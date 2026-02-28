@@ -84,8 +84,14 @@ func TestQueryHandler_IncidentBlock(t *testing.T) {
 	if len(memValues) < 3 {
 		t.Errorf("only %d memory metric buckets", len(memValues))
 	}
-	if len(memValues) >= 2 && memValues[len(memValues)-1] <= memValues[0] {
-		t.Errorf("memory should climb: first=%.0f last=%.0f", memValues[0], memValues[len(memValues)-1])
+	var peakMem float64
+	for _, v := range memValues {
+		if v > peakMem {
+			peakMem = v
+		}
+	}
+	if peakMem < 500 {
+		t.Errorf("peak memory = %.0f MB, want >= 500 (OOM)", peakMem)
 	}
 
 	// Spans: all should be error or slow

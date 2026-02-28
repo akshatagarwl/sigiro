@@ -368,9 +368,15 @@ func TestE2E_InvestigationBlock_Content(t *testing.T) {
 	if len(memMetrics) < 5 {
 		t.Errorf("only %d memory.usage buckets, want >= 5", len(memMetrics))
 	}
-	// Last memory bucket should be higher than first (climbing)
-	if len(memMetrics) >= 2 && memMetrics[len(memMetrics)-1] <= memMetrics[0] {
-		t.Errorf("memory should climb: first=%.0f last=%.0f", memMetrics[0], memMetrics[len(memMetrics)-1])
+	// Memory should peak above 500MB (OOM at 512Mi)
+	var peakMem float64
+	for _, v := range memMetrics {
+		if v > peakMem {
+			peakMem = v
+		}
+	}
+	if peakMem < 500 {
+		t.Errorf("peak memory = %.0f MB, want >= 500 (OOM)", peakMem)
 	}
 
 	// --- Spans ---
