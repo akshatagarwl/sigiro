@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
@@ -141,5 +142,83 @@ func TestMapLogs(t *testing.T) {
 	}
 	if r.Name != "app.log" {
 		t.Errorf("name = %q, want app.log", r.Name)
+	}
+}
+
+func TestMapProfiles(t *testing.T) {
+	pd := pprofile.NewProfiles()
+
+	// Build the shared dictionary:
+	// StringTable: [0]="cpu" [1]="count" [2]="runtime.gcDrain" [3]="runtime.gcBgMarkWorker" [4]="main.handler"
+	dict := pd.Dictionary()
+	dict.StringTable().Append("cpu")             // 0
+	dict.StringTable().Append("count")           // 1
+	dict.StringTable().Append("runtime.gcDrain") // 2
+	dict.StringTable().Append("runtime.gcBgMarkWorker") // 3
+	dict.StringTable().Append("main.handler")    // 4
+
+	// FunctionTable: [0]=gcDrain [1]=gcBgMarkWorker [2]=main.handler
+	fn0 := dict.FunctionTable().AppendEmpty()
+	fn0.SetNameStrindex(2) // "runtime.gcDrain"
+	fn1 := dict.FunctionTable().AppendEmpty()
+	fn1.SetNameStrindex(3) // "runtime.gcBgMarkWorker"
+	fn2 := dict.FunctionTable().AppendEmpty()
+	fn2.SetNameStrindex(4) // "main.handler"
+
+	// LocationTable: [0]→fn0(gcDrain) [1]→fn1(gcBgMarkWorker) [2]→fn2(main.handler)
+	loc0 := dict.LocationTable().AppendEmpty()
+	loc0.Lines().AppendEmpty().SetFunctionIndex(0)
+	loc1 := dict.LocationTable().AppendEmpty()
+	loc1.Lines().AppendEmpty().SetFunctionIndex(1)
+	loc2 := dict.LocationTable().AppendEmpty()
+	loc2.Lines().AppendEmpty().SetFunctionIndex(2)
+
+	// StackTable: [0]→locations [2, 1, 0] = main.handler → gcBgMarkWorker → gcDrain
+	stack0 := dict.StackTable().AppendEmpty()
+	stack0.LocationIndices().Append(2) // main.handler
+	stack0.LocationIndices().Append(1) // gcBgMarkWorker
+	stack0.LocationIndices().Append(0) // gcDrain
+
+	// Resource + Profile
+	rp := pd.ResourceProfiles().AppendEmpty()
+	setResource(rp.Resource())
+	sp := rp.ScopeProfiles().AppendEmpty()
+	p := sp.Profiles().AppendEmpty()
+	p.SampleType().SetTypeStrindex(0) // "cpu"
+	p.SampleType().SetUnitStrindex(1) // "count"
+	p.SetTime(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 9, 30, 0, time.UTC).UnixNano()))
+
+	// One sample: stack[0], value=150
+	sample := p.Samples().AppendEmpty()
+	sample.SetStackIndex(0)
+	sample.Values().Append(150)
+
+	rows := mapProfiles(pd)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	r := rows[0]
+	if r.Signal != schema.SignalProfile {
+		t.Errorf("signal = %q, want profile", r.Signal)
+	}
+	if r.Service != "checkout" {
+		t.Errorf("service = %q, want checkout", r.Service)
+	}
+	if r.Name != "profile.cpu" {
+		t.Errorf("name = %q, want profile.cpu", r.Name)
+	}
+	if *r.Value != 150 {
+		t.Errorf("value = %f, want 150", *r.Value)
+	}
+
+	// Stack should resolve to [main.handler, runtime.gcBgMarkWorker, runtime.gcDrain]
+	wantStack := []string{"main.handler", "runtime.gcBgMarkWorker", "runtime.gcDrain"}
+	if len(r.Stacktrace) != len(wantStack) {
+		t.Fatalf("stacktrace len = %d, want %d: %v", len(r.Stacktrace), len(wantStack), r.Stacktrace)
+	}
+	for i, s := range r.Stacktrace {
+		if s != wantStack[i] {
+			t.Errorf("stacktrace[%d] = %q, want %q", i, s, wantStack[i])
+		}
 	}
 }
