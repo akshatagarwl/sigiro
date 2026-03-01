@@ -1,0 +1,16 @@
+version: "2"
+linters:
+  settings:
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: "log"
+              desc: "Use log/slog instead of stdlib log"
+            - pkg: "go.uber.org/zap"
+              desc: "Use log/slog instead of zap"
+    forbidigo:
+      forbid:
+        - pattern: 'os\.Getenv'
+          msg: "Use github.com/caarlos0/env/v11 for environment variable management"
+      analyze-types: true
