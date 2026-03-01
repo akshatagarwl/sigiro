@@ -111,6 +111,11 @@ func (e *Exporter) flush(ctx context.Context) error {
 	e.mu.Unlock()
 
 	if err := e.writer.Write(ctx, snapshot); err != nil {
+		// Prepend failed batch so it is retried on the next tick.
+		// Rows that arrived during the write attempt end up after the
+		// retried rows, preserving chronological order.
+		// NOTE: sustained failures will grow the buffer without bound
+		// until memory-bounded ring buffers are implemented.
 		e.mu.Lock()
 		e.buffer = append(snapshot, e.buffer...)
 		e.mu.Unlock()
