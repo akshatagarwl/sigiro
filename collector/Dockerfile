@@ -21,7 +21,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    cd collector/cmd/collector && go build -trimpath -o /observe-collector .
+    cd collector/cmd/collector && CGO_ENABLED=0 go build -trimpath -o /observe-collector .
 
 # Stage 2: Minimal runtime image
 FROM gcr.io/distroless/static-debian12
