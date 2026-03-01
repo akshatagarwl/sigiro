@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AkshatM/observe/pkg/schema"
+	"github.com/akshatagarwl/observe/pkg/schema"
 )
 
 // InvestigateRequest defines the parameters for an investigation query.

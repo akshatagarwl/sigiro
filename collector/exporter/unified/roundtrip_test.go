@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AkshatM/observe/internal/query"
-	"github.com/AkshatM/observe/pkg/schema"
+	"github.com/akshatagarwl/observe/internal/query"
+	"github.com/akshatagarwl/observe/pkg/schema"
 	_ "github.com/marcboeker/go-duckdb"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"

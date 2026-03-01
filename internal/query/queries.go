@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/AkshatM/observe/pkg/schema"
+	"github.com/akshatagarwl/observe/pkg/schema"
 )
 
 func queryMetrics(ctx context.Context, db *sql.DB, table, service string, t1, t2 int64) ([]schema.MetricRow, error) {

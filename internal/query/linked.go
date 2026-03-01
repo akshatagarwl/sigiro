@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/AkshatM/observe/pkg/schema"
+	"github.com/akshatagarwl/observe/pkg/schema"
 )
 
 // queryLinkedSpans fetches all spans (across all services) for the given trace IDs.

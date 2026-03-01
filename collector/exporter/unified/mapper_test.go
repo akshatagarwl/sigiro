@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AkshatM/observe/pkg/schema"
+	"github.com/akshatagarwl/observe/pkg/schema"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"

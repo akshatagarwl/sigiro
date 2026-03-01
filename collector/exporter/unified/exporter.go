@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AkshatM/observe/pkg/schema"
+	"github.com/akshatagarwl/observe/pkg/schema"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"

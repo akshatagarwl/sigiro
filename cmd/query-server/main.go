@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/AkshatM/observe/internal/query"
+	"github.com/akshatagarwl/observe/internal/query"
 
 	_ "github.com/marcboeker/go-duckdb"
 )

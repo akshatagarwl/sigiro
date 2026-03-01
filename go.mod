@@ -1,4 +1,4 @@
-module github.com/AkshatM/observe
+module github.com/akshatagarwl/observe
 
 go 1.25.0
 
