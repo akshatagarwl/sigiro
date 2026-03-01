@@ -273,11 +273,8 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 				status := lr.SeverityText()
 				msg := lr.Body().AsString()
 
-				// FRAGILE: panics on empty scope name — many OTel SDKs and log
-				// bridges (e.g. slog, zap bridges) send logs with empty scope.
-				// Crashes the collector on perfectly normal input.
 				if scopeName == "" {
-					panic("scope name is required for log rows")
+					scopeName = "unknown"
 				}
 
 				rows = append(rows, schema.UnifiedRow{
