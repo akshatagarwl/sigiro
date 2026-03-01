@@ -1,0 +1,44 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+
+exporters:
+  unified_parquet:
+    s3_bucket: ${env:S3_BUCKET}
+    s3_region: ${env:S3_REGION:-us-east-1}
+    s3_endpoint: ${env:S3_ENDPOINT}
+    s3_access_key: ${env:S3_ACCESS_KEY}
+    s3_secret_key: ${env:S3_SECRET_KEY}
+    flush_interval: 15s
+  debug:
+    verbosity: basic
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [unified_parquet, debug]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [unified_parquet, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [unified_parquet, debug]
+    profiles:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [unified_parquet, debug]
