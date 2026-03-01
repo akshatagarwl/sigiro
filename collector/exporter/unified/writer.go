@@ -47,64 +47,83 @@ func EpochHour(tsNano int64) int64 {
 	return (tsNano / nsPerHour) * 3600
 }
 
-// Write groups rows by epoch-hour partition, sorts each group by
-// (service, signal, timestamp), and uploads a Parquet file per hour.
+// Write sorts rows in-place by (hour, service, signal, timestamp),
+// walks hour boundaries as zero-copy sub-slices, and uploads a Parquet
+// file per hour partition.
 func (w *ParquetWriter) Write(ctx context.Context, rows []schema.UnifiedRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
-	// Group rows by hour bucket.
-	byHour := map[int64][]schema.UnifiedRow{}
+	// Sort in-place: primary key is hour bucket, then the existing sort order.
+	sort.Slice(rows, func(i, j int) bool {
+		hi, hj := EpochHour(rows[i].Timestamp), EpochHour(rows[j].Timestamp)
+		if hi != hj {
+			return hi < hj
+		}
 
-	for _, r := range rows {
-		h := EpochHour(r.Timestamp)
-		byHour[h] = append(byHour[h], r)
+		if rows[i].Service != rows[j].Service {
+			return rows[i].Service < rows[j].Service
+		}
+
+		if rows[i].Signal != rows[j].Signal {
+			return rows[i].Signal < rows[j].Signal
+		}
+
+		return rows[i].Timestamp < rows[j].Timestamp
+	})
+
+	// Walk sorted slice, find hour boundaries, take sub-slices (zero copy).
+	start := 0
+	for start < len(rows) {
+		hour := EpochHour(rows[start].Timestamp)
+
+		end := start + 1
+		for end < len(rows) && EpochHour(rows[end].Timestamp) == hour {
+			end++
+		}
+
+		if err := w.writePartition(ctx, hour, rows[start:end]); err != nil {
+			return err
+		}
+
+		start = end
 	}
 
-	for hour, hourRows := range byHour {
-		sort.Slice(hourRows, func(i, j int) bool {
-			if hourRows[i].Service != hourRows[j].Service {
-				return hourRows[i].Service < hourRows[j].Service
-			}
+	return nil
+}
 
-			if hourRows[i].Signal != hourRows[j].Signal {
-				return hourRows[i].Signal < hourRows[j].Signal
-			}
+func (w *ParquetWriter) writePartition(ctx context.Context, hour int64, hourRows []schema.UnifiedRow) error {
+	key := fmt.Sprintf("%d/%s-%d.parquet",
+		hour, w.nodeID, time.Now().UnixNano())
 
-			return hourRows[i].Timestamp < hourRows[j].Timestamp
-		})
+	// FRAGILE: entire hour-partition is buffered in memory before upload.
+	// A burst of data for a single hour can OOM the process. No size
+	// limit or chunking.
+	var buf bytes.Buffer
+	buf.Grow(len(hourRows) * 256)
 
-		key := fmt.Sprintf("%d/%s-%d.parquet",
-			hour, w.nodeID, time.Now().UnixNano())
-
-		// FRAGILE: entire hour-partition is buffered in memory before upload.
-		// A burst of data for a single hour can OOM the process. No size
-		// limit or chunking.
-		var buf bytes.Buffer
-
-		writer := parquet.NewGenericWriter[schema.UnifiedRow](&buf,
-			parquet.Compression(&zstd.Codec{Level: zstd.SpeedBetterCompression}),
-		)
-		if _, err := writer.Write(hourRows); err != nil {
-			return fmt.Errorf("parquet write: %w", err)
-		}
-
-		if err := writer.Close(); err != nil {
-			return fmt.Errorf("parquet close: %w", err)
-		}
-
-		_, err := w.s3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket: aws.String(w.bucket),
-			Key:    aws.String(key),
-			Body:   bytes.NewReader(buf.Bytes()),
-		})
-		if err != nil {
-			return fmt.Errorf("s3 put %s: %w", key, err)
-		}
-
-		slog.Info("flushed parquet", "key", key, "rows", len(hourRows), "bytes", buf.Len())
+	writer := parquet.NewGenericWriter[schema.UnifiedRow](&buf,
+		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBetterCompression}),
+	)
+	if _, err := writer.Write(hourRows); err != nil {
+		return fmt.Errorf("parquet write: %w", err)
 	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("parquet close: %w", err)
+	}
+
+	_, err := w.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(w.bucket),
+		Key:    aws.String(key),
+		Body:   bytes.NewReader(buf.Bytes()),
+	})
+	if err != nil {
+		return fmt.Errorf("s3 put %s: %w", key, err)
+	}
+
+	slog.Info("flushed parquet", "key", key, "rows", len(hourRows), "bytes", buf.Len())
 
 	return nil
 }

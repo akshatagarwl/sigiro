@@ -8,19 +8,20 @@ func BuildSpanTrees(spans []SpanNode) []SpanNode {
 		return nil
 	}
 
-	// Index by ID and collect children lists
+	// Index by ID (pointer into input slice) and collect children lists.
 	childrenOf := make(map[string][]string, len(spans))
 
-	byID := make(map[string]SpanNode, len(spans))
-	for _, s := range spans {
-		s.Children = nil
-		byID[s.SpanID] = s
+	byID := make(map[string]*SpanNode, len(spans))
+	for i := range spans {
+		spans[i].Children = nil
+		byID[spans[i].SpanID] = &spans[i]
 	}
 
 	// Build parent→children index and identify roots
 	var rootIDs []string
 
-	for _, s := range spans {
+	for i := range spans {
+		s := &spans[i]
 		if s.ParentID != nil {
 			if _, ok := byID[*s.ParentID]; ok {
 				childrenOf[*s.ParentID] = append(childrenOf[*s.ParentID], s.SpanID)
@@ -35,7 +36,7 @@ func BuildSpanTrees(spans []SpanNode) []SpanNode {
 	var build func(id string) SpanNode
 
 	build = func(id string) SpanNode {
-		node := byID[id]
+		node := *byID[id]
 		for _, childID := range childrenOf[id] {
 			node.Children = append(node.Children, build(childID))
 		}

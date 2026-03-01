@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/akshatagarwl/observe/pkg/schema"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -13,6 +12,17 @@ import (
 	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
+
+var (
+	ptrUnitSpanDuration = ptr(schema.UnitSpanDuration)
+	ptrUnitCount        = ptr(schema.UnitProfileCount)
+)
+
+var spanStatusUpper = map[ptrace.StatusCode]string{
+	ptrace.StatusCodeOk:    "OK",
+	ptrace.StatusCodeError: "ERROR",
+	ptrace.StatusCodeUnset: "UNSET",
+}
 
 // FRAGILE: panics on missing/empty service.name — real OTel data frequently
 // lacks this attribute (e.g. default SDKs, bare collectors, pre-instrumented
@@ -72,7 +82,7 @@ func spanIDStr(sid pcommon.SpanID) *string {
 }
 
 func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
-	var rows []schema.UnifiedRow
+	rows := make([]schema.UnifiedRow, 0, md.DataPointCount())
 
 	for i := 0; i < md.ResourceMetrics().Len(); i++ {
 		rm := md.ResourceMetrics().At(i)
@@ -161,7 +171,7 @@ func mustJSONString(attrs map[string]string) *string {
 }
 
 func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
-	var rows []schema.UnifiedRow
+	rows := make([]schema.UnifiedRow, 0, td.SpanCount())
 
 	for i := 0; i < td.ResourceSpans().Len(); i++ {
 		rs := td.ResourceSpans().At(i)
@@ -184,7 +194,7 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 				// Normalize to uppercase to match the query layer, which filters
 				// on status='ERROR'. ptrace.StatusCode.String() returns title-case
 				// (e.g. "Error"), so we upper-case here at write time.
-				status := strings.ToUpper(s.Status().Code().String())
+				status := spanStatusUpper[s.Status().Code()]
 				kind := s.Kind().String()
 
 				var events []schema.Event
@@ -231,7 +241,7 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 					ParentSpanID: spanIDStr(s.ParentSpanID()),
 					Name:         s.Name(),
 					Value:        &dur,
-					Unit:         ptr(schema.UnitSpanDuration),
+					Unit:         ptrUnitSpanDuration,
 					Status:       &status,
 					Kind:         &kind,
 					Events:       events,
@@ -245,7 +255,7 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 }
 
 func mapLogs(ld plog.Logs) []schema.UnifiedRow {
-	var rows []schema.UnifiedRow
+	rows := make([]schema.UnifiedRow, 0, ld.LogRecordCount())
 
 	for i := 0; i < ld.ResourceLogs().Len(); i++ {
 		rl := ld.ResourceLogs().At(i)
@@ -292,7 +302,7 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 // moves dictionaries per-Profile, every index lookup below silently returns
 // wrong data (wrong function names, corrupt stacks) with no error.
 func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
-	var rows []schema.UnifiedRow
+	rows := make([]schema.UnifiedRow, 0, 256)
 
 	// Dictionary is shared across all profiles in the batch
 	dict := pd.Dictionary()
@@ -377,7 +387,7 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 						Name:       fmt.Sprintf("profile.%s", profileType),
 						Value:      &val,
 						Stacktrace: stack,
-						Unit:       ptr("count"),
+						Unit:       ptrUnitCount,
 						Kind:       &profileType,
 					})
 				}
