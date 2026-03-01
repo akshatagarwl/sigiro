@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // setupE2EDB creates a DuckDB connection with a view over the incident parquet.

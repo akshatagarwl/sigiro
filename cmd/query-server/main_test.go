@@ -12,7 +12,7 @@ import (
 
 	"github.com/akshatagarwl/observe/internal/query"
 	"github.com/akshatagarwl/observe/pkg/schema"
-	_ "github.com/marcboeker/go-duckdb"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 func newTestHandler(t *testing.T) http.HandlerFunc {

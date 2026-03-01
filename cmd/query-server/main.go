@@ -10,7 +10,7 @@ import (
 
 	"github.com/akshatagarwl/observe/internal/query"
 
-	_ "github.com/marcboeker/go-duckdb"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 func main() {
