@@ -35,6 +35,9 @@ func queryMetrics(ctx context.Context, db *sql.DB, table, service string, t1, t2
 	return result, rows.Err()
 }
 
+// querySpans returns error or slow spans for a service in a time window.
+// value is span duration in milliseconds (see schema.UnitSpanDuration).
+// The mapper converts OTel nanoseconds to ms at write time, so value > 1000 means > 1 second.
 func querySpans(ctx context.Context, db *sql.DB, table, service string, t1, t2 int64) ([]schema.SpanNode, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT trace_id, span_id, parent_span_id, name,

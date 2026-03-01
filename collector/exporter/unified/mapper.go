@@ -137,7 +137,9 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 			ss := rs.ScopeSpans().At(j)
 			for k := 0; k < ss.Spans().Len(); k++ {
 				s := ss.Spans().At(k)
-				dur := float64(s.EndTimestamp() - s.StartTimestamp())
+					// OTel timestamps are nanoseconds; convert to milliseconds at write time.
+				// This is the canonical unit for span durations — see schema.UnitSpanDuration.
+				dur := float64(s.EndTimestamp()-s.StartTimestamp()) / 1e6
 				status := s.Status().Code().String()
 				kind := s.Kind().String()
 
@@ -180,7 +182,7 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 					ParentSpanID: spanIDStr(s.ParentSpanID()),
 					Name:         s.Name(),
 					Value:        &dur,
-					Unit:         ptr("ns"),
+					Unit:         ptr(schema.UnitSpanDuration),
 					Status:       &status,
 					Kind:         &kind,
 					Events:       events,

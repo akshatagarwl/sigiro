@@ -518,11 +518,11 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 		}
 	})
 
-	t.Run("spans/duration_ns", func(t *testing.T) {
-		// GET /users/123: 150ms = 150_000_000ns
+	t.Run("spans/duration_ms", func(t *testing.T) {
+		// GET /users/123: 150ms (converted from OTel ns at write time, see schema.UnitSpanDuration)
 		dur := scalarFloat(`SELECT value FROM telemetry WHERE signal='span' AND name='GET /users/123'`)
-		if dur != 150_000_000 {
-			t.Errorf("GET /users/123 duration = %f, want 150000000 (150ms in ns)", dur)
+		if dur != 150 {
+			t.Errorf("GET /users/123 duration = %f, want 150 (ms)", dur)
 		}
 	})
 

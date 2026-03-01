@@ -8,6 +8,14 @@ const (
 	SignalProfile = "profile"
 )
 
+// Canonical units for the Value column by signal type.
+// These define the contract between the write path (mapper) and the read path (queries).
+// Changing a unit here requires updating both mapper.go and queries.go.
+const (
+	UnitSpanDuration = "ms"    // span Value is duration in milliseconds (converted from OTel nanoseconds at write time)
+	UnitProfileCount = "count" // profile Value is sample count
+)
+
 // Event represents a span event (e.g. exception, annotation).
 type Event struct {
 	Timestamp  int64   `parquet:"timestamp" json:"timestamp"`
