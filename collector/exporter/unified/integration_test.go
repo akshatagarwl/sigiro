@@ -124,6 +124,7 @@ func buildRealisticMetrics() pmetric.Metrics {
 	mem.SetName("process.runtime.go.mem.heap_alloc")
 	mem.SetUnit("By")
 	mem.SetEmptyGauge()
+
 	for i := 0; i < 5; i++ {
 		dp := mem.Gauge().DataPoints().AppendEmpty()
 		dp.SetDoubleValue(float64(200_000_000 + i*50_000_000))
@@ -220,23 +221,23 @@ func buildRealisticProfiles() pprofile.Profiles {
 
 	// StringTable: realistic Go function names + type/unit strings
 	strings := []string{
-		"cpu",                                 // 0
-		"nanoseconds",                         // 1
-		"runtime.gcBgMarkWorker",              // 2
-		"runtime.gcDrain",                     // 3
-		"runtime.mallocgc",                    // 4
-		"net/http.(*conn).serve",              // 5
-		"net/http.serverHandler.ServeHTTP",    // 6
-		"main.handleRequest",                  // 7
-		"database/sql.(*DB).QueryContext",     // 8
-		"database/sql.(*DB).query",            // 9
-		"database/sql.(*DB).execDC",           // 10
-		"encoding/json.(*Encoder).Encode",     // 11
-		"runtime.goexit",                      // 12
-		"runtime.systemstack",                 // 13
-		"runtime.gcMarkTermination",           // 14
-		"runtime.(*mcache).nextFree",          // 15
-		"github.com/lib/pq.(*conn).Query",    // 16
+		"cpu",                              // 0
+		"nanoseconds",                      // 1
+		"runtime.gcBgMarkWorker",           // 2
+		"runtime.gcDrain",                  // 3
+		"runtime.mallocgc",                 // 4
+		"net/http.(*conn).serve",           // 5
+		"net/http.serverHandler.ServeHTTP", // 6
+		"main.handleRequest",               // 7
+		"database/sql.(*DB).QueryContext",  // 8
+		"database/sql.(*DB).query",         // 9
+		"database/sql.(*DB).execDC",        // 10
+		"encoding/json.(*Encoder).Encode",  // 11
+		"runtime.goexit",                   // 12
+		"runtime.systemstack",              // 13
+		"runtime.gcMarkTermination",        // 14
+		"runtime.(*mcache).nextFree",       // 15
+		"github.com/lib/pq.(*conn).Query",  // 16
 	}
 	for _, s := range strings {
 		dict.StringTable().Append(s)
@@ -337,6 +338,7 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 	profiles := buildRealisticProfiles()
 
 	var rows []schema.UnifiedRow
+
 	rows = append(rows, mapTraces(traces)...)
 	rows = append(rows, mapMetrics(metrics)...)
 	rows = append(rows, mapLogs(logs)...)
@@ -351,9 +353,11 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 		if rows[i].Service != rows[j].Service {
 			return rows[i].Service < rows[j].Service
 		}
+
 		if rows[i].Signal != rows[j].Signal {
 			return rows[i].Signal < rows[j].Signal
 		}
+
 		return rows[i].Timestamp < rows[j].Timestamp
 	})
 
@@ -362,6 +366,7 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	path := f.Name()
 
 	w := parquet.NewGenericWriter[schema.UnifiedRow](f,
@@ -370,9 +375,11 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 	if _, err := w.Write(rows); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	f.Close()
 
 	t.Logf("wrote %d rows to %s", len(rows), path)
@@ -394,6 +401,7 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 		if err := db.QueryRow(q).Scan(&v); err != nil {
 			t.Fatalf("query %q: %v", q, err)
 		}
+
 		return v
 	}
 
@@ -402,6 +410,7 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 		if err := db.QueryRow(q).Scan(&v); err != nil {
 			t.Fatalf("query %q: %v", q, err)
 		}
+
 		return v
 	}
 
@@ -410,6 +419,7 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 		if err := db.QueryRow(q).Scan(&v); err != nil {
 			t.Fatalf("query %q: %v", q, err)
 		}
+
 		return v
 	}
 
@@ -419,14 +429,18 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 			t.Fatalf("query: %v", err)
 		}
 		defer rows.Close()
+
 		var result []string
+
 		for rows.Next() {
 			var s string
 			if err := rows.Scan(&s); err != nil {
 				t.Fatal(err)
 			}
+
 			result = append(result, s)
 		}
+
 		return result
 	}
 
@@ -436,15 +450,18 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 		if n != len(rows) {
 			t.Errorf("got %d rows, want %d", n, len(rows))
 		}
+
 		t.Logf("total rows: %d", n)
 	})
 
 	t.Run("all_four_signals", func(t *testing.T) {
 		signals := queryStrings(`SELECT DISTINCT signal FROM telemetry ORDER BY signal`)
+
 		want := []string{"log", "metric", "profile", "span"}
 		if len(signals) != 4 {
 			t.Fatalf("signals = %v, want %v", signals, want)
 		}
+
 		for i, s := range signals {
 			if s != want[i] {
 				t.Errorf("signal[%d] = %q, want %q", i, s, want[i])
@@ -502,6 +519,7 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 			SELECT span_id FROM telemetry
 			WHERE signal='span' AND name='POST /orders' AND service='api-gateway'
 		`)
+
 		childParent := scalar(`
 			SELECT parent_span_id FROM telemetry
 			WHERE signal='span' AND name='POST /charge' AND service='billing'
@@ -552,6 +570,7 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 		if !strings.Contains(metadataJSON, "http.method") {
 			t.Errorf("metadata missing http.method: %s", metadataJSON)
 		}
+
 		if !strings.Contains(metadataJSON, "http.route") {
 			t.Errorf("metadata missing http.route: %s", metadataJSON)
 		}
@@ -706,6 +725,7 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 		if name != "profile.cpu" {
 			t.Errorf("profile name = %q, want profile.cpu", name)
 		}
+
 		kind := scalar(`SELECT DISTINCT kind FROM telemetry WHERE signal='profile'`)
 		if kind != "cpu" {
 			t.Errorf("profile kind = %q, want cpu", kind)

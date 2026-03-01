@@ -63,7 +63,9 @@ func runPrimaryQueries(
 
 	go func() {
 		defer wg.Done()
+
 		metrics, err := queryMetrics(ctx, db, table, service, t1, t2)
+
 		mu.Lock()
 		block.Metrics = metrics
 		errs[0] = err
@@ -72,7 +74,9 @@ func runPrimaryQueries(
 
 	go func() {
 		defer wg.Done()
+
 		spans, err := querySpans(ctx, db, table, service, t1, t2)
+
 		mu.Lock()
 		block.Spans = spans
 		errs[1] = err
@@ -81,7 +85,9 @@ func runPrimaryQueries(
 
 	go func() {
 		defer wg.Done()
+
 		logs, err := queryLogs(ctx, db, table, service, t1, t2)
+
 		mu.Lock()
 		block.Logs = logs
 		errs[2] = err
@@ -90,7 +96,9 @@ func runPrimaryQueries(
 
 	go func() {
 		defer wg.Done()
+
 		profiles, err := queryProfiles(ctx, db, table, service, t1, t2)
+
 		mu.Lock()
 		block.Profiles = profiles
 		errs[3] = err
@@ -98,11 +106,13 @@ func runPrimaryQueries(
 	}()
 
 	wg.Wait()
+
 	for i, err := range errs {
 		if err != nil {
 			return fmt.Errorf("query %d failed: %w", i, err)
 		}
 	}
+
 	return nil
 }
 
@@ -121,6 +131,7 @@ func addLinkedData(
 	if err != nil {
 		return fmt.Errorf("linked spans: %w", err)
 	}
+
 	for tid, spans := range spansByTrace {
 		trees := schema.BuildSpanTrees(spans)
 		block.Linked.Traces = append(block.Linked.Traces, schema.LinkedTrace{
@@ -133,7 +144,9 @@ func addLinkedData(
 	if err != nil {
 		return fmt.Errorf("linked logs: %w", err)
 	}
+
 	block.Linked.Logs = linkedLogs
+
 	return nil
 }
 
@@ -142,19 +155,23 @@ func addLinkedData(
 // is already uppercase by OTel convention.
 func collectErrorTraceIDs(spans []schema.SpanNode, logs []schema.LogRow) []string {
 	seen := map[string]bool{}
+
 	for _, s := range spans {
 		if s.Status == "ERROR" && s.TraceID != "" {
 			seen[s.TraceID] = true
 		}
 	}
+
 	for _, l := range logs {
 		if l.TraceID != nil && l.Status == "ERROR" {
 			seen[*l.TraceID] = true
 		}
 	}
+
 	result := make([]string, 0, len(seen))
 	for tid := range seen {
 		result = append(result, tid)
 	}
+
 	return result
 }

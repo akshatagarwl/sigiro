@@ -48,6 +48,7 @@ func (w *ParquetWriter) Write(ctx context.Context, rows []schema.UnifiedRow) err
 
 	// Group rows by hour bucket.
 	byHour := map[int64][]schema.UnifiedRow{}
+
 	for _, r := range rows {
 		h := EpochHour(r.Timestamp)
 		byHour[h] = append(byHour[h], r)
@@ -58,9 +59,11 @@ func (w *ParquetWriter) Write(ctx context.Context, rows []schema.UnifiedRow) err
 			if hourRows[i].Service != hourRows[j].Service {
 				return hourRows[i].Service < hourRows[j].Service
 			}
+
 			if hourRows[i].Signal != hourRows[j].Signal {
 				return hourRows[i].Signal < hourRows[j].Signal
 			}
+
 			return hourRows[i].Timestamp < hourRows[j].Timestamp
 		})
 
@@ -68,12 +71,14 @@ func (w *ParquetWriter) Write(ctx context.Context, rows []schema.UnifiedRow) err
 			hour, w.nodeID, time.Now().UnixNano())
 
 		var buf bytes.Buffer
+
 		writer := parquet.NewGenericWriter[schema.UnifiedRow](&buf,
 			parquet.Compression(&zstd.Codec{Level: zstd.SpeedBetterCompression}),
 		)
 		if _, err := writer.Write(hourRows); err != nil {
 			return fmt.Errorf("parquet write: %w", err)
 		}
+
 		if err := writer.Close(); err != nil {
 			return fmt.Errorf("parquet close: %w", err)
 		}
@@ -89,5 +94,6 @@ func (w *ParquetWriter) Write(ctx context.Context, rows []schema.UnifiedRow) err
 
 		slog.Info("flushed parquet", "key", key, "rows", len(hourRows), "bytes", buf.Len())
 	}
+
 	return nil
 }

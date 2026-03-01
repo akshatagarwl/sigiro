@@ -16,6 +16,7 @@ func queryLinkedSpans(ctx context.Context, db *sql.DB, table string, traceIDs []
 	}
 
 	placeholders := make([]string, len(traceIDs))
+
 	args := make([]any, len(traceIDs))
 	for i, tid := range traceIDs {
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
@@ -35,24 +36,32 @@ func queryLinkedSpans(ctx context.Context, db *sql.DB, table string, traceIDs []
 	defer rows.Close()
 
 	result := map[string][]schema.SpanNode{}
+
 	for rows.Next() {
-		var s schema.SpanNode
-		var tid, sid, psid, svc, status, kind sql.NullString
-		var dur sql.NullFloat64
+		var (
+			s                                 schema.SpanNode
+			tid, sid, psid, svc, status, kind sql.NullString
+			dur                               sql.NullFloat64
+		)
+
 		if err := rows.Scan(&tid, &sid, &psid, &svc, &s.Name, &dur, &status, &kind); err != nil {
 			return nil, err
 		}
+
 		s.TraceID = tid.String
+
 		s.SpanID = sid.String
 		if psid.Valid {
 			s.ParentID = &psid.String
 		}
+
 		s.Service = svc.String
 		s.DurationMs = dur.Float64
 		s.Status = status.String
 		s.Kind = kind.String
 		result[s.TraceID] = append(result[s.TraceID], s)
 	}
+
 	return result, rows.Err()
 }
 
@@ -63,11 +72,13 @@ func queryLinkedLogs(ctx context.Context, db *sql.DB, table, excludeService stri
 	}
 
 	placeholders := make([]string, len(traceIDs))
+
 	args := make([]any, len(traceIDs)+1)
 	for i, tid := range traceIDs {
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 		args[i] = tid
 	}
+
 	svcPlaceholder := fmt.Sprintf("$%d", len(traceIDs)+1)
 	args[len(traceIDs)] = excludeService
 
@@ -84,18 +95,26 @@ func queryLinkedLogs(ctx context.Context, db *sql.DB, table, excludeService stri
 	defer rows.Close()
 
 	var result []schema.LogRow
+
 	for rows.Next() {
-		var l schema.LogRow
-		var svc, status, msg, tid sql.NullString
+		var (
+			l                     schema.LogRow
+			svc, status, msg, tid sql.NullString
+		)
+
 		if err := rows.Scan(&l.T, &svc, &status, &msg, &tid); err != nil {
 			return nil, err
 		}
+
 		l.Status = status.String
+
 		l.Message = "[" + svc.String + "] " + msg.String
 		if tid.Valid {
 			l.TraceID = &tid.String
 		}
+
 		result = append(result, l)
 	}
+
 	return result, rows.Err()
 }

@@ -14,43 +14,54 @@ import (
 // setupE2EDB creates a DuckDB connection with a view over the incident parquet.
 func setupE2EDB(t *testing.T) *sql.DB {
 	t.Helper()
+
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	path := "../../experiments/incident-gen/testdata/incident.parquet"
+
 	_, err = db.Exec(fmt.Sprintf(`CREATE VIEW observe AS SELECT * FROM read_parquet('%s')`, path))
 	if err != nil {
 		db.Close()
 		t.Fatalf("create view: %v (run incident-gen first)", err)
 	}
+
 	return db
 }
 
 func queryScalar[T any](t *testing.T, db *sql.DB, q string) T {
 	t.Helper()
+
 	var v T
 	if err := db.QueryRow(q).Scan(&v); err != nil {
 		t.Fatalf("query %q: %v", q, err)
 	}
+
 	return v
 }
 
 func queryStrings(t *testing.T, db *sql.DB, q string) []string {
 	t.Helper()
+
 	rows, err := db.Query(q)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
 	defer rows.Close()
+
 	var result []string
+
 	for rows.Next() {
 		var s string
 		if err := rows.Scan(&s); err != nil {
 			t.Fatal(err)
 		}
+
 		result = append(result, s)
 	}
+
 	return result
 }
 
@@ -61,10 +72,12 @@ func TestE2E_SignalTypes(t *testing.T) {
 	defer db.Close()
 
 	signals := queryStrings(t, db, `SELECT DISTINCT signal FROM observe ORDER BY signal`)
+
 	want := []string{"log", "metric", "profile", "span"}
 	if len(signals) != len(want) {
 		t.Fatalf("signals = %v, want %v", signals, want)
 	}
+
 	for i, s := range signals {
 		if s != want[i] {
 			t.Errorf("signal[%d] = %q, want %q", i, s, want[i])
@@ -95,6 +108,7 @@ func TestE2E_MemoryClimbsToOOM(t *testing.T) {
 	if minMem > 250 {
 		t.Errorf("min memory = %.0f MB, want < 250 (baseline)", minMem)
 	}
+
 	if maxMem < 500 {
 		t.Errorf("max memory = %.0f MB, want >= 500 (OOM)", maxMem)
 	}
@@ -118,15 +132,21 @@ func TestE2E_LatencyDegrades(t *testing.T) {
 	defer rows.Close()
 
 	var baseline, peak float64
+
 	for rows.Next() {
-		var bucket string
-		var avg float64
+		var (
+			bucket string
+			avg    float64
+		)
+
 		if err := rows.Scan(&bucket, &avg); err != nil {
 			t.Fatal(err)
 		}
+
 		if bucket <= "14:04" {
 			baseline = avg
 		}
+
 		if avg > peak {
 			peak = avg
 		}
@@ -135,6 +155,7 @@ func TestE2E_LatencyDegrades(t *testing.T) {
 	if baseline > 100 {
 		t.Errorf("baseline latency = %.0fms, want < 100ms", baseline)
 	}
+
 	if peak < 500 {
 		t.Errorf("peak latency = %.0fms, want > 500ms (degradation)", peak)
 	}
@@ -174,6 +195,7 @@ func TestE2E_OOMKillLog(t *testing.T) {
 	if !strings.Contains(msg, "512Mi") {
 		t.Errorf("OOMKill message = %q, want to contain '512Mi'", msg)
 	}
+
 	if !strings.Contains(msg, "exitCode=137") {
 		t.Errorf("OOMKill message = %q, want to contain 'exitCode=137'", msg)
 	}
@@ -197,11 +219,13 @@ func TestE2E_LogTimeline(t *testing.T) {
 	defer rows.Close()
 
 	var timeline []string
+
 	for rows.Next() {
 		var ts, status, msg string
 		if err := rows.Scan(&ts, &status, &msg); err != nil {
 			t.Fatal(err)
 		}
+
 		timeline = append(timeline, fmt.Sprintf("%s %s %s", ts, status, msg))
 	}
 
@@ -211,20 +235,25 @@ func TestE2E_LogTimeline(t *testing.T) {
 
 	// Verify ordering: pool near capacity before OOM before pool exhausted
 	var poolWarnIdx, oomIdx, poolExhaustIdx int
+
 	for i, line := range timeline {
 		if strings.Contains(line, "pool near capacity") {
 			poolWarnIdx = i
 		}
+
 		if strings.Contains(line, "OOMKilled") {
 			oomIdx = i
 		}
+
 		if strings.Contains(line, "pool exhausted") {
 			poolExhaustIdx = i
 		}
 	}
+
 	if poolWarnIdx >= oomIdx {
 		t.Error("pool near capacity should come before OOMKill")
 	}
+
 	if oomIdx >= poolExhaustIdx {
 		t.Error("OOMKill should come before pool exhausted")
 	}
@@ -265,6 +294,7 @@ func TestE2E_CrossServiceTraces(t *testing.T) {
 	if count == 0 {
 		t.Fatal("no cross-service traces found")
 	}
+
 	if count < 3 {
 		t.Errorf("cross-service traces = %d, want >= 3 (one per error trace)", count)
 	}
@@ -360,11 +390,13 @@ func TestE2E_InvestigationBlock_Content(t *testing.T) {
 	}
 	// Should have memory.usage metrics showing the climb
 	var memMetrics []float64
+
 	for _, m := range block.Metrics {
 		if m.Name == "memory.usage" && m.Avg != nil {
 			memMetrics = append(memMetrics, *m.Avg)
 		}
 	}
+
 	if len(memMetrics) < 5 {
 		t.Errorf("only %d memory.usage buckets, want >= 5", len(memMetrics))
 	}
@@ -375,6 +407,7 @@ func TestE2E_InvestigationBlock_Content(t *testing.T) {
 			peakMem = v
 		}
 	}
+
 	if peakMem < 500 {
 		t.Errorf("peak memory = %.0f MB, want >= 500 (OOM)", peakMem)
 	}
@@ -393,11 +426,13 @@ func TestE2E_InvestigationBlock_Content(t *testing.T) {
 	for _, s := range block.Spans {
 		if s.Status == "ERROR" && s.Name == "POST /checkout" {
 			hasDBChild := false
+
 			for _, c := range s.Children {
 				if c.Name == "db.query" {
 					hasDBChild = true
 				}
 			}
+
 			if !hasDBChild {
 				t.Errorf("error span %q (trace=%s) missing db.query child", s.Name, s.TraceID)
 			}
@@ -410,11 +445,13 @@ func TestE2E_InvestigationBlock_Content(t *testing.T) {
 	}
 	// Should contain OOMKill message
 	hasOOM := false
+
 	for _, l := range block.Logs {
 		if strings.Contains(l.Message, "OOMKilled") {
 			hasOOM = true
 		}
 	}
+
 	if !hasOOM {
 		t.Error("logs missing OOMKilled message")
 	}
@@ -441,6 +478,7 @@ func TestE2E_InvestigationBlock_Content(t *testing.T) {
 				services[c.Service] = true
 			}
 		}
+
 		if !services["checkout"] || !services["payments"] {
 			t.Errorf("linked trace %s has services %v, want both checkout and payments", lt.TraceID[:16], services)
 		}
@@ -450,12 +488,15 @@ func TestE2E_InvestigationBlock_Content(t *testing.T) {
 	if len(block.Linked.Logs) == 0 {
 		t.Fatal("no linked logs in block")
 	}
+
 	hasPaymentsLog := false
+
 	for _, l := range block.Linked.Logs {
 		if strings.Contains(l.Message, "payments") {
 			hasPaymentsLog = true
 		}
 	}
+
 	if !hasPaymentsLog {
 		t.Error("linked logs missing payments service error")
 	}

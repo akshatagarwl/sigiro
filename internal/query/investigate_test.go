@@ -20,6 +20,7 @@ func TestInvestigate_NoData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(block.Metrics) != 0 || len(block.Spans) != 0 || len(block.Logs) != 0 || len(block.Profiles) != 0 {
 		t.Error("expected empty results for nonexistent service")
 	}
@@ -28,6 +29,7 @@ func TestInvestigate_NoData(t *testing.T) {
 func TestParquetGlobs_SingleHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 14, 5, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 14, 25, 0, 0, time.UTC)
+
 	globs := ParquetGlobs("observe", from, to)
 	if len(globs) != 1 {
 		t.Fatalf("expected 1 glob, got %d: %v", len(globs), globs)
@@ -42,6 +44,7 @@ func TestParquetGlobs_SingleHour(t *testing.T) {
 func TestParquetGlobs_MultiHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 13, 30, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 15, 0, 0, 0, time.UTC)
+
 	globs := ParquetGlobs("observe", from, to)
 	if len(globs) != 3 {
 		t.Fatalf("expected 3 globs (hours 13,14,15), got %d: %v", len(globs), globs)
@@ -56,6 +59,7 @@ func TestParquetGlobs_MultiHour(t *testing.T) {
 func TestParquetGlobs_CrossDay(t *testing.T) {
 	from := time.Date(2026, 3, 1, 23, 30, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 2, 0, 15, 0, 0, time.UTC)
+
 	globs := ParquetGlobs("observe", from, to)
 	if len(globs) != 2 {
 		t.Fatalf("expected 2 globs (hour 23, hour 0), got %d: %v", len(globs), globs)
@@ -66,6 +70,7 @@ func TestParquetTable_SingleHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 14, 5, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 14, 25, 0, 0, time.UTC)
 	got := ParquetTable("observe", from, to)
+
 	want := "read_parquet('s3://observe/1772373600/*.parquet')"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -76,6 +81,7 @@ func TestParquetTable_MultiHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 13, 30, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 14, 15, 0, 0, time.UTC)
 	got := ParquetTable("observe", from, to)
+
 	want := "read_parquet(['s3://observe/1772370000/*.parquet', 's3://observe/1772373600/*.parquet'])"
 	if got != want {
 		t.Errorf("got %q,\nwant %q", got, want)

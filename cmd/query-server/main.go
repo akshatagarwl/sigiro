@@ -38,6 +38,7 @@ func main() {
 	http.HandleFunc("POST /v1/query", queryHandler(db, cfg))
 
 	slog.Info("query-server listening", "addr", cfg.ListenAddr)
+
 	if err := http.ListenAndServe(cfg.ListenAddr, nil); err != nil {
 		slog.Error("server exited", "error", err)
 		os.Exit(1)
@@ -50,20 +51,25 @@ func openDuckDB() *sql.DB {
 		slog.Error("open duckdb", "error", err)
 		os.Exit(1)
 	}
+
 	return db
 }
 
 func configureDuckDBS3(db *sql.DB, cfg Config) {
 	mustExec(db, "INSTALL httpfs; LOAD httpfs")
+
 	if cfg.S3Region != "" {
 		mustExec(db, "SET s3_region='"+cfg.S3Region+"'")
 	}
+
 	if cfg.S3AccessKey != "" {
 		mustExec(db, "SET s3_access_key_id='"+cfg.S3AccessKey+"'")
 	}
+
 	if cfg.S3SecretKey != "" {
 		mustExec(db, "SET s3_secret_access_key='"+cfg.S3SecretKey+"'")
 	}
+
 	if cfg.S3Endpoint != "" {
 		mustExec(db, "SET s3_endpoint='"+cfg.S3Endpoint+"'")
 		mustExec(db, "SET s3_use_ssl=false")
@@ -104,6 +110,7 @@ func queryHandler(db *sql.DB, cfg Config) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+
 		if err := json.NewEncoder(w).Encode(block); err != nil {
 			slog.Error("write response", "error", err)
 		}
@@ -115,8 +122,10 @@ func resolveQueryWindowAndTable(bucket string, req queryRequest) (time.Time, tim
 		// Trace lookup: scan all partitions.
 		fromT := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 		toT := time.Now().UTC()
+
 		return fromT, toT, "read_parquet('s3://" + bucket + "/**/*.parquet')", nil
 	}
+
 	if req.Service == "" || req.From == "" || req.To == "" {
 		return time.Time{}, time.Time{}, "", fmt.Errorf("service, from, and to are required")
 	}
@@ -125,10 +134,12 @@ func resolveQueryWindowAndTable(bucket string, req queryRequest) (time.Time, tim
 	if err != nil {
 		return time.Time{}, time.Time{}, "", fmt.Errorf("invalid from: %w", err)
 	}
+
 	toT, err := time.Parse(time.RFC3339, req.To)
 	if err != nil {
 		return time.Time{}, time.Time{}, "", fmt.Errorf("invalid to: %w", err)
 	}
+
 	return fromT, toT, query.ParquetTable(bucket, fromT, toT), nil
 }
 

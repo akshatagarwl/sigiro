@@ -43,6 +43,7 @@ func newExporter(cfg component.Config) *Exporter {
 	c := cfg.(*Config)
 	s3Client := newS3Client(c)
 	writer := NewParquetWriter(c.S3Bucket, s3Client)
+
 	return NewExporter(*c, writer)
 }
 
@@ -53,12 +54,14 @@ func newS3Client(cfg *Config) *s3.Client {
 			o.BaseEndpoint = aws.String(cfg.S3Endpoint)
 			o.UsePathStyle = true
 		}
+
 		if cfg.S3AccessKey != "" {
 			o.Credentials = credentials.NewStaticCredentialsProvider(
 				cfg.S3AccessKey, cfg.S3SecretKey, "",
 			)
 		}
 	}
+
 	return s3.New(s3.Options{}, opts)
 }
 
@@ -90,6 +93,7 @@ type metricsExporter struct{ *Exporter }
 func (e *metricsExporter) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{}
 }
+
 func (e *metricsExporter) ConsumeMetrics(ctx context.Context, md pmetric.Metrics) error {
 	return e.Exporter.ConsumeMetrics(ctx, md)
 }
@@ -99,6 +103,7 @@ type tracesExporter struct{ *Exporter }
 func (e *tracesExporter) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{}
 }
+
 func (e *tracesExporter) ConsumeTraces(ctx context.Context, td ptrace.Traces) error {
 	return e.Exporter.ConsumeTraces(ctx, td)
 }
@@ -108,6 +113,7 @@ type logsExporter struct{ *Exporter }
 func (e *logsExporter) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{}
 }
+
 func (e *logsExporter) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 	return e.Exporter.ConsumeLogs(ctx, ld)
 }
@@ -117,6 +123,7 @@ type profilesExporter struct{ *Exporter }
 func (e *profilesExporter) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{}
 }
+
 func (e *profilesExporter) ConsumeProfiles(ctx context.Context, pd pprofile.Profiles) error {
 	return e.Exporter.ConsumeProfiles(ctx, pd)
 }

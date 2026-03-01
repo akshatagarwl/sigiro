@@ -36,19 +36,24 @@ func TestMapMetrics_Gauge(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
+
 	r := rows[0]
 	if r.Signal != schema.SignalMetric {
 		t.Errorf("signal = %q, want metric", r.Signal)
 	}
+
 	if r.Service != "checkout" {
 		t.Errorf("service = %q, want checkout", r.Service)
 	}
+
 	if r.Name != "memory.usage" {
 		t.Errorf("name = %q, want memory.usage", r.Name)
 	}
+
 	if *r.Value != 512.0 {
 		t.Errorf("value = %f, want 512", *r.Value)
 	}
+
 	if *r.Unit != "MB" {
 		t.Errorf("unit = %q, want MB", *r.Unit)
 	}
@@ -71,6 +76,7 @@ func TestMapMetrics_Sum(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
+
 	if *rows[0].Value != 342.0 {
 		t.Errorf("value = %f, want 342", *rows[0].Value)
 	}
@@ -94,22 +100,28 @@ func TestMapTraces(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
+
 	r := rows[0]
 	if r.Signal != schema.SignalSpan {
 		t.Errorf("signal = %q, want span", r.Signal)
 	}
+
 	if r.Name != "POST /checkout" {
 		t.Errorf("name = %q", r.Name)
 	}
+
 	if r.TraceID == nil || *r.TraceID != "0102030405060708090a0b0c0d0e0f10" {
 		t.Errorf("trace_id = %v", r.TraceID)
 	}
+
 	if r.SpanID == nil || *r.SpanID != "0102030405060708" {
 		t.Errorf("span_id = %v", r.SpanID)
 	}
+
 	if *r.Value != 50 { // 50ms (converted from ns at write time, see schema.UnitSpanDuration)
 		t.Errorf("duration = %f, want 50 (ms)", *r.Value)
 	}
+
 	if *r.Status != "ERROR" {
 		t.Errorf("status = %q, want ERROR", *r.Status)
 	}
@@ -130,16 +142,20 @@ func TestMapLogs(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
+
 	r := rows[0]
 	if r.Signal != schema.SignalLog {
 		t.Errorf("signal = %q, want log", r.Signal)
 	}
+
 	if *r.Status != "ERROR" {
 		t.Errorf("status = %q, want ERROR", *r.Status)
 	}
+
 	if *r.Message != "OOMKilled: container checkout exceeded 512Mi" {
 		t.Errorf("message = %q", *r.Message)
 	}
+
 	if r.Name != "app.log" {
 		t.Errorf("name = %q, want app.log", r.Name)
 	}
@@ -151,17 +167,19 @@ func TestMapProfiles(t *testing.T) {
 	// Build the shared dictionary:
 	// StringTable: [0]="cpu" [1]="count" [2]="runtime.gcDrain" [3]="runtime.gcBgMarkWorker" [4]="main.handler"
 	dict := pd.Dictionary()
-	dict.StringTable().Append("cpu")             // 0
-	dict.StringTable().Append("count")           // 1
-	dict.StringTable().Append("runtime.gcDrain") // 2
+	dict.StringTable().Append("cpu")                    // 0
+	dict.StringTable().Append("count")                  // 1
+	dict.StringTable().Append("runtime.gcDrain")        // 2
 	dict.StringTable().Append("runtime.gcBgMarkWorker") // 3
-	dict.StringTable().Append("main.handler")    // 4
+	dict.StringTable().Append("main.handler")           // 4
 
 	// FunctionTable: [0]=gcDrain [1]=gcBgMarkWorker [2]=main.handler
 	fn0 := dict.FunctionTable().AppendEmpty()
 	fn0.SetNameStrindex(2) // "runtime.gcDrain"
+
 	fn1 := dict.FunctionTable().AppendEmpty()
 	fn1.SetNameStrindex(3) // "runtime.gcBgMarkWorker"
+
 	fn2 := dict.FunctionTable().AppendEmpty()
 	fn2.SetNameStrindex(4) // "main.handler"
 
@@ -197,16 +215,20 @@ func TestMapProfiles(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
+
 	r := rows[0]
 	if r.Signal != schema.SignalProfile {
 		t.Errorf("signal = %q, want profile", r.Signal)
 	}
+
 	if r.Service != "checkout" {
 		t.Errorf("service = %q, want checkout", r.Service)
 	}
+
 	if r.Name != "profile.cpu" {
 		t.Errorf("name = %q, want profile.cpu", r.Name)
 	}
+
 	if *r.Value != 150 {
 		t.Errorf("value = %f, want 150", *r.Value)
 	}
@@ -216,6 +238,7 @@ func TestMapProfiles(t *testing.T) {
 	if len(r.Stacktrace) != len(wantStack) {
 		t.Fatalf("stacktrace len = %d, want %d: %v", len(r.Stacktrace), len(wantStack), r.Stacktrace)
 	}
+
 	for i, s := range r.Stacktrace {
 		if s != wantStack[i] {
 			t.Errorf("stacktrace[%d] = %q, want %q", i, s, wantStack[i])

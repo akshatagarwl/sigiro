@@ -39,9 +39,12 @@ func (e *Exporter) Start(_ context.Context, _ component.Host) error {
 	if interval == 0 {
 		interval = 15 * time.Second
 	}
+
 	ticker := time.NewTicker(interval)
+
 	go func() {
 		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ticker.C:
@@ -53,6 +56,7 @@ func (e *Exporter) Start(_ context.Context, _ component.Host) error {
 			}
 		}
 	}()
+
 	return nil
 }
 
@@ -65,36 +69,44 @@ func (e *Exporter) Shutdown(ctx context.Context) error {
 // ConsumeMetrics maps OTLP metrics to UnifiedRows and appends to buffer.
 func (e *Exporter) ConsumeMetrics(_ context.Context, md pmetric.Metrics) error {
 	rows := mapMetrics(md)
+
 	e.mu.Lock()
 	e.buffer = append(e.buffer, rows...)
 	e.mu.Unlock()
+
 	return nil
 }
 
 // ConsumeTraces maps OTLP traces to UnifiedRows and appends to buffer.
 func (e *Exporter) ConsumeTraces(_ context.Context, td ptrace.Traces) error {
 	rows := mapTraces(td)
+
 	e.mu.Lock()
 	e.buffer = append(e.buffer, rows...)
 	e.mu.Unlock()
+
 	return nil
 }
 
 // ConsumeLogs maps OTLP logs to UnifiedRows and appends to buffer.
 func (e *Exporter) ConsumeLogs(_ context.Context, ld plog.Logs) error {
 	rows := mapLogs(ld)
+
 	e.mu.Lock()
 	e.buffer = append(e.buffer, rows...)
 	e.mu.Unlock()
+
 	return nil
 }
 
 // ConsumeProfiles maps OTLP profiles to UnifiedRows and appends to buffer.
 func (e *Exporter) ConsumeProfiles(_ context.Context, pd pprofile.Profiles) error {
 	rows := mapProfiles(pd)
+
 	e.mu.Lock()
 	e.buffer = append(e.buffer, rows...)
 	e.mu.Unlock()
+
 	return nil
 }
 
@@ -104,6 +116,7 @@ func (e *Exporter) flush(ctx context.Context) error {
 		e.mu.Unlock()
 		return nil
 	}
+
 	snapshot := e.buffer
 	e.buffer = make([]schema.UnifiedRow, 0, cap(snapshot))
 	e.mu.Unlock()
@@ -117,7 +130,9 @@ func (e *Exporter) flush(ctx context.Context) error {
 		e.mu.Lock()
 		e.buffer = append(snapshot, e.buffer...)
 		e.mu.Unlock()
+
 		return err
 	}
+
 	return nil
 }

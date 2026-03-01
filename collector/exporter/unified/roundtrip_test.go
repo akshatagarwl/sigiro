@@ -66,9 +66,11 @@ func TestRoundtrip_SpanDurationUnit(t *testing.T) {
 		if r.Name == "GET /fast" && *r.Value != 50 {
 			t.Errorf("mapper: GET /fast duration = %f, want 50 (ms)", *r.Value)
 		}
+
 		if r.Name == "POST /slow" && *r.Value != 2500 {
 			t.Errorf("mapper: POST /slow duration = %f, want 2500 (ms)", *r.Value)
 		}
+
 		if *r.Unit != schema.UnitSpanDuration {
 			t.Errorf("mapper: unit = %q, want %q", *r.Unit, schema.UnitSpanDuration)
 		}
@@ -79,9 +81,11 @@ func TestRoundtrip_SpanDurationUnit(t *testing.T) {
 		if rows[i].Service != rows[j].Service {
 			return rows[i].Service < rows[j].Service
 		}
+
 		if rows[i].Signal != rows[j].Signal {
 			return rows[i].Signal < rows[j].Signal
 		}
+
 		return rows[i].Timestamp < rows[j].Timestamp
 	})
 
@@ -89,16 +93,20 @@ func TestRoundtrip_SpanDurationUnit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	path := f.Name()
+
 	w := parquet.NewGenericWriter[schema.UnifiedRow](f,
 		parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}),
 	)
 	if _, err := w.Write(rows); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	f.Close()
 
 	// Load into DuckDB and query through the investigation layer
@@ -127,10 +135,12 @@ func TestRoundtrip_SpanDurationUnit(t *testing.T) {
 	if len(block.Spans) != 1 {
 		t.Fatalf("expected 1 span (slow only), got %d", len(block.Spans))
 	}
+
 	s := block.Spans[0]
 	if s.Name != "POST /slow" {
 		t.Errorf("span name = %q, want POST /slow", s.Name)
 	}
+
 	if s.DurationMs != 2500 {
 		t.Errorf("span DurationMs = %f, want 2500", s.DurationMs)
 	}

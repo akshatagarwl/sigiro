@@ -17,6 +17,7 @@ func ParquetGlobs(bucket string, from, to time.Time) []string {
 	for h := fromH; h <= toH; h += 3600 {
 		globs = append(globs, fmt.Sprintf("s3://%s/%d/*.parquet", bucket, h))
 	}
+
 	return globs
 }
 
@@ -27,9 +28,11 @@ func ParquetTable(bucket string, from, to time.Time) string {
 	if len(globs) == 1 {
 		return fmt.Sprintf("read_parquet('%s')", globs[0])
 	}
+
 	quoted := make([]string, len(globs))
 	for i, g := range globs {
 		quoted[i] = fmt.Sprintf("'%s'", g)
 	}
+
 	return fmt.Sprintf("read_parquet([%s])", strings.Join(quoted, ", "))
 }

@@ -19,8 +19,10 @@ func serviceName(res pcommon.Resource) string {
 		if v.AsString() == "" {
 			panic("resource attribute service.name is empty")
 		}
+
 		return v.AsString()
 	}
+
 	panic("resource attribute service.name is missing")
 }
 
@@ -28,6 +30,7 @@ func hostName(res pcommon.Resource) string {
 	if v, ok := res.Attributes().Get("host.name"); ok {
 		return v.AsString()
 	}
+
 	return ""
 }
 
@@ -35,6 +38,7 @@ func podName(res pcommon.Resource) string {
 	if v, ok := res.Attributes().Get("k8s.pod.name"); ok {
 		return v.AsString()
 	}
+
 	return ""
 }
 
@@ -42,6 +46,7 @@ func deployVersion(res pcommon.Resource) string {
 	if v, ok := res.Attributes().Get("service.version"); ok {
 		return v.AsString()
 	}
+
 	return ""
 }
 
@@ -51,6 +56,7 @@ func traceIDStr(tid pcommon.TraceID) *string {
 	if tid.IsEmpty() {
 		return nil
 	}
+
 	return ptr(hex.EncodeToString(tid[:]))
 }
 
@@ -58,11 +64,13 @@ func spanIDStr(sid pcommon.SpanID) *string {
 	if sid.IsEmpty() {
 		return nil
 	}
+
 	return ptr(hex.EncodeToString(sid[:]))
 }
 
 func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 	var rows []schema.UnifiedRow
+
 	for i := 0; i < md.ResourceMetrics().Len(); i++ {
 		rm := md.ResourceMetrics().At(i)
 		svc := serviceName(rm.Resource())
@@ -100,10 +108,12 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 				case pmetric.MetricTypeHistogram:
 					for p := 0; p < m.Histogram().DataPoints().Len(); p++ {
 						dp := m.Histogram().DataPoints().At(p)
+
 						var val float64
 						if dp.HasSum() {
 							val = dp.Sum() / float64(dp.Count())
 						}
+
 						rows = append(rows, schema.UnifiedRow{
 							Timestamp: int64(dp.Timestamp()),
 							Signal:    schema.SignalMetric,
@@ -115,6 +125,7 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 			}
 		}
 	}
+
 	return rows
 }
 
@@ -125,6 +136,7 @@ func dpValue(dp pmetric.NumberDataPoint) float64 {
 	case pmetric.NumberDataPointValueTypeDouble:
 		return dp.DoubleValue()
 	}
+
 	panic(fmt.Sprintf("unsupported metric datapoint value type: %v", dp.ValueType()))
 }
 
@@ -133,11 +145,13 @@ func mustJSONString(attrs map[string]string) *string {
 	if err != nil {
 		panic(fmt.Sprintf("marshal attributes: %v", err))
 	}
+
 	return ptr(string(b))
 }
 
 func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 	var rows []schema.UnifiedRow
+
 	for i := 0; i < td.ResourceSpans().Len(); i++ {
 		rs := td.ResourceSpans().At(i)
 		svc := serviceName(rs.Resource())
@@ -159,30 +173,37 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 				kind := s.Kind().String()
 
 				var events []schema.Event
+
 				for e := 0; e < s.Events().Len(); e++ {
 					ev := s.Events().At(e)
+
 					event := schema.Event{
 						Timestamp: int64(ev.Timestamp()),
 						Name:      ev.Name(),
 					}
 					if ev.Attributes().Len() > 0 {
 						attrs := map[string]string{}
+
 						ev.Attributes().Range(func(k string, v pcommon.Value) bool {
 							attrs[k] = v.AsString()
 							return true
 						})
 						event.Attributes = mustJSONString(attrs)
 					}
+
 					events = append(events, event)
 				}
 
 				var metadata *string
+
 				if s.Attributes().Len() > 0 {
 					attrs := map[string]string{}
+
 					s.Attributes().Range(func(k string, v pcommon.Value) bool {
 						attrs[k] = v.AsString()
 						return true
 					})
+
 					metadata = mustJSONString(attrs)
 				}
 
@@ -204,11 +225,13 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 			}
 		}
 	}
+
 	return rows
 }
 
 func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 	var rows []schema.UnifiedRow
+
 	for i := 0; i < ld.ResourceLogs().Len(); i++ {
 		rl := ld.ResourceLogs().At(i)
 		svc := serviceName(rl.Resource())
@@ -218,6 +241,7 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 
 		for j := 0; j < rl.ScopeLogs().Len(); j++ {
 			sl := rl.ScopeLogs().At(j)
+
 			scopeName := sl.Scope().Name()
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				lr := sl.LogRecords().At(k)
@@ -240,6 +264,7 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 			}
 		}
 	}
+
 	return rows
 }
 
@@ -255,19 +280,24 @@ func buildLocationNamesIndex(
 	locations := make([]locInfo, locationTable.Len())
 	for l := 0; l < locationTable.Len(); l++ {
 		loc := locationTable.At(l)
+
 		var names []string
+
 		for li := 0; li < loc.Lines().Len(); li++ {
 			funcIdx := loc.Lines().At(li).FunctionIndex()
 			if int(funcIdx) < functionTable.Len() {
 				fn := functionTable.At(int(funcIdx))
+
 				nameIdx := fn.NameStrindex()
 				if int(nameIdx) < stringTable.Len() {
 					names = append(names, stringTable.At(int(nameIdx)))
 				}
 			}
 		}
+
 		locations[l] = locInfo{names: names}
 	}
+
 	return locations
 }
 
@@ -279,6 +309,7 @@ func resolveProfileType(p pprofile.Profile, stringTable pcommon.StringSlice) str
 			return profileType
 		}
 	}
+
 	panic("profile sample type is required")
 }
 
@@ -291,8 +322,10 @@ func resolveStacktrace(
 	if int(stackIdx) >= stackTable.Len() {
 		return nil
 	}
+
 	st := stackTable.At(int(stackIdx))
 	locIndices := st.LocationIndices()
+
 	stack := make([]string, 0, locIndices.Len())
 	for li := 0; li < locIndices.Len(); li++ {
 		locIdx := locIndices.At(li)
@@ -300,6 +333,7 @@ func resolveStacktrace(
 			stack = append(stack, locations[locIdx].names...)
 		}
 	}
+
 	return stack
 }
 
@@ -353,5 +387,6 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 			}
 		}
 	}
+
 	return rows
 }

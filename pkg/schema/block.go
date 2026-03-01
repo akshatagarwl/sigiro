@@ -29,7 +29,7 @@ type SpanNode struct {
 	ParentID   *string    `json:"parent_span_id,omitempty"`
 	Service    string     `json:"service,omitempty"`
 	Name       string     `json:"name"`
-	DurationMs float64   `json:"duration_ms"`
+	DurationMs float64    `json:"duration_ms"`
 	Status     string     `json:"status"`
 	Kind       string     `json:"kind,omitempty"`
 	Children   []SpanNode `json:"children,omitempty"`
