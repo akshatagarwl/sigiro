@@ -12,9 +12,7 @@ processors:
   - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.146.1
 
 exporters:
-  - gomod: github.com/akshatagarwl/observe/collector/exporter/unified v0.0.0
-    path: ./collector/exporter/unified
+  - gomod: github.com/akshatagarwl/observe v0.0.0
+    import: github.com/akshatagarwl/observe/collector/exporter/unified
+    path: ./
   - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.146.1
-
-replaces:
-  - github.com/akshatagarwl/observe => ./
