@@ -8,6 +8,10 @@ import (
 )
 
 func queryMetrics(ctx context.Context, db *sql.DB, table, service string, t1, t2 int64) ([]schema.MetricRow, error) {
+	// FRAGILE: table name is interpolated via string concatenation — if the
+	// bucket name or time range is ever derived from user input without
+	// validation, this is a SQL injection vector. All 4 query functions
+	// share this pattern.
 	rows, err := db.QueryContext(ctx, `
 		SELECT strftime(to_timestamp(timestamp/1000000000)::TIMESTAMP, '%H:%M') AS bucket,
 		       name,
@@ -47,7 +51,7 @@ func querySpans(ctx context.Context, db *sql.DB, table, service string, t1, t2 i
 		       value AS duration_ms, status, kind
 		FROM `+table+`
 		WHERE service=$1 AND signal='span' AND timestamp BETWEEN $2 AND $3
-		  AND (status='ERROR' OR value > 1000) -- status is upper-cased at write time in mapper.go
+		  AND (status='ERROR' OR value > 1000) -- FRAGILE: hardcoded 1s threshold — assumes all services have the same latency SLO. Also couples to mapper's ms unit convention; if mapper changes unit, this silently filters wrong.
 		ORDER BY value DESC
 		LIMIT 50
 	`, service, t1, t2)
@@ -126,6 +130,9 @@ func queryLogs(ctx context.Context, db *sql.DB, table, service string, t1, t2 in
 
 func queryProfiles(ctx context.Context, db *sql.DB, table, service string, t1, t2 int64) ([]schema.ProfileRow, error) {
 	rows, err := db.QueryContext(ctx, `
+		-- FRAGILE: assumes DuckDB 1-based array indexing. Also returns NULL
+		-- (not an error) if stacktrace is empty, which gets scanned as empty
+		-- string. Leaf function is meaningless for recursive stacks.
 		SELECT stacktrace[len(stacktrace)] AS leaf,
 		       sum(value) AS samples
 		FROM `+table+`

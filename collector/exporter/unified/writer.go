@@ -26,6 +26,10 @@ type ParquetWriter struct {
 
 // NewParquetWriter creates a new ParquetWriter.
 func NewParquetWriter(bucket string, s3Client *s3.Client) *ParquetWriter {
+	// FRAGILE: nodeID is UnixNano mod 100k — only 100k possible values, so
+	// two collector instances started in the same 100µs window (or any time
+	// mod-collision) will write to the same S3 key, silently overwriting
+	// each other's data. Use a UUID instead.
 	return &ParquetWriter{
 		bucket:   bucket,
 		s3Client: s3Client,
@@ -35,6 +39,10 @@ func NewParquetWriter(bucket string, s3Client *s3.Client) *ParquetWriter {
 
 // EpochHour returns the Unix timestamp (seconds) of the start of the hour
 // containing the given nanosecond timestamp.
+// FRAGILE: mixes nanosecond input with a seconds output — callers must know
+// the convention. The S3 key uses this seconds value, but the Parquet
+// timestamp column stores nanoseconds. If anyone passes microseconds or
+// seconds by mistake, rows land in the wrong partition silently.
 func EpochHour(tsNano int64) int64 {
 	return (tsNano / nsPerHour) * 3600
 }
@@ -70,6 +78,9 @@ func (w *ParquetWriter) Write(ctx context.Context, rows []schema.UnifiedRow) err
 		key := fmt.Sprintf("%d/%s-%d.parquet",
 			hour, w.nodeID, time.Now().UnixNano())
 
+		// FRAGILE: entire hour-partition is buffered in memory before upload.
+		// A burst of data for a single hour can OOM the process. No size
+		// limit or chunking.
 		var buf bytes.Buffer
 
 		writer := parquet.NewGenericWriter[schema.UnifiedRow](&buf,

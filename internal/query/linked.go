@@ -10,6 +10,10 @@ import (
 )
 
 // queryLinkedSpans fetches all spans (across all services) for the given trace IDs.
+// FRAGILE: builds an IN clause with one placeholder per trace ID — no upper
+// bound on len(traceIDs). A service with many error traces in the window can
+// produce a query with thousands of placeholders, hitting DuckDB query-size
+// limits or causing extreme memory use during plan/execution.
 func queryLinkedSpans(ctx context.Context, db *sql.DB, table string, traceIDs []string) (map[string][]schema.SpanNode, error) {
 	if len(traceIDs) == 0 {
 		return nil, nil
@@ -27,6 +31,8 @@ func queryLinkedSpans(ctx context.Context, db *sql.DB, table string, traceIDs []
 		SELECT trace_id, span_id, parent_span_id, service, name,
 		       value AS duration_ms, status, kind
 		FROM %s
+		-- FRAGILE: no time-range filter — scans ALL partitions for matching
+		-- trace IDs. For a large bucket this is a full table scan.
 		WHERE trace_id IN (%s) AND signal='span'
 		ORDER BY trace_id, timestamp
 	`, table, strings.Join(placeholders, ",")), args...)

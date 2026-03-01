@@ -14,6 +14,9 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
+// FRAGILE: panics on missing/empty service.name — real OTel data frequently
+// lacks this attribute (e.g. default SDKs, bare collectors, pre-instrumented
+// libraries). A single bad batch will crash the entire collector process.
 func serviceName(res pcommon.Resource) string {
 	if v, ok := res.Attributes().Get("service.name"); ok {
 		if v.AsString() == "" {
@@ -105,10 +108,16 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 							Name: m.Name(), Value: ptr(dpValue(dp)), Unit: &unit,
 						})
 					}
+				// FRAGILE: ExponentialHistogram and Summary metric types are silently
+				// dropped — no row is emitted and no error is raised. Data loss is
+				// invisible to the operator.
 				case pmetric.MetricTypeHistogram:
 					for p := 0; p < m.Histogram().DataPoints().Len(); p++ {
 						dp := m.Histogram().DataPoints().At(p)
 
+						// FRAGILE: divide-by-zero when Count==0 (newly-reset cumulative
+						// histograms). Also collapses a full distribution into a single
+						// avg — loses p50/p95/p99 bucket information.
 						var val float64
 						if dp.HasSum() {
 							val = dp.Sum() / float64(dp.Count())
@@ -137,6 +146,8 @@ func dpValue(dp pmetric.NumberDataPoint) float64 {
 		return dp.DoubleValue()
 	}
 
+	// FRAGILE: panics on unrecognized value types — newer OTel versions could
+	// add value types, crashing the collector on upgrade.
 	panic(fmt.Sprintf("unsupported metric datapoint value type: %v", dp.ValueType()))
 }
 
@@ -165,6 +176,10 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 				s := ss.Spans().At(k)
 				// OTel timestamps are nanoseconds; convert to milliseconds at write time.
 				// This is the canonical unit for span durations — see schema.UnitSpanDuration.
+				// FRAGILE: unsigned subtraction on pcommon.Timestamp (uint64) — if
+				// EndTimestamp < StartTimestamp (clock skew, unfinished spans where
+				// EndTimestamp==0), this wraps to a huge positive number rather than
+				// going negative, producing nonsensical duration values.
 				dur := float64(s.EndTimestamp()-s.StartTimestamp()) / 1e6
 				// Normalize to uppercase to match the query layer, which filters
 				// on status='ERROR'. ptrace.StatusCode.String() returns title-case
@@ -248,6 +263,9 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 				status := lr.SeverityText()
 				msg := lr.Body().AsString()
 
+				// FRAGILE: panics on empty scope name — many OTel SDKs and log
+				// bridges (e.g. slog, zap bridges) send logs with empty scope.
+				// Crashes the collector on perfectly normal input.
 				if scopeName == "" {
 					panic("scope name is required for log rows")
 				}
@@ -268,6 +286,11 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 	return rows
 }
 
+// FRAGILE: assumes Dictionary is populated at the top-level Profiles container
+// and shared across all ResourceProfiles/ScopeProfiles. The pprofile API is
+// experimental (v0.146.1) and this layout could change. If a future version
+// moves dictionaries per-Profile, every index lookup below silently returns
+// wrong data (wrong function names, corrupt stacks) with no error.
 func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 	var rows []schema.UnifiedRow
 
@@ -339,6 +362,9 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 						}
 					}
 
+					// FRAGILE: only reads Values().At(0) — silently drops all other
+					// value columns (e.g. alloc_objects vs alloc_space in heap
+					// profiles). Multi-value profiles lose data without warning.
 					var val float64
 					if sample.Values().Len() > 0 {
 						val = float64(sample.Values().At(0))

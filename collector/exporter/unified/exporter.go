@@ -48,6 +48,9 @@ func (e *Exporter) Start(_ context.Context, _ component.Host) error {
 		for {
 			select {
 			case <-ticker.C:
+				// FRAGILE: uses context.Background() — flush is not cancelled
+				// on Shutdown, so a slow S3 write can block process exit
+				// indefinitely.
 				if err := e.flush(context.Background()); err != nil {
 					slog.Error("flush failed", "error", err)
 				}
@@ -125,8 +128,10 @@ func (e *Exporter) flush(ctx context.Context) error {
 		// Prepend failed batch so it is retried on the next tick.
 		// Rows that arrived during the write attempt end up after the
 		// retried rows, preserving chronological order.
-		// NOTE: sustained failures will grow the buffer without bound
-		// until memory-bounded ring buffers are implemented.
+		// FRAGILE: sustained failures grow the buffer without bound
+		// (OOM guaranteed). No back-pressure, no drop policy, no metric
+		// to alert on buffer size. A transient S3 outage will accumulate
+		// data until the process is killed.
 		e.mu.Lock()
 		e.buffer = append(snapshot, e.buffer...)
 		e.mu.Unlock()

@@ -162,6 +162,10 @@ func collectErrorTraceIDs(spans []schema.SpanNode, logs []schema.LogRow) []strin
 		}
 	}
 
+	// FRAGILE: assumes log severity text is exactly "ERROR" — but the
+	// mapper stores lr.SeverityText() as-is (not upper-cased like spans).
+	// Common values include "error", "ERROR", "Error", "FATAL". This will
+	// miss most error logs, so linked traces are under-fetched.
 	for _, l := range logs {
 		if l.TraceID != nil && l.Status == "ERROR" {
 			seen[*l.TraceID] = true

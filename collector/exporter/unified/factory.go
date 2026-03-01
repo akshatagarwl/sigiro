@@ -65,6 +65,13 @@ func newS3Client(cfg *Config) *s3.Client {
 	return s3.New(s3.Options{}, opts)
 }
 
+// FRAGILE: each signal type creates its own Exporter instance with its own
+// buffer, flush goroutine, and S3 client. 4 independent exporters means 4x
+// memory buffers, 4 separate flush timers, and 4 separate S3 connections.
+// Rows from different signals for the same epoch-hour are written to
+// separate Parquet files, breaking the intended sort order (service, signal,
+// timestamp) within a single file. This also means Shutdown() is called 4
+// times, each flushing independently.
 func createMetricsExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
 	e := newExporter(cfg)
 	return &metricsExporter{e}, nil
