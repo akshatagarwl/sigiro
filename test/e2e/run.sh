@@ -35,9 +35,10 @@ echo "=== Waiting for Parquet files ==="
 TIMEOUT=120
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  FILE_COUNT=$(docker compose exec -T minio sh -c "find /data/observe -name '*.parquet' 2>/dev/null | wc -l" | tr -d '[:space:]')
-  if [ "$FILE_COUNT" -gt 0 ]; then
-    echo "Found $FILE_COUNT Parquet file(s) after ${ELAPSED}s"
+  # Check collector logs for successful flush messages
+  FLUSH_COUNT=$(docker compose logs collector 2>&1 | grep -c "flushed parquet" || true)
+  if [ "$FLUSH_COUNT" -gt 0 ]; then
+    echo "Found $FLUSH_COUNT flush(es) in collector logs after ${ELAPSED}s"
     break
   fi
   sleep 5
@@ -45,15 +46,15 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
 done
 
 if [ $ELAPSED -ge $TIMEOUT ]; then
-  echo "FAIL: No Parquet files after ${TIMEOUT}s"
+  echo "FAIL: No Parquet flushes after ${TIMEOUT}s"
   echo "=== Collector logs ==="
   docker compose logs collector
   exit 1
 fi
 
-# Wait for all generators to finish and flush
-echo "Waiting 20s for remaining data to flush..."
-sleep 20
+# Wait for all generators to finish (30s duration) and final flush (15s interval)
+echo "Waiting 40s for generators to finish and final flush..."
+sleep 40
 
 echo "=== Running DuckDB verification ==="
 
