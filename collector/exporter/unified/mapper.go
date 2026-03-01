@@ -268,16 +268,18 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 	return rows
 }
 
-type locInfo struct {
-	names []string
-}
+func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
+	var rows []schema.UnifiedRow
 
-func buildLocationNamesIndex(
-	locationTable pprofile.LocationSlice,
-	functionTable pprofile.FunctionSlice,
-	stringTable pcommon.StringSlice,
-) []locInfo {
-	locations := make([]locInfo, locationTable.Len())
+	// Dictionary is shared across all profiles in the batch
+	dict := pd.Dictionary()
+	stringTable := dict.StringTable()
+	locationTable := dict.LocationTable()
+	functionTable := dict.FunctionTable()
+	stackTable := dict.StackTable()
+
+	// Pre-compute resolved function names per location index.
+	locationNames := make([][]string, locationTable.Len())
 	for l := 0; l < locationTable.Len(); l++ {
 		loc := locationTable.At(l)
 
@@ -295,59 +297,8 @@ func buildLocationNamesIndex(
 			}
 		}
 
-		locations[l] = locInfo{names: names}
+		locationNames[l] = names
 	}
-
-	return locations
-}
-
-func resolveProfileType(p pprofile.Profile, stringTable pcommon.StringSlice) string {
-	typeIdx := p.SampleType().TypeStrindex()
-	if int(typeIdx) < stringTable.Len() {
-		profileType := stringTable.At(int(typeIdx))
-		if profileType != "" {
-			return profileType
-		}
-	}
-
-	panic("profile sample type is required")
-}
-
-func resolveStacktrace(
-	sample pprofile.Sample,
-	stackTable pprofile.StackSlice,
-	locations []locInfo,
-) []string {
-	stackIdx := sample.StackIndex()
-	if int(stackIdx) >= stackTable.Len() {
-		return nil
-	}
-
-	st := stackTable.At(int(stackIdx))
-	locIndices := st.LocationIndices()
-
-	stack := make([]string, 0, locIndices.Len())
-	for li := 0; li < locIndices.Len(); li++ {
-		locIdx := locIndices.At(li)
-		if int(locIdx) < len(locations) {
-			stack = append(stack, locations[locIdx].names...)
-		}
-	}
-
-	return stack
-}
-
-func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
-	var rows []schema.UnifiedRow
-
-	// Dictionary is shared across all profiles in the batch
-	dict := pd.Dictionary()
-	stringTable := dict.StringTable()
-	locationTable := dict.LocationTable()
-	functionTable := dict.FunctionTable()
-	stackTable := dict.StackTable()
-
-	locations := buildLocationNamesIndex(locationTable, functionTable, stringTable)
 
 	for i := 0; i < pd.ResourceProfiles().Len(); i++ {
 		rp := pd.ResourceProfiles().At(i)
@@ -360,13 +311,33 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 			sp := rp.ScopeProfiles().At(j)
 			for k := 0; k < sp.Profiles().Len(); k++ {
 				p := sp.Profiles().At(k)
-				profileType := resolveProfileType(p, stringTable)
+
+				typeIdx := p.SampleType().TypeStrindex()
+				if int(typeIdx) >= stringTable.Len() || stringTable.At(int(typeIdx)) == "" {
+					panic("profile sample type is required")
+				}
+
+				profileType := stringTable.At(int(typeIdx))
 
 				ts := int64(p.Time())
 
 				for s := 0; s < p.Samples().Len(); s++ {
 					sample := p.Samples().At(s)
-					stack := resolveStacktrace(sample, stackTable, locations)
+
+					// Resolve stacktrace from sample → stack table → location names.
+					var stack []string
+
+					if stackIdx := sample.StackIndex(); int(stackIdx) < stackTable.Len() {
+						locIndices := stackTable.At(int(stackIdx)).LocationIndices()
+
+						stack = make([]string, 0, locIndices.Len())
+						for li := 0; li < locIndices.Len(); li++ {
+							locIdx := locIndices.At(li)
+							if int(locIdx) < len(locationNames) {
+								stack = append(stack, locationNames[locIdx]...)
+							}
+						}
+					}
 
 					var val float64
 					if sample.Values().Len() > 0 {
