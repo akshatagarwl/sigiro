@@ -2,6 +2,7 @@ package unified
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/collector/pdata/ptrace"
-	"go.uber.org/zap"
 )
 
 // Exporter buffers incoming OTLP data, maps it to UnifiedRow,
@@ -21,16 +21,14 @@ type Exporter struct {
 	buffer []schema.UnifiedRow
 	writer *ParquetWriter
 	config Config
-	logger *zap.Logger
 	done   chan struct{}
 }
 
 // NewExporter creates a new Exporter.
-func NewExporter(cfg Config, writer *ParquetWriter, logger *zap.Logger) *Exporter {
+func NewExporter(cfg Config, writer *ParquetWriter) *Exporter {
 	return &Exporter{
 		writer: writer,
 		config: cfg,
-		logger: logger,
 		done:   make(chan struct{}),
 	}
 }
@@ -48,7 +46,7 @@ func (e *Exporter) Start(_ context.Context, _ component.Host) error {
 			select {
 			case <-ticker.C:
 				if err := e.flush(context.Background()); err != nil {
-					e.logger.Error("flush failed", zap.Error(err))
+					slog.Error("flush failed", "error", err)
 				}
 			case <-e.done:
 				return

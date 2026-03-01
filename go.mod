@@ -6,6 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.2
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.10
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.2
+	github.com/caarlos0/env/v11 v11.4.0
 	github.com/duckdb/duckdb-go/v2 v2.5.5
 	github.com/parquet-go/parquet-go v0.28.0
 	go.opentelemetry.io/collector/component v1.52.0
@@ -14,7 +15,6 @@ require (
 	go.opentelemetry.io/collector/exporter/xexporter v0.146.1
 	go.opentelemetry.io/collector/pdata v1.52.0
 	go.opentelemetry.io/collector/pdata/pprofile v0.146.1
-	go.uber.org/zap v1.27.1
 )
 
 require (
@@ -59,6 +59,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.40.0 // indirect
 	go.opentelemetry.io/otel/trace v1.40.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/zap v1.27.1 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/mod v0.32.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect

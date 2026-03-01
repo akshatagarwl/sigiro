@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
-	"go.uber.org/zap"
 )
 
 const nsPerHour = int64(time.Hour)
@@ -21,16 +21,14 @@ const nsPerHour = int64(time.Hour)
 type ParquetWriter struct {
 	bucket   string
 	s3Client *s3.Client
-	logger   *zap.Logger
 	nodeID   string
 }
 
 // NewParquetWriter creates a new ParquetWriter.
-func NewParquetWriter(bucket string, s3Client *s3.Client, logger *zap.Logger) *ParquetWriter {
+func NewParquetWriter(bucket string, s3Client *s3.Client) *ParquetWriter {
 	return &ParquetWriter{
 		bucket:   bucket,
 		s3Client: s3Client,
-		logger:   logger,
 		nodeID:   fmt.Sprintf("%d", time.Now().UnixNano()%100000),
 	}
 }
@@ -89,11 +87,7 @@ func (w *ParquetWriter) Write(ctx context.Context, rows []schema.UnifiedRow) err
 			return fmt.Errorf("s3 put %s: %w", key, err)
 		}
 
-		w.logger.Info("flushed parquet",
-			zap.String("key", key),
-			zap.Int("rows", len(hourRows)),
-			zap.Int("bytes", buf.Len()),
-		)
+		slog.Info("flushed parquet", "key", key, "rows", len(hourRows), "bytes", buf.Len())
 	}
 	return nil
 }

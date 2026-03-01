@@ -39,11 +39,11 @@ func createDefaultConfig() component.Config {
 	}
 }
 
-func newExporter(cfg component.Config, logger component.TelemetrySettings) *Exporter {
+func newExporter(cfg component.Config) *Exporter {
 	c := cfg.(*Config)
 	s3Client := newS3Client(c)
-	writer := NewParquetWriter(c.S3Bucket, s3Client, logger.Logger)
-	return NewExporter(*c, writer, logger.Logger)
+	writer := NewParquetWriter(c.S3Bucket, s3Client)
+	return NewExporter(*c, writer)
 }
 
 func newS3Client(cfg *Config) *s3.Client {
@@ -62,23 +62,23 @@ func newS3Client(cfg *Config) *s3.Client {
 	return s3.New(s3.Options{}, opts)
 }
 
-func createMetricsExporter(_ context.Context, set exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
-	e := newExporter(cfg, set.TelemetrySettings)
+func createMetricsExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
+	e := newExporter(cfg)
 	return &metricsExporter{e}, nil
 }
 
-func createTracesExporter(_ context.Context, set exporter.Settings, cfg component.Config) (exporter.Traces, error) {
-	e := newExporter(cfg, set.TelemetrySettings)
+func createTracesExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Traces, error) {
+	e := newExporter(cfg)
 	return &tracesExporter{e}, nil
 }
 
-func createLogsExporter(_ context.Context, set exporter.Settings, cfg component.Config) (exporter.Logs, error) {
-	e := newExporter(cfg, set.TelemetrySettings)
+func createLogsExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Logs, error) {
+	e := newExporter(cfg)
 	return &logsExporter{e}, nil
 }
 
-func createProfilesExporter(_ context.Context, set exporter.Settings, cfg component.Config) (xexporter.Profiles, error) {
-	e := newExporter(cfg, set.TelemetrySettings)
+func createProfilesExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (xexporter.Profiles, error) {
+	e := newExporter(cfg)
 	return &profilesExporter{e}, nil
 }
 
