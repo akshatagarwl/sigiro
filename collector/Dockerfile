@@ -14,9 +14,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 
 # Generate collector code and compile
+# OCB output_path is ./collector/cmd/collector — parent must exist.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    builder --config=otelcol-builder.yaml
+    mkdir -p collector/cmd/collector && builder --config=otelcol-builder.yaml
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
