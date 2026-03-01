@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,8 +20,8 @@ type Config struct {
 	S3AccessKey string `env:"S3_ACCESS_KEY"`
 	S3SecretKey string `env:"S3_SECRET_KEY"`
 	S3Endpoint  string `env:"S3_ENDPOINT"`
-	S3Bucket    string `env:"S3_BUCKET"`
-	ListenAddr  string `env:"LISTEN_ADDR"`
+	S3Bucket    string `env:"S3_BUCKET,required,notEmpty"`
+	ListenAddr  string `env:"LISTEN_ADDR,required,notEmpty"`
 }
 
 func main() {
@@ -30,14 +31,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	db := openDuckDB()
+	defer db.Close()
+
+	configureDuckDBS3(db, cfg)
+	http.HandleFunc("POST /v1/query", queryHandler(db, cfg))
+
+	slog.Info("query-server listening", "addr", cfg.ListenAddr)
+	if err := http.ListenAndServe(cfg.ListenAddr, nil); err != nil {
+		slog.Error("server exited", "error", err)
+		os.Exit(1)
+	}
+}
+
+func openDuckDB() *sql.DB {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		slog.Error("open duckdb", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	return db
+}
 
-	// Configure S3/httpfs
+func configureDuckDBS3(db *sql.DB, cfg Config) {
 	mustExec(db, "INSTALL httpfs; LOAD httpfs")
 	if cfg.S3Region != "" {
 		mustExec(db, "SET s3_region='"+cfg.S3Region+"'")
@@ -53,44 +69,27 @@ func main() {
 		mustExec(db, "SET s3_use_ssl=false")
 		mustExec(db, "SET s3_url_style='path'")
 	}
+}
 
-	http.HandleFunc("POST /v1/query", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Service string `json:"service"`
-			From    string `json:"from"`
-			To      string `json:"to"`
-			TraceID string `json:"trace_id"`
-		}
+type queryRequest struct {
+	Service string `json:"service"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	TraceID string `json:"trace_id"`
+}
+
+func queryHandler(db *sql.DB, cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req queryRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		var fromT, toT time.Time
-		var table string
-		if req.TraceID != "" {
-			// Trace lookup: scan all partitions
-			fromT = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-			toT = time.Now().UTC()
-			table = "read_parquet('s3://" + cfg.S3Bucket + "/**/*.parquet')"
-		}
-		if req.TraceID == "" {
-			if req.Service == "" || req.From == "" || req.To == "" {
-				http.Error(w, "service, from, and to are required", http.StatusBadRequest)
-				return
-			}
-			var err error
-			fromT, err = time.Parse(time.RFC3339, req.From)
-			if err != nil {
-				http.Error(w, "invalid from: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			toT, err = time.Parse(time.RFC3339, req.To)
-			if err != nil {
-				http.Error(w, "invalid to: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			table = query.ParquetTable(cfg.S3Bucket, fromT, toT)
+		fromT, toT, table, err := resolveQueryWindowAndTable(cfg.S3Bucket, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 
 		block, err := query.Investigate(r.Context(), db, table, query.InvestigateRequest{
@@ -105,14 +104,32 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(block)
-	})
-
-	slog.Info("query-server listening", "addr", cfg.ListenAddr)
-	if err := http.ListenAndServe(cfg.ListenAddr, nil); err != nil {
-		slog.Error("server exited", "error", err)
-		os.Exit(1)
+		if err := json.NewEncoder(w).Encode(block); err != nil {
+			slog.Error("write response", "error", err)
+		}
 	}
+}
+
+func resolveQueryWindowAndTable(bucket string, req queryRequest) (time.Time, time.Time, string, error) {
+	if req.TraceID != "" {
+		// Trace lookup: scan all partitions.
+		fromT := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+		toT := time.Now().UTC()
+		return fromT, toT, "read_parquet('s3://" + bucket + "/**/*.parquet')", nil
+	}
+	if req.Service == "" || req.From == "" || req.To == "" {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("service, from, and to are required")
+	}
+
+	fromT, err := time.Parse(time.RFC3339, req.From)
+	if err != nil {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("invalid from: %w", err)
+	}
+	toT, err := time.Parse(time.RFC3339, req.To)
+	if err != nil {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("invalid to: %w", err)
+	}
+	return fromT, toT, query.ParquetTable(bucket, fromT, toT), nil
 }
 
 func mustExec(db *sql.DB, q string) {

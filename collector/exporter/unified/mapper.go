@@ -16,9 +16,12 @@ import (
 
 func serviceName(res pcommon.Resource) string {
 	if v, ok := res.Attributes().Get("service.name"); ok {
+		if v.AsString() == "" {
+			panic("resource attribute service.name is empty")
+		}
 		return v.AsString()
 	}
-	return "unknown"
+	panic("resource attribute service.name is missing")
 }
 
 func hostName(res pcommon.Resource) string {
@@ -122,7 +125,15 @@ func dpValue(dp pmetric.NumberDataPoint) float64 {
 	case pmetric.NumberDataPointValueTypeDouble:
 		return dp.DoubleValue()
 	}
-	return 0
+	panic(fmt.Sprintf("unsupported metric datapoint value type: %v", dp.ValueType()))
+}
+
+func mustJSONString(attrs map[string]string) *string {
+	b, err := json.Marshal(attrs)
+	if err != nil {
+		panic(fmt.Sprintf("marshal attributes: %v", err))
+	}
+	return ptr(string(b))
 }
 
 func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
@@ -160,8 +171,7 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 							attrs[k] = v.AsString()
 							return true
 						})
-						b, _ := json.Marshal(attrs)
-						event.Attributes = ptr(string(b))
+						event.Attributes = mustJSONString(attrs)
 					}
 					events = append(events, event)
 				}
@@ -173,14 +183,13 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 						attrs[k] = v.AsString()
 						return true
 					})
-					b, _ := json.Marshal(attrs)
-					metadata = ptr(string(b))
+					metadata = mustJSONString(attrs)
 				}
 
 				rows = append(rows, schema.UnifiedRow{
-					Timestamp:    int64(s.StartTimestamp()),
-					Signal:       schema.SignalSpan,
-					Service:      svc, Host: host, Pod: pod, DeployVer: deploy,
+					Timestamp: int64(s.StartTimestamp()),
+					Signal:    schema.SignalSpan,
+					Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
 					TraceID:      traceIDStr(s.TraceID()),
 					SpanID:       spanIDStr(s.SpanID()),
 					ParentSpanID: spanIDStr(s.ParentSpanID()),
@@ -215,9 +224,8 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 				status := lr.SeverityText()
 				msg := lr.Body().AsString()
 
-				name := scopeName
-				if name == "" {
-					name = "log"
+				if scopeName == "" {
+					panic("scope name is required for log rows")
 				}
 
 				rows = append(rows, schema.UnifiedRow{
@@ -225,7 +233,7 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 					Signal:    schema.SignalLog,
 					Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
 					TraceID: traceIDStr(lr.TraceID()),
-					Name:    name,
+					Name:    scopeName,
 					Status:  &status,
 					Message: &msg,
 				})
@@ -235,20 +243,15 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 	return rows
 }
 
-func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
-	var rows []schema.UnifiedRow
+type locInfo struct {
+	names []string
+}
 
-	// Dictionary is shared across all profiles in the batch
-	dict := pd.Dictionary()
-	stringTable := dict.StringTable()
-	locationTable := dict.LocationTable()
-	functionTable := dict.FunctionTable()
-	stackTable := dict.StackTable()
-
-	// Build location → function names index
-	type locInfo struct {
-		names []string
-	}
+func buildLocationNamesIndex(
+	locationTable pprofile.LocationSlice,
+	functionTable pprofile.FunctionSlice,
+	stringTable pcommon.StringSlice,
+) []locInfo {
 	locations := make([]locInfo, locationTable.Len())
 	for l := 0; l < locationTable.Len(); l++ {
 		loc := locationTable.At(l)
@@ -265,6 +268,52 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 		}
 		locations[l] = locInfo{names: names}
 	}
+	return locations
+}
+
+func resolveProfileType(p pprofile.Profile, stringTable pcommon.StringSlice) string {
+	typeIdx := p.SampleType().TypeStrindex()
+	if int(typeIdx) < stringTable.Len() {
+		profileType := stringTable.At(int(typeIdx))
+		if profileType != "" {
+			return profileType
+		}
+	}
+	panic("profile sample type is required")
+}
+
+func resolveStacktrace(
+	sample pprofile.Sample,
+	stackTable pprofile.StackSlice,
+	locations []locInfo,
+) []string {
+	stackIdx := sample.StackIndex()
+	if int(stackIdx) >= stackTable.Len() {
+		return nil
+	}
+	st := stackTable.At(int(stackIdx))
+	locIndices := st.LocationIndices()
+	stack := make([]string, 0, locIndices.Len())
+	for li := 0; li < locIndices.Len(); li++ {
+		locIdx := locIndices.At(li)
+		if int(locIdx) < len(locations) {
+			stack = append(stack, locations[locIdx].names...)
+		}
+	}
+	return stack
+}
+
+func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
+	var rows []schema.UnifiedRow
+
+	// Dictionary is shared across all profiles in the batch
+	dict := pd.Dictionary()
+	stringTable := dict.StringTable()
+	locationTable := dict.LocationTable()
+	functionTable := dict.FunctionTable()
+	stackTable := dict.StackTable()
+
+	locations := buildLocationNamesIndex(locationTable, functionTable, stringTable)
 
 	for i := 0; i < pd.ResourceProfiles().Len(); i++ {
 		rp := pd.ResourceProfiles().At(i)
@@ -277,35 +326,13 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 			sp := rp.ScopeProfiles().At(j)
 			for k := 0; k < sp.Profiles().Len(); k++ {
 				p := sp.Profiles().At(k)
-
-				// Determine profile type from SampleType
-				profileType := "cpu"
-				typeIdx := p.SampleType().TypeStrindex()
-				if int(typeIdx) < stringTable.Len() {
-					t := stringTable.At(int(typeIdx))
-					if t != "" {
-						profileType = t
-					}
-				}
+				profileType := resolveProfileType(p, stringTable)
 
 				ts := int64(p.Time())
 
 				for s := 0; s < p.Samples().Len(); s++ {
 					sample := p.Samples().At(s)
-
-					// Resolve stack via StackTable
-					var stack []string
-					stackIdx := sample.StackIndex()
-					if int(stackIdx) < stackTable.Len() {
-						st := stackTable.At(int(stackIdx))
-						locIndices := st.LocationIndices()
-						for li := 0; li < locIndices.Len(); li++ {
-							locIdx := locIndices.At(li)
-							if int(locIdx) < len(locations) {
-								stack = append(stack, locations[locIdx].names...)
-							}
-						}
-					}
+					stack := resolveStacktrace(sample, stackTable, locations)
 
 					var val float64
 					if sample.Values().Len() > 0 {
@@ -313,9 +340,9 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 					}
 
 					rows = append(rows, schema.UnifiedRow{
-						Timestamp:  ts,
-						Signal:     schema.SignalProfile,
-						Service:    svc, Host: host, Pod: pod, DeployVer: deploy,
+						Timestamp: ts,
+						Signal:    schema.SignalProfile,
+						Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
 						Name:       fmt.Sprintf("profile.%s", profileType),
 						Value:      &val,
 						Stacktrace: stack,

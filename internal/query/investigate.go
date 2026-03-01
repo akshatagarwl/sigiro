@@ -29,6 +29,30 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 		Window:  fmt.Sprintf("%s - %s", req.From.Format("15:04"), req.To.Format("15:04")),
 	}
 
+	if err := runPrimaryQueries(ctx, db, table, req.Service, t1, t2, block); err != nil {
+		return nil, err
+	}
+
+	// Collect error trace IDs from spans and logs
+	traceIDs := collectErrorTraceIDs(block.Spans, block.Logs)
+
+	if err := addLinkedData(ctx, db, table, req.Service, traceIDs, block); err != nil {
+		return nil, err
+	}
+
+	// Build span trees for the main spans section
+	block.Spans = schema.BuildSpanTrees(block.Spans)
+
+	return block, nil
+}
+
+func runPrimaryQueries(
+	ctx context.Context,
+	db *sql.DB,
+	table, service string,
+	t1, t2 int64,
+	block *schema.InvestigationBlock,
+) error {
 	var (
 		mu   sync.Mutex
 		wg   sync.WaitGroup
@@ -39,7 +63,7 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 
 	go func() {
 		defer wg.Done()
-		metrics, err := queryMetrics(ctx, db, table, req.Service, t1, t2)
+		metrics, err := queryMetrics(ctx, db, table, service, t1, t2)
 		mu.Lock()
 		block.Metrics = metrics
 		errs[0] = err
@@ -48,7 +72,7 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 
 	go func() {
 		defer wg.Done()
-		spans, err := querySpans(ctx, db, table, req.Service, t1, t2)
+		spans, err := querySpans(ctx, db, table, service, t1, t2)
 		mu.Lock()
 		block.Spans = spans
 		errs[1] = err
@@ -57,7 +81,7 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 
 	go func() {
 		defer wg.Done()
-		logs, err := queryLogs(ctx, db, table, req.Service, t1, t2)
+		logs, err := queryLogs(ctx, db, table, service, t1, t2)
 		mu.Lock()
 		block.Logs = logs
 		errs[2] = err
@@ -66,7 +90,7 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 
 	go func() {
 		defer wg.Done()
-		profiles, err := queryProfiles(ctx, db, table, req.Service, t1, t2)
+		profiles, err := queryProfiles(ctx, db, table, service, t1, t2)
 		mu.Lock()
 		block.Profiles = profiles
 		errs[3] = err
@@ -74,40 +98,43 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 	}()
 
 	wg.Wait()
-
 	for i, err := range errs {
 		if err != nil {
-			return nil, fmt.Errorf("query %d failed: %w", i, err)
+			return fmt.Errorf("query %d failed: %w", i, err)
 		}
 	}
+	return nil
+}
 
-	// Collect error trace IDs from spans and logs
-	traceIDs := collectErrorTraceIDs(block.Spans, block.Logs)
-
-	if len(traceIDs) > 0 {
-		spansByTrace, err := queryLinkedSpans(ctx, db, table, traceIDs)
-		if err != nil {
-			return nil, fmt.Errorf("linked spans: %w", err)
-		}
-		for tid, spans := range spansByTrace {
-			trees := schema.BuildSpanTrees(spans)
-			block.Linked.Traces = append(block.Linked.Traces, schema.LinkedTrace{
-				TraceID: tid,
-				Spans:   trees,
-			})
-		}
-
-		linkedLogs, err := queryLinkedLogs(ctx, db, table, req.Service, traceIDs)
-		if err != nil {
-			return nil, fmt.Errorf("linked logs: %w", err)
-		}
-		block.Linked.Logs = linkedLogs
+func addLinkedData(
+	ctx context.Context,
+	db *sql.DB,
+	table, service string,
+	traceIDs []string,
+	block *schema.InvestigationBlock,
+) error {
+	if len(traceIDs) == 0 {
+		return nil
 	}
 
-	// Build span trees for the main spans section
-	block.Spans = schema.BuildSpanTrees(block.Spans)
+	spansByTrace, err := queryLinkedSpans(ctx, db, table, traceIDs)
+	if err != nil {
+		return fmt.Errorf("linked spans: %w", err)
+	}
+	for tid, spans := range spansByTrace {
+		trees := schema.BuildSpanTrees(spans)
+		block.Linked.Traces = append(block.Linked.Traces, schema.LinkedTrace{
+			TraceID: tid,
+			Spans:   trees,
+		})
+	}
 
-	return block, nil
+	linkedLogs, err := queryLinkedLogs(ctx, db, table, service, traceIDs)
+	if err != nil {
+		return fmt.Errorf("linked logs: %w", err)
+	}
+	block.Linked.Logs = linkedLogs
+	return nil
 }
 
 // collectErrorTraceIDs gathers trace IDs from error spans and logs.
