@@ -110,5 +110,11 @@ func (e *Exporter) flush(ctx context.Context) error {
 	e.buffer = make([]schema.UnifiedRow, 0, cap(snapshot))
 	e.mu.Unlock()
 
-	return e.writer.Write(ctx, snapshot)
+	if err := e.writer.Write(ctx, snapshot); err != nil {
+		e.mu.Lock()
+		e.buffer = append(snapshot, e.buffer...)
+		e.mu.Unlock()
+		return err
+	}
+	return nil
 }
