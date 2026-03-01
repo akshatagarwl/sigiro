@@ -2,27 +2,36 @@ package query
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
-// ParquetGlob generates the S3 glob pattern covering all hour partitions
-// between from and to. For single-hour windows it returns a specific path;
-// for multi-hour windows it uses hive_partitioning.
-func ParquetGlob(bucket string, from, to time.Time) string {
-	fromH := from.Truncate(time.Hour)
-	toH := to.Truncate(time.Hour)
+const nsPerHour = int64(time.Hour)
 
-	if fromH.Equal(toH) {
-		return fmt.Sprintf("s3://%s/year=%04d/month=%02d/day=%02d/hour=%02d/*.parquet",
-			bucket, fromH.Year(), fromH.Month(), fromH.Day(), fromH.Hour())
+// ParquetGlobs returns the S3 glob patterns covering all epoch-hour
+// partitions between from and to. Each hour in the range gets its own
+// glob: s3://{bucket}/{epochSeconds}/*.parquet
+func ParquetGlobs(bucket string, from, to time.Time) []string {
+	fromH := from.Truncate(time.Hour).Unix()
+	toH := to.Truncate(time.Hour).Unix()
+
+	var globs []string
+	for h := fromH; h <= toH; h += 3600 {
+		globs = append(globs, fmt.Sprintf("s3://%s/%d/*.parquet", bucket, h))
 	}
+	return globs
+}
 
-	// Multi-hour: use hive partitioning glob
-	if fromH.Year() == toH.Year() && fromH.Month() == toH.Month() && fromH.Day() == toH.Day() {
-		return fmt.Sprintf("s3://%s/year=%04d/month=%02d/day=%02d/hour=*/*.parquet",
-			bucket, fromH.Year(), fromH.Month(), fromH.Day())
+// ParquetTable returns a DuckDB read_parquet expression for the given
+// bucket and time range.
+func ParquetTable(bucket string, from, to time.Time) string {
+	globs := ParquetGlobs(bucket, from, to)
+	if len(globs) == 1 {
+		return fmt.Sprintf("read_parquet('%s')", globs[0])
 	}
-
-	// Multi-day: broad glob with hive partitioning (DuckDB will prune)
-	return fmt.Sprintf("s3://%s/**/*.parquet", bucket)
+	quoted := make([]string, len(globs))
+	for i, g := range globs {
+		quoted[i] = fmt.Sprintf("'%s'", g)
+	}
+	return fmt.Sprintf("read_parquet([%s])", strings.Join(quoted, ", "))
 }

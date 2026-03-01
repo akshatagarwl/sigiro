@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -61,11 +60,14 @@ func main() {
 		}
 
 		var fromT, toT time.Time
+		var table string
 		if req.TraceID != "" {
-			// Trace lookup: query all time (use broad glob)
+			// Trace lookup: scan all partitions
 			fromT = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 			toT = time.Now().UTC()
-		} else {
+			table = "read_parquet('s3://" + bucket + "/**/*.parquet')"
+		}
+		if req.TraceID == "" {
 			if req.Service == "" || req.From == "" || req.To == "" {
 				http.Error(w, "service, from, and to are required", http.StatusBadRequest)
 				return
@@ -81,10 +83,8 @@ func main() {
 				http.Error(w, "invalid to: "+err.Error(), http.StatusBadRequest)
 				return
 			}
+			table = query.ParquetTable(bucket, fromT, toT)
 		}
-
-		glob := query.ParquetGlob(bucket, fromT, toT)
-		table := fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", glob)
 
 		block, err := query.Investigate(r.Context(), db, table, query.InvestigateRequest{
 			Service: req.Service,

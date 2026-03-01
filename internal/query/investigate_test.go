@@ -25,22 +25,59 @@ func TestInvestigate_NoData(t *testing.T) {
 	}
 }
 
-func TestParquetGlob_SingleHour(t *testing.T) {
+func TestParquetGlobs_SingleHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 14, 5, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 14, 25, 0, 0, time.UTC)
-	got := ParquetGlob("observe", from, to)
-	want := "s3://observe/year=2026/month=03/day=01/hour=14/*.parquet"
+	globs := ParquetGlobs("observe", from, to)
+	if len(globs) != 1 {
+		t.Fatalf("expected 1 glob, got %d: %v", len(globs), globs)
+	}
+	// 2026-03-01 14:00 UTC = 1772373600
+	want := "s3://observe/1772373600/*.parquet"
+	if globs[0] != want {
+		t.Errorf("got %q, want %q", globs[0], want)
+	}
+}
+
+func TestParquetGlobs_MultiHour(t *testing.T) {
+	from := time.Date(2026, 3, 1, 13, 30, 0, 0, time.UTC)
+	to := time.Date(2026, 3, 1, 15, 0, 0, 0, time.UTC)
+	globs := ParquetGlobs("observe", from, to)
+	if len(globs) != 3 {
+		t.Fatalf("expected 3 globs (hours 13,14,15), got %d: %v", len(globs), globs)
+	}
+	// 2026-03-01 13:00 UTC = 1772370000
+	want0 := "s3://observe/1772370000/*.parquet"
+	if globs[0] != want0 {
+		t.Errorf("globs[0] = %q, want %q", globs[0], want0)
+	}
+}
+
+func TestParquetGlobs_CrossDay(t *testing.T) {
+	from := time.Date(2026, 3, 1, 23, 30, 0, 0, time.UTC)
+	to := time.Date(2026, 3, 2, 0, 15, 0, 0, time.UTC)
+	globs := ParquetGlobs("observe", from, to)
+	if len(globs) != 2 {
+		t.Fatalf("expected 2 globs (hour 23, hour 0), got %d: %v", len(globs), globs)
+	}
+}
+
+func TestParquetTable_SingleHour(t *testing.T) {
+	from := time.Date(2026, 3, 1, 14, 5, 0, 0, time.UTC)
+	to := time.Date(2026, 3, 1, 14, 25, 0, 0, time.UTC)
+	got := ParquetTable("observe", from, to)
+	want := "read_parquet('s3://observe/1772373600/*.parquet')"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-func TestParquetGlob_MultiHour(t *testing.T) {
+func TestParquetTable_MultiHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 13, 30, 0, 0, time.UTC)
-	to := time.Date(2026, 3, 1, 15, 0, 0, 0, time.UTC)
-	got := ParquetGlob("observe", from, to)
-	want := "s3://observe/year=2026/month=03/day=01/hour=*/*.parquet"
+	to := time.Date(2026, 3, 1, 14, 15, 0, 0, time.UTC)
+	got := ParquetTable("observe", from, to)
+	want := "read_parquet(['s3://observe/1772370000/*.parquet', 's3://observe/1772373600/*.parquet'])"
 	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+		t.Errorf("got %q,\nwant %q", got, want)
 	}
 }
