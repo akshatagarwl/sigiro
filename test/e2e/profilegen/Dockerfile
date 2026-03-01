@@ -6,7 +6,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY main.go .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -o /profilegen .
+    CGO_ENABLED=0 go build -trimpath -o /profilegen .
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /profilegen /profilegen
