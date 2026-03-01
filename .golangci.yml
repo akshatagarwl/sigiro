@@ -1,5 +1,55 @@
 version: "2"
+
 linters:
+  default: all
+  disable:
+    # Deprecated linters
+    - wsl # deprecated in favor of wsl_v5
+
+    # Not relevant for this project
+    - arangolint # arangodb-specific
+    - ginkgolinter # ginkgo/gomega-specific
+    - protogetter # protobuf-specific
+    - rowserrcheck # database/sql-specific
+    - sqlclosecheck # database/sql-specific
+    - testifylint # testify-specific
+    - unqueryvet # SQL query-specific
+    - zerologlint # zerolog-specific
+
+    # Too noisy / will fix incrementally
+    - cyclop # function complexity; overlaps with gocognit/gocyclo
+    - depguard # re-added in settings below via enable
+    - dupl # duplicate code detection; too aggressive early on
+    - err113 # requires wrapping all errors with fmt.Errorf
+    - exhaustruct # requires all struct fields to be set
+    - forbidigo # re-added in settings below via enable
+    - funlen # function length limits
+    - gochecknoglobals # forbids all globals
+    - gocognit # cognitive complexity
+    - gocyclo # cyclomatic complexity
+    - godot # requires periods at end of comments
+    - godox # flags TODO/FIXME comments
+    - goheader # file header requirements
+    - inamedparam # named params in interfaces
+    - interfacebloat # interface method count limits
+    - ireturn # forbids returning interfaces
+    - lll # line length limits
+    - maintidx # maintainability index
+    - mnd # magic number detection; too noisy
+    - nakedret # naked returns
+    - nestif # nested if depth
+    - nlreturn # newline before return
+    - noinlineerr # disallows inline error handling
+    - nonamedreturns # forbids named returns
+    - paralleltest # requires t.Parallel() in all tests
+    - testpackage # requires separate _test package
+    - varnamelen # variable name length vs scope
+    - wrapcheck # requires wrapping all external errors
+
+  enable:
+    - depguard
+    - forbidigo
+
   settings:
     depguard:
       rules:
@@ -14,3 +64,51 @@ linters:
         - pattern: 'os\.Getenv'
           msg: "Use github.com/caarlos0/env/v11 for environment variable management"
       analyze-types: true
+    dupl:
+      threshold: 100
+    goconst:
+      min-len: 2
+      min-occurrences: 3
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        - dupImport
+        - ifElseChain
+        - octalLiteral
+        - whyNoLint
+    errorlint:
+      asserts: false
+    misspell:
+      locale: US
+    nolintlint:
+      allow-unused: false
+      require-explanation: true
+      require-specific: true
+    revive:
+      rules:
+        - name: indent-error-flow
+        - name: unexported-return
+          disabled: true
+        - name: unused-parameter
+        - name: unused-receiver
+
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
+    paths:
+      - experiments/ # scratch code, not production
+    rules:
+      - path: (.+)_test\.go
+        linters:
+          - dupl
+          - mnd
+          - lll
+          - funlen
