@@ -22,6 +22,9 @@ type Exporter struct {
 	writer *ParquetWriter
 	config Config
 	done   chan struct{}
+
+	startOnce    sync.Once
+	shutdownOnce sync.Once
 }
 
 // NewExporter creates a new Exporter.
@@ -33,40 +36,50 @@ func NewExporter(cfg Config, writer *ParquetWriter) *Exporter {
 	}
 }
 
-// Start begins the periodic flush loop.
+// Start begins the periodic flush loop. Safe to call multiple times;
+// only the first call starts the goroutine.
 func (e *Exporter) Start(_ context.Context, _ component.Host) error {
-	interval := e.config.FlushInterval
-	if interval == 0 {
-		interval = 15 * time.Second
-	}
-
-	ticker := time.NewTicker(interval)
-
-	go func() {
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				// FRAGILE: uses context.Background() — flush is not cancelled
-				// on Shutdown, so a slow S3 write can block process exit
-				// indefinitely.
-				if err := e.flush(context.Background()); err != nil {
-					slog.Error("flush failed", "error", err)
-				}
-			case <-e.done:
-				return
-			}
+	e.startOnce.Do(func() {
+		interval := e.config.FlushInterval
+		if interval == 0 {
+			interval = 15 * time.Second
 		}
-	}()
+
+		ticker := time.NewTicker(interval)
+
+		go func() {
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					// FRAGILE: uses context.Background() — flush is not cancelled
+					// on Shutdown, so a slow S3 write can block process exit
+					// indefinitely.
+					if err := e.flush(context.Background()); err != nil {
+						slog.Error("flush failed", "error", err)
+					}
+				case <-e.done:
+					return
+				}
+			}
+		}()
+	})
 
 	return nil
 }
 
-// Shutdown flushes remaining data and stops the exporter.
+// Shutdown flushes remaining data and stops the exporter. Safe to call
+// multiple times; only the first call closes the done channel and flushes.
 func (e *Exporter) Shutdown(ctx context.Context) error {
-	close(e.done)
-	return e.flush(ctx)
+	var err error
+
+	e.shutdownOnce.Do(func() {
+		close(e.done)
+		err = e.flush(ctx)
+	})
+
+	return err
 }
 
 // ConsumeMetrics maps OTLP metrics to UnifiedRows and appends to buffer.

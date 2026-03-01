@@ -2,6 +2,7 @@ package unified
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -39,12 +40,33 @@ func createDefaultConfig() component.Config {
 	}
 }
 
-func newExporter(cfg component.Config) *Exporter {
-	c := cfg.(*Config)
-	s3Client := newS3Client(c)
-	writer := NewParquetWriter(c.S3Bucket, s3Client)
+// singleton holds the single shared Exporter instance. All four signal
+// types feed into the same buffer, flush loop, and S3 connection.
+var (
+	singletonMu sync.Mutex
+	singleton   *Exporter
+)
 
-	return NewExporter(*c, writer)
+func sharedExporter(cfg component.Config) *Exporter {
+	singletonMu.Lock()
+	defer singletonMu.Unlock()
+
+	if singleton == nil {
+		c := cfg.(*Config)
+		s3Client := newS3Client(c)
+		writer := NewParquetWriter(c.S3Bucket, s3Client)
+		singleton = NewExporter(*c, writer)
+	}
+
+	return singleton
+}
+
+// ResetSingleton tears down the shared exporter (for tests).
+func ResetSingleton() {
+	singletonMu.Lock()
+	defer singletonMu.Unlock()
+
+	singleton = nil
 }
 
 func newS3Client(cfg *Config) *s3.Client {
@@ -65,31 +87,20 @@ func newS3Client(cfg *Config) *s3.Client {
 	return s3.New(s3.Options{}, opts)
 }
 
-// FRAGILE: each signal type creates its own Exporter instance with its own
-// buffer, flush goroutine, and S3 client. 4 independent exporters means 4x
-// memory buffers, 4 separate flush timers, and 4 separate S3 connections.
-// Rows from different signals for the same epoch-hour are written to
-// separate Parquet files, breaking the intended sort order (service, signal,
-// timestamp) within a single file. This also means Shutdown() is called 4
-// times, each flushing independently.
 func createMetricsExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
-	e := newExporter(cfg)
-	return &metricsExporter{e}, nil
+	return &metricsExporter{sharedExporter(cfg)}, nil
 }
 
 func createTracesExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Traces, error) {
-	e := newExporter(cfg)
-	return &tracesExporter{e}, nil
+	return &tracesExporter{sharedExporter(cfg)}, nil
 }
 
 func createLogsExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Logs, error) {
-	e := newExporter(cfg)
-	return &logsExporter{e}, nil
+	return &logsExporter{sharedExporter(cfg)}, nil
 }
 
 func createProfilesExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (xexporter.Profiles, error) {
-	e := newExporter(cfg)
-	return &profilesExporter{e}, nil
+	return &profilesExporter{sharedExporter(cfg)}, nil
 }
 
 // Wrapper types that satisfy the exporter interfaces.
