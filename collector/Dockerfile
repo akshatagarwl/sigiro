@@ -1,25 +1,31 @@
-# Stage 1: Build the collector binary using OCB
+# syntax=docker/dockerfile:1
 FROM golang:1.25 AS builder
-
 WORKDIR /src
 
-# Install OCB
-RUN go install go.opentelemetry.io/collector/cmd/builder@v0.146.1
+# Install OCB (cached across builds)
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go install go.opentelemetry.io/collector/cmd/builder@v0.146.1
 
-# Copy entire repo (OCB needs root module for replaces directive)
+# TODO: copy go.mod/go.sum before COPY . . for dep-only layer caching.
+# Currently limited because OCB generates its own go.mod in collector/cmd/collector/,
+# so the real dep download happens during `builder` and `go build`, not here.
+# The cache mounts below are the primary win.
 COPY . .
 
 # Generate collector code and compile
-RUN builder --config=otelcol-builder.yaml
-RUN cd collector/cmd/collector && go build -trimpath -o /observe-collector .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    builder --config=otelcol-builder.yaml
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd collector/cmd/collector && go build -trimpath -o /observe-collector .
 
 # Stage 2: Minimal runtime image
 FROM gcr.io/distroless/static-debian12
-
 COPY --from=builder /observe-collector /observe-collector
 COPY --from=builder /src/collector/otelcol.yaml /etc/otelcol/otelcol.yaml
-
 EXPOSE 4317 4318
-
 ENTRYPOINT ["/observe-collector"]
 CMD ["--config", "/etc/otelcol/otelcol.yaml"]
