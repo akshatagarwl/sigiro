@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/AkshatM/observe/pkg/schema"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -137,10 +138,13 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 			ss := rs.ScopeSpans().At(j)
 			for k := 0; k < ss.Spans().Len(); k++ {
 				s := ss.Spans().At(k)
-					// OTel timestamps are nanoseconds; convert to milliseconds at write time.
+				// OTel timestamps are nanoseconds; convert to milliseconds at write time.
 				// This is the canonical unit for span durations — see schema.UnitSpanDuration.
 				dur := float64(s.EndTimestamp()-s.StartTimestamp()) / 1e6
-				status := s.Status().Code().String()
+				// Normalize to uppercase to match the query layer, which filters
+				// on status='ERROR'. ptrace.StatusCode.String() returns title-case
+				// (e.g. "Error"), so we upper-case here at write time.
+				status := strings.ToUpper(s.Status().Code().String())
 				kind := s.Kind().String()
 
 				var events []schema.Event

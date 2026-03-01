@@ -110,8 +110,8 @@ func TestMapTraces(t *testing.T) {
 	if *r.Value != 50 { // 50ms (converted from ns at write time, see schema.UnitSpanDuration)
 		t.Errorf("duration = %f, want 50 (ms)", *r.Value)
 	}
-	if *r.Status != "Error" {
-		t.Errorf("status = %q, want Error", *r.Status)
+	if *r.Status != "ERROR" {
+		t.Errorf("status = %q, want ERROR", *r.Status)
 	}
 }
 

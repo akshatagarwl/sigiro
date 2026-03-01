@@ -110,6 +110,9 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 	return block, nil
 }
 
+// collectErrorTraceIDs gathers trace IDs from error spans and logs.
+// Span status is upper-cased at write time (mapper.go); log severity text
+// is already uppercase by OTel convention.
 func collectErrorTraceIDs(spans []schema.SpanNode, logs []schema.LogRow) []string {
 	seen := map[string]bool{}
 	for _, s := range spans {

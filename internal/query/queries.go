@@ -44,7 +44,7 @@ func querySpans(ctx context.Context, db *sql.DB, table, service string, t1, t2 i
 		       value AS duration_ms, status, kind
 		FROM `+table+`
 		WHERE service=$1 AND signal='span' AND timestamp BETWEEN $2 AND $3
-		  AND (status='ERROR' OR value > 1000)
+		  AND (status='ERROR' OR value > 1000) -- status is upper-cased at write time in mapper.go
 		ORDER BY value DESC
 		LIMIT 50
 	`, service, t1, t2)

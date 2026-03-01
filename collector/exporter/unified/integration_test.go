@@ -512,7 +512,7 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 	})
 
 	t.Run("spans/error_status", func(t *testing.T) {
-		n := scalarInt(`SELECT count(*) FROM telemetry WHERE signal='span' AND status='Error'`)
+		n := scalarInt(`SELECT count(*) FROM telemetry WHERE signal='span' AND status='ERROR'`)
 		if n != 2 {
 			t.Errorf("error spans = %d, want 2 (POST /orders + POST /charge)", n)
 		}
