@@ -9,6 +9,10 @@ import (
 // ParquetGlobs returns the S3 glob patterns covering all epoch-hour
 // partitions between from and to. Each hour in the range gets its own
 // glob: s3://{bucket}/{epochSeconds}/*.parquet
+// FRAGILE: generates one glob per hour — a 30-day query produces 720 globs.
+// DuckDB must open and scan each glob independently, which can be very slow
+// or hit S3 rate limits. No upper bound on the time range means a careless
+// caller can generate thousands of globs.
 func ParquetGlobs(bucket string, from, to time.Time) []string {
 	fromH := from.Truncate(time.Hour).Unix()
 	toH := to.Truncate(time.Hour).Unix()

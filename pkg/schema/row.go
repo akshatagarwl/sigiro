@@ -10,7 +10,11 @@ const (
 
 // Canonical units for the Value column by signal type.
 // These define the contract between the write path (mapper) and the read path (queries).
-// Changing a unit here requires updating both mapper.go and queries.go.
+// FRAGILE: this is a stringly-typed contract enforced only by comments.
+// Changing a unit here requires updating both mapper.go and queries.go,
+// but nothing prevents them from drifting. The query layer hardcodes
+// "value > 1000" assuming milliseconds — if the mapper ever changes to
+// seconds or microseconds, queries silently return wrong results.
 const (
 	UnitSpanDuration = "ms"    // span Value is duration in milliseconds (converted from OTel nanoseconds at write time)
 	UnitProfileCount = "count" // profile Value is sample count
@@ -44,5 +48,9 @@ type UnifiedRow struct {
 	Kind         *string  `parquet:"kind,optional,dict"`
 	Stacktrace   []string `parquet:"stacktrace,optional"`
 	Events       []Event  `parquet:"events,optional"`
-	Metadata     *string  `parquet:"metadata,optional"`
+	// FRAGILE: metadata is a JSON-encoded string, not a structured type.
+	// Every consumer must parse it, and there is no schema validation.
+	// Attribute values are coerced to strings via AsString() in the mapper,
+	// losing type information (ints, bools, arrays, maps all become strings).
+	Metadata *string `parquet:"metadata,optional"`
 }
