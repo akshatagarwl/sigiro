@@ -40,5 +40,5 @@ service:
       exporters: [unified_parquet, debug]
     profiles:
       receivers: [otlp]
-      processors: [batch]
+      # batch processor does not support profiles signal yet
       exporters: [unified_parquet, debug]
