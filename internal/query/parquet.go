@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-const nsPerHour = int64(time.Hour)
-
 // ParquetGlobs returns the S3 glob patterns covering all epoch-hour
 // partitions between from and to. Each hour in the range gets its own
 // glob: s3://{bucket}/{epochSeconds}/*.parquet
