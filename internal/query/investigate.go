@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
-	"sort"
 	"time"
 
 	"github.com/akshatagarwl/observe/pkg/schema"
@@ -19,8 +17,8 @@ type InvestigateRequest struct {
 	TraceID string    `json:"trace_id,omitempty"`
 }
 
-// Investigate runs a single scan of the unified table plus linked trace follow-up,
-// assembling results into an InvestigationBlock.
+// Investigate runs a single Parquet scan into a temp table, then 4 cheap
+// in-memory SQL queries for each signal type, plus linked trace follow-up.
 func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateRequest) (*schema.InvestigationBlock, error) {
 	t1 := req.From.UnixNano()
 	t2 := req.To.UnixNano()
@@ -47,10 +45,9 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 	return block, nil
 }
 
-type metricKey struct{ bucket, name string }
-
-// runPrimaryQueries executes a single scan over the unified table and
-// aggregates metrics, spans, logs, and profiles in Go.
+// runPrimaryQueries materializes one Parquet scan into a temp table, then
+// runs 4 SQL aggregations against it. All I/O happens in the CREATE TABLE;
+// the follow-up queries are pure in-memory scans.
 func runPrimaryQueries(
 	ctx context.Context,
 	db *sql.DB,
@@ -58,179 +55,188 @@ func runPrimaryQueries(
 	t1, t2 int64,
 	block *schema.InvestigationBlock,
 ) error {
-	rows, err := db.QueryContext(ctx, `
-		SELECT signal, timestamp, name, value, status, trace_id, span_id,
-		       parent_span_id, kind, message,
-		       CASE WHEN signal = 'profile' AND stacktrace IS NOT NULL AND len(stacktrace) > 0
-		            THEN stacktrace[len(stacktrace)]
-		            ELSE NULL END AS leaf_function
-		FROM `+table+`
+	// Pin a single connection so the temp table is visible to all queries.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Single Parquet scan → temp table (CREATE OR REPLACE handles leftover
+	// from a previous request that reused this pooled connection).
+	_, err = conn.ExecContext(ctx, `
+		CREATE OR REPLACE TEMP TABLE _scan AS
+		SELECT * FROM `+table+`
 		WHERE service = $1 AND timestamp BETWEEN $2 AND $3
-		ORDER BY signal, timestamp
 	`, service, t1, t2)
 	if err != nil {
-		return err
+		return fmt.Errorf("create scan table: %w", err)
 	}
-	defer rows.Close()
+	defer conn.ExecContext(context.Background(), `DROP TABLE IF EXISTS _scan`)
 
-	metricAccum := map[metricKey][]float64{}
-
-	var (
-		spans []schema.SpanNode
-		logs  []schema.LogRow
-	)
-
-	profileAccum := map[string]float64{}
-
-	for rows.Next() {
-		var (
-			signal   string
-			ts       int64
-			name     sql.NullString
-			value    sql.NullFloat64
-			status   sql.NullString
-			traceID  sql.NullString
-			spanID   sql.NullString
-			parentID sql.NullString
-			kind     sql.NullString
-			message  sql.NullString
-			leaf     sql.NullString
-		)
-
-		if err := rows.Scan(&signal, &ts, &name, &value, &status,
-			&traceID, &spanID, &parentID, &kind, &message, &leaf); err != nil {
-			return fmt.Errorf("scan row: %w", err)
-		}
-
-		switch signal {
-		case "metric":
-			bucket := time.Unix(0, ts).UTC().Format("15:04")
-			key := metricKey{bucket, name.String}
-			metricAccum[key] = append(metricAccum[key], value.Float64)
-
-		case "span":
-			dur := value.Float64
-			if status.String == "ERROR" || dur > 1000 {
-				s := schema.SpanNode{
-					TraceID:    traceID.String,
-					SpanID:     spanID.String,
-					Name:       name.String,
-					DurationMs: dur,
-					Status:     status.String,
-					Kind:       kind.String,
-				}
-				if parentID.Valid {
-					s.ParentID = &parentID.String
-				}
-
-				spans = append(spans, s)
-			}
-
-		case "log":
-			l := schema.LogRow{
-				T:       time.Unix(0, ts).UTC().Format("15:04:05"),
-				Status:  status.String,
-				Message: message.String,
-			}
-			if traceID.Valid {
-				l.TraceID = &traceID.String
-			}
-
-			logs = append(logs, l)
-
-		case "profile":
-			if leaf.Valid && leaf.String != "" {
-				profileAccum[leaf.String] += value.Float64
-			}
-		}
+	block.Metrics, err = scanMetrics(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("metrics: %w", err)
 	}
 
-	if err := rows.Err(); err != nil {
-		return err
+	block.Spans, err = scanSpans(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("spans: %w", err)
 	}
 
-	// Build metrics: sort values, compute p95/avg/count
-	block.Metrics = buildMetrics(metricAccum)
-
-	// Build spans: sort by duration desc, limit 50
-	sort.Slice(spans, func(i, j int) bool { return spans[i].DurationMs > spans[j].DurationMs })
-
-	if len(spans) > 50 {
-		spans = spans[:50]
+	block.Logs, err = scanLogs(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("logs: %w", err)
 	}
 
-	block.Spans = spans
-
-	// Build logs: SQL gives ASC, we want DESC; reverse and limit 100
-	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
-		logs[i], logs[j] = logs[j], logs[i]
+	block.Profiles, err = scanProfiles(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("profiles: %w", err)
 	}
-
-	if len(logs) > 100 {
-		logs = logs[:100]
-	}
-
-	block.Logs = logs
-
-	// Build profiles: sort by samples desc, limit 10
-	block.Profiles = buildProfiles(profileAccum)
 
 	return nil
 }
 
-func buildMetrics(accum map[metricKey][]float64) []schema.MetricRow {
-	result := make([]schema.MetricRow, 0, len(accum))
+func scanMetrics(ctx context.Context, conn *sql.Conn) ([]schema.MetricRow, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT strftime(to_timestamp(timestamp/1000000000)::TIMESTAMP, '%H:%M') AS bucket,
+		       name,
+		       quantile_cont(value, 0.95) AS p95,
+		       avg(value) AS avg,
+		       count(*) AS n
+		FROM _scan
+		WHERE signal = 'metric'
+		GROUP BY bucket, name
+		ORDER BY bucket, name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
-	for key, values := range accum {
-		sort.Float64s(values)
+	var result []schema.MetricRow
 
-		p95Idx := int(math.Ceil(0.95*float64(len(values)))) - 1
-		if p95Idx < 0 {
-			p95Idx = 0
+	for rows.Next() {
+		var m schema.MetricRow
+		if err := rows.Scan(&m.Bucket, &m.Name, &m.P95, &m.Avg, &m.N); err != nil {
+			return nil, err
 		}
 
-		p95 := values[p95Idx]
-
-		var sum float64
-		for _, v := range values {
-			sum += v
-		}
-
-		avg := sum / float64(len(values))
-
-		result = append(result, schema.MetricRow{
-			Bucket: key.bucket,
-			Name:   key.name,
-			P95:    &p95,
-			Avg:    &avg,
-			N:      len(values),
-		})
+		result = append(result, m)
 	}
 
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Bucket != result[j].Bucket {
-			return result[i].Bucket < result[j].Bucket
-		}
-
-		return result[i].Name < result[j].Name
-	})
-
-	return result
+	return result, rows.Err()
 }
 
-func buildProfiles(accum map[string]float64) []schema.ProfileRow {
-	result := make([]schema.ProfileRow, 0, len(accum))
-	for fn, samples := range accum {
-		result = append(result, schema.ProfileRow{Function: fn, Samples: samples})
+func scanSpans(ctx context.Context, conn *sql.Conn) ([]schema.SpanNode, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT trace_id, span_id, parent_span_id, name,
+		       value AS duration_ms, status, kind
+		FROM _scan
+		WHERE signal = 'span' AND (status = 'ERROR' OR value > 1000)
+		ORDER BY value DESC
+		LIMIT 50
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []schema.SpanNode
+
+	for rows.Next() {
+		var (
+			s                            schema.SpanNode
+			tid, sid, psid, status, kind sql.NullString
+			dur                          sql.NullFloat64
+		)
+
+		if err := rows.Scan(&tid, &sid, &psid, &s.Name, &dur, &status, &kind); err != nil {
+			return nil, err
+		}
+
+		s.TraceID = tid.String
+		s.SpanID = sid.String
+
+		if psid.Valid {
+			s.ParentID = &psid.String
+		}
+
+		s.DurationMs = dur.Float64
+		s.Status = status.String
+		s.Kind = kind.String
+		result = append(result, s)
 	}
 
-	sort.Slice(result, func(i, j int) bool { return result[i].Samples > result[j].Samples })
+	return result, rows.Err()
+}
 
-	if len(result) > 10 {
-		result = result[:10]
+func scanLogs(ctx context.Context, conn *sql.Conn) ([]schema.LogRow, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT strftime(to_timestamp(timestamp/1000000000)::TIMESTAMP, '%H:%M:%S') AS t,
+		       status, message, trace_id
+		FROM _scan
+		WHERE signal = 'log'
+		ORDER BY timestamp DESC
+		LIMIT 100
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []schema.LogRow
+
+	for rows.Next() {
+		var (
+			l                schema.LogRow
+			status, msg, tid sql.NullString
+		)
+
+		if err := rows.Scan(&l.T, &status, &msg, &tid); err != nil {
+			return nil, err
+		}
+
+		l.Status = status.String
+		l.Message = msg.String
+
+		if tid.Valid {
+			l.TraceID = &tid.String
+		}
+
+		result = append(result, l)
 	}
 
-	return result
+	return result, rows.Err()
+}
+
+func scanProfiles(ctx context.Context, conn *sql.Conn) ([]schema.ProfileRow, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT stacktrace[len(stacktrace)] AS leaf,
+		       sum(value) AS samples
+		FROM _scan
+		WHERE signal = 'profile' AND stacktrace IS NOT NULL AND len(stacktrace) > 0
+		GROUP BY leaf
+		ORDER BY samples DESC
+		LIMIT 10
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []schema.ProfileRow
+
+	for rows.Next() {
+		var p schema.ProfileRow
+		if err := rows.Scan(&p.Function, &p.Samples); err != nil {
+			return nil, err
+		}
+
+		result = append(result, p)
+	}
+
+	return result, rows.Err()
 }
 
 func addLinkedData(
@@ -268,8 +274,6 @@ func addLinkedData(
 }
 
 // collectErrorTraceIDs gathers trace IDs from error spans and logs.
-// Span status is upper-cased at write time (mapper.go); log severity text
-// is already uppercase by OTel convention.
 func collectErrorTraceIDs(spans []schema.SpanNode, logs []schema.LogRow) []string {
 	seen := map[string]bool{}
 
