@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sync"
+	"math"
+	"sort"
 	"time"
 
 	"github.com/akshatagarwl/observe/pkg/schema"
@@ -18,7 +19,7 @@ type InvestigateRequest struct {
 	TraceID string    `json:"trace_id,omitempty"`
 }
 
-// Investigate runs the 4 parallel signal queries plus linked trace follow-up,
+// Investigate runs a single scan of the unified table plus linked trace follow-up,
 // assembling results into an InvestigationBlock.
 func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateRequest) (*schema.InvestigationBlock, error) {
 	t1 := req.From.UnixNano()
@@ -46,6 +47,10 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 	return block, nil
 }
 
+type metricKey struct{ bucket, name string }
+
+// runPrimaryQueries executes a single scan over the unified table and
+// aggregates metrics, spans, logs, and profiles in Go.
 func runPrimaryQueries(
 	ctx context.Context,
 	db *sql.DB,
@@ -53,67 +58,179 @@ func runPrimaryQueries(
 	t1, t2 int64,
 	block *schema.InvestigationBlock,
 ) error {
+	rows, err := db.QueryContext(ctx, `
+		SELECT signal, timestamp, name, value, status, trace_id, span_id,
+		       parent_span_id, kind, message,
+		       CASE WHEN signal = 'profile' AND stacktrace IS NOT NULL AND len(stacktrace) > 0
+		            THEN stacktrace[len(stacktrace)]
+		            ELSE NULL END AS leaf_function
+		FROM `+table+`
+		WHERE service = $1 AND timestamp BETWEEN $2 AND $3
+		ORDER BY signal, timestamp
+	`, service, t1, t2)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	metricAccum := map[metricKey][]float64{}
+
 	var (
-		mu   sync.Mutex
-		wg   sync.WaitGroup
-		errs [4]error
+		spans []schema.SpanNode
+		logs  []schema.LogRow
 	)
 
-	wg.Add(4)
+	profileAccum := map[string]float64{}
 
-	go func() {
-		defer wg.Done()
+	for rows.Next() {
+		var (
+			signal   string
+			ts       int64
+			name     sql.NullString
+			value    sql.NullFloat64
+			status   sql.NullString
+			traceID  sql.NullString
+			spanID   sql.NullString
+			parentID sql.NullString
+			kind     sql.NullString
+			message  sql.NullString
+			leaf     sql.NullString
+		)
 
-		metrics, err := queryMetrics(ctx, db, table, service, t1, t2)
+		if err := rows.Scan(&signal, &ts, &name, &value, &status,
+			&traceID, &spanID, &parentID, &kind, &message, &leaf); err != nil {
+			return fmt.Errorf("scan row: %w", err)
+		}
 
-		mu.Lock()
-		block.Metrics = metrics
-		errs[0] = err
-		mu.Unlock()
-	}()
+		switch signal {
+		case "metric":
+			bucket := time.Unix(0, ts).UTC().Format("15:04")
+			key := metricKey{bucket, name.String}
+			metricAccum[key] = append(metricAccum[key], value.Float64)
 
-	go func() {
-		defer wg.Done()
+		case "span":
+			dur := value.Float64
+			if status.String == "ERROR" || dur > 1000 {
+				s := schema.SpanNode{
+					TraceID:    traceID.String,
+					SpanID:     spanID.String,
+					Name:       name.String,
+					DurationMs: dur,
+					Status:     status.String,
+					Kind:       kind.String,
+				}
+				if parentID.Valid {
+					s.ParentID = &parentID.String
+				}
 
-		spans, err := querySpans(ctx, db, table, service, t1, t2)
+				spans = append(spans, s)
+			}
 
-		mu.Lock()
-		block.Spans = spans
-		errs[1] = err
-		mu.Unlock()
-	}()
+		case "log":
+			l := schema.LogRow{
+				T:       time.Unix(0, ts).UTC().Format("15:04:05"),
+				Status:  status.String,
+				Message: message.String,
+			}
+			if traceID.Valid {
+				l.TraceID = &traceID.String
+			}
 
-	go func() {
-		defer wg.Done()
+			logs = append(logs, l)
 
-		logs, err := queryLogs(ctx, db, table, service, t1, t2)
-
-		mu.Lock()
-		block.Logs = logs
-		errs[2] = err
-		mu.Unlock()
-	}()
-
-	go func() {
-		defer wg.Done()
-
-		profiles, err := queryProfiles(ctx, db, table, service, t1, t2)
-
-		mu.Lock()
-		block.Profiles = profiles
-		errs[3] = err
-		mu.Unlock()
-	}()
-
-	wg.Wait()
-
-	for i, err := range errs {
-		if err != nil {
-			return fmt.Errorf("query %d failed: %w", i, err)
+		case "profile":
+			if leaf.Valid && leaf.String != "" {
+				profileAccum[leaf.String] += value.Float64
+			}
 		}
 	}
 
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Build metrics: sort values, compute p95/avg/count
+	block.Metrics = buildMetrics(metricAccum)
+
+	// Build spans: sort by duration desc, limit 50
+	sort.Slice(spans, func(i, j int) bool { return spans[i].DurationMs > spans[j].DurationMs })
+
+	if len(spans) > 50 {
+		spans = spans[:50]
+	}
+
+	block.Spans = spans
+
+	// Build logs: SQL gives ASC, we want DESC; reverse and limit 100
+	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
+		logs[i], logs[j] = logs[j], logs[i]
+	}
+
+	if len(logs) > 100 {
+		logs = logs[:100]
+	}
+
+	block.Logs = logs
+
+	// Build profiles: sort by samples desc, limit 10
+	block.Profiles = buildProfiles(profileAccum)
+
 	return nil
+}
+
+func buildMetrics(accum map[metricKey][]float64) []schema.MetricRow {
+	result := make([]schema.MetricRow, 0, len(accum))
+
+	for key, values := range accum {
+		sort.Float64s(values)
+
+		p95Idx := int(math.Ceil(0.95*float64(len(values)))) - 1
+		if p95Idx < 0 {
+			p95Idx = 0
+		}
+
+		p95 := values[p95Idx]
+
+		var sum float64
+		for _, v := range values {
+			sum += v
+		}
+
+		avg := sum / float64(len(values))
+
+		result = append(result, schema.MetricRow{
+			Bucket: key.bucket,
+			Name:   key.name,
+			P95:    &p95,
+			Avg:    &avg,
+			N:      len(values),
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Bucket != result[j].Bucket {
+			return result[i].Bucket < result[j].Bucket
+		}
+
+		return result[i].Name < result[j].Name
+	})
+
+	return result
+}
+
+func buildProfiles(accum map[string]float64) []schema.ProfileRow {
+	result := make([]schema.ProfileRow, 0, len(accum))
+	for fn, samples := range accum {
+		result = append(result, schema.ProfileRow{Function: fn, Samples: samples})
+	}
+
+	sort.Slice(result, func(i, j int) bool { return result[i].Samples > result[j].Samples })
+
+	if len(result) > 10 {
+		result = result[:10]
+	}
+
+	return result
 }
 
 func addLinkedData(
@@ -162,10 +279,6 @@ func collectErrorTraceIDs(spans []schema.SpanNode, logs []schema.LogRow) []strin
 		}
 	}
 
-	// FRAGILE: assumes log severity text is exactly "ERROR" — but the
-	// mapper stores lr.SeverityText() as-is (not upper-cased like spans).
-	// Common values include "error", "ERROR", "Error", "FATAL". This will
-	// miss most error logs, so linked traces are under-fetched.
 	for _, l := range logs {
 		if l.TraceID != nil && l.Status == "ERROR" {
 			seen[*l.TraceID] = true
