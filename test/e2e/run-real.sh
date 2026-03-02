@@ -12,7 +12,7 @@ COMPOSE="docker compose -f docker-compose.real.yaml"
 cleanup() {
   echo "=== Cleaning up ==="
   $COMPOSE down -v --remove-orphans 2>/dev/null || true
-  rm -f "$SCRIPT_DIR/postgres-init.sql"
+  rm -rf "$SCRIPT_DIR/postgres-init.sql"
 }
 trap cleanup EXIT
 
@@ -33,7 +33,7 @@ echo "=== Phase 2: App services + profilegen ==="
 $COMPOSE up -d \
   ad cart checkout currency email payment \
   product-catalog quote recommendation shipping \
-  frontend image-provider frontend-proxy profilegen
+  frontend image-provider profilegen
 echo "Waiting for services to start..."
 sleep 30
 
