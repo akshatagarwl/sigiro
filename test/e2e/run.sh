@@ -182,6 +182,29 @@ echo ""
 echo "  SKIP: Cross-service traces (telemetrygen generates independent trace_ids per service)"
 
 echo ""
+echo "=== Check 9: Query server investigation block ==="
+docker compose up -d query-server
+echo "Waiting for query-server to start..."
+sleep 5
+
+FROM=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
+TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+RESULT=$(curl -sf http://localhost:8080/v1/query -d "{\"service\":\"checkout\",\"from\":\"$FROM\",\"to\":\"$TO\"}" 2>&1) || true
+
+for field in metrics spans logs profiles; do
+  printf "  %-45s" "API: $field present..."
+  if echo "$RESULT" | grep -q "\"$field\":\[{"; then
+    echo "PASS"
+    PASSES=$((PASSES + 1))
+  else
+    echo "FAIL"
+    echo "    Expected $field array with data"
+    echo "    Response: ${RESULT:0:200}"
+    FAILURES=$((FAILURES + 1))
+  fi
+done
+
+echo ""
 echo "==============================="
 echo "  Passed: $PASSES"
 echo "  Failed: $FAILURES"
