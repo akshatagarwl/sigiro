@@ -1,0 +1,310 @@
+services:
+  # === Infrastructure (reused from synthetic test) ===
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  minio-setup:
+    image: minio/mc
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: sh -c "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb local/observe --ignore-existing"
+
+  otel-collector:
+    build:
+      context: ../..
+      dockerfile: collector/Dockerfile
+    depends_on:
+      minio-setup: { condition: service_completed_successfully }
+    environment:
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: observe
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+    command: ["--config", "/etc/otelcol/otelcol.yaml", "--feature-gates=service.profilesSupport"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+
+  profilegen:
+    build: ./profilegen
+    depends_on:
+      otel-collector: { condition: service_started }
+    command:
+      - --endpoint=otel-collector:4317
+      - --insecure
+      - --services=checkout,payment
+      - --duration=120s
+      - --rate=2
+
+  # === Demo dependencies ===
+
+  flagd:
+    image: ghcr.io/open-feature/flagd:v0.12.9
+    command: ["start", "--uri", "file:/etc/flagd/flagd.json"]
+    volumes:
+      - ./flagd.json:/etc/flagd/flagd.json:ro
+    ports:
+      - "8013:8013"
+
+  valkey-cart:
+    image: valkey/valkey:9.0.1-alpine3.23
+
+  postgresql:
+    image: postgres:17.6
+    environment:
+      POSTGRES_DB: product-catalog
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  # === Demo app services (14) ===
+
+  ad:
+    image: ghcr.io/open-telemetry/demo:2.2.0-ad
+    depends_on:
+      otel-collector: { condition: service_started }
+      flagd: { condition: service_started }
+    environment:
+      AD_PORT: "9555"
+      FLAGD_HOST: flagd
+      FLAGD_PORT: "8013"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_LOGS_EXPORTER: otlp
+      OTEL_SERVICE_NAME: ad
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+
+  cart:
+    image: ghcr.io/open-telemetry/demo:2.2.0-cart
+    depends_on:
+      otel-collector: { condition: service_started }
+      valkey-cart: { condition: service_started }
+    environment:
+      CART_PORT: "7070"
+      VALKEY_ADDR: valkey-cart:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: cart
+    deploy:
+      resources:
+        limits:
+          memory: 160M
+
+  checkout:
+    image: ghcr.io/open-telemetry/demo:2.2.0-checkout
+    depends_on:
+      otel-collector: { condition: service_started }
+      cart: { condition: service_started }
+      currency: { condition: service_started }
+      email: { condition: service_started }
+      payment: { condition: service_started }
+      product-catalog: { condition: service_started }
+      shipping: { condition: service_started }
+    environment:
+      CHECKOUT_PORT: "5050"
+      CART_ADDR: cart:7070
+      CURRENCY_ADDR: currency:7001
+      EMAIL_ADDR: http://email:6060
+      PAYMENT_ADDR: payment:50051
+      PRODUCT_CATALOG_ADDR: product-catalog:3550
+      SHIPPING_ADDR: shipping:50050
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: checkout
+    deploy:
+      resources:
+        limits:
+          memory: 20M
+
+  currency:
+    image: ghcr.io/open-telemetry/demo:2.2.0-currency
+    depends_on:
+      otel-collector: { condition: service_started }
+    environment:
+      CURRENCY_PORT: "7001"
+      IPV6_ENABLED: "false"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: currency
+    deploy:
+      resources:
+        limits:
+          memory: 20M
+
+  email:
+    image: ghcr.io/open-telemetry/demo:2.2.0-email
+    depends_on:
+      otel-collector: { condition: service_started }
+    environment:
+      EMAIL_PORT: "6060"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: email
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+
+  frontend:
+    image: ghcr.io/open-telemetry/demo:2.2.0-frontend
+    depends_on:
+      otel-collector: { condition: service_started }
+      ad: { condition: service_started }
+      cart: { condition: service_started }
+      checkout: { condition: service_started }
+      currency: { condition: service_started }
+      recommendation: { condition: service_started }
+      product-catalog: { condition: service_started }
+      shipping: { condition: service_started }
+    environment:
+      FRONTEND_PORT: "8080"
+      AD_ADDR: ad:9555
+      CART_ADDR: cart:7070
+      CHECKOUT_ADDR: checkout:5050
+      CURRENCY_ADDR: currency:7001
+      RECOMMENDATION_ADDR: recommendation:9001
+      PRODUCT_CATALOG_ADDR: product-catalog:3550
+      SHIPPING_ADDR: shipping:50050
+      ENV_PLATFORM: local
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: frontend
+    deploy:
+      resources:
+        limits:
+          memory: 250M
+
+  frontend-proxy:
+    image: ghcr.io/open-telemetry/demo:2.2.0-frontend-proxy
+    depends_on:
+      frontend: { condition: service_started }
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+
+  image-provider:
+    image: ghcr.io/open-telemetry/demo:2.2.0-image-provider
+    depends_on:
+      otel-collector: { condition: service_started }
+    environment:
+      IMAGE_PROVIDER_PORT: "8081"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: image-provider
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+
+  load-generator:
+    image: ghcr.io/open-telemetry/demo:2.2.0-load-generator
+    depends_on:
+      frontend-proxy: { condition: service_started }
+    environment:
+      LOCUST_HOST: http://frontend-proxy:8080
+      LOCUST_USERS: "5"
+      LOCUST_AUTOSTART: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: load-generator
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+
+  payment:
+    image: ghcr.io/open-telemetry/demo:2.2.0-payment
+    depends_on:
+      otel-collector: { condition: service_started }
+      flagd: { condition: service_started }
+    environment:
+      PAYMENT_PORT: "50051"
+      FLAGD_HOST: flagd
+      FLAGD_PORT: "8013"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: payment
+    deploy:
+      resources:
+        limits:
+          memory: 140M
+
+  product-catalog:
+    image: ghcr.io/open-telemetry/demo:2.2.0-product-catalog
+    depends_on:
+      otel-collector: { condition: service_started }
+      postgresql: { condition: service_healthy }
+    environment:
+      PRODUCT_CATALOG_PORT: "3550"
+      POSTGRES_DB: product-catalog
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: postgresql
+      FLAGD_HOST: flagd
+      FLAGD_PORT: "8013"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: product-catalog
+    deploy:
+      resources:
+        limits:
+          memory: 20M
+
+  quote:
+    image: ghcr.io/open-telemetry/demo:2.2.0-quote
+    depends_on:
+      otel-collector: { condition: service_started }
+    environment:
+      QUOTE_PORT: "8090"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_PHP_AUTOLOAD_ENABLED: "true"
+      OTEL_SERVICE_NAME: quote
+    deploy:
+      resources:
+        limits:
+          memory: 40M
+
+  recommendation:
+    image: ghcr.io/open-telemetry/demo:2.2.0-recommendation
+    depends_on:
+      otel-collector: { condition: service_started }
+      product-catalog: { condition: service_started }
+    environment:
+      RECOMMENDATION_PORT: "9001"
+      PRODUCT_CATALOG_ADDR: product-catalog:3550
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: recommendation
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+
+  shipping:
+    image: ghcr.io/open-telemetry/demo:2.2.0-shipping
+    depends_on:
+      otel-collector: { condition: service_started }
+    environment:
+      SHIPPING_PORT: "50050"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: shipping
+    deploy:
+      resources:
+        limits:
+          memory: 20M

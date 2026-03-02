@@ -1,0 +1,80 @@
+{
+  "$schema": "https://flagd.dev/schema/v0/flags.json",
+  "flags": {
+    "llmInaccurateResponse": {
+      "state": "ENABLED",
+      "variants": { "off": false, "on": true },
+      "defaultVariant": "off"
+    },
+    "llmRateLimitError": {
+      "state": "ENABLED",
+      "variants": { "off": false, "on": true },
+      "defaultVariant": "off"
+    },
+    "productCatalogFailure": {
+      "state": "ENABLED",
+      "variants": { "on": true, "off": false },
+      "defaultVariant": "off"
+    },
+    "recommendationCacheFailure": {
+      "state": "ENABLED",
+      "variants": { "on": true, "off": false },
+      "defaultVariant": "off"
+    },
+    "adManualGc": {
+      "state": "ENABLED",
+      "variants": { "on": true, "off": false },
+      "defaultVariant": "off"
+    },
+    "adHighCpu": {
+      "state": "ENABLED",
+      "variants": { "on": true, "off": false },
+      "defaultVariant": "off"
+    },
+    "adFailure": {
+      "state": "ENABLED",
+      "variants": { "on": true, "off": false },
+      "defaultVariant": "off"
+    },
+    "kafkaQueueProblems": {
+      "state": "ENABLED",
+      "variants": { "on": 100, "off": 0 },
+      "defaultVariant": "off"
+    },
+    "cartFailure": {
+      "state": "ENABLED",
+      "variants": { "on": true, "off": false },
+      "defaultVariant": "off"
+    },
+    "paymentFailure": {
+      "state": "ENABLED",
+      "variants": { "100%": 1, "90%": 0.95, "75%": 0.75, "50%": 0.5, "25%": 0.25, "10%": 0.1, "off": 0 },
+      "defaultVariant": "off"
+    },
+    "paymentUnreachable": {
+      "state": "ENABLED",
+      "variants": { "on": true, "off": false },
+      "defaultVariant": "off"
+    },
+    "loadGeneratorFloodHomepage": {
+      "state": "ENABLED",
+      "variants": { "on": 100, "off": 0 },
+      "defaultVariant": "off"
+    },
+    "imageSlowLoad": {
+      "state": "ENABLED",
+      "variants": { "10sec": 10000, "5sec": 5000, "off": 0 },
+      "defaultVariant": "off"
+    },
+    "failedReadinessProbe": {
+      "state": "ENABLED",
+      "variants": { "on": true, "off": false },
+      "defaultVariant": "off"
+    },
+    "emailMemoryLeak": {
+      "state": "ENABLED",
+      "variants": { "off": 0, "1x": 1, "10x": 10, "100x": 100, "1000x": 1000, "10000x": 10000 },
+      "defaultVariant": "off"
+    }
+  }
+}
