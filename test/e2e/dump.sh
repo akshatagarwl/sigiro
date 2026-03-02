@@ -114,7 +114,10 @@ LIMIT 5;
 
 run_query "Sort Order Check (first 20 rows)" "
 SELECT service, signal, strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t
-FROM $PARQUET ORDER BY rowid LIMIT 20;
+FROM (
+  SELECT *, row_number() OVER () AS rn
+  FROM $PARQUET
+) ORDER BY rn LIMIT 20;
 "
 
 exit 0
