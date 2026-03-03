@@ -33,7 +33,9 @@ services:
       S3_REGION: us-east-1
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
-    command: ["--config", "/etc/otelcol/otelcol.yaml", "--feature-gates=service.profilesSupport"]
+    command: ["--config", "/etc/otelcol/otelcol.e2e.yaml", "--feature-gates=service.profilesSupport"]
+    volumes:
+      - ../../collector/otelcol.e2e.yaml:/etc/otelcol/otelcol.e2e.yaml:ro
     ports:
       - "4317:4317"
       - "4318:4318"

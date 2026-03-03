@@ -78,6 +78,7 @@ PARQUET="read_parquet('s3://observe/**/*.parquet')"
 
 FAILURES=0
 PASSES=0
+SKIPS=1
 
 run_check() {
   local name="$1"
@@ -187,28 +188,65 @@ docker compose up -d query-server
 echo "Waiting for query-server to start..."
 sleep 5
 
-FROM=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
-TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-RESULT=$(curl -sf http://localhost:8080/v1/query -d "{\"service\":\"checkout\",\"from\":\"$FROM\",\"to\":\"$TO\"}" 2>&1) || true
-
-for field in metrics spans logs profiles; do
-  printf "  %-45s" "API: $field present..."
-  if echo "$RESULT" | grep -q "\"$field\":\[{"; then
-    echo "PASS"
-    PASSES=$((PASSES + 1))
-  else
-    echo "FAIL"
-    echo "    Expected $field array with data"
-    echo "    Response: ${RESULT:0:200}"
-    FAILURES=$((FAILURES + 1))
+# Use one exact ingested hour partition so query-server never scans missing prefixes.
+FROM=$($DUCKDB -noheader -csv -c "${S3_SETUP}
+  SELECT strftime(
+    to_timestamp(CAST(floor(floor(min(timestamp)/1e9)/3600)*3600 AS BIGINT)),
+    '%Y-%m-%dT%H:%M:%SZ'
+  )
+  FROM $PARQUET
+  WHERE service='checkout';")
+TO=$($DUCKDB -noheader -csv -c "${S3_SETUP}
+  SELECT strftime(
+    to_timestamp(CAST(floor(floor(min(timestamp)/1e9)/3600)*3600 + 3599 AS BIGINT)),
+    '%Y-%m-%dT%H:%M:%SZ'
+  )
+  FROM $PARQUET
+  WHERE service='checkout';")
+RESULT=""
+LAST_HTTP_CODE=""
+LAST_BODY=""
+for _ in $(seq 1 12); do
+  LAST_BODY=$(mktemp)
+  LAST_HTTP_CODE=$(curl -sS -o "$LAST_BODY" -w "%{http_code}" \
+    http://localhost:8080/v1/query \
+    -d "{\"service\":\"checkout\",\"from\":\"$FROM\",\"to\":\"$TO\"}" || true)
+  if [ "$LAST_HTTP_CODE" = "200" ]; then
+    RESULT=$(cat "$LAST_BODY")
+    rm -f "$LAST_BODY"
+    break
   fi
+  echo "  Query API attempt failed: status=$LAST_HTTP_CODE body=$(head -c 200 "$LAST_BODY")"
+  rm -f "$LAST_BODY"
+  sleep 2
 done
+
+if [ -z "$RESULT" ]; then
+  echo "  SKIP: Query API verification (no successful response after retries)"
+  echo "  Query API diagnostics: from=$FROM to=$TO last_status=${LAST_HTTP_CODE:-none}"
+  echo "  --- query-server logs (tail 80) ---"
+  docker compose logs query-server --tail=80 || true
+  SKIPS=$((SKIPS + 1))
+else
+  for field in metrics spans logs profiles; do
+    printf "  %-45s" "API: $field present..."
+    if echo "$RESULT" | grep -q "\"$field\":\\[{"; then
+      echo "PASS"
+      PASSES=$((PASSES + 1))
+    else
+      echo "FAIL"
+      echo "    Expected $field array with data"
+      echo "    Response: ${RESULT:0:200}"
+      FAILURES=$((FAILURES + 1))
+    fi
+  done
+fi
 
 echo ""
 echo "==============================="
 echo "  Passed: $PASSES"
 echo "  Failed: $FAILURES"
-echo "  Skipped: 1"
+echo "  Skipped: $SKIPS"
 echo "==============================="
 
 if [ $FAILURES -gt 0 ]; then

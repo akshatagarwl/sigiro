@@ -98,15 +98,21 @@ func queryHandler(db *sql.DB, cfg Config) http.HandlerFunc {
 		// multi-GB JSON body and OOM the server.
 		var req queryRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			slog.Warn("invalid query request", "error", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
+
 			return
 		}
 
 		fromT, toT, table, err := resolveQueryWindowAndTable(cfg.S3Bucket, req)
 		if err != nil {
+			slog.Warn("invalid query window", "service", req.Service, "from", req.From, "to", req.To, "trace_id", req.TraceID, "error", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
+
 			return
 		}
+
+		slog.Info("query request", "service", req.Service, "from", fromT.Format(time.RFC3339), "to", toT.Format(time.RFC3339), "trace_id", req.TraceID, "table", table)
 
 		block, err := query.Investigate(r.Context(), db, table, query.InvestigateRequest{
 			Service: req.Service,
@@ -115,7 +121,9 @@ func queryHandler(db *sql.DB, cfg Config) http.HandlerFunc {
 			TraceID: req.TraceID,
 		})
 		if err != nil {
+			slog.Error("query failed", "service", req.Service, "from", fromT.Format(time.RFC3339), "to", toT.Format(time.RFC3339), "trace_id", req.TraceID, "table", table, "error", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+
 			return
 		}
 
