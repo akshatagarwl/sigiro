@@ -58,20 +58,32 @@ LIMIT 1;" 2>/dev/null | head -n1 || true)
   fi
 fi
 
-FROM=$(date -u -r "$PARTITION_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python - <<PY
-import datetime
-print(datetime.datetime.utcfromtimestamp($PARTITION_EPOCH).strftime('%Y-%m-%dT%H:%M:%SZ'))
-PY
-)
-TO=$(date -u -r "$((PARTITION_EPOCH + 3599))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python - <<PY
-import datetime
-print(datetime.datetime.utcfromtimestamp($PARTITION_EPOCH + 3599).strftime('%Y-%m-%dT%H:%M:%SZ'))
-PY
-)
 SERVICE=$($DUCKDB -noheader -csv -c "${S3_SETUP}
-SELECT service FROM $PARQUET WHERE service IS NOT NULL AND service <> '' LIMIT 1;")
+SELECT service FROM $PARQUET
+WHERE service IS NOT NULL AND service <> '' AND timestamp > 0
+ORDER BY timestamp DESC
+LIMIT 1;")
+SERVICE_EPOCH=$($DUCKDB -noheader -csv -c "${S3_SETUP}
+SELECT CAST(floor(max(timestamp)/1e9) AS BIGINT)
+FROM $PARQUET
+WHERE service = '$SERVICE' AND timestamp > 0;")
+FROM=$(date -u -r "$((SERVICE_EPOCH - SERVICE_EPOCH % 3600))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python - <<PY
+import datetime
+ts=$SERVICE_EPOCH - ($SERVICE_EPOCH % 3600)
+print(datetime.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%dT%H:%M:%SZ'))
+PY
+)
+TO=$(date -u -r "$((SERVICE_EPOCH - SERVICE_EPOCH % 3600 + 3599))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python - <<PY
+import datetime
+ts=$SERVICE_EPOCH - ($SERVICE_EPOCH % 3600) + 3599
+print(datetime.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%dT%H:%M:%SZ'))
+PY
+)
 TRACE_ID=$($DUCKDB -noheader -csv -c "${S3_SETUP}
-SELECT trace_id FROM $PARQUET WHERE signal='span' AND trace_id IS NOT NULL LIMIT 1;")
+SELECT trace_id FROM $PARQUET
+WHERE signal='span' AND trace_id IS NOT NULL AND timestamp > 0
+ORDER BY timestamp DESC
+LIMIT 1;")
 
 echo "partition=$PARTITION_EPOCH service=$SERVICE from=$FROM to=$TO"
 

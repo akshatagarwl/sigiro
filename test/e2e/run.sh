@@ -189,20 +189,21 @@ echo "Waiting for query-server to start..."
 sleep 5
 
 # Use one exact ingested hour partition so query-server never scans missing prefixes.
-FROM=$($DUCKDB -noheader -csv -c "${S3_SETUP}
-  SELECT strftime(
-    to_timestamp(CAST(floor(floor(min(timestamp)/1e9)/3600)*3600 AS BIGINT)),
-    '%Y-%m-%dT%H:%M:%SZ'
-  )
+FROM_EPOCH=$($DUCKDB -noheader -csv -c "${S3_SETUP}
+  SELECT CAST(floor(floor(min(timestamp)/1e9)/3600)*3600 AS BIGINT)
   FROM $PARQUET
-  WHERE service='checkout';")
-TO=$($DUCKDB -noheader -csv -c "${S3_SETUP}
-  SELECT strftime(
-    to_timestamp(CAST(floor(floor(min(timestamp)/1e9)/3600)*3600 + 3599 AS BIGINT)),
-    '%Y-%m-%dT%H:%M:%SZ'
-  )
-  FROM $PARQUET
-  WHERE service='checkout';")
+  WHERE service='checkout' AND timestamp > 0;")
+TO_EPOCH=$((FROM_EPOCH + 3599))
+FROM=$(date -u -r "$FROM_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python - <<PY
+import datetime
+print(datetime.datetime.utcfromtimestamp($FROM_EPOCH).strftime('%Y-%m-%dT%H:%M:%SZ'))
+PY
+)
+TO=$(date -u -r "$TO_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python - <<PY
+import datetime
+print(datetime.datetime.utcfromtimestamp($TO_EPOCH).strftime('%Y-%m-%dT%H:%M:%SZ'))
+PY
+)
 RESULT=""
 LAST_HTTP_CODE=""
 LAST_BODY=""
