@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM golang:1.25-bookworm AS builder
+# TODO: Build with Zig (musl) for fully static, zero-dependency binaries to
+# avoid runtime glibc mismatches across base images/hosts.
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
