@@ -28,7 +28,7 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 		Window:  fmt.Sprintf("%s - %s", req.From.Format("15:04"), req.To.Format("15:04")),
 	}
 
-	if err := runPrimaryQueries(ctx, db, table, req.Service, t1, t2, block); err != nil {
+	if err := runPrimaryQueries(ctx, db, table, req.Service, req.TraceID, t1, t2, block); err != nil {
 		return nil, err
 	}
 
@@ -52,6 +52,7 @@ func runPrimaryQueries(
 	ctx context.Context,
 	db *sql.DB,
 	table, service string,
+	traceID string,
 	t1, t2 int64,
 	block *schema.InvestigationBlock,
 ) error {
@@ -64,14 +65,31 @@ func runPrimaryQueries(
 
 	// Single Parquet scan → temp table (CREATE OR REPLACE handles leftover
 	// from a previous request that reused this pooled connection).
-	_, err = conn.ExecContext(ctx, `
-		CREATE OR REPLACE TEMP TABLE _scan AS
-		SELECT * FROM `+table+`
-		WHERE service = $1 AND timestamp BETWEEN $2 AND $3
-	`, service, t1, t2)
+	switch {
+	case traceID != "" && service != "":
+		_, err = conn.ExecContext(ctx, `
+			CREATE OR REPLACE TEMP TABLE _scan AS
+			SELECT * FROM `+table+`
+			WHERE trace_id = $1 AND service = $2 AND timestamp BETWEEN $3 AND $4
+		`, traceID, service, t1, t2)
+	case traceID != "":
+		_, err = conn.ExecContext(ctx, `
+			CREATE OR REPLACE TEMP TABLE _scan AS
+			SELECT * FROM `+table+`
+			WHERE trace_id = $1 AND timestamp BETWEEN $2 AND $3
+		`, traceID, t1, t2)
+	default:
+		_, err = conn.ExecContext(ctx, `
+			CREATE OR REPLACE TEMP TABLE _scan AS
+			SELECT * FROM `+table+`
+			WHERE service = $1 AND timestamp BETWEEN $2 AND $3
+		`, service, t1, t2)
+	}
+
 	if err != nil {
 		return fmt.Errorf("create scan table: %w", err)
 	}
+
 	defer conn.ExecContext(context.Background(), `DROP TABLE IF EXISTS _scan`)
 
 	block.Metrics, err = scanMetrics(ctx, conn)

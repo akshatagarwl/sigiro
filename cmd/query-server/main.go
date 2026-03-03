@@ -136,17 +136,13 @@ func queryHandler(db *sql.DB, cfg Config) http.HandlerFunc {
 }
 
 func resolveQueryWindowAndTable(bucket string, req queryRequest) (time.Time, time.Time, string, error) {
+	table := fmt.Sprintf("read_parquet('s3://%s/**/*.parquet')", bucket)
+
 	if req.TraceID != "" {
-		// Trace lookup: scan all partitions.
-		// FRAGILE: scans EVERY parquet file ever written (year 2000 to now).
-		// This is an unbounded full-table scan that will get slower over time
-		// and could time out or OOM on a bucket with months of data.
-		// Also, bucket is string-concatenated into the glob — SQL injection
-		// if bucket ever comes from user input.
 		fromT := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 		toT := time.Now().UTC()
 
-		return fromT, toT, "read_parquet('s3://" + bucket + "/**/*.parquet')", nil
+		return fromT, toT, table, nil
 	}
 
 	if req.Service == "" || req.From == "" || req.To == "" {
@@ -163,7 +159,7 @@ func resolveQueryWindowAndTable(bucket string, req queryRequest) (time.Time, tim
 		return time.Time{}, time.Time{}, "", fmt.Errorf("invalid to: %w", err)
 	}
 
-	return fromT, toT, query.ParquetTable(bucket, fromT, toT), nil
+	return fromT, toT, table, nil
 }
 
 func mustExec(db *sql.DB, q string) {
