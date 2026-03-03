@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/akshatagarwl/observe/pkg/schema"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -24,19 +25,15 @@ var spanStatusUpper = map[ptrace.StatusCode]string{
 	ptrace.StatusCodeUnset: "UNSET",
 }
 
-// FRAGILE: panics on missing/empty service.name — real OTel data frequently
-// lacks this attribute (e.g. default SDKs, bare collectors, pre-instrumented
-// libraries). A single bad batch will crash the entire collector process.
 func serviceName(res pcommon.Resource) string {
 	if v, ok := res.Attributes().Get("service.name"); ok {
-		if v.AsString() == "" {
-			panic("resource attribute service.name is empty")
+		svc := strings.TrimSpace(v.AsString())
+		if svc != "" {
+			return svc
 		}
-
-		return v.AsString()
 	}
 
-	panic("resource attribute service.name is missing")
+	return "unknown_service"
 }
 
 func hostName(res pcommon.Resource) string {

@@ -245,3 +245,40 @@ func TestMapProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestMapProfiles_MissingServiceName(t *testing.T) {
+	pd := pprofile.NewProfiles()
+	dict := pd.Dictionary()
+	dict.StringTable().Append("cpu")
+	dict.StringTable().Append("count")
+	dict.StringTable().Append("runtime.main")
+
+	fn0 := dict.FunctionTable().AppendEmpty()
+	fn0.SetNameStrindex(2)
+
+	loc0 := dict.LocationTable().AppendEmpty()
+	loc0.Lines().AppendEmpty().SetFunctionIndex(0)
+
+	stack0 := dict.StackTable().AppendEmpty()
+	stack0.LocationIndices().Append(0)
+
+	rp := pd.ResourceProfiles().AppendEmpty()
+	rp.Resource().Attributes().PutStr("host.name", "node-01")
+	sp := rp.ScopeProfiles().AppendEmpty()
+	p := sp.Profiles().AppendEmpty()
+	p.SampleType().SetTypeStrindex(0)
+	p.SampleType().SetUnitStrindex(1)
+	p.SetTime(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 9, 30, 0, time.UTC).UnixNano()))
+	sample := p.Samples().AppendEmpty()
+	sample.SetStackIndex(0)
+	sample.Values().Append(1)
+
+	rows := mapProfiles(pd)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	if rows[0].Service != "unknown_service" {
+		t.Fatalf("service = %q, want unknown_service", rows[0].Service)
+	}
+}
