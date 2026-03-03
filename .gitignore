@@ -5,3 +5,6 @@ cmd/query-server/query-server
 experiments/query-engine/query-engine
 experiments/incident-gen/incident-gen
 test/e2e/profilegen/profilegen
+
+# Local alias to AGENTS.md
+CLAUDE.md
