@@ -2,6 +2,7 @@ package unified
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -116,8 +117,13 @@ func (e *Exporter) ConsumeLogs(_ context.Context, ld plog.Logs) error {
 }
 
 // ConsumeProfiles maps OTLP profiles to UnifiedRows and appends to buffer.
+// Returns a permanent error for malformed profile data (multi-value samples,
+// missing values) — the collector will not retry these batches.
 func (e *Exporter) ConsumeProfiles(_ context.Context, pd pprofile.Profiles) error {
-	rows := mapProfiles(pd)
+	rows, err := mapProfiles(pd)
+	if err != nil {
+		return fmt.Errorf("map profiles: %w", err)
+	}
 
 	e.mu.Lock()
 	e.buffer = append(e.buffer, rows...)

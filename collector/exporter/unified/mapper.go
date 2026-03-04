@@ -14,10 +14,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
-var (
-	ptrUnitSpanDuration = ptr(schema.UnitSpanDuration)
-	ptrUnitCount        = ptr(schema.UnitProfileCount)
-)
+var ptrUnitSpanDuration = ptr(schema.UnitSpanDuration)
 
 var spanStatusUpper = map[ptrace.StatusCode]string{
 	ptrace.StatusCodeOk:    "OK",
@@ -290,15 +287,19 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 	return rows
 }
 
-// FRAGILE: assumes Dictionary is populated at the top-level Profiles container
-// and shared across all ResourceProfiles/ScopeProfiles. The pprofile API is
+// GAP: Dictionary location assumption.
+//
+// Assumes Dictionary is populated at the top-level Profiles container and
+// shared across all ResourceProfiles/ScopeProfiles. The pprofile API is
 // experimental (v0.146.1) and this layout could change. If a future version
 // moves dictionaries per-Profile, every index lookup below silently returns
 // wrong data (wrong function names, corrupt stacks) with no error.
-func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
+//
+// See docs/architecture/profiles.md §Known Gaps.
+func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 	rows := make([]schema.UnifiedRow, 0, 256)
 
-	// Dictionary is shared across all profiles in the batch
+	// Dictionary is shared across all profiles in the batch.
 	dict := pd.Dictionary()
 	stringTable := dict.StringTable()
 	locationTable := dict.LocationTable()
@@ -341,15 +342,46 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 
 				typeIdx := p.SampleType().TypeStrindex()
 				if int(typeIdx) >= stringTable.Len() || stringTable.At(int(typeIdx)) == "" {
-					panic("profile sample type is required")
+					return nil, fmt.Errorf("profile sample type is required (type_strindex=%d, string_table_len=%d)", typeIdx, stringTable.Len())
 				}
 
 				profileType := stringTable.At(int(typeIdx))
+
+				unitIdx := p.SampleType().UnitStrindex()
+
+				unit := schema.UnitProfileCount
+				if int(unitIdx) < stringTable.Len() && stringTable.At(int(unitIdx)) != "" {
+					unit = stringTable.At(int(unitIdx))
+				}
 
 				ts := int64(p.Time())
 
 				for s := 0; s < p.Samples().Len(); s++ {
 					sample := p.Samples().At(s)
+
+					// GAP: Multi-value profiles.
+					//
+					// OTel pprofile SampleType is singular per Profile, but Sample.Values()
+					// can contain multiple entries. In the Google pprof format, a heap profile
+					// carries 4 value types (alloc_objects, alloc_space, inuse_objects,
+					// inuse_space) as parallel arrays. The OTel pprofile format expects
+					// separate Profile objects per value type, so Values().Len() > 1 is
+					// non-conformant or indicates a format we don't understand.
+					//
+					// We refuse to silently drop values. If a profiler sends multi-value
+					// samples, this error surfaces immediately so we can implement proper
+					// fan-out (one row per value type) with correct naming.
+					//
+					// See docs/architecture/profiles.md §Gap 1.
+					if sample.Values().Len() == 0 {
+						return nil, fmt.Errorf("profile sample has no values (service=%s, profile_type=%s, sample_index=%d)", svc, profileType, s)
+					}
+
+					if sample.Values().Len() > 1 {
+						return nil, fmt.Errorf("multi-value profile samples not supported: got %d values, want 1 (service=%s, profile_type=%s, sample_index=%d). See docs/architecture/profiles.md", sample.Values().Len(), svc, profileType, s)
+					}
+
+					val := float64(sample.Values().At(0))
 
 					// Resolve stacktrace from sample → stack table → location names.
 					var stack []string
@@ -366,14 +398,6 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 						}
 					}
 
-					// FRAGILE: only reads Values().At(0) — silently drops all other
-					// value columns (e.g. alloc_objects vs alloc_space in heap
-					// profiles). Multi-value profiles lose data without warning.
-					var val float64
-					if sample.Values().Len() > 0 {
-						val = float64(sample.Values().At(0))
-					}
-
 					rows = append(rows, schema.UnifiedRow{
 						Timestamp: ts,
 						Signal:    schema.SignalProfile,
@@ -381,7 +405,7 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 						Name:       fmt.Sprintf("profile.%s", profileType),
 						Value:      &val,
 						Stacktrace: stack,
-						Unit:       ptrUnitCount,
+						Unit:       &unit,
 						Kind:       &profileType,
 					})
 				}
@@ -389,5 +413,5 @@ func mapProfiles(pd pprofile.Profiles) []schema.UnifiedRow {
 		}
 	}
 
-	return rows
+	return rows, nil
 }

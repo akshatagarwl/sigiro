@@ -1,6 +1,7 @@
 package unified
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -211,7 +212,11 @@ func TestMapProfiles(t *testing.T) {
 	sample.SetStackIndex(0)
 	sample.Values().Append(150)
 
-	rows := mapProfiles(pd)
+	rows, err := mapProfiles(pd)
+	if err != nil {
+		t.Fatalf("mapProfiles: %v", err)
+	}
+
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
@@ -233,6 +238,10 @@ func TestMapProfiles(t *testing.T) {
 		t.Errorf("value = %f, want 150", *r.Value)
 	}
 
+	if *r.Unit != "count" {
+		t.Errorf("unit = %q, want count", *r.Unit)
+	}
+
 	// Stack should resolve to [main.handler, runtime.gcBgMarkWorker, runtime.gcDrain]
 	wantStack := []string{"main.handler", "runtime.gcBgMarkWorker", "runtime.gcDrain"}
 	if len(r.Stacktrace) != len(wantStack) {
@@ -243,6 +252,86 @@ func TestMapProfiles(t *testing.T) {
 		if s != wantStack[i] {
 			t.Errorf("stacktrace[%d] = %q, want %q", i, s, wantStack[i])
 		}
+	}
+}
+
+func TestMapProfiles_MultiValueError(t *testing.T) {
+	pd := pprofile.NewProfiles()
+	dict := pd.Dictionary()
+	dict.StringTable().Append("alloc_objects") // 0
+	dict.StringTable().Append("count")         // 1
+	dict.StringTable().Append("runtime.main")  // 2
+
+	fn0 := dict.FunctionTable().AppendEmpty()
+	fn0.SetNameStrindex(2)
+
+	loc0 := dict.LocationTable().AppendEmpty()
+	loc0.Lines().AppendEmpty().SetFunctionIndex(0)
+
+	stack0 := dict.StackTable().AppendEmpty()
+	stack0.LocationIndices().Append(0)
+
+	rp := pd.ResourceProfiles().AppendEmpty()
+	setResource(rp.Resource())
+	sp := rp.ScopeProfiles().AppendEmpty()
+	p := sp.Profiles().AppendEmpty()
+	p.SampleType().SetTypeStrindex(0)
+	p.SampleType().SetUnitStrindex(1)
+	p.SetTime(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 9, 30, 0, time.UTC).UnixNano()))
+
+	// Multi-value sample: alloc_objects=150, alloc_space=48000
+	// This must error — we don't know the semantics of the second value.
+	sample := p.Samples().AppendEmpty()
+	sample.SetStackIndex(0)
+	sample.Values().Append(150)
+	sample.Values().Append(48000) // second value, no type metadata
+
+	_, err := mapProfiles(pd)
+	if err == nil {
+		t.Fatal("expected error for multi-value profile sample, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "multi-value") {
+		t.Errorf("error should mention multi-value, got: %v", err)
+	}
+}
+
+func TestMapProfiles_EmptyValueError(t *testing.T) {
+	pd := pprofile.NewProfiles()
+	dict := pd.Dictionary()
+	dict.StringTable().Append("cpu")          // 0
+	dict.StringTable().Append("count")        // 1
+	dict.StringTable().Append("runtime.main") // 2
+
+	fn0 := dict.FunctionTable().AppendEmpty()
+	fn0.SetNameStrindex(2)
+
+	loc0 := dict.LocationTable().AppendEmpty()
+	loc0.Lines().AppendEmpty().SetFunctionIndex(0)
+
+	stack0 := dict.StackTable().AppendEmpty()
+	stack0.LocationIndices().Append(0)
+
+	rp := pd.ResourceProfiles().AppendEmpty()
+	setResource(rp.Resource())
+	sp := rp.ScopeProfiles().AppendEmpty()
+	p := sp.Profiles().AppendEmpty()
+	p.SampleType().SetTypeStrindex(0)
+	p.SampleType().SetUnitStrindex(1)
+	p.SetTime(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 9, 30, 0, time.UTC).UnixNano()))
+
+	// Sample with no values — must error.
+	sample := p.Samples().AppendEmpty()
+	sample.SetStackIndex(0)
+	// No sample.Values().Append(...)
+
+	_, err := mapProfiles(pd)
+	if err == nil {
+		t.Fatal("expected error for empty-value profile sample, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "no values") {
+		t.Errorf("error should mention no values, got: %v", err)
 	}
 }
 
@@ -273,12 +362,62 @@ func TestMapProfiles_MissingServiceName(t *testing.T) {
 	sample.SetStackIndex(0)
 	sample.Values().Append(1)
 
-	rows := mapProfiles(pd)
+	rows, err := mapProfiles(pd)
+	if err != nil {
+		t.Fatalf("mapProfiles: %v", err)
+	}
+
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
 
 	if rows[0].Service != "unknown_service" {
 		t.Fatalf("service = %q, want unknown_service", rows[0].Service)
+	}
+}
+
+func TestMapProfiles_PreservesUnit(t *testing.T) {
+	pd := pprofile.NewProfiles()
+	dict := pd.Dictionary()
+	dict.StringTable().Append("alloc_space")  // 0
+	dict.StringTable().Append("bytes")        // 1
+	dict.StringTable().Append("runtime.main") // 2
+
+	fn0 := dict.FunctionTable().AppendEmpty()
+	fn0.SetNameStrindex(2)
+
+	loc0 := dict.LocationTable().AppendEmpty()
+	loc0.Lines().AppendEmpty().SetFunctionIndex(0)
+
+	stack0 := dict.StackTable().AppendEmpty()
+	stack0.LocationIndices().Append(0)
+
+	rp := pd.ResourceProfiles().AppendEmpty()
+	setResource(rp.Resource())
+	sp := rp.ScopeProfiles().AppendEmpty()
+	p := sp.Profiles().AppendEmpty()
+	p.SampleType().SetTypeStrindex(0) // "alloc_space"
+	p.SampleType().SetUnitStrindex(1) // "bytes"
+	p.SetTime(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 9, 30, 0, time.UTC).UnixNano()))
+
+	sample := p.Samples().AppendEmpty()
+	sample.SetStackIndex(0)
+	sample.Values().Append(48000)
+
+	rows, err := mapProfiles(pd)
+	if err != nil {
+		t.Fatalf("mapProfiles: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	if *rows[0].Unit != "bytes" {
+		t.Errorf("unit = %q, want bytes", *rows[0].Unit)
+	}
+
+	if rows[0].Name != "profile.alloc_space" {
+		t.Errorf("name = %q, want profile.alloc_space", rows[0].Name)
 	}
 }

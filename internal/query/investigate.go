@@ -228,6 +228,25 @@ func scanLogs(ctx context.Context, conn *sql.Conn) ([]schema.LogRow, error) {
 	return result, rows.Err()
 }
 
+// GAP: Leaf-only profile aggregation.
+//
+// This query extracts only the leaf (top-of-stack) function per sample. It
+// answers "what functions are hot" but cannot build flamegraphs, which require
+// aggregating full stack prefixes. Flamegraph construction needs:
+//
+//	SELECT array_to_string(stacktrace, ';') AS folded, sum(value)::BIGINT AS count
+//	FROM _scan WHERE signal = 'profile' GROUP BY folded
+//
+// The folded output can feed Brendan Gregg's flamegraph.pl, d3-flame-graph
+// (needs tree construction from folded stacks), or speedscope (needs index-
+// based SampledProfile JSON). See docs/architecture/profiles.md §Gap 4.
+//
+// GAP: No profile type filtering.
+//
+// This query aggregates ALL profile types together (cpu, alloc_space, etc.).
+// A service emitting both CPU and heap profiles will produce mixed results.
+// Needs WHERE name = 'profile.cpu' (or parameterized) to be correct.
+// See docs/architecture/profiles.md §Gap 5.
 func scanProfiles(ctx context.Context, conn *sql.Conn) ([]schema.ProfileRow, error) {
 	rows, err := conn.QueryContext(ctx, `
 		SELECT stacktrace[len(stacktrace)] AS leaf,

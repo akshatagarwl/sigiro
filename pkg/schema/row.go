@@ -17,7 +17,7 @@ const (
 // seconds or microseconds, queries silently return wrong results.
 const (
 	UnitSpanDuration = "ms"    // span Value is duration in milliseconds (converted from OTel nanoseconds at write time)
-	UnitProfileCount = "count" // profile Value is sample count
+	UnitProfileCount = "count" // profile Value default unit; actual unit preserved from pprofile SampleType (e.g. "bytes" for alloc_space)
 )
 
 // Event represents a span event (e.g. exception, annotation).

@@ -342,7 +342,13 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 	rows = append(rows, mapTraces(traces)...)
 	rows = append(rows, mapMetrics(metrics)...)
 	rows = append(rows, mapLogs(logs)...)
-	rows = append(rows, mapProfiles(profiles)...)
+
+	profileRows, err := mapProfiles(profiles)
+	if err != nil {
+		t.Fatalf("mapProfiles: %v", err)
+	}
+
+	rows = append(rows, profileRows...)
 
 	if len(rows) == 0 {
 		t.Fatal("no rows produced")
