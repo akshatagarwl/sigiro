@@ -25,7 +25,7 @@ func newTestHandler(t *testing.T) http.HandlerFunc {
 
 	t.Cleanup(func() { db.Close() })
 
-	parquetPath := "../../experiments/incident-gen/testdata/incident.parquet"
+	parquetPath := "../../testdata/incident.parquet"
 
 	_, err = db.Exec(fmt.Sprintf(`CREATE VIEW observe AS SELECT * FROM read_parquet('%s')`, parquetPath))
 	if err != nil {

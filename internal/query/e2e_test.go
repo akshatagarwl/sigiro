@@ -20,7 +20,7 @@ func setupE2EDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 
-	path := "../../experiments/incident-gen/testdata/incident.parquet"
+	path := "../../testdata/incident.parquet"
 
 	_, err = db.Exec(fmt.Sprintf(`CREATE VIEW observe AS SELECT * FROM read_parquet('%s')`, path))
 	if err != nil {
