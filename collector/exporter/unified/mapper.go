@@ -296,6 +296,11 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 // wrong data (wrong function names, corrupt stacks) with no error.
 //
 // See docs/architecture/profiles.md §Known Gaps.
+//
+// Unlike mapMetrics/mapTraces/mapLogs which panic on malformed data (programmer
+// errors like unknown enum values), mapProfiles returns errors because the
+// failure modes are data-shape problems from external profilers (multi-value
+// samples, missing values) that can happen at runtime with valid code.
 func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 	rows := make([]schema.UnifiedRow, 0, 256)
 
@@ -355,6 +360,7 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 				}
 
 				ts := int64(p.Time())
+				name := "profile." + profileType
 
 				for s := 0; s < p.Samples().Len(); s++ {
 					sample := p.Samples().At(s)
@@ -378,7 +384,7 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 					}
 
 					if sample.Values().Len() > 1 {
-						return nil, fmt.Errorf("multi-value profile samples not supported: got %d values, want 1 (service=%s, profile_type=%s, sample_index=%d). See docs/architecture/profiles.md", sample.Values().Len(), svc, profileType, s)
+						return nil, fmt.Errorf("multi-value profile samples not supported: got %d values, want 1 (service=%s, profile_type=%s, sample_index=%d)", sample.Values().Len(), svc, profileType, s)
 					}
 
 					val := float64(sample.Values().At(0))
@@ -402,11 +408,11 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 						Timestamp: ts,
 						Signal:    schema.SignalProfile,
 						Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
-						Name:       fmt.Sprintf("profile.%s", profileType),
+						Name:       name,
 						Value:      &val,
 						Stacktrace: stack,
-						Unit:       &unit,
-						Kind:       &profileType,
+						Unit:       ptr(unit),
+						Kind:       ptr(profileType),
 					})
 				}
 			}

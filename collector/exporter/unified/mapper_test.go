@@ -255,21 +255,25 @@ func TestMapProfiles(t *testing.T) {
 	}
 }
 
-func TestMapProfiles_MultiValueError(t *testing.T) {
+// makeMinimalProfile builds the smallest valid pprofile.Profiles:
+// one function ("runtime.main"), one location, one stack, one profile.
+// The sample is added but with no values — caller must append values.
+// Returns the Profiles and a reference to the sample for customization.
+func makeMinimalProfile(typeStr, unitStr string) (pprofile.Profiles, pprofile.Sample) {
 	pd := pprofile.NewProfiles()
 	dict := pd.Dictionary()
-	dict.StringTable().Append("alloc_objects") // 0
-	dict.StringTable().Append("count")         // 1
-	dict.StringTable().Append("runtime.main")  // 2
+	dict.StringTable().Append(typeStr)        // 0
+	dict.StringTable().Append(unitStr)        // 1
+	dict.StringTable().Append("runtime.main") // 2
 
-	fn0 := dict.FunctionTable().AppendEmpty()
-	fn0.SetNameStrindex(2)
+	fn := dict.FunctionTable().AppendEmpty()
+	fn.SetNameStrindex(2)
 
-	loc0 := dict.LocationTable().AppendEmpty()
-	loc0.Lines().AppendEmpty().SetFunctionIndex(0)
+	loc := dict.LocationTable().AppendEmpty()
+	loc.Lines().AppendEmpty().SetFunctionIndex(0)
 
-	stack0 := dict.StackTable().AppendEmpty()
-	stack0.LocationIndices().Append(0)
+	stack := dict.StackTable().AppendEmpty()
+	stack.LocationIndices().Append(0)
 
 	rp := pd.ResourceProfiles().AppendEmpty()
 	setResource(rp.Resource())
@@ -279,10 +283,14 @@ func TestMapProfiles_MultiValueError(t *testing.T) {
 	p.SampleType().SetUnitStrindex(1)
 	p.SetTime(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 9, 30, 0, time.UTC).UnixNano()))
 
-	// Multi-value sample: alloc_objects=150, alloc_space=48000
-	// This must error — we don't know the semantics of the second value.
 	sample := p.Samples().AppendEmpty()
 	sample.SetStackIndex(0)
+
+	return pd, sample
+}
+
+func TestMapProfiles_MultiValueError(t *testing.T) {
+	pd, sample := makeMinimalProfile("alloc_objects", "count")
 	sample.Values().Append(150)
 	sample.Values().Append(48000) // second value, no type metadata
 
@@ -297,33 +305,8 @@ func TestMapProfiles_MultiValueError(t *testing.T) {
 }
 
 func TestMapProfiles_EmptyValueError(t *testing.T) {
-	pd := pprofile.NewProfiles()
-	dict := pd.Dictionary()
-	dict.StringTable().Append("cpu")          // 0
-	dict.StringTable().Append("count")        // 1
-	dict.StringTable().Append("runtime.main") // 2
-
-	fn0 := dict.FunctionTable().AppendEmpty()
-	fn0.SetNameStrindex(2)
-
-	loc0 := dict.LocationTable().AppendEmpty()
-	loc0.Lines().AppendEmpty().SetFunctionIndex(0)
-
-	stack0 := dict.StackTable().AppendEmpty()
-	stack0.LocationIndices().Append(0)
-
-	rp := pd.ResourceProfiles().AppendEmpty()
-	setResource(rp.Resource())
-	sp := rp.ScopeProfiles().AppendEmpty()
-	p := sp.Profiles().AppendEmpty()
-	p.SampleType().SetTypeStrindex(0)
-	p.SampleType().SetUnitStrindex(1)
-	p.SetTime(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 9, 30, 0, time.UTC).UnixNano()))
-
-	// Sample with no values — must error.
-	sample := p.Samples().AppendEmpty()
-	sample.SetStackIndex(0)
-	// No sample.Values().Append(...)
+	pd, _ := makeMinimalProfile("cpu", "count")
+	// Sample has no values appended.
 
 	_, err := mapProfiles(pd)
 	if err == nil {
@@ -336,31 +319,13 @@ func TestMapProfiles_EmptyValueError(t *testing.T) {
 }
 
 func TestMapProfiles_MissingServiceName(t *testing.T) {
-	pd := pprofile.NewProfiles()
-	dict := pd.Dictionary()
-	dict.StringTable().Append("cpu")
-	dict.StringTable().Append("count")
-	dict.StringTable().Append("runtime.main")
-
-	fn0 := dict.FunctionTable().AppendEmpty()
-	fn0.SetNameStrindex(2)
-
-	loc0 := dict.LocationTable().AppendEmpty()
-	loc0.Lines().AppendEmpty().SetFunctionIndex(0)
-
-	stack0 := dict.StackTable().AppendEmpty()
-	stack0.LocationIndices().Append(0)
-
-	rp := pd.ResourceProfiles().AppendEmpty()
-	rp.Resource().Attributes().PutStr("host.name", "node-01")
-	sp := rp.ScopeProfiles().AppendEmpty()
-	p := sp.Profiles().AppendEmpty()
-	p.SampleType().SetTypeStrindex(0)
-	p.SampleType().SetUnitStrindex(1)
-	p.SetTime(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 9, 30, 0, time.UTC).UnixNano()))
-	sample := p.Samples().AppendEmpty()
-	sample.SetStackIndex(0)
+	pd, sample := makeMinimalProfile("cpu", "count")
 	sample.Values().Append(1)
+
+	// Override: remove service.name, keep only host.name.
+	rp := pd.ResourceProfiles().At(0)
+	rp.Resource().Attributes().Clear()
+	rp.Resource().Attributes().PutStr("host.name", "node-01")
 
 	rows, err := mapProfiles(pd)
 	if err != nil {
@@ -377,31 +342,7 @@ func TestMapProfiles_MissingServiceName(t *testing.T) {
 }
 
 func TestMapProfiles_PreservesUnit(t *testing.T) {
-	pd := pprofile.NewProfiles()
-	dict := pd.Dictionary()
-	dict.StringTable().Append("alloc_space")  // 0
-	dict.StringTable().Append("bytes")        // 1
-	dict.StringTable().Append("runtime.main") // 2
-
-	fn0 := dict.FunctionTable().AppendEmpty()
-	fn0.SetNameStrindex(2)
-
-	loc0 := dict.LocationTable().AppendEmpty()
-	loc0.Lines().AppendEmpty().SetFunctionIndex(0)
-
-	stack0 := dict.StackTable().AppendEmpty()
-	stack0.LocationIndices().Append(0)
-
-	rp := pd.ResourceProfiles().AppendEmpty()
-	setResource(rp.Resource())
-	sp := rp.ScopeProfiles().AppendEmpty()
-	p := sp.Profiles().AppendEmpty()
-	p.SampleType().SetTypeStrindex(0) // "alloc_space"
-	p.SampleType().SetUnitStrindex(1) // "bytes"
-	p.SetTime(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 9, 30, 0, time.UTC).UnixNano()))
-
-	sample := p.Samples().AppendEmpty()
-	sample.SetStackIndex(0)
+	pd, sample := makeMinimalProfile("alloc_space", "bytes")
 	sample.Values().Append(48000)
 
 	rows, err := mapProfiles(pd)
