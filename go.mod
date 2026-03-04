@@ -10,6 +10,7 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.5.5
 	github.com/parquet-go/parquet-go v0.28.0
 	go.opentelemetry.io/collector/component v1.52.0
+	go.opentelemetry.io/collector/component/componenttest v0.146.1
 	go.opentelemetry.io/collector/consumer v1.52.0
 	go.opentelemetry.io/collector/exporter v1.52.0
 	go.opentelemetry.io/collector/exporter/xexporter v0.146.1
@@ -54,7 +55,6 @@ require (
 	github.com/twpayne/go-geom v1.6.1 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/collector/component/componenttest v0.146.1 // indirect
 	go.opentelemetry.io/collector/consumer/xconsumer v0.146.1 // indirect
 	go.opentelemetry.io/collector/featuregate v1.52.0 // indirect
 	go.opentelemetry.io/collector/internal/componentalias v0.146.1 // indirect
