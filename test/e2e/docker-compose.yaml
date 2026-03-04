@@ -42,6 +42,7 @@ services:
     ports:
       - "4317:4317"
       - "4318:4318"
+      - "4319:4319"
 
   # --- telemetrygen: checkout service ---
   telemetrygen-checkout-traces:
@@ -131,12 +132,14 @@ services:
       - "8080:8080"
 
   # --- profilegen: synthetic OTLP profiles ---
+  # Profiles go to port 4319 (otlp gRPC) because otelarrow on 4317
+  # doesn't support the profiles signal yet.
   profilegen:
     build: ./profilegen
     depends_on:
       collector: { condition: service_started }
     command:
-      - --endpoint=collector:4317
+      - --endpoint=collector:4319
       - --insecure
       - --services=checkout,payments
       - --duration=30s

@@ -27,6 +27,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /observe-collector /observe-collector
 COPY --from=builder /src/collector/otelcol.yaml /etc/otelcol/otelcol.yaml
-EXPOSE 4317 4318
+EXPOSE 4317 4318 4319
 ENTRYPOINT ["/observe-collector"]
 CMD ["--config", "/etc/otelcol/otelcol.yaml"]

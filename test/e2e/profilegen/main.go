@@ -22,7 +22,7 @@ import (
 )
 
 func main() {
-	endpoint := flag.String("endpoint", "localhost:4317", "collector gRPC endpoint")
+	endpoint := flag.String("endpoint", "localhost:4319", "collector gRPC endpoint (otlp, not otelarrow — profiles unsupported on arrow)")
 	insecureConn := flag.Bool("insecure", false, "use insecure gRPC connection")
 	services := flag.String("services", "checkout,payments", "comma-separated service names")
 	duration := flag.Duration("duration", 30*time.Second, "how long to generate profiles")

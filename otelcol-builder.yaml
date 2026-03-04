@@ -6,6 +6,7 @@ dist:
   output_path: ./collector/cmd/collector
 
 receivers:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/otelarrowreceiver v0.146.1
   - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.146.1
   - gomod: go.opentelemetry.io/ebpf-profiler v0.0.202610
     import: go.opentelemetry.io/ebpf-profiler/collector

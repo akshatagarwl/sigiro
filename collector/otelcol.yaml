@@ -1,10 +1,23 @@
 receivers:
-  otlp:
+  # Primary: OTel Arrow — 30-70% bandwidth savings over standard OTLP.
+  # Accepts both Arrow-encoded and standard OTLP protobuf over gRPC.
+  # Does NOT support profiles signal or HTTP protocol.
+  otelarrow:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+
+  # Fallback: standard OTLP receiver for:
+  # - Profiles signal (otelarrow doesn't support profiles yet)
+  # - HTTP clients (browsers, PHP/Python SDKs, firewalled environments)
+  # When otelarrow adds profiles support, this becomes HTTP-only fallback.
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4319
       http:
         endpoint: 0.0.0.0:4318
+
   profiling:
     samples_per_second: 20
     tracers: all
@@ -31,15 +44,15 @@ service:
       level: info
   pipelines:
     metrics:
-      receivers: [otlp]
+      receivers: [otelarrow, otlp]
       processors: [batch]
       exporters: [unified_parquet, debug]
     traces:
-      receivers: [otlp]
+      receivers: [otelarrow, otlp]
       processors: [batch]
       exporters: [unified_parquet, debug]
     logs:
-      receivers: [otlp]
+      receivers: [otelarrow, otlp]
       processors: [batch]
       exporters: [unified_parquet, debug]
     profiles:
