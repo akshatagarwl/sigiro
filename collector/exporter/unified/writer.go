@@ -18,6 +18,12 @@ import (
 const nsPerHour = int64(time.Hour)
 
 // ParquetWriter writes sorted UnifiedRows as Parquet files to S3.
+//
+// Design: parquet-go serializes directly from []UnifiedRow, then AWS SDK uploads
+// via PutObject. Append-only — files are never modified or deleted by the app.
+// S3 lifecycle rules handle TTL. See docs/architecture/tradeoffs.md §7 for
+// alternatives considered (DuckDB httpfs, raw net/http, local WAL + sync)
+// and when to revisit.
 type ParquetWriter struct {
 	bucket   string
 	s3Client *s3.Client
@@ -100,6 +106,11 @@ func (w *ParquetWriter) writePartition(ctx context.Context, hour int64, hourRows
 	// FRAGILE: entire hour-partition is buffered in memory before upload.
 	// A burst of data for a single hour can OOM the process. No size
 	// limit or chunking.
+	//
+	// FUTURE: if this becomes a problem, the local WAL + DuckDB sync
+	// architecture decouples flushing from uploading — collector writes
+	// to local disk (no OOM on S3 failure), DuckDB merges + re-sorts +
+	// uploads in the background. See docs/architecture/tradeoffs.md §7.
 	var buf bytes.Buffer
 	buf.Grow(len(hourRows) * 256)
 

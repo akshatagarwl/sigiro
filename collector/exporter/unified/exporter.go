@@ -145,6 +145,10 @@ func (e *Exporter) flush(ctx context.Context) error {
 		// (OOM guaranteed). No back-pressure, no drop policy, no metric
 		// to alert on buffer size. A transient S3 outage will accumulate
 		// data until the process is killed.
+		//
+		// FUTURE: local WAL + DuckDB sync would fix this — flush to local
+		// disk (never fails unless disk full), sync to S3 independently.
+		// See docs/architecture/tradeoffs.md §7.
 		e.mu.Lock()
 		e.buffer = append(snapshot, e.buffer...)
 		e.mu.Unlock()
