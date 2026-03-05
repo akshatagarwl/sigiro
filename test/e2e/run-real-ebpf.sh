@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# Real-traffic test with eBPF profiling (Linux only).
+#
+# Overrides docker-compose.real.yaml to:
+# - Use otelcol.yaml (has eBPF profiling receiver) instead of e2e config
+# - Run collector privileged with host PID namespace
+# - Disable profilegen (eBPF profiler replaces it)
+#
+# On Docker Desktop (macOS/Windows), eBPF profiles will only capture
+# kernel stacks with unknown_service — use run-real.sh for app-level
+# profiles via profilegen instead.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -6,14 +16,16 @@ cd "$SCRIPT_DIR"
 
 export DOCKER_BUILDKIT=1
 
+OVERRIDE_EBPF="/tmp/e2e-ebpf.override.yaml"
+
 compose() {
-  docker compose -f docker-compose.real.yaml "$@"
+  docker compose -f docker-compose.real.yaml -f "$OVERRIDE_EBPF" "$@"
 }
 
 cleanup() {
   echo "=== Cleaning up ==="
   compose down -v --remove-orphans 2>/dev/null || true
-  rm -f "$SCRIPT_DIR/postgres-init.sql"
+  rm -f "$SCRIPT_DIR/postgres-init.sql" "$OVERRIDE_EBPF"
 }
 trap cleanup EXIT
 
@@ -21,6 +33,21 @@ echo "=== Fetching postgres init SQL ==="
 rm -rf "$SCRIPT_DIR/postgres-init.sql"
 curl -sfL "https://raw.githubusercontent.com/open-telemetry/opentelemetry-demo/2.2.0/src/postgresql/init.sql" \
   -o "$SCRIPT_DIR/postgres-init.sql"
+
+echo "=== Writing compose overrides ==="
+cat > "$OVERRIDE_EBPF" <<'YAML'
+services:
+  otel-collector:
+    command: ["--config", "/etc/otelcol/otelcol.yaml", "--feature-gates=service.profilesSupport"]
+    volumes:
+      - ../../collector/otelcol.yaml:/etc/otelcol/otelcol.yaml:ro
+      - /sys/kernel/debug:/sys/kernel/debug
+      - /sys/kernel/tracing:/sys/kernel/tracing
+    privileged: true
+    pid: host
+  profilegen:
+    profiles: ["disabled"]
+YAML
 
 echo "=== Ensuring host tracefs/debugfs mounts ==="
 docker run --rm --privileged alpine sh -lc 'mount -t tracefs tracefs /sys/kernel/tracing || true; mount -t debugfs debugfs /sys/kernel/debug || true'
