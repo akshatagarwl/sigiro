@@ -1,0 +1,426 @@
+# Observe — Agent Data Guide
+#
+# Read this file, then query the data with DuckDB SQL.
+# All observability data lives in one Parquet table on S3.
+# No separate stores, no PromQL, no LogQL — just SQL.
+
+## What This Is
+
+A unified observability table. Metrics, traces, logs, and profiles are
+interleaved in the same Parquet files on S3. Every row is one observation.
+
+You query it with DuckDB. One SQL dialect for everything.
+
+## DuckDB Setup
+
+```sql
+INSTALL httpfs;
+LOAD httpfs;
+SET s3_region = 'us-east-1';
+SET s3_access_key_id = '<key>';
+SET s3_secret_access_key = '<secret>';
+```
+
+For MinIO or local S3-compatible storage:
+```sql
+SET s3_endpoint = 'localhost:9000';
+SET s3_use_ssl = false;
+SET s3_url_style = 'path';
+```
+
+## S3 Layout
+
+```
+s3://observe/{epoch_hour_seconds}/{node}-{ts}.parquet
+```
+
+epoch_hour_seconds = Unix seconds of the hour start.
+2026-03-01 14:00 UTC = 1772373600.
+
+Query one hour:
+```sql
+SELECT * FROM read_parquet('s3://observe/1772373600/*.parquet') LIMIT 10;
+```
+
+Query multiple hours:
+```sql
+SELECT * FROM read_parquet([
+  's3://observe/1772373600/*.parquet',
+  's3://observe/1772377200/*.parquet'
+]) LIMIT 10;
+```
+
+To compute the epoch-hour for a given time:
+```sql
+SELECT (extract(epoch FROM '2026-03-01 14:23:00'::TIMESTAMP)::BIGINT / 3600) * 3600;
+-- returns 1772373600
+```
+
+## Schema
+
+Every row has these columns:
+
+| column | type | signals | meaning |
+|---|---|---|---|
+| timestamp | int64 | all | Unix nanoseconds |
+| signal | string | all | "metric", "span", "log", "profile" |
+| service | string | all | service name, primary filter |
+| host | string | all | machine hostname |
+| pod | string | all | k8s pod name |
+| deploy_version | string? | all | git SHA or version tag |
+| trace_id | string? | span, log | distributed trace ID (hex) |
+| span_id | string? | span | span ID within trace (hex) |
+| parent_span_id | string? | span | parent span ID for call trees |
+| name | string | all | what's measured (see below) |
+| value | float64? | metric, span, profile | numeric measurement (see below) |
+| status | string? | span, log | span: OK/ERROR/UNSET, log: INFO/WARN/ERROR |
+| message | string? | log | log body text |
+| unit | string? | metric, span, profile | unit of value |
+| kind | string? | span, profile | span: client/server/internal, profile: cpu/memory |
+| stacktrace | list<string>? | profile | call stack, root-to-leaf order |
+| events | list<struct>? | span | span events (timestamp, name, attributes) |
+| metadata | string? | all | JSON blob, extra attributes — filter LAST |
+
+### What `name` means per signal
+
+- metric: metric name (e.g. `http.server.duration`, `process.runtime.go.mem.heap_alloc`)
+- span: operation name (e.g. `POST /checkout`, `db.query`, `GET /users/:id`)
+- log: logger/scope name (e.g. `app.checkout`, `billing.logger`)
+- profile: `profile.{type}` (e.g. `profile.cpu`, `profile.alloc_space`)
+
+### What `value` means per signal
+
+- metric: the metric value, in `unit`
+- span: duration in milliseconds (converted from OTel nanoseconds at write time)
+- profile: sample count
+- log: null
+
+## Sort Order
+
+Files are sorted (service, signal, timestamp). This means:
+
+- ALWAYS filter by `service` first — row group pruning makes it near-free
+- ALWAYS filter by `signal` — skips irrelevant row groups
+- Time ranges scan sequentially within a signal
+
+Bad: `WHERE name='http.duration'` (scans everything)
+Good: `WHERE service='checkout' AND signal='metric' AND name='http.duration'`
+
+## Timestamp Handling
+
+Timestamps are Unix nanoseconds, not seconds or milliseconds.
+
+```sql
+-- Convert readable time to nanoseconds for WHERE clauses:
+SELECT epoch_ns('2026-03-01 14:00:00'::TIMESTAMP);
+-- 1772373600000000000
+
+-- Convert stored nanoseconds to readable time:
+SELECT to_timestamp(timestamp / 1e9) FROM ...;
+
+-- Readable bucket for aggregation:
+SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket
+FROM ...;
+```
+
+## Investigation Playbook
+
+Given: a service name and an approximate time of incident.
+Goal: determine root cause in 1-2 query rounds.
+
+### Step 1: Compute the time window
+
+Pick a 25-minute window centered on the incident. Compute epoch-hours.
+
+```sql
+-- Example: incident at 14:10, window 14:00-14:25
+-- epoch_hour for 14:00 = 1772373600
+-- epoch_hour for 14:25 = 1772373600 (same hour)
+-- If it crossed an hour boundary, use both epoch-hours
+```
+
+Set up the table reference for all subsequent queries:
+```sql
+-- Single hour:
+CREATE TEMP VIEW obs AS SELECT * FROM read_parquet('s3://observe/1772373600/*.parquet');
+-- Multi-hour:
+CREATE TEMP VIEW obs AS SELECT * FROM read_parquet(['s3://observe/1772373600/*.parquet', 's3://observe/1772377200/*.parquet']);
+```
+
+### Step 2: Run these 5 queries
+
+Run all 5 in parallel if your tool supports it.
+
+#### 2a. Metrics — bucketed time series
+
+```sql
+SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
+       name,
+       approx_quantile(value, 0.95) AS p95,
+       avg(value) AS avg,
+       count(*) AS n
+FROM obs
+WHERE service='checkout' AND signal='metric'
+      AND timestamp BETWEEN epoch_ns('2026-03-01 14:00:00'::TIMESTAMP)
+                        AND epoch_ns('2026-03-01 14:25:00'::TIMESTAMP)
+GROUP BY bucket, name
+ORDER BY bucket, name;
+```
+
+Look for: inflection points. When did p95 spike? When did error count jump?
+
+#### 2b. Spans — errors and slow operations
+
+```sql
+SELECT trace_id, span_id, parent_span_id, name,
+       value AS duration_ms, status, kind, service
+FROM obs
+WHERE service='checkout' AND signal='span'
+      AND timestamp BETWEEN epoch_ns('2026-03-01 14:00:00'::TIMESTAMP)
+                        AND epoch_ns('2026-03-01 14:25:00'::TIMESTAMP)
+      AND (status='ERROR' OR value > 1000)
+ORDER BY CASE WHEN status='ERROR' THEN 0 ELSE 1 END, value DESC
+LIMIT 50;
+```
+
+Look for: which operations fail, how slow, collect trace_ids for step 3.
+
+#### 2c. Logs — recent, capped
+
+```sql
+SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t,
+       status, message, trace_id
+FROM obs
+WHERE service='checkout' AND signal='log'
+      AND timestamp BETWEEN epoch_ns('2026-03-01 14:00:00'::TIMESTAMP)
+                        AND epoch_ns('2026-03-01 14:25:00'::TIMESTAMP)
+ORDER BY timestamp DESC
+LIMIT 100;
+```
+
+Look for: error messages, warnings before the incident, correlation via trace_id.
+
+Narrow with: `AND status='ERROR'` or `AND message LIKE '%timeout%'`
+
+#### 2d. Profiles — top functions
+
+```sql
+SELECT stacktrace[len(stacktrace)] AS leaf_function,
+       sum(value) AS samples
+FROM obs
+WHERE service='checkout' AND signal='profile'
+      AND timestamp BETWEEN epoch_ns('2026-03-01 14:00:00'::TIMESTAMP)
+                        AND epoch_ns('2026-03-01 14:25:00'::TIMESTAMP)
+      AND stacktrace IS NOT NULL AND len(stacktrace) > 0
+GROUP BY leaf_function
+ORDER BY samples DESC
+LIMIT 10;
+```
+
+Look for: runtime.gcBgMarkWorker (GC pressure), database/sql.(*DB).conn
+(pool contention), crypto/tls.(*Conn).Handshake (TLS overhead).
+
+Full call stacks for a hot function:
+```sql
+SELECT stacktrace, sum(value) AS samples
+FROM obs
+WHERE service='checkout' AND signal='profile'
+      AND list_contains(stacktrace, 'runtime.gcBgMarkWorker')
+GROUP BY stacktrace
+ORDER BY samples DESC
+LIMIT 5;
+```
+
+#### 2e. Discover services (optional)
+
+```sql
+SELECT DISTINCT service
+FROM obs
+WHERE timestamp > epoch_ns(now() - INTERVAL '1 hour')
+ORDER BY service;
+```
+
+### Step 3: Follow cross-service traces
+
+Take the error trace_ids from step 2b. Query ALL services for those traces:
+
+```sql
+SELECT trace_id, service, name, span_id, parent_span_id,
+       value AS duration_ms, status, kind,
+       signal
+FROM obs
+WHERE trace_id IN ('abc123def456...', 'fed789abc012...')
+      AND signal IN ('span', 'log')
+ORDER BY trace_id, timestamp;
+```
+
+This shows the full call chain across services. Use parent_span_id to
+reconstruct the tree: a span whose parent_span_id matches another span's
+span_id is a child call.
+
+Also get logs from other services for these traces:
+```sql
+SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t,
+       service, status, message
+FROM obs
+WHERE trace_id IN ('abc123def456...', 'fed789abc012...')
+      AND signal = 'log'
+      AND service != 'checkout'
+ORDER BY timestamp;
+```
+
+### Step 4: Compare with baseline (optional)
+
+If you need to confirm something is anomalous, run the same metrics query
+on a healthy window (e.g., same time yesterday or 1 hour earlier):
+
+```sql
+SELECT name,
+       approx_quantile(value, 0.95) AS p95,
+       avg(value) AS avg,
+       count(*) AS n
+FROM read_parquet('s3://observe/1772287200/*.parquet')
+WHERE service='checkout' AND signal='metric'
+      AND timestamp BETWEEN epoch_ns('2026-02-28 14:00:00'::TIMESTAMP)
+                        AND epoch_ns('2026-02-28 14:25:00'::TIMESTAMP)
+GROUP BY name
+ORDER BY name;
+```
+
+## Sentinel Queries (Health Checks)
+
+Quick checks to determine if a service needs investigation.
+
+### Error rate (last 5 minutes)
+```sql
+SELECT count(*) FILTER (WHERE status = 'ERROR') * 100.0
+       / NULLIF(count(*), 0) AS error_pct
+FROM obs
+WHERE service = 'checkout' AND signal = 'span'
+      AND timestamp > epoch_ns(now() - INTERVAL '5 minutes');
+```
+Anomalous if: > 5%
+
+### Latency spike (5-min p95 vs 1-hour baseline)
+```sql
+WITH recent AS (
+  SELECT approx_quantile(value, 0.95) AS p95
+  FROM obs
+  WHERE service = 'checkout' AND signal = 'span'
+        AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
+),
+baseline AS (
+  SELECT approx_quantile(value, 0.95) AS p95
+  FROM obs
+  WHERE service = 'checkout' AND signal = 'span'
+        AND timestamp BETWEEN epoch_ns(now() - INTERVAL '1 hour')
+                          AND epoch_ns(now() - INTERVAL '5 minutes')
+)
+SELECT CASE WHEN baseline.p95 > 0
+  THEN (recent.p95 - baseline.p95) / baseline.p95 * 100
+  ELSE 0 END AS pct_change
+FROM recent, baseline;
+```
+Anomalous if: > 50% increase
+
+### Log error burst (last 5 minutes)
+```sql
+SELECT count(*) AS error_count
+FROM obs
+WHERE service = 'checkout' AND signal = 'log'
+      AND status IN ('ERROR', 'FATAL')
+      AND timestamp > epoch_ns(now() - INTERVAL '5 minutes');
+```
+Anomalous if: > 10 errors in 5 minutes (tune per service)
+
+### Service silence (no data)
+```sql
+SELECT count(*) AS row_count
+FROM obs
+WHERE service = 'checkout'
+      AND timestamp > epoch_ns(now() - INTERVAL '5 minutes');
+```
+Anomalous if: 0 (service stopped emitting)
+
+## Example: OOMKill Investigation
+
+Alert: "OOMKill on checkout, 14:10 UTC"
+
+Metrics query returns:
+```
+bucket | name               | p95   | avg
+14:05  | process.memory.rss | 450MB | 420MB
+14:08  | process.memory.rss | 680MB | 650MB   ← climbing
+14:10  | process.memory.rss | 950MB | 920MB   ← near limit
+14:08  | db.pool.active     | 45    | 42      ← pool filling
+```
+
+Spans query returns errors:
+```
+trace_id | name           | duration_ms | status
+abc123   | POST /checkout | 2300        | ERROR
+def456   | POST /checkout | 1800        | ERROR
+```
+
+Logs show the sequence:
+```
+14:09:45 | WARN  | connection pool near capacity
+14:10:02 | ERROR | OOMKilled by kubelet (exitCode=137)
+14:10:03 | ERROR | connection pool exhausted
+```
+
+Profiles show GC thrashing:
+```
+leaf_function              | samples
+runtime.gcBgMarkWorker     | 340
+database/sql.(*DB).conn    | 280
+```
+
+Linked traces (abc123) show cascade:
+```
+service  | name           | duration_ms | status
+checkout | POST /checkout | 2300        | ERROR
+payments | POST /pay      | 2100        | ERROR
+payments | db.query       | 2000        | ERROR
+```
+
+Diagnosis: connection pool leak caused memory growth. GC couldn't keep up.
+OOMKill at 14:10. Cascading failure to payments via db queries.
+
+## Metadata
+
+metadata is a JSON string with attributes not promoted to columns.
+Query it LAST, after filtering by service/signal/time:
+
+```sql
+SELECT json_extract_string(metadata, '$.http.method') AS method,
+       json_extract_string(metadata, '$.http.status_code') AS status_code
+FROM obs
+WHERE service='checkout' AND signal='span' AND status='ERROR'
+LIMIT 20;
+```
+
+## Gotchas
+
+1. timestamp is nanoseconds. Not seconds. Not milliseconds.
+
+2. stacktrace is a list, not a string.
+   Leaf: stacktrace[len(stacktrace)]
+   Root: stacktrace[1]
+   Display: array_to_string(stacktrace, ' → ')
+
+3. events is a list of structs. Use unnest(events) to search event text.
+
+4. value is null for logs. Use count(*), not sum(value), for log queries.
+
+5. Linked trace queries (WHERE trace_id IN (...)) are the slowest query
+   type because trace_id is not in the sort order. Limit to 10-20 trace_ids.
+
+6. Always include service AND signal in WHERE. This is what makes queries
+   fast (row group pruning from the sort order).
+
+7. Cross-hour queries need multiple glob patterns. A window from 13:50 to
+   14:15 spans two epoch-hours — include both in read_parquet([...]).
+
+8. metadata is for reading context, not for filtering. Filter on promoted
+   columns (service, signal, status, name) first, read metadata after.
