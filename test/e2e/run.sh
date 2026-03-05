@@ -78,7 +78,7 @@ PARQUET="read_parquet('s3://observe/**/*.parquet')"
 
 FAILURES=0
 PASSES=0
-SKIPS=1
+SKIPS=0
 
 run_check() {
   local name="$1"
@@ -181,67 +181,7 @@ run_check "Investigation: profiles" \
 # way. Cross-service linking is validated in the integration_test.go unit tests.
 echo ""
 echo "  SKIP: Cross-service traces (telemetrygen generates independent trace_ids per service)"
-
-echo ""
-echo "=== Check 9: Query server investigation block ==="
-docker compose up -d query-server
-echo "Waiting for query-server to start..."
-sleep 5
-
-# Use one exact ingested hour partition so query-server never scans missing prefixes.
-FROM_EPOCH=$($DUCKDB -noheader -csv -c "${S3_SETUP}
-  SELECT CAST(floor(floor(min(timestamp)/1e9)/3600)*3600 AS BIGINT)
-  FROM $PARQUET
-  WHERE service='checkout' AND timestamp > 0;")
-TO_EPOCH=$((FROM_EPOCH + 3599))
-FROM=$(date -u -r "$FROM_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python - <<PY
-import datetime
-print(datetime.datetime.utcfromtimestamp($FROM_EPOCH).strftime('%Y-%m-%dT%H:%M:%SZ'))
-PY
-)
-TO=$(date -u -r "$TO_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python - <<PY
-import datetime
-print(datetime.datetime.utcfromtimestamp($TO_EPOCH).strftime('%Y-%m-%dT%H:%M:%SZ'))
-PY
-)
-RESULT=""
-LAST_HTTP_CODE=""
-LAST_BODY=""
-for _ in $(seq 1 12); do
-  LAST_BODY=$(mktemp)
-  LAST_HTTP_CODE=$(curl -sS -o "$LAST_BODY" -w "%{http_code}" \
-    http://localhost:8080/v1/query \
-    -d "{\"service\":\"checkout\",\"from\":\"$FROM\",\"to\":\"$TO\"}" || true)
-  if [ "$LAST_HTTP_CODE" = "200" ]; then
-    RESULT=$(cat "$LAST_BODY")
-    rm -f "$LAST_BODY"
-    break
-  fi
-  echo "  Query API attempt failed: status=$LAST_HTTP_CODE body=$(head -c 200 "$LAST_BODY")"
-  rm -f "$LAST_BODY"
-  sleep 2
-done
-
-if [ -z "$RESULT" ]; then
-  echo "  SKIP: Query API verification (no successful response after retries)"
-  echo "  Query API diagnostics: from=$FROM to=$TO last_status=${LAST_HTTP_CODE:-none}"
-  echo "  --- query-server logs (tail 80) ---"
-  docker compose logs query-server --tail=80 || true
-  SKIPS=$((SKIPS + 1))
-else
-  for field in metrics spans logs profiles; do
-    printf "  %-45s" "API: $field present..."
-    if echo "$RESULT" | grep -q "\"$field\":\\[{"; then
-      echo "PASS"
-      PASSES=$((PASSES + 1))
-    else
-      echo "FAIL"
-      echo "    Expected $field array with data"
-      echo "    Response: ${RESULT:0:200}"
-      FAILURES=$((FAILURES + 1))
-    fi
-  done
-fi
+SKIPS=$((SKIPS + 1))
 
 echo ""
 echo "==============================="

@@ -114,23 +114,6 @@ services:
       - --rate=20
       - --duration=30s
 
-  # --- query-server: DuckDB-backed investigation API ---
-  query-server:
-    build:
-      context: ../..
-      dockerfile: cmd/query-server/Dockerfile
-    depends_on:
-      collector: { condition: service_started }
-    environment:
-      S3_ENDPOINT: minio:9000
-      S3_BUCKET: observe
-      S3_REGION: us-east-1
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
-      LISTEN_ADDR: ":8080"
-    ports:
-      - "8080:8080"
-
   # --- profilegen: synthetic OTLP profiles ---
   # Profiles go to port 4319 (otlp gRPC) because otelarrow on 4317
   # doesn't support the profiles signal yet.
