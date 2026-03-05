@@ -400,6 +400,68 @@ WHERE service='checkout' AND signal='span' AND status='ERROR'
 LIMIT 20;
 ```
 
+## Saving Investigation Results
+
+After completing an investigation, save a transcript and findings file so
+the work is preserved and reviewable. Write to `investigations/` in the
+repo root.
+
+### File naming
+
+```
+investigations/{date}-{service}-{summary}.md
+```
+
+Example: `investigations/2026-03-05-checkout-oomkill.md`
+
+### What to include
+
+```markdown
+# Investigation: {service} — {one-line summary}
+Date: {YYYY-MM-DD HH:MM UTC}
+Trigger: {what prompted the investigation}
+
+## Environment
+- S3 bucket: {bucket}
+- Time window: {start} — {end}
+- Epoch hours queried: {list}
+
+## Findings
+
+### Signal Summary
+| signal | rows | services |
+|--------|------|----------|
+| ...    | ...  | ...      |
+
+### Per-Service Health
+| service | error_rate | p95_latency_ms | row_count |
+|---------|-----------|----------------|-----------|
+| ...     | ...       | ...            | ...       |
+
+### Root Cause
+{What went wrong and why, with supporting evidence from queries}
+
+### Key Evidence
+- Metrics: {what the metrics showed}
+- Spans: {error spans, slow operations}
+- Logs: {relevant log lines}
+- Profiles: {hot functions if applicable}
+- Traces: {cross-service call chains}
+
+## Queries Run
+{Paste each SQL query and its result summary — not full result sets,
+just the rows/patterns that mattered}
+
+## Recommendations
+{What to fix, ordered by impact}
+```
+
+### Create the directory if it doesn't exist
+
+```bash
+mkdir -p investigations
+```
+
 ## Gotchas
 
 1. timestamp is nanoseconds. Not seconds. Not milliseconds.
