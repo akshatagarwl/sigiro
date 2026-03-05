@@ -435,7 +435,8 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 					//
 					// See docs/architecture/profiles.md §Gap 1.
 					if sample.Values().Len() == 0 {
-						return nil, fmt.Errorf("profile sample has no values (service=%s, profile_type=%s, sample_index=%d)", r.svc, profileType, s)
+						// eBPF profiler can emit metadata-only samples with no values — skip.
+						continue
 					}
 
 					if sample.Values().Len() > 1 {
