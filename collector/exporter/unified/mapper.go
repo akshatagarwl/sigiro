@@ -106,8 +106,16 @@ func attrsToMap(pattrs pcommon.Map) map[string]string {
 // mergeMetadata merges resource attrs (baseline) with signal-specific attrs
 // (override on conflict) and returns the JSON string. Returns nil if both are empty.
 func mergeMetadata(resourceAttrs, signalAttrs map[string]string) *string {
-	if len(resourceAttrs) == 0 && len(signalAttrs) == 0 {
-		return nil
+	if len(resourceAttrs) == 0 {
+		if len(signalAttrs) == 0 {
+			return nil
+		}
+
+		return mustJSONString(signalAttrs)
+	}
+
+	if len(signalAttrs) == 0 {
+		return mustJSONString(resourceAttrs)
 	}
 
 	merged := make(map[string]string, len(resourceAttrs)+len(signalAttrs))
