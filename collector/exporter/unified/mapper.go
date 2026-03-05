@@ -291,7 +291,7 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 //
 // Assumes Dictionary is populated at the top-level Profiles container and
 // shared across all ResourceProfiles/ScopeProfiles. The pprofile API is
-// experimental (v0.146.1) and this layout could change. If a future version
+// experimental (v0.147.0) and this layout could change. If a future version
 // moves dictionaries per-Profile, every index lookup below silently returns
 // wrong data (wrong function names, corrupt stacks) with no error.
 //

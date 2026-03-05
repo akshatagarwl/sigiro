@@ -1,7 +1,7 @@
 .PHONY: collector test e2e e2e-real
 
 collector:
-	go install go.opentelemetry.io/collector/cmd/builder@v0.146.1
+	go install go.opentelemetry.io/collector/cmd/builder@v0.147.0
 	builder --config=otelcol-builder.yaml
 
 test:

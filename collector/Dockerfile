@@ -5,7 +5,7 @@ WORKDIR /src
 # Install OCB (cached across builds)
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go install go.opentelemetry.io/collector/cmd/builder@v0.146.1
+    go install go.opentelemetry.io/collector/cmd/builder@v0.147.0
 
 # TODO: copy go.mod/go.sum before COPY . . for dep-only layer caching.
 # Currently limited because OCB generates its own go.mod in collector/cmd/collector/,
