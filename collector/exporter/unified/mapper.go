@@ -439,17 +439,18 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 					}
 
 					// OTel eBPF profiler emits CPU/probe samples with empty
-					// Values() by design — only off-CPU samples carry a value
-					// (duration). Skip empty-value samples: without the profiler's
-					// samples_per_second config we can't assign a meaningful value.
+					// Values() by design. Each sample represents one stack
+					// observation at the configured samples_per_second rate.
+					// Default to count=1: each empty-value sample is one CPU hit.
 					//
 					// See: opentelemetry-ebpf-profiler reporter/internal/pdata
 					// TestGenerate_NativeFrame asserts Values().Len() == 0.
+					var val float64
 					if sample.Values().Len() == 0 {
-						continue
+						val = 1.0
+					} else {
+						val = float64(sample.Values().At(0))
 					}
-
-					val := float64(sample.Values().At(0))
 
 					// Resolve stacktrace from sample → stack table → location names.
 					var stack []string
