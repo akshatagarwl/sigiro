@@ -22,39 +22,37 @@ var spanStatusUpper = map[ptrace.StatusCode]string{
 	ptrace.StatusCodeUnset: "UNSET",
 }
 
+// resAttr returns a resource attribute value, or "" if missing.
+func resAttr(res pcommon.Resource, key string) string {
+	if v, ok := res.Attributes().Get(key); ok {
+		return v.AsString()
+	}
+
+	return ""
+}
+
 func serviceName(res pcommon.Resource) string {
-	if v, ok := res.Attributes().Get("service.name"); ok {
-		svc := strings.TrimSpace(v.AsString())
-		if svc != "" {
-			return svc
-		}
+	if svc := strings.TrimSpace(resAttr(res, "service.name")); svc != "" {
+		return svc
 	}
 
 	return "unknown_service"
 }
 
-func hostName(res pcommon.Resource) string {
-	if v, ok := res.Attributes().Get("host.name"); ok {
-		return v.AsString()
-	}
-
-	return ""
+// resourceInfo holds the promoted resource attributes extracted into columns.
+type resourceInfo struct {
+	svc, host, pod, deploy string
+	extra                  map[string]string
 }
 
-func podName(res pcommon.Resource) string {
-	if v, ok := res.Attributes().Get("k8s.pod.name"); ok {
-		return v.AsString()
+func extractResource(res pcommon.Resource) resourceInfo {
+	return resourceInfo{
+		svc:    serviceName(res),
+		host:   resAttr(res, "host.name"),
+		pod:    resAttr(res, "k8s.pod.name"),
+		deploy: resAttr(res, "service.version"),
+		extra:  extraResourceAttrs(res),
 	}
-
-	return ""
-}
-
-func deployVersion(res pcommon.Resource) string {
-	if v, ok := res.Attributes().Get("service.version"); ok {
-		return v.AsString()
-	}
-
-	return ""
 }
 
 // promotedResourceKeys are the resource attributes extracted into their own columns.
@@ -155,12 +153,8 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 
 	for i := 0; i < md.ResourceMetrics().Len(); i++ {
 		rm := md.ResourceMetrics().At(i)
-		svc := serviceName(rm.Resource())
-		host := hostName(rm.Resource())
-		pod := podName(rm.Resource())
-		deploy := deployVersion(rm.Resource())
-		resAttrs := extraResourceAttrs(rm.Resource())
-		metadata := mergeMetadata(resAttrs, nil)
+		r := extractResource(rm.Resource())
+		metadata := mergeMetadata(r.extra, nil)
 
 		for j := 0; j < rm.ScopeMetrics().Len(); j++ {
 			sm := rm.ScopeMetrics().At(j)
@@ -175,7 +169,7 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 						rows = append(rows, schema.UnifiedRow{
 							Timestamp: int64(dp.Timestamp()),
 							Signal:    schema.SignalMetric,
-							Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
+							Service:   r.svc, Host: r.host, Pod: r.pod, DeployVer: r.deploy,
 							Name: m.Name(), Value: ptr(dpValue(dp)), Unit: &unit,
 							Metadata: metadata,
 						})
@@ -186,7 +180,7 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 						rows = append(rows, schema.UnifiedRow{
 							Timestamp: int64(dp.Timestamp()),
 							Signal:    schema.SignalMetric,
-							Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
+							Service:   r.svc, Host: r.host, Pod: r.pod, DeployVer: r.deploy,
 							Name: m.Name(), Value: ptr(dpValue(dp)), Unit: &unit,
 							Metadata: metadata,
 						})
@@ -209,7 +203,7 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 						rows = append(rows, schema.UnifiedRow{
 							Timestamp: int64(dp.Timestamp()),
 							Signal:    schema.SignalMetric,
-							Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
+							Service:   r.svc, Host: r.host, Pod: r.pod, DeployVer: r.deploy,
 							Name: m.Name(), Value: &val, Unit: &unit,
 							Metadata: metadata,
 						})
@@ -249,11 +243,7 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 
 	for i := 0; i < td.ResourceSpans().Len(); i++ {
 		rs := td.ResourceSpans().At(i)
-		svc := serviceName(rs.Resource())
-		host := hostName(rs.Resource())
-		pod := podName(rs.Resource())
-		deploy := deployVersion(rs.Resource())
-		resAttrs := extraResourceAttrs(rs.Resource())
+		r := extractResource(rs.Resource())
 
 		for j := 0; j < rs.ScopeSpans().Len(); j++ {
 			ss := rs.ScopeSpans().At(j)
@@ -290,12 +280,12 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 				}
 
 				spanAttrs := attrsToMap(s.Attributes())
-				metadata := mergeMetadata(resAttrs, spanAttrs)
+				metadata := mergeMetadata(r.extra, spanAttrs)
 
 				rows = append(rows, schema.UnifiedRow{
 					Timestamp: int64(s.StartTimestamp()),
 					Signal:    schema.SignalSpan,
-					Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
+					Service:   r.svc, Host: r.host, Pod: r.pod, DeployVer: r.deploy,
 					TraceID:      traceIDStr(s.TraceID()),
 					SpanID:       spanIDStr(s.SpanID()),
 					ParentSpanID: spanIDStr(s.ParentSpanID()),
@@ -319,11 +309,7 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 
 	for i := 0; i < ld.ResourceLogs().Len(); i++ {
 		rl := ld.ResourceLogs().At(i)
-		svc := serviceName(rl.Resource())
-		host := hostName(rl.Resource())
-		pod := podName(rl.Resource())
-		deploy := deployVersion(rl.Resource())
-		resAttrs := extraResourceAttrs(rl.Resource())
+		r := extractResource(rl.Resource())
 
 		for j := 0; j < rl.ScopeLogs().Len(); j++ {
 			sl := rl.ScopeLogs().At(j)
@@ -339,12 +325,12 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 				}
 
 				logAttrs := attrsToMap(lr.Attributes())
-				metadata := mergeMetadata(resAttrs, logAttrs)
+				metadata := mergeMetadata(r.extra, logAttrs)
 
 				rows = append(rows, schema.UnifiedRow{
 					Timestamp: int64(lr.Timestamp()),
 					Signal:    schema.SignalLog,
-					Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
+					Service:   r.svc, Host: r.host, Pod: r.pod, DeployVer: r.deploy,
 					TraceID:  traceIDStr(lr.TraceID()),
 					Name:     scopeName,
 					Status:   &status,
@@ -406,12 +392,8 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 
 	for i := 0; i < pd.ResourceProfiles().Len(); i++ {
 		rp := pd.ResourceProfiles().At(i)
-		svc := serviceName(rp.Resource())
-		host := hostName(rp.Resource())
-		pod := podName(rp.Resource())
-		deploy := deployVersion(rp.Resource())
-		resAttrs := extraResourceAttrs(rp.Resource())
-		metadata := mergeMetadata(resAttrs, nil)
+		r := extractResource(rp.Resource())
+		metadata := mergeMetadata(r.extra, nil)
 
 		for j := 0; j < rp.ScopeProfiles().Len(); j++ {
 			sp := rp.ScopeProfiles().At(j)
@@ -453,11 +435,11 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 					//
 					// See docs/architecture/profiles.md §Gap 1.
 					if sample.Values().Len() == 0 {
-						return nil, fmt.Errorf("profile sample has no values (service=%s, profile_type=%s, sample_index=%d)", svc, profileType, s)
+						return nil, fmt.Errorf("profile sample has no values (service=%s, profile_type=%s, sample_index=%d)", r.svc, profileType, s)
 					}
 
 					if sample.Values().Len() > 1 {
-						return nil, fmt.Errorf("multi-value profile samples not supported: got %d values, want 1 (service=%s, profile_type=%s, sample_index=%d)", sample.Values().Len(), svc, profileType, s)
+						return nil, fmt.Errorf("multi-value profile samples not supported: got %d values, want 1 (service=%s, profile_type=%s, sample_index=%d)", sample.Values().Len(), r.svc, profileType, s)
 					}
 
 					val := float64(sample.Values().At(0))
@@ -480,7 +462,7 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 					rows = append(rows, schema.UnifiedRow{
 						Timestamp: ts,
 						Signal:    schema.SignalProfile,
-						Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
+						Service:   r.svc, Host: r.host, Pod: r.pod, DeployVer: r.deploy,
 						Name:       name,
 						Value:      &val,
 						Stacktrace: stack,

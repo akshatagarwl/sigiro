@@ -9,6 +9,14 @@ import (
 	"github.com/akshatagarwl/observe/pkg/schema"
 )
 
+func nullStrPtr(ns sql.NullString) *string {
+	if ns.Valid {
+		return &ns.String
+	}
+
+	return nil
+}
+
 // InvestigateRequest defines the parameters for an investigation query.
 type InvestigateRequest struct {
 	Service string    `json:"service"`
@@ -179,11 +187,7 @@ func scanSpans(ctx context.Context, conn *sql.Conn) ([]schema.SpanNode, error) {
 
 		s.TraceID = tid.String
 		s.SpanID = sid.String
-
-		if psid.Valid {
-			s.ParentID = &psid.String
-		}
-
+		s.ParentID = nullStrPtr(psid)
 		s.DurationMs = dur.Float64
 		s.Status = status.String
 		s.Kind = kind.String
@@ -221,11 +225,7 @@ func scanLogs(ctx context.Context, conn *sql.Conn) ([]schema.LogRow, error) {
 
 		l.Status = status.String
 		l.Message = msg.String
-
-		if tid.Valid {
-			l.TraceID = &tid.String
-		}
-
+		l.TraceID = nullStrPtr(tid)
 		result = append(result, l)
 	}
 
