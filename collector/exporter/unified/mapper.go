@@ -434,16 +434,16 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 					// fan-out (one row per value type) with correct naming.
 					//
 					// See docs/architecture/profiles.md §Gap 1.
-					if sample.Values().Len() == 0 {
-						// eBPF profiler can emit metadata-only samples with no values — skip.
-						continue
-					}
-
 					if sample.Values().Len() > 1 {
 						return nil, fmt.Errorf("multi-value profile samples not supported: got %d values, want 1 (service=%s, profile_type=%s, sample_index=%d)", sample.Values().Len(), r.svc, profileType, s)
 					}
 
-					val := float64(sample.Values().At(0))
+					// eBPF profiler emits samples with no explicit value — each
+					// sample represents one observation, so default to count=1.
+					val := 1.0
+					if sample.Values().Len() == 1 {
+						val = float64(sample.Values().At(0))
+					}
 
 					// Resolve stacktrace from sample → stack table → location names.
 					var stack []string

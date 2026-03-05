@@ -328,17 +328,21 @@ func TestMapProfiles_MultiValueError(t *testing.T) {
 	}
 }
 
-func TestMapProfiles_EmptyValueSkipped(t *testing.T) {
+func TestMapProfiles_EmptyValueDefaultsToOne(t *testing.T) {
 	pd, _ := makeMinimalProfile("cpu", "count")
-	// Sample has no values appended — should be skipped, not error.
+	// Sample has no values appended — should default to count=1.
 
 	rows, err := mapProfiles(pd)
 	if err != nil {
 		t.Fatalf("unexpected error for empty-value profile sample: %v", err)
 	}
 
-	if len(rows) != 0 {
-		t.Errorf("expected 0 rows for empty-value sample, got %d", len(rows))
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row for empty-value sample, got %d", len(rows))
+	}
+
+	if *rows[0].Value != 1.0 {
+		t.Errorf("expected value=1.0 for empty-value sample, got %f", *rows[0].Value)
 	}
 }
 
