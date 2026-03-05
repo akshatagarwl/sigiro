@@ -27,6 +27,12 @@ processors:
   batch:
     timeout: 5s
 
+extensions:
+  file_storage/queue:
+    directory: ${env:QUEUE_STORAGE_DIR:-/var/lib/observe/queue}
+    compaction:
+      on_rebound: true
+
 exporters:
   unified_parquet:
     s3_bucket: ${env:S3_BUCKET}
@@ -35,10 +41,13 @@ exporters:
     s3_access_key: ${env:S3_ACCESS_KEY}
     s3_secret_key: ${env:S3_SECRET_KEY}
     flush_interval: 15s
+    sending_queue:
+      storage: file_storage/queue
   debug:
     verbosity: basic
 
 service:
+  extensions: [file_storage/queue]
   telemetry:
     logs:
       level: info
