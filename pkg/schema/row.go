@@ -31,7 +31,7 @@ type Event struct {
 // All observability signals (metrics, spans, logs, profiles) are stored
 // as rows in this single schema. Sort order: (service, signal, timestamp).
 //
-// Planned additions (see docs/plans/11-wide-event-gaps.md):
+// Planned additions (see docs/plans/04-wide-event-gaps.md):
 //
 //	P1: duration_ms float64?          — span duration (decouple from Value)
 //	P1: http_method string? (dict)    — promoted from metadata

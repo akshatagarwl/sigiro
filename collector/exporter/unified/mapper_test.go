@@ -1,6 +1,7 @@
 package unified
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,29 @@ func setResource(res pcommon.Resource) {
 	res.Attributes().PutStr("host.name", "node-01")
 	res.Attributes().PutStr("k8s.pod.name", "checkout-abc-1")
 	res.Attributes().PutStr("service.version", "v2.3.1")
+}
+
+// setResourceWithExtras sets the 4 promoted attrs plus extra resource attrs.
+func setResourceWithExtras(res pcommon.Resource) {
+	setResource(res)
+	res.Attributes().PutStr("cloud.region", "us-east-1")
+	res.Attributes().PutStr("k8s.namespace.name", "production")
+}
+
+// parseMetadata is a test helper that parses the metadata JSON string.
+func parseMetadata(t *testing.T, metadata *string) map[string]string {
+	t.Helper()
+
+	if metadata == nil {
+		t.Fatal("metadata is nil, expected JSON")
+	}
+
+	var m map[string]string
+	if err := json.Unmarshal([]byte(*metadata), &m); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+
+	return m
 }
 
 func TestMapMetrics_Gauge(t *testing.T) {
@@ -360,5 +384,197 @@ func TestMapProfiles_PreservesUnit(t *testing.T) {
 
 	if rows[0].Name != "profile.alloc_space" {
 		t.Errorf("name = %q, want profile.alloc_space", rows[0].Name)
+	}
+}
+
+// --- P0-1: Log attributes in metadata ---
+
+func TestMapLogs_AttributesInMetadata(t *testing.T) {
+	ld := plog.NewLogs()
+	rl := ld.ResourceLogs().AppendEmpty()
+	setResource(rl.Resource())
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("app.log")
+	lr := sl.LogRecords().AppendEmpty()
+	lr.SetSeverityText("ERROR")
+	lr.Body().SetStr("request failed")
+	lr.SetTimestamp(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 10, 2, 0, time.UTC).UnixNano()))
+	lr.Attributes().PutStr("user.id", "u-123")
+	lr.Attributes().PutStr("request.id", "req-456")
+
+	rows := mapLogs(ld)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	m := parseMetadata(t, rows[0].Metadata)
+
+	if m["user.id"] != "u-123" {
+		t.Errorf("user.id = %q, want u-123", m["user.id"])
+	}
+
+	if m["request.id"] != "req-456" {
+		t.Errorf("request.id = %q, want req-456", m["request.id"])
+	}
+}
+
+func TestMapLogs_NoAttributesNoMetadata(t *testing.T) {
+	ld := plog.NewLogs()
+	rl := ld.ResourceLogs().AppendEmpty()
+	setResource(rl.Resource()) // only promoted attrs
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("app.log")
+	lr := sl.LogRecords().AppendEmpty()
+	lr.SetSeverityText("INFO")
+	lr.Body().SetStr("ok")
+	lr.SetTimestamp(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 10, 2, 0, time.UTC).UnixNano()))
+
+	rows := mapLogs(ld)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	if rows[0].Metadata != nil {
+		t.Errorf("metadata should be nil when no extra attrs, got %q", *rows[0].Metadata)
+	}
+}
+
+// --- P0-2: Resource attributes in metadata ---
+
+func TestMapMetrics_ResourceAttrsInMetadata(t *testing.T) {
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	setResourceWithExtras(rm.Resource())
+	sm := rm.ScopeMetrics().AppendEmpty()
+	m := sm.Metrics().AppendEmpty()
+	m.SetName("cpu.usage")
+	m.SetUnit("%")
+	m.SetEmptyGauge()
+	dp := m.Gauge().DataPoints().AppendEmpty()
+	dp.SetDoubleValue(75.0)
+	dp.SetTimestamp(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 10, 0, 0, time.UTC).UnixNano()))
+
+	rows := mapMetrics(md)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	meta := parseMetadata(t, rows[0].Metadata)
+
+	if meta["cloud.region"] != "us-east-1" {
+		t.Errorf("cloud.region = %q, want us-east-1", meta["cloud.region"])
+	}
+
+	if meta["k8s.namespace.name"] != "production" {
+		t.Errorf("k8s.namespace.name = %q, want production", meta["k8s.namespace.name"])
+	}
+
+	// Promoted keys must NOT appear in metadata.
+	for _, key := range []string{"service.name", "host.name", "k8s.pod.name", "service.version"} {
+		if _, ok := meta[key]; ok {
+			t.Errorf("promoted key %q should not be in metadata", key)
+		}
+	}
+}
+
+func TestMapTraces_ResourceAndSpanAttrsMerged(t *testing.T) {
+	td := ptrace.NewTraces()
+	rs := td.ResourceSpans().AppendEmpty()
+	setResourceWithExtras(rs.Resource())
+	ss := rs.ScopeSpans().AppendEmpty()
+	s := ss.Spans().AppendEmpty()
+	s.SetName("GET /api")
+	s.SetTraceID([16]byte{1})
+	s.SetSpanID([8]byte{1})
+	s.SetStartTimestamp(pcommon.Timestamp(1000000000))
+	s.SetEndTimestamp(pcommon.Timestamp(1050000000))
+	s.Status().SetCode(ptrace.StatusCodeOk)
+	s.SetKind(ptrace.SpanKindClient)
+	// Span attr that conflicts with resource attr.
+	s.Attributes().PutStr("cloud.region", "eu-west-1")
+	s.Attributes().PutStr("http.method", "GET")
+
+	rows := mapTraces(td)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	meta := parseMetadata(t, rows[0].Metadata)
+
+	// Span attr overrides resource attr on conflict.
+	if meta["cloud.region"] != "eu-west-1" {
+		t.Errorf("cloud.region = %q, want eu-west-1 (span override)", meta["cloud.region"])
+	}
+
+	// Resource attr preserved when no conflict.
+	if meta["k8s.namespace.name"] != "production" {
+		t.Errorf("k8s.namespace.name = %q, want production", meta["k8s.namespace.name"])
+	}
+
+	// Span-specific attr present.
+	if meta["http.method"] != "GET" {
+		t.Errorf("http.method = %q, want GET", meta["http.method"])
+	}
+}
+
+func TestMapLogs_ResourceAndLogAttrsMerged(t *testing.T) {
+	ld := plog.NewLogs()
+	rl := ld.ResourceLogs().AppendEmpty()
+	setResourceWithExtras(rl.Resource())
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("app.log")
+	lr := sl.LogRecords().AppendEmpty()
+	lr.SetSeverityText("WARN")
+	lr.Body().SetStr("slow query")
+	lr.SetTimestamp(pcommon.Timestamp(time.Date(2026, 3, 1, 14, 10, 2, 0, time.UTC).UnixNano()))
+	lr.Attributes().PutStr("db.statement", "SELECT 1")
+	// Conflict: log attr overrides resource attr.
+	lr.Attributes().PutStr("cloud.region", "ap-south-1")
+
+	rows := mapLogs(ld)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	meta := parseMetadata(t, rows[0].Metadata)
+
+	if meta["cloud.region"] != "ap-south-1" {
+		t.Errorf("cloud.region = %q, want ap-south-1 (log override)", meta["cloud.region"])
+	}
+
+	if meta["k8s.namespace.name"] != "production" {
+		t.Errorf("k8s.namespace.name = %q, want production", meta["k8s.namespace.name"])
+	}
+
+	if meta["db.statement"] != "SELECT 1" {
+		t.Errorf("db.statement = %q, want SELECT 1", meta["db.statement"])
+	}
+}
+
+func TestMapProfiles_ResourceAttrsInMetadata(t *testing.T) {
+	pd, sample := makeMinimalProfile("cpu", "count")
+	sample.Values().Append(100)
+	// Add extra resource attrs.
+	rp := pd.ResourceProfiles().At(0)
+	rp.Resource().Attributes().PutStr("cloud.region", "us-east-1")
+	rp.Resource().Attributes().PutStr("telemetry.sdk.language", "go")
+
+	rows, err := mapProfiles(pd)
+	if err != nil {
+		t.Fatalf("mapProfiles: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	meta := parseMetadata(t, rows[0].Metadata)
+
+	if meta["cloud.region"] != "us-east-1" {
+		t.Errorf("cloud.region = %q, want us-east-1", meta["cloud.region"])
+	}
+
+	if meta["telemetry.sdk.language"] != "go" {
+		t.Errorf("telemetry.sdk.language = %q, want go", meta["telemetry.sdk.language"])
 	}
 }

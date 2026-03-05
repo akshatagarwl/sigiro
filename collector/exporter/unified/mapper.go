@@ -57,6 +57,73 @@ func deployVersion(res pcommon.Resource) string {
 	return ""
 }
 
+// promotedResourceKeys are the resource attributes extracted into their own columns.
+// Everything else goes into metadata.
+var promotedResourceKeys = map[string]bool{
+	"service.name":    true,
+	"host.name":       true,
+	"k8s.pod.name":    true,
+	"service.version": true,
+}
+
+// extraResourceAttrs returns resource attributes that aren't promoted to columns.
+func extraResourceAttrs(res pcommon.Resource) map[string]string {
+	var attrs map[string]string
+
+	res.Attributes().Range(func(k string, v pcommon.Value) bool {
+		if promotedResourceKeys[k] {
+			return true
+		}
+
+		if attrs == nil {
+			attrs = make(map[string]string)
+		}
+
+		attrs[k] = v.AsString()
+
+		return true
+	})
+
+	return attrs
+}
+
+// attrsToMap converts pcommon attributes to a string map.
+func attrsToMap(pattrs pcommon.Map) map[string]string {
+	if pattrs.Len() == 0 {
+		return nil
+	}
+
+	attrs := make(map[string]string, pattrs.Len())
+
+	pattrs.Range(func(k string, v pcommon.Value) bool {
+		attrs[k] = v.AsString()
+		return true
+	})
+
+	return attrs
+}
+
+// mergeMetadata merges resource attrs (baseline) with signal-specific attrs
+// (override on conflict) and returns the JSON string. Returns nil if both are empty.
+func mergeMetadata(resourceAttrs, signalAttrs map[string]string) *string {
+	if len(resourceAttrs) == 0 && len(signalAttrs) == 0 {
+		return nil
+	}
+
+	merged := make(map[string]string, len(resourceAttrs)+len(signalAttrs))
+
+	for k, v := range resourceAttrs {
+		merged[k] = v
+	}
+
+	// Signal-specific attrs override resource attrs.
+	for k, v := range signalAttrs {
+		merged[k] = v
+	}
+
+	return mustJSONString(merged)
+}
+
 func ptr[T any](v T) *T { return &v }
 
 func traceIDStr(tid pcommon.TraceID) *string {
@@ -84,6 +151,8 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 		host := hostName(rm.Resource())
 		pod := podName(rm.Resource())
 		deploy := deployVersion(rm.Resource())
+		resAttrs := extraResourceAttrs(rm.Resource())
+		metadata := mergeMetadata(resAttrs, nil)
 
 		for j := 0; j < rm.ScopeMetrics().Len(); j++ {
 			sm := rm.ScopeMetrics().At(j)
@@ -100,6 +169,7 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 							Signal:    schema.SignalMetric,
 							Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
 							Name: m.Name(), Value: ptr(dpValue(dp)), Unit: &unit,
+							Metadata: metadata,
 						})
 					}
 				case pmetric.MetricTypeSum:
@@ -110,6 +180,7 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 							Signal:    schema.SignalMetric,
 							Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
 							Name: m.Name(), Value: ptr(dpValue(dp)), Unit: &unit,
+							Metadata: metadata,
 						})
 					}
 				// FRAGILE: ExponentialHistogram and Summary metric types are silently
@@ -132,6 +203,7 @@ func mapMetrics(md pmetric.Metrics) []schema.UnifiedRow {
 							Signal:    schema.SignalMetric,
 							Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
 							Name: m.Name(), Value: &val, Unit: &unit,
+							Metadata: metadata,
 						})
 					}
 				}
@@ -173,6 +245,7 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 		host := hostName(rs.Resource())
 		pod := podName(rs.Resource())
 		deploy := deployVersion(rs.Resource())
+		resAttrs := extraResourceAttrs(rs.Resource())
 
 		for j := 0; j < rs.ScopeSpans().Len(); j++ {
 			ss := rs.ScopeSpans().At(j)
@@ -201,30 +274,15 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 						Name:      ev.Name(),
 					}
 					if ev.Attributes().Len() > 0 {
-						attrs := map[string]string{}
-
-						ev.Attributes().Range(func(k string, v pcommon.Value) bool {
-							attrs[k] = v.AsString()
-							return true
-						})
+						attrs := attrsToMap(ev.Attributes())
 						event.Attributes = mustJSONString(attrs)
 					}
 
 					events = append(events, event)
 				}
 
-				var metadata *string
-
-				if s.Attributes().Len() > 0 {
-					attrs := map[string]string{}
-
-					s.Attributes().Range(func(k string, v pcommon.Value) bool {
-						attrs[k] = v.AsString()
-						return true
-					})
-
-					metadata = mustJSONString(attrs)
-				}
+				spanAttrs := attrsToMap(s.Attributes())
+				metadata := mergeMetadata(resAttrs, spanAttrs)
 
 				rows = append(rows, schema.UnifiedRow{
 					Timestamp: int64(s.StartTimestamp()),
@@ -248,22 +306,6 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 	return rows
 }
 
-// GAP: Log attributes dropped.
-//
-// Log record attributes (user.id, request.id, feature flags, etc.) are
-// silently discarded. metadata is never populated for logs, unlike spans
-// which serialize all span attributes into metadata JSON.
-//
-// See docs/plans/11-wide-event-gaps.md §P0-1.
-
-// GAP: Resource attributes beyond 4 are dropped (all signals).
-//
-// Only service.name, host.name, k8s.pod.name, service.version are extracted.
-// Everything else (cloud.provider, cloud.region, k8s.namespace.name,
-// k8s.deployment.name, telemetry.sdk.language, etc.) is silently discarded.
-// This applies to all four mapper functions, not just logs.
-//
-// See docs/plans/11-wide-event-gaps.md §P0-2.
 func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 	rows := make([]schema.UnifiedRow, 0, ld.LogRecordCount())
 
@@ -273,6 +315,7 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 		host := hostName(rl.Resource())
 		pod := podName(rl.Resource())
 		deploy := deployVersion(rl.Resource())
+		resAttrs := extraResourceAttrs(rl.Resource())
 
 		for j := 0; j < rl.ScopeLogs().Len(); j++ {
 			sl := rl.ScopeLogs().At(j)
@@ -287,14 +330,18 @@ func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 					scopeName = "unknown"
 				}
 
+				logAttrs := attrsToMap(lr.Attributes())
+				metadata := mergeMetadata(resAttrs, logAttrs)
+
 				rows = append(rows, schema.UnifiedRow{
 					Timestamp: int64(lr.Timestamp()),
 					Signal:    schema.SignalLog,
 					Service:   svc, Host: host, Pod: pod, DeployVer: deploy,
-					TraceID: traceIDStr(lr.TraceID()),
-					Name:    scopeName,
-					Status:  &status,
-					Message: &msg,
+					TraceID:  traceIDStr(lr.TraceID()),
+					Name:     scopeName,
+					Status:   &status,
+					Message:  &msg,
+					Metadata: metadata,
 				})
 			}
 		}
@@ -355,6 +402,8 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 		host := hostName(rp.Resource())
 		pod := podName(rp.Resource())
 		deploy := deployVersion(rp.Resource())
+		resAttrs := extraResourceAttrs(rp.Resource())
+		metadata := mergeMetadata(resAttrs, nil)
 
 		for j := 0; j < rp.ScopeProfiles().Len(); j++ {
 			sp := rp.ScopeProfiles().At(j)
@@ -429,6 +478,7 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 						Stacktrace: stack,
 						Unit:       ptr(unit),
 						Kind:       ptr(profileType),
+						Metadata:   metadata,
 					})
 				}
 			}
