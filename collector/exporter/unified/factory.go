@@ -2,15 +2,18 @@ package unified
 
 import (
 	"context"
+	"fmt"
 	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
+	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/exporter"
+	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/xexporter"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -34,39 +37,47 @@ func NewFactory() xexporter.Factory {
 
 func createDefaultConfig() component.Config {
 	return &Config{
-		S3Bucket:      "observe",
-		S3Region:      "us-east-1",
-		FlushInterval: 15 * time.Second,
+		S3Bucket: "observe",
+		S3Region: "us-east-1",
+		Retry:    configretry.NewDefaultBackOffConfig(),
+		Timeout:  exporterhelper.NewDefaultTimeoutConfig(),
+		Queue:    configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
 	}
 }
 
-// singleton holds the single shared Exporter instance. All four signal
-// types feed into the same buffer, flush loop, and S3 connection.
+// sharedWriter holds the single ParquetWriter instance shared across all
+// signal-specific exporters. Each push function writes through this writer.
 var (
-	singletonMu sync.Mutex
-	singleton   *Exporter
+	writerMu     sync.Mutex
+	sharedWriter *ParquetWriter
 )
 
-func sharedExporter(cfg component.Config) *Exporter {
-	singletonMu.Lock()
-	defer singletonMu.Unlock()
+func getSharedWriter(cfg *Config) *ParquetWriter {
+	writerMu.Lock()
+	defer writerMu.Unlock()
 
-	if singleton == nil {
-		c := cfg.(*Config)
-		s3Client := newS3Client(c)
-		writer := NewParquetWriter(c.S3Bucket, s3Client)
-		singleton = NewExporter(*c, writer)
+	if sharedWriter == nil {
+		s3Client := newS3Client(cfg)
+		sharedWriter = NewParquetWriter(cfg.S3Bucket, s3Client)
 	}
 
-	return singleton
+	return sharedWriter
 }
 
-// ResetSingleton tears down the shared exporter (for tests).
+// ResetSingleton tears down the shared writer (for tests).
 func ResetSingleton() {
-	singletonMu.Lock()
-	defer singletonMu.Unlock()
+	writerMu.Lock()
+	defer writerMu.Unlock()
 
-	singleton = nil
+	sharedWriter = nil
+}
+
+// SharedWriter returns the current shared ParquetWriter (for tests).
+func SharedWriter() *ParquetWriter {
+	writerMu.Lock()
+	defer writerMu.Unlock()
+
+	return sharedWriter
 }
 
 func newS3Client(cfg *Config) *s3.Client {
@@ -87,61 +98,75 @@ func newS3Client(cfg *Config) *s3.Client {
 	return s3.New(s3.Options{}, opts)
 }
 
-func createMetricsExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
-	return &metricsExporter{sharedExporter(cfg)}, nil
+func helperOptions(cfg *Config) []exporterhelper.Option {
+	return []exporterhelper.Option{
+		exporterhelper.WithTimeout(cfg.Timeout),
+		exporterhelper.WithRetry(cfg.Retry),
+		exporterhelper.WithQueue(cfg.Queue),
+	}
 }
 
-func createTracesExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Traces, error) {
-	return &tracesExporter{sharedExporter(cfg)}, nil
+func createMetricsExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
+	c := cfg.(*Config)
+	w := getSharedWriter(c)
+
+	return exporterhelper.NewMetrics(ctx, set, cfg,
+		func(_ context.Context, md pmetric.Metrics) error {
+			rows := mapMetrics(md)
+			return w.Write(context.Background(), rows)
+		},
+		helperOptions(c)...,
+	)
 }
 
-func createLogsExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (exporter.Logs, error) {
-	return &logsExporter{sharedExporter(cfg)}, nil
+func createTracesExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (exporter.Traces, error) {
+	c := cfg.(*Config)
+	w := getSharedWriter(c)
+
+	return exporterhelper.NewTraces(ctx, set, cfg,
+		func(_ context.Context, td ptrace.Traces) error {
+			rows := mapTraces(td)
+			return w.Write(context.Background(), rows)
+		},
+		helperOptions(c)...,
+	)
+}
+
+func createLogsExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (exporter.Logs, error) {
+	c := cfg.(*Config)
+	w := getSharedWriter(c)
+
+	return exporterhelper.NewLogs(ctx, set, cfg,
+		func(_ context.Context, ld plog.Logs) error {
+			rows := mapLogs(ld)
+			return w.Write(context.Background(), rows)
+		},
+		helperOptions(c)...,
+	)
+}
+
+// profilesExporter is a manual wrapper — no xexporterhelper exists at v0.147.0.
+// It shares the same ParquetWriter as the exporterhelper-managed signal exporters.
+type profilesExporter struct {
+	writer *ParquetWriter
+}
+
+func (e *profilesExporter) Start(_ context.Context, _ component.Host) error { return nil }
+func (e *profilesExporter) Shutdown(_ context.Context) error                { return nil }
+func (e *profilesExporter) Capabilities() consumer.Capabilities             { return consumer.Capabilities{} }
+
+func (e *profilesExporter) ConsumeProfiles(_ context.Context, pd pprofile.Profiles) error {
+	rows, err := mapProfiles(pd)
+	if err != nil {
+		return fmt.Errorf("map profiles: %w", err)
+	}
+
+	return e.writer.Write(context.Background(), rows)
 }
 
 func createProfilesExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (xexporter.Profiles, error) {
-	return &profilesExporter{sharedExporter(cfg)}, nil
-}
+	c := cfg.(*Config)
+	w := getSharedWriter(c)
 
-// Wrapper types that satisfy the exporter interfaces.
-// Each embeds the shared Exporter and adds the required Capabilities method.
-
-type metricsExporter struct{ *Exporter }
-
-func (e *metricsExporter) Capabilities() consumer.Capabilities {
-	return consumer.Capabilities{}
-}
-
-func (e *metricsExporter) ConsumeMetrics(ctx context.Context, md pmetric.Metrics) error {
-	return e.Exporter.ConsumeMetrics(ctx, md)
-}
-
-type tracesExporter struct{ *Exporter }
-
-func (e *tracesExporter) Capabilities() consumer.Capabilities {
-	return consumer.Capabilities{}
-}
-
-func (e *tracesExporter) ConsumeTraces(ctx context.Context, td ptrace.Traces) error {
-	return e.Exporter.ConsumeTraces(ctx, td)
-}
-
-type logsExporter struct{ *Exporter }
-
-func (e *logsExporter) Capabilities() consumer.Capabilities {
-	return consumer.Capabilities{}
-}
-
-func (e *logsExporter) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
-	return e.Exporter.ConsumeLogs(ctx, ld)
-}
-
-type profilesExporter struct{ *Exporter }
-
-func (e *profilesExporter) Capabilities() consumer.Capabilities {
-	return consumer.Capabilities{}
-}
-
-func (e *profilesExporter) ConsumeProfiles(ctx context.Context, pd pprofile.Profiles) error {
-	return e.Exporter.ConsumeProfiles(ctx, pd)
+	return &profilesExporter{writer: w}, nil
 }
