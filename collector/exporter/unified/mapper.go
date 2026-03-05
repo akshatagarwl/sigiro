@@ -248,6 +248,22 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 	return rows
 }
 
+// GAP: Log attributes dropped.
+//
+// Log record attributes (user.id, request.id, feature flags, etc.) are
+// silently discarded. metadata is never populated for logs, unlike spans
+// which serialize all span attributes into metadata JSON.
+//
+// See docs/plans/11-wide-event-gaps.md §P0-1.
+
+// GAP: Resource attributes beyond 4 are dropped (all signals).
+//
+// Only service.name, host.name, k8s.pod.name, service.version are extracted.
+// Everything else (cloud.provider, cloud.region, k8s.namespace.name,
+// k8s.deployment.name, telemetry.sdk.language, etc.) is silently discarded.
+// This applies to all four mapper functions, not just logs.
+//
+// See docs/plans/11-wide-event-gaps.md §P0-2.
 func mapLogs(ld plog.Logs) []schema.UnifiedRow {
 	rows := make([]schema.UnifiedRow, 0, ld.LogRecordCount())
 

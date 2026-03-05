@@ -30,6 +30,15 @@ type Event struct {
 // UnifiedRow is the canonical schema for the unified Parquet table.
 // All observability signals (metrics, spans, logs, profiles) are stored
 // as rows in this single schema. Sort order: (service, signal, timestamp).
+//
+// Planned additions (see docs/plans/11-wide-event-gaps.md):
+//
+//	P1: duration_ms float64?          — span duration (decouple from Value)
+//	P1: http_method string? (dict)    — promoted from metadata
+//	P1: http_status_code int32?       — promoted from metadata
+//	P1: http_route string? (dict)     — promoted from metadata
+//	P1: error_type string? (dict)     — from span exception events
+//	P2: ingest_timestamp int64        — when the exporter received the data
 type UnifiedRow struct {
 	Timestamp    int64    `parquet:"timestamp"`
 	Signal       string   `parquet:"signal,dict"`
@@ -52,5 +61,10 @@ type UnifiedRow struct {
 	// Every consumer must parse it, and there is no schema validation.
 	// Attribute values are coerced to strings via AsString() in the mapper,
 	// losing type information (ints, bools, arrays, maps all become strings).
+	//
+	// GAP: High-value attributes (http.method, http.status_code, http.route)
+	// should be promoted to their own columns for queryability. Filtering by
+	// http.status_code=500 currently requires JSON_EXTRACT on every row.
+	// See docs/plans/11-wide-event-gaps.md §P1.
 	Metadata *string `parquet:"metadata,optional"`
 }
