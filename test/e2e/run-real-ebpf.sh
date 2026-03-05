@@ -93,7 +93,7 @@ run_check "Signal: span" "SELECT count(*) > 0 FROM $PARQUET WHERE signal='span';
 echo ""
 echo "=== Profile checks (eBPF) ==="
 run_check "Profiles have stacktrace" "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND stacktrace IS NOT NULL AND len(stacktrace) > 0;" "true"
-run_check "Profiles from >= 2 services" "SELECT count(DISTINCT service) >= 2 FROM $PARQUET WHERE signal='profile';" "true"
+run_check "Profiles have value" "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND value IS NOT NULL AND value > 0;" "true"
 
 echo ""
 echo "=== Service + trace checks ==="
