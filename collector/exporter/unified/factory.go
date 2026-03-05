@@ -2,9 +2,9 @@ package unified
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
+	"github.com/akshatagarwl/observe/pkg/schema"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -15,10 +15,6 @@ import (
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 	"go.opentelemetry.io/collector/exporter/xexporter"
-	"go.opentelemetry.io/collector/pdata/plog"
-	"go.opentelemetry.io/collector/pdata/pmetric"
-	"go.opentelemetry.io/collector/pdata/pprofile"
-	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
 const typeStr = "unified_parquet"
@@ -98,58 +94,49 @@ func helperOptions(cfg *Config) []exporterhelper.Option {
 	}
 }
 
+// pushFunc returns a push function that maps pdata to UnifiedRows and writes them.
+func pushFunc[T any](w *ParquetWriter, mapper func(T) []schema.UnifiedRow) func(context.Context, T) error {
+	return func(ctx context.Context, data T) error {
+		return w.Write(ctx, mapper(data))
+	}
+}
+
+// pushFuncErr is like pushFunc but for mappers that can return errors (profiles).
+func pushFuncErr[T any](w *ParquetWriter, mapper func(T) ([]schema.UnifiedRow, error)) func(context.Context, T) error {
+	return func(ctx context.Context, data T) error {
+		rows, err := mapper(data)
+		if err != nil {
+			return err
+		}
+
+		return w.Write(ctx, rows)
+	}
+}
+
 func createMetricsExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
 	c := cfg.(*Config)
 	w := getSharedWriter(c)
 
-	return exporterhelper.NewMetrics(ctx, set, cfg,
-		func(ctx context.Context, md pmetric.Metrics) error {
-			rows := mapMetrics(md)
-			return w.Write(ctx, rows)
-		},
-		helperOptions(c)...,
-	)
+	return exporterhelper.NewMetrics(ctx, set, cfg, pushFunc(w, mapMetrics), helperOptions(c)...)
 }
 
 func createTracesExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (exporter.Traces, error) {
 	c := cfg.(*Config)
 	w := getSharedWriter(c)
 
-	return exporterhelper.NewTraces(ctx, set, cfg,
-		func(ctx context.Context, td ptrace.Traces) error {
-			rows := mapTraces(td)
-			return w.Write(ctx, rows)
-		},
-		helperOptions(c)...,
-	)
+	return exporterhelper.NewTraces(ctx, set, cfg, pushFunc(w, mapTraces), helperOptions(c)...)
 }
 
 func createLogsExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (exporter.Logs, error) {
 	c := cfg.(*Config)
 	w := getSharedWriter(c)
 
-	return exporterhelper.NewLogs(ctx, set, cfg,
-		func(ctx context.Context, ld plog.Logs) error {
-			rows := mapLogs(ld)
-			return w.Write(ctx, rows)
-		},
-		helperOptions(c)...,
-	)
+	return exporterhelper.NewLogs(ctx, set, cfg, pushFunc(w, mapLogs), helperOptions(c)...)
 }
 
 func createProfilesExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (xexporter.Profiles, error) {
 	c := cfg.(*Config)
 	w := getSharedWriter(c)
 
-	return xexporterhelper.NewProfiles(ctx, set, cfg,
-		func(ctx context.Context, pd pprofile.Profiles) error {
-			rows, err := mapProfiles(pd)
-			if err != nil {
-				return fmt.Errorf("map profiles: %w", err)
-			}
-
-			return w.Write(ctx, rows)
-		},
-		helperOptions(c)...,
-	)
+	return xexporterhelper.NewProfiles(ctx, set, cfg, pushFuncErr(w, mapProfiles), helperOptions(c)...)
 }
