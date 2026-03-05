@@ -30,6 +30,7 @@ processors:
 extensions:
   file_storage/queue:
     directory: ${env:QUEUE_STORAGE_DIR:-/var/lib/observe/queue}
+    create_directory: true
     compaction:
       on_rebound: true
 
@@ -40,7 +41,6 @@ exporters:
     s3_endpoint: ${env:S3_ENDPOINT}
     s3_access_key: ${env:S3_ACCESS_KEY}
     s3_secret_key: ${env:S3_SECRET_KEY}
-    flush_interval: 15s
     sending_queue:
       storage: file_storage/queue
   debug:

@@ -21,5 +21,4 @@ exporters:
   - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.147.0
 
 extensions:
-  - gomod: go.opentelemetry.io/collector/extension/extensiontest v0.147.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.147.0
