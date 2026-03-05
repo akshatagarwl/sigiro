@@ -1,0 +1,143 @@
+# CPU-bound Go workload that the eBPF profiler will capture
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-burner
+  namespace: observe
+  labels:
+    app: cpu-burner
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cpu-burner
+  template:
+    metadata:
+      labels:
+        app: cpu-burner
+    spec:
+      containers:
+        - name: stress
+          image: alpine
+          command: ["sh", "-c", "apk add --no-cache stress-ng && stress-ng --cpu 1 --timeout 0"]
+          resources:
+            limits:
+              cpu: 200m
+              memory: 64Mi
+---
+# A Go HTTP server that generates real Go stacks for profiling
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-demo
+  namespace: observe
+  labels:
+    app: go-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-demo
+  template:
+    metadata:
+      labels:
+        app: go-demo
+    spec:
+      containers:
+        - name: demo
+          image: golang:1.25-alpine
+          command:
+            - sh
+            - -c
+            - |
+              cat > /tmp/main.go << 'GOEOF'
+              package main
+
+              import (
+                "crypto/sha256"
+                "fmt"
+                "net/http"
+                "runtime"
+                "time"
+              )
+
+              func cpuWork() {
+                for {
+                  data := []byte(fmt.Sprintf("work-%d", time.Now().UnixNano()))
+                  for i := 0; i < 1000; i++ {
+                    data = []byte(fmt.Sprintf("%x", sha256.Sum256(data)))
+                  }
+                  runtime.Gosched()
+                }
+              }
+
+              func allocWork() {
+                for {
+                  s := make([]byte, 1<<20)
+                  _ = s
+                  time.Sleep(100 * time.Millisecond)
+                }
+              }
+
+              func handler(w http.ResponseWriter, r *http.Request) {
+                data := []byte("hello")
+                for i := 0; i < 100; i++ {
+                  data = []byte(fmt.Sprintf("%x", sha256.Sum256(data)))
+                }
+                fmt.Fprintf(w, "ok: %x\n", data[:8])
+              }
+
+              func main() {
+                go cpuWork()
+                go cpuWork()
+                go allocWork()
+                http.HandleFunc("/", handler)
+                fmt.Println("listening on :8080")
+                http.ListenAndServe(":8080", nil)
+              }
+              GOEOF
+              cd /tmp && go run main.go
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-demo
+  namespace: observe
+spec:
+  selector:
+    app: go-demo
+  ports:
+    - port: 8080
+---
+# Generate HTTP traffic to go-demo
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-gen
+  namespace: observe
+  labels:
+    app: traffic-gen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-gen
+  template:
+    metadata:
+      labels:
+        app: traffic-gen
+    spec:
+      containers:
+        - name: curl
+          image: alpine
+          command: ["sh", "-c", "apk add --no-cache curl && while true; do curl -s http://go-demo:8080/ > /dev/null; sleep 0.5; done"]
+          resources:
+            limits:
+              cpu: 50m
+              memory: 32Mi

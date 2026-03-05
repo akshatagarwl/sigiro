@@ -1,0 +1,32 @@
+# profilegen sends synthetic profiles via OTLP to the collector.
+# This validates the full pipeline: OTLP receive -> k8sattributes -> parquet.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: profilegen
+  namespace: observe
+  labels:
+    app: profilegen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: profilegen
+  template:
+    metadata:
+      labels:
+        app: profilegen
+    spec:
+      containers:
+        - name: profilegen
+          image: profilegen:local
+          args:
+            - --endpoint=observe-collector.observe.svc:4319
+            - --insecure
+            - --services=checkout,payment,frontend
+            - --duration=300s
+            - --rate=5
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi

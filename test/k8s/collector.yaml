@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: collector-config
+  namespace: observe
+data:
+  otelcol.k8s.yaml: |
+    receivers:
+      otelarrow:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4319
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch:
+        timeout: 5s
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.namespace.name
+            - k8s.node.name
+            - k8s.deployment.name
+            - k8s.statefulset.name
+            - k8s.daemonset.name
+            - k8s.container.name
+            - container.id
+            - container.image.name
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+          - sources:
+              - from: connection
+    extensions:
+      file_storage/queue:
+        directory: /var/lib/observe/queue
+        create_directory: true
+        compaction:
+          on_rebound: true
+    exporters:
+      unified_parquet:
+        s3_bucket: observe
+        s3_region: us-east-1
+        s3_endpoint: http://minio.observe.svc:9000
+        s3_access_key: minioadmin
+        s3_secret_key: minioadmin
+        sending_queue:
+          storage: file_storage/queue
+      debug:
+        verbosity: detailed
+    service:
+      extensions: [file_storage/queue]
+      telemetry:
+        logs:
+          level: debug
+      pipelines:
+        metrics:
+          receivers: [otelarrow, otlp]
+          processors: [k8sattributes, batch]
+          exporters: [unified_parquet, debug]
+        traces:
+          receivers: [otelarrow, otlp]
+          processors: [k8sattributes, batch]
+          exporters: [unified_parquet, debug]
+        logs:
+          receivers: [otelarrow, otlp]
+          processors: [k8sattributes, batch]
+          exporters: [unified_parquet, debug]
+        profiles:
+          receivers: [otlp]
+          processors: [k8sattributes]
+          exporters: [unified_parquet, debug]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: observe-collector
+  namespace: observe
+spec:
+  selector:
+    matchLabels:
+      app: observe-collector
+  template:
+    metadata:
+      labels:
+        app: observe-collector
+    spec:
+      serviceAccountName: observe-collector
+      containers:
+        - name: collector
+          image: observe-collector:local
+          imagePullPolicy: Never
+          args:
+            - --config
+            - /etc/otelcol/otelcol.k8s.yaml
+            - --feature-gates=service.profilesSupport
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - containerPort: 4317
+              hostPort: 4317
+              protocol: TCP
+            - containerPort: 4318
+              hostPort: 4318
+              protocol: TCP
+            - containerPort: 4319
+              hostPort: 4319
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+            - name: queue
+              mountPath: /var/lib/observe/queue
+      volumes:
+        - name: config
+          configMap:
+            name: collector-config
+        - name: queue
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: observe-collector
+  namespace: observe
+spec:
+  selector:
+    app: observe-collector
+  ports:
+    - name: otelarrow
+      port: 4317
+    - name: otlp-http
+      port: 4318
+    - name: otlp-grpc
+      port: 4319
