@@ -5,14 +5,15 @@ import "testing"
 func ptr(s string) *string { return &s }
 
 func TestBuildSpanTrees_Empty(t *testing.T) {
+	// Empty input must return empty slice (not nil) so JSON marshals as [] not null.
 	result := BuildSpanTrees(nil)
-	if result != nil {
-		t.Fatalf("expected nil, got %v", result)
+	if result == nil || len(result) != 0 {
+		t.Fatalf("expected empty slice, got %v", result)
 	}
 
 	result = BuildSpanTrees([]SpanNode{})
-	if result != nil {
-		t.Fatalf("expected nil, got %v", result)
+	if result == nil || len(result) != 0 {
+		t.Fatalf("expected empty slice, got %v", result)
 	}
 }
 

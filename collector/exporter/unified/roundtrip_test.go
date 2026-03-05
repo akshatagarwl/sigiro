@@ -130,18 +130,16 @@ func TestRoundtrip_SpanDurationUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The query layer filters for status='ERROR' OR value > 1000 (ms).
-	// Only POST /slow (2500ms) should appear — GET /fast (50ms, OK) should not.
-	if len(block.Spans) != 1 {
-		t.Fatalf("expected 1 span (slow only), got %d", len(block.Spans))
+	// All spans returned, sorted by duration desc. POST /slow (2500ms) should be first.
+	if len(block.Spans) != 2 {
+		t.Fatalf("expected 2 spans, got %d", len(block.Spans))
 	}
 
-	s := block.Spans[0]
-	if s.Name != "POST /slow" {
-		t.Errorf("span name = %q, want POST /slow", s.Name)
+	if block.Spans[0].Name != "POST /slow" {
+		t.Errorf("first span = %q, want POST /slow (highest duration)", block.Spans[0].Name)
 	}
 
-	if s.DurationMs != 2500 {
-		t.Errorf("span DurationMs = %f, want 2500", s.DurationMs)
+	if block.Spans[0].DurationMs != 2500 {
+		t.Errorf("span DurationMs = %f, want 2500", block.Spans[0].DurationMs)
 	}
 }

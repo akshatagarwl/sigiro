@@ -5,7 +5,7 @@ package schema
 // is nil or not present in the set), and recursively builds children.
 func BuildSpanTrees(spans []SpanNode) []SpanNode {
 	if len(spans) == 0 {
-		return nil
+		return []SpanNode{}
 	}
 
 	// Index by ID (pointer into input slice) and collect children lists.

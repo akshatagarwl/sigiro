@@ -416,10 +416,15 @@ func TestE2E_InvestigationBlock_Content(t *testing.T) {
 	if len(block.Spans) == 0 {
 		t.Fatal("no spans in block")
 	}
-	// All returned spans should be errors (query filters for ERROR or slow >1000ms)
+	// Error spans should appear before OK spans (sorted errors-first, then by duration desc)
+	seenOK := false
 	for _, s := range block.Spans {
-		if s.Status != "ERROR" && s.DurationMs <= 1000 {
-			t.Errorf("span %q has status=%s dur=%.0fms, should be ERROR or >1000ms", s.Name, s.Status, s.DurationMs)
+		if s.Status == "ERROR" && seenOK {
+			t.Errorf("error span %q appeared after OK span — errors should sort first", s.Name)
+		}
+
+		if s.Status != "ERROR" {
+			seenOK = true
 		}
 	}
 	// Each error span tree should have a db.query child

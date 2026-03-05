@@ -26,6 +26,10 @@ func Investigate(ctx context.Context, db *sql.DB, table string, req InvestigateR
 	block := &schema.InvestigationBlock{
 		Service: req.Service,
 		Window:  fmt.Sprintf("%s - %s", req.From.Format("15:04"), req.To.Format("15:04")),
+		Linked: schema.LinkedBlock{
+			Traces: []schema.LinkedTrace{},
+			Logs:   []schema.LogRow{},
+		},
 	}
 
 	if err := runPrimaryQueries(ctx, db, table, req.Service, req.TraceID, t1, t2, block); err != nil {
@@ -132,7 +136,7 @@ func scanMetrics(ctx context.Context, conn *sql.Conn) ([]schema.MetricRow, error
 	}
 	defer rows.Close()
 
-	var result []schema.MetricRow
+	result := []schema.MetricRow{}
 
 	for rows.Next() {
 		var m schema.MetricRow
@@ -151,8 +155,8 @@ func scanSpans(ctx context.Context, conn *sql.Conn) ([]schema.SpanNode, error) {
 		SELECT trace_id, span_id, parent_span_id, name,
 		       value AS duration_ms, status, kind
 		FROM _scan
-		WHERE signal = 'span' AND (status = 'ERROR' OR value > 1000)
-		ORDER BY value DESC
+		WHERE signal = 'span'
+		ORDER BY CASE WHEN status = 'ERROR' THEN 0 ELSE 1 END, value DESC
 		LIMIT 50
 	`)
 	if err != nil {
@@ -160,7 +164,7 @@ func scanSpans(ctx context.Context, conn *sql.Conn) ([]schema.SpanNode, error) {
 	}
 	defer rows.Close()
 
-	var result []schema.SpanNode
+	result := []schema.SpanNode{}
 
 	for rows.Next() {
 		var (
@@ -203,7 +207,7 @@ func scanLogs(ctx context.Context, conn *sql.Conn) ([]schema.LogRow, error) {
 	}
 	defer rows.Close()
 
-	var result []schema.LogRow
+	result := []schema.LogRow{}
 
 	for rows.Next() {
 		var (
@@ -262,7 +266,7 @@ func scanProfiles(ctx context.Context, conn *sql.Conn) ([]schema.ProfileRow, err
 	}
 	defer rows.Close()
 
-	var result []schema.ProfileRow
+	result := []schema.ProfileRow{}
 
 	for rows.Next() {
 		var p schema.ProfileRow
