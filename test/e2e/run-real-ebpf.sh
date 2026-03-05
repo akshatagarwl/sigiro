@@ -6,16 +6,14 @@ cd "$SCRIPT_DIR"
 
 export DOCKER_BUILDKIT=1
 
-OVERRIDE_EBPF="/tmp/e2e-ebpf.override.yaml"
-
 compose() {
-  docker compose -f docker-compose.real.yaml -f "$OVERRIDE_EBPF" "$@"
+  docker compose -f docker-compose.real.yaml "$@"
 }
 
 cleanup() {
   echo "=== Cleaning up ==="
   compose down -v --remove-orphans 2>/dev/null || true
-  rm -f "$SCRIPT_DIR/postgres-init.sql" "$OVERRIDE_EBPF"
+  rm -f "$SCRIPT_DIR/postgres-init.sql"
 }
 trap cleanup EXIT
 
@@ -23,21 +21,6 @@ echo "=== Fetching postgres init SQL ==="
 rm -rf "$SCRIPT_DIR/postgres-init.sql"
 curl -sfL "https://raw.githubusercontent.com/open-telemetry/opentelemetry-demo/2.2.0/src/postgresql/init.sql" \
   -o "$SCRIPT_DIR/postgres-init.sql"
-
-echo "=== Writing compose overrides ==="
-cat > "$OVERRIDE_EBPF" <<'YAML'
-services:
-  otel-collector:
-    command: ["--config", "/etc/otelcol/otelcol.yaml", "--feature-gates=service.profilesSupport"]
-    volumes:
-      - ../../collector/otelcol.yaml:/etc/otelcol/otelcol.yaml:ro
-      - /sys/kernel/debug:/sys/kernel/debug
-      - /sys/kernel/tracing:/sys/kernel/tracing
-    privileged: true
-    pid: host
-  profilegen:
-    profiles: ["disabled"]
-YAML
 
 echo "=== Ensuring host tracefs/debugfs mounts ==="
 docker run --rm --privileged alpine sh -lc 'mount -t tracefs tracefs /sys/kernel/tracing || true; mount -t debugfs debugfs /sys/kernel/debug || true'
@@ -50,7 +33,7 @@ compose up -d minio minio-setup otel-collector flagd valkey-cart postgresql
 echo "Waiting for infrastructure..."
 sleep 10
 
-echo "=== Phase 2: App services (no profilegen) ==="
+echo "=== Phase 2: App services ==="
 compose up -d \
   ad cart checkout currency email payment \
   product-catalog quote recommendation shipping \
@@ -102,10 +85,15 @@ run_check() {
 
 echo ""
 echo "=== Signal checks ==="
+run_check "Signal: profile" "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile';" "true"
 run_check "Signal: log" "SELECT count(*) > 0 FROM $PARQUET WHERE signal='log';" "true"
 run_check "Signal: metric" "SELECT count(*) > 0 FROM $PARQUET WHERE signal='metric';" "true"
-run_check "Signal: profile" "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile';" "true"
 run_check "Signal: span" "SELECT count(*) > 0 FROM $PARQUET WHERE signal='span';" "true"
+
+echo ""
+echo "=== Profile checks (eBPF) ==="
+run_check "Profiles have stacktrace" "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND stacktrace IS NOT NULL AND len(stacktrace) > 0;" "true"
+run_check "Profiles from >= 2 services" "SELECT count(DISTINCT service) >= 2 FROM $PARQUET WHERE signal='profile';" "true"
 
 echo ""
 echo "=== Service + trace checks ==="
