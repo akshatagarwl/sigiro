@@ -1,4 +1,5 @@
 CLAUDE.md
+AGENTS.md
 
 # Go binaries
 cmd/query-server/query-server
