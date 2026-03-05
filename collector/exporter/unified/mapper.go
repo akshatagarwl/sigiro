@@ -438,12 +438,18 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 						return nil, fmt.Errorf("multi-value profile samples not supported: got %d values, want 1 (service=%s, profile_type=%s, sample_index=%d)", sample.Values().Len(), r.svc, profileType, s)
 					}
 
-					// eBPF profiler emits samples with no explicit value — each
-					// sample represents one observation, so default to count=1.
-					val := 1.0
-					if sample.Values().Len() == 1 {
-						val = float64(sample.Values().At(0))
+					// OTel eBPF profiler emits CPU/probe samples with empty
+					// Values() by design — only off-CPU samples carry a value
+					// (duration). Skip empty-value samples: without the profiler's
+					// samples_per_second config we can't assign a meaningful value.
+					//
+					// See: opentelemetry-ebpf-profiler reporter/internal/pdata
+					// TestGenerate_NativeFrame asserts Values().Len() == 0.
+					if sample.Values().Len() == 0 {
+						continue
 					}
+
+					val := float64(sample.Values().At(0))
 
 					// Resolve stacktrace from sample → stack table → location names.
 					var stack []string
