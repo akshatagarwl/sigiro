@@ -155,6 +155,8 @@ go.opentelemetry.io/collector/consumer v1.53.0 h1:Gyy80dX5r1Lv9lvQk8XFtUkWs1enii
 go.opentelemetry.io/collector/consumer v1.53.0/go.mod h1:f5U6ibd+XpC5eOSeEYhERAQJ2a5bp1d2RzW3MFddMDM=
 go.opentelemetry.io/collector/consumer/consumererror v0.147.0 h1:c4jjAEke6AEqoxalOAIEudGuN4rnnheaLWdpJXPCAPQ=
 go.opentelemetry.io/collector/consumer/consumererror v0.147.0/go.mod h1:9MwE9k6xHd3TGBSAeKSmt42dwWyxwUhYqfwPUx1ZQJY=
+go.opentelemetry.io/collector/consumer/consumererror/xconsumererror v0.147.0 h1:HSmBAtam5792w4nOSntYD66eUkBlScdj+CzR8RwB6uI=
+go.opentelemetry.io/collector/consumer/consumererror/xconsumererror v0.147.0/go.mod h1:QIng6ovCvUvD2KwHCufDvS9l9JWig5u/1l1luEEidCw=
 go.opentelemetry.io/collector/consumer/consumertest v0.147.0 h1:AU3sUm2L3pezrg6hzPJAO19ZANQoCcfgbyanN0q360g=
 go.opentelemetry.io/collector/consumer/consumertest v0.147.0/go.mod h1:QWGFRmeYNbKaseDTNT3a2iGDmjl+DCZnLzMP7Rjj0JM=
 go.opentelemetry.io/collector/consumer/xconsumer v0.147.0 h1:XJVQc2dYyalaFXMTa4/RE+aweQTiBpw1edfwdCIJSxw=
@@ -163,6 +165,8 @@ go.opentelemetry.io/collector/exporter v1.53.0 h1:B+Qpfr6Tu0ocUbZOBkhG6l3Cwgu72n
 go.opentelemetry.io/collector/exporter v1.53.0/go.mod h1:ho0WReomrL9Xex0XF95ZZ4oSAVrjm9yFGbGaRZjXhXI=
 go.opentelemetry.io/collector/exporter/exporterhelper v0.147.0 h1:LSKMjcoq/sfhxYSMmdCSHcHnOQAysfRZXcjOLbz0Prk=
 go.opentelemetry.io/collector/exporter/exporterhelper v0.147.0/go.mod h1:6Yl9DTcsj8tRyjOfNFR0rUjkZil6Z7qwWcDb1fEfFvA=
+go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.147.0 h1:uCa4+J+RX4Kpa7k+AIUWrP5vRHscjCNgKpYhwfroY7o=
+go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.147.0/go.mod h1:lNU6ofNUnIL0zrKUKCNWZzFMtETqCBwR9rnZf5iMMxI=
 go.opentelemetry.io/collector/exporter/exportertest v0.147.0 h1:Ax8ZFBv86ZtdhG1vGw1+xkyn/XWgqJMu7ek27Hohqkw=
 go.opentelemetry.io/collector/exporter/exportertest v0.147.0/go.mod h1:V+QvACPt52yL0x2Em3UDYDXQZdaR8vASdbOgq0jMT/Q=
 go.opentelemetry.io/collector/exporter/xexporter v0.147.0 h1:3PqWr987tOqYl08sijJyVhCjRP3HGoavuxl23fNVMVg=

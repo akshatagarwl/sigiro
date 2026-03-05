@@ -9,8 +9,8 @@ import (
 )
 
 func TestSharedWriter_AllSignalsShareOneWriter(t *testing.T) {
-	ResetSingleton()
-	t.Cleanup(ResetSingleton)
+	resetSingleton()
+	t.Cleanup(resetSingleton)
 
 	cfg := createDefaultConfig()
 	ctx := context.Background()
@@ -21,28 +21,28 @@ func TestSharedWriter_AllSignalsShareOneWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w1 := SharedWriter()
+	w1 := sharedWriter
 
 	_, err = createTracesExporter(ctx, set, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w2 := SharedWriter()
+	w2 := sharedWriter
 
 	_, err = createLogsExporter(ctx, set, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w3 := SharedWriter()
+	w3 := sharedWriter
 
 	_, err = createProfilesExporter(ctx, set, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w4 := SharedWriter()
+	w4 := sharedWriter
 
 	if w1 != w2 || w2 != w3 || w3 != w4 {
 		t.Fatal("expected all signal types to share the same ParquetWriter")
@@ -50,29 +50,29 @@ func TestSharedWriter_AllSignalsShareOneWriter(t *testing.T) {
 }
 
 func TestSharedWriter_ResetAllowsNewInstance(t *testing.T) {
-	ResetSingleton()
-	t.Cleanup(ResetSingleton)
+	resetSingleton()
+	t.Cleanup(resetSingleton)
 
 	cfg := createDefaultConfig()
 	ctx := context.Background()
 	set := exportertest.NewNopSettings(exportertest.NopType)
 
 	_, _ = createMetricsExporter(ctx, set, cfg)
-	first := SharedWriter()
+	first := sharedWriter
 
-	ResetSingleton()
+	resetSingleton()
 
 	_, _ = createMetricsExporter(ctx, set, cfg)
-	second := SharedWriter()
+	second := sharedWriter
 
 	if first == second {
-		t.Fatal("ResetSingleton did not create a new ParquetWriter instance")
+		t.Fatal("resetSingleton did not create a new ParquetWriter instance")
 	}
 }
 
 func TestFactory_AllSignalTypesCreateValidExporters(t *testing.T) {
-	ResetSingleton()
-	t.Cleanup(ResetSingleton)
+	resetSingleton()
+	t.Cleanup(resetSingleton)
 
 	cfg := createDefaultConfig()
 	ctx := context.Background()

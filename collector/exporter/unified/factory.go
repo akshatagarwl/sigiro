@@ -11,9 +11,9 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
-	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 	"go.opentelemetry.io/collector/exporter/xexporter"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -64,20 +64,12 @@ func getSharedWriter(cfg *Config) *ParquetWriter {
 	return sharedWriter
 }
 
-// ResetSingleton tears down the shared writer (for tests).
-func ResetSingleton() {
+// resetSingleton tears down the shared writer (for tests).
+func resetSingleton() {
 	writerMu.Lock()
 	defer writerMu.Unlock()
 
 	sharedWriter = nil
-}
-
-// SharedWriter returns the current shared ParquetWriter (for tests).
-func SharedWriter() *ParquetWriter {
-	writerMu.Lock()
-	defer writerMu.Unlock()
-
-	return sharedWriter
 }
 
 func newS3Client(cfg *Config) *s3.Client {
@@ -111,9 +103,9 @@ func createMetricsExporter(ctx context.Context, set exporter.Settings, cfg compo
 	w := getSharedWriter(c)
 
 	return exporterhelper.NewMetrics(ctx, set, cfg,
-		func(_ context.Context, md pmetric.Metrics) error {
+		func(ctx context.Context, md pmetric.Metrics) error {
 			rows := mapMetrics(md)
-			return w.Write(context.Background(), rows)
+			return w.Write(ctx, rows)
 		},
 		helperOptions(c)...,
 	)
@@ -124,9 +116,9 @@ func createTracesExporter(ctx context.Context, set exporter.Settings, cfg compon
 	w := getSharedWriter(c)
 
 	return exporterhelper.NewTraces(ctx, set, cfg,
-		func(_ context.Context, td ptrace.Traces) error {
+		func(ctx context.Context, td ptrace.Traces) error {
 			rows := mapTraces(td)
-			return w.Write(context.Background(), rows)
+			return w.Write(ctx, rows)
 		},
 		helperOptions(c)...,
 	)
@@ -137,36 +129,27 @@ func createLogsExporter(ctx context.Context, set exporter.Settings, cfg componen
 	w := getSharedWriter(c)
 
 	return exporterhelper.NewLogs(ctx, set, cfg,
-		func(_ context.Context, ld plog.Logs) error {
+		func(ctx context.Context, ld plog.Logs) error {
 			rows := mapLogs(ld)
-			return w.Write(context.Background(), rows)
+			return w.Write(ctx, rows)
 		},
 		helperOptions(c)...,
 	)
 }
 
-// profilesExporter is a manual wrapper — no xexporterhelper exists at v0.147.0.
-// It shares the same ParquetWriter as the exporterhelper-managed signal exporters.
-type profilesExporter struct {
-	writer *ParquetWriter
-}
-
-func (e *profilesExporter) Start(_ context.Context, _ component.Host) error { return nil }
-func (e *profilesExporter) Shutdown(_ context.Context) error                { return nil }
-func (e *profilesExporter) Capabilities() consumer.Capabilities             { return consumer.Capabilities{} }
-
-func (e *profilesExporter) ConsumeProfiles(_ context.Context, pd pprofile.Profiles) error {
-	rows, err := mapProfiles(pd)
-	if err != nil {
-		return fmt.Errorf("map profiles: %w", err)
-	}
-
-	return e.writer.Write(context.Background(), rows)
-}
-
-func createProfilesExporter(_ context.Context, _ exporter.Settings, cfg component.Config) (xexporter.Profiles, error) {
+func createProfilesExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (xexporter.Profiles, error) {
 	c := cfg.(*Config)
 	w := getSharedWriter(c)
 
-	return &profilesExporter{writer: w}, nil
+	return xexporterhelper.NewProfiles(ctx, set, cfg,
+		func(ctx context.Context, pd pprofile.Profiles) error {
+			rows, err := mapProfiles(pd)
+			if err != nil {
+				return fmt.Errorf("map profiles: %w", err)
+			}
+
+			return w.Write(ctx, rows)
+		},
+		helperOptions(c)...,
+	)
 }
