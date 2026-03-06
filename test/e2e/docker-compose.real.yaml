@@ -151,7 +151,7 @@ services:
       KAFKA_ADDR: kafka:9092
       PAYMENT_ADDR: payment:50051
       PRODUCT_CATALOG_ADDR: product-catalog:3550
-      SHIPPING_ADDR: shipping:50050
+      SHIPPING_ADDR: http://shipping:50050
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_SERVICE_NAME: checkout
     deploy:
@@ -212,7 +212,7 @@ services:
       CURRENCY_ADDR: currency:7001
       RECOMMENDATION_ADDR: recommendation:9001
       PRODUCT_CATALOG_ADDR: product-catalog:3550
-      SHIPPING_ADDR: shipping:50050
+      SHIPPING_ADDR: http://shipping:50050
       ENV_PLATFORM: local
       FLAGD_HOST: flagd
       FLAGD_PORT: "8013"
