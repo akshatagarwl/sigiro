@@ -27,8 +27,13 @@ spec:
             - name: OTEL_EBPF_KUBE_METADATA_ENABLE
               value: "true"
           volumeMounts:
+            - name: bpffs
+              mountPath: /sys/fs/bpf
             - name: run
               mountPath: /var/run/obi
       volumes:
+        - name: bpffs
+          hostPath:
+            path: /sys/fs/bpf
         - name: run
           emptyDir: {}
