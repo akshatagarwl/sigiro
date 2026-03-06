@@ -115,7 +115,8 @@ func (w *ParquetWriter) writePartition(ctx context.Context, hour int64, hourRows
 	buf.Grow(len(hourRows) * 256)
 
 	writer := parquet.NewGenericWriter[schema.UnifiedRow](&buf,
-		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBetterCompression}),
+		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBestCompression}),
+		parquet.PageBufferSize(8*1024*1024),
 		parquet.BloomFilters(
 			parquet.SplitBlockFilter(10, "trace_id"),
 		),

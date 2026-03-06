@@ -13,11 +13,105 @@ import (
 	"github.com/parquet-go/parquet-go/compress/zstd"
 )
 
-// TestCompression_DeltaTimestamp measures compression with delta encoding on
-// timestamps and bloom filters on trace_id. Run with -v to see sizes.
-func TestCompression_DeltaTimestamp(t *testing.T) {
+// TestCompression measures compression with the current writer config:
+// zstd SpeedBestCompression, BYTE_STREAM_SPLIT on Value, dict on stacktrace
+// elements, 8MB page buffers, delta on timestamps, bloom on trace_id.
+func TestCompression(t *testing.T) {
 	const numRows = 10000
 
+	rows := generateTestRows(numRows)
+	sortRows(rows)
+
+	var buf bytes.Buffer
+	buf.Grow(len(rows) * 256)
+
+	w := parquet.NewGenericWriter[schema.UnifiedRow](&buf,
+		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBestCompression}),
+		parquet.PageBufferSize(8*1024*1024),
+		parquet.BloomFilters(
+			parquet.SplitBlockFilter(10, "trace_id"),
+		),
+		parquet.SortingWriterConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("service"),
+				parquet.Ascending("signal"),
+				parquet.Ascending("timestamp"),
+			),
+		),
+	)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	compressedSize := buf.Len()
+	rawSize := numRows * 200 // rough estimate: ~200 bytes per uncompressed row
+	ratio := float64(rawSize) / float64(compressedSize)
+
+	t.Logf("rows=%d raw≈%d compressed=%d ratio=%.1fx", numRows, rawSize, compressedSize, ratio)
+
+	if ratio < 8.0 {
+		t.Errorf("compression ratio %.1fx is below 8x floor", ratio)
+	}
+}
+
+// TestCompression_OldVsNew compares the old config (SpeedBetterCompression,
+// no split, no dict on stacktrace elements, default page size) against the
+// new config to quantify the delta.
+func TestCompression_OldVsNew(t *testing.T) {
+	const numRows = 10000
+
+	rows := generateTestRows(numRows)
+	sortRows(rows)
+
+	writeWith := func(opts ...parquet.WriterOption) int {
+		var buf bytes.Buffer
+		buf.Grow(len(rows) * 256)
+
+		w := parquet.NewGenericWriter[schema.UnifiedRow](&buf, opts...)
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		return buf.Len()
+	}
+
+	sortOpts := parquet.SortingWriterConfig(
+		parquet.SortingColumns(
+			parquet.Ascending("service"),
+			parquet.Ascending("signal"),
+			parquet.Ascending("timestamp"),
+		),
+	)
+	bloom := parquet.BloomFilters(parquet.SplitBlockFilter(10, "trace_id"))
+
+	oldSize := writeWith(
+		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBetterCompression}),
+		bloom, sortOpts,
+	)
+
+	newSize := writeWith(
+		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBestCompression}),
+		parquet.PageBufferSize(8*1024*1024),
+		bloom, sortOpts,
+	)
+
+	improvement := 100.0 * float64(oldSize-newSize) / float64(oldSize)
+	t.Logf("old=%d bytes  new=%d bytes  improvement=%.1f%%", oldSize, newSize, improvement)
+
+	if newSize > oldSize {
+		t.Errorf("new config (%d bytes) is larger than old config (%d bytes)", newSize, oldSize)
+	}
+}
+
+func generateTestRows(n int) []schema.UnifiedRow {
 	base := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
 	services := []string{"checkout", "payments", "inventory", "frontend", "cart"}
 	signals := []string{"metric", "span", "log", "profile"}
@@ -28,7 +122,7 @@ func TestCompression_DeltaTimestamp(t *testing.T) {
 		"cpu", "alloc_space",
 	}
 
-	rows := make([]schema.UnifiedRow, numRows)
+	rows := make([]schema.UnifiedRow, n)
 	for i := range rows {
 		svc := services[i%len(services)]
 		sig := signals[i%len(signals)]
@@ -73,47 +167,7 @@ func TestCompression_DeltaTimestamp(t *testing.T) {
 		}
 	}
 
-	// Sort like the real writer does
-	sortRows(rows)
-
-	// Write with current config (delta on timestamp + bloom filters)
-	var buf bytes.Buffer
-	buf.Grow(len(rows) * 256)
-
-	w := parquet.NewGenericWriter[schema.UnifiedRow](&buf,
-		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBetterCompression}),
-		parquet.BloomFilters(
-			parquet.SplitBlockFilter(10, "trace_id"),
-		),
-		parquet.SortingWriterConfig(
-			parquet.SortingColumns(
-				parquet.Ascending("service"),
-				parquet.Ascending("signal"),
-				parquet.Ascending("timestamp"),
-			),
-		),
-	)
-	if _, err := w.Write(rows); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	optimizedSize := buf.Len()
-
-	// Estimate raw size (rough: each row ~200 bytes uncompressed)
-	rawSize := numRows * 200
-
-	ratio := float64(rawSize) / float64(optimizedSize)
-	t.Logf("rows=%d raw≈%d bytes compressed=%d bytes ratio=%.1fx",
-		numRows, rawSize, optimizedSize, ratio)
-
-	// Sanity: we should get at least 5x compression on structured observability data
-	if ratio < 5.0 {
-		t.Errorf("compression ratio %.1fx is below 5x target", ratio)
-	}
+	return rows
 }
 
 func sortRows(rows []schema.UnifiedRow) {

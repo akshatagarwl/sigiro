@@ -55,7 +55,7 @@ type UnifiedRow struct {
 	Message      *string  `parquet:"message,optional"`
 	Unit         *string  `parquet:"unit,optional,dict"`
 	Kind         *string  `parquet:"kind,optional,dict"`
-	Stacktrace   []string `parquet:"stacktrace,optional"`
+	Stacktrace   []string `parquet:"stacktrace,optional,list" parquet-element:",dict"`
 	Events       []Event  `parquet:"events,optional"`
 	// FRAGILE: metadata is a JSON-encoded string, not a structured type.
 	// Every consumer must parse it, and there is no schema validation.
