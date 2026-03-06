@@ -523,6 +523,184 @@ func minimalProfile() *pprofprofile.Profile {
 	}
 }
 
+func TestIngestFoldedStacks(t *testing.T) {
+	sink := new(consumertest.ProfilesSink)
+	cfg := &Config{
+		HTTP: confighttp.ServerConfig{
+			NetAddr: confignet.AddrConfig{
+				Endpoint:  "localhost:19537",
+				Transport: confignet.TransportTypeTCP,
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	set := receivertest.NewNopSettings(component.MustNewType("pyroscope"))
+
+	recv, err := newPyroscopeReceiver(cfg, sink, set)
+	if err != nil {
+		t.Fatalf("failed to create receiver: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := recv.Start(ctx, componenttest.NewNopHost()); err != nil {
+		t.Fatalf("failed to start receiver: %v", err)
+	}
+
+	defer func() { _ = recv.Shutdown(ctx) }()
+
+	folded := []byte(`main;init;setup 100
+main;process;compute 250
+main;process;io_wait 75
+main;cleanup 30
+`)
+
+	// Test with explicit format=folded.
+	resp, err := http.Post(
+		"http://localhost:19537/ingest?name=java-service{env=prod}&format=folded&from=1700000000&until=1700000010",
+		"text/plain",
+		bytes.NewReader(folded),
+	)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	if sink.ProfileCount() == 0 {
+		t.Fatal("expected at least one profile")
+	}
+
+	profiles := sink.AllProfiles()[0]
+	rp := profiles.ResourceProfiles().At(0)
+
+	serviceName, ok := rp.Resource().Attributes().Get("service.name")
+	if !ok || serviceName.Str() != "java-service" {
+		t.Errorf("expected service.name=java-service, got %v", serviceName)
+	}
+
+	env, ok := rp.Resource().Attributes().Get("env")
+	if !ok || env.Str() != "prod" {
+		t.Errorf("expected env=prod, got %v", env)
+	}
+}
+
+func TestIngestFoldedStacksAutoDetect(t *testing.T) {
+	sink := new(consumertest.ProfilesSink)
+	cfg := &Config{
+		HTTP: confighttp.ServerConfig{
+			NetAddr: confignet.AddrConfig{
+				Endpoint:  "localhost:19538",
+				Transport: confignet.TransportTypeTCP,
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	set := receivertest.NewNopSettings(component.MustNewType("pyroscope"))
+
+	recv, err := newPyroscopeReceiver(cfg, sink, set)
+	if err != nil {
+		t.Fatalf("failed to create receiver: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := recv.Start(ctx, componenttest.NewNopHost()); err != nil {
+		t.Fatalf("failed to start receiver: %v", err)
+	}
+
+	defer func() { _ = recv.Shutdown(ctx) }()
+
+	// Send folded stacks WITHOUT format param — should auto-detect via pprof fallback.
+	folded := []byte(`com.example.App.main;com.example.App.process;com.example.App.compute 500
+com.example.App.main;com.example.App.handleRequest 200
+`)
+
+	resp, err := http.Post(
+		"http://localhost:19538/ingest?name=java-auto-detect",
+		"text/plain",
+		bytes.NewReader(folded),
+	)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	if sink.ProfileCount() == 0 {
+		t.Fatal("expected at least one profile from auto-detected folded stacks")
+	}
+
+	serviceName, _ := sink.AllProfiles()[0].ResourceProfiles().At(0).Resource().Attributes().Get("service.name")
+	if serviceName.Str() != "java-auto-detect" {
+		t.Errorf("service.name: got %q, want %q", serviceName.Str(), "java-auto-detect")
+	}
+}
+
+func TestParseFoldedStacks(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantErr   bool
+		wantCount int // number of samples
+	}{
+		{
+			name:      "basic",
+			input:     "a;b;c 100\nd;e 50\n",
+			wantCount: 2,
+		},
+		{
+			name:      "single stack",
+			input:     "main 42\n",
+			wantCount: 1,
+		},
+		{
+			name:      "with blank lines",
+			input:     "\na;b 10\n\nc;d 20\n\n",
+			wantCount: 2,
+		},
+		{
+			name:    "empty input",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "only blank lines",
+			input:   "\n\n\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prof, err := parseFoldedStacks([]byte(tt.input))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(prof.Sample) != tt.wantCount {
+				t.Errorf("sample count: got %d, want %d", len(prof.Sample), tt.wantCount)
+			}
+		})
+	}
+}
+
 func TestNsFromSec(t *testing.T) {
 	tests := []struct {
 		input uint64

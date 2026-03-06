@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer/xconsumer"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
 )
@@ -111,21 +112,51 @@ func (r *pyroscopeReceiver) handleIngest(resp http.ResponseWriter, req *http.Req
 		return
 	}
 
-	if params.format != "" && params.format != "pprof" {
-		// Only pprof format supported for now. JFR and folded are future work.
-		http.Error(resp, fmt.Sprintf("unsupported format: %s (only pprof supported)", params.format), http.StatusBadRequest)
-		return
-	}
+	var profiles *pprofile.Profiles
 
-	prof, err := pprofprofile.Parse(bytes.NewReader(body))
-	if err != nil {
-		http.Error(resp, fmt.Sprintf("failed to parse pprof: %s", err), http.StatusBadRequest)
-		return
-	}
+	switch params.format {
+	case "", "pprof":
+		prof, pprofErr := pprofprofile.Parse(bytes.NewReader(body))
+		if pprofErr != nil {
+			// When format is unspecified, try folded stacks as fallback.
+			// Pyroscope Java SDK sends collapsed stacks without setting format param.
+			if params.format == "" {
+				if foldedProf, foldedErr := parseFoldedStacks(body); foldedErr == nil {
+					var convertErr error
+					if profiles, convertErr = pproftranslator.ConvertPprofToProfiles(foldedProf); convertErr == nil {
+						break
+					}
+				}
+			}
 
-	profiles, err := pproftranslator.ConvertPprofToProfiles(prof)
-	if err != nil {
-		http.Error(resp, fmt.Sprintf("failed to convert pprof to profiles: %s", err), http.StatusInternalServerError)
+			http.Error(resp, fmt.Sprintf("failed to parse pprof: %s", pprofErr), http.StatusBadRequest)
+
+			return
+		}
+
+		var err error
+
+		profiles, err = pproftranslator.ConvertPprofToProfiles(prof)
+		if err != nil {
+			http.Error(resp, fmt.Sprintf("failed to convert pprof to profiles: %s", err), http.StatusInternalServerError)
+			return
+		}
+
+	case "folded", "collapsed":
+		prof, err := parseFoldedStacks(body)
+		if err != nil {
+			http.Error(resp, fmt.Sprintf("failed to parse folded stacks: %s", err), http.StatusBadRequest)
+			return
+		}
+
+		profiles, err = pproftranslator.ConvertPprofToProfiles(prof)
+		if err != nil {
+			http.Error(resp, fmt.Sprintf("failed to convert folded stacks to profiles: %s", err), http.StatusInternalServerError)
+			return
+		}
+
+	default:
+		http.Error(resp, fmt.Sprintf("unsupported format: %s (supported: pprof, folded)", params.format), http.StatusBadRequest)
 		return
 	}
 
@@ -285,6 +316,111 @@ func nsFromSec(v uint64) uint64 {
 	default: // already nanoseconds
 		return v
 	}
+}
+
+// parseFoldedStacks parses Brendan Gregg's folded/collapsed stacks format:
+//
+//	func_a;func_b;func_c 150
+//	main;init;malloc 25
+//
+// Each line is a semicolon-separated stack trace followed by a space and a sample count.
+// This is the format Pyroscope Java SDK sends after converting JFR locally.
+func parseFoldedStacks(data []byte) (*pprofprofile.Profile, error) {
+	lines := bytes.Split(data, []byte("\n"))
+
+	funcMap := make(map[string]*pprofprofile.Function)
+	locMap := make(map[string]*pprofprofile.Location)
+
+	var nextFuncID, nextLocID uint64
+
+	getFunc := func(name string) *pprofprofile.Function {
+		if f, ok := funcMap[name]; ok {
+			return f
+		}
+
+		nextFuncID++
+
+		f := &pprofprofile.Function{ID: nextFuncID, Name: name}
+		funcMap[name] = f
+
+		return f
+	}
+
+	getLoc := func(name string) *pprofprofile.Location {
+		if l, ok := locMap[name]; ok {
+			return l
+		}
+
+		nextLocID++
+
+		fn := getFunc(name)
+		l := &pprofprofile.Location{
+			ID:   nextLocID,
+			Line: []pprofprofile.Line{{Function: fn}},
+		}
+		locMap[name] = l
+
+		return l
+	}
+
+	var samples []*pprofprofile.Sample
+
+	for _, line := range lines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+
+		// Find the last space — everything before is the stack, after is the count.
+		lastSpace := bytes.LastIndexByte(line, ' ')
+		if lastSpace < 0 {
+			continue // Malformed line, skip.
+		}
+
+		stackStr := string(line[:lastSpace])
+		countStr := string(bytes.TrimSpace(line[lastSpace+1:]))
+
+		count, err := strconv.ParseInt(countStr, 10, 64)
+		if err != nil {
+			continue // Malformed count, skip.
+		}
+
+		frames := strings.Split(stackStr, ";")
+
+		// Build locations in reverse order (leaf first, like pprof convention).
+		locs := make([]*pprofprofile.Location, len(frames))
+		for i, frame := range frames {
+			locs[len(frames)-1-i] = getLoc(frame)
+		}
+
+		samples = append(samples, &pprofprofile.Sample{
+			Location: locs,
+			Value:    []int64{count},
+		})
+	}
+
+	if len(samples) == 0 {
+		return nil, fmt.Errorf("no valid stacks found in folded input")
+	}
+
+	// Collect functions and locations into slices.
+	functions := make([]*pprofprofile.Function, 0, len(funcMap))
+	for _, f := range funcMap {
+		functions = append(functions, f)
+	}
+
+	locations := make([]*pprofprofile.Location, 0, len(locMap))
+	for _, l := range locMap {
+		locations = append(locations, l)
+	}
+
+	return &pprofprofile.Profile{
+		SampleType: []*pprofprofile.ValueType{{Type: "samples", Unit: "count"}},
+		PeriodType: &pprofprofile.ValueType{Type: "cpu", Unit: "nanoseconds"},
+		Sample:     samples,
+		Location:   locations,
+		Function:   functions,
+	}, nil
 }
 
 // Ensure multipart.File satisfies io.Reader at compile time.
