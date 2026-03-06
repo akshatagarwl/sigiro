@@ -129,7 +129,7 @@ kubectl -n "$NS" get pods --no-headers | sort
 echo ""
 echo "=== Setting up MinIO port-forward ==="
 MINIO_POD=$(kubectl -n "$NS" get pods -l app=minio -o jsonpath='{.items[0].metadata.name}')
-kubectl -n "$NS" port-forward "$MINIO_POD" 9000:9000 &
+kubectl -n "$NS" port-forward "$MINIO_POD" 9000:9000 &>/dev/null &
 PF_PID=$!
 sleep 3
 
@@ -220,7 +220,7 @@ echo ""
 echo "=== K8s metadata enrichment ==="
 run_check "Spans have k8s.namespace.name in metadata" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='span' AND metadata LIKE '%k8s.namespace.name%';" "true"
-run_check "Profiles have k8s.pod.name in metadata" \
+run_info "Profiles have k8s.pod.name in metadata (needs real Linux eBPF)" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND metadata LIKE '%k8s.pod.name%';" "true"
 
 echo ""
