@@ -462,6 +462,126 @@ just the rows/patterns that mattered}
 mkdir -p investigations
 ```
 
+## Debugging Silent or Failing Services
+
+When services are missing telemetry or producing errors, work through these
+steps systematically. Each step eliminates a class of problems.
+
+### Step 1: Triage — which services are silent?
+
+```sql
+SELECT service, signal,
+       count(*) AS rows,
+       count(*) FILTER (WHERE status = 'ERROR') AS errors
+FROM obs
+GROUP BY service, signal
+ORDER BY service, signal;
+```
+
+Compare against expected services. Any service not in the results is silent.
+
+### Step 2: Check container health (if you have access)
+
+For each silent service, determine if it's running, crashed, or OOMKilled:
+
+```bash
+docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' <container>
+```
+
+Exit code signals:
+- **0**: clean shutdown (wrong command, missing entrypoint)
+- **1**: application error (bad config, missing env var, failed assertion)
+- **2**: shell/argument error (bad CLI flags)
+- **137**: SIGKILL / OOMKilled (check memory limits)
+- **139**: SIGSEGV (null pointer, undefined behavior — common in C/C++)
+
+### Step 3: Check container logs for crash messages
+
+```bash
+docker logs <container> 2>&1 | head -50
+```
+
+Zero log output + exit code 1 = crash before logging initializes.
+This usually means a required env var is missing or a config file isn't mounted.
+
+### Step 4: Verify environment variables
+
+Common env var problems by language/runtime:
+
+| Runtime | Gotcha |
+|---------|--------|
+| Go (OTel auto-instrumentation) | Needs `OTEL_EXPERIMENTAL_CONFIG_FILE` pointing to a mounted YAML, plus `OTEL_SEMCONV_STABILITY_OPT_IN` |
+| C/C++ | `getenv()` returns NULL for missing vars. `std::string(NULL)` = SIGSEGV. Always set `VERSION`, `HOST`, etc. |
+| .NET (ASP.NET Core) | `ASPNETCORE_URLS=http://*:<port>` required for Kestrel to bind gRPC/HTTP. Without it, the port doesn't accept connections |
+| nginx (OTel module) | Uses `OTEL_COLLECTOR_HOST` + `OTEL_COLLECTOR_PORT_GRPC`, NOT `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| Ruby (Sinatra/Rails) | Needs `APP_ENV=production` to avoid dev-mode behaviors |
+| PHP (OTel auto-instrumentation) | Needs `OTEL_PHP_AUTOLOAD_ENABLED=true` |
+| Feature flags (flagd) | Services using OpenFeature need `FLAGD_HOST` + `FLAGD_PORT` or they error-loop on flag evaluation |
+
+Check upstream docs or docker-compose for the canonical env vars.
+Don't assume `OTEL_EXPORTER_OTLP_ENDPOINT` works universally — each SDK/module has its own convention.
+
+### Step 5: Identify cascade failures
+
+One crashed service can cause errors across many others.
+Use parent_span_id to trace which function owns an error:
+
+```sql
+-- Find error spans
+SELECT span_id, parent_span_id, name, status, service, value AS duration_ms
+FROM obs
+WHERE signal = 'span' AND status = 'ERROR'
+ORDER BY value DESC
+LIMIT 20;
+
+-- Then find the parent span to see which operation triggered the error
+SELECT name, service, status, value AS duration_ms
+FROM obs
+WHERE signal = 'span' AND span_id = '<parent_span_id_from_above>';
+```
+
+Common cascade pattern:
+1. Service A crashes → Service B calls A, gets connection refused → B returns ERROR
+2. B's caller (Service C) propagates ERROR upstream → frontend shows errors
+3. Fix A, and B + C recover automatically
+
+### Step 6: Verify URL schemes and addresses
+
+Go's `url.Parse("host:port/path")` interprets `host:` as a URL **scheme**,
+not a hostname. This causes "unsupported protocol scheme" errors.
+
+Always use explicit schemes for HTTP services:
+- `http://shipping:50050` (correct)
+- `shipping:50050` (broken in Go — `shipping:` becomes the scheme)
+
+gRPC services typically don't need a scheme (the gRPC dialer handles it),
+but HTTP services always do.
+
+### Step 7: Verify with cross-service trace
+
+After fixing, confirm the full call chain works:
+
+```sql
+-- Find a trace that touches multiple services
+SELECT trace_id, count(DISTINCT service) AS svc_count
+FROM obs
+WHERE signal = 'span' AND trace_id IS NOT NULL
+GROUP BY trace_id
+HAVING svc_count >= 3
+ORDER BY svc_count DESC
+LIMIT 5;
+
+-- Inspect the full trace tree
+SELECT service, name, span_id, parent_span_id,
+       value AS duration_ms, status
+FROM obs
+WHERE signal = 'span' AND trace_id = '<trace_id>'
+ORDER BY timestamp;
+```
+
+A healthy trace should show: no ERROR status, reasonable durations,
+and all expected services participating in the call chain.
+
 ## Gotchas
 
 1. timestamp is nanoseconds. Not seconds. Not milliseconds.
