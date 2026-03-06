@@ -116,6 +116,16 @@ func (w *ParquetWriter) writePartition(ctx context.Context, hour int64, hourRows
 
 	writer := parquet.NewGenericWriter[schema.UnifiedRow](&buf,
 		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBetterCompression}),
+		parquet.BloomFilters(
+			parquet.SplitBlockFilter(10, "trace_id"),
+		),
+		parquet.SortingWriterConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("service"),
+				parquet.Ascending("signal"),
+				parquet.Ascending("timestamp"),
+			),
+		),
 	)
 	if _, err := writer.Write(hourRows); err != nil {
 		return fmt.Errorf("parquet write: %w", err)

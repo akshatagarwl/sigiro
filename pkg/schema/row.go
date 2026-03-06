@@ -40,7 +40,7 @@ type Event struct {
 //	P1: error_type string? (dict)     — from span exception events
 //	P2: ingest_timestamp int64        — when the exporter received the data
 type UnifiedRow struct {
-	Timestamp    int64    `parquet:"timestamp"`
+	Timestamp    int64    `parquet:"timestamp,delta"`
 	Signal       string   `parquet:"signal,dict"`
 	Service      string   `parquet:"service,dict"`
 	Host         string   `parquet:"host,dict"`
