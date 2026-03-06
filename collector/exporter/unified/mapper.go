@@ -31,9 +31,24 @@ func resAttr(res pcommon.Resource, key string) string {
 	return ""
 }
 
-func serviceName(res pcommon.Resource) string {
-	if svc := strings.TrimSpace(resAttr(res, "service.name")); svc != "" {
+// resolveServiceName returns the best service name from resource attributes.
+// If service.name is missing or is an OTel sentinel (unknown_service, unknown_service:go, etc.),
+// falls back through k8s workload names, container name, and process executable name.
+func resolveServiceName(res pcommon.Resource) string {
+	if svc := strings.TrimSpace(resAttr(res, "service.name")); svc != "" && !strings.HasPrefix(svc, "unknown_service") {
 		return svc
+	}
+
+	for _, key := range []string{
+		"k8s.deployment.name",
+		"k8s.statefulset.name",
+		"k8s.daemonset.name",
+		"k8s.container.name",
+		"process.executable.name",
+	} {
+		if v := strings.TrimSpace(resAttr(res, key)); v != "" {
+			return v
+		}
 	}
 
 	return "unknown_service"
@@ -47,7 +62,7 @@ type resourceInfo struct {
 
 func extractResource(res pcommon.Resource) resourceInfo {
 	return resourceInfo{
-		svc:    serviceName(res),
+		svc:    resolveServiceName(res),
 		host:   resAttr(res, "host.name"),
 		pod:    resAttr(res, "k8s.pod.name"),
 		deploy: resAttr(res, "service.version"),
@@ -488,7 +503,7 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 						}
 
 						v := kv.Value().AsString()
-						if key == "service.name" && v != "" {
+						if key == "service.name" && v != "" && !strings.HasPrefix(v, "unknown_service") {
 							sampleSvc = v
 							continue
 						}

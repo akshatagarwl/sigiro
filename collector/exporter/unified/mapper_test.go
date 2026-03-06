@@ -629,6 +629,90 @@ func TestMapLogs_ResourceAndLogAttrsMerged(t *testing.T) {
 	}
 }
 
+func TestResolveServiceName(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs map[string]string
+		want  string
+	}{
+		{"SDK service", map[string]string{"service.name": "checkout"}, "checkout"},
+		{"eBPF sentinel + deployment", map[string]string{"service.name": "unknown_service", "k8s.deployment.name": "ad-server"}, "ad-server"},
+		{"SDK sentinel variant", map[string]string{"service.name": "unknown_service:go", "k8s.deployment.name": "cart"}, "cart"},
+		{"no service.name + deployment", map[string]string{"k8s.deployment.name": "frontend"}, "frontend"},
+		{"StatefulSet", map[string]string{"service.name": "unknown_service", "k8s.statefulset.name": "redis"}, "redis"},
+		{"DaemonSet", map[string]string{"service.name": "unknown_service", "k8s.daemonset.name": "fluentbit"}, "fluentbit"},
+		{"container only", map[string]string{"service.name": "unknown_service", "k8s.container.name": "nginx"}, "nginx"},
+		{"executable only", map[string]string{"service.name": "unknown_service", "process.executable.name": "myapp"}, "myapp"},
+		{"empty resource", map[string]string{}, "unknown_service"},
+		{"deployment beats container", map[string]string{"service.name": "unknown_service", "k8s.deployment.name": "api", "k8s.container.name": "sidecar"}, "api"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := pcommon.NewResource()
+			for k, v := range tt.attrs {
+				res.Attributes().PutStr(k, v)
+			}
+
+			if got := resolveServiceName(res); got != tt.want {
+				t.Errorf("resolveServiceName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMapProfiles_SampleSentinelIgnored(t *testing.T) {
+	// Resource resolves to k8s.deployment.name=ad-server (service.name is sentinel).
+	// Sample has service.name=unknown_service — should NOT override.
+	pd := pprofile.NewProfiles()
+	dict := pd.Dictionary()
+	dict.StringTable().Append("cpu")             // 0
+	dict.StringTable().Append("count")           // 1
+	dict.StringTable().Append("runtime.main")    // 2
+	dict.StringTable().Append("service.name")    // 3
+	dict.StringTable().Append("unknown_service") // 4
+
+	fn := dict.FunctionTable().AppendEmpty()
+	fn.SetNameStrindex(2)
+
+	loc := dict.LocationTable().AppendEmpty()
+	loc.Lines().AppendEmpty().SetFunctionIndex(0)
+	stack := dict.StackTable().AppendEmpty()
+	stack.LocationIndices().Append(0)
+
+	// Sample attr: service.name=unknown_service
+	attr0 := dict.AttributeTable().AppendEmpty()
+	attr0.SetKeyStrindex(3)
+	attr0.Value().SetStr("unknown_service")
+
+	rp := pd.ResourceProfiles().AppendEmpty()
+	rp.Resource().Attributes().PutStr("service.name", "unknown_service")
+	rp.Resource().Attributes().PutStr("k8s.deployment.name", "ad-server")
+	sp := rp.ScopeProfiles().AppendEmpty()
+	p := sp.Profiles().AppendEmpty()
+	p.SampleType().SetTypeStrindex(0)
+	p.SampleType().SetUnitStrindex(1)
+	p.SetTime(pcommon.Timestamp(1e18))
+
+	sample := p.Samples().AppendEmpty()
+	sample.SetStackIndex(0)
+	sample.Values().Append(1)
+	sample.AttributeIndices().Append(0) // service.name=unknown_service
+
+	rows, err := mapProfiles(pd)
+	if err != nil {
+		t.Fatalf("mapProfiles: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	if rows[0].Service != "ad-server" {
+		t.Errorf("service = %q, want ad-server (sentinel in sample should not override)", rows[0].Service)
+	}
+}
+
 func TestMapProfiles_ResourceAttrsInMetadata(t *testing.T) {
 	pd, sample := makeMinimalProfile("cpu", "count")
 	sample.Values().Append(100)
