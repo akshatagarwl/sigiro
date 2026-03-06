@@ -369,6 +369,80 @@ func TestMapProfiles_MissingServiceName(t *testing.T) {
 	}
 }
 
+func TestMapProfiles_SampleAttributeServiceName(t *testing.T) {
+	// eBPF profiler sets resource service.name=unknown_service but puts real
+	// service.name on each sample via AttributeIndices → AttributeTable.
+	pd := pprofile.NewProfiles()
+	dict := pd.Dictionary()
+	dict.StringTable().Append("cpu")                     // 0
+	dict.StringTable().Append("count")                   // 1
+	dict.StringTable().Append("runtime.main")            // 2
+	dict.StringTable().Append("service.name")            // 3
+	dict.StringTable().Append("ad")                      // 4
+	dict.StringTable().Append("process.executable.name") // 5
+	dict.StringTable().Append("/usr/bin/ad-server")      // 6
+
+	fn := dict.FunctionTable().AppendEmpty()
+	fn.SetNameStrindex(2)
+
+	loc := dict.LocationTable().AppendEmpty()
+	loc.Lines().AppendEmpty().SetFunctionIndex(0)
+
+	stack := dict.StackTable().AppendEmpty()
+	stack.LocationIndices().Append(0)
+
+	// AttributeTable: [0]=service.name:"ad", [1]=process.executable.name:"/usr/bin/ad-server"
+	attr0 := dict.AttributeTable().AppendEmpty()
+	attr0.SetKeyStrindex(3)
+	attr0.Value().SetStr("ad")
+
+	attr1 := dict.AttributeTable().AppendEmpty()
+	attr1.SetKeyStrindex(5)
+	attr1.Value().SetStr("/usr/bin/ad-server")
+
+	rp := pd.ResourceProfiles().AppendEmpty()
+	rp.Resource().Attributes().PutStr("service.name", "unknown_service")
+	rp.Resource().Attributes().PutStr("host.name", "node-01")
+	sp := rp.ScopeProfiles().AppendEmpty()
+	p := sp.Profiles().AppendEmpty()
+	p.SampleType().SetTypeStrindex(0)
+	p.SampleType().SetUnitStrindex(1)
+	p.SetTime(pcommon.Timestamp(1e18))
+
+	sample := p.Samples().AppendEmpty()
+	sample.SetStackIndex(0)
+	sample.Values().Append(1)
+	sample.AttributeIndices().Append(0) // service.name=ad
+	sample.AttributeIndices().Append(1) // process.executable.name=/usr/bin/ad-server
+
+	rows, err := mapProfiles(pd)
+	if err != nil {
+		t.Fatalf("mapProfiles: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	r := rows[0]
+
+	// Sample service.name should override resource unknown_service.
+	if r.Service != "ad" {
+		t.Errorf("service = %q, want ad", r.Service)
+	}
+
+	// process.executable.name should appear in metadata.
+	meta := parseMetadata(t, r.Metadata)
+	if meta["process.executable.name"] != "/usr/bin/ad-server" {
+		t.Errorf("process.executable.name = %q, want /usr/bin/ad-server", meta["process.executable.name"])
+	}
+
+	// service.name should NOT be in metadata (it's promoted to Service column).
+	if _, ok := meta["service.name"]; ok {
+		t.Errorf("service.name should not be in metadata, it's promoted to Service")
+	}
+}
+
 func TestMapProfiles_PreservesUnit(t *testing.T) {
 	pd, sample := makeMinimalProfile("alloc_space", "bytes")
 	sample.Values().Append(48000)

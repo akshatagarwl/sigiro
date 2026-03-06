@@ -367,6 +367,7 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 	locationTable := dict.LocationTable()
 	functionTable := dict.FunctionTable()
 	stackTable := dict.StackTable()
+	attrTable := dict.AttributeTable()
 
 	// Pre-compute resolved function names per location index.
 	locationNames := make([][]string, locationTable.Len())
@@ -393,7 +394,6 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 	for i := 0; i < pd.ResourceProfiles().Len(); i++ {
 		rp := pd.ResourceProfiles().At(i)
 		r := extractResource(rp.Resource())
-		metadata := mergeMetadata(r.extra, nil)
 
 		for j := 0; j < rp.ScopeProfiles().Len(); j++ {
 			sp := rp.ScopeProfiles().At(j)
@@ -467,16 +467,53 @@ func mapProfiles(pd pprofile.Profiles) ([]schema.UnifiedRow, error) {
 						}
 					}
 
+					// Read sample attributes from the attribute table.
+					// eBPF profiler puts service.name, process.executable.name, process.pid here.
+					sampleSvc := r.svc
+
+					var sampleAttrs map[string]string
+
+					attrIndices := sample.AttributeIndices()
+					for ai := 0; ai < attrIndices.Len(); ai++ {
+						idx := attrIndices.At(ai)
+						if int(idx) >= attrTable.Len() {
+							continue
+						}
+
+						kv := attrTable.At(int(idx))
+
+						key := ""
+						if ki := kv.KeyStrindex(); int(ki) < stringTable.Len() {
+							key = stringTable.At(int(ki))
+						}
+
+						v := kv.Value().AsString()
+						if key == "service.name" && v != "" {
+							sampleSvc = v
+							continue
+						}
+
+						if key != "" {
+							if sampleAttrs == nil {
+								sampleAttrs = make(map[string]string)
+							}
+
+							sampleAttrs[key] = v
+						}
+					}
+
+					sampleMetadata := mergeMetadata(r.extra, sampleAttrs)
+
 					rows = append(rows, schema.UnifiedRow{
 						Timestamp: ts,
 						Signal:    schema.SignalProfile,
-						Service:   r.svc, Host: r.host, Pod: r.pod, DeployVer: r.deploy,
+						Service:   sampleSvc, Host: r.host, Pod: r.pod, DeployVer: r.deploy,
 						Name:       name,
 						Value:      &val,
 						Stacktrace: stack,
 						Unit:       ptr(unit),
 						Kind:       ptr(profileType),
-						Metadata:   metadata,
+						Metadata:   sampleMetadata,
 					})
 				}
 			}
