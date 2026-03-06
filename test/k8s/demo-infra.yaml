@@ -1,0 +1,382 @@
+# Demo infrastructure: flagd, valkey, kafka, postgresql
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flagd-config
+  namespace: observe
+data:
+  flagd.json: |
+    {
+      "$schema": "https://flagd.dev/schema/v0/flags.json",
+      "flags": {
+        "llmInaccurateResponse": {
+          "state": "ENABLED",
+          "variants": { "off": false, "on": true },
+          "defaultVariant": "off"
+        },
+        "llmRateLimitError": {
+          "state": "ENABLED",
+          "variants": { "off": false, "on": true },
+          "defaultVariant": "off"
+        },
+        "productCatalogFailure": {
+          "state": "ENABLED",
+          "variants": { "on": true, "off": false },
+          "defaultVariant": "off"
+        },
+        "recommendationCacheFailure": {
+          "state": "ENABLED",
+          "variants": { "on": true, "off": false },
+          "defaultVariant": "off"
+        },
+        "adManualGc": {
+          "state": "ENABLED",
+          "variants": { "on": true, "off": false },
+          "defaultVariant": "off"
+        },
+        "adHighCpu": {
+          "state": "ENABLED",
+          "variants": { "on": true, "off": false },
+          "defaultVariant": "off"
+        },
+        "adFailure": {
+          "state": "ENABLED",
+          "variants": { "on": true, "off": false },
+          "defaultVariant": "off"
+        },
+        "kafkaQueueProblems": {
+          "state": "ENABLED",
+          "variants": { "on": 100, "off": 0 },
+          "defaultVariant": "off"
+        },
+        "cartFailure": {
+          "state": "ENABLED",
+          "variants": { "on": true, "off": false },
+          "defaultVariant": "off"
+        },
+        "paymentFailure": {
+          "state": "ENABLED",
+          "variants": { "100%": 1, "90%": 0.95, "75%": 0.75, "50%": 0.5, "25%": 0.25, "10%": 0.1, "off": 0 },
+          "defaultVariant": "off"
+        },
+        "paymentUnreachable": {
+          "state": "ENABLED",
+          "variants": { "on": true, "off": false },
+          "defaultVariant": "off"
+        },
+        "loadGeneratorFloodHomepage": {
+          "state": "ENABLED",
+          "variants": { "on": 100, "off": 0 },
+          "defaultVariant": "off"
+        },
+        "imageSlowLoad": {
+          "state": "ENABLED",
+          "variants": { "10sec": 10000, "5sec": 5000, "off": 0 },
+          "defaultVariant": "off"
+        },
+        "failedReadinessProbe": {
+          "state": "ENABLED",
+          "variants": { "on": true, "off": false },
+          "defaultVariant": "off"
+        },
+        "emailMemoryLeak": {
+          "state": "ENABLED",
+          "variants": { "off": 0, "1x": 1, "10x": 10, "100x": 100, "1000x": 1000, "10000x": 10000 },
+          "defaultVariant": "off"
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flagd
+  namespace: observe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flagd
+  template:
+    metadata:
+      labels:
+        app: flagd
+    spec:
+      containers:
+        - name: flagd
+          image: ghcr.io/open-feature/flagd:v0.12.9
+          args: ["start", "--uri", "file:/etc/flagd/flagd.json"]
+          ports:
+            - containerPort: 8013
+          resources:
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/flagd
+      volumes:
+        - name: config
+          configMap:
+            name: flagd-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flagd
+  namespace: observe
+spec:
+  selector:
+    app: flagd
+  ports:
+    - port: 8013
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkey-cart
+  namespace: observe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: valkey-cart
+  template:
+    metadata:
+      labels:
+        app: valkey-cart
+    spec:
+      containers:
+        - name: valkey
+          image: valkey/valkey:9.0.1-alpine3.23
+          ports:
+            - containerPort: 6379
+          resources:
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey-cart
+  namespace: observe
+spec:
+  selector:
+    app: valkey-cart
+  ports:
+    - port: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: observe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: ghcr.io/open-telemetry/demo:2.2.0-kafka
+          env:
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: PLAINTEXT://kafka:9092
+            - name: KAFKA_LISTENERS
+              value: PLAINTEXT://kafka:9092,CONTROLLER://kafka:9093
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 1@kafka:9093
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://observe-collector:4318
+            - name: OTEL_SERVICE_NAME
+              value: kafka
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx400m -Xms400m"
+          ports:
+            - containerPort: 9092
+          resources:
+            limits:
+              memory: 620Mi
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "nc -z localhost 9092"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: observe
+spec:
+  selector:
+    app: kafka
+  ports:
+    - port: 9092
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: observe
+data:
+  init.sql: |
+    -- Copyright The OpenTelemetry Authors
+    -- SPDX-License-Identifier: Apache-2.0
+
+    CREATE USER otelu WITH PASSWORD 'otelp';
+
+    -- Accounting Service: create a schema
+    CREATE SCHEMA accounting;
+    GRANT USAGE ON SCHEMA accounting TO otelu;
+
+    CREATE TABLE accounting."order" (
+        order_id TEXT PRIMARY KEY
+    );
+
+    CREATE TABLE accounting.shipping (
+        shipping_tracking_id TEXT PRIMARY KEY,
+        shipping_cost_currency_code TEXT NOT NULL,
+        shipping_cost_units BIGINT NOT NULL,
+        shipping_cost_nanos INT NOT NULL,
+        street_address TEXT,
+        city TEXT,
+        state TEXT,
+        country TEXT,
+        zip_code TEXT,
+        order_id TEXT NOT NULL,
+        FOREIGN KEY (order_id) REFERENCES accounting."order"(order_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE accounting.orderitem (
+        item_cost_currency_code TEXT NOT NULL,
+        item_cost_units BIGINT NOT NULL,
+        item_cost_nanos INT NOT NULL,
+        product_id TEXT NOT NULL,
+        quantity INT NOT NULL,
+        order_id TEXT NOT NULL,
+        PRIMARY KEY (order_id, product_id),
+        FOREIGN KEY (order_id) REFERENCES accounting."order"(order_id) ON DELETE CASCADE
+    );
+
+    GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA accounting TO otelu;
+
+    -- Product Review Service
+    CREATE SCHEMA reviews;
+    GRANT USAGE ON SCHEMA reviews TO otelu;
+
+    CREATE TABLE reviews.productreviews (
+        id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        product_id VARCHAR(16) NOT NULL,
+        username VARCHAR(64) NOT NULL,
+        description VARCHAR(1024),
+        score NUMERIC(2,1) NOT NULL
+    );
+
+    CREATE INDEX product_id_index ON reviews.productreviews (product_id);
+    GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA reviews TO otelu;
+
+    INSERT INTO reviews.productreviews (product_id, username, description, score)
+    VALUES
+        ('OLJCESPC7Z', 'stargazer_mike', 'Great entry-level telescope!', '4.5'),
+        ('OLJCESPC7Z', 'nightskylover', 'Excellent performance for the price.', '4.0'),
+        ('66VCHSJNUP', 'tech_astro', 'The StarSense app is revolutionary!', '5.0'),
+        ('66VCHSJNUP', 'app_user', 'Amazing smartphone integration.', '4.5'),
+        ('1YMWWN1N4O', 'solar_viewer', 'Perfect for solar observations!', '5.0'),
+        ('L9ECAV7KIM', 'clean_optics', 'Lifesaver for all my optics.', '5.0'),
+        ('2ZYFJ3GM2N', 'bird_watcher', 'Incredible clarity and brightness.', '5.0'),
+        ('0PUK6V6EV0', 'astro_photog', 'Fantastic for planetary photography.', '5.0'),
+        ('LS4PSXUNUM', 'night_walker', 'Perfect red light for night vision.', '5.0'),
+        ('9SIQT8TOJO', 'deep_sky_master', 'A dream for deep-sky imaging.', '5.0'),
+        ('6E92ZMYYFZ', 'solar_safety', 'Essential for safe solar viewing.', '5.0'),
+        ('HQTGWGPNH4', 'history_buff', 'Fascinating historical content.', '5.0');
+
+    -- Product Catalog Service
+    CREATE SCHEMA catalog;
+    GRANT USAGE ON SCHEMA catalog TO otelu;
+
+    CREATE TABLE catalog.products (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        picture TEXT,
+        price_currency_code TEXT NOT NULL,
+        price_units BIGINT NOT NULL,
+        price_nanos INT NOT NULL,
+        categories TEXT
+    );
+
+    GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO otelu;
+
+    INSERT INTO catalog.products (id, name, description, picture, price_currency_code, price_units, price_nanos, categories)
+    VALUES
+        ('OLJCESPC7Z', 'National Park Foundation Explorascope', 'Manual alt-azimuth refractor telescope', 'NationalParkFoundationExplorascope.jpg', 'USD', 101, 960000000, 'telescopes'),
+        ('66VCHSJNUP', 'Starsense Explorer Refractor Telescope', 'Smartphone-guided telescope', 'StarsenseExplorer.jpg', 'USD', 349, 950000000, 'telescopes'),
+        ('1YMWWN1N4O', 'Eclipsmart Travel Refractor Telescope', 'Dedicated solar scope', 'EclipsmartTravelRefractorTelescope.jpg', 'USD', 129, 950000000, 'telescopes,travel'),
+        ('L9ECAV7KIM', 'Lens Cleaning Kit', 'Multi-surface cleaning kit', 'LensCleaningKit.jpg', 'USD', 21, 950000000, 'accessories'),
+        ('2ZYFJ3GM2N', 'Roof Binoculars', 'Versatile all-around binocular', 'RoofBinoculars.jpg', 'USD', 209, 950000000, 'binoculars'),
+        ('0PUK6V6EV0', 'Solar System Color Imager', 'Planetary imaging camera', 'SolarSystemColorImager.jpg', 'USD', 175, 0, 'accessories,telescopes'),
+        ('LS4PSXUNUM', 'Red Flashlight', '3-in-1 red flashlight and hand warmer', 'RedFlashlight.jpg', 'USD', 57, 80000000, 'accessories,flashlights'),
+        ('9SIQT8TOJO', 'Optical Tube Assembly', 'RASA V2 astrograph', 'OpticalTubeAssembly.jpg', 'USD', 3599, 0, 'accessories,telescopes,assembly'),
+        ('6E92ZMYYFZ', 'Solar Filter', 'EclipSmart solar filter for 8" telescopes', 'SolarFilter.jpg', 'USD', 69, 950000000, 'accessories,telescopes'),
+        ('HQTGWGPNH4', 'The Comet Book', '16th-century treatise on comets', 'TheCometBook.jpg', 'USD', 0, 990000000, 'books');
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql
+  namespace: observe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+  template:
+    metadata:
+      labels:
+        app: postgresql
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17.6
+          env:
+            - name: POSTGRES_DB
+              value: product-catalog
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: postgres
+          ports:
+            - containerPort: 5432
+          resources:
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 5
+            periodSeconds: 2
+          volumeMounts:
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: init-sql
+          configMap:
+            name: postgres-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  namespace: observe
+spec:
+  selector:
+    app: postgresql
+  ports:
+    - port: 5432

@@ -10,15 +10,23 @@ data:
         protocols:
           grpc:
             endpoint: 0.0.0.0:4317
+
       otlp:
         protocols:
           grpc:
             endpoint: 0.0.0.0:4319
           http:
             endpoint: 0.0.0.0:4318
+
+      profiling:
+        samples_per_second: 20
+        tracers: all
+        reporter_interval: 5s
+
     processors:
       batch:
         timeout: 5s
+
       k8sattributes:
         auth_type: serviceAccount
         passthrough: false
@@ -40,28 +48,31 @@ data:
                 name: k8s.pod.ip
           - sources:
               - from: connection
+
     extensions:
       file_storage/queue:
         directory: /var/lib/observe/queue
         create_directory: true
         compaction:
           on_rebound: true
+
     exporters:
       unified_parquet:
-        s3_bucket: observe
-        s3_region: us-east-1
-        s3_endpoint: http://minio.observe.svc:9000
-        s3_access_key: minioadmin
-        s3_secret_key: minioadmin
+        s3_bucket: ${env:S3_BUCKET}
+        s3_region: ${env:S3_REGION:-us-east-1}
+        s3_endpoint: ${env:S3_ENDPOINT}
+        s3_access_key: ${env:S3_ACCESS_KEY}
+        s3_secret_key: ${env:S3_SECRET_KEY}
         sending_queue:
           storage: file_storage/queue
       debug:
-        verbosity: detailed
+        verbosity: basic
+
     service:
       extensions: [file_storage/queue]
       telemetry:
         logs:
-          level: debug
+          level: info
       pipelines:
         metrics:
           receivers: [otelarrow, otlp]
@@ -76,7 +87,7 @@ data:
           processors: [k8sattributes, batch]
           exporters: [unified_parquet, debug]
         profiles:
-          receivers: [otlp]
+          receivers: [otlp, profiling]
           processors: [k8sattributes]
           exporters: [unified_parquet, debug]
 ---
@@ -94,6 +105,7 @@ spec:
       labels:
         app: observe-collector
     spec:
+      hostPID: true
       serviceAccountName: observe-collector
       containers:
         - name: collector
@@ -103,11 +115,23 @@ spec:
             - --config
             - /etc/otelcol/otelcol.k8s.yaml
             - --feature-gates=service.profilesSupport
+          securityContext:
+            privileged: true
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: S3_ENDPOINT
+              value: http://minio.observe.svc:9000
+            - name: S3_BUCKET
+              value: observe
+            - name: S3_REGION
+              value: us-east-1
+            - name: S3_ACCESS_KEY
+              value: minioadmin
+            - name: S3_SECRET_KEY
+              value: minioadmin
           ports:
             - containerPort: 4317
               hostPort: 4317
@@ -123,12 +147,22 @@ spec:
               mountPath: /etc/otelcol
             - name: queue
               mountPath: /var/lib/observe/queue
+            - name: debugfs
+              mountPath: /sys/kernel/debug
+            - name: tracefs
+              mountPath: /sys/kernel/tracing
       volumes:
         - name: config
           configMap:
             name: collector-config
         - name: queue
           emptyDir: {}
+        - name: debugfs
+          hostPath:
+            path: /sys/kernel/debug
+        - name: tracefs
+          hostPath:
+            path: /sys/kernel/tracing
 ---
 apiVersion: v1
 kind: Service
