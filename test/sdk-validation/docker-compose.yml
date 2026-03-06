@@ -82,22 +82,9 @@ services:
     ports:
       - "5102:5000"
 
-  # Pyroscope Java rideshare — sends collapsed stacks (validates Phase 2 folded format)
-  java-app:
-    build:
-      context: ./pyroscope-examples/java/rideshare
-      dockerfile: Dockerfile
-    depends_on:
-      collector: { condition: service_started }
-    environment:
-      PYROSCOPE_SERVER_ADDRESS: http://collector:4040
-      PYROSCOPE_APPLICATION_NAME: rideshare.java
-      PYROSCOPE_FORMAT: jfr
-      PYROSCOPE_PROFILING_INTERVAL: 10ms
-      PYROSCOPE_PROFILER_EVENT: itimer
-      REGION: us-east
-    ports:
-      - "5103:5000"
+  # Java rideshare excluded: Java SDK v2.1.2 sends raw JFR (format=jfr),
+  # not collapsed stacks. Raw JFR parsing is not implemented.
+  # Re-enable when JFR support is added to the pyroscope receiver.
 
   # Load generator — hits /bike, /car, /scooter on each app
   load:
@@ -106,7 +93,6 @@ services:
       - go-app
       - python-app
       - nodejs-app
-      - java-app
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -114,7 +100,7 @@ services:
         sleep 10
         echo "Starting load generation..."
         while true; do
-          for host in go-app:5000 python-app:5000 nodejs-app:5000 java-app:5000; do
+          for host in go-app:5000 python-app:5000 nodejs-app:5000; do
             for route in bike car scooter; do
               curl -sf "http://$${host}/$${route}" > /dev/null 2>&1 || true
             done

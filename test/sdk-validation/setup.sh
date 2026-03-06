@@ -22,8 +22,7 @@ cd "$EXAMPLES_DIR"
 git sparse-checkout set \
   examples/language-sdk-instrumentation/golang-push/rideshare \
   examples/language-sdk-instrumentation/python/rideshare/flask \
-  examples/language-sdk-instrumentation/nodejs/express \
-  examples/language-sdk-instrumentation/java/rideshare
+  examples/language-sdk-instrumentation/nodejs/express
 
 # Move example dirs to top level so docker-compose context paths work.
 mv examples/language-sdk-instrumentation/* .

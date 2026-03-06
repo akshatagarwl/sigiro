@@ -26,30 +26,27 @@ echo "Waiting for collector to be ready..."
 sleep 5
 
 echo "=== Step 4: Start SDK apps + load generator ==="
-docker compose up -d go-app python-app nodejs-app java-app load
+docker compose up -d go-app python-app nodejs-app load
 
 echo "=== Step 5: Wait for profiles to accumulate ==="
-TIMEOUT=120
-ELAPSED=0
-while [ $ELAPSED -lt $TIMEOUT ]; do
-  FLUSH_COUNT=$(docker compose logs collector 2>&1 | grep -c "flushed parquet" || true)
-  if [ "$FLUSH_COUNT" -ge 3 ]; then
-    echo "Found $FLUSH_COUNT flush(es) in collector logs after ${ELAPSED}s"
-    break
-  fi
-  sleep 5
-  ELAPSED=$((ELAPSED + 5))
-done
+# Node.js SDK has ~60s default push interval, need minimum 90s total wait.
+# Go/Python push within 10-15s, Node.js takes ~60s for first push.
+echo "Waiting 90s for all SDKs to push (Node.js SDK has ~60s push interval)..."
+sleep 90
 
-if [ $ELAPSED -ge $TIMEOUT ]; then
-  echo "WARN: Only $FLUSH_COUNT flush(es) after ${TIMEOUT}s, proceeding anyway..."
+# Check flushes happened
+FLUSH_COUNT=$(docker compose logs collector 2>&1 | grep -c "flushed parquet" || true)
+echo "Found $FLUSH_COUNT flush(es) in collector logs"
+
+if [ "$FLUSH_COUNT" -eq 0 ]; then
+  echo "WARN: No flushes detected"
   echo "=== Collector logs ==="
   docker compose logs collector --tail=50
 fi
 
 # Extra wait for final flush cycle
-echo "Waiting 30s for final flush cycle..."
-sleep 30
+echo "Waiting 20s for final flush cycle..."
+sleep 20
 
 echo "=== Step 6: Verify profiles ==="
 bash verify.sh
