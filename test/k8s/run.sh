@@ -47,8 +47,18 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
     echo "=== Loading image into K8s ==="
     if command -v limactl &>/dev/null; then
       # Lima/k3s: import via ctr
-      LIMA_INSTANCE="${K8S_CTX}"
-      docker save observe-collector:local | limactl shell "$LIMA_INSTANCE" sudo k3s ctr images import -
+      # Context name may differ from Lima instance name (e.g., lima-k3s → observe-k8s)
+      LIMA_INSTANCE="${LIMA_VM:-}"
+      if [[ -z "$LIMA_INSTANCE" ]]; then
+        # Auto-detect: find a running Lima instance with k3s
+        LIMA_INSTANCE=$(limactl list --format '{{.Name}}' 2>/dev/null | head -1)
+      fi
+      if [[ -n "$LIMA_INSTANCE" ]]; then
+        echo "Loading image into Lima instance '$LIMA_INSTANCE'..."
+        docker save observe-collector:local | limactl shell "$LIMA_INSTANCE" sudo k3s ctr images import -
+      else
+        echo "WARNING: No running Lima instance found — you may need to manually load the image"
+      fi
     else
       echo "WARNING: Non-OrbStack context — you may need to manually load the image"
     fi
