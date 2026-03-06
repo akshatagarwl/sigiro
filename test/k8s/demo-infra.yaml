@@ -188,9 +188,9 @@ spec:
             - name: KAFKA_ADVERTISED_LISTENERS
               value: PLAINTEXT://kafka:9092
             - name: KAFKA_LISTENERS
-              value: PLAINTEXT://kafka:9092,CONTROLLER://kafka:9093
+              value: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-              value: 1@kafka:9093
+              value: 1@localhost:9093
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://observe-collector:4318
             - name: OTEL_SERVICE_NAME
