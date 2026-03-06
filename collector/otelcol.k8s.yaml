@@ -20,7 +20,7 @@ processors:
   batch:
     timeout: 5s
 
-  k8sattributes:
+  k8s_attributes:
     auth_type: serviceAccount
     passthrough: false
     extract:
@@ -36,6 +36,9 @@ processors:
         - container.id
         - container.image.name
     pod_association:
+      - sources:
+          - from: resource_attribute
+            name: container.id
       - sources:
           - from: resource_attribute
             name: k8s.pod.ip
@@ -69,17 +72,17 @@ service:
   pipelines:
     metrics:
       receivers: [otelarrow, otlp]
-      processors: [k8sattributes, batch]
+      processors: [k8s_attributes, batch]
       exporters: [unified_parquet, debug]
     traces:
       receivers: [otelarrow, otlp]
-      processors: [k8sattributes, batch]
+      processors: [k8s_attributes, batch]
       exporters: [unified_parquet, debug]
     logs:
       receivers: [otelarrow, otlp]
-      processors: [k8sattributes, batch]
+      processors: [k8s_attributes, batch]
       exporters: [unified_parquet, debug]
     profiles:
       receivers: [otlp, profiling]
-      processors: [k8sattributes]
+      processors: [k8s_attributes]
       exporters: [unified_parquet, debug]
