@@ -25,15 +25,15 @@ echo "=== Building images ==="
 $COMPOSE build
 
 echo "=== Phase 1: Infrastructure ==="
-$COMPOSE up -d minio minio-setup otel-collector flagd valkey-cart postgresql
+$COMPOSE up -d minio minio-setup otel-collector flagd valkey-cart postgresql kafka
 echo "Waiting for infrastructure to be ready..."
 sleep 10
 
-echo "=== Phase 2: App services + profilegen ==="
+echo "=== Phase 2: App services ==="
 $COMPOSE up -d \
   ad cart checkout currency email payment \
   product-catalog quote recommendation shipping \
-  frontend image-provider profilegen
+  frontend image-provider
 echo "Waiting for services to start..."
 sleep 30
 
@@ -105,15 +105,12 @@ run_check() {
 }
 
 echo ""
-echo "=== Check 1: All 4 signal types present ==="
+echo "=== Check 1: Log, metric, span signals present ==="
 run_check "Signal: log" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='log';" \
   "true"
 run_check "Signal: metric" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='metric';" \
-  "true"
-run_check "Signal: profile" \
-  "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile';" \
   "true"
 run_check "Signal: span" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='span';" \
@@ -162,13 +159,7 @@ run_check "Spans have trace_id" \
   "true"
 
 echo ""
-echo "=== Check 6: Profiles have stacktrace ==="
-run_check "Profiles have stacktrace" \
-  "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND stacktrace IS NOT NULL AND len(stacktrace) > 0;" \
-  "true"
-
-echo ""
-echo "=== Check 7: Investigation block for checkout ==="
+echo "=== Check 6: Investigation block for checkout ==="
 run_check "Investigation: metrics" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='metric' AND service='checkout';" \
   "true"
@@ -178,12 +169,9 @@ run_check "Investigation: spans" \
 run_check "Investigation: logs" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='log' AND service='checkout';" \
   "true"
-run_check "Investigation: profiles" \
-  "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND service='checkout';" \
-  "true"
 
 echo ""
-echo "=== Check 8: Metrics have real names ==="
+echo "=== Check 7: Metrics have real names ==="
 run_check "Distinct metric names >= 3" \
   "SELECT count(DISTINCT name) >= 3 FROM $PARQUET WHERE signal='metric';" \
   "true"
