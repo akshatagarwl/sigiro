@@ -23,6 +23,13 @@ receivers:
     tracers: all
     reporter_interval: 5s
 
+  # Pyroscope SDK ingest: accepts Pyroscope native /ingest push protocol.
+  # Enables profiling from Python, Node.js, Go, Java SDKs on non-eBPF platforms.
+  pyroscope:
+    http:
+      endpoint: 0.0.0.0:4040
+    timeout: 10s
+
 processors:
   batch:
     timeout: 5s
@@ -65,6 +72,6 @@ service:
       processors: [batch]
       exporters: [unified_parquet, debug]
     profiles:
-      receivers: [otlp, profiling]
+      receivers: [otlp, profiling, pyroscope]
       # batch processor does not support profiles signal yet
       exporters: [unified_parquet, debug]

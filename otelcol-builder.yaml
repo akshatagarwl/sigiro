@@ -10,6 +10,9 @@ receivers:
   - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.147.0
   - gomod: go.opentelemetry.io/ebpf-profiler v0.0.202610
     import: go.opentelemetry.io/ebpf-profiler/collector
+  - gomod: github.com/akshatagarwl/observe v0.0.0
+    import: github.com/akshatagarwl/observe/collector/receiver/pyroscope
+    path: ./
 
 processors:
   - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.147.0
