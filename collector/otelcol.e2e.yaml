@@ -18,6 +18,12 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
+  # Pyroscope SDK ingest: accepts Pyroscope native /ingest push protocol.
+  pyroscope:
+    http:
+      endpoint: 0.0.0.0:4040
+    timeout: 10s
+
 processors:
   batch:
     timeout: 5s
@@ -60,6 +66,6 @@ service:
       processors: [batch]
       exporters: [unified_parquet, debug]
     profiles:
-      receivers: [otlp]
+      receivers: [otlp, pyroscope]
       # batch processor does not support profiles signal yet
       exporters: [unified_parquet, debug]

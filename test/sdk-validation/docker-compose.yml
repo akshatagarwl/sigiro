@@ -1,0 +1,123 @@
+services:
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  minio-setup:
+    image: minio/mc
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: sh -c "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb local/observe --ignore-existing"
+
+  collector:
+    build:
+      context: ../..
+      dockerfile: collector/Dockerfile
+    depends_on:
+      minio-setup: { condition: service_completed_successfully }
+    environment:
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: observe
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+    command: ["--config", "/etc/otelcol/otelcol.e2e.yaml", "--feature-gates=service.profilesSupport"]
+    volumes:
+      - ../../collector/otelcol.e2e.yaml:/etc/otelcol/otelcol.e2e.yaml:ro
+    ports:
+      - "4040:4040"
+      - "4317:4317"
+      - "4318:4318"
+      - "4319:4319"
+
+  # Pyroscope Go rideshare — sends cpu, alloc_objects, goroutines profiles
+  go-app:
+    build:
+      context: ./pyroscope-examples/golang-push/rideshare
+      dockerfile: Dockerfile
+    depends_on:
+      collector: { condition: service_started }
+    environment:
+      PYROSCOPE_SERVER_ADDRESS: http://collector:4040
+      PYROSCOPE_APPLICATION_NAME: rideshare.go
+      REGION: us-east
+    ports:
+      - "5100:5000"
+
+  # Pyroscope Python rideshare — sends cpu profiles
+  python-app:
+    build:
+      context: ./pyroscope-examples/python/rideshare/flask
+      dockerfile: Dockerfile
+    depends_on:
+      collector: { condition: service_started }
+    environment:
+      PYROSCOPE_SERVER_ADDRESS: http://collector:4040
+      PYROSCOPE_APPLICATION_NAME: rideshare.python
+      REGION: us-east
+    ports:
+      - "5101:5000"
+
+  # Pyroscope Node.js rideshare — sends cpu profiles
+  nodejs-app:
+    build:
+      context: ./pyroscope-examples/nodejs/express
+      dockerfile: Dockerfile
+    depends_on:
+      collector: { condition: service_started }
+    environment:
+      PYROSCOPE_URL: http://collector:4040
+      APP_NAME: rideshare.nodejs
+      REGION: us-east
+    ports:
+      - "5102:5000"
+
+  # Pyroscope Java rideshare — sends collapsed stacks (validates Phase 2 folded format)
+  java-app:
+    build:
+      context: ./pyroscope-examples/java/rideshare
+      dockerfile: Dockerfile
+    depends_on:
+      collector: { condition: service_started }
+    environment:
+      PYROSCOPE_SERVER_ADDRESS: http://collector:4040
+      PYROSCOPE_APPLICATION_NAME: rideshare.java
+      PYROSCOPE_FORMAT: jfr
+      PYROSCOPE_PROFILING_INTERVAL: 10ms
+      PYROSCOPE_PROFILER_EVENT: itimer
+      REGION: us-east
+    ports:
+      - "5103:5000"
+
+  # Load generator — hits /bike, /car, /scooter on each app
+  load:
+    image: curlimages/curl:latest
+    depends_on:
+      - go-app
+      - python-app
+      - nodejs-app
+      - java-app
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting 10s for apps to start..."
+        sleep 10
+        echo "Starting load generation..."
+        while true; do
+          for host in go-app:5000 python-app:5000 nodejs-app:5000 java-app:5000; do
+            for route in bike car scooter; do
+              curl -sf "http://$${host}/$${route}" > /dev/null 2>&1 || true
+            done
+          done
+          sleep 2
+        done
