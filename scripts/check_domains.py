@@ -1,139 +1,123 @@
 #!/usr/bin/env python3
 """
-Fast parallel domain availability check.
-Budget: ≤$15/yr → .com (~$10/yr) or .dev (~$10/yr). .ai at $75/yr is excluded.
+Fast domain availability check using parallel DNS queries.
+DNS is ~10x faster than RDAP for bulk checks.
+No NS records = domain likely unregistered.
 
 Usage:
-    python3 check_domains.py candidates.txt
-
-Output:
-    com_free.txt  — names available on .com
-    dev_free.txt  — names available on .dev (checked only if not .com-free)
+    python3 check_domains.py candidates.txt com_free.txt
 """
 
 import asyncio
-import aiohttp
 import sys
 
-CONCURRENCY = 120
-RDAP_COM = "https://rdap.verisign.com/com/v1/domain/{}.com"
-RDAP_DEV = "https://www.registry.google/rdap/domain/{}.dev"
-TIMEOUT = aiohttp.ClientTimeout(total=8)
+CONCURRENCY = 500  # massively parallel DNS
 
+VOW = set('aeiou')
+SONORANT = set('lmnr')
+STOP = set('bdgkpt')
+FRIC = set('fsvz')
 
-async def check(session, url, word, sem):
-    async with sem:
-        try:
-            async with session.get(url, timeout=TIMEOUT) as resp:
-                return resp.status == 404
-        except Exception:
-            return False  # network error = assume taken
+VALID_CC = {
+    'bl','br','cl','cr','dr','fl','fr','gl','gr','kl','kr',
+    'pl','pr','sc','sk','sl','sm','sn','sp','st','sw','tr','tw',
+    'nd','nt','nk','rd','rn','rk','rt','ld','lk','lt','mp','ng',
+    'ns','rs','ls','ts','ks',
+}
 
-
-async def main(candidates):
-    sem = asyncio.Semaphore(CONCURRENCY)
-    connector = aiohttp.TCPConnector(limit=CONCURRENCY, ttl_dns_cache=300)
-
-    com_free = []
-    dev_free = []
-    batch = 1000
-    total = len(candidates)
-
-    async with aiohttp.ClientSession(connector=connector) as session:
-        # Phase 1: check .com
-        print("Phase 1: checking .com...", file=sys.stderr)
-        for i in range(0, total, batch):
-            chunk = candidates[i:i+batch]
-            tasks = [check(session, RDAP_COM.format(w), w, sem) for w in chunk]
-            results = await asyncio.gather(*tasks)
-            for w, avail in zip(chunk, results):
-                if avail:
-                    com_free.append(w)
-            done = min(i + batch, total)
-            print(f"  {done}/{total} — {len(com_free)} .com free", file=sys.stderr)
-
-        # Phase 2: check .dev for names NOT available on .com
-        # (most dev builders will use .dev as primary anyway)
-        print("\nPhase 2: checking .dev for remaining...", file=sys.stderr)
-        not_com = [w for w in candidates if w not in set(com_free)]
-        # Sample every 3rd to keep this fast — still get good coverage
-        sample = not_com[::3]
-        for i in range(0, len(sample), batch):
-            chunk = sample[i:i+batch]
-            tasks = [check(session, RDAP_DEV.format(w), w, sem) for w in chunk]
-            results = await asyncio.gather(*tasks)
-            for w, avail in zip(chunk, results):
-                if avail:
-                    dev_free.append(w)
-            done = min(i + batch, len(sample))
-            print(f"  {done}/{len(sample)} — {len(dev_free)} .dev free", file=sys.stderr)
-
-    return com_free, dev_free
-
+def ok(w):
+    if len(w) < 5 or len(w) > 7: return False
+    if 'h' in w or 'x' in w: return False
+    vr = 0
+    for c in w:
+        vr = vr+1 if c in VOW else 0
+        if vr >= 3: return False
+    for i in range(len(w)-1):
+        if w[i] in VOW and w[i+1] in VOW:
+            if w[i] == w[i+1]: return False
+            if w[i]+w[i+1] in {'iu','ui','uo','oe','ao','oa'}: return False
+    for i in range(len(w)-1):
+        if w[i] not in VOW and w[i+1] not in VOW:
+            if w[i]+w[i+1] not in VALID_CC: return False
+    return True
 
 def score(w):
-    """Phonetic quality score — higher = more likely to feel like a good tech name."""
     s = 0
-    SONORANT = set('lmnr')
-    STOP = set('bdgkpt')
-    FRICATIVE = set('fsvz')
-    # Ends in vowel (soft, memorable — like figma, versa, navi)
-    if w[-1] in 'aeiou':
-        s += 4
-    # Ends in sonorant (clean — like render, linear)
-    elif w[-1] in SONORANT:
-        s += 2
-    # Starts with stop or fricative (punchy)
-    if w[0] in STOP | FRICATIVE:
-        s += 1
-    # 4-5 chars strongly preferred
-    if len(w) == 4:
-        s += 3
-    elif len(w) == 5:
-        s += 2
-    elif len(w) == 6:
-        s += 1
-    # Penalize back-to-back stops (hard to say)
-    for i in range(len(w)-1):
-        if w[i] in STOP and w[i+1] in STOP:
-            s -= 3
-    # Reward vowel-consonant balance (~40-60% vowels)
-    vc = sum(1 for c in w if c in 'aeiou')
-    ratio = vc / len(w)
-    if 0.35 <= ratio <= 0.60:
-        s += 1
+    if w[-1] in VOW:      s += 7
+    elif w[-1] in SONORANT: s += 5
+    elif w[-1] in 'sk':   s += 1
+    if len(w) == 5: s += 4
+    elif len(w) == 6: s += 3
+    elif len(w) == 7: s += 1
+    cc = sum(1 for i in range(len(w)-1) if w[i] not in VOW and w[i+1] not in VOW)
+    s -= cc * 2
+    vc = sum(1 for c in w if c in VOW)
+    if 0.35 <= vc/len(w) <= 0.65: s += 1
     return s
 
 
+async def check_dns(resolver, word, sem, tld='com'):
+    """Returns word only on NXDOMAIN (domain truly does not exist)."""
+    import aiodns
+    async with sem:
+        try:
+            await resolver.query(f"{word}.{tld}", 'A')
+            return None  # resolved = registered
+        except aiodns.error.DNSError as e:
+            # ARES_ENOTFOUND (4) = NXDOMAIN = domain doesn't exist
+            if e.args[0] == 4:
+                return word
+            return None  # timeout, refused, servfail = assume registered
+        except Exception:
+            return None  # anything else = assume registered (safe default)
+
+
+async def main(candidates, tld):
+    try:
+        import aiodns
+    except ImportError:
+        print("Installing aiodns...", file=sys.stderr)
+        import subprocess
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'aiodns', '-q'])
+        import aiodns
+
+    resolver = aiodns.DNSResolver(timeout=2, tries=1)
+    sem = asyncio.Semaphore(CONCURRENCY)
+
+    free = []
+    batch = 5000
+    total = len(candidates)
+    for i in range(0, total, batch):
+        chunk = candidates[i:i+batch]
+        tasks = [check_dns(resolver, w, sem, tld) for w in chunk]
+        results = await asyncio.gather(*tasks)
+        found = [r for r in results if r]
+        free.extend(found)
+        done = min(i+batch, total)
+        print(f"  {done}/{total} — {len(free)} .{tld} free", file=sys.stderr)
+
+    return free
+
+
 if __name__ == '__main__':
-    infile = sys.argv[1] if len(sys.argv) > 1 else 'candidates.txt'
+    infile  = sys.argv[1] if len(sys.argv) > 1 else 'scripts/candidates.txt'
+    outfile = sys.argv[2] if len(sys.argv) > 2 else 'scripts/com_free.txt'
+    tld     = sys.argv[3] if len(sys.argv) > 3 else 'com'
 
     with open(infile) as f:
-        candidates = [line.strip() for line in f if line.strip()]
+        all_candidates = [l.strip() for l in f if l.strip()]
 
-    print(f"Checking {len(candidates)} candidates...", file=sys.stderr)
-    com_free, dev_free = asyncio.run(main(candidates))
+    candidates = [w for w in all_candidates if ok(w)]
+    print(f"After filter: {len(candidates)}/{len(all_candidates)} candidates", file=sys.stderr)
 
-    # Score and sort
-    com_ranked = sorted(com_free, key=lambda w: (-score(w), len(w), w))
-    dev_ranked = sorted(dev_free, key=lambda w: (-score(w), len(w), w))
+    free = asyncio.run(main(candidates, tld))
+    free.sort(key=lambda w: (-score(w), len(w), w))
 
-    base = infile.rsplit('/', 1)[0] if '/' in infile else '.'
+    with open(outfile, 'w') as f:
+        for w in free:
+            f.write(w+'\n')
 
-    with open(f'{base}/com_free.txt', 'w') as f:
-        for w in com_ranked:
-            f.write(f"{w}\n")
-
-    with open(f'{base}/dev_free.txt', 'w') as f:
-        for w in dev_ranked:
-            f.write(f"{w}\n")
-
-    print(f"\n=== RESULTS ===", file=sys.stderr)
-    print(f".com available: {len(com_free)} names → scripts/com_free.txt", file=sys.stderr)
-    print(f".dev available: {len(dev_free)} names (sampled) → scripts/dev_free.txt", file=sys.stderr)
-    print(f"\nTop .com candidates:", file=sys.stderr)
-    for w in com_ranked[:30]:
-        print(f"  {w}", file=sys.stderr)
-    print(f"\nTop .dev candidates:", file=sys.stderr)
-    for w in dev_ranked[:30]:
+    print(f"\n.{tld} available: {len(free)} names → {outfile}", file=sys.stderr)
+    print(f"\nTop 60:", file=sys.stderr)
+    for w in free[:60]:
         print(f"  {w}", file=sys.stderr)
