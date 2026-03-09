@@ -9,4 +9,6 @@ test/e2e/profilegen/profilegen
 
 # Local alias to AGENTS.md
 CLAUDE.md
-collector/cmd/collector/
+# OCB-generated collector binaries
+collector/cmd/collector/observe-collector
+collector/cmd/collector/collector
