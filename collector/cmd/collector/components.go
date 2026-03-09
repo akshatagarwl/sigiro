@@ -3,23 +3,22 @@
 package main
 
 import (
-	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/connector"
-	"go.opentelemetry.io/collector/exporter"
-	"go.opentelemetry.io/collector/extension"
-	"go.opentelemetry.io/collector/otelcol"
-	"go.opentelemetry.io/collector/processor"
-	"go.opentelemetry.io/collector/receiver"
-	otelconftelemetry "go.opentelemetry.io/collector/service/telemetry/otelconftelemetry"
 	unified "github.com/akshatagarwl/observe/collector/exporter/unified"
-	debugexporter "go.opentelemetry.io/collector/exporter/debugexporter"
 	filestorage "github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage"
-	batchprocessor "go.opentelemetry.io/collector/processor/batchprocessor"
 	k8sattributesprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor"
 	transformprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
 	otelarrowreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/otelarrowreceiver"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/connector"
+	"go.opentelemetry.io/collector/exporter"
+	debugexporter "go.opentelemetry.io/collector/exporter/debugexporter"
+	"go.opentelemetry.io/collector/extension"
+	"go.opentelemetry.io/collector/otelcol"
+	"go.opentelemetry.io/collector/processor"
+	batchprocessor "go.opentelemetry.io/collector/processor/batchprocessor"
+	"go.opentelemetry.io/collector/receiver"
 	otlpreceiver "go.opentelemetry.io/collector/receiver/otlpreceiver"
-	collector "go.opentelemetry.io/ebpf-profiler/collector"
+	otelconftelemetry "go.opentelemetry.io/collector/service/telemetry/otelconftelemetry"
 )
 
 type aliasProvider interface{ DeprecatedAlias() component.Type }
@@ -52,19 +51,23 @@ func components() (otelcol.Factories, error) {
 		filestorage.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.147.0",
 	})
 
-	factories.Receivers, err = otelcol.MakeFactoryMap[receiver.Factory](
+	receivers := []receiver.Factory{
 		otelarrowreceiver.NewFactory(),
 		otlpreceiver.NewFactory(),
-		collector.NewFactory(),
-	)
+	}
+	receivers = append(receivers, platformReceivers()...)
+	factories.Receivers, err = otelcol.MakeFactoryMap[receiver.Factory](receivers...)
 	if err != nil {
 		return otelcol.Factories{}, err
 	}
-	factories.ReceiverModules = makeModulesMap(factories.Receivers, map[component.Type]string{
+	receiverModules := map[component.Type]string{
 		otelarrowreceiver.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/otelarrowreceiver v0.147.0",
-		otlpreceiver.NewFactory().Type(): "go.opentelemetry.io/collector/receiver/otlpreceiver v0.147.0",
-		collector.NewFactory().Type(): "go.opentelemetry.io/ebpf-profiler v0.0.202610",
-	})
+		otlpreceiver.NewFactory().Type():      "go.opentelemetry.io/collector/receiver/otlpreceiver v0.147.0",
+	}
+	for k, v := range platformReceiverModules() {
+		receiverModules[k] = v
+	}
+	factories.ReceiverModules = makeModulesMap(factories.Receivers, receiverModules)
 
 	factories.Exporters, err = otelcol.MakeFactoryMap[exporter.Factory](
 		unified.NewFactory(),
@@ -74,7 +77,7 @@ func components() (otelcol.Factories, error) {
 		return otelcol.Factories{}, err
 	}
 	factories.ExporterModules = makeModulesMap(factories.Exporters, map[component.Type]string{
-		unified.NewFactory().Type(): "github.com/akshatagarwl/observe v0.0.0",
+		unified.NewFactory().Type():       "github.com/akshatagarwl/observe v0.0.0",
 		debugexporter.NewFactory().Type(): "go.opentelemetry.io/collector/exporter/debugexporter v0.147.0",
 	})
 
@@ -87,18 +90,16 @@ func components() (otelcol.Factories, error) {
 		return otelcol.Factories{}, err
 	}
 	factories.ProcessorModules = makeModulesMap(factories.Processors, map[component.Type]string{
-		batchprocessor.NewFactory().Type(): "go.opentelemetry.io/collector/processor/batchprocessor v0.147.0",
+		batchprocessor.NewFactory().Type():         "go.opentelemetry.io/collector/processor/batchprocessor v0.147.0",
 		k8sattributesprocessor.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.147.0",
-		transformprocessor.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.147.0",
+		transformprocessor.NewFactory().Type():     "github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.147.0",
 	})
 
-	factories.Connectors, err = otelcol.MakeFactoryMap[connector.Factory](
-	)
+	factories.Connectors, err = otelcol.MakeFactoryMap[connector.Factory]()
 	if err != nil {
 		return otelcol.Factories{}, err
 	}
-	factories.ConnectorModules = makeModulesMap(factories.Connectors, map[component.Type]string{
-	})
+	factories.ConnectorModules = makeModulesMap(factories.Connectors, map[component.Type]string{})
 
 	return factories, nil
 }
