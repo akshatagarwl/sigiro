@@ -121,7 +121,10 @@ func (r *pyroscopeReceiver) handleIngest(resp http.ResponseWriter, req *http.Req
 		return
 	}
 
-	var profiles *pprofile.Profiles
+	// profilesBatch holds one or more Profiles to consume.
+	// JFR produces multiple profile types (cpu, alloc, lock) per request,
+	// each needing its own pprofile.Profiles to preserve the shared dictionary.
+	var profilesBatch []pprofile.Profiles
 
 	switch params.format {
 	case "", "pprof":
@@ -131,8 +134,9 @@ func (r *pyroscopeReceiver) handleIngest(resp http.ResponseWriter, req *http.Req
 			// Pyroscope Java SDK sends collapsed stacks without setting format param.
 			if params.format == "" {
 				if foldedProf, foldedErr := parseFoldedStacks(body.profile); foldedErr == nil {
-					var convertErr error
-					if profiles, convertErr = pproftranslator.ConvertPprofToProfiles(foldedProf); convertErr == nil {
+					if profiles, convertErr := pproftranslator.ConvertPprofToProfiles(foldedProf); convertErr == nil {
+						profilesBatch = append(profilesBatch, *profiles)
+
 						break
 					}
 				}
@@ -143,13 +147,13 @@ func (r *pyroscopeReceiver) handleIngest(resp http.ResponseWriter, req *http.Req
 			return
 		}
 
-		var err error
-
-		profiles, err = pproftranslator.ConvertPprofToProfiles(prof)
+		profiles, err := pproftranslator.ConvertPprofToProfiles(prof)
 		if err != nil {
 			http.Error(resp, fmt.Sprintf("failed to convert pprof to profiles: %s", err), http.StatusInternalServerError)
 			return
 		}
+
+		profilesBatch = append(profilesBatch, *profiles)
 
 	case "folded", "collapsed":
 		prof, err := parseFoldedStacks(body.profile)
@@ -158,52 +162,60 @@ func (r *pyroscopeReceiver) handleIngest(resp http.ResponseWriter, req *http.Req
 			return
 		}
 
-		profiles, err = pproftranslator.ConvertPprofToProfiles(prof)
+		profiles, err := pproftranslator.ConvertPprofToProfiles(prof)
 		if err != nil {
 			http.Error(resp, fmt.Sprintf("failed to convert folded stacks to profiles: %s", err), http.StatusInternalServerError)
 			return
 		}
 
+		profilesBatch = append(profilesBatch, *profiles)
+
 	case "jfr":
-		profiles, err = parseJFRToProfiles(body.profile, body.labels, params)
+		batch, err := parseJFRToProfiles(body.profile, body.labels, params)
 		if err != nil {
 			http.Error(resp, fmt.Sprintf("failed to parse JFR: %s", err), http.StatusBadRequest)
 			return
 		}
+
+		profilesBatch = batch
 
 	default:
 		http.Error(resp, fmt.Sprintf("unsupported format: %s (supported: pprof, folded, jfr)", params.format), http.StatusBadRequest)
 		return
 	}
 
-	// Set resource attributes from ingest params.
-	for i := range profiles.ResourceProfiles().Len() {
-		rp := profiles.ResourceProfiles().At(i)
-		attrs := rp.Resource().Attributes()
-		attrs.PutStr("service.name", params.name)
+	for idx := range profilesBatch {
+		profiles := &profilesBatch[idx]
 
-		for k, v := range params.labels {
-			attrs.PutStr(k, v)
-		}
-		// Set timestamps from query params if the profile doesn't have them.
-		for j := range rp.ScopeProfiles().Len() {
-			sp := rp.ScopeProfiles().At(j)
-			for k := range sp.Profiles().Len() {
-				p := sp.Profiles().At(k)
-				if p.Time() == 0 && params.start > 0 {
-					p.SetTime(pcommon.Timestamp(nsFromSec(params.start)))
-				}
+		// Set resource attributes from ingest params.
+		for i := range profiles.ResourceProfiles().Len() {
+			rp := profiles.ResourceProfiles().At(i)
+			attrs := rp.Resource().Attributes()
+			attrs.PutStr("service.name", params.name)
 
-				if p.DurationNano() == 0 && params.end > params.start {
-					p.SetDurationNano(nsFromSec(params.end) - nsFromSec(params.start))
+			for k, v := range params.labels {
+				attrs.PutStr(k, v)
+			}
+			// Set timestamps from query params if the profile doesn't have them.
+			for j := range rp.ScopeProfiles().Len() {
+				sp := rp.ScopeProfiles().At(j)
+				for k := range sp.Profiles().Len() {
+					p := sp.Profiles().At(k)
+					if p.Time() == 0 && params.start > 0 {
+						p.SetTime(pcommon.Timestamp(nsFromSec(params.start)))
+					}
+
+					if p.DurationNano() == 0 && params.end > params.start {
+						p.SetDurationNano(nsFromSec(params.end) - nsFromSec(params.start))
+					}
 				}
 			}
 		}
-	}
 
-	if err := r.next.ConsumeProfiles(ctx, *profiles); err != nil {
-		http.Error(resp, err.Error(), http.StatusInternalServerError)
-		return
+		if err := r.next.ConsumeProfiles(ctx, *profiles); err != nil {
+			http.Error(resp, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	r.logger.Debug("Ingested Pyroscope profile",
@@ -380,10 +392,11 @@ func nsFromSec(v uint64) uint64 {
 	}
 }
 
-// parseJFRToProfiles parses raw JFR binary into pprofile.Profiles.
-// JFR may produce multiple profile types (cpu, alloc, lock, etc.) per request.
-// All are merged into a single *pprofile.Profiles container.
-func parseJFRToProfiles(jfrBody, labelsBody []byte, params ingestParams) (*pprofile.Profiles, error) {
+// parseJFRToProfiles parses raw JFR binary into a slice of pprofile.Profiles.
+// JFR produces multiple profile types (cpu, alloc, lock, etc.) per request.
+// Each becomes a separate pprofile.Profiles to preserve its own dictionary
+// (string table, location table, etc.) which is shared at the Profiles level.
+func parseJFRToProfiles(jfrBody, labelsBody []byte, params ingestParams) ([]pprofile.Profiles, error) {
 	var labels jfrpprof.LabelsSnapshot
 	if len(labelsBody) > 0 {
 		if err := labels.UnmarshalVT(labelsBody); err != nil {
@@ -407,8 +420,8 @@ func parseJFRToProfiles(jfrBody, labelsBody []byte, params ingestParams) (*pprof
 	}
 
 	// Convert each profilev1.Profile → protobuf bytes → google/pprof → pprofile.
-	// Merge all into a single *pprofile.Profiles.
-	merged := pprofile.NewProfiles()
+	// Each JFR profile type gets its own pprofile.Profiles with its own dictionary.
+	result := make([]pprofile.Profiles, 0, len(jfrProfiles.Profiles))
 
 	for _, jp := range jfrProfiles.Profiles {
 		bs, err := jp.Profile.MarshalVT()
@@ -426,15 +439,10 @@ func parseJFRToProfiles(jfrBody, labelsBody []byte, params ingestParams) (*pprof
 			return nil, fmt.Errorf("failed to convert %s to pprofile: %w", jp.Metric, err)
 		}
 
-		// Append all ResourceProfiles from this converted profile into merged.
-		for i := range converted.ResourceProfiles().Len() {
-			src := converted.ResourceProfiles().At(i)
-			dest := merged.ResourceProfiles().AppendEmpty()
-			src.CopyTo(dest)
-		}
+		result = append(result, *converted)
 	}
 
-	return &merged, nil
+	return result, nil
 }
 
 // parseFoldedStacks parses Brendan Gregg's folded/collapsed stacks format:

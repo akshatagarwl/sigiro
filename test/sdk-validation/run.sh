@@ -26,7 +26,7 @@ echo "Waiting for collector to be ready..."
 sleep 5
 
 echo "=== Step 4: Start SDK apps + load generator ==="
-docker compose up -d go-app python-app nodejs-app load
+docker compose up -d go-app python-app nodejs-app java-app load
 
 echo "=== Step 5: Wait for profiles to accumulate ==="
 # Node.js SDK has ~60s default push interval, need minimum 90s total wait.

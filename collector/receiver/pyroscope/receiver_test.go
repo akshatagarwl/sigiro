@@ -799,24 +799,30 @@ func TestIngestJFR(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
 	}
 
+	// JFR produces multiple profile types (cpu, alloc, lock), each as a
+	// separate ConsumeProfiles call to preserve dictionary integrity.
 	if sink.ProfileCount() == 0 {
 		t.Fatal("expected at least one profile from JFR, got none")
 	}
 
-	profiles := sink.AllProfiles()[0]
-	rp := profiles.ResourceProfiles().At(0)
+	t.Logf("Received %d ConsumeProfiles call(s) from JFR", sink.ProfileCount())
 
-	serviceName, ok := rp.Resource().Attributes().Get("service.name")
-	if !ok || serviceName.Str() != "rideshare.java" {
-		t.Errorf("expected service.name=rideshare.java, got %v", serviceName)
+	// Check all consumed profiles have correct resource attributes.
+	for _, profiles := range sink.AllProfiles() {
+		for i := range profiles.ResourceProfiles().Len() {
+			rp := profiles.ResourceProfiles().At(i)
+
+			serviceName, ok := rp.Resource().Attributes().Get("service.name")
+			if !ok || serviceName.Str() != "rideshare.java" {
+				t.Errorf("expected service.name=rideshare.java, got %v", serviceName)
+			}
+
+			env, ok := rp.Resource().Attributes().Get("env")
+			if !ok || env.Str() != "staging" {
+				t.Errorf("expected env=staging, got %v", env)
+			}
+		}
 	}
-
-	env, ok := rp.Resource().Attributes().Get("env")
-	if !ok || env.Str() != "staging" {
-		t.Errorf("expected env=staging, got %v", env)
-	}
-
-	t.Logf("Received %d ResourceProfile(s) from JFR", profiles.ResourceProfiles().Len())
 }
 
 func TestIngestJFRRawBody(t *testing.T) {
