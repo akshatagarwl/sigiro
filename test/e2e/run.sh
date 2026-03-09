@@ -176,6 +176,24 @@ run_check "Investigation: profiles" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND service='checkout';" \
   "true"
 
+echo ""
+echo "=== Check 9: Self-observability (collector's own telemetry) ==="
+run_check "Collector metrics exist" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE service='observe-collector' AND signal='metric';" \
+  "true"
+run_check "Collector logs exist" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE service='observe-collector' AND signal='log';" \
+  "true"
+run_check "Collector traces exist" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE service='observe-collector' AND signal='span';" \
+  "true"
+run_check "Collector self-profiles exist" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE service='observe-collector' AND signal='profile';" \
+  "true"
+run_check "Collector otelcol_* metrics" \
+  "SELECT count(DISTINCT name) >= 5 FROM $PARQUET WHERE service='observe-collector' AND signal='metric' AND name LIKE 'otelcol_%';" \
+  "true"
+
 # Cross-service traces: SKIP — telemetrygen generates independent trace_ids per
 # service, so no shared traces exist. The exporter code path is identical either
 # way. Cross-service linking is validated in the integration_test.go unit tests.

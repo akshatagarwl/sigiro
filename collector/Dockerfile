@@ -15,9 +15,14 @@ COPY . .
 
 # Generate collector code and compile
 # OCB output_path is ./collector/cmd/collector — parent must exist.
+# OCB overwrites main.go, so we save our custom version (with Pyroscope SDK init)
+# and restore it after generation.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    mkdir -p collector/cmd/collector && builder --config=otelcol-builder.yaml
+    cp collector/cmd/collector/main.go /tmp/main.go.custom && \
+    mkdir -p collector/cmd/collector && builder --config=otelcol-builder.yaml && \
+    cp /tmp/main.go.custom collector/cmd/collector/main.go && \
+    cd collector/cmd/collector && go get github.com/grafana/pyroscope-go
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
