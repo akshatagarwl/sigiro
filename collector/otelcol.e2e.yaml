@@ -52,11 +52,24 @@ service:
   telemetry:
     logs:
       level: info
+      processors:
+        - batch:
+            exporter:
+              otlp:
+                protocol: grpc
+                endpoint: http://localhost:4319
     metrics:
       level: detailed
       readers:
         - periodic:
             interval: 10000
+            exporter:
+              otlp:
+                protocol: grpc
+                endpoint: http://localhost:4319
+    traces:
+      processors:
+        - batch:
             exporter:
               otlp:
                 protocol: grpc

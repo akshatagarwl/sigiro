@@ -667,6 +667,102 @@ Anomalous if: any value > 0 (data was dropped because the queue was full)
 | `otelcol_process_memory_rss_bytes` | RSS memory |
 | `otelcol_process_cpu_seconds_total` | CPU usage |
 
+### Collector logs (errors, warnings, flush info)
+
+```sql
+SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t,
+       status, message
+FROM obs
+WHERE service='observe-collector' AND signal='log'
+      AND status IN ('ERROR', 'WARN')
+      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+ORDER BY timestamp DESC
+LIMIT 50;
+```
+Anomalous if: any ERROR rows present
+
+Log volume by severity:
+```sql
+SELECT status, count(*) AS n
+FROM obs
+WHERE service='observe-collector' AND signal='log'
+      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+GROUP BY status ORDER BY n DESC;
+```
+
+Parquet flush details (from slog.Info output):
+```sql
+SELECT message FROM obs
+WHERE service='observe-collector' AND signal='log'
+      AND message LIKE '%flushed parquet%'
+      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+LIMIT 10;
+```
+
+### Collector traces (internal operation latency)
+
+```sql
+SELECT name, count(*) AS n,
+       approx_quantile(value, 0.95) AS p95_ms,
+       avg(value) AS avg_ms
+FROM obs
+WHERE service='observe-collector' AND signal='span'
+      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+GROUP BY name ORDER BY p95_ms DESC;
+```
+
+Slow operations (> 5s):
+```sql
+SELECT name, value AS duration_ms, status,
+       strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t
+FROM obs
+WHERE service='observe-collector' AND signal='span'
+      AND value > 5000
+      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+ORDER BY value DESC LIMIT 20;
+```
+
+### Self-profiling (CPU, goroutines, memory allocations)
+
+```sql
+SELECT name, count(*) AS samples
+FROM obs
+WHERE service='observe-collector' AND signal='profile'
+      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+GROUP BY name;
+```
+
+Collector hot functions (CPU):
+```sql
+SELECT stacktrace[len(stacktrace)] AS leaf_function,
+       sum(value) AS samples
+FROM obs
+WHERE service='observe-collector' AND signal='profile'
+      AND name = 'profile.cpu'
+      AND stacktrace IS NOT NULL AND len(stacktrace) > 0
+      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+GROUP BY leaf_function ORDER BY samples DESC LIMIT 10;
+```
+
+Memory allocation hotspots:
+```sql
+SELECT stacktrace[len(stacktrace)] AS leaf_function,
+       sum(value) AS samples
+FROM obs
+WHERE service='observe-collector' AND signal='profile'
+      AND name = 'profile.alloc_space'
+      AND stacktrace IS NOT NULL AND len(stacktrace) > 0
+      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+GROUP BY leaf_function ORDER BY samples DESC LIMIT 10;
+```
+
+### eBPF dedup (known issue)
+
+When an eBPF profiler runs on the same host, it will also profile the collector
+process, creating duplicate profiles. Future mitigation: filter by service name
+or PID in the eBPF profiler config. For now, self-profiling via SDK provides
+richer data (goroutines, allocations) that eBPF cannot.
+
 ## Gotchas
 
 1. timestamp is nanoseconds. Not seconds. Not milliseconds.
