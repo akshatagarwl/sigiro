@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -136,19 +138,31 @@ func TestParseIngestParams(t *testing.T) {
 			name:  "simple name",
 			query: "name=my-app&from=1700000000&until=1700000010",
 			want: ingestParams{
-				name:   "my-app",
-				labels: map[string]string{},
-				start:  1700000000,
-				end:    1700000010,
+				name:       "my-app",
+				labels:     map[string]string{},
+				start:      1700000000,
+				end:        1700000010,
+				sampleRate: 100,
 			},
 		},
 		{
 			name:  "name with labels",
 			query: "name=my-app{env=prod,region=us-west-1}&from=100",
 			want: ingestParams{
-				name:   "my-app",
-				labels: map[string]string{"env": "prod", "region": "us-west-1"},
-				start:  100,
+				name:       "my-app",
+				labels:     map[string]string{"env": "prod", "region": "us-west-1"},
+				start:      100,
+				sampleRate: 100,
+			},
+		},
+		{
+			name:  "custom sampleRate",
+			query: "name=java-app&format=jfr&sampleRate=200",
+			want: ingestParams{
+				name:       "java-app",
+				labels:     map[string]string{},
+				format:     "jfr",
+				sampleRate: 200,
 			},
 		},
 		{
@@ -188,6 +202,14 @@ func TestParseIngestParams(t *testing.T) {
 
 			if got.end != tt.want.end {
 				t.Errorf("end: got %d, want %d", got.end, tt.want.end)
+			}
+
+			if got.sampleRate != tt.want.sampleRate {
+				t.Errorf("sampleRate: got %d, want %d", got.sampleRate, tt.want.sampleRate)
+			}
+
+			if got.format != tt.want.format {
+				t.Errorf("format: got %q, want %q", got.format, tt.want.format)
 			}
 
 			for k, v := range tt.want.labels {
@@ -698,6 +720,199 @@ func TestParseFoldedStacks(t *testing.T) {
 				t.Errorf("sample count: got %d, want %d", len(prof.Sample), tt.wantCount)
 			}
 		})
+	}
+}
+
+func TestIngestJFR(t *testing.T) {
+	sink := new(consumertest.ProfilesSink)
+	cfg := &Config{
+		HTTP: confighttp.ServerConfig{
+			NetAddr: confignet.AddrConfig{
+				Endpoint:  "localhost:19539",
+				Transport: confignet.TransportTypeTCP,
+			},
+		},
+		Timeout: 10 * time.Second,
+	}
+
+	set := receivertest.NewNopSettings(component.MustNewType("pyroscope"))
+
+	recv, err := newPyroscopeReceiver(cfg, sink, set)
+	if err != nil {
+		t.Fatalf("failed to create receiver: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := recv.Start(ctx, componenttest.NewNopHost()); err != nil {
+		t.Fatalf("failed to start receiver: %v", err)
+	}
+
+	defer func() { _ = recv.Shutdown(ctx) }()
+
+	// Read vendored JFR fixture (gzip-compressed).
+	jfrGz, err := os.ReadFile("testdata/async-profiler.jfr.gz")
+	if err != nil {
+		t.Fatalf("failed to read JFR fixture: %v", err)
+	}
+
+	// Decompress for sending as raw body (readBody will handle gzip).
+	gz, err := gzip.NewReader(bytes.NewReader(jfrGz))
+	if err != nil {
+		t.Fatalf("failed to create gzip reader: %v", err)
+	}
+
+	jfrRaw, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatalf("failed to decompress JFR: %v", err)
+	}
+
+	gz.Close()
+
+	// Send as multipart form (how Java SDK sends it).
+	var body bytes.Buffer
+
+	writer := multipart.NewWriter(&body)
+
+	part, err := writer.CreateFormFile("jfr", "profile.jfr")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+
+	if _, err := part.Write(jfrRaw); err != nil {
+		t.Fatalf("failed to write JFR to form: %v", err)
+	}
+
+	writer.Close()
+
+	resp, err := http.Post(
+		"http://localhost:19539/ingest?name=rideshare.java{env=staging}&format=jfr&sampleRate=100&from=1700000000&until=1700000010",
+		writer.FormDataContentType(),
+		&body,
+	)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+	}
+
+	if sink.ProfileCount() == 0 {
+		t.Fatal("expected at least one profile from JFR, got none")
+	}
+
+	profiles := sink.AllProfiles()[0]
+	rp := profiles.ResourceProfiles().At(0)
+
+	serviceName, ok := rp.Resource().Attributes().Get("service.name")
+	if !ok || serviceName.Str() != "rideshare.java" {
+		t.Errorf("expected service.name=rideshare.java, got %v", serviceName)
+	}
+
+	env, ok := rp.Resource().Attributes().Get("env")
+	if !ok || env.Str() != "staging" {
+		t.Errorf("expected env=staging, got %v", env)
+	}
+
+	t.Logf("Received %d ResourceProfile(s) from JFR", profiles.ResourceProfiles().Len())
+}
+
+func TestIngestJFRRawBody(t *testing.T) {
+	sink := new(consumertest.ProfilesSink)
+	cfg := &Config{
+		HTTP: confighttp.ServerConfig{
+			NetAddr: confignet.AddrConfig{
+				Endpoint:  "localhost:19540",
+				Transport: confignet.TransportTypeTCP,
+			},
+		},
+		Timeout: 10 * time.Second,
+	}
+
+	set := receivertest.NewNopSettings(component.MustNewType("pyroscope"))
+
+	recv, err := newPyroscopeReceiver(cfg, sink, set)
+	if err != nil {
+		t.Fatalf("failed to create receiver: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := recv.Start(ctx, componenttest.NewNopHost()); err != nil {
+		t.Fatalf("failed to start receiver: %v", err)
+	}
+
+	defer func() { _ = recv.Shutdown(ctx) }()
+
+	// Send gzip-compressed JFR as raw body (not multipart).
+	jfrGz, err := os.ReadFile("testdata/async-profiler.jfr.gz")
+	if err != nil {
+		t.Fatalf("failed to read JFR fixture: %v", err)
+	}
+
+	resp, err := http.Post(
+		"http://localhost:19540/ingest?name=java-raw&format=jfr&sampleRate=100&from=1700000000&until=1700000010",
+		"application/octet-stream",
+		bytes.NewReader(jfrGz),
+	)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+	}
+
+	if sink.ProfileCount() == 0 {
+		t.Fatal("expected at least one profile from raw JFR body")
+	}
+}
+
+func TestIngestJFRInvalidData(t *testing.T) {
+	sink := new(consumertest.ProfilesSink)
+	cfg := &Config{
+		HTTP: confighttp.ServerConfig{
+			NetAddr: confignet.AddrConfig{
+				Endpoint:  "localhost:19541",
+				Transport: confignet.TransportTypeTCP,
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	set := receivertest.NewNopSettings(component.MustNewType("pyroscope"))
+
+	recv, err := newPyroscopeReceiver(cfg, sink, set)
+	if err != nil {
+		t.Fatalf("failed to create receiver: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := recv.Start(ctx, componenttest.NewNopHost()); err != nil {
+		t.Fatalf("failed to start receiver: %v", err)
+	}
+
+	defer func() { _ = recv.Shutdown(ctx) }()
+
+	resp, err := http.Post(
+		"http://localhost:19541/ingest?name=bad-jfr&format=jfr",
+		"application/octet-stream",
+		bytes.NewReader([]byte("this is not JFR data")),
+	)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid JFR, got %d", resp.StatusCode)
+	}
+
+	if sink.ProfileCount() != 0 {
+		t.Fatal("expected no profiles for invalid JFR data")
 	}
 }
 

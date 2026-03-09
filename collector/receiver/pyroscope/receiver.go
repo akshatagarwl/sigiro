@@ -13,8 +13,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	pprofprofile "github.com/google/pprof/profile"
+	jfrpprof "github.com/grafana/jfr-parser/pprof"
 	pproftranslator "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/pprof"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer/xconsumer"
@@ -36,11 +38,18 @@ type pyroscopeReceiver struct {
 }
 
 type ingestParams struct {
-	name   string // app name (before the {labels} part)
-	labels map[string]string
-	start  uint64
-	end    uint64
-	format string // "pprof", "jfr", "folded"
+	name       string // app name (before the {labels} part)
+	labels     map[string]string
+	start      uint64
+	end        uint64
+	format     string // "pprof", "jfr", "folded"
+	sampleRate int64  // for JFR ParseInput, default 100 (async-profiler default)
+}
+
+// requestBody holds the parsed body from an ingest request.
+type requestBody struct {
+	profile []byte
+	labels  []byte // non-nil only for multipart with "labels" field (JFR labels protobuf)
 }
 
 func newPyroscopeReceiver(cfg *Config, consumer xconsumer.Profiles, set receiver.Settings) (*pyroscopeReceiver, error) {
@@ -116,12 +125,12 @@ func (r *pyroscopeReceiver) handleIngest(resp http.ResponseWriter, req *http.Req
 
 	switch params.format {
 	case "", "pprof":
-		prof, pprofErr := pprofprofile.Parse(bytes.NewReader(body))
+		prof, pprofErr := pprofprofile.Parse(bytes.NewReader(body.profile))
 		if pprofErr != nil {
 			// When format is unspecified, try folded stacks as fallback.
 			// Pyroscope Java SDK sends collapsed stacks without setting format param.
 			if params.format == "" {
-				if foldedProf, foldedErr := parseFoldedStacks(body); foldedErr == nil {
+				if foldedProf, foldedErr := parseFoldedStacks(body.profile); foldedErr == nil {
 					var convertErr error
 					if profiles, convertErr = pproftranslator.ConvertPprofToProfiles(foldedProf); convertErr == nil {
 						break
@@ -143,7 +152,7 @@ func (r *pyroscopeReceiver) handleIngest(resp http.ResponseWriter, req *http.Req
 		}
 
 	case "folded", "collapsed":
-		prof, err := parseFoldedStacks(body)
+		prof, err := parseFoldedStacks(body.profile)
 		if err != nil {
 			http.Error(resp, fmt.Sprintf("failed to parse folded stacks: %s", err), http.StatusBadRequest)
 			return
@@ -155,8 +164,15 @@ func (r *pyroscopeReceiver) handleIngest(resp http.ResponseWriter, req *http.Req
 			return
 		}
 
+	case "jfr":
+		profiles, err = parseJFRToProfiles(body.profile, body.labels, params)
+		if err != nil {
+			http.Error(resp, fmt.Sprintf("failed to parse JFR: %s", err), http.StatusBadRequest)
+			return
+		}
+
 	default:
-		http.Error(resp, fmt.Sprintf("unsupported format: %s (supported: pprof, folded)", params.format), http.StatusBadRequest)
+		http.Error(resp, fmt.Sprintf("unsupported format: %s (supported: pprof, folded, jfr)", params.format), http.StatusBadRequest)
 		return
 	}
 
@@ -243,20 +259,34 @@ func parseIngestParams(qs url.Values) (ingestParams, error) {
 		p.end = end
 	}
 
+	p.sampleRate = 100 // async-profiler default
+
+	if v := qs.Get("sampleRate"); v != "" {
+		sr, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return ingestParams{}, fmt.Errorf("failed to parse 'sampleRate': %w", err)
+		}
+
+		p.sampleRate = sr
+	}
+
 	return p, nil
 }
 
 // readBody handles gzip-compressed and multipart/form-data bodies.
-func readBody(req *http.Request) ([]byte, error) {
+// For multipart requests, it also extracts the "labels" field (JFR labels protobuf).
+func readBody(req *http.Request) (requestBody, error) {
 	ct := req.Header.Get("Content-Type")
 
-	// Multipart form: Pyroscope SDKs send pprof as a form file.
+	// Multipart form: Pyroscope SDKs send pprof/jfr as a form file.
 	if strings.HasPrefix(ct, "multipart/form-data") {
 		if err := req.ParseMultipartForm(32 << 20); err != nil {
-			return nil, fmt.Errorf("failed to parse multipart form: %w", err)
+			return requestBody{}, fmt.Errorf("failed to parse multipart form: %w", err)
 		}
 
 		defer func() { _ = req.MultipartForm.RemoveAll() }()
+
+		var result requestBody
 
 		for _, key := range []string{"profile", "pprof", "jfr"} {
 			files, ok := req.MultipartForm.File[key]
@@ -266,18 +296,50 @@ func readBody(req *http.Request) ([]byte, error) {
 
 			f, err := files[0].Open()
 			if err != nil {
-				return nil, fmt.Errorf("failed to open form file: %w", err)
+				return requestBody{}, fmt.Errorf("failed to open form file: %w", err)
 			}
 			defer f.Close()
 
-			return decompressReader(f)
+			data, err := decompressReader(f)
+			if err != nil {
+				return requestBody{}, err
+			}
+
+			result.profile = data
+
+			break
 		}
 
-		return nil, fmt.Errorf("no profile/pprof/jfr field in multipart form")
+		if result.profile == nil {
+			return requestBody{}, fmt.Errorf("no profile/pprof/jfr field in multipart form")
+		}
+
+		// Extract JFR labels if present.
+		if labelsFiles, ok := req.MultipartForm.File["labels"]; ok && len(labelsFiles) > 0 {
+			lf, err := labelsFiles[0].Open()
+			if err != nil {
+				return requestBody{}, fmt.Errorf("failed to open labels file: %w", err)
+			}
+			defer lf.Close()
+
+			labelsData, err := decompressReader(lf)
+			if err != nil {
+				return requestBody{}, fmt.Errorf("failed to read labels: %w", err)
+			}
+
+			result.labels = labelsData
+		}
+
+		return result, nil
 	}
 
 	// Regular body (possibly gzip-compressed).
-	return decompressReader(req.Body)
+	data, err := decompressReader(req.Body)
+	if err != nil {
+		return requestBody{}, err
+	}
+
+	return requestBody{profile: data}, nil
 }
 
 func decompressReader(r io.Reader) ([]byte, error) {
@@ -316,6 +378,63 @@ func nsFromSec(v uint64) uint64 {
 	default: // already nanoseconds
 		return v
 	}
+}
+
+// parseJFRToProfiles parses raw JFR binary into pprofile.Profiles.
+// JFR may produce multiple profile types (cpu, alloc, lock, etc.) per request.
+// All are merged into a single *pprofile.Profiles container.
+func parseJFRToProfiles(jfrBody, labelsBody []byte, params ingestParams) (*pprofile.Profiles, error) {
+	var labels jfrpprof.LabelsSnapshot
+	if len(labelsBody) > 0 {
+		if err := labels.UnmarshalVT(labelsBody); err != nil {
+			return nil, fmt.Errorf("failed to parse JFR labels: %w", err)
+		}
+	}
+
+	pi := &jfrpprof.ParseInput{
+		StartTime:  time.Unix(int64(params.start), 0),
+		EndTime:    time.Unix(int64(params.end), 0),
+		SampleRate: params.sampleRate,
+	}
+
+	jfrProfiles, err := jfrpprof.ParseJFR(jfrBody, pi, &labels)
+	if err != nil {
+		return nil, fmt.Errorf("JFR parse failed: %w", err)
+	}
+
+	if len(jfrProfiles.Profiles) == 0 {
+		return nil, fmt.Errorf("JFR produced no profiles")
+	}
+
+	// Convert each profilev1.Profile → protobuf bytes → google/pprof → pprofile.
+	// Merge all into a single *pprofile.Profiles.
+	merged := pprofile.NewProfiles()
+
+	for _, jp := range jfrProfiles.Profiles {
+		bs, err := jp.Profile.MarshalVT()
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal profilev1 for %s: %w", jp.Metric, err)
+		}
+
+		prof, err := pprofprofile.ParseData(bs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse pprof bytes for %s: %w", jp.Metric, err)
+		}
+
+		converted, err := pproftranslator.ConvertPprofToProfiles(prof)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert %s to pprofile: %w", jp.Metric, err)
+		}
+
+		// Append all ResourceProfiles from this converted profile into merged.
+		for i := range converted.ResourceProfiles().Len() {
+			src := converted.ResourceProfiles().At(i)
+			dest := merged.ResourceProfiles().AppendEmpty()
+			src.CopyTo(dest)
+		}
+	}
+
+	return &merged, nil
 }
 
 // parseFoldedStacks parses Brendan Gregg's folded/collapsed stacks format:
