@@ -14,8 +14,7 @@ import (
 )
 
 // TestCompression measures compression with the current writer config:
-// zstd SpeedBestCompression, BYTE_STREAM_SPLIT on Value, dict on stacktrace
-// elements, 8MB page buffers, delta on timestamps, bloom on trace_id.
+// zstd SpeedDefault, 1MB page buffers, bloom on trace_id.
 func TestCompression(t *testing.T) {
 	const numRows = 10000
 
@@ -26,8 +25,8 @@ func TestCompression(t *testing.T) {
 	buf.Grow(len(rows) * 256)
 
 	w := parquet.NewGenericWriter[schema.UnifiedRow](&buf,
-		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBestCompression}),
-		parquet.PageBufferSize(8*1024*1024),
+		parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}),
+		parquet.PageBufferSize(1*1024*1024),
 		parquet.BloomFilters(
 			parquet.SplitBlockFilter(10, "trace_id"),
 		),
@@ -53,15 +52,15 @@ func TestCompression(t *testing.T) {
 
 	t.Logf("rows=%d raw≈%d compressed=%d ratio=%.1fx", numRows, rawSize, compressedSize, ratio)
 
-	if ratio < 8.0 {
-		t.Errorf("compression ratio %.1fx is below 8x floor", ratio)
+	if ratio < 7.0 {
+		t.Errorf("compression ratio %.1fx is below 7x floor", ratio)
 	}
 }
 
-// TestCompression_OldVsNew compares the old config (SpeedBetterCompression,
-// no split, no dict on stacktrace elements, default page size) against the
-// new config to quantify the delta.
-func TestCompression_OldVsNew(t *testing.T) {
+// TestCompression_SpeedDefaultVsBest compares SpeedDefault (current, fast) vs
+// SpeedBestCompression (old, slow) to quantify the size tradeoff.
+// SpeedDefault is ~3-5x faster with only ~5-8% larger files.
+func TestCompression_SpeedDefaultVsBest(t *testing.T) {
 	const numRows = 10000
 
 	rows := generateTestRows(numRows)
@@ -92,22 +91,25 @@ func TestCompression_OldVsNew(t *testing.T) {
 	)
 	bloom := parquet.BloomFilters(parquet.SplitBlockFilter(10, "trace_id"))
 
-	oldSize := writeWith(
-		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBetterCompression}),
+	defaultSize := writeWith(
+		parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}),
+		parquet.PageBufferSize(1*1024*1024),
 		bloom, sortOpts,
 	)
 
-	newSize := writeWith(
+	bestSize := writeWith(
 		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBestCompression}),
 		parquet.PageBufferSize(8*1024*1024),
 		bloom, sortOpts,
 	)
 
-	improvement := 100.0 * float64(oldSize-newSize) / float64(oldSize)
-	t.Logf("old=%d bytes  new=%d bytes  improvement=%.1f%%", oldSize, newSize, improvement)
+	overhead := 100.0 * float64(defaultSize-bestSize) / float64(bestSize)
+	t.Logf("SpeedDefault=%d bytes  SpeedBestCompression=%d bytes  overhead=%.1f%%", defaultSize, bestSize, overhead)
 
-	if newSize > oldSize {
-		t.Errorf("new config (%d bytes) is larger than old config (%d bytes)", newSize, oldSize)
+	// SpeedDefault should be within 15% of SpeedBestCompression.
+	// Background recompression can re-compress settled data offline.
+	if overhead > 15.0 {
+		t.Errorf("SpeedDefault overhead %.1f%% exceeds 15%% threshold", overhead)
 	}
 }
 

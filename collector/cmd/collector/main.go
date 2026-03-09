@@ -59,10 +59,7 @@ func main() {
 		ProfileTypes: []pyroscope.ProfileType{
 			pyroscope.ProfileCPU,
 			pyroscope.ProfileGoroutines,
-			pyroscope.ProfileAllocObjects,
 			pyroscope.ProfileAllocSpace,
-			pyroscope.ProfileInuseObjects,
-			pyroscope.ProfileInuseSpace,
 		},
 	})
 	if err != nil {

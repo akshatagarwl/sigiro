@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/akshatagarwl/observe/pkg/schema"
@@ -28,6 +29,7 @@ type ParquetWriter struct {
 	bucket   string
 	s3Client *s3.Client
 	nodeID   string
+	bufPool  sync.Pool // pool of *bytes.Buffer, reused across flushes
 }
 
 // NewParquetWriter creates a new ParquetWriter.
@@ -111,12 +113,17 @@ func (w *ParquetWriter) writePartition(ctx context.Context, hour int64, hourRows
 	// architecture decouples flushing from uploading — collector writes
 	// to local disk (no OOM on S3 failure), DuckDB merges + re-sorts +
 	// uploads in the background. See docs/architecture/tradeoffs.md §7.
-	var buf bytes.Buffer
+	buf, _ := w.bufPool.Get().(*bytes.Buffer)
+	if buf == nil {
+		buf = new(bytes.Buffer)
+	}
+	buf.Reset()
 	buf.Grow(len(hourRows) * 256)
+	defer w.bufPool.Put(buf)
 
-	writer := parquet.NewGenericWriter[schema.UnifiedRow](&buf,
-		parquet.Compression(&zstd.Codec{Level: zstd.SpeedBestCompression}),
-		parquet.PageBufferSize(8*1024*1024),
+	writer := parquet.NewGenericWriter[schema.UnifiedRow](buf,
+		parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}),
+		parquet.PageBufferSize(1*1024*1024),
 		parquet.BloomFilters(
 			parquet.SplitBlockFilter(10, "trace_id"),
 		),
