@@ -82,9 +82,18 @@ services:
     ports:
       - "5102:5000"
 
-  # Java rideshare excluded: Java SDK v2.1.2 sends raw JFR (format=jfr),
-  # not collapsed stacks. Raw JFR parsing is not implemented.
-  # Re-enable when JFR support is added to the pyroscope receiver.
+  # Pyroscope Java rideshare — sends cpu profiles via JFR format.
+  # No HTTP server — pushes profiles autonomously to collector.
+  java-app:
+    build:
+      context: ./pyroscope-examples/java/rideshare
+      dockerfile: Dockerfile
+    depends_on:
+      collector: { condition: service_started }
+    environment:
+      PYROSCOPE_SERVER_ADDRESS: http://collector:4040
+      PYROSCOPE_APPLICATION_NAME: rideshare.java
+      REGION: us-east
 
   # Load generator — hits /bike, /car, /scooter on each app
   load:

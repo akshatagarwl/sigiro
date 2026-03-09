@@ -57,6 +57,9 @@ run_check "Python profiles exist" \
 run_check "Node.js profiles exist" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND service='rideshare.nodejs';" \
   "true"
+run_check "Java profiles exist" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND service='rideshare.java';" \
+  "true"
 
 echo ""
 echo "--- Check 2: Stacktraces are non-empty ---"
@@ -69,6 +72,9 @@ run_check "Python stacktraces non-empty" \
 run_check "Node.js stacktraces non-empty" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND service='rideshare.nodejs' AND stacktrace IS NOT NULL AND len(stacktrace) > 0;" \
   "true"
+run_check "Java stacktraces non-empty" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND service='rideshare.java' AND stacktrace IS NOT NULL AND len(stacktrace) > 0;" \
+  "true"
 
 echo ""
 echo "--- Check 3: Timestamps within last 10 minutes ---"
@@ -80,6 +86,9 @@ run_check "Python timestamps recent" \
   "true"
 run_check "Node.js timestamps recent" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND service='rideshare.nodejs' AND timestamp > (extract(epoch from now()) - 600) * 1e9;" \
+  "true"
+run_check "Java timestamps recent" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND service='rideshare.java' AND timestamp > (extract(epoch from now()) - 600) * 1e9;" \
   "true"
 
 echo ""
@@ -99,6 +108,9 @@ run_check "Python profile count >= 5" \
 run_check "Node.js profile count >= 1" \
   "SELECT count(*) >= 1 FROM $PARQUET WHERE signal='profile' AND service='rideshare.nodejs';" \
   "true"
+run_check "Java profile count >= 5" \
+  "SELECT count(*) >= 5 FROM $PARQUET WHERE signal='profile' AND service='rideshare.java';" \
+  "true"
 
 echo ""
 echo "--- Check 6: Sample stacktrace contents ---"
@@ -110,11 +122,6 @@ GROUP BY service, name, stacktrace
 ORDER BY service
 LIMIT 12;
 " 2>&1 || true
-
-# Java SDK excluded: sends raw JFR (format=jfr), not collapsed stacks.
-# Raw JFR parsing not implemented. Re-enable when JFR support is added.
-echo ""
-echo "  SKIP: Java SDK (sends raw JFR, not supported yet)"
 
 echo ""
 echo "==============================="
