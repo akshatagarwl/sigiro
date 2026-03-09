@@ -582,6 +582,91 @@ ORDER BY timestamp;
 A healthy trace should show: no ERROR status, reasonable durations,
 and all expected services participating in the call chain.
 
+## Pipeline Health (Self-Observability)
+
+The collector feeds its own internal metrics back into the unified table.
+They appear as service='observe-collector', signal='metric'.
+Use these queries to check if the pipeline itself is healthy.
+
+### Discover available pipeline metrics
+
+```sql
+SELECT DISTINCT name FROM obs
+WHERE service='observe-collector' AND signal='metric'
+ORDER BY name;
+```
+
+### Exporter failures (are S3 writes failing?)
+
+```sql
+SELECT name, max(value) AS total
+FROM obs WHERE service='observe-collector' AND signal='metric'
+  AND name LIKE 'otelcol_exporter_send_failed%'
+  AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
+GROUP BY name;
+```
+Anomalous if: any value > 0
+
+### Queue depth (is the queue backing up?)
+
+```sql
+SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
+       avg(value) AS avg_depth, max(value) AS max_depth
+FROM obs WHERE service='observe-collector' AND signal='metric'
+  AND name = 'otelcol_exporter_queue_size'
+  AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+GROUP BY bucket ORDER BY bucket;
+```
+Anomalous if: steadily increasing or near queue capacity
+
+### Ingest rate (throughput per signal)
+
+```sql
+SELECT name, max(value) AS total
+FROM obs WHERE service='observe-collector' AND signal='metric'
+  AND name LIKE 'otelcol_receiver_accepted%'
+  AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
+GROUP BY name;
+```
+
+### Memory usage (approaching OOM?)
+
+```sql
+SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
+       max(value) / 1e6 AS rss_mb
+FROM obs WHERE service='observe-collector' AND signal='metric'
+  AND name = 'otelcol_process_memory_rss_bytes'
+  AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
+GROUP BY bucket ORDER BY bucket;
+```
+Anomalous if: steadily climbing toward container memory limit
+
+### Data loss (queue overflow = data dropped)
+
+```sql
+SELECT name, max(value) AS total
+FROM obs WHERE service='observe-collector' AND signal='metric'
+  AND name LIKE 'otelcol_exporter_enqueue_failed%'
+  AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
+GROUP BY name;
+```
+Anomalous if: any value > 0 (data was dropped because the queue was full)
+
+### Key metrics reference
+
+| Metric | What it tells you |
+|--------|-------------------|
+| `otelcol_receiver_accepted_spans` | Trace ingest rate |
+| `otelcol_receiver_accepted_metric_points` | Metrics ingest rate |
+| `otelcol_receiver_refused_*` | Backpressure / errors |
+| `otelcol_exporter_sent_*` | Successful S3 writes |
+| `otelcol_exporter_send_failed_*` | S3 write failures |
+| `otelcol_exporter_queue_size` | Current queue depth |
+| `otelcol_exporter_enqueue_failed_*` | Data loss (queue full) |
+| `otelcol_processor_batch_batch_send_size` | Batch fullness |
+| `otelcol_process_memory_rss_bytes` | RSS memory |
+| `otelcol_process_cpu_seconds_total` | CPU usage |
+
 ## Gotchas
 
 1. timestamp is nanoseconds. Not seconds. Not milliseconds.
