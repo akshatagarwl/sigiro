@@ -10,7 +10,7 @@ if [ -z "$staged_go_files" ]; then
 fi
 
 echo "Running gofumpt..."
-echo "$staged_go_files" | xargs GOOS=linux go run mvdan.cc/gofumpt@latest -w
+echo "$staged_go_files" | xargs go run mvdan.cc/gofumpt@latest -w
 if [ $? -ne 0 ]; then
   echo "ERROR: gofumpt failed"
   exit 1
@@ -21,7 +21,11 @@ fi
 echo "Running wsl..."
 staged_dirs=$(echo "$staged_go_files" | xargs -n1 dirname | sort -u)
 for dir in $staged_dirs; do
-  (cd "$dir" && GOOS=linux go run github.com/bombsimon/wsl/v5/cmd/wsl@latest -fix ./...)
+  # collector/ imports eBPF linux-only deps; GOOS=linux lets wsl load those packages on macOS/Windows.
+  # Other modules run with native GOOS so platform-specific files are formatted correctly.
+  goos_prefix=""
+  case "$dir" in collector/*) goos_prefix="GOOS=linux" ;; esac
+  (cd "$dir" && env $goos_prefix go run github.com/bombsimon/wsl/v5/cmd/wsl@latest -fix ./...)
   if [ $? -ne 0 ]; then
     echo "ERROR: wsl failed in $dir"
     exit 1
