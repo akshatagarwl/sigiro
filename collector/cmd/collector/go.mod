@@ -270,4 +270,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/akshatagarwl/sigiro v0.0.0 => ~/workspace/observe
+replace github.com/akshatagarwl/sigiro v0.0.0 => ~/workspace/sigiro/
