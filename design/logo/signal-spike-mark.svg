@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 32" fill="none">
+  <!--
+    Sigiro mark — Signal Spike (B) — DISCARDED DIRECTION
+    Preserved because of the S-animation property:
+    rotate(-90deg) around center → dip arm swings left, spike arm swings right = S shape
+
+    Baseline at y=16 (center of viewBox). Dip −10px to y=26, spike +10px to y=6.
+    Equal arms ensure a balanced S after rotation.
+
+    CSS: transform: rotate(-90deg); transform-origin: center; transform-box: fill-box;
+  -->
+  <path
+    d="M2 16 L8 16 L12 26 L18 16 L22 6 L28 16 L34 16"
+    stroke="#C4501A"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <!-- Anomaly dot at spike apex (22,6). Lands near S crossing when rotated 90° CCW. -->
+  <circle cx="22" cy="6" r="3" fill="#C4501A"/>
+</svg>
