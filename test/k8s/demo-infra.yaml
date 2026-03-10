@@ -4,7 +4,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: flagd-config
-  namespace: observe
+  namespace: sigiro
 data:
   flagd.json: |
     {
@@ -92,7 +92,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: flagd
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -124,7 +124,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: flagd
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: flagd
@@ -135,7 +135,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: valkey-cart
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -159,7 +159,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: valkey-cart
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: valkey-cart
@@ -170,7 +170,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kafka
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -192,7 +192,7 @@ spec:
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
               value: 1@localhost:9093
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4318
+              value: http://sigiro-collector:4318
             - name: OTEL_SERVICE_NAME
               value: kafka
             - name: KAFKA_HEAP_OPTS
@@ -213,7 +213,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: kafka
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: kafka
@@ -224,7 +224,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-init
-  namespace: observe
+  namespace: sigiro
 data:
   init.sql: |
     -- Copyright The OpenTelemetry Authors
@@ -331,7 +331,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgresql
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -374,7 +374,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgresql
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: postgresql

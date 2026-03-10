@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/akshatagarwl/observe/pkg/schema"
+	"github.com/akshatagarwl/sigiro/pkg/schema"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/parquet-go/parquet-go"
@@ -117,7 +117,9 @@ func (w *ParquetWriter) writePartition(ctx context.Context, hour int64, hourRows
 	if buf == nil {
 		buf = new(bytes.Buffer)
 	}
+
 	buf.Reset()
+
 	buf.Grow(len(hourRows) * 256)
 	defer w.bufPool.Put(buf)
 

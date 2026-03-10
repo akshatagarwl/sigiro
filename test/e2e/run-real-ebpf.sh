@@ -88,7 +88,7 @@ SET s3_secret_access_key='minioadmin';
 SET s3_use_ssl=false;
 SET s3_url_style='path';
 "
-PARQUET="read_parquet('s3://observe/**/*.parquet')"
+PARQUET="read_parquet('s3://sigiro/**/*.parquet')"
 
 FAILURES=0
 PASSES=0

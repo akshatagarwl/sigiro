@@ -74,7 +74,7 @@ SET s3_secret_access_key='minioadmin';
 SET s3_use_ssl=false;
 SET s3_url_style='path';
 "
-PARQUET="read_parquet('s3://observe/**/*.parquet')"
+PARQUET="read_parquet('s3://sigiro/**/*.parquet')"
 
 FAILURES=0
 PASSES=0
@@ -179,19 +179,19 @@ run_check "Investigation: profiles" \
 echo ""
 echo "=== Check 9: Self-observability (collector's own telemetry) ==="
 run_check "Collector metrics exist" \
-  "SELECT count(*) > 0 FROM $PARQUET WHERE service='observe-collector' AND signal='metric';" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE service='sigiro-collector' AND signal='metric';" \
   "true"
 run_check "Collector logs exist" \
-  "SELECT count(*) > 0 FROM $PARQUET WHERE service='observe-collector' AND signal='log';" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE service='sigiro-collector' AND signal='log';" \
   "true"
 run_check "Collector traces exist" \
-  "SELECT count(*) > 0 FROM $PARQUET WHERE service='observe-collector' AND signal='span';" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE service='sigiro-collector' AND signal='span';" \
   "true"
 run_check "Collector self-profiles exist" \
-  "SELECT count(*) > 0 FROM $PARQUET WHERE service='observe-collector' AND signal='profile';" \
+  "SELECT count(*) > 0 FROM $PARQUET WHERE service='sigiro-collector' AND signal='profile';" \
   "true"
 run_check "Collector otelcol_* metrics" \
-  "SELECT count(DISTINCT name) >= 5 FROM $PARQUET WHERE service='observe-collector' AND signal='metric' AND name LIKE 'otelcol_%';" \
+  "SELECT count(DISTINCT name) >= 5 FROM $PARQUET WHERE service='sigiro-collector' AND signal='metric' AND name LIKE 'otelcol_%';" \
   "true"
 
 # Cross-service traces: SKIP — telemetrygen generates independent trace_ids per

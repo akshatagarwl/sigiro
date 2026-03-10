@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Formatted data dump for manual inspection after E2E run.
-# Prereq: MinIO must be running with data at s3://observe/**/*.parquet
+# Prereq: MinIO must be running with data at s3://sigiro/**/*.parquet
 # Usage: ./dump.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -22,7 +22,7 @@ SET s3_secret_access_key='minioadmin';
 SET s3_use_ssl=false;
 SET s3_url_style='path';
 "
-PARQUET="read_parquet('s3://observe/**/*.parquet')"
+PARQUET="read_parquet('s3://sigiro/**/*.parquet')"
 
 run_query() {
   local title="$1"
@@ -34,7 +34,7 @@ run_query() {
 
 run_query "File Inventory" "
 SELECT file_name, count(*) AS row_groups
-FROM parquet_metadata('s3://observe/**/*.parquet')
+FROM parquet_metadata('s3://sigiro/**/*.parquet')
 GROUP BY file_name
 ORDER BY file_name;
 "

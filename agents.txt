@@ -1,4 +1,4 @@
-# Observe — Agent Data Guide
+# Sigiro — Agent Data Guide
 #
 # Read this file, then query the data with DuckDB SQL.
 # All observability data lives in one Parquet table on S3.
@@ -31,7 +31,7 @@ SET s3_url_style = 'path';
 ## S3 Layout
 
 ```
-s3://observe/{epoch_hour_seconds}/{node}-{ts}.parquet
+s3://sigiro/{epoch_hour_seconds}/{node}-{ts}.parquet
 ```
 
 epoch_hour_seconds = Unix seconds of the hour start.
@@ -39,14 +39,14 @@ epoch_hour_seconds = Unix seconds of the hour start.
 
 Query one hour:
 ```sql
-SELECT * FROM read_parquet('s3://observe/1772373600/*.parquet') LIMIT 10;
+SELECT * FROM read_parquet('s3://sigiro/1772373600/*.parquet') LIMIT 10;
 ```
 
 Query multiple hours:
 ```sql
 SELECT * FROM read_parquet([
-  's3://observe/1772373600/*.parquet',
-  's3://observe/1772377200/*.parquet'
+  's3://sigiro/1772373600/*.parquet',
+  's3://sigiro/1772377200/*.parquet'
 ]) LIMIT 10;
 ```
 
@@ -142,9 +142,9 @@ Pick a 25-minute window centered on the incident. Compute epoch-hours.
 Set up the table reference for all subsequent queries:
 ```sql
 -- Single hour:
-CREATE TEMP VIEW obs AS SELECT * FROM read_parquet('s3://observe/1772373600/*.parquet');
+CREATE TEMP VIEW obs AS SELECT * FROM read_parquet('s3://sigiro/1772373600/*.parquet');
 -- Multi-hour:
-CREATE TEMP VIEW obs AS SELECT * FROM read_parquet(['s3://observe/1772373600/*.parquet', 's3://observe/1772377200/*.parquet']);
+CREATE TEMP VIEW obs AS SELECT * FROM read_parquet(['s3://sigiro/1772373600/*.parquet', 's3://sigiro/1772377200/*.parquet']);
 ```
 
 ### Step 2: Run these 5 queries
@@ -279,7 +279,7 @@ SELECT name,
        approx_quantile(value, 0.95) AS p95,
        avg(value) AS avg,
        count(*) AS n
-FROM read_parquet('s3://observe/1772287200/*.parquet')
+FROM read_parquet('s3://sigiro/1772287200/*.parquet')
 WHERE service='checkout' AND signal='metric'
       AND timestamp BETWEEN epoch_ns('2026-02-28 14:00:00'::TIMESTAMP)
                         AND epoch_ns('2026-02-28 14:25:00'::TIMESTAMP)
@@ -585,14 +585,14 @@ and all expected services participating in the call chain.
 ## Pipeline Health (Self-Observability)
 
 The collector feeds its own internal metrics back into the unified table.
-They appear as service='observe-collector', signal='metric'.
+They appear as service='sigiro-collector', signal='metric'.
 Use these queries to check if the pipeline itself is healthy.
 
 ### Discover available pipeline metrics
 
 ```sql
 SELECT DISTINCT name FROM obs
-WHERE service='observe-collector' AND signal='metric'
+WHERE service='sigiro-collector' AND signal='metric'
 ORDER BY name;
 ```
 
@@ -600,7 +600,7 @@ ORDER BY name;
 
 ```sql
 SELECT name, max(value) AS total
-FROM obs WHERE service='observe-collector' AND signal='metric'
+FROM obs WHERE service='sigiro-collector' AND signal='metric'
   AND name LIKE 'otelcol_exporter_send_failed%'
   AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
 GROUP BY name;
@@ -612,7 +612,7 @@ Anomalous if: any value > 0
 ```sql
 SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
        avg(value) AS avg_depth, max(value) AS max_depth
-FROM obs WHERE service='observe-collector' AND signal='metric'
+FROM obs WHERE service='sigiro-collector' AND signal='metric'
   AND name = 'otelcol_exporter_queue_size'
   AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
 GROUP BY bucket ORDER BY bucket;
@@ -623,7 +623,7 @@ Anomalous if: steadily increasing or near queue capacity
 
 ```sql
 SELECT name, max(value) AS total
-FROM obs WHERE service='observe-collector' AND signal='metric'
+FROM obs WHERE service='sigiro-collector' AND signal='metric'
   AND name LIKE 'otelcol_receiver_accepted%'
   AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
 GROUP BY name;
@@ -634,7 +634,7 @@ GROUP BY name;
 ```sql
 SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
        max(value) / 1e6 AS rss_mb
-FROM obs WHERE service='observe-collector' AND signal='metric'
+FROM obs WHERE service='sigiro-collector' AND signal='metric'
   AND name = 'otelcol_process_memory_rss_bytes'
   AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
 GROUP BY bucket ORDER BY bucket;
@@ -645,7 +645,7 @@ Anomalous if: steadily climbing toward container memory limit
 
 ```sql
 SELECT name, max(value) AS total
-FROM obs WHERE service='observe-collector' AND signal='metric'
+FROM obs WHERE service='sigiro-collector' AND signal='metric'
   AND name LIKE 'otelcol_exporter_enqueue_failed%'
   AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
 GROUP BY name;
@@ -673,7 +673,7 @@ Anomalous if: any value > 0 (data was dropped because the queue was full)
 SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t,
        status, message
 FROM obs
-WHERE service='observe-collector' AND signal='log'
+WHERE service='sigiro-collector' AND signal='log'
       AND status IN ('ERROR', 'WARN')
       AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
 ORDER BY timestamp DESC
@@ -685,7 +685,7 @@ Log volume by severity:
 ```sql
 SELECT status, count(*) AS n
 FROM obs
-WHERE service='observe-collector' AND signal='log'
+WHERE service='sigiro-collector' AND signal='log'
       AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
 GROUP BY status ORDER BY n DESC;
 ```
@@ -693,7 +693,7 @@ GROUP BY status ORDER BY n DESC;
 Parquet flush details (from slog.Info output):
 ```sql
 SELECT message FROM obs
-WHERE service='observe-collector' AND signal='log'
+WHERE service='sigiro-collector' AND signal='log'
       AND message LIKE '%flushed parquet%'
       AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
 LIMIT 10;
@@ -706,7 +706,7 @@ SELECT name, count(*) AS n,
        approx_quantile(value, 0.95) AS p95_ms,
        avg(value) AS avg_ms
 FROM obs
-WHERE service='observe-collector' AND signal='span'
+WHERE service='sigiro-collector' AND signal='span'
       AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
 GROUP BY name ORDER BY p95_ms DESC;
 ```
@@ -716,7 +716,7 @@ Slow operations (> 5s):
 SELECT name, value AS duration_ms, status,
        strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t
 FROM obs
-WHERE service='observe-collector' AND signal='span'
+WHERE service='sigiro-collector' AND signal='span'
       AND value > 5000
       AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
 ORDER BY value DESC LIMIT 20;
@@ -727,7 +727,7 @@ ORDER BY value DESC LIMIT 20;
 ```sql
 SELECT name, count(*) AS samples
 FROM obs
-WHERE service='observe-collector' AND signal='profile'
+WHERE service='sigiro-collector' AND signal='profile'
       AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
 GROUP BY name;
 ```
@@ -737,7 +737,7 @@ Collector hot functions (CPU):
 SELECT stacktrace[len(stacktrace)] AS leaf_function,
        sum(value) AS samples
 FROM obs
-WHERE service='observe-collector' AND signal='profile'
+WHERE service='sigiro-collector' AND signal='profile'
       AND name = 'profile.cpu'
       AND stacktrace IS NOT NULL AND len(stacktrace) > 0
       AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
@@ -749,7 +749,7 @@ Memory allocation hotspots:
 SELECT stacktrace[len(stacktrace)] AS leaf_function,
        sum(value) AS samples
 FROM obs
-WHERE service='observe-collector' AND signal='profile'
+WHERE service='sigiro-collector' AND signal='profile'
       AND name = 'profile.alloc_space'
       AND stacktrace IS NOT NULL AND len(stacktrace) > 0
       AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')

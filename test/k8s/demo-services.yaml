@@ -1,11 +1,11 @@
 # OTel demo services (14) — translated from test/e2e/docker-compose.real.yaml
-# All otel-collector references → observe-collector (K8s service name)
+# All otel-collector references → sigiro-collector (K8s service name)
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: otel-go-config
-  namespace: observe
+  namespace: sigiro
 data:
   otel-config.yml: |
     file_format: "1.0-rc.3"
@@ -48,7 +48,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ad
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -70,7 +70,7 @@ spec:
             - name: FLAGD_PORT
               value: "8013"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4318
+              value: http://sigiro-collector:4318
             - name: OTEL_LOGS_EXPORTER
               value: otlp
             - name: OTEL_SERVICE_NAME
@@ -85,7 +85,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ad
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: ad
@@ -98,7 +98,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cart
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -124,7 +124,7 @@ spec:
             - name: VALKEY_ADDR
               value: valkey-cart:6379
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4317
+              value: http://sigiro-collector:4317
             - name: OTEL_SERVICE_NAME
               value: cart
           ports:
@@ -137,7 +137,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: cart
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: cart
@@ -150,7 +150,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: checkout
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -182,7 +182,7 @@ spec:
             - name: SHIPPING_ADDR
               value: http://shipping:50050
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4317
+              value: http://sigiro-collector:4317
             - name: OTEL_SERVICE_NAME
               value: checkout
           ports:
@@ -195,7 +195,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: checkout
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: checkout
@@ -208,7 +208,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: currency
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -230,7 +230,7 @@ spec:
             - name: VERSION
               value: "2.2.0"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4317
+              value: http://sigiro-collector:4317
             - name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
               value: cumulative
             - name: OTEL_SERVICE_NAME
@@ -245,7 +245,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: currency
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: currency
@@ -258,7 +258,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: email
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -282,7 +282,7 @@ spec:
             - name: FLAGD_PORT
               value: "8013"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4318
+              value: http://sigiro-collector:4318
             - name: OTEL_SERVICE_NAME
               value: email
           ports:
@@ -295,7 +295,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: email
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: email
@@ -308,7 +308,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -352,7 +352,7 @@ spec:
             - name: FLAGD_PORT
               value: "8013"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4317
+              value: http://sigiro-collector:4317
             - name: OTEL_SERVICE_NAME
               value: frontend
           ports:
@@ -365,7 +365,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: frontend
@@ -378,7 +378,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: image-provider
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -396,7 +396,7 @@ spec:
             - name: IMAGE_PROVIDER_PORT
               value: "8081"
             - name: OTEL_COLLECTOR_HOST
-              value: observe-collector
+              value: sigiro-collector
             - name: OTEL_COLLECTOR_PORT_GRPC
               value: "4317"
             - name: OTEL_SERVICE_NAME
@@ -411,7 +411,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: image-provider
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: image-provider
@@ -424,7 +424,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: load-generator
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -452,7 +452,7 @@ spec:
             - name: LOCUST_WEB_PORT
               value: "8089"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4317
+              value: http://sigiro-collector:4317
             - name: OTEL_SERVICE_NAME
               value: load-generator
             - name: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
@@ -473,7 +473,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: payment
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -495,7 +495,7 @@ spec:
             - name: FLAGD_PORT
               value: "8013"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4317
+              value: http://sigiro-collector:4317
             - name: OTEL_SERVICE_NAME
               value: payment
           ports:
@@ -508,7 +508,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: payment
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: payment
@@ -521,7 +521,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: product-catalog
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -547,7 +547,7 @@ spec:
             - name: GOMEMLIMIT
               value: 16MiB
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4317
+              value: http://sigiro-collector:4317
             - name: OTEL_SERVICE_NAME
               value: product-catalog
             - name: OTEL_EXPERIMENTAL_CONFIG_FILE
@@ -572,7 +572,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: product-catalog
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: product-catalog
@@ -585,7 +585,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: quote
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -605,7 +605,7 @@ spec:
             - name: QUOTE_PORT
               value: "8090"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4318
+              value: http://sigiro-collector:4318
             - name: OTEL_PHP_AUTOLOAD_ENABLED
               value: "true"
             - name: OTEL_PHP_INTERNAL_METRICS_ENABLED
@@ -622,7 +622,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: quote
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: quote
@@ -635,7 +635,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: recommendation
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -655,7 +655,7 @@ spec:
             - name: PRODUCT_CATALOG_ADDR
               value: product-catalog:3550
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4317
+              value: http://sigiro-collector:4317
             - name: OTEL_SERVICE_NAME
               value: recommendation
             - name: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
@@ -670,7 +670,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: recommendation
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: recommendation
@@ -683,7 +683,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: shipping
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -705,7 +705,7 @@ spec:
             - name: QUOTE_ADDR
               value: http://quote:8090
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://observe-collector:4317
+              value: http://sigiro-collector:4317
             - name: OTEL_SERVICE_NAME
               value: shipping
           ports:
@@ -718,7 +718,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: shipping
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: shipping

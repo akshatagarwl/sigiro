@@ -47,7 +47,7 @@ processors:
 
 extensions:
   file_storage/queue:
-    directory: /var/lib/observe/queue
+    directory: /var/lib/sigiro/queue
     create_directory: true
     compaction:
       on_rebound: true

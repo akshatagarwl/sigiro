@@ -1,4 +1,4 @@
-module github.com/akshatagarwl/observe
+module github.com/akshatagarwl/sigiro
 
 go 1.25.0
 

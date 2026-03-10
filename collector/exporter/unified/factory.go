@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/akshatagarwl/observe/pkg/schema"
+	"github.com/akshatagarwl/sigiro/pkg/schema"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -33,7 +33,7 @@ func NewFactory() xexporter.Factory {
 
 func createDefaultConfig() component.Config {
 	return &Config{
-		S3Bucket: "observe",
+		S3Bucket: "sigiro",
 		S3Region: "us-east-1",
 		Retry:    configretry.NewDefaultBackOffConfig(),
 		Timeout:  exporterhelper.NewDefaultTimeoutConfig(),

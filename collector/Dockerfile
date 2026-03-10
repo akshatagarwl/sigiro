@@ -26,13 +26,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    cd collector/cmd/collector && CGO_ENABLED=0 go build -trimpath -o /observe-collector .
+    cd collector/cmd/collector && CGO_ENABLED=0 go build -trimpath -o /sigiro-collector .
 
 # Stage 2: Minimal runtime image
 FROM gcr.io/distroless/static-debian12
-COPY --from=builder /observe-collector /observe-collector
+COPY --from=builder /sigiro-collector /sigiro-collector
 COPY --from=builder /src/collector/otelcol.yaml /etc/otelcol/otelcol.yaml
-VOLUME /var/lib/observe/queue
+VOLUME /var/lib/sigiro/queue
 EXPOSE 4317 4318 4319
-ENTRYPOINT ["/observe-collector"]
+ENTRYPOINT ["/sigiro-collector"]
 CMD ["--config", "/etc/otelcol/otelcol.yaml"]

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/akshatagarwl/observe/pkg/schema"
+	"github.com/akshatagarwl/sigiro/pkg/schema"
 )
 
 func nullStrPtr(ns sql.NullString) *string {

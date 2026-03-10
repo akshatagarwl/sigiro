@@ -1,4 +1,4 @@
-module observe/test/e2e/profilegen
+module sigiro/test/e2e/profilegen
 
 go 1.25.0
 

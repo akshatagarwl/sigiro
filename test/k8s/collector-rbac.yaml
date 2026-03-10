@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: observe-collector
-  namespace: observe
+  name: sigiro-collector
+  namespace: sigiro
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: observe-collector
+  name: sigiro-collector
 rules:
   - apiGroups: [""]
     resources: ["pods", "namespaces", "nodes"]
@@ -19,12 +19,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: observe-collector
+  name: sigiro-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: observe-collector
+  name: sigiro-collector
 subjects:
   - kind: ServiceAccount
-    name: observe-collector
-    namespace: observe
+    name: sigiro-collector
+    namespace: sigiro

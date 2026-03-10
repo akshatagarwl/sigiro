@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/akshatagarwl/observe/pkg/schema"
+	"github.com/akshatagarwl/sigiro/pkg/schema"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"

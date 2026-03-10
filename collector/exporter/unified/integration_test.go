@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akshatagarwl/observe/pkg/schema"
+	"github.com/akshatagarwl/sigiro/pkg/schema"
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"

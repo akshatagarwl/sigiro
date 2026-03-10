@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 K8S_CTX="orbstack"
-NS="observe"
+NS="sigiro"
 SKIP_BUILD=false
 
 while [[ $# -gt 0 ]]; do
@@ -23,8 +23,8 @@ kubectl() { command kubectl --context "$K8S_CTX" "$@"; }
 cleanup() {
   echo "=== Cleaning up ==="
   kubectl delete namespace "$NS" --ignore-not-found 2>/dev/null || true
-  kubectl delete clusterrole observe-collector --ignore-not-found 2>/dev/null || true
-  kubectl delete clusterrolebinding observe-collector --ignore-not-found 2>/dev/null || true
+  kubectl delete clusterrole sigiro-collector --ignore-not-found 2>/dev/null || true
+  kubectl delete clusterrolebinding sigiro-collector --ignore-not-found 2>/dev/null || true
 }
 
 if [[ "${CLEANUP:-}" == "true" ]]; then
@@ -40,14 +40,14 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
   echo ""
   echo "=== Building collector image ==="
   cd "$REPO_ROOT"
-  docker build -t observe-collector:local -f collector/Dockerfile .
+  docker build -t sigiro-collector:local -f collector/Dockerfile .
 
   # Load image into K8s runtime if not OrbStack (OrbStack shares Docker images)
   if [[ "$K8S_CTX" != "orbstack" ]]; then
     echo "=== Loading image into K8s ==="
     if command -v limactl &>/dev/null; then
       # Lima/k3s: import via ctr
-      # Context name may differ from Lima instance name (e.g., lima-k3s → observe-k8s)
+      # Context name may differ from Lima instance name (e.g., lima-k3s → sigiro-k8s)
       LIMA_INSTANCE="${LIMA_VM:-}"
       if [[ -z "$LIMA_INSTANCE" ]]; then
         # Auto-detect: find a running Lima instance with k3s
@@ -55,7 +55,7 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
       fi
       if [[ -n "$LIMA_INSTANCE" ]]; then
         echo "Loading image into Lima instance '$LIMA_INSTANCE'..."
-        docker save observe-collector:local | limactl shell "$LIMA_INSTANCE" sudo k3s ctr images import -
+        docker save sigiro-collector:local | limactl shell "$LIMA_INSTANCE" sudo k3s ctr images import -
       else
         echo "WARNING: No running Lima instance found — you may need to manually load the image"
       fi
@@ -101,7 +101,7 @@ echo "=== Phase 3: Collector DaemonSet (eBPF) ==="
 kubectl apply -f "$SCRIPT_DIR/collector.yaml"
 
 echo "Waiting for collector..."
-kubectl -n "$NS" rollout status daemonset/observe-collector --timeout=120s
+kubectl -n "$NS" rollout status daemonset/sigiro-collector --timeout=120s
 
 # --- Phase 4: Demo services (14) ---
 echo ""
@@ -127,7 +127,7 @@ echo "=== Phase 6: Verification ==="
 
 echo ""
 echo "--- Collector status ---"
-COLLECTOR_POD=$(kubectl -n "$NS" get pods -l app=observe-collector -o jsonpath='{.items[0].metadata.name}')
+COLLECTOR_POD=$(kubectl -n "$NS" get pods -l app=sigiro-collector -o jsonpath='{.items[0].metadata.name}')
 echo "Pod: $COLLECTOR_POD"
 kubectl -n "$NS" logs "$COLLECTOR_POD" --tail=100 2>&1 | grep -iE "error|panic|fatal" | tail -10 || echo "(no errors)"
 
@@ -157,7 +157,7 @@ SET s3_secret_access_key='minioadmin';
 SET s3_use_ssl=false;
 SET s3_url_style='path';
 "
-PARQUET="read_parquet('s3://observe/**/*.parquet')"
+PARQUET="read_parquet('s3://sigiro/**/*.parquet')"
 
 FAILURES=0
 PASSES=0

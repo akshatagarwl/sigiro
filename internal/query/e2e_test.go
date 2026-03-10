@@ -22,7 +22,7 @@ func setupE2EDB(t *testing.T) *sql.DB {
 
 	path := "../../testdata/incident.parquet"
 
-	_, err = db.Exec(fmt.Sprintf(`CREATE VIEW observe AS SELECT * FROM read_parquet('%s')`, path))
+	_, err = db.Exec(fmt.Sprintf(`CREATE VIEW sigiro AS SELECT * FROM read_parquet('%s')`, path))
 	if err != nil {
 		db.Close()
 		t.Fatalf("create view: %v (run incident-gen first)", err)
@@ -71,7 +71,7 @@ func TestE2E_SignalTypes(t *testing.T) {
 	db := setupE2EDB(t)
 	defer db.Close()
 
-	signals := queryStrings(t, db, `SELECT DISTINCT signal FROM observe ORDER BY signal`)
+	signals := queryStrings(t, db, `SELECT DISTINCT signal FROM sigiro ORDER BY signal`)
 
 	want := []string{"log", "metric", "profile", "span"}
 	if len(signals) != len(want) {
@@ -89,7 +89,7 @@ func TestE2E_Services(t *testing.T) {
 	db := setupE2EDB(t)
 	defer db.Close()
 
-	services := queryStrings(t, db, `SELECT DISTINCT service FROM observe ORDER BY service`)
+	services := queryStrings(t, db, `SELECT DISTINCT service FROM sigiro ORDER BY service`)
 	if len(services) != 2 || services[0] != "checkout" || services[1] != "payments" {
 		t.Fatalf("services = %v, want [checkout, payments]", services)
 	}
@@ -101,9 +101,9 @@ func TestE2E_MemoryClimbsToOOM(t *testing.T) {
 
 	// Memory should start around 200MB and reach 512MB
 	minMem := queryScalar[float64](t, db,
-		`SELECT min(value) FROM observe WHERE signal='metric' AND name='memory.usage' AND service='checkout'`)
+		`SELECT min(value) FROM sigiro WHERE signal='metric' AND name='memory.usage' AND service='checkout'`)
 	maxMem := queryScalar[float64](t, db,
-		`SELECT max(value) FROM observe WHERE signal='metric' AND name='memory.usage' AND service='checkout'`)
+		`SELECT max(value) FROM sigiro WHERE signal='metric' AND name='memory.usage' AND service='checkout'`)
 
 	if minMem > 250 {
 		t.Errorf("min memory = %.0f MB, want < 250 (baseline)", minMem)
@@ -122,7 +122,7 @@ func TestE2E_LatencyDegrades(t *testing.T) {
 	rows, err := db.Query(`
 		SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
 		       avg(value) AS avg_ms
-		FROM observe
+		FROM sigiro
 		WHERE signal='metric' AND name='http.duration' AND service='checkout'
 		GROUP BY bucket ORDER BY bucket
 	`)
@@ -166,21 +166,21 @@ func TestE2E_ErrorSpans(t *testing.T) {
 	defer db.Close()
 
 	count := queryScalar[int](t, db,
-		`SELECT count(*) FROM observe WHERE signal='span' AND status='ERROR'`)
+		`SELECT count(*) FROM sigiro WHERE signal='span' AND status='ERROR'`)
 	if count == 0 {
 		t.Fatal("no error spans found")
 	}
 
 	// Error spans should be slow (>2000ms)
 	minDur := queryScalar[float64](t, db,
-		`SELECT min(value) FROM observe WHERE signal='span' AND status='ERROR'`)
+		`SELECT min(value) FROM sigiro WHERE signal='span' AND status='ERROR'`)
 	if minDur < 2000 {
 		t.Errorf("min error span duration = %.0fms, want >= 2000", minDur)
 	}
 
 	// Error spans should be in both checkout and payments
 	errorServices := queryStrings(t, db,
-		`SELECT DISTINCT service FROM observe WHERE signal='span' AND status='ERROR' ORDER BY service`)
+		`SELECT DISTINCT service FROM sigiro WHERE signal='span' AND status='ERROR' ORDER BY service`)
 	if len(errorServices) != 2 || errorServices[0] != "checkout" || errorServices[1] != "payments" {
 		t.Errorf("error span services = %v, want [checkout, payments]", errorServices)
 	}
@@ -191,7 +191,7 @@ func TestE2E_OOMKillLog(t *testing.T) {
 	defer db.Close()
 
 	msg := queryScalar[string](t, db,
-		`SELECT message FROM observe WHERE signal='log' AND message LIKE '%OOMKilled%'`)
+		`SELECT message FROM sigiro WHERE signal='log' AND message LIKE '%OOMKilled%'`)
 	if !strings.Contains(msg, "512Mi") {
 		t.Errorf("OOMKill message = %q, want to contain '512Mi'", msg)
 	}
@@ -209,7 +209,7 @@ func TestE2E_LogTimeline(t *testing.T) {
 	rows, err := db.Query(`
 		SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t,
 		       status, message
-		FROM observe
+		FROM sigiro
 		WHERE signal='log' AND service='checkout' AND status IN ('WARN','ERROR')
 		ORDER BY timestamp
 	`)
@@ -266,7 +266,7 @@ func TestE2E_ProfilesShowGCThrashing(t *testing.T) {
 	// Top function by samples should be GC-related
 	topFunc := queryScalar[string](t, db, `
 		SELECT stacktrace[len(stacktrace)] AS leaf
-		FROM observe
+		FROM sigiro
 		WHERE signal='profile' AND service='checkout'
 		GROUP BY leaf
 		ORDER BY sum(value) DESC
@@ -285,7 +285,7 @@ func TestE2E_CrossServiceTraces(t *testing.T) {
 	count := queryScalar[int](t, db, `
 		SELECT count(*) FROM (
 			SELECT trace_id
-			FROM observe
+			FROM sigiro
 			WHERE signal='span' AND trace_id IS NOT NULL
 			GROUP BY trace_id
 			HAVING count(DISTINCT service) > 1
@@ -306,10 +306,10 @@ func TestE2E_SpanParentChild(t *testing.T) {
 
 	// Spans with parent_span_id should reference an existing span_id
 	orphans := queryScalar[int](t, db, `
-		SELECT count(*) FROM observe a
+		SELECT count(*) FROM sigiro a
 		WHERE a.signal='span' AND a.parent_span_id IS NOT NULL
 		  AND NOT EXISTS (
-			SELECT 1 FROM observe b WHERE b.signal='span' AND b.span_id = a.parent_span_id
+			SELECT 1 FROM sigiro b WHERE b.signal='span' AND b.span_id = a.parent_span_id
 		  )
 	`)
 	if orphans > 0 {
@@ -318,8 +318,8 @@ func TestE2E_SpanParentChild(t *testing.T) {
 
 	// Error traces should have checkout → payments parent-child relationship
 	count := queryScalar[int](t, db, `
-		SELECT count(*) FROM observe parent
-		JOIN observe child ON parent.span_id = child.parent_span_id
+		SELECT count(*) FROM sigiro parent
+		JOIN sigiro child ON parent.span_id = child.parent_span_id
 		WHERE parent.signal='span' AND child.signal='span'
 		  AND parent.service='checkout' AND child.service='payments'
 		  AND parent.status='ERROR'
@@ -335,14 +335,14 @@ func TestE2E_DeployVersionTransition(t *testing.T) {
 
 	// Should see both v2.3.0 (baseline) and v2.3.1 (after deploy)
 	versions := queryStrings(t, db,
-		`SELECT DISTINCT deploy_version FROM observe WHERE service='checkout' AND deploy_version != '' ORDER BY deploy_version`)
+		`SELECT DISTINCT deploy_version FROM sigiro WHERE service='checkout' AND deploy_version != '' ORDER BY deploy_version`)
 	if len(versions) != 2 || versions[0] != "v2.3.0" || versions[1] != "v2.3.1" {
 		t.Errorf("deploy versions = %v, want [v2.3.0, v2.3.1]", versions)
 	}
 
 	// All errors should be on v2.3.1
 	badVersion := queryScalar[int](t, db,
-		`SELECT count(*) FROM observe WHERE signal='span' AND status='ERROR' AND service='checkout' AND deploy_version != 'v2.3.1'`)
+		`SELECT count(*) FROM sigiro WHERE signal='span' AND status='ERROR' AND service='checkout' AND deploy_version != 'v2.3.1'`)
 	if badVersion > 0 {
 		t.Errorf("%d error spans on non-v2.3.1 deploy version", badVersion)
 	}
@@ -356,7 +356,7 @@ func TestE2E_SortOrder(t *testing.T) {
 	violations := queryScalar[int](t, db, `
 		WITH numbered AS (
 			SELECT service, signal, timestamp, row_number() OVER () AS rn
-			FROM observe
+			FROM sigiro
 		)
 		SELECT count(*) FROM numbered a
 		JOIN numbered b ON b.rn = a.rn + 1
@@ -375,7 +375,7 @@ func TestE2E_InvestigationBlock_Content(t *testing.T) {
 	db := setupE2EDB(t)
 	defer db.Close()
 
-	block, err := Investigate(context.Background(), db, "observe", InvestigateRequest{
+	block, err := Investigate(context.Background(), db, "sigiro", InvestigateRequest{
 		Service: "checkout",
 		From:    time.Date(2026, 3, 1, 14, 0, 0, 0, time.UTC),
 		To:      time.Date(2026, 3, 1, 14, 25, 0, 0, time.UTC),

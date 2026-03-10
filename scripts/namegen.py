@@ -1,96 +1,121 @@
 #!/usr/bin/env python3
 """
-Generate pronounceable 2-syllable word candidates.
-Focuses on patterns that produce good-sounding short tech names.
-Outputs to candidates.txt for domain checking.
+Generate pronounceable 5-7 char candidates NOT covered by the previous run.
+Previous run covered: CVCV(4), CVCCV(5), CVCVC(6), diphthong endings.
+This run adds: CCVCV(5), CCVCVC(6), CVCVCV(6), targeted 7-char suffix combos.
+Target: under 250k candidates total.
 """
 
 import sys
 from itertools import product
 
-# Onset consonants — no H, no X
-C = list('bdfgjklmnprstvwz')
-# Coda consonants (syllable endings that feel clean)
-K = list('bdklmnrst')
-# Simple vowels
-V = list('aeiou')
+VOW = set('aeiou')
+C   = list('bdfgjklmnprstvwz')   # 16 single consonants, no H/X
+V   = list('aeiou')              # 5 vowels
 
-# Scoring: some consonant-vowel combos feel better than others for tech names
-# Penalize harsh-sounding clusters, reward balanced ones
-GOOD_STARTS = set('bdfgjklmnprstvwz')  # all fine
-SONORANT = set('lmnr')  # soft endings — preferred
-STOP = set('bdgkpt')
-FRICATIVE = set('fsvzs')
+# Onset consonant clusters (natural English)
+CC  = ['bl','br','cl','cr','dr','fl','fr','gl','gr','kl','kr',
+       'pl','pr','sc','sk','sl','sm','sn','sp','st','sw','tr','tw']
 
-def score(w):
-    """Higher = more likely to sound like a good tech name."""
-    s = 0
-    # Prefer ending in vowel or sonorant (soft endings like Figma, Versa, Kilo)
-    if w[-1] in 'aeiou':
-        s += 3
-    elif w[-1] in SONORANT:
-        s += 2
-    # Prefer starting consonant that's a stop or fricative (punchy)
-    if w[0] in STOP | FRICATIVE:
-        s += 1
-    # Prefer 4-5 char names (punchy)
-    if len(w) == 4:
-        s += 2
-    elif len(w) == 5:
-        s += 1
-    # Penalize back-to-back stops (e.g. "kpali" sounds bad)
+VALID_CC = set(CC) | {
+    'nd','nt','nk','rd','rn','rk','rt','ld','lk','lt','mp','ng',
+    'ns','rs','ls','st','ts','ks',
+}
+
+def ok(w):
+    if len(w) < 5 or len(w) > 7: return False
+    if 'h' in w or 'x' in w: return False
+    vr = 0
+    for c in w:
+        vr = vr+1 if c in VOW else 0
+        if vr >= 3: return False
     for i in range(len(w)-1):
-        if w[i] in STOP and w[i+1] in STOP:
-            s -= 2
-    # Prefer consonant variety (not same consonant repeated)
-    if len(set(c for c in w if c not in 'aeiou')) < 2:
-        s -= 1
-    return s
-
-candidates = set()
-
-# Pattern 1: CV·CV  (e.g. navi, kelo, mura — 4 chars, cleanest)
-for c1, v1, c2, v2 in product(C, V, C, V):
-    candidates.add(c1 + v1 + c2 + v2)
-
-# Pattern 2: CVC·CV  (e.g. kanta, versa, solba — 5 chars)
-for c1, v1, k, c2, v2 in product(C, V, K, C, V):
-    candidates.add(c1 + v1 + k + c2 + v2)
-
-# Pattern 3: CV·CVC  (e.g. kalon, verin, noral — 6 chars)
-for c1, v1, c2, v2, k in product(C, V, C, V, K):
-    w = c1 + v1 + c2 + v2 + k
-    if len(w) == 6:
-        candidates.add(w)
-
-# Pattern 4: CV·CAW / CV·CAI (diphthong endings — e.g. karaw, solai)
-for c1, v1, c2, dv in product(C, V, C, ['ai', 'aw', 'ay']):
-    candidates.add(c1 + v1 + c2 + dv)
-
-def is_ok(w):
-    if len(w) < 4 or len(w) > 6:
-        return False
-    if 'h' in w:
-        return False
-    # No same-consonant doubles in middle
+        if w[i] in VOW and w[i+1] in VOW:
+            if w[i] == w[i+1]: return False
+            if w[i]+w[i+1] in {'iu','ui','uo','oe','ao','oa'}: return False
     for i in range(len(w)-1):
-        if w[i] == w[i+1] and w[i] not in 'aeiou':
-            return False
-    # No three vowels in a row
-    vrun = 0
-    for ch in w:
-        vrun = vrun + 1 if ch in 'aeiou' else 0
-        if vrun >= 3:
-            return False
+        if w[i] not in VOW and w[i+1] not in VOW:
+            if w[i]+w[i+1] not in VALID_CC: return False
     return True
 
-filtered = [w for w in candidates if is_ok(w)]
+def score(w):
+    s = 0
+    if w[-1] in VOW:      s += 7
+    elif w[-1] in 'lnrm': s += 5
+    elif w[-1] in 'sk':   s += 1
+    if len(w) == 5: s += 4
+    elif len(w) == 6: s += 3
+    elif len(w) == 7: s += 1
+    cc = sum(1 for i in range(len(w)-1) if w[i] not in VOW and w[i+1] not in VOW)
+    s -= cc * 2
+    vc = sum(1 for c in w if c in VOW)
+    if 0.35 <= vc/len(w) <= 0.65: s += 1
+    return s
+
+words = set()
+
+# ── NEW patterns not in previous run ─────────────────────────────────────────
+
+# 5-char CCVCV: cluster onset + CVCV tail (travo, klena, grima, spila, stave)
+# 23 CC × 5 V × 16 C × 5 V = 9,200
+for cl,v1,c2,v2 in product(CC, V, C, V):
+    words.add(cl+v1+c2+v2)
+
+# 6-char CCVCVC: cluster onset + CVCVC (traklon, grevan, spilak)
+# 23 CC × 5 V × 16 C × 5 V × 7 coda = 64,400
+for cl,v1,c2,v2,k in product(CC, V, C, V, ['l','n','r','m','s','k','t']):
+    words.add(cl+v1+c2+v2+k)
+
+# 6-char CCVCCV: cluster onset + CVC + CV (stronga, skelta) — skip, very noisy
+
+# 6-char CVCVCV: 3-syllable smooth (verona, navita, kalima, turova)
+# 16 × 5 × 16 × 5 × 16 × 5 = 512,000 — too many alone
+# LIMIT: only use C starting with b,d,f,g,k,l,m,n,p,r,s,t,v,w,z (skip j)
+# That's 15^3 × 5^3 = 421,875 — still too many
+# LIMIT: first C from shorter list (10 most common onset consonants)
+C_COMMON = list('bdgklmnrstv')  # 11 chars
+for c1,v1,c2,v2,c3,v3 in product(C_COMMON, V, C_COMMON, V, C_COMMON, V):
+    words.add(c1+v1+c2+v2+c3+v3)
+# 11^3 × 5^3 = 1331 × 125 = 166,375
+
+# 7-char: CVCV root + natural suffix
+# Only CVCV roots that scored well (end in vowel = more likely clean)
+# That's 16^2 × 5^2 = 6,400 roots × 40 suffixes = 256,000
+# LIMIT: use C_COMMON for roots = 11^2 × 5^2 = 3,025 roots × 40 suffixes = 121,000
+SUFFIXES_7 = [
+    # -C+VC endings (6 chars of suffix = total 7+root) — only pick short suffixes
+    'ran','ren','ron','rin',
+    'lan','len','lon','lin',
+    'van','ven','von','vin',
+    'tan','ten','ton','tin',
+    'san','sen','son','sin',
+    'nar','ner','nor','nir',
+    'mar','mer','mor','mir',
+    'dar','der','dor','dir',
+    'pal','pel','pol','pil',
+    'ral','rel','rol','ril',
+    'nal','nel','nol','nil',
+    'tal','tel','tol','til',
+    'sal','sel','sol','sil',
+    'val','vel','vol','vil',
+    'kar','ker','kor','kir',
+    'gar','ger','gor','gir',
+]
+for c1,v1,c2,v2 in product(C_COMMON, V, C_COMMON, V):
+    root = c1+v1+c2+v2
+    for suf in SUFFIXES_7:
+        w = root + suf
+        if len(w) == 7:
+            words.add(w)
+
+# ── Apply filter ─────────────────────────────────────────────────────────────
+filtered = [w for w in words if ok(w)]
 filtered.sort(key=lambda w: (-score(w), len(w), w))
 
 print(f"Generated {len(filtered)} candidates", file=sys.stderr)
 
 with open('~/workspace/observe/scripts/candidates.txt', 'w') as f:
     for w in filtered:
-        f.write(w + '\n')
+        f.write(w+'\n')
 
-print("Written to scripts/candidates.txt", file=sys.stderr)
+print("Done.", file=sys.stderr)

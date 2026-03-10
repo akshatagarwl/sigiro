@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: minio
-  namespace: observe
+  namespace: sigiro
 spec:
   replicas: 1
   selector:
@@ -36,7 +36,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: minio
-  namespace: observe
+  namespace: sigiro
 spec:
   selector:
     app: minio
@@ -50,7 +50,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: minio-setup
-  namespace: observe
+  namespace: sigiro
 spec:
   backoffLimit: 5
   template:
@@ -63,4 +63,4 @@ spec:
       containers:
         - name: mc
           image: minio/mc
-          command: ["sh", "-c", "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb local/observe --ignore-existing"]
+          command: ["sh", "-c", "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb local/sigiro --ignore-existing"]

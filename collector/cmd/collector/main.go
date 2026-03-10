@@ -2,7 +2,7 @@
 // Customized: Pyroscope SDK self-profiling added to main().
 // Do not regenerate with `make collector` without reapplying changes.
 
-// Program observe-collector is an OpenTelemetry Collector binary.
+// Program sigiro-collector is an OpenTelemetry Collector binary.
 package main
 
 import (
@@ -22,7 +22,7 @@ import (
 
 func main() {
 	info := component.BuildInfo{
-		Command:     "observe-collector",
+		Command:     "sigiro-collector",
 		Description: "Observe collector with unified Parquet exporter",
 		Version:     "0.1.0",
 	}
@@ -54,7 +54,7 @@ func main() {
 	// Self-profiling: Pyroscope SDK → localhost:4040 (pyroscope receiver).
 	// Non-fatal: profiling is observability, not core function.
 	profiler, err := pyroscope.Start(pyroscope.Config{
-		ApplicationName: "observe-collector",
+		ApplicationName: "sigiro-collector",
 		ServerAddress:   "http://localhost:4040",
 		ProfileTypes: []pyroscope.ProfileType{
 			pyroscope.ProfileCPU,

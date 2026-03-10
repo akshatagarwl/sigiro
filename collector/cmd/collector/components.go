@@ -3,7 +3,7 @@
 package main
 
 import (
-	unified "github.com/akshatagarwl/observe/collector/exporter/unified"
+	unified "github.com/akshatagarwl/sigiro/collector/exporter/unified"
 	filestorage "github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage"
 	k8sattributesprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor"
 	transformprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
@@ -77,7 +77,7 @@ func components() (otelcol.Factories, error) {
 		return otelcol.Factories{}, err
 	}
 	factories.ExporterModules = makeModulesMap(factories.Exporters, map[component.Type]string{
-		unified.NewFactory().Type():       "github.com/akshatagarwl/observe v0.0.0",
+		unified.NewFactory().Type():       "github.com/akshatagarwl/sigiro v0.0.0",
 		debugexporter.NewFactory().Type(): "go.opentelemetry.io/collector/exporter/debugexporter v0.147.0",
 	})
 

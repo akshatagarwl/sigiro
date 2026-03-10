@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/akshatagarwl/observe/pkg/schema"
+	"github.com/akshatagarwl/sigiro/pkg/schema"
 )
 
 // sqlPlaceholders returns ("$1,$2,...$n", []any{vals...}) for use in IN clauses.

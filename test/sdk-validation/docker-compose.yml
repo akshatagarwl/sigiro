@@ -17,7 +17,7 @@ services:
     image: minio/mc
     depends_on:
       minio: { condition: service_healthy }
-    entrypoint: sh -c "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb local/observe --ignore-existing"
+    entrypoint: sh -c "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb local/sigiro --ignore-existing"
 
   collector:
     build:
@@ -27,7 +27,7 @@ services:
       minio-setup: { condition: service_completed_successfully }
     environment:
       S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: observe
+      S3_BUCKET: sigiro
       S3_REGION: us-east-1
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
