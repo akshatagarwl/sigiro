@@ -30,12 +30,27 @@ func TestParquetGlobs_SingleHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 14, 5, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 14, 25, 0, 0, time.UTC)
 
-	globs := ParquetGlobs("sigiro", from, to)
+	globs := ParquetGlobs("sigiro", from, to, "")
 	if len(globs) != 1 {
 		t.Fatalf("expected 1 glob, got %d: %v", len(globs), globs)
 	}
 	// 2026-03-01 14:00 UTC = 1772373600
-	want := "s3://sigiro/1772373600/*.parquet"
+	want := "s3://sigiro/1772373600/signal=*/*.parquet"
+	if globs[0] != want {
+		t.Errorf("got %q, want %q", globs[0], want)
+	}
+}
+
+func TestParquetGlobs_SingleSignal(t *testing.T) {
+	from := time.Date(2026, 3, 1, 14, 5, 0, 0, time.UTC)
+	to := time.Date(2026, 3, 1, 14, 25, 0, 0, time.UTC)
+
+	globs := ParquetGlobs("sigiro", from, to, "metric")
+	if len(globs) != 1 {
+		t.Fatalf("expected 1 glob, got %d: %v", len(globs), globs)
+	}
+
+	want := "s3://sigiro/1772373600/signal=metric/*.parquet"
 	if globs[0] != want {
 		t.Errorf("got %q, want %q", globs[0], want)
 	}
@@ -45,12 +60,12 @@ func TestParquetGlobs_MultiHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 13, 30, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 15, 0, 0, 0, time.UTC)
 
-	globs := ParquetGlobs("sigiro", from, to)
+	globs := ParquetGlobs("sigiro", from, to, "")
 	if len(globs) != 3 {
 		t.Fatalf("expected 3 globs (hours 13,14,15), got %d: %v", len(globs), globs)
 	}
 	// 2026-03-01 13:00 UTC = 1772370000
-	want0 := "s3://sigiro/1772370000/*.parquet"
+	want0 := "s3://sigiro/1772370000/signal=*/*.parquet"
 	if globs[0] != want0 {
 		t.Errorf("globs[0] = %q, want %q", globs[0], want0)
 	}
@@ -60,7 +75,7 @@ func TestParquetGlobs_CrossDay(t *testing.T) {
 	from := time.Date(2026, 3, 1, 23, 30, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 2, 0, 15, 0, 0, time.UTC)
 
-	globs := ParquetGlobs("sigiro", from, to)
+	globs := ParquetGlobs("sigiro", from, to, "")
 	if len(globs) != 2 {
 		t.Fatalf("expected 2 globs (hour 23, hour 0), got %d: %v", len(globs), globs)
 	}
@@ -69,9 +84,20 @@ func TestParquetGlobs_CrossDay(t *testing.T) {
 func TestParquetTable_SingleHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 14, 5, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 14, 25, 0, 0, time.UTC)
-	got := ParquetTable("sigiro", from, to)
+	got := ParquetTable("sigiro", from, to, "")
 
-	want := "read_parquet('s3://sigiro/1772373600/*.parquet')"
+	want := "read_parquet('s3://sigiro/1772373600/signal=*/*.parquet', hive_partitioning=true)"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestParquetTable_SingleSignal(t *testing.T) {
+	from := time.Date(2026, 3, 1, 14, 5, 0, 0, time.UTC)
+	to := time.Date(2026, 3, 1, 14, 25, 0, 0, time.UTC)
+	got := ParquetTable("sigiro", from, to, "metric")
+
+	want := "read_parquet('s3://sigiro/1772373600/signal=metric/*.parquet')"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -80,9 +106,9 @@ func TestParquetTable_SingleHour(t *testing.T) {
 func TestParquetTable_MultiHour(t *testing.T) {
 	from := time.Date(2026, 3, 1, 13, 30, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 1, 14, 15, 0, 0, time.UTC)
-	got := ParquetTable("sigiro", from, to)
+	got := ParquetTable("sigiro", from, to, "")
 
-	want := "read_parquet(['s3://sigiro/1772370000/*.parquet', 's3://sigiro/1772373600/*.parquet'])"
+	want := "read_parquet(['s3://sigiro/1772370000/signal=*/*.parquet', 's3://sigiro/1772373600/signal=*/*.parquet'], hive_partitioning=true)"
 	if got != want {
 		t.Errorf("got %q,\nwant %q", got, want)
 	}

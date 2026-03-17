@@ -55,43 +55,49 @@ func EpochHour(tsNano int64) int64 {
 	return (tsNano / nsPerHour) * 3600
 }
 
-// Write sorts rows in-place by (hour, service, signal, timestamp),
-// walks hour boundaries as zero-copy sub-slices, and uploads a Parquet
-// file per hour partition.
+// Write sorts rows in-place by (hour, signal, service, timestamp),
+// walks (hour, signal) boundaries as zero-copy sub-slices, and uploads
+// a Parquet file per (hour, signal) partition. This produces Hive-style
+// partitioning on S3: {epochHour}/signal={signal}/{node}-{ts}.parquet
+//
+// Hive partitioning by signal enables two access patterns from one layout:
+// - AI agents glob signal=* to get all signals in one unified scan
+// - Dashboard tools (Perses) glob signal=metric to get only metrics
 func (w *ParquetWriter) Write(ctx context.Context, rows []schema.UnifiedRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
-	// Sort in-place: primary key is hour bucket, then the existing sort order.
+	// Sort in-place: primary key is (hour, signal), then (service, timestamp).
 	sort.Slice(rows, func(i, j int) bool {
 		hi, hj := EpochHour(rows[i].Timestamp), EpochHour(rows[j].Timestamp)
 		if hi != hj {
 			return hi < hj
 		}
 
-		if rows[i].Service != rows[j].Service {
-			return rows[i].Service < rows[j].Service
-		}
-
 		if rows[i].Signal != rows[j].Signal {
 			return rows[i].Signal < rows[j].Signal
+		}
+
+		if rows[i].Service != rows[j].Service {
+			return rows[i].Service < rows[j].Service
 		}
 
 		return rows[i].Timestamp < rows[j].Timestamp
 	})
 
-	// Walk sorted slice, find hour boundaries, take sub-slices (zero copy).
+	// Walk sorted slice, find (hour, signal) boundaries, take sub-slices (zero copy).
 	start := 0
 	for start < len(rows) {
 		hour := EpochHour(rows[start].Timestamp)
+		signal := rows[start].Signal
 
 		end := start + 1
-		for end < len(rows) && EpochHour(rows[end].Timestamp) == hour {
+		for end < len(rows) && EpochHour(rows[end].Timestamp) == hour && rows[end].Signal == signal {
 			end++
 		}
 
-		if err := w.writePartition(ctx, hour, rows[start:end]); err != nil {
+		if err := w.writePartition(ctx, hour, signal, rows[start:end]); err != nil {
 			return err
 		}
 
@@ -101,9 +107,9 @@ func (w *ParquetWriter) Write(ctx context.Context, rows []schema.UnifiedRow) err
 	return nil
 }
 
-func (w *ParquetWriter) writePartition(ctx context.Context, hour int64, hourRows []schema.UnifiedRow) error {
-	key := fmt.Sprintf("%d/%s-%d.parquet",
-		hour, w.nodeID, time.Now().UnixNano())
+func (w *ParquetWriter) writePartition(ctx context.Context, hour int64, signal string, hourRows []schema.UnifiedRow) error {
+	key := fmt.Sprintf("%d/signal=%s/%s-%d.parquet",
+		hour, signal, w.nodeID, time.Now().UnixNano())
 
 	// FRAGILE: entire hour-partition is buffered in memory before upload.
 	// A burst of data for a single hour can OOM the process. No size
