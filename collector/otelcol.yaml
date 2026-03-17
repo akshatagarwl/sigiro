@@ -32,7 +32,7 @@ receivers:
 
 processors:
   batch:
-    timeout: 5s
+    timeout: 60s
 
 extensions:
   file_storage/queue:

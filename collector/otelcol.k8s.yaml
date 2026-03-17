@@ -18,7 +18,7 @@ receivers:
 
 processors:
   batch:
-    timeout: 5s
+    timeout: 60s
 
   k8s_attributes:
     auth_type: serviceAccount
