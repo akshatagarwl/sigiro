@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roadmap — Sigiro</title>
+    <meta name="description" content="What we're building and when. Sigiro public roadmap." />
+    <meta name="theme-color" content="#0A0A0A" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Departure+Mono&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+      :root {
+        --bg: #0a0a0a; --surface: #141414; --border: #222; --accent: #fff;
+        --text: #e0e0e0; --text-secondary: #b0b0b0; --mid: #888; --muted: #666; --dim: #444;
+        --font-display: 'Departure Mono', monospace;
+        --font-mono: 'JetBrains Mono', monospace;
+        --font-body: 'Inter', system-ui, sans-serif;
+        --sig-log: #6b9bd2; --sig-metric: #a78bfa; --sig-trace: #d4943e; --sig-profile: #6bc9a8;
+      }
+      html { color-scheme: dark; }
+      body { background: var(--bg); color: var(--text); font-family: var(--font-body); font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+      a { color: inherit; text-decoration: none; }
+      .container { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+
+      nav { display: flex; justify-content: space-between; align-items: center; height: 64px; padding: 0 clamp(24px, 4vw, 48px); border-bottom: 1px solid var(--border); }
+      .nav-logo { display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 15px; color: var(--text); }
+      .nav-back { font-family: var(--font-mono); font-size: 13px; color: var(--mid); }
+      .nav-back:hover { color: var(--text); }
+
+      .page-header { padding: 80px 0 48px; border-bottom: 1px solid var(--border); }
+      .page-title { font-family: var(--font-display); font-size: clamp(28px, 4vw, 48px); color: var(--accent); margin-bottom: 12px; }
+      .page-subtitle { color: var(--text-secondary); font-size: 17px; }
+
+      .phase { padding: 48px 0; border-bottom: 1px solid var(--border); }
+      .phase:last-child { border-bottom: none; }
+      .phase-header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+      .phase-status { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; padding: 4px 10px; border-radius: 3px; }
+      .status-now { background: var(--sig-profile); color: var(--bg); }
+      .status-next { background: var(--dim); color: var(--text); }
+      .status-later { background: transparent; border: 1px solid var(--dim); color: var(--muted); }
+      .phase-title { font-family: var(--font-display); font-size: 22px; color: var(--accent); }
+      .phase-items { list-style: none; display: flex; flex-direction: column; gap: 12px; }
+      .phase-item { display: flex; gap: 12px; align-items: flex-start; }
+      .phase-item::before { content: '→'; color: var(--dim); font-family: var(--font-mono); flex-shrink: 0; margin-top: 1px; }
+      .item-title { color: var(--text); font-weight: 500; }
+      .item-desc { color: var(--muted); font-size: 14px; margin-top: 2px; }
+
+      footer { padding: 48px 0; text-align: center; color: var(--muted); font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <a href="/" class="nav-logo">sigiro</a>
+      <a href="/" class="nav-back">← back</a>
+    </nav>
+
+    <div class="container">
+      <header class="page-header">
+        <h1 class="page-title">Roadmap</h1>
+        <p class="page-subtitle">What we're building, in the order we're building it. Updated as priorities shift.</p>
+      </header>
+
+      <section class="phase">
+        <div class="phase-header">
+          <span class="phase-status status-now">Building now</span>
+          <h2 class="phase-title">Foundation</h2>
+        </div>
+        <ul class="phase-items">
+          <li class="phase-item">
+            <div>
+              <div class="item-title">Unified signal ingestion</div>
+              <div class="item-desc">Single OTLP endpoint for logs, metrics, traces, and profiles. One table, one schema.</div>
+            </div>
+          </li>
+          <li class="phase-item">
+            <div>
+              <div class="item-title">Query layer density</div>
+              <div class="item-desc">Pre-aggregated, structured responses that fit in 50K tokens. Log template dedup, adaptive summarization.</div>
+            </div>
+          </li>
+          <li class="phase-item">
+            <div>
+              <div class="item-title">Tier-1 anomaly sentinels</div>
+              <div class="item-desc">Lightweight statistical detectors that annotate data before the LLM ever sees it.</div>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="phase">
+        <div class="phase-header">
+          <span class="phase-status status-next">Next</span>
+          <h2 class="phase-title">Agent reasoning</h2>
+        </div>
+        <ul class="phase-items">
+          <li class="phase-item">
+            <div>
+              <div class="item-title">Investigation agent</div>
+              <div class="item-desc">Multi-step reasoning over correlated signals. Ask "why is checkout slow?" and get the root cause.</div>
+            </div>
+          </li>
+          <li class="phase-item">
+            <div>
+              <div class="item-title">Service topology awareness</div>
+              <div class="item-desc">Agent understands your service graph and traces dependencies automatically.</div>
+            </div>
+          </li>
+          <li class="phase-item">
+            <div>
+              <div class="item-title">MCP + A2A support</div>
+              <div class="item-desc">First-class agent protocols. Your agent talks to our agent.</div>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="phase">
+        <div class="phase-header">
+          <span class="phase-status status-later">Later</span>
+          <h2 class="phase-title">Autonomy</h2>
+        </div>
+        <ul class="phase-items">
+          <li class="phase-item">
+            <div>
+              <div class="item-title">Continuous monitoring agents</div>
+              <div class="item-desc">Always-on agents that watch your services and alert with root cause, not just symptoms.</div>
+            </div>
+          </li>
+          <li class="phase-item">
+            <div>
+              <div class="item-title">Remediation suggestions</div>
+              <div class="item-desc">Agent proposes fixes with links to the exact config/code that needs changing.</div>
+            </div>
+          </li>
+          <li class="phase-item">
+            <div>
+              <div class="item-title">Multi-cluster federation</div>
+              <div class="item-desc">Correlate signals across clusters, clouds, and regions.</div>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <footer>
+        <p>© 2026 Sigiro · <a href="/">Home</a> · <a href="/agents.txt">agents.txt</a></p>
+      </footer>
+    </div>
+  </body>
+</html>

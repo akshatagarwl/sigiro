@@ -1,0 +1,23 @@
+# Sigiro Agents.txt
+# https://sigiro.dev/agents.txt
+
+User-agent: *
+Allow: /api/v1/query
+Allow: /api/v1/investigate
+Allow: /api/v1/signals
+
+# Agent capabilities
+Name: Sigiro
+Description: AI-native observability — logs, metrics, traces, and profiles in one table. Ask what broke and get the answer.
+Contact: hello@sigiro.dev
+API: https://sigiro.dev/api/v1
+Docs: https://sigiro.dev/docs
+
+# Supported agent protocols
+Protocol: MCP
+Protocol: OpenAPI
+Protocol: A2A
+
+# Rate limits
+Rate-limit: 100/minute
+Rate-limit-authenticated: 1000/minute
