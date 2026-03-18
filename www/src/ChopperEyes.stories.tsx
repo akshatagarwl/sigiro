@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { ChopperEye, type ChopperExpression } from './ChopperEyes'
 import { Logo, type EyeExpression } from './Logo'
+import { AllAnimatedPairs, HoverAnimatedPairs } from './ChopperPairStories'
 
 const meta = {
   title: 'Chopper Eyes',
@@ -114,6 +115,20 @@ export const TwoEyesAllExpressions: Story = {
       ))}
     </div>
   ),
+}
+
+// --- Animated Pair Sequences ---
+
+export const AnimatedSequences: Story = {
+  name: 'Animated — Auto-playing',
+  args: { size: 80 },
+  render: () => <AllAnimatedPairs />,
+}
+
+export const HoverSequences: Story = {
+  name: 'Animated — Hover to play',
+  args: { size: 80 },
+  render: () => <HoverAnimatedPairs />,
 }
 
 // --- Current Logo (single eye) for comparison ---
