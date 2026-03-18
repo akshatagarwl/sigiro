@@ -7,7 +7,9 @@
     "dev": "vp dev",
     "build": "vp build",
     "check": "vp check",
-    "preview": "vp preview"
+    "preview": "vp preview",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "motion": "^12.38.0",
@@ -22,7 +24,11 @@
     "playwright": "^1.58.2",
     "typescript": "~5.9.3",
     "vite": "npm:@voidzero-dev/vite-plus-core@latest",
-    "vite-plus": "latest"
+    "vite-plus": "latest",
+    "storybook": "^10.2.19",
+    "@storybook/react-vite": "^10.2.19",
+    "@storybook/addon-docs": "^10.2.19",
+    "@storybook/addon-mcp": "latest"
   },
   "overrides": {
     "vite": "npm:@voidzero-dev/vite-plus-core@latest",
