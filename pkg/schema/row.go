@@ -20,13 +20,6 @@ const (
 	UnitProfileCount = "count" // profile Value default unit; actual unit preserved from pprofile SampleType (e.g. "bytes" for alloc_space)
 )
 
-// Event represents a span event (e.g. exception, annotation).
-type Event struct {
-	Timestamp  int64   `parquet:"timestamp" json:"timestamp"`
-	Name       string  `parquet:"name" json:"name"`
-	Attributes *string `parquet:"attributes,optional" json:"attributes,omitempty"`
-}
-
 // UnifiedRow is the canonical schema for the unified Parquet table.
 // All observability signals (metrics, spans, logs, profiles) are stored
 // as rows in this single schema. Sort order: (service, signal, timestamp).
@@ -37,7 +30,6 @@ type Event struct {
 //	P1: http_method string? (dict)    — promoted from metadata
 //	P1: http_status_code int32?       — promoted from metadata
 //	P1: http_route string? (dict)     — promoted from metadata
-//	P1: error_type string? (dict)     — from span exception events
 //	P2: ingest_timestamp int64        — when the exporter received the data
 type UnifiedRow struct {
 	Timestamp    int64    `parquet:"timestamp,delta"`
@@ -56,7 +48,6 @@ type UnifiedRow struct {
 	Unit         *string  `parquet:"unit,optional,dict"`
 	Kind         *string  `parquet:"kind,optional,dict"`
 	Stacktrace   []string `parquet:"stacktrace,optional,list" parquet-element:",dict"`
-	Events       []Event  `parquet:"events,optional"`
 	// FRAGILE: metadata is a JSON-encoded string, not a structured type.
 	// Every consumer must parse it, and there is no schema validation.
 	// Attribute values are coerced to strings via AsString() in the mapper,

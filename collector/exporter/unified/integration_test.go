@@ -550,24 +550,48 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 		}
 	})
 
-	t.Run("spans/events_and_metadata", func(t *testing.T) {
-		// Events is a nested Parquet struct — check presence via len() and content via CAST to VARCHAR
-		eventCount := scalarInt(`
-			SELECT len(events) FROM telemetry
-			WHERE signal='span' AND name='POST /orders'
+	t.Run("spans/span_event_becomes_log", func(t *testing.T) {
+		// Span events are converted to log rows at ingest (no events column).
+		// The exception event on POST /orders should appear as a log row
+		// correlated via trace_id + span_id.
+		n := scalarInt(`
+			SELECT count(*) FROM telemetry
+			WHERE signal='log' AND name='exception'
+			  AND trace_id='ffeeddccbbaa99887766554433221100'
 		`)
-		if eventCount == 0 {
-			t.Fatal("POST /orders span has no events, want exception event")
+		if n != 1 {
+			t.Errorf("exception log rows = %d, want 1", n)
 		}
 
-		eventName := scalar(`
-			SELECT events[1].name FROM telemetry
+		// The log row should carry the span_id of the parent span
+		spanID := scalar(`
+			SELECT span_id FROM telemetry
+			WHERE signal='log' AND name='exception'
+		`)
+
+		parentSpanID := scalar(`
+			SELECT span_id FROM telemetry
 			WHERE signal='span' AND name='POST /orders'
 		`)
-		if eventName != "exception" {
-			t.Errorf("first event name = %q, want exception", eventName)
+		if spanID != parentSpanID {
+			t.Errorf("exception log span_id=%s, want parent span_id=%s", spanID, parentSpanID)
 		}
 
+		// Exception attributes should be in metadata
+		metadataJSON := scalar(`
+			SELECT metadata FROM telemetry
+			WHERE signal='log' AND name='exception'
+		`)
+		if !strings.Contains(metadataJSON, "exception.type") {
+			t.Errorf("exception metadata missing exception.type: %s", metadataJSON)
+		}
+
+		if !strings.Contains(metadataJSON, "context.DeadlineExceeded") {
+			t.Errorf("exception metadata missing exception type value: %s", metadataJSON)
+		}
+	})
+
+	t.Run("spans/metadata", func(t *testing.T) {
 		// Metadata is a JSON string stored as varchar — check on the span that has attributes
 		metadataJSON := scalar(`
 			SELECT metadata FROM telemetry
@@ -624,9 +648,10 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 
 	// --- Validate logs ---
 	t.Run("logs/count", func(t *testing.T) {
+		// 4 original log records + 1 span exception event converted to log
 		n := scalarInt(`SELECT count(*) FROM telemetry WHERE signal='log'`)
-		if n != 4 {
-			t.Errorf("log count = %d, want 4", n)
+		if n != 5 {
+			t.Errorf("log count = %d, want 5 (4 logs + 1 span event)", n)
 		}
 	})
 
@@ -641,13 +666,14 @@ func TestIntegration_RealDataPipeline(t *testing.T) {
 	})
 
 	t.Run("logs/trace_correlation", func(t *testing.T) {
-		// Error logs should be correlated to the error trace
+		// Error logs should be correlated to the error trace:
+		// 2 original error logs + 1 exception span event converted to log
 		n := scalarInt(`
 			SELECT count(*) FROM telemetry
 			WHERE signal='log' AND trace_id='ffeeddccbbaa99887766554433221100'
 		`)
-		if n != 2 {
-			t.Errorf("trace-correlated logs = %d, want 2 (one per service)", n)
+		if n != 3 {
+			t.Errorf("trace-correlated logs = %d, want 3 (2 logs + 1 span event)", n)
 		}
 	})
 

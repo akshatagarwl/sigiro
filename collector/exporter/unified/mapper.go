@@ -277,23 +277,6 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 				status := spanStatusUpper[s.Status().Code()]
 				kind := s.Kind().String()
 
-				var events []schema.Event
-
-				for e := 0; e < s.Events().Len(); e++ {
-					ev := s.Events().At(e)
-
-					event := schema.Event{
-						Timestamp: int64(ev.Timestamp()),
-						Name:      ev.Name(),
-					}
-					if ev.Attributes().Len() > 0 {
-						attrs := attrsToMap(ev.Attributes())
-						event.Attributes = mustJSONString(attrs)
-					}
-
-					events = append(events, event)
-				}
-
 				spanAttrs := attrsToMap(s.Attributes())
 				metadata := mergeMetadata(r.extra, spanAttrs)
 
@@ -309,9 +292,48 @@ func mapTraces(td ptrace.Traces) []schema.UnifiedRow {
 					Unit:         ptrUnitSpanDuration,
 					Status:       &status,
 					Kind:         &kind,
-					Events:       events,
 					Metadata:     metadata,
 				})
+
+				// Span events become log rows correlated via trace_id + span_id.
+				// OTel is deprecating span events in favor of log-based events
+				// (opentelemetry.io/blog/2026/deprecating-span-events/). As a
+				// greenfield project we skip the nested list<struct> entirely and
+				// store events as first-class log rows from day one. Every event
+				// benefits from log template dedup, capping, and summarization.
+				for e := 0; e < s.Events().Len(); e++ {
+					ev := s.Events().At(e)
+
+					evName := ev.Name()
+					evAttrs := attrsToMap(ev.Attributes())
+
+					var (
+						evStatus *string
+						evMsg    *string
+					)
+
+					if evName == "exception" {
+						evStatus = ptr("ERROR")
+
+						if m, ok := evAttrs["exception.message"]; ok {
+							evMsg = &m
+						}
+					}
+
+					evMetadata := mergeMetadata(r.extra, evAttrs)
+
+					rows = append(rows, schema.UnifiedRow{
+						Timestamp: int64(ev.Timestamp()),
+						Signal:    schema.SignalLog,
+						Service:   r.svc, Host: r.host, Pod: r.pod, DeployVer: r.deploy,
+						TraceID:  traceIDStr(s.TraceID()),
+						SpanID:   spanIDStr(s.SpanID()),
+						Name:     evName,
+						Status:   evStatus,
+						Message:  evMsg,
+						Metadata: evMetadata,
+					})
+				}
 			}
 		}
 	}
