@@ -2,11 +2,12 @@ import { useEyeMood } from './EyeMood'
 import { ChopperEye } from './ChopperEyes'
 
 export function MoodLogo({ size = 24 }: { size?: number }) {
-  const { expression, trigger } = useEyeMood()
+  const { expression, trigger, clear } = useEyeMood()
 
   return (
     <span
       onMouseEnter={() => trigger('action:hover-logo')}
+      onMouseLeave={clear}
       style={{ cursor: 'pointer', display: 'inline-flex', verticalAlign: 'middle' }}
     >
       <ChopperEye size={size} expression={expression} />

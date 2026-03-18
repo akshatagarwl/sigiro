@@ -20,7 +20,7 @@ const RULES = {
   // --- User Actions ---
   'action:waitlist':  { expression: 'heart',   priority: 5, duration: 2000 } as MoodRule,
   'action:scroll-pricing': { expression: 'sparkle', priority: 2, duration: 0 } as MoodRule,
-  'action:hover-logo': { expression: 'happy',  priority: 3, duration: 800 } as MoodRule,
+  'action:hover-logo': { expression: 'happy',  priority: 3, duration: 0 } as MoodRule,
 
   // --- Content Sections (scroll-triggered) ---
   'section:hero':         { expression: 'normal',  priority: 0, duration: 0 } as MoodRule,
