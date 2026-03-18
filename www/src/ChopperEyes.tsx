@@ -12,6 +12,7 @@ export type ChopperExpression =
   | 'sleepy'
 
 const anim = { type: 'spring' as const, stiffness: 400, damping: 22 }
+const lidAnim = { type: 'spring' as const, stiffness: 300, damping: 26 }
 
 const PINK = '#FF6B9D'
 const GOLD = '#FFD700'
@@ -40,9 +41,6 @@ export function ChopperEye({
   const springX = useSpring(mx, { stiffness: 300, damping: 30 })
   const springY = useSpring(my, { stiffness: 300, damping: 30 })
 
-  // Max offset in viewBox units (40x40) — iris can shift ~3 units
-  const maxOffset = 3
-
   useEffect(() => {
     if (prefersReducedMotion) return
     const svg = svgRef.current
@@ -55,7 +53,7 @@ export function ChopperEye({
       const dx = e.clientX - cx
       const dy = e.clientY - cy
       const dist = Math.sqrt(dx * dx + dy * dy)
-      const scale = Math.min(maxOffset, dist / 60)
+      const scale = Math.min(3, dist / 60)
       const angle = Math.atan2(dy, dx)
       mx.set(Math.cos(angle) * scale)
       my.set(Math.sin(angle) * scale)
@@ -65,7 +63,7 @@ export function ChopperEye({
     return () => document.removeEventListener('mousemove', onMouseMove)
   }, [mx, my])
 
-  // Expressions that replace the entire eye shape — no tracking needed
+  // --- Shape-replacement expressions (no eyeball at all) ---
 
   if (expression === 'heart') {
     return (
@@ -121,33 +119,6 @@ export function ChopperEye({
     )
   }
 
-  if (expression === 'happy') {
-    return (
-      <svg viewBox="0 0 40 40" width={size} height={size} fill="none" aria-hidden="true">
-        <motion.path
-          d="M5 22 Q20 6 35 22"
-          initial={{ pathLength: 0 }}
-          animate={{ pathLength: 1 }}
-          transition={{ duration: 0.3 }}
-          stroke="currentColor"
-          strokeWidth="3"
-          strokeLinecap="round"
-          fill="none"
-        />
-        <motion.path
-          d="M11 24 Q20 30 29 24"
-          initial={{ pathLength: 0 }}
-          animate={{ pathLength: 1 }}
-          transition={{ duration: 0.3, delay: 0.05 }}
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          fill="none"
-        />
-      </svg>
-    )
-  }
-
   if (expression === 'dizzy') {
     return (
       <svg viewBox="0 0 40 40" width={size} height={size} fill="none" aria-hidden="true">
@@ -165,66 +136,87 @@ export function ChopperEye({
     )
   }
 
-  // Round-eye-based expressions: normal, glare, cry, sleepy
-  // Iris + catchlights track the mouse cursor
-  const hasTracking = expression === 'normal' || expression === 'cry'
+  // --- Unified eye with animated eyelid ---
+  // All remaining expressions (normal, happy, sleepy, glare, cry) share
+  // one SVG. An eyelid overlay animates to close/open the eye naturally.
+
+  const isOpen = expression === 'normal' || expression === 'cry'
+  const isHappy = expression === 'happy'
+  const isSleepy = expression === 'sleepy'
+  const isGlare = expression === 'glare'
+
+  // Eyelid coverage: how far down the bg-colored lid covers the eye
+  // Expressed as the y position of the bottom edge of the lid cover
+  // Higher = more covered. Eye center is at y=20, sclera radius=17.
+  // y=3  → fully open (lid at very top of sclera, nothing covered)
+  // y=19 → sleepy (half the eye covered)
+  // y=14 → glare (narrow squint opening)
+  // y=37 → fully closed (entire eye covered)
+  const lidBottom = isOpen ? 3 : isSleepy ? 19 : isGlare ? 14 : 37
+
+  // Iris color
+  const irisColor = expression === 'cry' ? BLUE : isGlare ? RED : 'currentColor'
+
+  // Mouse tracking only when eye is open
+  const hasTracking = isOpen
 
   return (
     <svg ref={svgRef} viewBox="0 0 40 40" width={size} height={size} fill="none" aria-hidden="true">
       <defs>
+        {/* Clip to sclera bounds */}
         <clipPath id={id}>
-          {expression === 'sleepy' ? (
-            <rect x="0" y="16" width="40" height="24" />
-          ) : expression === 'glare' ? (
-            <path d="M3 14 A17 17 0 0 1 37 14 L37 26 Q20 22 3 26 Z" />
-          ) : (
-            <circle cx="20" cy="20" r="18" />
-          )}
+          <circle cx="20" cy="20" r="17" />
         </clipPath>
       </defs>
 
-      {/* outer sclera */}
+      {/* Sclera outline — always visible */}
       <circle cx="20" cy="20" r="17" stroke="currentColor" strokeWidth="2" />
 
+      {/* Iris group — inside sclera clip, tracks cursor */}
       <g clipPath={`url(#${id})`}>
-        {/* iris group — moves with cursor for normal/cry */}
         <motion.g style={hasTracking ? { x: springX, y: springY } : undefined}>
+          {/* Iris fill */}
           <motion.circle
             cx="20" cy="20"
-            animate={{ r: expression === 'glare' ? 12 : 13 }}
+            animate={{ r: isGlare ? 12 : 13 }}
             transition={anim}
-            fill={expression === 'cry' ? BLUE : expression === 'glare' ? RED : 'currentColor'}
+            fill={irisColor}
           />
 
-          {expression === 'normal' && (
-            <>
-              <motion.ellipse
-                cx="24" cy="14"
-                initial={{ rx: 0, ry: 0 }}
-                animate={{ rx: 4, ry: 5.5 }}
-                transition={anim}
-                fill={bg}
-              />
-              <motion.circle
-                cx="14" cy="24"
-                initial={{ r: 0 }}
-                animate={{ r: 2 }}
-                transition={{ ...anim, delay: 0.05 }}
-                fill={bg}
-              />
-            </>
-          )}
+          {/* Catchlights — normal */}
+          <motion.ellipse
+            cx="24" cy="14"
+            animate={{
+              rx: isOpen ? 4 : 0,
+              ry: isOpen ? 5.5 : 0,
+              opacity: isOpen ? 1 : 0,
+            }}
+            transition={anim}
+            fill={bg}
+          />
+          <motion.circle
+            cx="14" cy="24"
+            animate={{
+              r: isOpen ? 2 : 0,
+              opacity: isOpen ? 1 : 0,
+            }}
+            transition={anim}
+            fill={bg}
+          />
 
-          {expression === 'glare' && (
-            <motion.ellipse
-              cx="23" cy="15"
-              initial={{ rx: 0, ry: 0 }}
-              animate={{ rx: 2, ry: 2.5 }}
-              transition={anim}
-              fill={bg}
-            />
-          )}
+          {/* Catchlight — glare (smaller, more intense) */}
+          <motion.ellipse
+            cx="23" cy="15"
+            animate={{
+              rx: isGlare ? 2 : 0,
+              ry: isGlare ? 2.5 : 0,
+              opacity: isGlare ? 1 : 0,
+            }}
+            transition={anim}
+            fill={bg}
+          />
 
+          {/* Catchlights — cry (pulsing) */}
           {expression === 'cry' && (
             <>
               <motion.ellipse
@@ -242,64 +234,95 @@ export function ChopperEye({
             </>
           )}
 
-          {expression === 'sleepy' && (
-            <>
-              <ellipse cx="24" cy="19" rx="3" ry="3.5" fill={bg} />
-              <circle cx="14" cy="25" r="1.5" fill={bg} />
-            </>
-          )}
+          {/* Catchlights — sleepy */}
+          <motion.ellipse
+            cx="24" cy="19"
+            animate={{
+              rx: isSleepy ? 3 : 0,
+              ry: isSleepy ? 3.5 : 0,
+              opacity: isSleepy ? 1 : 0,
+            }}
+            transition={anim}
+            fill={bg}
+          />
+          <motion.circle
+            cx="14" cy="25"
+            animate={{
+              r: isSleepy ? 1.5 : 0,
+              opacity: isSleepy ? 1 : 0,
+            }}
+            transition={anim}
+            fill={bg}
+          />
         </motion.g>
+
+        {/* Eyelid — bg-colored shape that slides down to cover the iris */}
+        {/* Uses a curved bottom edge for natural eyelid look */}
+        <motion.path
+          animate={{
+            d: `M0 0 L40 0 L40 ${lidBottom} Q20 ${lidBottom - 6} 0 ${lidBottom} Z`,
+          }}
+          transition={lidAnim}
+          fill={bg}
+        />
       </g>
 
-      {/* overlays (outside tracking group — stay fixed) */}
+      {/* --- Overlays on top of sclera --- */}
 
-      {expression === 'glare' && (
-        <motion.path
-          d="M6 8 L34 14"
-          initial={{ pathLength: 0 }}
-          animate={{ pathLength: 1 }}
-          transition={{ duration: 0.2 }}
-          stroke={RED}
-          strokeWidth="3.5"
-          strokeLinecap="round"
-          fill="none"
-        />
-      )}
+      {/* Eyelid crease line — visible when eye is partially or fully closed */}
+      <motion.path
+        animate={{
+          d: isHappy
+            ? 'M5 22 Q20 8 35 22'
+            : isSleepy
+              ? 'M3 20 Q20 12 37 20'
+              : isGlare
+                ? 'M3 14 Q20 8 37 14'
+                : 'M3 3 Q20 3 37 3',
+          opacity: (isHappy || isSleepy || isGlare) ? 1 : 0,
+        }}
+        transition={lidAnim}
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        fill="none"
+      />
 
-      {expression === 'cry' && (
-        <>
-          <motion.path
-            d="M33 30 Q34 35 33 38 Q32 39 31 38 Q30 35 33 30 Z"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 0.9, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.2 }}
-            fill={BLUE}
-          />
-          <motion.path
-            d="M36 28 Q37 32 36 34 Q35.5 35 35 34 Q34 32 36 28 Z"
-            initial={{ opacity: 0, y: -3 }}
-            animate={{ opacity: 0.6, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.35 }}
-            fill={BLUE}
-          />
-        </>
-      )}
+      {/* Happy — lower arc (the smile part of ^_^) */}
+      <motion.path
+        d="M11 24 Q20 30 29 24"
+        animate={{ opacity: isHappy ? 1 : 0 }}
+        transition={lidAnim}
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        fill="none"
+      />
 
-      {expression === 'sleepy' && (
-        <>
-          <motion.path
-            d="M3 20 Q20 12 37 20"
-            initial={{ pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ duration: 0.3 }}
-            stroke="currentColor"
-            strokeWidth="3"
-            strokeLinecap="round"
-            fill="none"
-          />
-          <path d="M0 20 Q20 12 40 20 L40 0 L0 0 Z" fill={bg} />
-        </>
-      )}
+      {/* Glare — angry eyebrow slash */}
+      <motion.path
+        d="M6 8 L34 14"
+        animate={{ opacity: isGlare ? 1 : 0 }}
+        transition={{ duration: 0.2 }}
+        stroke={RED}
+        strokeWidth="3.5"
+        strokeLinecap="round"
+        fill="none"
+      />
+
+      {/* Cry — teardrops */}
+      <motion.path
+        d="M33 30 Q34 35 33 38 Q32 39 31 38 Q30 35 33 30 Z"
+        animate={{ opacity: expression === 'cry' ? 0.9 : 0, y: expression === 'cry' ? 0 : -4 }}
+        transition={{ duration: 0.4, delay: 0.2 }}
+        fill={BLUE}
+      />
+      <motion.path
+        d="M36 28 Q37 32 36 34 Q35.5 35 35 34 Q34 32 36 28 Z"
+        animate={{ opacity: expression === 'cry' ? 0.6 : 0, y: expression === 'cry' ? 0 : -3 }}
+        transition={{ duration: 0.4, delay: 0.35 }}
+        fill={BLUE}
+      />
     </svg>
   )
 }
