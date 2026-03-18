@@ -1,6 +1,6 @@
 # Sigiro — Agent Data Guide
 #
-# Read this file, then query the data with DuckDB SQL.
+# Read this file, then query the data with the sigiro CLI.
 # All observability data lives in one Parquet table on S3.
 # No separate stores, no PromQL, no LogQL — just SQL.
 
@@ -9,52 +9,7 @@
 A unified observability table. Metrics, traces, logs, and profiles are
 interleaved in the same Parquet files on S3. Every row is one observation.
 
-You query it with DuckDB. One SQL dialect for everything.
-
-## DuckDB Setup
-
-```sql
-INSTALL httpfs;
-LOAD httpfs;
-SET s3_region = 'us-east-1';
-SET s3_access_key_id = '<key>';
-SET s3_secret_access_key = '<secret>';
-```
-
-For MinIO or local S3-compatible storage:
-```sql
-SET s3_endpoint = 'localhost:9000';
-SET s3_use_ssl = false;
-SET s3_url_style = 'path';
-```
-
-## S3 Layout
-
-```
-s3://sigiro/{epoch_hour_seconds}/{node}-{ts}.parquet
-```
-
-epoch_hour_seconds = Unix seconds of the hour start.
-2026-03-01 14:00 UTC = 1772373600.
-
-Query one hour:
-```sql
-SELECT * FROM read_parquet('s3://sigiro/1772373600/*.parquet') LIMIT 10;
-```
-
-Query multiple hours:
-```sql
-SELECT * FROM read_parquet([
-  's3://sigiro/1772373600/*.parquet',
-  's3://sigiro/1772377200/*.parquet'
-]) LIMIT 10;
-```
-
-To compute the epoch-hour for a given time:
-```sql
-SELECT (extract(epoch FROM '2026-03-01 14:23:00'::TIMESTAMP)::BIGINT / 3600) * 3600;
--- returns 1772373600
-```
+You query it with the sigiro CLI. One SQL dialect (DuckDB) for everything.
 
 ## Schema
 
@@ -71,27 +26,26 @@ Every row has these columns:
 | trace_id | string? | span, log | distributed trace ID (hex) |
 | span_id | string? | span | span ID within trace (hex) |
 | parent_span_id | string? | span | parent span ID for call trees |
-| name | string | all | what's measured (see below) |
-| value | float64? | metric, span, profile | numeric measurement (see below) |
+| name | string | all | what's measured: metric name, operation name, logger name, profile type |
+| value | float64? | metric, span, profile | numeric measurement: metric value, span duration (ms), sample count. null for logs |
 | status | string? | span, log | span: OK/ERROR/UNSET, log: INFO/WARN/ERROR |
 | message | string? | log | log body text |
 | unit | string? | metric, span, profile | unit of value |
 | kind | string? | span, profile | span: client/server/internal, profile: cpu/memory |
 | stacktrace | list<string>? | profile | call stack, root-to-leaf order |
-| events | list<struct>? | span | span events (timestamp, name, attributes) |
 | metadata | string? | all | JSON blob, extra attributes — filter LAST |
 
 ### What `name` means per signal
 
 - metric: metric name (e.g. `http.server.duration`, `process.runtime.go.mem.heap_alloc`)
-- span: operation name (e.g. `POST /checkout`, `db.query`, `GET /users/:id`)
+- span: operation name (e.g. `POST /checkout`, `db.query`)
 - log: logger/scope name (e.g. `app.checkout`, `billing.logger`)
 - profile: `profile.{type}` (e.g. `profile.cpu`, `profile.alloc_space`)
 
 ### What `value` means per signal
 
 - metric: the metric value, in `unit`
-- span: duration in milliseconds (converted from OTel nanoseconds at write time)
+- span: duration in milliseconds
 - profile: sample count
 - log: null
 
@@ -113,178 +67,118 @@ Timestamps are Unix nanoseconds, not seconds or milliseconds.
 ```sql
 -- Convert readable time to nanoseconds for WHERE clauses:
 SELECT epoch_ns('2026-03-01 14:00:00'::TIMESTAMP);
--- 1772373600000000000
 
 -- Convert stored nanoseconds to readable time:
 SELECT to_timestamp(timestamp / 1e9) FROM ...;
 
 -- Readable bucket for aggregation:
-SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket
-FROM ...;
+SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket FROM ...;
+```
+
+## CLI Usage
+
+```bash
+# Investigate a service (structured block: metrics + spans + logs + profiles + linked traces)
+sigiro investigate --service checkout --window 15m
+
+# Investigate a specific trace
+sigiro investigate --trace abc123def456 --window 1h
+
+# Raw SQL query (obs view = last 1 hour of all signals)
+sigiro query "SELECT count(*) FROM obs WHERE service='checkout' AND signal='span'"
+
+# Pipe to jq
+sigiro query "SELECT DISTINCT service FROM obs" | jq '.[].service'
+
+# Pipe investigation to an LLM
+sigiro investigate --service checkout --window 15m | llm "what's the root cause?"
+```
+
+### Environment variables
+
+```bash
+export SIGIRO_BUCKET=sigiro
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_REGION=us-east-1
+
+# For MinIO / local dev:
+export SIGIRO_S3_ENDPOINT=localhost:9000
 ```
 
 ## Investigation Playbook
 
 Given: a service name and an approximate time of incident.
-Goal: determine root cause in 1-2 query rounds.
+Goal: determine root cause.
 
-### Step 1: Compute the time window
+### Quick start
 
-Pick a 25-minute window centered on the incident. Compute epoch-hours.
-
-```sql
--- Example: incident at 14:10, window 14:00-14:25
--- epoch_hour for 14:00 = 1772373600
--- epoch_hour for 14:25 = 1772373600 (same hour)
--- If it crossed an hour boundary, use both epoch-hours
+```bash
+sigiro investigate --service checkout --window 15m
 ```
 
-Set up the table reference for all subsequent queries:
-```sql
--- Single hour:
-CREATE TEMP VIEW obs AS SELECT * FROM read_parquet('s3://sigiro/1772373600/*.parquet');
--- Multi-hour:
-CREATE TEMP VIEW obs AS SELECT * FROM read_parquet(['s3://sigiro/1772373600/*.parquet', 's3://sigiro/1772377200/*.parquet']);
+This runs 4 queries in parallel (metrics, spans, logs, profiles) plus a
+linked trace follow-up, and returns a structured JSON block.
+
+### Manual drill-down with raw SQL
+
+#### Metrics — bucketed time series
+```bash
+sigiro query "
+  SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
+         name, approx_quantile(value, 0.95) AS p95, avg(value) AS avg, count(*) AS n
+  FROM obs
+  WHERE service='checkout' AND signal='metric'
+  GROUP BY bucket, name
+  ORDER BY bucket, name
+"
 ```
 
-### Step 2: Run these 5 queries
-
-Run all 5 in parallel if your tool supports it.
-
-#### 2a. Metrics — bucketed time series
-
-```sql
-SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
-       name,
-       approx_quantile(value, 0.95) AS p95,
-       avg(value) AS avg,
-       count(*) AS n
-FROM obs
-WHERE service='checkout' AND signal='metric'
-      AND timestamp BETWEEN epoch_ns('2026-03-01 14:00:00'::TIMESTAMP)
-                        AND epoch_ns('2026-03-01 14:25:00'::TIMESTAMP)
-GROUP BY bucket, name
-ORDER BY bucket, name;
+#### Spans — errors and slow operations
+```bash
+sigiro query "
+  SELECT trace_id, span_id, name, value AS duration_ms, status
+  FROM obs
+  WHERE service='checkout' AND signal='span' AND (status='ERROR' OR value > 1000)
+  ORDER BY CASE WHEN status='ERROR' THEN 0 ELSE 1 END, value DESC
+  LIMIT 50
+"
 ```
 
-Look for: inflection points. When did p95 spike? When did error count jump?
-
-#### 2b. Spans — errors and slow operations
-
-```sql
-SELECT trace_id, span_id, parent_span_id, name,
-       value AS duration_ms, status, kind, service
-FROM obs
-WHERE service='checkout' AND signal='span'
-      AND timestamp BETWEEN epoch_ns('2026-03-01 14:00:00'::TIMESTAMP)
-                        AND epoch_ns('2026-03-01 14:25:00'::TIMESTAMP)
-      AND (status='ERROR' OR value > 1000)
-ORDER BY CASE WHEN status='ERROR' THEN 0 ELSE 1 END, value DESC
-LIMIT 50;
+#### Logs — recent errors
+```bash
+sigiro query "
+  SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t,
+         status, message, trace_id
+  FROM obs
+  WHERE service='checkout' AND signal='log'
+  ORDER BY timestamp DESC
+  LIMIT 100
+"
 ```
 
-Look for: which operations fail, how slow, collect trace_ids for step 3.
-
-#### 2c. Logs — recent, capped
-
-```sql
-SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t,
-       status, message, trace_id
-FROM obs
-WHERE service='checkout' AND signal='log'
-      AND timestamp BETWEEN epoch_ns('2026-03-01 14:00:00'::TIMESTAMP)
-                        AND epoch_ns('2026-03-01 14:25:00'::TIMESTAMP)
-ORDER BY timestamp DESC
-LIMIT 100;
+#### Profiles — hot functions
+```bash
+sigiro query "
+  SELECT stacktrace[len(stacktrace)] AS leaf_function, sum(value) AS samples
+  FROM obs
+  WHERE service='checkout' AND signal='profile'
+        AND stacktrace IS NOT NULL AND len(stacktrace) > 0
+  GROUP BY leaf_function
+  ORDER BY samples DESC
+  LIMIT 10
+"
 ```
 
-Look for: error messages, warnings before the incident, correlation via trace_id.
-
-Narrow with: `AND status='ERROR'` or `AND message LIKE '%timeout%'`
-
-#### 2d. Profiles — top functions
-
-```sql
-SELECT stacktrace[len(stacktrace)] AS leaf_function,
-       sum(value) AS samples
-FROM obs
-WHERE service='checkout' AND signal='profile'
-      AND timestamp BETWEEN epoch_ns('2026-03-01 14:00:00'::TIMESTAMP)
-                        AND epoch_ns('2026-03-01 14:25:00'::TIMESTAMP)
-      AND stacktrace IS NOT NULL AND len(stacktrace) > 0
-GROUP BY leaf_function
-ORDER BY samples DESC
-LIMIT 10;
-```
-
-Look for: runtime.gcBgMarkWorker (GC pressure), database/sql.(*DB).conn
-(pool contention), crypto/tls.(*Conn).Handshake (TLS overhead).
-
-Full call stacks for a hot function:
-```sql
-SELECT stacktrace, sum(value) AS samples
-FROM obs
-WHERE service='checkout' AND signal='profile'
-      AND list_contains(stacktrace, 'runtime.gcBgMarkWorker')
-GROUP BY stacktrace
-ORDER BY samples DESC
-LIMIT 5;
-```
-
-#### 2e. Discover services (optional)
-
-```sql
-SELECT DISTINCT service
-FROM obs
-WHERE timestamp > epoch_ns(now() - INTERVAL '1 hour')
-ORDER BY service;
-```
-
-### Step 3: Follow cross-service traces
-
-Take the error trace_ids from step 2b. Query ALL services for those traces:
-
-```sql
-SELECT trace_id, service, name, span_id, parent_span_id,
-       value AS duration_ms, status, kind,
-       signal
-FROM obs
-WHERE trace_id IN ('abc123def456...', 'fed789abc012...')
-      AND signal IN ('span', 'log')
-ORDER BY trace_id, timestamp;
-```
-
-This shows the full call chain across services. Use parent_span_id to
-reconstruct the tree: a span whose parent_span_id matches another span's
-span_id is a child call.
-
-Also get logs from other services for these traces:
-```sql
-SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t,
-       service, status, message
-FROM obs
-WHERE trace_id IN ('abc123def456...', 'fed789abc012...')
-      AND signal = 'log'
-      AND service != 'checkout'
-ORDER BY timestamp;
-```
-
-### Step 4: Compare with baseline (optional)
-
-If you need to confirm something is anomalous, run the same metrics query
-on a healthy window (e.g., same time yesterday or 1 hour earlier):
-
-```sql
-SELECT name,
-       approx_quantile(value, 0.95) AS p95,
-       avg(value) AS avg,
-       count(*) AS n
-FROM read_parquet('s3://sigiro/1772287200/*.parquet')
-WHERE service='checkout' AND signal='metric'
-      AND timestamp BETWEEN epoch_ns('2026-02-28 14:00:00'::TIMESTAMP)
-                        AND epoch_ns('2026-02-28 14:25:00'::TIMESTAMP)
-GROUP BY name
-ORDER BY name;
+#### Follow cross-service traces
+```bash
+sigiro query "
+  SELECT trace_id, service, name, span_id, parent_span_id,
+         value AS duration_ms, status
+  FROM obs
+  WHERE trace_id IN ('abc123...', 'def456...') AND signal IN ('span', 'log')
+  ORDER BY trace_id, timestamp
+"
 ```
 
 ## Sentinel Queries (Health Checks)
@@ -292,498 +186,54 @@ ORDER BY name;
 Quick checks to determine if a service needs investigation.
 
 ### Error rate (last 5 minutes)
-```sql
-SELECT count(*) FILTER (WHERE status = 'ERROR') * 100.0
-       / NULLIF(count(*), 0) AS error_pct
-FROM obs
-WHERE service = 'checkout' AND signal = 'span'
-      AND timestamp > epoch_ns(now() - INTERVAL '5 minutes');
-```
-Anomalous if: > 5%
-
-### Latency spike (5-min p95 vs 1-hour baseline)
-```sql
-WITH recent AS (
-  SELECT approx_quantile(value, 0.95) AS p95
+```bash
+sigiro query "
+  SELECT count(*) FILTER (WHERE status = 'ERROR') * 100.0 / NULLIF(count(*), 0) AS error_pct
   FROM obs
   WHERE service = 'checkout' AND signal = 'span'
         AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
-),
-baseline AS (
-  SELECT approx_quantile(value, 0.95) AS p95
-  FROM obs
-  WHERE service = 'checkout' AND signal = 'span'
-        AND timestamp BETWEEN epoch_ns(now() - INTERVAL '1 hour')
-                          AND epoch_ns(now() - INTERVAL '5 minutes')
-)
-SELECT CASE WHEN baseline.p95 > 0
-  THEN (recent.p95 - baseline.p95) / baseline.p95 * 100
-  ELSE 0 END AS pct_change
-FROM recent, baseline;
+"
+```
+Anomalous if: > 5%
+
+### Latency spike (5-min p95 vs baseline)
+```bash
+sigiro query "
+  WITH recent AS (
+    SELECT approx_quantile(value, 0.95) AS p95 FROM obs
+    WHERE service='checkout' AND signal='span'
+          AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
+  ),
+  baseline AS (
+    SELECT approx_quantile(value, 0.95) AS p95 FROM obs
+    WHERE service='checkout' AND signal='span'
+          AND timestamp BETWEEN epoch_ns(now() - INTERVAL '1 hour')
+                            AND epoch_ns(now() - INTERVAL '5 minutes')
+  )
+  SELECT CASE WHEN baseline.p95 > 0
+    THEN (recent.p95 - baseline.p95) / baseline.p95 * 100
+    ELSE 0 END AS pct_change
+  FROM recent, baseline
+"
 ```
 Anomalous if: > 50% increase
 
-### Log error burst (last 5 minutes)
-```sql
-SELECT count(*) AS error_count
-FROM obs
-WHERE service = 'checkout' AND signal = 'log'
-      AND status IN ('ERROR', 'FATAL')
-      AND timestamp > epoch_ns(now() - INTERVAL '5 minutes');
-```
-Anomalous if: > 10 errors in 5 minutes (tune per service)
-
-### Service silence (no data)
-```sql
-SELECT count(*) AS row_count
-FROM obs
-WHERE service = 'checkout'
-      AND timestamp > epoch_ns(now() - INTERVAL '5 minutes');
-```
-Anomalous if: 0 (service stopped emitting)
-
-## Example: OOMKill Investigation
-
-Alert: "OOMKill on checkout, 14:10 UTC"
-
-Metrics query returns:
-```
-bucket | name               | p95   | avg
-14:05  | process.memory.rss | 450MB | 420MB
-14:08  | process.memory.rss | 680MB | 650MB   ← climbing
-14:10  | process.memory.rss | 950MB | 920MB   ← near limit
-14:08  | db.pool.active     | 45    | 42      ← pool filling
-```
-
-Spans query returns errors:
-```
-trace_id | name           | duration_ms | status
-abc123   | POST /checkout | 2300        | ERROR
-def456   | POST /checkout | 1800        | ERROR
-```
-
-Logs show the sequence:
-```
-14:09:45 | WARN  | connection pool near capacity
-14:10:02 | ERROR | OOMKilled by kubelet (exitCode=137)
-14:10:03 | ERROR | connection pool exhausted
-```
-
-Profiles show GC thrashing:
-```
-leaf_function              | samples
-runtime.gcBgMarkWorker     | 340
-database/sql.(*DB).conn    | 280
-```
-
-Linked traces (abc123) show cascade:
-```
-service  | name           | duration_ms | status
-checkout | POST /checkout | 2300        | ERROR
-payments | POST /pay      | 2100        | ERROR
-payments | db.query       | 2000        | ERROR
-```
-
-Diagnosis: connection pool leak caused memory growth. GC couldn't keep up.
-OOMKill at 14:10. Cascading failure to payments via db queries.
-
-## Metadata
-
-metadata is a JSON string with attributes not promoted to columns.
-Query it LAST, after filtering by service/signal/time:
-
-```sql
-SELECT json_extract_string(metadata, '$.http.method') AS method,
-       json_extract_string(metadata, '$.http.status_code') AS status_code
-FROM obs
-WHERE service='checkout' AND signal='span' AND status='ERROR'
-LIMIT 20;
-```
-
-## Saving Investigation Results
-
-After completing an investigation, save a transcript and findings file so
-the work is preserved and reviewable. Write to `investigations/` in the
-repo root.
-
-### File naming
-
-```
-investigations/{date}-{service}-{summary}.md
-```
-
-Example: `investigations/2026-03-05-checkout-oomkill.md`
-
-### What to include
-
-```markdown
-# Investigation: {service} — {one-line summary}
-Date: {YYYY-MM-DD HH:MM UTC}
-Trigger: {what prompted the investigation}
-
-## Environment
-- S3 bucket: {bucket}
-- Time window: {start} — {end}
-- Epoch hours queried: {list}
-
-## Findings
-
-### Signal Summary
-| signal | rows | services |
-|--------|------|----------|
-| ...    | ...  | ...      |
-
-### Per-Service Health
-| service | error_rate | p95_latency_ms | row_count |
-|---------|-----------|----------------|-----------|
-| ...     | ...       | ...            | ...       |
-
-### Root Cause
-{What went wrong and why, with supporting evidence from queries}
-
-### Key Evidence
-- Metrics: {what the metrics showed}
-- Spans: {error spans, slow operations}
-- Logs: {relevant log lines}
-- Profiles: {hot functions if applicable}
-- Traces: {cross-service call chains}
-
-## Queries Run
-{Paste each SQL query and its result summary — not full result sets,
-just the rows/patterns that mattered}
-
-## Recommendations
-{What to fix, ordered by impact}
-```
-
-### Create the directory if it doesn't exist
-
+### Service silence
 ```bash
-mkdir -p investigations
+sigiro query "
+  SELECT count(*) AS row_count FROM obs
+  WHERE service = 'checkout'
+        AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
+"
 ```
-
-## Debugging Silent or Failing Services
-
-When services are missing telemetry or producing errors, work through these
-steps systematically. Each step eliminates a class of problems.
-
-### Step 1: Triage — which services are silent?
-
-```sql
-SELECT service, signal,
-       count(*) AS rows,
-       count(*) FILTER (WHERE status = 'ERROR') AS errors
-FROM obs
-GROUP BY service, signal
-ORDER BY service, signal;
-```
-
-Compare against expected services. Any service not in the results is silent.
-
-### Step 2: Check container health (if you have access)
-
-For each silent service, determine if it's running, crashed, or OOMKilled:
-
-```bash
-docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' <container>
-```
-
-Exit code signals:
-- **0**: clean shutdown (wrong command, missing entrypoint)
-- **1**: application error (bad config, missing env var, failed assertion)
-- **2**: shell/argument error (bad CLI flags)
-- **137**: SIGKILL / OOMKilled (check memory limits)
-- **139**: SIGSEGV (null pointer, undefined behavior — common in C/C++)
-
-### Step 3: Check container logs for crash messages
-
-```bash
-docker logs <container> 2>&1 | head -50
-```
-
-Zero log output + exit code 1 = crash before logging initializes.
-This usually means a required env var is missing or a config file isn't mounted.
-
-### Step 4: Verify environment variables
-
-Common env var problems by language/runtime:
-
-| Runtime | Gotcha |
-|---------|--------|
-| Go (OTel auto-instrumentation) | Needs `OTEL_EXPERIMENTAL_CONFIG_FILE` pointing to a mounted YAML, plus `OTEL_SEMCONV_STABILITY_OPT_IN` |
-| C/C++ | `getenv()` returns NULL for missing vars. `std::string(NULL)` = SIGSEGV. Always set `VERSION`, `HOST`, etc. |
-| .NET (ASP.NET Core) | `ASPNETCORE_URLS=http://*:<port>` required for Kestrel to bind gRPC/HTTP. Without it, the port doesn't accept connections |
-| nginx (OTel module) | Uses `OTEL_COLLECTOR_HOST` + `OTEL_COLLECTOR_PORT_GRPC`, NOT `OTEL_EXPORTER_OTLP_ENDPOINT` |
-| Ruby (Sinatra/Rails) | Needs `APP_ENV=production` to avoid dev-mode behaviors |
-| PHP (OTel auto-instrumentation) | Needs `OTEL_PHP_AUTOLOAD_ENABLED=true` |
-| Feature flags (flagd) | Services using OpenFeature need `FLAGD_HOST` + `FLAGD_PORT` or they error-loop on flag evaluation |
-
-Check upstream docs or docker-compose for the canonical env vars.
-Don't assume `OTEL_EXPORTER_OTLP_ENDPOINT` works universally — each SDK/module has its own convention.
-
-### Step 5: Identify cascade failures
-
-One crashed service can cause errors across many others.
-Use parent_span_id to trace which function owns an error:
-
-```sql
--- Find error spans
-SELECT span_id, parent_span_id, name, status, service, value AS duration_ms
-FROM obs
-WHERE signal = 'span' AND status = 'ERROR'
-ORDER BY value DESC
-LIMIT 20;
-
--- Then find the parent span to see which operation triggered the error
-SELECT name, service, status, value AS duration_ms
-FROM obs
-WHERE signal = 'span' AND span_id = '<parent_span_id_from_above>';
-```
-
-Common cascade pattern:
-1. Service A crashes → Service B calls A, gets connection refused → B returns ERROR
-2. B's caller (Service C) propagates ERROR upstream → frontend shows errors
-3. Fix A, and B + C recover automatically
-
-### Step 6: Verify URL schemes and addresses
-
-Go's `url.Parse("host:port/path")` interprets `host:` as a URL **scheme**,
-not a hostname. This causes "unsupported protocol scheme" errors.
-
-Always use explicit schemes for HTTP services:
-- `http://shipping:50050` (correct)
-- `shipping:50050` (broken in Go — `shipping:` becomes the scheme)
-
-gRPC services typically don't need a scheme (the gRPC dialer handles it),
-but HTTP services always do.
-
-### Step 7: Verify with cross-service trace
-
-After fixing, confirm the full call chain works:
-
-```sql
--- Find a trace that touches multiple services
-SELECT trace_id, count(DISTINCT service) AS svc_count
-FROM obs
-WHERE signal = 'span' AND trace_id IS NOT NULL
-GROUP BY trace_id
-HAVING svc_count >= 3
-ORDER BY svc_count DESC
-LIMIT 5;
-
--- Inspect the full trace tree
-SELECT service, name, span_id, parent_span_id,
-       value AS duration_ms, status
-FROM obs
-WHERE signal = 'span' AND trace_id = '<trace_id>'
-ORDER BY timestamp;
-```
-
-A healthy trace should show: no ERROR status, reasonable durations,
-and all expected services participating in the call chain.
-
-## Pipeline Health (Self-Observability)
-
-The collector feeds its own internal metrics back into the unified table.
-They appear as service='sigiro-collector', signal='metric'.
-Use these queries to check if the pipeline itself is healthy.
-
-### Discover available pipeline metrics
-
-```sql
-SELECT DISTINCT name FROM obs
-WHERE service='sigiro-collector' AND signal='metric'
-ORDER BY name;
-```
-
-### Exporter failures (are S3 writes failing?)
-
-```sql
-SELECT name, max(value) AS total
-FROM obs WHERE service='sigiro-collector' AND signal='metric'
-  AND name LIKE 'otelcol_exporter_send_failed%'
-  AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
-GROUP BY name;
-```
-Anomalous if: any value > 0
-
-### Queue depth (is the queue backing up?)
-
-```sql
-SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
-       avg(value) AS avg_depth, max(value) AS max_depth
-FROM obs WHERE service='sigiro-collector' AND signal='metric'
-  AND name = 'otelcol_exporter_queue_size'
-  AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-GROUP BY bucket ORDER BY bucket;
-```
-Anomalous if: steadily increasing or near queue capacity
-
-### Ingest rate (throughput per signal)
-
-```sql
-SELECT name, max(value) AS total
-FROM obs WHERE service='sigiro-collector' AND signal='metric'
-  AND name LIKE 'otelcol_receiver_accepted%'
-  AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
-GROUP BY name;
-```
-
-### Memory usage (approaching OOM?)
-
-```sql
-SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M') AS bucket,
-       max(value) / 1e6 AS rss_mb
-FROM obs WHERE service='sigiro-collector' AND signal='metric'
-  AND name = 'otelcol_process_memory_rss_bytes'
-  AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-GROUP BY bucket ORDER BY bucket;
-```
-Anomalous if: steadily climbing toward container memory limit
-
-### Data loss (queue overflow = data dropped)
-
-```sql
-SELECT name, max(value) AS total
-FROM obs WHERE service='sigiro-collector' AND signal='metric'
-  AND name LIKE 'otelcol_exporter_enqueue_failed%'
-  AND timestamp > epoch_ns(now() - INTERVAL '5 minutes')
-GROUP BY name;
-```
-Anomalous if: any value > 0 (data was dropped because the queue was full)
-
-### Key metrics reference
-
-| Metric | What it tells you |
-|--------|-------------------|
-| `otelcol_receiver_accepted_spans` | Trace ingest rate |
-| `otelcol_receiver_accepted_metric_points` | Metrics ingest rate |
-| `otelcol_receiver_refused_*` | Backpressure / errors |
-| `otelcol_exporter_sent_*` | Successful S3 writes |
-| `otelcol_exporter_send_failed_*` | S3 write failures |
-| `otelcol_exporter_queue_size` | Current queue depth |
-| `otelcol_exporter_enqueue_failed_*` | Data loss (queue full) |
-| `otelcol_processor_batch_batch_send_size` | Batch fullness |
-| `otelcol_process_memory_rss_bytes` | RSS memory |
-| `otelcol_process_cpu_seconds_total` | CPU usage |
-
-### Collector logs (errors, warnings, flush info)
-
-```sql
-SELECT strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t,
-       status, message
-FROM obs
-WHERE service='sigiro-collector' AND signal='log'
-      AND status IN ('ERROR', 'WARN')
-      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-ORDER BY timestamp DESC
-LIMIT 50;
-```
-Anomalous if: any ERROR rows present
-
-Log volume by severity:
-```sql
-SELECT status, count(*) AS n
-FROM obs
-WHERE service='sigiro-collector' AND signal='log'
-      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-GROUP BY status ORDER BY n DESC;
-```
-
-Parquet flush details (from slog.Info output):
-```sql
-SELECT message FROM obs
-WHERE service='sigiro-collector' AND signal='log'
-      AND message LIKE '%flushed parquet%'
-      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-LIMIT 10;
-```
-
-### Collector traces (internal operation latency)
-
-```sql
-SELECT name, count(*) AS n,
-       approx_quantile(value, 0.95) AS p95_ms,
-       avg(value) AS avg_ms
-FROM obs
-WHERE service='sigiro-collector' AND signal='span'
-      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-GROUP BY name ORDER BY p95_ms DESC;
-```
-
-Slow operations (> 5s):
-```sql
-SELECT name, value AS duration_ms, status,
-       strftime(to_timestamp(timestamp/1e9)::TIMESTAMP, '%H:%M:%S') AS t
-FROM obs
-WHERE service='sigiro-collector' AND signal='span'
-      AND value > 5000
-      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-ORDER BY value DESC LIMIT 20;
-```
-
-### Self-profiling (CPU, goroutines, memory allocations)
-
-```sql
-SELECT name, count(*) AS samples
-FROM obs
-WHERE service='sigiro-collector' AND signal='profile'
-      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-GROUP BY name;
-```
-
-Collector hot functions (CPU):
-```sql
-SELECT stacktrace[len(stacktrace)] AS leaf_function,
-       sum(value) AS samples
-FROM obs
-WHERE service='sigiro-collector' AND signal='profile'
-      AND name = 'profile.cpu'
-      AND stacktrace IS NOT NULL AND len(stacktrace) > 0
-      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-GROUP BY leaf_function ORDER BY samples DESC LIMIT 10;
-```
-
-Memory allocation hotspots:
-```sql
-SELECT stacktrace[len(stacktrace)] AS leaf_function,
-       sum(value) AS samples
-FROM obs
-WHERE service='sigiro-collector' AND signal='profile'
-      AND name = 'profile.alloc_space'
-      AND stacktrace IS NOT NULL AND len(stacktrace) > 0
-      AND timestamp > epoch_ns(now() - INTERVAL '15 minutes')
-GROUP BY leaf_function ORDER BY samples DESC LIMIT 10;
-```
-
-### eBPF dedup (known issue)
-
-When an eBPF profiler runs on the same host, it will also profile the collector
-process, creating duplicate profiles. Future mitigation: filter by service name
-or PID in the eBPF profiler config. For now, self-profiling via SDK provides
-richer data (goroutines, allocations) that eBPF cannot.
+Anomalous if: 0
 
 ## Gotchas
 
 1. timestamp is nanoseconds. Not seconds. Not milliseconds.
-
-2. stacktrace is a list, not a string.
-   Leaf: stacktrace[len(stacktrace)]
-   Root: stacktrace[1]
-   Display: array_to_string(stacktrace, ' → ')
-
-3. events is a list of structs. Use unnest(events) to search event text.
-
-4. value is null for logs. Use count(*), not sum(value), for log queries.
-
-5. Linked trace queries (WHERE trace_id IN (...)) are the slowest query
-   type because trace_id is not in the sort order. Limit to 10-20 trace_ids.
-
-6. Always include service AND signal in WHERE. This is what makes queries
-   fast (row group pruning from the sort order).
-
-7. Cross-hour queries need multiple glob patterns. A window from 13:50 to
-   14:15 spans two epoch-hours — include both in read_parquet([...]).
-
-8. metadata is for reading context, not for filtering. Filter on promoted
-   columns (service, signal, status, name) first, read metadata after.
+2. stacktrace is a list, not a string. Leaf: stacktrace[len(stacktrace)]. Root: stacktrace[1].
+3. value is null for logs. Use count(*), not sum(value), for log queries.
+4. Linked trace queries (WHERE trace_id IN (...)) are the slowest query type. Limit to 10-20 trace_ids.
+5. Always include service AND signal in WHERE. Row group pruning from the sort order makes this fast.
+6. metadata is for reading context, not for filtering. Filter on promoted columns first.
+7. The obs view in `sigiro query` covers the last 1 hour. For wider ranges, use read_parquet() directly.

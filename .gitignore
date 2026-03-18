@@ -1,14 +1,15 @@
 CLAUDE.md
 AGENTS.md
 
+# Build output
+dist/
+
 # Go binaries
 cmd/query-server/query-server
 experiments/query-engine/query-engine
 experiments/incident-gen/incident-gen
 test/e2e/profilegen/profilegen
 
-# Local alias to AGENTS.md
-CLAUDE.md
 # OCB-generated collector binaries
 collector/cmd/collector/observe-collector
 collector/cmd/collector/collector
