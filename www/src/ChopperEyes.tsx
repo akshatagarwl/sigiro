@@ -1,5 +1,5 @@
-import { motion } from 'motion/react'
-import { useRef } from 'react'
+import { motion, useMotionValue, useSpring } from 'motion/react'
+import { useEffect, useRef } from 'react'
 
 export type ChopperExpression =
   | 'normal'
@@ -11,13 +11,16 @@ export type ChopperExpression =
   | 'happy'
   | 'sleepy'
 
-const spring = { type: 'spring' as const, stiffness: 400, damping: 22 }
+const anim = { type: 'spring' as const, stiffness: 400, damping: 22 }
 
 const PINK = '#FF6B9D'
 const GOLD = '#FFD700'
 const BLUE = '#6BB5FF'
 const PURPLE = '#B07CFF'
 const RED = '#FF4D4D'
+
+const prefersReducedMotion =
+  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 export function ChopperEye({
   size = 200,
@@ -29,31 +32,58 @@ export function ChopperEye({
   const idRef = useRef(`ch-${Math.random().toString(36).slice(2, 6)}`)
   const id = idRef.current
   const bg = 'var(--bg, #0A0A0A)'
+  const svgRef = useRef<SVGSVGElement>(null)
 
-  // Chopper rule: some expressions REPLACE the entire eye shape.
-  // Heart = big pink heart, no eyeball. Sparkle = big gold star, no eyeball.
-  // Dizzy = spiral, no eyeball. Happy = arcs, no eyeball.
-  // Others keep the round eye base.
+  // Mouse-tracking for iris movement
+  const mx = useMotionValue(0)
+  const my = useMotionValue(0)
+  const springX = useSpring(mx, { stiffness: 300, damping: 30 })
+  const springY = useSpring(my, { stiffness: 300, damping: 30 })
+
+  // Max offset in viewBox units (40x40) — iris can shift ~3 units
+  const maxOffset = 3
+
+  useEffect(() => {
+    if (prefersReducedMotion) return
+    const svg = svgRef.current
+    if (!svg) return
+
+    function onMouseMove(e: MouseEvent) {
+      const rect = svg!.getBoundingClientRect()
+      const cx = rect.left + rect.width / 2
+      const cy = rect.top + rect.height / 2
+      const dx = e.clientX - cx
+      const dy = e.clientY - cy
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      const scale = Math.min(maxOffset, dist / 60)
+      const angle = Math.atan2(dy, dx)
+      mx.set(Math.cos(angle) * scale)
+      my.set(Math.sin(angle) * scale)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    return () => document.removeEventListener('mousemove', onMouseMove)
+  }, [mx, my])
+
+  // Expressions that replace the entire eye shape — no tracking needed
 
   if (expression === 'heart') {
-    // entire eye is a big pink heart
     return (
       <svg viewBox="0 0 40 40" width={size} height={size} fill="none" aria-hidden="true">
         <motion.path
           d="M20 36 C20 36 4 24 4 14 C4 8 8 4 14 4 C17 4 19 6 20 8 C21 6 23 4 26 4 C32 4 36 8 36 14 C36 24 20 36 20 36 Z"
           initial={{ scale: 0 }}
           animate={{ scale: 1 }}
-          transition={spring}
+          transition={anim}
           fill={PINK}
           stroke={PINK}
           strokeWidth="1"
         />
-        {/* white highlight on left lobe */}
         <motion.ellipse
           cx="12" cy="12"
           initial={{ rx: 0, ry: 0, opacity: 0 }}
           animate={{ rx: 3, ry: 4, opacity: 0.5 }}
-          transition={{ ...spring, delay: 0.1 }}
+          transition={{ ...anim, delay: 0.1 }}
           fill="#FFF"
         />
       </svg>
@@ -61,33 +91,30 @@ export function ChopperEye({
   }
 
   if (expression === 'sparkle') {
-    // entire eye is a big golden 4-point star
     return (
       <svg viewBox="0 0 40 40" width={size} height={size} fill="none" aria-hidden="true">
         <motion.path
           d="M20 2 L24 15 L38 20 L24 25 L20 38 L16 25 L2 20 L16 15 Z"
           initial={{ scale: 0, rotate: -30 }}
           animate={{ scale: 1, rotate: 0 }}
-          transition={spring}
+          transition={anim}
           fill={GOLD}
           stroke={GOLD}
           strokeWidth="0.5"
           strokeLinejoin="round"
         />
-        {/* white sparkle highlight */}
         <motion.ellipse
           cx="18" cy="15"
           initial={{ rx: 0, ry: 0, opacity: 0 }}
           animate={{ rx: 2.5, ry: 3.5, opacity: 0.5 }}
-          transition={{ ...spring, delay: 0.1 }}
+          transition={{ ...anim, delay: 0.1 }}
           fill="#FFF"
         />
-        {/* small extra sparkle */}
         <motion.circle
           cx="23" cy="24"
           initial={{ r: 0, opacity: 0 }}
           animate={{ r: 1.5, opacity: 0.4 }}
-          transition={{ ...spring, delay: 0.15 }}
+          transition={{ ...anim, delay: 0.15 }}
           fill="#FFF"
         />
       </svg>
@@ -122,7 +149,6 @@ export function ChopperEye({
   }
 
   if (expression === 'dizzy') {
-    // entire eye is a purple spiral
     return (
       <svg viewBox="0 0 40 40" width={size} height={size} fill="none" aria-hidden="true">
         <motion.path
@@ -140,8 +166,11 @@ export function ChopperEye({
   }
 
   // Round-eye-based expressions: normal, glare, cry, sleepy
+  // Iris + catchlights track the mouse cursor
+  const hasTracking = expression === 'normal' || expression === 'cry'
+
   return (
-    <svg viewBox="0 0 40 40" width={size} height={size} fill="none" aria-hidden="true">
+    <svg ref={svgRef} viewBox="0 0 40 40" width={size} height={size} fill="none" aria-hidden="true">
       <defs>
         <clipPath id={id}>
           {expression === 'sleepy' ? (
@@ -158,69 +187,71 @@ export function ChopperEye({
       <circle cx="20" cy="20" r="17" stroke="currentColor" strokeWidth="2" />
 
       <g clipPath={`url(#${id})`}>
-        {/* iris */}
-        <motion.circle
-          cx="20" cy="20"
-          animate={{ r: expression === 'glare' ? 12 : 13 }}
-          transition={spring}
-          fill={expression === 'cry' ? BLUE : expression === 'glare' ? RED : 'currentColor'}
-        />
-
-        {expression === 'normal' && (
-          <>
-            <motion.ellipse
-              cx="24" cy="14"
-              initial={{ rx: 0, ry: 0 }}
-              animate={{ rx: 4, ry: 5.5 }}
-              transition={spring}
-              fill={bg}
-            />
-            <motion.circle
-              cx="14" cy="24"
-              initial={{ r: 0 }}
-              animate={{ r: 2 }}
-              transition={{ ...spring, delay: 0.05 }}
-              fill={bg}
-            />
-          </>
-        )}
-
-        {expression === 'glare' && (
-          <motion.ellipse
-            cx="23" cy="15"
-            initial={{ rx: 0, ry: 0 }}
-            animate={{ rx: 2, ry: 2.5 }}
-            transition={spring}
-            fill={bg}
+        {/* iris group — moves with cursor for normal/cry */}
+        <motion.g style={hasTracking ? { x: springX, y: springY } : undefined}>
+          <motion.circle
+            cx="20" cy="20"
+            animate={{ r: expression === 'glare' ? 12 : 13 }}
+            transition={anim}
+            fill={expression === 'cry' ? BLUE : expression === 'glare' ? RED : 'currentColor'}
           />
-        )}
 
-        {expression === 'cry' && (
-          <>
+          {expression === 'normal' && (
+            <>
+              <motion.ellipse
+                cx="24" cy="14"
+                initial={{ rx: 0, ry: 0 }}
+                animate={{ rx: 4, ry: 5.5 }}
+                transition={anim}
+                fill={bg}
+              />
+              <motion.circle
+                cx="14" cy="24"
+                initial={{ r: 0 }}
+                animate={{ r: 2 }}
+                transition={{ ...anim, delay: 0.05 }}
+                fill={bg}
+              />
+            </>
+          )}
+
+          {expression === 'glare' && (
             <motion.ellipse
-              cx="24" cy="14"
-              animate={{ rx: [3.5, 5, 3.5], ry: [4.5, 6.5, 4.5] }}
-              transition={{ repeat: Infinity, duration: 1.2, ease: 'easeInOut' }}
-              fill="#FFF"
+              cx="23" cy="15"
+              initial={{ rx: 0, ry: 0 }}
+              animate={{ rx: 2, ry: 2.5 }}
+              transition={anim}
+              fill={bg}
             />
-            <motion.circle
-              cx="14" cy="24"
-              animate={{ r: [1.5, 2.5, 1.5] }}
-              transition={{ repeat: Infinity, duration: 1, ease: 'easeInOut' }}
-              fill="#FFF"
-            />
-          </>
-        )}
+          )}
 
-        {expression === 'sleepy' && (
-          <>
-            <ellipse cx="24" cy="19" rx="3" ry="3.5" fill={bg} />
-            <circle cx="14" cy="25" r="1.5" fill={bg} />
-          </>
-        )}
+          {expression === 'cry' && (
+            <>
+              <motion.ellipse
+                cx="24" cy="14"
+                animate={{ rx: [3.5, 5, 3.5], ry: [4.5, 6.5, 4.5] }}
+                transition={{ repeat: Infinity, duration: 1.2, ease: 'easeInOut' }}
+                fill="#FFF"
+              />
+              <motion.circle
+                cx="14" cy="24"
+                animate={{ r: [1.5, 2.5, 1.5] }}
+                transition={{ repeat: Infinity, duration: 1, ease: 'easeInOut' }}
+                fill="#FFF"
+              />
+            </>
+          )}
+
+          {expression === 'sleepy' && (
+            <>
+              <ellipse cx="24" cy="19" rx="3" ry="3.5" fill={bg} />
+              <circle cx="14" cy="25" r="1.5" fill={bg} />
+            </>
+          )}
+        </motion.g>
       </g>
 
-      {/* overlays */}
+      {/* overlays (outside tracking group — stay fixed) */}
 
       {expression === 'glare' && (
         <motion.path
