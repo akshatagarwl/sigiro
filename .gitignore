@@ -3,6 +3,9 @@ AGENTS.md
 
 # Build output
 dist/
+zig-cache/
+.zig-cache/
+zig-out/
 
 # Go binaries
 cmd/query-server/query-server
