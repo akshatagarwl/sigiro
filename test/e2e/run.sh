@@ -31,14 +31,17 @@ docker compose up -d \
   telemetrygen-payments-logs \
   profilegen
 
-echo "=== Waiting for Parquet files ==="
+echo "=== Waiting for all signals to flush ==="
+# Profiles bypass the batch processor and flush immediately.
+# Traces/metrics/logs go through the 60s batch processor, so we must
+# wait for at least one non-profile flush before running checks.
 TIMEOUT=120
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  # Check collector logs for successful flush messages
-  FLUSH_COUNT=$(docker compose logs collector 2>&1 | grep -c "flushed parquet" || true)
-  if [ "$FLUSH_COUNT" -gt 0 ]; then
-    echo "Found $FLUSH_COUNT flush(es) in collector logs after ${ELAPSED}s"
+  # Look for flushes of any non-profile signal
+  NON_PROFILE=$(docker compose logs collector 2>&1 | grep "flushed parquet" | grep -c -v "signal=profile" || true)
+  if [ "$NON_PROFILE" -gt 0 ]; then
+    echo "Found $NON_PROFILE non-profile flush(es) after ${ELAPSED}s"
     break
   fi
   sleep 5
@@ -46,15 +49,15 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
 done
 
 if [ $ELAPSED -ge $TIMEOUT ]; then
-  echo "FAIL: No Parquet flushes after ${TIMEOUT}s"
+  echo "FAIL: No non-profile Parquet flushes after ${TIMEOUT}s"
   echo "=== Collector logs ==="
   docker compose logs collector
   exit 1
 fi
 
-# Wait for all generators to finish (30s duration) and final flush (15s interval)
-echo "Waiting 40s for generators to finish and final flush..."
-sleep 40
+# Give a few seconds for all signal flushes to complete
+echo "Waiting 10s for remaining flushes..."
+sleep 10
 
 echo "=== Running DuckDB verification ==="
 
