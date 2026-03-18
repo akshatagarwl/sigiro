@@ -1,0 +1,16 @@
+{
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "react",
+            "importNames": ["useEffect", "useLayoutEffect"],
+            "message": "useEffect is banned. Use useSyncExternalStore for subscriptions, ref callbacks for DOM ops, CSS animations for timed reveals, or derive state during render. See src/hooks.ts for approved patterns."
+          }
+        ]
+      }
+    ]
+  }
+}

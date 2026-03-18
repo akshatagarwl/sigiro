@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
 import { ChopperEye, type ChopperExpression } from './ChopperEyes'
+import { useFrameSequence } from './hooks'
 
 type Frame = {
   left: ChopperExpression
@@ -18,29 +18,8 @@ function AnimatedPair({
   label?: string
   trigger?: 'auto' | 'hover' | 'click'
 }) {
-  const [frameIndex, setFrameIndex] = useState(0)
-  const [playing, setPlaying] = useState(trigger === 'auto')
-
-  const startSequence = useCallback(() => {
-    setFrameIndex(0)
-    setPlaying(true)
-  }, [])
-
-  useEffect(() => {
-    if (!playing) return
-    const frame = frames[frameIndex]
-    const timer = setTimeout(() => {
-      const next = frameIndex + 1
-      if (next < frames.length) {
-        setFrameIndex(next)
-      } else {
-        // loop
-        setFrameIndex(0)
-      }
-    }, frame.duration)
-    return () => clearTimeout(timer)
-  }, [frameIndex, playing, frames])
-
+  const durations = frames.map((f) => f.duration)
+  const [frameIndex, startSequence] = useFrameSequence(durations, { playing: trigger === 'auto' })
   const frame = frames[frameIndex]
   const gap = size * 0.12
 
@@ -55,7 +34,9 @@ function AnimatedPair({
         <ChopperEye size={size} expression={frame.right} />
       </div>
       {label && (
-        <div style={{ marginTop: 8, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>{label}</div>
+        <div style={{ marginTop: 8, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>
+          {label}
+        </div>
       )}
     </div>
   )
@@ -160,7 +141,15 @@ export function AllAnimatedPairs() {
   ]
 
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 40, alignItems: 'flex-start', maxWidth: 900 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 40,
+        alignItems: 'flex-start',
+        maxWidth: 900,
+      }}
+    >
       {pairs.map(({ frames, label }) => (
         <AnimatedPair key={label} frames={frames} size={80} label={label} />
       ))}
@@ -181,7 +170,15 @@ export function HoverAnimatedPairs() {
   ]
 
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 40, alignItems: 'flex-start', maxWidth: 900 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 40,
+        alignItems: 'flex-start',
+        maxWidth: 900,
+      }}
+    >
       {pairs.map(({ frames, label }) => (
         <AnimatedPair key={label} frames={frames} size={80} label={label} trigger="hover" />
       ))}

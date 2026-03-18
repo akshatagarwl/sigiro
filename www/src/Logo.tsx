@@ -1,8 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { motion, useSpring, useMotionValue } from 'motion/react'
-
-const prefersReducedMotion =
-  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+import { useMouseOffset } from './hooks'
 
 // hover cycles: normal → happy → surprised → wonder → normal
 export type EyeExpression = 'normal' | 'happy' | 'surprised' | 'wonder'
@@ -16,35 +14,17 @@ export function Logo({
   expression?: EyeExpression
 }) {
   const svgRef = useRef<SVGSVGElement>(null)
-  const x = useMotionValue(0)
-  const y = useMotionValue(0)
+  const [rawX, rawY] = useMouseOffset(svgRef, 2.5, 80)
+  const x = useMotionValue(rawX)
+  const y = useMotionValue(rawY)
+  x.set(rawX)
+  y.set(rawY)
   const springX = useSpring(x, { stiffness: 300, damping: 30 })
   const springY = useSpring(y, { stiffness: 300, damping: 30 })
   const [internalExpression, setInternalExpression] = useState<EyeExpression>('normal')
   const expressionIndex = useRef(0)
 
   const expression = controlledExpression ?? internalExpression
-
-  useEffect(() => {
-    if (prefersReducedMotion) return
-    const svg = svgRef.current
-    if (!svg) return
-    const maxOffset = 2.5
-    function onMouseMove(e: MouseEvent) {
-      const rect = svg!.getBoundingClientRect()
-      const cx = rect.left + rect.width / 2
-      const cy = rect.top + rect.height / 2
-      const dx = e.clientX - cx
-      const dy = e.clientY - cy
-      const dist = Math.sqrt(dx * dx + dy * dy)
-      const scale = Math.min(maxOffset, dist / 80)
-      const angle = Math.atan2(dy, dx)
-      x.set(Math.cos(angle) * scale)
-      y.set(Math.sin(angle) * scale)
-    }
-    document.addEventListener('mousemove', onMouseMove)
-    return () => document.removeEventListener('mousemove', onMouseMove)
-  }, [x, y])
 
   function cycleExpression() {
     if (controlledExpression != null) return
@@ -94,7 +74,8 @@ export function Logo({
       ) : expression === 'surprised' ? (
         <>
           <motion.circle
-            cx="17" cy="16"
+            cx="17"
+            cy="16"
             initial={{ r: 9 }}
             animate={{ r: 13 }}
             transition={spring}
@@ -108,7 +89,8 @@ export function Logo({
           </defs>
           <motion.g style={{ x: springX, y: springY }} clipPath={`url(#${clipId})`}>
             <motion.circle
-              cx="17" cy="16"
+              cx="17"
+              cy="16"
               initial={{ r: 7 }}
               animate={{ r: 3 }}
               transition={spring}
@@ -125,20 +107,25 @@ export function Logo({
             </clipPath>
           </defs>
           <ellipse
-            cx="17" cy="16" rx="13" ry="9"
+            cx="17"
+            cy="16"
+            rx="13"
+            ry="9"
             stroke="currentColor"
             strokeWidth="2"
             strokeLinecap="round"
           />
           <motion.g style={{ x: springX, y: springY }} clipPath={`url(#${clipId})`}>
             <motion.circle
-              cx="17" cy="16"
+              cx="17"
+              cy="16"
               animate={{ r: expression === 'wonder' ? 9 : 7 }}
               transition={spring}
               fill="currentColor"
             />
             <motion.circle
-              cx="19.5" cy="13.5"
+              cx="19.5"
+              cy="13.5"
               animate={{ r: expression === 'wonder' ? 3 : 2.5 }}
               transition={spring}
               fill="var(--bg, #0A0A0A)"
@@ -146,14 +133,16 @@ export function Logo({
             {expression === 'wonder' && (
               <>
                 <motion.circle
-                  cx="14" cy="14"
+                  cx="14"
+                  cy="14"
                   initial={{ r: 0, opacity: 0 }}
                   animate={{ r: 1.5, opacity: 1 }}
                   transition={{ ...spring, delay: 0.1 }}
                   fill="var(--bg, #0A0A0A)"
                 />
                 <motion.circle
-                  cx="19" cy="18"
+                  cx="19"
+                  cy="18"
                   initial={{ r: 0, opacity: 0 }}
                   animate={{ r: 1, opacity: 1 }}
                   transition={{ ...spring, delay: 0.15 }}

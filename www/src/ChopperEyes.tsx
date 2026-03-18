@@ -1,5 +1,6 @@
 import { motion, useMotionValue, useSpring } from 'motion/react'
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
+import { useMouseOffset } from './hooks'
 
 export type ChopperExpression =
   | 'normal'
@@ -20,9 +21,6 @@ const BLUE = '#6BB5FF'
 const PURPLE = '#B07CFF'
 const RED = '#FF4D4D'
 
-const prefersReducedMotion =
-  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
 export function ChopperEye({
   size = 200,
   expression = 'normal',
@@ -35,33 +33,14 @@ export function ChopperEye({
   const bg = 'var(--bg, #0A0A0A)'
   const svgRef = useRef<SVGSVGElement>(null)
 
-  // Mouse-tracking for iris movement
-  const mx = useMotionValue(0)
-  const my = useMotionValue(0)
+  // Mouse-tracking for iris movement via external store (no useEffect)
+  const [rawX, rawY] = useMouseOffset(svgRef, 3, 60)
+  const mx = useMotionValue(rawX)
+  const my = useMotionValue(rawY)
+  mx.set(rawX)
+  my.set(rawY)
   const springX = useSpring(mx, { stiffness: 300, damping: 30 })
   const springY = useSpring(my, { stiffness: 300, damping: 30 })
-
-  useEffect(() => {
-    if (prefersReducedMotion) return
-    const svg = svgRef.current
-    if (!svg) return
-
-    function onMouseMove(e: MouseEvent) {
-      const rect = svg!.getBoundingClientRect()
-      const cx = rect.left + rect.width / 2
-      const cy = rect.top + rect.height / 2
-      const dx = e.clientX - cx
-      const dy = e.clientY - cy
-      const dist = Math.sqrt(dx * dx + dy * dy)
-      const scale = Math.min(3, dist / 60)
-      const angle = Math.atan2(dy, dx)
-      mx.set(Math.cos(angle) * scale)
-      my.set(Math.sin(angle) * scale)
-    }
-
-    document.addEventListener('mousemove', onMouseMove)
-    return () => document.removeEventListener('mousemove', onMouseMove)
-  }, [mx, my])
 
   // --- Shape-replacement expressions (no eyeball at all) ---
 
@@ -78,7 +57,8 @@ export function ChopperEye({
           strokeWidth="1"
         />
         <motion.ellipse
-          cx="12" cy="12"
+          cx="12"
+          cy="12"
           initial={{ rx: 0, ry: 0, opacity: 0 }}
           animate={{ rx: 3, ry: 4, opacity: 0.5 }}
           transition={{ ...anim, delay: 0.1 }}
@@ -102,14 +82,16 @@ export function ChopperEye({
           strokeLinejoin="round"
         />
         <motion.ellipse
-          cx="18" cy="15"
+          cx="18"
+          cy="15"
           initial={{ rx: 0, ry: 0, opacity: 0 }}
           animate={{ rx: 2.5, ry: 3.5, opacity: 0.5 }}
           transition={{ ...anim, delay: 0.1 }}
           fill="#FFF"
         />
         <motion.circle
-          cx="23" cy="24"
+          cx="23"
+          cy="24"
           initial={{ r: 0, opacity: 0 }}
           animate={{ r: 1.5, opacity: 0.4 }}
           transition={{ ...anim, delay: 0.15 }}
@@ -177,7 +159,8 @@ export function ChopperEye({
         <motion.g style={hasTracking ? { x: springX, y: springY } : undefined}>
           {/* Iris fill */}
           <motion.circle
-            cx="20" cy="20"
+            cx="20"
+            cy="20"
             animate={{ r: isGlare ? 12 : 13 }}
             transition={anim}
             fill={irisColor}
@@ -185,7 +168,8 @@ export function ChopperEye({
 
           {/* Catchlights — normal */}
           <motion.ellipse
-            cx="24" cy="14"
+            cx="24"
+            cy="14"
             animate={{
               rx: isOpen ? 4 : 0,
               ry: isOpen ? 5.5 : 0,
@@ -195,7 +179,8 @@ export function ChopperEye({
             fill={bg}
           />
           <motion.circle
-            cx="14" cy="24"
+            cx="14"
+            cy="24"
             animate={{
               r: isOpen ? 2 : 0,
               opacity: isOpen ? 1 : 0,
@@ -206,7 +191,8 @@ export function ChopperEye({
 
           {/* Catchlight — glare (smaller, more intense) */}
           <motion.ellipse
-            cx="23" cy="15"
+            cx="23"
+            cy="15"
             animate={{
               rx: isGlare ? 2 : 0,
               ry: isGlare ? 2.5 : 0,
@@ -220,13 +206,15 @@ export function ChopperEye({
           {expression === 'cry' && (
             <>
               <motion.ellipse
-                cx="24" cy="14"
+                cx="24"
+                cy="14"
                 animate={{ rx: [3.5, 5, 3.5], ry: [4.5, 6.5, 4.5] }}
                 transition={{ repeat: Infinity, duration: 1.2, ease: 'easeInOut' }}
                 fill="#FFF"
               />
               <motion.circle
-                cx="14" cy="24"
+                cx="14"
+                cy="24"
                 animate={{ r: [1.5, 2.5, 1.5] }}
                 transition={{ repeat: Infinity, duration: 1, ease: 'easeInOut' }}
                 fill="#FFF"
@@ -236,7 +224,8 @@ export function ChopperEye({
 
           {/* Catchlights — sleepy */}
           <motion.ellipse
-            cx="24" cy="19"
+            cx="24"
+            cy="19"
             animate={{
               rx: isSleepy ? 3 : 0,
               ry: isSleepy ? 3.5 : 0,
@@ -246,7 +235,8 @@ export function ChopperEye({
             fill={bg}
           />
           <motion.circle
-            cx="14" cy="25"
+            cx="14"
+            cy="25"
             animate={{
               r: isSleepy ? 1.5 : 0,
               opacity: isSleepy ? 1 : 0,
@@ -279,7 +269,7 @@ export function ChopperEye({
               : isGlare
                 ? 'M3 14 Q20 8 37 14'
                 : 'M3 3 Q20 3 37 3',
-          opacity: (isHappy || isSleepy || isGlare) ? 1 : 0,
+          opacity: isHappy || isSleepy || isGlare ? 1 : 0,
         }}
         transition={lidAnim}
         stroke="currentColor"
