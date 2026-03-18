@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { ChopperEye, type ChopperExpression } from './ChopperEyes'
+import { Logo, type EyeExpression } from './Logo'
 
 const meta = {
   title: 'Chopper Eyes',
@@ -64,6 +65,70 @@ export const AllExpressions: Story = {
         <div key={expr} style={{ textAlign: 'center' }}>
           <ChopperEye size={150} expression={expr} />
           <div style={{ marginTop: 4, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>{expr}</div>
+        </div>
+      ))}
+    </div>
+  ),
+}
+
+// --- Two-Eye Variations ---
+
+function TwoChopperEyes({ size, expression }: { size: number; expression: ChopperExpression }) {
+  const gap = size * 0.15
+  return (
+    <div style={{ display: 'flex', gap, alignItems: 'center' }}>
+      <ChopperEye size={size} expression={expression} />
+      <ChopperEye size={size} expression={expression} />
+    </div>
+  )
+}
+
+export const TwoEyesNormal: Story = {
+  name: 'Two Eyes — Normal',
+  args: { size: 120 },
+  render: () => <TwoChopperEyes size={120} expression="normal" />,
+}
+
+export const TwoEyesHeart: Story = {
+  name: 'Two Eyes — Heart',
+  args: { size: 120 },
+  render: () => <TwoChopperEyes size={120} expression="heart" />,
+}
+
+export const TwoEyesSparkle: Story = {
+  name: 'Two Eyes — Sparkle',
+  args: { size: 120 },
+  render: () => <TwoChopperEyes size={120} expression="sparkle" />,
+}
+
+export const TwoEyesAllExpressions: Story = {
+  name: 'Two Eyes — All',
+  args: { size: 80 },
+  render: () => (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 32, alignItems: 'flex-start', maxWidth: 800 }}>
+      {allExpressions.map((expr) => (
+        <div key={expr} style={{ textAlign: 'center' }}>
+          <TwoChopperEyes size={80} expression={expr} />
+          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>{expr}</div>
+        </div>
+      ))}
+    </div>
+  ),
+}
+
+// --- Current Logo (single eye) for comparison ---
+
+const logoExpressions: EyeExpression[] = ['normal', 'happy', 'surprised', 'wonder']
+
+export const CurrentLogoComparison: Story = {
+  name: 'Current Logo (comparison)',
+  args: { size: 120 },
+  render: () => (
+    <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
+      {logoExpressions.map((expr) => (
+        <div key={expr} style={{ textAlign: 'center' }}>
+          <Logo size={120} expression={expr} />
+          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>{expr}</div>
         </div>
       ))}
     </div>
