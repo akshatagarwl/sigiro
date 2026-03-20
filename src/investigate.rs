@@ -309,6 +309,10 @@ pub struct SpanRow {
 
 #[derive(Serialize)]
 pub struct LogTemplate {
+    /// Normalized template with UUIDs, IPs, and long numbers replaced by placeholders.
+    /// Multiple log lines that differ only in dynamic values collapse to one template.
+    pub template: String,
+    /// First-seen exemplar body (original, unnormalized) for this template.
     pub body: String,
     pub severity_text: String,
     pub count: i64,
@@ -637,11 +641,25 @@ fn query_logs(
     from_ts: i64,
     to_ts: i64,
 ) -> Result<Vec<LogTemplate>> {
-    let sql = "SELECT body, severity_text, count(*) AS count,
-               min(timestamp)::VARCHAR AS first_seen, max(timestamp)::VARCHAR AS last_seen
+    // Normalize log bodies to templates: UUIDs → {uuid}, IPs → {ip}, long numbers → {id}.
+    // GROUP BY template collapses noisy logs (e.g., 1000 "timeout for 10.0.0.X" → 1 template).
+    // first(body) keeps one real exemplar for context.
+    let sql = "SELECT
+            regexp_replace(
+              regexp_replace(
+                regexp_replace(body,
+                  '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '{uuid}', 'gi'),
+                '\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b', '{ip}', 'g'),
+              '\\b\\d{4,}\\b', '{id}', 'g'
+            ) AS template,
+            first(body) AS exemplar_body,
+            severity_text,
+            count(*) AS count,
+            min(timestamp)::VARCHAR AS first_seen,
+            max(timestamp)::VARCHAR AS last_seen
         FROM sigiro_logs
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
-        GROUP BY body, severity_text
+        GROUP BY template, severity_text
         ORDER BY count DESC
         LIMIT 30";
 
@@ -651,11 +669,12 @@ fn query_logs(
 
     while let Some(row) = rows.next()? {
         results.push(LogTemplate {
-            body: row.get::<_, String>(0).unwrap_or_default(),
-            severity_text: row.get::<_, String>(1).context("severity_text")?,
-            count: row.get::<_, i64>(2).context("count")?,
-            first_seen: row.get::<_, String>(3).unwrap_or_default(),
-            last_seen: row.get::<_, String>(4).unwrap_or_default(),
+            template: row.get::<_, String>(0).unwrap_or_default(),
+            body: row.get::<_, String>(1).unwrap_or_default(),
+            severity_text: row.get::<_, String>(2).context("severity_text")?,
+            count: row.get::<_, i64>(3).context("count")?,
+            first_seen: row.get::<_, String>(4).unwrap_or_default(),
+            last_seen: row.get::<_, String>(5).unwrap_or_default(),
         });
     }
     Ok(results)
@@ -984,6 +1003,56 @@ mod tests {
             .collect();
         assert_eq!(k8s.len(), 1);
         assert!(k8s[0].description.contains("OOMKilled"));
+    }
+
+    #[test]
+    fn log_template_dedup_ips() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        // Two log lines differing only in IP address should collapse to one template
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
+                severity_text, body)
+             VALUES
+                (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', 'Connection timeout for 192.168.1.1'),
+                (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', 'Connection timeout for 10.0.0.5'),
+                (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', 'Connection timeout for 172.16.0.99')"
+        ))
+        .expect("insert");
+        let logs = query_logs(&conn, "api", now_us - 60_000_000, now_us + 60_000_000).unwrap();
+        assert_eq!(
+            logs.len(),
+            1,
+            "3 logs with different IPs should collapse to 1 template"
+        );
+        assert_eq!(logs[0].count, 3);
+        assert!(logs[0].template.contains("{ip}"));
+        // Exemplar body should be one of the original lines
+        assert!(
+            logs[0].body.contains("192.168")
+                || logs[0].body.contains("10.0.0")
+                || logs[0].body.contains("172.16")
+        );
+    }
+
+    #[test]
+    fn log_template_dedup_uuids() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
+                severity_text, body)
+             VALUES
+                (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'Failed to process order 550e8400-e29b-41d4-a716-446655440000'),
+                (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'Failed to process order a1b2c3d4-e5f6-7890-abcd-ef1234567890')"
+        ))
+        .expect("insert");
+        let logs = query_logs(&conn, "api", now_us - 60_000_000, now_us + 60_000_000).unwrap();
+        assert_eq!(logs.len(), 1, "2 logs with different UUIDs should collapse");
+        assert!(logs[0].template.contains("{uuid}"));
+        assert_eq!(logs[0].count, 2);
     }
 
     #[test]
