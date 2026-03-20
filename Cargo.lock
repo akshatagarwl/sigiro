@@ -2791,6 +2791,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "axum",
+ "chrono",
  "clap",
  "crossbeam-channel",
  "dirs",

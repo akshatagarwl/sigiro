@@ -1,5 +1,6 @@
 mod ingest;
 mod inserter;
+mod investigate;
 mod schema;
 mod server;
 
@@ -27,6 +28,14 @@ enum Command {
     },
     /// Show services seen, row counts, data size, uptime
     Status,
+    /// Investigate a service — returns structured metrics, spans, logs, linked traces
+    Investigate {
+        /// Service name to investigate
+        service: String,
+        /// Time window (e.g. 15m, 1h)
+        #[arg(long, default_value = "15m")]
+        window: String,
+    },
 }
 
 fn data_dir() -> Result<PathBuf> {
@@ -93,6 +102,20 @@ async fn main() -> Result<()> {
             schema::create_tables(&conn)?;
             print_status(&conn)?;
         }
+        Some(Command::Investigate { service, window }) => {
+            let conn = open_db()?;
+            schema::create_tables(&conn)?;
+            let shared = Arc::new(Mutex::new(conn));
+            let window_us = parse_window(&window)?;
+            let now_us = chrono::Utc::now().timestamp_micros();
+            let req = investigate::InvestigateRequest {
+                service,
+                from_ts: Some(now_us - window_us),
+                to_ts: Some(now_us),
+            };
+            let block = investigate::investigate(&shared, &req)?;
+            println!("{}", serde_json::to_string_pretty(&block)?);
+        }
     }
     Ok(())
 }
@@ -125,6 +148,17 @@ fn run_query(conn: &Connection, sql: &str) -> Result<()> {
         println!("{}", vals.join("\t"));
     }
     Ok(())
+}
+
+fn parse_window(s: &str) -> Result<i64> {
+    let s = s.trim();
+    if let Some(m) = s.strip_suffix('m') {
+        Ok(m.parse::<i64>().context("invalid minutes")? * 60 * 1_000_000)
+    } else if let Some(h) = s.strip_suffix('h') {
+        Ok(h.parse::<i64>().context("invalid hours")? * 3600 * 1_000_000)
+    } else {
+        anyhow::bail!("window must end with 'm' or 'h' (e.g. 15m, 1h)")
+    }
 }
 
 fn print_status(conn: &Connection) -> Result<()> {

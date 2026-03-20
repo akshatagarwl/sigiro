@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
 
 use crate::ingest::{IngestMsg, OtlpGrpcService};
+use crate::investigate;
 
 pub struct AppState {
     pub conn: Arc<Mutex<Connection>>,
@@ -36,6 +37,7 @@ pub async fn run_servers(conn: Arc<Mutex<Connection>>, tx: Sender<IngestMsg>) ->
     let http_app = Router::new()
         .route("/health", get(health))
         .route("/query", post(query_handler))
+        .route("/investigate", post(investigate_handler))
         .with_state(app_state);
 
     let http_handle = tokio::spawn(async move {
@@ -104,4 +106,12 @@ async fn query_handler(
     }
 
     Ok(Json(results))
+}
+
+async fn investigate_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<investigate::InvestigateRequest>,
+) -> Result<Json<investigate::InvestigationBlock>, String> {
+    let block = investigate::investigate(&state.conn, &req).map_err(|e| format!("{e:#}"))?;
+    Ok(Json(block))
 }
