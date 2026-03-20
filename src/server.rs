@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use axum::{
+    Json, Router,
     extract::State,
     routing::{get, post},
-    Json, Router,
 };
 use crossbeam_channel::Sender;
 use duckdb::Connection;

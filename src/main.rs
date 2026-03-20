@@ -208,7 +208,7 @@ fn print_status(conn: &Connection) -> Result<()> {
             row.get::<_, i64>(0)
         }) {
             Ok(count) => println!("  {table}: {count} rows"),
-            Err(e) => eprintln!("  {table}: error ({e})"),
+            Err(e) => tracing::error!("{table}: {e}"),
         }
     }
     Ok(())

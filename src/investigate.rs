@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use duckdb::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 #[derive(Deserialize)]
@@ -17,7 +17,8 @@ pub struct InvestigationBlock {
     pub window: Window,
     pub metrics: Vec<MetricBucket>,
     pub spans: Vec<SpanRow>,
-    pub span_trees: HashMap<String, Vec<String>>,
+    /// parent_span_id -> [child_span_id]. Root spans (no parent) are not keys.
+    pub span_trees: BTreeMap<String, Vec<String>>,
     pub logs: Vec<LogTemplate>,
     pub linked_traces: Vec<LinkedTrace>,
 }
@@ -26,6 +27,8 @@ pub struct InvestigationBlock {
 pub struct Window {
     pub from_ts: i64,
     pub to_ts: i64,
+    pub from_iso: String,
+    pub to_iso: String,
 }
 
 #[derive(Serialize)]
@@ -43,7 +46,8 @@ pub struct SpanRow {
     pub span_id: String,
     pub parent_span_id: String,
     pub span_name: String,
-    pub duration: i64,
+    /// Duration in nanoseconds
+    pub duration_ns: i64,
     pub status_code: i32,
     pub service_name: String,
 }
@@ -61,6 +65,12 @@ pub struct LogTemplate {
 pub struct LinkedTrace {
     pub trace_id: String,
     pub spans: Vec<SpanRow>,
+}
+
+fn us_to_iso(us: i64) -> String {
+    chrono::DateTime::from_timestamp_micros(us)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default()
 }
 
 pub fn investigate(
@@ -84,7 +94,12 @@ pub fn investigate(
 
     Ok(InvestigationBlock {
         service: req.service.clone(),
-        window: Window { from_ts, to_ts },
+        window: Window {
+            from_ts,
+            to_ts,
+            from_iso: us_to_iso(from_ts),
+            to_iso: us_to_iso(to_ts),
+        },
         metrics,
         spans,
         span_trees,
@@ -99,12 +114,17 @@ fn query_metrics(
     from_ts: i64,
     to_ts: i64,
 ) -> Result<Vec<MetricBucket>> {
+    // Query gauge + sum tables (the two that have a scalar `value` column)
     let sql = "SELECT time_bucket(INTERVAL '1 minute', timestamp) AS bucket,
                metric_name,
                approx_quantile(value, 0.95) AS p95,
                avg(value) AS avg,
                count(*) AS n
-        FROM sigiro_metrics_gauge
+        FROM (
+            SELECT timestamp, metric_name, value, service_name FROM sigiro_metrics_gauge
+            UNION ALL
+            SELECT timestamp, metric_name, value, service_name FROM sigiro_metrics_sum
+        )
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         GROUP BY bucket, metric_name
         ORDER BY bucket, metric_name";
@@ -115,11 +135,11 @@ fn query_metrics(
 
     while let Some(row) = rows.next()? {
         results.push(MetricBucket {
-            bucket: row.get::<_, String>(0).unwrap_or_default(),
-            metric_name: row.get::<_, String>(1).unwrap_or_default(),
+            bucket: row.get::<_, String>(0).context("bucket")?,
+            metric_name: row.get::<_, String>(1).context("metric_name")?,
             p95: row.get::<_, f64>(2).unwrap_or(0.0),
             avg: row.get::<_, f64>(3).unwrap_or(0.0),
-            count: row.get::<_, i64>(4).unwrap_or(0),
+            count: row.get::<_, i64>(4).context("count")?,
         });
     }
     Ok(results)
@@ -138,17 +158,21 @@ fn query_spans(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Re
     let mut results = Vec::new();
 
     while let Some(row) = rows.next()? {
-        results.push(SpanRow {
-            trace_id: row.get::<_, String>(0).unwrap_or_default(),
-            span_id: row.get::<_, String>(1).unwrap_or_default(),
-            parent_span_id: row.get::<_, String>(2).unwrap_or_default(),
-            span_name: row.get::<_, String>(3).unwrap_or_default(),
-            duration: row.get::<_, i64>(4).unwrap_or(0),
-            status_code: row.get::<_, i32>(5).unwrap_or(0),
-            service_name: row.get::<_, String>(6).unwrap_or_default(),
-        });
+        results.push(parse_span_row(row)?);
     }
     Ok(results)
+}
+
+fn parse_span_row(row: &duckdb::Row<'_>) -> Result<SpanRow> {
+    Ok(SpanRow {
+        trace_id: row.get::<_, String>(0).context("trace_id")?,
+        span_id: row.get::<_, String>(1).context("span_id")?,
+        parent_span_id: row.get::<_, String>(2).unwrap_or_default(),
+        span_name: row.get::<_, String>(3).context("span_name")?,
+        duration_ns: row.get::<_, i64>(4).context("duration")?,
+        status_code: row.get::<_, i32>(5).context("status_code")?,
+        service_name: row.get::<_, String>(6).context("service_name")?,
+    })
 }
 
 fn query_logs(
@@ -172,8 +196,8 @@ fn query_logs(
     while let Some(row) = rows.next()? {
         results.push(LogTemplate {
             body: row.get::<_, String>(0).unwrap_or_default(),
-            severity_text: row.get::<_, String>(1).unwrap_or_default(),
-            count: row.get::<_, i64>(2).unwrap_or(0),
+            severity_text: row.get::<_, String>(1).context("severity_text")?,
+            count: row.get::<_, i64>(2).context("count")?,
             first_seen: row.get::<_, String>(3).unwrap_or_default(),
             last_seen: row.get::<_, String>(4).unwrap_or_default(),
         });
@@ -181,8 +205,8 @@ fn query_logs(
     Ok(results)
 }
 
-fn build_span_trees(spans: &[SpanRow]) -> HashMap<String, Vec<String>> {
-    let mut trees: HashMap<String, Vec<String>> = HashMap::new();
+fn build_span_trees(spans: &[SpanRow]) -> BTreeMap<String, Vec<String>> {
+    let mut trees: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for span in spans {
         if !span.parent_span_id.is_empty() {
             trees
@@ -195,54 +219,41 @@ fn build_span_trees(spans: &[SpanRow]) -> HashMap<String, Vec<String>> {
 }
 
 fn query_linked_traces(conn: &Connection, spans: &[SpanRow]) -> Result<Vec<LinkedTrace>> {
-    // Collect error trace_ids, cap at 5
-    let error_trace_ids: Vec<String> = spans
+    let mut seen = HashSet::new();
+    let unique: Vec<&str> = spans
         .iter()
         .filter(|s| s.status_code == 2)
-        .map(|s| s.trace_id.clone())
-        .collect::<Vec<_>>();
-
-    let unique: Vec<&String> = {
-        let mut seen = std::collections::HashSet::new();
-        error_trace_ids
-            .iter()
-            .filter(move |id| seen.insert(id.as_str().to_string()))
-            .take(5)
-            .collect()
-    };
+        .filter_map(|s| {
+            if seen.insert(s.trace_id.as_str()) {
+                Some(s.trace_id.as_str())
+            } else {
+                None
+            }
+        })
+        .take(5)
+        .collect();
 
     if unique.is_empty() {
         return Ok(Vec::new());
     }
 
-    let placeholders: Vec<String> = unique.iter().map(|_| "?".to_string()).collect();
+    let placeholders = vec!["?"; unique.len()].join(", ");
     let sql = format!(
         "SELECT trace_id, span_id, parent_span_id, span_name, duration,
                 status_code, service_name
          FROM sigiro_spans
-         WHERE trace_id IN ({})
+         WHERE trace_id IN ({placeholders})
          ORDER BY trace_id, timestamp
-         LIMIT 200",
-        placeholders.join(", ")
+         LIMIT 200"
     );
 
     let mut stmt = conn.prepare(&sql)?;
-
-    // Build params for the IN clause
     let params: Vec<&dyn duckdb::ToSql> = unique.iter().map(|s| s as &dyn duckdb::ToSql).collect();
     let mut rows = stmt.query(params.as_slice())?;
 
-    let mut trace_map: HashMap<String, Vec<SpanRow>> = HashMap::new();
+    let mut trace_map: BTreeMap<String, Vec<SpanRow>> = BTreeMap::new();
     while let Some(row) = rows.next()? {
-        let span = SpanRow {
-            trace_id: row.get::<_, String>(0).unwrap_or_default(),
-            span_id: row.get::<_, String>(1).unwrap_or_default(),
-            parent_span_id: row.get::<_, String>(2).unwrap_or_default(),
-            span_name: row.get::<_, String>(3).unwrap_or_default(),
-            duration: row.get::<_, i64>(4).unwrap_or(0),
-            status_code: row.get::<_, i32>(5).unwrap_or(0),
-            service_name: row.get::<_, String>(6).unwrap_or_default(),
-        };
+        let span = parse_span_row(row)?;
         trace_map
             .entry(span.trace_id.clone())
             .or_default()
