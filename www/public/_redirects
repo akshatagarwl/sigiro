@@ -1,0 +1,9 @@
+# Social / community short links
+/github    https://github.com/sigiroai          301
+/x         https://x.com/SigiroAI               301
+/twitter   https://x.com/SigiroAI               301
+/linkedin  https://linkedin.com/company/sigiro   301
+/discord   https://discord.gg/sigiro             301
+
+# Install script (redirects to GitHub releases)
+/install   https://github.com/sigiroai/sigiro/releases/latest/download/install.sh  302
