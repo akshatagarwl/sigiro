@@ -50,6 +50,104 @@ fn compute_coverage(spans_total: i64, logs_total: i64, metrics_count: usize) -> 
     }
 }
 
+/// Auto-derived service metadata and topology from existing OTLP data.
+/// Agent gets namespace, pod count, and service dependencies in 1 round instead of 3.
+#[derive(Serialize, Debug)]
+pub struct ServiceContext {
+    pub service_name: String,
+    pub first_seen: String,
+    pub last_seen: String,
+    /// k8s.namespace.name from resource_attributes (if present)
+    pub namespace: Option<String>,
+    /// k8s.deployment.name from resource_attributes (if present)
+    pub deployment: Option<String>,
+    /// Distinct service_instance_id values in the window
+    pub pod_count: i64,
+    /// Services this service calls (downstream, from CLIENT/PRODUCER spans)
+    pub dependencies: Vec<String>,
+    /// Services that call this service (upstream, from CLIENT/PRODUCER spans)
+    pub dependents: Vec<String>,
+}
+
+fn query_service_context(
+    conn: &Connection,
+    service: &str,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<ServiceContext> {
+    // Query 1: resource attribute extraction
+    // ANY_VALUE because resource_attributes varies per span but we want one representative value
+    let meta_sql = "SELECT
+        ANY_VALUE(resource_attributes::JSON->>'k8s.namespace.name') AS namespace,
+        ANY_VALUE(resource_attributes::JSON->>'k8s.deployment.name') AS deployment,
+        count(DISTINCT service_instance_id) AS pod_count,
+        min(timestamp)::VARCHAR AS first_seen,
+        max(timestamp)::VARCHAR AS last_seen
+    FROM sigiro_spans
+    WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)";
+
+    let (namespace, deployment, pod_count, first_seen, last_seen) = conn
+        .query_row(meta_sql, duckdb::params![service, from_ts, to_ts], |row| {
+            Ok((
+                row.get::<_, String>(0).ok().filter(|s| !s.is_empty()),
+                row.get::<_, String>(1).ok().filter(|s| !s.is_empty()),
+                row.get::<_, i64>(2).unwrap_or(0),
+                row.get::<_, String>(3).unwrap_or_default(),
+                row.get::<_, String>(4).unwrap_or_default(),
+            ))
+        })
+        .context("service metadata query failed")?;
+
+    // Query 2: downstream dependencies (services this service calls)
+    let deps_sql = "SELECT DISTINCT s2.service_name
+        FROM sigiro_spans s1
+        JOIN sigiro_spans s2 ON s1.trace_id = s2.trace_id
+        WHERE s1.service_name = ? AND s2.service_name != ?
+          AND s1.span_kind IN (3, 4)
+          AND s1.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+        LIMIT 20";
+    let dependencies = query_string_list(conn, deps_sql, service, from_ts, to_ts)?;
+
+    // Query 3: upstream dependents (services that call this service)
+    let dependents_sql = "SELECT DISTINCT s1.service_name
+        FROM sigiro_spans s1
+        JOIN sigiro_spans s2 ON s1.trace_id = s2.trace_id
+        WHERE s2.service_name = ? AND s1.service_name != ?
+          AND s1.span_kind IN (3, 4)
+          AND s2.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+        LIMIT 20";
+    let dependents = query_string_list(conn, dependents_sql, service, from_ts, to_ts)?;
+
+    Ok(ServiceContext {
+        service_name: service.to_string(),
+        first_seen,
+        last_seen,
+        namespace,
+        deployment,
+        pod_count,
+        dependencies,
+        dependents,
+    })
+}
+
+fn query_string_list(
+    conn: &Connection,
+    sql: &str,
+    service: &str,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query(duckdb::params![service, service, from_ts, to_ts])?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next()? {
+        if let Ok(s) = row.get::<_, String>(0) {
+            results.push(s);
+        }
+    }
+    Ok(results)
+}
+
 #[derive(Deserialize)]
 pub struct InvestigateRequest {
     pub service: String,
@@ -68,6 +166,9 @@ pub struct InvestigationBlock {
     /// What data exists and what's missing. The agent MUST check gaps before concluding
     /// "no problems" — absence of data != absence of problems.
     pub coverage: Coverage,
+    /// Auto-derived service metadata + topology. Agent gets namespace, pod count,
+    /// and service dependencies without a separate API call.
+    pub context: ServiceContext,
     /// Per-operation aggregates: error rate, percentiles, exemplar trace_id.
     /// This is the primary triage view — the agent should read this FIRST to identify
     /// which operations are broken, then drill into spans/logs for root cause.
@@ -211,6 +312,8 @@ pub fn investigate(
     let linked_spans_returned: i64 = linked_traces.iter().map(|lt| lt.spans.len() as i64).sum();
 
     let coverage = compute_coverage(spans_total, logs_total, metrics.len());
+    let context = query_service_context(&conn, &req.service, from_ts, to_ts)
+        .context("service context query failed")?;
 
     Ok(InvestigationBlock {
         service: req.service.clone(),
@@ -221,6 +324,7 @@ pub fn investigate(
             to_iso: us_to_iso(to_ts),
         },
         coverage,
+        context,
         truncation: Truncation {
             spans_total,
             spans_returned: spans.len() as i64,
@@ -680,6 +784,74 @@ mod tests {
         assert!(c.has_logs);
         assert!(c.has_metrics);
         assert!(c.gaps.is_empty(), "no gaps when all signals present");
+    }
+
+    #[test]
+    fn service_context_empty_db() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        let ctx = query_service_context(&conn, "nonexistent", now_us - 60_000_000, now_us).unwrap();
+        assert_eq!(ctx.service_name, "nonexistent");
+        assert_eq!(ctx.pod_count, 0);
+        assert!(ctx.dependencies.is_empty());
+        assert!(ctx.dependents.is_empty());
+        assert!(ctx.namespace.is_none());
+    }
+
+    #[test]
+    fn service_context_with_k8s_attrs() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+                parent_span_id, span_name, span_kind, status_code, service_name,
+                service_instance_id, resource_attributes)
+             VALUES
+                (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'op', 2, 1, 'checkout',
+                 'pod-1', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}'),
+                (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'op', 2, 1, 'checkout',
+                 'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}')"
+        ))
+        .expect("insert");
+        let ctx =
+            query_service_context(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000)
+                .unwrap();
+        assert_eq!(ctx.namespace, Some("prod".to_string()));
+        assert_eq!(ctx.deployment, Some("checkout-v2".to_string()));
+        assert_eq!(ctx.pod_count, 2);
+    }
+
+    #[test]
+    fn service_context_dependencies() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        // checkout (CLIENT span_kind=3) calls payments (SERVER span_kind=2), same trace
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+                parent_span_id, span_name, span_kind, status_code, service_name)
+             VALUES
+                (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx1', '', 'POST /pay', 3, 1, 'checkout'),
+                (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments')"
+        ))
+        .expect("insert");
+        let ctx =
+            query_service_context(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000)
+                .unwrap();
+        assert!(
+            ctx.dependencies.contains(&"payments".to_string()),
+            "checkout should depend on payments"
+        );
+        // payments should have checkout as a dependent
+        let ctx2 =
+            query_service_context(&conn, "payments", now_us - 60_000_000, now_us + 60_000_000)
+                .unwrap();
+        assert!(
+            ctx2.dependents.contains(&"checkout".to_string()),
+            "payments should have checkout as dependent"
+        );
     }
 
     #[test]
