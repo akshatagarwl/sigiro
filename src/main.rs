@@ -170,8 +170,39 @@ fn print_status(conn: &Connection) -> Result<()> {
         "sigiro_metrics_histogram",
         "sigiro_metrics_exp_histogram",
     ];
+
+    // DB file size
+    let db_path = data_dir()?.join("sigiro.duckdb");
+    let db_size = std::fs::metadata(&db_path)
+        .map(|m| format_bytes(m.len()))
+        .unwrap_or_else(|_| "N/A".to_string());
+
     println!("sigiro status");
     println!("─────────────");
+    println!("  db: {} ({})", db_path.display(), db_size);
+    println!();
+
+    // Services seen
+    match conn.prepare("SELECT DISTINCT service_name FROM sigiro_spans UNION SELECT DISTINCT service_name FROM sigiro_logs UNION SELECT DISTINCT service_name FROM sigiro_metrics_gauge") {
+        Ok(mut stmt) => {
+            let mut rows = stmt.query([])?;
+            let mut services = Vec::new();
+            while let Some(row) = rows.next()? {
+                if let Ok(s) = row.get::<_, String>(0) {
+                    services.push(s);
+                }
+            }
+            if services.is_empty() {
+                println!("  services: (none)");
+            } else {
+                println!("  services: {}", services.join(", "));
+            }
+        }
+        Err(_) => println!("  services: (none)"),
+    }
+    println!();
+
+    // Row counts per table
     for table in tables {
         match conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
             row.get::<_, i64>(0)
@@ -181,4 +212,16 @@ fn print_status(conn: &Connection) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
 }
