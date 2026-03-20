@@ -1,55 +1,31 @@
 x-telemetrygen: &telemetrygen-base
   image: ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.146.0
   depends_on:
-    collector: { condition: service_started }
+    sigiro:
+      condition: service_healthy
 
 services:
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 2s
-      timeout: 5s
-      retries: 10
-
-  minio-setup:
-    image: minio/mc
-    depends_on:
-      minio: { condition: service_healthy }
-    entrypoint: sh -c "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb local/sigiro --ignore-existing"
-
-  collector:
+  sigiro:
     build:
       context: ../..
-      dockerfile: collector/Dockerfile
-    depends_on:
-      minio-setup: { condition: service_completed_successfully }
-    environment:
-      S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: sigiro
-      S3_REGION: us-east-1
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
-    command: ["--config", "/etc/otelcol/otelcol.e2e.yaml", "--feature-gates=service.profilesSupport"]
-    volumes:
-      - ../../collector/otelcol.e2e.yaml:/etc/otelcol/otelcol.e2e.yaml:ro
+      dockerfile: Dockerfile
     ports:
       - "4317:4317"
       - "4318:4318"
-      - "4319:4319"
+      - "9999:9999"
+    volumes:
+      - sigiro-data:/var/lib/sigiro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      interval: 5s
+      retries: 10
 
   # --- telemetrygen: checkout service ---
   telemetrygen-checkout-traces:
     <<: *telemetrygen-base
     command:
       - traces
-      - --otlp-endpoint=collector:4317
+      - --otlp-endpoint=sigiro:4317
       - --otlp-insecure
       - --service=checkout
       - --traces=50
@@ -61,7 +37,7 @@ services:
     <<: *telemetrygen-base
     command:
       - metrics
-      - --otlp-endpoint=collector:4317
+      - --otlp-endpoint=sigiro:4317
       - --otlp-insecure
       - --service=checkout
       - --metrics=20
@@ -72,7 +48,7 @@ services:
     <<: *telemetrygen-base
     command:
       - logs
-      - --otlp-endpoint=collector:4317
+      - --otlp-endpoint=sigiro:4317
       - --otlp-insecure
       - --service=checkout
       - --logs=100
@@ -84,7 +60,7 @@ services:
     <<: *telemetrygen-base
     command:
       - traces
-      - --otlp-endpoint=collector:4317
+      - --otlp-endpoint=sigiro:4317
       - --otlp-insecure
       - --service=payments
       - --traces=50
@@ -96,7 +72,7 @@ services:
     <<: *telemetrygen-base
     command:
       - metrics
-      - --otlp-endpoint=collector:4317
+      - --otlp-endpoint=sigiro:4317
       - --otlp-insecure
       - --service=payments
       - --metrics=20
@@ -107,23 +83,12 @@ services:
     <<: *telemetrygen-base
     command:
       - logs
-      - --otlp-endpoint=collector:4317
+      - --otlp-endpoint=sigiro:4317
       - --otlp-insecure
       - --service=payments
       - --logs=100
       - --rate=20
       - --duration=30s
 
-  # --- profilegen: synthetic OTLP profiles ---
-  # Profiles go to port 4319 (otlp gRPC) because otelarrow on 4317
-  # doesn't support the profiles signal yet.
-  profilegen:
-    build: ./profilegen
-    depends_on:
-      collector: { condition: service_started }
-    command:
-      - --endpoint=collector:4319
-      - --insecure
-      - --services=checkout,payments
-      - --duration=30s
-      - --rate=2
+volumes:
+  sigiro-data:
