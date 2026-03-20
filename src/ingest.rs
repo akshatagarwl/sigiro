@@ -1,20 +1,18 @@
 use anyhow::Result;
-use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
+use axum::{body::Bytes, extract::State, http::StatusCode, routing::post, Router};
 use crossbeam_channel::Sender;
-use opentelemetry_proto::tonic::{
-    collector::{
-        logs::v1::{
-            logs_service_server::{LogsService, LogsServiceServer},
-            ExportLogsServiceRequest, ExportLogsServiceResponse,
-        },
-        metrics::v1::{
-            metrics_service_server::{MetricsService, MetricsServiceServer},
-            ExportMetricsServiceRequest, ExportMetricsServiceResponse,
-        },
-        trace::v1::{
-            trace_service_server::{TraceService, TraceServiceServer},
-            ExportTraceServiceRequest, ExportTraceServiceResponse,
-        },
+use opentelemetry_proto::tonic::collector::{
+    logs::v1::{
+        logs_service_server::{LogsService, LogsServiceServer},
+        ExportLogsServiceRequest, ExportLogsServiceResponse,
+    },
+    metrics::v1::{
+        metrics_service_server::{MetricsService, MetricsServiceServer},
+        ExportMetricsServiceRequest, ExportMetricsServiceResponse,
+    },
+    trace::v1::{
+        trace_service_server::{TraceService, TraceServiceServer},
+        ExportTraceServiceRequest, ExportTraceServiceResponse,
     },
 };
 use prost::Message;
@@ -36,15 +34,21 @@ impl OtlpGrpcService {
     }
 
     pub fn trace_service(&self) -> TraceServiceServer<Self> {
-        TraceServiceServer::new(Self { tx: self.tx.clone() })
+        TraceServiceServer::new(Self {
+            tx: self.tx.clone(),
+        })
     }
 
     pub fn logs_service(&self) -> LogsServiceServer<Self> {
-        LogsServiceServer::new(Self { tx: self.tx.clone() })
+        LogsServiceServer::new(Self {
+            tx: self.tx.clone(),
+        })
     }
 
     pub fn metrics_service(&self) -> MetricsServiceServer<Self> {
-        MetricsServiceServer::new(Self { tx: self.tx.clone() })
+        MetricsServiceServer::new(Self {
+            tx: self.tx.clone(),
+        })
     }
 }
 
@@ -108,10 +112,7 @@ pub fn otlp_http_router(tx: Sender<IngestMsg>) -> Router {
         .with_state(tx)
 }
 
-async fn otlp_http_traces(
-    State(tx): State<Sender<IngestMsg>>,
-    body: Bytes,
-) -> StatusCode {
+async fn otlp_http_traces(State(tx): State<Sender<IngestMsg>>, body: Bytes) -> StatusCode {
     if let Err(e) = tx.send(IngestMsg::Traces(body.to_vec())) {
         tracing::error!("failed to enqueue traces: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;
@@ -119,10 +120,7 @@ async fn otlp_http_traces(
     StatusCode::OK
 }
 
-async fn otlp_http_logs(
-    State(tx): State<Sender<IngestMsg>>,
-    body: Bytes,
-) -> StatusCode {
+async fn otlp_http_logs(State(tx): State<Sender<IngestMsg>>, body: Bytes) -> StatusCode {
     if let Err(e) = tx.send(IngestMsg::Logs(body.to_vec())) {
         tracing::error!("failed to enqueue logs: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;
@@ -130,10 +128,7 @@ async fn otlp_http_logs(
     StatusCode::OK
 }
 
-async fn otlp_http_metrics(
-    State(tx): State<Sender<IngestMsg>>,
-    body: Bytes,
-) -> StatusCode {
+async fn otlp_http_metrics(State(tx): State<Sender<IngestMsg>>, body: Bytes) -> StatusCode {
     if let Err(e) = tx.send(IngestMsg::Metrics(body.to_vec())) {
         tracing::error!("failed to enqueue metrics: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;

@@ -1,5 +1,9 @@
 use anyhow::{Context, Result};
-use axum::{Json, Router, extract::State, routing::{get, post}};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
 use crossbeam_channel::Sender;
 use duckdb::Connection;
 use std::sync::{Arc, Mutex};
@@ -77,7 +81,12 @@ async fn query_handler(
     let stmt_ref = rows.as_ref().ok_or("no result set")?;
     let column_count = stmt_ref.column_count();
     let column_names: Vec<String> = (0..column_count)
-        .map(|i| stmt_ref.column_name(i).map(|s| s.to_string()).unwrap_or_else(|_| "?".to_string()))
+        .map(|i| {
+            stmt_ref
+                .column_name(i)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| "?".to_string())
+        })
         .collect();
 
     let mut results = Vec::new();

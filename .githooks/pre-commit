@@ -1,32 +1,24 @@
 #!/bin/sh
 #
-# Pre-commit hook: run gofumpt and wsl on staged Go files.
+# Pre-commit hook: run cargo fmt check + clippy on staged Rust files.
 #
 
-staged_go_files=$(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+staged_rs_files=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
 
-if [ -z "$staged_go_files" ]; then
+if [ -z "$staged_rs_files" ]; then
   exit 0
 fi
 
-echo "Running gofumpt..."
-echo "$staged_go_files" | xargs go run mvdan.cc/gofumpt@latest -w
+echo "Running cargo fmt --check..."
+cargo fmt --check 2>&1
 if [ $? -ne 0 ]; then
-  echo "ERROR: gofumpt failed"
+  echo "ERROR: cargo fmt failed — run 'cargo fmt' to fix"
   exit 1
 fi
 
-# wsl requires files in the same directory, so run per-package directory.
-# Use -cd to handle separate Go modules (e.g. experiments/parquet-bench).
-echo "Running wsl..."
-staged_dirs=$(echo "$staged_go_files" | xargs -n1 dirname | sort -u)
-for dir in $staged_dirs; do
-  (cd "$dir" && go run github.com/bombsimon/wsl/v5/cmd/wsl@latest -fix ./...)
-  if [ $? -ne 0 ]; then
-    echo "ERROR: wsl failed in $dir"
-    exit 1
-  fi
-done
-
-# Re-stage files that were modified by formatters
-echo "$staged_go_files" | xargs git add
+echo "Running cargo clippy..."
+cargo clippy -- -D warnings 2>&1
+if [ $? -ne 0 ]; then
+  echo "ERROR: clippy found warnings"
+  exit 1
+fi

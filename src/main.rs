@@ -104,7 +104,12 @@ fn run_query(conn: &Connection, sql: &str) -> Result<()> {
     let stmt_ref = rows.as_ref().context("no result set")?;
     let column_count = stmt_ref.column_count();
     let column_names: Vec<String> = (0..column_count)
-        .map(|i| stmt_ref.column_name(i).map(|s| s.to_string()).unwrap_or_else(|_| "?".to_string()))
+        .map(|i| {
+            stmt_ref
+                .column_name(i)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| "?".to_string())
+        })
         .collect();
     println!("{}", column_names.join("\t"));
 
@@ -134,7 +139,9 @@ fn print_status(conn: &Connection) -> Result<()> {
     println!("sigiro status");
     println!("─────────────");
     for table in tables {
-        match conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get::<_, i64>(0)) {
+        match conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+            row.get::<_, i64>(0)
+        }) {
             Ok(count) => println!("  {table}: {count} rows"),
             Err(e) => eprintln!("  {table}: error ({e})"),
         }
