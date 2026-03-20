@@ -73,8 +73,24 @@ async fn health() -> &'static str {
 }
 
 const BLOCKED_KEYWORDS: &[&str] = &[
-    "DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "COPY", "ATTACH", "DETACH", "EXPORT",
-    "IMPORT", "PRAGMA", "LOAD", "INSTALL", "SET",
+    "DROP",
+    "DELETE",
+    "INSERT",
+    "UPDATE",
+    "ALTER",
+    "CREATE",
+    "COPY",
+    "ATTACH",
+    "DETACH",
+    "EXPORT",
+    "IMPORT",
+    "PRAGMA",
+    "LOAD",
+    "INSTALL",
+    "SET",
+    "CALL",
+    "TRUNCATE",
+    "CHECKPOINT",
 ];
 
 fn validate_read_only(sql: &str) -> Result<(), String> {
@@ -222,6 +238,31 @@ mod tests {
     #[test]
     fn allows_show_tables() {
         assert!(validate_read_only("SHOW TABLES").is_ok());
+    }
+
+    #[test]
+    fn rejects_multi_statement_with_dml() {
+        assert!(validate_read_only("SELECT 1; DROP TABLE sigiro_spans").is_err());
+    }
+
+    #[test]
+    fn rejects_call() {
+        assert!(validate_read_only("CALL pragma_version()").is_err());
+    }
+
+    #[test]
+    fn rejects_truncate() {
+        assert!(validate_read_only("TRUNCATE sigiro_spans").is_err());
+    }
+
+    #[test]
+    fn rejects_checkpoint() {
+        assert!(validate_read_only("CHECKPOINT").is_err());
+    }
+
+    #[test]
+    fn rejects_keyword_after_paren() {
+        assert!(validate_read_only("(DELETE FROM sigiro_spans)").is_err());
     }
 }
 

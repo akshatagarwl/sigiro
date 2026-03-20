@@ -163,7 +163,11 @@ fn query_histogram_metrics(
                max(max) AS p95,
                sum(sum)/NULLIF(sum(count),0) AS avg,
                sum(count) AS n
-        FROM sigiro_metrics_histogram
+        FROM (
+            SELECT timestamp, metric_name, count, sum, max, service_name FROM sigiro_metrics_histogram
+            UNION ALL
+            SELECT timestamp, metric_name, count, sum, max, service_name FROM sigiro_metrics_exp_histogram
+        )
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         GROUP BY bucket, metric_name
         ORDER BY bucket, metric_name";
@@ -357,8 +361,8 @@ fn query_linked_traces(
 
     // ±5 min buffer around the investigation window
     let buffer_us: i64 = 5 * 60 * 1_000_000;
-    let linked_from = from_ts - buffer_us;
-    let linked_to = to_ts + buffer_us;
+    let linked_from = from_ts.saturating_sub(buffer_us);
+    let linked_to = to_ts.saturating_add(buffer_us);
 
     let placeholders = vec!["?"; unique.len()].join(", ");
     let sql = format!(
