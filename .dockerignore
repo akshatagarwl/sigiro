@@ -1,0 +1,15 @@
+target/
+dist/
+www/
+test/
+predict/
+docs/
+.git/
+.github/
+.worktrees/
+*.md
+*.pen
+.dockerignore
+docker-bake.hcl
+railway.toml
+render.yaml
