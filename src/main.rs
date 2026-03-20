@@ -1,9 +1,13 @@
+mod ingest;
+mod inserter;
 mod schema;
+mod server;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use duckdb::Connection;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 #[derive(Parser)]
 #[command(name = "sigiro", about = "Observability for AI agents")]
@@ -44,15 +48,33 @@ fn open_db() -> Result<Connection> {
         .with_context(|| format!("failed to open DuckDB at {}", db_path.display()))
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Some(Command::Serve) | None => {
             let conn = open_db()?;
             schema::create_tables(&conn)?;
+
             let db_path = data_dir()?.join("sigiro.duckdb");
             eprintln!("sigiro ready — {}", db_path.display());
+
+            let (tx, rx) = crossbeam_channel::unbounded();
+
+            // Single shared connection for both insert and query
+            let shared_conn = Arc::new(Mutex::new(conn));
+
+            // Inserter runs on a dedicated OS thread
+            let inserter_conn = shared_conn.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = inserter::run_inserter(inserter_conn, rx) {
+                    eprintln!("inserter fatal: {e:#}");
+                    std::process::exit(1);
+                }
+            });
+
+            server::run_servers(shared_conn, tx).await?;
         }
         Some(Command::Query { sql }) => {
             let conn = open_db()?;

@@ -2,117 +2,167 @@ use anyhow::{Context, Result};
 use duckdb::Connection;
 
 pub fn create_tables(conn: &Connection) -> Result<()> {
+    // Traces — 25 columns, matches otlp2records::traces_schema()
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS sigiro_spans (
-            start_time_unix_nano  BIGINT NOT NULL,
-            end_time_unix_nano    BIGINT NOT NULL,
-            trace_id              VARCHAR NOT NULL,
-            span_id               VARCHAR NOT NULL,
+            timestamp             TIMESTAMP NOT NULL,
+            end_timestamp         BIGINT NOT NULL,
+            duration              BIGINT NOT NULL,
+            trace_id              VARCHAR,
+            span_id               VARCHAR,
             parent_span_id        VARCHAR,
+            trace_state           VARCHAR,
+            service_name          VARCHAR NOT NULL,
+            service_namespace     VARCHAR,
+            service_instance_id   VARCHAR,
             span_name             VARCHAR NOT NULL,
             span_kind             INTEGER NOT NULL,
             status_code           INTEGER NOT NULL,
             status_message        VARCHAR,
-            service_name          VARCHAR NOT NULL,
-            duration_nano         BIGINT NOT NULL,
             resource_attributes   VARCHAR,
+            scope_name            VARCHAR,
+            scope_version         VARCHAR,
+            scope_attributes      VARCHAR,
             span_attributes       VARCHAR,
             events_json           VARCHAR,
-            links_json            VARCHAR
+            links_json            VARCHAR,
+            dropped_attributes_count INTEGER,
+            dropped_events_count  INTEGER,
+            dropped_links_count   INTEGER,
+            flags                 INTEGER
         )",
     )
     .context("failed to create sigiro_spans")?;
 
+    // Logs — 15 columns, matches otlp2records::logs_schema()
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS sigiro_logs (
-            timestamp_unix_nano    BIGINT NOT NULL,
-            observed_timestamp     BIGINT,
-            trace_id               VARCHAR,
-            span_id                VARCHAR,
-            severity_number        INTEGER,
-            severity_text          VARCHAR,
-            body                   VARCHAR,
-            service_name           VARCHAR NOT NULL,
-            resource_attributes    VARCHAR,
-            log_attributes         VARCHAR
+            timestamp             TIMESTAMP NOT NULL,
+            observed_timestamp    BIGINT NOT NULL,
+            trace_id              VARCHAR,
+            span_id               VARCHAR,
+            service_name          VARCHAR NOT NULL,
+            service_namespace     VARCHAR,
+            service_instance_id   VARCHAR,
+            severity_number       INTEGER NOT NULL,
+            severity_text         VARCHAR NOT NULL,
+            body                  VARCHAR,
+            resource_attributes   VARCHAR,
+            scope_name            VARCHAR,
+            scope_version         VARCHAR,
+            scope_attributes      VARCHAR,
+            log_attributes        VARCHAR
         )",
     )
     .context("failed to create sigiro_logs")?;
 
+    // Gauge — 16 columns, matches otlp2records::gauge_schema()
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS sigiro_metrics_gauge (
-            metric_name            VARCHAR NOT NULL,
-            start_time_unix_nano   BIGINT,
-            time_unix_nano         BIGINT NOT NULL,
-            gauge_value            DOUBLE,
-            exemplar_json          VARCHAR,
-            flags                  INTEGER,
-            service_name           VARCHAR NOT NULL,
-            resource_attributes    VARCHAR,
-            metric_attributes      VARCHAR
+            timestamp             TIMESTAMP NOT NULL,
+            start_timestamp       BIGINT,
+            metric_name           VARCHAR NOT NULL,
+            metric_description    VARCHAR,
+            metric_unit           VARCHAR,
+            value                 DOUBLE NOT NULL,
+            service_name          VARCHAR NOT NULL,
+            service_namespace     VARCHAR,
+            service_instance_id   VARCHAR,
+            resource_attributes   VARCHAR,
+            scope_name            VARCHAR,
+            scope_version         VARCHAR,
+            scope_attributes      VARCHAR,
+            metric_attributes     VARCHAR,
+            flags                 INTEGER,
+            exemplars_json        VARCHAR
         )",
     )
     .context("failed to create sigiro_metrics_gauge")?;
 
+    // Sum — 18 columns, matches otlp2records::sum_schema()
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS sigiro_metrics_sum (
+            timestamp                  TIMESTAMP NOT NULL,
+            start_timestamp            BIGINT,
             metric_name                VARCHAR NOT NULL,
-            start_time_unix_nano       BIGINT,
-            time_unix_nano             BIGINT NOT NULL,
-            sum_value                  DOUBLE,
-            exemplar_json              VARCHAR,
-            flags                      INTEGER,
-            is_monotonic               BOOLEAN,
-            aggregation_temporality    INTEGER,
+            metric_description         VARCHAR,
+            metric_unit                VARCHAR,
+            value                      DOUBLE NOT NULL,
             service_name               VARCHAR NOT NULL,
+            service_namespace          VARCHAR,
+            service_instance_id        VARCHAR,
             resource_attributes        VARCHAR,
-            metric_attributes          VARCHAR
+            scope_name                 VARCHAR,
+            scope_version              VARCHAR,
+            scope_attributes           VARCHAR,
+            metric_attributes          VARCHAR,
+            flags                      INTEGER,
+            exemplars_json             VARCHAR,
+            aggregation_temporality    INTEGER NOT NULL,
+            is_monotonic               BOOLEAN NOT NULL
         )",
     )
     .context("failed to create sigiro_metrics_sum")?;
 
+    // Histogram — 22 columns, matches otlp2records::histogram_schema()
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS sigiro_metrics_histogram (
+            timestamp                  TIMESTAMP NOT NULL,
+            start_timestamp            BIGINT,
             metric_name                VARCHAR NOT NULL,
-            start_time_unix_nano       BIGINT,
-            time_unix_nano             BIGINT NOT NULL,
-            histogram_count            BIGINT,
-            histogram_sum              DOUBLE,
-            histogram_min              DOUBLE,
-            histogram_max              DOUBLE,
-            bucket_counts              VARCHAR,
-            explicit_bounds            VARCHAR,
-            exemplar_json              VARCHAR,
-            flags                      INTEGER,
-            aggregation_temporality    INTEGER,
+            metric_description         VARCHAR,
+            metric_unit                VARCHAR,
+            count                      BIGINT NOT NULL,
+            sum                        DOUBLE,
+            min                        DOUBLE,
+            max                        DOUBLE,
+            bucket_counts              VARCHAR NOT NULL,
+            explicit_bounds            VARCHAR NOT NULL,
             service_name               VARCHAR NOT NULL,
+            service_namespace          VARCHAR,
+            service_instance_id        VARCHAR,
             resource_attributes        VARCHAR,
-            metric_attributes          VARCHAR
+            scope_name                 VARCHAR,
+            scope_version              VARCHAR,
+            scope_attributes           VARCHAR,
+            metric_attributes          VARCHAR,
+            flags                      INTEGER,
+            exemplars_json             VARCHAR,
+            aggregation_temporality    INTEGER NOT NULL
         )",
     )
     .context("failed to create sigiro_metrics_histogram")?;
 
+    // ExpHistogram — 27 columns, matches otlp2records::exp_histogram_schema()
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS sigiro_metrics_exp_histogram (
+            timestamp                  TIMESTAMP NOT NULL,
+            start_timestamp            BIGINT,
             metric_name                VARCHAR NOT NULL,
-            start_time_unix_nano       BIGINT,
-            time_unix_nano             BIGINT NOT NULL,
-            exp_histogram_count        BIGINT,
-            exp_histogram_sum          DOUBLE,
-            exp_histogram_min          DOUBLE,
-            exp_histogram_max          DOUBLE,
-            exp_histogram_scale        INTEGER,
-            exp_histogram_zero_count   BIGINT,
+            metric_description         VARCHAR,
+            metric_unit                VARCHAR,
+            count                      BIGINT NOT NULL,
+            sum                        DOUBLE,
+            min                        DOUBLE,
+            max                        DOUBLE,
+            scale                      INTEGER NOT NULL,
+            zero_count                 BIGINT NOT NULL,
+            zero_threshold             DOUBLE,
             positive_offset            INTEGER,
             positive_bucket_counts     VARCHAR,
             negative_offset            INTEGER,
             negative_bucket_counts     VARCHAR,
-            exemplar_json              VARCHAR,
-            flags                      INTEGER,
-            aggregation_temporality    INTEGER,
             service_name               VARCHAR NOT NULL,
+            service_namespace          VARCHAR,
+            service_instance_id        VARCHAR,
             resource_attributes        VARCHAR,
-            metric_attributes          VARCHAR
+            scope_name                 VARCHAR,
+            scope_version              VARCHAR,
+            scope_attributes           VARCHAR,
+            metric_attributes          VARCHAR,
+            flags                      INTEGER,
+            exemplars_json             VARCHAR,
+            aggregation_temporality    INTEGER NOT NULL
         )",
     )
     .context("failed to create sigiro_metrics_exp_histogram")?;
