@@ -1,18 +1,18 @@
-mod ingest;
-mod inserter;
-mod investigate;
-mod mcp;
-mod schema;
-mod server;
-
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::styling};
 use duckdb::Connection;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use sigiro::{data_dir, format_bytes, open_db, parse_window};
+
+const STYLES: styling::Styles = styling::Styles::styled()
+    .header(styling::AnsiColor::Cyan.on_default().bold())
+    .usage(styling::AnsiColor::Cyan.on_default().bold())
+    .literal(styling::AnsiColor::Green.on_default().bold())
+    .placeholder(styling::AnsiColor::Yellow.on_default());
+
 #[derive(Parser)]
-#[command(name = "sigiro", about = "Observability for AI agents")]
+#[command(name = "sigiro", about = "Observability for AI agents", styles = STYLES)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -41,25 +41,6 @@ enum Command {
     Mcp,
 }
 
-fn data_dir() -> Result<PathBuf> {
-    match std::env::var("SIGIRO_DATA_DIR") {
-        Ok(dir) => Ok(PathBuf::from(dir)),
-        Err(_) => {
-            let home = dirs::home_dir().context("cannot determine home directory")?;
-            Ok(home.join(".sigiro").join("data"))
-        }
-    }
-}
-
-fn open_db() -> Result<Connection> {
-    let dir = data_dir()?;
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create data directory: {}", dir.display()))?;
-    let db_path = dir.join("sigiro.duckdb");
-    Connection::open(&db_path)
-        .with_context(|| format!("failed to open DuckDB at {}", db_path.display()))
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -75,26 +56,24 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Command::Serve) | None => {
             let conn = open_db()?;
-            schema::create_tables(&conn)?;
+            sigiro::schema::create_tables(&conn)?;
 
             let db_path = data_dir()?.join("sigiro.duckdb");
             tracing::info!("sigiro ready — {}", db_path.display());
 
             let (tx, rx) = crossbeam_channel::unbounded();
 
-            // Single shared connection for both insert and query
             let shared_conn = Arc::new(Mutex::new(conn));
 
-            // Inserter runs on a dedicated OS thread
             let inserter_conn = shared_conn.clone();
             std::thread::spawn(move || {
-                if let Err(e) = inserter::run_inserter(inserter_conn, rx) {
+                if let Err(e) = sigiro::inserter::run_inserter(inserter_conn, rx) {
                     tracing::error!("inserter fatal: {e:#}");
                     std::process::exit(1);
                 }
             });
 
-            server::run_servers(shared_conn, tx).await?;
+            sigiro::server::run_servers(shared_conn, tx).await?;
         }
         Some(Command::Query { sql }) => {
             let conn = open_db()?;
@@ -102,28 +81,28 @@ async fn main() -> Result<()> {
         }
         Some(Command::Status) => {
             let conn = open_db()?;
-            schema::create_tables(&conn)?;
+            sigiro::schema::create_tables(&conn)?;
             print_status(&conn)?;
         }
         Some(Command::Investigate { service, window }) => {
             let conn = open_db()?;
-            schema::create_tables(&conn)?;
+            sigiro::schema::create_tables(&conn)?;
             let shared = Arc::new(Mutex::new(conn));
             let window_us = parse_window(&window)?;
             let now_us = chrono::Utc::now().timestamp_micros();
-            let req = investigate::InvestigateRequest {
+            let req = sigiro::investigate::InvestigateRequest {
                 service,
                 from_ts: Some(now_us - window_us),
                 to_ts: Some(now_us),
             };
-            let block = investigate::investigate(&shared, &req)?;
+            let block = sigiro::investigate::investigate(&shared, &req)?;
             println!("{}", serde_json::to_string_pretty(&block)?);
         }
         Some(Command::Mcp) => {
             let conn = open_db()?;
-            schema::create_tables(&conn)?;
+            sigiro::schema::create_tables(&conn)?;
             let shared = Arc::new(Mutex::new(conn));
-            mcp::run_mcp_server(shared).await?;
+            sigiro::mcp::run_mcp_server(shared).await?;
         }
     }
     Ok(())
@@ -182,17 +161,6 @@ fn value_ref_to_string(val: duckdb::types::ValueRef<'_>) -> String {
     }
 }
 
-fn parse_window(s: &str) -> Result<i64> {
-    let s = s.trim();
-    if let Some(m) = s.strip_suffix('m') {
-        Ok(m.parse::<i64>().context("invalid minutes")? * 60 * 1_000_000)
-    } else if let Some(h) = s.strip_suffix('h') {
-        Ok(h.parse::<i64>().context("invalid hours")? * 3600 * 1_000_000)
-    } else {
-        anyhow::bail!("window must end with 'm' or 'h' (e.g. 15m, 1h)")
-    }
-}
-
 fn print_status(conn: &Connection) -> Result<()> {
     let tables = [
         "sigiro_spans",
@@ -203,7 +171,6 @@ fn print_status(conn: &Connection) -> Result<()> {
         "sigiro_metrics_exp_histogram",
     ];
 
-    // DB file size
     let db_path = data_dir()?.join("sigiro.duckdb");
     let db_size = std::fs::metadata(&db_path)
         .map(|m| format_bytes(m.len()))
@@ -214,7 +181,6 @@ fn print_status(conn: &Connection) -> Result<()> {
     println!("  db: {} ({})", db_path.display(), db_size);
     println!();
 
-    // Services seen
     match conn.prepare("SELECT DISTINCT service_name FROM sigiro_spans UNION SELECT DISTINCT service_name FROM sigiro_logs UNION SELECT DISTINCT service_name FROM sigiro_metrics_gauge") {
         Ok(mut stmt) => {
             let mut rows = stmt.query([])?;
@@ -234,7 +200,6 @@ fn print_status(conn: &Connection) -> Result<()> {
     }
     println!();
 
-    // Row counts per table
     for table in tables {
         match conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
             row.get::<_, i64>(0)
@@ -244,58 +209,4 @@ fn print_status(conn: &Connection) -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_window_minutes() {
-        assert_eq!(parse_window("15m").unwrap(), 15 * 60 * 1_000_000);
-        assert_eq!(parse_window("1m").unwrap(), 60 * 1_000_000);
-    }
-
-    #[test]
-    fn parse_window_hours() {
-        assert_eq!(parse_window("1h").unwrap(), 3600 * 1_000_000);
-        assert_eq!(parse_window("2h").unwrap(), 2 * 3600 * 1_000_000);
-    }
-
-    #[test]
-    fn parse_window_trims() {
-        assert_eq!(parse_window("  15m  ").unwrap(), 15 * 60 * 1_000_000);
-    }
-
-    #[test]
-    fn parse_window_rejects_invalid() {
-        assert!(parse_window("15").is_err());
-        assert!(parse_window("abc").is_err());
-        assert!(parse_window("15d").is_err());
-    }
-
-    #[test]
-    fn format_bytes_units() {
-        assert_eq!(format_bytes(500), "500 B");
-        assert_eq!(format_bytes(1024), "1.0 KB");
-        assert_eq!(format_bytes(1024 * 1024), "1.0 MB");
-        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GB");
-    }
-
-    #[test]
-    fn format_bytes_fractional() {
-        assert_eq!(format_bytes(1536), "1.5 KB");
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
 }

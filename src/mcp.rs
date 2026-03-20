@@ -94,7 +94,7 @@ impl SigiroMcp {
     #[tool]
     async fn sigiro_query(&self, params: Parameters<QueryParams>) -> String {
         let sql = &params.0.sql;
-        if let Err(e) = crate::server::validate_read_only_public(sql) {
+        if let Err(e) = crate::server::validate_read_only(sql) {
             return format!("error: {e}");
         }
         let conn = match self.conn.lock() {
