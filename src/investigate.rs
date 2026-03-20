@@ -393,6 +393,46 @@ fn us_to_iso(us: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Adaptive summarization: vary detail level based on window size.
+/// Larger windows get coarser buckets and fewer exemplars to stay under token budget.
+///
+/// | Window    | Metric buckets | Span exemplars | Log limit |
+/// |-----------|----------------|----------------|-----------|
+/// | < 15m     | 1 minute       | 50             | 30        |
+/// | 15m - 2h  | 5 minutes      | 20             | 30        |
+/// | > 2h      | 1 hour         | 0 (summaries)  | 20        |
+struct AdaptiveConfig {
+    bucket_interval: &'static str,
+    span_limit: i64,
+    log_limit: i64,
+}
+
+fn adaptive_config(from_ts: i64, to_ts: i64) -> AdaptiveConfig {
+    let window_us = to_ts - from_ts;
+    let fifteen_min = 15 * 60 * 1_000_000_i64;
+    let two_hours = 2 * 3600 * 1_000_000_i64;
+
+    if window_us <= fifteen_min {
+        AdaptiveConfig {
+            bucket_interval: "1 minute",
+            span_limit: 50,
+            log_limit: 30,
+        }
+    } else if window_us <= two_hours {
+        AdaptiveConfig {
+            bucket_interval: "5 minutes",
+            span_limit: 20,
+            log_limit: 30,
+        }
+    } else {
+        AdaptiveConfig {
+            bucket_interval: "1 hour",
+            span_limit: 0, // operation summaries only
+            log_limit: 20,
+        }
+    }
+}
+
 pub fn investigate(
     conn: &Arc<Mutex<Connection>>,
     req: &InvestigateRequest,
@@ -406,20 +446,29 @@ pub fn investigate(
         anyhow::anyhow!("{e}")
     })?;
 
-    let mut metrics =
-        query_metrics(&conn, &req.service, from_ts, to_ts).context("metrics query failed")?;
-    let histogram_metrics = query_histogram_metrics(&conn, &req.service, from_ts, to_ts)
-        .context("histogram metrics query failed")?;
+    let config = adaptive_config(from_ts, to_ts);
+
+    let mut metrics = query_metrics(&conn, &req.service, from_ts, to_ts, config.bucket_interval)
+        .context("metrics query failed")?;
+    let histogram_metrics =
+        query_histogram_metrics(&conn, &req.service, from_ts, to_ts, config.bucket_interval)
+            .context("histogram metrics query failed")?;
     metrics.extend(histogram_metrics);
 
     let operation_summaries = query_operation_summaries(&conn, &req.service, from_ts, to_ts)
         .context("operation summaries query failed")?;
 
     let spans_total = count_spans(&conn, &req.service, from_ts, to_ts)?;
-    let spans = query_spans(&conn, &req.service, from_ts, to_ts).context("spans query failed")?;
+    let spans = if config.span_limit > 0 {
+        query_spans(&conn, &req.service, from_ts, to_ts, config.span_limit)
+            .context("spans query failed")?
+    } else {
+        Vec::new()
+    };
 
     let logs_total = count_log_templates(&conn, &req.service, from_ts, to_ts)?;
-    let logs = query_logs(&conn, &req.service, from_ts, to_ts).context("logs query failed")?;
+    let logs = query_logs(&conn, &req.service, from_ts, to_ts, config.log_limit)
+        .context("logs query failed")?;
 
     let span_trees = build_span_trees(&spans);
 
@@ -469,9 +518,11 @@ fn query_metrics(
     service: &str,
     from_ts: i64,
     to_ts: i64,
+    bucket_interval: &str,
 ) -> Result<Vec<MetricBucket>> {
     // Query gauge + sum tables (the two that have a scalar `value` column)
-    let sql = "SELECT time_bucket(INTERVAL '1 minute', timestamp)::VARCHAR AS bucket,
+    let sql = format!(
+        "SELECT time_bucket(INTERVAL '{bucket_interval}', timestamp)::VARCHAR AS bucket,
                metric_name,
                approx_quantile(value, 0.95) AS p95,
                avg(value) AS avg,
@@ -483,9 +534,10 @@ fn query_metrics(
         )
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         GROUP BY bucket, metric_name
-        ORDER BY bucket, metric_name";
+        ORDER BY bucket, metric_name"
+    );
 
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
     let mut results = Vec::new();
 
@@ -506,8 +558,9 @@ fn query_histogram_metrics(
     service: &str,
     from_ts: i64,
     to_ts: i64,
+    bucket_interval: &str,
 ) -> Result<Vec<MetricBucket>> {
-    let sql = "SELECT time_bucket(INTERVAL '1 minute', timestamp)::VARCHAR AS bucket,
+    let sql = format!("SELECT time_bucket(INTERVAL '{bucket_interval}', timestamp)::VARCHAR AS bucket,
                metric_name,
                max(max) AS p95,
                sum(sum)/NULLIF(sum(count),0) AS avg,
@@ -519,9 +572,9 @@ fn query_histogram_metrics(
         )
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         GROUP BY bucket, metric_name
-        ORDER BY bucket, metric_name";
+        ORDER BY bucket, metric_name");
 
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
     let mut results = Vec::new();
 
@@ -640,15 +693,23 @@ fn query_operation_summaries(
     Ok(results)
 }
 
-fn query_spans(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Result<Vec<SpanRow>> {
-    let sql = "SELECT trace_id, span_id, parent_span_id, span_name, duration,
+fn query_spans(
+    conn: &Connection,
+    service: &str,
+    from_ts: i64,
+    to_ts: i64,
+    limit: i64,
+) -> Result<Vec<SpanRow>> {
+    let sql = format!(
+        "SELECT trace_id, span_id, parent_span_id, span_name, duration,
                status_code, service_name
         FROM sigiro_spans
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         ORDER BY CASE WHEN status_code = 2 THEN 0 ELSE 1 END, duration DESC
-        LIMIT 50";
+        LIMIT {limit}"
+    );
 
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
     let mut results = Vec::new();
 
@@ -675,6 +736,7 @@ fn query_logs(
     service: &str,
     from_ts: i64,
     to_ts: i64,
+    limit: i64,
 ) -> Result<Vec<LogTemplate>> {
     // Normalize log bodies to templates: UUIDs → {uuid}, IPs → {ip}, long numbers → {id}.
     // GROUP BY template collapses noisy logs (e.g., 1000 "timeout for 10.0.0.X" → 1 template).
@@ -696,10 +758,10 @@ fn query_logs(
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         GROUP BY template, severity_text
         ORDER BY count DESC
-        LIMIT 30";
+        LIMIT ?";
 
     let mut stmt = conn.prepare(sql)?;
-    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts, limit])?;
     let mut results = Vec::new();
 
     while let Some(row) = rows.next()? {
@@ -1055,7 +1117,7 @@ mod tests {
                 (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', 'Connection timeout for 172.16.0.99')"
         ))
         .expect("insert");
-        let logs = query_logs(&conn, "api", now_us - 60_000_000, now_us + 60_000_000).unwrap();
+        let logs = query_logs(&conn, "api", now_us - 60_000_000, now_us + 60_000_000, 30).unwrap();
         assert_eq!(
             logs.len(),
             1,
@@ -1084,10 +1146,64 @@ mod tests {
                 (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'Failed to process order a1b2c3d4-e5f6-7890-abcd-ef1234567890')"
         ))
         .expect("insert");
-        let logs = query_logs(&conn, "api", now_us - 60_000_000, now_us + 60_000_000).unwrap();
+        let logs = query_logs(&conn, "api", now_us - 60_000_000, now_us + 60_000_000, 30).unwrap();
         assert_eq!(logs.len(), 1, "2 logs with different UUIDs should collapse");
         assert!(logs[0].template.contains("{uuid}"));
         assert_eq!(logs[0].count, 2);
+    }
+
+    #[test]
+    fn adaptive_config_short_window() {
+        let now = 1_000_000_000_000_i64;
+        let config = adaptive_config(now - 5 * 60 * 1_000_000, now); // 5m
+        assert_eq!(config.bucket_interval, "1 minute");
+        assert_eq!(config.span_limit, 50);
+        assert_eq!(config.log_limit, 30);
+    }
+
+    #[test]
+    fn adaptive_config_medium_window() {
+        let now = 1_000_000_000_000_i64;
+        let config = adaptive_config(now - 30 * 60 * 1_000_000, now); // 30m
+        assert_eq!(config.bucket_interval, "5 minutes");
+        assert_eq!(config.span_limit, 20);
+    }
+
+    #[test]
+    fn adaptive_config_large_window() {
+        let now = 1_000_000_000_000_i64;
+        let config = adaptive_config(now - 3 * 3600 * 1_000_000, now); // 3h
+        assert_eq!(config.bucket_interval, "1 hour");
+        assert_eq!(config.span_limit, 0); // summaries only
+        assert_eq!(config.log_limit, 20);
+    }
+
+    #[test]
+    fn investigate_large_window_no_spans() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+                parent_span_id, span_name, span_kind, status_code, service_name)
+             VALUES
+                (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'op', 2, 1, 'svc')"
+        ))
+        .expect("insert");
+        let shared = Arc::new(Mutex::new(conn));
+        // 3h window → adaptive config should return 0 span_limit
+        let req = InvestigateRequest {
+            service: "svc".to_string(),
+            from_ts: Some(now_us - 3 * 3600 * 1_000_000),
+            to_ts: Some(now_us + 60_000_000),
+        };
+        let block = investigate(&shared, &req).unwrap();
+        assert!(
+            block.spans.is_empty(),
+            ">2h window should omit flat spans (operation_summaries suffice)"
+        );
+        // But operation summaries should still be present
+        assert!(!block.operation_summaries.is_empty());
     }
 
     #[test]
