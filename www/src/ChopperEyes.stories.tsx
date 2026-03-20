@@ -55,17 +55,34 @@ export const Sleepy: Story = {
 }
 
 const allExpressions: ChopperExpression[] = [
-  'normal', 'sparkle', 'heart', 'glare', 'cry', 'dizzy', 'happy', 'sleepy',
+  'normal',
+  'sparkle',
+  'heart',
+  'glare',
+  'cry',
+  'dizzy',
+  'happy',
+  'sleepy',
 ]
 
 export const AllExpressions: Story = {
   args: { size: 150 },
   render: () => (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'flex-start', maxWidth: 700 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 24,
+        alignItems: 'flex-start',
+        maxWidth: 700,
+      }}
+    >
       {allExpressions.map((expr) => (
         <div key={expr} style={{ textAlign: 'center' }}>
           <ChopperEye size={150} expression={expr} />
-          <div style={{ marginTop: 4, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>{expr}</div>
+          <div style={{ marginTop: 4, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>
+            {expr}
+          </div>
         </div>
       ))}
     </div>
@@ -106,11 +123,21 @@ export const TwoEyesAllExpressions: Story = {
   name: 'Two Eyes — All',
   args: { size: 80 },
   render: () => (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 32, alignItems: 'flex-start', maxWidth: 800 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 32,
+        alignItems: 'flex-start',
+        maxWidth: 800,
+      }}
+    >
       {allExpressions.map((expr) => (
         <div key={expr} style={{ textAlign: 'center' }}>
           <TwoChopperEyes size={80} expression={expr} />
-          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>{expr}</div>
+          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>
+            {expr}
+          </div>
         </div>
       ))}
     </div>
@@ -143,7 +170,9 @@ export const CurrentLogoComparison: Story = {
       {logoExpressions.map((expr) => (
         <div key={expr} style={{ textAlign: 'center' }}>
           <Logo size={120} expression={expr} />
-          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>{expr}</div>
+          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.5, fontFamily: 'monospace' }}>
+            {expr}
+          </div>
         </div>
       ))}
     </div>
