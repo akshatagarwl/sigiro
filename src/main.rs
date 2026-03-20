@@ -1,6 +1,7 @@
 mod ingest;
 mod inserter;
 mod investigate;
+mod mcp;
 mod schema;
 mod server;
 
@@ -36,6 +37,8 @@ enum Command {
         #[arg(long, default_value = "15m")]
         window: String,
     },
+    /// Start MCP stdio server for Claude/Cursor/Codex integration
+    Mcp,
 }
 
 fn data_dir() -> Result<PathBuf> {
@@ -115,6 +118,12 @@ async fn main() -> Result<()> {
             };
             let block = investigate::investigate(&shared, &req)?;
             println!("{}", serde_json::to_string_pretty(&block)?);
+        }
+        Some(Command::Mcp) => {
+            let conn = open_db()?;
+            schema::create_tables(&conn)?;
+            let shared = Arc::new(Mutex::new(conn));
+            mcp::run_mcp_server(shared).await?;
         }
     }
     Ok(())

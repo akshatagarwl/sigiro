@@ -48,6 +48,12 @@ const BLOCKED_KEYWORDS: &[&str] = &[
     "READ_JSON",
 ];
 
+/// Validate that a SQL query is read-only (no DML/DDL/file access).
+/// Public for reuse by the MCP server.
+pub fn validate_read_only_public(sql: &str) -> Result<(), String> {
+    validate_read_only(sql)
+}
+
 fn validate_read_only(sql: &str) -> Result<(), String> {
     let upper = sql.to_uppercase();
     for kw in BLOCKED_KEYWORDS {
@@ -141,7 +147,8 @@ async fn health() -> &'static str {
 
 /// Convert a DuckDB ValueRef to a serde_json::Value.
 /// Uses pattern matching on the actual type — no cascading type-try guessing.
-fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
+/// Public for reuse by the MCP server.
+pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
     use duckdb::types::ValueRef;
     match val {
         ValueRef::Null => serde_json::Value::Null,
