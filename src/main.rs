@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, builder::styling};
 use duckdb::Connection;
 use std::sync::{Arc, Mutex};
 
-use sigiro::{data_dir, format_bytes, open_db, parse_window};
+use sigiro::{data_dir, format_bytes, open_db};
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -33,9 +33,12 @@ enum Command {
     Investigate {
         /// Service name to investigate
         service: String,
-        /// Time window (e.g. 15m, 1h)
-        #[arg(long, default_value = "15m")]
-        window: String,
+        /// Start of range in epoch seconds (defaults to now - 900)
+        #[arg(long)]
+        from: Option<i64>,
+        /// End of range in epoch seconds (defaults to now)
+        #[arg(long)]
+        to: Option<i64>,
     },
     /// Start MCP stdio server for Claude/Cursor/Codex integration
     Mcp,
@@ -84,16 +87,14 @@ async fn main() -> Result<()> {
             sigiro::schema::create_tables(&conn)?;
             print_status(&conn)?;
         }
-        Some(Command::Investigate { service, window }) => {
+        Some(Command::Investigate { service, from, to }) => {
             let conn = open_db()?;
             sigiro::schema::create_tables(&conn)?;
             let shared = Arc::new(Mutex::new(conn));
-            let window_us = parse_window(&window)?;
-            let now_us = chrono::Utc::now().timestamp_micros();
             let req = sigiro::investigate::InvestigateRequest {
                 service,
-                from_ts: Some(now_us - window_us),
-                to_ts: Some(now_us),
+                from_ts: from.map(|s| s * 1_000_000),
+                to_ts: to.map(|s| s * 1_000_000),
             };
             let block = sigiro::investigate::investigate(&shared, &req)?;
             println!("{}", serde_json::to_string_pretty(&block)?);
