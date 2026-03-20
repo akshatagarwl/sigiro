@@ -19,6 +19,10 @@ pub struct InvestigationBlock {
     /// If any total > returned count, the data is incomplete and the agent should
     /// acknowledge this in its analysis or request a narrower time window.
     pub truncation: Truncation,
+    /// Per-operation aggregates: error rate, percentiles, exemplar trace_id.
+    /// This is the primary triage view — the agent should read this FIRST to identify
+    /// which operations are broken, then drill into spans/logs for root cause.
+    pub operation_summaries: Vec<OperationSummary>,
     pub metrics: Vec<MetricBucket>,
     pub spans: Vec<SpanRow>,
     /// parent_span_id -> [child_span_id]. Root spans (no parent) are not keys.
@@ -90,6 +94,22 @@ pub struct LinkedTrace {
     pub spans: Vec<SpanRow>,
 }
 
+/// Pre-aggregated per-operation summary. 3x more token-efficient than raw spans.
+/// An agent can read 10 summaries (~3KB) instead of 50 flat spans (~10KB)
+/// and immediately identify which operations are broken.
+#[derive(Serialize)]
+pub struct OperationSummary {
+    pub span_name: String,
+    pub count: i64,
+    pub error_count: i64,
+    pub error_pct: f64,
+    pub duration_p50_ns: f64,
+    pub duration_p95_ns: f64,
+    pub duration_p99_ns: f64,
+    /// One real error trace_id for drill-down. None if no errors for this operation.
+    pub exemplar_error_trace_id: Option<String>,
+}
+
 fn us_to_iso(us: i64) -> String {
     chrono::DateTime::from_timestamp_micros(us)
         .map(|dt| dt.to_rfc3339())
@@ -114,6 +134,9 @@ pub fn investigate(
     let histogram_metrics = query_histogram_metrics(&conn, &req.service, from_ts, to_ts)
         .context("histogram metrics query failed")?;
     metrics.extend(histogram_metrics);
+
+    let operation_summaries = query_operation_summaries(&conn, &req.service, from_ts, to_ts)
+        .context("operation summaries query failed")?;
 
     let spans_total = count_spans(&conn, &req.service, from_ts, to_ts)?;
     let spans = query_spans(&conn, &req.service, from_ts, to_ts).context("spans query failed")?;
@@ -146,6 +169,7 @@ pub fn investigate(
             linked_spans_total: linked_spans_returned, // we don't know the true total without a separate query
             linked_spans_returned,
         },
+        operation_summaries,
         metrics,
         spans,
         span_trees,
@@ -256,6 +280,45 @@ fn count_error_traces(conn: &Connection, service: &str, from_ts: i64, to_ts: i64
         |row| row.get(0),
     )
     .context("count error traces failed")
+}
+
+fn query_operation_summaries(
+    conn: &Connection,
+    service: &str,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<Vec<OperationSummary>> {
+    let sql = "SELECT span_name,
+               count(*) AS cnt,
+               count(*) FILTER (WHERE status_code = 2) AS err_cnt,
+               count(*) FILTER (WHERE status_code = 2) * 100.0 / count(*) AS err_pct,
+               approx_quantile(duration, 0.50) AS p50,
+               approx_quantile(duration, 0.95) AS p95,
+               approx_quantile(duration, 0.99) AS p99,
+               first(trace_id) FILTER (WHERE status_code = 2) AS exemplar_tid
+        FROM sigiro_spans
+        WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+        GROUP BY span_name
+        ORDER BY err_cnt DESC, cnt DESC
+        LIMIT 20";
+
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    let mut results = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        results.push(OperationSummary {
+            span_name: row.get::<_, String>(0).context("span_name")?,
+            count: row.get::<_, i64>(1).context("count")?,
+            error_count: row.get::<_, i64>(2).context("error_count")?,
+            error_pct: row.get::<_, f64>(3).unwrap_or(0.0),
+            duration_p50_ns: row.get::<_, f64>(4).unwrap_or(0.0),
+            duration_p95_ns: row.get::<_, f64>(5).unwrap_or(0.0),
+            duration_p99_ns: row.get::<_, f64>(6).unwrap_or(0.0),
+            exemplar_error_trace_id: row.get::<_, String>(7).ok(),
+        });
+    }
+    Ok(results)
 }
 
 fn query_spans(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Result<Vec<SpanRow>> {
@@ -398,6 +461,7 @@ mod tests {
         };
         let block = investigate(&shared, &req).expect("investigate should succeed on empty db");
         assert_eq!(block.service, "nonexistent");
+        assert!(block.operation_summaries.is_empty());
         assert!(block.metrics.is_empty());
         assert!(block.spans.is_empty());
         assert!(block.logs.is_empty());
@@ -405,6 +469,59 @@ mod tests {
         assert_eq!(block.truncation.spans_total, 0);
         assert_eq!(block.truncation.logs_total, 0);
         assert_eq!(block.truncation.error_traces_total, 0);
+    }
+
+    #[test]
+    fn investigate_with_real_span_data() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+
+        // Insert real span data — simulates what otlp2records would produce
+        // Must include all NOT NULL columns: timestamp, end_timestamp, duration, service_name,
+        // span_name, span_kind, status_code
+        let now_us = chrono::Utc::now().timestamp_micros();
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+                parent_span_id, span_name, span_kind, status_code, service_name)
+             VALUES
+                (make_timestamp({now_us}), {now_us} + 500000000, 500000000, 'trace-1', 'span-1', '', 'POST /checkout', 2, 2, 'checkout'),
+                (make_timestamp({now_us}), {now_us} + 200000000, 200000000, 'trace-2', 'span-2', '', 'POST /checkout', 2, 1, 'checkout'),
+                (make_timestamp({now_us}), {now_us} + 300000000, 300000000, 'trace-3', 'span-3', '', 'POST /checkout', 2, 2, 'checkout'),
+                (make_timestamp({now_us}), {now_us} + 1000000, 1000000, 'trace-4', 'span-4', '', 'GET /health', 2, 1, 'checkout'),
+                (make_timestamp({now_us}), {now_us} + 2000000, 2000000, 'trace-5', 'span-5', '', 'GET /health', 2, 1, 'checkout');"
+        )).expect("insert spans");
+
+        let shared = Arc::new(Mutex::new(conn));
+        let req = InvestigateRequest {
+            service: "checkout".to_string(),
+            from_ts: Some(now_us - 60_000_000), // 1 min window
+            to_ts: Some(now_us + 60_000_000),
+        };
+        let block = investigate(&shared, &req).expect("investigate");
+
+        // Operation summaries: POST /checkout (3 spans, 2 errors), GET /health (2 spans, 0 errors)
+        assert_eq!(block.operation_summaries.len(), 2);
+        let checkout_op = &block.operation_summaries[0]; // error-first ordering
+        assert_eq!(checkout_op.span_name, "POST /checkout");
+        assert_eq!(checkout_op.count, 3);
+        assert_eq!(checkout_op.error_count, 2);
+        assert!((checkout_op.error_pct - 66.66).abs() < 1.0);
+        assert!(checkout_op.exemplar_error_trace_id.is_some());
+
+        let health_op = &block.operation_summaries[1];
+        assert_eq!(health_op.span_name, "GET /health");
+        assert_eq!(health_op.count, 2);
+        assert_eq!(health_op.error_count, 0);
+        assert!(health_op.exemplar_error_trace_id.is_none());
+
+        // Flat spans: all 5 returned, error-first
+        assert_eq!(block.spans.len(), 5);
+        assert_eq!(block.spans[0].status_code, 2); // errors first
+        assert_eq!(block.truncation.spans_total, 5);
+        assert_eq!(block.truncation.spans_returned, 5);
+
+        // Linked traces: 2 error traces
+        assert_eq!(block.truncation.error_traces_total, 2);
     }
 }
 
