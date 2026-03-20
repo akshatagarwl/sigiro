@@ -4,6 +4,52 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+/// Tells the agent what data exists and what's missing.
+/// Without this, an agent might conclude "no errors in logs" when there ARE no logs —
+/// confusing absence of problems with absence of data.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Coverage {
+    pub has_spans: bool,
+    pub has_logs: bool,
+    pub has_metrics: bool,
+    pub span_count: i64,
+    pub log_template_count: i64,
+    pub metric_series_count: i64,
+    /// Human-readable gap descriptions for the agent.
+    /// Empty when all signal types are present.
+    pub gaps: Vec<String>,
+}
+
+fn compute_coverage(spans_total: i64, logs_total: i64, metrics_count: usize) -> Coverage {
+    let has_spans = spans_total > 0;
+    let has_logs = logs_total > 0;
+    let has_metrics = metrics_count > 0;
+
+    let mut gaps = Vec::new();
+    if !has_spans {
+        gaps.push("no spans found — service may not be instrumented for tracing".to_string());
+    }
+    if !has_logs {
+        gaps.push("no logs found — consider enabling log collection".to_string());
+    }
+    if !has_metrics {
+        gaps.push("no metrics found — no gauge/sum/histogram data in this window".to_string());
+    }
+    if has_spans && !has_logs {
+        gaps.push("spans exist but no logs — rely on span data for diagnosis".to_string());
+    }
+
+    Coverage {
+        has_spans,
+        has_logs,
+        has_metrics,
+        span_count: spans_total,
+        log_template_count: logs_total,
+        metric_series_count: metrics_count as i64,
+        gaps,
+    }
+}
+
 #[derive(Deserialize)]
 pub struct InvestigateRequest {
     pub service: String,
@@ -19,6 +65,9 @@ pub struct InvestigationBlock {
     /// If any total > returned count, the data is incomplete and the agent should
     /// acknowledge this in its analysis or request a narrower time window.
     pub truncation: Truncation,
+    /// What data exists and what's missing. The agent MUST check gaps before concluding
+    /// "no problems" — absence of data != absence of problems.
+    pub coverage: Coverage,
     /// Per-operation aggregates: error rate, percentiles, exemplar trace_id.
     /// This is the primary triage view — the agent should read this FIRST to identify
     /// which operations are broken, then drill into spans/logs for root cause.
@@ -161,6 +210,8 @@ pub fn investigate(
         query_linked_traces(&conn, &spans, from_ts, to_ts).context("linked traces query failed")?;
     let linked_spans_returned: i64 = linked_traces.iter().map(|lt| lt.spans.len() as i64).sum();
 
+    let coverage = compute_coverage(spans_total, logs_total, metrics.len());
+
     Ok(InvestigationBlock {
         service: req.service.clone(),
         window: Window {
@@ -169,6 +220,7 @@ pub fn investigate(
             from_iso: us_to_iso(from_ts),
             to_iso: us_to_iso(to_ts),
         },
+        coverage,
         truncation: Truncation {
             spans_total,
             spans_returned: spans.len() as i64,
@@ -512,6 +564,21 @@ mod tests {
         assert_eq!(block.truncation.spans_total, 0);
         assert_eq!(block.truncation.logs_total, 0);
         assert_eq!(block.truncation.error_traces_total, 0);
+
+        // Coverage: empty db → all gaps present
+        assert!(!block.coverage.has_spans);
+        assert!(!block.coverage.has_logs);
+        assert!(!block.coverage.has_metrics);
+        assert_eq!(block.coverage.span_count, 0);
+        assert_eq!(block.coverage.log_template_count, 0);
+        assert_eq!(block.coverage.metric_series_count, 0);
+        assert!(
+            block.coverage.gaps.len() >= 3,
+            "should have gaps for all signal types"
+        );
+        assert!(block.coverage.gaps.iter().any(|g| g.contains("no spans")));
+        assert!(block.coverage.gaps.iter().any(|g| g.contains("no logs")));
+        assert!(block.coverage.gaps.iter().any(|g| g.contains("no metrics")));
     }
 
     #[test]
@@ -569,6 +636,50 @@ mod tests {
 
         // Linked traces: 2 error traces
         assert_eq!(block.truncation.error_traces_total, 2);
+
+        // Coverage: spans exist, no logs/metrics → appropriate gaps
+        assert!(block.coverage.has_spans);
+        assert!(!block.coverage.has_logs);
+        assert!(!block.coverage.has_metrics);
+        assert_eq!(block.coverage.span_count, 5);
+        assert!(block.coverage.gaps.iter().any(|g| g.contains("no logs")));
+        assert!(
+            block
+                .coverage
+                .gaps
+                .iter()
+                .any(|g| g.contains("spans exist but no logs"))
+        );
+        assert!(!block.coverage.gaps.iter().any(|g| g.contains("no spans")));
+    }
+
+    #[test]
+    fn coverage_no_data() {
+        let c = compute_coverage(0, 0, 0);
+        assert!(!c.has_spans);
+        assert!(!c.has_logs);
+        assert!(!c.has_metrics);
+        assert!(c.gaps.len() >= 3);
+    }
+
+    #[test]
+    fn coverage_spans_only() {
+        let c = compute_coverage(10, 0, 0);
+        assert!(c.has_spans);
+        assert!(!c.has_logs);
+        assert!(!c.has_metrics);
+        // Should have "no logs", "no metrics", and "spans exist but no logs"
+        assert!(c.gaps.iter().any(|g| g.contains("spans exist but no logs")));
+        assert!(!c.gaps.iter().any(|g| g.contains("no spans")));
+    }
+
+    #[test]
+    fn coverage_all_signals() {
+        let c = compute_coverage(10, 5, 3);
+        assert!(c.has_spans);
+        assert!(c.has_logs);
+        assert!(c.has_metrics);
+        assert!(c.gaps.is_empty(), "no gaps when all signals present");
     }
 
     #[test]
