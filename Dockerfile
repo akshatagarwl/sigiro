@@ -23,7 +23,7 @@ COPY src/ src/
 RUN cargo build --release
 
 # Stage 4: minimal runtime
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/sigiro /usr/local/bin/sigiro
 EXPOSE 4317 4318 9999
