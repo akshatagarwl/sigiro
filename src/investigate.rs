@@ -448,17 +448,14 @@ pub fn investigate(
 
     let config = adaptive_config(from_ts, to_ts);
 
-    let mut metrics = query_metrics(&conn, &req.service, from_ts, to_ts, config.bucket_interval)
+    let metrics = query_all_metrics(&conn, &req.service, from_ts, to_ts, config.bucket_interval)
         .context("metrics query failed")?;
-    let histogram_metrics =
-        query_histogram_metrics(&conn, &req.service, from_ts, to_ts, config.bucket_interval)
-            .context("histogram metrics query failed")?;
-    metrics.extend(histogram_metrics);
 
     let operation_summaries = query_operation_summaries(&conn, &req.service, from_ts, to_ts)
         .context("operation summaries query failed")?;
 
-    let spans_total = count_spans(&conn, &req.service, from_ts, to_ts)?;
+    // Combined: total spans + distinct error trace count in one query (was 2)
+    let (spans_total, error_traces_total) = count_span_stats(&conn, &req.service, from_ts, to_ts)?;
     let spans = if config.span_limit > 0 {
         query_spans(&conn, &req.service, from_ts, to_ts, config.span_limit)
             .context("spans query failed")?
@@ -472,7 +469,6 @@ pub fn investigate(
 
     let span_trees = build_span_trees(&spans);
 
-    let error_traces_total = count_error_traces(&conn, &req.service, from_ts, to_ts)?;
     let linked_traces =
         query_linked_traces(&conn, &spans, from_ts, to_ts).context("linked traces query failed")?;
     let linked_spans_returned: i64 = linked_traces.iter().map(|lt| lt.spans.len() as i64).sum();
@@ -513,32 +509,58 @@ pub fn investigate(
     })
 }
 
-fn query_metrics(
+/// Combined metrics query: gauge/sum scalars + histogram aggregates in one round-trip.
+/// Was 2 separate queries; merged via UNION ALL with compatible (bucket, metric_name, p95, avg, n) schema.
+fn query_all_metrics(
     conn: &Connection,
     service: &str,
     from_ts: i64,
     to_ts: i64,
     bucket_interval: &str,
 ) -> Result<Vec<MetricBucket>> {
-    // Query gauge + sum tables (the two that have a scalar `value` column)
     let sql = format!(
-        "SELECT time_bucket(INTERVAL '{bucket_interval}', timestamp)::VARCHAR AS bucket,
-               metric_name,
-               approx_quantile(value, 0.95) AS p95,
-               avg(value) AS avg,
-               count(*) AS n
-        FROM (
-            SELECT timestamp, metric_name, value, service_name FROM sigiro_metrics_gauge
+        "WITH scalar AS (
+            SELECT timestamp, metric_name, service_name,
+                   value AS p95_src, value AS avg_src, 1 AS cnt
+            FROM sigiro_metrics_gauge
+            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
             UNION ALL
-            SELECT timestamp, metric_name, value, service_name FROM sigiro_metrics_sum
+            SELECT timestamp, metric_name, service_name,
+                   value, value, 1
+            FROM sigiro_metrics_sum
+            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+        ),
+        histo AS (
+            SELECT timestamp, metric_name, service_name,
+                   max AS p95_src, CASE WHEN count > 0 THEN sum/count ELSE 0 END AS avg_src, count AS cnt
+            FROM sigiro_metrics_histogram
+            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+            UNION ALL
+            SELECT timestamp, metric_name, service_name,
+                   max, CASE WHEN count > 0 THEN sum/count ELSE 0 END, count
+            FROM sigiro_metrics_exp_histogram
+            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+        ),
+        combined AS (
+            SELECT timestamp, metric_name, p95_src, avg_src, cnt FROM scalar
+            UNION ALL
+            SELECT timestamp, metric_name, p95_src, avg_src, cnt FROM histo
         )
-        WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+        SELECT time_bucket(INTERVAL '{bucket_interval}', timestamp)::VARCHAR AS bucket,
+               metric_name,
+               approx_quantile(p95_src, 0.95) AS p95,
+               avg(avg_src) AS avg,
+               sum(cnt) AS n
+        FROM combined
         GROUP BY bucket, metric_name
         ORDER BY bucket, metric_name"
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    let mut rows = stmt.query(duckdb::params![
+        service, from_ts, to_ts, service, from_ts, to_ts, service, from_ts, to_ts, service,
+        from_ts, to_ts
+    ])?;
     let mut results = Vec::new();
 
     while let Some(row) = rows.next()? {
@@ -553,51 +575,22 @@ fn query_metrics(
     Ok(results)
 }
 
-fn query_histogram_metrics(
+/// Combined span counts: total spans + distinct error traces in one query instead of two.
+fn count_span_stats(
     conn: &Connection,
     service: &str,
     from_ts: i64,
     to_ts: i64,
-    bucket_interval: &str,
-) -> Result<Vec<MetricBucket>> {
-    let sql = format!("SELECT time_bucket(INTERVAL '{bucket_interval}', timestamp)::VARCHAR AS bucket,
-               metric_name,
-               max(max) AS p95,
-               sum(sum)/NULLIF(sum(count),0) AS avg,
-               sum(count) AS n
-        FROM (
-            SELECT timestamp, metric_name, count, sum, max, service_name FROM sigiro_metrics_histogram
-            UNION ALL
-            SELECT timestamp, metric_name, count, sum, max, service_name FROM sigiro_metrics_exp_histogram
-        )
-        WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
-        GROUP BY bucket, metric_name
-        ORDER BY bucket, metric_name");
-
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
-    let mut results = Vec::new();
-
-    while let Some(row) = rows.next()? {
-        results.push(MetricBucket {
-            bucket: row.get::<_, String>(0).context("bucket")?,
-            metric_name: row.get::<_, String>(1).context("metric_name")?,
-            p95: row.get::<_, f64>(2).unwrap_or(0.0),
-            avg: row.get::<_, f64>(3).unwrap_or(0.0),
-            count: row.get::<_, i64>(4).context("count")?,
-        });
-    }
-    Ok(results)
-}
-
-fn count_spans(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Result<i64> {
+) -> Result<(i64, i64)> {
     conn.query_row(
-        "SELECT count(*) FROM sigiro_spans
+        "SELECT count(*),
+                count(DISTINCT CASE WHEN status_code = 2 THEN trace_id END)
+         FROM sigiro_spans
          WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
         duckdb::params![service, from_ts, to_ts],
-        |row| row.get(0),
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
     )
-    .context("count spans failed")
+    .context("count span stats failed")
 }
 
 fn count_log_templates(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Result<i64> {
@@ -608,17 +601,6 @@ fn count_log_templates(conn: &Connection, service: &str, from_ts: i64, to_ts: i6
         |row| row.get(0),
     )
     .context("count log templates failed")
-}
-
-fn count_error_traces(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Result<i64> {
-    conn.query_row(
-        "SELECT count(DISTINCT trace_id) FROM sigiro_spans
-         WHERE service_name = ? AND status_code = 2
-           AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
-        duckdb::params![service, from_ts, to_ts],
-        |row| row.get(0),
-    )
-    .context("count error traces failed")
 }
 
 fn query_operation_summaries(
