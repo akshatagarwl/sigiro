@@ -7,18 +7,17 @@ target/
 # Autoresearch output
 predict/
 
-# Build output (legacy)
-dist/
-zig-cache/
-.zig-cache/
-zig-out/
-
-# Go binaries (legacy)
-cmd/query-server/query-server
-experiments/query-engine/query-engine
-experiments/incident-gen/incident-gen
-test/e2e/profilegen/profilegen
-
-# OCB-generated collector binaries (legacy)
-collector/cmd/collector/observe-collector
-collector/cmd/collector/collector
+# Agent/IDE configs (per-machine, not shared)
+.agents/
+.augment/
+.junie/
+.kiro/
+.claude/skills/
+.claude/diagrams/
+.claude/settings.local.json
+.impeccable.md
+.mcp.json
+skills/
+skills-lock.json
+investigations/
+design/
