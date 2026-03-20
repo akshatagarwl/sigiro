@@ -97,6 +97,11 @@ pub struct LinkedTrace {
 /// Pre-aggregated per-operation summary. 3x more token-efficient than raw spans.
 /// An agent can read 10 summaries (~3KB) instead of 50 flat spans (~10KB)
 /// and immediately identify which operations are broken.
+///
+/// Includes baseline comparison from the preceding window (4x the investigation window).
+/// Example: investigating last 15m → baseline is the 1h before that.
+/// If baseline_error_pct is Some(0.5) and error_pct is 12.0, the agent knows
+/// error rate jumped 24x — this is anomalous, not normal.
 #[derive(Serialize)]
 pub struct OperationSummary {
     pub span_name: String,
@@ -108,6 +113,11 @@ pub struct OperationSummary {
     pub duration_p99_ns: f64,
     /// One real error trace_id for drill-down. None if no errors for this operation.
     pub exemplar_error_trace_id: Option<String>,
+    /// Baseline metrics from the preceding window (4x investigation window duration).
+    /// None if no historical data exists for this operation.
+    pub baseline_error_pct: Option<f64>,
+    pub baseline_p95_ns: Option<f64>,
+    pub baseline_count: Option<i64>,
 }
 
 fn us_to_iso(us: i64) -> String {
@@ -288,22 +298,52 @@ fn query_operation_summaries(
     from_ts: i64,
     to_ts: i64,
 ) -> Result<Vec<OperationSummary>> {
-    let sql = "SELECT span_name,
-               count(*) AS cnt,
-               count(*) FILTER (WHERE status_code = 2) AS err_cnt,
-               count(*) FILTER (WHERE status_code = 2) * 100.0 / count(*) AS err_pct,
-               approx_quantile(duration, 0.50) AS p50,
-               approx_quantile(duration, 0.95) AS p95,
-               approx_quantile(duration, 0.99) AS p99,
-               first(trace_id) FILTER (WHERE status_code = 2) AS exemplar_tid
-        FROM sigiro_spans
-        WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
-        GROUP BY span_name
-        ORDER BY err_cnt DESC, cnt DESC
+    // Baseline window: 4x the investigation window, immediately preceding it.
+    // E.g., investigating last 15m → baseline is the preceding 1h.
+    let window_us = to_ts - from_ts;
+    let baseline_from = from_ts.saturating_sub(window_us * 4);
+    let baseline_to = from_ts;
+
+    // Single query: current window LEFT JOIN baseline window.
+    // The agent sees both current and baseline side-by-side.
+    let sql = "WITH current AS (
+            SELECT span_name,
+                   count(*) AS cnt,
+                   count(*) FILTER (WHERE status_code = 2) AS err_cnt,
+                   count(*) FILTER (WHERE status_code = 2) * 100.0 / count(*) AS err_pct,
+                   approx_quantile(duration, 0.50) AS p50,
+                   approx_quantile(duration, 0.95) AS p95,
+                   approx_quantile(duration, 0.99) AS p99,
+                   first(trace_id) FILTER (WHERE status_code = 2) AS exemplar_tid
+            FROM sigiro_spans
+            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+            GROUP BY span_name
+        ),
+        baseline AS (
+            SELECT span_name,
+                   count(*) AS bl_cnt,
+                   count(*) FILTER (WHERE status_code = 2) * 100.0 / count(*) AS bl_err_pct,
+                   approx_quantile(duration, 0.95) AS bl_p95
+            FROM sigiro_spans
+            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+            GROUP BY span_name
+        )
+        SELECT c.span_name, c.cnt, c.err_cnt, c.err_pct, c.p50, c.p95, c.p99, c.exemplar_tid,
+               b.bl_err_pct, b.bl_p95, b.bl_cnt
+        FROM current c
+        LEFT JOIN baseline b ON c.span_name = b.span_name
+        ORDER BY c.err_cnt DESC, c.cnt DESC
         LIMIT 20";
 
     let mut stmt = conn.prepare(sql)?;
-    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    let mut rows = stmt.query(duckdb::params![
+        service,
+        from_ts,
+        to_ts,
+        service,
+        baseline_from,
+        baseline_to
+    ])?;
     let mut results = Vec::new();
 
     while let Some(row) = rows.next()? {
@@ -316,6 +356,9 @@ fn query_operation_summaries(
             duration_p95_ns: row.get::<_, f64>(5).unwrap_or(0.0),
             duration_p99_ns: row.get::<_, f64>(6).unwrap_or(0.0),
             exemplar_error_trace_id: row.get::<_, String>(7).ok(),
+            baseline_error_pct: row.get::<_, f64>(8).ok(),
+            baseline_p95_ns: row.get::<_, f64>(9).ok(),
+            baseline_count: row.get::<_, i64>(10).ok(),
         });
     }
     Ok(results)
@@ -507,6 +550,10 @@ mod tests {
         assert_eq!(checkout_op.error_count, 2);
         assert!((checkout_op.error_pct - 66.66).abs() < 1.0);
         assert!(checkout_op.exemplar_error_trace_id.is_some());
+        // No baseline data exists (all data is in the current window) → None
+        assert!(checkout_op.baseline_error_pct.is_none());
+        assert!(checkout_op.baseline_p95_ns.is_none());
+        assert!(checkout_op.baseline_count.is_none());
 
         let health_op = &block.operation_summaries[1];
         assert_eq!(health_op.span_name, "GET /health");
@@ -522,6 +569,52 @@ mod tests {
 
         // Linked traces: 2 error traces
         assert_eq!(block.truncation.error_traces_total, 2);
+    }
+
+    #[test]
+    fn operation_summary_baselines() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+
+        let now_us = chrono::Utc::now().timestamp_micros();
+        // Baseline window: 10 minutes ago (healthy — 0% errors, fast durations)
+        let baseline_ts = now_us - 10 * 60 * 1_000_000;
+        // Current window: now (high errors, slow durations)
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+                parent_span_id, span_name, span_kind, status_code, service_name)
+             VALUES
+                -- Baseline: healthy
+                (make_timestamp({baseline_ts}), {baseline_ts} + 50000000, 50000000, 'bl-1', 'bs-1', '', 'POST /checkout', 2, 1, 'checkout'),
+                (make_timestamp({baseline_ts}), {baseline_ts} + 60000000, 60000000, 'bl-2', 'bs-2', '', 'POST /checkout', 2, 1, 'checkout'),
+                -- Current: broken
+                (make_timestamp({now_us}), {now_us} + 800000000, 800000000, 'cur-1', 'cs-1', '', 'POST /checkout', 2, 2, 'checkout'),
+                (make_timestamp({now_us}), {now_us} + 900000000, 900000000, 'cur-2', 'cs-2', '', 'POST /checkout', 2, 2, 'checkout');"
+        )).expect("insert spans");
+
+        let shared = Arc::new(Mutex::new(conn));
+        // Investigate last 5 minutes → baseline is preceding 20 minutes (covers baseline_ts)
+        let req = InvestigateRequest {
+            service: "checkout".to_string(),
+            from_ts: Some(now_us - 5 * 60 * 1_000_000),
+            to_ts: Some(now_us + 60_000_000),
+        };
+        let block = investigate(&shared, &req).expect("investigate");
+
+        let op = &block.operation_summaries[0];
+        assert_eq!(op.span_name, "POST /checkout");
+        // Current: 2 spans, both errors
+        assert_eq!(op.count, 2);
+        assert_eq!(op.error_count, 2);
+        assert!((op.error_pct - 100.0).abs() < 0.01);
+        // Baseline: 2 spans, 0 errors → 0% error rate
+        assert!(op.baseline_error_pct.is_some());
+        assert!((op.baseline_error_pct.unwrap() - 0.0).abs() < 0.01);
+        assert!(op.baseline_count.is_some());
+        assert_eq!(op.baseline_count.unwrap(), 2);
+        // Baseline p95 should be around 60ms (60_000_000 ns)
+        assert!(op.baseline_p95_ns.is_some());
+        assert!(op.baseline_p95_ns.unwrap() < 100_000_000.0); // less than 100ms
     }
 }
 
