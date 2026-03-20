@@ -21,3 +21,6 @@ skills/
 skills-lock.json
 investigations/
 design/
+
+# Screenshots and generated images
+*.png
