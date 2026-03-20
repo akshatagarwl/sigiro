@@ -1,23 +1,172 @@
-# Sigiro Agents.txt
-# https://sigiro.dev/agents.txt
+# Sigiro — Agent Data Guide
+#
+# Read this file, then query the data with the sigiro CLI or HTTP API.
+# All observability data lives in DuckDB tables (one per signal type).
+# No separate stores, no PromQL, no LogQL — just SQL.
 
-User-agent: *
-Allow: /api/v1/query
-Allow: /api/v1/investigate
-Allow: /api/v1/signals
+## What This Is
 
-# Agent capabilities
-Name: Sigiro
-Description: AI-native observability — logs, metrics, traces, and profiles in one table. Ask what broke and get the answer.
-Contact: hello@sigiro.dev
-API: https://sigiro.dev/api/v1
-Docs: https://sigiro.dev/docs
+A per-signal observability store backed by DuckDB. Metrics, traces, and logs
+are stored in separate tables optimized for their schema. You query with SQL
+via the sigiro CLI or HTTP API.
 
-# Supported agent protocols
-Protocol: MCP
-Protocol: OpenAPI
-Protocol: A2A
+## Schema
 
-# Rate limits
-Rate-limit: 100/minute
-Rate-limit-authenticated: 1000/minute
+### sigiro_spans (traces)
+| column | type | meaning |
+|---|---|---|
+| timestamp | TIMESTAMP | span start time |
+| end_timestamp | BIGINT | span end (nanoseconds) |
+| duration | BIGINT | span duration (nanoseconds) |
+| trace_id | VARCHAR | distributed trace ID (hex) |
+| span_id | VARCHAR | span ID within trace (hex) |
+| parent_span_id | VARCHAR | parent span ID for call trees |
+| service_name | VARCHAR | service name, primary filter |
+| span_name | VARCHAR | operation name (e.g. POST /checkout) |
+| span_kind | INTEGER | 0=unspecified, 1=internal, 2=server, 3=client, 4=producer, 5=consumer |
+| status_code | INTEGER | 0=unset, 1=ok, 2=error |
+| status_message | VARCHAR | error message if status_code=2 |
+| resource_attributes | VARCHAR | JSON resource attributes |
+| span_attributes | VARCHAR | JSON span attributes |
+| events_json | VARCHAR | JSON span events |
+| links_json | VARCHAR | JSON span links |
+
+### sigiro_logs
+| column | type | meaning |
+|---|---|---|
+| timestamp | TIMESTAMP | log timestamp |
+| trace_id | VARCHAR | trace ID for correlation |
+| span_id | VARCHAR | span ID for correlation |
+| service_name | VARCHAR | service name |
+| severity_number | INTEGER | OTel severity (1-24) |
+| severity_text | VARCHAR | INFO, WARN, ERROR, etc. |
+| body | VARCHAR | log message text |
+| resource_attributes | VARCHAR | JSON resource attributes |
+| log_attributes | VARCHAR | JSON log attributes |
+
+### sigiro_metrics_gauge
+| column | type | meaning |
+|---|---|---|
+| timestamp | TIMESTAMP | metric timestamp |
+| metric_name | VARCHAR | metric name (e.g. process.runtime.go.mem.heap_alloc) |
+| value | DOUBLE | gauge value |
+| service_name | VARCHAR | service name |
+| metric_attributes | VARCHAR | JSON metric attributes |
+
+### sigiro_metrics_sum / sigiro_metrics_histogram / sigiro_metrics_exp_histogram
+Same pattern — see schema.rs for full column lists.
+
+## CLI Usage
+
+```bash
+# Start the server (gRPC :4317, OTLP HTTP :4318, query HTTP :9999)
+sigiro serve
+
+# Show services, row counts, DB file size
+sigiro status
+
+# Raw SQL query
+sigiro query "SELECT count(*) FROM sigiro_spans WHERE service_name='checkout'"
+
+# Investigate a service (structured JSON: metrics + spans + logs + linked traces)
+sigiro investigate checkout
+sigiro investigate checkout --from 1711000000 --to 1711001000
+
+# Pipe investigation to an LLM
+sigiro investigate checkout | llm "what's the root cause?"
+```
+
+## HTTP API
+
+```bash
+# Health check
+curl http://localhost:9999/health
+
+# Raw SQL query
+curl -X POST http://localhost:9999/query -d "SELECT count(*) FROM sigiro_spans"
+
+# Investigate a service
+curl -X POST http://localhost:9999/investigate \
+  -H 'Content-Type: application/json' \
+  -d '{"service":"checkout"}'
+
+# With custom time window (microsecond timestamps)
+curl -X POST http://localhost:9999/investigate \
+  -H 'Content-Type: application/json' \
+  -d '{"service":"checkout","from_ts":1711000000000000,"to_ts":1711001000000000}'
+```
+
+## Investigation Playbook
+
+Given: a service name and an approximate time of incident.
+Goal: determine root cause.
+
+### Quick start
+
+```bash
+sigiro investigate checkout
+```
+
+Returns an InvestigationBlock JSON with:
+- **metrics**: 1-minute bucketed time series (p95, avg, count)
+- **spans**: top 50 by error status + duration
+- **span_trees**: parent_span_id → child span_ids mapping
+- **logs**: template-deduplicated (body + severity grouped, with count)
+- **linked_traces**: cross-service spans for error trace_ids (cap 5)
+
+### Manual drill-down with raw SQL
+
+#### Metrics — bucketed time series
+```sql
+SELECT time_bucket(INTERVAL '1 minute', timestamp) AS bucket,
+       metric_name, approx_quantile(value, 0.95) AS p95, avg(value), count(*)
+FROM sigiro_metrics_gauge
+WHERE service_name='checkout'
+GROUP BY bucket, metric_name
+ORDER BY bucket, metric_name
+```
+
+#### Spans — errors and slow operations
+```sql
+SELECT trace_id, span_id, span_name, duration, status_code
+FROM sigiro_spans
+WHERE service_name='checkout' AND status_code = 2
+ORDER BY duration DESC
+LIMIT 50
+```
+
+#### Logs — template dedup
+```sql
+SELECT body, severity_text, count(*) AS n,
+       min(timestamp) AS first_seen, max(timestamp) AS last_seen
+FROM sigiro_logs
+WHERE service_name='checkout'
+GROUP BY body, severity_text
+ORDER BY n DESC
+LIMIT 30
+```
+
+#### Follow cross-service traces
+```sql
+SELECT trace_id, service_name, span_name, span_id, parent_span_id,
+       duration, status_code
+FROM sigiro_spans
+WHERE trace_id IN ('abc123...', 'def456...')
+ORDER BY trace_id, timestamp
+```
+
+## Environment Variables
+
+```bash
+# Data directory (default: ~/.sigiro/data/)
+export SIGIRO_DATA_DIR=/var/lib/sigiro
+```
+
+## Gotchas
+
+1. DuckDB file lock: only one process can open the DB for writing. Use HTTP API if server is running.
+2. duration in sigiro_spans is nanoseconds, not milliseconds.
+3. timestamp is a TIMESTAMP type (microsecond precision in DuckDB).
+4. Linked trace queries (WHERE trace_id IN (...)) scan the full spans table. Cap trace_ids.
+5. Always include service_name in WHERE for efficient filtering.
+6. No profiles table — profiles are not supported in the current schema.

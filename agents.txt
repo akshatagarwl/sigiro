@@ -70,7 +70,7 @@ sigiro query "SELECT count(*) FROM sigiro_spans WHERE service_name='checkout'"
 
 # Investigate a service (structured JSON: metrics + spans + logs + linked traces)
 sigiro investigate checkout
-sigiro investigate checkout --window 1h
+sigiro investigate checkout --from 1711000000 --to 1711001000
 
 # Pipe investigation to an LLM
 sigiro investigate checkout | llm "what's the root cause?"
