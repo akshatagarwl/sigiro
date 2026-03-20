@@ -1,0 +1,11 @@
+[package]
+name = "sigiro"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+duckdb = { version = "1.3", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+dirs = "6"

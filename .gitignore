@@ -1,18 +1,24 @@
 CLAUDE.md
 AGENTS.md
 
-# Build output
+# Rust build output
+target/
+
+# Autoresearch output
+predict/
+
+# Build output (legacy)
 dist/
 zig-cache/
 .zig-cache/
 zig-out/
 
-# Go binaries
+# Go binaries (legacy)
 cmd/query-server/query-server
 experiments/query-engine/query-engine
 experiments/incident-gen/incident-gen
 test/e2e/profilegen/profilegen
 
-# OCB-generated collector binaries
+# OCB-generated collector binaries (legacy)
 collector/cmd/collector/observe-collector
 collector/cmd/collector/collector
