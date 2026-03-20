@@ -26,3 +26,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
 chrono = "0.4"
 rmcp = { version = "1.2.0", features = ["server", "transport-io"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "investigate_bench"
+harness = false
+
+[profile.profiling]
+inherits = "release"
+debug = true
