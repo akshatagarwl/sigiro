@@ -138,17 +138,39 @@ fn run_query(conn: &Connection, sql: &str) -> Result<()> {
 
     while let Some(row) = rows.next()? {
         let vals: Vec<String> = (0..column_count)
-            .map(|i| {
-                row.get::<_, String>(i)
-                    .or_else(|_| row.get::<_, i64>(i).map(|v| v.to_string()))
-                    .or_else(|_| row.get::<_, f64>(i).map(|v| v.to_string()))
-                    .or_else(|_| row.get::<_, bool>(i).map(|v| v.to_string()))
-                    .unwrap_or_else(|_| "NULL".to_string())
-            })
+            .map(|i| value_ref_to_string(row.get_ref(i).expect("valid column index")))
             .collect();
         println!("{}", vals.join("\t"));
     }
     Ok(())
+}
+
+/// Convert a DuckDB ValueRef to its string representation for CLI tabular output.
+fn value_ref_to_string(val: duckdb::types::ValueRef<'_>) -> String {
+    use duckdb::types::ValueRef;
+    match val {
+        ValueRef::Null => "NULL".to_string(),
+        ValueRef::Boolean(b) => b.to_string(),
+        ValueRef::TinyInt(n) => n.to_string(),
+        ValueRef::SmallInt(n) => n.to_string(),
+        ValueRef::Int(n) => n.to_string(),
+        ValueRef::BigInt(n) => n.to_string(),
+        ValueRef::HugeInt(n) => n.to_string(),
+        ValueRef::UTinyInt(n) => n.to_string(),
+        ValueRef::USmallInt(n) => n.to_string(),
+        ValueRef::UInt(n) => n.to_string(),
+        ValueRef::UBigInt(n) => n.to_string(),
+        ValueRef::Float(f) => f.to_string(),
+        ValueRef::Double(f) => f.to_string(),
+        ValueRef::Text(bytes) => std::str::from_utf8(bytes)
+            .unwrap_or("<invalid utf8>")
+            .to_string(),
+        ValueRef::Blob(bytes) => format!("<blob {} bytes>", bytes.len()),
+        ValueRef::Timestamp(_, us) => us.to_string(),
+        ValueRef::Date32(d) => d.to_string(),
+        ValueRef::Time64(_, t) => t.to_string(),
+        _ => format!("{val:?}"),
+    }
 }
 
 fn parse_window(s: &str) -> Result<i64> {

@@ -15,12 +15,35 @@ pub struct InvestigateRequest {
 pub struct InvestigationBlock {
     pub service: String,
     pub window: Window,
+    /// Hard limits applied to this response. The AI agent MUST check these fields.
+    /// If any total > returned count, the data is incomplete and the agent should
+    /// acknowledge this in its analysis or request a narrower time window.
+    pub truncation: Truncation,
     pub metrics: Vec<MetricBucket>,
     pub spans: Vec<SpanRow>,
     /// parent_span_id -> [child_span_id]. Root spans (no parent) are not keys.
     pub span_trees: BTreeMap<String, Vec<String>>,
     pub logs: Vec<LogTemplate>,
     pub linked_traces: Vec<LinkedTrace>,
+}
+
+/// Surfaces data completeness to the AI agent. Without this, the agent cannot know
+/// whether its analysis is based on partial or complete data — leading to confident
+/// but incorrect root cause conclusions.
+#[derive(Serialize)]
+pub struct Truncation {
+    /// Total spans matching the query vs. returned (capped at 50)
+    pub spans_total: i64,
+    pub spans_returned: i64,
+    /// Total distinct log templates vs. returned (capped at 30)
+    pub logs_total: i64,
+    pub logs_returned: i64,
+    /// Total error trace_ids found vs. linked (capped at 5)
+    pub error_traces_total: i64,
+    pub error_traces_returned: i64,
+    /// Total linked spans fetched vs. cap (200)
+    pub linked_spans_total: i64,
+    pub linked_spans_returned: i64,
 }
 
 #[derive(Serialize)]
@@ -91,13 +114,19 @@ pub fn investigate(
     let histogram_metrics = query_histogram_metrics(&conn, &req.service, from_ts, to_ts)
         .context("histogram metrics query failed")?;
     metrics.extend(histogram_metrics);
+
+    let spans_total = count_spans(&conn, &req.service, from_ts, to_ts)?;
     let spans = query_spans(&conn, &req.service, from_ts, to_ts).context("spans query failed")?;
+
+    let logs_total = count_log_templates(&conn, &req.service, from_ts, to_ts)?;
     let logs = query_logs(&conn, &req.service, from_ts, to_ts).context("logs query failed")?;
 
     let span_trees = build_span_trees(&spans);
 
+    let error_traces_total = count_error_traces(&conn, &req.service, from_ts, to_ts)?;
     let linked_traces =
         query_linked_traces(&conn, &spans, from_ts, to_ts).context("linked traces query failed")?;
+    let linked_spans_returned: i64 = linked_traces.iter().map(|lt| lt.spans.len() as i64).sum();
 
     Ok(InvestigationBlock {
         service: req.service.clone(),
@@ -106,6 +135,16 @@ pub fn investigate(
             to_ts,
             from_iso: us_to_iso(from_ts),
             to_iso: us_to_iso(to_ts),
+        },
+        truncation: Truncation {
+            spans_total,
+            spans_returned: spans.len() as i64,
+            logs_total,
+            logs_returned: logs.len() as i64,
+            error_traces_total,
+            error_traces_returned: linked_traces.len() as i64,
+            linked_spans_total: linked_spans_returned, // we don't know the true total without a separate query
+            linked_spans_returned,
         },
         metrics,
         spans,
@@ -186,6 +225,37 @@ fn query_histogram_metrics(
         });
     }
     Ok(results)
+}
+
+fn count_spans(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Result<i64> {
+    conn.query_row(
+        "SELECT count(*) FROM sigiro_spans
+         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+        duckdb::params![service, from_ts, to_ts],
+        |row| row.get(0),
+    )
+    .context("count spans failed")
+}
+
+fn count_log_templates(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Result<i64> {
+    conn.query_row(
+        "SELECT count(DISTINCT body) FROM sigiro_logs
+         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+        duckdb::params![service, from_ts, to_ts],
+        |row| row.get(0),
+    )
+    .context("count log templates failed")
+}
+
+fn count_error_traces(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Result<i64> {
+    conn.query_row(
+        "SELECT count(DISTINCT trace_id) FROM sigiro_spans
+         WHERE service_name = ? AND status_code = 2
+           AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+        duckdb::params![service, from_ts, to_ts],
+        |row| row.get(0),
+    )
+    .context("count error traces failed")
 }
 
 fn query_spans(conn: &Connection, service: &str, from_ts: i64, to_ts: i64) -> Result<Vec<SpanRow>> {
@@ -332,6 +402,9 @@ mod tests {
         assert!(block.spans.is_empty());
         assert!(block.logs.is_empty());
         assert!(block.linked_traces.is_empty());
+        assert_eq!(block.truncation.spans_total, 0);
+        assert_eq!(block.truncation.logs_total, 0);
+        assert_eq!(block.truncation.error_traces_total, 0);
     }
 }
 
