@@ -1,0 +1,7 @@
+name = "sigiro-www"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "dist"
+
+[[kv_namespaces]]
+binding = "WAITLIST"
+id = "fc5b3563298540d98106e767947046d4"
