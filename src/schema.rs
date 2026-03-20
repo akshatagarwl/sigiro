@@ -167,5 +167,85 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
     )
     .context("failed to create sigiro_metrics_exp_histogram")?;
 
+    // Anomaly detection view — surfaces error rates, high latency, and silent services
+    conn.execute_batch(
+        "CREATE OR REPLACE VIEW sigiro_anomalies AS
+        WITH error_rates AS (
+            SELECT service_name,
+                   count(*) FILTER (WHERE status_code = 2) * 100.0 / NULLIF(count(*), 0) AS error_pct
+            FROM sigiro_spans
+            WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
+            GROUP BY service_name
+        ),
+        latency AS (
+            SELECT service_name,
+                   approx_quantile(duration, 0.95) AS p95_ns
+            FROM sigiro_spans
+            WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
+            GROUP BY service_name
+        ),
+        silence AS (
+            SELECT DISTINCT service_name FROM sigiro_spans
+            EXCEPT
+            SELECT DISTINCT service_name FROM sigiro_spans
+            WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
+        )
+        SELECT 'error_rate' AS anomaly_type, service_name, error_pct AS value FROM error_rates WHERE error_pct > 5
+        UNION ALL
+        SELECT 'high_latency', service_name, CAST(p95_ns AS DOUBLE) FROM latency WHERE p95_ns > 1000000000
+        UNION ALL
+        SELECT 'silence', service_name, 0.0 FROM silence",
+    )
+    .context("failed to create sigiro_anomalies view")?;
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_tables_on_fresh_db() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        create_tables(&conn).expect("create_tables should succeed");
+
+        // Verify all tables exist
+        let tables = [
+            "sigiro_spans",
+            "sigiro_logs",
+            "sigiro_metrics_gauge",
+            "sigiro_metrics_sum",
+            "sigiro_metrics_histogram",
+            "sigiro_metrics_exp_histogram",
+        ];
+        for table in tables {
+            let count: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap_or_else(|_| panic!("{table} should exist"));
+            assert_eq!(count, 0, "{table} should be empty");
+        }
+    }
+
+    #[test]
+    fn create_tables_idempotent() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        create_tables(&conn).expect("first call");
+        create_tables(&conn).expect("second call should also succeed");
+    }
+
+    #[test]
+    fn anomalies_view_exists() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        create_tables(&conn).expect("create_tables");
+        // View should be queryable even with no data
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM sigiro_anomalies", [], |row| {
+                row.get(0)
+            })
+            .expect("sigiro_anomalies view should be queryable");
+        assert_eq!(count, 0);
+    }
 }

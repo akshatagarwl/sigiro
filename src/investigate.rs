@@ -81,16 +81,23 @@ pub fn investigate(
     let to_ts = req.to_ts.unwrap_or(now_us);
     let from_ts = req.from_ts.unwrap_or(to_ts - 15 * 60 * 1_000_000);
 
-    let conn = conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let conn = conn.lock().map_err(|e| {
+        tracing::error!("DuckDB connection mutex poisoned");
+        anyhow::anyhow!("{e}")
+    })?;
 
-    let metrics =
+    let mut metrics =
         query_metrics(&conn, &req.service, from_ts, to_ts).context("metrics query failed")?;
+    let histogram_metrics = query_histogram_metrics(&conn, &req.service, from_ts, to_ts)
+        .context("histogram metrics query failed")?;
+    metrics.extend(histogram_metrics);
     let spans = query_spans(&conn, &req.service, from_ts, to_ts).context("spans query failed")?;
     let logs = query_logs(&conn, &req.service, from_ts, to_ts).context("logs query failed")?;
 
     let span_trees = build_span_trees(&spans);
 
-    let linked_traces = query_linked_traces(&conn, &spans).context("linked traces query failed")?;
+    let linked_traces =
+        query_linked_traces(&conn, &spans, from_ts, to_ts).context("linked traces query failed")?;
 
     Ok(InvestigationBlock {
         service: req.service.clone(),
@@ -125,6 +132,38 @@ fn query_metrics(
             UNION ALL
             SELECT timestamp, metric_name, value, service_name FROM sigiro_metrics_sum
         )
+        WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+        GROUP BY bucket, metric_name
+        ORDER BY bucket, metric_name";
+
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    let mut results = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        results.push(MetricBucket {
+            bucket: row.get::<_, String>(0).context("bucket")?,
+            metric_name: row.get::<_, String>(1).context("metric_name")?,
+            p95: row.get::<_, f64>(2).unwrap_or(0.0),
+            avg: row.get::<_, f64>(3).unwrap_or(0.0),
+            count: row.get::<_, i64>(4).context("count")?,
+        });
+    }
+    Ok(results)
+}
+
+fn query_histogram_metrics(
+    conn: &Connection,
+    service: &str,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<Vec<MetricBucket>> {
+    let sql = "SELECT time_bucket(INTERVAL '1 minute', timestamp) AS bucket,
+               metric_name,
+               max(max) AS p95,
+               sum(sum)/NULLIF(sum(count),0) AS avg,
+               sum(count) AS n
+        FROM sigiro_metrics_histogram
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         GROUP BY bucket, metric_name
         ORDER BY bucket, metric_name";
@@ -218,7 +257,86 @@ fn build_span_trees(spans: &[SpanRow]) -> BTreeMap<String, Vec<String>> {
     trees
 }
 
-fn query_linked_traces(conn: &Connection, spans: &[SpanRow]) -> Result<Vec<LinkedTrace>> {
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_span(trace_id: &str, span_id: &str, parent: &str, status: i32) -> SpanRow {
+        SpanRow {
+            trace_id: trace_id.to_string(),
+            span_id: span_id.to_string(),
+            parent_span_id: parent.to_string(),
+            span_name: "test".to_string(),
+            duration_ns: 1000,
+            status_code: status,
+            service_name: "svc".to_string(),
+        }
+    }
+
+    #[test]
+    fn build_span_trees_groups_by_parent() {
+        let spans = vec![
+            make_span("t1", "s1", "", 0),
+            make_span("t1", "s2", "s1", 0),
+            make_span("t1", "s3", "s1", 0),
+            make_span("t1", "s4", "s2", 0),
+        ];
+        let trees = build_span_trees(&spans);
+        assert_eq!(trees.get("s1").unwrap().len(), 2);
+        assert_eq!(trees.get("s2").unwrap().len(), 1);
+        assert!(!trees.contains_key(""));
+    }
+
+    #[test]
+    fn build_span_trees_empty() {
+        let trees = build_span_trees(&[]);
+        assert!(trees.is_empty());
+    }
+
+    #[test]
+    fn build_span_trees_root_only() {
+        let spans = vec![make_span("t1", "s1", "", 0)];
+        let trees = build_span_trees(&spans);
+        assert!(trees.is_empty());
+    }
+
+    #[test]
+    fn us_to_iso_valid() {
+        let iso = us_to_iso(1_700_000_000_000_000);
+        assert!(iso.contains("2023-11"));
+    }
+
+    #[test]
+    fn us_to_iso_zero() {
+        let iso = us_to_iso(0);
+        assert!(iso.contains("1970"));
+    }
+
+    #[test]
+    fn investigate_with_in_memory_db() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let shared = Arc::new(Mutex::new(conn));
+        let req = InvestigateRequest {
+            service: "nonexistent".to_string(),
+            from_ts: None,
+            to_ts: None,
+        };
+        let block = investigate(&shared, &req).expect("investigate should succeed on empty db");
+        assert_eq!(block.service, "nonexistent");
+        assert!(block.metrics.is_empty());
+        assert!(block.spans.is_empty());
+        assert!(block.logs.is_empty());
+        assert!(block.linked_traces.is_empty());
+    }
+}
+
+fn query_linked_traces(
+    conn: &Connection,
+    spans: &[SpanRow],
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<Vec<LinkedTrace>> {
     let mut seen = HashSet::new();
     let unique: Vec<&str> = spans
         .iter()
@@ -237,19 +355,31 @@ fn query_linked_traces(conn: &Connection, spans: &[SpanRow]) -> Result<Vec<Linke
         return Ok(Vec::new());
     }
 
+    // ±5 min buffer around the investigation window
+    let buffer_us: i64 = 5 * 60 * 1_000_000;
+    let linked_from = from_ts - buffer_us;
+    let linked_to = to_ts + buffer_us;
+
     let placeholders = vec!["?"; unique.len()].join(", ");
     let sql = format!(
         "SELECT trace_id, span_id, parent_span_id, span_name, duration,
                 status_code, service_name
          FROM sigiro_spans
          WHERE trace_id IN ({placeholders})
+           AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
          ORDER BY trace_id, timestamp
          LIMIT 200"
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<&dyn duckdb::ToSql> = unique.iter().map(|s| s as &dyn duckdb::ToSql).collect();
-    let mut rows = stmt.query(params.as_slice())?;
+    let mut params: Vec<Box<dyn duckdb::ToSql>> = unique
+        .iter()
+        .map(|s| Box::new(s.to_string()) as Box<dyn duckdb::ToSql>)
+        .collect();
+    params.push(Box::new(linked_from));
+    params.push(Box::new(linked_to));
+    let param_refs: Vec<&dyn duckdb::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut rows = stmt.query(param_refs.as_slice())?;
 
     let mut trace_map: BTreeMap<String, Vec<SpanRow>> = BTreeMap::new();
     while let Some(row) = rows.next()? {

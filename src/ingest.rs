@@ -1,18 +1,18 @@
 use anyhow::Result;
-use axum::{body::Bytes, extract::State, http::StatusCode, routing::post, Router};
+use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
 use crossbeam_channel::Sender;
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
-        logs_service_server::{LogsService, LogsServiceServer},
         ExportLogsServiceRequest, ExportLogsServiceResponse,
+        logs_service_server::{LogsService, LogsServiceServer},
     },
     metrics::v1::{
-        metrics_service_server::{MetricsService, MetricsServiceServer},
         ExportMetricsServiceRequest, ExportMetricsServiceResponse,
+        metrics_service_server::{MetricsService, MetricsServiceServer},
     },
     trace::v1::{
-        trace_service_server::{TraceService, TraceServiceServer},
         ExportTraceServiceRequest, ExportTraceServiceResponse,
+        trace_service_server::{TraceService, TraceServiceServer},
     },
 };
 use prost::Message;

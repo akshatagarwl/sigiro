@@ -60,9 +60,9 @@ pub async fn run_servers(conn: Arc<Mutex<Connection>>, tx: Sender<IngestMsg>) ->
     });
 
     tokio::select! {
-        r = grpc_handle => r??,
-        r = http_handle => r??,
-        r = otlp_http_handle => r??,
+        r = grpc_handle => { tracing::error!("gRPC server exited unexpectedly"); r?? },
+        r = http_handle => { tracing::error!("HTTP server exited unexpectedly"); r?? },
+        r = otlp_http_handle => { tracing::error!("OTLP HTTP server exited unexpectedly"); r?? },
     }
 
     Ok(())
@@ -72,11 +72,42 @@ async fn health() -> &'static str {
     "ok"
 }
 
+const BLOCKED_KEYWORDS: &[&str] = &[
+    "DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "COPY", "ATTACH", "DETACH", "EXPORT",
+    "IMPORT", "PRAGMA", "LOAD", "INSTALL", "SET",
+];
+
+fn validate_read_only(sql: &str) -> Result<(), String> {
+    let upper = sql.to_uppercase();
+    for kw in BLOCKED_KEYWORDS {
+        // Check for keyword as whole word (preceded by start/whitespace/semicolon, followed by whitespace/paren/semicolon/end)
+        for (i, _) in upper.match_indices(kw) {
+            let before_ok = i == 0
+                || upper.as_bytes()[i - 1].is_ascii_whitespace()
+                || upper.as_bytes()[i - 1] == b';'
+                || upper.as_bytes()[i - 1] == b'(';
+            let end = i + kw.len();
+            let after_ok = end == upper.len()
+                || upper.as_bytes()[end].is_ascii_whitespace()
+                || upper.as_bytes()[end] == b'('
+                || upper.as_bytes()[end] == b';';
+            if before_ok && after_ok {
+                return Err(format!("query rejected: {kw} statements not allowed"));
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn query_handler(
     State(state): State<Arc<AppState>>,
     body: String,
 ) -> Result<Json<Vec<serde_json::Value>>, String> {
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    validate_read_only(&body)?;
+    let conn = state.conn.lock().map_err(|e| {
+        tracing::error!("DuckDB connection mutex poisoned");
+        e.to_string()
+    })?;
     let mut stmt = conn.prepare(&body).map_err(|e| e.to_string())?;
     let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
 
@@ -95,17 +126,103 @@ async fn query_handler(
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
         let mut obj = serde_json::Map::new();
         for (i, name) in column_names.iter().enumerate() {
-            let val = row
-                .get::<_, String>(i)
-                .or_else(|_| row.get::<_, i64>(i).map(|v| v.to_string()))
-                .or_else(|_| row.get::<_, f64>(i).map(|v| v.to_string()))
-                .unwrap_or_else(|_| "null".to_string());
-            obj.insert(name.clone(), serde_json::Value::String(val));
+            let val: serde_json::Value = if let Ok(s) = row.get::<_, String>(i) {
+                serde_json::Value::String(s)
+            } else if let Ok(n) = row.get::<_, i64>(i) {
+                serde_json::json!(n)
+            } else if let Ok(f) = row.get::<_, f64>(i) {
+                serde_json::json!(f)
+            } else if let Ok(b) = row.get::<_, bool>(i) {
+                serde_json::json!(b)
+            } else {
+                serde_json::Value::Null
+            };
+            obj.insert(name.clone(), val);
         }
         results.push(serde_json::Value::Object(obj));
     }
 
     Ok(Json(results))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_drop_table() {
+        assert!(validate_read_only("DROP TABLE sigiro_spans").is_err());
+    }
+
+    #[test]
+    fn rejects_delete() {
+        assert!(validate_read_only("DELETE FROM sigiro_spans WHERE 1=1").is_err());
+    }
+
+    #[test]
+    fn rejects_insert() {
+        assert!(validate_read_only("INSERT INTO sigiro_spans VALUES (1)").is_err());
+    }
+
+    #[test]
+    fn rejects_update() {
+        assert!(validate_read_only("UPDATE sigiro_spans SET status_code = 0").is_err());
+    }
+
+    #[test]
+    fn rejects_case_insensitive() {
+        assert!(validate_read_only("drop table sigiro_spans").is_err());
+        assert!(validate_read_only("Drop Table sigiro_spans").is_err());
+    }
+
+    #[test]
+    fn rejects_attach() {
+        assert!(validate_read_only("ATTACH '/tmp/evil.db' AS evil").is_err());
+    }
+
+    #[test]
+    fn rejects_copy() {
+        assert!(validate_read_only("COPY sigiro_spans TO '/tmp/data.csv'").is_err());
+    }
+
+    #[test]
+    fn rejects_load_extension() {
+        assert!(validate_read_only("LOAD httpfs").is_err());
+        assert!(validate_read_only("INSTALL httpfs").is_err());
+    }
+
+    #[test]
+    fn rejects_set() {
+        assert!(validate_read_only("SET access_mode = 'read_write'").is_err());
+    }
+
+    #[test]
+    fn allows_select() {
+        assert!(validate_read_only("SELECT * FROM sigiro_spans").is_ok());
+    }
+
+    #[test]
+    fn allows_select_with_where() {
+        assert!(
+            validate_read_only("SELECT count(*) FROM sigiro_spans WHERE status_code = 2").is_ok()
+        );
+    }
+
+    #[test]
+    fn allows_keyword_in_column_name() {
+        // "updated_at" contains "UPDATE" substring but is not a keyword at word boundary
+        assert!(validate_read_only("SELECT updated_at FROM sigiro_spans").is_ok());
+    }
+
+    #[test]
+    fn allows_describe() {
+        assert!(validate_read_only("DESCRIBE sigiro_spans").is_ok());
+    }
+
+    #[test]
+    fn allows_show_tables() {
+        assert!(validate_read_only("SHOW TABLES").is_ok());
+    }
 }
 
 async fn investigate_handler(
