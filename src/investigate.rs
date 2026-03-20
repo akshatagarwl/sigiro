@@ -148,6 +148,82 @@ fn query_string_list(
     Ok(results)
 }
 
+/// Auto-detected event from OTLP data — deploys (version changes) and K8s events
+/// (OOMKilled, BackOff, etc.). Correlates errors to recent changes without webhooks.
+///
+/// Limitation: only detects events present in OTLP data. External events (GitHub
+/// deploys, paging tools) need an optional webhook (not MVP). Most high-value events
+/// (deploys, OOM, restarts) DO appear in OTLP resource_attributes and logs.
+#[derive(Serialize, Debug)]
+pub struct DerivedEvent {
+    pub detected_at: String,
+    pub event_type: String,
+    pub description: String,
+}
+
+fn query_derived_events(
+    conn: &Connection,
+    service: &str,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<Vec<DerivedEvent>> {
+    let mut events = Vec::new();
+
+    // Deploy detection: distinct service.version values in the window.
+    // Uses a CTE to extract version first, then groups — avoids DuckDB casting issues
+    // with repeated ::JSON casts in GROUP BY.
+    let deploy_sql = "WITH versioned AS (
+        SELECT timestamp, resource_attributes::JSON->>'service.version' AS version
+        FROM sigiro_spans
+        WHERE service_name = ?
+          AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+    )
+    SELECT min(timestamp)::VARCHAR AS detected_at, version
+    FROM versioned
+    WHERE version IS NOT NULL
+    GROUP BY version
+    ORDER BY detected_at";
+
+    let mut stmt = conn.prepare(deploy_sql)?;
+    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    let mut versions = Vec::new();
+    while let Some(row) = rows.next()? {
+        let detected_at: String = row.get::<_, String>(0).unwrap_or_default();
+        let version: String = row.get::<_, String>(1).unwrap_or_default();
+        versions.push((detected_at, version));
+    }
+    // If multiple versions exist, each is a deploy event
+    for (detected_at, version) in &versions {
+        events.push(DerivedEvent {
+            detected_at: detected_at.clone(),
+            event_type: "deploy".to_string(),
+            description: format!("version {version} first seen"),
+        });
+    }
+
+    // K8s events from log body patterns
+    let k8s_sql = "SELECT timestamp::VARCHAR AS detected_at, body AS description
+    FROM sigiro_logs
+    WHERE service_name = ?
+      AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+      AND (body LIKE '%OOMKilled%' OR body LIKE '%Unhealthy%'
+        OR body LIKE '%BackOff%' OR body LIKE '%FailedScheduling%'
+        OR body LIKE '%ScalingReplicaSet%')
+    LIMIT 20";
+
+    let mut stmt = conn.prepare(k8s_sql)?;
+    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    while let Some(row) = rows.next()? {
+        events.push(DerivedEvent {
+            detected_at: row.get::<_, String>(0).unwrap_or_default(),
+            event_type: "k8s_event".to_string(),
+            description: row.get::<_, String>(1).unwrap_or_default(),
+        });
+    }
+
+    Ok(events)
+}
+
 #[derive(Deserialize)]
 pub struct InvestigateRequest {
     pub service: String,
@@ -169,6 +245,8 @@ pub struct InvestigationBlock {
     /// Auto-derived service metadata + topology. Agent gets namespace, pod count,
     /// and service dependencies without a separate API call.
     pub context: ServiceContext,
+    /// Auto-detected deploys and K8s events. Agent correlates errors to recent changes.
+    pub events: Vec<DerivedEvent>,
     /// Per-operation aggregates: error rate, percentiles, exemplar trace_id.
     /// This is the primary triage view — the agent should read this FIRST to identify
     /// which operations are broken, then drill into spans/logs for root cause.
@@ -314,6 +392,8 @@ pub fn investigate(
     let coverage = compute_coverage(spans_total, logs_total, metrics.len());
     let context = query_service_context(&conn, &req.service, from_ts, to_ts)
         .context("service context query failed")?;
+    let events = query_derived_events(&conn, &req.service, from_ts, to_ts)
+        .context("derived events query failed")?;
 
     Ok(InvestigationBlock {
         service: req.service.clone(),
@@ -325,6 +405,7 @@ pub fn investigate(
         },
         coverage,
         context,
+        events,
         truncation: Truncation {
             spans_total,
             spans_returned: spans.len() as i64,
@@ -852,6 +933,66 @@ mod tests {
             ctx2.dependents.contains(&"checkout".to_string()),
             "payments should have checkout as dependent"
         );
+    }
+
+    #[test]
+    fn derived_events_deploy_detection() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        // Insert spans with two different service.version values
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+                parent_span_id, span_name, span_kind, status_code, service_name, resource_attributes)
+             VALUES
+                (make_timestamp({now_us} - 60000000), {now_us}, 1000, 't1', 's1', '', 'op', 2, 1, 'api',
+                 '{{\"service.version\":\"v1.0.0\"}}'),
+                (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'op', 2, 1, 'api',
+                 '{{\"service.version\":\"v1.1.0\"}}')"
+        ))
+        .expect("insert");
+        let events =
+            query_derived_events(&conn, "api", now_us - 120_000_000, now_us + 60_000_000).unwrap();
+        let deploys: Vec<_> = events.iter().filter(|e| e.event_type == "deploy").collect();
+        assert_eq!(
+            deploys.len(),
+            2,
+            "should detect 2 versions as deploy events"
+        );
+        assert!(deploys.iter().any(|e| e.description.contains("v1.0.0")));
+        assert!(deploys.iter().any(|e| e.description.contains("v1.1.0")));
+    }
+
+    #[test]
+    fn derived_events_k8s_oomkilled() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
+                severity_text, body)
+             VALUES
+                (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR',
+                 'Container killed due to OOMKilled')"
+        ))
+        .expect("insert");
+        let events =
+            query_derived_events(&conn, "api", now_us - 60_000_000, now_us + 60_000_000).unwrap();
+        let k8s: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == "k8s_event")
+            .collect();
+        assert_eq!(k8s.len(), 1);
+        assert!(k8s[0].description.contains("OOMKilled"));
+    }
+
+    #[test]
+    fn derived_events_no_events() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        let events = query_derived_events(&conn, "api", now_us - 60_000_000, now_us).unwrap();
+        assert!(events.is_empty());
     }
 
     #[test]
