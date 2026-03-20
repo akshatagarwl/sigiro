@@ -122,7 +122,7 @@ fn query_metrics(
     to_ts: i64,
 ) -> Result<Vec<MetricBucket>> {
     // Query gauge + sum tables (the two that have a scalar `value` column)
-    let sql = "SELECT time_bucket(INTERVAL '1 minute', timestamp) AS bucket,
+    let sql = "SELECT time_bucket(INTERVAL '1 minute', timestamp)::VARCHAR AS bucket,
                metric_name,
                approx_quantile(value, 0.95) AS p95,
                avg(value) AS avg,
@@ -158,7 +158,7 @@ fn query_histogram_metrics(
     from_ts: i64,
     to_ts: i64,
 ) -> Result<Vec<MetricBucket>> {
-    let sql = "SELECT time_bucket(INTERVAL '1 minute', timestamp) AS bucket,
+    let sql = "SELECT time_bucket(INTERVAL '1 minute', timestamp)::VARCHAR AS bucket,
                metric_name,
                max(max) AS p95,
                sum(sum)/NULLIF(sum(count),0) AS avg,
