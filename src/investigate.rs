@@ -231,6 +231,41 @@ pub struct InvestigateRequest {
     pub to_ts: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct InvestigateMultiRequest {
+    pub services: Vec<String>,
+    pub from_ts: Option<i64>,
+    pub to_ts: Option<i64>,
+}
+
+const MAX_MULTI_SERVICES: usize = 10;
+
+pub fn investigate_multi(
+    conn: &Arc<Mutex<Connection>>,
+    req: &InvestigateMultiRequest,
+) -> Result<BTreeMap<String, InvestigationBlock>> {
+    anyhow::ensure!(!req.services.is_empty(), "services list must not be empty");
+    anyhow::ensure!(
+        req.services.len() <= MAX_MULTI_SERVICES,
+        "max {} services per multi-investigation, got {}",
+        MAX_MULTI_SERVICES,
+        req.services.len()
+    );
+
+    let mut results = BTreeMap::new();
+    for service in &req.services {
+        let single_req = InvestigateRequest {
+            service: service.clone(),
+            from_ts: req.from_ts,
+            to_ts: req.to_ts,
+        };
+        let block = investigate(conn, &single_req)
+            .with_context(|| format!("investigate failed for service: {service}"))?;
+        results.insert(service.clone(), block);
+    }
+    Ok(results)
+}
+
 #[derive(Serialize)]
 pub struct InvestigationBlock {
     pub service: String,
@@ -1053,6 +1088,61 @@ mod tests {
         assert_eq!(logs.len(), 1, "2 logs with different UUIDs should collapse");
         assert!(logs[0].template.contains("{uuid}"));
         assert_eq!(logs[0].count, 2);
+    }
+
+    #[test]
+    fn investigate_multi_basic() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let now_us = chrono::Utc::now().timestamp_micros();
+        conn.execute_batch(&format!(
+            "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+                parent_span_id, span_name, span_kind, status_code, service_name)
+             VALUES
+                (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'op', 2, 1, 'svc-a'),
+                (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'op', 2, 1, 'svc-b'),
+                (make_timestamp({now_us}), {now_us}+1000, 1000, 't3', 's3', '', 'op', 2, 1, 'svc-c')"
+        ))
+        .expect("insert");
+        let shared = Arc::new(Mutex::new(conn));
+        let req = InvestigateMultiRequest {
+            services: vec!["svc-a".into(), "svc-b".into(), "svc-c".into()],
+            from_ts: Some(now_us - 60_000_000),
+            to_ts: Some(now_us + 60_000_000),
+        };
+        let blocks = investigate_multi(&shared, &req).unwrap();
+        assert_eq!(blocks.len(), 3);
+        assert!(blocks.contains_key("svc-a"));
+        assert!(blocks.contains_key("svc-b"));
+        assert!(blocks.contains_key("svc-c"));
+    }
+
+    #[test]
+    fn investigate_multi_cap_enforced() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let shared = Arc::new(Mutex::new(conn));
+        let services: Vec<String> = (0..11).map(|i| format!("svc-{i}")).collect();
+        let req = InvestigateMultiRequest {
+            services,
+            from_ts: None,
+            to_ts: None,
+        };
+        let result = investigate_multi(&shared, &req);
+        assert!(result.is_err(), "should reject >10 services");
+    }
+
+    #[test]
+    fn investigate_multi_empty_rejected() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+        crate::schema::create_tables(&conn).expect("create tables");
+        let shared = Arc::new(Mutex::new(conn));
+        let req = InvestigateMultiRequest {
+            services: vec![],
+            from_ts: None,
+            to_ts: None,
+        };
+        assert!(investigate_multi(&shared, &req).is_err());
     }
 
     #[test]

@@ -90,6 +90,7 @@ pub async fn run_servers(conn: Arc<Mutex<Connection>>, tx: Sender<IngestMsg>) ->
         .route("/health", get(health))
         .route("/query", post(query_handler))
         .route("/investigate", post(investigate_handler))
+        .route("/investigate/multi", post(investigate_multi_handler))
         .with_state(app_state);
 
     let http_handle = tokio::spawn(async move {
@@ -389,4 +390,12 @@ async fn investigate_handler(
 ) -> Result<Json<investigate::InvestigationBlock>, String> {
     let block = investigate::investigate(&state.conn, &req).map_err(|e| format!("{e:#}"))?;
     Ok(Json(block))
+}
+
+async fn investigate_multi_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<investigate::InvestigateMultiRequest>,
+) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, String> {
+    let blocks = investigate::investigate_multi(&state.conn, &req).map_err(|e| format!("{e:#}"))?;
+    Ok(Json(blocks))
 }
