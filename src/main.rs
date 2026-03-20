@@ -50,6 +50,14 @@ fn open_db() -> Result<Connection> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "sigiro=info".parse().expect("valid filter")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -58,7 +66,7 @@ async fn main() -> Result<()> {
             schema::create_tables(&conn)?;
 
             let db_path = data_dir()?.join("sigiro.duckdb");
-            eprintln!("sigiro ready — {}", db_path.display());
+            tracing::info!("sigiro ready — {}", db_path.display());
 
             let (tx, rx) = crossbeam_channel::unbounded();
 
@@ -69,7 +77,7 @@ async fn main() -> Result<()> {
             let inserter_conn = shared_conn.clone();
             std::thread::spawn(move || {
                 if let Err(e) = inserter::run_inserter(inserter_conn, rx) {
-                    eprintln!("inserter fatal: {e:#}");
+                    tracing::error!("inserter fatal: {e:#}");
                     std::process::exit(1);
                 }
             });
@@ -93,15 +101,10 @@ fn run_query(conn: &Connection, sql: &str) -> Result<()> {
     let mut stmt = conn.prepare(sql).context("failed to prepare SQL")?;
     let mut rows = stmt.query([]).context("failed to execute query")?;
 
-    let column_count = rows.as_ref().context("no result set")?.column_count();
+    let stmt_ref = rows.as_ref().context("no result set")?;
+    let column_count = stmt_ref.column_count();
     let column_names: Vec<String> = (0..column_count)
-        .map(|i| {
-            rows.as_ref()
-                .expect("checked above")
-                .column_name(i)
-                .expect("valid column index")
-                .to_string()
-        })
+        .map(|i| stmt_ref.column_name(i).map(|s| s.to_string()).unwrap_or_else(|_| "?".to_string()))
         .collect();
     println!("{}", column_names.join("\t"));
 
@@ -131,10 +134,10 @@ fn print_status(conn: &Connection) -> Result<()> {
     println!("sigiro status");
     println!("─────────────");
     for table in tables {
-        let count: i64 = conn
-            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
-            .unwrap_or(0);
-        println!("  {table}: {count} rows");
+        match conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get::<_, i64>(0)) {
+            Ok(count) => println!("  {table}: {count} rows"),
+            Err(e) => eprintln!("  {table}: error ({e})"),
+        }
     }
     Ok(())
 }

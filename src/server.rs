@@ -17,7 +17,7 @@ pub async fn run_servers(conn: Arc<Mutex<Connection>>, tx: Sender<IngestMsg>) ->
     let grpc_handle = tokio::spawn(async move {
         let addr = "[::]:4317".parse().expect("valid addr");
         let svc = OtlpGrpcService::new(grpc_tx);
-        eprintln!("gRPC listening on {addr}");
+        tracing::info!("gRPC listening on {addr}");
         TonicServer::builder()
             .add_service(svc.trace_service())
             .add_service(svc.logs_service())
@@ -36,7 +36,7 @@ pub async fn run_servers(conn: Arc<Mutex<Connection>>, tx: Sender<IngestMsg>) ->
 
     let http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
-        eprintln!("HTTP listening on 0.0.0.0:9999");
+        tracing::info!("HTTP listening on 0.0.0.0:9999");
         axum::serve(listener, http_app)
             .await
             .context("HTTP server failed")
@@ -47,7 +47,7 @@ pub async fn run_servers(conn: Arc<Mutex<Connection>>, tx: Sender<IngestMsg>) ->
     let otlp_http_app = crate::ingest::otlp_http_router(http_otlp_tx);
     let otlp_http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind("0.0.0.0:4318").await?;
-        eprintln!("OTLP HTTP listening on 0.0.0.0:4318");
+        tracing::info!("OTLP HTTP listening on 0.0.0.0:4318");
         axum::serve(listener, otlp_http_app)
             .await
             .context("OTLP HTTP server failed")
@@ -74,18 +74,10 @@ async fn query_handler(
     let mut stmt = conn.prepare(&body).map_err(|e| e.to_string())?;
     let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
 
-    let column_count = rows
-        .as_ref()
-        .ok_or("no result set")?
-        .column_count();
+    let stmt_ref = rows.as_ref().ok_or("no result set")?;
+    let column_count = stmt_ref.column_count();
     let column_names: Vec<String> = (0..column_count)
-        .map(|i| {
-            rows.as_ref()
-                .unwrap()
-                .column_name(i)
-                .unwrap()
-                .to_string()
-        })
+        .map(|i| stmt_ref.column_name(i).map(|s| s.to_string()).unwrap_or_else(|_| "?".to_string()))
         .collect();
 
     let mut results = Vec::new();

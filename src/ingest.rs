@@ -112,28 +112,31 @@ async fn otlp_http_traces(
     State(tx): State<Sender<IngestMsg>>,
     body: Bytes,
 ) -> StatusCode {
-    match tx.send(IngestMsg::Traces(body.to_vec())) {
-        Ok(_) => StatusCode::OK,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    if let Err(e) = tx.send(IngestMsg::Traces(body.to_vec())) {
+        tracing::error!("failed to enqueue traces: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
+    StatusCode::OK
 }
 
 async fn otlp_http_logs(
     State(tx): State<Sender<IngestMsg>>,
     body: Bytes,
 ) -> StatusCode {
-    match tx.send(IngestMsg::Logs(body.to_vec())) {
-        Ok(_) => StatusCode::OK,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    if let Err(e) = tx.send(IngestMsg::Logs(body.to_vec())) {
+        tracing::error!("failed to enqueue logs: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
+    StatusCode::OK
 }
 
 async fn otlp_http_metrics(
     State(tx): State<Sender<IngestMsg>>,
     body: Bytes,
 ) -> StatusCode {
-    match tx.send(IngestMsg::Metrics(body.to_vec())) {
-        Ok(_) => StatusCode::OK,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    if let Err(e) = tx.send(IngestMsg::Metrics(body.to_vec())) {
+        tracing::error!("failed to enqueue metrics: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
+    StatusCode::OK
 }

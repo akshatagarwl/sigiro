@@ -10,7 +10,7 @@ use crate::ingest::IngestMsg;
 pub fn run_inserter(conn: Arc<Mutex<Connection>>, rx: Receiver<IngestMsg>) -> Result<()> {
     for msg in rx {
         if let Err(e) = handle_msg(&conn, msg) {
-            eprintln!("inserter error: {e:#}");
+            tracing::error!("inserter: {e:#}");
         }
     }
     Ok(())
