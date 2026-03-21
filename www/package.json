@@ -12,10 +12,16 @@
     "build-storybook": "storybook build"
   },
   "dependencies": {
+    "@mdx-js/rollup": "^3.1.1",
     "email-validator": "^2.0.4",
     "motion": "^12.38.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "react-router": "^7.13.1",
+    "rehype-autolink-headings": "^7.1.0",
+    "rehype-slug": "^6.0.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@storybook/addon-docs": "^10.2.19",

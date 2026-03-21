@@ -1,10 +1,24 @@
 import { defineConfig } from 'vite-plus'
 import react from '@vitejs/plugin-react'
+import mdx from '@mdx-js/rollup'
+import remarkGfm from 'remark-gfm'
+import remarkFrontmatter from 'remark-frontmatter'
+import rehypeSlug from 'rehype-slug'
+import rehypeAutolinkHeadings from 'rehype-autolink-headings'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    {
+      enforce: 'pre' as const,
+      ...mdx({
+        remarkPlugins: [remarkGfm, remarkFrontmatter],
+        rehypePlugins: [rehypeSlug, rehypeAutolinkHeadings],
+      }),
+    },
+    react({ include: /\.(tsx|ts|jsx|js|mdx|md)$/ }),
+  ],
   lint: {
-    ignorePatterns: ['dist/**'],
+    ignorePatterns: ['dist/**', '**/*.mdx'],
     options: {
       typeAware: true,
       typeCheck: true,

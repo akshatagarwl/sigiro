@@ -1,0 +1,52 @@
+# Authentication
+
+sigiro uses API keys for authentication. Every request to the query/investigate API requires a valid key.
+
+## Key prefixes
+
+| Prefix | Environment | Auth backend |
+|--------|------------|--------------|
+| `sk_live_` | Production | Verified via [Unkey](https://unkey.dev) |
+| `sk_dev_` | Local development | Bypass — returns hardcoded dev context |
+
+## Saving your key
+
+```bash
+sigiro auth sk_live_your_key_here
+# Saved to ~/.config/sigiro/config.toml (permissions: 0600)
+```
+
+## Key resolution order
+
+1. `SIGIRO_API_KEY` environment variable (CI/CD, Docker)
+2. `~/.config/sigiro/config.toml` (saved via `sigiro auth`)
+
+```toml
+# ~/.config/sigiro/config.toml
+api_key = "sk_live_your_key_here"
+```
+
+## Using with curl
+
+```bash
+curl -X POST localhost:9999/investigate \
+  -H "Authorization: Bearer sk_dev_test" \
+  -H "Content-Type: application/json" \
+  -d '{"service": "my-app"}'
+```
+
+## Dev/prod parity
+
+The same auth middleware always runs in both environments. The only difference is which backend the key resolves against — determined by the key prefix, not by server config.
+
+```bash
+# Local dev — same middleware, dev bypass
+curl -H "Authorization: Bearer sk_dev_test" localhost:9999/query -d "SELECT 1"
+
+# Production — same middleware, real Unkey verify
+curl -H "Authorization: Bearer sk_example_7KqX..." app.sigiro.com/query -d "SELECT 1"
+```
+
+## Unauthenticated endpoints
+
+`/health` does not require authentication (used by Docker/K8s healthchecks).

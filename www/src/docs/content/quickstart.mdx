@@ -1,0 +1,63 @@
+# Quickstart
+
+Get sigiro running in 60 seconds.
+
+## Install
+
+```bash
+cargo install sigiro
+```
+
+Or with Docker:
+
+```bash
+docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
+```
+
+## Start the server
+
+```bash
+sigiro serve
+```
+
+This starts:
+- gRPC OTLP on `:4317`
+- HTTP OTLP on `:4318`
+- Query/Investigate API on `:9999`
+
+## Send telemetry
+
+Point your OpenTelemetry SDK at sigiro:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+```
+
+Or test with telemetrygen:
+
+```bash
+telemetrygen traces --otlp-endpoint=localhost:4317 --otlp-insecure \
+  --service=my-app --traces=100 --child-spans=3
+```
+
+## Investigate
+
+```bash
+curl -X POST localhost:9999/investigate \
+  -H "Authorization: Bearer sk_dev_test" \
+  -H "Content-Type: application/json" \
+  -d '{"service": "my-app"}'
+```
+
+The response is an `InvestigationBlock` — structured evidence for your AI agent.
+
+## Hosted mode
+
+For the hosted version at app.sigiro.com:
+
+```bash
+sigiro auth sk_live_your_key_here
+sigiro investigate my-app
+```
+
+The CLI automatically sends requests to the hosted API when an API key is configured.

@@ -1,0 +1,36 @@
+# Introduction
+
+sigiro is an observability backend for AI agents. One binary, one command, structured answers.
+
+```bash
+cargo install sigiro
+sigiro serve
+```
+
+Your app sends OpenTelemetry. Your agent calls `sigiro investigate`. sigiro returns a structured `InvestigationBlock` — not raw spans, not dashboards, not alerts.
+
+## What makes sigiro different
+
+| Traditional observability | sigiro |
+|--------------------------|--------|
+| Dashboards for humans | Structured JSON for agents |
+| 100K+ spans in context window | 10-50K tokens of pre-analyzed evidence |
+| Manual correlation | Auto-correlated spans, logs, metrics |
+| Complex query language | `sigiro investigate checkout-service` |
+
+## How it works
+
+```
+OTLP gRPC/HTTP  -->  otlp2records  -->  DuckDB  -->  /investigate  -->  AI agent
+```
+
+1. Your app sends OTLP telemetry (traces, logs, metrics)
+2. sigiro stores it in DuckDB via Arrow zero-copy insert
+3. Your agent calls `/investigate` with a service name
+4. sigiro returns coverage, operation summaries, log templates, linked traces
+
+## Next steps
+
+- [Quickstart](/docs/quickstart) — run sigiro in 60 seconds
+- [Authentication](/docs/auth) — `sigiro auth` and API keys
+- [Architecture](/docs/architecture/overview) — how it works under the hood

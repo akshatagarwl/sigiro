@@ -1,0 +1,198 @@
+.docs-layout {
+  display: flex;
+  min-height: 100vh;
+  background: #0a0a0a;
+  color: #e5e5e5;
+}
+
+.docs-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid #1a1a1a;
+  padding: 1.5rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.docs-logo {
+  font-family: 'Departure Mono', monospace;
+  font-size: 1.25rem;
+  color: #fff;
+  text-decoration: none;
+  display: block;
+  margin-bottom: 2rem;
+  letter-spacing: 0.05em;
+}
+
+.docs-section {
+  margin-bottom: 1.5rem;
+}
+
+.docs-section h3 {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #666;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+.docs-section ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.docs-link {
+  display: block;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.875rem;
+  color: #999;
+  text-decoration: none;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.docs-link:hover {
+  color: #e5e5e5;
+  background: #1a1a1a;
+}
+
+.docs-link.active {
+  color: #fff;
+  background: #1a1a1a;
+}
+
+.docs-content {
+  flex: 1;
+  min-width: 0;
+  padding: 3rem 4rem;
+  max-width: 800px;
+}
+
+.docs-article {
+  line-height: 1.7;
+  font-size: 0.9375rem;
+}
+
+.docs-article h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  color: #fff;
+  letter-spacing: -0.02em;
+}
+
+.docs-article h2 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin-top: 2.5rem;
+  margin-bottom: 0.75rem;
+  color: #fff;
+  letter-spacing: -0.01em;
+}
+
+.docs-article h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 0.5rem;
+  color: #e5e5e5;
+}
+
+.docs-article p {
+  margin-bottom: 1rem;
+  color: #b3b3b3;
+}
+
+.docs-article a {
+  color: #60a5fa;
+  text-decoration: none;
+}
+
+.docs-article a:hover {
+  text-decoration: underline;
+}
+
+.docs-article code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  background: #1a1a1a;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  color: #e5e5e5;
+}
+
+.docs-article pre {
+  background: #111;
+  border: 1px solid #1a1a1a;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  margin: 1.25rem 0;
+}
+
+.docs-article pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.docs-article table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  font-size: 0.875rem;
+}
+
+.docs-article th,
+.docs-article td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.docs-article th {
+  color: #999;
+  font-weight: 500;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.docs-article blockquote {
+  border-left: 3px solid #333;
+  padding-left: 1rem;
+  margin: 1.25rem 0;
+  color: #888;
+}
+
+.docs-article ul,
+.docs-article ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.docs-article li {
+  margin-bottom: 0.35rem;
+  color: #b3b3b3;
+}
+
+@media (max-width: 768px) {
+  .docs-layout {
+    flex-direction: column;
+  }
+  .docs-sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+    border-right: none;
+    border-bottom: 1px solid #1a1a1a;
+  }
+  .docs-content {
+    padding: 2rem 1.5rem;
+  }
+}
