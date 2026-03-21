@@ -7,6 +7,7 @@ pub mod ingest;
 pub mod inserter;
 pub mod investigate;
 pub mod mcp;
+pub mod pool;
 pub mod provision;
 pub mod schema;
 pub mod server;

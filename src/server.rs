@@ -18,23 +18,21 @@ use crate::investigate;
 
 /// RFC 9457 problem details constructors for sigiro API errors.
 /// Content-Type: application/problem+json — standard format agents can rely on.
-pub type ApiError = ProblemDetails;
-
-pub fn query_rejected(detail: impl Into<String>) -> ApiError {
+pub fn query_rejected(detail: impl Into<String>) -> ProblemDetails {
     ProblemDetails::new()
         .with_status(StatusCode::BAD_REQUEST)
         .with_title("Query Rejected")
         .with_detail(detail)
 }
 
-pub fn internal_error(detail: impl Into<String>) -> ApiError {
+pub fn internal_error(detail: impl Into<String>) -> ProblemDetails {
     ProblemDetails::new()
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
         .with_title("Internal Error")
         .with_detail(detail)
 }
 
-pub fn invalid_request(detail: impl Into<String>) -> ApiError {
+pub fn invalid_request(detail: impl Into<String>) -> ProblemDetails {
     ProblemDetails::new()
         .with_status(StatusCode::BAD_REQUEST)
         .with_title("Invalid Request")
@@ -286,7 +284,7 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
 async fn query_handler(
     State(state): State<Arc<AppState>>,
     body: String,
-) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+) -> Result<Json<Vec<serde_json::Value>>, ProblemDetails> {
     validate_read_only(&body).map_err(query_rejected)?;
     let conn = state.conn.lock().map_err(|e| {
         tracing::error!("DuckDB connection mutex poisoned");
@@ -326,7 +324,7 @@ async fn query_handler(
 async fn investigate_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<investigate::InvestigateRequest>,
-) -> Result<Json<investigate::InvestigationBlock>, ApiError> {
+) -> Result<Json<investigate::InvestigationBlock>, ProblemDetails> {
     let block = investigate::investigate(&state.conn, &req, state.table_prefix)
         .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(block))
@@ -335,7 +333,8 @@ async fn investigate_handler(
 async fn investigate_multi_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<investigate::InvestigateMultiRequest>,
-) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, ApiError> {
+) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, ProblemDetails>
+{
     let blocks = investigate::investigate_multi(&state.conn, &req, state.table_prefix)
         .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(blocks))
