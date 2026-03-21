@@ -124,7 +124,7 @@ pub async fn upsert_installation(
     headers: HeaderMap,
     Json(req): Json<InstallationRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (client, vercel, saas) = get_vercel_deps(&state)?;
+    let (client, vercel) = get_vercel_deps(&state);
     let claims = verify_vercel_request(client, vercel, &headers).await?;
 
     let owner_id = req
@@ -135,9 +135,9 @@ pub async fn upsert_installation(
 
     // Lago customer (idempotent upsert)
     crate::provision::create_lago_customer(
-        &saas.http_client,
-        &saas.provision.lago_url,
-        &saas.provision.lago_api_key,
+        &state.http_client,
+        &state.provision.lago_url,
+        &state.provision.lago_api_key,
         owner_id,
         None,
         None,
@@ -164,7 +164,7 @@ pub async fn create_resource(
     headers: HeaderMap,
     Json(req): Json<ResourceRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (client, vercel, saas) = get_vercel_deps(&state)?;
+    let (client, vercel) = get_vercel_deps(&state);
     let claims = verify_vercel_request(client, vercel, &headers).await?;
 
     let owner_id = &claims.sub;
@@ -172,8 +172,8 @@ pub async fn create_resource(
     // Create Unkey key for this resource
     let api_key = crate::provision::create_unkey_key(
         client,
-        &saas.provision.unkey_root_key,
-        &saas.provision.unkey_api_id,
+        &state.provision.unkey_root_key,
+        &state.provision.unkey_api_id,
         owner_id,
     )
     .await
@@ -204,7 +204,7 @@ pub async fn delete_installation(
     State(state): State<Arc<crate::server::AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (client, vercel, _saas) = get_vercel_deps(&state)?;
+    let (client, vercel) = get_vercel_deps(&state);
     let _claims = verify_vercel_request(client, vercel, &headers).await?;
 
     // In a full implementation, this would:
@@ -216,14 +216,8 @@ pub async fn delete_installation(
     Ok(Json(serde_json::json!({ "status": "deleted" })))
 }
 
-fn get_vercel_deps(
-    state: &crate::server::AppState,
-) -> Result<(&reqwest::Client, &VercelConfig, &crate::server::SaasState), (StatusCode, String)> {
-    let saas = state
-        .saas
-        .as_ref()
-        .ok_or((StatusCode::NOT_FOUND, "SaaS mode not configured".into()))?;
-    Ok((&saas.http_client, &saas.vercel, saas))
+fn get_vercel_deps(state: &crate::server::AppState) -> (&reqwest::Client, &VercelConfig) {
+    (&state.http_client, &state.vercel)
 }
 
 #[cfg(test)]

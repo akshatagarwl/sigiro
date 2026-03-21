@@ -121,31 +121,39 @@ pub async fn verify_with_unkey(
 }
 
 /// axum middleware: verify API key via Unkey with moka cache.
-/// No-op in local dev (no SaaS state). Mandatory in SaaS mode.
+/// Always runs — same code path in dev and prod.
+/// Dev keys (`sk_dev_*`) bypass Unkey and return a hardcoded AuthContext.
 pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, String)> {
-    let saas = match &state.saas {
-        Some(s) => s,
-        None => return Ok(next.run(req).await), // local dev: no auth
-    };
-
     let token = extract_bearer_token(req.headers()).map_err(|e| (e.status_code(), e.message()))?;
+
+    // Dev key bypass — same middleware runs, just a different auth backend
+    if token.starts_with("sk_dev_") {
+        let ctx = AuthContext {
+            owner_id: "dev_user".to_string(),
+            project_id: "dev_project".to_string(),
+        };
+        let mut req = req;
+        req.extensions_mut().insert(ctx);
+        return Ok(next.run(req).await);
+    }
+
     let cache_key = hash_for_cache(token);
 
     // 1. Cache hit
-    if let Some(ctx) = saas.auth_cache.get(&cache_key).await {
+    if let Some(ctx) = state.auth_cache.get(&cache_key).await {
         let mut req = req;
         req.extensions_mut().insert(ctx);
         return Ok(next.run(req).await);
     }
 
     // 2. Unkey verify
-    match verify_with_unkey(&saas.http_client, &saas.unkey_api_id, token).await {
+    match verify_with_unkey(&state.http_client, &state.unkey_api_id, token).await {
         Ok(ctx) => {
-            saas.auth_cache.insert(cache_key, ctx.clone()).await;
+            state.auth_cache.insert(cache_key, ctx.clone()).await;
             let mut req = req;
             req.extensions_mut().insert(ctx);
             Ok(next.run(req).await)
@@ -259,5 +267,20 @@ mod tests {
 
         let result = cache.get(&hash_for_cache("sk_live_unknown")).await;
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn dev_key_is_recognized() {
+        // sk_dev_ prefix keys should be recognized as dev keys
+        assert!("sk_dev_test123".starts_with("sk_dev_"));
+        assert!(!"sk_live_test123".starts_with("sk_dev_"));
+    }
+
+    #[test]
+    fn extract_dev_key_from_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer sk_dev_local".parse().unwrap());
+        let token = extract_bearer_token(&headers).unwrap();
+        assert!(token.starts_with("sk_dev_"));
     }
 }

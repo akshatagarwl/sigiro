@@ -18,12 +18,6 @@ pub struct AppState {
     pub conn: Arc<Mutex<Connection>>,
     /// "lake." when DuckLake is active, "" for local mode
     pub table_prefix: &'static str,
-    /// Auth + billing + provisioning. None only for local `cargo run -- serve` dev.
-    pub saas: Option<SaasState>,
-}
-
-/// All SaaS services bundled together. Either all configured or none.
-pub struct SaasState {
     pub auth_cache: moka::future::Cache<String, crate::auth::AuthContext>,
     pub http_client: reqwest::Client,
     pub unkey_api_id: String,
@@ -83,27 +77,29 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Try to build SaaS state from env vars. Returns None if any are missing.
-fn try_build_saas_state() -> Option<SaasState> {
-    let env = |name: &str| std::env::var(name).ok();
-    let unkey_api_id = env("UNKEY_API_ID")?;
-    Some(SaasState {
-        auth_cache: moka::future::Cache::builder()
-            .max_capacity(10_000)
-            .time_to_live(std::time::Duration::from_secs(60))
-            .build(),
-        http_client: reqwest::Client::new(),
-        provision: crate::provision::ProvisionConfig {
-            logto_webhook_secret: env("LOGTO_WEBHOOK_SECRET")?,
-            lago_url: env("LAGO_URL")?,
-            lago_api_key: env("LAGO_API_KEY")?,
-            unkey_root_key: env("UNKEY_ROOT_KEY")?,
-            unkey_api_id: unkey_api_id.clone(),
-            idempotency: crate::provision::IdempotencySet::new(10_000),
-        },
-        vercel: crate::vercel::VercelConfig::new(&env("VERCEL_PARTNER_ID")?),
-        unkey_api_id,
-    })
+/// Build config from env vars, falling back to dev defaults.
+/// Same code path always runs — dev uses `sk_dev_` keys which bypass Unkey.
+struct AppConfig {
+    unkey_api_id: String,
+    logto_webhook_secret: String,
+    lago_url: String,
+    lago_api_key: String,
+    unkey_root_key: String,
+    vercel_partner_id: String,
+}
+
+fn load_app_config() -> AppConfig {
+    let env_or = |name: &str, default: &str| -> String {
+        std::env::var(name).unwrap_or_else(|_| default.to_string())
+    };
+    AppConfig {
+        unkey_api_id: env_or("UNKEY_API_ID", "dev"),
+        logto_webhook_secret: env_or("LOGTO_WEBHOOK_SECRET", "dev-secret"),
+        lago_url: env_or("LAGO_URL", "http://localhost:3000"),
+        lago_api_key: env_or("LAGO_API_KEY", "dev-lago-key"),
+        unkey_root_key: env_or("UNKEY_ROOT_KEY", "dev-unkey-root"),
+        vercel_partner_id: env_or("VERCEL_PARTNER_ID", "dev"),
+    }
 }
 
 pub async fn run_servers(
@@ -126,19 +122,35 @@ pub async fn run_servers(
             .context("gRPC server failed")
     });
 
-    // SaaS mode: all env vars present → auth + billing + provisioning + Vercel.
-    // Local dev: no env vars → unauthenticated, no billing.
-    let saas = try_build_saas_state();
-    if saas.is_some() {
-        tracing::info!("SaaS mode — auth, billing, provisioning, Vercel all active");
+    // Same code path always — dev defaults when env vars missing.
+    // Dev uses `sk_dev_` keys which bypass Unkey (see auth middleware).
+    let cfg = load_app_config();
+    let is_prod = cfg.unkey_api_id != "dev";
+    if is_prod {
+        tracing::info!("production mode — Unkey API ID: {}", cfg.unkey_api_id);
     } else {
-        tracing::info!("local dev mode — no auth, no billing (set UNKEY_API_ID to enable SaaS)");
+        tracing::info!("dev mode — use Bearer sk_dev_<anything> to authenticate");
     }
 
+    let provision = crate::provision::ProvisionConfig {
+        logto_webhook_secret: cfg.logto_webhook_secret,
+        lago_url: cfg.lago_url,
+        lago_api_key: cfg.lago_api_key,
+        unkey_root_key: cfg.unkey_root_key,
+        unkey_api_id: cfg.unkey_api_id.clone(),
+        idempotency: crate::provision::IdempotencySet::new(10_000),
+    };
     let app_state = Arc::new(AppState {
         conn,
         table_prefix,
-        saas,
+        auth_cache: moka::future::Cache::builder()
+            .max_capacity(10_000)
+            .time_to_live(std::time::Duration::from_secs(60))
+            .build(),
+        http_client: reqwest::Client::new(),
+        unkey_api_id: cfg.unkey_api_id,
+        provision,
+        vercel: crate::vercel::VercelConfig::new(&cfg.vercel_partner_id),
     });
     let http_app = Router::new()
         .route("/health", get(health))
