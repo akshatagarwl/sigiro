@@ -7,6 +7,7 @@ WORKDIR /build
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
+COPY benches/ benches/
 RUN cargo chef prepare --recipe-path recipe.json
 
 # Stage 2: cook dependencies (cached until Cargo.lock changes)
@@ -23,15 +24,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
     --mount=type=cache,target=/build/target,id=cargo-target-${TARGETARCH} \
     cargo chef cook --release --recipe-path recipe.json
 
-# Stage 3: build sigiro (only recompiles src/ changes)
+# Stage 3: build the sigiro binary only (no benches, no tests)
 FROM deps AS builder
 ARG TARGETARCH
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
+COPY benches/ benches/
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-${TARGETARCH} \
     --mount=type=cache,target=/build/target,id=cargo-target-${TARGETARCH} \
-    cargo build --release && \
+    cargo build --release --bin sigiro && \
     cp /build/target/release/sigiro /build/sigiro
 
 # Stage 4: minimal runtime
