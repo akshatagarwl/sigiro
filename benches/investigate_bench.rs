@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 fn setup_populated_db() -> Arc<Mutex<duckdb::Connection>> {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
@@ -77,7 +77,7 @@ fn bench_investigate(c: &mut Criterion) {
                 from_ts: Some(now_us - 15 * 60 * 1_000_000),
                 to_ts: Some(now_us + 60 * 1_000_000),
             };
-            investigate(&shared, &req).expect("investigate");
+            investigate(&shared, &req, "").expect("investigate");
         });
     });
 }
@@ -101,6 +101,7 @@ fn bench_query_logs(c: &mut Criterion) {
                 now_us - 15 * 60 * 1_000_000,
                 now_us + 60 * 1_000_000,
                 30,
+                "",
             )
             .expect("query_logs");
         });
@@ -150,6 +151,7 @@ fn bench_service_context(c: &mut Criterion) {
                 "bench-svc",
                 now_us - 15 * 60 * 1_000_000,
                 now_us + 60 * 1_000_000,
+                "",
             )
             .expect("context");
         });

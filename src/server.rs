@@ -14,6 +14,8 @@ use crate::investigate;
 
 pub struct AppState {
     pub conn: Arc<Mutex<Connection>>,
+    /// "lake." when DuckLake is active, "" for local mode
+    pub table_prefix: &'static str,
 }
 
 /// DuckDB's access_mode is database-level, not connection-level:
@@ -68,7 +70,11 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn run_servers(conn: Arc<Mutex<Connection>>, tx: Sender<IngestMsg>) -> Result<()> {
+pub async fn run_servers(
+    conn: Arc<Mutex<Connection>>,
+    tx: Sender<IngestMsg>,
+    table_prefix: &'static str,
+) -> Result<()> {
     // gRPC server on :4317
     let grpc_tx = tx.clone();
     let grpc_handle = tokio::spawn(async move {
@@ -85,7 +91,7 @@ pub async fn run_servers(conn: Arc<Mutex<Connection>>, tx: Sender<IngestMsg>) ->
     });
 
     // HTTP server on :9999 (query + health)
-    let app_state = Arc::new(AppState { conn });
+    let app_state = Arc::new(AppState { conn, table_prefix });
     let http_app = Router::new()
         .route("/health", get(health))
         .route("/query", post(query_handler))
@@ -189,7 +195,7 @@ async fn query_handler(
         .map(|i| {
             stmt_ref
                 .column_name(i)
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
                 .unwrap_or_else(|_| "?".to_string())
         })
         .collect();
@@ -211,7 +217,8 @@ async fn investigate_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<investigate::InvestigateRequest>,
 ) -> Result<Json<investigate::InvestigationBlock>, String> {
-    let block = investigate::investigate(&state.conn, &req).map_err(|e| format!("{e:#}"))?;
+    let block = investigate::investigate(&state.conn, &req, state.table_prefix)
+        .map_err(|e| format!("{e:#}"))?;
     Ok(Json(block))
 }
 
@@ -219,6 +226,7 @@ async fn investigate_multi_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<investigate::InvestigateMultiRequest>,
 ) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, String> {
-    let blocks = investigate::investigate_multi(&state.conn, &req).map_err(|e| format!("{e:#}"))?;
+    let blocks = investigate::investigate_multi(&state.conn, &req, state.table_prefix)
+        .map_err(|e| format!("{e:#}"))?;
     Ok(Json(blocks))
 }

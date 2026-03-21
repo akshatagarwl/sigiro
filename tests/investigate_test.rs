@@ -59,14 +59,14 @@ fn us_to_iso_zero() {
 #[test]
 fn investigate_with_in_memory_db() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
     let req = InvestigateRequest {
         service: "nonexistent".to_string(),
         from_ts: None,
         to_ts: None,
     };
-    let block = investigate(&shared, &req).expect("investigate should succeed on empty db");
+    let block = investigate(&shared, &req, "").expect("investigate should succeed on empty db");
     assert_eq!(block.service, "nonexistent");
     assert!(block.operation_summaries.is_empty());
     assert!(block.metrics.is_empty());
@@ -96,7 +96,7 @@ fn investigate_with_in_memory_db() {
 #[test]
 fn investigate_with_real_span_data() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
 
     let now_us = chrono::Utc::now().timestamp_micros();
     conn.execute_batch(&format!(
@@ -116,7 +116,7 @@ fn investigate_with_real_span_data() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block = investigate(&shared, &req).expect("investigate");
+    let block = investigate(&shared, &req, "").expect("investigate");
 
     assert_eq!(block.operation_summaries.len(), 2);
     let checkout_op = &block.operation_summaries[0];
@@ -187,9 +187,9 @@ fn coverage_all_signals() {
 #[test]
 fn service_context_empty_db() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
-    let ctx = query_service_context(&conn, "nonexistent", now_us - 60_000_000, now_us).unwrap();
+    let ctx = query_service_context(&conn, "nonexistent", now_us - 60_000_000, now_us, "").unwrap();
     assert_eq!(ctx.service_name, "nonexistent");
     assert_eq!(ctx.pod_count, 0);
     assert!(ctx.dependencies.is_empty());
@@ -200,7 +200,7 @@ fn service_context_empty_db() {
 #[test]
 fn service_context_with_k8s_attrs() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
@@ -213,8 +213,14 @@ fn service_context_with_k8s_attrs() {
              'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}')"
     ))
     .expect("insert");
-    let ctx =
-        query_service_context(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).unwrap();
+    let ctx = query_service_context(
+        &conn,
+        "checkout",
+        now_us - 60_000_000,
+        now_us + 60_000_000,
+        "",
+    )
+    .unwrap();
     assert_eq!(ctx.namespace, Some("prod".to_string()));
     assert_eq!(ctx.deployment, Some("checkout-v2".to_string()));
     assert_eq!(ctx.pod_count, 2);
@@ -223,7 +229,7 @@ fn service_context_with_k8s_attrs() {
 #[test]
 fn service_context_dependencies() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
@@ -233,14 +239,26 @@ fn service_context_dependencies() {
             (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments')"
     ))
     .expect("insert");
-    let ctx =
-        query_service_context(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).unwrap();
+    let ctx = query_service_context(
+        &conn,
+        "checkout",
+        now_us - 60_000_000,
+        now_us + 60_000_000,
+        "",
+    )
+    .unwrap();
     assert!(
         ctx.dependencies.contains(&"payments".to_string()),
         "checkout should depend on payments"
     );
-    let ctx2 =
-        query_service_context(&conn, "payments", now_us - 60_000_000, now_us + 60_000_000).unwrap();
+    let ctx2 = query_service_context(
+        &conn,
+        "payments",
+        now_us - 60_000_000,
+        now_us + 60_000_000,
+        "",
+    )
+    .unwrap();
     assert!(
         ctx2.dependents.contains(&"checkout".to_string()),
         "payments should have checkout as dependent"
@@ -250,7 +268,7 @@ fn service_context_dependencies() {
 #[test]
 fn derived_events_deploy_detection() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
@@ -263,7 +281,7 @@ fn derived_events_deploy_detection() {
     ))
     .expect("insert");
     let events =
-        query_derived_events(&conn, "api", now_us - 120_000_000, now_us + 60_000_000).unwrap();
+        query_derived_events(&conn, "api", now_us - 120_000_000, now_us + 60_000_000, "").unwrap();
     let deploys: Vec<_> = events.iter().filter(|e| e.event_type == "deploy").collect();
     assert_eq!(
         deploys.len(),
@@ -277,7 +295,7 @@ fn derived_events_deploy_detection() {
 #[test]
 fn derived_events_k8s_oomkilled() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
@@ -288,7 +306,7 @@ fn derived_events_k8s_oomkilled() {
     ))
     .expect("insert");
     let events =
-        query_derived_events(&conn, "api", now_us - 60_000_000, now_us + 60_000_000).unwrap();
+        query_derived_events(&conn, "api", now_us - 60_000_000, now_us + 60_000_000, "").unwrap();
     let k8s: Vec<_> = events
         .iter()
         .filter(|e| e.event_type == "k8s_event")
@@ -300,7 +318,7 @@ fn derived_events_k8s_oomkilled() {
 #[test]
 fn log_template_dedup_ips() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
@@ -311,7 +329,15 @@ fn log_template_dedup_ips() {
             (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', 'Connection timeout for 172.16.0.99')"
     ))
     .expect("insert");
-    let logs = query_logs(&conn, "api", now_us - 60_000_000, now_us + 60_000_000, 30).unwrap();
+    let logs = query_logs(
+        &conn,
+        "api",
+        now_us - 60_000_000,
+        now_us + 60_000_000,
+        30,
+        "",
+    )
+    .unwrap();
     assert_eq!(
         logs.len(),
         1,
@@ -329,7 +355,7 @@ fn log_template_dedup_ips() {
 #[test]
 fn log_template_dedup_uuids() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
@@ -339,7 +365,15 @@ fn log_template_dedup_uuids() {
             (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'Failed to process order a1b2c3d4-e5f6-7890-abcd-ef1234567890')"
     ))
     .expect("insert");
-    let logs = query_logs(&conn, "api", now_us - 60_000_000, now_us + 60_000_000, 30).unwrap();
+    let logs = query_logs(
+        &conn,
+        "api",
+        now_us - 60_000_000,
+        now_us + 60_000_000,
+        30,
+        "",
+    )
+    .unwrap();
     assert_eq!(logs.len(), 1, "2 logs with different UUIDs should collapse");
     assert!(logs[0].template.contains("{uuid}"));
     assert_eq!(logs[0].count, 2);
@@ -374,7 +408,7 @@ fn adaptive_config_large_window() {
 #[test]
 fn investigate_large_window_no_spans() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
@@ -389,7 +423,7 @@ fn investigate_large_window_no_spans() {
         from_ts: Some(now_us - 3 * 3600 * 1_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block = investigate(&shared, &req).unwrap();
+    let block = investigate(&shared, &req, "").unwrap();
     assert!(
         block.spans.is_empty(),
         ">2h window should omit flat spans (operation_summaries suffice)"
@@ -400,7 +434,7 @@ fn investigate_large_window_no_spans() {
 #[test]
 fn investigate_multi_basic() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
@@ -417,7 +451,7 @@ fn investigate_multi_basic() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks = investigate_multi(&shared, &req).unwrap();
+    let blocks = investigate_multi(&shared, &req, "").unwrap();
     assert_eq!(blocks.len(), 3);
     assert!(blocks.contains_key("svc-a"));
     assert!(blocks.contains_key("svc-b"));
@@ -427,7 +461,7 @@ fn investigate_multi_basic() {
 #[test]
 fn investigate_multi_cap_enforced() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
     let services: Vec<String> = (0..11).map(|i| format!("svc-{i}")).collect();
     let req = InvestigateMultiRequest {
@@ -435,36 +469,36 @@ fn investigate_multi_cap_enforced() {
         from_ts: None,
         to_ts: None,
     };
-    let result = investigate_multi(&shared, &req);
+    let result = investigate_multi(&shared, &req, "");
     assert!(result.is_err(), "should reject >10 services");
 }
 
 #[test]
 fn investigate_multi_empty_rejected() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
     let req = InvestigateMultiRequest {
         services: vec![],
         from_ts: None,
         to_ts: None,
     };
-    assert!(investigate_multi(&shared, &req).is_err());
+    assert!(investigate_multi(&shared, &req, "").is_err());
 }
 
 #[test]
 fn derived_events_no_events() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
-    let events = query_derived_events(&conn, "api", now_us - 60_000_000, now_us).unwrap();
+    let events = query_derived_events(&conn, "api", now_us - 60_000_000, now_us, "").unwrap();
     assert!(events.is_empty());
 }
 
 #[test]
 fn operation_summary_baselines() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn).expect("create tables");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
 
     let now_us = chrono::Utc::now().timestamp_micros();
     let baseline_ts = now_us - 10 * 60 * 1_000_000;
@@ -486,7 +520,7 @@ fn operation_summary_baselines() {
         from_ts: Some(now_us - 5 * 60 * 1_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block = investigate(&shared, &req).expect("investigate");
+    let block = investigate(&shared, &req, "").expect("investigate");
 
     let op = &block.operation_summaries[0];
     assert_eq!(op.span_name, "POST /checkout");

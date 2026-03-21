@@ -12,6 +12,7 @@ use crate::investigate;
 
 pub struct SigiroMcp {
     conn: Arc<Mutex<Connection>>,
+    table_prefix: &'static str,
     tool_router: ToolRouter<Self>,
 }
 
@@ -63,7 +64,7 @@ impl SigiroMcp {
             from_ts: p.from_ts,
             to_ts: p.to_ts,
         };
-        match investigate::investigate(&self.conn, &req) {
+        match investigate::investigate(&self.conn, &req, self.table_prefix) {
             Ok(block) => serde_json::to_string_pretty(&block)
                 .unwrap_or_else(|e| format!("serialization error: {e}")),
             Err(e) => format!("error: {e:#}"),
@@ -81,7 +82,7 @@ impl SigiroMcp {
             from_ts: p.from_ts,
             to_ts: p.to_ts,
         };
-        match investigate::investigate_multi(&self.conn, &req) {
+        match investigate::investigate_multi(&self.conn, &req, self.table_prefix) {
             Ok(blocks) => serde_json::to_string_pretty(&blocks)
                 .unwrap_or_else(|e| format!("serialization error: {e}")),
             Err(e) => format!("error: {e:#}"),
@@ -118,7 +119,7 @@ impl SigiroMcp {
             .map(|i| {
                 stmt_ref
                     .column_name(i)
-                    .map(|s| s.to_string())
+                    .map(ToString::to_string)
                     .unwrap_or_else(|_| "?".to_string())
             })
             .collect();
@@ -145,31 +146,24 @@ impl SigiroMcp {
             Err(e) => return format!("error: connection mutex poisoned: {e}"),
         };
 
-        let tables = [
-            "sigiro_spans",
-            "sigiro_logs",
-            "sigiro_metrics_gauge",
-            "sigiro_metrics_sum",
-            "sigiro_metrics_histogram",
-            "sigiro_metrics_exp_histogram",
-        ];
-
+        let prefix = self.table_prefix;
         let mut table_counts = std::collections::BTreeMap::new();
-        for table in tables {
+        for table in crate::storage::TABLE_NAMES {
+            let qualified = format!("{prefix}{table}");
             let count: i64 = conn
-                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                .query_row(&format!("SELECT count(*) FROM {qualified}"), [], |row| {
                     row.get(0)
                 })
                 .unwrap_or(0);
-            table_counts.insert(table.to_string(), count);
+            table_counts.insert(qualified, count);
         }
 
         let mut services = Vec::new();
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT DISTINCT service_name FROM sigiro_spans
-             UNION SELECT DISTINCT service_name FROM sigiro_logs
-             UNION SELECT DISTINCT service_name FROM sigiro_metrics_gauge",
-        ) {
+        if let Ok(mut stmt) = conn.prepare(&format!(
+            "SELECT DISTINCT service_name FROM {prefix}sigiro_spans
+             UNION SELECT DISTINCT service_name FROM {prefix}sigiro_logs
+             UNION SELECT DISTINCT service_name FROM {prefix}sigiro_metrics_gauge",
+        )) {
             if let Ok(mut rows) = stmt.query([]) {
                 while let Ok(Some(row)) = rows.next() {
                     if let Ok(s) = row.get::<_, String>(0) {
@@ -200,17 +194,21 @@ impl ServerHandler for SigiroMcp {
 }
 
 impl SigiroMcp {
-    pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
+    pub fn new(conn: Arc<Mutex<Connection>>, table_prefix: &'static str) -> Self {
         Self {
             conn,
+            table_prefix,
             tool_router: Self::tool_router(),
         }
     }
 }
 
 /// Run the MCP stdio server. Blocks until the client disconnects.
-pub async fn run_mcp_server(conn: Arc<Mutex<Connection>>) -> Result<()> {
-    let server = SigiroMcp::new(conn);
+pub async fn run_mcp_server(
+    conn: Arc<Mutex<Connection>>,
+    table_prefix: &'static str,
+) -> Result<()> {
+    let server = SigiroMcp::new(conn, table_prefix);
     let transport = rmcp::transport::io::stdio();
     let service = server
         .serve(transport)

@@ -7,10 +7,11 @@ rust-version = "1.85"
 [dependencies]
 # DuckDB: git main for arrow 58 compat with otlp2records
 duckdb = { git = "https://github.com/duckdb/duckdb-rs", branch = "main", features = ["bundled", "appender-arrow"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 dirs = "6"
+envy = "0.4"
 
 # OTLP ingest
 otlp2records = "0.4"
@@ -33,6 +34,25 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "investigate_bench"
 harness = false
+
+[lints.clippy]
+# Disallowed patterns (configured in clippy.toml)
+disallowed-methods = "deny"
+disallowed-macros = "deny"
+
+# Silent error drops via `let _ = expr_returning_result`
+let-underscore-must-use = "deny"
+
+# General quality
+needless-pass-by-value = "warn"
+cloned-instead-of-copied = "warn"
+redundant-closure-for-method-calls = "warn"
+manual-string-new = "warn"
+inefficient-to-string = "warn"
+
+[lints.rust]
+# Compiler-level: unused Results are errors
+unused-must-use = "deny"
 
 [profile.release]
 lto = "thin"

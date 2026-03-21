@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use duckdb::Connection;
 
-pub fn create_tables(conn: &Connection) -> Result<()> {
+/// Create all sigiro tables and views.
+/// `prefix` is "lake." when DuckLake is active, "" for local mode.
+pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     // Traces — 25 columns, matches otlp2records::traces_schema()
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sigiro_spans (
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_spans (
             timestamp             TIMESTAMP NOT NULL,
             end_timestamp         BIGINT NOT NULL,
             duration              BIGINT NOT NULL,
@@ -30,13 +32,13 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             dropped_events_count  INTEGER,
             dropped_links_count   INTEGER,
             flags                 INTEGER
-        )",
-    )
+        )"
+    ))
     .context("failed to create sigiro_spans")?;
 
     // Logs — 15 columns, matches otlp2records::logs_schema()
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sigiro_logs (
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_logs (
             timestamp             TIMESTAMP NOT NULL,
             observed_timestamp    BIGINT NOT NULL,
             trace_id              VARCHAR,
@@ -52,13 +54,13 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             scope_version         VARCHAR,
             scope_attributes      VARCHAR,
             log_attributes        VARCHAR
-        )",
-    )
+        )"
+    ))
     .context("failed to create sigiro_logs")?;
 
     // Gauge — 16 columns, matches otlp2records::gauge_schema()
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sigiro_metrics_gauge (
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_gauge (
             timestamp             TIMESTAMP NOT NULL,
             start_timestamp       BIGINT,
             metric_name           VARCHAR NOT NULL,
@@ -75,13 +77,13 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             metric_attributes     VARCHAR,
             flags                 INTEGER,
             exemplars_json        VARCHAR
-        )",
-    )
+        )"
+    ))
     .context("failed to create sigiro_metrics_gauge")?;
 
     // Sum — 18 columns, matches otlp2records::sum_schema()
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sigiro_metrics_sum (
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_sum (
             timestamp                  TIMESTAMP NOT NULL,
             start_timestamp            BIGINT,
             metric_name                VARCHAR NOT NULL,
@@ -100,13 +102,13 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             exemplars_json             VARCHAR,
             aggregation_temporality    INTEGER NOT NULL,
             is_monotonic               BOOLEAN NOT NULL
-        )",
-    )
+        )"
+    ))
     .context("failed to create sigiro_metrics_sum")?;
 
     // Histogram — 22 columns, matches otlp2records::histogram_schema()
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sigiro_metrics_histogram (
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_histogram (
             timestamp                  TIMESTAMP NOT NULL,
             start_timestamp            BIGINT,
             metric_name                VARCHAR NOT NULL,
@@ -129,13 +131,13 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             flags                      INTEGER,
             exemplars_json             VARCHAR,
             aggregation_temporality    INTEGER NOT NULL
-        )",
-    )
+        )"
+    ))
     .context("failed to create sigiro_metrics_histogram")?;
 
     // ExpHistogram — 27 columns, matches otlp2records::exp_histogram_schema()
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sigiro_metrics_exp_histogram (
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_exp_histogram (
             timestamp                  TIMESTAMP NOT NULL,
             start_timestamp            BIGINT,
             metric_name                VARCHAR NOT NULL,
@@ -163,39 +165,39 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             flags                      INTEGER,
             exemplars_json             VARCHAR,
             aggregation_temporality    INTEGER NOT NULL
-        )",
-    )
+        )"
+    ))
     .context("failed to create sigiro_metrics_exp_histogram")?;
 
-    // Anomaly detection view — surfaces error rates, high latency, and silent services
-    conn.execute_batch(
+    // Anomaly detection view — always in the default catalog (reads from prefixed tables)
+    conn.execute_batch(&format!(
         "CREATE OR REPLACE VIEW sigiro_anomalies AS
         WITH error_rates AS (
             SELECT service_name,
                    count(*) FILTER (WHERE status_code = 2) * 100.0 / NULLIF(count(*), 0) AS error_pct
-            FROM sigiro_spans
+            FROM {prefix}sigiro_spans
             WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
             GROUP BY service_name
         ),
         latency AS (
             SELECT service_name,
                    approx_quantile(duration, 0.95) AS p95_ns
-            FROM sigiro_spans
+            FROM {prefix}sigiro_spans
             WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
             GROUP BY service_name
         ),
         silence AS (
-            SELECT DISTINCT service_name FROM sigiro_spans
+            SELECT DISTINCT service_name FROM {prefix}sigiro_spans
             EXCEPT
-            SELECT DISTINCT service_name FROM sigiro_spans
+            SELECT DISTINCT service_name FROM {prefix}sigiro_spans
             WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
         )
         SELECT 'error_rate' AS anomaly_type, service_name, error_pct AS value FROM error_rates WHERE error_pct > 5
         UNION ALL
         SELECT 'high_latency', service_name, CAST(p95_ns AS DOUBLE) FROM latency WHERE p95_ns > 1000000000
         UNION ALL
-        SELECT 'silence', service_name, 0.0 FROM silence",
-    )
+        SELECT 'silence', service_name, 0.0 FROM silence"
+    ))
     .context("failed to create sigiro_anomalies view")?;
 
     Ok(())

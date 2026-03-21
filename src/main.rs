@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, builder::styling};
 use duckdb::Connection;
 use std::sync::{Arc, Mutex};
 
-use sigiro::{data_dir, format_bytes, open_db};
+use sigiro::{data_dir, format_bytes, open_db, storage};
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -44,6 +44,22 @@ enum Command {
     Mcp,
 }
 
+/// Initialize DuckLake if configured, return the table prefix ("lake." or "").
+/// Uses a 'static str so it can be shared across threads without lifetime issues.
+fn init_storage(conn: &Connection) -> Result<&'static str> {
+    match storage::load_config() {
+        Some(config) => {
+            storage::init_ducklake(conn, &config)?;
+            tracing::info!("DuckLake mode — tables in lake.*");
+            Ok(storage::table_prefix(true))
+        }
+        None => {
+            tracing::info!("local mode — no SIGIRO_CATALOG_URL set");
+            Ok(storage::table_prefix(false))
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -59,7 +75,8 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Command::Serve) | None => {
             let conn = open_db()?;
-            sigiro::schema::create_tables(&conn)?;
+            let prefix = init_storage(&conn)?;
+            sigiro::schema::create_tables(&conn, prefix)?;
 
             let db_path = data_dir()?.join("sigiro.duckdb");
             tracing::info!("sigiro ready — {}", db_path.display());
@@ -69,41 +86,56 @@ async fn main() -> Result<()> {
             let shared_conn = Arc::new(Mutex::new(conn));
 
             let inserter_conn = shared_conn.clone();
+            let inserter_prefix = prefix.to_string();
             std::thread::spawn(move || {
-                if let Err(e) = sigiro::inserter::run_inserter(inserter_conn, rx) {
+                if let Err(e) = sigiro::inserter::run_inserter(&inserter_conn, rx, &inserter_prefix)
+                {
                     tracing::error!("inserter fatal: {e:#}");
                     std::process::exit(1);
                 }
             });
 
-            sigiro::server::run_servers(shared_conn, tx).await?;
+            // Spawn compactor only in DuckLake mode (local DuckDB doesn't need it)
+            if !prefix.is_empty() {
+                let compactor_conn = shared_conn.clone();
+                tokio::spawn(async move {
+                    sigiro::compactor::run_compactor(compactor_conn, 7, prefix).await;
+                });
+            }
+
+            sigiro::server::run_servers(shared_conn, tx, prefix).await?;
         }
         Some(Command::Query { sql }) => {
             let conn = open_db()?;
+            let prefix = init_storage(&conn)?;
+            sigiro::schema::create_tables(&conn, prefix)?;
             run_query(&conn, &sql)?;
         }
         Some(Command::Status) => {
             let conn = open_db()?;
-            sigiro::schema::create_tables(&conn)?;
-            print_status(&conn)?;
+            let prefix = init_storage(&conn)?;
+            sigiro::schema::create_tables(&conn, prefix)?;
+            print_status(&conn, prefix)?;
         }
         Some(Command::Investigate { service, from, to }) => {
             let conn = open_db()?;
-            sigiro::schema::create_tables(&conn)?;
+            let prefix = init_storage(&conn)?;
+            sigiro::schema::create_tables(&conn, prefix)?;
             let shared = Arc::new(Mutex::new(conn));
             let req = sigiro::investigate::InvestigateRequest {
                 service,
                 from_ts: from.map(|s| s * 1_000_000),
                 to_ts: to.map(|s| s * 1_000_000),
             };
-            let block = sigiro::investigate::investigate(&shared, &req)?;
+            let block = sigiro::investigate::investigate(&shared, &req, prefix)?;
             println!("{}", serde_json::to_string_pretty(&block)?);
         }
         Some(Command::Mcp) => {
             let conn = open_db()?;
-            sigiro::schema::create_tables(&conn)?;
+            let prefix = init_storage(&conn)?;
+            sigiro::schema::create_tables(&conn, prefix)?;
             let shared = Arc::new(Mutex::new(conn));
-            sigiro::mcp::run_mcp_server(shared).await?;
+            sigiro::mcp::run_mcp_server(shared, prefix).await?;
         }
     }
     Ok(())
@@ -119,7 +151,7 @@ fn run_query(conn: &Connection, sql: &str) -> Result<()> {
         .map(|i| {
             stmt_ref
                 .column_name(i)
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
                 .unwrap_or_else(|_| "?".to_string())
         })
         .collect();
@@ -162,16 +194,7 @@ fn value_ref_to_string(val: duckdb::types::ValueRef<'_>) -> String {
     }
 }
 
-fn print_status(conn: &Connection) -> Result<()> {
-    let tables = [
-        "sigiro_spans",
-        "sigiro_logs",
-        "sigiro_metrics_gauge",
-        "sigiro_metrics_sum",
-        "sigiro_metrics_histogram",
-        "sigiro_metrics_exp_histogram",
-    ];
-
+fn print_status(conn: &Connection, prefix: &str) -> Result<()> {
     let db_path = data_dir()?.join("sigiro.duckdb");
     let db_size = std::fs::metadata(&db_path)
         .map(|m| format_bytes(m.len()))
@@ -180,9 +203,16 @@ fn print_status(conn: &Connection) -> Result<()> {
     println!("sigiro status");
     println!("─────────────");
     println!("  db: {} ({})", db_path.display(), db_size);
+    if !prefix.is_empty() {
+        println!("  mode: DuckLake (tables in lake.*)");
+    } else {
+        println!("  mode: local");
+    }
     println!();
 
-    match conn.prepare("SELECT DISTINCT service_name FROM sigiro_spans UNION SELECT DISTINCT service_name FROM sigiro_logs UNION SELECT DISTINCT service_name FROM sigiro_metrics_gauge") {
+    match conn.prepare(&format!(
+        "SELECT DISTINCT service_name FROM {prefix}sigiro_spans UNION SELECT DISTINCT service_name FROM {prefix}sigiro_logs UNION SELECT DISTINCT service_name FROM {prefix}sigiro_metrics_gauge"
+    )) {
         Ok(mut stmt) => {
             let mut rows = stmt.query([])?;
             let mut services = Vec::new();
@@ -201,12 +231,13 @@ fn print_status(conn: &Connection) -> Result<()> {
     }
     println!();
 
-    for table in tables {
-        match conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+    for table in storage::TABLE_NAMES {
+        let qualified = format!("{prefix}{table}");
+        match conn.query_row(&format!("SELECT count(*) FROM {qualified}"), [], |row| {
             row.get::<_, i64>(0)
         }) {
-            Ok(count) => println!("  {table}: {count} rows"),
-            Err(e) => tracing::error!("{table}: {e}"),
+            Ok(count) => println!("  {qualified}: {count} rows"),
+            Err(e) => tracing::error!("{qualified}: {e}"),
         }
     }
     Ok(())
