@@ -18,16 +18,17 @@ pub struct AppState {
     pub conn: Arc<Mutex<Connection>>,
     /// "lake." when DuckLake is active, "" for local mode
     pub table_prefix: &'static str,
-    /// Unkey auth cache — None in OSS/local mode
-    pub auth_cache: Option<moka::future::Cache<String, crate::auth::AuthContext>>,
-    /// HTTP client for Unkey/Lago calls — None in OSS/local mode
-    pub http_client: Option<reqwest::Client>,
-    /// Unkey API ID — None in OSS/local mode
-    pub unkey_api_id: Option<String>,
-    /// Provisioning config — None in OSS/local mode
-    pub provision: Option<crate::provision::ProvisionConfig>,
-    /// Vercel Partner API config — None unless VERCEL_PARTNER_ID set
-    pub vercel: Option<crate::vercel::VercelConfig>,
+    /// Auth + billing + provisioning. None only for local `cargo run -- serve` dev.
+    pub saas: Option<SaasState>,
+}
+
+/// All SaaS services bundled together. Either all configured or none.
+pub struct SaasState {
+    pub auth_cache: moka::future::Cache<String, crate::auth::AuthContext>,
+    pub http_client: reqwest::Client,
+    pub unkey_api_id: String,
+    pub provision: crate::provision::ProvisionConfig,
+    pub vercel: crate::vercel::VercelConfig,
 }
 
 /// DuckDB's access_mode is database-level, not connection-level:
@@ -82,6 +83,29 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Try to build SaaS state from env vars. Returns None if any are missing.
+fn try_build_saas_state() -> Option<SaasState> {
+    let env = |name: &str| std::env::var(name).ok();
+    let unkey_api_id = env("UNKEY_API_ID")?;
+    Some(SaasState {
+        auth_cache: moka::future::Cache::builder()
+            .max_capacity(10_000)
+            .time_to_live(std::time::Duration::from_secs(60))
+            .build(),
+        http_client: reqwest::Client::new(),
+        provision: crate::provision::ProvisionConfig {
+            logto_webhook_secret: env("LOGTO_WEBHOOK_SECRET")?,
+            lago_url: env("LAGO_URL")?,
+            lago_api_key: env("LAGO_API_KEY")?,
+            unkey_root_key: env("UNKEY_ROOT_KEY")?,
+            unkey_api_id: unkey_api_id.clone(),
+            idempotency: crate::provision::IdempotencySet::new(10_000),
+        },
+        vercel: crate::vercel::VercelConfig::new(&env("VERCEL_PARTNER_ID")?),
+        unkey_api_id,
+    })
+}
+
 pub async fn run_servers(
     conn: Arc<Mutex<Connection>>,
     tx: Sender<IngestMsg>,
@@ -102,53 +126,19 @@ pub async fn run_servers(
             .context("gRPC server failed")
     });
 
-    // HTTP server on :9999 (query + health)
-    // Auth is opt-in: only active when UNKEY_API_ID is set
-    let (auth_cache, http_client, unkey_api_id) = match std::env::var("UNKEY_API_ID") {
-        Ok(api_id) => {
-            let cache = moka::future::Cache::builder()
-                .max_capacity(10_000)
-                .time_to_live(std::time::Duration::from_secs(60))
-                .build();
-            tracing::info!("auth enabled — Unkey API ID: {api_id}");
-            (Some(cache), Some(reqwest::Client::new()), Some(api_id))
-        }
-        Err(_) => (None, None, None),
-    };
-    // Provisioning config — opt-in via LOGTO_WEBHOOK_SECRET
-    let provision = match (
-        std::env::var("LOGTO_WEBHOOK_SECRET"),
-        std::env::var("LAGO_URL"),
-        std::env::var("LAGO_API_KEY"),
-        std::env::var("UNKEY_ROOT_KEY"),
-    ) {
-        (Ok(secret), Ok(lago_url), Ok(lago_key), Ok(unkey_root)) => {
-            let unkey_api = std::env::var("UNKEY_API_ID").unwrap_or_default();
-            tracing::info!("provisioning webhook enabled");
-            Some(crate::provision::ProvisionConfig {
-                logto_webhook_secret: secret,
-                lago_url,
-                lago_api_key: lago_key,
-                unkey_root_key: unkey_root,
-                unkey_api_id: unkey_api,
-                idempotency: crate::provision::IdempotencySet::new(10_000),
-            })
-        }
-        _ => None,
-    };
-    // Vercel Partner API — opt-in via VERCEL_PARTNER_ID
-    let vercel = std::env::var("VERCEL_PARTNER_ID").ok().map(|id| {
-        tracing::info!("Vercel Partner API enabled");
-        crate::vercel::VercelConfig::new(&id)
-    });
+    // SaaS mode: all env vars present → auth + billing + provisioning + Vercel.
+    // Local dev: no env vars → unauthenticated, no billing.
+    let saas = try_build_saas_state();
+    if saas.is_some() {
+        tracing::info!("SaaS mode — auth, billing, provisioning, Vercel all active");
+    } else {
+        tracing::info!("local dev mode — no auth, no billing (set UNKEY_API_ID to enable SaaS)");
+    }
+
     let app_state = Arc::new(AppState {
         conn,
         table_prefix,
-        auth_cache,
-        http_client,
-        unkey_api_id,
-        provision,
-        vercel,
+        saas,
     });
     let http_app = Router::new()
         .route("/health", get(health))

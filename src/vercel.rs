@@ -124,7 +124,7 @@ pub async fn upsert_installation(
     headers: HeaderMap,
     Json(req): Json<InstallationRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (client, vercel) = get_vercel_deps(&state)?;
+    let (client, vercel, saas) = get_vercel_deps(&state)?;
     let claims = verify_vercel_request(client, vercel, &headers).await?;
 
     let owner_id = req
@@ -133,20 +133,17 @@ pub async fn upsert_installation(
         .or(req.user_id.as_deref())
         .unwrap_or(&claims.sub);
 
-    // Provision via Lago + Unkey if provisioning is configured
-    if let (Some(provision), Some(http)) = (&state.provision, &state.http_client) {
-        // Lago customer (idempotent upsert)
-        crate::provision::create_lago_customer(
-            http,
-            &provision.lago_url,
-            &provision.lago_api_key,
-            owner_id,
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
+    // Lago customer (idempotent upsert)
+    crate::provision::create_lago_customer(
+        &saas.http_client,
+        &saas.provision.lago_url,
+        &saas.provision.lago_api_key,
+        owner_id,
+        None,
+        None,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     tracing::info!(
         "upserted Vercel installation: {} (owner: {})",
@@ -167,24 +164,20 @@ pub async fn create_resource(
     headers: HeaderMap,
     Json(req): Json<ResourceRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (client, vercel) = get_vercel_deps(&state)?;
+    let (client, vercel, saas) = get_vercel_deps(&state)?;
     let claims = verify_vercel_request(client, vercel, &headers).await?;
 
     let owner_id = &claims.sub;
 
     // Create Unkey key for this resource
-    let api_key = if let Some(provision) = &state.provision {
-        crate::provision::create_unkey_key(
-            client,
-            &provision.unkey_root_key,
-            &provision.unkey_api_id,
-            owner_id,
-        )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    } else {
-        format!("sk_live_placeholder_{owner_id}")
-    };
+    let api_key = crate::provision::create_unkey_key(
+        client,
+        &saas.provision.unkey_root_key,
+        &saas.provision.unkey_api_id,
+        owner_id,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Create project DuckDB
     let data_dir =
@@ -211,7 +204,7 @@ pub async fn delete_installation(
     State(state): State<Arc<crate::server::AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (client, vercel) = get_vercel_deps(&state)?;
+    let (client, vercel, _saas) = get_vercel_deps(&state)?;
     let _claims = verify_vercel_request(client, vercel, &headers).await?;
 
     // In a full implementation, this would:
@@ -225,16 +218,12 @@ pub async fn delete_installation(
 
 fn get_vercel_deps(
     state: &crate::server::AppState,
-) -> Result<(&reqwest::Client, &VercelConfig), (StatusCode, String)> {
-    let client = state
-        .http_client
+) -> Result<(&reqwest::Client, &VercelConfig, &crate::server::SaasState), (StatusCode, String)> {
+    let saas = state
+        .saas
         .as_ref()
-        .ok_or((StatusCode::NOT_FOUND, "HTTP client not configured".into()))?;
-    let vercel = state.vercel.as_ref().ok_or((
-        StatusCode::NOT_FOUND,
-        "Vercel integration not configured".into(),
-    ))?;
-    Ok((client, vercel))
+        .ok_or((StatusCode::NOT_FOUND, "SaaS mode not configured".into()))?;
+    Ok((&saas.http_client, &saas.vercel, saas))
 }
 
 #[cfg(test)]

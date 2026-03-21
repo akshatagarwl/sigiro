@@ -164,10 +164,11 @@ pub async fn logto_webhook_handler(
     headers: HeaderMap,
     body: String,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let provision = state
-        .provision
+    let saas = state
+        .saas
         .as_ref()
-        .ok_or((StatusCode::NOT_FOUND, "provisioning not configured".into()))?;
+        .ok_or((StatusCode::NOT_FOUND, "SaaS mode not configured".into()))?;
+    let provision = &saas.provision;
 
     // Verify HMAC signature
     let signature = headers
@@ -196,10 +197,7 @@ pub async fn logto_webhook_handler(
         .data
         .ok_or((StatusCode::BAD_REQUEST, "missing user data".into()))?;
 
-    let client = state
-        .http_client
-        .as_ref()
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "no HTTP client".into()))?;
+    let client = &saas.http_client;
 
     // 1. Create Lago customer
     create_lago_customer(

@@ -121,38 +121,36 @@ pub async fn verify_with_unkey(
 }
 
 /// axum middleware: verify API key via Unkey with moka cache.
-/// Only active when AppState has auth_cache + unkey config.
+/// No-op in local dev (no SaaS state). Mandatory in SaaS mode.
 pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, String)> {
-    let (auth_cache, http_client, unkey_api_id) =
-        match (&state.auth_cache, &state.http_client, &state.unkey_api_id) {
-            (Some(cache), Some(client), Some(api_id)) => (cache, client, api_id),
-            _ => return Ok(next.run(req).await), // no auth configured, pass through
-        };
+    let saas = match &state.saas {
+        Some(s) => s,
+        None => return Ok(next.run(req).await), // local dev: no auth
+    };
 
     let token = extract_bearer_token(req.headers()).map_err(|e| (e.status_code(), e.message()))?;
     let cache_key = hash_for_cache(token);
 
     // 1. Cache hit
-    if let Some(ctx) = auth_cache.get(&cache_key).await {
+    if let Some(ctx) = saas.auth_cache.get(&cache_key).await {
         let mut req = req;
         req.extensions_mut().insert(ctx);
         return Ok(next.run(req).await);
     }
 
     // 2. Unkey verify
-    match verify_with_unkey(http_client, unkey_api_id, token).await {
+    match verify_with_unkey(&saas.http_client, &saas.unkey_api_id, token).await {
         Ok(ctx) => {
-            auth_cache.insert(cache_key, ctx.clone()).await;
+            saas.auth_cache.insert(cache_key, ctx.clone()).await;
             let mut req = req;
             req.extensions_mut().insert(ctx);
             Ok(next.run(req).await)
         }
         Err(AuthError::ServiceUnavailable(msg)) => {
-            // Unkey down + not in cache = 503
             tracing::error!("Unkey unavailable: {msg}");
             Err((
                 StatusCode::SERVICE_UNAVAILABLE,
