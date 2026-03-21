@@ -15,12 +15,7 @@ dirs = "6"
 envy = "0.4"
 toml = "0.8"
 reqwest = { version = "0.12", features = ["json"] }
-moka = { version = "0.12", features = ["future"] }
-sha2 = "0.10"
 dashmap = "6"
-hmac = "0.12"
-hex = "0.4"
-jsonwebtoken = "9"
 
 # OTLP ingest
 otlp2records = "0.4"
@@ -31,6 +26,8 @@ opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "log
 crossbeam-channel = "0.5"
 axum = "0.8"
 problem_details = { version = "0.9", features = ["axum", "json"] }
+prefixed-api-key = { version = "0.3", features = ["sha2"] }
+tower_governor = { version = "0.8", features = ["axum"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"

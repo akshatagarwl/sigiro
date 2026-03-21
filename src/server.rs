@@ -43,11 +43,9 @@ pub struct AppState {
     pub conn: Arc<Mutex<Connection>>,
     /// "lake." when DuckLake is active, "" for local mode
     pub table_prefix: &'static str,
-    pub auth_cache: moka::future::Cache<String, crate::auth::AuthContext>,
+    /// Admin DuckDB for API key storage (separate from per-project data)
+    pub admin_conn: Arc<Mutex<Connection>>,
     pub http_client: reqwest::Client,
-    pub unkey_api_id: String,
-    pub provision: crate::provision::ProvisionConfig,
-    pub vercel: crate::vercel::VercelConfig,
 }
 
 /// DuckDB's access_mode is database-level, not connection-level:
@@ -102,33 +100,9 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Build config from env vars, falling back to dev defaults.
-/// Same code path always runs — dev uses `sk_dev_` keys which bypass Unkey.
-struct AppConfig {
-    unkey_api_id: String,
-    logto_webhook_secret: String,
-    lago_url: String,
-    lago_api_key: String,
-    unkey_root_key: String,
-    vercel_partner_id: String,
-}
-
-fn load_app_config() -> AppConfig {
-    let env_or = |name: &str, default: &str| -> String {
-        std::env::var(name).unwrap_or_else(|_| default.to_string())
-    };
-    AppConfig {
-        unkey_api_id: env_or("UNKEY_API_ID", "dev"),
-        logto_webhook_secret: env_or("LOGTO_WEBHOOK_SECRET", "dev-secret"),
-        lago_url: env_or("LAGO_URL", "http://localhost:3000"),
-        lago_api_key: env_or("LAGO_API_KEY", "dev-lago-key"),
-        unkey_root_key: env_or("UNKEY_ROOT_KEY", "dev-unkey-root"),
-        vercel_partner_id: env_or("VERCEL_PARTNER_ID", "dev"),
-    }
-}
-
 pub async fn run_servers(
     conn: Arc<Mutex<Connection>>,
+    admin_conn: Arc<Mutex<Connection>>,
     tx: Sender<IngestMsg>,
     table_prefix: &'static str,
 ) -> Result<()> {
@@ -147,51 +121,19 @@ pub async fn run_servers(
             .context("gRPC server failed")
     });
 
-    // Same code path always — dev defaults when env vars missing.
-    // Dev uses `sk_dev_` keys which bypass Unkey (see auth middleware).
-    let cfg = load_app_config();
-    let is_prod = cfg.unkey_api_id != "dev";
-    if is_prod {
-        tracing::info!("production mode — Unkey API ID: {}", cfg.unkey_api_id);
-    } else {
-        tracing::info!("dev mode — use Bearer sk_dev_<anything> to authenticate");
-    }
+    tracing::info!("dev mode — use Bearer sigiro_dev_<anything> to authenticate");
 
-    let provision = crate::provision::ProvisionConfig {
-        logto_webhook_secret: cfg.logto_webhook_secret,
-        lago_url: cfg.lago_url,
-        lago_api_key: cfg.lago_api_key,
-        unkey_root_key: cfg.unkey_root_key,
-        unkey_api_id: cfg.unkey_api_id.clone(),
-        idempotency: crate::provision::IdempotencySet::new(10_000),
-    };
     let app_state = Arc::new(AppState {
         conn,
         table_prefix,
-        auth_cache: moka::future::Cache::builder()
-            .max_capacity(10_000)
-            .time_to_live(std::time::Duration::from_secs(60))
-            .build(),
+        admin_conn,
         http_client: reqwest::Client::new(),
-        unkey_api_id: cfg.unkey_api_id,
-        provision,
-        vercel: crate::vercel::VercelConfig::new(&cfg.vercel_partner_id),
     });
     // Authenticated routes — auth middleware applies to these
     let authed = Router::new()
         .route("/query", post(query_handler))
         .route("/investigate", post(investigate_handler))
         .route("/investigate/multi", post(investigate_multi_handler))
-        .route(
-            "/webhooks/logto",
-            post(crate::provision::logto_webhook_handler),
-        )
-        .route(
-            "/v1/installations",
-            axum::routing::put(crate::vercel::upsert_installation)
-                .delete(crate::vercel::delete_installation),
-        )
-        .route("/v1/resources", post(crate::vercel::create_resource))
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,

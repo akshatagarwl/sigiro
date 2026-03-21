@@ -1,5 +1,4 @@
 pub mod auth;
-pub mod billing;
 pub mod client;
 pub mod compactor;
 pub mod config;
@@ -8,11 +7,9 @@ pub mod inserter;
 pub mod investigate;
 pub mod mcp;
 pub mod pool;
-pub mod provision;
 pub mod schema;
 pub mod server;
 pub mod storage;
-pub mod vercel;
 
 use anyhow::{Context, Result};
 use duckdb::Connection;

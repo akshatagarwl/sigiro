@@ -44,9 +44,46 @@ enum Command {
     Mcp,
     /// Save API key for hosted mode
     Auth {
-        /// API key (e.g. sk_live_...)
+        /// API key (e.g. sigiro_...)
         key: String,
     },
+    /// Admin commands for key management
+    Admin {
+        #[command(subcommand)]
+        action: AdminAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminAction {
+    /// Create a new API key for a project
+    CreateKey {
+        /// Project ID
+        #[arg(long)]
+        project: String,
+        /// Plan (free, builder, team, pro)
+        #[arg(long, default_value = "free")]
+        plan: String,
+        /// Rate limit (requests per minute)
+        #[arg(long, default_value = "100")]
+        rate_limit: u32,
+    },
+    /// Revoke an API key by short token
+    RevokeKey {
+        /// Short token portion of the key
+        short_token: String,
+    },
+}
+
+/// Open or create the admin DuckDB (for API key storage).
+fn open_admin_db() -> Result<Connection> {
+    let dir = data_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("admin.duckdb");
+    let conn = Connection::open(&path)
+        .with_context(|| format!("failed to open admin DB at {}", path.display()))?;
+    sigiro::auth::create_keys_table(&conn)?;
+    Ok(conn)
 }
 
 /// Initialize DuckLake if configured, return the table prefix ("lake." or "").
@@ -83,12 +120,15 @@ async fn main() -> Result<()> {
             let prefix = init_storage(&conn)?;
             sigiro::schema::create_tables(&conn, prefix)?;
 
+            let admin_conn = open_admin_db()?;
+
             let db_path = data_dir()?.join("sigiro.duckdb");
             tracing::info!("sigiro ready — {}", db_path.display());
 
             let (tx, rx) = crossbeam_channel::unbounded();
 
             let shared_conn = Arc::new(Mutex::new(conn));
+            let shared_admin = Arc::new(Mutex::new(admin_conn));
 
             let inserter_conn = shared_conn.clone();
             let inserter_prefix = prefix.to_string();
@@ -108,7 +148,7 @@ async fn main() -> Result<()> {
                 });
             }
 
-            sigiro::server::run_servers(shared_conn, tx, prefix).await?;
+            sigiro::server::run_servers(shared_conn, shared_admin, tx, prefix).await?;
         }
         Some(Command::Query { sql }) => {
             let client = require_client()?;
@@ -141,6 +181,27 @@ async fn main() -> Result<()> {
         Some(Command::Auth { key }) => {
             let path = sigiro::config::save_api_key(&key)?;
             println!("API key saved to {}", path.display());
+        }
+        Some(Command::Admin { action }) => {
+            let admin_conn = open_admin_db()?;
+            let admin = Mutex::new(admin_conn);
+            match action {
+                AdminAction::CreateKey {
+                    project,
+                    plan,
+                    rate_limit,
+                } => {
+                    let raw_key = sigiro::auth::create_key(&admin, &project, &plan, rate_limit)?;
+                    println!("{raw_key}");
+                }
+                AdminAction::RevokeKey { short_token } => {
+                    if sigiro::auth::revoke_key(&admin, &short_token)? {
+                        println!("Key revoked: {short_token}");
+                    } else {
+                        println!("No key found with short token: {short_token}");
+                    }
+                }
+            }
         }
     }
     Ok(())
