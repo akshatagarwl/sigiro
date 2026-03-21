@@ -52,9 +52,7 @@ export function DocsLayout() {
                   <NavLink
                     to={link.to}
                     end={link.to === '/docs'}
-                    className={({ isActive }) =>
-                      isActive ? 'docs-link active' : 'docs-link'
-                    }
+                    className={({ isActive }) => (isActive ? 'docs-link active' : 'docs-link')}
                   >
                     {link.label}
                   </NavLink>

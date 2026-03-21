@@ -22,9 +22,15 @@ export default function DocsRoutes() {
         <Route index element={<Index />} />
         <Route path="quickstart" element={<Quickstart />} />
         <Route path="auth" element={<Auth />} />
-        <Route path="architecture/overview" element={<Placeholder title="Architecture Overview" />} />
+        <Route
+          path="architecture/overview"
+          element={<Placeholder title="Architecture Overview" />}
+        />
         <Route path="architecture/write-path" element={<Placeholder title="Write Path" />} />
-        <Route path="architecture/investigation" element={<Placeholder title="Investigation Engine" />} />
+        <Route
+          path="architecture/investigation"
+          element={<Placeholder title="Investigation Engine" />}
+        />
         <Route path="architecture/hosted-mode" element={<Placeholder title="Hosted Mode" />} />
         <Route path="integrations/mcp" element={<Placeholder title="MCP Integration" />} />
         <Route path="integrations/vercel" element={<Placeholder title="Vercel Marketplace" />} />
