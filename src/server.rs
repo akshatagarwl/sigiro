@@ -24,6 +24,8 @@ pub struct AppState {
     pub http_client: Option<reqwest::Client>,
     /// Unkey API ID — None in OSS/local mode
     pub unkey_api_id: Option<String>,
+    /// Provisioning config — None in OSS/local mode
+    pub provision: Option<crate::provision::ProvisionConfig>,
 }
 
 /// DuckDB's access_mode is database-level, not connection-level:
@@ -111,18 +113,44 @@ pub async fn run_servers(
         }
         Err(_) => (None, None, None),
     };
+    // Provisioning config — opt-in via LOGTO_WEBHOOK_SECRET
+    let provision = match (
+        std::env::var("LOGTO_WEBHOOK_SECRET"),
+        std::env::var("LAGO_URL"),
+        std::env::var("LAGO_API_KEY"),
+        std::env::var("UNKEY_ROOT_KEY"),
+    ) {
+        (Ok(secret), Ok(lago_url), Ok(lago_key), Ok(unkey_root)) => {
+            let unkey_api = std::env::var("UNKEY_API_ID").unwrap_or_default();
+            tracing::info!("provisioning webhook enabled");
+            Some(crate::provision::ProvisionConfig {
+                logto_webhook_secret: secret,
+                lago_url,
+                lago_api_key: lago_key,
+                unkey_root_key: unkey_root,
+                unkey_api_id: unkey_api,
+                idempotency: crate::provision::IdempotencySet::new(10_000),
+            })
+        }
+        _ => None,
+    };
     let app_state = Arc::new(AppState {
         conn,
         table_prefix,
         auth_cache,
         http_client,
         unkey_api_id,
+        provision,
     });
     let http_app = Router::new()
         .route("/health", get(health))
         .route("/query", post(query_handler))
         .route("/investigate", post(investigate_handler))
         .route("/investigate/multi", post(investigate_multi_handler))
+        .route(
+            "/webhooks/logto",
+            post(crate::provision::logto_webhook_handler),
+        )
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
