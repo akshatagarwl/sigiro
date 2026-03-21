@@ -1,4 +1,5 @@
 pub mod compactor;
+pub mod config;
 pub mod ingest;
 pub mod inserter;
 pub mod investigate;

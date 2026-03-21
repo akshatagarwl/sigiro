@@ -42,6 +42,11 @@ enum Command {
     },
     /// Start MCP stdio server for Claude/Cursor/Codex integration
     Mcp,
+    /// Save API key for hosted mode
+    Auth {
+        /// API key (e.g. sk_live_...)
+        key: String,
+    },
 }
 
 /// Initialize DuckLake if configured, return the table prefix ("lake." or "").
@@ -136,6 +141,10 @@ async fn main() -> Result<()> {
             sigiro::schema::create_tables(&conn, prefix)?;
             let shared = Arc::new(Mutex::new(conn));
             sigiro::mcp::run_mcp_server(shared, prefix).await?;
+        }
+        Some(Command::Auth { key }) => {
+            let path = sigiro::config::save_api_key(&key)?;
+            println!("API key saved to {}", path.display());
         }
     }
     Ok(())
