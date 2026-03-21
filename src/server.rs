@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::State,
+    middleware as axum_mw,
     routing::{get, post},
 };
 use crossbeam_channel::Sender;
@@ -9,6 +10,7 @@ use duckdb::Connection;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
 
+use crate::auth;
 use crate::ingest::{IngestMsg, OtlpGrpcService};
 use crate::investigate;
 
@@ -16,6 +18,12 @@ pub struct AppState {
     pub conn: Arc<Mutex<Connection>>,
     /// "lake." when DuckLake is active, "" for local mode
     pub table_prefix: &'static str,
+    /// Unkey auth cache — None in OSS/local mode
+    pub auth_cache: Option<moka::future::Cache<String, crate::auth::AuthContext>>,
+    /// HTTP client for Unkey/Lago calls — None in OSS/local mode
+    pub http_client: Option<reqwest::Client>,
+    /// Unkey API ID — None in OSS/local mode
+    pub unkey_api_id: Option<String>,
 }
 
 /// DuckDB's access_mode is database-level, not connection-level:
@@ -91,12 +99,34 @@ pub async fn run_servers(
     });
 
     // HTTP server on :9999 (query + health)
-    let app_state = Arc::new(AppState { conn, table_prefix });
+    // Auth is opt-in: only active when UNKEY_API_ID is set
+    let (auth_cache, http_client, unkey_api_id) = match std::env::var("UNKEY_API_ID") {
+        Ok(api_id) => {
+            let cache = moka::future::Cache::builder()
+                .max_capacity(10_000)
+                .time_to_live(std::time::Duration::from_secs(60))
+                .build();
+            tracing::info!("auth enabled — Unkey API ID: {api_id}");
+            (Some(cache), Some(reqwest::Client::new()), Some(api_id))
+        }
+        Err(_) => (None, None, None),
+    };
+    let app_state = Arc::new(AppState {
+        conn,
+        table_prefix,
+        auth_cache,
+        http_client,
+        unkey_api_id,
+    });
     let http_app = Router::new()
         .route("/health", get(health))
         .route("/query", post(query_handler))
         .route("/investigate", post(investigate_handler))
         .route("/investigate/multi", post(investigate_multi_handler))
+        .layer(axum_mw::from_fn_with_state(
+            app_state.clone(),
+            auth::auth_middleware,
+        ))
         .with_state(app_state);
 
     let http_handle = tokio::spawn(async move {

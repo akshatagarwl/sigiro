@@ -13,6 +13,10 @@ anyhow = "1"
 dirs = "6"
 envy = "0.4"
 toml = "0.8"
+reqwest = { version = "0.12", features = ["json"] }
+moka = { version = "0.12", features = ["future"] }
+sha2 = "0.10"
+dashmap = "6"
 
 # OTLP ingest
 otlp2records = "0.4"

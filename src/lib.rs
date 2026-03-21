@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod compactor;
 pub mod config;
 pub mod ingest;
