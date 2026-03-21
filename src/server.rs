@@ -2,17 +2,44 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::State,
+    http::StatusCode,
     middleware as axum_mw,
     routing::{get, post},
 };
 use crossbeam_channel::Sender;
 use duckdb::Connection;
+use problem_details::ProblemDetails;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
 
 use crate::auth;
 use crate::ingest::{IngestMsg, OtlpGrpcService};
 use crate::investigate;
+
+/// RFC 9457 problem details constructors for sigiro API errors.
+/// Content-Type: application/problem+json — standard format agents can rely on.
+pub type ApiError = ProblemDetails;
+
+pub fn query_rejected(detail: impl Into<String>) -> ApiError {
+    ProblemDetails::new()
+        .with_status(StatusCode::BAD_REQUEST)
+        .with_title("Query Rejected")
+        .with_detail(detail)
+}
+
+pub fn internal_error(detail: impl Into<String>) -> ApiError {
+    ProblemDetails::new()
+        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .with_title("Internal Error")
+        .with_detail(detail)
+}
+
+pub fn invalid_request(detail: impl Into<String>) -> ApiError {
+    ProblemDetails::new()
+        .with_status(StatusCode::BAD_REQUEST)
+        .with_title("Invalid Request")
+        .with_detail(detail)
+}
 
 pub struct AppState {
     pub conn: Arc<Mutex<Connection>>,
@@ -259,16 +286,20 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
 async fn query_handler(
     State(state): State<Arc<AppState>>,
     body: String,
-) -> Result<Json<Vec<serde_json::Value>>, String> {
-    validate_read_only(&body)?;
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    validate_read_only(&body).map_err(query_rejected)?;
     let conn = state.conn.lock().map_err(|e| {
         tracing::error!("DuckDB connection mutex poisoned");
-        e.to_string()
+        internal_error(e.to_string())
     })?;
-    let mut stmt = conn.prepare(&body).map_err(|e| e.to_string())?;
-    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(&body)
+        .map_err(|e| query_rejected(e.to_string()))?;
+    let mut rows = stmt.query([]).map_err(|e| internal_error(e.to_string()))?;
 
-    let stmt_ref = rows.as_ref().ok_or("no result set")?;
+    let stmt_ref = rows
+        .as_ref()
+        .ok_or_else(|| internal_error("no result set"))?;
     let column_count = stmt_ref.column_count();
     let column_names: Vec<String> = (0..column_count)
         .map(|i| {
@@ -280,10 +311,10 @@ async fn query_handler(
         .collect();
 
     let mut results = Vec::new();
-    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+    while let Some(row) = rows.next().map_err(|e| internal_error(e.to_string()))? {
         let mut obj = serde_json::Map::new();
         for (i, name) in column_names.iter().enumerate() {
-            let val = row.get_ref(i).map_err(|e| e.to_string())?;
+            let val = row.get_ref(i).map_err(|e| internal_error(e.to_string()))?;
             obj.insert(name.clone(), value_ref_to_json(val));
         }
         results.push(serde_json::Value::Object(obj));
@@ -295,17 +326,17 @@ async fn query_handler(
 async fn investigate_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<investigate::InvestigateRequest>,
-) -> Result<Json<investigate::InvestigationBlock>, String> {
+) -> Result<Json<investigate::InvestigationBlock>, ApiError> {
     let block = investigate::investigate(&state.conn, &req, state.table_prefix)
-        .map_err(|e| format!("{e:#}"))?;
+        .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(block))
 }
 
 async fn investigate_multi_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<investigate::InvestigateMultiRequest>,
-) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, String> {
+) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, ApiError> {
     let blocks = investigate::investigate_multi(&state.conn, &req, state.table_prefix)
-        .map_err(|e| format!("{e:#}"))?;
+        .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(blocks))
 }

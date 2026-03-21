@@ -3,6 +3,7 @@ name = "sigiro"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+license = "Apache-2.0"
 
 [dependencies]
 # DuckDB: git main for arrow 58 compat with otlp2records
@@ -29,6 +30,7 @@ arrow = "58"
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics"] }
 crossbeam-channel = "0.5"
 axum = "0.8"
+problem_details = { version = "0.9", features = ["axum", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
