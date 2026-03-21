@@ -1,8 +1,8 @@
+import * as emailValidator from 'email-validator'
+
 interface Env {
   WAITLIST: KVNamespace
 }
-
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   const origin = 'https://sigiro.com'
@@ -30,7 +30,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   }
 
   const email = body.email?.trim().toLowerCase()
-  if (!email || !EMAIL_RE.test(email) || email.length > 320) {
+  if (!email || !emailValidator.validate(email) || email.length > 320) {
     return new Response(JSON.stringify({ error: 'invalid email' }), { status: 400, headers })
   }
 
