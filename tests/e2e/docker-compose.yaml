@@ -55,6 +55,32 @@ services:
       - --rate=20
       - --duration=30s
 
+  # --- telemetrygen: http-svc via HTTP OTLP (:4318) ---
+  telemetrygen-http-traces:
+    <<: *telemetrygen-base
+    command:
+      - traces
+      - --otlp-endpoint=sigiro:4318
+      - --otlp-insecure
+      - --otlp-http
+      - --service=http-svc
+      - --traces=20
+      - --child-spans=2
+      - --rate=5
+      - --duration=30s
+
+  telemetrygen-http-logs:
+    <<: *telemetrygen-base
+    command:
+      - logs
+      - --otlp-endpoint=sigiro:4318
+      - --otlp-insecure
+      - --otlp-http
+      - --service=http-svc
+      - --logs=50
+      - --rate=10
+      - --duration=30s
+
   # --- telemetrygen: payments service ---
   telemetrygen-payments-traces:
     <<: *telemetrygen-base

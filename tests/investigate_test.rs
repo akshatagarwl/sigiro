@@ -496,6 +496,59 @@ fn derived_events_no_events() {
 }
 
 #[test]
+fn investigate_all_three_signals() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+
+    let now_us = chrono::Utc::now().timestamp_micros();
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+            parent_span_id, span_name, span_kind, status_code, service_name)
+         VALUES (make_timestamp({now_us}), {now_us} + 1000, 1000, 't1', 's1', '', 'op', 2, 1, 'svc');
+         INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
+            severity_text, body)
+         VALUES (make_timestamp({now_us}), {now_us}, 'svc', 13, 'WARN', 'something happened');
+         INSERT INTO sigiro_metrics_gauge (timestamp, metric_name, value, service_name)
+         VALUES (make_timestamp({now_us}), 'cpu.usage', 42.0, 'svc');"
+    ))
+    .expect("insert all signals");
+
+    let shared = Arc::new(Mutex::new(conn));
+    let req = InvestigateRequest {
+        service: "svc".to_string(),
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
+    };
+    let block = investigate(&shared, &req, "").expect("investigate");
+
+    // Coverage: all 3 signal types present, no gaps
+    assert!(block.coverage.has_spans);
+    assert!(block.coverage.has_logs);
+    assert!(block.coverage.has_metrics);
+    assert!(
+        block.coverage.gaps.is_empty(),
+        "no gaps when all signals present"
+    );
+
+    // Truncation present with correct counts
+    assert_eq!(block.truncation.spans_total, 1);
+
+    // Operation summaries present
+    assert!(!block.operation_summaries.is_empty());
+
+    // Window present with valid ISO timestamps
+    assert!(
+        block.window.from_iso.contains('T'),
+        "from_iso should be ISO format"
+    );
+    assert!(
+        block.window.to_iso.contains('T'),
+        "to_iso should be ISO format"
+    );
+    assert!(block.window.from_ts < block.window.to_ts);
+}
+
+#[test]
 fn operation_summary_baselines() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");

@@ -44,7 +44,9 @@ docker compose up -d \
   telemetrygen-checkout-logs \
   telemetrygen-payments-traces \
   telemetrygen-payments-metrics \
-  telemetrygen-payments-logs
+  telemetrygen-payments-logs \
+  telemetrygen-http-traces \
+  telemetrygen-http-logs
 
 echo "=== Waiting for telemetry to be ingested (35s) ==="
 sleep 35
@@ -69,6 +71,56 @@ run_check() {
     echo "FAIL"
     echo "    Expected to match: $expected"
     echo "    Got: $result"
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+# assert_contains: check that $1 contains substring $2
+assert_contains() {
+  local haystack="$1"
+  local needle="$2"
+  local name="$3"
+  printf "  %-50s" "$name..."
+  if echo "$haystack" | grep -q "$needle"; then
+    echo "PASS"
+    PASSES=$((PASSES + 1))
+  else
+    echo "FAIL"
+    echo "    Expected to contain: $needle"
+    echo "    Got: ${haystack:0:300}"
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+# assert_json: check a jq expression returns expected value
+assert_json() {
+  local json="$1"
+  local jq_expr="$2"
+  local expected="$3"
+  local name="$4"
+  printf "  %-50s" "$name..."
+  actual=$(echo "$json" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+path = '''$jq_expr'''
+# Navigate dotted path
+obj = d
+for key in path.strip('.').split('.'):
+    if isinstance(obj, dict):
+        obj = obj.get(key)
+    else:
+        obj = None
+        break
+print(json.dumps(obj))
+" 2>/dev/null) || actual="null"
+  if [ "$actual" = "$expected" ]; then
+    echo "PASS"
+    PASSES=$((PASSES + 1))
+  else
+    echo "FAIL"
+    echo "    Path: $jq_expr"
+    echo "    Expected: $expected"
+    echo "    Got: $actual"
     FAILURES=$((FAILURES + 1))
   fi
 }
@@ -123,18 +175,38 @@ fi
 
 echo ""
 echo "=== Check 6: /investigate returns valid JSON ==="
-printf "  %-50s" "/investigate returns data..."
 inv=$(curl -sf -X POST "$SIGIRO_URL/investigate" \
   -H 'Content-Type: application/json' \
   -d '{"service":"checkout"}') || true
-if echo "$inv" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['service']=='checkout'" 2>/dev/null; then
-  echo "PASS"
-  PASSES=$((PASSES + 1))
-else
-  echo "FAIL"
-  echo "    Got: ${inv:0:200}"
-  FAILURES=$((FAILURES + 1))
-fi
+assert_contains "$inv" '"service":"checkout"' "/investigate returns checkout"
+
+echo ""
+echo "=== Check 7: /query endpoint via HTTP ==="
+query_result=$(curl -sf -X POST "$SIGIRO_URL/query" \
+  -d "SELECT service_name, count(*) as cnt FROM sigiro_spans GROUP BY service_name") || true
+assert_contains "$query_result" "checkout" "query: SELECT returns checkout"
+assert_contains "$query_result" "payments" "query: SELECT returns payments"
+
+echo ""
+echo "=== Check 8: SQL injection blocked over HTTP ==="
+drop_result=$(curl -s -X POST "$SIGIRO_URL/query" -d "DROP TABLE sigiro_spans") || true
+assert_contains "$drop_result" "rejected" "blocklist: DROP rejected over HTTP"
+
+echo ""
+echo "=== Check 9: /investigate/multi over HTTP ==="
+multi_result=$(curl -sf -X POST "$SIGIRO_URL/investigate/multi" \
+  -H 'Content-Type: application/json' \
+  -d '{"services":["checkout","payments"]}') || true
+assert_contains "$multi_result" '"checkout"' "multi: checkout present"
+assert_contains "$multi_result" '"payments"' "multi: payments present"
+
+echo ""
+echo "=== Check 10: HTTP OTLP ingest (:4318) ==="
+http_svc_result=$(curl -sf -X POST "$SIGIRO_URL/investigate" \
+  -H 'Content-Type: application/json' \
+  -d '{"service":"http-svc"}') || true
+assert_json "$http_svc_result" ".coverage.has_spans" "true" "HTTP OTLP: http-svc has spans"
+assert_json "$http_svc_result" ".coverage.has_logs" "true" "HTTP OTLP: http-svc has logs"
 
 echo ""
 echo "==============================="
