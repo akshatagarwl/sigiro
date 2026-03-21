@@ -111,29 +111,50 @@ async fn main() -> Result<()> {
             sigiro::server::run_servers(shared_conn, tx, prefix).await?;
         }
         Some(Command::Query { sql }) => {
-            let conn = open_db()?;
-            let prefix = init_storage(&conn)?;
-            sigiro::schema::create_tables(&conn, prefix)?;
-            run_query(&conn, &sql)?;
+            if let Some(client) = sigiro::client::try_build_client() {
+                let result = client.query(&sql).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let conn = open_db()?;
+                let prefix = init_storage(&conn)?;
+                sigiro::schema::create_tables(&conn, prefix)?;
+                run_query(&conn, &sql)?;
+            }
         }
         Some(Command::Status) => {
-            let conn = open_db()?;
-            let prefix = init_storage(&conn)?;
-            sigiro::schema::create_tables(&conn, prefix)?;
-            print_status(&conn, prefix)?;
+            if let Some(client) = sigiro::client::try_build_client() {
+                let result = client.status().await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let conn = open_db()?;
+                let prefix = init_storage(&conn)?;
+                sigiro::schema::create_tables(&conn, prefix)?;
+                print_status(&conn, prefix)?;
+            }
         }
         Some(Command::Investigate { service, from, to }) => {
-            let conn = open_db()?;
-            let prefix = init_storage(&conn)?;
-            sigiro::schema::create_tables(&conn, prefix)?;
-            let shared = Arc::new(Mutex::new(conn));
-            let req = sigiro::investigate::InvestigateRequest {
-                service,
-                from_ts: from.map(|s| s * 1_000_000),
-                to_ts: to.map(|s| s * 1_000_000),
-            };
-            let block = sigiro::investigate::investigate(&shared, &req, prefix)?;
-            println!("{}", serde_json::to_string_pretty(&block)?);
+            if let Some(client) = sigiro::client::try_build_client() {
+                let block = client
+                    .investigate(
+                        &service,
+                        from.map(|s| s * 1_000_000),
+                        to.map(|s| s * 1_000_000),
+                    )
+                    .await?;
+                println!("{}", serde_json::to_string_pretty(&block)?);
+            } else {
+                let conn = open_db()?;
+                let prefix = init_storage(&conn)?;
+                sigiro::schema::create_tables(&conn, prefix)?;
+                let shared = Arc::new(Mutex::new(conn));
+                let req = sigiro::investigate::InvestigateRequest {
+                    service,
+                    from_ts: from.map(|s| s * 1_000_000),
+                    to_ts: to.map(|s| s * 1_000_000),
+                };
+                let block = sigiro::investigate::investigate(&shared, &req, prefix)?;
+                println!("{}", serde_json::to_string_pretty(&block)?);
+            }
         }
         Some(Command::Mcp) => {
             let conn = open_db()?;

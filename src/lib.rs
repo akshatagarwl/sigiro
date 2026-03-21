@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod billing;
+pub mod client;
 pub mod compactor;
 pub mod config;
 pub mod ingest;

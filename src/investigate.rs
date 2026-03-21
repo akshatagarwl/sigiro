@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 /// Tells the agent what data exists and what's missing.
 /// Without this, an agent might conclude "no errors in logs" when there ARE no logs —
 /// confusing absence of problems with absence of data.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Coverage {
     pub has_spans: bool,
     pub has_logs: bool,
@@ -52,7 +52,7 @@ pub fn compute_coverage(spans_total: i64, logs_total: i64, metrics_count: usize)
 
 /// Auto-derived service metadata and topology from existing OTLP data.
 /// Agent gets namespace, pod count, and service dependencies in 1 round instead of 3.
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ServiceContext {
     pub service_name: String,
     pub first_seen: String,
@@ -161,7 +161,7 @@ fn query_string_list(
 /// Limitation: only detects events present in OTLP data. External events (GitHub
 /// deploys, paging tools) need an optional webhook (not MVP). Most high-value events
 /// (deploys, OOM, restarts) DO appear in OTLP resource_attributes and logs.
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DerivedEvent {
     pub detected_at: String,
     pub event_type: String,
@@ -279,7 +279,7 @@ pub fn investigate_multi(
     Ok(results)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct InvestigationBlock {
     pub service: String,
     pub window: Window,
@@ -310,7 +310,7 @@ pub struct InvestigationBlock {
 /// Surfaces data completeness to the AI agent. Without this, the agent cannot know
 /// whether its analysis is based on partial or complete data — leading to confident
 /// but incorrect root cause conclusions.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Truncation {
     /// Total spans matching the query vs. returned (capped at 50)
     pub spans_total: i64,
@@ -326,7 +326,7 @@ pub struct Truncation {
     pub linked_spans_returned: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Window {
     pub from_ts: i64,
     pub to_ts: i64,
@@ -334,7 +334,7 @@ pub struct Window {
     pub to_iso: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct MetricBucket {
     pub bucket: String,
     pub metric_name: String,
@@ -343,7 +343,7 @@ pub struct MetricBucket {
     pub count: i64,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SpanRow {
     pub trace_id: String,
     pub span_id: String,
@@ -355,7 +355,7 @@ pub struct SpanRow {
     pub service_name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct LogTemplate {
     /// Normalized template with UUIDs, IPs, and long numbers replaced by placeholders.
     /// Multiple log lines that differ only in dynamic values collapse to one template.
@@ -368,7 +368,7 @@ pub struct LogTemplate {
     pub last_seen: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct LinkedTrace {
     pub trace_id: String,
     pub spans: Vec<SpanRow>,
@@ -382,7 +382,7 @@ pub struct LinkedTrace {
 /// Example: investigating last 15m → baseline is the 1h before that.
 /// If baseline_error_pct is Some(0.5) and error_pct is 12.0, the agent knows
 /// error rate jumped 24x — this is anomalous, not normal.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct OperationSummary {
     pub span_name: String,
     pub count: i64,

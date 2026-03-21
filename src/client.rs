@@ -1,0 +1,132 @@
+use anyhow::{Context, Result, bail};
+
+use crate::investigate::InvestigationBlock;
+
+/// HTTP client for hosted mode — CLI commands go to app.sigiro.com instead of local DuckDB.
+pub struct SigiroClient {
+    http: reqwest::Client,
+    base_url: String,
+    api_key: String,
+}
+
+impl SigiroClient {
+    pub fn new(base_url: &str, api_key: &str) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            base_url: base_url.trim_end_matches('/').to_string(),
+            api_key: api_key.to_string(),
+        }
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    pub async fn investigate(
+        &self,
+        service: &str,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<InvestigationBlock> {
+        let resp = self
+            .http
+            .post(format!("{}/investigate", self.base_url))
+            .bearer_auth(&self.api_key)
+            .json(&serde_json::json!({
+                "service_name": service,
+                "from_ts": from,
+                "to_ts": to,
+            }))
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => resp
+                .json()
+                .await
+                .context("failed to parse investigation response"),
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            429 => bail!("Rate limited. Try again later."),
+            s => {
+                let body = resp.text().await.unwrap_or_default();
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
+    pub async fn query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
+        let resp = self
+            .http
+            .post(format!("{}/query", self.base_url))
+            .bearer_auth(&self.api_key)
+            .body(sql.to_string())
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => resp.json().await.context("failed to parse query response"),
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            429 => bail!("Rate limited. Try again later."),
+            s => {
+                let body = resp.text().await.unwrap_or_default();
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
+    pub async fn status(&self) -> Result<serde_json::Value> {
+        let resp = self
+            .http
+            .get(format!("{}/health", self.base_url))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => {
+                let body = resp.text().await.unwrap_or_default();
+                Ok(serde_json::json!({ "status": body }))
+            }
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            s => {
+                let body = resp.text().await.unwrap_or_default();
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+}
+
+/// Build a client from config if API key is available.
+pub fn try_build_client() -> Option<SigiroClient> {
+    let api_key = crate::config::get_api_key().ok()?;
+    let base_url =
+        std::env::var("SIGIRO_ENDPOINT").unwrap_or_else(|_| "https://app.sigiro.com".to_string());
+    Some(SigiroClient::new(&base_url, &api_key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_client_with_url() {
+        let client = SigiroClient::new("https://app.sigiro.com/", "sk_live_test");
+        assert_eq!(client.base_url(), "https://app.sigiro.com");
+    }
+
+    #[test]
+    fn build_client_trims_trailing_slashes() {
+        let client = SigiroClient::new("https://example.com///", "key");
+        assert_eq!(client.base_url(), "https://example.com");
+    }
+
+    #[test]
+    fn build_client_default_endpoint() {
+        // SigiroClient directly (no env var dependency)
+        let client = SigiroClient::new("https://app.sigiro.com", "sk_live_test");
+        assert_eq!(client.base_url(), "https://app.sigiro.com");
+    }
+}
