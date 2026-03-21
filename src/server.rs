@@ -129,20 +129,23 @@ pub async fn run_servers(
         admin_conn,
         http_client: reqwest::Client::new(),
     });
-    // Authenticated routes — auth middleware applies to these
-    let authed = Router::new()
+
+    // v1 API routes — all authenticated
+    let v1 = Router::new()
         .route("/query", post(query_handler))
         .route("/investigate", post(investigate_handler))
         .route("/investigate/multi", post(investigate_multi_handler))
+        .route("/services", get(services_handler))
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
         ));
 
-    // Public routes — no auth required (healthcheck, OTLP ingest)
+    // Public routes + v1 API
     let http_app = Router::new()
         .route("/health", get(health))
-        .merge(authed)
+        .nest("/v1", v1)
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(app_state);
 
     let http_handle = tokio::spawn(async move {
@@ -261,6 +264,47 @@ async fn query_handler(
     }
 
     Ok(Json(results))
+}
+
+/// GET /v1/services — discover what services are sending telemetry.
+/// Agents call this before /investigate to know what services exist.
+async fn services_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, ProblemDetails> {
+    let conn = state.conn.lock().map_err(|e| {
+        tracing::error!("DuckDB connection mutex poisoned");
+        internal_error(e.to_string())
+    })?;
+    let sql = format!(
+        "SELECT service_name, \
+                min(timestamp)::VARCHAR AS first_seen, \
+                max(timestamp)::VARCHAR AS last_seen, \
+                count(*) AS span_count \
+         FROM {}sigiro_spans \
+         GROUP BY service_name \
+         ORDER BY span_count DESC",
+        state.table_prefix
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| internal_error(e.to_string()))?;
+    let mut rows = stmt.query([]).map_err(|e| internal_error(e.to_string()))?;
+
+    let mut services = Vec::new();
+    while let Some(row) = rows.next().map_err(|e| internal_error(e.to_string()))? {
+        let name: String = row.get(0).map_err(|e| internal_error(e.to_string()))?;
+        let first_seen: String = row.get(1).map_err(|e| internal_error(e.to_string()))?;
+        let last_seen: String = row.get(2).map_err(|e| internal_error(e.to_string()))?;
+        let span_count: i64 = row.get(3).map_err(|e| internal_error(e.to_string()))?;
+        services.push(serde_json::json!({
+            "name": name,
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+            "span_count": span_count,
+        }));
+    }
+
+    Ok(Json(serde_json::json!({ "services": services })))
 }
 
 async fn investigate_handler(
