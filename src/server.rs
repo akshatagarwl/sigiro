@@ -26,6 +26,8 @@ pub struct AppState {
     pub unkey_api_id: Option<String>,
     /// Provisioning config — None in OSS/local mode
     pub provision: Option<crate::provision::ProvisionConfig>,
+    /// Vercel Partner API config — None unless VERCEL_PARTNER_ID set
+    pub vercel: Option<crate::vercel::VercelConfig>,
 }
 
 /// DuckDB's access_mode is database-level, not connection-level:
@@ -134,6 +136,11 @@ pub async fn run_servers(
         }
         _ => None,
     };
+    // Vercel Partner API — opt-in via VERCEL_PARTNER_ID
+    let vercel = std::env::var("VERCEL_PARTNER_ID").ok().map(|id| {
+        tracing::info!("Vercel Partner API enabled");
+        crate::vercel::VercelConfig::new(&id)
+    });
     let app_state = Arc::new(AppState {
         conn,
         table_prefix,
@@ -141,6 +148,7 @@ pub async fn run_servers(
         http_client,
         unkey_api_id,
         provision,
+        vercel,
     });
     let http_app = Router::new()
         .route("/health", get(health))
@@ -151,6 +159,12 @@ pub async fn run_servers(
             "/webhooks/logto",
             post(crate::provision::logto_webhook_handler),
         )
+        .route(
+            "/v1/installations",
+            axum::routing::put(crate::vercel::upsert_installation)
+                .delete(crate::vercel::delete_installation),
+        )
+        .route("/v1/resources", post(crate::vercel::create_resource))
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,

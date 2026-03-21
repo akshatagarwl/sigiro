@@ -19,6 +19,7 @@ sha2 = "0.10"
 dashmap = "6"
 hmac = "0.12"
 hex = "0.4"
+jsonwebtoken = "9"
 
 # OTLP ingest
 otlp2records = "0.4"

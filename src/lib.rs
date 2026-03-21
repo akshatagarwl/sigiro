@@ -11,6 +11,7 @@ pub mod provision;
 pub mod schema;
 pub mod server;
 pub mod storage;
+pub mod vercel;
 
 use anyhow::{Context, Result};
 use duckdb::Connection;
