@@ -54,8 +54,10 @@ sleep 35
 FAILURES=0
 PASSES=0
 
+DEV_AUTH="Authorization: Bearer sk_dev_e2e_test"
+
 query() {
-  curl -sf -X POST "$SIGIRO_URL/query" -d "$1" 2>&1
+  curl -sf -X POST "$SIGIRO_URL/query" -H "$DEV_AUTH" -d "$1" 2>&1
 }
 
 run_check() {
@@ -176,6 +178,7 @@ fi
 echo ""
 echo "=== Check 6: /investigate returns valid JSON ==="
 inv=$(curl -sf -X POST "$SIGIRO_URL/investigate" \
+  -H "$DEV_AUTH" \
   -H 'Content-Type: application/json' \
   -d '{"service":"checkout"}') || true
 assert_contains "$inv" '"service":"checkout"' "/investigate returns checkout"
@@ -183,18 +186,61 @@ assert_contains "$inv" '"service":"checkout"' "/investigate returns checkout"
 echo ""
 echo "=== Check 7: /query endpoint via HTTP ==="
 query_result=$(curl -sf -X POST "$SIGIRO_URL/query" \
+  -H "$DEV_AUTH" \
   -d "SELECT service_name, count(*) as cnt FROM sigiro_spans GROUP BY service_name") || true
 assert_contains "$query_result" "checkout" "query: SELECT returns checkout"
 assert_contains "$query_result" "payments" "query: SELECT returns payments"
 
 echo ""
 echo "=== Check 8: SQL injection blocked over HTTP ==="
-drop_result=$(curl -s -X POST "$SIGIRO_URL/query" -d "DROP TABLE sigiro_spans") || true
+drop_result=$(curl -s -X POST "$SIGIRO_URL/query" -H "Authorization: Bearer sk_dev_test" -d "DROP TABLE sigiro_spans") || true
 assert_contains "$drop_result" "rejected" "blocklist: DROP rejected over HTTP"
+
+echo ""
+echo "=== Check 11: Auth — sk_dev_ key accepted ==="
+auth_result=$(curl -sf -o /dev/null -w "%{http_code}" -X POST "$SIGIRO_URL/query" \
+  -H "Authorization: Bearer sk_dev_test" \
+  -d "SELECT 1 AS ok") || true
+printf "  %-50s" "sk_dev_ key returns 200..."
+if [ "$auth_result" = "200" ]; then
+  echo "PASS"
+  PASSES=$((PASSES + 1))
+else
+  echo "FAIL (got: $auth_result)"
+  FAILURES=$((FAILURES + 1))
+fi
+
+echo ""
+echo "=== Check 12: Auth — no key returns 401 ==="
+no_auth_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SIGIRO_URL/query" \
+  -d "SELECT 1 AS ok") || true
+printf "  %-50s" "no auth header returns 401..."
+if [ "$no_auth_code" = "401" ]; then
+  echo "PASS"
+  PASSES=$((PASSES + 1))
+else
+  echo "FAIL (got: $no_auth_code)"
+  FAILURES=$((FAILURES + 1))
+fi
+
+echo ""
+echo "=== Check 13: Auth — invalid prefix returns 401 or 503 ==="
+bad_key_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SIGIRO_URL/query" \
+  -H "Authorization: Bearer sk_fake_bad_key" \
+  -d "SELECT 1 AS ok") || true
+printf "  %-50s" "invalid key returns 401/503..."
+if [ "$bad_key_code" = "401" ] || [ "$bad_key_code" = "503" ]; then
+  echo "PASS (got: $bad_key_code)"
+  PASSES=$((PASSES + 1))
+else
+  echo "FAIL (got: $bad_key_code)"
+  FAILURES=$((FAILURES + 1))
+fi
 
 echo ""
 echo "=== Check 9: /investigate/multi over HTTP ==="
 multi_result=$(curl -sf -X POST "$SIGIRO_URL/investigate/multi" \
+  -H "$DEV_AUTH" \
   -H 'Content-Type: application/json' \
   -d '{"services":["checkout","payments"]}') || true
 assert_contains "$multi_result" '"checkout"' "multi: checkout present"
@@ -203,6 +249,7 @@ assert_contains "$multi_result" '"payments"' "multi: payments present"
 echo ""
 echo "=== Check 10: HTTP OTLP ingest (:4318) ==="
 http_svc_result=$(curl -sf -X POST "$SIGIRO_URL/investigate" \
+  -H "$DEV_AUTH" \
   -H 'Content-Type: application/json' \
   -d '{"service":"http-svc"}') || true
 assert_json "$http_svc_result" ".coverage.has_spans" "true" "HTTP OTLP: http-svc has spans"

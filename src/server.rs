@@ -152,8 +152,8 @@ pub async fn run_servers(
         provision,
         vercel: crate::vercel::VercelConfig::new(&cfg.vercel_partner_id),
     });
-    let http_app = Router::new()
-        .route("/health", get(health))
+    // Authenticated routes — auth middleware applies to these
+    let authed = Router::new()
         .route("/query", post(query_handler))
         .route("/investigate", post(investigate_handler))
         .route("/investigate/multi", post(investigate_multi_handler))
@@ -170,7 +170,12 @@ pub async fn run_servers(
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
-        ))
+        ));
+
+    // Public routes — no auth required (healthcheck, OTLP ingest)
+    let http_app = Router::new()
+        .route("/health", get(health))
+        .merge(authed)
         .with_state(app_state);
 
     let http_handle = tokio::spawn(async move {
