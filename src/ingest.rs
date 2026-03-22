@@ -1,4 +1,5 @@
 use anyhow::Result;
+use arrow::record_batch::RecordBatch;
 use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
 use crossbeam_channel::Sender;
 use duckdb::Connection;
@@ -16,14 +17,27 @@ use opentelemetry_proto::tonic::collector::{
         trace_service_server::{TraceService, TraceServiceServer},
     },
 };
+use otlp2records::{InputFormat, MetricBatches};
 use prost::Message;
 use std::sync::{Arc, Mutex};
 use tonic::{Request, Response, Status};
 
+/// Pre-transformed ingest message carrying Arrow RecordBatches, not raw bytes.
+/// Transform happens on the tokio blocking pool (parallel) BEFORE the channel,
+/// so the inserter threads only do DuckDB writes — no CPU-bound protobuf decoding.
 pub enum IngestMsg {
-    Traces { project_id: String, bytes: Vec<u8> },
-    Logs { project_id: String, bytes: Vec<u8> },
-    Metrics { project_id: String, bytes: Vec<u8> },
+    Traces {
+        project_id: String,
+        batch: RecordBatch,
+    },
+    Logs {
+        project_id: String,
+        batch: RecordBatch,
+    },
+    Metrics {
+        project_id: String,
+        batches: MetricBatches,
+    },
 }
 
 impl IngestMsg {
@@ -69,7 +83,7 @@ impl OtlpGrpcService {
 }
 
 /// Extract project_id from gRPC metadata Bearer token.
-/// Dev keys (sigiro_dev_*) route to "dev_project" without DB verification.
+/// Uses the auth cache to avoid DuckDB lookups on every request.
 pub fn extract_project_id_grpc(
     admin_conn: &Mutex<Connection>,
     metadata: &tonic::metadata::MetadataMap,
@@ -86,9 +100,38 @@ pub fn extract_project_id_grpc(
         return Ok("dev_project".to_string());
     }
 
-    let ctx = crate::auth::verify_key(admin_conn, token)
+    let ctx = crate::auth::verify_key_cached(admin_conn, token)
         .map_err(|_| Status::unauthenticated("Invalid API key"))?;
     Ok(ctx.project_id)
+}
+
+/// Transform raw protobuf bytes into Arrow RecordBatch on the tokio blocking pool.
+/// This parallelizes the CPU-bound protobuf decode + Arrow conversion across all cores.
+async fn transform_traces(bytes: Vec<u8>) -> Result<RecordBatch, Status> {
+    tokio::task::spawn_blocking(move || {
+        otlp2records::transform_traces(&bytes, InputFormat::Protobuf)
+            .map_err(|e| Status::internal(format!("transform traces: {e}")))
+    })
+    .await
+    .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
+}
+
+async fn transform_logs(bytes: Vec<u8>) -> Result<RecordBatch, Status> {
+    tokio::task::spawn_blocking(move || {
+        otlp2records::transform_logs(&bytes, InputFormat::Protobuf)
+            .map_err(|e| Status::internal(format!("transform logs: {e}")))
+    })
+    .await
+    .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
+}
+
+async fn transform_metrics(bytes: Vec<u8>) -> Result<MetricBatches, Status> {
+    tokio::task::spawn_blocking(move || {
+        otlp2records::transform_metrics(&bytes, InputFormat::Protobuf)
+            .map_err(|e| Status::internal(format!("transform metrics: {e}")))
+    })
+    .await
+    .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
 #[tonic::async_trait]
@@ -98,11 +141,15 @@ impl TraceService for OtlpGrpcService {
         request: Request<ExportTraceServiceRequest>,
     ) -> Result<Response<ExportTraceServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
-        let msg = request.into_inner();
-        let bytes = msg.encode_to_vec();
-        self.tx
-            .send(IngestMsg::Traces { project_id, bytes })
-            .map_err(|e| Status::internal(e.to_string()))?;
+        // Transform on tokio blocking pool — no double decode.
+        // Encode once (prost), decode once (otlp2records). Previously: decode (tonic) → encode (prost) → decode (otlp2records).
+        let bytes = request.into_inner().encode_to_vec();
+        let batch = transform_traces(bytes).await?;
+        if batch.num_rows() > 0 {
+            self.tx
+                .send(IngestMsg::Traces { project_id, batch })
+                .map_err(|e| Status::internal(e.to_string()))?;
+        }
         Ok(Response::new(ExportTraceServiceResponse {
             partial_success: None,
         }))
@@ -116,11 +163,13 @@ impl LogsService for OtlpGrpcService {
         request: Request<ExportLogsServiceRequest>,
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
-        let msg = request.into_inner();
-        let bytes = msg.encode_to_vec();
-        self.tx
-            .send(IngestMsg::Logs { project_id, bytes })
-            .map_err(|e| Status::internal(e.to_string()))?;
+        let bytes = request.into_inner().encode_to_vec();
+        let batch = transform_logs(bytes).await?;
+        if batch.num_rows() > 0 {
+            self.tx
+                .send(IngestMsg::Logs { project_id, batch })
+                .map_err(|e| Status::internal(e.to_string()))?;
+        }
         Ok(Response::new(ExportLogsServiceResponse {
             partial_success: None,
         }))
@@ -134,10 +183,13 @@ impl MetricsService for OtlpGrpcService {
         request: Request<ExportMetricsServiceRequest>,
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
-        let msg = request.into_inner();
-        let bytes = msg.encode_to_vec();
+        let bytes = request.into_inner().encode_to_vec();
+        let batches = transform_metrics(bytes).await?;
         self.tx
-            .send(IngestMsg::Metrics { project_id, bytes })
+            .send(IngestMsg::Metrics {
+                project_id,
+                batches,
+            })
             .map_err(|e| Status::internal(e.to_string()))?;
         Ok(Response::new(ExportMetricsServiceResponse {
             partial_success: None,
@@ -162,7 +214,7 @@ pub fn otlp_http_router(tx: Sender<IngestMsg>, admin_conn: Arc<Mutex<Connection>
 }
 
 /// Extract project_id from HTTP Authorization header.
-/// Same logic as gRPC: dev keys bypass, real keys verified against admin DB.
+/// Uses the auth cache to avoid DuckDB lookups on every request.
 pub fn extract_project_id_http(
     admin_conn: &Mutex<Connection>,
     headers: &axum::http::HeaderMap,
@@ -180,7 +232,7 @@ pub fn extract_project_id_http(
         return Ok("dev_project".to_string());
     }
 
-    let ctx = crate::auth::verify_key(admin_conn, token).map_err(|_| {
+    let ctx = crate::auth::verify_key_cached(admin_conn, token).map_err(|_| {
         tracing::warn!("OTLP HTTP: invalid API key");
         StatusCode::UNAUTHORIZED
     })?;
@@ -196,12 +248,19 @@ async fn otlp_http_traces(
         Ok(id) => id,
         Err(status) => return status,
     };
-    if let Err(e) = state.tx.send(IngestMsg::Traces {
-        project_id,
-        bytes: body.to_vec(),
-    }) {
-        tracing::error!("failed to enqueue traces: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
+    // HTTP path: bytes come in raw — transform on blocking pool, no double decode.
+    let batch = match transform_traces(body.to_vec()).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("failed to transform traces: {e}");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+    if batch.num_rows() > 0 {
+        if let Err(e) = state.tx.send(IngestMsg::Traces { project_id, batch }) {
+            tracing::error!("failed to enqueue traces: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     }
     StatusCode::OK
 }
@@ -215,12 +274,18 @@ async fn otlp_http_logs(
         Ok(id) => id,
         Err(status) => return status,
     };
-    if let Err(e) = state.tx.send(IngestMsg::Logs {
-        project_id,
-        bytes: body.to_vec(),
-    }) {
-        tracing::error!("failed to enqueue logs: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
+    let batch = match transform_logs(body.to_vec()).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("failed to transform logs: {e}");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+    if batch.num_rows() > 0 {
+        if let Err(e) = state.tx.send(IngestMsg::Logs { project_id, batch }) {
+            tracing::error!("failed to enqueue logs: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     }
     StatusCode::OK
 }
@@ -234,9 +299,16 @@ async fn otlp_http_metrics(
         Ok(id) => id,
         Err(status) => return status,
     };
+    let batches = match transform_metrics(body.to_vec()).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("failed to transform metrics: {e}");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
     if let Err(e) = state.tx.send(IngestMsg::Metrics {
         project_id,
-        bytes: body.to_vec(),
+        batches,
     }) {
         tracing::error!("failed to enqueue metrics: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;
