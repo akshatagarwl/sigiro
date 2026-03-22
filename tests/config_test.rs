@@ -1,5 +1,11 @@
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+/// Guards tests that mutate the SIGIRO_API_KEY env var.
+/// std::env::set_var/remove_var mutate process-global state and race when
+/// cargo test runs tests in parallel threads.
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 /// Helper: create a temp dir with a config.toml containing the given content.
 fn write_temp_config(content: &str) -> (tempfile::TempDir, PathBuf) {
@@ -20,6 +26,7 @@ fn read_config_from_file() {
 
 #[test]
 fn env_var_overrides_file() {
+    let _guard = ENV_MUTEX.lock().unwrap();
     // Set env var, verify get_api_key returns it regardless of file state
     unsafe { std::env::set_var("SIGIRO_API_KEY", "sk_env_override") };
     let result = sigiro::config::get_api_key();
@@ -29,6 +36,7 @@ fn env_var_overrides_file() {
 
 #[test]
 fn missing_config_returns_error() {
+    let _guard = ENV_MUTEX.lock().unwrap();
     // Ensure no env var set
     unsafe { std::env::remove_var("SIGIRO_API_KEY") };
     let bad_path = PathBuf::from("/tmp/sigiro-test-nonexistent/config.toml");
