@@ -8,6 +8,15 @@ import rehypeAutolinkHeadings from 'rehype-autolink-headings'
 
 export default defineConfig({
   plugins: [
+    // Treat .canvas files as JSON (JSON Canvas spec)
+    {
+      name: 'canvas-json',
+      transform(code: string, id: string) {
+        if (id.endsWith('.canvas')) {
+          return { code: `export default ${code}`, map: null }
+        }
+      },
+    },
     {
       enforce: 'pre' as const,
       ...mdx({
