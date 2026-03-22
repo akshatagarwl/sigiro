@@ -187,22 +187,55 @@ async fn main() -> Result<()> {
             println!("API key saved to {}", path.display());
         }
         Some(Command::Admin { action }) => {
-            let admin_conn = open_admin_db()?;
-            let admin = Mutex::new(admin_conn);
+            // Try HTTP to running server first (solves DuckDB single-writer lock).
+            // Fall back to direct DuckDB if server isn't running (bootstrapping).
+            let server_url = std::env::var("SIGIRO_ENDPOINT")
+                .unwrap_or_else(|_| "http://localhost:9999".to_string());
+
             match action {
                 AdminAction::CreateKey {
                     project,
                     plan,
                     rate_limit,
                 } => {
-                    let raw_key = sigiro::auth::create_key(&admin, &project, &plan, rate_limit)?;
-                    println!("{raw_key}");
+                    let client = sigiro::client::SigiroClient::new(&server_url, "");
+                    match client.admin_create_key(&project, &plan, rate_limit).await {
+                        Ok(raw_key) => {
+                            println!("{raw_key}");
+                        }
+                        Err(http_err) => {
+                            tracing::debug!(
+                                "server not reachable, falling back to direct DB: {http_err:#}"
+                            );
+                            let admin_conn = open_admin_db()?;
+                            let admin = Mutex::new(admin_conn);
+                            let raw_key =
+                                sigiro::auth::create_key(&admin, &project, &plan, rate_limit)?;
+                            println!("{raw_key}");
+                        }
+                    }
                 }
                 AdminAction::RevokeKey { short_token } => {
-                    if sigiro::auth::revoke_key(&admin, &short_token)? {
-                        println!("Key revoked: {short_token}");
-                    } else {
-                        println!("No key found with short token: {short_token}");
+                    let client = sigiro::client::SigiroClient::new(&server_url, "");
+                    match client.admin_revoke_key(&short_token).await {
+                        Ok(true) => {
+                            println!("Key revoked: {short_token}");
+                        }
+                        Ok(false) => {
+                            println!("No key found with short token: {short_token}");
+                        }
+                        Err(http_err) => {
+                            tracing::debug!(
+                                "server not reachable, falling back to direct DB: {http_err:#}"
+                            );
+                            let admin_conn = open_admin_db()?;
+                            let admin = Mutex::new(admin_conn);
+                            if sigiro::auth::revoke_key(&admin, &short_token)? {
+                                println!("Key revoked: {short_token}");
+                            } else {
+                                println!("No key found with short token: {short_token}");
+                            }
+                        }
                     }
                 }
             }

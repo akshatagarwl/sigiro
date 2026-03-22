@@ -76,6 +76,60 @@ impl SigiroClient {
         }
     }
 
+    /// Create an API key via the running server's admin endpoint.
+    pub async fn admin_create_key(
+        &self,
+        project: &str,
+        plan: &str,
+        rate_limit: u32,
+    ) -> Result<String> {
+        let resp = self
+            .http
+            .post(format!("{}/admin/keys", self.base_url))
+            .json(&serde_json::json!({
+                "project": project,
+                "plan": plan,
+                "rate_limit": rate_limit,
+            }))
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => {
+                let body: serde_json::Value =
+                    resp.json().await.context("failed to parse response")?;
+                body["key"]
+                    .as_str()
+                    .map(String::from)
+                    .context("response missing 'key' field")
+            }
+            s => {
+                let body = resp.text().await.unwrap_or_default();
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
+    /// Revoke an API key via the running server's admin endpoint.
+    pub async fn admin_revoke_key(&self, short_token: &str) -> Result<bool> {
+        let resp = self
+            .http
+            .delete(format!("{}/admin/keys/{}", self.base_url, short_token))
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            s => {
+                let body = resp.text().await.unwrap_or_default();
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
     pub async fn status(&self) -> Result<serde_json::Value> {
         let resp = self
             .http

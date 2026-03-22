@@ -172,10 +172,18 @@ pub async fn run_servers(
         ))
         .layer(GovernorLayer::new(governor_conf));
 
-    // Public routes + v1 API
+    // Admin routes — no bearer auth (chicken-and-egg: need admin to create first key).
+    // These are on :9999 which should only be exposed internally.
+    let admin = Router::new().route("/keys", post(admin_create_key)).route(
+        "/keys/{short_token}",
+        axum::routing::delete(admin_revoke_key),
+    );
+
+    // Public routes + v1 API + admin
     let http_app = Router::new()
         .route("/health", get(health))
         .nest("/v1", v1)
+        .nest("/admin", admin)
         .layer(tower_http::compression::CompressionLayer::new())
         .with_state(app_state);
 
@@ -377,4 +385,53 @@ async fn investigate_multi_handler(
     let blocks = investigate::investigate_multi(&conn, &req, state.pool.prefix())
         .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(blocks))
+}
+
+// --- Admin endpoints ---
+// No bearer auth required — :9999 should only be exposed internally.
+// This solves the DuckDB single-writer lock problem: the CLI talks to the
+// running server over HTTP instead of opening admin.duckdb directly.
+
+#[derive(serde::Deserialize)]
+struct CreateKeyRequest {
+    project: String,
+    #[serde(default = "default_plan")]
+    plan: String,
+    #[serde(default = "default_rate_limit")]
+    rate_limit: u32,
+}
+
+fn default_plan() -> String {
+    "free".to_string()
+}
+
+fn default_rate_limit() -> u32 {
+    100
+}
+
+async fn admin_create_key(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateKeyRequest>,
+) -> Result<Json<serde_json::Value>, ProblemDetails> {
+    let raw_key = auth::create_key(&state.admin_conn, &req.project, &req.plan, req.rate_limit)
+        .map_err(|e| internal_error(format!("{e:#}")))?;
+    Ok(Json(serde_json::json!({ "key": raw_key })))
+}
+
+async fn admin_revoke_key(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(short_token): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ProblemDetails> {
+    let revoked = auth::revoke_key(&state.admin_conn, &short_token)
+        .map_err(|e| internal_error(format!("{e:#}")))?;
+    if revoked {
+        Ok(Json(
+            serde_json::json!({ "revoked": true, "short_token": short_token }),
+        ))
+    } else {
+        Err(ProblemDetails::new()
+            .with_status(StatusCode::NOT_FOUND)
+            .with_title("Key Not Found")
+            .with_detail(format!("No key found with short token: {short_token}")))
+    }
 }
