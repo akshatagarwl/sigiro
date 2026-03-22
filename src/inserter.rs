@@ -5,20 +5,22 @@ use otlp2records::{InputFormat, MetricBatches};
 use std::sync::{Arc, Mutex};
 
 use crate::ingest::IngestMsg;
+use crate::pool::ProjectPool;
 
-/// Run the inserter loop using a shared connection.
-/// `prefix` is "lake." when DuckLake is active, "" for local mode.
+/// Run the inserter loop routing messages to per-project DuckDB via the pool.
 ///
-/// NOTE: DuckDB appender with cross-catalog names ("lake.sigiro_spans") needs
-/// verification with DuckLake. If appender doesn't support it, fall back to
-/// INSERT INTO ... SELECT * FROM arrow_scan(...). Test with real DuckLake setup.
-pub fn run_inserter(
-    conn: &Arc<Mutex<Connection>>,
-    rx: Receiver<IngestMsg>,
-    prefix: &str,
-) -> Result<()> {
+/// OTLP ingest doesn't carry project_id yet (P1 — OTLP ingest auth).
+/// Until then, all data routes to "default" project. When OTLP auth lands,
+/// IngestMsg will carry project_id and this will route per-project.
+pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<()> {
+    let prefix = pool.prefix();
     for msg in rx {
-        if let Err(e) = handle_msg(conn, msg, prefix) {
+        // TODO: extract project_id from msg when OTLP ingest auth lands
+        let project_id = "default";
+        let conn = pool
+            .get_or_create(project_id)
+            .context("failed to get project connection for inserter")?;
+        if let Err(e) = handle_msg(&conn, msg, prefix) {
             tracing::error!("inserter: {e:#}");
         }
     }

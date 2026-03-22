@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::State,
     http::StatusCode,
     middleware as axum_mw,
@@ -11,10 +11,34 @@ use duckdb::Connection;
 use problem_details::ProblemDetails;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
 
-use crate::auth;
+use crate::auth::{self, AuthContext};
 use crate::ingest::{IngestMsg, OtlpGrpcService};
 use crate::investigate;
+use crate::pool::ProjectPool;
+
+/// Rate limit key: extract Bearer token from Authorization header.
+/// Falls back to "anonymous" if missing — auth middleware will reject it anyway.
+#[derive(Clone)]
+struct BearerKeyExtractor;
+
+impl KeyExtractor for BearerKeyExtractor {
+    type Key = String;
+
+    fn extract<T>(
+        &self,
+        req: &axum::http::Request<T>,
+    ) -> Result<Self::Key, tower_governor::GovernorError> {
+        let key = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("anonymous");
+        Ok(key.to_string())
+    }
+}
 
 /// RFC 9457 problem details constructors for sigiro API errors.
 /// Content-Type: application/problem+json — standard format agents can rely on.
@@ -40,9 +64,7 @@ pub fn invalid_request(detail: impl Into<String>) -> ProblemDetails {
 }
 
 pub struct AppState {
-    pub conn: Arc<Mutex<Connection>>,
-    /// "lake." when DuckLake is active, "" for local mode
-    pub table_prefix: &'static str,
+    pub pool: Arc<ProjectPool>,
     /// Admin DuckDB for API key storage (separate from per-project data)
     pub admin_conn: Arc<Mutex<Connection>>,
     pub http_client: reqwest::Client,
@@ -101,10 +123,9 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
 }
 
 pub async fn run_servers(
-    conn: Arc<Mutex<Connection>>,
+    pool: Arc<ProjectPool>,
     admin_conn: Arc<Mutex<Connection>>,
     tx: Sender<IngestMsg>,
-    table_prefix: &'static str,
 ) -> Result<()> {
     // gRPC server on :4317
     let grpc_tx = tx.clone();
@@ -124,13 +145,21 @@ pub async fn run_servers(
     tracing::info!("dev mode — use Bearer sigiro_dev_<anything> to authenticate");
 
     let app_state = Arc::new(AppState {
-        conn,
-        table_prefix,
+        pool,
         admin_conn,
         http_client: reqwest::Client::new(),
     });
 
-    // v1 API routes — all authenticated
+    // Rate limit: 100 requests/minute per API key (GCRA algorithm, in-memory)
+    let governor_conf = GovernorConfigBuilder::default()
+        .key_extractor(BearerKeyExtractor)
+        .per_second(2)
+        .burst_size(10)
+        .finish()
+        .expect("valid governor config");
+
+    // v1 API routes — all authenticated + rate limited
+    // Layer order: request → governor → auth → handler (last .layer() runs first)
     let v1 = Router::new()
         .route("/query", post(query_handler))
         .route("/investigate", post(investigate_handler))
@@ -139,7 +168,8 @@ pub async fn run_servers(
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
-        ));
+        ))
+        .layer(GovernorLayer::new(governor_conf));
 
     // Public routes + v1 API
     let http_app = Router::new()
@@ -226,12 +256,26 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
     }
 }
 
+/// Get the per-project DuckDB connection from the pool using the AuthContext.
+#[allow(clippy::result_large_err)] // ProblemDetails is the axum error response type
+fn project_conn(
+    state: &AppState,
+    auth: &AuthContext,
+) -> Result<Arc<Mutex<Connection>>, ProblemDetails> {
+    state
+        .pool
+        .get_or_create(&auth.project_id)
+        .map_err(|e| internal_error(format!("project DB: {e:#}")))
+}
+
 async fn query_handler(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
     body: String,
 ) -> Result<Json<Vec<serde_json::Value>>, ProblemDetails> {
     validate_read_only(&body).map_err(query_rejected)?;
-    let conn = state.conn.lock().map_err(|e| {
+    let conn = project_conn(&state, &auth)?;
+    let conn = conn.lock().map_err(|e| {
         tracing::error!("DuckDB connection mutex poisoned");
         internal_error(e.to_string())
     })?;
@@ -270,11 +314,14 @@ async fn query_handler(
 /// Agents call this before /investigate to know what services exist.
 async fn services_handler(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<serde_json::Value>, ProblemDetails> {
-    let conn = state.conn.lock().map_err(|e| {
+    let conn = project_conn(&state, &auth)?;
+    let conn = conn.lock().map_err(|e| {
         tracing::error!("DuckDB connection mutex poisoned");
         internal_error(e.to_string())
     })?;
+    let prefix = state.pool.prefix();
     let sql = format!(
         "SELECT service_name, \
                 min(timestamp)::VARCHAR AS first_seen, \
@@ -283,7 +330,7 @@ async fn services_handler(
          FROM {}sigiro_spans \
          GROUP BY service_name \
          ORDER BY span_count DESC",
-        state.table_prefix
+        prefix
     );
     let mut stmt = conn
         .prepare(&sql)
@@ -309,19 +356,23 @@ async fn services_handler(
 
 async fn investigate_handler(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
     Json(req): Json<investigate::InvestigateRequest>,
 ) -> Result<Json<investigate::InvestigationBlock>, ProblemDetails> {
-    let block = investigate::investigate(&state.conn, &req, state.table_prefix)
+    let conn = project_conn(&state, &auth)?;
+    let block = investigate::investigate(&conn, &req, state.pool.prefix())
         .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(block))
 }
 
 async fn investigate_multi_handler(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
     Json(req): Json<investigate::InvestigateMultiRequest>,
 ) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, ProblemDetails>
 {
-    let blocks = investigate::investigate_multi(&state.conn, &req, state.table_prefix)
+    let conn = project_conn(&state, &auth)?;
+    let blocks = investigate::investigate_multi(&conn, &req, state.pool.prefix())
         .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(blocks))
 }

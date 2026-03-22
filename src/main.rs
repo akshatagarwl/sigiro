@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, builder::styling};
 use duckdb::Connection;
 use std::sync::{Arc, Mutex};
 
-use sigiro::{data_dir, open_db, storage};
+use sigiro::{data_dir, open_db, pool::ProjectPool, storage};
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -116,39 +116,44 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Serve) | None => {
-            let conn = open_db()?;
-            let prefix = init_storage(&conn)?;
-            sigiro::schema::create_tables(&conn, prefix)?;
+            let dir = data_dir()?;
+            std::fs::create_dir_all(&dir)?;
 
+            // Detect DuckLake prefix by probing a temp connection
+            let probe_conn = open_db()?;
+            let prefix = init_storage(&probe_conn)?;
+            drop(probe_conn);
+
+            let pool = Arc::new(ProjectPool::new(dir.clone(), prefix, 100));
             let admin_conn = open_admin_db()?;
 
-            let db_path = data_dir()?.join("sigiro.duckdb");
-            tracing::info!("sigiro ready — {}", db_path.display());
+            tracing::info!("sigiro ready — data_dir={}", dir.display());
 
             let (tx, rx) = crossbeam_channel::unbounded();
-
-            let shared_conn = Arc::new(Mutex::new(conn));
             let shared_admin = Arc::new(Mutex::new(admin_conn));
 
-            let inserter_conn = shared_conn.clone();
-            let inserter_prefix = prefix.to_string();
+            // Inserter thread: routes messages to per-project DuckDB via pool.
+            // OTLP ingest doesn't have auth yet (P1), so all data goes to "default" project.
+            // When OTLP auth lands, IngestMsg will carry project_id.
+            let inserter_pool = Arc::clone(&pool);
             std::thread::spawn(move || {
-                if let Err(e) = sigiro::inserter::run_inserter(&inserter_conn, rx, &inserter_prefix)
-                {
+                if let Err(e) = sigiro::inserter::run_inserter(&inserter_pool, rx) {
                     tracing::error!("inserter fatal: {e:#}");
                     std::process::exit(1);
                 }
             });
 
-            // Spawn compactor only in DuckLake mode (local DuckDB doesn't need it)
-            if !prefix.is_empty() {
-                let compactor_conn = shared_conn.clone();
-                tokio::spawn(async move {
-                    sigiro::compactor::run_compactor(compactor_conn, 7, prefix).await;
-                });
-            }
+            // Evict idle connections every 2 minutes
+            let evictor_pool = Arc::clone(&pool);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(120));
+                loop {
+                    interval.tick().await;
+                    evictor_pool.evict_idle(std::time::Duration::from_secs(300));
+                }
+            });
 
-            sigiro::server::run_servers(shared_conn, shared_admin, tx, prefix).await?;
+            sigiro::server::run_servers(pool, shared_admin, tx).await?;
         }
         Some(Command::Query { sql }) => {
             let client = require_client()?;
