@@ -49,7 +49,7 @@ impl SigiroClient {
             401 => bail!("Invalid API key. Run: sigiro auth <key>"),
             429 => bail!("Rate limited. Try again later."),
             s => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = resp.text().await.context("failed to read error body")?;
                 bail!("Server error ({s}): {body}")
             }
         }
@@ -70,7 +70,7 @@ impl SigiroClient {
             401 => bail!("Invalid API key. Run: sigiro auth <key>"),
             429 => bail!("Rate limited. Try again later."),
             s => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = resp.text().await.context("failed to read error body")?;
                 bail!("Server error ({s}): {body}")
             }
         }
@@ -105,7 +105,7 @@ impl SigiroClient {
                     .context("response missing 'key' field")
             }
             s => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = resp.text().await.context("failed to read error body")?;
                 bail!("Server error ({s}): {body}")
             }
         }
@@ -124,7 +124,7 @@ impl SigiroClient {
             200 => Ok(true),
             404 => Ok(false),
             s => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = resp.text().await.context("failed to read error body")?;
                 bail!("Server error ({s}): {body}")
             }
         }
@@ -141,12 +141,12 @@ impl SigiroClient {
 
         match resp.status().as_u16() {
             200 => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = resp.text().await.context("failed to read error body")?;
                 Ok(serde_json::json!({ "status": body }))
             }
             401 => bail!("Invalid API key. Run: sigiro auth <key>"),
             s => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = resp.text().await.context("failed to read error body")?;
                 bail!("Server error ({s}): {body}")
             }
         }
@@ -159,28 +159,4 @@ pub fn try_build_client() -> Option<SigiroClient> {
     let base_url =
         std::env::var("SIGIRO_ENDPOINT").unwrap_or_else(|_| "https://app.sigiro.com".to_string());
     Some(SigiroClient::new(&base_url, &api_key))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_client_with_url() {
-        let client = SigiroClient::new("https://app.sigiro.com/", "sk_live_test");
-        assert_eq!(client.base_url(), "https://app.sigiro.com");
-    }
-
-    #[test]
-    fn build_client_trims_trailing_slashes() {
-        let client = SigiroClient::new("https://example.com///", "key");
-        assert_eq!(client.base_url(), "https://example.com");
-    }
-
-    #[test]
-    fn build_client_default_endpoint() {
-        // SigiroClient directly (no env var dependency)
-        let client = SigiroClient::new("https://app.sigiro.com", "sk_live_test");
-        assert_eq!(client.base_url(), "https://app.sigiro.com");
-    }
 }

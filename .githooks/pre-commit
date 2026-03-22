@@ -1,34 +1,5 @@
-#!/bin/sh
-#
-# Pre-commit hook: run checks on staged files.
-#
-
-staged_rs_files=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
-staged_www_files=$(git diff --cached --name-only --diff-filter=ACM -- 'www/*')
-
-# Rust checks
-if [ -n "$staged_rs_files" ]; then
-  echo "Running cargo fmt --check..."
-  cargo fmt --check 2>&1
-  if [ $? -ne 0 ]; then
-    echo "ERROR: cargo fmt failed — run 'cargo fmt' to fix"
-    exit 1
-  fi
-
-  echo "Running cargo clippy..."
-  cargo clippy -- -D warnings 2>&1
-  if [ $? -ne 0 ]; then
-    echo "ERROR: clippy found warnings"
-    exit 1
-  fi
-fi
-
-# www checks (build verifies types + imports + MDX compilation)
-if [ -n "$staged_www_files" ]; then
-  echo "Running bun build (www)..."
-  (cd www && bun run build) 2>&1
-  if [ $? -ne 0 ]; then
-    echo "ERROR: bun build failed in www/"
-    exit 1
-  fi
-fi
+#!/usr/bin/env bash
+# Tiger Style pre-commit hook for sigiro
+# Install: git config core.hooksPath .githooks
+# Bypass:  git commit --no-verify
+exec scripts/tiger-check.sh

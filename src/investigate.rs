@@ -4,6 +4,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+/// Common query parameters shared by all investigation sub-queries.
+/// Tiger Style: functions should have ≤4 parameters — this struct bundles
+/// the 5 common params (conn, service, from_ts, to_ts, prefix) into one.
+pub struct QueryCtx<'a> {
+    pub conn: &'a Connection,
+    pub service: &'a str,
+    pub from_ts: i64,
+    pub to_ts: i64,
+    pub prefix: &'a str,
+}
+
 /// Tells the agent what data exists and what's missing.
 /// Without this, an agent might conclude "no errors in logs" when there ARE no logs —
 /// confusing absence of problems with absence of data.
@@ -69,13 +80,7 @@ pub struct ServiceContext {
     pub dependents: Vec<String>,
 }
 
-pub fn query_service_context(
-    conn: &Connection,
-    service: &str,
-    from_ts: i64,
-    to_ts: i64,
-    prefix: &str,
-) -> Result<ServiceContext> {
+pub fn query_service_context(ctx: &QueryCtx) -> Result<ServiceContext> {
     // Query 1: resource attribute extraction
     // ANY_VALUE because resource_attributes varies per span but we want one representative value
     let meta_sql = format!(
@@ -85,48 +90,64 @@ pub fn query_service_context(
         count(DISTINCT service_instance_id) AS pod_count,
         min(timestamp)::VARCHAR AS first_seen,
         max(timestamp)::VARCHAR AS last_seen
-    FROM {prefix}sigiro_spans
-    WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)"
+    FROM {}sigiro_spans
+    WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+        ctx.prefix
     );
 
-    let (namespace, deployment, pod_count, first_seen, last_seen) = conn
-        .query_row(&meta_sql, duckdb::params![service, from_ts, to_ts], |row| {
-            Ok((
-                row.get::<_, String>(0).ok().filter(|s| !s.is_empty()),
-                row.get::<_, String>(1).ok().filter(|s| !s.is_empty()),
-                row.get::<_, i64>(2).unwrap_or(0),
-                row.get::<_, String>(3).unwrap_or_default(),
-                row.get::<_, String>(4).unwrap_or_default(),
-            ))
-        })
+    let (namespace, deployment, pod_count, first_seen, last_seen) = ctx
+        .conn
+        .query_row(
+            &meta_sql,
+            duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts],
+            |row| {
+                Ok((
+                    // namespace and deployment are genuinely nullable (not all services run in k8s)
+                    row.get::<_, String>(0).ok().filter(|s| !s.is_empty()),
+                    row.get::<_, String>(1).ok().filter(|s| !s.is_empty()),
+                    row.get::<_, i64>(2)?,
+                    // first_seen/last_seen are NULL when no spans match (min/max of empty set)
+                    row.get::<_, String>(3).unwrap_or_else(|_| String::new()),
+                    row.get::<_, String>(4).unwrap_or_else(|_| String::new()),
+                ))
+            },
+        )
         .context("service metadata query failed")?;
 
     // Query 2: downstream dependencies (services this service calls)
     let deps_sql = format!(
         "SELECT DISTINCT s2.service_name
-        FROM {prefix}sigiro_spans s1
-        JOIN {prefix}sigiro_spans s2 ON s1.trace_id = s2.trace_id
+        FROM {}sigiro_spans s1
+        JOIN {}sigiro_spans s2 ON s1.trace_id = s2.trace_id
         WHERE s1.service_name = ? AND s2.service_name != ?
           AND s1.span_kind IN (3, 4)
           AND s1.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
-        LIMIT 20"
+        LIMIT 20",
+        ctx.prefix, ctx.prefix
     );
-    let dependencies = query_string_list(conn, &deps_sql, service, from_ts, to_ts)?;
+    let dependencies = query_string_list(ctx.conn, &deps_sql, ctx.service, ctx.from_ts, ctx.to_ts)?;
 
     // Query 3: upstream dependents (services that call this service)
     let dependents_sql = format!(
         "SELECT DISTINCT s1.service_name
-        FROM {prefix}sigiro_spans s1
-        JOIN {prefix}sigiro_spans s2 ON s1.trace_id = s2.trace_id
+        FROM {}sigiro_spans s1
+        JOIN {}sigiro_spans s2 ON s1.trace_id = s2.trace_id
         WHERE s2.service_name = ? AND s1.service_name != ?
           AND s1.span_kind IN (3, 4)
           AND s2.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
-        LIMIT 20"
+        LIMIT 20",
+        ctx.prefix, ctx.prefix
     );
-    let dependents = query_string_list(conn, &dependents_sql, service, from_ts, to_ts)?;
+    let dependents = query_string_list(
+        ctx.conn,
+        &dependents_sql,
+        ctx.service,
+        ctx.from_ts,
+        ctx.to_ts,
+    )?;
 
     Ok(ServiceContext {
-        service_name: service.to_string(),
+        service_name: ctx.service.to_string(),
         first_seen,
         last_seen,
         namespace,
@@ -137,6 +158,7 @@ pub fn query_service_context(
     })
 }
 
+#[allow(clippy::too_many_arguments)] // Internal helper with varying SQL; QueryCtx doesn't apply
 fn query_string_list(
     conn: &Connection,
     sql: &str,
@@ -168,13 +190,7 @@ pub struct DerivedEvent {
     pub description: String,
 }
 
-pub fn query_derived_events(
-    conn: &Connection,
-    service: &str,
-    from_ts: i64,
-    to_ts: i64,
-    prefix: &str,
-) -> Result<Vec<DerivedEvent>> {
+pub fn query_derived_events(ctx: &QueryCtx) -> Result<Vec<DerivedEvent>> {
     let mut events = Vec::new();
 
     // Deploy detection: distinct service.version values in the window.
@@ -183,7 +199,7 @@ pub fn query_derived_events(
     let deploy_sql = format!(
         "WITH versioned AS (
         SELECT timestamp, resource_attributes::JSON->>'service.version' AS version
-        FROM {prefix}sigiro_spans
+        FROM {}sigiro_spans
         WHERE service_name = ?
           AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
     )
@@ -191,15 +207,16 @@ pub fn query_derived_events(
     FROM versioned
     WHERE version IS NOT NULL
     GROUP BY version
-    ORDER BY detected_at"
+    ORDER BY detected_at",
+        ctx.prefix
     );
 
-    let mut stmt = conn.prepare(&deploy_sql)?;
-    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    let mut stmt = ctx.conn.prepare(&deploy_sql)?;
+    let mut rows = stmt.query(duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts])?;
     let mut versions = Vec::new();
     while let Some(row) = rows.next()? {
-        let detected_at: String = row.get::<_, String>(0).unwrap_or_default();
-        let version: String = row.get::<_, String>(1).unwrap_or_default();
+        let detected_at: String = row.get::<_, String>(0).context("deploy detected_at")?;
+        let version: String = row.get::<_, String>(1).context("deploy version")?;
         versions.push((detected_at, version));
     }
     // If multiple versions exist, each is a deploy event
@@ -214,22 +231,23 @@ pub fn query_derived_events(
     // K8s events from log body patterns
     let k8s_sql = format!(
         "SELECT timestamp::VARCHAR AS detected_at, body AS description
-    FROM {prefix}sigiro_logs
+    FROM {}sigiro_logs
     WHERE service_name = ?
       AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
       AND (body LIKE '%OOMKilled%' OR body LIKE '%Unhealthy%'
         OR body LIKE '%BackOff%' OR body LIKE '%FailedScheduling%'
         OR body LIKE '%ScalingReplicaSet%')
-    LIMIT 20"
+    LIMIT 20",
+        ctx.prefix
     );
 
-    let mut stmt = conn.prepare(&k8s_sql)?;
-    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    let mut stmt = ctx.conn.prepare(&k8s_sql)?;
+    let mut rows = stmt.query(duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts])?;
     while let Some(row) = rows.next()? {
         events.push(DerivedEvent {
-            detected_at: row.get::<_, String>(0).unwrap_or_default(),
+            detected_at: row.get::<_, String>(0).context("k8s event detected_at")?,
             event_type: "k8s_event".to_string(),
-            description: row.get::<_, String>(1).unwrap_or_default(),
+            description: row.get::<_, String>(1).context("k8s event description")?,
         });
     }
 
@@ -400,10 +418,10 @@ pub struct OperationSummary {
     pub baseline_count: Option<i64>,
 }
 
-pub fn us_to_iso(us: i64) -> String {
+pub fn us_to_iso(us: i64) -> Result<String> {
     chrono::DateTime::from_timestamp_micros(us)
         .map(|dt| dt.to_rfc3339())
-        .unwrap_or_default()
+        .ok_or_else(|| anyhow::anyhow!("invalid timestamp_micros: {us}"))
 }
 
 /// Adaptive summarization: vary detail level based on window size.
@@ -461,68 +479,47 @@ pub fn investigate(
     })?;
 
     let config = adaptive_config(from_ts, to_ts);
-
-    let metrics = query_all_metrics(
-        &conn,
-        &req.service,
+    let ctx = QueryCtx {
+        conn: &conn,
+        service: &req.service,
         from_ts,
         to_ts,
-        config.bucket_interval,
         prefix,
-    )
-    .context("metrics query failed")?;
+    };
+
+    let metrics =
+        query_all_metrics(&ctx, config.bucket_interval).context("metrics query failed")?;
 
     let operation_summaries =
-        query_operation_summaries(&conn, &req.service, from_ts, to_ts, prefix)
-            .context("operation summaries query failed")?;
+        query_operation_summaries(&ctx).context("operation summaries query failed")?;
 
     // Combined: total spans + distinct error trace count in one query (was 2)
-    let (spans_total, error_traces_total) =
-        count_span_stats(&conn, &req.service, from_ts, to_ts, prefix)?;
+    let (spans_total, error_traces_total) = count_span_stats(&ctx)?;
     let spans = if config.span_limit > 0 {
-        query_spans(
-            &conn,
-            &req.service,
-            from_ts,
-            to_ts,
-            config.span_limit,
-            prefix,
-        )
-        .context("spans query failed")?
+        query_spans(&ctx, config.span_limit).context("spans query failed")?
     } else {
         Vec::new()
     };
 
-    let logs_total = count_log_templates(&conn, &req.service, from_ts, to_ts, prefix)?;
-    let logs = query_logs(
-        &conn,
-        &req.service,
-        from_ts,
-        to_ts,
-        config.log_limit,
-        prefix,
-    )
-    .context("logs query failed")?;
+    let logs_total = count_log_templates(&ctx)?;
+    let logs = query_logs(&ctx, config.log_limit).context("logs query failed")?;
 
     let span_trees = build_span_trees(&spans);
 
-    let linked_traces = query_linked_traces(&conn, &spans, from_ts, to_ts, prefix)
-        .context("linked traces query failed")?;
+    let linked_traces = query_linked_traces(&ctx, &spans).context("linked traces query failed")?;
     let linked_spans_returned: i64 = linked_traces.iter().map(|lt| lt.spans.len() as i64).sum();
 
     let coverage = compute_coverage(spans_total, logs_total, metrics.len());
-    let context = query_service_context(&conn, &req.service, from_ts, to_ts, prefix)
-        .context("service context query failed")?;
-    let events = query_derived_events(&conn, &req.service, from_ts, to_ts, prefix)
-        .context("derived events query failed")?;
+    let context = query_service_context(&ctx).context("service context query failed")?;
+    let events = query_derived_events(&ctx).context("derived events query failed")?;
 
     Ok(InvestigationBlock {
         service: req.service.clone(),
         window: Window {
             from_ts,
             to_ts,
-            from_iso: us_to_iso(from_ts),
-            to_iso: us_to_iso(to_ts),
+            from_iso: us_to_iso(from_ts)?,
+            to_iso: us_to_iso(to_ts)?,
         },
         coverage,
         context,
@@ -548,35 +545,28 @@ pub fn investigate(
 
 /// Combined metrics query: gauge/sum scalars + histogram aggregates in one round-trip.
 /// Was 2 separate queries; merged via UNION ALL with compatible (bucket, metric_name, p95, avg, n) schema.
-fn query_all_metrics(
-    conn: &Connection,
-    service: &str,
-    from_ts: i64,
-    to_ts: i64,
-    bucket_interval: &str,
-    prefix: &str,
-) -> Result<Vec<MetricBucket>> {
+fn query_all_metrics(ctx: &QueryCtx, bucket_interval: &str) -> Result<Vec<MetricBucket>> {
     let sql = format!(
         "WITH scalar AS (
             SELECT timestamp, metric_name, service_name,
                    value AS p95_src, value AS avg_src, 1 AS cnt
-            FROM {prefix}sigiro_metrics_gauge
+            FROM {}sigiro_metrics_gauge
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
             UNION ALL
             SELECT timestamp, metric_name, service_name,
                    value, value, 1
-            FROM {prefix}sigiro_metrics_sum
+            FROM {}sigiro_metrics_sum
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         ),
         histo AS (
             SELECT timestamp, metric_name, service_name,
                    max AS p95_src, CASE WHEN count > 0 THEN sum/count ELSE 0 END AS avg_src, count AS cnt
-            FROM {prefix}sigiro_metrics_histogram
+            FROM {}sigiro_metrics_histogram
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
             UNION ALL
             SELECT timestamp, metric_name, service_name,
                    max, CASE WHEN count > 0 THEN sum/count ELSE 0 END, count
-            FROM {prefix}sigiro_metrics_exp_histogram
+            FROM {}sigiro_metrics_exp_histogram
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         ),
         combined AS (
@@ -591,13 +581,24 @@ fn query_all_metrics(
                sum(cnt) AS n
         FROM combined
         GROUP BY bucket, metric_name
-        ORDER BY bucket, metric_name"
+        ORDER BY bucket, metric_name",
+        ctx.prefix, ctx.prefix, ctx.prefix, ctx.prefix
     );
 
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = ctx.conn.prepare(&sql)?;
     let mut rows = stmt.query(duckdb::params![
-        service, from_ts, to_ts, service, from_ts, to_ts, service, from_ts, to_ts, service,
-        from_ts, to_ts
+        ctx.service,
+        ctx.from_ts,
+        ctx.to_ts,
+        ctx.service,
+        ctx.from_ts,
+        ctx.to_ts,
+        ctx.service,
+        ctx.from_ts,
+        ctx.to_ts,
+        ctx.service,
+        ctx.from_ts,
+        ctx.to_ts
     ])?;
     let mut results = Vec::new();
 
@@ -605,8 +606,8 @@ fn query_all_metrics(
         results.push(MetricBucket {
             bucket: row.get::<_, String>(0).context("bucket")?,
             metric_name: row.get::<_, String>(1).context("metric_name")?,
-            p95: row.get::<_, f64>(2).unwrap_or(0.0),
-            avg: row.get::<_, f64>(3).unwrap_or(0.0),
+            p95: row.get::<_, f64>(2).context("p95")?,
+            avg: row.get::<_, f64>(3).context("avg")?,
             count: row.get::<_, i64>(4).context("count")?,
         });
     }
@@ -614,71 +615,61 @@ fn query_all_metrics(
 }
 
 /// Combined span counts: total spans + distinct error traces in one query instead of two.
-fn count_span_stats(
-    conn: &Connection,
-    service: &str,
-    from_ts: i64,
-    to_ts: i64,
-    prefix: &str,
-) -> Result<(i64, i64)> {
-    conn.query_row(
-        &format!(
-            "SELECT count(*),
+fn count_span_stats(ctx: &QueryCtx) -> Result<(i64, i64)> {
+    ctx.conn
+        .query_row(
+            &format!(
+                "SELECT count(*),
                 count(DISTINCT CASE WHEN status_code = 2 THEN trace_id END)
-         FROM {prefix}sigiro_spans
-         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)"
-        ),
-        duckdb::params![service, from_ts, to_ts],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-    )
-    .context("count span stats failed")
+         FROM {}sigiro_spans
+         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+                ctx.prefix
+            ),
+            duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .context("count span stats failed")
 }
 
-fn count_log_templates(
-    conn: &Connection,
-    service: &str,
-    from_ts: i64,
-    to_ts: i64,
-    prefix: &str,
-) -> Result<i64> {
-    conn.query_row(
-        &format!(
-            "SELECT count(DISTINCT body) FROM {prefix}sigiro_logs
-         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)"
-        ),
-        duckdb::params![service, from_ts, to_ts],
-        |row| row.get(0),
-    )
-    .context("count log templates failed")
+fn count_log_templates(ctx: &QueryCtx) -> Result<i64> {
+    ctx.conn
+        .query_row(
+            &format!(
+                "SELECT count(DISTINCT body) FROM {}sigiro_logs
+         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+                ctx.prefix
+            ),
+            duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts],
+            |row| row.get(0),
+        )
+        .context("count log templates failed")
 }
 
-fn query_operation_summaries(
-    conn: &Connection,
-    service: &str,
-    from_ts: i64,
-    to_ts: i64,
-    prefix: &str,
-) -> Result<Vec<OperationSummary>> {
+fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
     // Baseline window: 4x the investigation window, immediately preceding it.
     // E.g., investigating last 15m → baseline is the preceding 1h.
-    let window_us = to_ts - from_ts;
-    let baseline_from = from_ts.saturating_sub(window_us * 4);
-    let baseline_to = from_ts;
+    let window_us = ctx.to_ts - ctx.from_ts;
+    let baseline_from = ctx.from_ts.saturating_sub(window_us * 4);
+    let baseline_to = ctx.from_ts;
 
     // Single query: current window LEFT JOIN baseline window.
     // The agent sees both current and baseline side-by-side.
     let sql = format!(
         "WITH current AS (
-            SELECT span_name,
-                   count(*) AS cnt,
+             SELECT span_name,
+                    count(*) AS cnt,
                    count(*) FILTER (WHERE status_code = 2) AS err_cnt,
                    count(*) FILTER (WHERE status_code = 2) * 100.0 / count(*) AS err_pct,
                    approx_quantile(duration, 0.50) AS p50,
                    approx_quantile(duration, 0.95) AS p95,
                    approx_quantile(duration, 0.99) AS p99,
                    first(trace_id) FILTER (WHERE status_code = 2) AS exemplar_tid
-            FROM {prefix}sigiro_spans
-            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+            FROM {}sigiro_spans
+            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+        ctx.prefix
+    );
+    let sql = format!(
+        "{sql}
             GROUP BY span_name
         ),
         baseline AS (
@@ -686,8 +677,12 @@ fn query_operation_summaries(
                    count(*) AS bl_cnt,
                    count(*) FILTER (WHERE status_code = 2) * 100.0 / count(*) AS bl_err_pct,
                    approx_quantile(duration, 0.95) AS bl_p95
-            FROM {prefix}sigiro_spans
-            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+            FROM {}sigiro_spans
+            WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+        ctx.prefix
+    );
+    let sql = format!(
+        "{sql}
             GROUP BY span_name
         )
         SELECT c.span_name, c.cnt, c.err_cnt, c.err_pct, c.p50, c.p95, c.p99, c.exemplar_tid,
@@ -698,12 +693,12 @@ fn query_operation_summaries(
         LIMIT 20"
     );
 
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = ctx.conn.prepare(&sql)?;
     let mut rows = stmt.query(duckdb::params![
-        service,
-        from_ts,
-        to_ts,
-        service,
+        ctx.service,
+        ctx.from_ts,
+        ctx.to_ts,
+        ctx.service,
         baseline_from,
         baseline_to
     ])?;
@@ -714,10 +709,11 @@ fn query_operation_summaries(
             span_name: row.get::<_, String>(0).context("span_name")?,
             count: row.get::<_, i64>(1).context("count")?,
             error_count: row.get::<_, i64>(2).context("error_count")?,
-            error_pct: row.get::<_, f64>(3).unwrap_or(0.0),
-            duration_p50_ns: row.get::<_, f64>(4).unwrap_or(0.0),
-            duration_p95_ns: row.get::<_, f64>(5).unwrap_or(0.0),
-            duration_p99_ns: row.get::<_, f64>(6).unwrap_or(0.0),
+            error_pct: row.get::<_, f64>(3).context("error_pct")?,
+            duration_p50_ns: row.get::<_, f64>(4).context("duration_p50_ns")?,
+            duration_p95_ns: row.get::<_, f64>(5).context("duration_p95_ns")?,
+            duration_p99_ns: row.get::<_, f64>(6).context("duration_p99_ns")?,
+            // baseline fields are genuinely nullable — NULL from LEFT JOIN when no historical data
             exemplar_error_trace_id: row.get::<_, String>(7).ok(),
             baseline_error_pct: row.get::<_, f64>(8).ok(),
             baseline_p95_ns: row.get::<_, f64>(9).ok(),
@@ -727,25 +723,19 @@ fn query_operation_summaries(
     Ok(results)
 }
 
-fn query_spans(
-    conn: &Connection,
-    service: &str,
-    from_ts: i64,
-    to_ts: i64,
-    limit: i64,
-    prefix: &str,
-) -> Result<Vec<SpanRow>> {
+fn query_spans(ctx: &QueryCtx, limit: i64) -> Result<Vec<SpanRow>> {
     let sql = format!(
         "SELECT trace_id, span_id, parent_span_id, span_name, duration,
                status_code, service_name
-        FROM {prefix}sigiro_spans
+        FROM {}sigiro_spans
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         ORDER BY CASE WHEN status_code = 2 THEN 0 ELSE 1 END, duration DESC
-        LIMIT {limit}"
+        LIMIT {limit}",
+        ctx.prefix
     );
 
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts])?;
+    let mut stmt = ctx.conn.prepare(&sql)?;
+    let mut rows = stmt.query(duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts])?;
     let mut results = Vec::new();
 
     while let Some(row) = rows.next()? {
@@ -758,7 +748,7 @@ fn parse_span_row(row: &duckdb::Row<'_>) -> Result<SpanRow> {
     Ok(SpanRow {
         trace_id: row.get::<_, String>(0).context("trace_id")?,
         span_id: row.get::<_, String>(1).context("span_id")?,
-        parent_span_id: row.get::<_, String>(2).unwrap_or_default(),
+        parent_span_id: row.get::<_, String>(2).unwrap_or_default(), // TRADEOFF: root spans have NULL parent — empty string is correct model representation
         span_name: row.get::<_, String>(3).context("span_name")?,
         duration_ns: row.get::<_, i64>(4).context("duration")?,
         status_code: row.get::<_, i32>(5).context("status_code")?,
@@ -766,14 +756,7 @@ fn parse_span_row(row: &duckdb::Row<'_>) -> Result<SpanRow> {
     })
 }
 
-pub fn query_logs(
-    conn: &Connection,
-    service: &str,
-    from_ts: i64,
-    to_ts: i64,
-    limit: i64,
-    prefix: &str,
-) -> Result<Vec<LogTemplate>> {
+pub fn query_logs(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogTemplate>> {
     // Normalize log bodies to templates: UUIDs → {uuid}, IPs → {ip}, long numbers → {id}.
     // GROUP BY template collapses noisy logs (e.g., 1000 "timeout for 10.0.0.X" → 1 template).
     // first(body) keeps one real exemplar for context.
@@ -791,25 +774,26 @@ pub fn query_logs(
             count(*) AS count,
             min(timestamp)::VARCHAR AS first_seen,
             max(timestamp)::VARCHAR AS last_seen
-        FROM {prefix}sigiro_logs
+        FROM {}sigiro_logs
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         GROUP BY template, severity_text
         ORDER BY count DESC
-        LIMIT ?"
+        LIMIT ?",
+        ctx.prefix
     );
 
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(duckdb::params![service, from_ts, to_ts, limit])?;
+    let mut stmt = ctx.conn.prepare(&sql)?;
+    let mut rows = stmt.query(duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts, limit])?;
     let mut results = Vec::new();
 
     while let Some(row) = rows.next()? {
         results.push(LogTemplate {
-            template: row.get::<_, String>(0).unwrap_or_default(),
-            body: row.get::<_, String>(1).unwrap_or_default(),
+            template: row.get::<_, String>(0).context("template")?,
+            body: row.get::<_, String>(1).context("body")?,
             severity_text: row.get::<_, String>(2).context("severity_text")?,
             count: row.get::<_, i64>(3).context("count")?,
-            first_seen: row.get::<_, String>(4).unwrap_or_default(),
-            last_seen: row.get::<_, String>(5).unwrap_or_default(),
+            first_seen: row.get::<_, String>(4).context("first_seen")?,
+            last_seen: row.get::<_, String>(5).context("last_seen")?,
         });
     }
     Ok(results)
@@ -828,13 +812,7 @@ pub fn build_span_trees(spans: &[SpanRow]) -> BTreeMap<String, Vec<String>> {
     trees
 }
 
-fn query_linked_traces(
-    conn: &Connection,
-    spans: &[SpanRow],
-    from_ts: i64,
-    to_ts: i64,
-    prefix: &str,
-) -> Result<Vec<LinkedTrace>> {
+fn query_linked_traces(ctx: &QueryCtx, spans: &[SpanRow]) -> Result<Vec<LinkedTrace>> {
     let mut seen = HashSet::new();
     let unique: Vec<&str> = spans
         .iter()
@@ -855,21 +833,22 @@ fn query_linked_traces(
 
     // ±5 min buffer around the investigation window
     let buffer_us: i64 = 5 * 60 * 1_000_000;
-    let linked_from = from_ts.saturating_sub(buffer_us);
-    let linked_to = to_ts.saturating_add(buffer_us);
+    let linked_from = ctx.from_ts.saturating_sub(buffer_us);
+    let linked_to = ctx.to_ts.saturating_add(buffer_us);
 
     let placeholders = vec!["?"; unique.len()].join(", ");
     let sql = format!(
         "SELECT trace_id, span_id, parent_span_id, span_name, duration,
                 status_code, service_name
-         FROM {prefix}sigiro_spans
+         FROM {}sigiro_spans
          WHERE trace_id IN ({placeholders})
            AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
          ORDER BY trace_id, timestamp
-         LIMIT 200"
+         LIMIT 200",
+        ctx.prefix
     );
 
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = ctx.conn.prepare(&sql)?;
     let mut params: Vec<Box<dyn duckdb::ToSql>> = unique
         .iter()
         .map(|s| Box::new(s.to_string()) as Box<dyn duckdb::ToSql>)

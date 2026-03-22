@@ -35,6 +35,8 @@ impl KeyExtractor for BearerKeyExtractor {
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
+            // TRADEOFF: rate limiter needs a key for every request, including unauthenticated ones.
+            // "anonymous" groups all unauthenticated requests under one rate limit bucket.
             .unwrap_or("anonymous");
         Ok(key.to_string())
     }
@@ -261,8 +263,10 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
         ValueRef::Timestamp(_, us) => serde_json::json!(us),
         ValueRef::Date32(d) => serde_json::json!(d),
         ValueRef::Time64(_, t) => serde_json::json!(t),
-        // Compound types: render as string representation
-        _ => serde_json::Value::String(format!("{val:?}")),
+        // TRADEOFF: DuckDB ValueRef has 20+ variants including Map, List, Enum, Union, etc.
+        // Exhaustive matching would break on every duckdb-rs update. Debug-format is safe
+        // because this is user-facing query output, not internal data flow.
+        val => serde_json::Value::String(format!("{val:?}")),
     }
 }
 

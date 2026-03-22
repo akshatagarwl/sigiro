@@ -1,0 +1,18 @@
+# Tiger Style clippy configuration
+# See: https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md
+#
+# Ideal Tiger Style targets (marked with *) vs current pragmatic thresholds:
+# * Functions: <70 lines, ≤4 params
+# * Cognitive complexity: ≤15
+#
+# We use slightly relaxed thresholds to avoid blocking on pre-existing code
+# while still catching new violations. Tighten these as code improves.
+
+# Functions should be short and focused (*ideal: 70)
+too-many-lines-threshold = 100
+
+# Max parameters per function (*ideal: 4, current: 5 to allow transition)
+too-many-arguments-threshold = 5
+
+# Cognitive complexity limit for readable functions (*ideal: 15)
+cognitive-complexity-threshold = 25

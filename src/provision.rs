@@ -104,7 +104,7 @@ pub async fn create_lago_customer(
         .context("failed to reach Lago")?;
     if !resp.status().is_success() {
         let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        let text = resp.text().await.context("failed to read error body")?;
         bail!("Lago customer creation failed: {status} — {text}");
     }
     tracing::info!("created Lago customer: {user_id}");
@@ -135,7 +135,7 @@ pub async fn create_unkey_key(
         .context("failed to reach Unkey")?;
     if !resp.status().is_success() {
         let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        let text = resp.text().await.context("failed to read error body")?;
         bail!("Unkey key creation failed: {status} — {text}");
     }
     let result: serde_json::Value = resp.json().await.context("invalid Unkey response")?;

@@ -1,7 +1,7 @@
 use sigiro::investigate::{
-    InvestigateMultiRequest, InvestigateRequest, SpanRow, adaptive_config, build_span_trees,
-    compute_coverage, investigate, investigate_multi, query_derived_events, query_logs,
-    query_service_context, us_to_iso,
+    InvestigateMultiRequest, InvestigateRequest, QueryCtx, SpanRow, adaptive_config,
+    build_span_trees, compute_coverage, investigate, investigate_multi, query_derived_events,
+    query_logs, query_service_context, us_to_iso,
 };
 use std::sync::{Arc, Mutex};
 
@@ -46,13 +46,13 @@ fn build_span_trees_root_only() {
 
 #[test]
 fn us_to_iso_valid() {
-    let iso = us_to_iso(1_700_000_000_000_000);
+    let iso = us_to_iso(1_700_000_000_000_000).unwrap();
     assert!(iso.contains("2023-11"));
 }
 
 #[test]
 fn us_to_iso_zero() {
-    let iso = us_to_iso(0);
+    let iso = us_to_iso(0).unwrap();
     assert!(iso.contains("1970"));
 }
 
@@ -189,7 +189,14 @@ fn service_context_empty_db() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
-    let ctx = query_service_context(&conn, "nonexistent", now_us - 60_000_000, now_us, "").unwrap();
+    let qctx = QueryCtx {
+        conn: &conn,
+        service: "nonexistent",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us,
+        prefix: "",
+    };
+    let ctx = query_service_context(&qctx).unwrap();
     assert_eq!(ctx.service_name, "nonexistent");
     assert_eq!(ctx.pod_count, 0);
     assert!(ctx.dependencies.is_empty());
@@ -213,14 +220,14 @@ fn service_context_with_k8s_attrs() {
              'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}')"
     ))
     .expect("insert");
-    let ctx = query_service_context(
-        &conn,
-        "checkout",
-        now_us - 60_000_000,
-        now_us + 60_000_000,
-        "",
-    )
-    .unwrap();
+    let qctx = QueryCtx {
+        conn: &conn,
+        service: "checkout",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
+        prefix: "",
+    };
+    let ctx = query_service_context(&qctx).unwrap();
     assert_eq!(ctx.namespace, Some("prod".to_string()));
     assert_eq!(ctx.deployment, Some("checkout-v2".to_string()));
     assert_eq!(ctx.pod_count, 2);
@@ -239,26 +246,26 @@ fn service_context_dependencies() {
             (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments')"
     ))
     .expect("insert");
-    let ctx = query_service_context(
-        &conn,
-        "checkout",
-        now_us - 60_000_000,
-        now_us + 60_000_000,
-        "",
-    )
-    .unwrap();
+    let qctx = QueryCtx {
+        conn: &conn,
+        service: "checkout",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
+        prefix: "",
+    };
+    let ctx = query_service_context(&qctx).unwrap();
     assert!(
         ctx.dependencies.contains(&"payments".to_string()),
         "checkout should depend on payments"
     );
-    let ctx2 = query_service_context(
-        &conn,
-        "payments",
-        now_us - 60_000_000,
-        now_us + 60_000_000,
-        "",
-    )
-    .unwrap();
+    let qctx2 = QueryCtx {
+        conn: &conn,
+        service: "payments",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
+        prefix: "",
+    };
+    let ctx2 = query_service_context(&qctx2).unwrap();
     assert!(
         ctx2.dependents.contains(&"checkout".to_string()),
         "payments should have checkout as dependent"
@@ -280,8 +287,14 @@ fn derived_events_deploy_detection() {
              '{{\"service.version\":\"v1.1.0\"}}')"
     ))
     .expect("insert");
-    let events =
-        query_derived_events(&conn, "api", now_us - 120_000_000, now_us + 60_000_000, "").unwrap();
+    let qctx = QueryCtx {
+        conn: &conn,
+        service: "api",
+        from_ts: now_us - 120_000_000,
+        to_ts: now_us + 60_000_000,
+        prefix: "",
+    };
+    let events = query_derived_events(&qctx).unwrap();
     let deploys: Vec<_> = events.iter().filter(|e| e.event_type == "deploy").collect();
     assert_eq!(
         deploys.len(),
@@ -305,8 +318,14 @@ fn derived_events_k8s_oomkilled() {
              'Container killed due to OOMKilled')"
     ))
     .expect("insert");
-    let events =
-        query_derived_events(&conn, "api", now_us - 60_000_000, now_us + 60_000_000, "").unwrap();
+    let qctx = QueryCtx {
+        conn: &conn,
+        service: "api",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
+        prefix: "",
+    };
+    let events = query_derived_events(&qctx).unwrap();
     let k8s: Vec<_> = events
         .iter()
         .filter(|e| e.event_type == "k8s_event")
@@ -329,15 +348,14 @@ fn log_template_dedup_ips() {
             (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', 'Connection timeout for 172.16.0.99')"
     ))
     .expect("insert");
-    let logs = query_logs(
-        &conn,
-        "api",
-        now_us - 60_000_000,
-        now_us + 60_000_000,
-        30,
-        "",
-    )
-    .unwrap();
+    let qctx = QueryCtx {
+        conn: &conn,
+        service: "api",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
+        prefix: "",
+    };
+    let logs = query_logs(&qctx, 30).unwrap();
     assert_eq!(
         logs.len(),
         1,
@@ -365,15 +383,14 @@ fn log_template_dedup_uuids() {
             (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'Failed to process order a1b2c3d4-e5f6-7890-abcd-ef1234567890')"
     ))
     .expect("insert");
-    let logs = query_logs(
-        &conn,
-        "api",
-        now_us - 60_000_000,
-        now_us + 60_000_000,
-        30,
-        "",
-    )
-    .unwrap();
+    let qctx = QueryCtx {
+        conn: &conn,
+        service: "api",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
+        prefix: "",
+    };
+    let logs = query_logs(&qctx, 30).unwrap();
     assert_eq!(logs.len(), 1, "2 logs with different UUIDs should collapse");
     assert!(logs[0].template.contains("{uuid}"));
     assert_eq!(logs[0].count, 2);
@@ -491,7 +508,14 @@ fn derived_events_no_events() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
-    let events = query_derived_events(&conn, "api", now_us - 60_000_000, now_us, "").unwrap();
+    let qctx = QueryCtx {
+        conn: &conn,
+        service: "api",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us,
+        prefix: "",
+    };
+    let events = query_derived_events(&qctx).unwrap();
     assert!(events.is_empty());
 }
 
