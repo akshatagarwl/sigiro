@@ -1,0 +1,15 @@
+# cargo-mutants configuration for sigiro
+# https://mutants.rs/configuration.html
+
+# Skip files where mutation testing adds no value
+exclude_globs = [
+    "src/main.rs",       # CLI entrypoint, tested via integration
+    "src/mcp.rs",        # MCP stdio transport, tested manually
+    "src/compactor.rs",  # S3 side effects, tested via integration
+]
+
+# Timeout per mutant (DuckDB compile is slow)
+timeout_multiplier = 3.0
+
+# Cap total time — this is for nightly CI, not local dev
+build_timeout_multiplier = 2.0
