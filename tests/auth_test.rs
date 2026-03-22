@@ -99,3 +99,29 @@ fn dev_key_prefix_recognized() {
     assert!("sigiro_dev_test".starts_with("sigiro_dev_"));
     assert!(!"sigiro_BRTRKFsL_xxx".starts_with("sigiro_dev_"));
 }
+
+#[test]
+fn verify_key_cached_returns_same_result() {
+    let conn = test_admin_conn();
+    let raw_key = create_key(&conn, "proj_cached", "free", 100).unwrap();
+
+    // First call — cache miss, hits DuckDB
+    let ctx1 = verify_key_cached(&conn, &raw_key).unwrap();
+    assert_eq!(ctx1.project_id, "proj_cached");
+
+    // Second call — cache hit, should return same result
+    let ctx2 = verify_key_cached(&conn, &raw_key).unwrap();
+    assert_eq!(ctx2.project_id, "proj_cached");
+    assert_eq!(ctx2.plan, "free");
+}
+
+#[test]
+fn verify_key_cached_invalid_key_not_cached() {
+    let conn = test_admin_conn();
+
+    // Invalid key should fail
+    assert!(verify_key_cached(&conn, "sigiro_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBB").is_err());
+
+    // Should fail again (not cached as success)
+    assert!(verify_key_cached(&conn, "sigiro_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBB").is_err());
+}

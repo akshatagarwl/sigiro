@@ -4,10 +4,12 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use dashmap::DashMap;
 use duckdb::Connection;
 use prefixed_api_key::{PrefixedApiKey, PrefixedApiKeyController};
 use problem_details::ProblemDetails;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Auth context extracted from the API key — attached to request extensions.
 /// Handlers use this to route to the correct per-project DuckDB.
@@ -15,6 +17,61 @@ use std::sync::{Arc, Mutex};
 pub struct AuthContext {
     pub project_id: String,
     pub plan: String,
+}
+
+/// Auth cache TTL — verified keys cached for 60 seconds.
+/// API keys don't change often; this eliminates the admin DuckDB mutex
+/// contention on the ingest hot path (every OTLP request was hitting it).
+const AUTH_CACHE_TTL: Duration = Duration::from_secs(60);
+
+struct CachedAuth {
+    ctx: AuthContext,
+    expires: Instant,
+}
+
+/// Global auth cache: raw_key → (AuthContext, expiry).
+/// DashMap for concurrent reads from tokio + inserter threads.
+fn auth_cache() -> &'static DashMap<String, CachedAuth> {
+    static CACHE: OnceLock<DashMap<String, CachedAuth>> = OnceLock::new();
+    CACHE.get_or_init(|| DashMap::with_capacity(1024))
+}
+
+/// Verify an API key with caching. Used by the OTLP ingest hot path.
+/// Checks the in-memory cache first; on miss, falls back to DuckDB verify
+/// and caches the result for AUTH_CACHE_TTL.
+///
+/// Returns AuthContext on success, ProblemDetails on failure.
+/// Failed verifications are NOT cached (attacker can't poison the cache).
+#[allow(clippy::result_large_err)]
+pub fn verify_key_cached(
+    conn: &Mutex<Connection>,
+    raw_key: &str,
+) -> Result<AuthContext, ProblemDetails> {
+    let cache = auth_cache();
+
+    // Fast path: cache hit with valid TTL
+    if let Some(entry) = cache.get(raw_key) {
+        if entry.expires > Instant::now() {
+            return Ok(entry.ctx.clone());
+        }
+        // Expired — drop ref before removing to avoid deadlock
+        drop(entry);
+        cache.remove(raw_key);
+    }
+
+    // Slow path: verify against DuckDB
+    let ctx = verify_key(conn, raw_key)?;
+
+    // Cache successful verification
+    cache.insert(
+        raw_key.to_string(),
+        CachedAuth {
+            ctx: ctx.clone(),
+            expires: Instant::now() + AUTH_CACHE_TTL,
+        },
+    );
+
+    Ok(ctx)
 }
 
 /// Build the prefixed-api-key controller with sigiro's key format.
