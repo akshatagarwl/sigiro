@@ -14,6 +14,7 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <Routes>
         <Route index element={<App />} />
+        <Route path="how-it-works" element={<App />} />
         <Route
           path="docs/*"
           element={
