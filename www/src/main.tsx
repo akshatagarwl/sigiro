@@ -5,6 +5,7 @@ import App from './App'
 import './index.css'
 
 const DocsRoutes = lazy(() => import('./docs/routes'))
+const Plan = lazy(() => import('./plan/Plan'))
 
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
 window.scrollTo(0, 0)
@@ -20,6 +21,14 @@ createRoot(document.getElementById('root')!).render(
           element={
             <Suspense fallback={<div style={{ background: '#0a0a0a', minHeight: '100vh' }} />}>
               <DocsRoutes />
+            </Suspense>
+          }
+        />
+        <Route
+          path="plan"
+          element={
+            <Suspense fallback={<div style={{ background: 'var(--bg)', minHeight: '100vh' }} />}>
+              <Plan />
             </Suspense>
           }
         />
