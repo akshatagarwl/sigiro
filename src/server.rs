@@ -127,11 +127,12 @@ pub async fn run_servers(
     admin_conn: Arc<Mutex<Connection>>,
     tx: Sender<IngestMsg>,
 ) -> Result<()> {
-    // gRPC server on :4317
+    // gRPC server on :4317 — authenticated via Bearer token in metadata
     let grpc_tx = tx.clone();
+    let grpc_admin = Arc::clone(&admin_conn);
     let grpc_handle = tokio::spawn(async move {
         let addr = "[::]:4317".parse().expect("valid addr");
-        let svc = OtlpGrpcService::new(grpc_tx);
+        let svc = OtlpGrpcService::new(grpc_tx, grpc_admin);
         tracing::info!("gRPC listening on {addr}");
         TonicServer::builder()
             .add_service(svc.trace_service())
@@ -146,7 +147,7 @@ pub async fn run_servers(
 
     let app_state = Arc::new(AppState {
         pool,
-        admin_conn,
+        admin_conn: Arc::clone(&admin_conn),
         http_client: reqwest::Client::new(),
     });
 
@@ -186,9 +187,10 @@ pub async fn run_servers(
             .context("HTTP server failed")
     });
 
-    // OTLP HTTP on :4318
+    // OTLP HTTP on :4318 — authenticated via Authorization header
     let http_otlp_tx = tx;
-    let otlp_http_app = crate::ingest::otlp_http_router(http_otlp_tx);
+    let otlp_admin = Arc::clone(&admin_conn);
+    let otlp_http_app = crate::ingest::otlp_http_router(http_otlp_tx, otlp_admin);
     let otlp_http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind("0.0.0.0:4318").await?;
         tracing::info!("OTLP HTTP listening on 0.0.0.0:4318");

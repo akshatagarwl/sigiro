@@ -133,8 +133,7 @@ async fn main() -> Result<()> {
             let shared_admin = Arc::new(Mutex::new(admin_conn));
 
             // Inserter thread: routes messages to per-project DuckDB via pool.
-            // OTLP ingest doesn't have auth yet (P1), so all data goes to "default" project.
-            // When OTLP auth lands, IngestMsg will carry project_id.
+            // Each IngestMsg carries project_id from OTLP auth (Bearer token).
             let inserter_pool = Arc::clone(&pool);
             std::thread::spawn(move || {
                 if let Err(e) = sigiro::inserter::run_inserter(&inserter_pool, rx) {

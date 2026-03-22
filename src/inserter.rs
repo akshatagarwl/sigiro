@@ -8,20 +8,16 @@ use crate::ingest::IngestMsg;
 use crate::pool::ProjectPool;
 
 /// Run the inserter loop routing messages to per-project DuckDB via the pool.
-///
-/// OTLP ingest doesn't carry project_id yet (P1 — OTLP ingest auth).
-/// Until then, all data routes to "default" project. When OTLP auth lands,
-/// IngestMsg will carry project_id and this will route per-project.
+/// Each IngestMsg carries the project_id extracted during OTLP auth.
 pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<()> {
     let prefix = pool.prefix();
     for msg in rx {
-        // TODO: extract project_id from msg when OTLP ingest auth lands
-        let project_id = "default";
+        let project_id = msg.project_id().to_string();
         let conn = pool
-            .get_or_create(project_id)
+            .get_or_create(&project_id)
             .context("failed to get project connection for inserter")?;
         if let Err(e) = handle_msg(&conn, msg, prefix) {
-            tracing::error!("inserter: {e:#}");
+            tracing::error!(project_id, "inserter: {e:#}");
         }
     }
     Ok(())
@@ -29,7 +25,7 @@ pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<
 
 fn handle_msg(conn: &Arc<Mutex<Connection>>, msg: IngestMsg, prefix: &str) -> Result<()> {
     match msg {
-        IngestMsg::Traces(bytes) => {
+        IngestMsg::Traces { bytes, .. } => {
             let batch = otlp2records::transform_traces(&bytes, InputFormat::Protobuf)
                 .context("failed to transform traces")?;
             if batch.num_rows() > 0 {
@@ -43,7 +39,7 @@ fn handle_msg(conn: &Arc<Mutex<Connection>>, msg: IngestMsg, prefix: &str) -> Re
                     .with_context(|| format!("failed to append {table} batch"))?;
             }
         }
-        IngestMsg::Logs(bytes) => {
+        IngestMsg::Logs { bytes, .. } => {
             let batch = otlp2records::transform_logs(&bytes, InputFormat::Protobuf)
                 .context("failed to transform logs")?;
             if batch.num_rows() > 0 {
@@ -57,7 +53,7 @@ fn handle_msg(conn: &Arc<Mutex<Connection>>, msg: IngestMsg, prefix: &str) -> Re
                     .with_context(|| format!("failed to append {table} batch"))?;
             }
         }
-        IngestMsg::Metrics(bytes) => {
+        IngestMsg::Metrics { bytes, .. } => {
             let batches: MetricBatches =
                 otlp2records::transform_metrics(&bytes, InputFormat::Protobuf)
                     .context("failed to transform metrics")?;

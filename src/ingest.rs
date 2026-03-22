@@ -1,6 +1,7 @@
 use anyhow::Result;
 use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
 use crossbeam_channel::Sender;
+use duckdb::Connection;
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
         ExportLogsServiceRequest, ExportLogsServiceResponse,
@@ -16,40 +17,78 @@ use opentelemetry_proto::tonic::collector::{
     },
 };
 use prost::Message;
+use std::sync::{Arc, Mutex};
 use tonic::{Request, Response, Status};
 
 pub enum IngestMsg {
-    Traces(Vec<u8>),
-    Logs(Vec<u8>),
-    Metrics(Vec<u8>),
+    Traces { project_id: String, bytes: Vec<u8> },
+    Logs { project_id: String, bytes: Vec<u8> },
+    Metrics { project_id: String, bytes: Vec<u8> },
+}
+
+impl IngestMsg {
+    pub fn project_id(&self) -> &str {
+        match self {
+            IngestMsg::Traces { project_id, .. }
+            | IngestMsg::Logs { project_id, .. }
+            | IngestMsg::Metrics { project_id, .. } => project_id,
+        }
+    }
 }
 
 pub struct OtlpGrpcService {
     tx: Sender<IngestMsg>,
+    admin_conn: Arc<Mutex<Connection>>,
 }
 
 impl OtlpGrpcService {
-    pub fn new(tx: Sender<IngestMsg>) -> Self {
-        Self { tx }
+    pub fn new(tx: Sender<IngestMsg>, admin_conn: Arc<Mutex<Connection>>) -> Self {
+        Self { tx, admin_conn }
     }
 
     pub fn trace_service(&self) -> TraceServiceServer<Self> {
         TraceServiceServer::new(Self {
             tx: self.tx.clone(),
+            admin_conn: Arc::clone(&self.admin_conn),
         })
     }
 
     pub fn logs_service(&self) -> LogsServiceServer<Self> {
         LogsServiceServer::new(Self {
             tx: self.tx.clone(),
+            admin_conn: Arc::clone(&self.admin_conn),
         })
     }
 
     pub fn metrics_service(&self) -> MetricsServiceServer<Self> {
         MetricsServiceServer::new(Self {
             tx: self.tx.clone(),
+            admin_conn: Arc::clone(&self.admin_conn),
         })
     }
+}
+
+/// Extract project_id from gRPC metadata Bearer token.
+/// Dev keys (sigiro_dev_*) route to "dev_project" without DB verification.
+fn extract_project_id_grpc(
+    admin_conn: &Mutex<Connection>,
+    metadata: &tonic::metadata::MetadataMap,
+) -> Result<String, Status> {
+    let token = metadata
+        .get("authorization")
+        .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
+        .to_str()
+        .map_err(|_| Status::unauthenticated("Invalid Authorization encoding"))?
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| Status::unauthenticated("Expected: Bearer <key>"))?;
+
+    if token.starts_with("sigiro_dev_") {
+        return Ok("dev_project".to_string());
+    }
+
+    let ctx = crate::auth::verify_key(admin_conn, token)
+        .map_err(|_| Status::unauthenticated("Invalid API key"))?;
+    Ok(ctx.project_id)
 }
 
 #[tonic::async_trait]
@@ -58,10 +97,11 @@ impl TraceService for OtlpGrpcService {
         &self,
         request: Request<ExportTraceServiceRequest>,
     ) -> Result<Response<ExportTraceServiceResponse>, Status> {
+        let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let msg = request.into_inner();
         let bytes = msg.encode_to_vec();
         self.tx
-            .send(IngestMsg::Traces(bytes))
+            .send(IngestMsg::Traces { project_id, bytes })
             .map_err(|e| Status::internal(e.to_string()))?;
         Ok(Response::new(ExportTraceServiceResponse {
             partial_success: None,
@@ -75,10 +115,11 @@ impl LogsService for OtlpGrpcService {
         &self,
         request: Request<ExportLogsServiceRequest>,
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
+        let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let msg = request.into_inner();
         let bytes = msg.encode_to_vec();
         self.tx
-            .send(IngestMsg::Logs(bytes))
+            .send(IngestMsg::Logs { project_id, bytes })
             .map_err(|e| Status::internal(e.to_string()))?;
         Ok(Response::new(ExportLogsServiceResponse {
             partial_success: None,
@@ -92,10 +133,11 @@ impl MetricsService for OtlpGrpcService {
         &self,
         request: Request<ExportMetricsServiceRequest>,
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
+        let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let msg = request.into_inner();
         let bytes = msg.encode_to_vec();
         self.tx
-            .send(IngestMsg::Metrics(bytes))
+            .send(IngestMsg::Metrics { project_id, bytes })
             .map_err(|e| Status::internal(e.to_string()))?;
         Ok(Response::new(ExportMetricsServiceResponse {
             partial_success: None,
@@ -104,34 +146,206 @@ impl MetricsService for OtlpGrpcService {
 }
 
 // OTLP HTTP endpoints on :4318
-pub fn otlp_http_router(tx: Sender<IngestMsg>) -> Router {
+
+struct OtlpHttpState {
+    tx: Sender<IngestMsg>,
+    admin_conn: Arc<Mutex<Connection>>,
+}
+
+pub fn otlp_http_router(tx: Sender<IngestMsg>, admin_conn: Arc<Mutex<Connection>>) -> Router {
+    let state = Arc::new(OtlpHttpState { tx, admin_conn });
     Router::new()
         .route("/v1/traces", post(otlp_http_traces))
         .route("/v1/logs", post(otlp_http_logs))
         .route("/v1/metrics", post(otlp_http_metrics))
-        .with_state(tx)
+        .with_state(state)
 }
 
-async fn otlp_http_traces(State(tx): State<Sender<IngestMsg>>, body: Bytes) -> StatusCode {
-    if let Err(e) = tx.send(IngestMsg::Traces(body.to_vec())) {
+/// Extract project_id from HTTP Authorization header.
+/// Same logic as gRPC: dev keys bypass, real keys verified against admin DB.
+fn extract_project_id_http(
+    admin_conn: &Mutex<Connection>,
+    headers: &axum::http::HeaderMap,
+) -> Result<String, StatusCode> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| {
+            tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
+            StatusCode::UNAUTHORIZED
+        })?;
+
+    if token.starts_with("sigiro_dev_") {
+        return Ok("dev_project".to_string());
+    }
+
+    let ctx = crate::auth::verify_key(admin_conn, token).map_err(|_| {
+        tracing::warn!("OTLP HTTP: invalid API key");
+        StatusCode::UNAUTHORIZED
+    })?;
+    Ok(ctx.project_id)
+}
+
+async fn otlp_http_traces(
+    State(state): State<Arc<OtlpHttpState>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+        Ok(id) => id,
+        Err(status) => return status,
+    };
+    if let Err(e) = state.tx.send(IngestMsg::Traces {
+        project_id,
+        bytes: body.to_vec(),
+    }) {
         tracing::error!("failed to enqueue traces: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
     StatusCode::OK
 }
 
-async fn otlp_http_logs(State(tx): State<Sender<IngestMsg>>, body: Bytes) -> StatusCode {
-    if let Err(e) = tx.send(IngestMsg::Logs(body.to_vec())) {
+async fn otlp_http_logs(
+    State(state): State<Arc<OtlpHttpState>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+        Ok(id) => id,
+        Err(status) => return status,
+    };
+    if let Err(e) = state.tx.send(IngestMsg::Logs {
+        project_id,
+        bytes: body.to_vec(),
+    }) {
         tracing::error!("failed to enqueue logs: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
     StatusCode::OK
 }
 
-async fn otlp_http_metrics(State(tx): State<Sender<IngestMsg>>, body: Bytes) -> StatusCode {
-    if let Err(e) = tx.send(IngestMsg::Metrics(body.to_vec())) {
+async fn otlp_http_metrics(
+    State(state): State<Arc<OtlpHttpState>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+        Ok(id) => id,
+        Err(status) => return status,
+    };
+    if let Err(e) = state.tx.send(IngestMsg::Metrics {
+        project_id,
+        bytes: body.to_vec(),
+    }) {
         tracing::error!("failed to enqueue metrics: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
     StatusCode::OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+
+    fn test_admin_conn() -> Arc<Mutex<Connection>> {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::auth::create_keys_table(&conn).unwrap();
+        Arc::new(Mutex::new(conn))
+    }
+
+    #[test]
+    fn grpc_auth_dev_key_returns_dev_project() {
+        let admin = test_admin_conn();
+        let mut metadata = tonic::metadata::MetadataMap::new();
+        metadata.insert(
+            "authorization",
+            "Bearer sigiro_dev_test123".parse().unwrap(),
+        );
+        let project_id = extract_project_id_grpc(&admin, &metadata).unwrap();
+        assert_eq!(project_id, "dev_project");
+    }
+
+    #[test]
+    fn grpc_auth_missing_header_fails() {
+        let admin = test_admin_conn();
+        let metadata = tonic::metadata::MetadataMap::new();
+        let err = extract_project_id_grpc(&admin, &metadata).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[test]
+    fn grpc_auth_invalid_key_fails() {
+        let admin = test_admin_conn();
+        let mut metadata = tonic::metadata::MetadataMap::new();
+        metadata.insert(
+            "authorization",
+            "Bearer sigiro_FAKEFAKE_FAKEFAKEFAKEFAKEFAKEFAKE"
+                .parse()
+                .unwrap(),
+        );
+        let err = extract_project_id_grpc(&admin, &metadata).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[test]
+    fn grpc_auth_real_key_returns_project_id() {
+        let admin = test_admin_conn();
+        let raw_key = crate::auth::create_key(&admin, "my_project", "free", 100).unwrap();
+        let mut metadata = tonic::metadata::MetadataMap::new();
+        metadata.insert(
+            "authorization",
+            format!("Bearer {raw_key}").parse().unwrap(),
+        );
+        let project_id = extract_project_id_grpc(&admin, &metadata).unwrap();
+        assert_eq!(project_id, "my_project");
+    }
+
+    #[test]
+    fn http_auth_dev_key_returns_dev_project() {
+        let admin = test_admin_conn();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            "Bearer sigiro_dev_test123".parse().unwrap(),
+        );
+        let project_id = extract_project_id_http(&admin, &headers).unwrap();
+        assert_eq!(project_id, "dev_project");
+    }
+
+    #[test]
+    fn http_auth_missing_header_returns_401() {
+        let admin = test_admin_conn();
+        let headers = HeaderMap::new();
+        let err = extract_project_id_http(&admin, &headers).unwrap_err();
+        assert_eq!(err, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn http_auth_invalid_key_returns_401() {
+        let admin = test_admin_conn();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            "Bearer sigiro_FAKEFAKE_FAKEFAKEFAKEFAKEFAKEFAKE"
+                .parse()
+                .unwrap(),
+        );
+        let err = extract_project_id_http(&admin, &headers).unwrap_err();
+        assert_eq!(err, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn http_auth_real_key_returns_project_id() {
+        let admin = test_admin_conn();
+        let raw_key = crate::auth::create_key(&admin, "http_proj", "builder", 500).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            format!("Bearer {raw_key}").parse().unwrap(),
+        );
+        let project_id = extract_project_id_http(&admin, &headers).unwrap();
+        assert_eq!(project_id, "http_proj");
+    }
 }
