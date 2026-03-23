@@ -26,6 +26,11 @@ export default defineConfig({
       typeCheck: true,
     },
   },
+  server: {
+    fs: {
+      allow: ['..'],
+    },
+  },
   fmt: {
     singleQuote: true,
     semi: false,

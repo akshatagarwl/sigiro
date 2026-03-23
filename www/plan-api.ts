@@ -36,6 +36,14 @@ function parseFrontmatter(content: string): { data: Record<string, unknown>; bod
     else if (typeof val === 'string' && /^\d+$/.test(val)) val = Number.parseInt(val, 10)
     data[key] = val
   }
+  // Parse concerns from JSON if present
+  if (typeof data.concerns === 'string') {
+    try {
+      data.concerns = JSON.parse(data.concerns)
+    } catch {
+      data.concerns = []
+    }
+  }
   return { data, body: match[2] }
 }
 
@@ -43,7 +51,9 @@ function parseFrontmatter(content: string): { data: Record<string, unknown>; bod
 function serializeFrontmatter(data: Record<string, unknown>): string {
   const lines: string[] = []
   for (const [k, v] of Object.entries(data)) {
-    if (typeof v === 'string') {
+    if (k === 'concerns' && Array.isArray(v)) {
+      lines.push(`${k}: "${JSON.stringify(v).replace(/"/g, '\\"')}"`)
+    } else if (typeof v === 'string') {
       lines.push(`${k}: "${v}"`)
     } else {
       lines.push(`${k}: ${String(v)}`)
@@ -78,8 +88,8 @@ export function planApiPlugin(): Plugin {
               if (!file.endsWith('.md')) continue
               const id = basename(file, '.md')
               const content = readFileSync(join(STEPS_DIR, file), 'utf-8')
-              const { data } = parseFrontmatter(content)
-              steps[id] = data
+              const { data, body } = parseFrontmatter(content)
+              steps[id] = { ...data, body: body.trim() }
             }
 
             res.setHeader('Content-Type', 'application/json')
