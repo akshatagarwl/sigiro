@@ -16,22 +16,13 @@ pub struct SigiroMcp {
     tool_router: ToolRouter<Self>,
 }
 
-/// Parameters for investigating a single service.
+/// Parameters for investigating one or more services.
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct InvestigateParams {
-    /// Service name to investigate
-    pub service: String,
-    /// Start timestamp in epoch microseconds (defaults to now - 15m)
-    pub from_ts: Option<i64>,
-    /// End timestamp in epoch microseconds (defaults to now)
-    pub to_ts: Option<i64>,
-}
-
-/// Parameters for investigating multiple services at once.
-#[derive(Deserialize, schemars::JsonSchema)]
-pub struct InvestigateMultiParams {
-    /// Service names to investigate (max 10)
-    pub services: Vec<String>,
+    /// Single service name to investigate
+    pub service: Option<String>,
+    /// Multiple service names to investigate (max 10). Use for incident topology.
+    pub services: Option<Vec<String>>,
     /// Start timestamp in epoch microseconds (defaults to now - 15m)
     pub from_ts: Option<i64>,
     /// End timestamp in epoch microseconds (defaults to now)
@@ -53,7 +44,9 @@ struct StatusResponse {
 
 #[tool_router]
 impl SigiroMcp {
-    /// Investigate a service — returns structured metrics, spans, logs, linked traces,
+    /// Investigate one or more services — returns a map of service name to investigation block.
+    /// Pass `service` for a single service or `services` for multi-service incidents (max 10).
+    /// Each block contains structured metrics, spans, logs, linked traces,
     /// operation summaries with baselines, coverage gaps, service context (topology),
     /// and derived events (deploys, K8s events).
     #[tool]
@@ -61,28 +54,11 @@ impl SigiroMcp {
         let p = params.0;
         let req = investigate::InvestigateRequest {
             service: p.service,
-            from_ts: p.from_ts,
-            to_ts: p.to_ts,
-        };
-        match investigate::investigate(&self.conn, &req, self.table_prefix) {
-            Ok(block) => serde_json::to_string_pretty(&block)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
-            Err(e) => format!("error: {e:#}"),
-        }
-    }
-
-    /// Investigate multiple services in one call (max 10). Returns a map of service name
-    /// to investigation block. Use this for incident topology — investigate all related
-    /// services at once instead of making N separate calls.
-    #[tool]
-    async fn sigiro_investigate_multi(&self, params: Parameters<InvestigateMultiParams>) -> String {
-        let p = params.0;
-        let req = investigate::InvestigateMultiRequest {
             services: p.services,
             from_ts: p.from_ts,
             to_ts: p.to_ts,
         };
-        match investigate::investigate_multi(&self.conn, &req, self.table_prefix) {
+        match investigate::investigate(&self.conn, &req, self.table_prefix) {
             Ok(blocks) => serde_json::to_string_pretty(&blocks)
                 .unwrap_or_else(|e| format!("serialization error: {e}")),
             Err(e) => format!("error: {e:#}"),
@@ -189,7 +165,7 @@ impl ServerHandler for SigiroMcp {
                 Implementation::new("sigiro", env!("CARGO_PKG_VERSION"))
                     .with_title("Sigiro — observability for AI agents"),
             )
-            .with_instructions("Sigiro is an observability backend for AI agents. Use sigiro_investigate to analyze a service, sigiro_investigate_multi for multi-service incidents, sigiro_query for ad-hoc SQL, and sigiro_status for a health check.")
+            .with_instructions("Sigiro is an observability backend for AI agents. Use sigiro_investigate to analyze one or more services (pass 'service' for one, 'services' for multiple), sigiro_query for ad-hoc SQL, and sigiro_status for a health check.")
     }
 }
 

@@ -166,7 +166,6 @@ pub async fn run_servers(
     let v1 = Router::new()
         .route("/query", post(query_handler))
         .route("/investigate", post(investigate_handler))
-        .route("/investigate/multi", post(investigate_multi_handler))
         .route("/services", get(services_handler))
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
@@ -372,21 +371,10 @@ async fn investigate_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
     Json(req): Json<investigate::InvestigateRequest>,
-) -> Result<Json<investigate::InvestigationBlock>, ProblemDetails> {
-    let conn = project_conn(&state, &auth)?;
-    let block = investigate::investigate(&conn, &req, state.pool.prefix())
-        .map_err(|e| internal_error(format!("{e:#}")))?;
-    Ok(Json(block))
-}
-
-async fn investigate_multi_handler(
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthContext>,
-    Json(req): Json<investigate::InvestigateMultiRequest>,
 ) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, ProblemDetails>
 {
     let conn = project_conn(&state, &auth)?;
-    let blocks = investigate::investigate_multi(&conn, &req, state.pool.prefix())
+    let blocks = investigate::investigate(&conn, &req, state.pool.prefix())
         .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(blocks))
 }

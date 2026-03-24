@@ -1,7 +1,6 @@
 use sigiro::investigate::{
-    InvestigateMultiRequest, InvestigateRequest, QueryCtx, SpanRow, adaptive_config,
-    build_span_trees, compute_coverage, investigate, investigate_multi, query_derived_events,
-    query_logs, query_service_context, us_to_iso,
+    InvestigateRequest, QueryCtx, SpanRow, adaptive_config, build_span_trees, compute_coverage,
+    investigate, query_derived_events, query_logs, query_service_context, us_to_iso,
 };
 use std::sync::{Arc, Mutex};
 
@@ -62,11 +61,13 @@ fn investigate_with_in_memory_db() {
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
     let req = InvestigateRequest {
-        service: "nonexistent".to_string(),
+        service: Some("nonexistent".to_string()),
+        services: None,
         from_ts: None,
         to_ts: None,
     };
-    let block = investigate(&shared, &req, "").expect("investigate should succeed on empty db");
+    let blocks = investigate(&shared, &req, "").expect("investigate should succeed on empty db");
+    let block = &blocks["nonexistent"];
     assert_eq!(block.service, "nonexistent");
     assert!(block.operation_summaries.is_empty());
     assert!(block.metrics.is_empty());
@@ -112,11 +113,13 @@ fn investigate_with_real_span_data() {
 
     let shared = Arc::new(Mutex::new(conn));
     let req = InvestigateRequest {
-        service: "checkout".to_string(),
+        service: Some("checkout".to_string()),
+        services: None,
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block = investigate(&shared, &req, "").expect("investigate");
+    let blocks = investigate(&shared, &req, "").expect("investigate");
+    let block = &blocks["checkout"];
 
     assert_eq!(block.operation_summaries.len(), 2);
     let checkout_op = &block.operation_summaries[0];
@@ -436,11 +439,13 @@ fn investigate_large_window_no_spans() {
     .expect("insert");
     let shared = Arc::new(Mutex::new(conn));
     let req = InvestigateRequest {
-        service: "svc".to_string(),
+        service: Some("svc".to_string()),
+        services: None,
         from_ts: Some(now_us - 3 * 3600 * 1_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block = investigate(&shared, &req, "").unwrap();
+    let blocks = investigate(&shared, &req, "").unwrap();
+    let block = &blocks["svc"];
     assert!(
         block.spans.is_empty(),
         ">2h window should omit flat spans (operation_summaries suffice)"
@@ -463,12 +468,13 @@ fn investigate_multi_basic() {
     ))
     .expect("insert");
     let shared = Arc::new(Mutex::new(conn));
-    let req = InvestigateMultiRequest {
-        services: vec!["svc-a".into(), "svc-b".into(), "svc-c".into()],
+    let req = InvestigateRequest {
+        service: None,
+        services: Some(vec!["svc-a".into(), "svc-b".into(), "svc-c".into()]),
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks = investigate_multi(&shared, &req, "").unwrap();
+    let blocks = investigate(&shared, &req, "").unwrap();
     assert_eq!(blocks.len(), 3);
     assert!(blocks.contains_key("svc-a"));
     assert!(blocks.contains_key("svc-b"));
@@ -481,12 +487,13 @@ fn investigate_multi_cap_enforced() {
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
     let services: Vec<String> = (0..11).map(|i| format!("svc-{i}")).collect();
-    let req = InvestigateMultiRequest {
-        services,
+    let req = InvestigateRequest {
+        service: None,
+        services: Some(services),
         from_ts: None,
         to_ts: None,
     };
-    let result = investigate_multi(&shared, &req, "");
+    let result = investigate(&shared, &req, "");
     assert!(result.is_err(), "should reject >10 services");
 }
 
@@ -495,12 +502,13 @@ fn investigate_multi_empty_rejected() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
-    let req = InvestigateMultiRequest {
-        services: vec![],
+    let req = InvestigateRequest {
+        service: None,
+        services: Some(vec![]),
         from_ts: None,
         to_ts: None,
     };
-    assert!(investigate_multi(&shared, &req, "").is_err());
+    assert!(investigate(&shared, &req, "").is_err());
 }
 
 #[test]
@@ -539,11 +547,13 @@ fn investigate_all_three_signals() {
 
     let shared = Arc::new(Mutex::new(conn));
     let req = InvestigateRequest {
-        service: "svc".to_string(),
+        service: Some("svc".to_string()),
+        services: None,
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block = investigate(&shared, &req, "").expect("investigate");
+    let blocks = investigate(&shared, &req, "").expect("investigate");
+    let block = &blocks["svc"];
 
     // Coverage: all 3 signal types present, no gaps
     assert!(block.coverage.has_spans);
@@ -593,11 +603,13 @@ fn operation_summary_baselines() {
 
     let shared = Arc::new(Mutex::new(conn));
     let req = InvestigateRequest {
-        service: "checkout".to_string(),
+        service: Some("checkout".to_string()),
+        services: None,
         from_ts: Some(now_us - 5 * 60 * 1_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block = investigate(&shared, &req, "").expect("investigate");
+    let blocks = investigate(&shared, &req, "").expect("investigate");
+    let block = &blocks["checkout"];
 
     let op = &block.operation_summaries[0];
     assert_eq!(op.span_name, "POST /checkout");

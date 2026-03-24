@@ -256,46 +256,17 @@ pub fn query_derived_events(ctx: &QueryCtx) -> Result<Vec<DerivedEvent>> {
 
 #[derive(Deserialize)]
 pub struct InvestigateRequest {
-    pub service: String,
+    /// Single service (convenience — mutually exclusive with `services`)
+    #[serde(default)]
+    pub service: Option<String>,
+    /// Multiple services (max 10)
+    #[serde(default)]
+    pub services: Option<Vec<String>>,
     pub from_ts: Option<i64>,
     pub to_ts: Option<i64>,
 }
 
-#[derive(Deserialize)]
-pub struct InvestigateMultiRequest {
-    pub services: Vec<String>,
-    pub from_ts: Option<i64>,
-    pub to_ts: Option<i64>,
-}
-
-const MAX_MULTI_SERVICES: usize = 10;
-
-pub fn investigate_multi(
-    conn: &Arc<Mutex<Connection>>,
-    req: &InvestigateMultiRequest,
-    prefix: &str,
-) -> Result<BTreeMap<String, InvestigationBlock>> {
-    anyhow::ensure!(!req.services.is_empty(), "services list must not be empty");
-    anyhow::ensure!(
-        req.services.len() <= MAX_MULTI_SERVICES,
-        "max {} services per multi-investigation, got {}",
-        MAX_MULTI_SERVICES,
-        req.services.len()
-    );
-
-    let mut results = BTreeMap::new();
-    for service in &req.services {
-        let single_req = InvestigateRequest {
-            service: service.clone(),
-            from_ts: req.from_ts,
-            to_ts: req.to_ts,
-        };
-        let block = investigate(conn, &single_req, prefix)
-            .with_context(|| format!("investigate failed for service: {service}"))?;
-        results.insert(service.clone(), block);
-    }
-    Ok(results)
-}
+const MAX_SERVICES: usize = 10;
 
 #[derive(Serialize, Deserialize)]
 pub struct InvestigationBlock {
@@ -468,10 +439,53 @@ pub fn investigate(
     conn: &Arc<Mutex<Connection>>,
     req: &InvestigateRequest,
     prefix: &str,
+) -> Result<BTreeMap<String, InvestigationBlock>> {
+    let services = resolve_services(req)?;
+    let mut results = BTreeMap::new();
+    for service in &services {
+        let block = investigate_one(conn, service, req.from_ts, req.to_ts, prefix)
+            .with_context(|| format!("investigate failed for service: {service}"))?;
+        results.insert(service.clone(), block);
+    }
+    Ok(results)
+}
+
+/// Resolve and validate the service list from the request.
+fn resolve_services(req: &InvestigateRequest) -> Result<Vec<String>> {
+    let services = match (&req.service, &req.services) {
+        (Some(s), None) => vec![s.clone()],
+        (None, Some(list)) => list.clone(),
+        (Some(s), Some(list)) => {
+            // Both provided — merge, deduplicate, preserve order
+            let mut merged = vec![s.clone()];
+            for item in list {
+                if item != s {
+                    merged.push(item.clone());
+                }
+            }
+            merged
+        }
+        (None, None) => anyhow::bail!("either 'service' or 'services' must be provided"),
+    };
+    anyhow::ensure!(!services.is_empty(), "services list must not be empty");
+    anyhow::ensure!(
+        services.len() <= MAX_SERVICES,
+        "max {MAX_SERVICES} services per investigation, got {}",
+        services.len()
+    );
+    Ok(services)
+}
+
+fn investigate_one(
+    conn: &Arc<Mutex<Connection>>,
+    service: &str,
+    from_ts: Option<i64>,
+    to_ts: Option<i64>,
+    prefix: &str,
 ) -> Result<InvestigationBlock> {
     let now_us = chrono::Utc::now().timestamp_micros();
-    let to_ts = req.to_ts.unwrap_or(now_us);
-    let from_ts = req.from_ts.unwrap_or(to_ts - 15 * 60 * 1_000_000);
+    let to_ts = to_ts.unwrap_or(now_us);
+    let from_ts = from_ts.unwrap_or(to_ts - 15 * 60 * 1_000_000);
 
     let conn = conn.lock().map_err(|e| {
         tracing::error!("DuckDB connection mutex poisoned");
@@ -481,7 +495,7 @@ pub fn investigate(
     let config = adaptive_config(from_ts, to_ts);
     let ctx = QueryCtx {
         conn: &conn,
-        service: &req.service,
+        service,
         from_ts,
         to_ts,
         prefix,
@@ -514,7 +528,7 @@ pub fn investigate(
     let events = query_derived_events(&ctx).context("derived events query failed")?;
 
     Ok(InvestigationBlock {
-        service: req.service.clone(),
+        service: service.to_string(),
         window: Window {
             from_ts,
             to_ts,

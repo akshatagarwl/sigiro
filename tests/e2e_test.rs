@@ -256,11 +256,13 @@ fn e2e_full_pipeline_ingest_and_investigate() {
 
     // Run investigate()
     let req = InvestigateRequest {
-        service: "checkout".to_string(),
+        service: Some("checkout".to_string()),
+        services: None,
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block = investigate(&conn, &req, "").expect("investigate should succeed");
+    let blocks = investigate(&conn, &req, "").expect("investigate should succeed");
+    let block = &blocks["checkout"];
 
     // Coverage
     assert!(block.coverage.has_spans, "should have spans");
@@ -314,22 +316,26 @@ fn e2e_multi_project_isolation() {
     // Investigate project A — should only see alpha-svc
     let conn_a = pool.get_or_create("proj_alpha").unwrap();
     let req_a = InvestigateRequest {
-        service: "alpha-svc".to_string(),
+        service: Some("alpha-svc".to_string()),
+        services: None,
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block_a = investigate(&conn_a, &req_a, "").unwrap();
+    let blocks_a = investigate(&conn_a, &req_a, "").unwrap();
+    let block_a = &blocks_a["alpha-svc"];
     assert_eq!(block_a.coverage.span_count, 30);
     assert_eq!(block_a.operation_summaries.len(), 1);
     assert_eq!(block_a.operation_summaries[0].span_name, "GET /alpha");
 
     // Project A should NOT see beta-svc
     let req_beta_on_a = InvestigateRequest {
-        service: "beta-svc".to_string(),
+        service: Some("beta-svc".to_string()),
+        services: None,
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block_beta_on_a = investigate(&conn_a, &req_beta_on_a, "").unwrap();
+    let blocks_beta_on_a = investigate(&conn_a, &req_beta_on_a, "").unwrap();
+    let block_beta_on_a = &blocks_beta_on_a["beta-svc"];
     assert_eq!(
         block_beta_on_a.coverage.span_count, 0,
         "beta-svc should NOT appear in project alpha's DB"
@@ -338,11 +344,13 @@ fn e2e_multi_project_isolation() {
     // Investigate project B — should only see beta-svc
     let conn_b = pool.get_or_create("proj_beta").unwrap();
     let req_b = InvestigateRequest {
-        service: "beta-svc".to_string(),
+        service: Some("beta-svc".to_string()),
+        services: None,
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block_b = investigate(&conn_b, &req_b, "").unwrap();
+    let blocks_b = investigate(&conn_b, &req_b, "").unwrap();
+    let block_b = &blocks_b["beta-svc"];
     assert_eq!(block_b.coverage.span_count, 50);
     assert_eq!(block_b.operation_summaries[0].span_name, "GET /beta");
 }
@@ -567,11 +575,13 @@ fn e2e_investigation_all_signals() {
 
     // Run investigate and verify coverage
     let req = InvestigateRequest {
-        service: "full-svc".to_string(),
+        service: Some("full-svc".to_string()),
+        services: None,
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let block = investigate(&conn, &req, "").expect("investigate with all signals");
+    let blocks = investigate(&conn, &req, "").expect("investigate with all signals");
+    let block = &blocks["full-svc"];
 
     assert!(
         block.coverage.has_spans,
