@@ -68,9 +68,12 @@ sigiro status
 # Raw SQL query
 sigiro query "SELECT count(*) FROM sigiro_spans WHERE service_name='checkout'"
 
-# Investigate a service (structured JSON: metrics + spans + logs + linked traces)
+# Investigate one or more services (structured JSON: metrics + spans + logs + linked traces)
 sigiro investigate checkout
 sigiro investigate checkout --from 1711000000 --to 1711001000
+
+# Investigate multiple services at once (incident topology)
+sigiro investigate checkout,payments,inventory
 
 # Pipe investigation to an LLM
 sigiro investigate checkout | llm "what's the root cause?"
@@ -85,12 +88,17 @@ curl http://localhost:9999/health
 # Raw SQL query
 curl -X POST http://localhost:9999/query -d "SELECT count(*) FROM sigiro_spans"
 
-# Investigate a service
+# Investigate one service
 curl -X POST http://localhost:9999/investigate \
   -H 'Content-Type: application/json' \
   -d '{"service":"checkout"}'
 
-# With custom time window (microsecond timestamps)
+# Multiple services in one call (max 10)
+curl -X POST http://localhost:9999/investigate \
+  -H 'Content-Type: application/json' \
+  -d '{"services":["checkout","payments","inventory"]}'
+
+# Custom time window (microsecond timestamps)
 curl -X POST http://localhost:9999/investigate \
   -H 'Content-Type: application/json' \
   -d '{"service":"checkout","from_ts":1711000000000000,"to_ts":1711001000000000}'
@@ -135,7 +143,37 @@ ORDER BY duration DESC
 LIMIT 50
 ```
 
-#### Logs — template dedup
+#### Logs — two-pass investigation (saves tokens, reduces context poisoning)
+
+If the service has many logs (hundreds+), use a two-pass approach:
+
+**Pass 1 — Templates (cheap, high signal):**
+Get deduplicated log templates with counts. This compresses thousands of lines
+into a handful of patterns. Look for rare/new templates or error severity.
+```sql
+SELECT regexp_replace(body, '[0-9a-f]{8,}|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9]+', '{id}', 'g') AS template,
+       severity_text, count(*) AS n,
+       min(timestamp) AS first_seen, max(timestamp) AS last_seen
+FROM sigiro_logs
+WHERE service_name='checkout'
+GROUP BY template, severity_text
+ORDER BY n DESC
+LIMIT 30
+```
+
+**Pass 2 — Drill into suspicious template (targeted, full detail):**
+Once you identify a suspicious template (rare occurrence, ERROR severity, or
+new pattern), fetch the raw logs matching it to get exact values.
+```sql
+SELECT timestamp, body, severity_text, trace_id, span_id, log_attributes
+FROM sigiro_logs
+WHERE service_name='checkout'
+  AND body LIKE '%connection%refused%'  -- match the suspicious template
+ORDER BY timestamp DESC
+LIMIT 20
+```
+
+**When to skip two-pass:** If there are <100 logs, just read them directly:
 ```sql
 SELECT body, severity_text, count(*) AS n,
        min(timestamp) AS first_seen, max(timestamp) AS last_seen
