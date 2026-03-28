@@ -193,6 +193,107 @@ WHERE trace_id IN ('abc123...', 'def456...')
 ORDER BY trace_id, timestamp
 ```
 
+## Platform Data Correlation
+
+Sigiro stores app-level telemetry (traces, logs, metrics). It does NOT store
+platform-level data (deploys, machine events, web vitals, infra metrics).
+During investigations, YOU are the glue — fetch platform data and correlate
+timestamps with sigiro's InvestigationBlock.
+
+### Investigation workflow
+
+1. sigiro investigate <service>  → get traces, logs, anomalies, span trees
+2. Query the platform API for the same time window → deploys, events, metrics
+3. Correlate: "deploy v1.2.3 at 14:32 → error spike in sigiro at 14:33"
+
+### Vercel
+
+Data to fetch (via Vercel REST API, needs VERCEL_TOKEN):
+- Recent deployments: GET /v6/deployments?projectId=<id>&limit=10
+  → deployment times, commit SHAs, build status
+- Web Vitals: GET /v1/web-vitals?projectId=<id>
+  → LCP, FID, CLS scores (Vercel Speed Insights)
+- Serverless function logs: GET /v2/deployments/<id>/events
+  → cold starts, timeouts, errors
+- Environment: check VERCEL_REGION, VERCEL_URL env vars in spans
+
+Correlate: deployment timestamp vs error spike in sigiro_spans.
+Correlate: web vitals degradation vs slow spans (high p95 duration).
+
+### Fly.io
+
+Data to fetch (via Fly Machines API, needs FLY_API_TOKEN):
+- Machine events: GET /v1/apps/<app>/machines/<id>/events
+  → start, stop, exit (with exit code + signal), OOM kills
+- Machine state: GET /v1/apps/<app>/machines
+  → running/stopped/created, region, image ref
+- Prometheus metrics: GET https://api.fly.io/prometheus/<org>/api/v1/query
+  → fly_instance_cpu, fly_instance_memory_*, fly_instance_up
+  → fly_edge_http_response_time, fly_app_concurrency
+
+Resource attributes to check in sigiro spans:
+  FLY_APP_NAME, FLY_MACHINE_ID, FLY_REGION, FLY_ALLOC_ID,
+  FLY_IMAGE_REF, FLY_VM_MEMORY_MB, FLY_PROCESS_GROUP
+
+Correlate: machine exit event vs error logs in sigiro_logs.
+Correlate: memory metric spike vs slow spans.
+Correlate: scale-to-zero restart vs cold start latency in spans.
+
+### Railway
+
+Data to fetch (via Railway GraphQL API, needs RAILWAY_TOKEN):
+- Deployments: query { deployments(projectId: "<id>") { ... } }
+  → deployment status, commit SHA, timestamps
+- Service metrics: query { metrics(serviceId: "<id>") { ... } }
+  → CPU, memory, network usage
+- Logs: query { deploymentLogs(deploymentId: "<id>") { ... } }
+  → build + runtime logs (Railway's own log stream)
+
+Resource attributes to check in sigiro spans:
+  RAILWAY_SERVICE_NAME, RAILWAY_ENVIRONMENT, RAILWAY_DEPLOYMENT_ID
+
+Correlate: deployment timestamp vs error spike in sigiro_spans.
+
+### GitHub Actions (CI/CD)
+
+Data to fetch (via GitHub REST API, needs GITHUB_TOKEN):
+- Workflow runs: GET /repos/<owner>/<repo>/actions/runs?per_page=10
+  → run times, status, triggering commit SHA
+- Failed jobs: GET /repos/<owner>/<repo>/actions/runs/<id>/jobs
+  → step-level failure details
+
+Correlate: merge/deploy workflow completion → deployment → error spike.
+Use commit SHA to link: GitHub run → Vercel/Railway/Fly deployment → sigiro spans.
+
+### GenAI SDK telemetry
+
+If the app uses OpenAI, Anthropic, or other LLM APIs with OTel instrumentation
+(e.g., opentelemetry-instrumentation-openai), these span attributes are already
+in sigiro_spans:
+
+  gen_ai.system          → "openai", "anthropic", etc.
+  gen_ai.request.model   → "gpt-4", "claude-3-opus", etc.
+  gen_ai.usage.input_tokens
+  gen_ai.usage.output_tokens
+  gen_ai.response.finish_reason
+
+Useful queries:
+  -- Cost by model (approximate)
+  SELECT json_extract_string(span_attributes, '$.gen_ai.request.model') AS model,
+         SUM(CAST(json_extract(span_attributes, '$.gen_ai.usage.input_tokens') AS BIGINT)) AS input_tokens,
+         SUM(CAST(json_extract(span_attributes, '$.gen_ai.usage.output_tokens') AS BIGINT)) AS output_tokens
+  FROM sigiro_spans
+  WHERE json_extract_string(span_attributes, '$.gen_ai.system') IS NOT NULL
+  GROUP BY model
+
+  -- Slowest LLM calls
+  SELECT span_name, duration/1000000 AS ms,
+         json_extract_string(span_attributes, '$.gen_ai.request.model') AS model
+  FROM sigiro_spans
+  WHERE json_extract_string(span_attributes, '$.gen_ai.system') IS NOT NULL
+  ORDER BY duration DESC
+  LIMIT 20
+
 ## Environment Variables
 
 ```bash
