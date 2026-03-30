@@ -265,6 +265,58 @@ Data to fetch (via GitHub REST API, needs GITHUB_TOKEN):
 Correlate: merge/deploy workflow completion → deployment → error spike.
 Use commit SHA to link: GitHub run → Vercel/Railway/Fly deployment → sigiro spans.
 
+### Database Platforms
+
+Sigiro captures db.statement and db.system from OTel spans (Layer 1).
+For deeper DB debugging, query the platform's own insights API (Layer 2).
+
+**PlanetScale** (needs PLANETSCALE_TOKEN):
+- Query Insights: GET /v1/organizations/{org}/databases/{db}/query-statistics
+  → slow queries, QPS, rows read/written, latency percentiles
+- Deploy requests: GET /v1/organizations/{org}/databases/{db}/deploy-requests
+  → schema migration history, timing
+
+**Neon** (needs NEON_API_KEY):
+- Project info: GET /projects/{id}
+  → compute endpoints, connection pooling config
+- Query stats: connect to Neon Postgres, run:
+  SELECT query, calls, mean_exec_time, rows FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 20
+
+**Supabase** (needs SUPABASE_SERVICE_KEY):
+- Query stats: same pg_stat_statements via SQL connection
+- Logs: GET /v1/projects/{ref}/analytics/endpoints/logs.all
+  → Postgres logs, auth logs, API gateway logs
+
+**Turso/libSQL** (needs TURSO_TOKEN):
+- Usage: GET /v1/organizations/{org}/databases/{db}/usage
+  → query count, rows read, storage used
+
+**Any Postgres** (direct connection):
+- EXPLAIN ANALYZE <slow query from sigiro spans>
+- SELECT * FROM pg_stat_activity WHERE state = 'active'
+- SELECT * FROM pg_locks WHERE NOT granted
+
+Correlate: slow db.statement spans in Sigiro → query stats in DB platform API.
+Correlate: schema migration deploy request → error spike in sigiro_spans.
+
+### System-Level Debugging (Layer 3)
+
+If Layer 1 (Sigiro) and Layer 2 (platform APIs) don't explain the problem,
+use bpftrace for kernel-level visibility. Requires MCPtrace MCP server
+(github.com/eunomia-bpf/MCPtrace) + Linux + root access.
+
+Only works on: Fly Machines, K8s nodes, self-hosted VMs.
+Does NOT work on: Vercel, Railway, PaaS databases.
+
+Useful bpftrace programs for debugging:
+- TCP retransmits: tracepoint:tcp:tcp_retransmit_skb
+- DNS latency: kprobe:tcp_v4_connect (filter port 53)
+- Disk I/O latency: tracepoint:block:block_rq_complete
+- OOM kills: tracepoint:oom:oom_score_adj_update
+- Process exec: tracepoint:syscalls:sys_enter_execve
+
+Workflow: list_probes → exec_program → get_result → correlate with Sigiro spans.
+
 ### GenAI SDK telemetry
 
 If the app uses OpenAI, Anthropic, or other LLM APIs with OTel instrumentation
