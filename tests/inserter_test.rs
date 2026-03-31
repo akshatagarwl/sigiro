@@ -90,8 +90,9 @@ fn inserter_processes_spans_for_single_project() {
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
+    let wal_dir = dir.path().join("wal");
     let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
+        sigiro::inserter::run_inserter(&pool_clone, rx, wal_dir).unwrap();
     });
 
     // Send 10 batches of 100 spans
@@ -124,8 +125,9 @@ fn inserter_isolates_projects() {
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
+    let wal_dir = dir.path().join("wal");
     let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
+        sigiro::inserter::run_inserter(&pool_clone, rx, wal_dir).unwrap();
     });
 
     // Send to two different projects
@@ -179,8 +181,9 @@ fn inserter_handles_bounded_channel_backpressure() {
     let (tx, rx) = unbounded(); // dispatcher channel is unbounded
 
     let pool_clone = Arc::clone(&pool);
+    let wal_dir = dir.path().join("wal");
     let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
+        sigiro::inserter::run_inserter(&pool_clone, rx, wal_dir).unwrap();
     });
 
     // Send many messages quickly — some may be dropped due to bounded per-project channel
@@ -221,8 +224,9 @@ fn inserter_throughput_single_project() {
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
+    let wal_dir = dir.path().join("wal");
     let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
+        sigiro::inserter::run_inserter(&pool_clone, rx, wal_dir).unwrap();
     });
 
     let start = Instant::now();

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::ingest::IngestMsg;
 use crate::pool::ProjectPool;
+use crate::wal;
 
 /// Max rows buffered per table before forcing a flush.
 const FLUSH_ROW_THRESHOLD: usize = 10_000;
@@ -21,6 +22,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 struct ProjectFlusher {
     conn: Arc<Mutex<Connection>>,
     prefix: &'static str,
+    wal_dir: std::path::PathBuf,
     /// Buffered RecordBatches per table, flushed in bulk.
     spans_buf: Vec<RecordBatch>,
     logs_buf: Vec<RecordBatch>,
@@ -36,10 +38,15 @@ struct ProjectFlusher {
 }
 
 impl ProjectFlusher {
-    fn new(conn: Arc<Mutex<Connection>>, prefix: &'static str) -> Self {
+    fn new(
+        conn: Arc<Mutex<Connection>>,
+        prefix: &'static str,
+        wal_dir: std::path::PathBuf,
+    ) -> Self {
         Self {
             conn,
             prefix,
+            wal_dir,
             spans_buf: Vec::new(),
             logs_buf: Vec::new(),
             gauge_buf: Vec::new(),
@@ -94,6 +101,24 @@ impl ProjectFlusher {
             return Ok(());
         }
 
+        // WAL: serialize buffers to disk before DuckDB append
+        let p = self.prefix;
+        let tbl_spans = format!("{p}sigiro_spans");
+        let tbl_logs = format!("{p}sigiro_logs");
+        let tbl_gauge = format!("{p}sigiro_metrics_gauge");
+        let tbl_sum = format!("{p}sigiro_metrics_sum");
+        let tbl_hist = format!("{p}sigiro_metrics_histogram");
+        let tbl_ehist = format!("{p}sigiro_metrics_exp_histogram");
+        let wal_entries: Vec<(&str, &[RecordBatch])> = vec![
+            (&tbl_spans, &self.spans_buf[..]),
+            (&tbl_logs, &self.logs_buf[..]),
+            (&tbl_gauge, &self.gauge_buf[..]),
+            (&tbl_sum, &self.sum_buf[..]),
+            (&tbl_hist, &self.histogram_buf[..]),
+            (&tbl_ehist, &self.exp_histogram_buf[..]),
+        ];
+        let wal_path = wal::write_wal(&self.wal_dir, project_id, &wal_entries)?;
+
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
 
         // Flush spans
@@ -144,6 +169,11 @@ impl ProjectFlusher {
             "sigiro_metrics_exp_histogram",
         )?;
 
+        // DuckDB flush succeeded — remove WAL file
+        if let Err(e) = std::fs::remove_file(&wal_path) {
+            tracing::warn!(path = %wal_path.display(), "failed to remove WAL file: {e}");
+        }
+
         let total = self.spans_rows + self.logs_rows + self.metrics_rows;
         tracing::debug!(
             project_id,
@@ -192,7 +222,11 @@ fn flush_metric_buf(
 /// and flushes to DuckDB on timer (1s) or count (10k rows) threshold.
 /// Project A's ingest load cannot block project B.
 #[allow(clippy::needless_pass_by_value)] // Receiver is consumed by the for loop
-pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<()> {
+pub fn run_inserter(
+    pool: &Arc<ProjectPool>,
+    rx: Receiver<IngestMsg>,
+    wal_dir: std::path::PathBuf,
+) -> Result<()> {
     let prefix = pool.prefix();
 
     // Per-project sender channels + join handles. Flusher threads are spawned lazily.
@@ -216,10 +250,11 @@ pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<
                 let (tx, prx) = crossbeam_channel::bounded::<IngestMsg>(10_000);
 
                 let pid = project_id.clone();
+                let wd = wal_dir.clone();
                 let handle = std::thread::Builder::new()
                     .name(format!("flusher-{pid}"))
                     .spawn(move || {
-                        run_project_flusher(&pid, conn, prx, prefix);
+                        run_project_flusher(&pid, conn, prx, prefix, wd);
                     })
                     .with_context(|| format!("failed to spawn flusher for {project_id}"))?;
 
@@ -271,8 +306,9 @@ fn run_project_flusher(
     conn: Arc<Mutex<Connection>>,
     rx: Receiver<IngestMsg>,
     prefix: &'static str,
+    wal_dir: std::path::PathBuf,
 ) {
-    let mut flusher = ProjectFlusher::new(conn, prefix);
+    let mut flusher = ProjectFlusher::new(conn, prefix, wal_dir);
 
     loop {
         // Use recv_timeout so we flush on the timer even if no new messages arrive.

@@ -127,6 +127,14 @@ async fn main() -> Result<()> {
             let pool = Arc::new(ProjectPool::new(dir.clone(), prefix, 100));
             let admin_conn = open_admin_db()?;
 
+            // Replay any WAL files from a previous crash
+            let wal_dir = dir.join("wal");
+            match sigiro::wal::replay_all(&wal_dir, &pool) {
+                Ok(0) => {}
+                Ok(rows) => tracing::info!(rows, "WAL replay complete"),
+                Err(e) => tracing::error!("WAL replay failed: {e:#}"),
+            }
+
             tracing::info!("sigiro ready — data_dir={}", dir.display());
 
             let (tx, rx) = crossbeam_channel::unbounded();
@@ -135,8 +143,10 @@ async fn main() -> Result<()> {
             // Inserter thread: routes messages to per-project DuckDB via pool.
             // Each IngestMsg carries project_id from OTLP auth (Bearer token).
             let inserter_pool = Arc::clone(&pool);
+            let inserter_wal_dir = wal_dir;
             std::thread::spawn(move || {
-                if let Err(e) = sigiro::inserter::run_inserter(&inserter_pool, rx) {
+                if let Err(e) = sigiro::inserter::run_inserter(&inserter_pool, rx, inserter_wal_dir)
+                {
                     tracing::error!("inserter fatal: {e:#}");
                     std::process::exit(1);
                 }
