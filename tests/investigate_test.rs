@@ -339,18 +339,39 @@ fn derived_events_k8s_oomkilled() {
 
 #[test]
 fn log_template_dedup_ips() {
+    // DRAIN dedup: logs with different IPs should collapse to one template.
+    // We simulate what the inserter does: classify via DRAIN, store template_id.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
-    conn.execute_batch(&format!(
-        "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
-            severity_text, body)
-         VALUES
-            (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', 'Connection timeout for 192.168.1.1'),
-            (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', 'Connection timeout for 10.0.0.5'),
-            (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', 'Connection timeout for 172.16.0.99')"
-    ))
-    .expect("insert");
+
+    let mut drain = sigiro::drain::DrainTree::new();
+    // Pre-warm DRAIN with two examples so the template stabilizes before DB inserts.
+    drain.classify("Connection timeout for 1.1.1.1");
+    drain.classify("Connection timeout for 2.2.2.2");
+    let bodies = [
+        "Connection timeout for 192.168.1.1",
+        "Connection timeout for 10.0.0.5",
+        "Connection timeout for 172.16.0.99",
+    ];
+    for body in &bodies {
+        let (template, id) = drain.classify(body);
+        conn.execute(
+            &format!(
+                "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
+                    severity_text, body, template_id)
+                 VALUES (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', ?, ?)"
+            ),
+            duckdb::params![body, id],
+        )
+        .expect("insert log");
+        conn.execute(
+            "INSERT OR IGNORE INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
+            duckdb::params![id, template],
+        )
+        .expect("insert template");
+    }
+
     let qctx = QueryCtx {
         conn: &conn,
         service: "api",
@@ -365,27 +386,45 @@ fn log_template_dedup_ips() {
         "3 logs with different IPs should collapse to 1 template"
     );
     assert_eq!(logs[0].count, 3);
-    assert!(logs[0].template.contains("{ip}"));
     assert!(
-        logs[0].body.contains("192.168")
-            || logs[0].body.contains("10.0.0")
-            || logs[0].body.contains("172.16")
+        logs[0].template.contains("<*>"),
+        "DRAIN should wildcard the varying IP"
     );
 }
 
 #[test]
 fn log_template_dedup_uuids() {
+    // DRAIN dedup: logs with different UUIDs should collapse to one template.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = chrono::Utc::now().timestamp_micros();
-    conn.execute_batch(&format!(
-        "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
-            severity_text, body)
-         VALUES
-            (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'Failed to process order 550e8400-e29b-41d4-a716-446655440000'),
-            (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'Failed to process order a1b2c3d4-e5f6-7890-abcd-ef1234567890')"
-    ))
-    .expect("insert");
+
+    let mut drain = sigiro::drain::DrainTree::new();
+    // Pre-warm DRAIN with two examples so the template stabilizes before DB inserts.
+    drain.classify("Failed to process order 00000000-0000-0000-0000-000000000000");
+    drain.classify("Failed to process order 11111111-1111-1111-1111-111111111111");
+    let bodies = [
+        "Failed to process order 550e8400-e29b-41d4-a716-446655440000",
+        "Failed to process order a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    ];
+    for body in &bodies {
+        let (template, id) = drain.classify(body);
+        conn.execute(
+            &format!(
+                "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
+                    severity_text, body, template_id)
+                 VALUES (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', ?, ?)"
+            ),
+            duckdb::params![body, id],
+        )
+        .expect("insert log");
+        conn.execute(
+            "INSERT OR IGNORE INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
+            duckdb::params![id, template],
+        )
+        .expect("insert template");
+    }
+
     let qctx = QueryCtx {
         conn: &conn,
         service: "api",
@@ -395,7 +434,10 @@ fn log_template_dedup_uuids() {
     };
     let logs = query_logs(&qctx, 30).unwrap();
     assert_eq!(logs.len(), 1, "2 logs with different UUIDs should collapse");
-    assert!(logs[0].template.contains("{uuid}"));
+    assert!(
+        logs[0].template.contains("<*>"),
+        "DRAIN should wildcard the varying UUID"
+    );
     assert_eq!(logs[0].count, 2);
 }
 

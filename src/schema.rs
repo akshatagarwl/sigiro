@@ -53,10 +53,22 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             scope_name            VARCHAR,
             scope_version         VARCHAR,
             scope_attributes      VARCHAR,
-            log_attributes        VARCHAR
+            log_attributes        VARCHAR,
+            template_id           UBIGINT
         )"
     ))
     .context("failed to create sigiro_logs")?;
+
+    // Log template lookup table — maps template_id to template text.
+    // Populated at insert time by the DRAIN algorithm.
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_log_templates (
+            template_id           UBIGINT PRIMARY KEY,
+            template_text         VARCHAR NOT NULL,
+            first_seen            TIMESTAMP NOT NULL DEFAULT now()
+        )"
+    ))
+    .context("failed to create sigiro_log_templates")?;
 
     // Gauge — 16 columns, matches otlp2records::gauge_schema()
     conn.execute_batch(&format!(

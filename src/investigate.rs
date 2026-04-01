@@ -771,29 +771,24 @@ fn parse_span_row(row: &duckdb::Row<'_>) -> Result<SpanRow> {
 }
 
 pub fn query_logs(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogTemplate>> {
-    // Normalize log bodies to templates: UUIDs → {uuid}, IPs → {ip}, long numbers → {id}.
-    // GROUP BY template collapses noisy logs (e.g., 1000 "timeout for 10.0.0.X" → 1 template).
+    // DRAIN templates are computed at insert time (inserter.rs) and stored as template_id.
+    // GROUP BY template_id collapses noisy logs; JOIN fetches the template text.
     // first(body) keeps one real exemplar for context.
     let sql = format!(
         "SELECT
-            regexp_replace(
-              regexp_replace(
-                regexp_replace(body,
-                  '[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}', '{{uuid}}', 'gi'),
-                '\\b\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}\\b', '{{ip}}', 'g'),
-              '\\b\\d{{4,}}\\b', '{{id}}', 'g'
-            ) AS template,
-            first(body) AS exemplar_body,
-            severity_text,
+            COALESCE(t.template_text, l.body) AS template,
+            first(l.body) AS exemplar_body,
+            l.severity_text,
             count(*) AS count,
-            min(timestamp)::VARCHAR AS first_seen,
-            max(timestamp)::VARCHAR AS last_seen
-        FROM {}sigiro_logs
-        WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
-        GROUP BY template, severity_text
+            min(l.timestamp)::VARCHAR AS first_seen,
+            max(l.timestamp)::VARCHAR AS last_seen
+        FROM {prefix}sigiro_logs l
+        LEFT JOIN {prefix}sigiro_log_templates t ON l.template_id = t.template_id
+        WHERE l.service_name = ? AND l.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+        GROUP BY template, l.severity_text
         ORDER BY count DESC
         LIMIT ?",
-        ctx.prefix
+        prefix = ctx.prefix
     );
 
     let mut stmt = ctx.conn.prepare(&sql)?;

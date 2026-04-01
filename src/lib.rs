@@ -3,6 +3,7 @@ pub mod billing;
 pub mod client;
 pub mod compactor;
 pub mod config;
+pub mod drain;
 pub mod ingest;
 pub mod inserter;
 pub mod investigate;

@@ -1,13 +1,15 @@
 use anyhow::{Context, Result};
+use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use crossbeam_channel::Receiver;
 use dashmap::DashMap;
 use duckdb::Connection;
 use otlp2records::MetricBatches;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::drain::DrainTree;
 use crate::ingest::IngestMsg;
 use crate::pool::ProjectPool;
 
@@ -62,6 +64,11 @@ struct ProjectFlusher {
     /// Total buffered rows across all signals for flush threshold.
     total_rows: usize,
     last_flush: Instant,
+    /// DRAIN tree for log template extraction. Lives in memory per-project.
+    drain: DrainTree,
+    /// New templates discovered this flush cycle: template_id → template_text.
+    /// Flushed to sigiro_log_templates after DuckDB log append.
+    pending_templates: HashMap<u64, String>,
 }
 
 impl ProjectFlusher {
@@ -85,12 +92,60 @@ impl ProjectFlusher {
             buffers,
             total_rows: 0,
             last_flush: Instant::now(),
+            drain: DrainTree::new(),
+            pending_templates: HashMap::new(),
         }
     }
 
     fn buffer(&mut self, signal: SignalTable, batch: RecordBatch) {
+        let batch = if signal == SignalTable::Logs {
+            self.classify_logs(&batch)
+        } else {
+            batch
+        };
         self.total_rows += batch.num_rows();
         self.buffers.entry(signal).or_default().push(batch);
+    }
+
+    /// Run DRAIN on each log body and append a `template_id` column to the batch.
+    fn classify_logs(&mut self, batch: &RecordBatch) -> RecordBatch {
+        let body_idx = batch
+            .schema()
+            .index_of("body")
+            .expect("sigiro_logs must have body column");
+        let body_col = batch
+            .column(body_idx)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("body column must be StringArray");
+
+        let mut template_ids = Vec::with_capacity(batch.num_rows());
+        for i in 0..batch.num_rows() {
+            let body = body_col.value(i);
+            let (template, id) = self.drain.classify(body);
+            template_ids.push(id);
+            self.pending_templates.entry(id).or_insert(template);
+        }
+
+        // Append template_id column to the existing batch
+        let id_array = std::sync::Arc::new(UInt64Array::from(template_ids));
+        let mut columns: Vec<std::sync::Arc<dyn Array>> = batch.columns().to_vec();
+        columns.push(id_array);
+
+        let mut fields: Vec<arrow::datatypes::Field> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        fields.push(arrow::datatypes::Field::new(
+            "template_id",
+            arrow::datatypes::DataType::UInt64,
+            true,
+        ));
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
+
+        RecordBatch::try_new(schema, columns).expect("failed to add template_id column")
     }
 
     fn buffer_metrics(&mut self, batches: MetricBatches) {
@@ -137,6 +192,31 @@ impl ProjectFlusher {
                 }
             }
             // Appender::drop flushes automatically
+        }
+
+        // Flush new log templates to the lookup table
+        if !self.pending_templates.is_empty() {
+            let tpl_table = format!(
+                "{}sigiro_log_templates",
+                self.table_names
+                    .get(&SignalTable::Logs)
+                    .map_or("", |t| { t.strip_suffix("sigiro_logs").unwrap_or("") })
+            );
+            for (id, text) in self.pending_templates.drain() {
+                // INSERT OR IGNORE: if template_id already exists, skip.
+                if let Err(e) = conn.execute(
+                    &format!(
+                        "INSERT OR IGNORE INTO {tpl_table} (template_id, template_text) VALUES (?, ?)"
+                    ),
+                    duckdb::params![id, text],
+                ) {
+                    tracing::warn!(
+                        project_id,
+                        template_id = id,
+                        "failed to insert log template: {e}"
+                    );
+                }
+            }
         }
 
         tracing::debug!(project_id, rows = self.total_rows, "flushed batches");
