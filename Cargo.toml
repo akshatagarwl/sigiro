@@ -22,7 +22,7 @@ otlp2records = "0.4"
 tonic = "0.14"
 prost = "0.14"
 arrow = "58"
-opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics"] }
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles"] }
 crossbeam-channel = "0.5"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["compression-full", "cors"] }

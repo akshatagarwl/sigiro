@@ -23,18 +23,26 @@ pub struct Coverage {
     pub has_spans: bool,
     pub has_logs: bool,
     pub has_metrics: bool,
+    pub has_profiles: bool,
     pub span_count: i64,
     pub log_template_count: i64,
     pub metric_series_count: i64,
+    pub profile_sample_count: i64,
     /// Human-readable gap descriptions for the agent.
     /// Empty when all signal types are present.
     pub gaps: Vec<String>,
 }
 
-pub fn compute_coverage(spans_total: i64, logs_total: i64, metrics_count: usize) -> Coverage {
+pub fn compute_coverage(
+    spans_total: i64,
+    logs_total: i64,
+    metrics_count: usize,
+    profile_samples: i64,
+) -> Coverage {
     let has_spans = spans_total > 0;
     let has_logs = logs_total > 0;
     let has_metrics = metrics_count > 0;
+    let has_profiles = profile_samples > 0;
 
     let mut gaps = Vec::new();
     if !has_spans {
@@ -54,9 +62,11 @@ pub fn compute_coverage(spans_total: i64, logs_total: i64, metrics_count: usize)
         has_spans,
         has_logs,
         has_metrics,
+        has_profiles,
         span_count: spans_total,
         log_template_count: logs_total,
         metric_series_count: metrics_count as i64,
+        profile_sample_count: profile_samples,
         gaps,
     }
 }
@@ -294,6 +304,8 @@ pub struct InvestigationBlock {
     pub span_trees: BTreeMap<String, Vec<String>>,
     pub logs: Vec<LogTemplate>,
     pub linked_traces: Vec<LinkedTrace>,
+    /// Top functions from continuous profiles, ranked by self-time.
+    pub profiles: Vec<ProfileSummary>,
 }
 
 /// Surfaces data completeness to the AI agent. Without this, the agent cannot know
@@ -361,6 +373,16 @@ pub struct LogTemplate {
 pub struct LinkedTrace {
     pub trace_id: String,
     pub spans: Vec<SpanRow>,
+}
+
+/// Top function from continuous profiling, ranked by total self-time.
+#[derive(Serialize, Deserialize)]
+pub struct ProfileSummary {
+    pub function: String,
+    pub profile_type: String,
+    pub total_value: i64,
+    pub unit: String,
+    pub sample_count: i64,
 }
 
 /// Pre-aggregated per-operation summary. 3x more token-efficient than raw spans.
@@ -523,7 +545,9 @@ fn investigate_one(
     let linked_traces = query_linked_traces(&ctx, &spans).context("linked traces query failed")?;
     let linked_spans_returned: i64 = linked_traces.iter().map(|lt| lt.spans.len() as i64).sum();
 
-    let coverage = compute_coverage(spans_total, logs_total, metrics.len());
+    let profiles = query_profiles(&ctx, 20).context("profiles query failed")?;
+    let profile_sample_count = count_profile_samples(&ctx)?;
+    let coverage = compute_coverage(spans_total, logs_total, metrics.len(), profile_sample_count);
     let context = query_service_context(&ctx).context("service context query failed")?;
     let events = query_derived_events(&ctx).context("derived events query failed")?;
 
@@ -554,6 +578,7 @@ fn investigate_one(
         span_trees,
         logs,
         linked_traces,
+        profiles,
     })
 }
 
@@ -803,6 +828,58 @@ pub fn query_logs(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogTemplate>> {
             count: row.get::<_, i64>(3).context("count")?,
             first_seen: row.get::<_, String>(4).context("first_seen")?,
             last_seen: row.get::<_, String>(5).context("last_seen")?,
+        });
+    }
+    Ok(results)
+}
+
+fn count_profile_samples(ctx: &QueryCtx) -> Result<i64> {
+    let sql = format!(
+        "SELECT count(*) FROM {}sigiro_profiles
+         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+        ctx.prefix
+    );
+    let count: i64 = ctx
+        .conn
+        .query_row(
+            &sql,
+            duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    Ok(count)
+}
+
+/// Top functions from continuous profiles, ranked by total self-time.
+/// Uses stack_trace[1] (leaf function = self time) for aggregation.
+pub fn query_profiles(ctx: &QueryCtx, limit: i64) -> Result<Vec<ProfileSummary>> {
+    let sql = format!(
+        "SELECT
+            stack_trace[len(stack_trace)] AS function,
+            COALESCE(profile_type, 'unknown') AS profile_type,
+            SUM(value) AS total_value,
+            COALESCE(first(unit), '') AS unit,
+            count(*) AS sample_count
+        FROM {prefix}sigiro_profiles
+        WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+          AND len(stack_trace) > 0
+        GROUP BY function, profile_type
+        ORDER BY total_value DESC
+        LIMIT ?",
+        prefix = ctx.prefix
+    );
+
+    let mut stmt = ctx.conn.prepare(&sql)?;
+    let mut rows = stmt.query(duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts, limit])?;
+    let mut results = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        results.push(ProfileSummary {
+            function: row.get::<_, String>(0).context("function")?,
+            profile_type: row.get::<_, String>(1).context("profile_type")?,
+            total_value: row.get::<_, i64>(2).context("total_value")?,
+            unit: row.get::<_, String>(3).context("unit")?,
+            sample_count: row.get::<_, i64>(4).context("sample_count")?,
         });
     }
     Ok(results)

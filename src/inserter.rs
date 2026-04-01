@@ -30,6 +30,7 @@ enum SignalTable {
     MetricsSum,
     MetricsHistogram,
     MetricsExpHistogram,
+    Profiles,
 }
 
 impl SignalTable {
@@ -42,6 +43,7 @@ impl SignalTable {
             Self::MetricsSum => "sigiro_metrics_sum",
             Self::MetricsHistogram => "sigiro_metrics_histogram",
             Self::MetricsExpHistogram => "sigiro_metrics_exp_histogram",
+            Self::Profiles => "sigiro_profiles",
         };
         format!("{prefix}{suffix}")
     }
@@ -80,6 +82,7 @@ impl ProjectFlusher {
             SignalTable::MetricsSum,
             SignalTable::MetricsHistogram,
             SignalTable::MetricsExpHistogram,
+            SignalTable::Profiles,
         ];
         let table_names: BTreeMap<SignalTable, String> =
             signals.iter().map(|s| (*s, s.table_name(prefix))).collect();
@@ -354,5 +357,6 @@ fn buffer_msg(flusher: &mut ProjectFlusher, msg: IngestMsg) {
         IngestMsg::Traces { batch, .. } => flusher.buffer(SignalTable::Spans, batch),
         IngestMsg::Logs { batch, .. } => flusher.buffer(SignalTable::Logs, batch),
         IngestMsg::Metrics { batches, .. } => flusher.buffer_metrics(batches),
+        IngestMsg::Profiles { batch, .. } => flusher.buffer(SignalTable::Profiles, batch),
     }
 }

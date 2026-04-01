@@ -181,6 +181,22 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_exp_histogram")?;
 
+    // Profiles — one row per sample per value type.
+    // Stack traces resolved from OTLP pprofile dictionary encoding at ingest time.
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_profiles (
+            profile_id            VARCHAR,
+            service_name          VARCHAR NOT NULL,
+            timestamp             TIMESTAMP NOT NULL,
+            profile_type          VARCHAR,
+            stack_trace           VARCHAR[],
+            value                 BIGINT,
+            unit                  VARCHAR,
+            resource_attributes   VARCHAR
+        )"
+    ))
+    .context("failed to create sigiro_profiles")?;
+
     // Anomaly detection view — always in the default catalog (reads from prefixed tables)
     conn.execute_batch(&format!(
         "CREATE OR REPLACE VIEW sigiro_anomalies AS

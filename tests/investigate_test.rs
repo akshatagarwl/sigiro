@@ -161,7 +161,7 @@ fn investigate_with_real_span_data() {
 
 #[test]
 fn coverage_no_data() {
-    let c = compute_coverage(0, 0, 0);
+    let c = compute_coverage(0, 0, 0, 0);
     assert!(!c.has_spans);
     assert!(!c.has_logs);
     assert!(!c.has_metrics);
@@ -170,7 +170,7 @@ fn coverage_no_data() {
 
 #[test]
 fn coverage_spans_only() {
-    let c = compute_coverage(10, 0, 0);
+    let c = compute_coverage(10, 0, 0, 0);
     assert!(c.has_spans);
     assert!(!c.has_logs);
     assert!(!c.has_metrics);
@@ -180,7 +180,7 @@ fn coverage_spans_only() {
 
 #[test]
 fn coverage_all_signals() {
-    let c = compute_coverage(10, 5, 3);
+    let c = compute_coverage(10, 5, 3, 0);
     assert!(c.has_spans);
     assert!(c.has_logs);
     assert!(c.has_metrics);

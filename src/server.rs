@@ -140,6 +140,7 @@ pub async fn run_servers(
             .add_service(svc.trace_service())
             .add_service(svc.logs_service())
             .add_service(svc.metrics_service())
+            .add_service(svc.profiles_service())
             .serve(addr)
             .await
             .context("gRPC server failed")
