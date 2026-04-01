@@ -4,6 +4,7 @@ use crossbeam_channel::Receiver;
 use dashmap::DashMap;
 use duckdb::Connection;
 use otlp2records::MetricBatches;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -16,173 +17,134 @@ const FLUSH_ROW_THRESHOLD: usize = 10_000;
 /// Max time between flushes, even if row threshold not reached.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Signal types that map to DuckDB tables. Adding a new signal type
+/// (e.g. Profiles) requires only adding a variant here and handling it
+/// in the IngestMsg match — the flush path iterates the map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum SignalTable {
+    Spans,
+    Logs,
+    MetricsGauge,
+    MetricsSum,
+    MetricsHistogram,
+    MetricsExpHistogram,
+}
+
+impl SignalTable {
+    /// DuckDB table name (with prefix for DuckLake mode).
+    fn table_name(self, prefix: &str) -> String {
+        let suffix = match self {
+            Self::Spans => "sigiro_spans",
+            Self::Logs => "sigiro_logs",
+            Self::MetricsGauge => "sigiro_metrics_gauge",
+            Self::MetricsSum => "sigiro_metrics_sum",
+            Self::MetricsHistogram => "sigiro_metrics_histogram",
+            Self::MetricsExpHistogram => "sigiro_metrics_exp_histogram",
+        };
+        format!("{prefix}{suffix}")
+    }
+}
+
 /// Per-project flusher state. Each project gets its own flusher thread
 /// so project A's load cannot block project B.
+///
+/// Crash recovery: DuckDB has its own WAL — once `append_record_batch`
+/// returns, the data is durable. The only data-loss window is the buffer
+/// here (up to 1s / 10k rows between 200 OK and DuckDB append). This is
+/// acceptable for a debugging tool where the data source is still running
+/// and will re-emit. See docs/designs/wal.md for the full analysis.
 struct ProjectFlusher {
     conn: Arc<Mutex<Connection>>,
-    prefix: &'static str,
-    /// Buffered RecordBatches per table, flushed in bulk.
-    spans_buf: Vec<RecordBatch>,
-    logs_buf: Vec<RecordBatch>,
-    gauge_buf: Vec<RecordBatch>,
-    sum_buf: Vec<RecordBatch>,
-    histogram_buf: Vec<RecordBatch>,
-    exp_histogram_buf: Vec<RecordBatch>,
-    /// Row counts for flush threshold.
-    spans_rows: usize,
-    logs_rows: usize,
-    metrics_rows: usize,
+    /// Precomputed table names (prefix applied once at construction).
+    table_names: BTreeMap<SignalTable, String>,
+    /// Buffered RecordBatches per signal, flushed in bulk.
+    buffers: BTreeMap<SignalTable, Vec<RecordBatch>>,
+    /// Total buffered rows across all signals for flush threshold.
+    total_rows: usize,
     last_flush: Instant,
 }
 
 impl ProjectFlusher {
     fn new(conn: Arc<Mutex<Connection>>, prefix: &'static str) -> Self {
+        let signals = [
+            SignalTable::Spans,
+            SignalTable::Logs,
+            SignalTable::MetricsGauge,
+            SignalTable::MetricsSum,
+            SignalTable::MetricsHistogram,
+            SignalTable::MetricsExpHistogram,
+        ];
+        let table_names: BTreeMap<SignalTable, String> =
+            signals.iter().map(|s| (*s, s.table_name(prefix))).collect();
+        let buffers: BTreeMap<SignalTable, Vec<RecordBatch>> =
+            signals.iter().map(|s| (*s, Vec::new())).collect();
+
         Self {
             conn,
-            prefix,
-            spans_buf: Vec::new(),
-            logs_buf: Vec::new(),
-            gauge_buf: Vec::new(),
-            sum_buf: Vec::new(),
-            histogram_buf: Vec::new(),
-            exp_histogram_buf: Vec::new(),
-            spans_rows: 0,
-            logs_rows: 0,
-            metrics_rows: 0,
+            table_names,
+            buffers,
+            total_rows: 0,
             last_flush: Instant::now(),
         }
     }
 
-    fn buffer_traces(&mut self, batch: RecordBatch) {
-        self.spans_rows += batch.num_rows();
-        self.spans_buf.push(batch);
-    }
-
-    fn buffer_logs(&mut self, batch: RecordBatch) {
-        self.logs_rows += batch.num_rows();
-        self.logs_buf.push(batch);
+    fn buffer(&mut self, signal: SignalTable, batch: RecordBatch) {
+        self.total_rows += batch.num_rows();
+        self.buffers.entry(signal).or_default().push(batch);
     }
 
     fn buffer_metrics(&mut self, batches: MetricBatches) {
         if let Some(b) = batches.gauge {
-            self.metrics_rows += b.num_rows();
-            self.gauge_buf.push(b);
+            self.buffer(SignalTable::MetricsGauge, b);
         }
         if let Some(b) = batches.sum {
-            self.metrics_rows += b.num_rows();
-            self.sum_buf.push(b);
+            self.buffer(SignalTable::MetricsSum, b);
         }
         if let Some(b) = batches.histogram {
-            self.metrics_rows += b.num_rows();
-            self.histogram_buf.push(b);
+            self.buffer(SignalTable::MetricsHistogram, b);
         }
         if let Some(b) = batches.exp_histogram {
-            self.metrics_rows += b.num_rows();
-            self.exp_histogram_buf.push(b);
+            self.buffer(SignalTable::MetricsExpHistogram, b);
         }
     }
 
     fn should_flush(&self) -> bool {
-        let total = self.spans_rows + self.logs_rows + self.metrics_rows;
-        total >= FLUSH_ROW_THRESHOLD || self.last_flush.elapsed() >= FLUSH_INTERVAL
+        self.total_rows >= FLUSH_ROW_THRESHOLD || self.last_flush.elapsed() >= FLUSH_INTERVAL
     }
 
-    /// Flush all buffered batches to DuckDB using a persistent appender per table.
+    /// Flush all buffered batches to DuckDB using appenders per table.
     /// Acquires the mutex ONCE for the entire flush, writes all tables, releases.
     fn flush(&mut self, project_id: &str) -> Result<()> {
-        if self.spans_rows + self.logs_rows + self.metrics_rows == 0 {
+        if self.total_rows == 0 {
             return Ok(());
         }
 
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // Flush spans
-        if !self.spans_buf.is_empty() {
-            let table = format!("{}sigiro_spans", self.prefix);
+        for (signal, buf) in &mut self.buffers {
+            if buf.is_empty() {
+                continue;
+            }
+            let table = &self.table_names[signal];
             let mut appender = conn
-                .appender(&table)
+                .appender(table)
                 .with_context(|| format!("failed to create {table} appender"))?;
-            for batch in self.spans_buf.drain(..) {
-                appender
-                    .append_record_batch(batch)
-                    .with_context(|| format!("failed to append {table} batch"))?;
+            for batch in buf.drain(..) {
+                if batch.num_rows() > 0 {
+                    appender
+                        .append_record_batch(batch)
+                        .with_context(|| format!("failed to append {table} batch"))?;
+                }
             }
             // Appender::drop flushes automatically
         }
 
-        // Flush logs
-        if !self.logs_buf.is_empty() {
-            let table = format!("{}sigiro_logs", self.prefix);
-            let mut appender = conn
-                .appender(&table)
-                .with_context(|| format!("failed to create {table} appender"))?;
-            for batch in self.logs_buf.drain(..) {
-                appender
-                    .append_record_batch(batch)
-                    .with_context(|| format!("failed to append {table} batch"))?;
-            }
-        }
+        tracing::debug!(project_id, rows = self.total_rows, "flushed batches");
 
-        // Flush metrics (4 tables)
-        flush_metric_buf(
-            &conn,
-            &mut self.gauge_buf,
-            self.prefix,
-            "sigiro_metrics_gauge",
-        )?;
-        flush_metric_buf(&conn, &mut self.sum_buf, self.prefix, "sigiro_metrics_sum")?;
-        flush_metric_buf(
-            &conn,
-            &mut self.histogram_buf,
-            self.prefix,
-            "sigiro_metrics_histogram",
-        )?;
-        flush_metric_buf(
-            &conn,
-            &mut self.exp_histogram_buf,
-            self.prefix,
-            "sigiro_metrics_exp_histogram",
-        )?;
-
-        let total = self.spans_rows + self.logs_rows + self.metrics_rows;
-        tracing::debug!(
-            project_id,
-            total,
-            spans = self.spans_rows,
-            logs = self.logs_rows,
-            metrics = self.metrics_rows,
-            "flushed batches"
-        );
-
-        self.spans_rows = 0;
-        self.logs_rows = 0;
-        self.metrics_rows = 0;
+        self.total_rows = 0;
         self.last_flush = Instant::now();
         Ok(())
     }
-}
-
-fn flush_metric_buf(
-    conn: &Connection,
-    buf: &mut Vec<RecordBatch>,
-    prefix: &str,
-    table_name: &str,
-) -> Result<()> {
-    if buf.is_empty() {
-        return Ok(());
-    }
-    let table = format!("{prefix}{table_name}");
-    let mut appender = conn
-        .appender(&table)
-        .with_context(|| format!("failed to create {table} appender"))?;
-    for batch in buf.drain(..) {
-        if batch.num_rows() > 0 {
-            appender
-                .append_record_batch(batch)
-                .with_context(|| format!("failed to append {table} batch"))?;
-        }
-    }
-    Ok(())
 }
 
 /// Run the inserter: routes messages to per-project flusher threads.
@@ -278,11 +240,7 @@ fn run_project_flusher(
         // Use recv_timeout so we flush on the timer even if no new messages arrive.
         match rx.recv_timeout(FLUSH_INTERVAL) {
             Ok(msg) => {
-                match msg {
-                    IngestMsg::Traces { batch, .. } => flusher.buffer_traces(batch),
-                    IngestMsg::Logs { batch, .. } => flusher.buffer_logs(batch),
-                    IngestMsg::Metrics { batches, .. } => flusher.buffer_metrics(batches),
-                }
+                buffer_msg(&mut flusher, msg);
                 if flusher.should_flush() {
                     if let Err(e) = flusher.flush(project_id) {
                         tracing::error!(project_id, "flush failed: {e:#}");
@@ -298,11 +256,7 @@ fn run_project_flusher(
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                 // Dispatcher dropped our sender — drain remaining messages and flush.
                 for remaining in rx.try_iter() {
-                    match remaining {
-                        IngestMsg::Traces { batch, .. } => flusher.buffer_traces(batch),
-                        IngestMsg::Logs { batch, .. } => flusher.buffer_logs(batch),
-                        IngestMsg::Metrics { batches, .. } => flusher.buffer_metrics(batches),
-                    }
+                    buffer_msg(&mut flusher, remaining);
                 }
                 if let Err(e) = flusher.flush(project_id) {
                     tracing::error!(project_id, "final flush failed: {e:#}");
@@ -311,5 +265,14 @@ fn run_project_flusher(
                 break;
             }
         }
+    }
+}
+
+/// Route an IngestMsg into the flusher's signal-keyed buffers.
+fn buffer_msg(flusher: &mut ProjectFlusher, msg: IngestMsg) {
+    match msg {
+        IngestMsg::Traces { batch, .. } => flusher.buffer(SignalTable::Spans, batch),
+        IngestMsg::Logs { batch, .. } => flusher.buffer(SignalTable::Logs, batch),
+        IngestMsg::Metrics { batches, .. } => flusher.buffer_metrics(batches),
     }
 }
