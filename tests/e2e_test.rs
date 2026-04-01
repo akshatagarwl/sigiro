@@ -615,3 +615,179 @@ fn e2e_investigation_all_signals() {
     // Metrics should be present
     assert!(!block.metrics.is_empty(), "should have metric buckets");
 }
+
+// ---------------------------------------------------------------------------
+// DRAIN log template dedup e2e: logs with variable tokens should collapse
+// ---------------------------------------------------------------------------
+
+/// Build a logs batch where bodies follow the pattern "Request {id} failed with code 500"
+/// with different IDs — DRAIN should collapse these into one template.
+fn make_templated_logs_batch(bodies: &[&str], service_name: &str, ts_base: i64) -> RecordBatch {
+    let n = bodies.len();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
+        Field::new("observed_timestamp", DataType::Int64, false),
+        Field::new("trace_id", DataType::Utf8, true),
+        Field::new("span_id", DataType::Utf8, true),
+        Field::new("service_name", DataType::Utf8, false),
+        Field::new("service_namespace", DataType::Utf8, true),
+        Field::new("service_instance_id", DataType::Utf8, true),
+        Field::new("severity_number", DataType::Int32, false),
+        Field::new("severity_text", DataType::Utf8, false),
+        Field::new("body", DataType::Utf8, true),
+        Field::new("resource_attributes", DataType::Utf8, true),
+        Field::new("scope_name", DataType::Utf8, true),
+        Field::new("scope_version", DataType::Utf8, true),
+        Field::new("scope_attributes", DataType::Utf8, true),
+        Field::new("log_attributes", DataType::Utf8, true),
+    ]));
+
+    let timestamps: Vec<i64> = (0..n).map(|i| ts_base + i as i64).collect();
+    let observed: Vec<i64> = timestamps.clone();
+    let service_names: Vec<&str> = vec![service_name; n];
+    let severity_numbers: Vec<i32> = vec![13; n]; // WARN
+    let severity_texts: Vec<&str> = vec!["WARN"; n];
+    let nulls: Vec<Option<&str>> = vec![None; n];
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(TimestampMicrosecondArray::from(timestamps)),
+            Arc::new(Int64Array::from(observed)),
+            Arc::new(StringArray::from(nulls.clone())),
+            Arc::new(StringArray::from(nulls.clone())),
+            Arc::new(StringArray::from(service_names)),
+            Arc::new(StringArray::from(nulls.clone())),
+            Arc::new(StringArray::from(nulls.clone())),
+            Arc::new(Int32Array::from(severity_numbers)),
+            Arc::new(StringArray::from(severity_texts)),
+            Arc::new(StringArray::from(bodies.to_vec())),
+            Arc::new(StringArray::from(nulls.clone())),
+            Arc::new(StringArray::from(nulls.clone())),
+            Arc::new(StringArray::from(nulls.clone())),
+            Arc::new(StringArray::from(nulls.clone())),
+            Arc::new(StringArray::from(nulls)),
+        ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn e2e_drain_log_template_dedup() {
+    // Verify the full pipeline: OTLP logs → inserter (DRAIN) → DuckDB → investigate
+    // Logs with variable tokens should collapse into a single template.
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), "", 10));
+    let (tx, rx) = unbounded();
+
+    let pool_clone = Arc::clone(&pool);
+    let handle = std::thread::spawn(move || {
+        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
+    });
+
+    let now_us = chrono::Utc::now().timestamp_micros();
+
+    // Send 20 logs that should collapse into 2 templates:
+    // Template 1: "Request <*> failed with code 500" (10 logs)
+    // Template 2: "User <*> logged in from <*>" (10 logs)
+    let request_bodies: Vec<String> = (0..10)
+        .map(|i| format!("Request {i} failed with code 500"))
+        .collect();
+    let login_bodies: Vec<String> = (0..10)
+        .map(|i| format!("User user_{i} logged in from 10.0.0.{i}"))
+        .collect();
+
+    let req_refs: Vec<&str> = request_bodies.iter().map(String::as_str).collect();
+    let login_refs: Vec<&str> = login_bodies.iter().map(String::as_str).collect();
+
+    tx.send(IngestMsg::Logs {
+        project_id: "drain_test".to_string(),
+        batch: make_templated_logs_batch(&req_refs, "api-svc", now_us),
+    })
+    .unwrap();
+    tx.send(IngestMsg::Logs {
+        project_id: "drain_test".to_string(),
+        batch: make_templated_logs_batch(&login_refs, "api-svc", now_us + 100),
+    })
+    .unwrap();
+
+    drop(tx);
+    handle.join().unwrap();
+
+    // Verify: 20 rows in sigiro_logs, each with a template_id
+    let conn = pool.get_or_create("drain_test").unwrap();
+    let conn = conn.lock().unwrap();
+
+    let total_logs: i64 = conn
+        .query_row("SELECT count(*) FROM sigiro_logs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(total_logs, 20, "should have 20 log rows");
+
+    // All rows should have a template_id (not NULL)
+    let null_templates: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sigiro_logs WHERE template_id IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(null_templates, 0, "all logs should have template_id");
+
+    // Should have a small number of distinct template_ids (2-3, not 20)
+    let distinct_templates: i64 = conn
+        .query_row(
+            "SELECT count(DISTINCT template_id) FROM sigiro_logs",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        distinct_templates <= 4,
+        "DRAIN should collapse 20 logs to ≤4 templates, got {distinct_templates}"
+    );
+
+    // Template lookup table should have entries
+    let template_count: i64 = conn
+        .query_row("SELECT count(*) FROM sigiro_log_templates", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(
+        template_count >= 1,
+        "sigiro_log_templates should have entries"
+    );
+
+    // At least one template should contain <*> (wildcard from DRAIN)
+    let wildcard_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sigiro_log_templates WHERE template_text LIKE '%<*>%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        wildcard_count >= 1,
+        "at least one template should have <*> wildcards"
+    );
+
+    // Verify via investigate query: should get ≤4 grouped templates, not 20 raw lines
+    let qctx = sigiro::investigate::QueryCtx {
+        conn: &conn,
+        service: "api-svc",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
+        prefix: "",
+    };
+    let logs = sigiro::investigate::query_logs(&qctx, 30).unwrap();
+    assert!(
+        logs.len() <= 4,
+        "investigate should return ≤4 templates, got {}",
+        logs.len()
+    );
+    let total_count: i64 = logs.iter().map(|l| l.count).sum();
+    assert_eq!(total_count, 20, "total count across templates should be 20");
+}
