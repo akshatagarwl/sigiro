@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use crate::ingest::IngestMsg;
 use crate::pool::ProjectPool;
-use crate::wal;
 
 /// Max rows buffered per table before forcing a flush.
 const FLUSH_ROW_THRESHOLD: usize = 10_000;
@@ -20,7 +19,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Signal types that map to DuckDB tables. Adding a new signal type
 /// (e.g. Profiles) requires only adding a variant here and handling it
-/// in the IngestMsg match — the flush and WAL paths iterate the map.
+/// in the IngestMsg match — the flush path iterates the map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum SignalTable {
     Spans,
@@ -48,24 +47,25 @@ impl SignalTable {
 
 /// Per-project flusher state. Each project gets its own flusher thread
 /// so project A's load cannot block project B.
+///
+/// Crash recovery: DuckDB has its own WAL — once `append_record_batch`
+/// returns, the data is durable. The only data-loss window is the buffer
+/// here (up to 1s / 10k rows between 200 OK and DuckDB append). This is
+/// acceptable for a debugging tool where the data source is still running
+/// and will re-emit. See docs/designs/wal.md for the full analysis.
 struct ProjectFlusher {
     conn: Arc<Mutex<Connection>>,
     /// Precomputed table names (prefix applied once at construction).
     table_names: BTreeMap<SignalTable, String>,
-    wal_dir: std::path::PathBuf,
     /// Buffered RecordBatches per signal, flushed in bulk.
     buffers: BTreeMap<SignalTable, Vec<RecordBatch>>,
-    /// Row counts per signal for flush threshold.
+    /// Total buffered rows across all signals for flush threshold.
     total_rows: usize,
     last_flush: Instant,
 }
 
 impl ProjectFlusher {
-    fn new(
-        conn: Arc<Mutex<Connection>>,
-        prefix: &'static str,
-        wal_dir: std::path::PathBuf,
-    ) -> Self {
+    fn new(conn: Arc<Mutex<Connection>>, prefix: &'static str) -> Self {
         let signals = [
             SignalTable::Spans,
             SignalTable::Logs,
@@ -82,7 +82,6 @@ impl ProjectFlusher {
         Self {
             conn,
             table_names,
-            wal_dir,
             buffers,
             total_rows: 0,
             last_flush: Instant::now(),
@@ -113,39 +112,15 @@ impl ProjectFlusher {
         self.total_rows >= FLUSH_ROW_THRESHOLD || self.last_flush.elapsed() >= FLUSH_INTERVAL
     }
 
-    /// Flush all buffered batches to DuckDB using a persistent appender per table.
+    /// Flush all buffered batches to DuckDB using appenders per table.
     /// Acquires the mutex ONCE for the entire flush, writes all tables, releases.
     fn flush(&mut self, project_id: &str) -> Result<()> {
         if self.total_rows == 0 {
             return Ok(());
         }
 
-        // WAL: serialize buffers to disk before DuckDB append.
-        // On failure, degrade gracefully — flush without WAL protection rather
-        // than killing the flusher thread and orphaning buffered data.
-        let wal_entries: Vec<(&str, &[RecordBatch])> = self
-            .table_names
-            .iter()
-            .map(|(signal, name)| {
-                let bufs = self.buffers.get(signal).map_or(&[][..], |v| &v[..]);
-                (name.as_str(), bufs)
-            })
-            .collect();
-
-        let wal_path = match wal::write_wal(&self.wal_dir, project_id, &wal_entries) {
-            Ok(path) => Some(path),
-            Err(e) => {
-                tracing::error!(
-                    project_id,
-                    "WAL write failed, flushing without crash protection: {e:#}"
-                );
-                None
-            }
-        };
-
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // Flush all non-empty buffers to DuckDB
         for (signal, buf) in &mut self.buffers {
             if buf.is_empty() {
                 continue;
@@ -164,13 +139,6 @@ impl ProjectFlusher {
             // Appender::drop flushes automatically
         }
 
-        // DuckDB flush succeeded — remove WAL file
-        if let Some(path) = wal_path {
-            if let Err(e) = std::fs::remove_file(&path) {
-                tracing::warn!(path = %path.display(), "failed to remove WAL file: {e}");
-            }
-        }
-
         tracing::debug!(project_id, rows = self.total_rows, "flushed batches");
 
         self.total_rows = 0;
@@ -186,11 +154,7 @@ impl ProjectFlusher {
 /// and flushes to DuckDB on timer (1s) or count (10k rows) threshold.
 /// Project A's ingest load cannot block project B.
 #[allow(clippy::needless_pass_by_value)] // Receiver is consumed by the for loop
-pub fn run_inserter(
-    pool: &Arc<ProjectPool>,
-    rx: Receiver<IngestMsg>,
-    wal_dir: std::path::PathBuf,
-) -> Result<()> {
+pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<()> {
     let prefix = pool.prefix();
 
     // Per-project sender channels + join handles. Flusher threads are spawned lazily.
@@ -214,11 +178,10 @@ pub fn run_inserter(
                 let (tx, prx) = crossbeam_channel::bounded::<IngestMsg>(10_000);
 
                 let pid = project_id.clone();
-                let wd = wal_dir.clone();
                 let handle = std::thread::Builder::new()
                     .name(format!("flusher-{pid}"))
                     .spawn(move || {
-                        run_project_flusher(&pid, conn, prx, prefix, wd);
+                        run_project_flusher(&pid, conn, prx, prefix);
                     })
                     .with_context(|| format!("failed to spawn flusher for {project_id}"))?;
 
@@ -270,9 +233,8 @@ fn run_project_flusher(
     conn: Arc<Mutex<Connection>>,
     rx: Receiver<IngestMsg>,
     prefix: &'static str,
-    wal_dir: std::path::PathBuf,
 ) {
-    let mut flusher = ProjectFlusher::new(conn, prefix, wal_dir);
+    let mut flusher = ProjectFlusher::new(conn, prefix);
 
     loop {
         // Use recv_timeout so we flush on the timer even if no new messages arrive.

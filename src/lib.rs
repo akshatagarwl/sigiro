@@ -11,7 +11,6 @@ pub mod pool;
 pub mod schema;
 pub mod server;
 pub mod storage;
-pub mod wal;
 
 use anyhow::{Context, Result};
 use duckdb::Connection;

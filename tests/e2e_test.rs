@@ -226,9 +226,8 @@ fn e2e_full_pipeline_ingest_and_investigate() {
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
-    let wal_dir = dir.path().join("wal");
     let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx, wal_dir).unwrap();
+        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
     });
 
     let now_us = chrono::Utc::now().timestamp_micros();
@@ -291,9 +290,8 @@ fn e2e_multi_project_isolation() {
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
-    let wal_dir = dir.path().join("wal");
     let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx, wal_dir).unwrap();
+        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
     });
 
     let now_us = chrono::Utc::now().timestamp_micros();
@@ -368,9 +366,8 @@ fn e2e_services_endpoint_simulation() {
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
-    let wal_dir = dir.path().join("wal");
     let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx, wal_dir).unwrap();
+        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
     });
 
     let now_us = chrono::Utc::now().timestamp_micros();
@@ -519,9 +516,8 @@ fn e2e_investigation_all_signals() {
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
-    let wal_dir = dir.path().join("wal");
     let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx, wal_dir).unwrap();
+        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
     });
 
     let now_us = chrono::Utc::now().timestamp_micros();
