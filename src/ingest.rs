@@ -223,7 +223,52 @@ impl MetricsService for OtlpGrpcService {
 ///   → Dictionary.function_table[].name_strindex
 ///   → Dictionary.string_table[]
 fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBatch, Status> {
-    let dict = request.dictionary.unwrap_or_default(); // TRADEOFF: missing dictionary = empty, not an error
+    let dict = match request.dictionary {
+        Some(d) => d,
+        None => {
+            // No dictionary = no samples can be resolved. Return empty batch.
+            tracing::debug!("profiles request has no dictionary, returning empty batch");
+            return RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("profile_id", DataType::Utf8, true),
+                    Field::new("service_name", DataType::Utf8, false),
+                    Field::new(
+                        "timestamp",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        false,
+                    ),
+                    Field::new("profile_type", DataType::Utf8, true),
+                    Field::new(
+                        "stack_trace",
+                        DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                        true,
+                    ),
+                    Field::new("value", DataType::Int64, true),
+                    Field::new("unit", DataType::Utf8, true),
+                    Field::new("resource_attributes", DataType::Utf8, true),
+                ])),
+                vec![
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(
+                        ListArray::try_new(
+                            Arc::new(Field::new("item", DataType::Utf8, true)),
+                            arrow::buffer::OffsetBuffer::new(vec![0i32].into()),
+                            Arc::new(StringBuilder::new().finish()),
+                            None,
+                        )
+                        .map_err(|e| Status::internal(format!("arrow error: {e}")))?,
+                    ),
+                    Arc::new(Int64Array::from(Vec::<i64>::new())),
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(StringBuilder::new().finish()),
+                ],
+            )
+            .map_err(|e| Status::internal(format!("arrow error: {e}")));
+        }
+    };
     let string_table = &dict.string_table;
 
     let schema = Arc::new(Schema::new(vec![
@@ -325,7 +370,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                             a.value
                                 .as_ref()
                                 .map(|v| format!("{v:?}"))
-                                .unwrap_or_default()
+                                .unwrap_or_default() // TRADEOFF: missing attribute value = empty string in JSON, not an error
                         ))
                         .collect::<Vec<_>>()
                         .join(",")
@@ -338,12 +383,12 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
         for sp in &rp.scope_profiles {
             for profile in &sp.profiles {
                 let ts_us = (profile.time_unix_nano / 1000) as i64;
+                let pid_hex;
                 let pid = if profile.profile_id.is_empty() {
                     ""
                 } else {
-                    // profile_id is bytes, hex encode
-                    // Use a static buffer approach for safety
-                    ""
+                    pid_hex = hex::encode(&profile.profile_id);
+                    pid_hex.as_str()
                 };
 
                 // Resolve profile_type and unit from sample_type
@@ -470,6 +515,7 @@ pub fn otlp_http_router(tx: Sender<IngestMsg>, admin_conn: Arc<Mutex<Connection>
         .route("/v1/traces", post(otlp_http_traces))
         .route("/v1/logs", post(otlp_http_logs))
         .route("/v1/metrics", post(otlp_http_metrics))
+        .route("/v1/profiles", post(otlp_http_profiles))
         .with_state(state)
 }
 
@@ -572,6 +618,42 @@ async fn otlp_http_metrics(
     }) {
         tracing::error!("failed to enqueue metrics: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    StatusCode::OK
+}
+
+async fn otlp_http_profiles(
+    State(state): State<Arc<OtlpHttpState>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+        Ok(id) => id,
+        Err(status) => return status,
+    };
+    let req = match ExportProfilesServiceRequest::decode(body) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("failed to decode profiles request: {e}");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+    let batch = match tokio::task::spawn_blocking(move || transform_profiles(req)).await {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => {
+            tracing::error!("failed to transform profiles: {e}");
+            return StatusCode::BAD_REQUEST;
+        }
+        Err(e) => {
+            tracing::error!("transform profiles task panicked: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+    if batch.num_rows() > 0 {
+        if let Err(e) = state.tx.send(IngestMsg::Profiles { project_id, batch }) {
+            tracing::error!("failed to enqueue profiles: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     }
     StatusCode::OK
 }

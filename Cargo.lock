@@ -3581,6 +3581,7 @@ dependencies = [
  "dirs",
  "duckdb",
  "envy",
+ "hex",
  "opentelemetry-proto",
  "otlp2records",
  "prefixed-api-key",
