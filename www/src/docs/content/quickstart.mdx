@@ -1,11 +1,12 @@
 # Quickstart
 
-Get sigiro running in 60 seconds.
+Get sigiro running and test it in under 2 minutes.
 
-## Install
+## Start the server
 
 ```bash
-cargo install sigiro
+# From source
+cargo run -- serve
 ```
 
 Or with Docker:
@@ -14,51 +15,158 @@ Or with Docker:
 docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
 ```
 
-## Start the server
-
-```bash
-sigiro serve
-```
-
 This starts:
 
-- gRPC OTLP on `:4317`
-- HTTP OTLP on `:4318`
-- Query/Investigate API on `:9999`
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| `:4317` | gRPC | OTLP ingest (traces, logs, metrics, profiles) |
+| `:4318` | HTTP | OTLP HTTP ingest |
+| `:9999` | HTTP | Query, Investigate, Admin, Health |
 
-## Send telemetry
+## Send test telemetry
 
-Point your OpenTelemetry SDK at sigiro:
+The easiest way is [telemetrygen](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/cmd/telemetrygen):
+
+```bash
+# Traces
+docker run --rm ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.146.0 \
+  traces --otlp-endpoint=localhost:4317 --otlp-insecure \
+  --service=checkout --traces=50 --child-spans=3
+
+# Logs
+docker run --rm ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.146.0 \
+  logs --otlp-endpoint=localhost:4317 --otlp-insecure \
+  --service=checkout --logs=100
+
+# Metrics
+docker run --rm ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.146.0 \
+  metrics --otlp-endpoint=localhost:4317 --otlp-insecure \
+  --service=checkout --metrics=20
+```
+
+Or point any OpenTelemetry SDK at sigiro:
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
-Or test with telemetrygen:
+## Query
+
+sigiro uses **dev-mode tokens** for local testing — no key management needed:
 
 ```bash
-telemetrygen traces --otlp-endpoint=localhost:4317 --otlp-insecure \
-  --service=my-app --traces=100 --child-spans=3
+# List services
+curl -s http://localhost:9999/v1/services \
+  -H "Authorization: Bearer sigiro_dev_anything"
+
+# Run SQL against your telemetry data
+curl -s -X POST http://localhost:9999/v1/query \
+  -H "Authorization: Bearer sigiro_dev_anything" \
+  -d "SELECT service_name, count(*) FROM sigiro_spans GROUP BY 1"
 ```
+
+### Dev-mode auth
+
+Any token starting with `sigiro_dev_` is accepted without database lookup. All data lands in the `dev_project` namespace. Use this for local development only — production requires real API keys.
 
 ## Investigate
 
 ```bash
-curl -X POST localhost:9999/investigate \
-  -H "Authorization: Bearer sk_dev_test" \
+curl -s -X POST http://localhost:9999/v1/investigate \
+  -H "Authorization: Bearer sigiro_dev_anything" \
   -H "Content-Type: application/json" \
-  -d '{"service": "my-app"}'
+  -d '{"service_name": "checkout"}'
 ```
 
-The response is an `InvestigationBlock` — structured evidence for your AI agent.
+The response is an `InvestigationBlock` — structured evidence including:
+- **Coverage** — which signals exist (spans, logs, metrics, profiles)
+- **Operation summaries** — per-span-name latency percentiles and error rates
+- **Log templates** — DRAIN-deduplicated log patterns with counts
+- **Span trees** — parent-child relationships for error traces
+- **Anomalies** — auto-detected from the `sigiro_anomalies` view
 
-## Hosted mode
-
-For the hosted version at app.sigiro.com:
+### Multi-service investigate
 
 ```bash
-sigiro auth sk_live_your_key_here
-sigiro investigate my-app
+curl -s -X POST http://localhost:9999/v1/investigate \
+  -H "Authorization: Bearer sigiro_dev_anything" \
+  -H "Content-Type: application/json" \
+  -d '{"services": ["checkout", "payments"]}'
 ```
 
-The CLI automatically sends requests to the hosted API when an API key is configured.
+## Create real API keys
+
+For production or multi-project use:
+
+```bash
+# Via CLI (server must be running)
+cargo run -- admin create-key --project my_app --plan free
+
+# Or via HTTP
+curl -s -X POST http://localhost:9999/admin/keys \
+  -H "Content-Type: application/json" \
+  -d '{"project": "my_app", "plan": "free"}'
+# → {"key":"sigiro_BRTRKFsL_..."}
+
+# Revoke a key
+cargo run -- admin revoke-key BRTRKFsL
+```
+
+Each project gets its own isolated DuckDB database at `~/.sigiro/data/{project_id}.duckdb`.
+
+## Use the CLI
+
+Save an API key, then use CLI commands that talk to the running server:
+
+```bash
+# Save key (writes to ~/.config/sigiro/config.toml)
+cargo run -- auth sigiro_BRTRKFsL_...
+
+# Now CLI commands work
+cargo run -- status
+cargo run -- query "SELECT count(*) FROM sigiro_spans"
+cargo run -- investigate checkout
+cargo run -- investigate checkout --from 1711100000 --to 1711100900
+```
+
+## Data schema
+
+sigiro creates these tables per project:
+
+| Table | Signal | Key columns |
+|-------|--------|-------------|
+| `sigiro_spans` | Traces | `trace_id`, `span_id`, `service_name`, `span_name`, `duration`, `status_code` |
+| `sigiro_logs` | Logs | `body`, `severity_text`, `template_id` |
+| `sigiro_log_templates` | Templates | `template_id`, `template_text` (DRAIN dedup) |
+| `sigiro_metrics_gauge` | Metrics | `metric_name`, `value` |
+| `sigiro_metrics_sum` | Metrics | `metric_name`, `value`, `is_monotonic` |
+| `sigiro_metrics_histogram` | Metrics | `metric_name`, `count`, `sum`, `min`, `max`, `bucket_counts` |
+| `sigiro_metrics_exp_histogram` | Metrics | `metric_name`, `count`, `sum`, `scale`, `positive/negative buckets` |
+| `sigiro_profiles` | Profiles | `profile_type`, `stack_trace`, `value`, `unit` |
+
+Plus a `sigiro_anomalies` view that flags error rate > 5%, p95 latency > 1s, or silence (no recent spans).
+
+## Environment variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `SIGIRO_DATA_DIR` | DuckDB file storage | `~/.sigiro/data/` |
+| `SIGIRO_API_KEY` | API key (overrides config file) | — |
+| `SIGIRO_ENDPOINT` | Server URL for CLI | `http://localhost:9999` |
+| `SIGIRO_CATALOG_URL` | PostgreSQL URL for DuckLake S3 mode | (local mode) |
+| `RUST_LOG` | Tracing filter | `sigiro=info` |
+
+## Full E2E test
+
+Automated Docker test that exercises the entire pipeline:
+
+```bash
+cd tests/e2e && bash run.sh
+```
+
+This builds the image, starts sigiro, sends traces/logs/metrics via telemetrygen for 30s, then runs 13+ assertions covering ingest, query, investigate, auth, and multi-signal correlation.
+
+## Next steps
+
+- [Authentication](/docs/auth) — API keys, plans, and production auth
+- Point your app's OpenTelemetry SDK at sigiro and run `investigate` on your services
