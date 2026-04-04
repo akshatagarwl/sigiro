@@ -7,9 +7,7 @@
     "dev": "vp dev",
     "build": "vp build",
     "check": "vp check",
-    "preview": "vp preview",
-    "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "preview": "vp preview"
   },
   "dependencies": {
     "@mdx-js/rollup": "^3.1.1",
@@ -27,15 +25,11 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@storybook/addon-docs": "^10.2.19",
-    "@storybook/addon-mcp": "latest",
-    "@storybook/react-vite": "^10.2.19",
     "@types/node": "^24.12.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.0",
     "playwright": "^1.58.2",
-    "storybook": "^10.2.19",
     "typescript": "~5.9.3",
     "vite": "npm:@voidzero-dev/vite-plus-core@latest",
     "vite-plus": "latest",
