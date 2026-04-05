@@ -6,8 +6,8 @@ rust-version = "1.85"
 license = "Apache-2.0"
 
 [dependencies]
-# DuckDB: git main for arrow 58 compat with otlp2records
-duckdb = { git = "https://github.com/duckdb/duckdb-rs", branch = "main", features = ["bundled", "appender-arrow"] }
+# DuckDB: pinned rev for arrow 58 compat with otlp2records (avoids main drift breaking cache)
+duckdb = { git = "https://github.com/duckdb/duckdb-rs", rev = "bcadfebcc07bace4967ecd5f80c25f7c6b8f85ea", features = ["bundled", "appender-arrow"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
