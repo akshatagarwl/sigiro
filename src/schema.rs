@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use duckdb::Connection;
 
 /// Create all sigiro tables and views.
-/// `prefix` is "lake." when DuckLake is active, "" for local mode.
+/// `prefix` is always "lake." (DuckLake catalog-qualified tables).
 pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     // Traces — 25 columns, matches otlp2records::traces_schema()
     conn.execute_batch(&format!(
@@ -61,9 +61,11 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
 
     // Log template lookup table — maps template_id to template text.
     // Populated at insert time by the DRAIN algorithm.
+    // No PRIMARY KEY — DuckLake does not support PK/UNIQUE constraints.
+    // Duplicate template rows are harmless; dedup can be added to the compactor.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_log_templates (
-            template_id           UBIGINT PRIMARY KEY,
+            template_id           UBIGINT,
             template_text         VARCHAR NOT NULL,
             first_seen            TIMESTAMP NOT NULL DEFAULT now()
         )"

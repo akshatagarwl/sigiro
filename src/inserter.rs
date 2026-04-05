@@ -34,7 +34,7 @@ enum SignalTable {
 }
 
 impl SignalTable {
-    /// DuckDB table name (with prefix for DuckLake mode).
+    /// DuckDB table name (with lake. prefix).
     fn table_name(self, prefix: &str) -> String {
         let suffix = match self {
             Self::Spans => "sigiro_spans",
@@ -74,7 +74,7 @@ struct ProjectFlusher {
 }
 
 impl ProjectFlusher {
-    fn new(conn: Arc<Mutex<Connection>>, prefix: &'static str) -> Self {
+    fn new(conn: Arc<Mutex<Connection>>) -> Self {
         let signals = [
             SignalTable::Spans,
             SignalTable::Logs,
@@ -84,8 +84,10 @@ impl ProjectFlusher {
             SignalTable::MetricsExpHistogram,
             SignalTable::Profiles,
         ];
-        let table_names: BTreeMap<SignalTable, String> =
-            signals.iter().map(|s| (*s, s.table_name(prefix))).collect();
+        let table_names: BTreeMap<SignalTable, String> = signals
+            .iter()
+            .map(|s| (*s, s.table_name(ProjectPool::prefix())))
+            .collect();
         let buffers: BTreeMap<SignalTable, Vec<RecordBatch>> =
             signals.iter().map(|s| (*s, Vec::new())).collect();
 
@@ -172,6 +174,7 @@ impl ProjectFlusher {
 
     /// Flush all buffered batches to DuckDB using appenders per table.
     /// Acquires the mutex ONCE for the entire flush, writes all tables, releases.
+    /// Uses appender_to_catalog_and_db for DuckLake catalog-qualified table access.
     fn flush(&mut self, project_id: &str) -> Result<()> {
         if self.total_rows == 0 {
             return Ok(());
@@ -184,8 +187,11 @@ impl ProjectFlusher {
                 continue;
             }
             let table = &self.table_names[signal];
+            // Extract bare table name (strip "lake." prefix for catalog-qualified appender).
+            // conn.appender("lake.table") fails — must use appender_to_catalog_and_db.
+            let bare_table = table.strip_prefix("lake.").unwrap_or(table);
             let mut appender = conn
-                .appender(table)
+                .appender_to_catalog_and_db(bare_table, "lake", "main")
                 .with_context(|| format!("failed to create {table} appender"))?;
             for batch in buf.drain(..) {
                 if batch.num_rows() > 0 {
@@ -206,11 +212,11 @@ impl ProjectFlusher {
                     .map_or("", |t| { t.strip_suffix("sigiro_logs").unwrap_or("") })
             );
             for (id, text) in self.pending_templates.drain() {
-                // INSERT OR IGNORE: if template_id already exists, skip.
+                // Plain INSERT — DuckLake does not support PRIMARY KEY.
+                // Duplicate template rows are harmless (templates are tiny,
+                // dedup can be added to the compactor if needed).
                 if let Err(e) = conn.execute(
-                    &format!(
-                        "INSERT OR IGNORE INTO {tpl_table} (template_id, template_text) VALUES (?, ?)"
-                    ),
+                    &format!("INSERT INTO {tpl_table} (template_id, template_text) VALUES (?, ?)"),
                     duckdb::params![id, text],
                 ) {
                     tracing::warn!(
@@ -238,8 +244,6 @@ impl ProjectFlusher {
 /// Project A's ingest load cannot block project B.
 #[allow(clippy::needless_pass_by_value)] // Receiver is consumed by the for loop
 pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<()> {
-    let prefix = pool.prefix();
-
     // Per-project sender channels + join handles. Flusher threads are spawned lazily.
     let project_senders: DashMap<String, crossbeam_channel::Sender<IngestMsg>> = DashMap::new();
     let flusher_handles: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
@@ -264,7 +268,7 @@ pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<
                 let handle = std::thread::Builder::new()
                     .name(format!("flusher-{pid}"))
                     .spawn(move || {
-                        run_project_flusher(&pid, conn, prx, prefix);
+                        run_project_flusher(&pid, conn, prx);
                     })
                     .with_context(|| format!("failed to spawn flusher for {project_id}"))?;
 
@@ -311,13 +315,8 @@ pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<
 /// Per-project flusher loop. Receives pre-transformed RecordBatches,
 /// buffers them, and flushes to DuckDB on timer or row count threshold.
 #[allow(clippy::needless_pass_by_value)] // Receiver moved into thread, needs ownership
-fn run_project_flusher(
-    project_id: &str,
-    conn: Arc<Mutex<Connection>>,
-    rx: Receiver<IngestMsg>,
-    prefix: &'static str,
-) {
-    let mut flusher = ProjectFlusher::new(conn, prefix);
+fn run_project_flusher(project_id: &str, conn: Arc<Mutex<Connection>>, rx: Receiver<IngestMsg>) {
+    let mut flusher = ProjectFlusher::new(conn);
 
     loop {
         // Use recv_timeout so we flush on the timer even if no new messages arrive.

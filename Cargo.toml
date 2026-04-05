@@ -45,6 +45,10 @@ tempfile = "3"
 name = "investigate_bench"
 harness = false
 
+[[bench]]
+name = "appender_bench"
+harness = false
+
 [lints.clippy]
 # Disallowed patterns (configured in clippy.toml)
 disallowed-methods = "deny"

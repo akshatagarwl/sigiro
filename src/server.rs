@@ -335,7 +335,7 @@ async fn services_handler(
         tracing::error!("DuckDB connection mutex poisoned");
         internal_error(e.to_string())
     })?;
-    let prefix = state.pool.prefix();
+    let prefix = ProjectPool::prefix();
     let sql = format!(
         "SELECT service_name, \
                 min(timestamp)::VARCHAR AS first_seen, \
@@ -375,7 +375,7 @@ async fn investigate_handler(
 ) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, ProblemDetails>
 {
     let conn = project_conn(&state, &auth)?;
-    let blocks = investigate::investigate(&conn, &req, state.pool.prefix())
+    let blocks = investigate::investigate(&conn, &req, ProjectPool::prefix())
         .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(blocks))
 }

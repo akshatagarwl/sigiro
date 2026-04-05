@@ -354,6 +354,7 @@ fn log_template_dedup_ips() {
         "Connection timeout for 10.0.0.5",
         "Connection timeout for 172.16.0.99",
     ];
+    let mut seen_templates: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for body in &bodies {
         let (template, id) = drain.classify(body);
         conn.execute(
@@ -365,11 +366,14 @@ fn log_template_dedup_ips() {
             duckdb::params![body, id],
         )
         .expect("insert log");
-        conn.execute(
-            "INSERT OR IGNORE INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
-            duckdb::params![id, template],
-        )
-        .expect("insert template");
+        // Insert template only once per unique id (no PK to enforce uniqueness).
+        if seen_templates.insert(id) {
+            conn.execute(
+                "INSERT INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
+                duckdb::params![id, template],
+            )
+            .expect("insert template");
+        }
     }
 
     let qctx = QueryCtx {
@@ -407,6 +411,7 @@ fn log_template_dedup_uuids() {
         "Failed to process order 550e8400-e29b-41d4-a716-446655440000",
         "Failed to process order a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     ];
+    let mut seen_templates: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for body in &bodies {
         let (template, id) = drain.classify(body);
         conn.execute(
@@ -418,11 +423,14 @@ fn log_template_dedup_uuids() {
             duckdb::params![body, id],
         )
         .expect("insert log");
-        conn.execute(
-            "INSERT OR IGNORE INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
-            duckdb::params![id, template],
-        )
-        .expect("insert template");
+        // Insert template only once per unique id (no PK to enforce uniqueness).
+        if seen_templates.insert(id) {
+            conn.execute(
+                "INSERT INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
+                duckdb::params![id, template],
+            )
+            .expect("insert template");
+        }
     }
 
     let qctx = QueryCtx {

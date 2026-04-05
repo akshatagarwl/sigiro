@@ -2,7 +2,7 @@ use sigiro::pool::ProjectPool;
 use std::sync::Arc;
 
 fn test_pool(dir: &std::path::Path) -> ProjectPool {
-    ProjectPool::new(dir.to_path_buf(), "", 10)
+    ProjectPool::new(dir.to_path_buf(), 10)
 }
 
 #[test]
@@ -13,9 +13,11 @@ fn get_or_create_opens_connection() {
     let conn = pool.get_or_create("proj_a").unwrap();
     assert_eq!(pool.len(), 1);
 
-    // Verify tables were created
+    // Verify tables were created (now in lake.* schema)
     let guard = conn.lock().unwrap();
-    let mut stmt = guard.prepare("SELECT count(*) FROM sigiro_spans").unwrap();
+    let mut stmt = guard
+        .prepare("SELECT count(*) FROM lake.sigiro_spans")
+        .unwrap();
     let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
     assert_eq!(count, 0);
 }
@@ -53,7 +55,7 @@ fn data_isolation_between_projects() {
         let guard = conn_a.lock().unwrap();
         guard
             .execute_batch(
-                "INSERT INTO sigiro_metrics_gauge (timestamp, metric_name, service_name, value) \
+                "INSERT INTO lake.sigiro_metrics_gauge (timestamp, metric_name, service_name, value) \
                  VALUES (current_timestamp, 'cpu', 'svc', 42.0)",
             )
             .unwrap();
@@ -64,7 +66,7 @@ fn data_isolation_between_projects() {
     {
         let guard = conn_b.lock().unwrap();
         let mut stmt = guard
-            .prepare("SELECT count(*) FROM sigiro_metrics_gauge")
+            .prepare("SELECT count(*) FROM lake.sigiro_metrics_gauge")
             .unwrap();
         let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(count, 0, "project B should have no data from project A");
@@ -88,7 +90,7 @@ fn evict_idle_removes_old_connections() {
 #[test]
 fn evict_oldest_at_capacity() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = ProjectPool::new(dir.path().to_path_buf(), "", 2);
+    let pool = ProjectPool::new(dir.path().to_path_buf(), 2);
 
     pool.get_or_create("proj_a").unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));

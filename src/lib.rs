@@ -14,7 +14,6 @@ pub mod server;
 pub mod storage;
 
 use anyhow::{Context, Result};
-use duckdb::Connection;
 use std::path::PathBuf;
 
 pub fn data_dir() -> Result<PathBuf> {
@@ -25,15 +24,6 @@ pub fn data_dir() -> Result<PathBuf> {
             Ok(home.join(".sigiro").join("data"))
         }
     }
-}
-
-pub fn open_db() -> Result<Connection> {
-    let dir = data_dir()?;
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create data directory: {}", dir.display()))?;
-    let db_path = dir.join("sigiro.duckdb");
-    Connection::open(&db_path)
-        .with_context(|| format!("failed to open DuckDB at {}", db_path.display()))
 }
 
 pub fn format_bytes(bytes: u64) -> String {

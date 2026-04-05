@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
 use duckdb::Connection;
 use serde::Deserialize;
+use std::path::Path;
 
 /// DuckLake storage configuration, parsed from SIGIRO_* env vars via envy.
-/// When SIGIRO_CATALOG_URL is set, DuckLake is activated: tables live in `lake.*`,
-/// Parquet files go to S3, and PostgreSQL manages the catalog.
-/// When not set, sigiro runs in local-only mode with zero config.
+/// When SIGIRO_CATALOG_URL is set: PostgreSQL catalog + S3 (distributed mode).
+/// When not set: DuckDB file catalog + local Parquet (default, zero config).
 #[derive(Deserialize, Debug)]
 pub struct StorageConfig {
-    /// PostgreSQL connection string for DuckLake catalog (required for DuckLake mode)
+    /// PostgreSQL connection string for DuckLake catalog (required for distributed mode)
     pub catalog_url: String,
     /// S3 bucket for Parquet data files
     pub s3_bucket: String,
@@ -32,19 +32,6 @@ fn default_prefix() -> String {
     "sigiro/".to_string()
 }
 
-/// Try to load DuckLake config from SIGIRO_* env vars.
-/// Returns None if SIGIRO_CATALOG_URL is not set (local-only mode).
-pub fn load_config() -> Option<StorageConfig> {
-    match envy::prefixed("SIGIRO_").from_env::<StorageConfig>() {
-        Ok(config) => Some(config),
-        Err(envy::Error::MissingValue(_)) => None,
-        Err(e) => {
-            tracing::warn!("invalid storage config, falling back to local mode: {e}");
-            None
-        }
-    }
-}
-
 /// Escape single quotes for DuckDB string literals.
 /// Config values come from env vars, not user input, but a postgres URL with
 /// special chars (e.g., passwords containing ') would break the SQL otherwise.
@@ -52,8 +39,37 @@ fn escape_sql_literal(s: &str) -> String {
     s.replace('\'', "''")
 }
 
-/// Initialize DuckLake: load extensions, configure S3, attach catalog.
-/// After this call, tables are accessible as `lake.sigiro_*`.
+/// Initialize DuckLake with DuckDB file catalog + local Parquet (zero config).
+/// Tables accessible as `lake.sigiro_*`.
+/// Catalog stored in `project_dir/catalog.ducklake`.
+/// Parquet stored in `project_dir/catalog.ducklake.files/` (auto-created by DuckLake).
+pub fn init_default(conn: &Connection, project_dir: &Path) -> Result<()> {
+    let project_dir_str = escape_sql_literal(&project_dir.to_string_lossy());
+    std::fs::create_dir_all(project_dir).with_context(|| {
+        format!(
+            "failed to create project directory: {}",
+            project_dir.display()
+        )
+    })?;
+
+    // Load required extension (only ducklake — no sqlite extension needed)
+    conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
+        .context("failed to install/load ducklake extension")?;
+    tracing::info!("loaded DuckDB extension: ducklake");
+
+    // Attach DuckLake with DuckDB file catalog + local Parquet.
+    // catalog.ducklake is a DuckDB database with the DuckLake schema.
+    // Data files go to catalog.ducklake.files/ (auto-created).
+    let attach_sql = format!("ATTACH 'ducklake:{project_dir_str}/catalog.ducklake' AS lake");
+    conn.execute_batch(&attach_sql)
+        .context("failed to attach DuckLake catalog")?;
+    tracing::info!("DuckLake attached — catalog: DuckDB file, data: local Parquet");
+
+    Ok(())
+}
+
+/// Initialize DuckLake with PostgreSQL catalog + S3 (distributed mode).
+/// Tables accessible as `lake.sigiro_*`.
 pub fn init_ducklake(conn: &Connection, config: &StorageConfig) -> Result<()> {
     // Set extension directory if provided (Docker/offline environments)
     if let Some(ref dir) = config.extension_dir {
@@ -101,10 +117,22 @@ pub fn init_ducklake(conn: &Connection, config: &StorageConfig) -> Result<()> {
     Ok(())
 }
 
-/// Returns the table name prefix: "lake." when DuckLake is active, "" for local mode.
-/// All SQL queries use this to reference the correct schema.
-pub fn table_prefix(ducklake_active: bool) -> &'static str {
-    if ducklake_active { "lake." } else { "" }
+/// Try to load DuckLake distributed config from SIGIRO_* env vars.
+/// Returns None if SIGIRO_CATALOG_URL is not set (will use DuckDB file default).
+pub fn load_config() -> Option<StorageConfig> {
+    match envy::prefixed("SIGIRO_").from_env::<StorageConfig>() {
+        Ok(config) => Some(config),
+        Err(envy::Error::MissingValue(_)) => None,
+        Err(e) => {
+            tracing::warn!("invalid storage config, using DuckDB file default: {e}");
+            None
+        }
+    }
+}
+
+/// Always returns "lake." — there is no longer a non-DuckLake path.
+pub fn table_prefix() -> &'static str {
+    "lake."
 }
 
 /// The 6 sigiro table names (without prefix).

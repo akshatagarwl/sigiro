@@ -112,7 +112,7 @@ curl -s -X POST http://localhost:9999/admin/keys \
 cargo run -- admin revoke-key BRTRKFsL
 ```
 
-Each project gets its own isolated DuckDB database at `~/.sigiro/data/{project_id}.duckdb`.
+Each project gets its own isolated DuckLake catalog at `~/.sigiro/data/{project_id}/catalog.ducklake` with Parquet data in `catalog.ducklake.files/`.
 
 ## Use the CLI
 

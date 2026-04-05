@@ -1,19 +1,24 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use sigiro::investigate::{
-    InvestigateRequest, adaptive_config, build_span_trees, compute_coverage, investigate,
+    InvestigateRequest, QueryCtx, adaptive_config, build_span_trees, compute_coverage, investigate,
     query_logs, query_service_context,
 };
 use std::sync::{Arc, Mutex};
 
-fn setup_populated_db() -> Arc<Mutex<duckdb::Connection>> {
+/// Setup a DuckLake-backed DB matching production config.
+fn setup_populated_db() -> (Arc<Mutex<duckdb::Connection>>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn, "").expect("create tables");
+
+    // DuckLake file catalog — matches production default
+    sigiro::storage::init_default(&conn, dir.path()).expect("init ducklake");
+    sigiro::schema::create_tables(&conn, "lake.").expect("create tables");
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
-    // Insert 100 spans across 5 operations, mix of errors and ok
+    // Insert 100 spans across 5 operations
     let mut sql = String::from(
-        "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+        "INSERT INTO lake.sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name,
             service_instance_id, resource_attributes) VALUES ",
     );
@@ -38,9 +43,9 @@ fn setup_populated_db() -> Arc<Mutex<duckdb::Connection>> {
     }
     conn.execute_batch(&sql).expect("insert spans");
 
-    // Insert 50 logs with some duplicatable patterns
+    // Insert 50 logs with template-friendly patterns
     let mut log_sql = String::from(
-        "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number, severity_text, body) VALUES ",
+        "INSERT INTO lake.sigiro_logs (timestamp, observed_timestamp, service_name, severity_number, severity_text, body) VALUES ",
     );
     for i in 0..50 {
         if i > 0 {
@@ -50,12 +55,11 @@ fn setup_populated_db() -> Arc<Mutex<duckdb::Connection>> {
         let body = match i % 4 {
             0 => format!("Connection timeout for 10.0.0.{i}"),
             1 => format!("Failed to process order {i:08x}-e29b-41d4-a716-446655440000"),
-            2 => format!("Request completed in {dur}ms", dur = i * 100 + 50),
+            2 => format!("Request completed in {}ms", i * 100 + 50),
             _ => format!("Health check passed for pod-{i}"),
         };
         let sev = if i % 4 == 0 { "WARN" } else { "INFO" };
         let sev_num = if i % 4 == 0 { 13 } else { 9 };
-        // Escape single quotes in body
         let body = body.replace('\'', "''");
         log_sql.push_str(&format!(
             "(make_timestamp({ts}), {ts}, 'bench-svc', {sev_num}, '{sev}', '{body}')"
@@ -63,49 +67,58 @@ fn setup_populated_db() -> Arc<Mutex<duckdb::Connection>> {
     }
     conn.execute_batch(&log_sql).expect("insert logs");
 
-    Arc::new(Mutex::new(conn))
+    (Arc::new(Mutex::new(conn)), dir)
 }
 
 fn bench_investigate(c: &mut Criterion) {
-    let shared = setup_populated_db();
+    let (shared, _dir) = setup_populated_db();
     let now_us = chrono::Utc::now().timestamp_micros();
 
-    c.bench_function("investigate_full", |b| {
+    let mut group = c.benchmark_group("investigate");
+    group.sample_size(10);
+
+    group.bench_function("investigate_full", |b| {
         b.iter(|| {
             let req = InvestigateRequest {
-                service: "bench-svc".to_string(),
+                service: Some("bench-svc".to_string()),
+                services: None,
                 from_ts: Some(now_us - 15 * 60 * 1_000_000),
                 to_ts: Some(now_us + 60 * 1_000_000),
             };
-            investigate(&shared, &req, "").expect("investigate");
+            investigate(&shared, &req, "lake.").expect("investigate");
         });
     });
+
+    group.finish();
 }
 
 fn bench_compute_coverage(c: &mut Criterion) {
     c.bench_function("compute_coverage", |b| {
-        b.iter(|| compute_coverage(100, 50, 10));
+        b.iter(|| compute_coverage(100, 50, 10, 0));
     });
 }
 
 fn bench_query_logs(c: &mut Criterion) {
-    let shared = setup_populated_db();
+    let (shared, _dir) = setup_populated_db();
     let now_us = chrono::Utc::now().timestamp_micros();
     let conn = shared.lock().unwrap();
 
-    c.bench_function("query_logs_regex", |b| {
-        b.iter(|| {
-            query_logs(
-                &conn,
-                "bench-svc",
-                now_us - 15 * 60 * 1_000_000,
-                now_us + 60 * 1_000_000,
-                30,
-                "",
-            )
-            .expect("query_logs");
-        });
+    let ctx = QueryCtx {
+        conn: &conn,
+        service: "bench-svc",
+        from_ts: now_us - 15 * 60 * 1_000_000,
+        to_ts: now_us + 60 * 1_000_000,
+        prefix: "lake.",
+    };
+
+    let mut group = c.benchmark_group("investigate");
+    group.sample_size(10);
+
+    group.bench_function("query_logs_regex", |b| {
+        b.iter(|| query_logs(&ctx, 30).expect("query_logs"));
     });
+
+    group.finish();
 }
 
 fn bench_build_span_trees(c: &mut Criterion) {
@@ -140,22 +153,26 @@ fn bench_adaptive_config(c: &mut Criterion) {
 }
 
 fn bench_service_context(c: &mut Criterion) {
-    let shared = setup_populated_db();
+    let (shared, _dir) = setup_populated_db();
     let now_us = chrono::Utc::now().timestamp_micros();
     let conn = shared.lock().unwrap();
 
-    c.bench_function("query_service_context", |b| {
-        b.iter(|| {
-            query_service_context(
-                &conn,
-                "bench-svc",
-                now_us - 15 * 60 * 1_000_000,
-                now_us + 60 * 1_000_000,
-                "",
-            )
-            .expect("context");
-        });
+    let ctx = QueryCtx {
+        conn: &conn,
+        service: "bench-svc",
+        from_ts: now_us - 15 * 60 * 1_000_000,
+        to_ts: now_us + 60 * 1_000_000,
+        prefix: "lake.",
+    };
+
+    let mut group = c.benchmark_group("investigate");
+    group.sample_size(10);
+
+    group.bench_function("query_service_context", |b| {
+        b.iter(|| query_service_context(&ctx).expect("context"));
     });
+
+    group.finish();
 }
 
 criterion_group!(

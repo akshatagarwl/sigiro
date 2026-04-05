@@ -1,13 +1,8 @@
 use sigiro::storage;
 
 #[test]
-fn table_prefix_local_mode() {
-    assert_eq!(storage::table_prefix(false), "");
-}
-
-#[test]
-fn table_prefix_ducklake_mode() {
-    assert_eq!(storage::table_prefix(true), "lake.");
+fn table_prefix_always_lake() {
+    assert_eq!(storage::table_prefix(), "lake.");
 }
 
 #[test]

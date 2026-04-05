@@ -222,7 +222,7 @@ fn make_gauge_batch(n: usize, service_name: &str, ts_base: i64) -> RecordBatch {
 #[test]
 fn e2e_full_pipeline_ingest_and_investigate() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), "", 10));
+    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
@@ -250,7 +250,9 @@ fn e2e_full_pipeline_ingest_and_investigate() {
     let count: i64 = conn
         .lock()
         .unwrap()
-        .query_row("SELECT count(*) FROM sigiro_spans", [], |row| row.get(0))
+        .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(count, 100, "expected 100 spans ingested, got {count}");
 
@@ -261,7 +263,7 @@ fn e2e_full_pipeline_ingest_and_investigate() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks = investigate(&conn, &req, "").expect("investigate should succeed");
+    let blocks = investigate(&conn, &req, "lake.").expect("investigate should succeed");
     let block = &blocks["checkout"];
 
     // Coverage
@@ -286,7 +288,7 @@ fn e2e_full_pipeline_ingest_and_investigate() {
 #[test]
 fn e2e_multi_project_isolation() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), "", 10));
+    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
@@ -321,7 +323,7 @@ fn e2e_multi_project_isolation() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks_a = investigate(&conn_a, &req_a, "").unwrap();
+    let blocks_a = investigate(&conn_a, &req_a, "lake.").unwrap();
     let block_a = &blocks_a["alpha-svc"];
     assert_eq!(block_a.coverage.span_count, 30);
     assert_eq!(block_a.operation_summaries.len(), 1);
@@ -334,7 +336,7 @@ fn e2e_multi_project_isolation() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks_beta_on_a = investigate(&conn_a, &req_beta_on_a, "").unwrap();
+    let blocks_beta_on_a = investigate(&conn_a, &req_beta_on_a, "lake.").unwrap();
     let block_beta_on_a = &blocks_beta_on_a["beta-svc"];
     assert_eq!(
         block_beta_on_a.coverage.span_count, 0,
@@ -349,7 +351,7 @@ fn e2e_multi_project_isolation() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks_b = investigate(&conn_b, &req_b, "").unwrap();
+    let blocks_b = investigate(&conn_b, &req_b, "lake.").unwrap();
     let block_b = &blocks_b["beta-svc"];
     assert_eq!(block_b.coverage.span_count, 50);
     assert_eq!(block_b.operation_summaries[0].span_name, "GET /beta");
@@ -362,7 +364,7 @@ fn e2e_multi_project_isolation() {
 #[test]
 fn e2e_services_endpoint_simulation() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), "", 10));
+    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
@@ -399,7 +401,7 @@ fn e2e_services_endpoint_simulation() {
     let mut stmt = conn_guard
         .prepare(
             "SELECT service_name, count(*) AS cnt
-             FROM sigiro_spans
+            FROM lake.sigiro_spans
              GROUP BY service_name
              ORDER BY service_name",
         )
@@ -512,7 +514,7 @@ fn e2e_query_validation() {
 #[test]
 fn e2e_investigation_all_signals() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), "", 10));
+    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
@@ -558,13 +560,13 @@ fn e2e_investigation_all_signals() {
     {
         let guard = conn.lock().unwrap();
         let spans: i64 = guard
-            .query_row("SELECT count(*) FROM sigiro_spans", [], |r| r.get(0))
+            .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |r| r.get(0))
             .unwrap();
         let logs: i64 = guard
-            .query_row("SELECT count(*) FROM sigiro_logs", [], |r| r.get(0))
+            .query_row("SELECT count(*) FROM lake.sigiro_logs", [], |r| r.get(0))
             .unwrap();
         let gauges: i64 = guard
-            .query_row("SELECT count(*) FROM sigiro_metrics_gauge", [], |r| {
+            .query_row("SELECT count(*) FROM lake.sigiro_metrics_gauge", [], |r| {
                 r.get(0)
             })
             .unwrap();
@@ -580,7 +582,7 @@ fn e2e_investigation_all_signals() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks = investigate(&conn, &req, "").expect("investigate with all signals");
+    let blocks = investigate(&conn, &req, "lake.").expect("investigate with all signals");
     let block = &blocks["full-svc"];
 
     assert!(
@@ -681,7 +683,7 @@ fn e2e_drain_log_template_dedup() {
     // Verify the full pipeline: OTLP logs → inserter (DRAIN) → DuckDB → investigate
     // Logs with variable tokens should collapse into a single template.
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), "", 10));
+    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
@@ -723,14 +725,14 @@ fn e2e_drain_log_template_dedup() {
     let conn = conn.lock().unwrap();
 
     let total_logs: i64 = conn
-        .query_row("SELECT count(*) FROM sigiro_logs", [], |r| r.get(0))
+        .query_row("SELECT count(*) FROM lake.sigiro_logs", [], |r| r.get(0))
         .unwrap();
     assert_eq!(total_logs, 20, "should have 20 log rows");
 
     // All rows should have a template_id (not NULL)
     let null_templates: i64 = conn
         .query_row(
-            "SELECT count(*) FROM sigiro_logs WHERE template_id IS NULL",
+            "SELECT count(*) FROM lake.sigiro_logs WHERE template_id IS NULL",
             [],
             |r| r.get(0),
         )
@@ -740,7 +742,7 @@ fn e2e_drain_log_template_dedup() {
     // Should have a small number of distinct template_ids (2-3, not 20)
     let distinct_templates: i64 = conn
         .query_row(
-            "SELECT count(DISTINCT template_id) FROM sigiro_logs",
+            "SELECT count(DISTINCT template_id) FROM lake.sigiro_logs",
             [],
             |r| r.get(0),
         )
@@ -752,7 +754,7 @@ fn e2e_drain_log_template_dedup() {
 
     // Template lookup table should have entries
     let template_count: i64 = conn
-        .query_row("SELECT count(*) FROM sigiro_log_templates", [], |r| {
+        .query_row("SELECT count(*) FROM lake.sigiro_log_templates", [], |r| {
             r.get(0)
         })
         .unwrap();
@@ -764,7 +766,7 @@ fn e2e_drain_log_template_dedup() {
     // At least one template should contain <*> (wildcard from DRAIN)
     let wildcard_count: i64 = conn
         .query_row(
-            "SELECT count(*) FROM sigiro_log_templates WHERE template_text LIKE '%<*>%'",
+            "SELECT count(*) FROM lake.sigiro_log_templates WHERE template_text LIKE '%<*>%'",
             [],
             |r| r.get(0),
         )
@@ -780,7 +782,7 @@ fn e2e_drain_log_template_dedup() {
         service: "api-svc",
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
-        prefix: "",
+        prefix: "lake.",
     };
     let logs = sigiro::investigate::query_logs(&qctx, 30).unwrap();
     assert!(

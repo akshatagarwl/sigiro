@@ -79,7 +79,7 @@ Successful verifications are cached for 60 seconds. Failed verifications are **n
 
 ## Multi-tenant isolation
 
-Each API key maps to a `project_id`. Each project gets its own DuckDB database at `~/.sigiro/data/{project_id}.duckdb`. Keys from different projects cannot access each other's data.
+Each API key maps to a `project_id`. Each project gets its own DuckLake catalog at `~/.sigiro/data/{project_id}/catalog.ducklake`. Keys from different projects cannot access each other's data.
 
 ## Rate limiting
 

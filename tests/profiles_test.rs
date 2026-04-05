@@ -93,7 +93,7 @@ fn make_profiles_batch(
 #[test]
 fn e2e_profiles_pipeline() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), "", 10));
+    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
@@ -140,14 +140,16 @@ fn e2e_profiles_pipeline() {
     let conn = conn.lock().unwrap();
 
     let total: i64 = conn
-        .query_row("SELECT count(*) FROM sigiro_profiles", [], |r| r.get(0))
+        .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(total, 4, "should have 4 profile samples");
 
     // Verify stack traces are stored correctly
     let db_query_count: i64 = conn
         .query_row(
-            "SELECT count(*) FROM sigiro_profiles WHERE list_contains(stack_trace, 'db_query')",
+            "SELECT count(*) FROM lake.sigiro_profiles WHERE list_contains(stack_trace, 'db_query')",
             [],
             |r| r.get(0),
         )
@@ -157,7 +159,7 @@ fn e2e_profiles_pipeline() {
     // Verify profile_type stored
     let cpu_count: i64 = conn
         .query_row(
-            "SELECT count(*) FROM sigiro_profiles WHERE profile_type = 'cpu'",
+            "SELECT count(*) FROM lake.sigiro_profiles WHERE profile_type = 'cpu'",
             [],
             |r| r.get(0),
         )
@@ -170,7 +172,7 @@ fn e2e_profiles_pipeline() {
         service: "api-svc",
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
-        prefix: "",
+        prefix: "lake.",
     };
     let profiles = sigiro::investigate::query_profiles(&qctx, 20).unwrap();
     assert!(!profiles.is_empty(), "should have profile summaries");
@@ -195,7 +197,7 @@ fn e2e_profiles_pipeline() {
 #[test]
 fn e2e_profiles_multi_type() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), "", 10));
+    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
@@ -240,7 +242,7 @@ fn e2e_profiles_multi_type() {
     // Should have both profile types
     let type_count: i64 = conn
         .query_row(
-            "SELECT count(DISTINCT profile_type) FROM sigiro_profiles",
+            "SELECT count(DISTINCT profile_type) FROM lake.sigiro_profiles",
             [],
             |r| r.get(0),
         )
@@ -253,7 +255,7 @@ fn e2e_profiles_multi_type() {
         service: "api-svc",
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
-        prefix: "",
+        prefix: "lake.",
     };
     let profiles = sigiro::investigate::query_profiles(&qctx, 20).unwrap();
     assert_eq!(
@@ -275,7 +277,7 @@ fn e2e_profiles_multi_type() {
 #[test]
 fn e2e_profiles_empty_batch() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), "", 10));
+    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let (tx, rx) = unbounded();
 
     let pool_clone = Arc::clone(&pool);
@@ -299,7 +301,9 @@ fn e2e_profiles_empty_batch() {
     let conn = conn.lock().unwrap();
 
     let total: i64 = conn
-        .query_row("SELECT count(*) FROM sigiro_profiles", [], |r| r.get(0))
+        .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(total, 0, "should have 0 profile samples");
 }

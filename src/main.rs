@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, builder::styling};
 use duckdb::Connection;
 use std::sync::{Arc, Mutex};
 
-use sigiro::{data_dir, open_db, pool::ProjectPool, storage};
+use sigiro::{data_dir, pool::ProjectPool, storage};
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -86,22 +86,6 @@ fn open_admin_db() -> Result<Connection> {
     Ok(conn)
 }
 
-/// Initialize DuckLake if configured, return the table prefix ("lake." or "").
-/// Uses a 'static str so it can be shared across threads without lifetime issues.
-fn init_storage(conn: &Connection) -> Result<&'static str> {
-    match storage::load_config() {
-        Some(config) => {
-            storage::init_ducklake(conn, &config)?;
-            tracing::info!("DuckLake mode — tables in lake.*");
-            Ok(storage::table_prefix(true))
-        }
-        None => {
-            tracing::info!("local mode — no SIGIRO_CATALOG_URL set");
-            Ok(storage::table_prefix(false))
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -119,12 +103,9 @@ async fn main() -> Result<()> {
             let dir = data_dir()?;
             std::fs::create_dir_all(&dir)?;
 
-            // Detect DuckLake prefix by probing a temp connection
-            let probe_conn = open_db()?;
-            let prefix = init_storage(&probe_conn)?;
-            drop(probe_conn);
-
-            let pool = Arc::new(ProjectPool::new(dir.clone(), prefix, 100));
+            // DuckLake init is now per-project (in pool.get_or_create).
+            // No need for a probe connection at startup.
+            let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
             let admin_conn = open_admin_db()?;
 
             tracing::info!("sigiro ready — data_dir={}", dir.display());
@@ -176,8 +157,18 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&block)?);
         }
         Some(Command::Mcp) => {
-            let conn = open_db()?;
-            let prefix = init_storage(&conn)?;
+            let conn = Connection::open_in_memory().context("failed to open in-memory DuckDB")?;
+            let prefix = storage::table_prefix();
+            let data_dir = data_dir()?;
+            match storage::load_config() {
+                Some(config) => {
+                    storage::init_ducklake(&conn, &config)?;
+                    tracing::info!("DuckLake distributed mode — catalog: PostgreSQL, data: S3");
+                }
+                None => {
+                    storage::init_default(&conn, &data_dir)?;
+                }
+            }
             sigiro::schema::create_tables(&conn, prefix)?;
             let shared = Arc::new(Mutex::new(conn));
             sigiro::mcp::run_mcp_server(shared, prefix).await?;
