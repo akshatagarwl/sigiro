@@ -4,7 +4,6 @@ use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
 use crossbeam_channel::Sender;
-use duckdb::Connection;
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
         ExportLogsServiceRequest, ExportLogsServiceResponse,
@@ -25,6 +24,7 @@ use opentelemetry_proto::tonic::collector::{
 };
 use otlp2records::{InputFormat, MetricBatches};
 use prost::Message;
+use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tonic::{Request, Response, Status};
 

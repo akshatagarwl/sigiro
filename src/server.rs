@@ -7,12 +7,13 @@ use axum::{
     routing::{get, post},
 };
 use crossbeam_channel::Sender;
-use duckdb::Connection;
 use problem_details::ProblemDetails;
+use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
 
+use crate::admin;
 use crate::auth::{self, AuthContext};
 use crate::ingest::{IngestMsg, OtlpGrpcService};
 use crate::investigate;
@@ -67,7 +68,7 @@ pub fn invalid_request(detail: impl Into<String>) -> ProblemDetails {
 
 pub struct AppState {
     pub pool: Arc<ProjectPool>,
-    /// Admin DuckDB for API key storage (separate from per-project data)
+    /// Admin SQLite for API key storage (separate from per-project data)
     pub admin_conn: Arc<Mutex<Connection>>,
     pub http_client: reqwest::Client,
 }
@@ -275,7 +276,7 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
 fn project_conn(
     state: &AppState,
     auth: &AuthContext,
-) -> Result<Arc<Mutex<Connection>>, ProblemDetails> {
+) -> Result<Arc<Mutex<duckdb::Connection>>, ProblemDetails> {
     state
         .pool
         .get_or_create(&auth.project_id)
@@ -406,7 +407,7 @@ async fn admin_create_key(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateKeyRequest>,
 ) -> Result<Json<serde_json::Value>, ProblemDetails> {
-    let raw_key = auth::create_key(&state.admin_conn, &req.project, &req.plan, req.rate_limit)
+    let raw_key = admin::create_key(&state.admin_conn, &req.project, &req.plan, req.rate_limit)
         .map_err(|e| internal_error(format!("{e:#}")))?;
     Ok(Json(serde_json::json!({ "key": raw_key })))
 }
@@ -415,7 +416,7 @@ async fn admin_revoke_key(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(short_token): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, ProblemDetails> {
-    let revoked = auth::revoke_key(&state.admin_conn, &short_token)
+    let revoked = admin::revoke_key(&state.admin_conn, &short_token)
         .map_err(|e| internal_error(format!("{e:#}")))?;
     if revoked {
         Ok(Json(

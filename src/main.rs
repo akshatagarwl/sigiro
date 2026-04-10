@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, builder::styling};
-use duckdb::Connection;
+use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
 use sigiro::{data_dir, pool::ProjectPool, storage};

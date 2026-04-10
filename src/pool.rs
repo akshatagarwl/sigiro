@@ -59,16 +59,8 @@ impl ProjectPool {
         conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
             .context("failed to set DuckDB memory limit")?;
 
-        // Initialize DuckLake — uses DuckDB file catalog by default,
-        // or PostgreSQL + S3 if SIGIRO_CATALOG_URL is set.
-        match crate::storage::load_config() {
-            Some(config) => {
-                crate::storage::init_ducklake(&conn, &config)?;
-            }
-            None => {
-                crate::storage::init_default(&conn, &project_dir)?;
-            }
-        }
+        // Initialize DuckLake — always uses SQLite catalog + local Parquet for now.
+        crate::storage::init_default(&conn, &project_dir)?;
 
         crate::schema::create_tables(&conn, Self::prefix())?;
 

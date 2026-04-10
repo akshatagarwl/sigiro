@@ -5,8 +5,6 @@ use axum::{
     response::Response,
 };
 use dashmap::DashMap;
-use duckdb::Connection;
-use prefixed_api_key::{PrefixedApiKey, PrefixedApiKeyController};
 use problem_details::ProblemDetails;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -36,15 +34,15 @@ fn auth_cache() -> &'static DashMap<String, CachedAuth> {
     CACHE.get_or_init(|| DashMap::with_capacity(1024))
 }
 
-/// Verify an API key with caching. Used by the OTLP ingest hot path.
-/// Checks the in-memory cache first; on miss, falls back to DuckDB verify
-/// and caches the result for AUTH_CACHE_TTL.
+/// Verify an API key with caching. Used by OTLP ingest hot path.
+/// Checks in-memory cache first; on miss, falls back to SQLite verify
+/// and caches result for AUTH_CACHE_TTL.
 ///
 /// Returns AuthContext on success, ProblemDetails on failure.
-/// Failed verifications are NOT cached (attacker can't poison the cache).
+/// Failed verifications are NOT cached (attacker can't poison cache).
 #[allow(clippy::result_large_err)]
 pub fn verify_key_cached(
-    conn: &Mutex<Connection>,
+    conn: &Mutex<rusqlite::Connection>,
     raw_key: &str,
 ) -> Result<AuthContext, ProblemDetails> {
     let cache = auth_cache();
@@ -59,8 +57,14 @@ pub fn verify_key_cached(
         cache.remove(raw_key);
     }
 
-    // Slow path: verify against DuckDB
-    let ctx = verify_key(conn, raw_key)?;
+    // Slow path: verify against SQLite
+    let (project_id, plan) = crate::admin::verify_key_db(conn, raw_key).map_err(|e| {
+        ProblemDetails::new()
+            .with_status(StatusCode::UNAUTHORIZED)
+            .with_title("Invalid API Key")
+            .with_detail(e.to_string())
+    })?;
+    let ctx = AuthContext { project_id, plan };
 
     // Cache successful verification
     cache.insert(
@@ -72,110 +76,6 @@ pub fn verify_key_cached(
     );
 
     Ok(ctx)
-}
-
-/// Build the prefixed-api-key controller with sigiro's key format.
-/// Keys look like: sigiro_BRTRKFsL_51FwqftsmMDHHbJAMEXXHCgG
-pub fn key_controller() -> prefixed_api_key::PakControllerOsSha256 {
-    PrefixedApiKeyController::configure()
-        .prefix("sigiro".to_string())
-        .seam_defaults() // OsRng + SHA-256 + default lengths (8 short, 24 long)
-        .finalize()
-        .expect("valid controller config")
-}
-
-/// Create the api_keys table in the admin DuckDB.
-pub fn create_keys_table(conn: &Connection) -> anyhow::Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sigiro_api_keys (
-            short_token TEXT PRIMARY KEY,
-            long_token_hash TEXT NOT NULL,
-            project_id TEXT NOT NULL,
-            plan TEXT NOT NULL DEFAULT 'free',
-            rate_limit INTEGER NOT NULL DEFAULT 100,
-            created_at TIMESTAMP DEFAULT current_timestamp
-        )",
-    )?;
-    Ok(())
-}
-
-/// Generate a new API key, store the hash in admin DB, return the raw key string.
-/// The raw key is shown once to the user and never stored.
-pub fn create_key(
-    conn: &Mutex<Connection>,
-    project_id: &str,
-    plan: &str,
-    rate_limit: u32,
-) -> anyhow::Result<String> {
-    let controller = key_controller();
-    let (pak, hash) = controller
-        .try_generate_key_and_hash()
-        .map_err(|e| anyhow::anyhow!("key generation failed: {e}"))?;
-
-    let short_token = pak.short_token().to_string();
-    let hash_str = hash.to_string();
-    let key_string = pak.to_string();
-
-    let guard = conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-    guard.execute(
-        "INSERT INTO sigiro_api_keys (short_token, long_token_hash, project_id, plan, rate_limit) \
-         VALUES (?, ?, ?, ?, ?)",
-        duckdb::params![short_token, hash_str, project_id, plan, rate_limit as i32],
-    )?;
-
-    Ok(key_string)
-}
-
-/// Verify an API key against the admin DB.
-/// Returns AuthContext on success, ProblemDetails on failure.
-#[allow(clippy::result_large_err)] // ProblemDetails is the axum error response type
-pub fn verify_key(conn: &Mutex<Connection>, raw_key: &str) -> Result<AuthContext, ProblemDetails> {
-    let pak =
-        PrefixedApiKey::from_string(raw_key).map_err(|_| invalid_api_key("Malformed API key"))?;
-
-    let short_token = pak.short_token().to_string();
-    let controller = key_controller();
-
-    let guard = conn.lock().map_err(|e| {
-        tracing::error!("admin DB mutex poisoned: {e}");
-        internal("Auth database unavailable")
-    })?;
-
-    let mut stmt = guard
-        .prepare(
-            "SELECT long_token_hash, project_id, plan FROM sigiro_api_keys WHERE short_token = ?",
-        )
-        .map_err(|e| internal(e.to_string()))?;
-
-    let result = stmt.query_row([&short_token], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    });
-
-    match result {
-        Ok((stored_hash, project_id, plan)) => {
-            if controller.check_hash(&pak, &stored_hash) {
-                Ok(AuthContext { project_id, plan })
-            } else {
-                Err(invalid_api_key("Invalid API key"))
-            }
-        }
-        Err(duckdb::Error::QueryReturnedNoRows) => Err(invalid_api_key("Invalid API key")),
-        Err(e) => Err(internal(e.to_string())),
-    }
-}
-
-/// Revoke an API key by short token.
-pub fn revoke_key(conn: &Mutex<Connection>, short_token: &str) -> anyhow::Result<bool> {
-    let guard = conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-    let affected = guard.execute(
-        "DELETE FROM sigiro_api_keys WHERE short_token = ?",
-        [short_token],
-    )?;
-    Ok(affected > 0)
 }
 
 /// Extract bearer token from Authorization header.
@@ -211,7 +111,14 @@ pub async fn auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    let ctx = verify_key(&state.admin_conn, token)?;
+    let (project_id, plan) =
+        crate::admin::verify_key_db(&state.admin_conn, token).map_err(|e| {
+            ProblemDetails::new()
+                .with_status(StatusCode::UNAUTHORIZED)
+                .with_title("Invalid API Key")
+                .with_detail(e.to_string())
+        })?;
+    let ctx = AuthContext { project_id, plan };
     let mut req = req;
     req.extensions_mut().insert(ctx);
     Ok(next.run(req).await)
