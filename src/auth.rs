@@ -58,12 +58,8 @@ pub fn verify_key_cached(
     }
 
     // Slow path: verify against SQLite
-    let (project_id, plan) = crate::admin::verify_key_db(conn, raw_key).map_err(|e| {
-        ProblemDetails::new()
-            .with_status(StatusCode::UNAUTHORIZED)
-            .with_title("Invalid API Key")
-            .with_detail(e.to_string())
-    })?;
+    let (project_id, plan) =
+        crate::admin::verify_key_db(conn, raw_key).map_err(classify_auth_error)?;
     let ctx = AuthContext { project_id, plan };
 
     // Cache successful verification
@@ -112,12 +108,7 @@ pub async fn auth_middleware(
     }
 
     let (project_id, plan) =
-        crate::admin::verify_key_db(&state.admin_conn, token).map_err(|e| {
-            ProblemDetails::new()
-                .with_status(StatusCode::UNAUTHORIZED)
-                .with_title("Invalid API Key")
-                .with_detail(e.to_string())
-        })?;
+        crate::admin::verify_key_db(&state.admin_conn, token).map_err(classify_auth_error)?;
     let ctx = AuthContext { project_id, plan };
     let mut req = req;
     req.extensions_mut().insert(ctx);
@@ -131,16 +122,19 @@ fn missing_auth(detail: impl Into<String>) -> ProblemDetails {
         .with_detail(detail)
 }
 
-fn invalid_api_key(detail: impl Into<String>) -> ProblemDetails {
-    ProblemDetails::new()
-        .with_status(StatusCode::UNAUTHORIZED)
-        .with_title("Invalid API Key")
-        .with_detail(detail)
-}
-
-fn internal(detail: impl Into<String>) -> ProblemDetails {
-    ProblemDetails::new()
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-        .with_title("Internal Error")
-        .with_detail(detail)
+/// Classify an anyhow::Error from verify_key_db into the right ProblemDetails.
+/// Auth failures (malformed/invalid key) → 401.  DB errors → 500.
+fn classify_auth_error(e: anyhow::Error) -> ProblemDetails {
+    let msg = e.to_string();
+    if msg.contains("Malformed API key") || msg.contains("Invalid API key") {
+        ProblemDetails::new()
+            .with_status(StatusCode::UNAUTHORIZED)
+            .with_title("Invalid API Key")
+            .with_detail(msg)
+    } else {
+        ProblemDetails::new()
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+            .with_title("Internal Error")
+            .with_detail(msg)
+    }
 }
