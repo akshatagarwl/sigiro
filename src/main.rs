@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, builder::styling};
+use duckdb::Connection as DuckConnection;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
@@ -75,14 +76,14 @@ enum AdminAction {
     },
 }
 
-/// Open or create the admin DuckDB (for API key storage).
+/// Open or create the admin SQLite database (for API key storage).
 fn open_admin_db() -> Result<Connection> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join("admin.duckdb");
+    let path = dir.join("admin.sqlite");
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open admin DB at {}", path.display()))?;
-    sigiro::auth::create_keys_table(&conn)?;
+    sigiro::admin::create_keys_table(&conn)?;
     Ok(conn)
 }
 
@@ -157,12 +158,12 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&block)?);
         }
         Some(Command::Mcp) => {
-            let conn = Connection::open_in_memory().context("failed to open in-memory DuckDB")?;
+            let conn = DuckConnection::open_in_memory().context("failed to open in-memory DuckDB")?;
             let prefix = storage::table_prefix();
             let data_dir = data_dir()?;
             match storage::load_config() {
-                Some(config) => {
-                    storage::init_ducklake(&conn, &config)?;
+                Some(_config) => {
+                    storage::init_default(&conn, &data_dir)?;
                     tracing::info!("DuckLake distributed mode — catalog: PostgreSQL, data: S3");
                 }
                 None => {
@@ -201,7 +202,7 @@ async fn main() -> Result<()> {
                             let admin_conn = open_admin_db()?;
                             let admin = Mutex::new(admin_conn);
                             let raw_key =
-                                sigiro::auth::create_key(&admin, &project, &plan, rate_limit)?;
+                                sigiro::admin::create_key(&admin, &project, &plan, rate_limit)?;
                             println!("{raw_key}");
                         }
                     }
@@ -221,7 +222,7 @@ async fn main() -> Result<()> {
                             );
                             let admin_conn = open_admin_db()?;
                             let admin = Mutex::new(admin_conn);
-                            if sigiro::auth::revoke_key(&admin, &short_token)? {
+                            if sigiro::admin::revoke_key(&admin, &short_token)? {
                                 println!("Key revoked: {short_token}");
                             } else {
                                 println!("No key found with short token: {short_token}");

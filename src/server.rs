@@ -384,7 +384,7 @@ async fn investigate_handler(
 // --- Admin endpoints ---
 // No bearer auth required — :9999 should only be exposed internally.
 // This solves the DuckDB single-writer lock problem: the CLI talks to the
-// running server over HTTP instead of opening admin.duckdb directly.
+// running server over HTTP instead of opening admin.sqlite directly.
 
 #[derive(serde::Deserialize)]
 struct CreateKeyRequest {
