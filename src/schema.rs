@@ -1,5 +1,28 @@
 use anyhow::{Context, Result};
 use duckdb::Connection;
+use tracing::{info, warn};
+
+/// Fleet observability extensions — loaded on each project connection.
+/// Each extension provides SQL functions agents can query to debug system state.
+const FLEET_EXTENSIONS: &[&str] = &["system_stats", "fsquery", "hostfs", "observefs"];
+
+/// Load fleet observability DuckDB community extensions.
+/// Failures are non-fatal — missing extensions produce a warning and Sigiro keeps running.
+pub fn load_fleet_extensions(conn: &Connection) -> Vec<String> {
+    let mut loaded = Vec::new();
+    for name in FLEET_EXTENSIONS {
+        match conn.execute_batch(&format!("INSTALL {name} FROM community; LOAD {name};")) {
+            Ok(_) => {
+                info!("loaded extension: {name}");
+                loaded.push(name.to_string());
+            }
+            Err(e) => {
+                warn!("skipping extension {name}: {e}");
+            }
+        }
+    }
+    loaded
+}
 
 /// Create all sigiro tables and views.
 /// `prefix` is always "lake." (DuckLake catalog-qualified tables).

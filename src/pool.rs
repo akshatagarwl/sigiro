@@ -64,6 +64,11 @@ impl ProjectPool {
 
         crate::schema::create_tables(&conn, Self::prefix())?;
 
+        let loaded = crate::schema::load_fleet_extensions(&conn);
+        if !loaded.is_empty() {
+            tracing::info!(project_id, extensions = ?loaded, "loaded fleet extensions");
+        }
+
         let shared = Arc::new(Mutex::new(conn));
         self.connections.insert(
             project_id.to_string(),

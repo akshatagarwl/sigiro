@@ -123,6 +123,17 @@ async fn main() -> Result<()> {
                 std::env::consts::ARCH,
             )?;
 
+            // Probe fleet extensions and store result
+            let probe = DuckConnection::open_in_memory()
+                .context("failed to open probe DuckDB for extension check")?;
+            let loaded = sigiro::schema::load_fleet_extensions(&probe);
+            drop(probe);
+            sigiro::admin::write_instance_status(
+                &admin_conn,
+                "extensions",
+                &serde_json::to_string(&loaded).unwrap_or_else(|_| "[]".to_string()),
+            )?;
+
             tracing::info!("sigiro ready — data_dir={}", dir.display());
 
             let (tx, rx) = crossbeam_channel::unbounded();
