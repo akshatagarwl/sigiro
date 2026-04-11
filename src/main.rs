@@ -109,6 +109,20 @@ async fn main() -> Result<()> {
             let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
             let admin_conn = open_admin_db()?;
 
+            // Write instance status at startup
+            sigiro::admin::write_instance_status(
+                &admin_conn,
+                "version",
+                env!("CARGO_PKG_VERSION"),
+            )?;
+            sigiro::admin::write_instance_status(&admin_conn, "mode", "otlp")?;
+            sigiro::admin::write_instance_status(&admin_conn, "platform_os", std::env::consts::OS)?;
+            sigiro::admin::write_instance_status(
+                &admin_conn,
+                "platform_arch",
+                std::env::consts::ARCH,
+            )?;
+
             tracing::info!("sigiro ready — data_dir={}", dir.display());
 
             let (tx, rx) = crossbeam_channel::unbounded();
@@ -158,7 +172,8 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&block)?);
         }
         Some(Command::Mcp) => {
-            let conn = DuckConnection::open_in_memory().context("failed to open in-memory DuckDB")?;
+            let conn =
+                DuckConnection::open_in_memory().context("failed to open in-memory DuckDB")?;
             let prefix = storage::table_prefix();
             let data_dir = data_dir()?;
             match storage::load_config() {

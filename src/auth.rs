@@ -59,7 +59,7 @@ pub fn verify_key_cached(
 
     // Slow path: verify against SQLite
     let (project_id, plan) =
-        crate::admin::verify_key_db(conn, raw_key).map_err(classify_auth_error)?;
+        crate::admin::verify_key_db(conn, raw_key).map_err(|e| classify_auth_error(&e))?;
     let ctx = AuthContext { project_id, plan };
 
     // Cache successful verification
@@ -107,8 +107,8 @@ pub async fn auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    let (project_id, plan) =
-        crate::admin::verify_key_db(&state.admin_conn, token).map_err(classify_auth_error)?;
+    let (project_id, plan) = crate::admin::verify_key_db(&state.admin_conn, token)
+        .map_err(|e| classify_auth_error(&e))?;
     let ctx = AuthContext { project_id, plan };
     let mut req = req;
     req.extensions_mut().insert(ctx);
@@ -124,7 +124,7 @@ fn missing_auth(detail: impl Into<String>) -> ProblemDetails {
 
 /// Classify an anyhow::Error from verify_key_db into the right ProblemDetails.
 /// Auth failures (malformed/invalid key) → 401.  DB errors → 500.
-fn classify_auth_error(e: anyhow::Error) -> ProblemDetails {
+fn classify_auth_error(e: &anyhow::Error) -> ProblemDetails {
     let msg = e.to_string();
     if msg.contains("Malformed API key") || msg.contains("Invalid API key") {
         ProblemDetails::new()

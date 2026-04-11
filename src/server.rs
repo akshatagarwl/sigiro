@@ -177,10 +177,13 @@ pub async fn run_servers(
 
     // Admin routes — no bearer auth (chicken-and-egg: need admin to create first key).
     // These are on :9999 which should only be exposed internally.
-    let admin = Router::new().route("/keys", post(admin_create_key)).route(
-        "/keys/{short_token}",
-        axum::routing::delete(admin_revoke_key),
-    );
+    let admin = Router::new()
+        .route("/keys", post(admin_create_key))
+        .route(
+            "/keys/{short_token}",
+            axum::routing::delete(admin_revoke_key),
+        )
+        .route("/status", get(admin_status));
 
     // Public routes + v1 API + admin
     let http_app = Router::new()
@@ -428,4 +431,20 @@ async fn admin_revoke_key(
             .with_title("Key Not Found")
             .with_detail(format!("No key found with short token: {short_token}")))
     }
+}
+
+/// GET /admin/status — returns all instance_status rows as JSON object.
+async fn admin_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, ProblemDetails> {
+    let guard = state
+        .admin_conn
+        .lock()
+        .map_err(|e| internal_error(format!("admin DB mutex: {e}")))?;
+    let map = admin::read_all_status(&guard).map_err(|e| internal_error(format!("{e:#}")))?;
+    Ok(Json(serde_json::Value::Object(
+        map.into_iter()
+            .map(|(k, v)| (k, serde_json::Value::String(v)))
+            .collect(),
+    )))
 }
