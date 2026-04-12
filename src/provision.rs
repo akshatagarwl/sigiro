@@ -1,3 +1,15 @@
+// FULLY DEAD — Neither provision.rs nor vercel.rs are declared in lib.rs or main.rs.
+// Neither file is compiled. The entire Logto webhook + Vercel integration flow is orphaned.
+//
+// Both files can be deleted together. Also check if `hmac` can be removed from Cargo.toml.
+//
+// Why tooling didn't catch this:
+//   - Rust only compiles files that appear in `mod` declarations. Files sitting in src/ that
+//     aren't `mod`'d are invisible to the compiler — no warnings, no dead-code analysis.
+//   - `cargo clippy` / rustc can't warn about code they never see.
+//   - To catch this in CI: use a script that checks every .rs file in src/ is reachable from
+//     lib.rs or main.rs (e.g., `cargo-modules` or a simple `rg` check).
+
 use anyhow::{Context, Result, bail};
 use axum::{
     Json,

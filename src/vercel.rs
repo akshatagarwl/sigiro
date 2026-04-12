@@ -1,3 +1,9 @@
+// FULLY DEAD — Not declared in lib.rs or main.rs, so this file is never compiled.
+// The Vercel integration flow (installations + resource provisioning) is orphaned.
+// Can be deleted together with provision.rs.
+//
+// See comment in provision.rs for why tooling didn't catch this.
+
 use anyhow::{Context, Result};
 use axum::{
     Json,

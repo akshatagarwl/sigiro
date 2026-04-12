@@ -36,6 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
 chrono = "0.4"
 rmcp = { version = "1.2.0", features = ["server", "transport-io"] }
 hex = "0.4.3"
+libc = "0.2.184"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

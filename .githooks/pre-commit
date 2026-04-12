@@ -4,10 +4,34 @@
 #
 
 staged_rs_files=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
+
+# Check for orphaned .rs files (not declared as modules in lib.rs or main.rs).
+# Rust only compiles files reachable from the module tree — orphaned files are invisible
+# to clippy, dead-code analysis, and all static analysis tools.
+check_orphaned_rs() {
+  local orphans=""
+  for f in src/**/*.rs src/*.rs; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f" .rs)
+    case "$base" in lib|main|mod) continue ;; esac
+    # Check if any file in src/ has a `mod <base>;` or `pub mod <base>;` declaration
+    if ! rg -q --type rust "^(pub(\([^)]*\))?\s+)?mod ${base};" src/ 2>/dev/null; then
+      orphans="${orphans}  ${f}\n"
+    fi
+  done
+  if [ -n "$orphans" ]; then
+    echo "ERROR: orphaned .rs files not declared as modules:"
+    printf "%b" "$orphans"
+    echo "Either add 'mod <name>;' to lib.rs/main.rs or delete the file."
+    return 1
+  fi
+}
 staged_www_files=$(git diff --cached --name-only --diff-filter=ACM -- 'www/*')
 
-# Rust checks (Tiger Style + fmt + clippy)
+# Rust checks (orphaned files + Tiger Style + fmt + clippy)
 if [ -n "$staged_rs_files" ]; then
+  check_orphaned_rs || exit 1
+
   exec_tiger=scripts/tiger-check.sh
   if [ -x "$exec_tiger" ]; then
     bash "$exec_tiger"
