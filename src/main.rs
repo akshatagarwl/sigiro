@@ -22,7 +22,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Start gRPC + HTTP servers
-    Serve,
+    Serve {
+        /// Disable eBPF auto-instrumentation (run in OTLP-only mode)
+        #[arg(long)]
+        no_ebpf: bool,
+    },
     /// Run SQL query
     Query {
         /// SQL statement to execute
@@ -100,66 +104,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Serve) | None => {
-            let dir = data_dir()?;
-            std::fs::create_dir_all(&dir)?;
-
-            // DuckLake init is now per-project (in pool.get_or_create).
-            // No need for a probe connection at startup.
-            let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
-            let admin_conn = open_admin_db()?;
-
-            // Write instance status at startup
-            sigiro::admin::write_instance_status(
-                &admin_conn,
-                "version",
-                env!("CARGO_PKG_VERSION"),
-            )?;
-            sigiro::admin::write_instance_status(&admin_conn, "mode", "otlp")?;
-            sigiro::admin::write_instance_status(&admin_conn, "platform_os", std::env::consts::OS)?;
-            sigiro::admin::write_instance_status(
-                &admin_conn,
-                "platform_arch",
-                std::env::consts::ARCH,
-            )?;
-
-            // Probe fleet extensions and store result
-            let probe = DuckConnection::open_in_memory()
-                .context("failed to open probe DuckDB for extension check")?;
-            let loaded = sigiro::schema::load_fleet_extensions(&probe);
-            drop(probe);
-            sigiro::admin::write_instance_status(
-                &admin_conn,
-                "extensions",
-                &serde_json::to_string(&loaded).unwrap_or_else(|_| "[]".to_string()),
-            )?;
-
-            tracing::info!("sigiro ready — data_dir={}", dir.display());
-
-            let (tx, rx) = crossbeam_channel::unbounded();
-            let shared_admin = Arc::new(Mutex::new(admin_conn));
-
-            // Inserter thread: routes messages to per-project DuckDB via pool.
-            // Each IngestMsg carries project_id from OTLP auth (Bearer token).
-            let inserter_pool = Arc::clone(&pool);
-            std::thread::spawn(move || {
-                if let Err(e) = sigiro::inserter::run_inserter(&inserter_pool, rx) {
-                    tracing::error!("inserter fatal: {e:#}");
-                    std::process::exit(1);
-                }
-            });
-
-            // Evict idle connections every 2 minutes
-            let evictor_pool = Arc::clone(&pool);
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(120));
-                loop {
-                    interval.tick().await;
-                    evictor_pool.evict_idle(std::time::Duration::from_secs(300));
-                }
-            });
-
-            sigiro::server::run_servers(pool, shared_admin, tx).await?;
+        Some(Command::Serve { no_ebpf }) => {
+            run_serve(no_ebpf).await?;
+        }
+        None => {
+            run_serve(false).await?;
         }
         Some(Command::Query { sql }) => {
             let client = require_client()?;
@@ -259,6 +208,86 @@ async fn main() -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+async fn run_serve(no_ebpf: bool) -> Result<()> {
+    let dir = data_dir()?;
+    std::fs::create_dir_all(&dir)?;
+
+    // DuckLake init is now per-project (in pool.get_or_create).
+    // No need for a probe connection at startup.
+    let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
+    let admin_conn = open_admin_db()?;
+
+    // Write instance status at startup
+    sigiro::admin::write_instance_status(&admin_conn, "version", env!("CARGO_PKG_VERSION"))?;
+    sigiro::admin::write_instance_status(&admin_conn, "mode", "otlp")?;
+    sigiro::admin::write_instance_status(&admin_conn, "platform_os", std::env::consts::OS)?;
+    sigiro::admin::write_instance_status(&admin_conn, "platform_arch", std::env::consts::ARCH)?;
+
+    // Probe fleet extensions and store result
+    let probe = DuckConnection::open_in_memory()
+        .context("failed to open probe DuckDB for extension check")?;
+    let loaded = sigiro::schema::load_fleet_extensions(&probe);
+    drop(probe);
+    sigiro::admin::write_instance_status(
+        &admin_conn,
+        "extensions",
+        &serde_json::to_string(&loaded).unwrap_or_else(|_| "[]".to_string()),
+    )?;
+
+    // eBPF auto-instrumentation: try obi, degrade gracefully
+    if no_ebpf {
+        tracing::info!("eBPF disabled by --no-ebpf flag");
+        sigiro::admin::write_instance_status(&admin_conn, "ebpf_status", "disabled")?;
+        sigiro::admin::write_instance_status(&admin_conn, "ebpf_reason", "--no-ebpf flag")?;
+    } else {
+        let otlp_endpoint = format!(
+            "http://127.0.0.1:{}",
+            std::env::var("SIGIRO_PORT").unwrap_or_else(|_| "9999".to_string())
+        );
+        let status = sigiro::ebpf::ebpf_status("obi");
+        sigiro::ebpf::write_ebpf_status(&admin_conn, &status)?;
+        match status.status.as_str() {
+            "ready" => {
+                sigiro::ebpf::start_obi("obi", &otlp_endpoint)?;
+            }
+            _ => {
+                tracing::warn!(
+                    "eBPF unavailable: {} — running in OTLP-only mode",
+                    status.reason
+                );
+            }
+        }
+    }
+
+    tracing::info!("sigiro ready — data_dir={}", dir.display());
+
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let shared_admin = Arc::new(Mutex::new(admin_conn));
+
+    // Inserter thread: routes messages to per-project DuckDB via pool.
+    // Each IngestMsg carries project_id from OTLP auth (Bearer token).
+    let inserter_pool = Arc::clone(&pool);
+    std::thread::spawn(move || {
+        if let Err(e) = sigiro::inserter::run_inserter(&inserter_pool, rx) {
+            tracing::error!("inserter fatal: {e:#}");
+            std::process::exit(1);
+        }
+    });
+
+    // Evict idle connections every 2 minutes
+    let evictor_pool = Arc::clone(&pool);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(120));
+        loop {
+            interval.tick().await;
+            evictor_pool.evict_idle(std::time::Duration::from_secs(300));
+        }
+    });
+
+    sigiro::server::run_servers(pool, shared_admin, tx).await?;
     Ok(())
 }
 
