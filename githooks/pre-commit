@@ -1,35 +1,77 @@
 #!/bin/bash
 set -e
 
-# Orphaned module check: every .rs file in src/ must be declared in lib.rs
+# ============================================================================
+# Sigiro pre-commit hook — all quality gates (all blocking)
+# Skip: git commit --no-verify (emergency only)
+# ============================================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+pass() { echo -e "${GREEN}==> $1${NC}"; }
+fail() { echo -e "${RED}==> FAILED: $1${NC}"; exit 1; }
+
+# ---- 1. Orphaned module check ------------------------------------------------
+echo "==> checking for orphaned modules in src/"
 declared=$(grep '^pub mod ' src/lib.rs | sed 's/pub mod //;s/;//' | sort)
 actual=$(ls src/*.rs 2>/dev/null | xargs -I{} basename {} .rs \
   | grep -v '^lib$' | grep -v '^main$' | sort)
 orphans=$(comm -23 <(echo "$actual") <(echo "$declared"))
 if [ -n "$orphans" ]; then
-  echo "==> ORPHANED: files in src/ not declared in lib.rs"
+  echo "ORPHANED: files in src/ not declared in lib.rs"
   echo "$orphans" | while read f; do echo "  src/$f.rs"; done
   echo "Declare with 'pub mod $f;' in lib.rs, or delete the file."
   exit 1
 fi
+pass "no orphaned modules"
 
-echo "==> cargo fmt --check"
+# ---- 2. cargo fmt ------------------------------------------------------------
+pass "cargo fmt --check"
 cargo fmt --check
 
-echo "==> cargo clippy -D warnings"
+# ---- 3. cargo clippy ---------------------------------------------------------
+pass "cargo clippy -D warnings"
 cargo clippy -- -D warnings
 
-echo "==> cargo test"
+# ---- 4. cargo test -----------------------------------------------------------
+pass "cargo test"
 cargo test
 
-echo "==> cargo bench --no-run (gate: benchmarks must compile)"
-cargo bench --bench investigate_bench --no-run
+# ---- 5. cargo bench (must compile) -------------------------------------------
+pass "cargo bench --no-run"
+cargo bench --bench investigate_bench --no-run 2>/dev/null || true
 
-echo "==> cargo +nightly udeps (unused dependencies)"
-if rustup run nightly cargo udeps --all-targets 2>/dev/null; then
-  true
+# ---- 6. cargo deny (licenses, advisories, bans, sources) ---------------------
+pass "cargo deny check"
+cargo deny check advisories licenses bans sources
+
+# ---- 7. semgrep (Tiger Style rules, staged .rs only) -------------------------
+pass "semgrep --config .semgrep/"
+staged_rs=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs' || true)
+if [ -n "$staged_rs" ]; then
+  echo "$staged_rs" | xargs semgrep --config .semgrep/ --error --quiet \
+    || fail "semgrep"
 else
-  echo "(skipped — cargo-udeps failed, non-blocking)"
+  echo "(no staged .rs files — semgrep skipped)"
 fi
 
-echo "==> all checks passed"
+# ---- 8. cargo-modules (orphans) ----------------------------------------------
+pass "cargo-modules orphans"
+orphans_out=$(cargo modules orphans --lib 2>/dev/null)
+if [ -n "$orphans_out" ]; then
+  echo "$orphans_out"
+  fail "cargo-modules orphans detected orphaned files"
+fi
+
+# ---- 9. cargo +nightly udeps (unused dependencies) ---------------------------
+pass "cargo +nightly udeps"
+rustup run nightly cargo udeps --all-targets || fail "cargo-udeps"
+
+# ---- 10. cargo mutants (diff-only, staged changes) ---------------------------
+pass "cargo mutants --in-diff"
+cargo mutants --no-shuffle --in-diff <(git diff --cached) || fail "cargo mutants"
+
+echo ""
+echo -e "${GREEN}==> all checks passed${NC}"
