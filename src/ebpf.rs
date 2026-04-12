@@ -133,11 +133,7 @@ pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
 
     match status.status.as_str() {
         "ready" => {
-            let path = if obi_path.is_empty() {
-                "obi"
-            } else {
-                obi_path
-            };
+            let path = if obi_path.is_empty() { "obi" } else { obi_path };
             info!("starting obi with OTLP endpoint: {otlp_endpoint}");
             let child = Command::new(path)
                 .env("OTEL_EXPORTER_OTLP_ENDPOINT", otlp_endpoint)
@@ -174,10 +170,7 @@ pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
 }
 
 /// Write eBPF status to instance_status.
-pub fn write_ebpf_status(
-    conn: &rusqlite::Connection,
-    status: &EbpfStatus,
-) -> Result<()> {
+pub fn write_ebpf_status(conn: &rusqlite::Connection, status: &EbpfStatus) -> Result<()> {
     crate::admin::write_instance_status(conn, "ebpf_status", &status.status)?;
     crate::admin::write_instance_status(conn, "ebpf_reason", &status.reason)?;
     crate::admin::write_instance_status(

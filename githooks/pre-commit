@@ -1,0 +1,31 @@
+#!/bin/bash
+set -e
+
+# Orphaned module check: every .rs file in src/ must be declared in lib.rs
+declared=$(grep '^pub mod ' src/lib.rs | sed 's/pub mod //;s/;//' | sort)
+actual=$(ls src/*.rs 2>/dev/null | xargs -I{} basename {} .rs \
+  | grep -v '^lib$' | grep -v '^main$' | sort)
+orphans=$(comm -23 <(echo "$actual") <(echo "$declared"))
+if [ -n "$orphans" ]; then
+  echo "==> ORPHANED: files in src/ not declared in lib.rs"
+  echo "$orphans" | while read f; do echo "  src/$f.rs"; done
+  echo "Declare with 'pub mod $f;' in lib.rs, or delete the file."
+  exit 1
+fi
+
+echo "==> cargo fmt --check"
+cargo fmt --check
+
+echo "==> cargo clippy -D warnings"
+cargo clippy -- -D warnings
+
+echo "==> cargo test"
+cargo test
+
+echo "==> cargo bench --no-run (gate: benchmarks must compile)"
+cargo bench --bench investigate_bench --no-run
+
+echo "==> cargo +nightly udeps (unused dependencies)"
+cargo +nightly udeps --all-targets
+
+echo "==> all checks passed"
