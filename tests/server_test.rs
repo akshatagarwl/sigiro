@@ -13,7 +13,7 @@ fn test_conn() -> Connection {
 #[test]
 fn read_only_via_config_blocks_mutations() {
     let dir = std::env::temp_dir().join("sigiro_test_ro");
-    let _ = std::fs::remove_dir_all(&dir);
+    let _removed = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let db_path = dir.join("test_readonly.duckdb");
 
@@ -50,7 +50,7 @@ fn read_only_via_config_blocks_mutations() {
         );
     }
 
-    let _ = std::fs::remove_dir_all(&dir);
+    let _removed = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -101,12 +101,12 @@ fn value_ref_null() {
 #[test]
 fn value_ref_double() {
     let conn = test_conn();
-    let mut stmt = conn.prepare("SELECT 3.14::DOUBLE AS f").unwrap();
+    let mut stmt = conn.prepare("SELECT PI()::DOUBLE AS f").unwrap();
     let mut rows = stmt.query([]).unwrap();
     let row = rows.next().unwrap().unwrap();
     assert_eq!(
         value_ref_to_json(row.get_ref(0).unwrap()),
-        serde_json::json!(3.14)
+        serde_json::json!(std::f64::consts::PI)
     );
 }
 

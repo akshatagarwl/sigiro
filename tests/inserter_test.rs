@@ -191,13 +191,13 @@ fn inserter_handles_bounded_channel_backpressure() {
 
     // Send many messages quickly — some may be dropped due to bounded per-project channel
     for i in 0..100 {
-        let _ = tx.send(IngestMsg::Traces {
+        let _result = tx.send(IngestMsg::Traces {
             project_id: "fast_project".to_string(),
             batch: make_spans_batch(10),
         });
         // Every 10th message goes to a different project
         if i % 10 == 0 {
-            let _ = tx.send(IngestMsg::Traces {
+            let _result = tx.send(IngestMsg::Traces {
                 project_id: "slow_project".to_string(),
                 batch: make_spans_batch(10),
             });

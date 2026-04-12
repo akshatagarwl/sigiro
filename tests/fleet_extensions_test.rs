@@ -17,7 +17,7 @@ fn load_fleet_extensions_returns_loaded_list() {
     // At minimum, the function should run without panicking.
     // Extensions may fail on non-Linux, so just verify the return type.
     println!("loaded extensions: {loaded:?}");
-    assert!(!loaded.iter().any(|e| e.is_empty()));
+    assert!(!loaded.iter().any(String::is_empty));
 }
 
 #[test]
