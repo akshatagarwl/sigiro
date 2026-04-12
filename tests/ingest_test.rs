@@ -1,10 +1,10 @@
-use duckdb::Connection;
-use std::sync::{Arc, Mutex};
+use rusqlite::Connection;
+use std::sync::Mutex;
 
-fn test_admin_conn() -> Arc<Mutex<Connection>> {
+fn test_admin_conn() -> Mutex<Connection> {
     let conn = Connection::open_in_memory().unwrap();
-    sigiro::auth::create_keys_table(&conn).unwrap();
-    Arc::new(Mutex::new(conn))
+    sigiro::admin::create_keys_table(&conn).unwrap();
+    Mutex::new(conn)
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn grpc_auth_invalid_key_fails() {
 #[test]
 fn grpc_auth_real_key_returns_project_id() {
     let admin = test_admin_conn();
-    let raw_key = sigiro::auth::create_key(&admin, "my_project", "free", 100).unwrap();
+    let raw_key = sigiro::admin::create_key(&admin, "my_project", "free", 100).unwrap();
     let mut metadata = tonic::metadata::MetadataMap::new();
     metadata.insert(
         "authorization",
@@ -91,7 +91,7 @@ fn http_auth_invalid_key_returns_401() {
 #[test]
 fn http_auth_real_key_returns_project_id() {
     let admin = test_admin_conn();
-    let raw_key = sigiro::auth::create_key(&admin, "http_proj", "builder", 500).unwrap();
+    let raw_key = sigiro::admin::create_key(&admin, "http_proj", "builder", 500).unwrap();
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         "authorization",
