@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
 use sigiro::{data_dir, pool::ProjectPool};
+use sigiro::toon::to_toon;
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -17,6 +18,17 @@ const STYLES: styling::Styles = styling::Styles::styled()
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+    /// Output format (toon or json)
+    #[arg(long, default_value = "toon")]
+    output: OutputFormat,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum OutputFormat {
+    /// Token-Oriented Object Notation (default, ~40% fewer tokens)
+    Toon,
+    /// Standard JSON format
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -91,6 +103,14 @@ fn open_admin_db() -> Result<Connection> {
     Ok(conn)
 }
 
+/// Format output based on the selected output format.
+fn format_output(value: &serde_json::Value, output_format: &OutputFormat) -> Result<String> {
+    match output_format {
+        OutputFormat::Toon => Ok(to_toon(value)),
+        OutputFormat::Json => Ok(serde_json::to_string_pretty(value)?),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -113,12 +133,12 @@ async fn main() -> Result<()> {
         Some(Command::Query { sql }) => {
             let client = require_client()?;
             let result = client.query(&sql).await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            println!("{}", format_output(&serde_json::to_value(&result)?, &cli.output)?);
         }
         Some(Command::Status) => {
             let client = require_client()?;
             let result = client.status().await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            println!("{}", format_output(&result, &cli.output)?);
         }
         Some(Command::Investigate { service, from, to }) => {
             let client = require_client()?;
@@ -129,7 +149,7 @@ async fn main() -> Result<()> {
                     to.map(|s| s * 1_000_000),
                 )
                 .await?;
-            println!("{}", serde_json::to_string_pretty(&block)?);
+            println!("{}", format_output(&serde_json::to_value(&block)?, &cli.output)?);
         }
         Some(Command::Mcp) => {
             let client = require_client()?;

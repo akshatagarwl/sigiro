@@ -6,6 +6,7 @@ pub mod compactor;
 pub mod config;
 pub mod drain;
 pub mod ebpf;
+pub mod extensions;
 pub mod ingest;
 pub mod inserter;
 pub mod investigate;
@@ -14,6 +15,7 @@ pub mod pool;
 pub mod schema;
 pub mod server;
 pub mod storage;
+pub mod toon;
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
