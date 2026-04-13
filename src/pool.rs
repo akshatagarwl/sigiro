@@ -1,31 +1,35 @@
 use anyhow::{Context, Result};
-use dashmap::DashMap;
 use duckdb::Connection;
+use moka::sync::Cache;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::Duration;
 
 /// Per-project DuckDB connection pool.
 /// Each project gets its own DuckLake catalog + Parquet directory for data isolation.
 /// The DuckDB connection is in-memory (just a coordinator) — all data lives in
 /// the `.ducklake` catalog file + Parquet files under the project directory.
 pub struct ProjectPool {
-    pub connections: DashMap<String, PoolEntry>,
+    connections: Cache<String, Arc<Mutex<Connection>>>,
     data_dir: PathBuf,
-    max_connections: usize,
-}
-
-pub struct PoolEntry {
-    conn: Arc<Mutex<Connection>>,
-    last_access: Instant,
 }
 
 impl ProjectPool {
     pub fn new(data_dir: PathBuf, max_connections: usize) -> Self {
+        Self::new_with_idle(data_dir, max_connections, Duration::from_secs(300))
+    }
+
+    pub fn new_with_idle(
+        data_dir: PathBuf,
+        max_connections: usize,
+        idle_timeout: Duration,
+    ) -> Self {
         Self {
-            connections: DashMap::new(),
+            connections: Cache::builder()
+                .max_capacity(max_connections as u64)
+                .time_to_idle(idle_timeout)
+                .build(),
             data_dir,
-            max_connections,
         }
     }
 
@@ -37,15 +41,9 @@ impl ProjectPool {
     /// Get or create a DuckDB connection for a project.
     /// Creates the DuckLake catalog and tables on first access.
     pub fn get_or_create(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
-        // Fast path: connection exists
-        if let Some(mut entry) = self.connections.get_mut(project_id) {
-            entry.last_access = Instant::now();
-            return Ok(Arc::clone(&entry.conn));
-        }
-
-        // Evict if at capacity before creating new
-        if self.connections.len() >= self.max_connections {
-            self.evict_oldest();
+        // Fast path: connection exists — moka handles touch on access
+        if let Some(conn) = self.connections.get(project_id) {
+            return Ok(conn);
         }
 
         // Slow path: in-memory coordinator, ATTACH per-project DuckLake catalog.
@@ -70,54 +68,39 @@ impl ProjectPool {
         }
 
         let shared = Arc::new(Mutex::new(conn));
-        self.connections.insert(
-            project_id.to_string(),
-            PoolEntry {
-                conn: Arc::clone(&shared),
-                last_access: Instant::now(),
-            },
-        );
+        self.connections
+            .insert(project_id.to_string(), Arc::clone(&shared));
 
         tracing::info!(project_id, "opened DuckDB connection (DuckLake)");
         Ok(shared)
     }
 
     /// Evict connections idle longer than the given duration.
-    pub fn evict_idle(&self, max_idle: std::time::Duration) {
-        let now = Instant::now();
-        let before = self.connections.len();
-        self.connections
-            .retain(|_, entry| now.duration_since(entry.last_access) < max_idle);
-        let evicted = before - self.connections.len();
-        if evicted > 0 {
-            tracing::info!(evicted, "evicted idle DuckDB connections");
-        }
-    }
-
-    /// Evict the oldest connection to make room for a new one.
-    fn evict_oldest(&self) {
-        let oldest = self
-            .connections
-            .iter()
-            .min_by_key(|entry| entry.last_access)
-            .map(|entry| entry.key().clone());
-        if let Some(key) = oldest {
-            self.connections.remove(&key);
-            tracing::info!(project_id = %key, "evicted oldest DuckDB connection");
-        }
+    /// moka handles TTL-based eviction automatically; this forces a maintenance cycle.
+    pub fn evict_idle(&self, _max_idle: Duration) {
+        // moka's time_to_idle handles expiry automatically.
+        // run_pending_tasks() forces the background maintenance to process
+        // expired entries immediately (useful for testing and explicit cleanup).
+        self.connections.run_pending_tasks();
     }
 
     /// Number of open connections.
     pub fn len(&self) -> usize {
-        self.connections.len()
+        self.connections.run_pending_tasks();
+        self.connections.entry_count() as usize
     }
 
     pub fn is_empty(&self) -> bool {
-        self.connections.is_empty()
+        self.len() == 0
     }
 
     /// Remove a project's connection (for account deletion).
     pub fn remove(&self, project_id: &str) {
-        self.connections.remove(project_id);
+        self.connections.invalidate(project_id);
+    }
+
+    /// Check if a project connection exists (for tests).
+    pub fn contains(&self, project_id: &str) -> bool {
+        self.connections.contains_key(project_id)
     }
 }

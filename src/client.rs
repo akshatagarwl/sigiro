@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use backon::{ExponentialBuilder, Retryable};
 
 use crate::investigate::InvestigationBlock;
 
@@ -8,6 +9,23 @@ pub struct SigiroClient {
     http: reqwest::Client,
     base_url: String,
     api_key: String,
+}
+
+/// Retry policy: exponential backoff with jitter.
+/// 3 attempts: ~200ms, ~400ms, ~800ms (with ±25% jitter).
+fn retry_policy() -> ExponentialBuilder {
+    ExponentialBuilder::default()
+        .with_min_delay(std::time::Duration::from_millis(200))
+        .with_max_times(3)
+        .with_jitter()
+}
+
+/// Check if an error is transient and worth retrying.
+fn is_transient(err: &anyhow::Error) -> bool {
+    if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>() {
+        return reqwest_err.is_connect() || reqwest_err.is_timeout();
+    }
+    false
 }
 
 impl SigiroClient {
@@ -23,24 +41,65 @@ impl SigiroClient {
         &self.base_url
     }
 
+    /// Send an HTTP request with retry on transient connection errors.
+    /// Each retry rebuilds the request from method + url + body.
+    /// Status code handling (401/429/5xx) is done by callers.
+    async fn send_retryable(
+        http: &reqwest::Client,
+        method: reqwest::Method,
+        url: &str,
+        bearer: Option<&str>,
+        body: Option<String>,
+    ) -> Result<reqwest::Response> {
+        let http = http.clone();
+        let url = url.to_string();
+        let method = method.to_string(); // Convert to String so closure can FnMut
+        let bearer = bearer.map(str::to_string);
+
+        let attempt = || {
+            let http = http.clone();
+            let url = url.clone();
+            let method = method.clone();
+            let bearer = bearer.clone();
+            let body = body.clone();
+            async move {
+                let mut req = http.request(method.parse().expect("valid HTTP method"), &url);
+                if let Some(ref token) = bearer {
+                    req = req.bearer_auth(token);
+                }
+                if let Some(ref b) = body {
+                    req = req.body(b.clone());
+                }
+                req.send()
+                    .await
+                    .context("failed to connect to sigiro server")
+            }
+        };
+
+        attempt.retry(retry_policy()).when(is_transient).await
+    }
+
     pub async fn investigate(
         &self,
         service: &str,
         from: Option<i64>,
         to: Option<i64>,
     ) -> Result<InvestigationBlock> {
-        let resp = self
-            .http
-            .post(format!("{}/investigate", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&serde_json::json!({
-                "service_name": service,
-                "from_ts": from,
-                "to_ts": to,
-            }))
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
+        let url = format!("{}/investigate", self.base_url);
+        let body = serde_json::json!({
+            "service_name": service,
+            "from_ts": from,
+            "to_ts": to,
+        });
+
+        let resp = Self::send_retryable(
+            &self.http,
+            reqwest::Method::POST,
+            &url,
+            Some(&self.api_key),
+            Some(body.to_string()),
+        )
+        .await?;
 
         match resp.status().as_u16() {
             200 => resp
@@ -57,14 +116,16 @@ impl SigiroClient {
     }
 
     pub async fn query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
-        let resp = self
-            .http
-            .post(format!("{}/query", self.base_url))
-            .bearer_auth(&self.api_key)
-            .body(sql.to_string())
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
+        let url = format!("{}/query", self.base_url);
+
+        let resp = Self::send_retryable(
+            &self.http,
+            reqwest::Method::POST,
+            &url,
+            Some(&self.api_key),
+            Some(sql.to_string()),
+        )
+        .await?;
 
         match resp.status().as_u16() {
             200 => resp.json().await.context("failed to parse query response"),
@@ -84,17 +145,21 @@ impl SigiroClient {
         plan: &str,
         rate_limit: u32,
     ) -> Result<String> {
-        let resp = self
-            .http
-            .post(format!("{}/admin/keys", self.base_url))
-            .json(&serde_json::json!({
-                "project": project,
-                "plan": plan,
-                "rate_limit": rate_limit,
-            }))
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
+        let url = format!("{}/admin/keys", self.base_url);
+        let body = serde_json::json!({
+            "project": project,
+            "plan": plan,
+            "rate_limit": rate_limit,
+        });
+
+        let resp = Self::send_retryable(
+            &self.http,
+            reqwest::Method::POST,
+            &url,
+            None,
+            Some(body.to_string()),
+        )
+        .await?;
 
         match resp.status().as_u16() {
             200 => {
@@ -114,12 +179,10 @@ impl SigiroClient {
 
     /// Revoke an API key via the running server's admin endpoint.
     pub async fn admin_revoke_key(&self, short_token: &str) -> Result<bool> {
-        let resp = self
-            .http
-            .delete(format!("{}/admin/keys/{}", self.base_url, short_token))
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
+        let url = format!("{}/admin/keys/{}", self.base_url, short_token);
+
+        let resp =
+            Self::send_retryable(&self.http, reqwest::Method::DELETE, &url, None, None).await?;
 
         match resp.status().as_u16() {
             200 => Ok(true),
@@ -132,13 +195,16 @@ impl SigiroClient {
     }
 
     pub async fn status(&self) -> Result<serde_json::Value> {
-        let resp = self
-            .http
-            .get(format!("{}/health", self.base_url))
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
+        let url = format!("{}/health", self.base_url);
+
+        let resp = Self::send_retryable(
+            &self.http,
+            reqwest::Method::GET,
+            &url,
+            Some(&self.api_key),
+            None,
+        )
+        .await?;
 
         match resp.status().as_u16() {
             200 => {
@@ -161,20 +227,22 @@ impl SigiroClient {
         from: Option<i64>,
         to: Option<i64>,
     ) -> Result<std::collections::BTreeMap<String, InvestigationBlock>> {
+        let url = format!("{}/investigate", self.base_url);
         let body = serde_json::json!({
             "service_name": service,
             "services": services,
             "from_ts": from,
             "to_ts": to,
         });
-        let resp = self
-            .http
-            .post(format!("{}/investigate", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
+
+        let resp = Self::send_retryable(
+            &self.http,
+            reqwest::Method::POST,
+            &url,
+            Some(&self.api_key),
+            Some(body.to_string()),
+        )
+        .await?;
 
         match resp.status().as_u16() {
             200 => resp
@@ -192,13 +260,16 @@ impl SigiroClient {
 
     /// List services with first/last seen and span counts.
     pub async fn services(&self) -> Result<serde_json::Value> {
-        let resp = self
-            .http
-            .get(format!("{}/services", self.base_url))
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
+        let url = format!("{}/services", self.base_url);
+
+        let resp = Self::send_retryable(
+            &self.http,
+            reqwest::Method::GET,
+            &url,
+            Some(&self.api_key),
+            None,
+        )
+        .await?;
 
         match resp.status().as_u16() {
             200 => resp

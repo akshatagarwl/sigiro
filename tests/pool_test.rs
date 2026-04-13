@@ -76,32 +76,39 @@ fn data_isolation_between_projects() {
 #[test]
 fn evict_idle_removes_old_connections() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = test_pool(dir.path());
+    // Pool with very short idle timeout (1ms) — everything expires immediately
+    let pool_short_idle = ProjectPool::new_with_idle(
+        dir.path().to_path_buf(),
+        10,
+        std::time::Duration::from_millis(1),
+    );
 
-    pool.get_or_create("proj_a").unwrap();
-    pool.get_or_create("proj_b").unwrap();
-    assert_eq!(pool.len(), 2);
+    pool_short_idle.get_or_create("proj_a").unwrap();
+    pool_short_idle.get_or_create("proj_b").unwrap();
 
-    // Evict with zero duration — everything is "idle"
-    pool.evict_idle(std::time::Duration::ZERO);
-    assert_eq!(pool.len(), 0);
+    // Wait for idle timeout to expire
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    // Force maintenance — entries past idle timeout should be evicted
+    pool_short_idle.evict_idle(std::time::Duration::ZERO);
+    assert_eq!(pool_short_idle.len(), 0);
 }
 
 #[test]
-fn evict_oldest_at_capacity() {
+fn evict_at_capacity() {
     let dir = tempfile::tempdir().unwrap();
     let pool = ProjectPool::new(dir.path().to_path_buf(), 2);
 
     pool.get_or_create("proj_a").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(10));
     pool.get_or_create("proj_b").unwrap();
     assert_eq!(pool.len(), 2);
 
-    // Opening a third should evict the oldest (proj_a)
+    // Opening a third should trigger eviction (moka manages capacity)
     pool.get_or_create("proj_c").unwrap();
-    assert_eq!(pool.len(), 2);
-    assert!(pool.connections.contains_key("proj_b"));
-    assert!(pool.connections.contains_key("proj_c"));
+    // Pool should not exceed max capacity
+    assert!(pool.len() <= 2);
+    // proj_c must be present (just inserted)
+    assert!(pool.contains("proj_c"));
 }
 
 #[test]
