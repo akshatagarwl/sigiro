@@ -1,8 +1,49 @@
 use sigiro::investigate::{
-    InvestigateRequest, QueryCtx, SpanRow, adaptive_config, build_span_trees, compute_coverage,
-    investigate, query_derived_events, query_logs, query_service_context, us_to_iso,
+    adaptive_config, build_span_trees, compute_coverage, investigate, query_derived_events,
+    query_logs, query_service_context, us_to_iso, InvestigateRequest, QueryCtx, SpanRow,
 };
 use std::sync::{Arc, Mutex};
+
+/// Helper: set up in-memory DB with DRAIN-classified logs and deduplicated templates.
+/// Returns (shared_conn, now_us).
+fn setup_drain_logs(
+    prewarm: &[&str],
+    bodies: &[&str],
+    severity_number: i32,
+    severity_text: &str,
+) -> (Arc<Mutex<duckdb::Connection>>, i64) {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = chrono::Utc::now().timestamp_micros();
+
+    let mut drain = sigiro::drain::DrainTree::new();
+    for example in prewarm {
+        drain.classify(example);
+    }
+
+    let mut seen_templates: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for body in bodies {
+        let (template, id) = drain.classify(body);
+        conn.execute(
+            &format!(
+                "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
+                    severity_text, body, template_id)
+                 VALUES (make_timestamp({now_us}), {now_us}, 'api', {severity_number}, '{severity_text}', ?, ?)"
+            ),
+            duckdb::params![body, id],
+        )
+        .expect("insert log");
+        if seen_templates.insert(id) {
+            conn.execute(
+                "INSERT INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
+                duckdb::params![id, template],
+            )
+            .expect("insert template");
+        }
+    }
+
+    (Arc::new(Mutex::new(conn)), now_us)
+}
 
 fn make_span(trace_id: &str, span_id: &str, parent: &str, status: i32) -> SpanRow {
     SpanRow {
@@ -149,13 +190,11 @@ fn investigate_with_real_span_data() {
     assert!(!block.coverage.has_metrics);
     assert_eq!(block.coverage.span_count, 5);
     assert!(block.coverage.gaps.iter().any(|g| g.contains("no logs")));
-    assert!(
-        block
-            .coverage
-            .gaps
-            .iter()
-            .any(|g| g.contains("spans exist but no logs"))
-    );
+    assert!(block
+        .coverage
+        .gaps
+        .iter()
+        .any(|g| g.contains("spans exist but no logs")));
     assert!(!block.coverage.gaps.iter().any(|g| g.contains("no spans")));
 }
 
@@ -340,42 +379,22 @@ fn derived_events_k8s_oomkilled() {
 #[test]
 fn log_template_dedup_ips() {
     // DRAIN dedup: logs with different IPs should collapse to one template.
-    // We simulate what the inserter does: classify via DRAIN, store template_id.
-    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn, "").expect("create tables");
-    let now_us = chrono::Utc::now().timestamp_micros();
-
-    let mut drain = sigiro::drain::DrainTree::new();
-    // Pre-warm DRAIN with two examples so the template stabilizes before DB inserts.
-    drain.classify("Connection timeout for 1.1.1.1");
-    drain.classify("Connection timeout for 2.2.2.2");
     let bodies = [
         "Connection timeout for 192.168.1.1",
         "Connection timeout for 10.0.0.5",
         "Connection timeout for 172.16.0.99",
     ];
-    let mut seen_templates: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    for body in &bodies {
-        let (template, id) = drain.classify(body);
-        conn.execute(
-            &format!(
-                "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
-                    severity_text, body, template_id)
-                 VALUES (make_timestamp({now_us}), {now_us}, 'api', 13, 'WARN', ?, ?)"
-            ),
-            duckdb::params![body, id],
-        )
-        .expect("insert log");
-        // Insert template only once per unique id (no PK to enforce uniqueness).
-        if seen_templates.insert(id) {
-            conn.execute(
-                "INSERT INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
-                duckdb::params![id, template],
-            )
-            .expect("insert template");
-        }
-    }
+    let (shared, now_us) = setup_drain_logs(
+        &[
+            "Connection timeout for 1.1.1.1",
+            "Connection timeout for 2.2.2.2",
+        ],
+        &bodies,
+        13,
+        "WARN",
+    );
 
+    let conn = shared.lock().unwrap();
     let qctx = QueryCtx {
         conn: &conn,
         service: "api",
@@ -399,40 +418,21 @@ fn log_template_dedup_ips() {
 #[test]
 fn log_template_dedup_uuids() {
     // DRAIN dedup: logs with different UUIDs should collapse to one template.
-    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn, "").expect("create tables");
-    let now_us = chrono::Utc::now().timestamp_micros();
-
-    let mut drain = sigiro::drain::DrainTree::new();
-    // Pre-warm DRAIN with two examples so the template stabilizes before DB inserts.
-    drain.classify("Failed to process order 00000000-0000-0000-0000-000000000000");
-    drain.classify("Failed to process order 11111111-1111-1111-1111-111111111111");
     let bodies = [
         "Failed to process order 550e8400-e29b-41d4-a716-446655440000",
         "Failed to process order a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     ];
-    let mut seen_templates: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    for body in &bodies {
-        let (template, id) = drain.classify(body);
-        conn.execute(
-            &format!(
-                "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
-                    severity_text, body, template_id)
-                 VALUES (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', ?, ?)"
-            ),
-            duckdb::params![body, id],
-        )
-        .expect("insert log");
-        // Insert template only once per unique id (no PK to enforce uniqueness).
-        if seen_templates.insert(id) {
-            conn.execute(
-                "INSERT INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
-                duckdb::params![id, template],
-            )
-            .expect("insert template");
-        }
-    }
+    let (shared, now_us) = setup_drain_logs(
+        &[
+            "Failed to process order 00000000-0000-0000-0000-000000000000",
+            "Failed to process order 11111111-1111-1111-1111-111111111111",
+        ],
+        &bodies,
+        17,
+        "ERROR",
+    );
 
+    let conn = shared.lock().unwrap();
     let qctx = QueryCtx {
         conn: &conn,
         service: "api",
