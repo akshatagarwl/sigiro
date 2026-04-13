@@ -39,6 +39,7 @@ rmcp = { version = "1.2.0", features = ["server", "transport-io"] }
 hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
+which = "5"
 
 [build-dependencies]
 ureq = { version = "3", features = ["rustls"] }

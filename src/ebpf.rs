@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::process::Command;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Result of checking eBPF readiness.
 pub struct EbpfStatus {
@@ -20,14 +20,12 @@ pub fn check_obi_available(obi_path: &str) -> bool {
     }
 }
 
-/// Find obi in PATH using `which`.
+/// Find obi in PATH using the `which` crate.
 fn which_obi() -> Option<String> {
-    Command::new("which")
-        .arg("obi")
-        .output()
+    which::which("obi")
+        .inspect_err(|e| debug!("obi not found in PATH: {e}"))
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Determine eBPF status: check obi availability and platform capabilities.
