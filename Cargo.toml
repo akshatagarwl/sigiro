@@ -27,7 +27,7 @@ opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "log
 crossbeam-channel = "0.5"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["compression-full", "cors"] }
-problem_details = { version = "0.9", features = ["axum", "json"] }
+axum-anyhow = "0.10"
 prefixed-api-key = { version = "0.3", features = ["sha2"] }
 tower_governor = { version = "0.8", features = ["axum"] }
 serde = { version = "1", features = ["derive"] }

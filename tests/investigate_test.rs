@@ -1,6 +1,6 @@
 use sigiro::investigate::{
-    adaptive_config, build_span_trees, compute_coverage, investigate, query_derived_events,
-    query_logs, query_service_context, us_to_iso, InvestigateRequest, QueryCtx, SpanRow,
+    InvestigateRequest, QueryCtx, SpanRow, adaptive_config, build_span_trees, compute_coverage,
+    investigate, query_derived_events, query_logs, query_service_context, us_to_iso,
 };
 use std::sync::{Arc, Mutex};
 
@@ -190,11 +190,13 @@ fn investigate_with_real_span_data() {
     assert!(!block.coverage.has_metrics);
     assert_eq!(block.coverage.span_count, 5);
     assert!(block.coverage.gaps.iter().any(|g| g.contains("no logs")));
-    assert!(block
-        .coverage
-        .gaps
-        .iter()
-        .any(|g| g.contains("spans exist but no logs")));
+    assert!(
+        block
+            .coverage
+            .gaps
+            .iter()
+            .any(|g| g.contains("spans exist but no logs"))
+    );
     assert!(!block.coverage.gaps.iter().any(|g| g.contains("no spans")));
 }
 

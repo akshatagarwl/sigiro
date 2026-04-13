@@ -2,12 +2,11 @@ use anyhow::{Context, Result};
 use axum::{
     Extension, Json, Router,
     extract::State,
-    http::StatusCode,
     middleware as axum_mw,
     routing::{get, post},
 };
+use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt};
 use crossbeam_channel::Sender;
-use problem_details::ProblemDetails;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
@@ -41,29 +40,6 @@ impl KeyExtractor for BearerKeyExtractor {
             .unwrap_or("anonymous");
         Ok(key.to_string())
     }
-}
-
-/// RFC 9457 problem details constructors for sigiro API errors.
-/// Content-Type: application/problem+json — standard format agents can rely on.
-pub fn query_rejected(detail: impl Into<String>) -> ProblemDetails {
-    ProblemDetails::new()
-        .with_status(StatusCode::BAD_REQUEST)
-        .with_title("Query Rejected")
-        .with_detail(detail)
-}
-
-pub fn internal_error(detail: impl Into<String>) -> ProblemDetails {
-    ProblemDetails::new()
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-        .with_title("Internal Error")
-        .with_detail(detail)
-}
-
-pub fn invalid_request(detail: impl Into<String>) -> ProblemDetails {
-    ProblemDetails::new()
-        .with_status(StatusCode::BAD_REQUEST)
-        .with_title("Invalid Request")
-        .with_detail(detail)
 }
 
 pub struct AppState {
@@ -275,36 +251,33 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
 }
 
 /// Get the per-project DuckDB connection from the pool using the AuthContext.
-#[allow(clippy::result_large_err)] // ProblemDetails is the axum error response type
-fn project_conn(
-    state: &AppState,
-    auth: &AuthContext,
-) -> Result<Arc<Mutex<duckdb::Connection>>, ProblemDetails> {
+fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duckdb::Connection>>> {
     state
         .pool
         .get_or_create(&auth.project_id)
-        .map_err(|e| internal_error(format!("project DB: {e:#}")))
+        .context_internal("Project DB", "failed to get project connection")
 }
 
 async fn query_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
     body: String,
-) -> Result<Json<Vec<serde_json::Value>>, ProblemDetails> {
-    validate_read_only(&body).map_err(query_rejected)?;
-    let conn = project_conn(&state, &auth)?;
-    let conn = conn.lock().map_err(|e| {
-        tracing::error!("DuckDB connection mutex poisoned");
-        internal_error(e.to_string())
+) -> ApiResult<Json<Vec<serde_json::Value>>> {
+    validate_read_only(&body).map_err(|e| {
+        anyhow::anyhow!(e).context_bad_request("Query Rejected", "query contains blocked keyword")
     })?;
+    let conn = project_conn(&state, &auth)?;
+    let conn = conn
+        .lock()
+        .map_err(|e| anyhow::anyhow!("DuckDB connection mutex poisoned: {e}"))?;
     let mut stmt = conn
         .prepare(&body)
-        .map_err(|e| query_rejected(e.to_string()))?;
-    let mut rows = stmt.query([]).map_err(|e| internal_error(e.to_string()))?;
+        .context_bad_request("Query Rejected", "invalid SQL")?;
+    let mut rows = stmt
+        .query([])
+        .context_internal("Query", "query execution failed")?;
 
-    let stmt_ref = rows
-        .as_ref()
-        .ok_or_else(|| internal_error("no result set"))?;
+    let stmt_ref = rows.as_ref().context_internal("Query", "no result set")?;
     let column_count = stmt_ref.column_count();
     let column_names: Vec<String> = (0..column_count)
         .map(|i| {
@@ -316,10 +289,15 @@ async fn query_handler(
         .collect();
 
     let mut results = Vec::new();
-    while let Some(row) = rows.next().map_err(|e| internal_error(e.to_string()))? {
-        let mut obj = serde_json::Map::new();
+    while let Some(row) = rows
+        .next()
+        .context_internal("Query", "row iteration failed")?
+    {
+        let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
         for (i, name) in column_names.iter().enumerate() {
-            let val = row.get_ref(i).map_err(|e| internal_error(e.to_string()))?;
+            let val = row
+                .get_ref(i)
+                .context_internal("Query", "column read failed")?;
             obj.insert(name.clone(), value_ref_to_json(val));
         }
         results.push(serde_json::Value::Object(obj));
@@ -333,12 +311,11 @@ async fn query_handler(
 async fn services_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
-) -> Result<Json<serde_json::Value>, ProblemDetails> {
+) -> ApiResult<Json<serde_json::Value>> {
     let conn = project_conn(&state, &auth)?;
-    let conn = conn.lock().map_err(|e| {
-        tracing::error!("DuckDB connection mutex poisoned");
-        internal_error(e.to_string())
-    })?;
+    let conn = conn
+        .lock()
+        .map_err(|e| anyhow::anyhow!("DuckDB connection mutex poisoned: {e}"))?;
     let prefix = ProjectPool::prefix();
     let sql = format!(
         "SELECT service_name, \
@@ -352,15 +329,28 @@ async fn services_handler(
     );
     let mut stmt = conn
         .prepare(&sql)
-        .map_err(|e| internal_error(e.to_string()))?;
-    let mut rows = stmt.query([]).map_err(|e| internal_error(e.to_string()))?;
+        .context_internal("Services", "failed to prepare query")?;
+    let mut rows = stmt
+        .query([])
+        .context_internal("Services", "query execution failed")?;
 
     let mut services = Vec::new();
-    while let Some(row) = rows.next().map_err(|e| internal_error(e.to_string()))? {
-        let name: String = row.get(0).map_err(|e| internal_error(e.to_string()))?;
-        let first_seen: Option<String> = row.get(1).map_err(|e| internal_error(e.to_string()))?;
-        let last_seen: Option<String> = row.get(2).map_err(|e| internal_error(e.to_string()))?;
-        let span_count: i64 = row.get(3).map_err(|e| internal_error(e.to_string()))?;
+    while let Some(row) = rows
+        .next()
+        .context_internal("Services", "row iteration failed")?
+    {
+        let name: String = row
+            .get::<_, String>(0)
+            .context_internal("Services", "failed to read service_name")?;
+        let first_seen: Option<String> = row
+            .get::<_, Option<String>>(1)
+            .context_internal("Services", "failed to read first_seen")?;
+        let last_seen: Option<String> = row
+            .get::<_, Option<String>>(2)
+            .context_internal("Services", "failed to read last_seen")?;
+        let span_count: i64 = row
+            .get::<_, i64>(3)
+            .context_internal("Services", "failed to read span_count")?;
         services.push(serde_json::json!({
             "name": name,
             "first_seen": first_seen,
@@ -376,11 +366,10 @@ async fn investigate_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
     Json(req): Json<investigate::InvestigateRequest>,
-) -> Result<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>, ProblemDetails>
-{
+) -> ApiResult<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>> {
     let conn = project_conn(&state, &auth)?;
     let blocks = investigate::investigate(&conn, &req, ProjectPool::prefix())
-        .map_err(|e| internal_error(format!("{e:#}")))?;
+        .context_internal("Investigate", "investigation failed")?;
     Ok(Json(blocks))
 }
 
@@ -409,39 +398,37 @@ fn default_rate_limit() -> u32 {
 async fn admin_create_key(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateKeyRequest>,
-) -> Result<Json<serde_json::Value>, ProblemDetails> {
+) -> ApiResult<Json<serde_json::Value>> {
     let raw_key = admin::create_key(&state.admin_conn, &req.project, &req.plan, req.rate_limit)
-        .map_err(|e| internal_error(format!("{e:#}")))?;
+        .context_internal("Admin", "failed to create API key")?;
     Ok(Json(serde_json::json!({ "key": raw_key })))
 }
 
 async fn admin_revoke_key(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(short_token): axum::extract::Path<String>,
-) -> Result<Json<serde_json::Value>, ProblemDetails> {
+) -> ApiResult<Json<serde_json::Value>> {
     let revoked = admin::revoke_key(&state.admin_conn, &short_token)
-        .map_err(|e| internal_error(format!("{e:#}")))?;
+        .context_internal("Admin", "failed to revoke API key")?;
     if revoked {
         Ok(Json(
             serde_json::json!({ "revoked": true, "short_token": short_token }),
         ))
     } else {
-        Err(ProblemDetails::new()
-            .with_status(StatusCode::NOT_FOUND)
-            .with_title("Key Not Found")
-            .with_detail(format!("No key found with short token: {short_token}")))
+        Err(axum_anyhow::not_found(
+            "Key Not Found",
+            &format!("No key found with short token: {short_token}"),
+        ))
     }
 }
 
 /// GET /admin/status — returns all instance_status rows as JSON object.
-async fn admin_status(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, ProblemDetails> {
+async fn admin_status(State(state): State<Arc<AppState>>) -> ApiResult<Json<serde_json::Value>> {
     let guard = state
         .admin_conn
         .lock()
-        .map_err(|e| internal_error(format!("admin DB mutex: {e}")))?;
-    let map = admin::read_all_status(&guard).map_err(|e| internal_error(format!("{e:#}")))?;
+        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let map = admin::read_all_status(&guard).context_internal("Admin", "failed to read status")?;
     Ok(Json(serde_json::Value::Object(
         map.into_iter()
             .map(|(k, v)| (k, serde_json::Value::String(v)))

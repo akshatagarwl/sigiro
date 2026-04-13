@@ -456,6 +456,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-anyhow"
+version = "0.10.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "942895465d6604247a720c41ce20d7486e1bc9642306d9c13097dd819680280a"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tower",
+]
+
+[[package]]
 name = "axum-core"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1622,16 +1636,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-serde"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f056c8559e3757392c8d091e796416e4649d8e49e88b8d76df6c002f05027fd"
-dependencies = [
- "http",
- "serde",
-]
-
-[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2763,19 +2767,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "problem_details"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d50e8b46a2f32e61ae82888734e24627ea0f8c9bc7c5fc8d0c3e0eb7ed0ff5ab"
-dependencies = [
- "axum",
- "http",
- "http-serde",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "proc-macro-crate"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3339,7 +3330,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3630,6 +3621,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "axum",
+ "axum-anyhow",
  "chrono",
  "clap",
  "criterion",
@@ -3643,7 +3635,6 @@ dependencies = [
  "opentelemetry-proto",
  "otlp2records",
  "prefixed-api-key",
- "problem_details",
  "prost",
  "reqwest",
  "rmcp",

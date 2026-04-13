@@ -333,12 +333,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
             }
         };
         let mut frames = Vec::with_capacity(stack.location_indices.len().min(128));
-        for (frame_pos, &loc_idx) in stack
-            .location_indices
-            .iter()
-            .take(128)
-            .enumerate()
-        {
+        for (frame_pos, &loc_idx) in stack.location_indices.iter().take(128).enumerate() {
             let loc = match dict.location_table.get(loc_idx as usize) {
                 Some(loc) => loc,
                 None => {

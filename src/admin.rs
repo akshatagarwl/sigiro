@@ -133,7 +133,7 @@ pub fn open_admin_db() -> Result<Connection> {
 }
 
 /// Verify an API key against admin DB and return (project_id, plan).
-/// Returns Result to allow auth.rs to convert to ProblemDetails.
+/// Returns Result to allow auth.rs to convert to ApiError.
 pub fn verify_key_db(conn: &Mutex<Connection>, raw_key: &str) -> Result<(String, String)> {
     let pak =
         PrefixedApiKey::from_string(raw_key).map_err(|_| anyhow::anyhow!("Malformed API key"))?;

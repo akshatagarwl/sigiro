@@ -1,11 +1,11 @@
 use axum::{
     extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     middleware::Next,
     response::Response,
 };
+use axum_anyhow::ApiError;
 use dashmap::DashMap;
-use problem_details::ProblemDetails;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -38,13 +38,12 @@ fn auth_cache() -> &'static DashMap<String, CachedAuth> {
 /// Checks in-memory cache first; on miss, falls back to SQLite verify
 /// and caches result for AUTH_CACHE_TTL.
 ///
-/// Returns AuthContext on success, ProblemDetails on failure.
+/// Returns AuthContext on success, ApiError on failure.
 /// Failed verifications are NOT cached (attacker can't poison cache).
-#[allow(clippy::result_large_err)]
 pub fn verify_key_cached(
     conn: &Mutex<rusqlite::Connection>,
     raw_key: &str,
-) -> Result<AuthContext, ProblemDetails> {
+) -> Result<AuthContext, ApiError> {
     let cache = auth_cache();
 
     // Fast path: cache hit with valid TTL
@@ -58,8 +57,14 @@ pub fn verify_key_cached(
     }
 
     // Slow path: verify against SQLite
-    let (project_id, plan) =
-        crate::admin::verify_key_db(conn, raw_key).map_err(|e| classify_auth_error(&e))?;
+    let (project_id, plan) = crate::admin::verify_key_db(conn, raw_key).map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("Malformed API key") || msg.contains("Invalid API key") {
+            axum_anyhow::unauthorized("Invalid API Key", &msg)
+        } else {
+            axum_anyhow::internal_error("Internal Error", &msg)
+        }
+    })?;
     let ctx = AuthContext { project_id, plan };
 
     // Cache successful verification
@@ -75,16 +80,22 @@ pub fn verify_key_cached(
 }
 
 /// Extract bearer token from Authorization header.
-#[allow(clippy::result_large_err)] // ProblemDetails is the axum error response type
-pub fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ProblemDetails> {
+pub fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
     let value = headers
         .get("authorization")
-        .ok_or_else(|| missing_auth("Missing Authorization header"))?
+        .ok_or_else(|| {
+            axum_anyhow::unauthorized("Missing Authentication", "Missing Authorization header")
+        })?
         .to_str()
-        .map_err(|_| missing_auth("Invalid Authorization header encoding"))?;
-    value
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| missing_auth("Expected: Bearer <key>"))
+        .map_err(|_| {
+            axum_anyhow::unauthorized(
+                "Missing Authentication",
+                "Invalid Authorization header encoding",
+            )
+        })?;
+    value.strip_prefix("Bearer ").ok_or_else(|| {
+        axum_anyhow::unauthorized("Missing Authentication", "Expected: Bearer <key>")
+    })
 }
 
 /// axum middleware: verify API key against local DuckDB.
@@ -93,7 +104,7 @@ pub async fn auth_middleware(
     State(state): State<Arc<crate::server::AppState>>,
     req: Request,
     next: Next,
-) -> Result<Response, ProblemDetails> {
+) -> Result<Response, ApiError> {
     let token = extract_bearer_token(req.headers())?;
 
     // Dev key bypass — same middleware runs, dev keys skip DB verification
@@ -107,34 +118,17 @@ pub async fn auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    let (project_id, plan) = crate::admin::verify_key_db(&state.admin_conn, token)
-        .map_err(|e| classify_auth_error(&e))?;
+    let (project_id, plan) =
+        crate::admin::verify_key_db(&state.admin_conn, token).map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("Malformed API key") || msg.contains("Invalid API key") {
+                axum_anyhow::unauthorized("Invalid API Key", &msg)
+            } else {
+                axum_anyhow::internal_error("Internal Error", &msg)
+            }
+        })?;
     let ctx = AuthContext { project_id, plan };
     let mut req = req;
     req.extensions_mut().insert(ctx);
     Ok(next.run(req).await)
-}
-
-fn missing_auth(detail: impl Into<String>) -> ProblemDetails {
-    ProblemDetails::new()
-        .with_status(StatusCode::UNAUTHORIZED)
-        .with_title("Missing Authentication")
-        .with_detail(detail)
-}
-
-/// Classify an anyhow::Error from verify_key_db into the right ProblemDetails.
-/// Auth failures (malformed/invalid key) → 401.  DB errors → 500.
-fn classify_auth_error(e: &anyhow::Error) -> ProblemDetails {
-    let msg = e.to_string();
-    if msg.contains("Malformed API key") || msg.contains("Invalid API key") {
-        ProblemDetails::new()
-            .with_status(StatusCode::UNAUTHORIZED)
-            .with_title("Invalid API Key")
-            .with_detail(msg)
-    } else {
-        ProblemDetails::new()
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-            .with_title("Internal Error")
-            .with_detail(msg)
-    }
 }
