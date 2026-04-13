@@ -358,8 +358,8 @@ async fn services_handler(
     let mut services = Vec::new();
     while let Some(row) = rows.next().map_err(|e| internal_error(e.to_string()))? {
         let name: String = row.get(0).map_err(|e| internal_error(e.to_string()))?;
-        let first_seen: String = row.get(1).map_err(|e| internal_error(e.to_string()))?;
-        let last_seen: String = row.get(2).map_err(|e| internal_error(e.to_string()))?;
+        let first_seen: Option<String> = row.get(1).map_err(|e| internal_error(e.to_string()))?;
+        let last_seen: Option<String> = row.get(2).map_err(|e| internal_error(e.to_string()))?;
         let span_count: i64 = row.get(3).map_err(|e| internal_error(e.to_string()))?;
         services.push(serde_json::json!({
             "name": name,

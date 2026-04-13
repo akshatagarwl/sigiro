@@ -76,8 +76,8 @@ pub fn compute_coverage(
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ServiceContext {
     pub service_name: String,
-    pub first_seen: String,
-    pub last_seen: String,
+    pub first_seen: Option<String>,
+    pub last_seen: Option<String>,
     /// k8s.namespace.name from resource_attributes (if present)
     pub namespace: Option<String>,
     /// k8s.deployment.name from resource_attributes (if present)
@@ -117,8 +117,8 @@ pub fn query_service_context(ctx: &QueryCtx) -> Result<ServiceContext> {
                     row.get::<_, String>(1).ok().filter(|s| !s.is_empty()),
                     row.get::<_, i64>(2)?,
                     // first_seen/last_seen are NULL when no spans match (min/max of empty set)
-                    row.get::<_, String>(3).unwrap_or_else(|_| String::new()),
-                    row.get::<_, String>(4).unwrap_or_else(|_| String::new()),
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             },
         )
@@ -365,8 +365,8 @@ pub struct LogTemplate {
     pub body: String,
     pub severity_text: String,
     pub count: i64,
-    pub first_seen: String,
-    pub last_seen: String,
+    pub first_seen: Option<String>,
+    pub last_seen: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -826,8 +826,8 @@ pub fn query_logs(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogTemplate>> {
             body: row.get::<_, String>(1).context("body")?,
             severity_text: row.get::<_, String>(2).context("severity_text")?,
             count: row.get::<_, i64>(3).context("count")?,
-            first_seen: row.get::<_, String>(4).context("first_seen")?,
-            last_seen: row.get::<_, String>(5).context("last_seen")?,
+            first_seen: row.get::<_, Option<String>>(4)?,
+            last_seen: row.get::<_, Option<String>>(5)?,
         });
     }
     Ok(results)
@@ -846,7 +846,7 @@ fn count_profile_samples(ctx: &QueryCtx) -> Result<i64> {
             duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts],
             |r| r.get(0),
         )
-        .unwrap_or(0);
+        .context("span count query failed")?;
     Ok(count)
 }
 
