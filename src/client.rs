@@ -214,10 +214,11 @@ impl SigiroClient {
     }
 }
 
-/// Build a client from config if API key is available.
-pub fn try_build_client() -> Option<SigiroClient> {
-    let api_key = crate::config::get_api_key().ok()?;
-    let base_url =
-        std::env::var("SIGIRO_ENDPOINT").unwrap_or_else(|_| "https://app.sigiro.com".to_string());
-    Some(SigiroClient::new(&base_url, &api_key))
+/// Build a client from config. Fails if API key or endpoint is not configured.
+pub fn try_build_client() -> anyhow::Result<SigiroClient> {
+    let api_key = crate::config::get_api_key()
+        .map_err(|_| anyhow::anyhow!("No API key configured. Run: sigiro auth <key>"))?;
+    let base_url = std::env::var("SIGIRO_ENDPOINT")
+        .map_err(|_| anyhow::anyhow!("SIGIRO_ENDPOINT not set. Export SIGIRO_ENDPOINT=http://localhost:9999 (or your server URL)"))?;
+    Ok(SigiroClient::new(&base_url, &api_key))
 }

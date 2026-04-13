@@ -7,14 +7,23 @@ fn test_toon_status_output() {
         "version": "1.0.0"
     });
     let toon = sigiro::toon::to_toon(&status);
-    
+
     // TOON should be more compact than JSON
     let json_str = serde_json::to_string_pretty(&status).unwrap();
-    assert!(toon.len() < json_str.len(), "TOON should be more compact than JSON");
-    
+    assert!(
+        toon.len() < json_str.len(),
+        "TOON should be more compact than JSON"
+    );
+
     // TOON should contain the data
-    assert!(toon.contains("status: ok"), "TOON should contain status field");
-    assert!(toon.contains("version: 1.0.0"), "TOON should contain version field");
+    assert!(
+        toon.contains("status: ok"),
+        "TOON should contain status field"
+    );
+    assert!(
+        toon.contains("version: 1.0.0"),
+        "TOON should contain version field"
+    );
 }
 
 #[test]
@@ -24,15 +33,18 @@ fn test_toon_services_array() {
         {"name": "payments", "spans": 800, "logs": 200}
     ]);
     let toon = sigiro::toon::to_toon(&services);
-    
+
     // TOON should use table format for arrays of objects
     assert!(toon.contains("["), "TOON should have array indicator");
     assert!(toon.contains("name"), "TOON should contain name field");
     assert!(toon.contains("spans"), "TOON should contain spans field");
     assert!(toon.contains("logs"), "TOON should contain logs field");
-    
+
     // Should contain the actual data
-    assert!(toon.contains("checkout"), "TOON should contain checkout service");
+    assert!(
+        toon.contains("checkout"),
+        "TOON should contain checkout service"
+    );
     assert!(toon.contains("1500"), "TOON should contain span count");
 }
 
@@ -53,11 +65,20 @@ fn test_toon_investigate_structure() {
         ]
     });
     let toon = sigiro::toon::to_toon(&investigate);
-    
+
     // Should handle nested objects
-    assert!(toon.contains("service: checkout"), "TOON should contain service");
-    assert!(toon.contains("window"), "TOON should contain window section");
-    assert!(toon.contains("operation_summaries"), "TOON should contain operation summaries");
+    assert!(
+        toon.contains("service: checkout"),
+        "TOON should contain service"
+    );
+    assert!(
+        toon.contains("window"),
+        "TOON should contain window section"
+    );
+    assert!(
+        toon.contains("operation_summaries"),
+        "TOON should contain operation summaries"
+    );
 }
 
 #[test]
@@ -67,7 +88,7 @@ fn test_toon_empty_values() {
     // Empty arrays might return empty string or some indicator
     // The important thing is it doesn't panic
     let _ = toon; // Just verify it doesn't panic
-    
+
     let empty_object = json!({});
     let toon = sigiro::toon::to_toon(&empty_object);
     // Empty objects might return empty string
@@ -82,10 +103,16 @@ fn test_toon_special_characters() {
         "description": "This has, commas"
     });
     let toon = sigiro::toon::to_toon(&with_commas);
-    
+
     // Should handle strings with commas
-    assert!(toon.contains("Hello, world"), "TOON should handle commas in strings");
-    assert!(toon.contains("This has, commas"), "TOON should handle commas in strings");
+    assert!(
+        toon.contains("Hello, world"),
+        "TOON should handle commas in strings"
+    );
+    assert!(
+        toon.contains("This has, commas"),
+        "TOON should handle commas in strings"
+    );
 }
 
 #[test]
@@ -96,7 +123,7 @@ fn test_toon_numeric_types() {
         "negative": -100
     });
     let toon = sigiro::toon::to_toon(&numbers);
-    
+
     assert!(toon.contains("42"), "TOON should contain integer");
     assert!(toon.contains("3.14"), "TOON should contain float");
     assert!(toon.contains("-100"), "TOON should contain negative number");
@@ -109,7 +136,7 @@ fn test_toon_boolean_values() {
         "deleted": false
     });
     let toon = sigiro::toon::to_toon(&booleans);
-    
+
     assert!(toon.contains("true"), "TOON should contain true");
     assert!(toon.contains("false"), "TOON should contain false");
 }
@@ -121,8 +148,11 @@ fn test_toon_null_values() {
         "missing": null
     });
     let toon = sigiro::toon::to_toon(&with_null);
-    
-    assert!(toon.contains("present: value"), "TOON should contain present field");
+
+    assert!(
+        toon.contains("present: value"),
+        "TOON should contain present field"
+    );
     // Null handling depends on implementation
     assert!(!toon.is_empty(), "TOON should handle null values");
 }
@@ -139,18 +169,20 @@ fn test_toon_performance_comparison() {
             "duration_p95_ns": i as f64 * 1000000.0
         }));
     }
-    
+
     let large_structure = json!({
         "service": "test-service",
         "operations": operations
     });
-    
+
     let toon = sigiro::toon::to_toon(&large_structure);
     let json_str = serde_json::to_string_pretty(&large_structure).unwrap();
-    
+
     // TOON should be significantly more compact
     let compression_ratio = toon.len() as f64 / json_str.len() as f64;
-    assert!(compression_ratio < 0.8, 
-        "TOON should be at least 20% more compact than JSON. Ratio: {:.2}", 
-        compression_ratio);
+    assert!(
+        compression_ratio < 0.8,
+        "TOON should be at least 20% more compact than JSON. Ratio: {:.2}",
+        compression_ratio
+    );
 }

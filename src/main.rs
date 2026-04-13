@@ -4,8 +4,8 @@ use duckdb::Connection as DuckConnection;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
-use sigiro::{data_dir, pool::ProjectPool};
 use sigiro::toon::to_toon;
+use sigiro::{data_dir, pool::ProjectPool};
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -133,7 +133,10 @@ async fn main() -> Result<()> {
         Some(Command::Query { sql }) => {
             let client = require_client()?;
             let result = client.query(&sql).await?;
-            println!("{}", format_output(&serde_json::to_value(&result)?, &cli.output)?);
+            println!(
+                "{}",
+                format_output(&serde_json::to_value(&result)?, &cli.output)?
+            );
         }
         Some(Command::Status) => {
             let client = require_client()?;
@@ -149,7 +152,10 @@ async fn main() -> Result<()> {
                     to.map(|s| s * 1_000_000),
                 )
                 .await?;
-            println!("{}", format_output(&serde_json::to_value(&block)?, &cli.output)?);
+            println!(
+                "{}",
+                format_output(&serde_json::to_value(&block)?, &cli.output)?
+            );
         }
         Some(Command::Mcp) => {
             let client = require_client()?;
@@ -164,7 +170,7 @@ async fn main() -> Result<()> {
             // Try HTTP to running server first (solves DuckDB single-writer lock).
             // Fall back to direct DuckDB if server isn't running (bootstrapping).
             let server_url = std::env::var("SIGIRO_ENDPOINT")
-                .unwrap_or_else(|_| "http://localhost:9999".to_string());
+                .context("SIGIRO_ENDPOINT not set. Export SIGIRO_ENDPOINT=http://localhost:9999 (or your server URL)")?;
 
             match action {
                 AdminAction::CreateKey {
@@ -298,7 +304,7 @@ async fn run_serve(no_ebpf: bool) -> Result<()> {
     Ok(())
 }
 
-/// Build HTTP client from config. Fails fast if no API key is configured.
+/// Build HTTP client from config. Fails fast if API key or endpoint is not configured.
 fn require_client() -> Result<sigiro::client::SigiroClient> {
-    sigiro::client::try_build_client().context("No API key configured. Run: sigiro auth <key>")
+    sigiro::client::try_build_client()
 }
