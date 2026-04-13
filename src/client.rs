@@ -2,7 +2,8 @@ use anyhow::{Context, Result, bail};
 
 use crate::investigate::InvestigationBlock;
 
-/// HTTP client for hosted mode — CLI commands go to app.sigiro.com instead of local DuckDB.
+/// HTTP client for hosted mode — CLI and MCP go through sigiro serve instead of direct DuckDB.
+#[derive(Clone)]
 pub struct SigiroClient {
     http: reqwest::Client,
     base_url: String,
@@ -144,6 +145,66 @@ impl SigiroClient {
                 let body = resp.text().await.context("failed to read error body")?;
                 Ok(serde_json::json!({ "status": body }))
             }
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            s => {
+                let body = resp.text().await.context("failed to read error body")?;
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
+    /// Investigate one or more services. Pass `service` for single, `services` for multi.
+    pub async fn investigate_multi(
+        &self,
+        service: Option<&str>,
+        services: Option<Vec<String>>,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<std::collections::BTreeMap<String, InvestigationBlock>> {
+        let body = serde_json::json!({
+            "service_name": service,
+            "services": services,
+            "from_ts": from,
+            "to_ts": to,
+        });
+        let resp = self
+            .http
+            .post(format!("{}/investigate", self.base_url))
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => resp
+                .json()
+                .await
+                .context("failed to parse investigation response"),
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            429 => bail!("Rate limited. Try again later."),
+            s => {
+                let body = resp.text().await.context("failed to read error body")?;
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
+    /// List services with first/last seen and span counts.
+    pub async fn services(&self) -> Result<serde_json::Value> {
+        let resp = self
+            .http
+            .get(format!("{}/services", self.base_url))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => resp
+                .json()
+                .await
+                .context("failed to parse services response"),
             401 => bail!("Invalid API key. Run: sigiro auth <key>"),
             s => {
                 let body = resp.text().await.context("failed to read error body")?;

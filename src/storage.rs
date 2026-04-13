@@ -56,11 +56,7 @@ pub fn init_distributed(conn: &Connection, config: &StorageConfig) -> Result<()>
         tracing::info!(region = %config.s3_region, bucket = %config.s3_bucket, "S3 credentials configured");
 
         // Attach DuckLake with PostgreSQL catalog + S3 data path
-        let s3_data_path = format!(
-            "s3://{}/{}data",
-            config.s3_bucket,
-            s3_prefix
-        );
+        let s3_data_path = format!("s3://{}/{}data", config.s3_bucket, s3_prefix);
         let attach_sql = format!(
             "ATTACH 'ducklake:{}' AS lake (DATA_PATH '{}')",
             config.catalog_url, s3_data_path

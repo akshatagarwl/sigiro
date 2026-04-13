@@ -1,18 +1,15 @@
 use anyhow::{Context, Result};
-use duckdb::Connection;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::Implementation;
 use rmcp::schemars;
 use rmcp::{ServerHandler, ServiceExt as _, tool, tool_router};
-use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use serde::Deserialize;
 
-use crate::investigate;
+use crate::client::SigiroClient;
 
 pub struct SigiroMcp {
-    conn: Arc<Mutex<Connection>>,
-    table_prefix: &'static str,
+    client: SigiroClient,
     tool_router: ToolRouter<Self>,
 }
 
@@ -36,12 +33,6 @@ pub struct QueryParams {
     pub sql: String,
 }
 
-#[derive(Serialize)]
-struct StatusResponse {
-    services: Vec<String>,
-    tables: std::collections::BTreeMap<String, i64>,
-}
-
 #[tool_router]
 impl SigiroMcp {
     /// Investigate one or more services — returns a map of service name to investigation block.
@@ -52,13 +43,11 @@ impl SigiroMcp {
     #[tool]
     async fn sigiro_investigate(&self, params: Parameters<InvestigateParams>) -> String {
         let p = params.0;
-        let req = investigate::InvestigateRequest {
-            service: p.service,
-            services: p.services,
-            from_ts: p.from_ts,
-            to_ts: p.to_ts,
-        };
-        match investigate::investigate(&self.conn, &req, self.table_prefix) {
+        match self
+            .client
+            .investigate_multi(p.service.as_deref(), p.services, p.from_ts, p.to_ts)
+            .await
+        {
             Ok(blocks) => serde_json::to_string_pretty(&blocks)
                 .unwrap_or_else(|e| format!("serialization error: {e}")),
             Err(e) => format!("error: {e:#}"),
@@ -70,90 +59,21 @@ impl SigiroMcp {
     /// doesn't cover your question.
     #[tool]
     async fn sigiro_query(&self, params: Parameters<QueryParams>) -> String {
-        let sql = &params.0.sql;
-        if let Err(e) = crate::server::validate_read_only(sql) {
-            return format!("error: {e}");
+        match self.client.query(&params.0.sql).await {
+            Ok(rows) => serde_json::to_string_pretty(&rows)
+                .unwrap_or_else(|e| format!("serialization error: {e}")),
+            Err(e) => format!("error: {e:#}"),
         }
-        let conn = match self.conn.lock() {
-            Ok(c) => c,
-            Err(e) => return format!("error: connection mutex poisoned: {e}"),
-        };
-        let mut stmt = match conn.prepare(sql) {
-            Ok(s) => s,
-            Err(e) => return format!("error: {e}"),
-        };
-        let mut rows = match stmt.query([]) {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
-        let stmt_ref = match rows.as_ref() {
-            Some(s) => s,
-            None => return "error: no result set".to_string(),
-        };
-        let column_count = stmt_ref.column_count();
-        let column_names: Vec<String> = (0..column_count)
-            .map(|i| {
-                stmt_ref
-                    .column_name(i)
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|_| "?".to_string())
-            })
-            .collect();
-
-        let mut results = Vec::new();
-        while let Ok(Some(row)) = rows.next() {
-            let mut obj = serde_json::Map::new();
-            for (i, name) in column_names.iter().enumerate() {
-                if let Ok(val) = row.get_ref(i) {
-                    obj.insert(name.clone(), crate::server::value_ref_to_json(val));
-                }
-            }
-            results.push(serde_json::Value::Object(obj));
-        }
-        serde_json::to_string_pretty(&results)
-            .unwrap_or_else(|e| format!("serialization error: {e}"))
     }
 
     /// Get sigiro status — services seen and row counts per table. Quick health check.
     #[tool]
     async fn sigiro_status(&self) -> String {
-        let conn = match self.conn.lock() {
-            Ok(c) => c,
-            Err(e) => return format!("error: connection mutex poisoned: {e}"),
-        };
-
-        let prefix = self.table_prefix;
-        let mut table_counts = std::collections::BTreeMap::new();
-        for table in crate::storage::TABLE_NAMES {
-            let qualified = format!("{prefix}{table}");
-            let count: i64 = conn
-                .query_row(&format!("SELECT count(*) FROM {qualified}"), [], |row| {
-                    row.get(0)
-                })
-                .unwrap_or(0);
-            table_counts.insert(qualified, count);
+        match self.client.services().await {
+            Ok(val) => serde_json::to_string_pretty(&val)
+                .unwrap_or_else(|e| format!("serialization error: {e}")),
+            Err(e) => format!("error: {e:#}"),
         }
-
-        let mut services = Vec::new();
-        if let Ok(mut stmt) = conn.prepare(&format!(
-            "SELECT DISTINCT service_name FROM {prefix}sigiro_spans
-             UNION SELECT DISTINCT service_name FROM {prefix}sigiro_logs
-             UNION SELECT DISTINCT service_name FROM {prefix}sigiro_metrics_gauge",
-        )) {
-            if let Ok(mut rows) = stmt.query([]) {
-                while let Ok(Some(row)) = rows.next() {
-                    if let Ok(s) = row.get::<_, String>(0) {
-                        services.push(s);
-                    }
-                }
-            }
-        }
-
-        let resp = StatusResponse {
-            services,
-            tables: table_counts,
-        };
-        serde_json::to_string_pretty(&resp).unwrap_or_else(|e| format!("serialization error: {e}"))
     }
 }
 
@@ -170,21 +90,17 @@ impl ServerHandler for SigiroMcp {
 }
 
 impl SigiroMcp {
-    pub fn new(conn: Arc<Mutex<Connection>>, table_prefix: &'static str) -> Self {
+    pub fn new(client: SigiroClient) -> Self {
         Self {
-            conn,
-            table_prefix,
+            client,
             tool_router: Self::tool_router(),
         }
     }
 }
 
 /// Run the MCP stdio server. Blocks until the client disconnects.
-pub async fn run_mcp_server(
-    conn: Arc<Mutex<Connection>>,
-    table_prefix: &'static str,
-) -> Result<()> {
-    let server = SigiroMcp::new(conn, table_prefix);
+pub async fn run_mcp_server(client: SigiroClient) -> Result<()> {
+    let server = SigiroMcp::new(client);
     let transport = rmcp::transport::io::stdio();
     let service = server
         .serve(transport)

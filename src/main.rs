@@ -4,7 +4,7 @@ use duckdb::Connection as DuckConnection;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
-use sigiro::{data_dir, pool::ProjectPool, storage};
+use sigiro::{data_dir, pool::ProjectPool};
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -132,22 +132,9 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&block)?);
         }
         Some(Command::Mcp) => {
-            let conn =
-                DuckConnection::open_in_memory().context("failed to open in-memory DuckDB")?;
-            let prefix = storage::table_prefix();
-            let data_dir = data_dir()?;
-            match storage::load_config() {
-                Some(_config) => {
-                    storage::init_default(&conn, &data_dir)?;
-                    tracing::info!("DuckLake distributed mode — catalog: PostgreSQL, data: S3");
-                }
-                None => {
-                    storage::init_default(&conn, &data_dir)?;
-                }
-            }
-            sigiro::schema::create_tables(&conn, prefix)?;
-            let shared = Arc::new(Mutex::new(conn));
-            sigiro::mcp::run_mcp_server(shared, prefix).await?;
+            let client = require_client()?;
+            tracing::info!("MCP server connecting to {}", client.base_url());
+            sigiro::mcp::run_mcp_server(client).await?;
         }
         Some(Command::Auth { key }) => {
             let path = sigiro::config::save_api_key(&key)?;
