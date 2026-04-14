@@ -6,7 +6,6 @@ use axum::{
     routing::{get, post},
 };
 use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt};
-use crossbeam_channel::Sender;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
@@ -14,7 +13,8 @@ use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extract
 
 use crate::admin;
 use crate::auth::{self, AuthContext};
-use crate::ingest::{IngestMsg, OtlpGrpcService};
+use crate::ingest::OtlpGrpcService;
+use crate::inserter::MsgRouter;
 use crate::investigate;
 use crate::pool::ProjectPool;
 
@@ -104,14 +104,14 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
 pub async fn run_servers(
     pool: Arc<ProjectPool>,
     admin_conn: Arc<Mutex<Connection>>,
-    tx: Sender<IngestMsg>,
+    router: Arc<MsgRouter>,
 ) -> Result<()> {
     // gRPC server on :4317 — authenticated via Bearer token in metadata
-    let grpc_tx = tx.clone();
     let grpc_admin = Arc::clone(&admin_conn);
+    let grpc_router = Arc::clone(&router);
     let grpc_handle = tokio::spawn(async move {
         let addr = "[::]:4317".parse().expect("valid addr");
-        let svc = OtlpGrpcService::new(grpc_tx, grpc_admin);
+        let svc = OtlpGrpcService::new(grpc_router, grpc_admin);
         tracing::info!("gRPC listening on {addr}");
         TonicServer::builder()
             .add_service(svc.trace_service())
@@ -178,9 +178,7 @@ pub async fn run_servers(
     });
 
     // OTLP HTTP on :4318 — authenticated via Authorization header
-    let http_otlp_tx = tx;
-    let otlp_admin = Arc::clone(&admin_conn);
-    let otlp_http_app = crate::ingest::otlp_http_router(http_otlp_tx, otlp_admin);
+    let otlp_http_app = crate::ingest::otlp_http_router(router, Arc::clone(&admin_conn));
     let otlp_http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind("0.0.0.0:4318").await?;
         tracing::info!("OTLP HTTP listening on 0.0.0.0:4318");

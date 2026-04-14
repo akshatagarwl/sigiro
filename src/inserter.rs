@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
-use crossbeam_channel::Receiver;
 use dashmap::DashMap;
 use duckdb::Connection;
 use otlp2records::MetricBatches;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 
 use crate::drain::DrainTree;
 use crate::ingest::IngestMsg;
@@ -18,6 +18,10 @@ const FLUSH_ROW_THRESHOLD: usize = 10_000;
 
 /// Max time between flushes, even if row threshold not reached.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Per-project channel capacity. When full, messages are dropped
+/// (the OTLP SDK retries). Better to drop one project's data than block all.
+const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
 
 /// Signal types that map to DuckDB tables. Adding a new signal type
 /// (e.g. Profiles) requires only adding a variant here and handling it
@@ -64,7 +68,88 @@ impl SignalTable {
     }
 }
 
-/// Per-project flusher state. Each project gets its own flusher thread
+/// Routes IngestMsg to per-project flusher tasks.
+///
+/// Handlers call `router.send(msg)` directly. The router lazily creates
+/// per-project bounded channels and tokio tasks on first message per project.
+/// No dispatcher thread — handlers fan out directly.
+pub struct MsgRouter {
+    pool: Arc<ProjectPool>,
+    project_senders: DashMap<String, mpsc::Sender<IngestMsg>>,
+}
+
+impl MsgRouter {
+    pub fn new(pool: Arc<ProjectPool>) -> Self {
+        Self {
+            pool,
+            project_senders: DashMap::new(),
+        }
+    }
+
+    /// Route a message to the appropriate per-project flusher.
+    /// Creates the flusher task on first message for a project.
+    /// Drops the message with a warning if the project channel is full.
+    pub async fn send(&self, msg: IngestMsg) {
+        let project_id = msg.project_id().to_string();
+
+        // Fast path: existing sender
+        if let Some(sender) = self.project_senders.get(&project_id) {
+            match sender.try_send(msg) {
+                Ok(()) => return,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
+                    // Channel full — log and drop.
+                    tracing::warn!(project_id, "project channel full, dropping message");
+                    drop(msg);
+                    return;
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(msg)) => {
+                    // Receiver dropped — flusher task exited. Remove stale entry and fall through.
+                    drop(sender);
+                    self.project_senders.remove(&project_id);
+                    // Re-enter with msg to create new flusher
+                    return self.send_with_fallback(project_id, msg).await;
+                }
+            }
+        }
+
+        self.send_with_fallback(project_id, msg).await;
+    }
+
+    /// Slow path: create connection + channel + flusher task.
+    async fn send_with_fallback(&self, project_id: String, msg: IngestMsg) {
+        // get_or_create is sync — fast path is just a DashMap lookup,
+        // slow path opens in-memory DuckDB + creates dirs (low ms).
+        let conn = match self.pool.get_or_create(&project_id) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(project_id, "failed to get project connection: {e:#}");
+                return;
+            }
+        };
+
+        let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
+        let pid = project_id.clone();
+        tokio::spawn(async move {
+            run_flusher(&pid, conn, rx).await;
+        });
+
+        // Insert — another task may have raced us, that's fine.
+        let sender = self
+            .project_senders
+            .entry(project_id.clone())
+            .or_insert(tx)
+            .clone();
+
+        if let Err(e) = sender.try_send(msg) {
+            tracing::warn!(
+                project_id,
+                "project channel full on new sender, dropping message: {e}"
+            );
+        }
+    }
+}
+
+/// Per-project flusher state. Each project gets its own flusher task
 /// so project A's load cannot block project B.
 ///
 /// Crash recovery: DuckDB has its own WAL — once `append_record_batch`
@@ -251,115 +336,46 @@ impl ProjectFlusher {
     }
 }
 
-/// Run the inserter: routes messages to per-project flusher threads.
-///
-/// Architecture: one dispatcher thread fans out to per-project channels.
-/// Each project gets a dedicated flusher thread that buffers RecordBatches
-/// and flushes to DuckDB on timer (1s) or count (10k rows) threshold.
-/// Project A's ingest load cannot block project B.
-#[allow(clippy::needless_pass_by_value)] // Receiver is consumed by the for loop
-pub fn run_inserter(pool: &Arc<ProjectPool>, rx: Receiver<IngestMsg>) -> Result<()> {
-    // Per-project sender channels + join handles. Flusher threads are spawned lazily.
-    let project_senders: DashMap<String, crossbeam_channel::Sender<IngestMsg>> = DashMap::new();
-    let flusher_handles: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
-
-    for msg in &rx {
-        let project_id = msg.project_id().to_string();
-
-        // Get or create per-project channel + flusher thread.
-        let sender = {
-            if let Some(s) = project_senders.get(&project_id) {
-                s.clone()
-            } else {
-                let conn = pool
-                    .get_or_create(&project_id)
-                    .context("failed to get project connection for inserter")?;
-
-                // Bounded channel: backpressure per project. If a project's flusher
-                // falls behind, only THAT project's channel fills up.
-                let (tx, prx) = crossbeam_channel::bounded::<IngestMsg>(10_000);
-
-                let pid = project_id.clone();
-                let handle = std::thread::Builder::new()
-                    .name(format!("flusher-{pid}"))
-                    .spawn(move || {
-                        run_project_flusher(&pid, conn, prx);
-                    })
-                    .with_context(|| format!("failed to spawn flusher for {project_id}"))?;
-
-                flusher_handles
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("{e}"))?
-                    .push(handle);
-                project_senders.insert(project_id.clone(), tx.clone());
-                tx
-            }
-        };
-
-        // Send to project-specific flusher. If channel is full, log and drop.
-        // The OTLP SDK will retry. Better to drop one project's data than block all.
-        if let Err(e) = sender.try_send(msg) {
-            match e {
-                crossbeam_channel::TrySendError::Full(_) => {
-                    tracing::warn!(project_id, "project channel full, dropping message");
-                }
-                crossbeam_channel::TrySendError::Disconnected(_) => {
-                    // Flusher thread died — remove stale sender, will respawn on next message.
-                    tracing::error!(project_id, "flusher thread disconnected, removing");
-                    project_senders.remove(&project_id);
-                }
-            }
-        }
-    }
-
-    // Main channel closed — drop all senders so flusher threads see Disconnected,
-    // then wait for them to drain and flush remaining data.
-    drop(project_senders);
-    let handles = flusher_handles
-        .into_inner()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    for handle in handles {
-        if let Err(e) = handle.join() {
-            tracing::error!("flusher thread panicked: {e:?}");
-        }
-    }
-
-    Ok(())
-}
-
 /// Per-project flusher loop. Receives pre-transformed RecordBatches,
 /// buffers them, and flushes to DuckDB on timer or row count threshold.
-#[allow(clippy::needless_pass_by_value)] // Receiver moved into thread, needs ownership
-fn run_project_flusher(project_id: &str, conn: Arc<Mutex<Connection>>, rx: Receiver<IngestMsg>) {
+async fn run_flusher(
+    project_id: &str,
+    conn: Arc<Mutex<Connection>>,
+    mut rx: mpsc::Receiver<IngestMsg>,
+) {
     let mut flusher = ProjectFlusher::new(conn);
+    let mut interval = tokio::time::interval(FLUSH_INTERVAL);
 
     loop {
-        // Use recv_timeout so we flush on the timer even if no new messages arrive.
-        match rx.recv_timeout(FLUSH_INTERVAL) {
-            Ok(msg) => {
-                buffer_msg(&mut flusher, msg);
-                if flusher.should_flush() {
-                    if let Err(e) = flusher.flush(project_id) {
-                        tracing::error!(project_id, "flush failed: {e:#}");
-                    }
-                }
-            }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+        tokio::select! {
+            biased;
+
+            _ = interval.tick() => {
                 // Timer expired — flush whatever we have.
                 if let Err(e) = flusher.flush(project_id) {
                     tracing::error!(project_id, "timer flush failed: {e:#}");
                 }
             }
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                // Dispatcher dropped our sender — drain remaining messages and flush.
-                for remaining in rx.try_iter() {
-                    buffer_msg(&mut flusher, remaining);
+
+            msg = rx.recv() => {
+                match msg {
+                    Some(msg) => {
+                        buffer_msg(&mut flusher, msg);
+                        if flusher.should_flush() {
+                            if let Err(e) = flusher.flush(project_id) {
+                                tracing::error!(project_id, "flush failed: {e:#}");
+                            }
+                        }
+                    }
+                    None => {
+                        // Channel closed — all senders dropped.
+                        if let Err(e) = flusher.flush(project_id) {
+                            tracing::error!(project_id, "final flush failed: {e:#}");
+                        }
+                        tracing::info!(project_id, "flusher task exiting (channel closed)");
+                        break;
+                    }
                 }
-                if let Err(e) = flusher.flush(project_id) {
-                    tracing::error!(project_id, "final flush failed: {e:#}");
-                }
-                tracing::info!(project_id, "flusher thread exiting (channel closed)");
-                break;
             }
         }
     }

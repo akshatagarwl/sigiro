@@ -3,7 +3,6 @@ use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArr
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
-use crossbeam_channel::Sender;
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
         ExportLogsServiceRequest, ExportLogsServiceResponse,
@@ -27,6 +26,8 @@ use prost::Message;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tonic::{Request, Response, Status};
+
+use crate::inserter::MsgRouter;
 
 /// Pre-transformed ingest message carrying Arrow RecordBatches, not raw bytes.
 /// Transform happens on the tokio blocking pool (parallel) BEFORE the channel,
@@ -62,39 +63,39 @@ impl IngestMsg {
 }
 
 pub struct OtlpGrpcService {
-    tx: Sender<IngestMsg>,
+    router: Arc<MsgRouter>,
     admin_conn: Arc<Mutex<Connection>>,
 }
 
 impl OtlpGrpcService {
-    pub fn new(tx: Sender<IngestMsg>, admin_conn: Arc<Mutex<Connection>>) -> Self {
-        Self { tx, admin_conn }
+    pub fn new(router: Arc<MsgRouter>, admin_conn: Arc<Mutex<Connection>>) -> Self {
+        Self { router, admin_conn }
     }
 
     pub fn trace_service(&self) -> TraceServiceServer<Self> {
         TraceServiceServer::new(Self {
-            tx: self.tx.clone(),
+            router: Arc::clone(&self.router),
             admin_conn: Arc::clone(&self.admin_conn),
         })
     }
 
     pub fn logs_service(&self) -> LogsServiceServer<Self> {
         LogsServiceServer::new(Self {
-            tx: self.tx.clone(),
+            router: Arc::clone(&self.router),
             admin_conn: Arc::clone(&self.admin_conn),
         })
     }
 
     pub fn metrics_service(&self) -> MetricsServiceServer<Self> {
         MetricsServiceServer::new(Self {
-            tx: self.tx.clone(),
+            router: Arc::clone(&self.router),
             admin_conn: Arc::clone(&self.admin_conn),
         })
     }
 
     pub fn profiles_service(&self) -> ProfilesServiceServer<Self> {
         ProfilesServiceServer::new(Self {
-            tx: self.tx.clone(),
+            router: Arc::clone(&self.router),
             admin_conn: Arc::clone(&self.admin_conn),
         })
     }
@@ -164,9 +165,9 @@ impl TraceService for OtlpGrpcService {
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_traces(bytes).await?;
         if batch.num_rows() > 0 {
-            self.tx
+            self.router
                 .send(IngestMsg::Traces { project_id, batch })
-                .map_err(|e| Status::internal(e.to_string()))?;
+                .await;
         }
         Ok(Response::new(ExportTraceServiceResponse {
             partial_success: None,
@@ -184,9 +185,9 @@ impl LogsService for OtlpGrpcService {
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_logs(bytes).await?;
         if batch.num_rows() > 0 {
-            self.tx
+            self.router
                 .send(IngestMsg::Logs { project_id, batch })
-                .map_err(|e| Status::internal(e.to_string()))?;
+                .await;
         }
         Ok(Response::new(ExportLogsServiceResponse {
             partial_success: None,
@@ -203,12 +204,12 @@ impl MetricsService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batches = transform_metrics(bytes).await?;
-        self.tx
+        self.router
             .send(IngestMsg::Metrics {
                 project_id,
                 batches,
             })
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .await;
         Ok(Response::new(ExportMetricsServiceResponse {
             partial_success: None,
         }))
@@ -551,9 +552,9 @@ impl ProfilesService for OtlpGrpcService {
             .await
             .map_err(|e| Status::internal(format!("transform task panicked: {e}")))??;
         if batch.num_rows() > 0 {
-            self.tx
+            self.router
                 .send(IngestMsg::Profiles { project_id, batch })
-                .map_err(|e| Status::internal(e.to_string()))?;
+                .await;
         }
         Ok(Response::new(ExportProfilesServiceResponse {
             partial_success: None,
@@ -564,12 +565,12 @@ impl ProfilesService for OtlpGrpcService {
 // OTLP HTTP endpoints on :4318
 
 struct OtlpHttpState {
-    tx: Sender<IngestMsg>,
+    router: Arc<MsgRouter>,
     admin_conn: Arc<Mutex<Connection>>,
 }
 
-pub fn otlp_http_router(tx: Sender<IngestMsg>, admin_conn: Arc<Mutex<Connection>>) -> Router {
-    let state = Arc::new(OtlpHttpState { tx, admin_conn });
+pub fn otlp_http_router(router: Arc<MsgRouter>, admin_conn: Arc<Mutex<Connection>>) -> Router {
+    let state = Arc::new(OtlpHttpState { router, admin_conn });
     Router::new()
         .route("/v1/traces", post(otlp_http_traces))
         .route("/v1/logs", post(otlp_http_logs))
@@ -622,10 +623,10 @@ async fn otlp_http_traces(
         }
     };
     if batch.num_rows() > 0 {
-        if let Err(e) = state.tx.send(IngestMsg::Traces { project_id, batch }) {
-            tracing::error!("failed to enqueue traces: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR;
-        }
+        state
+            .router
+            .send(IngestMsg::Traces { project_id, batch })
+            .await;
     }
     StatusCode::OK
 }
@@ -647,10 +648,10 @@ async fn otlp_http_logs(
         }
     };
     if batch.num_rows() > 0 {
-        if let Err(e) = state.tx.send(IngestMsg::Logs { project_id, batch }) {
-            tracing::error!("failed to enqueue logs: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR;
-        }
+        state
+            .router
+            .send(IngestMsg::Logs { project_id, batch })
+            .await;
     }
     StatusCode::OK
 }
@@ -671,13 +672,13 @@ async fn otlp_http_metrics(
             return StatusCode::BAD_REQUEST;
         }
     };
-    if let Err(e) = state.tx.send(IngestMsg::Metrics {
-        project_id,
-        batches,
-    }) {
-        tracing::error!("failed to enqueue metrics: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
+    state
+        .router
+        .send(IngestMsg::Metrics {
+            project_id,
+            batches,
+        })
+        .await;
     StatusCode::OK
 }
 
@@ -709,10 +710,10 @@ async fn otlp_http_profiles(
         }
     };
     if batch.num_rows() > 0 {
-        if let Err(e) = state.tx.send(IngestMsg::Profiles { project_id, batch }) {
-            tracing::error!("failed to enqueue profiles: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR;
-        }
+        state
+            .router
+            .send(IngestMsg::Profiles { project_id, batch })
+            .await;
     }
     StatusCode::OK
 }

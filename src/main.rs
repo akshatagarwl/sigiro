@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
 use sigiro::toon::to_toon;
-use sigiro::{data_dir, pool::ProjectPool};
+use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool};
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -277,18 +277,11 @@ async fn run_serve(no_ebpf: bool) -> Result<()> {
 
     tracing::info!("sigiro ready — data_dir={}", dir.display());
 
-    let (tx, rx) = crossbeam_channel::unbounded();
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
-    // Inserter thread: routes messages to per-project DuckDB via pool.
-    // Each IngestMsg carries project_id from OTLP auth (Bearer token).
-    let inserter_pool = Arc::clone(&pool);
-    std::thread::spawn(move || {
-        if let Err(e) = sigiro::inserter::run_inserter(&inserter_pool, rx) {
-            tracing::error!("inserter fatal: {e:#}");
-            std::process::exit(1);
-        }
-    });
+    // MsgRouter: handlers send directly to per-project flusher tasks.
+    // No main channel, no dispatcher thread.
+    let router = Arc::new(MsgRouter::new(Arc::clone(&pool)));
 
     // Evict idle connections every 2 minutes
     let evictor_pool = Arc::clone(&pool);
@@ -300,7 +293,7 @@ async fn run_serve(no_ebpf: bool) -> Result<()> {
         }
     });
 
-    sigiro::server::run_servers(pool, shared_admin, tx).await?;
+    sigiro::server::run_servers(pool, shared_admin, router).await?;
     Ok(())
 }
 

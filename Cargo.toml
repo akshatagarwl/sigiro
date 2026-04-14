@@ -8,7 +8,7 @@ license = "Apache-2.0"
 [dependencies]
 # DuckDB: pinned rev for arrow 58 compat with otlp2records (avoids main drift breaking cache)
 duckdb = { git = "https://github.com/duckdb/duckdb-rs", rev = "bcadfebcc07bace4967ecd5f80c25f7c6b8f85ea", features = ["bundled", "appender-arrow"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 dirs = "6"
@@ -24,7 +24,6 @@ tonic = "0.14"
 prost = "0.14"
 arrow = "58"
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles"] }
-crossbeam-channel = "0.5"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["compression-full", "cors"] }
 axum-anyhow = "0.10"
