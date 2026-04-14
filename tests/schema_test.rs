@@ -1,26 +1,19 @@
 use duckdb::Connection;
-use sigiro::storage;
+use sigiro::inserter::SignalTable;
 
 #[test]
 fn create_tables_on_fresh_db() {
     let conn = Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create_tables should succeed");
 
-    let tables = [
-        "sigiro_spans",
-        "sigiro_logs",
-        "sigiro_metrics_gauge",
-        "sigiro_metrics_sum",
-        "sigiro_metrics_histogram",
-        "sigiro_metrics_exp_histogram",
-    ];
-    for table in tables {
+    for table in SignalTable::ALL {
+        let name = table.table_suffix();
         let count: i64 = conn
-            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+            .query_row(&format!("SELECT count(*) FROM {name}"), [], |row| {
                 row.get(0)
             })
-            .unwrap_or_else(|_| panic!("{table} should exist"));
-        assert_eq!(count, 0, "{table} should be empty");
+            .unwrap_or_else(|_| panic!("{name} should exist"));
+        assert_eq!(count, 0, "{name} should be empty");
     }
 }
 
@@ -51,8 +44,8 @@ fn create_tables_with_schema_prefix() {
         .expect("attach in-memory as lake");
     sigiro::schema::create_tables(&conn, "lake.").expect("create tables with prefix");
 
-    for table in storage::TABLE_NAMES {
-        let qualified = format!("lake.{table}");
+    for table in SignalTable::ALL {
+        let qualified = format!("lake.{}", table.table_suffix());
         let count: i64 = conn
             .query_row(&format!("SELECT count(*) FROM {qualified}"), [], |row| {
                 row.get(0)

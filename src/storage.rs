@@ -113,13 +113,3 @@ pub struct StorageConfig {
 pub fn table_prefix() -> &'static str {
     "lake."
 }
-
-/// The 6 sigiro table names (without prefix).
-pub const TABLE_NAMES: &[&str] = &[
-    "sigiro_spans",
-    "sigiro_logs",
-    "sigiro_metrics_gauge",
-    "sigiro_metrics_sum",
-    "sigiro_metrics_histogram",
-    "sigiro_metrics_exp_histogram",
-];

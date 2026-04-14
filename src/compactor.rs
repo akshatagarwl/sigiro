@@ -1,7 +1,7 @@
 use duckdb::Connection;
 use std::sync::{Arc, Mutex};
 
-use crate::storage;
+use crate::inserter::SignalTable;
 
 /// Run the DuckLake compaction + retention loop.
 /// Executes hourly: merges small Parquet files, deletes expired data, cleans up old files.
@@ -21,8 +21,8 @@ pub async fn run_compactor(
         interval.tick().await;
         tracing::info!("compactor: starting hourly cycle");
 
-        for table in storage::TABLE_NAMES {
-            let qualified = format!("{prefix}{table}");
+        for table in SignalTable::ALL {
+            let qualified = format!("{}{}", prefix, table.table_suffix());
             // Per-table lock acquire/release — inserter can progress between tables
             if let Err(e) = compact_table(&conn, &qualified, retention_days) {
                 tracing::error!("compactor: {qualified}: {e:#}");

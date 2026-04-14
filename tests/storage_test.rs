@@ -1,3 +1,4 @@
+use sigiro::inserter::SignalTable;
 use sigiro::storage;
 
 #[test]
@@ -6,14 +7,43 @@ fn table_prefix_always_lake() {
 }
 
 #[test]
-fn table_names_has_all_six() {
-    assert_eq!(storage::TABLE_NAMES.len(), 6);
-    assert!(storage::TABLE_NAMES.contains(&"sigiro_spans"));
-    assert!(storage::TABLE_NAMES.contains(&"sigiro_logs"));
-    assert!(storage::TABLE_NAMES.contains(&"sigiro_metrics_gauge"));
-    assert!(storage::TABLE_NAMES.contains(&"sigiro_metrics_sum"));
-    assert!(storage::TABLE_NAMES.contains(&"sigiro_metrics_histogram"));
-    assert!(storage::TABLE_NAMES.contains(&"sigiro_metrics_exp_histogram"));
+fn signal_table_all_has_all_tables() {
+    assert_eq!(SignalTable::ALL.len(), 7);
+    assert!(
+        SignalTable::ALL
+            .iter()
+            .any(|t| t.table_suffix() == "sigiro_spans")
+    );
+    assert!(
+        SignalTable::ALL
+            .iter()
+            .any(|t| t.table_suffix() == "sigiro_logs")
+    );
+    assert!(
+        SignalTable::ALL
+            .iter()
+            .any(|t| t.table_suffix() == "sigiro_metrics_gauge")
+    );
+    assert!(
+        SignalTable::ALL
+            .iter()
+            .any(|t| t.table_suffix() == "sigiro_metrics_sum")
+    );
+    assert!(
+        SignalTable::ALL
+            .iter()
+            .any(|t| t.table_suffix() == "sigiro_metrics_histogram")
+    );
+    assert!(
+        SignalTable::ALL
+            .iter()
+            .any(|t| t.table_suffix() == "sigiro_metrics_exp_histogram")
+    );
+    assert!(
+        SignalTable::ALL
+            .iter()
+            .any(|t| t.table_suffix() == "sigiro_profiles")
+    );
 }
 
 #[test]

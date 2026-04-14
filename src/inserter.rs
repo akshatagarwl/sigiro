@@ -23,7 +23,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// (e.g. Profiles) requires only adding a variant here and handling it
 /// in the IngestMsg match — the flush path iterates the map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum SignalTable {
+pub enum SignalTable {
     Spans,
     Logs,
     MetricsGauge,
@@ -34,9 +34,20 @@ enum SignalTable {
 }
 
 impl SignalTable {
-    /// DuckDB table name (with lake. prefix).
-    fn table_name(self, prefix: &str) -> String {
-        let suffix = match self {
+    /// All signal table variants.
+    pub const ALL: &'static [SignalTable] = &[
+        SignalTable::Spans,
+        SignalTable::Logs,
+        SignalTable::MetricsGauge,
+        SignalTable::MetricsSum,
+        SignalTable::MetricsHistogram,
+        SignalTable::MetricsExpHistogram,
+        SignalTable::Profiles,
+    ];
+
+    /// DuckDB table name without prefix (e.g. "sigiro_spans").
+    pub fn table_suffix(self) -> &'static str {
+        match self {
             Self::Spans => "sigiro_spans",
             Self::Logs => "sigiro_logs",
             Self::MetricsGauge => "sigiro_metrics_gauge",
@@ -44,8 +55,12 @@ impl SignalTable {
             Self::MetricsHistogram => "sigiro_metrics_histogram",
             Self::MetricsExpHistogram => "sigiro_metrics_exp_histogram",
             Self::Profiles => "sigiro_profiles",
-        };
-        format!("{prefix}{suffix}")
+        }
+    }
+
+    /// DuckDB table name (with lake. prefix).
+    fn table_name(self, prefix: &str) -> String {
+        format!("{}{}", prefix, self.table_suffix())
     }
 }
 
