@@ -292,7 +292,9 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
         let status = sigiro::admin::read_all_status(&admin_conn)?;
         let worker = sigiro::federation::WorkerInfo {
             id: hostname_or_default(),
-            endpoint: format!("grpc://{}:4317", local_ip_or_default()),
+            endpoint: format!("http://{}:9999", local_ip_or_default()),
+            catalog_path: dir.join("default").join("catalog.sqlite")
+                .to_str().unwrap_or_default().to_string(),
             mode: status.get("mode").cloned().unwrap_or_default(),
             platform: sigiro::federation::PlatformInfo {
                 os: status.get("platform_os").cloned().unwrap_or_default(),

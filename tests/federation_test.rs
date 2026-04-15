@@ -110,7 +110,8 @@ fn make_state(admin_conn: &Arc<Mutex<Connection>>) -> Arc<AppState> {
 fn test_worker(id: &str) -> federation::WorkerInfo {
     federation::WorkerInfo {
         id: id.to_string(),
-        endpoint: "arrow-flight://localhost:8080".to_string(),
+        endpoint: "http://localhost:9999".to_string(),
+        catalog_path: "/data/default/catalog.sqlite".to_string(),
         mode: "otlp".to_string(),
         platform: federation::PlatformInfo {
             os: "linux".to_string(),
@@ -194,7 +195,8 @@ async fn federation_endpoints_e2e() {
     let workers = json["workers"].as_array().expect("workers array");
     assert_eq!(workers.len(), 1);
     assert_eq!(workers[0]["id"], "worker-1");
-    assert_eq!(workers[0]["endpoint"], "arrow-flight://localhost:8080");
+    assert_eq!(workers[0]["endpoint"], "http://localhost:9999");
+    assert_eq!(workers[0]["catalog_path"], "/data/default/catalog.sqlite");
     assert_eq!(workers[0]["platform"]["os"], "linux");
     assert_eq!(workers[0]["capabilities"]["bpf"], true);
 

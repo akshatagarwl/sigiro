@@ -10,6 +10,9 @@ use tracing::{debug, info, warn};
 pub struct WorkerInfo {
     pub id: String,
     pub endpoint: String,
+    /// Path to this worker's DuckLake catalog (e.g. `/data/default/catalog.sqlite`).
+    /// Empty if the worker has no locally-accessible catalog (remote-only).
+    pub catalog_path: String,
     pub mode: String,
     pub platform: PlatformInfo,
     pub ebpf_status: String,
@@ -40,6 +43,7 @@ pub fn create_workers_table(conn: &Connection) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS federation_workers (
             id TEXT PRIMARY KEY,
             endpoint TEXT NOT NULL,
+            catalog_path TEXT NOT NULL DEFAULT '',
             mode TEXT NOT NULL DEFAULT 'otlp',
             platform_json TEXT NOT NULL DEFAULT '{}',
             ebpf_status TEXT NOT NULL DEFAULT 'unknown',
@@ -61,11 +65,12 @@ pub fn register_worker(conn: &Connection, worker: &WorkerInfo) -> Result<()> {
 
     conn.execute(
         "INSERT OR REPLACE INTO federation_workers
-            (id, endpoint, mode, platform_json, ebpf_status, capabilities_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             worker.id,
             worker.endpoint,
+            worker.catalog_path,
             worker.mode,
             platform_json,
             worker.ebpf_status,
@@ -110,7 +115,7 @@ pub fn deregister_worker(conn: &Connection, id: &str) -> Result<bool> {
 pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, endpoint, mode, platform_json, ebpf_status, capabilities_json
+            "SELECT id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json
              FROM federation_workers",
         )
         .context("failed to prepare workers query")?;
@@ -124,13 +129,14 @@ pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
             ))
         })
         .context("failed to query workers")?;
 
     let mut workers = Vec::new();
     for row in rows {
-        let (id, endpoint, mode, platform_json, ebpf_status, capabilities_json) =
+        let (id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json) =
             row.context("failed to read worker row")?;
         let platform: PlatformInfo =
             serde_json::from_str(&platform_json).context("failed to parse platform JSON")?;
@@ -139,6 +145,7 @@ pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
         workers.push(WorkerInfo {
             id,
             endpoint,
+            catalog_path,
             mode,
             platform,
             ebpf_status,
@@ -187,15 +194,15 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
 
     let worker_datasets: Vec<&WorkerInfo> = workers
         .iter()
-        .filter(|w| w.endpoint.starts_with("arrow-flight://") || w.endpoint.starts_with("grpc://"))
+        .filter(|w| !w.catalog_path.is_empty())
         .collect();
 
     if !worker_datasets.is_empty() {
         yaml.push_str("# Dynamic worker datasets below (auto-generated, do not edit)\n");
         for worker in &worker_datasets {
             yaml.push_str(&format!(
-                "  - name: worker_{}_spans\n    from: {}\n",
-                worker.id, worker.endpoint
+                "  - name: worker_{}_spans\n    from: ducklake:{}\n",
+                worker.id, worker.catalog_path
             ));
         }
     }
@@ -266,10 +273,11 @@ mod tests {
         conn
     }
 
-    fn test_worker(id: &str, endpoint: &str) -> WorkerInfo {
+    fn test_worker(id: &str, endpoint: &str, catalog_path: &str) -> WorkerInfo {
         WorkerInfo {
             id: id.to_string(),
             endpoint: endpoint.to_string(),
+            catalog_path: catalog_path.to_string(),
             mode: "otlp".to_string(),
             platform: PlatformInfo {
                 os: "linux".to_string(),
@@ -292,11 +300,12 @@ mod tests {
         let capabilities_json = serde_json::to_string(&worker.capabilities).unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO federation_workers
-                (id, endpoint, mode, platform_json, ebpf_status, capabilities_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 worker.id,
                 worker.endpoint,
+                worker.catalog_path,
                 worker.mode,
                 platform_json,
                 worker.ebpf_status,
@@ -310,13 +319,14 @@ mod tests {
     fn test_register_and_list() {
         let conn = setup_db();
 
-        let worker = test_worker("w1", "arrow-flight://localhost:8080");
+        let worker = test_worker("w1", "http://localhost:9999", "/data/default/catalog.sqlite");
         insert_worker_directly(&conn, &worker);
 
         let workers = list_workers(&conn).unwrap();
         assert_eq!(workers.len(), 1);
         assert_eq!(workers[0].id, "w1");
-        assert_eq!(workers[0].endpoint, "arrow-flight://localhost:8080");
+        assert_eq!(workers[0].endpoint, "http://localhost:9999");
+        assert_eq!(workers[0].catalog_path, "/data/default/catalog.sqlite");
         assert_eq!(workers[0].platform.os, "linux");
         assert_eq!(workers[0].platform.kernel, "5.15.0");
         assert!(workers[0].capabilities.bpf);
@@ -327,24 +337,26 @@ mod tests {
     fn test_register_upsert() {
         let conn = setup_db();
 
-        let mut worker = test_worker("w1", "arrow-flight://localhost:8080");
+        let mut worker = test_worker("w1", "http://localhost:9999", "/data/default/catalog.sqlite");
         insert_worker_directly(&conn, &worker);
 
         // Update the same worker
-        worker.endpoint = "grpc://updated:9090".to_string();
+        worker.endpoint = "http://updated:9999".to_string();
+        worker.catalog_path = "/data2/default/catalog.sqlite".to_string();
         insert_worker_directly(&conn, &worker);
 
         let workers = list_workers(&conn).unwrap();
         assert_eq!(workers.len(), 1);
-        assert_eq!(workers[0].endpoint, "grpc://updated:9090");
+        assert_eq!(workers[0].endpoint, "http://updated:9999");
+        assert_eq!(workers[0].catalog_path, "/data2/default/catalog.sqlite");
     }
 
     #[test]
     fn test_deregister() {
         let conn = setup_db();
 
-        let w1 = test_worker("w1", "arrow-flight://host1:8080");
-        let w2 = test_worker("w2", "grpc://host2:9090");
+        let w1 = test_worker("w1", "http://host1:9999", "/data1/default/catalog.sqlite");
+        let w2 = test_worker("w2", "http://host2:9999", "/data2/default/catalog.sqlite");
         insert_worker_directly(&conn, &w1);
         insert_worker_directly(&conn, &w2);
 
@@ -381,9 +393,11 @@ mod tests {
         let conn = setup_db();
         let dir = TempDir::new().unwrap();
 
-        let w1 = test_worker("alpha", "arrow-flight://10.0.0.1:8080");
-        let w2 = test_worker("beta", "grpc://10.0.0.2:9090");
-        let w3 = test_worker("gamma", "http://10.0.0.3:3000");
+        // Workers with catalog_path — should be included as DuckLake datasets
+        let w1 = test_worker("alpha", "http://10.0.0.1:9999", "/data/default/catalog.sqlite");
+        let w2 = test_worker("beta", "http://10.0.0.2:9999", "/data2/default/catalog.sqlite");
+        // Worker without catalog_path — should be skipped (needs shared storage)
+        let w3 = test_worker("gamma", "http://10.0.0.3:9999", "");
         insert_worker_directly(&conn, &w1);
         insert_worker_directly(&conn, &w2);
         insert_worker_directly(&conn, &w3);
@@ -400,9 +414,9 @@ mod tests {
         assert!(yaml.contains("enabled: true"));
         assert!(yaml.contains("engine: duckdb"));
         assert!(yaml.contains("worker_alpha_spans"));
-        assert!(yaml.contains("arrow-flight://10.0.0.1:8080"));
+        assert!(yaml.contains("ducklake:/data/default/catalog.sqlite"));
         assert!(yaml.contains("worker_beta_spans"));
-        assert!(yaml.contains("grpc://10.0.0.2:9090"));
+        assert!(yaml.contains("ducklake:/data2/default/catalog.sqlite"));
         assert!(!yaml.contains("worker_gamma_spans"));
         assert!(yaml.contains("auto-generated"));
     }
