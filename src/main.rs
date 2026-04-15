@@ -100,6 +100,7 @@ fn open_admin_db() -> Result<Connection> {
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open admin DB at {}", path.display()))?;
     sigiro::admin::create_keys_table(&conn)?;
+    sigiro::admin::create_instance_status_table(&conn)?;
     Ok(conn)
 }
 

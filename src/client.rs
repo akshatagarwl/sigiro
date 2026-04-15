@@ -29,37 +29,17 @@ impl SigiroClient {
         from: Option<i64>,
         to: Option<i64>,
     ) -> Result<InvestigationBlock> {
-        let resp = self
-            .http
-            .post(format!("{}/investigate", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&serde_json::json!({
-                "service_name": service,
-                "from_ts": from,
-                "to_ts": to,
-            }))
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
-
-        match resp.status().as_u16() {
-            200 => resp
-                .json()
-                .await
-                .context("failed to parse investigation response"),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            429 => bail!("Rate limited. Try again later."),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let blocks = self.investigate_multi(Some(service), None, from, to).await?;
+        blocks
+            .into_values()
+            .next()
+            .context("no investigation block returned for service")
     }
 
     pub async fn query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
         let resp = self
             .http
-            .post(format!("{}/query", self.base_url))
+            .post(format!("{}/v1/query", self.base_url))
             .bearer_auth(&self.api_key)
             .body(sql.to_string())
             .send()
@@ -162,14 +142,14 @@ impl SigiroClient {
         to: Option<i64>,
     ) -> Result<std::collections::BTreeMap<String, InvestigationBlock>> {
         let body = serde_json::json!({
-            "service_name": service,
+            "service": service,
             "services": services,
             "from_ts": from,
             "to_ts": to,
         });
         let resp = self
             .http
-            .post(format!("{}/investigate", self.base_url))
+            .post(format!("{}/v1/investigate", self.base_url))
             .bearer_auth(&self.api_key)
             .json(&body)
             .send()
@@ -194,7 +174,7 @@ impl SigiroClient {
     pub async fn services(&self) -> Result<serde_json::Value> {
         let resp = self
             .http
-            .get(format!("{}/services", self.base_url))
+            .get(format!("{}/v1/services", self.base_url))
             .bearer_auth(&self.api_key)
             .send()
             .await
