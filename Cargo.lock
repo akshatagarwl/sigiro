@@ -3636,6 +3636,7 @@ dependencies = [
  "toml",
  "tonic",
  "toon",
+ "tower",
  "tower-http",
  "tower_governor",
  "tracing",

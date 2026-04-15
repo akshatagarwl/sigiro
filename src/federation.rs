@@ -1,0 +1,401 @@
+use anyhow::{Context, Result};
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::process::Command;
+use tracing::{debug, info, warn};
+
+/// Information about a federation worker.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkerInfo {
+    pub id: String,
+    pub endpoint: String,
+    pub mode: String,
+    pub platform: PlatformInfo,
+    pub ebpf_status: String,
+    pub capabilities: WorkerCapabilities,
+    pub missing_permissions: Vec<String>,
+    pub suggestions: Vec<String>,
+}
+
+/// Platform information for a worker.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PlatformInfo {
+    pub os: String,
+    pub kernel: String,
+    pub arch: String,
+    pub container: String,
+}
+
+/// Capabilities of a federation worker.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkerCapabilities {
+    pub bpf: bool,
+    pub net_admin: bool,
+}
+
+/// Create the `federation_workers` table in SQLite.
+pub fn create_workers_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS federation_workers (
+            id TEXT PRIMARY KEY,
+            endpoint TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'otlp',
+            platform_json TEXT NOT NULL DEFAULT '{}',
+            ebpf_status TEXT NOT NULL DEFAULT 'unknown',
+            capabilities_json TEXT NOT NULL DEFAULT '{}',
+            registered_at TEXT DEFAULT (datetime('now')),
+            last_heartbeat TEXT DEFAULT (datetime('now'))
+        );",
+    )
+    .context("failed to create federation_workers table")?;
+    Ok(())
+}
+
+/// Register (or update) a worker in the federation.
+pub fn register_worker(conn: &Connection, worker: &WorkerInfo) -> Result<()> {
+    let platform_json =
+        serde_json::to_string(&worker.platform).context("failed to serialize platform info")?;
+    let capabilities_json = serde_json::to_string(&worker.capabilities)
+        .context("failed to serialize capabilities")?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO federation_workers
+            (id, endpoint, mode, platform_json, ebpf_status, capabilities_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            worker.id,
+            worker.endpoint,
+            worker.mode,
+            platform_json,
+            worker.ebpf_status,
+            capabilities_json,
+        ],
+    )
+    .context("failed to register worker")?;
+
+    info!("registered federation worker: {}", worker.id);
+    debug!(
+        "worker endpoint={}, mode={}",
+        worker.endpoint, worker.mode
+    );
+
+    let data_dir = crate::data_dir()?;
+    regenerate_spicepod(conn, &data_dir)?;
+    Ok(())
+}
+
+/// Deregister a worker from the federation.
+/// Returns `true` if a worker was actually deleted.
+pub fn deregister_worker(conn: &Connection, id: &str) -> Result<bool> {
+    let affected = conn
+        .execute(
+            "DELETE FROM federation_workers WHERE id = ?1",
+            [id],
+        )
+        .context("failed to deregister worker")?;
+
+    if affected > 0 {
+        info!("deregistered federation worker: {id}");
+        let data_dir = crate::data_dir()?;
+        regenerate_spicepod(conn, &data_dir)?;
+    } else {
+        debug!("no worker found to deregister: {id}");
+    }
+
+    Ok(affected > 0)
+}
+
+/// List all registered federation workers.
+pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, endpoint, mode, platform_json, ebpf_status, capabilities_json
+             FROM federation_workers",
+        )
+        .context("failed to prepare workers query")?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .context("failed to query workers")?;
+
+    let mut workers = Vec::new();
+    for row in rows {
+        let (id, endpoint, mode, platform_json, ebpf_status, capabilities_json) =
+            row.context("failed to read worker row")?;
+        let platform: PlatformInfo =
+            serde_json::from_str(&platform_json).context("failed to parse platform JSON")?;
+        let capabilities: WorkerCapabilities = serde_json::from_str(&capabilities_json)
+            .context("failed to parse capabilities JSON")?;
+        workers.push(WorkerInfo {
+            id,
+            endpoint,
+            mode,
+            platform,
+            ebpf_status,
+            capabilities,
+            missing_permissions: Vec::new(),
+            suggestions: Vec::new(),
+        });
+    }
+    Ok(workers)
+}
+
+/// Regenerate `spicepod.yaml` from all registered workers.
+pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
+    let workers = list_workers(conn)?;
+
+    let duckdb_path = data_dir.join("sigiro.duckdb");
+    let mut yaml = String::new();
+    yaml.push_str("version: v1\n");
+    yaml.push_str("kind: Spicepod\n");
+    yaml.push_str("name: sigiro-central\n\n");
+    yaml.push_str("datasets:\n");
+    yaml.push_str(&format!(
+        "  - name: sigiro_local_spans\n    from: duckdb:{}\n    acceleration:\n      enabled: true\n      engine: duckdb\n",
+        duckdb_path.display()
+    ));
+
+    let worker_datasets: Vec<&WorkerInfo> = workers
+        .iter()
+        .filter(|w| w.endpoint.starts_with("arrow-flight://") || w.endpoint.starts_with("grpc://"))
+        .collect();
+
+    if !worker_datasets.is_empty() {
+        yaml.push_str("# Dynamic worker datasets below (auto-generated, do not edit)\n");
+        for worker in &worker_datasets {
+            yaml.push_str(&format!(
+                "  - name: worker_{}_spans\n    from: {}\n",
+                worker.id, worker.endpoint
+            ));
+        }
+    }
+
+    let spicepod_path = data_dir.join("spicepod.yaml");
+    std::fs::write(&spicepod_path, &yaml)
+        .with_context(|| format!("failed to write spicepod.yaml to {}", spicepod_path.display()))?;
+
+    info!(
+        "regenerated spicepod.yaml with {} worker dataset(s)",
+        worker_datasets.len()
+    );
+    Ok(())
+}
+
+/// Start the `spiced` subprocess for Spice.ai federation.
+///
+/// Returns `Ok(())` if started, or `Ok(())` with a warning if
+/// `spiced` is not found (graceful fallback).
+pub fn start_spice(data_dir: &Path) -> Result<()> {
+    if which::which("spiced").is_err() {
+        warn!("spiced binary not found in PATH — Spice federation disabled");
+        return Ok(());
+    }
+
+    let spicepod_path = data_dir.join("spicepod.yaml");
+    if !spicepod_path.exists() {
+        warn!(
+            "spicepod.yaml not found at {} — skipping spiced start",
+            spicepod_path.display()
+        );
+        return Ok(());
+    }
+
+    info!(
+        "starting spiced with config: {}",
+        spicepod_path.display()
+    );
+
+    let mut child = Command::new("spiced")
+        .arg("--config")
+        .arg(&spicepod_path)
+        .env("SPICE_LOG", "info")
+        .spawn()
+        .context("spiced failed to start — check that spiced is installed and executable")?;
+
+    info!("spiced started (pid: {:?})", child.id());
+
+    // Monitor spiced lifecycle in a background thread.
+    // If spiced crashes, the warn log surfaces the exit code for debugging.
+    std::thread::spawn(move || {
+        if let Ok(exit) = child.wait() {
+            warn!("spiced exited: {exit}");
+        }
+    });
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn setup_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_workers_table(&conn).unwrap();
+        conn
+    }
+
+    fn test_worker(id: &str, endpoint: &str) -> WorkerInfo {
+        WorkerInfo {
+            id: id.to_string(),
+            endpoint: endpoint.to_string(),
+            mode: "otlp".to_string(),
+            platform: PlatformInfo {
+                os: "linux".to_string(),
+                kernel: "5.15.0".to_string(),
+                arch: "x86_64".to_string(),
+                container: "docker".to_string(),
+            },
+            ebpf_status: "ready".to_string(),
+            capabilities: WorkerCapabilities {
+                bpf: true,
+                net_admin: true,
+            },
+            missing_permissions: vec![],
+            suggestions: vec![],
+        }
+    }
+
+    fn insert_worker_directly(conn: &Connection, worker: &WorkerInfo) {
+        let platform_json = serde_json::to_string(&worker.platform).unwrap();
+        let capabilities_json = serde_json::to_string(&worker.capabilities).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO federation_workers
+                (id, endpoint, mode, platform_json, ebpf_status, capabilities_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                worker.id,
+                worker.endpoint,
+                worker.mode,
+                platform_json,
+                worker.ebpf_status,
+                capabilities_json,
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_register_and_list() {
+        let conn = setup_db();
+
+        let worker = test_worker("w1", "arrow-flight://localhost:8080");
+        insert_worker_directly(&conn, &worker);
+
+        let workers = list_workers(&conn).unwrap();
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].id, "w1");
+        assert_eq!(workers[0].endpoint, "arrow-flight://localhost:8080");
+        assert_eq!(workers[0].platform.os, "linux");
+        assert_eq!(workers[0].platform.kernel, "5.15.0");
+        assert!(workers[0].capabilities.bpf);
+        assert!(workers[0].capabilities.net_admin);
+    }
+
+    #[test]
+    fn test_register_upsert() {
+        let conn = setup_db();
+
+        let mut worker = test_worker("w1", "arrow-flight://localhost:8080");
+        insert_worker_directly(&conn, &worker);
+
+        // Update the same worker
+        worker.endpoint = "grpc://updated:9090".to_string();
+        insert_worker_directly(&conn, &worker);
+
+        let workers = list_workers(&conn).unwrap();
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].endpoint, "grpc://updated:9090");
+    }
+
+    #[test]
+    fn test_deregister() {
+        let conn = setup_db();
+
+        let w1 = test_worker("w1", "arrow-flight://host1:8080");
+        let w2 = test_worker("w2", "grpc://host2:9090");
+        insert_worker_directly(&conn, &w1);
+        insert_worker_directly(&conn, &w2);
+
+        let deleted = conn
+            .execute(
+                "DELETE FROM federation_workers WHERE id = ?1",
+                ["w1"],
+            )
+            .unwrap();
+        assert_eq!(deleted, 1);
+
+        let deleted_again = conn
+            .execute(
+                "DELETE FROM federation_workers WHERE id = ?1",
+                ["w1"],
+            )
+            .unwrap();
+        assert_eq!(deleted_again, 0);
+
+        let workers = list_workers(&conn).unwrap();
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].id, "w2");
+    }
+
+    #[test]
+    fn test_list_workers_empty() {
+        let conn = setup_db();
+        let workers = list_workers(&conn).unwrap();
+        assert!(workers.is_empty());
+    }
+
+    #[test]
+    fn test_regenerate_spicepod_yaml() {
+        let conn = setup_db();
+        let dir = TempDir::new().unwrap();
+
+        let w1 = test_worker("alpha", "arrow-flight://10.0.0.1:8080");
+        let w2 = test_worker("beta", "grpc://10.0.0.2:9090");
+        let w3 = test_worker("gamma", "http://10.0.0.3:3000");
+        insert_worker_directly(&conn, &w1);
+        insert_worker_directly(&conn, &w2);
+        insert_worker_directly(&conn, &w3);
+
+        regenerate_spicepod(&conn, dir.path()).unwrap();
+
+        let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
+        assert!(yaml.contains("version: v1"));
+        assert!(yaml.contains("kind: Spicepod"));
+        assert!(yaml.contains("name: sigiro-central"));
+        assert!(yaml.contains("sigiro_local_spans"));
+        assert!(yaml.contains("duckdb:"));
+        assert!(yaml.contains("enabled: true"));
+        assert!(yaml.contains("engine: duckdb"));
+        assert!(yaml.contains("worker_alpha_spans"));
+        assert!(yaml.contains("arrow-flight://10.0.0.1:8080"));
+        assert!(yaml.contains("worker_beta_spans"));
+        assert!(yaml.contains("grpc://10.0.0.2:9090"));
+        assert!(!yaml.contains("worker_gamma_spans"));
+        assert!(yaml.contains("auto-generated"));
+    }
+
+    #[test]
+    fn test_regenerate_spicepod_no_workers() {
+        let conn = setup_db();
+        let dir = TempDir::new().unwrap();
+
+        regenerate_spicepod(&conn, dir.path()).unwrap();
+
+        let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
+        assert!(yaml.contains("version: v1"));
+        assert!(yaml.contains("sigiro_local_spans"));
+        assert!(!yaml.contains("auto-generated"));
+    }
+}

@@ -38,6 +38,12 @@ enum Command {
         /// Disable eBPF auto-instrumentation (run in OTLP-only mode)
         #[arg(long)]
         no_ebpf: bool,
+        /// Run as central federation node (spawns Spice.ai for distributed query)
+        #[arg(long)]
+        central: bool,
+        /// URL of central node for collector self-registration (e.g. http://central:9999)
+        #[arg(long)]
+        central_url: Option<String>,
     },
     /// Run SQL query
     Query {
@@ -125,11 +131,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Serve { no_ebpf }) => {
-            run_serve(no_ebpf).await?;
+        Some(Command::Serve { no_ebpf, central, central_url }) => {
+            run_serve(no_ebpf, central, central_url).await?;
         }
         None => {
-            run_serve(false).await?;
+            run_serve(false, false, None).await?;
         }
         Some(Command::Query { sql }) => {
             let client = require_client()?;
@@ -225,7 +231,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_serve(no_ebpf: bool) -> Result<()> {
+async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) -> Result<()> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)?;
 
@@ -273,6 +279,49 @@ async fn run_serve(no_ebpf: bool) -> Result<()> {
         }
     }
 
+    // Federation: central node mode
+    if central {
+        tracing::info!("running as central federation node");
+        sigiro::federation::start_spice(&dir)?;
+    }
+
+    // Federation: collector self-registration with central node
+    if let Some(ref url) = central_url {
+        tracing::info!("collector self-registering with central node at {url}");
+        let client = sigiro::client::SigiroClient::new(url, "");
+        let status = sigiro::admin::read_all_status(&admin_conn)?;
+        let worker = sigiro::federation::WorkerInfo {
+            id: hostname_or_default(),
+            endpoint: format!("grpc://{}:4317", local_ip_or_default()),
+            mode: status.get("mode").cloned().unwrap_or_default(),
+            platform: sigiro::federation::PlatformInfo {
+                os: status.get("platform_os").cloned().unwrap_or_default(),
+                kernel: status.get("platform_kernel").cloned().unwrap_or_default(),
+                arch: status.get("platform_arch").cloned().unwrap_or_default(),
+                container: String::new(),
+            },
+            ebpf_status: status
+                .get("ebpf_status")
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string()),
+            capabilities: sigiro::federation::WorkerCapabilities {
+                bpf: status
+                    .get("capability_bpf")
+                    .map(|v| v == "true")
+                    .unwrap_or(false),
+                net_admin: status
+                    .get("capability_net_admin")
+                    .map(|v| v == "true")
+                    .unwrap_or(false),
+            },
+            missing_permissions: vec![],
+            suggestions: vec![],
+        };
+        if let Err(e) = client.register_worker(&worker).await {
+            tracing::warn!("failed to register with central node: {e:#}");
+        }
+    }
+
     tracing::info!("sigiro ready — data_dir={}", dir.display());
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
@@ -298,4 +347,12 @@ async fn run_serve(no_ebpf: bool) -> Result<()> {
 /// Build HTTP client from config. Fails fast if API key or endpoint is not configured.
 fn require_client() -> Result<sigiro::client::SigiroClient> {
     sigiro::client::try_build_client()
+}
+
+fn hostname_or_default() -> String {
+    std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".into())
+}
+
+fn local_ip_or_default() -> &'static str {
+    "127.0.0.1"
 }

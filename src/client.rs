@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 
 use crate::investigate::InvestigationBlock;
 
@@ -185,6 +186,83 @@ impl SigiroClient {
                 .json()
                 .await
                 .context("failed to parse services response"),
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            s => {
+                let body = resp.text().await.context("failed to read error body")?;
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
+    /// Register a federation worker with the server.
+    pub async fn register_worker(
+        &self,
+        worker: &crate::federation::WorkerInfo,
+    ) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/v1/federation/workers", self.base_url))
+            .bearer_auth(&self.api_key)
+            .json(worker)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => Ok(()),
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            s => {
+                let body = resp.text().await.context("failed to read error body")?;
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
+    /// Deregister a federation worker from the server.
+    /// Returns `true` if the worker was found and removed, `false` if 404.
+    pub async fn deregister_worker(&self, id: &str) -> Result<bool> {
+        let resp = self
+            .http
+            .delete(format!("{}/v1/federation/workers/{}", self.base_url, id))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            s => {
+                let body = resp.text().await.context("failed to read error body")?;
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
+    /// List all registered federation workers.
+    pub async fn list_workers(&self) -> Result<Vec<crate::federation::WorkerInfo>> {
+        #[derive(Deserialize)]
+        struct ListWorkersResponse {
+            workers: Vec<crate::federation::WorkerInfo>,
+        }
+
+        let resp = self
+            .http
+            .get(format!("{}/v1/federation/workers", self.base_url))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => {
+                let body: ListWorkersResponse = resp
+                    .json()
+                    .await
+                    .context("failed to parse list_workers response")?;
+                Ok(body.workers)
+            }
             401 => bail!("Invalid API key. Run: sigiro auth <key>"),
             s => {
                 let body = resp.text().await.context("failed to read error body")?;

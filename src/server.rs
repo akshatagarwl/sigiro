@@ -3,7 +3,7 @@ use axum::{
     Extension, Json, Router,
     extract::State,
     middleware as axum_mw,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt};
 use rusqlite::Connection;
@@ -13,6 +13,7 @@ use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extract
 
 use crate::admin;
 use crate::auth::{self, AuthContext};
+use crate::federation;
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::MsgRouter;
 use crate::investigate;
@@ -132,6 +133,14 @@ pub async fn run_servers(
         http_client: reqwest::Client::new(),
     });
 
+    {
+        let guard = admin_conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+        federation::create_workers_table(&guard)
+            .context("failed to create federation workers table")?;
+    }
+
     // Rate limit: 100 requests/minute per API key (GCRA algorithm, in-memory)
     let governor_conf = GovernorConfigBuilder::default()
         .key_extractor(BearerKeyExtractor)
@@ -146,6 +155,9 @@ pub async fn run_servers(
         .route("/query", post(query_handler))
         .route("/investigate", post(investigate_handler))
         .route("/services", get(services_handler))
+        .route("/federation/workers", post(register_worker_handler))
+        .route("/federation/workers", get(list_workers_handler))
+        .route("/federation/workers/{id}", delete(deregister_worker_handler))
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
@@ -433,4 +445,61 @@ async fn admin_status(State(state): State<Arc<AppState>>) -> ApiResult<Json<serd
             .map(|(k, v)| (k, serde_json::Value::String(v)))
             .collect(),
     )))
+}
+
+// --- Federation endpoints (authenticated, under /v1/federation) ---
+
+/// POST /v1/federation/workers -- register a federation worker.
+async fn register_worker_handler(
+    State(state): State<Arc<AppState>>,
+    Extension(_auth): Extension<AuthContext>,
+    Json(worker): Json<federation::WorkerInfo>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let id = worker.id.clone();
+    let guard = state
+        .admin_conn
+        .lock()
+        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    federation::register_worker(&guard, &worker)
+        .context_internal("Federation", "failed to register worker")?;
+    Ok(Json(serde_json::json!({
+        "registered": true,
+        "id": id,
+    })))
+}
+
+/// DELETE /v1/federation/workers/{id} -- deregister a federation worker.
+async fn deregister_worker_handler(
+    State(state): State<Arc<AppState>>,
+    Extension(_auth): Extension<AuthContext>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let guard = state
+        .admin_conn
+        .lock()
+        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let deregistered = federation::deregister_worker(&guard, &id)
+        .context_internal("Federation", "failed to deregister worker")?;
+    if deregistered {
+        Ok(Json(serde_json::json!({ "deregistered": true })))
+    } else {
+        Err(axum_anyhow::not_found(
+            "Worker Not Found",
+            &format!("No worker found with id: {id}"),
+        ))
+    }
+}
+
+/// GET /v1/federation/workers -- list all federation workers.
+async fn list_workers_handler(
+    State(state): State<Arc<AppState>>,
+    Extension(_auth): Extension<AuthContext>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let guard = state
+        .admin_conn
+        .lock()
+        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let workers = federation::list_workers(&guard)
+        .context_internal("Federation", "failed to list workers")?;
+    Ok(Json(serde_json::json!({ "workers": workers })))
 }
