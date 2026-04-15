@@ -151,19 +151,39 @@ pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
 }
 
 /// Regenerate `spicepod.yaml` from all registered workers.
+///
+/// Uses the "default" project directory for the local DuckLake dataset.
+/// If `SIGIRO_S3_BUCKET` is set, also adds a cold-storage S3 dataset.
 pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     let workers = list_workers(conn)?;
 
-    let duckdb_path = data_dir.join("sigiro.duckdb");
+    let catalog_path = data_dir.join("default").join("catalog.sqlite");
     let mut yaml = String::new();
     yaml.push_str("version: v1\n");
     yaml.push_str("kind: Spicepod\n");
     yaml.push_str("name: sigiro-central\n\n");
     yaml.push_str("datasets:\n");
     yaml.push_str(&format!(
-        "  - name: sigiro_local_spans\n    from: duckdb:{}\n    acceleration:\n      enabled: true\n      engine: duckdb\n",
-        duckdb_path.display()
+        "  - name: sigiro_local_spans\n    from: ducklake:{}\n    acceleration:\n      enabled: true\n      engine: duckdb\n",
+        catalog_path.display()
     ));
+
+    // Cold storage dataset via S3, if configured
+    if let Ok(bucket) = std::env::var("SIGIRO_S3_BUCKET") {
+        if !bucket.is_empty() {
+            let prefix = std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default();
+            let prefix_trimmed = prefix.trim_end_matches('/');
+            let prefix_with_slash = if prefix_trimmed.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", prefix_trimmed)
+            };
+            yaml.push_str(&format!(
+                "  - name: sigiro_spans_cold\n    from: ducklake:s3://{}/{}data\n",
+                bucket, prefix_with_slash
+            ));
+        }
+    }
 
     let worker_datasets: Vec<&WorkerInfo> = workers
         .iter()
@@ -375,7 +395,8 @@ mod tests {
         assert!(yaml.contains("kind: Spicepod"));
         assert!(yaml.contains("name: sigiro-central"));
         assert!(yaml.contains("sigiro_local_spans"));
-        assert!(yaml.contains("duckdb:"));
+        assert!(yaml.contains("ducklake:"));
+        assert!(yaml.contains("default/catalog.sqlite"));
         assert!(yaml.contains("enabled: true"));
         assert!(yaml.contains("engine: duckdb"));
         assert!(yaml.contains("worker_alpha_spans"));
@@ -396,6 +417,32 @@ mod tests {
         let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
         assert!(yaml.contains("version: v1"));
         assert!(yaml.contains("sigiro_local_spans"));
+        assert!(yaml.contains("ducklake:"));
+        assert!(yaml.contains("default/catalog.sqlite"));
         assert!(!yaml.contains("auto-generated"));
+    }
+
+    #[test]
+    fn test_regenerate_spicepod_with_s3_cold() {
+        let conn = setup_db();
+        let dir = TempDir::new().unwrap();
+
+        // Set S3 env vars for this test
+        unsafe {
+            std::env::set_var("SIGIRO_S3_BUCKET", "test-bucket");
+            std::env::set_var("SIGIRO_S3_PREFIX", "sigiro/");
+        }
+
+        regenerate_spicepod(&conn, dir.path()).unwrap();
+
+        // Clean up env vars
+        unsafe {
+            std::env::remove_var("SIGIRO_S3_BUCKET");
+            std::env::remove_var("SIGIRO_S3_PREFIX");
+        }
+
+        let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
+        assert!(yaml.contains("sigiro_spans_cold"));
+        assert!(yaml.contains("ducklake:s3://test-bucket/sigiro/data"));
     }
 }
