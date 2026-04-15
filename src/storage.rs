@@ -88,7 +88,9 @@ pub fn init_distributed(conn: &Connection, config: &StorageConfig) -> Result<()>
 pub fn load_config() -> Result<Option<StorageConfig>> {
     let catalog_url = match std::env::var("SIGIRO_CATALOG_URL") {
         Ok(v) if !v.is_empty() => v,
-        Ok(_) => return Ok(None),  // set but empty — use local SQLite
+        Ok(_) => anyhow::bail!(
+            "SIGIRO_CATALOG_URL is set but empty — provide a valid PostgreSQL catalog URL or unset it"
+        ),
         Err(_) => return Ok(None), // not set — use local SQLite
     };
 
@@ -109,7 +111,7 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         catalog_url,
         s3_bucket,
         s3_region,
-        s3_prefix: std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default(),
+        s3_prefix: std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default(), // empty prefix = data at bucket root, which is valid
     }))
 }
 

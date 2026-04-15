@@ -21,11 +21,7 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 pub fn data_dir() -> Result<PathBuf> {
-    match std::env::var("SIGIRO_DATA_DIR") {
-        Ok(dir) => Ok(PathBuf::from(dir)),
-        Err(_) => {
-            let home = dirs::home_dir().context("cannot determine home directory")?;
-            Ok(home.join(".sigiro").join("data"))
-        }
-    }
+    std::env::var("SIGIRO_DATA_DIR").map(PathBuf::from).context(
+        "SIGIRO_DATA_DIR not set — export SIGIRO_DATA_DIR=/path/to/data before starting sigiro",
+    )
 }

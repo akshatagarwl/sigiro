@@ -123,7 +123,11 @@ impl MsgRouter {
     async fn send_blocking(&self, project_id: &str, msg: IngestMsg) {
         if let Some(entry) = self.project_senders.get(project_id) {
             if entry.value().0.send(msg).await.is_err() {
-                tracing::error!(project_id, "project channel closed during blocking send");
+                tracing::error!(
+                    project_id,
+                    "FATAL: project channel closed during blocking send — message DROPPED. \
+                     The flusher task for this project has exited unexpectedly."
+                );
             }
         }
     }
@@ -135,7 +139,12 @@ impl MsgRouter {
         let conn = match self.pool.get_or_create(&project_id) {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!(project_id, "failed to get project connection: {e:#}");
+                tracing::error!(
+                    project_id,
+                    "FATAL: failed to get project connection — message DROPPED. \
+                     This indicates a corrupt DuckDB state or filesystem error. \
+                     Error: {e:#}"
+                );
                 return;
             }
         };
@@ -158,7 +167,8 @@ impl MsgRouter {
         if let Err(e) = sender.send(msg).await {
             tracing::error!(
                 project_id,
-                "project channel closed on new sender, message lost: {e}"
+                "FATAL: project channel closed on new sender — message DROPPED. \
+                 The flusher task exited immediately after creation. Error: {e}"
             );
         }
     }

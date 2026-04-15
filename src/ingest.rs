@@ -395,7 +395,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                             a.value
                                 .as_ref()
                                 .map(|v| format!("{v:?}"))
-                                .unwrap_or_default() // TRADEOFF: missing attribute value = empty string in JSON, not an error
+                                .unwrap_or_else(|| format!("<MISSING VALUE for key '{}'>", a.key))
                         ))
                         .collect::<Vec<_>>()
                         .join(",")

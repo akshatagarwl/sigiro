@@ -131,7 +131,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Serve { no_ebpf, central, central_url }) => {
+        Some(Command::Serve {
+            no_ebpf,
+            central,
+            central_url,
+        }) => {
             run_serve(no_ebpf, central, central_url).await?;
         }
         None => {
@@ -191,14 +195,9 @@ async fn main() -> Result<()> {
                             println!("{raw_key}");
                         }
                         Err(http_err) => {
-                            tracing::debug!(
-                                "server not reachable, falling back to direct DB: {http_err:#}"
+                            anyhow::bail!(
+                                "server not reachable at {server_url}: {http_err:#} — start the sigiro server first, or ensure SIGIRO_ENDPOINT points to a running instance"
                             );
-                            let admin_conn = open_admin_db()?;
-                            let admin = Mutex::new(admin_conn);
-                            let raw_key =
-                                sigiro::admin::create_key(&admin, &project, &plan, rate_limit)?;
-                            println!("{raw_key}");
                         }
                     }
                 }
@@ -212,16 +211,9 @@ async fn main() -> Result<()> {
                             println!("No key found with short token: {short_token}");
                         }
                         Err(http_err) => {
-                            tracing::debug!(
-                                "server not reachable, falling back to direct DB: {http_err:#}"
+                            anyhow::bail!(
+                                "server not reachable at {server_url}: {http_err:#} — start the sigiro server first, or ensure SIGIRO_ENDPOINT points to a running instance"
                             );
-                            let admin_conn = open_admin_db()?;
-                            let admin = Mutex::new(admin_conn);
-                            if sigiro::admin::revoke_key(&admin, &short_token)? {
-                                println!("Key revoked: {short_token}");
-                            } else {
-                                println!("No key found with short token: {short_token}");
-                            }
                         }
                     }
                 }
@@ -291,30 +283,30 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
         let client = sigiro::client::SigiroClient::new(url, "");
         let status = sigiro::admin::read_all_status(&admin_conn)?;
         let worker = sigiro::federation::WorkerInfo {
-            id: hostname_or_default(),
+            id: hostname_or_default()?,
             endpoint: format!("http://{}:9999", local_ip_or_default()),
             catalog_path: dir.join("default").join("catalog.sqlite")
-                .to_str().unwrap_or_default().to_string(),
-            mode: status.get("mode").cloned().unwrap_or_default(),
+                .to_str().context("catalog_path contains non-UTF8 characters")?.to_string(),
+            mode: status.get("mode").cloned().context("instance status missing 'mode' — server not fully initialized")?,
             platform: sigiro::federation::PlatformInfo {
-                os: status.get("platform_os").cloned().unwrap_or_default(),
-                kernel: status.get("platform_kernel").cloned().unwrap_or_default(),
-                arch: status.get("platform_arch").cloned().unwrap_or_default(),
+                os: status.get("platform_os").cloned().context("instance status missing 'platform_os' — server not fully initialized")?,
+                kernel: status.get("platform_kernel").cloned().context("instance status missing 'platform_kernel' — server not fully initialized")?,
+                arch: status.get("platform_arch").cloned().context("instance status missing 'platform_arch' — server not fully initialized")?,
                 container: String::new(),
             },
             ebpf_status: status
                 .get("ebpf_status")
                 .cloned()
-                .unwrap_or_else(|| "unknown".to_string()),
+                .context("instance status missing 'ebpf_status' — server not fully initialized")?,
             capabilities: sigiro::federation::WorkerCapabilities {
                 bpf: status
                     .get("capability_bpf")
                     .map(|v| v == "true")
-                    .unwrap_or(false),
+                    .context("instance status missing 'capability_bpf' — server not fully initialized")?,
                 net_admin: status
                     .get("capability_net_admin")
                     .map(|v| v == "true")
-                    .unwrap_or(false),
+                    .context("instance status missing 'capability_net_admin' — server not fully initialized")?,
             },
             missing_permissions: vec![],
             suggestions: vec![],
@@ -351,8 +343,9 @@ fn require_client() -> Result<sigiro::client::SigiroClient> {
     sigiro::client::try_build_client()
 }
 
-fn hostname_or_default() -> String {
-    std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".into())
+fn hostname_or_default() -> Result<String> {
+    std::env::var("HOSTNAME")
+        .context("HOSTNAME env var not set — required for federation worker registration")
 }
 
 fn local_ip_or_default() -> &'static str {

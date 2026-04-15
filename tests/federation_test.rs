@@ -16,7 +16,10 @@ fn build_app(state: Arc<AppState>) -> Router {
     let v1 = Router::new()
         .route("/federation/workers", post(register_worker_handler))
         .route("/federation/workers", get(list_workers_handler))
-        .route("/federation/workers/{id}", delete(deregister_worker_handler))
+        .route(
+            "/federation/workers/{id}",
+            delete(deregister_worker_handler),
+        )
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
@@ -241,7 +244,10 @@ async fn federation_endpoints_e2e() {
         .expect("read body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("parse json");
     let workers = json["workers"].as_array().expect("workers array");
-    assert!(workers.is_empty(), "workers should be empty after deregister");
+    assert!(
+        workers.is_empty(),
+        "workers should be empty after deregister"
+    );
 
     // --- 6. Deregister non-existent worker returns 404 ---
     let app = build_app(make_state(&admin_conn));

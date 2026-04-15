@@ -157,7 +157,10 @@ pub async fn run_servers(
         .route("/services", get(services_handler))
         .route("/federation/workers", post(register_worker_handler))
         .route("/federation/workers", get(list_workers_handler))
-        .route("/federation/workers/{id}", delete(deregister_worker_handler))
+        .route(
+            "/federation/workers/{id}",
+            delete(deregister_worker_handler),
+        )
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,

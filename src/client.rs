@@ -30,7 +30,9 @@ impl SigiroClient {
         from: Option<i64>,
         to: Option<i64>,
     ) -> Result<InvestigationBlock> {
-        let blocks = self.investigate_multi(Some(service), None, from, to).await?;
+        let blocks = self
+            .investigate_multi(Some(service), None, from, to)
+            .await?;
         blocks
             .into_values()
             .next()
@@ -195,10 +197,7 @@ impl SigiroClient {
     }
 
     /// Register a federation worker with the server.
-    pub async fn register_worker(
-        &self,
-        worker: &crate::federation::WorkerInfo,
-    ) -> Result<()> {
+    pub async fn register_worker(&self, worker: &crate::federation::WorkerInfo) -> Result<()> {
         let resp = self
             .http
             .post(format!("{}/v1/federation/workers", self.base_url))

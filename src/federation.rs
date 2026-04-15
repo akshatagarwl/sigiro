@@ -60,8 +60,8 @@ pub fn create_workers_table(conn: &Connection) -> Result<()> {
 pub fn register_worker(conn: &Connection, worker: &WorkerInfo) -> Result<()> {
     let platform_json =
         serde_json::to_string(&worker.platform).context("failed to serialize platform info")?;
-    let capabilities_json = serde_json::to_string(&worker.capabilities)
-        .context("failed to serialize capabilities")?;
+    let capabilities_json =
+        serde_json::to_string(&worker.capabilities).context("failed to serialize capabilities")?;
 
     conn.execute(
         "INSERT OR REPLACE INTO federation_workers
@@ -80,10 +80,7 @@ pub fn register_worker(conn: &Connection, worker: &WorkerInfo) -> Result<()> {
     .context("failed to register worker")?;
 
     info!("registered federation worker: {}", worker.id);
-    debug!(
-        "worker endpoint={}, mode={}",
-        worker.endpoint, worker.mode
-    );
+    debug!("worker endpoint={}, mode={}", worker.endpoint, worker.mode);
 
     let data_dir = crate::data_dir()?;
     regenerate_spicepod(conn, &data_dir)?;
@@ -94,10 +91,7 @@ pub fn register_worker(conn: &Connection, worker: &WorkerInfo) -> Result<()> {
 /// Returns `true` if a worker was actually deleted.
 pub fn deregister_worker(conn: &Connection, id: &str) -> Result<bool> {
     let affected = conn
-        .execute(
-            "DELETE FROM federation_workers WHERE id = ?1",
-            [id],
-        )
+        .execute("DELETE FROM federation_workers WHERE id = ?1", [id])
         .context("failed to deregister worker")?;
 
     if affected > 0 {
@@ -178,7 +172,7 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     // Cold storage dataset via S3, if configured
     if let Ok(bucket) = std::env::var("SIGIRO_S3_BUCKET") {
         if !bucket.is_empty() {
-            let prefix = std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default();
+            let prefix = std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default(); // empty prefix = data at bucket root, which is valid
             let prefix_trimmed = prefix.trim_end_matches('/');
             let prefix_with_slash = if prefix_trimmed.is_empty() {
                 String::new()
@@ -208,8 +202,12 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     }
 
     let spicepod_path = data_dir.join("spicepod.yaml");
-    std::fs::write(&spicepod_path, &yaml)
-        .with_context(|| format!("failed to write spicepod.yaml to {}", spicepod_path.display()))?;
+    std::fs::write(&spicepod_path, &yaml).with_context(|| {
+        format!(
+            "failed to write spicepod.yaml to {}",
+            spicepod_path.display()
+        )
+    })?;
 
     info!(
         "regenerated spicepod.yaml with {} worker dataset(s)",
@@ -220,27 +218,19 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
 
 /// Start the `spiced` subprocess for Spice.ai federation.
 ///
-/// Returns `Ok(())` if started, or `Ok(())` with a warning if
-/// `spiced` is not found (graceful fallback).
+/// Fails loudly if `spiced` is not in PATH or spicepod.yaml is missing.
 pub fn start_spice(data_dir: &Path) -> Result<()> {
-    if which::which("spiced").is_err() {
-        warn!("spiced binary not found in PATH — Spice federation disabled");
-        return Ok(());
-    }
+    which::which("spiced")
+        .context("spiced binary not found in PATH — install spiced for Spice federation (https://spiceai.org)")?;
 
     let spicepod_path = data_dir.join("spicepod.yaml");
-    if !spicepod_path.exists() {
-        warn!(
-            "spicepod.yaml not found at {} — skipping spiced start",
-            spicepod_path.display()
-        );
-        return Ok(());
-    }
-
-    info!(
-        "starting spiced with config: {}",
+    anyhow::ensure!(
+        spicepod_path.exists(),
+        "spicepod.yaml not found at {} — central federation requires a spicepod config",
         spicepod_path.display()
     );
+
+    info!("starting spiced with config: {}", spicepod_path.display());
 
     let mut child = Command::new("spiced")
         .arg("--config")
@@ -319,7 +309,11 @@ mod tests {
     fn test_register_and_list() {
         let conn = setup_db();
 
-        let worker = test_worker("w1", "http://localhost:9999", "/data/default/catalog.sqlite");
+        let worker = test_worker(
+            "w1",
+            "http://localhost:9999",
+            "/data/default/catalog.sqlite",
+        );
         insert_worker_directly(&conn, &worker);
 
         let workers = list_workers(&conn).unwrap();
@@ -337,7 +331,11 @@ mod tests {
     fn test_register_upsert() {
         let conn = setup_db();
 
-        let mut worker = test_worker("w1", "http://localhost:9999", "/data/default/catalog.sqlite");
+        let mut worker = test_worker(
+            "w1",
+            "http://localhost:9999",
+            "/data/default/catalog.sqlite",
+        );
         insert_worker_directly(&conn, &worker);
 
         // Update the same worker
@@ -361,18 +359,12 @@ mod tests {
         insert_worker_directly(&conn, &w2);
 
         let deleted = conn
-            .execute(
-                "DELETE FROM federation_workers WHERE id = ?1",
-                ["w1"],
-            )
+            .execute("DELETE FROM federation_workers WHERE id = ?1", ["w1"])
             .unwrap();
         assert_eq!(deleted, 1);
 
         let deleted_again = conn
-            .execute(
-                "DELETE FROM federation_workers WHERE id = ?1",
-                ["w1"],
-            )
+            .execute("DELETE FROM federation_workers WHERE id = ?1", ["w1"])
             .unwrap();
         assert_eq!(deleted_again, 0);
 
@@ -394,8 +386,16 @@ mod tests {
         let dir = TempDir::new().unwrap();
 
         // Workers with catalog_path — should be included as DuckLake datasets
-        let w1 = test_worker("alpha", "http://10.0.0.1:9999", "/data/default/catalog.sqlite");
-        let w2 = test_worker("beta", "http://10.0.0.2:9999", "/data2/default/catalog.sqlite");
+        let w1 = test_worker(
+            "alpha",
+            "http://10.0.0.1:9999",
+            "/data/default/catalog.sqlite",
+        );
+        let w2 = test_worker(
+            "beta",
+            "http://10.0.0.2:9999",
+            "/data2/default/catalog.sqlite",
+        );
         // Worker without catalog_path — should be skipped (needs shared storage)
         let w3 = test_worker("gamma", "http://10.0.0.3:9999", "");
         insert_worker_directly(&conn, &w1);
