@@ -49,7 +49,7 @@ fn signal_table_all_has_all_tables() {
 #[test]
 fn load_config_returns_none_without_env_vars() {
     // In test environment, SIGIRO_CATALOG_URL is not set
-    let config = storage::load_config();
+    let config = storage::load_config().unwrap();
     assert!(
         config.is_none(),
         "load_config should return None when SIGIRO_CATALOG_URL is not set"

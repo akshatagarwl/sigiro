@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::process::Command;
 use tracing::{debug, info, warn};
 
@@ -124,47 +124,27 @@ fn has_capability(cap: &str) -> bool {
     false
 }
 
-/// Try to start obi as a subprocess. Returns Ok(()) if started or gracefully degraded.
-/// Never returns Err — eBPF failure must not crash Sigiro.
+/// Try to start obi as a subprocess.
+/// Returns Ok(()) if obi started successfully.
+/// Returns Err if obi is ready but failed to spawn — this is a real error, not graceful degradation.
+/// Callers handle not_installed/disabled themselves (call ebpf_status first).
 pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
-    let status = ebpf_status(obi_path);
+    let path = if obi_path.is_empty() { "obi" } else { obi_path };
+    info!("starting obi with OTLP endpoint: {otlp_endpoint}");
+    let mut child = Command::new(path)
+        .env("OTEL_EXPORTER_OTLP_ENDPOINT", otlp_endpoint)
+        .spawn()
+        .context("obi failed to start — check that obi is installed and executable")?;
 
-    match status.status.as_str() {
-        "ready" => {
-            let path = if obi_path.is_empty() { "obi" } else { obi_path };
-            info!("starting obi with OTLP endpoint: {otlp_endpoint}");
-            let child = Command::new(path)
-                .env("OTEL_EXPORTER_OTLP_ENDPOINT", otlp_endpoint)
-                .spawn();
-
-            match child {
-                Ok(mut c) => {
-                    info!("obi started (pid: {:?})", c.id());
-                    // Detach — let obi run independently.
-                    // TRADEOFF: Proper lifecycle via watchexec-supervisor is planned but
-                    // not yet integrated. For now, spawn and forget.
-                    // If obi crashes, Sigiro keeps running (graceful degradation).
-                    std::thread::spawn(move || {
-                        if let Ok(exit) = c.wait() {
-                            warn!("obi exited: {exit}");
-                        }
-                    });
-                }
-                Err(e) => {
-                    warn!("obi failed to start: {e} — running in OTLP-only mode");
-                }
-            }
-            Ok(())
+    info!("obi started (pid: {:?})", child.id());
+    // Monitor obi lifecycle in a background thread.
+    // If obi crashes, the warn log surfaces the exit code for debugging.
+    std::thread::spawn(move || {
+        if let Ok(exit) = child.wait() {
+            warn!("obi exited: {exit}");
         }
-        "not_installed" | "disabled" => {
-            warn!(
-                "eBPF disabled: {} — suggestions: {:?}",
-                status.reason, status.suggestions
-            );
-            Ok(())
-        }
-        _ => Ok(()),
-    }
+    });
+    Ok(())
 }
 
 /// Write eBPF status to instance_status.

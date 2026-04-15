@@ -84,19 +84,33 @@ pub fn init_distributed(conn: &Connection, config: &StorageConfig) -> Result<()>
 
 /// Load distributed storage config from SIGIRO_* env vars.
 /// Returns Some if SIGIRO_CATALOG_URL is set, None otherwise (use local SQLite).
-pub fn load_config() -> Option<StorageConfig> {
-    let catalog_url = std::env::var("SIGIRO_CATALOG_URL").ok()?;
+/// Fails loudly if catalog_url is set but required S3 vars are missing or empty.
+pub fn load_config() -> Result<Option<StorageConfig>> {
+    let catalog_url = match std::env::var("SIGIRO_CATALOG_URL") {
+        Ok(v) if !v.is_empty() => v,
+        Ok(_) => return Ok(None),  // set but empty — use local SQLite
+        Err(_) => return Ok(None), // not set — use local SQLite
+    };
 
-    if catalog_url.is_empty() {
-        return None;
+    let s3_bucket = std::env::var("SIGIRO_S3_BUCKET").context(
+        "SIGIRO_CATALOG_URL is set but SIGIRO_S3_BUCKET is not set — set both or neither",
+    )?;
+    if s3_bucket.is_empty() {
+        anyhow::bail!("SIGIRO_S3_BUCKET is set but empty — provide a valid S3 bucket name");
+    }
+    let s3_region = std::env::var("SIGIRO_S3_REGION").context(
+        "SIGIRO_CATALOG_URL is set but SIGIRO_S3_REGION is not set — set both or neither",
+    )?;
+    if s3_region.is_empty() {
+        anyhow::bail!("SIGIRO_S3_REGION is set but empty — provide a valid AWS region");
     }
 
-    Some(StorageConfig {
+    Ok(Some(StorageConfig {
         catalog_url,
-        s3_bucket: std::env::var("SIGIRO_S3_BUCKET").unwrap_or_default(),
-        s3_region: std::env::var("SIGIRO_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
+        s3_bucket,
+        s3_region,
         s3_prefix: std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default(),
-    })
+    }))
 }
 
 /// Distributed storage configuration.
