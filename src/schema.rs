@@ -6,17 +6,39 @@ use tracing::info;
 /// Each extension provides SQL functions agents can query to debug system state.
 pub const FLEET_EXTENSIONS: &[&str] = &["system_stats", "fsquery", "hostfs"];
 
-/// Load a single extension: try local cache first, fall back to download.
+/// Load a single extension: try LOAD from name first (uses extension_directory cache),
+/// then try loading from bundled file path, then fall back to download.
 fn load_one_extension(conn: &Connection, name: &str) -> Result<()> {
-    // Fast path: extension already in local cache, just LOAD
+    // Path 1: LOAD by name — works if extension_directory is set and extension was
+    // previously installed/cached there by fetch-extensions or INSTALL.
     if conn.execute_batch(&format!("LOAD {name};")).is_ok() {
         info!("loaded extension (cached): {name}");
         return Ok(());
     }
 
-    // Slow path: download from community repository, then LOAD
+    // Path 2: LOAD from bundled file path — works for offline deployments where
+    // extensions were shipped alongside the binary in {data_dir}/extensions/{name}.duckdb_extension
+    let bundled = std::env::var("SIGIRO_DATA_DIR")
+        .map(|d| {
+            std::path::Path::new(&d)
+                .join("extensions")
+                .join(format!("{name}.duckdb_extension"))
+        })
+        .ok();
+    if let Some(ref path) = bundled {
+        if path.exists() {
+            if let Ok(()) = conn.execute_batch(&format!("LOAD '{}';", path.display())) {
+                info!("loaded extension (bundled): {name}");
+                return Ok(());
+            }
+        }
+    }
+
+    // Path 3: download from community repository, then LOAD — requires network
     conn.execute_batch(&format!("INSTALL {name} FROM community; LOAD {name};"))
-        .with_context(|| format!("failed to load extension '{name}' — run `sigiro fetch-extensions` to pre-download, or check network connectivity"))?;
+        .with_context(|| format!(
+            "failed to load extension '{name}' — run `sigiro fetch-extensions` to pre-download, or place {name}.duckdb_extension in $SIGIRO_DATA_DIR/extensions/"
+        ))?;
     info!("loaded extension (downloaded): {name}");
     Ok(())
 }
@@ -36,7 +58,9 @@ pub fn load_fleet_extensions(conn: &Connection) -> Result<()> {
 pub fn fetch_all_extensions(conn: &Connection) -> Result<()> {
     for name in FLEET_EXTENSIONS {
         conn.execute_batch(&format!("INSTALL {name} FROM community; LOAD {name};"))
-            .with_context(|| format!("failed to fetch extension '{name}' from community repository"))?;
+            .with_context(|| {
+                format!("failed to fetch extension '{name}' from community repository")
+            })?;
         info!("fetched extension: {name}");
     }
     Ok(())
