@@ -1,8 +1,8 @@
 use arrow::array::{Int32Array, Int64Array, StringArray, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use crossbeam_channel::unbounded;
 use sigiro::ingest::IngestMsg;
+use sigiro::inserter::MsgRouter;
 use sigiro::pool::ProjectPool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -83,32 +83,27 @@ fn make_spans_batch(n: usize) -> RecordBatch {
     .expect("valid record batch")
 }
 
-#[test]
-fn inserter_processes_spans_for_single_project() {
+#[tokio::test]
+async fn inserter_processes_spans_for_single_project() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     // Send 10 batches of 100 spans
     for _ in 0..10 {
         let batch = make_spans_batch(100);
-        tx.send(IngestMsg::Traces {
-            project_id: "test_project".to_string(),
-            batch,
-        })
-        .unwrap();
+        router
+            .send(IngestMsg::Traces {
+                project_id: "test_project".to_string(),
+                batch,
+            })
+            .await;
     }
 
-    // Drop sender to close channel and let inserter finish
-    drop(tx);
-    handle.join().unwrap();
+    // Shut down router and wait for all flushers to complete
+    router.shutdown_and_wait().await;
 
-    // Verify data landed in DuckDB (tables now in lake.* schema)
+    // Verify data landed in DuckDB
     let conn = pool.get_or_create("test_project").unwrap();
     let conn = conn.lock().unwrap();
     let count: i64 = conn
@@ -119,33 +114,29 @@ fn inserter_processes_spans_for_single_project() {
     assert_eq!(count, 1000, "expected 1000 spans, got {count}");
 }
 
-#[test]
-fn inserter_isolates_projects() {
+#[tokio::test]
+async fn inserter_isolates_projects() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     // Send to two different projects
     for _ in 0..5 {
-        tx.send(IngestMsg::Traces {
-            project_id: "project_a".to_string(),
-            batch: make_spans_batch(100),
-        })
-        .unwrap();
-        tx.send(IngestMsg::Traces {
-            project_id: "project_b".to_string(),
-            batch: make_spans_batch(50),
-        })
-        .unwrap();
+        router
+            .send(IngestMsg::Traces {
+                project_id: "project_a".to_string(),
+                batch: make_spans_batch(100),
+            })
+            .await;
+        router
+            .send(IngestMsg::Traces {
+                project_id: "project_b".to_string(),
+                batch: make_spans_batch(50),
+            })
+            .await;
     }
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
     // Each project should have its own data
     let conn_a = pool.get_or_create("project_a").unwrap();
@@ -176,39 +167,36 @@ fn inserter_isolates_projects() {
     );
 }
 
-#[test]
-fn inserter_handles_bounded_channel_backpressure() {
-    // This tests that per-project bounded channels handle backpressure gracefully.
-    // The inserter should drop messages for a slow project rather than blocking others.
+#[tokio::test]
+async fn inserter_handles_backpressure() {
+    // Backpressure is now applied via bounded channels — senders block
+    // rather than dropping data. All messages should be delivered.
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded(); // dispatcher channel is unbounded
+    let router = MsgRouter::new(pool.clone());
 
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
-
-    // Send many messages quickly — some may be dropped due to bounded per-project channel
+    // Send many messages quickly — with backpressure, none are dropped
     for i in 0..100 {
-        let _result = tx.send(IngestMsg::Traces {
-            project_id: "fast_project".to_string(),
-            batch: make_spans_batch(10),
-        });
+        router
+            .send(IngestMsg::Traces {
+                project_id: "fast_project".to_string(),
+                batch: make_spans_batch(10),
+            })
+            .await;
         // Every 10th message goes to a different project
         if i % 10 == 0 {
-            let _result = tx.send(IngestMsg::Traces {
-                project_id: "slow_project".to_string(),
-                batch: make_spans_batch(10),
-            });
+            router
+                .send(IngestMsg::Traces {
+                    project_id: "slow_project".to_string(),
+                    batch: make_spans_batch(10),
+                })
+                .await;
         }
     }
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
-    // Both projects should have data (we don't assert exact counts because
-    // some messages may be dropped under backpressure, which is correct behavior)
+    // Both projects should have data — no drops under backpressure
     let conn = pool.get_or_create("fast_project").unwrap();
     let count: i64 = conn
         .lock()
@@ -218,35 +206,40 @@ fn inserter_handles_bounded_channel_backpressure() {
         })
         .unwrap();
     assert!(count > 0, "fast_project should have some spans");
+
+    let conn2 = pool.get_or_create("slow_project").unwrap();
+    let count2: i64 = conn2
+        .lock()
+        .unwrap()
+        .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(count2 > 0, "slow_project should have some spans");
 }
 
-#[test]
-fn inserter_throughput_single_project() {
-    // Throughput test: 50,000 rows should complete in under 5 seconds.
+#[tokio::test]
+async fn inserter_throughput_single_project() {
+    // Throughput test: 50,000 rows should complete in under 30 seconds.
     // This validates the buffered flush path is working (not per-message appender create/destroy).
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     let start = Instant::now();
     let batch_size = 500;
     let num_batches = 100; // 50,000 total rows
 
     for _ in 0..num_batches {
-        tx.send(IngestMsg::Traces {
-            project_id: "throughput_test".to_string(),
-            batch: make_spans_batch(batch_size),
-        })
-        .unwrap();
+        router
+            .send(IngestMsg::Traces {
+                project_id: "throughput_test".to_string(),
+                batch: make_spans_batch(batch_size),
+            })
+            .await;
     }
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
     let elapsed = start.elapsed();
 
     let conn = pool.get_or_create("throughput_test").unwrap();

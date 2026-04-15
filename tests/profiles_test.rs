@@ -3,8 +3,8 @@
 use arrow::array::{Int64Array, ListArray, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use crossbeam_channel::unbounded;
 use sigiro::ingest::IngestMsg;
+use sigiro::inserter::MsgRouter;
 use sigiro::investigate::QueryCtx;
 use sigiro::pool::ProjectPool;
 use std::sync::Arc;
@@ -90,16 +90,11 @@ fn make_profiles_batch(
 // E2E: profiles through inserter → DuckDB → investigate
 // ---------------------------------------------------------------------------
 
-#[test]
-fn e2e_profiles_pipeline() {
+#[tokio::test]
+async fn e2e_profiles_pipeline() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
@@ -126,14 +121,14 @@ fn e2e_profiles_pipeline() {
         (&["main", "gc_collect"], 3_000_000, "cpu", "nanoseconds"),
     ];
 
-    tx.send(IngestMsg::Profiles {
-        project_id: "profile_test".to_string(),
-        batch: make_profiles_batch("api-svc", now_us, &stacks),
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Profiles {
+            project_id: "profile_test".to_string(),
+            batch: make_profiles_batch("api-svc", now_us, &stacks),
+        })
+        .await;
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
     // Verify rows landed in DuckDB
     let conn = pool.get_or_create("profile_test").unwrap();
@@ -194,16 +189,11 @@ fn e2e_profiles_pipeline() {
 // Multi-type profiles (CPU + heap in same project)
 // ---------------------------------------------------------------------------
 
-#[test]
-fn e2e_profiles_multi_type() {
+#[tokio::test]
+async fn e2e_profiles_multi_type() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
@@ -222,19 +212,20 @@ fn e2e_profiles_multi_type() {
         "bytes",
     )];
 
-    tx.send(IngestMsg::Profiles {
-        project_id: "multi_type".to_string(),
-        batch: make_profiles_batch("api-svc", now_us, &cpu_stacks),
-    })
-    .unwrap();
-    tx.send(IngestMsg::Profiles {
-        project_id: "multi_type".to_string(),
-        batch: make_profiles_batch("api-svc", now_us + 100, &heap_stacks),
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Profiles {
+            project_id: "multi_type".to_string(),
+            batch: make_profiles_batch("api-svc", now_us, &cpu_stacks),
+        })
+        .await;
+    router
+        .send(IngestMsg::Profiles {
+            project_id: "multi_type".to_string(),
+            batch: make_profiles_batch("api-svc", now_us + 100, &heap_stacks),
+        })
+        .await;
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
     let conn = pool.get_or_create("multi_type").unwrap();
     let conn = conn.lock().unwrap();
@@ -274,28 +265,23 @@ fn e2e_profiles_multi_type() {
 // Empty profiles batch doesn't crash
 // ---------------------------------------------------------------------------
 
-#[test]
-fn e2e_profiles_empty_batch() {
+#[tokio::test]
+async fn e2e_profiles_empty_batch() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Empty profiles batch
-    tx.send(IngestMsg::Profiles {
-        project_id: "empty_profiles".to_string(),
-        batch: make_profiles_batch("api-svc", now_us, &[]),
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Profiles {
+            project_id: "empty_profiles".to_string(),
+            batch: make_profiles_batch("api-svc", now_us, &[]),
+        })
+        .await;
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
     let conn = pool.get_or_create("empty_profiles").unwrap();
     let conn = conn.lock().unwrap();

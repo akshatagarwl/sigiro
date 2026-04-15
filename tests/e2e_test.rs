@@ -7,8 +7,8 @@
 use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use crossbeam_channel::unbounded;
 use sigiro::ingest::IngestMsg;
+use sigiro::inserter::MsgRouter;
 use sigiro::investigate::{InvestigateRequest, investigate};
 use sigiro::pool::ProjectPool;
 use sigiro::server::validate_read_only;
@@ -219,31 +219,26 @@ fn make_gauge_batch(n: usize, service_name: &str, ts_base: i64) -> RecordBatch {
 // TEST 1: Full pipeline — ingest spans via inserter, verify in DuckDB,
 //         then run investigate() and check coverage + operation summaries
 // ===========================================================================
-#[test]
-fn e2e_full_pipeline_ingest_and_investigate() {
+#[tokio::test]
+async fn e2e_full_pipeline_ingest_and_investigate() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Send 5 batches of 20 spans for "checkout" service
     for i in 0..5 {
         let batch = make_spans_batch(20, "checkout", "POST /checkout", now_us + i * 100);
-        tx.send(IngestMsg::Traces {
-            project_id: "proj_e2e".to_string(),
-            batch,
-        })
-        .unwrap();
+        router
+            .send(IngestMsg::Traces {
+                project_id: "proj_e2e".to_string(),
+                batch,
+            })
+            .await;
     }
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
     // Verify data in DuckDB
     let conn = pool.get_or_create("proj_e2e").unwrap();
@@ -285,35 +280,31 @@ fn e2e_full_pipeline_ingest_and_investigate() {
 // TEST 2: Multi-project isolation — project A and B ingest independently,
 //         investigate on A should not see B's data
 // ===========================================================================
-#[test]
-fn e2e_multi_project_isolation() {
+#[tokio::test]
+async fn e2e_multi_project_isolation() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Project A: "alpha-svc" with 30 spans
-    tx.send(IngestMsg::Traces {
-        project_id: "proj_alpha".to_string(),
-        batch: make_spans_batch(30, "alpha-svc", "GET /alpha", now_us),
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Traces {
+            project_id: "proj_alpha".to_string(),
+            batch: make_spans_batch(30, "alpha-svc", "GET /alpha", now_us),
+        })
+        .await;
 
     // Project B: "beta-svc" with 50 spans
-    tx.send(IngestMsg::Traces {
-        project_id: "proj_beta".to_string(),
-        batch: make_spans_batch(50, "beta-svc", "GET /beta", now_us),
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Traces {
+            project_id: "proj_beta".to_string(),
+            batch: make_spans_batch(50, "beta-svc", "GET /beta", now_us),
+        })
+        .await;
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
     // Investigate project A — should only see alpha-svc
     let conn_a = pool.get_or_create("proj_alpha").unwrap();
@@ -323,7 +314,7 @@ fn e2e_multi_project_isolation() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks_a = investigate(&conn_a, &req_a, "lake.").unwrap();
+    let blocks_a = investigate(&conn_a, &req_a, "lake.").expect("investigate failed");
     let block_a = &blocks_a["alpha-svc"];
     assert_eq!(block_a.coverage.span_count, 30);
     assert_eq!(block_a.operation_summaries.len(), 1);
@@ -336,7 +327,8 @@ fn e2e_multi_project_isolation() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks_beta_on_a = investigate(&conn_a, &req_beta_on_a, "lake.").unwrap();
+    let blocks_beta_on_a =
+        investigate(&conn_a, &req_beta_on_a, "lake.").expect("investigate failed");
     let block_beta_on_a = &blocks_beta_on_a["beta-svc"];
     assert_eq!(
         block_beta_on_a.coverage.span_count, 0,
@@ -351,7 +343,7 @@ fn e2e_multi_project_isolation() {
         from_ts: Some(now_us - 60_000_000),
         to_ts: Some(now_us + 60_000_000),
     };
-    let blocks_b = investigate(&conn_b, &req_b, "lake.").unwrap();
+    let blocks_b = investigate(&conn_b, &req_b, "lake.").expect("investigate failed");
     let block_b = &blocks_b["beta-svc"];
     assert_eq!(block_b.coverage.span_count, 50);
     assert_eq!(block_b.operation_summaries[0].span_name, "GET /beta");
@@ -361,38 +353,35 @@ fn e2e_multi_project_isolation() {
 // TEST 3: Services endpoint simulation — 3 services ingested, query grouped
 //         by service_name to verify all appear with correct counts
 // ===========================================================================
-#[test]
-fn e2e_services_endpoint_simulation() {
+#[tokio::test]
+async fn e2e_services_endpoint_simulation() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Ingest spans for 3 different services into the same project
-    tx.send(IngestMsg::Traces {
-        project_id: "proj_services".to_string(),
-        batch: make_spans_batch(10, "api-gateway", "GET /route", now_us),
-    })
-    .unwrap();
-    tx.send(IngestMsg::Traces {
-        project_id: "proj_services".to_string(),
-        batch: make_spans_batch(25, "user-service", "GET /users", now_us + 100),
-    })
-    .unwrap();
-    tx.send(IngestMsg::Traces {
-        project_id: "proj_services".to_string(),
-        batch: make_spans_batch(15, "order-service", "POST /orders", now_us + 200),
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Traces {
+            project_id: "proj_services".to_string(),
+            batch: make_spans_batch(10, "api-gateway", "GET /route", now_us),
+        })
+        .await;
+    router
+        .send(IngestMsg::Traces {
+            project_id: "proj_services".to_string(),
+            batch: make_spans_batch(25, "user-service", "GET /users", now_us + 100),
+        })
+        .await;
+    router
+        .send(IngestMsg::Traces {
+            project_id: "proj_services".to_string(),
+            batch: make_spans_batch(15, "order-service", "POST /orders", now_us + 200),
+        })
+        .await;
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
     // Query the services table grouped by service_name
     let conn = pool.get_or_create("proj_services").unwrap();
@@ -511,49 +500,46 @@ fn e2e_query_validation() {
 // TEST 5: Investigation with all signals — spans + logs + metrics (gauge),
 //         verify coverage shows all three present with no gaps
 // ===========================================================================
-#[test]
-fn e2e_investigation_all_signals() {
+#[tokio::test]
+async fn e2e_investigation_all_signals() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Ingest spans
-    tx.send(IngestMsg::Traces {
-        project_id: "proj_all_signals".to_string(),
-        batch: make_spans_batch(10, "full-svc", "GET /data", now_us),
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Traces {
+            project_id: "proj_all_signals".to_string(),
+            batch: make_spans_batch(10, "full-svc", "GET /data", now_us),
+        })
+        .await;
 
     // Ingest logs
-    tx.send(IngestMsg::Logs {
-        project_id: "proj_all_signals".to_string(),
-        batch: make_logs_batch(5, "full-svc", now_us),
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Logs {
+            project_id: "proj_all_signals".to_string(),
+            batch: make_logs_batch(5, "full-svc", now_us),
+        })
+        .await;
 
     // Ingest gauge metrics
     let gauge_batch = make_gauge_batch(3, "full-svc", now_us);
-    tx.send(IngestMsg::Metrics {
-        project_id: "proj_all_signals".to_string(),
-        batches: otlp2records::MetricBatches {
-            gauge: Some(gauge_batch),
-            sum: None,
-            histogram: None,
-            exp_histogram: None,
-            skipped: Default::default(),
-        },
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Metrics {
+            project_id: "proj_all_signals".to_string(),
+            batches: otlp2records::MetricBatches {
+                gauge: Some(gauge_batch),
+                sum: None,
+                histogram: None,
+                exp_histogram: None,
+                skipped: Default::default(),
+            },
+        })
+        .await;
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
     // Verify raw counts in DuckDB
     let conn = pool.get_or_create("proj_all_signals").unwrap();
@@ -678,18 +664,13 @@ fn make_templated_logs_batch(bodies: &[&str], service_name: &str, ts_base: i64) 
     .unwrap()
 }
 
-#[test]
-fn e2e_drain_log_template_dedup() {
+#[tokio::test]
+async fn e2e_drain_log_template_dedup() {
     // Verify the full pipeline: OTLP logs → inserter (DRAIN) → DuckDB → investigate
     // Logs with variable tokens should collapse into a single template.
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
-    let (tx, rx) = unbounded();
-
-    let pool_clone = Arc::clone(&pool);
-    let handle = std::thread::spawn(move || {
-        sigiro::inserter::run_inserter(&pool_clone, rx).unwrap();
-    });
+    let router = MsgRouter::new(pool.clone());
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
@@ -706,19 +687,20 @@ fn e2e_drain_log_template_dedup() {
     let req_refs: Vec<&str> = request_bodies.iter().map(String::as_str).collect();
     let login_refs: Vec<&str> = login_bodies.iter().map(String::as_str).collect();
 
-    tx.send(IngestMsg::Logs {
-        project_id: "drain_test".to_string(),
-        batch: make_templated_logs_batch(&req_refs, "api-svc", now_us),
-    })
-    .unwrap();
-    tx.send(IngestMsg::Logs {
-        project_id: "drain_test".to_string(),
-        batch: make_templated_logs_batch(&login_refs, "api-svc", now_us + 100),
-    })
-    .unwrap();
+    router
+        .send(IngestMsg::Logs {
+            project_id: "drain_test".to_string(),
+            batch: make_templated_logs_batch(&req_refs, "api-svc", now_us),
+        })
+        .await;
+    router
+        .send(IngestMsg::Logs {
+            project_id: "drain_test".to_string(),
+            batch: make_templated_logs_batch(&login_refs, "api-svc", now_us + 100),
+        })
+        .await;
 
-    drop(tx);
-    handle.join().unwrap();
+    router.shutdown_and_wait().await;
 
     // Verify: 20 rows in sigiro_logs, each with a template_id
     let conn = pool.get_or_create("drain_test").unwrap();
