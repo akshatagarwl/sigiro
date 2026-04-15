@@ -1,27 +1,45 @@
 use anyhow::{Context, Result};
 use duckdb::Connection;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Fleet observability extensions — loaded on each project connection.
 /// Each extension provides SQL functions agents can query to debug system state.
-const FLEET_EXTENSIONS: &[&str] = &["system_stats", "fsquery", "hostfs", "observefs"];
+pub const FLEET_EXTENSIONS: &[&str] = &["system_stats", "fsquery", "hostfs"];
 
-/// Load fleet observability DuckDB community extensions.
-/// Failures are non-fatal — missing extensions produce a warning and Sigiro keeps running.
-pub fn load_fleet_extensions(conn: &Connection) -> Vec<String> {
-    let mut loaded = Vec::new();
-    for name in FLEET_EXTENSIONS {
-        match conn.execute_batch(&format!("INSTALL {name} FROM community; LOAD {name};")) {
-            Ok(_) => {
-                info!("loaded extension: {name}");
-                loaded.push(name.to_string());
-            }
-            Err(e) => {
-                warn!("skipping extension {name}: {e}");
-            }
-        }
+/// Load a single extension: try local cache first, fall back to download.
+fn load_one_extension(conn: &Connection, name: &str) -> Result<()> {
+    // Fast path: extension already in local cache, just LOAD
+    if conn.execute_batch(&format!("LOAD {name};")).is_ok() {
+        info!("loaded extension (cached): {name}");
+        return Ok(());
     }
-    loaded
+
+    // Slow path: download from community repository, then LOAD
+    conn.execute_batch(&format!("INSTALL {name} FROM community; LOAD {name};"))
+        .with_context(|| format!("failed to load extension '{name}' — run `sigiro fetch-extensions` to pre-download, or check network connectivity"))?;
+    info!("loaded extension (downloaded): {name}");
+    Ok(())
+}
+
+/// Load all fleet observability DuckDB community extensions.
+/// Uses local cache when available, downloads only on first use.
+/// Fails hard if ANY extension cannot be loaded — run `sigiro fetch-extensions` first.
+pub fn load_fleet_extensions(conn: &Connection) -> Result<()> {
+    for name in FLEET_EXTENSIONS {
+        load_one_extension(conn, name)?;
+    }
+    Ok(())
+}
+
+/// Pre-download all fleet extensions to local cache for offline use.
+/// Call this from the `fetch-extensions` CLI command or deployment scripts.
+pub fn fetch_all_extensions(conn: &Connection) -> Result<()> {
+    for name in FLEET_EXTENSIONS {
+        conn.execute_batch(&format!("INSTALL {name} FROM community; LOAD {name};"))
+            .with_context(|| format!("failed to fetch extension '{name}' from community repository"))?;
+        info!("fetched extension: {name}");
+    }
+    Ok(())
 }
 
 /// Create all sigiro tables and views.

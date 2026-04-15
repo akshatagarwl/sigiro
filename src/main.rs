@@ -75,6 +75,8 @@ enum Command {
         #[command(subcommand)]
         action: AdminAction,
     },
+    /// Pre-download DuckDB extensions for offline use
+    FetchExtensions,
 }
 
 #[derive(Subcommand)]
@@ -219,6 +221,9 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Some(Command::FetchExtensions) => {
+            run_fetch_extensions()?;
+        }
     }
     Ok(())
 }
@@ -238,16 +243,8 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     sigiro::admin::write_instance_status(&admin_conn, "platform_os", std::env::consts::OS)?;
     sigiro::admin::write_instance_status(&admin_conn, "platform_arch", std::env::consts::ARCH)?;
 
-    // Probe fleet extensions and store result
-    let probe = DuckConnection::open_in_memory()
-        .context("failed to open probe DuckDB for extension check")?;
-    let loaded = sigiro::schema::load_fleet_extensions(&probe);
-    drop(probe);
-    sigiro::admin::write_instance_status(
-        &admin_conn,
-        "extensions",
-        &serde_json::to_string(&loaded).context("failed to serialize extensions list")?,
-    )?;
+    // Extension probe is deferred to first project connection (pool.get_or_create).
+    // Use `sigiro fetch-extensions` to pre-download for offline deployments.
 
     // eBPF auto-instrumentation: try obi, degrade gracefully
     if no_ebpf {
@@ -341,6 +338,31 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
 /// Build HTTP client from config. Fails fast if API key or endpoint is not configured.
 fn require_client() -> Result<sigiro::client::SigiroClient> {
     sigiro::client::try_build_client()
+}
+
+/// Pre-download DuckDB community extensions to local cache.
+/// Run once before `sigiro serve` in air-gapped environments, or include in deployment scripts.
+fn run_fetch_extensions() -> Result<()> {
+    let dir = data_dir()?;
+    let ext_dir = dir.join("extensions");
+    std::fs::create_dir_all(&ext_dir)?;
+    let ext_path = ext_dir.to_str().context("extension path contains non-UTF8")?;
+
+    let conn = DuckConnection::open_in_memory()
+        .context("failed to open DuckDB for extension fetch")?;
+    conn.execute_batch(&format!("SET extension_directory = '{ext_path}';"))
+        .context("failed to set extension directory")?;
+
+    sigiro::schema::fetch_all_extensions(&conn)?;
+    println!(
+        "fetched {} extensions to {}",
+        sigiro::schema::FLEET_EXTENSIONS.len(),
+        ext_dir.display()
+    );
+    for name in sigiro::schema::FLEET_EXTENSIONS {
+        println!("  - {name}");
+    }
+    Ok(())
 }
 
 fn hostname_or_default() -> Result<String> {

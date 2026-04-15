@@ -55,6 +55,16 @@ impl ProjectPool {
         let conn = Connection::open_in_memory()
             .with_context(|| format!("failed to open in-memory DuckDB for project {project_id}"))?;
 
+        // Use persistent local extension cache so downloads survive restarts.
+        // Extensions are stored under {data_dir}/extensions/ — pre-downloaded by
+        // `sigiro fetch-extensions` or automatically on first LOAD.
+        let ext_dir = self.data_dir.join("extensions");
+        std::fs::create_dir_all(&ext_dir).ok();
+        if let Some(p) = ext_dir.to_str() {
+            conn.execute_batch(&format!("SET extension_directory = '{p}';"))
+                .ok();
+        }
+
         // Cap memory per connection to avoid one project eating all RAM
         conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
             .context("failed to set DuckDB memory limit")?;
@@ -67,11 +77,7 @@ impl ProjectPool {
         }
 
         crate::schema::create_tables(&conn, Self::prefix())?;
-
-        let loaded = crate::schema::load_fleet_extensions(&conn);
-        if !loaded.is_empty() {
-            tracing::info!(project_id, extensions = ?loaded, "loaded fleet extensions");
-        }
+        crate::schema::load_fleet_extensions(&conn)?;
 
         let shared = Arc::new(Mutex::new(conn));
         self.connections.insert(
