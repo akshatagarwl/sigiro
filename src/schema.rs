@@ -53,19 +53,6 @@ pub fn load_fleet_extensions(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Pre-download all fleet extensions to local cache for offline use.
-/// Call this from the `fetch-extensions` CLI command or deployment scripts.
-pub fn fetch_all_extensions(conn: &Connection) -> Result<()> {
-    for name in FLEET_EXTENSIONS {
-        conn.execute_batch(&format!("INSTALL {name} FROM community; LOAD {name};"))
-            .with_context(|| {
-                format!("failed to fetch extension '{name}' from community repository")
-            })?;
-        info!("fetched extension: {name}");
-    }
-    Ok(())
-}
-
 /// Create all sigiro tables and views.
 /// `prefix` is always "lake." (DuckLake catalog-qualified tables).
 pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {

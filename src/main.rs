@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, builder::styling};
-use duckdb::Connection as DuckConnection;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
@@ -75,8 +74,6 @@ enum Command {
         #[command(subcommand)]
         action: AdminAction,
     },
-    /// Pre-download DuckDB extensions for offline use
-    FetchExtensions,
 }
 
 #[derive(Subcommand)]
@@ -221,9 +218,6 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Some(Command::FetchExtensions) => {
-            run_fetch_extensions()?;
-        }
     }
     Ok(())
 }
@@ -338,31 +332,6 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
 /// Build HTTP client from config. Fails fast if API key or endpoint is not configured.
 fn require_client() -> Result<sigiro::client::SigiroClient> {
     sigiro::client::try_build_client()
-}
-
-/// Pre-download DuckDB community extensions to local cache.
-/// Run once before `sigiro serve` in air-gapped environments, or include in deployment scripts.
-fn run_fetch_extensions() -> Result<()> {
-    let dir = data_dir()?;
-    let ext_dir = dir.join("extensions");
-    std::fs::create_dir_all(&ext_dir)?;
-    let ext_path = ext_dir.to_str().context("extension path contains non-UTF8")?;
-
-    let conn = DuckConnection::open_in_memory()
-        .context("failed to open DuckDB for extension fetch")?;
-    conn.execute_batch(&format!("SET extension_directory = '{ext_path}';"))
-        .context("failed to set extension directory")?;
-
-    sigiro::schema::fetch_all_extensions(&conn)?;
-    println!(
-        "fetched {} extensions to {}",
-        sigiro::schema::FLEET_EXTENSIONS.len(),
-        ext_dir.display()
-    );
-    for name in sigiro::schema::FLEET_EXTENSIONS {
-        println!("  - {name}");
-    }
-    Ok(())
 }
 
 fn hostname_or_default() -> Result<String> {
