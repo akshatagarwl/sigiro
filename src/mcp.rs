@@ -49,7 +49,7 @@ impl SigiroMcp {
             .await
         {
             Ok(blocks) => serde_json::to_string_pretty(&blocks)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
+                .unwrap_or_else(|e| format!("internal error: failed to serialize response: {e}")),
             Err(e) => format!("error: {e:#}"),
         }
     }
@@ -61,7 +61,7 @@ impl SigiroMcp {
     async fn sigiro_query(&self, params: Parameters<QueryParams>) -> String {
         match self.client.query(&params.0.sql).await {
             Ok(rows) => serde_json::to_string_pretty(&rows)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
+                .unwrap_or_else(|e| format!("internal error: failed to serialize response: {e}")),
             Err(e) => format!("error: {e:#}"),
         }
     }
@@ -71,7 +71,7 @@ impl SigiroMcp {
     async fn sigiro_status(&self) -> String {
         match self.client.services().await {
             Ok(val) => serde_json::to_string_pretty(&val)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
+                .unwrap_or_else(|e| format!("internal error: failed to serialize response: {e}")),
             Err(e) => format!("error: {e:#}"),
         }
     }

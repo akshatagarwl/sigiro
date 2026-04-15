@@ -247,7 +247,7 @@ async fn run_serve(no_ebpf: bool) -> Result<()> {
     sigiro::admin::write_instance_status(
         &admin_conn,
         "extensions",
-        &serde_json::to_string(&loaded).unwrap_or_else(|_| "[]".to_string()),
+        &serde_json::to_string(&loaded).context("failed to serialize extensions list")?,
     )?;
 
     // eBPF auto-instrumentation: try obi, degrade gracefully
@@ -256,10 +256,7 @@ async fn run_serve(no_ebpf: bool) -> Result<()> {
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_status", "disabled")?;
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_reason", "--no-ebpf flag")?;
     } else {
-        let otlp_endpoint = format!(
-            "http://127.0.0.1:{}",
-            std::env::var("SIGIRO_PORT").unwrap_or_else(|_| "9999".to_string())
-        );
+        let otlp_endpoint = "http://127.0.0.1:9999".to_string();
         let status = sigiro::ebpf::ebpf_status("obi");
         sigiro::ebpf::write_ebpf_status(&admin_conn, &status)?;
         match status.status.as_str() {
