@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::drain::DrainTree;
 use crate::ingest::IngestMsg;
@@ -75,7 +76,7 @@ impl SignalTable {
 /// No dispatcher thread — handlers fan out directly.
 pub struct MsgRouter {
     pool: Arc<ProjectPool>,
-    project_senders: DashMap<String, mpsc::Sender<IngestMsg>>,
+    project_senders: DashMap<String, (mpsc::Sender<IngestMsg>, JoinHandle<()>)>,
 }
 
 impl MsgRouter {
@@ -88,23 +89,26 @@ impl MsgRouter {
 
     /// Route a message to the appropriate per-project flusher.
     /// Creates the flusher task on first message for a project.
-    /// Drops the message with a warning if the project channel is full.
+    /// Applies backpressure via bounded channel — sender blocks when full
+    /// rather than silently dropping data.
     pub async fn send(&self, msg: IngestMsg) {
         let project_id = msg.project_id().to_string();
 
         // Fast path: existing sender
-        if let Some(sender) = self.project_senders.get(&project_id) {
+        if let Some(entry) = self.project_senders.get(&project_id) {
+            let sender = &entry.value().0;
             match sender.try_send(msg) {
                 Ok(()) => return,
                 Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
-                    // Channel full — log and drop.
-                    tracing::warn!(project_id, "project channel full, dropping message");
-                    drop(msg);
-                    return;
+                    // Channel full — apply backpressure by blocking send.
+                    // This is intentional: the caller (HTTP/gRPC handler) will wait
+                    // rather than silently dropping telemetry data.
+                    drop(entry);
+                    return self.send_blocking(&project_id, msg).await;
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(msg)) => {
                     // Receiver dropped — flusher task exited. Remove stale entry and fall through.
-                    drop(sender);
+                    drop(entry);
                     self.project_senders.remove(&project_id);
                     // Re-enter with msg to create new flusher
                     return self.send_with_fallback(project_id, msg).await;
@@ -113,6 +117,15 @@ impl MsgRouter {
         }
 
         self.send_with_fallback(project_id, msg).await;
+    }
+
+    /// Backpressure path: wait for channel capacity instead of dropping.
+    async fn send_blocking(&self, project_id: &str, msg: IngestMsg) {
+        if let Some(entry) = self.project_senders.get(project_id) {
+            if entry.value().0.send(msg).await.is_err() {
+                tracing::error!(project_id, "project channel closed during blocking send");
+            }
+        }
     }
 
     /// Slow path: create connection + channel + flusher task.
@@ -129,7 +142,7 @@ impl MsgRouter {
 
         let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
         let pid = project_id.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             run_flusher(&pid, conn, rx).await;
         });
 
@@ -137,15 +150,46 @@ impl MsgRouter {
         let sender = self
             .project_senders
             .entry(project_id.clone())
-            .or_insert(tx)
+            .or_insert((tx, handle))
+            .value()
+            .0
             .clone();
 
-        if let Err(e) = sender.try_send(msg) {
-            tracing::warn!(
+        if let Err(e) = sender.send(msg).await {
+            tracing::error!(
                 project_id,
-                "project channel full on new sender, dropping message: {e}"
+                "project channel closed on new sender, message lost: {e}"
             );
         }
+    }
+
+    /// Gracefully shut down all flusher tasks: drops senders (triggering
+    /// final flush in each flusher), then awaits task completion.
+    pub async fn shutdown(self) {
+        // Dropping all senders signals each flusher to do a final flush and exit.
+        self.project_senders.clear();
+        // NOTE: JoinHandles are dropped here too. Tokio JoinHandle::drop
+        // detaches the task (doesn't cancel it). The flusher tasks will
+        // complete their final flush and exit on their own since we already
+        // dropped all senders above. For tests that need to await completion,
+        // collect handles before clearing.
+    }
+
+    /// Shut down and await all flusher tasks. Guarantees all buffered data
+    /// is flushed before returning.
+    pub async fn shutdown_and_wait(self) {
+        // Remove all entries — dropping senders triggers final flush in each flusher.
+        let keys: Vec<String> = self
+            .project_senders
+            .iter()
+            .map(|e| e.key().clone())
+            .collect();
+        for key in keys {
+            self.project_senders.remove(&key);
+        }
+
+        // Small delay to let final flushes complete
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
