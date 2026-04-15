@@ -40,8 +40,6 @@ mod tests {
             {"name": "payments", "spans": 800}
         ]);
         let toon = to_toon(&value);
-        // The toon crate might format this differently
-        println!("TOON output:\n{}", toon);
         assert!(!toon.is_empty());
     }
 
@@ -56,7 +54,5 @@ mod tests {
         });
         let toon = to_toon(&value);
         assert!(toon.contains("service: checkout"));
-        // Nested objects might be handled differently
-        println!("TOON output:\n{}", toon);
     }
 }
