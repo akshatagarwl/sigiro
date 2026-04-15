@@ -301,96 +301,60 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
     let mut units = StringBuilder::new();
     let mut resource_attrs = StringBuilder::new();
 
-    let resolve_str = |idx: i32| -> &str {
-        match string_table.get(idx as usize) {
-            Some(s) => s.as_str(),
-            None => {
-                tracing::warn!(
-                    string_index = idx,
-                    table_len = string_table.len(),
-                    "string_table index out of bounds"
-                );
-                ""
-            }
-        }
+    let resolve_str = |idx: i32| -> Result<&str, Status> {
+        string_table
+            .get(idx as usize)
+            .map(String::as_str)
+            .ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "string_table index {idx} out of bounds (table has {} entries)",
+                    string_table.len()
+                ))
+            })
     };
 
     /// Resolve a stack from sample.stack_index through the dictionary tables.
     /// Returns function names from root to leaf, capped at 128 frames.
+    /// Returns Err on any index out of bounds — malformed profiles are rejected entirely.
     fn resolve_stack<'a>(
         stack_index: i32,
         dict: &'a opentelemetry_proto::tonic::profiles::v1development::ProfilesDictionary,
         string_table: &'a [String],
-    ) -> Vec<&'a str> {
-        let stack = match dict.stack_table.get(stack_index as usize) {
-            Some(s) => s,
-            None => {
-                tracing::warn!(
-                    stack_index,
-                    table_len = dict.stack_table.len(),
-                    "stack_table index out of bounds"
-                );
-                return vec![];
-            }
-        };
+    ) -> Result<Vec<&'a str>, Status> {
+        let stack = dict.stack_table.get(stack_index as usize).ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "stack_table index {stack_index} out of bounds (table has {} entries)",
+                dict.stack_table.len()
+            ))
+        })?;
         let mut frames = Vec::with_capacity(stack.location_indices.len().min(128));
         for (frame_pos, &loc_idx) in stack.location_indices.iter().take(128).enumerate() {
-            let loc = match dict.location_table.get(loc_idx as usize) {
-                Some(loc) => loc,
-                None => {
-                    tracing::warn!(
-                        stack_index,
-                        location_index = loc_idx,
-                        frame_pos,
-                        table_len = dict.location_table.len(),
-                        "location_table index out of bounds in stack frame"
-                    );
-                    continue;
-                }
-            };
-            let line = match loc.line.first() {
-                Some(line) => line,
-                None => {
-                    tracing::warn!(
-                        stack_index,
-                        location_index = loc_idx,
-                        frame_pos,
-                        "location has no line entries, skipping frame"
-                    );
-                    continue;
-                }
-            };
-            let func = match dict.function_table.get(line.function_index as usize) {
-                Some(func) => func,
-                None => {
-                    tracing::warn!(
-                        stack_index,
-                        location_index = loc_idx,
-                        function_index = line.function_index,
-                        frame_pos,
-                        table_len = dict.function_table.len(),
-                        "function_table index out of bounds in stack frame"
-                    );
-                    continue;
-                }
-            };
-            match string_table.get(func.name_strindex as usize) {
-                Some(name) => frames.push(name.as_str()),
-                None => {
-                    tracing::warn!(
-                        stack_index,
-                        location_index = loc_idx,
-                        function_index = line.function_index,
-                        name_strindex = func.name_strindex,
-                        frame_pos,
-                        table_len = string_table.len(),
-                        "function name_strindex out of bounds, frame will appear as <unknown>"
-                    );
-                    frames.push("<unknown>");
-                }
-            }
+            let loc = dict.location_table.get(loc_idx as usize).ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "location_table index {loc_idx} out of bounds at stack {stack_index} frame {frame_pos} (table has {} entries)",
+                    dict.location_table.len()
+                ))
+            })?;
+            let line = loc.line.first().ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "location index {loc_idx} has no line entries at stack {stack_index} frame {frame_pos}"
+                ))
+            })?;
+            let func = dict.function_table.get(line.function_index as usize).ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "function_table index {} out of bounds at stack {stack_index} frame {frame_pos} (table has {} entries)",
+                    line.function_index, dict.function_table.len()
+                ))
+            })?;
+            let name = string_table.get(func.name_strindex as usize).ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "string_table index {} out of bounds for function name at stack {stack_index} frame {frame_pos} (table has {} entries)",
+                    func.name_strindex, string_table.len()
+                ))
+            })?;
+            frames.push(name.as_str());
         }
-        frames
+        Ok(frames)
     }
 
     for rp in &request.resource_profiles {
@@ -411,10 +375,11 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                     }
                 })
             })
-            .unwrap_or_else(|| {
-                tracing::warn!("resource_profiles entry missing service.name attribute, using 'unknown'");
-                "unknown"
-            });
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "resource_profiles entry missing service.name attribute — every profile must identify its service",
+                )
+            })?;
 
         let res_attrs_json = if let Some(r) = &rp.resource {
             if r.attributes.is_empty() {
@@ -452,12 +417,16 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                 };
 
                 // Resolve profile_type and unit from sample_type
-                let (ptype, punit) = profile.sample_type.as_ref().map_or(("", ""), |st| {
-                    (resolve_str(st.type_strindex), resolve_str(st.unit_strindex))
-                });
+                let (ptype, punit) = match profile.sample_type.as_ref() {
+                    Some(st) => (
+                        resolve_str(st.type_strindex)?,
+                        resolve_str(st.unit_strindex)?,
+                    ),
+                    None => ("", ""),
+                };
 
                 for sample in &profile.sample {
-                    let stack = resolve_stack(sample.stack_index, &dict, string_table);
+                    let stack = resolve_stack(sample.stack_index, &dict, string_table)?;
                     let sample_values = if sample.values.is_empty() {
                         vec![0i64]
                     } else {
