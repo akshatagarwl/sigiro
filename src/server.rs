@@ -19,7 +19,8 @@ use crate::investigate;
 use crate::pool::ProjectPool;
 
 /// Rate limit key: extract Bearer token from Authorization header.
-/// Falls back to "anonymous" if missing — auth middleware will reject it anyway.
+/// Returns Err for requests without a parseable Bearer token — these will be
+/// rejected by auth middleware anyway, so rate-limiting them is pointless noise.
 #[derive(Clone)]
 struct BearerKeyExtractor;
 
@@ -33,11 +34,11 @@ impl KeyExtractor for BearerKeyExtractor {
         let key = req
             .headers()
             .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            // TRADEOFF: rate limiter needs a key for every request, including unauthenticated ones.
-            // "anonymous" groups all unauthenticated requests under one rate limit bucket.
-            .unwrap_or("anonymous");
+            .ok_or(tower_governor::GovernorError::UnableToExtractKey)?
+            .to_str()
+            .map_err(|_| tower_governor::GovernorError::UnableToExtractKey)?
+            .strip_prefix("Bearer ")
+            .ok_or(tower_governor::GovernorError::UnableToExtractKey)?;
         Ok(key.to_string())
     }
 }
