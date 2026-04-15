@@ -32,14 +32,15 @@ impl KeyExtractor for BearerKeyExtractor {
         &self,
         req: &axum::http::Request<T>,
     ) -> Result<Self::Key, tower_governor::GovernorError> {
+        // Use a placeholder when auth is missing/malformed so the request
+        // reaches the auth middleware, which returns a proper 401 instead of
+        // the governor's generic 500 "Unable To Extract Key".
         let key = req
             .headers()
             .get("authorization")
-            .ok_or(tower_governor::GovernorError::UnableToExtractKey)?
-            .to_str()
-            .map_err(|_| tower_governor::GovernorError::UnableToExtractKey)?
-            .strip_prefix("Bearer ")
-            .ok_or(tower_governor::GovernorError::UnableToExtractKey)?;
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("__missing_auth__");
         Ok(key.to_string())
     }
 }
