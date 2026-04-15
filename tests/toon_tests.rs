@@ -119,13 +119,13 @@ fn test_toon_special_characters() {
 fn test_toon_numeric_types() {
     let numbers = json!({
         "integer": 42,
-        "float": 3.14,
+        "float": 1.61803,
         "negative": -100
     });
     let toon = sigiro::toon::to_toon(&numbers);
 
     assert!(toon.contains("42"), "TOON should contain integer");
-    assert!(toon.contains("3.14"), "TOON should contain float");
+    assert!(toon.contains("1.618"), "TOON should contain float");
     assert!(toon.contains("-100"), "TOON should contain negative number");
 }
 

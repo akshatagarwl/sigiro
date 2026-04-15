@@ -51,7 +51,7 @@ fn missing_config_returns_error() {
 fn auth_command_writes_config() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let path = dir.path().join("config.toml");
-    std::fs::write(&path, format!("api_key=\"sk_live_written\"\n")).unwrap();
+    std::fs::write(&path, "api_key=\"sk_live_written\"\n").unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("sk_live_written"));
 }

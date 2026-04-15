@@ -130,7 +130,10 @@ fn bench_appender_throughput(c: &mut Criterion) {
 fn bench_appender_multi_batch(c: &mut Criterion) {
     let (conn, _dir) = setup_ducklake_db();
     let batches: Vec<RecordBatch> = (0..5).map(|_| make_span_batch(2_000)).collect();
-    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    let total_rows: usize = batches
+        .iter()
+        .map(arrow::array::RecordBatch::num_rows)
+        .sum();
 
     let mut group = c.benchmark_group("appender");
     group.throughput(Throughput::Elements(total_rows as u64));

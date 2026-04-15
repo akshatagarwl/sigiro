@@ -31,7 +31,7 @@ fn suggestion_strings_are_nonempty() {
 
 #[test]
 fn missing_capabilities_format() {
-    let missing = vec!["CAP_BPF".to_string(), "CAP_NET_ADMIN".to_string()];
+    let missing = ["CAP_BPF".to_string(), "CAP_NET_ADMIN".to_string()];
     let reason = format!("missing capabilities: {}", missing.join(", "));
     assert!(reason.contains("CAP_BPF"));
     assert!(reason.contains("CAP_NET_ADMIN"));
