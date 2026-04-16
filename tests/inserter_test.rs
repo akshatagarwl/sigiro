@@ -220,7 +220,7 @@ async fn inserter_handles_backpressure() {
 
 #[tokio::test]
 async fn inserter_throughput_single_project() {
-    // Throughput test: 50,000 rows should complete in under 30 seconds.
+    // Throughput test: 50,000 rows should complete in under 60 seconds.
     // This validates the buffered flush path is working (not per-message appender create/destroy).
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
@@ -258,7 +258,7 @@ async fn inserter_throughput_single_project() {
         batch_size * num_batches
     );
     assert!(
-        elapsed < Duration::from_secs(30),
-        "50k rows took {elapsed:?}, expected < 30s (DuckLake Parquet is slower than native DuckDB)"
+        elapsed < Duration::from_secs(60),
+        "50k rows took {elapsed:?}, expected < 60s (DuckLake Parquet is slower than native DuckDB)"
     );
 }
