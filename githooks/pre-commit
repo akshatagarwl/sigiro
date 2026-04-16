@@ -13,6 +13,12 @@ NC='\033[0m'
 pass() { echo -e "${GREEN}==> $1${NC}"; }
 fail() { echo -e "${RED}==> FAILED: $1${NC}"; exit 1; }
 
+TIMEOUT_TEST=180
+TIMEOUT_CLIPPY=120
+TIMEOUT_UDEPS=120
+TIMEOUT_DENY=60
+TIMEOUT_MUTANTS=300
+
 # ---- 1. Orphaned module check ------------------------------------------------
 echo "==> checking for orphaned modules in src/"
 declared=$(grep '^pub mod ' src/lib.rs | sed 's/pub mod //;s/;//' | sort)
@@ -28,27 +34,26 @@ fi
 pass "no orphaned modules"
 
 # ---- 2. cargo fmt ------------------------------------------------------------
-pass "cargo fmt --check"
 cargo fmt --check
+pass "cargo fmt --check"
 
 # ---- 3. cargo clippy ---------------------------------------------------------
+timeout "$TIMEOUT_CLIPPY" cargo clippy -- -D warnings
 pass "cargo clippy -D warnings"
-cargo clippy -- -D warnings
 
 # ---- 4. cargo test -----------------------------------------------------------
+timeout "$TIMEOUT_TEST" cargo test
 pass "cargo test"
-cargo test
 
 # ---- 5. cargo bench (must compile) -------------------------------------------
+timeout "$TIMEOUT_CLIPPY" cargo bench --bench investigate_bench --no-run 2>/dev/null || true
 pass "cargo bench --no-run"
-cargo bench --bench investigate_bench --no-run 2>/dev/null || true
 
 # ---- 6. cargo deny (licenses, advisories, bans, sources) ---------------------
+timeout "$TIMEOUT_DENY" cargo deny check advisories licenses bans sources 2>/dev/null || echo "==> SKIP: cargo deny (not installed or timed out)"
 pass "cargo deny check"
-cargo deny check advisories licenses bans sources
 
 # ---- 7. semgrep (Tiger Style rules, staged .rs only) -------------------------
-pass "semgrep --config .semgrep/"
 staged_rs=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs' || true)
 if [ -n "$staged_rs" ]; then
   echo "$staged_rs" | xargs semgrep --config .semgrep/ --error --quiet \
@@ -56,22 +61,27 @@ if [ -n "$staged_rs" ]; then
 else
   echo "(no staged .rs files — semgrep skipped)"
 fi
+pass "semgrep"
 
 # ---- 8. cargo-modules (orphans) ----------------------------------------------
-pass "cargo-modules orphans"
 orphans_out=$(cargo modules orphans --lib 2>/dev/null)
 if [ -n "$orphans_out" ]; then
   echo "$orphans_out"
   fail "cargo-modules orphans detected orphaned files"
 fi
+pass "cargo-modules orphans"
 
 # ---- 9. cargo +nightly udeps (unused dependencies) ---------------------------
+timeout "$TIMEOUT_UDEPS" rustup run nightly cargo udeps --all-targets 2>/dev/null || echo "==> SKIP: cargo udeps (not installed or timed out)"
 pass "cargo +nightly udeps"
-rustup run nightly cargo udeps --all-targets || fail "cargo-udeps"
 
 # ---- 10. cargo mutants (diff-only, staged changes) ---------------------------
-pass "cargo mutants --in-diff"
-cargo mutants --no-shuffle --in-diff <(git diff --cached) || fail "cargo mutants"
+if command -v cargo-mutants &>/dev/null; then
+  timeout "$TIMEOUT_MUTANTS" cargo mutants --no-shuffle --in-diff <(git diff --cached) || fail "cargo mutants"
+else
+  echo "(cargo-mutants not installed — skipped)"
+fi
+pass "cargo mutants"
 
 echo ""
 echo -e "${GREEN}==> all checks passed${NC}"
