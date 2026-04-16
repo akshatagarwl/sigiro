@@ -1,0 +1,45 @@
+# Sigiro local storage E2E test VM
+#
+# Usage:
+#   limactl start --name=sigiro-local dev/lima/sigiro-local.yaml
+#
+# Cross-compile and copy binary:
+#   ulimit -n 65536 && \
+#     AR_aarch64_unknown_linux_gnu=/opt/homebrew/opt/llvm/bin/llvm-ar \
+#     cargo zigbuild --release --target aarch64-unknown-linux-gnu
+#   limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-local:/home/akshat.guest/sigiro-latest
+#
+# Run E2E test:
+#   limactl shell sigiro-local bash -c \
+#     'SIGIRO_BIN=/home/akshat.guest/sigiro-latest MODE=local \
+#      SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'
+#   # Note: copy the test script first because 9p mount has stale caching:
+#   limactl copy tests/lima-e2e-test.sh sigiro-local:/tmp/lima-e2e-test.sh
+
+images:
+- location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+  arch: "aarch64"
+
+cpus: 2
+memory: "2GiB"
+disk: "40GiB"
+
+ssh:
+  localPort: 0
+
+containerd:
+  system: false
+  user: false
+
+mounts:
+- location: "<REPO_ROOT>"
+  writable: true
+
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y build-essential pkg-config libssl-dev git curl ca-certificates postgresql postgresql-client

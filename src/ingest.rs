@@ -124,29 +124,46 @@ pub fn extract_project_id_grpc(
     Ok(ctx.project_id)
 }
 
-/// Transform raw protobuf bytes into Arrow RecordBatch on the tokio blocking pool.
-/// This parallelizes the CPU-bound protobuf decode + Arrow conversion across all cores.
-async fn transform_traces(bytes: Vec<u8>) -> Result<RecordBatch, Status> {
+/// Detect InputFormat from Content-Type header.
+/// OTLP/HTTP spec: application/x-protobuf (default) or application/json.
+fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
+    headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| {
+            let ct_lower = ct.to_lowercase();
+            if ct_lower.contains("json") {
+                InputFormat::Json
+            } else {
+                InputFormat::Protobuf
+            }
+        })
+        .unwrap_or(InputFormat::Protobuf)
+}
+
+/// Transform raw bytes into Arrow RecordBatch on the tokio blocking pool.
+/// Supports both protobuf and JSON input based on Content-Type header.
+async fn transform_traces(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
     tokio::task::spawn_blocking(move || {
-        otlp2records::transform_traces(&bytes, InputFormat::Protobuf)
+        otlp2records::transform_traces(&bytes, fmt)
             .map_err(|e| Status::internal(format!("transform traces: {e}")))
     })
     .await
     .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
-async fn transform_logs(bytes: Vec<u8>) -> Result<RecordBatch, Status> {
+async fn transform_logs(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
     tokio::task::spawn_blocking(move || {
-        otlp2records::transform_logs(&bytes, InputFormat::Protobuf)
+        otlp2records::transform_logs(&bytes, fmt)
             .map_err(|e| Status::internal(format!("transform logs: {e}")))
     })
     .await
     .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
-async fn transform_metrics(bytes: Vec<u8>) -> Result<MetricBatches, Status> {
+async fn transform_metrics(bytes: Vec<u8>, fmt: InputFormat) -> Result<MetricBatches, Status> {
     tokio::task::spawn_blocking(move || {
-        otlp2records::transform_metrics(&bytes, InputFormat::Protobuf)
+        otlp2records::transform_metrics(&bytes, fmt)
             .map_err(|e| Status::internal(format!("transform metrics: {e}")))
     })
     .await
@@ -163,7 +180,7 @@ impl TraceService for OtlpGrpcService {
         // Transform on tokio blocking pool — no double decode.
         // Encode once (prost), decode once (otlp2records). Previously: decode (tonic) → encode (prost) → decode (otlp2records).
         let bytes = request.into_inner().encode_to_vec();
-        let batch = transform_traces(bytes).await?;
+        let batch = transform_traces(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() > 0 {
             self.router
                 .send(IngestMsg::Traces { project_id, batch })
@@ -183,7 +200,7 @@ impl LogsService for OtlpGrpcService {
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
-        let batch = transform_logs(bytes).await?;
+        let batch = transform_logs(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() > 0 {
             self.router
                 .send(IngestMsg::Logs { project_id, batch })
@@ -203,7 +220,7 @@ impl MetricsService for OtlpGrpcService {
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
-        let batches = transform_metrics(bytes).await?;
+        let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
         self.router
             .send(IngestMsg::Metrics {
                 project_id,
@@ -583,8 +600,8 @@ async fn otlp_http_traces(
         Ok(id) => id,
         Err(status) => return status,
     };
-    // HTTP path: bytes come in raw — transform on blocking pool, no double decode.
-    let batch = match transform_traces(body.to_vec()).await {
+    let fmt = detect_format(&headers);
+    let batch = match transform_traces(body.to_vec(), fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform traces: {e}");
@@ -609,7 +626,8 @@ async fn otlp_http_logs(
         Ok(id) => id,
         Err(status) => return status,
     };
-    let batch = match transform_logs(body.to_vec()).await {
+    let fmt = detect_format(&headers);
+    let batch = match transform_logs(body.to_vec(), fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform logs: {e}");
@@ -634,7 +652,8 @@ async fn otlp_http_metrics(
         Ok(id) => id,
         Err(status) => return status,
     };
-    let batches = match transform_metrics(body.to_vec()).await {
+    let fmt = detect_format(&headers);
+    let batches = match transform_metrics(body.to_vec(), fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform metrics: {e}");

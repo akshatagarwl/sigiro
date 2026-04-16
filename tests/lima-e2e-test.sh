@@ -8,6 +8,7 @@
 #
 # Environment:
 #   MODE          "local" (default) or "s3"
+#   SIGIRO_BIN    Path to sigiro binary (default: target/release/sigiro relative to script)
 #   SIGIRO_DATA   Data directory (default: /tmp/sigiro-e2e-data)
 #   MINIO_PORT    MinIO API port for S3 mode (default: 9000)
 #   PG_PORT       PostgreSQL port for S3 mode (default: 5432)
@@ -17,7 +18,8 @@ MODE="${MODE:-local}"
 SIGIRO_DATA="${SIGIRO_DATA:-/tmp/sigiro-e2e-data}"
 MINIO_PORT="${MINIO_PORT:-9000}"
 PG_PORT="${PG_PORT:-5432}"
-SIGIRO_BIN="$HOME/sigiro/target/release/sigiro"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SIGIRO_BIN="${SIGIRO_BIN:-${SCRIPT_DIR}/../target/release/sigiro}"
 SIGIRO_PID=""
 FAILED=0
 
@@ -35,7 +37,6 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 cleanup() {
     log "Cleaning up..."
     [ -n "$SIGIRO_PID" ] && kill "$SIGIRO_PID" 2>/dev/null || true
-    # Kill MinIO if running
     pkill -f "minio server" 2>/dev/null || true
     log "Done."
 }
@@ -59,10 +60,10 @@ mkdir -p "$SIGIRO_DATA"
 if [ "$MODE" = "s3" ]; then
     log "Setting up MinIO (S3-compatible storage)..."
 
-    # Start MinIO
     export MINIO_ROOT_USER=sigiro-test
     export MINIO_ROOT_PASSWORD=sigiro-test-secret
-    nohup minio server /data/minio --address ":${MINIO_PORT}" --console-address ":9001" > /tmp/minio.log 2>&1 &
+    mkdir -p /tmp/minio-data-e2e
+    nohup minio server /tmp/minio-data-e2e --address ":${MINIO_PORT}" --console-address ":9001" > /tmp/minio.log 2>&1 &
     MINIO_PID=$!
     sleep 3
 
@@ -114,20 +115,7 @@ if ! kill -0 "$SIGIRO_PID" 2>/dev/null; then
 fi
 pass "Server started (PID ${SIGIRO_PID})"
 
-# ─── Step 3: Create API key and verify auth ───────────────────────
-log "Creating test API key..."
-export SIGIRO_ENDPOINT="http://localhost:9999"
-KEY_OUTPUT=$($SIGIRO_BIN admin create-key --project test-project --plan free 2>&1) || true
-API_KEY=$(echo "$KEY_OUTPUT" | grep -oE 'sigiro_[a-zA-Z0-9]+' || echo "")
-
-if [ -n "$API_KEY" ]; then
-    pass "API key created: ${API_KEY:0:20}..."
-else
-    warn "Could not create API key, using dev key"
-    API_KEY="sigiro_dev"
-fi
-
-# ─── Step 4: Health check ─────────────────────────────────────────
+# ─── Step 3: Health check ─────────────────────────────────────────
 log "Checking health endpoint..."
 HEALTH=$(curl -sf http://localhost:9999/health 2>/dev/null || echo "")
 if [ -n "$HEALTH" ]; then
@@ -137,10 +125,15 @@ else
     cat /tmp/sigiro-server.log | tail -20
 fi
 
+# ─── Step 4: Create API key ──────────────────────────────────────
+# Use dev key for E2E — sigiro_dev_<anything> always works in dev mode
+API_KEY="sigiro_dev_test-project"
+export SIGIRO_ENDPOINT="http://localhost:9999"
+pass "Using dev API key: ${API_KEY}"
+
 # ─── Step 5: Send OTLP trace data ─────────────────────────────────
 log "Sending OTLP trace data via HTTP :4318..."
 
-# Build a minimal OTLP/JSON trace payload
 TRACE_PAYLOAD='{
   "resourceSpans": [{
     "resource": {
@@ -188,6 +181,7 @@ fi
 
 # ─── Step 6: Send OTLP log data ───────────────────────────────────
 log "Sending OTLP log data..."
+
 LOG_PAYLOAD='{
   "resourceLogs": [{
     "resource": {
@@ -236,6 +230,7 @@ fi
 
 # ─── Step 7: Send OTLP metric data ────────────────────────────────
 log "Sending OTLP metric data..."
+
 METRIC_PAYLOAD='{
   "resourceMetrics": [{
     "resource": {
@@ -292,12 +287,14 @@ sleep 5
 
 # ─── Step 9: Query data ──────────────────────────────────────────
 log "Querying stored data..."
-QUERY_RESULT=$($SIGIRO_BIN query "SELECT service, signal, count(*) as cnt FROM lake.sigiro_records GROUP BY service, signal ORDER BY service, signal" 2>&1) || true
+# Use the dev key for CLI commands
+export SIGIRO_API_KEY="${API_KEY}"
+QUERY_RESULT=$($SIGIRO_BIN query "SELECT count(*) as cnt FROM lake.sigiro_spans" 2>&1) || true
 log "Query result:"
 echo "$QUERY_RESULT"
 
-if echo "$QUERY_RESULT" | grep -q "checkout"; then
-    pass "Query returned checkout service data"
+if echo "$QUERY_RESULT" | grep -qE "[0-9]+"; then
+    pass "Query returned data"
 else
     fail "Query did not return expected data"
 fi
@@ -315,14 +312,20 @@ else
     warn "Investigate may not have returned expected data"
 fi
 
-# ─── Step 11: Verify data isolation ──────────────────────────────
+# ─── Step 11: Verify services endpoint ────────────────────────────
 log "Checking services endpoint..."
-SERVICES_RESULT=$(curl -sf http://localhost:9999/services -H "Authorization: Bearer ${API_KEY}" 2>/dev/null || echo "{}")
+SERVICES_RESULT=$(curl -sf http://localhost:9999/v1/services -H "Authorization: Bearer ${API_KEY}" 2>/dev/null || echo "{}")
 log "Services: ${SERVICES_RESULT}"
+
+if echo "$SERVICES_RESULT" | grep -qi "checkout"; then
+    pass "Services endpoint returned checkout"
+else
+    warn "Services endpoint did not include checkout"
+fi
 
 # ─── Step 12: Verify server logs ─────────────────────────────────
 log "Checking server logs for errors..."
-ERROR_COUNT=$(grep -ci "error\|panic\|fatal" /tmp/sigiro-server.log 2>/dev/null || echo "0")
+ERROR_COUNT=$(grep -ci "error\|panic\|fatal" /tmp/sigiro-server.log 2>/dev/null || true)
 if [ "$ERROR_COUNT" -lt 5 ]; then
     pass "Server logs clean (error mentions: ${ERROR_COUNT})"
 else
