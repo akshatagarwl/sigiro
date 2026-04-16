@@ -9,14 +9,19 @@ use duckdb::Connection;
 use std::sync::Arc;
 
 fn attach_ducklake_default(conn: &Connection, dir: &std::path::Path) {
+    // Point DuckDB's home_directory at the temp dir so INSTALL/LOAD works
+    // even in restricted environments (Nix sandbox, CI, containers).
+    let data_path = dir.to_string_lossy();
+    conn.execute_batch(&format!("SET home_directory='{data_path}';"))
+        .expect("set home_directory");
+
     conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
         .expect("install/load ducklake");
 
-    let data_path = dir.to_string_lossy();
     conn.execute_batch(&format!(
         "ATTACH 'ducklake:{data_path}/catalog.ducklake' AS lake"
     ))
-    .expect("attach DuckLake DuckDB file catalog");
+    .expect("attach DuckDB file catalog");
 }
 
 fn make_batch(n: usize) -> RecordBatch {
@@ -126,6 +131,8 @@ fn ducklake_data_survives_reattach() {
     // Session 2: re-attach and read
     {
         let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!("SET home_directory='{data_path}';"))
+            .unwrap();
         conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
             .unwrap();
         conn.execute_batch(&format!(

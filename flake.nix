@@ -65,8 +65,11 @@
           crossPkgs.stdenv.cc.bintools
         ];
 
-        # ---- Native build (for the build machine's own architecture) ----
-        nativeBuild = craneLib.buildPackage {
+        # ---- Dependency derivation (cached by Nix, rebuilds only on Cargo.lock change) ----
+        # This is the key optimization: DuckDB C++ compilation happens HERE and is cached.
+        # Source changes only rebuild the second derivation below.
+
+        nativeDeps = craneLib.buildDepsOnly {
           inherit src;
           strictDeps = true;
           nativeBuildInputs = with pkgs; [ cmake pkg-config python3 ];
@@ -76,11 +79,43 @@
           '';
         };
 
+        crossDeps = craneLib.buildDepsOnly {
+          inherit src;
+          strictDeps = true;
+
+          cargoExtraArgs = "--target ${targetTriple}";
+          inherit nativeBuildInputs;
+
+          env = crossEnv;
+
+          preBuild = ''
+            ulimit -n 65536 2>/dev/null || true
+          '';
+        };
+
+        # ---- Native build (for the build machine's own architecture) ----
+        nativeBuild = craneLib.buildPackage {
+          inherit src;
+          strictDeps = true;
+          nativeBuildInputs = with pkgs; [ cmake pkg-config python3 ];
+
+          cargoArtifacts = nativeDeps;
+
+          preBuild = ''
+            ulimit -n 65536 2>/dev/null || true
+          '';
+
+          preCheck = ''
+            export HOME=$(mktemp -d)
+          '';
+        };
+
         # ---- Cross-compiled build (aarch64-linux-gnu) ----
         crossBuild = craneLib.buildPackage {
           inherit src;
           strictDeps = true;
 
+          cargoArtifacts = crossDeps;
           cargoExtraArgs = "--target ${targetTriple}";
           inherit nativeBuildInputs;
 

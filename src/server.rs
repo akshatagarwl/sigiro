@@ -1,9 +1,5 @@
 use anyhow::{Context, Result};
-use axum::{
-    Extension, Json, Router,
-    extract::State,
-    middleware as axum_mw,
-};
+use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
 use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt};
 use axum_extra::routing::{RouterExt, TypedPath};
 use rusqlite::Connection;
@@ -486,7 +482,10 @@ async fn admin_revoke_key(
 }
 
 /// GET /admin/status — returns all instance_status rows as JSON object.
-async fn admin_status(_path: AdminStatusPath, State(state): State<Arc<AppState>>) -> ApiResult<Json<serde_json::Value>> {
+async fn admin_status(
+    _path: AdminStatusPath,
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<serde_json::Value>> {
     let guard = state
         .admin_conn
         .lock()

@@ -1,29 +1,10 @@
-CLAUDE.md
-AGENTS.md
+# Build artifacts
+/target
+/.cross
 
-# Rust build output
-target/
+# Nix
+/result
+/result-*
 
-# Autoresearch output
-predict/
-
-# Agent/IDE configs (per-machine, not shared)
-.agents/
-.augment/
-.junie/
-.kiro/
-.claude/skills/
-.claude/diagrams/
-.claude/settings.local.json
-.impeccable.md
-.mcp.json
-skills/
-skills-lock.json
-investigations/
-design/
-
-# Screenshots and generated images
-*.png
-.rp/
-
-.cross
+# OS
+.DS_Store
