@@ -4,10 +4,8 @@
 #   limactl start --name=sigiro-local dev/lima/sigiro-local.yaml
 #
 # Cross-compile and copy binary:
-#   ulimit -n 65536 && \
-#     AR_aarch64_unknown_linux_gnu=/opt/homebrew/opt/llvm/bin/llvm-ar \
-#     cargo zigbuild --release --target aarch64-unknown-linux-gnu
-#   limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-local:/home/akshat.guest/sigiro-latest
+#   nix build .#sigiro-aarch64-linux
+#   limactl copy ./result/bin/sigiro sigiro-local:/home/akshat.guest/sigiro-latest
 #
 # Run E2E test:
 #   limactl shell sigiro-local bash -c \
