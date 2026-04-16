@@ -229,15 +229,7 @@ struct ProjectFlusher {
 
 impl ProjectFlusher {
     fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        let signals = [
-            SignalTable::Spans,
-            SignalTable::Logs,
-            SignalTable::MetricsGauge,
-            SignalTable::MetricsSum,
-            SignalTable::MetricsHistogram,
-            SignalTable::MetricsExpHistogram,
-            SignalTable::Profiles,
-        ];
+        let signals = SignalTable::ALL;
         let table_names: BTreeMap<SignalTable, String> = signals
             .iter()
             .map(|s| (*s, s.table_name(ProjectPool::prefix())))
