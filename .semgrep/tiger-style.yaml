@@ -75,6 +75,7 @@ rules:
     message: |
       Tiger Style: Use tracing::info!() instead of println!() in library/server code.
       println!() is only acceptable in CLI command handlers for direct user output.
+      In tests, use tracing::info!() with #[traced_test] from tracing-test.
     languages: [rust]
     severity: INFO
     paths:
@@ -82,19 +83,17 @@ rules:
         - src/
       exclude:
         - src/main.rs  # CLI output is acceptable
-        - tests/
 
   - id: tiger-no-eprintln
     pattern: eprintln!(...)
     message: |
       Tiger Style: Use tracing::error!() or tracing::warn!() instead of eprintln!().
+      In tests, use tracing::error!() with #[traced_test] from tracing-test.
     languages: [rust]
     severity: WARNING
     paths:
       include:
         - src/
-      exclude:
-        - tests/
 
   # =============================================================================
   # Tiger Style: Assertions — Production Assertions Over debug_assert
