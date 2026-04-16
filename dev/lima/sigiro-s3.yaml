@@ -31,7 +31,7 @@ containerd:
   user: false
 
 mounts:
-- location: "<REPO_ROOT>"
+- location: "../.."
   writable: true
 
 provision:
