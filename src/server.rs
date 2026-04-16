@@ -3,10 +3,11 @@ use axum::{
     Extension, Json, Router,
     extract::State,
     middleware as axum_mw,
-    routing::{delete, get, post},
 };
 use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt};
+use axum_extra::routing::{RouterExt, TypedPath};
 use rusqlite::Connection;
+use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
@@ -18,6 +19,48 @@ use crate::ingest::OtlpGrpcService;
 use crate::inserter::MsgRouter;
 use crate::investigate;
 use crate::pool::ProjectPool;
+
+// --- Typed path structs for compile-time route checking ---
+
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/query")]
+struct QueryPath;
+
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/investigate")]
+struct InvestigatePath;
+
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/services")]
+struct ServicesPath;
+
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/federation/workers")]
+struct FederationWorkersPath;
+
+#[derive(Debug, Clone, Deserialize, TypedPath)]
+#[typed_path("/federation/workers/{id}")]
+struct FederationWorkerPath {
+    id: String,
+}
+
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/keys")]
+struct AdminKeysPath;
+
+#[derive(Debug, Clone, Deserialize, TypedPath)]
+#[typed_path("/keys/{short_token}")]
+struct AdminKeyPath {
+    short_token: String,
+}
+
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/status")]
+struct AdminStatusPath;
+
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/health")]
+struct HealthPath;
 
 /// Rate limit key: extract Bearer token from Authorization header.
 /// Returns Err for requests without a parseable Bearer token — these will be
@@ -104,6 +147,49 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Build the HTTP Router for the main API (port 9999).
+/// Extracted from `run_servers` so integration tests can build the same
+/// router with test state without starting TCP listeners.
+pub fn build_http_router(app_state: Arc<AppState>) -> Router {
+    // Rate limit: 100 requests/minute per API key (GCRA algorithm, in-memory)
+    let governor_conf = GovernorConfigBuilder::default()
+        .key_extractor(BearerKeyExtractor)
+        .per_second(2)
+        .burst_size(10)
+        .finish()
+        .expect("valid governor config");
+
+    // v1 API routes — all authenticated + rate limited
+    // Layer order: request → governor → auth → handler (last .layer() runs first)
+    let v1 = Router::new()
+        .typed_post(query_handler)
+        .typed_post(investigate_handler)
+        .typed_get(services_handler)
+        .typed_post(register_worker_handler)
+        .typed_get(list_workers_handler)
+        .typed_delete(deregister_worker_handler)
+        .layer(axum_mw::from_fn_with_state(
+            app_state.clone(),
+            auth::auth_middleware,
+        ))
+        .layer(GovernorLayer::new(governor_conf));
+
+    // Admin routes — no bearer auth (chicken-and-egg: need admin to create first key).
+    // These are on :9999 which should only be exposed internally.
+    let admin = Router::new()
+        .typed_post(admin_create_key)
+        .typed_delete(admin_revoke_key)
+        .typed_get(admin_status);
+
+    // Public routes + v1 API + admin
+    Router::new()
+        .typed_get(health)
+        .nest("/v1", v1)
+        .nest("/admin", admin)
+        .layer(tower_http::compression::CompressionLayer::new())
+        .with_state(app_state)
+}
+
 pub async fn run_servers(
     pool: Arc<ProjectPool>,
     admin_conn: Arc<Mutex<Connection>>,
@@ -142,49 +228,7 @@ pub async fn run_servers(
             .context("failed to create federation workers table")?;
     }
 
-    // Rate limit: 100 requests/minute per API key (GCRA algorithm, in-memory)
-    let governor_conf = GovernorConfigBuilder::default()
-        .key_extractor(BearerKeyExtractor)
-        .per_second(2)
-        .burst_size(10)
-        .finish()
-        .expect("valid governor config");
-
-    // v1 API routes — all authenticated + rate limited
-    // Layer order: request → governor → auth → handler (last .layer() runs first)
-    let v1 = Router::new()
-        .route("/query", post(query_handler))
-        .route("/investigate", post(investigate_handler))
-        .route("/services", get(services_handler))
-        .route("/federation/workers", post(register_worker_handler))
-        .route("/federation/workers", get(list_workers_handler))
-        .route(
-            "/federation/workers/{id}",
-            delete(deregister_worker_handler),
-        )
-        .layer(axum_mw::from_fn_with_state(
-            app_state.clone(),
-            auth::auth_middleware,
-        ))
-        .layer(GovernorLayer::new(governor_conf));
-
-    // Admin routes — no bearer auth (chicken-and-egg: need admin to create first key).
-    // These are on :9999 which should only be exposed internally.
-    let admin = Router::new()
-        .route("/keys", post(admin_create_key))
-        .route(
-            "/keys/{short_token}",
-            axum::routing::delete(admin_revoke_key),
-        )
-        .route("/status", get(admin_status));
-
-    // Public routes + v1 API + admin
-    let http_app = Router::new()
-        .route("/health", get(health))
-        .nest("/v1", v1)
-        .nest("/admin", admin)
-        .layer(tower_http::compression::CompressionLayer::new())
-        .with_state(app_state);
+    let http_app = build_http_router(app_state);
 
     let http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
@@ -227,7 +271,7 @@ pub async fn run_servers(
     Ok(())
 }
 
-async fn health() -> &'static str {
+async fn health(_path: HealthPath) -> &'static str {
     "ok"
 }
 
@@ -274,6 +318,7 @@ fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duc
 }
 
 async fn query_handler(
+    _path: QueryPath,
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
     body: String,
@@ -324,6 +369,7 @@ async fn query_handler(
 /// GET /v1/services — discover what services are sending telemetry.
 /// Agents call this before /investigate to know what services exist.
 async fn services_handler(
+    _path: ServicesPath,
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
 ) -> ApiResult<Json<serde_json::Value>> {
@@ -378,6 +424,7 @@ async fn services_handler(
 }
 
 async fn investigate_handler(
+    _path: InvestigatePath,
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
     Json(req): Json<investigate::InvestigateRequest>,
@@ -411,6 +458,7 @@ fn default_rate_limit() -> u32 {
 }
 
 async fn admin_create_key(
+    _path: AdminKeysPath,
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateKeyRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
@@ -420,8 +468,8 @@ async fn admin_create_key(
 }
 
 async fn admin_revoke_key(
+    AdminKeyPath { short_token }: AdminKeyPath,
     State(state): State<Arc<AppState>>,
-    axum::extract::Path(short_token): axum::extract::Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let revoked = admin::revoke_key(&state.admin_conn, &short_token)
         .context_internal("Admin", "failed to revoke API key")?;
@@ -438,7 +486,7 @@ async fn admin_revoke_key(
 }
 
 /// GET /admin/status — returns all instance_status rows as JSON object.
-async fn admin_status(State(state): State<Arc<AppState>>) -> ApiResult<Json<serde_json::Value>> {
+async fn admin_status(_path: AdminStatusPath, State(state): State<Arc<AppState>>) -> ApiResult<Json<serde_json::Value>> {
     let guard = state
         .admin_conn
         .lock()
@@ -455,6 +503,7 @@ async fn admin_status(State(state): State<Arc<AppState>>) -> ApiResult<Json<serd
 
 /// POST /v1/federation/workers -- register a federation worker.
 async fn register_worker_handler(
+    _path: FederationWorkersPath,
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthContext>,
     Json(worker): Json<federation::WorkerInfo>,
@@ -474,9 +523,9 @@ async fn register_worker_handler(
 
 /// DELETE /v1/federation/workers/{id} -- deregister a federation worker.
 async fn deregister_worker_handler(
+    FederationWorkerPath { id }: FederationWorkerPath,
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthContext>,
-    axum::extract::Path(id): axum::extract::Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let guard = state
         .admin_conn
@@ -496,6 +545,7 @@ async fn deregister_worker_handler(
 
 /// GET /v1/federation/workers -- list all federation workers.
 async fn list_workers_handler(
+    _path: FederationWorkersPath,
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthContext>,
 ) -> ApiResult<Json<serde_json::Value>> {

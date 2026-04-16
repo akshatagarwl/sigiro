@@ -39,6 +39,7 @@ hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
 which = "5"
+axum-extra = { version = "0.12.6", features = ["typed-routing"] }
 
 [build-dependencies]
 ureq = { version = "3", features = ["rustls"] }
@@ -47,6 +48,7 @@ ureq = { version = "3", features = ["rustls"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 tower = "0.5"
+axum-test = "17"
 
 [[bench]]
 name = "investigate_bench"
