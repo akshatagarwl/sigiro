@@ -13,7 +13,7 @@ const STYLES: styling::Styles = styling::Styles::styled()
     .placeholder(styling::AnsiColor::Yellow.on_default());
 
 #[derive(Parser)]
-#[command(name = "sigiro", about = "Observability for AI agents", styles = STYLES)]
+#[command(name = "sigiro", version, about = "Observability for AI agents", styles = STYLES)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,

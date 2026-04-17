@@ -33,7 +33,11 @@ pub fn init_default(conn: &Connection, project_dir: &Path) -> Result<()> {
 
 /// Initialize DuckLake with PostgreSQL catalog + optional S3 data files.
 /// Multi-writer safe — multiple sigiro instances can attach to the same catalog.
-pub fn init_distributed(conn: &Connection, config: &StorageConfig) -> Result<()> {
+pub fn init_distributed(
+    conn: &Connection,
+    config: &StorageConfig,
+    project_dir: &Path,
+) -> Result<()> {
     // Load required extensions
     conn.execute_batch("INSTALL ducklake; INSTALL postgres; LOAD ducklake; LOAD postgres;")
         .context("failed to install/load ducklake + postgres extensions")?;
@@ -74,11 +78,20 @@ pub fn init_distributed(conn: &Connection, config: &StorageConfig) -> Result<()>
         );
     } else {
         // PostgreSQL catalog + local Parquet (useful for multi-writer without S3)
-        let attach_sql = format!("ATTACH 'ducklake:{catalog_path}' AS lake");
+        std::fs::create_dir_all(project_dir).with_context(|| {
+            format!(
+                "failed to create project directory for local data: {}",
+                project_dir.display()
+            )
+        })?;
+        let local_data_path = project_dir.to_string_lossy();
+        let attach_sql =
+            format!("ATTACH 'ducklake:{catalog_path}' AS lake (DATA_PATH '{local_data_path}')");
         conn.execute_batch(&attach_sql)
             .context("failed to attach DuckLake with PostgreSQL catalog")?;
         tracing::info!(
             catalog = %catalog_path,
+            data_path = %local_data_path,
             "DuckLake attached — catalog: PostgreSQL, data: local Parquet"
         );
     }
@@ -98,17 +111,15 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         Err(_) => return Ok(None), // not set — use local SQLite
     };
 
-    let s3_bucket = std::env::var("SIGIRO_S3_BUCKET").context(
-        "SIGIRO_CATALOG_URL is set but SIGIRO_S3_BUCKET is not set — set both or neither",
-    )?;
-    if s3_bucket.is_empty() {
-        anyhow::bail!("SIGIRO_S3_BUCKET is set but empty — provide a valid S3 bucket name");
+    let s3_bucket = std::env::var("SIGIRO_S3_BUCKET").unwrap_or_default();
+    let s3_region = std::env::var("SIGIRO_S3_REGION").unwrap_or_default();
+    if !s3_bucket.is_empty() && s3_region.is_empty() {
+        anyhow::bail!(
+            "SIGIRO_S3_BUCKET is set but SIGIRO_S3_REGION is missing — provide a valid AWS region"
+        );
     }
-    let s3_region = std::env::var("SIGIRO_S3_REGION").context(
-        "SIGIRO_CATALOG_URL is set but SIGIRO_S3_REGION is not set — set both or neither",
-    )?;
-    if s3_region.is_empty() {
-        anyhow::bail!("SIGIRO_S3_REGION is set but empty — provide a valid AWS region");
+    if s3_bucket.is_empty() && !s3_region.is_empty() {
+        tracing::warn!("SIGIRO_S3_REGION is set but SIGIRO_S3_BUCKET is empty — S3 region ignored");
     }
 
     Ok(Some(StorageConfig {
@@ -141,7 +152,9 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
         // Check if it's a URI (contains //) or already libpq key=value
         if uri.contains("//") {
             // Parse URI: postgresql://user:pass@host:port/dbname
-            let stripped = uri.trim_start_matches("postgres:").trim_start_matches("postgresql:");
+            let stripped = uri
+                .trim_start_matches("postgres:")
+                .trim_start_matches("postgresql:");
             let stripped = stripped.trim_start_matches("//");
 
             // Split user:pass@host:port/dbname

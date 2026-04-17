@@ -71,7 +71,7 @@ impl ProjectPool {
 
         // Initialize DuckLake — use distributed storage if configured, else local.
         if let Some(config) = crate::storage::load_config()? {
-            crate::storage::init_distributed(&conn, &config)?;
+            crate::storage::init_distributed(&conn, &config, &project_dir)?;
         } else {
             crate::storage::init_default(&conn, &project_dir)?;
         }
