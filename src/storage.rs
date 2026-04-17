@@ -39,6 +39,10 @@ pub fn init_distributed(conn: &Connection, config: &StorageConfig) -> Result<()>
         .context("failed to install/load ducklake + postgres extensions")?;
     tracing::info!("loaded DuckDB extensions: ducklake, postgres");
 
+    // Convert catalog URL to libpq format that DuckLake expects.
+    // Accepts both postgresql:// URI and postgres:key=value libpq format.
+    let catalog_path = postgres_uri_to_libpq(&config.catalog_url)?;
+
     // Configure S3 credentials if bucket is set
     if !config.s3_bucket.is_empty() {
         let s3_prefix = if config.s3_prefix.is_empty() {
@@ -58,23 +62,23 @@ pub fn init_distributed(conn: &Connection, config: &StorageConfig) -> Result<()>
         // Attach DuckLake with PostgreSQL catalog + S3 data path
         let s3_data_path = format!("s3://{}/{}data", config.s3_bucket, s3_prefix);
         let attach_sql = format!(
-            "ATTACH 'ducklake:{}' AS lake (DATA_PATH '{}')",
-            config.catalog_url, s3_data_path
+            "ATTACH 'ducklake:{catalog_path}' AS lake (DATA_PATH '{}')",
+            s3_data_path
         );
         conn.execute_batch(&attach_sql)
             .context("failed to attach DuckLake with PostgreSQL catalog + S3")?;
         tracing::info!(
-            catalog = %config.catalog_url,
+            catalog = %catalog_path,
             data_path = %s3_data_path,
             "DuckLake attached — catalog: PostgreSQL, data: S3"
         );
     } else {
         // PostgreSQL catalog + local Parquet (useful for multi-writer without S3)
-        let attach_sql = format!("ATTACH 'ducklake:{}' AS lake", config.catalog_url);
+        let attach_sql = format!("ATTACH 'ducklake:{catalog_path}' AS lake");
         conn.execute_batch(&attach_sql)
             .context("failed to attach DuckLake with PostgreSQL catalog")?;
         tracing::info!(
-            catalog = %config.catalog_url,
+            catalog = %catalog_path,
             "DuckLake attached — catalog: PostgreSQL, data: local Parquet"
         );
     }
@@ -117,12 +121,64 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
 
 /// Distributed storage configuration.
 /// PostgreSQL catalog for multi-writer + optional S3 data files.
+///
+/// `catalog_url` can be:
+/// - A libpq connection string: `postgres:dbname=db host=localhost user=u password=p port=5432`
+/// - A PostgreSQL URI: `postgresql://user:pass@host:5432/dbname` (auto-converted to libpq format)
 #[derive(Debug)]
 pub struct StorageConfig {
     pub catalog_url: String,
     pub s3_bucket: String,
     pub s3_region: String,
     pub s3_prefix: String,
+}
+
+/// Convert a `postgresql://user:pass@host:port/dbname` URI to libpq `key=value` format
+/// that DuckLake expects: `postgres:dbname=db host=h user=u password=p port=5432`
+fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
+    // Already in libpq format — return as-is with postgres: prefix
+    if uri.starts_with("postgres:") || uri.starts_with("postgresql:") {
+        // Check if it's a URI (contains //) or already libpq key=value
+        if uri.contains("//") {
+            // Parse URI: postgresql://user:pass@host:port/dbname
+            let stripped = uri.trim_start_matches("postgres:").trim_start_matches("postgresql:");
+            let stripped = stripped.trim_start_matches("//");
+
+            // Split user:pass@host:port/dbname
+            let (credentials, rest) = stripped
+                .split_once('@')
+                .context("invalid postgres URI: expected user:pass@host format")?;
+
+            let (user, password) = credentials
+                .split_once(':')
+                .context("invalid postgres URI: expected user:password in credentials")?;
+
+            // rest = host:port/dbname
+            let (host_port, dbname) = rest
+                .split_once('/')
+                .context("invalid postgres URI: expected host:port/dbname")?;
+
+            let (host, port) = if host_port.contains(':') {
+                host_port.split_once(':').unwrap()
+            } else {
+                (host_port, "5432")
+            };
+
+            Ok(format!(
+                "postgres:dbname={dbname} host={host} user={user} password={password} port={port}"
+            ))
+        } else {
+            // Already libpq format, just ensure postgres: prefix
+            if uri.starts_with("postgres:") {
+                Ok(uri.to_string())
+            } else {
+                Ok(format!("postgres:{uri}"))
+            }
+        }
+    } else {
+        // Assume it's a path or other format — return as-is
+        Ok(uri.to_string())
+    }
 }
 
 /// Always returns "lake." — all tables are accessed through DuckLake.

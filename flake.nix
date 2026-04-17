@@ -25,6 +25,7 @@
         pkgs = import nixpkgs {
           system = buildSystem;
           inherit overlays;
+          config.allowUnsupportedSystem = true;  # cross-compile targets
         };
 
         lib = pkgs.lib;
@@ -86,7 +87,13 @@
           cargoExtraArgs = "--target ${targetTriple}";
           inherit nativeBuildInputs;
 
-          env = crossEnv;
+          env = crossEnv // {
+            # Cross glibc headers (resolv.h, endian.h) must appear before macOS SDK headers.
+            # DuckDB's http_util.cpp includes <resolv.h> → macOS nameser.h → <machine/endian.h> (BSD).
+            # Force the cross sysroot's glibc includes first via -isystem so cc-rs finds the Linux version.
+            CFLAGS_aarch64_unknown_linux_gnu = "-isystem ${crossPkgs.glibc.dev}/include";
+            CXXFLAGS_aarch64_unknown_linux_gnu = "-isystem ${crossPkgs.glibc.dev}/include -std=c++17";
+          };
 
           preBuild = ''
             ulimit -n 65536 2>/dev/null || true
@@ -119,7 +126,10 @@
           cargoExtraArgs = "--target ${targetTriple}";
           inherit nativeBuildInputs;
 
-          env = crossEnv;
+          env = crossEnv // {
+            CFLAGS_aarch64_unknown_linux_gnu = "-isystem ${crossPkgs.glibc.dev}/include";
+            CXXFLAGS_aarch64_unknown_linux_gnu = "-isystem ${crossPkgs.glibc.dev}/include -std=c++17";
+          };
 
           preBuild = ''
             ulimit -n 65536 2>/dev/null || true
