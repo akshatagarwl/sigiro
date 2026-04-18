@@ -3,6 +3,49 @@ use serde::Deserialize;
 
 use crate::investigate::InvestigationBlock;
 
+// --- Shared HTTP response handler ---
+
+/// Handle a sigiro HTTP response, checking for auth errors and rate limits.
+/// Returns the parsed JSON body on 200; otherwise bails with a descriptive message.
+///
+/// # Arguments
+/// * `resp` - The raw HTTP response
+/// * `success_msg` - Context message for successful parse
+/// * `not_found_msg` - Message to return (as false) on 404 (optional)
+///
+/// # Type Parameters
+/// * `T` - The target type to deserialize from JSON
+fn handle_http_response<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+    success_msg: &str,
+    not_found_msg: Option<&str>,
+) -> Result<std::result::Result<T, bool>> {
+    match resp.status().as_u16() {
+        200 => resp
+            .json()
+            .await
+            .context(success_msg)
+            .map(Ok),
+        401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+        429 => bail!("Rate limited. Try again later."),
+        404 if not_found_msg.is_some() => Ok(Err(false)),
+        s => {
+            let body = resp.text().await.context("failed to read error body")?;
+            bail!("Server error ({s}): {body}")
+        }
+    }
+}
+
+/// Map a Result<T, bool> to Result<T>, converting false to "not found".
+fn not_found_to_err<T>(result: std::result::Result<T, bool>, msg: &str) -> Result<T> {
+    match result {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(false)) if !msg.is_empty() => bail!("{msg}"),
+        Ok(Err(false)) => Ok(T::default()),
+        Err(e) => Err(e),
+    }
+}
+
 /// HTTP client for hosted mode — CLI and MCP go through sigiro serve instead of direct DuckDB.
 #[derive(Clone)]
 pub struct SigiroClient {
@@ -49,15 +92,8 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => resp.json().await.context("failed to parse query response"),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            429 => bail!("Rate limited. Try again later."),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let result = handle_http_response(resp, "failed to parse query response", None)?;
+        not_found_to_err(result, "")
     }
 
     /// Create an API key via the running server's admin endpoint.
@@ -79,19 +115,15 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => {
-                let body: serde_json::Value =
-                    resp.json().await.context("failed to parse response")?;
-                body["key"]
-                    .as_str()
-                    .map(String::from)
-                    .context("response missing 'key' field")
-            }
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
+        #[derive(Deserialize)]
+        struct CreateKeyResponse {
+            key: String,
+        }
+        let result = handle_http_response::<CreateKeyResponse>(resp, "failed to parse response", None)?;
+        match result {
+            Ok(Ok(body)) => Ok(body.key),
+            Ok(Err(false)) => bail!("unexpected false"),
+            Err(e) => Err(e),
         }
     }
 
@@ -104,14 +136,8 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => Ok(true),
-            404 => Ok(false),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let result = handle_http_response::<serde::Value>(resp, "failed to parse response", Some(""))?;
+        not_found_to_err(result, "")
     }
 
     pub async fn status(&self) -> Result<serde_json::Value> {
@@ -123,16 +149,14 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => {
-                let body = resp.text().await.context("failed to read error body")?;
-                Ok(serde_json::json!({ "status": body }))
+        let result = handle_http_response::<serde::Value>(resp, "failed to parse status response", None)?;
+        match result {
+            Ok(Ok(body)) => {
+                let body_str = body.as_str().unwrap_or("").to_string();
+                Ok(serde_json::json!({ "status": body_str }))
             }
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
+            Ok(Err(false)) => Ok(serde_json::Value::Null),
+            Err(e) => Err(e),
         }
     }
 
@@ -159,18 +183,8 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => resp
-                .json()
-                .await
-                .context("failed to parse investigation response"),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            429 => bail!("Rate limited. Try again later."),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let result = handle_http_response(resp, "failed to parse investigation response", None)?;
+        not_found_to_err(result, "")
     }
 
     /// List services with first/last seen and span counts.
@@ -183,17 +197,8 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => resp
-                .json()
-                .await
-                .context("failed to parse services response"),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let result = handle_http_response(resp, "failed to parse services response", None)?;
+        not_found_to_err(result, "")
     }
 
     /// Register a federation worker with the server.
@@ -207,13 +212,11 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => Ok(()),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
+        let result = handle_http_response::<serde::Value>(resp, "failed to parse response", None)?;
+        match result {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(false)) => bail!("unexpected false"),
+            Err(e) => Err(e),
         }
     }
 
@@ -228,15 +231,8 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => Ok(true),
-            404 => Ok(false),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let result = handle_http_response::<serde::Value>(resp, "failed to parse response", Some(""))?;
+        not_found_to_err(result, "")
     }
 
     /// List all registered federation workers.
@@ -254,19 +250,11 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => {
-                let body: ListWorkersResponse = resp
-                    .json()
-                    .await
-                    .context("failed to parse list_workers response")?;
-                Ok(body.workers)
-            }
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
+        let result = handle_http_response::<ListWorkersResponse>(resp, "failed to parse list_workers response", None)?;
+        match result {
+            Ok(Ok(body)) => Ok(body.workers),
+            Ok(Err(false)) => bail!("unexpected false"),
+            Err(e) => Err(e),
         }
     }
 }
