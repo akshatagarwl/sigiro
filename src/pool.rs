@@ -59,10 +59,10 @@ impl ProjectPool {
         // Extensions are stored under {data_dir}/extensions/ — pre-downloaded by
         // `sigiro fetch-extensions` or automatically on first LOAD.
         let ext_dir = self.data_dir.join("extensions");
-        std::fs::create_dir_all(&ext_dir).ok();
+        std::fs::create_dir_all(&ext_dir).context("failed to create extensions directory")?;
         if let Some(p) = ext_dir.to_str() {
             conn.execute_batch(&format!("SET extension_directory = '{p}';"))
-                .ok();
+                .context("failed to set DuckDB extension_directory")?;
         }
 
         // Cap memory per connection to avoid one project eating all RAM

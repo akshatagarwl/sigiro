@@ -23,7 +23,7 @@ containerd:
   user: false
 
 mounts:
-- location: "../.."
+- location: "~/workspace"
   writable: false
 
 provision:

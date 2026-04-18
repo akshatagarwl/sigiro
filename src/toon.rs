@@ -1,14 +1,12 @@
 use serde_json::Value;
 
 /// Convert a serde_json::Value to TOON format using the toon crate.
-///
 /// TOON format is token-efficient for LLM consumption:
 /// - Arrays become tables with headers
 /// - Objects become key-value pairs
 /// - Nested structures are flattened with dot notation
 ///
 /// # Future Considerations
-///
 /// DuckDB is considering native TOON support: https://github.com/duckdb/duckdb/discussions/21349
 /// If implemented, we could potentially use DuckDB's native TOON export for
 /// preparing prompts directly in the database, which could be more efficient

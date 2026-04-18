@@ -37,7 +37,6 @@ fn auth_cache() -> &'static DashMap<String, CachedAuth> {
 /// Verify an API key with caching. Used by OTLP ingest hot path.
 /// Checks in-memory cache first; on miss, falls back to SQLite verify
 /// and caches result for AUTH_CACHE_TTL.
-///
 /// Returns AuthContext on success, ApiError on failure.
 /// Failed verifications are NOT cached (attacker can't poison cache).
 pub fn verify_key_cached(

@@ -202,7 +202,6 @@ impl MetricsService for OtlpGrpcService {
 }
 
 /// Resolve pprofile dictionary encoding into flat profile rows as a RecordBatch.
-///
 /// Resolution chain:
 ///   Sample.stack_index → Dictionary.stack_table[].location_indices[]
 ///   → Dictionary.location_table[].line[].function_index
@@ -629,10 +628,19 @@ async fn otlp_http_metrics(
         }
     };
     // Only send if at least one metric batch is non-empty (consistent with traces/logs)
-    let has_data = batches.gauge.as_ref().map_or(false, |b| b.num_rows() > 0)
-        || batches.sum.as_ref().map_or(false, |b| b.num_rows() > 0)
-        || batches.histogram.as_ref().map_or(false, |b| b.num_rows() > 0)
-        || batches.exp_histogram.as_ref().map_or(false, |b| b.num_rows() > 0);
+    let has_data = batches
+        .gauge
+        .as_ref()
+        .is_some_and(|b| b.num_rows() > 0)
+        || batches.sum.as_ref().is_some_and(|b| b.num_rows() > 0)
+        || batches
+            .histogram
+            .as_ref()
+            .is_some_and(|b| b.num_rows() > 0)
+        || batches
+            .exp_histogram
+            .as_ref()
+            .is_some_and(|b| b.num_rows() > 0);
     if has_data {
         state
             .router

@@ -95,7 +95,6 @@ pub struct AppState {
 /// - `SET access_mode = 'read_only'` fails with "Cannot change access_mode setting while database is running"
 /// - `Connection::open_with_flags(path, ReadOnly)` creates a separate database instance that
 ///   doesn't share in-memory state with the write connection (ingested data invisible)
-///
 /// Therefore we use a keyword blocklist + `prepare()` single-statement guarantee.
 /// `conn.prepare()` only handles one statement — multi-statement injection via semicolons
 /// is already prevented by DuckDB itself.

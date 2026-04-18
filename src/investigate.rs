@@ -189,7 +189,6 @@ fn query_string_list(
 
 /// Auto-detected event from OTLP data — deploys (version changes) and K8s events
 /// (OOMKilled, BackOff, etc.). Correlates errors to recent changes without webhooks.
-///
 /// Limitation: only detects events present in OTLP data. External events (GitHub
 /// deploys, paging tools) need an optional webhook (not MVP). Most high-value events
 /// (deploys, OOM, restarts) DO appear in OTLP resource_attributes and logs.
@@ -264,7 +263,7 @@ pub fn query_derived_events(ctx: &QueryCtx) -> Result<Vec<DerivedEvent>> {
     Ok(events)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct InvestigateRequest {
     /// Single service (convenience — mutually exclusive with `services`)
     #[serde(default)]
@@ -387,9 +386,8 @@ pub struct ProfileSummary {
 
 /// Pre-aggregated per-operation summary. 3x more token-efficient than raw spans.
 /// An agent can read 10 summaries (~3KB) instead of 50 flat spans (~10KB)
-/// and immediately identify which operations are broken.
-///
-/// Includes baseline comparison from the preceding window (4x the investigation window).
+/// and immediately identify which operations are broken. Includes baseline
+/// comparison from the preceding window (4x the investigation window).
 /// Example: investigating last 15m → baseline is the 1h before that.
 /// If baseline_error_pct is Some(0.5) and error_pct is 12.0, the agent knows
 /// error rate jumped 24x — this is anomalous, not normal.
@@ -419,7 +417,6 @@ pub fn us_to_iso(us: i64) -> Result<String> {
 
 /// Adaptive summarization: vary detail level based on window size.
 /// Larger windows get coarser buckets and fewer exemplars to stay under token budget.
-///
 /// | Window    | Metric buckets | Span exemplars | Log limit |
 /// |-----------|----------------|----------------|-----------|
 /// | < 15m     | 1 minute       | 50             | 30        |

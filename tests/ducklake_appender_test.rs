@@ -1,6 +1,5 @@
 /// Test whether DuckDB's Appender API works on DuckLake-backed tables.
 /// This validates the highest-risk change in the ducklake-default plan (PR #2, Step 4).
-///
 /// Uses DuckDB file catalog (not SQLite) — matches production default configuration.
 use arrow::array::{Int32Array, StringArray, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};

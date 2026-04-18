@@ -3,223 +3,159 @@
 ## Goal
 
 Three-layer system:
-1. **Self-monitoring**: New Sigiro (vN+1) instruments itself via OTel SDK, sends OTLP to **old Sigiro (vN)** which stores it. No feedback loops.
-2. **CI regression detection**: Canary comparison of new Sigiro's performance metrics against old Sigiro's stored data
-3. **AI self-improvement loop**: Hermes reads old Sigiro's `/admin/self-investigate`, runs `autoresearch` to fix regressions
+1. **Self-monitoring**: obi (existing eBPF auto-instrumentation) traces new Sigiro → old Sigiro stores it
+2. **CI regression detection**: Compare new Sigiro's investigate data against baseline
+3. **AI self-improvement loop**: Hermes reads old Sigiro's investigate output, runs `autoresearch`
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  New Sigiro (vN+1, the one being tested)                   │
-│  OTEL_SERVICE_NAME=sigiro-next                              │
-│  SIGIRO_OTLP_ENDPOINT=http://old-sigiro:4317               │
-└──────────────────┬──────────────────────────────────────────┘
-                   │ OTLP (spans + metrics)
-                   ↓
 ┌──────────────────────────────────────────────────────────────┐
-│  Old Sigiro (vN, stable production)                          │
-│  - Receives and stores all telemetry from new Sigiro         │
-│  - DuckDB: sigiro_spans etc. contain "sigiro-next" entries  │
-│  - Provides /admin/self-investigate for new Sigiro data      │
+│  Old Sigiro (vN, stable)  ←  the observability backend       │
+│  :9999 HTTP, :4317 gRPC, :4318 OTLP HTTP                    │
+│  Receives and stores all telemetry from new Sigiro           │
+│  Agent reads /v1/investigate?service=sigiro-next from here  │
 └──────────────────────────────────────────────────────────────┘
-                   │
-                   ↓
-         Hermes Agent (outside both)
-                   │
-                   ├── reads /admin/self-investigate (filtered by service_name=sigiro-next)
-                   ├── runs autoresearch loop
-                   └── applies fixes → rebuilds → retests
+
+┌──────────────────────────────────────────────────────────────┐
+│  New Sigiro (vN+1, the one being tested)                    │
+│  sigiro serve --ebpf                                        │
+│    └─ spawns obi (existing, ebpf.rs:131)                    │
+│         ├─ eBPF probes attach at kernel level               │
+│         ├─ auto-discovers all processes (including Sigiro)  │
+│         └─ OTEL_EXPORTER_OTLP_ENDPOINT=<old-sigiro>:4317  │
+└──────────────────────────────────────────────────────────────┘
+
+Hermes Agent (outside both)
+  ├─ reads: old Sigiro /v1/investigate?service=sigiro-next
+  ├─ runs:  autoresearch loop on regressions
+  └─ applies fixes → rebuilds → retests
 ```
 
-**Why this works:**
-- Old Sigiro is never tracing itself — no feedback loops possible
-- New Sigiro crashes/leaks/has bugs → old Sigiro keeps storing clean telemetry
-- Agent reads from old Sigiro which is a stable reference
-- Two-instance architecture means no chicken-and-egg on service name detection
+**Key insight:** `obi` already does all the instrumentation. It auto-instruments any language, any framework, zero code changes. Sigiro already bundles it. We just need to point obi's OTLP export at the old Sigiro instead of at self.
 
-**Service name detection:** The `service_name` is set by the **sender** (OTel SDK), not the receiver. `OTEL_SERVICE_NAME=sigiro-next` on new Sigiro → all spans arrive at old Sigiro tagged as `"sigiro-next"`. Old Sigiro reads it from `rp.resource.attributes["service.name"]` (see `ingest.rs:346-367`). No code changes needed.
+**Why this is clean:**
+- obi uses eBPF kernel probes — it never modifies Sigiro's code
+- obi traces go to old Sigiro, not new Sigiro — no feedback loop
+- new Sigiro crashes/leaks → old Sigiro keeps running and storing clean data
+- service name is set via `OTEL_SERVICE_NAME=sigiro-next` env var — already a standard OTel convention
+- Agent reads existing `/v1/investigate` — no new endpoints needed
 
 ---
 
-## Phase 1: Self-Monitoring (New Sigiro)
+## Phase 1: Self-Monitoring — One-Line Fix
 
-### What to instrument
+### What needs to change
 
-| Component | Signal | What to capture |
-|-----------|--------|-----------------|
-| HTTP handlers (`server.rs`) | Spans + metrics | Latency p50/p95/p99, status codes, error rate |
-| gRPC handlers | Spans + metrics | Latency, error rate |
-| Inserter (`inserter.rs`) | Metrics | Channel depth, flush latency, rows/sec, buffer pressure |
-| DuckDB queries | Spans | Per-query duration (tagged: investigate vs raw query) |
-| Project pool (`pool.rs`) | Metrics | Active projects, connection wait time |
+**`src/main.rs` — one line:**
 
-### OTel SDK integration
-
-**`Cargo.toml` additions:**
-```toml
-opentelemetry = { version = "0.31", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.31", features = ["tonic"] }
-opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "metrics"] }
-opentelemetry_api = "0.31"
-```
-
-**Instrumentation approach:**
-
-New file `src/telemetry.rs`:
 ```rust
-use opentelemetry::trace::{Tracer, SpanKind};
-use opentelemetry_sdk::{runtime, trace as sdktrace};
-use opentelemetry_otlp::WithExportConfig;
-use std::time::Instant;
+// Before (hardcoded self):
+let otlp_endpoint = "http://127.0.0.1:9999".to_string();
 
-// Global tracer — initialized once
-pub fn init(service_name: &str, endpoint: &str) {
-    let exporter = opentelemetry_otlp::new_exporter()
-        .tonic()
-        .with_endpoint(endpoint);
-
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(exporter)
-        .with_trace_config(sdktrace::Config::default().with_resource(
-            opentelemetry_sdk::Resource::new(vec![
-                opentelemetry_api::KeyValue::new("service.name", service_name),
-            ])
-        ))
-        .install_batch(runtime::Tokio)
-        .expect("failed to init OTel tracer");
-
-    tracer
-}
+// After (env var, obi sends to external receiver instead):
+let otlp_endpoint = std::env::var("SIGIRO_OTEL_ENDPOINT")
+    .unwrap_or_else(|_| "http://127.0.0.1:9999".to_string());
 ```
 
-**No feedback loop risk** — all spans go from new Sigiro → old Sigiro. New Sigiro's own `/admin/self-investigate` reads from old Sigiro via HTTP. It never sends spans to itself.
+Then passed to `start_obi("obi", &otlp_endpoint)` as before.
 
-### `SIGIRO_OTLP_ENDPOINT` env var
+That's it. No new flags. No new dependencies. No `telemetry.rs`. No `#[instrument]` macros.
 
-New CLI flag on `Serve`:
-```rust
-Serve {
-    /// Endpoint for new Sigiro to send its own telemetry to (e.g. http://old-sigiro:4317)
-    #[arg(long, env = "SIGIRO_OTLP_ENDPOINT")]
-    otlp_endpoint: Option<String>,
-    ...
-}
-```
+### How obi works
 
-When set, init OTel SDK and instrument handlers. When unset, no self-instrumentation (backward compatible).
+obi is OpenTelemetry eBPF Instrumentation. It:
+- Auto-discovers all processes on the host
+- Attaches eBPF probes at kernel level (no application code changes)
+- Captures HTTP/HTTPS, gRPC, SQL (PostgreSQL, MySQL, SQLite, etc.), DNS
+- Exports OTLP to the endpoint set in `OTEL_EXPORTER_OTLP_ENDPOINT`
 
-**Startup sequence:**
-1. Parse `otlp_endpoint`
-2. If set, call `telemetry::init("sigiro-next", otlp_endpoint)`
-3. Start servers normally
-4. Every HTTP/gRPC handler gets wrapped in an OTel span
+Currently Sigiro hardcodes `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:9999` — so obi sends to itself. This is the feedback loop. The fix is letting users set it via env var.
 
----
+### How to use it
 
-## Phase 2: Self-Investigation Endpoint (Old Sigiro)
-
-### New endpoint: `GET /admin/self-investigate?service=sigiro-next`
-
-Query params:
-- `service` (required): the OTel `service_name` to investigate — agent passes `sigiro-next`
-- `from` / `to` (optional): time range in epoch seconds
-
-This reads from old Sigiro's DuckDB — `WHERE service_name = ?` filter picks up new Sigiro's spans.
-
-### Response type (extends existing `InvestigationBlock`)
-
-New variant or additional field in `InvestigationBlock`:
-```rust
-pub struct SelfMonitoringBlock {
-    // Sigiro's own performance
-    pub uptime_seconds: i64,
-    pub total_requests: i64,
-    pub error_rate: f64,
-    pub p50_query_latency_ms: f64,
-    pub p95_query_latency_ms: f64,
-    pub p99_query_latency_ms: f64,
-    pub ingest_throughput_rows_per_sec: f64,
-    pub inserter_channel_depth_avg: f64,
-    pub active_projects: i64,
-
-    // Aggregated from spans table
-    pub span_count_last_15m: i64,
-    pub error_span_count_last_15m: i64,
-
-    // Derived
-    pub anomalies: Vec<Anomaly>,
-}
-
-pub struct Anomaly {
-    pub severity: String, // "warning" | "critical"
-    pub message: String,
-    pub metric: String,
-    pub value: f64,
-    pub threshold: f64,
-}
-```
-
-**SQL to compute these (from old Sigiro's DuckDB):**
-```sql
--- Query latencies from span_name = '/v1/query' or '/v1/investigate'
-SELECT
-    percentile_cont(0.50) FILTER (WHERE duration_ns IS NOT NULL) as p50_ns,
-    percentile_cont(0.95) FILTER (WHERE duration_ns IS NOT NULL) as p95_ns,
-    percentile_cont(0.99) FILTER (WHERE duration_ns IS NOT NULL) as p99_ns
-FROM sigiro_spans
-WHERE service_name = ? AND span_name IN ('/v1/query', '/v1/investigate')
-  AND timestamp > now() - INTERVAL '15 minutes';
-
--- Error rate
-SELECT
-    count(*) as total,
-    count(*) FILTER (WHERE status_code >= 500) as errors
-FROM sigiro_spans
-WHERE service_name = ? AND timestamp > now() - INTERVAL '15 minutes';
-```
-
----
-
-## Phase 3: CI Regression Detection
-
-### Setup: Running old Sigiro as sidecar
-
-**In CI, before testing new Sigiro:**
 ```bash
-# Start old Sigiro as observability backend (runs in background, port 9999 old-sigiro)
+# On the host running new Sigiro:
+# Point obi at old Sigiro (the "observability backend")
+export SIGIRO_OTEL_ENDPOINT=http://old-sigiro:4317
+export OTEL_SERVICE_NAME=sigiro-next   # tells old Sigiro which service this is
+
+sigiro serve --ebpf
+```
+
+obi spawns, auto-instruments everything including new Sigiro's HTTP/gRPC handlers, and exports to old Sigiro.
+
+### What obi captures for Sigiro
+
+| Signal | What obi captures | Stored in old Sigiro as |
+|--------|------------------|------------------------|
+| HTTP spans | Method, path, status, duration, headers | `sigiro_spans` with `span_name=/v1/query`, `/v1/investigate` |
+| gRPC spans | Service, method, status, duration | `sigiro_spans` |
+| SQL spans | Query text, duration, rows | `sigiro_spans` with `span_name=<SQL>` |
+| Logs | `service.name`, severity, body | `sigiro_logs` |
+
+The `span_name` and `service_name` fields let the agent filter exactly what it needs.
+
+---
+
+## Phase 2: CI Regression Detection
+
+### Setup
+
+Old Sigiro runs as a sidecar in CI. New Sigiro sends its telemetry there.
+
+```bash
+# Start old Sigiro (previous stable tag) as observability backend
 docker run -d --name old-sigiro \
-  -p 9999:9999 -p 4317:4317 \
+  -p 9999:9999 -p 4317:4317 -p 4318:4318 \
   sigiroai/sigiro:<previous-stable-tag>
 
 # Wait for ready
 until curl -s http://localhost:9999/health; do sleep 1; done
 
-# Run new Sigiro smoke test against old Sigiro
-SIGIRO_OTLP_ENDPOINT=http://localhost:4317 \
+# Run new Sigiro with eBPF pointing to old Sigiro
+SIGIRO_OTEL_ENDPOINT=http://localhost:4317 \
 OTEL_SERVICE_NAME=sigiro-next \
 ./target/release/sigiro serve --no-ebpf &
+NEW_PID=$!
 
-# Generate load
+# Generate load (smoke test)
 ./scripts/smoke-test.sh
 
-# Collect metrics
-curl -s "http://localhost:9999/admin/self-investigate?service=sigiro-next" \
-  > "artifacts/self-internal-${GITHUB_SHA}.json"
+# Collect metrics from old Sigiro
+curl -s "http://localhost:9999/v1/investigate?service=sigiro-next&from=${FROM}&to=${TO}" \
+  > "artifacts/sigiro-next-${GITHUB_SHA}.json"
+
+kill $NEW_PID 2>/dev/null; docker stop old-sigiro
 ```
 
-**Store baseline on main branch:**
+### Baseline management
+
+On `main` branch, upload the metrics artifact as a baseline:
+
 ```yaml
-- name: Upload baseline metrics
+- name: Upload baseline
   if: github.ref == 'main'
   uses: actions/upload-artifact@v4
   with:
     name: sigiro-baseline
-    path: artifacts/self-internal-*.json
+    path: artifacts/sigiro-next-*.json
     retention-days: 30
+```
+
+On PRs, download the baseline and compare:
+
+```yaml
+- name: Download baseline
+  uses: actions/download-artifact@v4
+  with:
+    name: sigiro-baseline
+    path: artifacts/baseline/
+
+- name: Compare with baseline
+  run: ./scripts/ci-compare.sh
 ```
 
 ### Compare script
@@ -227,22 +163,16 @@ curl -s "http://localhost:9999/admin/self-investigate?service=sigiro-next" \
 `scripts/ci-compare.sh`:
 ```bash
 #!/bin/bash
-# Compares current run's self-investigate JSON against baseline
+set -e
 
-BASELINE=$(find artifacts -name 'sigiro-baseline-*.json' | head -1)
-CURRENT="artifacts/self-internal-${GITHUB_SHA}.json"
+BASELINE=$(ls artifacts/baseline/sigiro-next-*.json | head -1)
+CURRENT=$(ls artifacts/sigiro-next-${GITHUB_SHA}.json)
 
-# Extract key metrics with jq
-# Compare p99 latency, error rate, throughput
-# FAIL if any delta exceeds threshold
+THRESHOLD_P99=1.20   # 20% regression tolerance
+THRESHOLD_ERR=0.05  # 5% absolute error rate
 
-THRESHOLD_P99_LATENCY=1.20  # 20% regression tolerance
-THRESHOLD_ERROR_RATE=0.05    # 5% absolute
-
-jq -n \
-  --slurpfile base "$BASELINE" \
-  --slurpfile curr "$CURRENT" \
-  -f scripts/ci-compare.jq
+# Run jq comparison; exits non-zero if regression detected
+exec ./scripts/ci-compare.jq "$BASELINE" "$CURRENT" "$THRESHOLD_P99" "$THRESHOLD_ERR"
 ```
 
 `scripts/ci-compare.jq`:
@@ -259,93 +189,115 @@ def check($name; $curr; $base; $thresh):
     "PASS: \($name) stable"
   end);
 
-[ check("p99 latency"; $curr[0].p99_query_latency_ms; $base[0].p99_query_latency_ms; 1.20 ),
-  check("error rate";   $curr[0].error_rate;           $base[0].error_rate;           0.05 ) ]
+check("p99 latency";   $curr.p99_latency_ms;   $base.p99_latency_ms;   1.20),
+check("error rate";    $curr.error_rate;        $base.error_rate;        0.05)
 ```
+
+### Metrics extracted from investigate JSON
+
+The agent reads `sigiro-next` investigate data and computes:
+
+| Metric | Source field in investigate JSON |
+|--------|----------------------------------|
+| `p99_latency_ms` | `span_latencies.p99` from spans where `span_name IN ('/v1/query', '/v1/investigate')` |
+| `error_rate` | `error_count / total_spans` |
+| `throughput_rows_per_sec` | `span_count / time_window_seconds` |
+| `span_count` | `span_count` |
+| `anomalies` | `anomalies[]` array |
+
+These are all derived client-side from the existing `/v1/investigate` response. No new endpoint.
 
 ---
 
-## Phase 4: AI Self-Improvement Loop
+## Phase 3: AI Self-Improvement Loop
 
 ### Architecture
 
 ```
 Hermes Agent
     │
-    ├── reads: old Sigiro /admin/self-investigate (service=sigiro-next)
-    ├── reads: CI artifact diff output
+    ├── reads CI compare output (FAIL/PASS + delta)
+    ├── reads old Sigiro /v1/investigate?service=sigiro-next (filtered)
     │
-    ├── identifies: worst bottleneck (e.g., investigate p99 > baseline by 30%)
+    ├── identifies worst bottleneck
+    │     e.g., p99 latency regressed 35% vs baseline
     │
     └── runs autoresearch:
-        Goal: reduce investigate p99 latency by >20%
+        Goal: reduce p99 latency by >20%
         Scope: src/investigate.rs, src/pool.rs, src/schema.rs, src/inserter.rs
-        Metric: p99 investigate latency in ms (lower is better)
-        Verify: smoke test against old Sigiro, compare before/after
+        Metric: p99 latency from investigate JSON (lower is better)
+        Verify: rebuild → smoke test → re-compare
         Direction: minimize
         Iterations: 20
 ```
 
-**No feedback loop** — the agent is completely outside Sigiro. It reads from old Sigiro, builds new Sigiro, tests it, measures it.
-
-### Self-improvement skill
-
-New skill: `sigiro-self-improvement` (saved via `skill_manage`):
-
-```
-Metric → Scope mapping:
-- investigate p99 → investigate.rs (SQL queries), pool.rs (connection contention)
-- inserter flush latency → inserter.rs (buffer sizes, flush cadence)
-- query error rate → server.rs (handler errors), schema.rs (invalid SQL)
-- memory pressure → pool.rs (connection count), inserter.rs (channel depth)
-```
-
-**Auto-approvable changes** (no human review needed):
-- SQL query hints (INDEX, ANALYZE, LIMIT)
-- Buffer size tunables (inserter batch size, channel depth)
-- Feature flags that don't change API contract
-- Comment/cleanup improvements
+**Auto-approvable changes** (no human review):
+- SQL query INDEX hints
+- Buffer size tunables (inserter batch, channel depth)
+- LIMIT clauses added to prevent unbounded queries
+- Comment/formatting fixes
 
 **Human-required changes**:
 - API changes (new endpoints, changed response shapes)
-- Schema migrations (CREATE TABLE, ALTER TABLE)
-- New dependencies (Cargo.toml additions)
-- Architecture changes (multi-process, caching layer)
+- Schema migrations
+- New dependencies
+- Architecture changes
 
-### Trigger conditions
+### Metric → Scope mapping (for skill)
 
-The self-improvement loop runs when:
-1. CI detects a regression: `ci-compare.sh` exits non-zero → Hermes reads diff, runs `autoresearch`
-2. Nightly: no regression but p99 > 90th percentile of last 7 runs → proactive optimization
-3. Manual: `sigiro self-improve --target=p99` via CLI
+```
+investigate p99 latency
+  → investigate.rs (SQL query efficiency)
+  → pool.rs (connection mutex contention)
+  → schema.rs (missing indexes)
+
+inserter flush latency
+  → inserter.rs (batch size, flush cadence)
+
+error rate
+  → server.rs (handler errors)
+  → schema.rs (invalid SQL)
+
+query error count
+  → investigate.rs (SQL errors in investigation queries)
+```
 
 ---
 
-## Files Likely to Change
+## Files to Change
 
-| File | Changes |
-|------|---------|
-| `Cargo.toml` | Add `opentelemetry`, `opentelemetry_otlp`, `opentelemetry_sdk`, `opentelemetry_api` |
-| `src/telemetry.rs` | **NEW** — OTel tracer + meter init, instrumentation helpers |
-| `src/main.rs` | Add `--otlp-endpoint` flag, wire `telemetry::init()` in serve |
-| `src/server.rs` | Wrap handlers in OTel spans (add `#[instrument]` or manual span) |
-| `src/inserter.rs` | Add OTel metrics for channel depth, flush latency |
-| `src/investigate.rs` | Add `SelfMonitoringBlock` struct + `query_self_monitoring()` SQL |
-| `src/admin.rs` | New `GET /admin/self-investigate` handler |
-| `scripts/ci-compare.sh` | **NEW** — CI baseline comparison |
-| `scripts/ci-compare.jq` | **NEW** — jq filter for regression detection |
-| `scripts/smoke-test.sh` | **NEW** — load generator for CI self-monitoring |
-| `.github/workflows/build.yml` | Add baseline upload (main) + compare step (PR) |
-| `.hermes/skills/sigiro-self-improvement/` | **NEW** — skill encoding metric→scope mapping |
+| File | Change |
+|------|--------|
+| `src/main.rs` | Wire `SIGIRO_OTEL_ENDPOINT` env var to `start_obi()` — one line |
+| `scripts/ci-compare.sh` | **NEW** |
+| `scripts/ci-compare.jq` | **NEW** |
+| `scripts/smoke-test.sh` | **NEW** — generate load against new Sigiro |
+| `.github/workflows/build.yml` | Add old Sigiro sidecar, baseline upload/compare |
+| `.hermes/skills/sigiro-self-improvement/` | **NEW** — metric→scope skill |
+
+**Nothing else.** No new Rust modules, no OTel SDK additions, no new endpoints, no Cargo.toml changes.
 
 ---
 
 ## Testing
 
-1. **Local two-instance test**: Start old Sigiro on `:9999`, new Sigiro with `SIGIRO_OTLP_ENDPOINT=http://localhost:4317 OTEL_SERVICE_NAME=sigiro-next ./sigiro serve`, generate load, verify `curl localhost:9999/admin/self-investigate?service=sigiro-next` returns data
-2. **Feedback loop test**: Verify that querying `/admin/self-investigate` from new Sigiro does NOT create new spans (it shouldn't — new Sigiro's admin endpoint calls old Sigiro over HTTP, not through its own OTel tracer)
-3. **CI compare test**: Upload two JSON artifacts with different p99 values, verify script detects regression
-4. **Regression simulation**: Intentionally add `thread::sleep(Duration::from_millis(50))` in investigate handler, verify CI catches it
+1. **Local two-instance smoke test**
+   ```bash
+   docker run -d --name old-sigiro -p 9999:9999 sigiroai/sigiro:latest
+   SIGIRO_OTEL_ENDPOINT=http://localhost:4317 OTEL_SERVICE_NAME=sigiro-next \
+     ./target/release/sigiro serve --no-ebpf &
+   ./scripts/smoke-test.sh
+   curl -s "http://localhost:9999/v1/investigate?service=sigiro-next" | jq '.span_count'
+   # Should be > 0
+   ```
+
+2. **CI compare regression detection**
+   - Simulate regression: add `thread::sleep(Duration::from_millis(100))` in investigate handler
+   - Run CI, verify `ci-compare.sh` exits non-zero
+
+3. **Feedback loop test**
+   - Query old Sigiro's investigate endpoint repeatedly
+   - Verify old Sigiro's own spans (if any) are separate from `sigiro-next` service data
 
 ---
 
@@ -353,18 +305,18 @@ The self-improvement loop runs when:
 
 | Risk | Mitigation |
 |------|-----------|
-| Old Sigiro version mismatch | Pin old Sigiro image tag in CI; store baseline keyed by old version |
-| Timing variance in benchmarks | Run smoke test 3x, use median; require >15% delta for regression |
-| Self-improvement destabilizes code | Autoresearch only touches files in scope; human review for high-risk changes |
-| Old Sigiro disk fills up | TTL: `DELETE FROM sigiro_spans WHERE timestamp < now() - INTERVAL '7 days'` |
-| Two-instance memory overhead | Old Sigiro is sidecar only during CI; scale to zero when idle |
+| obi can't attach (wrong platform/caps) | `--no-ebpf` fallback; obi already degrades gracefully |
+| old Sigiro fills disk | TTL retention job; data is append-only until GC |
+| Timing variance causes flaky CI | Smoke test runs 3x; use median; require >15% delta |
+| Self-improvement destabilizes code | Scope limits which files autoresearch can touch; human gate for risky changes |
+| Breaking schema change blocks ingest | Feature: old Sigiro rejects new Sigiro's data → CI catches schema regressions early |
 
 ---
 
 ## Open Questions
 
-1. **Which old Sigiro version to use as baseline?** Tag the current production release. When cutting a new release, the release commit becomes the new baseline. Or: always use the last successful main-branch build as baseline.
-2. **What if new Sigiro has breaking schema changes?** If new Sigiro changes `sigiro_spans` table schema (e.g., new column), old Sigiro's ingest will reject it. This is a feature — it blocks schema regressions. Fix: only compare metrics that both versions support.
-3. **How to isolate new Sigiro's data in old Sigiro's DB?** Service name filter (`WHERE service_name = 'sigiro-next'`) is sufficient. Projects are isolated via `project_id` in the API key — new Sigiro uses its own API key, data stays separate.
-4. **Can the agent run self-improvement automatically on every PR?** Yes, but expensive. Better: run on regression only, with a manual trigger for proactive optimization.
-5. **What about logs and metrics signals?** Same pattern — OTel logs/metrics from new Sigiro → old Sigiro stores them. The agent reads `sigiro_logs` filtered by `service_name = 'sigiro-next'` too.
+1. **Which old Sigiro tag to use?** Pin to the last release tag. When cutting a new release, update the pinned tag in CI.
+2. **obi traces old Sigiro too** — should we exclude old Sigiro from obi's probes? Could add `discovery.exclude_services: ["sigiro"]` in obi config, but it's harmless — agent filters by `service_name = sigiro-next`.
+3. **What if old Sigiro is not available in CI?** Fail fast — if the observability backend is down, CI should fail loudly rather than run blind.
+4. **Retention policy?** Old Sigiro needs a TTL. Add a cron job: `DELETE FROM sigiro_spans WHERE timestamp < now() - INTERVAL '7 days'`. Or use DuckDB's built-in expiration.
+5. **Can customers use this for their own apps?** Yes — they run `sigiro serve --ebpf` pointing at their own old Sigiro instance as the backend. obi instruments their entire stack automatically.

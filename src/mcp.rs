@@ -7,7 +7,6 @@ use rmcp::{ServerHandler, ServiceExt as _, tool, tool_router};
 use serde::Deserialize;
 
 use crate::client::SigiroClient;
-use crate::investigate::InvestigateRequest;
 
 // --- Shared MCP response serializer ---
 
@@ -28,30 +27,10 @@ pub struct SigiroMcp {
     tool_router: ToolRouter<Self>,
 }
 
-/// Parameters for investigating one or more services (same as InvestigateRequest).
-/// Re-exported with JsonSchema derive for MCP schema generation.
-#[derive(Deserialize, schemars::JsonSchema)]
-pub struct InvestigateParams {
-    /// Single service name to investigate
-    pub service: Option<String>,
-    /// Multiple service names to investigate (max 10). Use for incident topology.
-    pub services: Option<Vec<String>>,
-    /// Start timestamp in epoch microseconds (defaults to now - 15m)
-    pub from_ts: Option<i64>,
-    /// End timestamp in epoch microseconds (defaults to now)
-    pub to_ts: Option<i64>,
-}
-
-impl From<InvestigateParams> for InvestigateRequest {
-    fn from(p: InvestigateParams) -> Self {
-        InvestigateRequest {
-            service: p.service,
-            services: p.services,
-            from_ts: p.from_ts,
-            to_ts: p.to_ts,
-        }
-    }
-}
+/// Parameters for investigating one or more services.
+/// This is a type alias so the MCP server can document it distinctly from
+/// the HTTP API's InvestigateRequest, while both are the same underlying type.
+pub type InvestigateParams = crate::investigate::InvestigateRequest;
 
 /// Parameters for running a read-only SQL query against the DuckDB database.
 #[derive(Deserialize, schemars::JsonSchema)]

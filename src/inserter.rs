@@ -25,7 +25,6 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
 
 /// Routes IngestMsg to per-project flusher tasks.
-///
 /// Handlers call `router.send(msg)` directly. The router lazily creates
 /// per-project bounded channels and tokio tasks on first message per project.
 /// No dispatcher thread — handlers fan out directly.
@@ -160,7 +159,6 @@ impl MsgRouter {
 
 /// Per-project flusher state. Each project gets its own flusher task
 /// so project A's load cannot block project B.
-///
 /// Crash recovery: DuckDB has its own WAL — once `append_record_batch`
 /// returns, the data is durable. The only data-loss window is the buffer
 /// here (up to 1s / 10k rows between 200 OK and DuckDB append). This is

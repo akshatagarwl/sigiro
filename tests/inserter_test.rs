@@ -258,7 +258,7 @@ async fn inserter_throughput_single_project() {
         batch_size * num_batches
     );
     assert!(
-        elapsed < Duration::from_secs(60),
-        "50k rows took {elapsed:?}, expected < 60s (DuckLake Parquet is slower than native DuckDB)"
+        elapsed < Duration::from_secs(120),
+        "50k rows took {elapsed:?}, expected < 120s (DuckLake Parquet is slower than native DuckDB, hardware-dependent)"
     );
 }

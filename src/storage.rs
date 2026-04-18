@@ -101,7 +101,6 @@ pub fn init_distributed(
 
 /// Distributed storage configuration.
 /// PostgreSQL catalog for multi-writer + optional S3 data files.
-///
 /// `catalog_url` can be:
 /// - A libpq connection string: `postgres:dbname=db host=localhost user=u password=p port=5432`
 /// - A PostgreSQL URI: `postgresql://user:***@host:5432/dbname` (auto-converted to libpq format)
@@ -113,9 +112,7 @@ pub struct StorageConfig {
     pub s3_prefix: String,
 }
 
-/// A parsed host:port pair.
-///
-/// Used when parsing PostgreSQL URIs to extract the host and default port.
+/// A parsed host:port pair. Used when parsing PostgreSQL URIs to extract the host and default port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostPort {
     pub host: String,
@@ -143,7 +140,6 @@ impl HostPort {
 }
 
 /// Load SIGIRO_* env vars to configure distributed (PostgreSQL catalog) storage.
-///
 /// Returns `Ok(None)` if `SIGIRO_CATALOG_URL` is not set — caller should use local SQLite.
 /// Returns an error if env vars are set but malformed.
 pub fn load_config() -> Result<Option<StorageConfig>> {

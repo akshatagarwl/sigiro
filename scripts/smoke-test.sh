@@ -23,6 +23,7 @@ set -euo pipefail
 SIGIRO_OTEL_ENDPOINT="${SIGIRO_OTEL_ENDPOINT:-http://127.0.0.1:9999}"
 SIGIRO_PYROSCOPE_ENDPOINT="${SIGIRO_PYROSCOPE_ENDPOINT:-}"
 SIGIRO_SERVICE_NAME="${SIGIRO_SERVICE_NAME:-sigiro-self}"
+OTEL_AUTH_HEADER="${OTEL_AUTH_HEADER:-Authorization: Bearer sigiro_dev_smoke-test}"
 SMOKE_DURATION="${SMOKE_DURATION:-30}"
 SIGIRO_BINARY="${SIGIRO_BINARY:-}"
 
@@ -136,6 +137,7 @@ while time.time() < end_time:
         subprocess.run(
             ["curl", "-sf", "-X", "POST", url,
              "-H", "Content-Type: application/json",
+             "-H", sys.argv[4],
              "-d", json.dumps(trace)],
             timeout=5, check=False
         )
@@ -147,20 +149,36 @@ while time.time() < end_time:
 print(f"Sent {count} spans", file=sys.stderr)
 PYEOF
 
-python3 "$LOADER" "$SMOKE_DURATION" "$SIGIRO_SERVICE_NAME" "http://127.0.0.1:4318/v1/traces"
+python3 "$LOADER" "$SMOKE_DURATION" "$SIGIRO_SERVICE_NAME" "http://127.0.0.1:4318/v1/traces" "$OTEL_AUTH_HEADER"
 rm -f "$LOADER"
 
 log "Load generation complete — waiting for data to flush..."
 sleep 5
 
+# --- Warmup: trigger DuckDB extension downloads before investigate ---
+# Avoids cold-start timeout on first investigate call (~20s to download extensions)
+log "Warming up investigate endpoint (trigger extension downloads)..."
+curl -sf -m 30 -X POST \
+    "http://127.0.0.1:9999/v1/investigate" \
+    -H "Authorization: Bearer sigiro_dev_smoke-test" \
+    -H "Content-Type: application/json" \
+    -d '{"service":"__warmup__","from_ts":0,"to_ts":1}' \
+    > /dev/null 2>&1 || true
+sleep 2
+
 # --- Query investigate endpoint ---
 NOW="$(date +%s)"
-FROM="$((NOW - SMOKE_DURATION - 30))"
-TO="$((NOW + 10))"
+# investigate API uses microseconds and POST with JSON body
+FROM_US=$(( (NOW - SMOKE_DURATION - 30) * 1000000 ))
+TO_US=$(( (NOW + 10) * 1000000 ))
 
-log "Querying /v1/investigate?service=${SIGIRO_SERVICE_NAME}&from=${FROM}&to=${TO}..."
-INVESTIGATE_RESP=$(curl -sf \
-    "http://127.0.0.1:9999/v1/investigate?service=${SIGIRO_SERVICE_NAME}&from=${FROM}&to=${TO}" \
+log "Querying POST /v1/investigate (service=${SIGIRO_SERVICE_NAME}, from_ts=${FROM_US}, to_ts=${TO_US})..."
+INVESTIGATE_RESP=$(curl -sf -s \
+    -X POST \
+    -H "Authorization: Bearer sigiro_dev_smoke-test" \
+    -H "Content-Type: application/json" \
+    "http://127.0.0.1:9999/v1/investigate" \
+    -d "{\"service\":\"${SIGIRO_SERVICE_NAME}\",\"from_ts\":${FROM_US},\"to_ts\":${TO_US}}" \
     2>/dev/null || echo '{"error": "investigate endpoint not available"}')
 
 # --- Optional: fetch Pyroscope profiles ---
@@ -172,9 +190,13 @@ import urllib.request, json, sys
 
 endpoint = '${SIGIRO_PYROSCOPE_ENDPOINT}'
 service = '${SIGIRO_SERVICE_NAME}'
+from_us = ${FROM_US}
+to_us = ${TO_US}
+from_s = from_us // 1000000000
+to_s = to_us // 1000000000
 
 def fetch_profile(profile_type, label):
-    url = f'{endpoint}/pyroscope/render?query=%7Bservice_name%3D%22{service}%22%7D&profileType={profile_type}&from=$(({FROM} * 1000000000))&to=$(({TO} * 1000000000))'
+    url = endpoint + '/pyroscope/render?query=%7Bservice_name%3D%22' + service + '%22%7D&profileType=' + profile_type + '&from=' + str(from_s) + '&to=' + str(to_s)
     try:
         with urllib.request.urlopen(url, timeout=10) as r:
             data = json.loads(r.read())

@@ -81,7 +81,6 @@ async fn list_workers_handler(
 }
 
 /// Set up a fresh test environment with its own temp dir and admin DB.
-///
 /// All tests must run through [`federation_endpoints_e2e`] to avoid races
 /// on the `SIGIRO_DATA_DIR` env var (shared across parallel test threads).
 fn setup() -> (TempDir, Arc<Mutex<Connection>>) {

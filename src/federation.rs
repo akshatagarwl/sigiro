@@ -152,7 +152,6 @@ pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
 }
 
 /// Regenerate `spicepod.yaml` from all registered workers.
-///
 /// Uses the "default" project directory for the local DuckLake dataset.
 /// If `SIGIRO_S3_BUCKET` is set, also adds a cold-storage S3 dataset.
 pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
@@ -217,7 +216,6 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
 }
 
 /// Start the `spiced` subprocess for Spice.ai federation.
-///
 /// Fails loudly if `spiced` is not in PATH or spicepod.yaml is missing.
 pub fn start_spice(data_dir: &Path) -> Result<()> {
     which::which("spiced")
