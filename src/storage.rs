@@ -44,7 +44,7 @@ pub fn init_distributed(
     tracing::info!("loaded DuckDB extensions: ducklake, postgres");
 
     // Convert catalog URL to libpq format that DuckLake expects.
-    // Accepts both postgresql:// URI and postgres:key=value libpq format.
+    // Accepts both postgresql:// URI and postgres:***@host:5432/dbname` (auto-converted to libpq format)
     let catalog_path = postgres_uri_to_libpq(&config.catalog_url)?;
 
     // Configure S3 credentials if bucket is set
@@ -99,43 +99,12 @@ pub fn init_distributed(
     Ok(())
 }
 
-/// Load distributed storage config from SIGIRO_* env vars.
-/// Returns Some if SIGIRO_CATALOG_URL is set, None otherwise (use local SQLite).
-/// Fails loudly if catalog_url is set but required S3 vars are missing or empty.
-pub fn load_config() -> Result<Option<StorageConfig>> {
-    let catalog_url = match std::env::var("SIGIRO_CATALOG_URL") {
-        Ok(v) if !v.is_empty() => v,
-        Ok(_) => anyhow::bail!(
-            "SIGIRO_CATALOG_URL is set but empty — provide a valid PostgreSQL catalog URL or unset it"
-        ),
-        Err(_) => return Ok(None), // not set — use local SQLite
-    };
-
-    let s3_bucket = std::env::var("SIGIRO_S3_BUCKET").unwrap_or_default();
-    let s3_region = std::env::var("SIGIRO_S3_REGION").unwrap_or_default();
-    if !s3_bucket.is_empty() && s3_region.is_empty() {
-        anyhow::bail!(
-            "SIGIRO_S3_BUCKET is set but SIGIRO_S3_REGION is missing — provide a valid AWS region"
-        );
-    }
-    if s3_bucket.is_empty() && !s3_region.is_empty() {
-        tracing::warn!("SIGIRO_S3_REGION is set but SIGIRO_S3_BUCKET is empty — S3 region ignored");
-    }
-
-    Ok(Some(StorageConfig {
-        catalog_url,
-        s3_bucket,
-        s3_region,
-        s3_prefix: std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default(), // empty prefix = data at bucket root, which is valid
-    }))
-}
-
 /// Distributed storage configuration.
 /// PostgreSQL catalog for multi-writer + optional S3 data files.
 ///
 /// `catalog_url` can be:
 /// - A libpq connection string: `postgres:dbname=db host=localhost user=u password=p port=5432`
-/// - A PostgreSQL URI: `postgresql://user:pass@host:5432/dbname` (auto-converted to libpq format)
+/// - A PostgreSQL URI: `postgresql://user:***@host:5432/dbname` (auto-converted to libpq format)
 #[derive(Debug)]
 pub struct StorageConfig {
     pub catalog_url: String,
@@ -144,18 +113,46 @@ pub struct StorageConfig {
     pub s3_prefix: String,
 }
 
-/// Convert a `postgresql://user:pass@host:port/dbname` URI to libpq `key=value` format
+/// A parsed host:port pair.
+///
+/// Used when parsing PostgreSQL URIs to extract the host and default port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostPort {
+    pub host: &'static str,
+    pub port: u16,
+}
+
+impl HostPort {
+    const DEFAULT_POSTGRES_PORT: u16 = 5432;
+
+    /// Parse a host:port string, defaulting to 5432 if no port given.
+    fn parse(s: &str) -> Result<Self> {
+        match s.split_once(':') {
+            Some((host, port_str)) => {
+                let port = port_str
+                    .parse()
+                    .context("invalid port in postgres URI: must be a number")?;
+                Ok(Self { host, port })
+            }
+            None => Ok(Self {
+                host: s,
+                port: Self::DEFAULT_POSTGRES_PORT,
+            }),
+        }
+    }
+}
+
+/// Convert a `postgresql://user:***@host:port/dbname` URI to libpq `key=value` format
 /// that DuckLake expects: `postgres:dbname=db host=h user=u password=p port=5432`
 fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
     // Already in libpq format — return as-is with postgres: prefix
-    if uri.starts_with("postgres:") || uri.starts_with("postgresql:") {
+    if uri.starts_with("postgres:") || uri.starts_with("postgresql://") {
         // Check if it's a URI (contains //) or already libpq key=value
-        if uri.contains("//") {
-            // Parse URI: postgresql://user:pass@host:port/dbname
+        if uri.starts_with("postgresql://") || uri.starts_with("postgres://") {
+            // Parse URI: postgresql://user:***@host:port/dbname
             let stripped = uri
-                .trim_start_matches("postgres:")
-                .trim_start_matches("postgresql:");
-            let stripped = stripped.trim_start_matches("//");
+                .trim_start_matches("postgres://")
+                .trim_start_matches("postgresql://");
 
             // Split user:pass@host:port/dbname
             let (credentials, rest) = stripped
@@ -167,25 +164,23 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
                 .context("invalid postgres URI: expected user:password in credentials")?;
 
             // rest = host:port/dbname
-            let (host_port, dbname) = rest
+            let (host_port_str, dbname) = rest
                 .split_once('/')
                 .context("invalid postgres URI: expected host:port/dbname")?;
 
-            let (host, port) = if host_port.contains(':') {
-                host_port.split_once(':').unwrap()
-            } else {
-                (host_port, "5432")
-            };
+            let host_port = HostPort::parse(host_port_str)?;
 
             Ok(format!(
-                "postgres:dbname={dbname} host={host} user={user} password={password} port={port}"
+                "postgres:dbname={dbname} host={} user={user} password={password} port={}",
+                host_port.host, host_port.port
             ))
         } else {
             // Already libpq format, just ensure postgres: prefix
-            if uri.starts_with("postgres:") {
+            let libpq = uri.trim_start_matches("postgresql:");
+            if libpq.starts_with("postgres:") {
                 Ok(uri.to_string())
             } else {
-                Ok(format!("postgres:{uri}"))
+                Ok(format!("postgres:{libpq}"))
             }
         }
     } else {
