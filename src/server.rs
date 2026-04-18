@@ -186,16 +186,47 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .with_state(app_state)
 }
 
+/// Server port configuration — all configurable via environment variables.
+/// Defaults match the original hardcoded values.
+#[derive(Clone)]
+pub struct ServerPorts {
+    pub http: u16,
+    pub grpc: u16,
+    pub otlp_http: u16,
+}
+
+impl Default for ServerPorts {
+    fn default() -> Self {
+        Self {
+            http: std::env::var("SIGIRO_HTTP_PORT")
+                .unwrap_or_else(|_| "9999".to_string())
+                .parse()
+                .unwrap_or(9999),
+            grpc: std::env::var("SIGIRO_GRPC_PORT")
+                .unwrap_or_else(|_| "4317".to_string())
+                .parse()
+                .unwrap_or(4317),
+            otlp_http: std::env::var("SIGIRO_OTLP_HTTP_PORT")
+                .unwrap_or_else(|_| "4318".to_string())
+                .parse()
+                .unwrap_or(4318),
+        }
+    }
+}
+
 pub async fn run_servers(
     pool: Arc<ProjectPool>,
     admin_conn: Arc<Mutex<Connection>>,
     router: Arc<MsgRouter>,
 ) -> Result<()> {
-    // gRPC server on :4317 — authenticated via Bearer token in metadata
+    let ports = ServerPorts::default();
+
+    // gRPC server — authenticated via Bearer token in metadata
     let grpc_admin = Arc::clone(&admin_conn);
     let grpc_router = Arc::clone(&router);
+    let grpc_port = ports.grpc;
     let grpc_handle = tokio::spawn(async move {
-        let addr = "[::]:4317".parse().expect("valid addr");
+        let addr = format!("[::]:{grpc_port}").parse().expect("valid addr");
         let svc = OtlpGrpcService::new(grpc_router, grpc_admin);
         tracing::info!("gRPC listening on {addr}");
         TonicServer::builder()
@@ -226,19 +257,21 @@ pub async fn run_servers(
 
     let http_app = build_http_router(app_state);
 
+    let http_port = ports.http;
     let http_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
-        tracing::info!("HTTP listening on 0.0.0.0:9999");
+        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{http_port}")).await?;
+        tracing::info!("HTTP listening on 0.0.0.0:{http_port}");
         axum::serve(listener, http_app)
             .await
             .context("HTTP server failed")
     });
 
-    // OTLP HTTP on :4318 — authenticated via Authorization header
+    // OTLP HTTP — authenticated via Authorization header
     let otlp_http_app = crate::ingest::otlp_http_router(router, Arc::clone(&admin_conn));
+    let otlp_http_port = ports.otlp_http;
     let otlp_http_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:4318").await?;
-        tracing::info!("OTLP HTTP listening on 0.0.0.0:4318");
+        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{otlp_http_port}")).await?;
+        tracing::info!("OTLP HTTP listening on 0.0.0.0:{otlp_http_port}");
         axum::serve(listener, otlp_http_app)
             .await
             .context("OTLP HTTP server failed")

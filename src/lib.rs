@@ -1,8 +1,6 @@
 pub mod admin;
 pub mod auth;
-pub mod billing;
 pub mod client;
-pub mod compactor;
 pub mod config;
 pub mod drain;
 pub mod ebpf;
@@ -12,6 +10,7 @@ pub mod inserter;
 pub mod investigate;
 pub mod mcp;
 pub mod pool;
+pub mod profiling;
 pub mod schema;
 pub mod server;
 pub mod storage;

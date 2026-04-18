@@ -254,9 +254,9 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     // Sends CPU + memory allocation profiles to the Pyroscope server.
     // The smoke-test script fetches these profiles and includes them in investigate blocks.
     let _profiling = match start_profiling() {
-        Ok(Some(_)) => {
+        Ok(Some(handle)) => {
             sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "active")?;
-            Some(_)
+            Some(handle)
         }
         Ok(None) => {
             sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "disabled")?;

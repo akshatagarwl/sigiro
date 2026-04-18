@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 /// Handle to the Pyroscope agent, if configured.
 pub struct ProfilingHandle {
     /// The running agent. Must be kept alive for profiling to continue.
-    _agent: pyroscope::PyroscopeAgent<pyroscope::agent::PyroscopeAgentRunning>,
+    _agent: pyroscope::PyroscopeAgent<pyroscope::pyroscope::PyroscopeAgentRunning>,
 }
 
 /// Start Pyroscope profiling if `SIGIRO_PYROSCOPE_ENDPOINT` is set.
@@ -26,17 +26,19 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
     let service_name = std::env::var("OTEL_SERVICE_NAME")
         .unwrap_or_else(|_| "sigiro".to_string());
 
-    let agent = pyroscope::PyroscopeAgent::builder(
+    let backend = pyroscope::backend::pprof_backend(
+        pyroscope::backend::pprof::PprofConfig::default(),
+        pyroscope::backend::BackendConfig::default(),
+    );
+
+    let agent = pyroscope::pyroscope::PyroscopeAgentBuilder::new(
         &endpoint,
         &service_name,
-        pyroscope::backend::pprof_backend(
-            pyroscope::backend::pprof::PprofConfig::new(
-                pyroscope::backend::pprof::BackendConfig::default(),
-            ),
-            pyroscope::backend::BackendConfig::default(),
-        ),
+        100, // sample rate Hz
+        "pyroscope-rs",
+        env!("CARGO_PKG_VERSION"),
+        backend,
     )
-    .sample_rate(100)
     .build()
     .context("failed to build Pyroscope agent")?;
 
