@@ -233,7 +233,8 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_status", "disabled")?;
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_reason", "--no-ebpf flag")?;
     } else {
-        let otlp_endpoint = "http://127.0.0.1:9999".to_string();
+        let otlp_endpoint = std::env::var("SIGIRO_OTEL_ENDPOINT")
+            .unwrap_or_else(|_| "http://127.0.0.1:9999".to_string());
         let status = sigiro::ebpf::ebpf_status("obi");
         sigiro::ebpf::write_ebpf_status(&admin_conn, &status)?;
         match status.status.as_str() {
