@@ -1,0 +1,31 @@
+{
+  "color": {
+    "accent":      "#C4501A",
+    "near-black":  "#1C1916",
+    "off-white":   "#F7F4EF",
+    "warm-mid":    "#9A9188",
+    "warm-light":  "#EDE9E2",
+    "warm-border": "#D5D0C9"
+  },
+  "typography": {
+    "display": {
+      "family": "Playfair Display",
+      "weight": 700,
+      "tracking": "-0.03em"
+    },
+    "ui": {
+      "family": "Inter",
+      "weight-regular": 400,
+      "weight-bold": 700,
+      "tracking-normal": "-0.02em",
+      "tracking-label": "0.08em"
+    }
+  },
+  "logo": {
+    "direction": "C — Eye / Iris",
+    "viewbox": "0 0 34 32",
+    "eye-outline": "ellipse cx=17 cy=16 rx=14 ry=10 stroke=#1C1916 stroke-width=2",
+    "iris": "circle cx=17 cy=16 r=5 fill=#C4501A",
+    "highlight": "circle cx=19 cy=14 r=1.5 fill=#F7F4EF"
+  }
+}
