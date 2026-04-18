@@ -94,22 +94,10 @@ enum AdminAction {
     RevokeKey {
         /// Short token portion of the key
         short_token: String,
-    },
+    }
 }
 
-/// Open or create the admin SQLite database (for API key storage).
-fn open_admin_db() -> Result<Connection> {
-    let dir = data_dir()?;
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join("admin.sqlite");
-    let conn = Connection::open(&path)
-        .with_context(|| format!("failed to open admin DB at {}", path.display()))?;
-    sigiro::admin::create_keys_table(&conn)?;
-    sigiro::admin::create_instance_status_table(&conn)?;
-    Ok(conn)
-}
-
-/// Format output based on the selected output format.
+/// Format output
 fn format_output(value: &serde_json::Value, output_format: &OutputFormat) -> Result<String> {
     match output_format {
         OutputFormat::Toon => Ok(to_toon(value)),
@@ -229,7 +217,7 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     // DuckLake init is now per-project (in pool.get_or_create).
     // No need for a probe connection at startup.
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
-    let admin_conn = open_admin_db()?;
+    let admin_conn = sigiro::admin::open_admin_db()?;
 
     // Write instance status at startup
     sigiro::admin::write_instance_status(&admin_conn, "version", env!("CARGO_PKG_VERSION"))?;
