@@ -628,13 +628,20 @@ async fn otlp_http_metrics(
             return StatusCode::BAD_REQUEST;
         }
     };
-    state
-        .router
-        .send(IngestMsg::Metrics {
-            project_id,
-            batches,
-        })
-        .await;
+    // Only send if at least one metric batch is non-empty (consistent with traces/logs)
+    let has_data = batches.gauge.as_ref().map_or(false, |b| b.num_rows() > 0)
+        || batches.sum.as_ref().map_or(false, |b| b.num_rows() > 0)
+        || batches.histogram.as_ref().map_or(false, |b| b.num_rows() > 0)
+        || batches.exp_histogram.as_ref().map_or(false, |b| b.num_rows() > 0);
+    if has_data {
+        state
+            .router
+            .send(IngestMsg::Metrics {
+                project_id,
+                batches,
+            })
+            .await;
+    }
     StatusCode::OK
 }
 
