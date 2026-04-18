@@ -28,9 +28,28 @@ pub struct SigiroMcp {
 }
 
 /// Parameters for investigating one or more services.
-/// This is a type alias so the MCP server can document it distinctly from
-/// the HTTP API's InvestigateRequest, while both are the same underlying type.
-pub type InvestigateParams = crate::investigate::InvestigateRequest;
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct InvestigateParams {
+    /// Single service name to investigate
+    pub service: Option<String>,
+    /// Multiple service names to investigate (max 10). Use for incident topology.
+    pub services: Option<Vec<String>>,
+    /// Start timestamp in epoch microseconds (defaults to now - 15m)
+    pub from_ts: Option<i64>,
+    /// End timestamp in epoch microseconds (defaults to now)
+    pub to_ts: Option<i64>,
+}
+
+impl From<InvestigateParams> for crate::investigate::InvestigateRequest {
+    fn from(p: InvestigateParams) -> Self {
+        crate::investigate::InvestigateRequest {
+            service: p.service,
+            services: p.services,
+            from_ts: p.from_ts,
+            to_ts: p.to_ts,
+        }
+    }
+}
 
 /// Parameters for running a read-only SQL query against the DuckDB database.
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -48,12 +67,8 @@ impl SigiroMcp {
     /// and derived events (deploys, K8s events).
     #[tool]
     async fn sigiro_investigate(&self, params: Parameters<InvestigateParams>) -> String {
-        let p = params.0;
-        match self
-            .client
-            .investigate_multi(p.service.as_deref(), p.services, p.from_ts, p.to_ts)
-            .await
-        {
+        let req = crate::investigate::InvestigateRequest::from(params.0);
+        match self.client.investigate_multi(req.service.as_deref(), req.services, req.from_ts, req.to_ts).await {
             Ok(blocks) => serialize_json(&blocks),
             Err(e) => format_error(e),
         }
