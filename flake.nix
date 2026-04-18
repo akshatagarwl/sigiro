@@ -4,192 +4,168 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     crane = {
       url = "github:ipetkov/crane";
     };
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay, crane }:
-    flake-utils.lib.eachSystem [
-      "aarch64-darwin"  # macOS ARM64 (build machine)
-      "x86_64-linux"    # Linux x86_64 (CI)
-    ] (buildSystem:
-      let
-        targetTriple = "aarch64-unknown-linux-gnu";
+  outputs = { self, nixpkgs, flake-utils, crane, fenix }:
+    let
+      # nixpkgs pkgsCross attribute name for each Rust target triple.
+      crossTargetPkgs = {
+        "aarch64-unknown-linux-gnu" = "aarch64-multiplatform";
+        "x86_64-unknown-linux-gnu"  = "gnu64";
+      };
 
-        overlays = [ (import rust-overlay) ];
-        pkgs = import nixpkgs {
-          system = buildSystem;
-          inherit overlays;
-          config.allowUnsupportedSystem = true;  # cross-compile targets
-        };
+      # Cross-targets available per build system.
+      # Empty list = native only.
+      crossTargetsFor = buildSystem: {
+        "aarch64-darwin" = [
+          "aarch64-unknown-linux-gnu"
+          "x86_64-unknown-linux-gnu"
+        ];
+        "x86_64-darwin"  = [ "x86_64-unknown-linux-gnu" ];
+        "x86_64-linux"   = [ ];
+      }.${buildSystem} or [ ];
 
-        lib = pkgs.lib;
+    in flake-utils.lib.eachSystem [
+      "aarch64-darwin"
+      "x86_64-darwin"
+      "x86_64-linux"
+    ] (buildSystem: let
 
-        # Cross-compilation sysroot — GCC toolchain + glibc for aarch64-linux.
-        # glibc ~2.39 from nixpkgs-unstable, forward-compatible with all newer systems.
-        crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+      pkgs = import nixpkgs {
+        system = buildSystem;
+        config.allowUnsupportedSystem = true;
+      };
+      lib = pkgs.lib;
 
-        # Rust toolchain — latest stable with aarch64-linux cross-compilation target
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          targets = [ targetTriple ];
-        };
+      crossTargets = crossTargetsFor buildSystem;
 
-        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+      # Fenix toolchain for the native build.
+      nativeToolchain = with fenix.packages.${buildSystem}; stable.toolchain;
 
-        crossPrefix = crossPkgs.stdenv.cc.targetPrefix;
+      craneLib = crane.mkLib pkgs;
+      src = craneLib.cleanCargoSource ./.;
 
-        src = craneLib.cleanCargoSource ./.;
+      nativeBuildInputs = with pkgs; [ cmake pkg-config python3 ];
 
-        # Common env vars for cross-compilation.
-        # Uses GCC (not clang) so bundled DuckDB C++ is ABI-compatible
-        # with community DuckDB extensions (both use libstdc++).
-        crossEnv = {
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "${crossPrefix}gcc";
-          CC_aarch64_unknown_linux_gnu  = "${crossPrefix}gcc";
-          CXX_aarch64_unknown_linux_gnu = "${crossPrefix}g++";
-          AR_aarch64_unknown_linux_gnu  = "${crossPrefix}ar";
-          CXXFLAGS_aarch64_unknown_linux_gnu = "-std=c++17";
+      # Dependency derivation (DuckDB C++ compiles here).
+      commonDeps = craneLib.buildDepsOnly {
+        inherit src;
+        strictDeps = true;
+        inherit nativeBuildInputs;
+        preBuild = "ulimit -n 65536 2>/dev/null || true";
+      };
+
+      # ---- Native package ----
+      native = craneLib.buildPackage {
+        inherit src;
+        strictDeps = true;
+        inherit nativeBuildInputs;
+        cargoArtifacts = commonDeps;
+        preBuild = "ulimit -n 65536 2>/dev/null || true";
+        preCheck = "export HOME=$(mktemp -d)";
+      };
+
+      # ---- Cross-compiled packages ----
+      crossPackages = lib.genAttrs crossTargets (crossTarget: let
+        crossPkgs = pkgs.pkgsCross.${crossTargetPkgs.${crossTarget}};
+
+        fenixToolchain = with fenix.packages.${buildSystem};
+          combine [ minimal.cargo minimal.rustc targets.${crossTarget}.latest.rust-std ];
+
+        crossEnvBase = {
+          "CARGO_TARGET_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}_LINKER"
+            = "${crossPkgs.stdenv.cc.targetPrefix}gcc";
+          "CC_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
+            = "${crossPkgs.stdenv.cc.targetPrefix}gcc";
+          "CXX_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
+            = "${crossPkgs.stdenv.cc.targetPrefix}g++";
+          "AR_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
+            = "${crossPkgs.stdenv.cc.targetPrefix}ar";
           PKG_CONFIG_ALLOW_CROSS = "1";
         };
 
-        # Build tools that run on the HOST machine
-        nativeBuildInputs = with pkgs; [
-          cmake
-          pkg-config
-          python3
+        crossDeps = (craneLib.overrideToolchain fenixToolchain).buildDepsOnly {
+          inherit src;
+          strictDeps = true;
+          nativeBuildInputs = nativeBuildInputs ++ [
+            crossPkgs.stdenv.cc
+            crossPkgs.stdenv.cc.bintools
+          ];
+          env = crossEnvBase // {
+            "CFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
+              = "-isystem ${crossPkgs.glibc.dev}/include";
+            "CXXFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
+              = "-isystem ${crossPkgs.glibc.dev}/include -std=c++17";
+          };
+          preBuild = "ulimit -n 65536 2>/dev/null || true";
+        };
+
+        crossEnv = crossEnvBase // {
+          "CFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
+            = "-isystem ${crossPkgs.glibc.dev}/include";
+          "CXXFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
+            = "-isystem ${crossPkgs.glibc.dev}/include -std=c++17";
+        };
+
+      in (craneLib.overrideToolchain fenixToolchain).buildPackage {
+        inherit src;
+        strictDeps = true;
+        nativeBuildInputs = nativeBuildInputs ++ [
           crossPkgs.stdenv.cc
           crossPkgs.stdenv.cc.bintools
         ];
+        cargoArtifacts = crossDeps;
+        cargoExtraArgs = "--target ${crossTarget}";
+        env = crossEnv;
+        preBuild = "ulimit -n 65536 2>/dev/null || true";
+        doCheck = false;
+        installPhase = ''
+          mkdir -p $out/bin
+          cp target/${crossTarget}/release/sigiro $out/bin/sigiro
+        '';
+        postFixup = ''
+          echo "--- Cross-compiled binary info ---"
+          ${pkgs.buildPackages.file}/bin/file $out/bin/sigiro
+          ${pkgs.buildPackages.binutils}/bin/${crossPkgs.stdenv.cc.targetPrefix}readelf -d $out/bin/sigiro 2>/dev/null || true
+        '';
+      });
 
-        # ---- Dependency derivation (cached by Nix, rebuilds only on Cargo.lock change) ----
-        # This is the key optimization: DuckDB C++ compilation happens HERE and is cached.
-        # Source changes only rebuild the second derivation below.
+    in {
+      packages =
+        { nativeBuild = native; }
+        // builtins.listToAttrs (
+          map (name: { name = "sigiro-${name}"; value = crossPackages.${name}; })
+          (builtins.attrNames crossPackages)
+        );
 
-        nativeDeps = craneLib.buildDepsOnly {
-          inherit src;
-          strictDeps = true;
-          nativeBuildInputs = with pkgs; [ cmake pkg-config python3 ];
-
-          preBuild = ''
-            ulimit -n 65536 2>/dev/null || true
-          '';
-        };
-
-        crossDeps = craneLib.buildDepsOnly {
-          inherit src;
-          strictDeps = true;
-
-          cargoExtraArgs = "--target ${targetTriple}";
-          inherit nativeBuildInputs;
-
-          env = crossEnv // {
-            # Cross glibc headers (resolv.h, endian.h) must appear before macOS SDK headers.
-            # DuckDB's http_util.cpp includes <resolv.h> → macOS nameser.h → <machine/endian.h> (BSD).
-            # Force the cross sysroot's glibc includes first via -isystem so cc-rs finds the Linux version.
-            CFLAGS_aarch64_unknown_linux_gnu = "-isystem ${crossPkgs.glibc.dev}/include";
-            CXXFLAGS_aarch64_unknown_linux_gnu = "-isystem ${crossPkgs.glibc.dev}/include -std=c++17";
-          };
-
-          preBuild = ''
-            ulimit -n 65536 2>/dev/null || true
-          '';
-        };
-
-        # ---- Native build (for the build machine's own architecture) ----
-        nativeBuild = craneLib.buildPackage {
-          inherit src;
-          strictDeps = true;
-          nativeBuildInputs = with pkgs; [ cmake pkg-config python3 ];
-
-          cargoArtifacts = nativeDeps;
-
-          preBuild = ''
-            ulimit -n 65536 2>/dev/null || true
-          '';
-
-          preCheck = ''
-            export HOME=$(mktemp -d)
-          '';
-        };
-
-        # ---- Cross-compiled build (aarch64-linux-gnu) ----
-        crossBuild = craneLib.buildPackage {
-          inherit src;
-          strictDeps = true;
-
-          cargoArtifacts = crossDeps;
-          cargoExtraArgs = "--target ${targetTriple}";
-          inherit nativeBuildInputs;
-
-          env = crossEnv // {
-            CFLAGS_aarch64_unknown_linux_gnu = "-isystem ${crossPkgs.glibc.dev}/include";
-            CXXFLAGS_aarch64_unknown_linux_gnu = "-isystem ${crossPkgs.glibc.dev}/include -std=c++17";
-          };
-
-          preBuild = ''
-            ulimit -n 65536 2>/dev/null || true
-          '';
-
-          doCheck = false;
-
-          installPhase = ''
-            mkdir -p $out/bin
-            cp target/${targetTriple}/release/sigiro $out/bin/sigiro
-          '';
-
-          postFixup = ''
-            echo "--- Cross-compiled binary info ---"
-            ${pkgs.buildPackages.file}/bin/file $out/bin/sigiro
-            ${pkgs.buildPackages.binutils}/bin/${crossPrefix}readelf -d $out/bin/sigiro 2>/dev/null || true
-          '';
-        };
-
-      in {
-        packages = {
-          default = nativeBuild;
-          sigiro = nativeBuild;
-          sigiro-aarch64-linux = crossBuild;
-        };
-
-        devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            # Rust toolchain (with aarch64-linux target)
-            rustToolchain
-
-            # Build dependencies
-            cmake
-            pkg-config
-            python3
-
-            # Cross-compilation toolchain (GCC for aarch64-linux)
-            # Ensures DuckDB C++ is compiled with GCC/libstdc++ for ABI compat
-            crossPkgs.stdenv.cc
-            crossPkgs.stdenv.cc.bintools
-
-            # Dev tools
-            cargo-watch
-            cargo-outdated
-            rust-analyzer
-            gdb
-          ];
-
-          env = crossEnv;
-
-          shellHook = ''
-            echo "sigiro dev shell"
-            echo "  rustc: $(rustc --version)"
-            echo "  cross: ${crossPrefix}gcc $(${crossPrefix}gcc -dumpversion 2>/dev/null)"
-            echo "  target: ${targetTriple}"
-            echo ""
-            echo "  nix build .#sigiro-aarch64-linux   — cross-compile for aarch64 Linux"
-            echo "  nix build                           — native build"
-          '';
-        };
-      }
-    );
+      devShells.default = pkgs.mkShell {
+        packages = with pkgs; [
+          nativeToolchain
+          cmake
+          pkg-config
+          python3
+          cargo-watch
+          cargo-outdated
+          rust-analyzer
+        ];
+        shellHook = ''
+          echo "sigiro dev shell"
+          echo "  rustc: $(rustc --version)"
+          echo ""
+          echo "  cargo build          — native build"
+          echo "  nix build            — native Nix build"
+          ${lib.optionalString (crossTargets != [ ]) ''
+            echo "  nix build .#sigiro-<target>  — cross-compile:"
+            ${lib.concatMapStringsSep "\n" (t: "            echo '    ${t}'") crossTargets}
+          ''}
+        '';
+      };
+    });
 }
