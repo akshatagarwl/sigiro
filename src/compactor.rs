@@ -1,7 +1,7 @@
 use duckdb::Connection;
 use std::sync::{Arc, Mutex};
 
-use crate::inserter::SignalTable;
+use crate::types::SignalTable;
 
 /// Run the DuckLake compaction + retention loop.
 /// Executes hourly: merges small Parquet files, deletes expired data, cleans up old files.

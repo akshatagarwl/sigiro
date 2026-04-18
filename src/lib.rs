@@ -16,6 +16,7 @@ pub mod schema;
 pub mod server;
 pub mod storage;
 pub mod toon;
+pub mod types;
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
@@ -27,9 +28,11 @@ use std::path::PathBuf;
 // root so consumers can use `sigiro::IngestMsg` instead of digging through
 // `sigiro::ingest` or `sigiro::inserter`.
 
-pub use ingest::{IngestMsg, OtlpGrpcService};
-pub use inserter::{MsgRouter, SignalTable};
+pub use ingest::OtlpGrpcService;
 pub use investigate::{InvestigationBlock, Window};
+pub use types::{IngestMsg, SignalTable};
+// Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
+pub use inserter::MsgRouter;
 
 pub fn data_dir() -> Result<PathBuf> {
     std::env::var("SIGIRO_DATA_DIR").map(PathBuf::from).context(

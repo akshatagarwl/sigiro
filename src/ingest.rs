@@ -28,39 +28,7 @@ use std::sync::{Arc, Mutex};
 use tonic::{Request, Response, Status};
 
 use crate::inserter::MsgRouter;
-
-/// Pre-transformed ingest message carrying Arrow RecordBatches, not raw bytes.
-/// Transform happens on the tokio blocking pool (parallel) BEFORE the channel,
-/// so the inserter threads only do DuckDB writes — no CPU-bound protobuf decoding.
-pub enum IngestMsg {
-    Traces {
-        project_id: String,
-        batch: RecordBatch,
-    },
-    Logs {
-        project_id: String,
-        batch: RecordBatch,
-    },
-    Metrics {
-        project_id: String,
-        batches: MetricBatches,
-    },
-    Profiles {
-        project_id: String,
-        batch: RecordBatch,
-    },
-}
-
-impl IngestMsg {
-    pub fn project_id(&self) -> &str {
-        match self {
-            IngestMsg::Traces { project_id, .. }
-            | IngestMsg::Logs { project_id, .. }
-            | IngestMsg::Metrics { project_id, .. }
-            | IngestMsg::Profiles { project_id, .. } => project_id,
-        }
-    }
-}
+use crate::types::IngestMsg;
 
 pub struct OtlpGrpcService {
     router: Arc<MsgRouter>,
