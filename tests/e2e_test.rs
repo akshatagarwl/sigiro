@@ -7,7 +7,7 @@
 use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use sigiro::ingest::IngestMsg;
+use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
 use sigiro::investigate::{InvestigateRequest, investigate};
 use sigiro::pool::ProjectPool;

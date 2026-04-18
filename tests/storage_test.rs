@@ -1,4 +1,4 @@
-use sigiro::inserter::SignalTable;
+use sigiro::SignalTable;
 use sigiro::storage;
 
 #[test]

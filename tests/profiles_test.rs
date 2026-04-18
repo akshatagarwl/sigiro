@@ -3,7 +3,7 @@
 use arrow::array::{Int64Array, ListArray, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use sigiro::ingest::IngestMsg;
+use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
 use sigiro::investigate::QueryCtx;
 use sigiro::pool::ProjectPool;

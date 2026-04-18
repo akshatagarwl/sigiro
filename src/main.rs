@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, builder::styling};
-use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
 use sigiro::toon::to_toon;

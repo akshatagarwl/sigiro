@@ -1,5 +1,5 @@
 use duckdb::Connection;
-use sigiro::inserter::SignalTable;
+use sigiro::SignalTable;
 
 #[test]
 fn create_tables_on_fresh_db() {

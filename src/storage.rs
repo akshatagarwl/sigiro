@@ -44,7 +44,7 @@ pub fn init_distributed(
     tracing::info!("loaded DuckDB extensions: ducklake, postgres");
 
     // Convert catalog URL to libpq format that DuckLake expects.
-    // Accepts both postgresql:// URI and postgres:***@host:5432/dbname` (auto-converted to libpq format)
+    // Accepts both postgresql:// URI and postgres:host=... (libpq format, auto-converted).
     let catalog_path = postgres_uri_to_libpq(&config.catalog_url)?;
 
     // Configure S3 credentials if bucket is set
@@ -116,9 +116,9 @@ pub struct StorageConfig {
 /// A parsed host:port pair.
 ///
 /// Used when parsing PostgreSQL URIs to extract the host and default port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostPort {
-    pub host: &'static str,
+    pub host: String,
     pub port: u16,
 }
 
@@ -132,14 +132,46 @@ impl HostPort {
                 let port = port_str
                     .parse()
                     .context("invalid port in postgres URI: must be a number")?;
-                Ok(Self { host, port })
+                Ok(Self { host: host.to_string(), port })
             }
             None => Ok(Self {
-                host: s,
+                host: s.to_string(),
                 port: Self::DEFAULT_POSTGRES_PORT,
             }),
         }
     }
+}
+
+/// Load SIGIRO_* env vars to configure distributed (PostgreSQL catalog) storage.
+///
+/// Returns `Ok(None)` if `SIGIRO_CATALOG_URL` is not set — caller should use local SQLite.
+/// Returns an error if env vars are set but malformed.
+pub fn load_config() -> Result<Option<StorageConfig>> {
+    let catalog_url = match std::env::var("SIGIRO_CATALOG_URL") {
+        Ok(v) if !v.is_empty() => v,
+        Ok(_) => anyhow::bail!(
+            "SIGIRO_CATALOG_URL is set but empty — provide a valid PostgreSQL catalog URL or unset it"
+        ),
+        Err(_) => return Ok(None), // not set — use local SQLite
+    };
+
+    let s3_bucket = std::env::var("SIGIRO_S3_BUCKET").unwrap_or_default();
+    let s3_region = std::env::var("SIGIRO_S3_REGION").unwrap_or_default();
+    if !s3_bucket.is_empty() && s3_region.is_empty() {
+        anyhow::bail!(
+            "SIGIRO_S3_BUCKET is set but SIGIRO_S3_REGION is missing — provide a valid AWS region"
+        );
+    }
+    if s3_bucket.is_empty() && !s3_region.is_empty() {
+        tracing::warn!("SIGIRO_S3_REGION is set but SIGIRO_S3_BUCKET is empty — S3 region ignored");
+    }
+
+    Ok(Some(StorageConfig {
+        catalog_url,
+        s3_bucket,
+        s3_region,
+        s3_prefix: std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default(),
+    }))
 }
 
 /// Convert a `postgresql://user:***@host:port/dbname` URI to libpq `key=value` format
@@ -148,10 +180,10 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
     // Already in libpq format — return as-is with postgres: prefix
     if uri.starts_with("postgres:") || uri.starts_with("postgresql://") {
         // Check if it's a URI (contains //) or already libpq key=value
-        if uri.starts_with("postgresql://") || uri.starts_with("postgres://") {
+        if uri.contains("//") {
             // Parse URI: postgresql://user:***@host:port/dbname
             let stripped = uri
-                .trim_start_matches("postgres://")
+                .trim_start_matches("postgres:")
                 .trim_start_matches("postgresql://");
 
             // Split user:pass@host:port/dbname
@@ -176,11 +208,10 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
             ))
         } else {
             // Already libpq format, just ensure postgres: prefix
-            let libpq = uri.trim_start_matches("postgresql:");
-            if libpq.starts_with("postgres:") {
+            if uri.starts_with("postgres:") {
                 Ok(uri.to_string())
             } else {
-                Ok(format!("postgres:{libpq}"))
+                Ok(format!("postgres:{uri}"))
             }
         }
     } else {

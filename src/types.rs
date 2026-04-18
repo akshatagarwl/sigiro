@@ -14,7 +14,7 @@ use otlp2records::MetricBatches;
 /// Pre-transformed ingest message carrying Arrow RecordBatches, not raw bytes.
 /// Transform happens on the tokio blocking pool (parallel) BEFORE the channel,
 /// so the inserter threads only do DuckDB writes — no CPU-bound protobuf decoding.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum IngestMsg {
     Traces {
         project_id: String,
