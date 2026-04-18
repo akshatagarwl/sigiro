@@ -20,6 +20,17 @@ pub mod toon;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
+// ---------------------------------------------------------------------------
+// Shared type re-exports
+// ---------------------------------------------------------------------------
+// These types are used across multiple modules and re-exported at the crate
+// root so consumers can use `sigiro::IngestMsg` instead of digging through
+// `sigiro::ingest` or `sigiro::inserter`.
+
+pub use ingest::{IngestMsg, OtlpGrpcService};
+pub use inserter::{MsgRouter, SignalTable};
+pub use investigate::{InvestigationBlock, Window};
+
 pub fn data_dir() -> Result<PathBuf> {
     std::env::var("SIGIRO_DATA_DIR").map(PathBuf::from).context(
         "SIGIRO_DATA_DIR not set — export SIGIRO_DATA_DIR=/path/to/data before starting sigiro",
