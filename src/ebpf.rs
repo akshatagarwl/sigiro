@@ -137,8 +137,6 @@ pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
         .context("obi failed to start — check that obi is installed and executable")?;
 
     info!("obi started (pid: {:?})", child.id());
-    // Monitor obi lifecycle in a background thread.
-    // If obi crashes, the warn log surfaces the exit code for debugging.
     std::thread::spawn(move || {
         if let Ok(exit) = child.wait() {
             warn!("obi exited: {exit}");

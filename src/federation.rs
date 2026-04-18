@@ -241,8 +241,6 @@ pub fn start_spice(data_dir: &Path) -> Result<()> {
 
     info!("spiced started (pid: {:?})", child.id());
 
-    // Monitor spiced lifecycle in a background thread.
-    // If spiced crashes, the warn log surfaces the exit code for debugging.
     std::thread::spawn(move || {
         if let Ok(exit) = child.wait() {
             warn!("spiced exited: {exit}");
