@@ -7,13 +7,29 @@ use rmcp::{ServerHandler, ServiceExt as _, tool, tool_router};
 use serde::Deserialize;
 
 use crate::client::SigiroClient;
+use crate::investigate::InvestigateRequest;
+
+// --- Shared MCP response serializer ---
+
+/// Serialize a value to a JSON string, or return a formatted error on failure.
+/// Consistent error format across all MCP tool responses.
+fn serialize_json<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string_pretty(value)
+        .unwrap_or_else(|e| format!("internal error: failed to serialize response: {e}"))
+}
+
+/// Format an error as a string, consistent across all MCP tool responses.
+fn format_error(e: anyhow::Error) -> String {
+    format!("error: {e:#}")
+}
 
 pub struct SigiroMcp {
     client: SigiroClient,
     tool_router: ToolRouter<Self>,
 }
 
-/// Parameters for investigating one or more services.
+/// Parameters for investigating one or more services (same as InvestigateRequest).
+/// Re-exported with JsonSchema derive for MCP schema generation.
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct InvestigateParams {
     /// Single service name to investigate
@@ -24,6 +40,17 @@ pub struct InvestigateParams {
     pub from_ts: Option<i64>,
     /// End timestamp in epoch microseconds (defaults to now)
     pub to_ts: Option<i64>,
+}
+
+impl From<InvestigateParams> for InvestigateRequest {
+    fn from(p: InvestigateParams) -> Self {
+        InvestigateRequest {
+            service: p.service,
+            services: p.services,
+            from_ts: p.from_ts,
+            to_ts: p.to_ts,
+        }
+    }
 }
 
 /// Parameters for running a read-only SQL query against the DuckDB database.
@@ -48,9 +75,8 @@ impl SigiroMcp {
             .investigate_multi(p.service.as_deref(), p.services, p.from_ts, p.to_ts)
             .await
         {
-            Ok(blocks) => serde_json::to_string_pretty(&blocks)
-                .unwrap_or_else(|e| format!("internal error: failed to serialize response: {e}")),
-            Err(e) => format!("error: {e:#}"),
+            Ok(blocks) => serialize_json(&blocks),
+            Err(e) => format_error(e),
         }
     }
 
@@ -60,9 +86,8 @@ impl SigiroMcp {
     #[tool]
     async fn sigiro_query(&self, params: Parameters<QueryParams>) -> String {
         match self.client.query(&params.0.sql).await {
-            Ok(rows) => serde_json::to_string_pretty(&rows)
-                .unwrap_or_else(|e| format!("internal error: failed to serialize response: {e}")),
-            Err(e) => format!("error: {e:#}"),
+            Ok(rows) => serialize_json(&rows),
+            Err(e) => format_error(e),
         }
     }
 
@@ -70,9 +95,8 @@ impl SigiroMcp {
     #[tool]
     async fn sigiro_status(&self) -> String {
         match self.client.services().await {
-            Ok(val) => serde_json::to_string_pretty(&val)
-                .unwrap_or_else(|e| format!("internal error: failed to serialize response: {e}")),
-            Err(e) => format!("error: {e:#}"),
+            Ok(val) => serialize_json(&val),
+            Err(e) => format_error(e),
         }
     }
 }
