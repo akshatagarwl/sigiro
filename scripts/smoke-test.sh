@@ -99,57 +99,67 @@ if ! kill -0 "$NEW_PID" 2>/dev/null; then
     exit 1
 fi
 
-# --- Generate OTLP load ---
+# Generate OTLP load ---
 log "Generating OTLP load for ${SMOKE_DURATION}s (sending to new Sigiro)..."
 
-# obi (if running) captures these calls via eBPF and redirects to SIGIRO_OTEL_ENDPOINT.
-# If obi is not running, no telemetry reaches old Sigiro — that's expected.
-# We still send directly to old Sigiro too so the test works either way.
+# Write Python loader to temp file to avoid bash quoting issues
+LOADER="$(mktemp)"
+cat > "$LOADER" <<'PYEOF'
+import sys, json, time, random, subprocess
 
-for i in $(seq 1 50); do
-    (
-        # Send directly to new Sigiro's HTTP OTLP receiver
-        curl -sf -X POST http://127.0.0.1:4318/v1/traces \
-            -H "Content-Type: application/json" \
-            -d "$(python3 - <<PYEOF
-import json, time, random
-return {
-    "resourceSpans": [{
-        "resource": {
-            "attributes": [
-                {"key": "service.name", "value": {"stringValue": "${OTEL_SERVICE_NAME}"}},
-                {"key": "service.version", "value": {"stringValue": "smoke-test"}}
-            ]
-        },
-        "scopeSpans": [{
-            "spans": [{
-                "traceId": format(random.getrandbits(128), '032x'),
-                "spanId": format(random.getrandbits(64), '016x'),
-                "name": "test-span-${i}",
-                "kind": 1,
-                "startTimeUnixNano": int(time.time() * 1e9),
-                "endTimeUnixNano": int(time.time() * 1e9) + int(1e8 * random.random()),
+duration = int(sys.argv[1])
+service_name = sys.argv[2]
+end_time = time.time() + duration
+
+url = "http://127.0.0.1:4318/v1/traces"
+count = 0
+
+while time.time() < end_time:
+    trace = {
+        "resourceSpans": [{
+            "resource": {
                 "attributes": [
-                    {"key": "http.method", "value": {"stringValue": "GET"}},
-                    {"key": "http.url", "value": {"stringValue": f"/test/{i}"}},
-                    {"key": "test.iteration", "value": {"intValue": str(${i})}}
-                ],
-                "status": {"code": 0}
+                    {"key": "service.name", "value": {"stringValue": service_name}},
+                    {"key": "service.version", "value": {"stringValue": "smoke-test"}}
+                ]
+            },
+            "scopeSpans": [{
+                "spans": [{
+                    "traceId": format(random.getrandbits(128), '032x'),
+                    "spanId": format(random.getrandbits(64), '016x'),
+                    "name": f"test-span-{count}",
+                    "kind": 1,
+                    "startTimeUnixNano": int(time.time() * 1e9),
+                    "endTimeUnixNano": int(time.time() * 1e9) + int(1e8 * random.random()),
+                    "attributes": [
+                        {"key": "http.method", "value": {"stringValue": "GET"}},
+                        {"key": "http.url", "value": {"stringValue": f"/test/{count}"}},
+                        {"key": "test.iteration", "value": {"intValue": str(count)}}
+                    ],
+                    "status": {"code": 0}
+                }]
             }]
         }]
-    }]
-}
+    }
+    try:
+        subprocess.run(
+            ["curl", "-sf", "-X", "POST", url,
+             "-H", "Content-Type: application/json",
+             "-d", json.dumps(trace)],
+            timeout=5, check=False
+        )
+    except Exception:
+        pass
+    count += 1
+    time.sleep(0.1)
+
+print(f"Sent {count} spans", file=sys.stderr)
 PYEOF
-)" \
-        > /dev/null 2>&1
-    ) &
-    sleep 0.1
-done
 
-# Also wait for background curls to finish
-wait 2>/dev/null || true
+python3 "$LOADER" "$SMOKE_DURATION" "$OTEL_SERVICE_NAME"
+rm -f "$LOADER"
 
-log "Load generation complete — waiting for data to flush to old Sigiro..."
+log "Load generation complete — waiting for data to flush..."
 sleep 3
 
 # --- Verify ---

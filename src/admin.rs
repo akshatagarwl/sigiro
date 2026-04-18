@@ -124,7 +124,8 @@ pub fn open_admin_db() -> Result<Connection> {
         .with_context(|| format!("failed to open admin DB at {}", path.display()))?;
 
     // Enable WAL mode for better concurrency
-    conn.execute("PRAGMA journal_mode=WAL", [])
+    // Note: PRAGMA returns a result so we use query_row to capture it
+    conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0))
         .context("failed to enable WAL mode")?;
 
     create_keys_table(&conn)?;
