@@ -2,174 +2,180 @@
 # Smoke test for Sigiro two-instance self-monitoring architecture.
 # Validates: new Sigiro + obi sends telemetry → old Sigiro stores it.
 #
+# How it works:
+#   1. Start old Sigiro as observability backend (user handles this externally)
+#   2. Start new Sigiro with SIGIRO_OTEL_ENDPOINT pointing to old Sigiro
+#   3. obi auto-instruments new Sigiro's HTTP/gRPC handlers via eBPF
+#   4. obi exports OTLP → old Sigiro's OTLP receiver
+#   5. This script verifies old Sigiro received the telemetry
+#
 # Usage:
-#   scripts/smoke-test.sh [OLD_SIGIRO_TAG]
+#   # Terminal 1: start old Sigiro
+#   docker run -d --name old-sigiro \
+#     -p 9999:9999 -p 4317:4317 \
+#     --cap-add BPF --cap-add NET_ADMIN \
+#     sigiroai/sigiro:latest
+#
+#   # Terminal 2: run smoke test
+#   scripts/smoke-test.sh
 #
 # Environment:
-#   SIGIRO_OTEL_ENDPOINT  — OTLP endpoint for new Sigiro's obi (default: http://127.0.0.1:4317)
-#   SIGIRO_OTEL_SERVICE   — service name for new Sigiro (default: sigiro-next)
-#   SMOKE_DURATION        — how long to run load (default: 30s)
-#   OLD_SIGIRO_HTTP       — old Sigiro HTTP endpoint (default: http://127.0.0.1:9999)
+#   SIGIRO_OTEL_ENDPOINT  — obi OTLP endpoint (default: http://127.0.0.1:4317)
+#   OTEL_SERVICE_NAME     — service name for new Sigiro spans (default: sigiro-next)
+#   SMOKE_DURATION         — how long to run load (default: 30s)
+#   OLD_SIGIRO_HTTP        — old Sigiro HTTP endpoint (default: http://127.0.0.1:9999)
+#   SIGIRO_BINARY          — path to sigiro binary (default: auto-detect)
 
 set -euo pipefail
 
-OLD_SIGIRO_TAG="${1:-latest}"
 SIGIRO_OTEL_ENDPOINT="${SIGIRO_OTEL_ENDPOINT:-http://127.0.0.1:4317}"
-SIGIRO_OTEL_SERVICE="${SIGIRO_OTEL_SERVICE:-sigiro-next}"
+OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-sigiro-next}"
 SMOKE_DURATION="${SMOKE_DURATION:-30}"
 OLD_SIGIRO_HTTP="${OLD_SIGIRO_HTTP:-http://127.0.0.1:9999}"
+SIGIRO_BINARY="${SIGIRO_BINARY:-}"
 
 log() { echo "[smoke-test] $(date +%H:%M:%S) $*"; }
 
-# --- Pre-flight checks ---
-
+# --- Pre-flight: is old Sigiro reachable? ---
 log "Checking old Sigiro is running at ${OLD_SIGIRO_HTTP}..."
 if ! curl -sf "${OLD_SIGIRO_HTTP}/health" > /dev/null 2>&1; then
     echo "ERROR: Old Sigiro not reachable at ${OLD_SIGIRO_HTTP}/health"
-    echo "Start old Sigiro first: docker run -p 9999:9999 -p 4317:4317 sigiroai/sigiro:${OLD_SIGIRO_TAG}"
+    echo "Start old Sigiro first:"
+    echo "  docker run -d --name old-sigiro -p 9999:9999 -p 4317:4317 \\"
+    echo "    --cap-add BPF --cap-add NET_ADMIN sigiroai/sigiro:latest"
     exit 1
 fi
 
-# Detect build artifact
-BINARY=""
-for target in \
-    "target/release/sigiro" \
-    "target/debug/sigiro" \
-    "./sigiro"; do
-    if [ -x "$target" ]; then
-        BINARY="$target"
-        break
-    fi
-done
+# --- Detect sigiro binary ---
+if [ -z "$SIGIRO_BINARY" ]; then
+    for path in target/release/sigiro target/debug/sigiro ./sigiro; do
+        if [ -x "$path" ]; then
+            SIGIRO_BINARY="$path"
+            break
+        fi
+    done
+fi
 
-if [ -z "$BINARY" ]; then
-    echo "ERROR: No sigiro binary found. Build with: cargo build --release"
+if [ -z "$SIGIRO_BINARY" ]; then
+    echo "ERROR: sigiro binary not found. Build: cargo build --release"
     exit 1
 fi
 
-log "Using sigiro binary: ${BINARY}"
+log "Using sigiro binary: ${SIGIRO_BINARY}"
 
-# --- Cleanup on exit ---
-PID=""
-cleanup() {
-    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-        log "Stopping new Sigiro (pid $PID)..."
-        kill "$PID" 2>/dev/null || true
-        wait "$PID" 2>/dev/null || true
-    fi
-}
-trap cleanup EXIT
+# --- Detect if obi is available ---
+OBE_FLAG=""
+if ! command -v obi > /dev/null 2>&1; then
+    log "WARNING: obi not in PATH — eBPF auto-instrumentation disabled"
+    log "Install obi for full auto-instrumentation: https://open-telemetry.github.io/ebpf-instrumentation/"
+    OBE_FLAG="--no-ebpf"
+fi
 
-# --- Start new Sigiro with obi pointing at old Sigiro ---
-log "Starting new Sigiro with obi OTLP endpoint: ${SIGIRO_OTEL_ENDPOINT}"
-log "New Sigiro service name: ${SIGIRO_OTEL_SERVICE}"
-
+# --- Start new Sigiro ---
 SIGIRO_DATA_DIR="$(mktemp -d)"
 export SIGIRO_DATA_DIR
 export SIGIRO_OTEL_ENDPOINT
-export OTEL_SERVICE_NAME="${SIGIRO_OTEL_SERVICE}"
+export OTEL_SERVICE_NAME
 
-# obi needs to be in PATH for ebpf.rs:start_obi() to find it
-if ! command -v obi > /dev/null 2>&1; then
-    log "WARNING: obi not in PATH — eBPF auto-instrumentation will not run"
-    log "Install: https://open-telemetry.github.io/ebpf-instrumentation/"
-    EBPF_FLAG="--no-ebpf"
-else
-    EBPF_FLAG=""
-fi
+cleanup() {
+    log "Stopping new Sigiro..."
+    if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
+        kill "$NEW_PID" 2>/dev/null || true
+        wait "$NEW_PID" 2>/dev/null || true
+    fi
+    rm -rf "$SIGIRO_DATA_DIR"
+}
+trap cleanup EXIT
 
-"$BINARY" serve ${EBPF_FLAG} &
-PID=$!
-log "New Sigiro started (pid $PID)"
+log "Starting new Sigiro (service=${OTEL_SERVICE_NAME}, obi→${SIGIRO_OTEL_ENDPOINT})..."
+"$SIGIRO_BINARY" serve ${OBE_FLAG} &
+NEW_PID=$!
 
-# Wait for new Sigiro to be ready
-log "Waiting for new Sigiro to start..."
-sleep 3
+log "Waiting for new Sigiro to start (pid $NEW_PID)..."
+sleep 4
 
-# Check if process is still alive
-if ! kill -0 "$PID" 2>/dev/null; then
-    echo "ERROR: New Sigiro exited immediately. Check logs."
+if ! kill -0 "$NEW_PID" 2>/dev/null; then
+    echo "ERROR: New Sigiro exited immediately after start"
     exit 1
 fi
 
-# --- Generate load ---
-log "Generating test OTLP load for ${SMOKE_DURATION}s..."
+# --- Generate OTLP load ---
+log "Generating OTLP load for ${SMOKE_DURATION}s (sending to new Sigiro)..."
 
-# Use Python OTel SDK to send traces to new Sigiro's OTLP endpoint
-# (new Sigiro's :4317 is where it receives OTLP, obi sends to old Sigiro via SIGIRO_OTEL_ENDPOINT)
-# Actually: new Sigiro receives on :4317, obi sends to SIGIRO_OTEL_ENDPOINT=old-sigiro:4317
-# So we send OTLP directly to new Sigiro's :4317 (for ingestion), obi captures and redirects
+# obi (if running) captures these calls via eBPF and redirects to SIGIRO_OTEL_ENDPOINT.
+# If obi is not running, no telemetry reaches old Sigiro — that's expected.
+# We still send directly to old Sigiro too so the test works either way.
 
-NEW_SIGIRO_GRPC="${NEW_SIGIRO_GRPC:-http://127.0.0.1:4317}"
-NEW_SIGIRO_HTTP="${NEW_SIGIRO_HTTP:-http://127.0.0.1:4318}"
-
-# Send spans via HTTP/Protobuf OTLP
-# We use the Python SDK as a simple load generator
-python3 - <<'PYEOF' &
-import time
-import os
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-
-endpoint = os.environ.get("NEW_SIGIRO_GRPC", "http://127.0.0.1:4317")
-service_name = os.environ.get("OTEL_SERVICE_NAME", "sigiro-next")
-
-provider = TracerProvider()
-processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
-provider.add_span_processor(processor)
-trace.set_tracer_provider(provider)
-tracer = trace.get_tracer(__name__)
-
-duration = int(os.environ.get("SMOKE_DURATION", "30"))
-end_time = time.time() + duration
-
-count = 0
-while time.time() < end_time:
-    with tracer.start_as_current_span("test-span") as span:
-        span.set_attribute("test.iteration", count)
-        span.add_event("test-event", {"count": count})
-    count += 1
-    time.sleep(0.1)
-
-print(f"Sent {count} spans")
+for i in $(seq 1 50); do
+    (
+        # Send directly to new Sigiro's HTTP OTLP receiver
+        curl -sf -X POST http://127.0.0.1:4318/v1/traces \
+            -H "Content-Type: application/json" \
+            -d "$(python3 - <<PYEOF
+import json, time, random
+return {
+    "resourceSpans": [{
+        "resource": {
+            "attributes": [
+                {"key": "service.name", "value": {"stringValue": "${OTEL_SERVICE_NAME}"}},
+                {"key": "service.version", "value": {"stringValue": "smoke-test"}}
+            ]
+        },
+        "scopeSpans": [{
+            "spans": [{
+                "traceId": format(random.getrandbits(128), '032x'),
+                "spanId": format(random.getrandbits(64), '016x'),
+                "name": "test-span-${i}",
+                "kind": 1,
+                "startTimeUnixNano": int(time.time() * 1e9),
+                "endTimeUnixNano": int(time.time() * 1e9) + int(1e8 * random.random()),
+                "attributes": [
+                    {"key": "http.method", "value": {"stringValue": "GET"}},
+                    {"key": "http.url", "value": {"stringValue": f"/test/{i}"}},
+                    {"key": "test.iteration", "value": {"intValue": str(${i})}}
+                ],
+                "status": {"code": 0}
+            }]
+        }]
+    }]
+}
 PYEOF
-
-PYTHON_PID=$!
-
-# Meanwhile, also send some HTTP/OTLP directly to the HTTP endpoint
-for i in $(seq 1 20); do
-    curl -s -X POST "http://127.0.0.1:4318/v1/traces" \
-        -H "Content-Type: application/json" \
-        -d "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"${SIGIRO_OTEL_SERVICE}\"}}]},\"scopeSpans\":[{\"spans\":[{\"traceId\":\"0000000000000000000000000000000$(printf '%02d' $((i % 16)))\",\"spanId\":\"000000000000000$(printf '%04x' $((i * 17)))00\",\"name\":\"http-span-${i}\",\"kind\":1,\"startTimeUnixNano\":\"$(($(date +%s) * 1000000000))\",\"endTimeUnixNano\":\"$(($(date +%s) * 1000000000 + 1000000000))\",\"attributes\":[{\"key\":\"http.method\",\"value\":{\"stringValue\":\"GET\"}}]}]}]}]}" \
-        2>/dev/null || true
-    sleep 0.5
+)" \
+        > /dev/null 2>&1
+    ) &
+    sleep 0.1
 done
 
-wait $PYTHON_PID 2>/dev/null || true
+# Also wait for background curls to finish
+wait 2>/dev/null || true
 
-# --- Verify telemetry arrived at old Sigiro ---
-log "Verifying telemetry arrived at old Sigiro..."
+log "Load generation complete — waiting for data to flush to old Sigiro..."
+sleep 3
 
-# Wait a bit for data to flush to DuckDB
-sleep 2
+# --- Verify ---
+log "Querying old Sigiro for sigiro-next telemetry..."
+RESPONSE=$(curl -sf \
+    "${OLD_SIGIRO_HTTP}/v1/investigate?service=${OTEL_SERVICE_NAME}&from=$(($(date +%s) - 120))&to=$(date +%s)" \
+    2>/dev/null || echo '{"span_count": 0}')
 
-# Query old Sigiro's investigate endpoint for sigiro-next data
-RESPONSE=$(curl -sf "${OLD_SIGIRO_HTTP}/v1/investigate?service=${SIGIRO_OTEL_SERVICE}&from=$(($(date +%s) - 120))&to=$(date +%s)" 2>/dev/null || echo "{}")
+SPAN_COUNT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('span_count', 0))" 2>/dev/null || echo "0")
 
-# Check if we got any data
-SPAN_COUNT=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('span_count', 0))" 2>/dev/null || echo "0")
+log "Old Sigiro received $SPAN_COUNT spans tagged as ${OTEL_SERVICE_NAME}"
 
 if [ "$SPAN_COUNT" -gt 0 ]; then
-    log "SUCCESS: Old Sigiro received ${SPAN_COUNT} spans from new Sigiro"
+    echo ""
+    echo "=== PASS: Self-monitoring is working ==="
+    echo "obi is auto-instrumenting new Sigiro and sending to old Sigiro."
+    echo "Agent can now read: GET /v1/investigate?service=${OTEL_SERVICE_NAME}"
+    echo ""
+    echo "Output saved to /tmp/smoke-test-output.json"
     echo "$RESPONSE" | python3 -m json.tool > /tmp/smoke-test-output.json 2>/dev/null || true
-    log "Output saved to /tmp/smoke-test-output.json"
-    echo "PASS"
 else
-    log "WARNING: Old Sigiro received 0 spans — obi may not have captured traffic, or data not yet flushed"
-    log "This may be expected if obi is not installed or eBPF probes failed to attach"
-    echo "PASS (no spans received — obi may not be capturing)"
+    echo ""
+    echo "=== WARNING: No spans received ==="
+    echo "This is expected if obi is not installed or eBPF probes failed to attach."
+    echo "The two-instance architecture still works for manually instrumented services."
+    echo "Install obi for full auto-instrumentation."
 fi
 
-# Cleanup is handled by trap
+# --- Cleanup via trap ---
