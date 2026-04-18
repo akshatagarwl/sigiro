@@ -72,6 +72,12 @@
         preCheck = "export HOME=$(mktemp -d)";
       };
 
+      # Zig is used on macOS for cross-compilation because:
+      # - macOS clang can't produce Linux ELF targets
+      # - Zig's clang wrapper correctly handles --target for any architecture
+      # - cargo-zigbuild intercepts all cc-rs C compiler calls and routes them through zig cc
+      zig = pkgs.zig;
+
       # ---- Cross-compiled packages ----
       crossPackages = lib.genAttrs crossTargets (crossTarget: let
         crossPkgs = pkgs.pkgsCross.${crossTargetPkgs.${crossTarget}};
@@ -79,51 +85,50 @@
         fenixToolchain = with fenix.packages.${buildSystem};
           combine [ minimal.cargo minimal.rustc targets.${crossTarget}.latest.rust-std ];
 
+        # Zig's clang handles --target=* correctly on macOS.
+        # cargo-zigbuild wraps cargo so all C compilation (via cc-rs) uses zig cc.
+        zigPkg = zig;
+        cargoZigbuild = pkgs.cargo-zigbuild.overrideAttrs (_: { preferLocalBuild = true; });
+
         crossEnvBase = {
           "CARGO_TARGET_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}_LINKER"
-            = "${crossPkgs.stdenv.cc.targetPrefix}gcc";
-          "CC_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
-            = "${crossPkgs.stdenv.cc.targetPrefix}gcc";
-          "CXX_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
-            = "${crossPkgs.stdenv.cc.targetPrefix}g++";
-          "AR_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
-            = "${crossPkgs.stdenv.cc.targetPrefix}ar";
-          PKG_CONFIG_ALLOW_CROSS = "1";
+            = "${zigPkg}/bin/zig cc-${lib.last (lib.splitString "-" crossTarget)}";
+          "PKG_CONFIG_ALLOW_CROSS" = "1";
+          "MACOSX_DEPLOYMENT_TARGET" = "";
+          "DEVELOPER_DIR" = "";
+          "SDKROOT" = "";
+          # Ensure zig cc is found before macOS clang
+          "PATH" = "${zigPkg}/bin:$PATH";
         };
 
+        # Vendor C deps (ring, zstd, brotli) compiled by cc-rs via cargo-zigbuild + zig cc.
+        # This is the critical path: zig cc understands --target=aarch64-unknown-linux-gnu on macOS.
         crossDeps = (craneLib.overrideToolchain fenixToolchain).buildDepsOnly {
           inherit src;
           strictDeps = true;
-          nativeBuildInputs = nativeBuildInputs ++ [
-            crossPkgs.stdenv.cc
-            crossPkgs.stdenv.cc.bintools
-          ];
+          nativeBuildInputs = nativeBuildInputs ++ [ zigPkg cargoZigbuild ];
           env = crossEnvBase // {
             "CFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
-              = "-isystem ${crossPkgs.glibc.dev}/include";
+              = "--target=${crossTarget} -isystem ${crossPkgs.glibc.dev}/include";
             "CXXFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
-              = "-isystem ${crossPkgs.glibc.dev}/include -std=c++17";
+              = "--target=${crossTarget} -isystem ${crossPkgs.glibc.dev}/include -std=c++17";
           };
           preBuild = "ulimit -n 65536 2>/dev/null || true";
-        };
-
-        crossEnv = crossEnvBase // {
-          "CFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
-            = "-isystem ${crossPkgs.glibc.dev}/include";
-          "CXXFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
-            = "-isystem ${crossPkgs.glibc.dev}/include -std=c++17";
         };
 
       in (craneLib.overrideToolchain fenixToolchain).buildPackage {
         inherit src;
         strictDeps = true;
-        nativeBuildInputs = nativeBuildInputs ++ [
-          crossPkgs.stdenv.cc
-          crossPkgs.stdenv.cc.bintools
-        ];
+        nativeBuildInputs = nativeBuildInputs ++ [ zigPkg cargoZigbuild ];
         cargoArtifacts = crossDeps;
+        # cargo-zigbuild handles --target automatically; cargoExtraArgs here is for clarity
         cargoExtraArgs = "--target ${crossTarget}";
-        env = crossEnv;
+        env = crossEnvBase // {
+          "CFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
+            = "--target=${crossTarget} -isystem ${crossPkgs.glibc.dev}/include";
+          "CXXFLAGS_${lib.replaceStrings ["-"] ["_"] (lib.toUpper crossTarget)}"
+            = "--target=${crossTarget} -isystem ${crossPkgs.glibc.dev}/include -std=c++17";
+        };
         preBuild = "ulimit -n 65536 2>/dev/null || true";
         doCheck = false;
         installPhase = ''
@@ -133,7 +138,7 @@
         postFixup = ''
           echo "--- Cross-compiled binary info ---"
           ${pkgs.buildPackages.file}/bin/file $out/bin/sigiro
-          ${pkgs.buildPackages.binutils}/bin/${crossPkgs.stdenv.cc.targetPrefix}readelf -d $out/bin/sigiro 2>/dev/null || true
+          ${pkgs.buildPackages.binutils}/bin/readelf -d $out/bin/sigiro 2>/dev/null || true
         '';
       });
 
