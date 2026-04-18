@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, builder::styling};
 use std::sync::{Arc, Mutex};
 
 use sigiro::toon::to_toon;
-use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool};
+use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -249,6 +249,25 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
             }
         }
     }
+
+    // Pyroscope continuous profiling: enabled when SIGIRO_PYROSCOPE_ENDPOINT is set.
+    // Sends CPU + memory allocation profiles to the Pyroscope server.
+    // The smoke-test script fetches these profiles and includes them in investigate blocks.
+    let _profiling = match start_profiling() {
+        Ok(Some(_)) => {
+            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "active")?;
+            Some(_)
+        }
+        Ok(None) => {
+            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "disabled")?;
+            None
+        }
+        Err(e) => {
+            tracing::warn!("Pyroscope profiling failed to start: {e:#}");
+            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "error")?;
+            None
+        }
+    };
 
     // Federation: central node mode
     if central {

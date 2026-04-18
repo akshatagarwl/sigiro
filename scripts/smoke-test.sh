@@ -1,50 +1,32 @@
 #!/usr/bin/env bash
-# Smoke test for Sigiro two-instance self-monitoring architecture.
-# Validates: new Sigiro + obi sends telemetry → old Sigiro stores it.
+# Smoke test for Sigiro self-monitoring + profiling loop.
 #
-# How it works:
-#   1. Start old Sigiro as observability backend (user handles this externally)
-#   2. Start new Sigiro with SIGIRO_OTEL_ENDPOINT pointing to old Sigiro
-#   3. obi auto-instruments new Sigiro's HTTP/gRPC handlers via eBPF
-#   4. obi exports OTLP → old Sigiro's OTLP receiver
-#   5. This script verifies old Sigiro received the telemetry
+# Architecture:
+#   1. Start sigiro (spawns obi as child to watch OTLP port 4318)
+#   2. obi captures traffic and stores traces in sigiro's own DuckDB
+#   3. Send OTLP load → sigiro → DuckDB
+#   4. Query /v1/investigate → return JSON blocks to AI agent
+#   5. Optionally fetch Pyroscope profiles (if SIGIRO_PYROSCOPE_ENDPOINT is set)
 #
 # Usage:
-#   # Terminal 1: start old Sigiro
-#   docker run -d --name old-sigiro \
-#     -p 9999:9999 -p 4317:4317 \
-#     --cap-add BPF --cap-add NET_ADMIN \
-#     sigiroai/sigiro:latest
-#
-#   # Terminal 2: run smoke test
 #   scripts/smoke-test.sh
 #
 # Environment:
-#   SIGIRO_OTEL_ENDPOINT  — obi OTLP endpoint (default: http://127.0.0.1:4317)
-#   OTEL_SERVICE_NAME     — service name for new Sigiro spans (default: sigiro-next)
-#   SMOKE_DURATION         — how long to run load (default: 30s)
-#   OLD_SIGIRO_HTTP        — old Sigiro HTTP endpoint (default: http://127.0.0.1:9999)
-#   SIGIRO_BINARY          — path to sigiro binary (default: auto-detect)
+#   SIGIRO_OTEL_ENDPOINT     obi's OTLP destination (default: http://127.0.0.1:9999)
+#   SIGIRO_PYROSCOPE_ENDPOINT Pyroscope endpoint for profiling (default: none)
+#   SIGIRO_SERVICE_NAME      service name for spans (default: sigiro-self)
+#   SMOKE_DURATION            load duration in seconds (default: 30)
+#   SIGIRO_BINARY             path to sigiro binary (default: auto-detect)
 
 set -euo pipefail
 
-SIGIRO_OTEL_ENDPOINT="${SIGIRO_OTEL_ENDPOINT:-http://127.0.0.1:4317}"
-OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-sigiro-next}"
+SIGIRO_OTEL_ENDPOINT="${SIGIRO_OTEL_ENDPOINT:-http://127.0.0.1:9999}"
+SIGIRO_PYROSCOPE_ENDPOINT="${SIGIRO_PYROSCOPE_ENDPOINT:-}"
+SIGIRO_SERVICE_NAME="${SIGIRO_SERVICE_NAME:-sigiro-self}"
 SMOKE_DURATION="${SMOKE_DURATION:-30}"
-OLD_SIGIRO_HTTP="${OLD_SIGIRO_HTTP:-http://127.0.0.1:9999}"
 SIGIRO_BINARY="${SIGIRO_BINARY:-}"
 
 log() { echo "[smoke-test] $(date +%H:%M:%S) $*"; }
-
-# --- Pre-flight: is old Sigiro reachable? ---
-log "Checking old Sigiro is running at ${OLD_SIGIRO_HTTP}..."
-if ! curl -sf "${OLD_SIGIRO_HTTP}/health" > /dev/null 2>&1; then
-    echo "ERROR: Old Sigiro not reachable at ${OLD_SIGIRO_HTTP}/health"
-    echo "Start old Sigiro first:"
-    echo "  docker run -d --name old-sigiro -p 9999:9999 -p 4317:4317 \\"
-    echo "    --cap-add BPF --cap-add NET_ADMIN sigiroai/sigiro:latest"
-    exit 1
-fi
 
 # --- Detect sigiro binary ---
 if [ -z "$SIGIRO_BINARY" ]; then
@@ -57,61 +39,69 @@ if [ -z "$SIGIRO_BINARY" ]; then
 fi
 
 if [ -z "$SIGIRO_BINARY" ]; then
-    echo "ERROR: sigiro binary not found. Build: cargo build --release"
+    echo "ERROR: sigiro binary not found. Build: cargo build [--release]"
     exit 1
 fi
 
 log "Using sigiro binary: ${SIGIRO_BINARY}"
 
-# --- Detect if obi is available ---
-OBE_FLAG=""
-if ! command -v obi > /dev/null 2>&1; then
-    log "WARNING: obi not in PATH — eBPF auto-instrumentation disabled"
-    log "Install obi for full auto-instrumentation: https://open-telemetry.github.io/ebpf-instrumentation/"
-    OBE_FLAG="--no-ebpf"
-fi
-
-# --- Start new Sigiro ---
+# --- Data directory for this run ---
 SIGIRO_DATA_DIR="$(mktemp -d)"
 export SIGIRO_DATA_DIR
 export SIGIRO_OTEL_ENDPOINT
-export OTEL_SERVICE_NAME
+export OTEL_SERVICE_NAME="${SIGIRO_SERVICE_NAME}"
 
 cleanup() {
-    log "Stopping new Sigiro..."
-    if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
-        kill "$NEW_PID" 2>/dev/null || true
-        wait "$NEW_PID" 2>/dev/null || true
+    log "Stopping sigiro (pid $SIGIRO_PID)..."
+    if [ -n "$SIGIRO_PID" ] && kill -0 "$SIGIRO_PID" 2>/dev/null; then
+        kill "$SIGIRO_PID" 2>/dev/null || true
+        wait "$SIGIRO_PID" 2>/dev/null || true
     fi
     rm -rf "$SIGIRO_DATA_DIR"
 }
 trap cleanup EXIT
 
-log "Starting new Sigiro (service=${OTEL_SERVICE_NAME}, obi→${SIGIRO_OTEL_ENDPOINT})..."
-"$SIGIRO_BINARY" serve ${OBE_FLAG} &
-NEW_PID=$!
+# --- Start sigiro ---
+# sigiro serve will:
+#   - Start HTTP API on :9999, OTLP HTTP on :4318, OTLP gRPC on :4317
+#   - Spawn obi as child (if obi is in PATH and eBPF is available)
+#   - obi watches port 4318 and sends captured traces back to :9999 (SIGIRO_OTEL_ENDPOINT)
+#   - All traces land in sigiro's own DuckDB via the normal ingest pipeline
+log "Starting sigiro (service=${SIGIRO_SERVICE_NAME}, obi→${SIGIRO_OTEL_ENDPOINT})..."
+"$SIGIRO_BINARY" serve &
+SIGIRO_PID=$!
 
-log "Waiting for new Sigiro to start (pid $NEW_PID)..."
+log "Waiting for sigiro to start (pid $SIGIRO_PID)..."
 sleep 4
 
-if ! kill -0 "$NEW_PID" 2>/dev/null; then
-    echo "ERROR: New Sigiro exited immediately after start"
+if ! kill -0 "$SIGIRO_PID" 2>/dev/null; then
+    echo "ERROR: sigiro exited immediately after start"
     exit 1
 fi
 
-# Generate OTLP load ---
-log "Generating OTLP load for ${SMOKE_DURATION}s (sending to new Sigiro)..."
+# --- Wait for sigiro to be ready ---
+READY_WAIT=0
+until curl -sf "http://127.0.0.1:9999/health" > /dev/null 2>&1; do
+    sleep 1
+    READY_WAIT=$((READY_WAIT + 1))
+    if [ "$READY_WAIT" -ge 15 ]; then
+        echo "ERROR: sigiro HTTP API not ready after 15s"
+        exit 1
+    fi
+done
+log "sigiro HTTP API ready on :9999"
 
-# Write Python loader to temp file to avoid bash quoting issues
+# --- Generate OTLP load ---
+log "Generating OTLP load for ${SMOKE_DURATION}s → http://127.0.0.1:4318/v1/traces..."
+
 LOADER="$(mktemp)"
 cat > "$LOADER" <<'PYEOF'
 import sys, json, time, random, subprocess
 
 duration = int(sys.argv[1])
 service_name = sys.argv[2]
+url = sys.argv[3]
 end_time = time.time() + duration
-
-url = "http://127.0.0.1:4318/v1/traces"
 count = 0
 
 while time.time() < end_time:
@@ -134,7 +124,8 @@ while time.time() < end_time:
                     "attributes": [
                         {"key": "http.method", "value": {"stringValue": "GET"}},
                         {"key": "http.url", "value": {"stringValue": f"/test/{count}"}},
-                        {"key": "test.iteration", "value": {"intValue": str(count)}}
+                        {"key": "test.iteration", "value": {"intValue": str(count)}},
+                        {"key": "test.load_ms", "value": {"intValue": str(int(random.random() * 50))}}
                     ],
                     "status": {"code": 0}
                 }]
@@ -156,36 +147,82 @@ while time.time() < end_time:
 print(f"Sent {count} spans", file=sys.stderr)
 PYEOF
 
-python3 "$LOADER" "$SMOKE_DURATION" "$OTEL_SERVICE_NAME"
+python3 "$LOADER" "$SMOKE_DURATION" "$SIGIRO_SERVICE_NAME" "http://127.0.0.1:4318/v1/traces"
 rm -f "$LOADER"
 
 log "Load generation complete — waiting for data to flush..."
-sleep 3
+sleep 5
 
-# --- Verify ---
-log "Querying old Sigiro for sigiro-next telemetry..."
-RESPONSE=$(curl -sf \
-    "${OLD_SIGIRO_HTTP}/v1/investigate?service=${OTEL_SERVICE_NAME}&from=$(($(date +%s) - 120))&to=$(date +%s)" \
-    2>/dev/null || echo '{"span_count": 0}')
+# --- Query investigate endpoint ---
+NOW="$(date +%s)"
+FROM="$((NOW - SMOKE_DURATION - 30))"
+TO="$((NOW + 10))"
 
-SPAN_COUNT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('span_count', 0))" 2>/dev/null || echo "0")
+log "Querying /v1/investigate?service=${SIGIRO_SERVICE_NAME}&from=${FROM}&to=${TO}..."
+INVESTIGATE_RESP=$(curl -sf \
+    "http://127.0.0.1:9999/v1/investigate?service=${SIGIRO_SERVICE_NAME}&from=${FROM}&to=${TO}" \
+    2>/dev/null || echo '{"error": "investigate endpoint not available"}')
 
-log "Old Sigiro received $SPAN_COUNT spans tagged as ${OTEL_SERVICE_NAME}"
+# --- Optional: fetch Pyroscope profiles ---
+PYROSCOPE_PROFILES="null"
+if [ -n "$SIGIRO_PYROSCOPE_ENDPOINT" ]; then
+    log "Fetching Pyroscope profiles from ${SIGIRO_PYROSCOPE_ENDPOINT}..."
+    PYROSCOPE_PROFILES=$(python3 -c "
+import urllib.request, json, sys
 
-if [ "$SPAN_COUNT" -gt 0 ]; then
-    echo ""
-    echo "=== PASS: Self-monitoring is working ==="
-    echo "obi is auto-instrumenting new Sigiro and sending to old Sigiro."
-    echo "Agent can now read: GET /v1/investigate?service=${OTEL_SERVICE_NAME}"
-    echo ""
-    echo "Output saved to /tmp/smoke-test-output.json"
-    echo "$RESPONSE" | python3 -m json.tool > /tmp/smoke-test-output.json 2>/dev/null || true
-else
-    echo ""
-    echo "=== WARNING: No spans received ==="
-    echo "This is expected if obi is not installed or eBPF probes failed to attach."
-    echo "The two-instance architecture still works for manually instrumented services."
-    echo "Install obi for full auto-instrumentation."
+endpoint = '${SIGIRO_PYROSCOPE_ENDPOINT}'
+service = '${SIGIRO_SERVICE_NAME}'
+
+def fetch_profile(profile_type, label):
+    url = f'{endpoint}/pyroscope/render?query=%7Bservice_name%3D%22{service}%22%7D&profileType={profile_type}&from=$(({FROM} * 1000000000))&to=$(({TO} * 1000000000))'
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            data = json.loads(r.read())
+            if data.get('flamegraph') and data['flamegraph'].get('nodes'):
+                return {
+                    'type': label,
+                    'top_functions': [
+                        {'name': n['name'], 'value': n.get('value', 0)}
+                        for n in data['flamegraph']['nodes'][:10]
+                    ]
+                }
+    except Exception as e:
+        return {'type': label, 'error': str(e)}
+    return {'type': label, 'error': 'no data'}
+
+profiles = {
+    'cpu': fetch_profile('process_cpu:cpu:nanoseconds:cpu:nanoseconds', 'cpu'),
+    'memory_inuse': fetch_profile('memory:inuse_space:bytes:space:bytes', 'memory_inuse'),
+    'memory_alloc': fetch_profile('memory:alloc_space:bytes:space:bytes', 'memory_alloc'),
+}
+print(json.dumps(profiles))
+" 2>/dev/null || echo '{"error": "pyroscope fetch failed"}')
 fi
 
-# --- Cleanup via trap ---
+# --- Build output JSON ---
+OUTPUT=$(python3 -c "
+import json, sys
+
+investigate = json.loads('''${INVESTIGATE_RESP}''')
+pyroscope = json.loads('''${PYROSCOPE_PROFILES}''')
+
+output = {
+    'smoke_test': {
+        'service': '${SIGIRO_SERVICE_NAME}',
+        'duration_seconds': ${SMOKE_DURATION},
+        'sigiro_pid': ${SIGIRO_PID},
+        'sigiro_data_dir': '${SIGIRO_DATA_DIR}',
+        'timestamp': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+    },
+    'investigate': investigate,
+    'pyroscope': pyroscope,
+}
+
+print(json.dumps(output, indent=2))
+")
+
+echo "$OUTPUT" | python3 -m json.tool 2>/dev/null || echo "$OUTPUT"
+
+# --- Store output for cron job delivery ---
+echo "$OUTPUT" > /tmp/sigiro-smoke-output.json
+log "Output saved to /tmp/sigiro-smoke-output.json"
