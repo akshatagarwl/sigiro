@@ -48,6 +48,27 @@ fn missing_config_returns_error() {
 }
 
 #[test]
+fn data_dir_requires_env_var() {
+    // data_dir() must read SIGIRO_DATA_DIR — if unset it must error,
+    // not silently return an empty path. This catches the mutant that
+    // replaces data_dir with Ok(Default::default()).
+    let _guard = ENV_MUTEX.lock().unwrap();
+    unsafe { std::env::remove_var("SIGIRO_DATA_DIR") };
+    let result = sigiro::data_dir();
+    // Env var is restored by the mutex guard dropping, but verify the
+    // error path explicitly.
+    assert!(
+        result.is_err(),
+        "data_dir should error when SIGIRO_DATA_DIR is unset"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("SIGIRO_DATA_DIR"),
+        "error message should mention SIGIRO_DATA_DIR, got: {err_msg}"
+    );
+}
+
+#[test]
 fn auth_command_writes_config() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let path = dir.path().join("config.toml");
