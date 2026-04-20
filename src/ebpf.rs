@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use tracing::{debug, info};
 
 use crate::supervisor::Supervisor;
@@ -28,6 +29,124 @@ fn which_obi() -> Option<String> {
         .inspect_err(|e| debug!("obi not found in PATH: {e}"))
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+// ---------------------------------------------------------------------------
+// Auto-download: obi binary from GitHub releases
+// ---------------------------------------------------------------------------
+
+/// Resolves the destination path for the obi binary.
+/// Prefers `$SIGIRO_DATA_DIR/bin/obi` if SIGIRO_DATA_DIR is set,
+/// otherwise falls back to `~/.local/bin/obi`.
+fn obi_install_path() -> std::path::PathBuf {
+    if let Ok(data_dir) = std::env::var("SIGIRO_DATA_DIR") {
+        let path = std::path::Path::new(&data_dir).join("bin").join("obi");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return path;
+    }
+    let home = dirs::home_dir().expect("cannot determine home directory");
+    let path = home.join(".local").join("bin").join("obi");
+    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    path
+}
+
+/// One-time install guard — set to Some(path) once obi is successfully installed.
+static OBI_INSTALL_TRACKER: OnceLock<String> = OnceLock::new();
+
+/// Ensure obi binary is available on disk, downloading it from GitHub releases
+/// if it is not found in PATH and has not already been installed by this function.
+///
+/// Downloads to `$SIGIRO_DATA_DIR/bin/obi` if `SIGIRO_DATA_DIR` is set,
+/// otherwise `~/.local/bin/obi`. The download is performed exactly once
+/// per process lifetime using a static `OnceLock`.
+pub fn ensure_obi_installed() -> Result<()> {
+    // Fast path: already resolved this call
+    if OBI_INSTALL_TRACKER.get().is_some() {
+        return Ok(());
+    }
+
+    // Check if obi is already in PATH
+    if which_obi().is_some() {
+        debug!("obi found in PATH, no download needed");
+        return Ok(());
+    }
+
+    let dest = obi_install_path();
+    if dest.exists() {
+        debug!("obi binary already exists at {}, skipping download", dest.display());
+        let _ = OBI_INSTALL_TRACKER.set(dest.to_string_lossy().into_owned());
+        return Ok(());
+    }
+
+    info!("obi not found in PATH — downloading from GitHub releases to {}", dest.display());
+
+    // Detect target triple for the release asset
+    let target = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "x86_64-apple-darwin"
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
+    } else {
+        anyhow::bail!(
+            "obi auto-download is not supported for this platform ({}/{}); \
+             please install obi manually",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+    };
+
+    let version = "v0.5.5"
+        .trim_start_matches('v');
+    let asset_name = format!("obi-{target}");
+    let download_url = format!(
+        "https://github.com/obi-collector/obi/releases/download/v{}/{}.tar.gz",
+        version, asset_name
+    );
+
+    // Use reqwest via a single-threaded Tokio runtime (sync context)
+    let bytes = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime for obi download")?
+        .block_on(async {
+            reqwest::get(&download_url)
+                .await
+                .with_context(|| format!("failed to fetch {}", download_url))?
+                .error_for_status()
+                .with_context(|| format!("GitHub release returned error for {}", download_url))?
+                .bytes()
+                .await
+                .context("failed to read obi release bytes")
+        })?;
+
+    // Decode the .tar.gz archive in-memory then write the inner binary
+    let mut decoder = flate2::read::GzDecoder::new(&bytes[..]);
+    let mut archive = tar::Archive::new(&mut decoder);
+    let mut entries = archive.entries()
+        .context("failed to read obi tar archive")?;
+    if let Some(Ok(mut entry)) = entries.next() {
+        entry.unpack(&dest)
+            .with_context(|| format!("failed to extract obi to {}", dest.display()))?;
+    } else {
+        anyhow::bail!("obi tar archive was empty");
+    }
+
+    // Make the binary executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
+            .context("failed to set executable permission on obi")?;
+    }
+
+    info!("obi successfully installed to {}", dest.display());
+    let _ = OBI_INSTALL_TRACKER.set(dest.to_string_lossy().into_owned());
+    Ok(())
 }
 
 /// Determine eBPF status: check obi availability and platform capabilities.
@@ -135,6 +254,9 @@ fn has_capability(cap: &str) -> bool {
 /// Callers handle not_installed/disabled themselves (call ebpf_status first).
 pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
     use uuid::Uuid;
+
+    // Auto-download obi from GitHub releases if not already available
+    ensure_obi_installed()?;
 
     let path = if obi_path.is_empty() { "obi" } else { obi_path };
     info!("starting obi with OTLP endpoint: {otlp_endpoint}");
