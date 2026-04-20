@@ -2456,16 +2456,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libfuzzer-sys"
-version = "0.4.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f12a681b7dd8ce12bff52488013ba614b869148d54dd79836ab85aafdd53f08d"
-dependencies = [
- "arbitrary",
- "cc",
-]
-
-[[package]]
 name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4252,19 +4242,6 @@ dependencies = [
  "tracing-test",
  "ureq",
  "which",
-]
-
-[[package]]
-name = "sigiro-fuzz"
-version = "0.0.0"
-dependencies = [
- "cc",
- "libfuzzer-sys",
- "opentelemetry-proto",
- "prost",
- "serde",
- "serde_json",
- "sigiro",
 ]
 
 [[package]]

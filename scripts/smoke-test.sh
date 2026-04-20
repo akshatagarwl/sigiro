@@ -47,7 +47,10 @@ fi
 log "Using sigiro binary: ${SIGIRO_BINARY}"
 
 # --- Data directory for this run ---
-SIGIRO_DATA_DIR="$(mktemp -d)"
+# Use a fixed location to avoid WAL corruption from leftover temp dirs
+SIGIRO_DATA_DIR="/tmp/sigiro-smoke-data"
+rm -rf "$SIGIRO_DATA_DIR" 2>/dev/null || true
+mkdir -p "$SIGIRO_DATA_DIR"
 export SIGIRO_DATA_DIR
 export SIGIRO_OTEL_ENDPOINT
 export OTEL_SERVICE_NAME="${SIGIRO_SERVICE_NAME}"
@@ -69,7 +72,7 @@ trap cleanup EXIT
 #   - obi watches port 4318 and sends captured traces back to :9999 (SIGIRO_OTEL_ENDPOINT)
 #   - All traces land in sigiro's own DuckDB via the normal ingest pipeline
 log "Starting sigiro (service=${SIGIRO_SERVICE_NAME}, obi→${SIGIRO_OTEL_ENDPOINT})..."
-"$SIGIRO_BINARY" serve &
+"$SIGIRO_BINARY" serve > "${SIGIRO_DATA_DIR}/sigiro.log" 2>&1 &
 SIGIRO_PID=$!
 
 log "Waiting for sigiro to start (pid $SIGIRO_PID)..."
@@ -92,9 +95,31 @@ until curl -sf "http://127.0.0.1:9999/health" > /dev/null 2>&1; do
 done
 log "sigiro HTTP API ready on :9999"
 
+# --- Wait for DuckDB pool to be initialized before sending spans ---
+# DuckDB extensions (ducklake, sqlite, system_stats, fsquery, hostfs) are
+# downloaded on first connection to the pool. This can take ~20s on a cold start.
+# If we start the loader before the pool is ready, spans are dropped because
+# pool.get_or_create() fails and the router silently drops IngestMsg::Traces.
+# We detect pool readiness by polling sigiro's log output for the pool init message.
+log "Waiting for DuckDB pool initialization (checking sigiro log for 'pool: opened DuckDB connection')..."
+SIGIRO_LOG="${SIGIRO_DATA_DIR}/sigiro.log"
+POOL_READY=0
+for i in $(seq 1 30); do
+    if [ -f "$SIGIRO_LOG" ] && grep -q 'opened DuckDB connection' "$SIGIRO_LOG" 2>/dev/null; then
+        log "DuckDB pool ready after ${i}s"
+        POOL_READY=1
+        break
+    fi
+    sleep 1
+done
+if [ "$POOL_READY" -eq 0 ]; then
+    echo "WARNING: DuckDB pool not ready after 30s — proceeding anyway (loader may drop spans)"
+fi
+
 # --- Generate OTLP load ---
 log "Generating OTLP load for ${SMOKE_DURATION}s → http://127.0.0.1:4318/v1/traces..."
 
+LOADER_START_S=$(python3 -c "import time; print(int(time.time()))")
 LOADER="$(mktemp)"
 cat > "$LOADER" <<'PYEOF'
 import sys, json, time, random, subprocess
@@ -102,7 +127,8 @@ import sys, json, time, random, subprocess
 duration = int(sys.argv[1])
 service_name = sys.argv[2]
 url = sys.argv[3]
-end_time = time.time() + duration
+start_time = time.time()
+end_time = start_time + duration
 count = 0
 
 while time.time() < end_time:
@@ -151,12 +177,15 @@ PYEOF
 
 python3 "$LOADER" "$SMOKE_DURATION" "$SIGIRO_SERVICE_NAME" "http://127.0.0.1:4318/v1/traces" "$OTEL_AUTH_HEADER"
 rm -f "$LOADER"
+LOADER_END_S=$(python3 -c "import time; print(int(time.time()))")
 
 log "Load generation complete — waiting for data to flush..."
-sleep 5
+sleep 15
 
 # --- Warmup: trigger DuckDB extension downloads before investigate ---
 # Avoids cold-start timeout on first investigate call (~20s to download extensions)
+# Use Python timestamps for all time math to stay consistent with span send times
+LOAD_START_S=$(python3 -c "import time; print(int(time.time()))")
 log "Warming up investigate endpoint (trigger extension downloads)..."
 curl -sf -m 30 -X POST \
     "http://127.0.0.1:9999/v1/investigate" \
@@ -164,22 +193,43 @@ curl -sf -m 30 -X POST \
     -H "Content-Type: application/json" \
     -d '{"service":"__warmup__","from_ts":0,"to_ts":1}' \
     > /dev/null 2>&1 || true
-sleep 2
+sleep 5
 
 # --- Query investigate endpoint ---
-NOW="$(date +%s)"
-# investigate API uses microseconds and POST with JSON body
-FROM_US=$(( (NOW - SMOKE_DURATION - 30) * 1000000 ))
-TO_US=$(( (NOW + 10) * 1000000 ))
+# Use Python for all timestamp math — avoids bash date +%s vs Python time.time() mismatch (Bug 3)
+# Spans were sent between LOADER_START_S and LOADER_END_S; add margin for flush
+INVESTIGATE_JSON=$(python3 - <<PYEOF
+import time, subprocess, json
 
-log "Querying POST /v1/investigate (service=${SIGIRO_SERVICE_NAME}, from_ts=${FROM_US}, to_ts=${TO_US})..."
-INVESTIGATE_RESP=$(curl -sf -s \
-    -X POST \
-    -H "Authorization: Bearer sigiro_dev_smoke-test" \
-    -H "Content-Type: application/json" \
-    "http://127.0.0.1:9999/v1/investigate" \
-    -d "{\"service\":\"${SIGIRO_SERVICE_NAME}\",\"from_ts\":${FROM_US},\"to_ts\":${TO_US}}" \
-    2>/dev/null || echo '{"error": "investigate endpoint not available"}')
+loader_start = ${LOADER_START_S}
+loader_end   = ${LOADER_END_S}
+# Window: generous 120s before and 120s after to cover extension download delays
+from_us = (loader_start - 120) * 1_000_000
+to_us   = (loader_end + 120) * 1_000_000
+
+service = '${SIGIRO_SERVICE_NAME}'
+r = subprocess.run([
+    'curl', '-sf', '-s', '-X', 'POST',
+    'http://127.0.0.1:9999/v1/investigate',
+    '-H', 'Authorization: Bearer sigiro_dev_smoke-test',
+    '-H', 'Content-Type: application/json',
+    '-d', json.dumps({'service': service, 'from_ts': from_us, 'to_ts': to_us})
+], capture_output=True, text=True)
+
+try:
+    result = json.loads(r.stdout)
+except Exception:
+    result = {'error': r.stdout or 'no output', 'stderr': r.stderr}
+
+print(json.dumps(result))
+PYEOF
+)
+
+FROM_US=$(python3 -c "print((${LOADER_START_S} - 120) * 1_000_000)")
+TO_US=$(python3 -c "print((${LOADER_END_S} + 120) * 1_000_000)")
+
+# investigate call is inside the Python block above (Bug 3 fix: use Python timestamps for consistency)
+log "Investigate JSON captured via Python (Bug 3 fix: consistent time.time() timestamps)"
 
 # --- Optional: fetch Pyroscope profiles ---
 PYROSCOPE_PROFILES="null"
@@ -225,7 +275,7 @@ fi
 OUTPUT=$(python3 -c "
 import json, sys
 
-investigate = json.loads('''${INVESTIGATE_RESP}''')
+investigate = json.loads('''${INVESTIGATE_JSON}''')
 pyroscope = json.loads('''${PYROSCOPE_PROFILES}''')
 
 output = {

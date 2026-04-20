@@ -9,7 +9,6 @@ cargo-fuzz = true
 [workspace]
 
 [dependencies]
-sigiro = { path = ".." }
 libfuzzer-sys = "0.4"
 prost = "0.14"
 rmcp = { version = "1.4.0", default-features = false, features = ["server", "client", "schemars"] }

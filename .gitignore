@@ -6,5 +6,26 @@
 /result
 /result-*
 
+# Fuzzing corpus — ignore generated artifacts, track curated seeds
+fuzz/target/
+fuzz/corpus/mcp_jsonrpc_fuzz/*
+fuzz/corpus/otlp_traces_fuzz/*
+!fuzz/corpus/mcp_jsonrpc_fuzz/seed_*.json
+!fuzz/corpus/otlp_traces_fuzz/seed_*.bin
+
+# Mutation testing
+mutants.out/
+mutants.out.old/
+
+# Vendored deps
+vendor/
+
+# Local cargo
+.cargo-home/
+.cargo-config.toml
+
+# Local task list
+TASKS.md
+
 # OS
 .DS_Store
