@@ -86,12 +86,17 @@ fn which_obi() -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-download: obi binary from GitHub releases
+// Auto-install: kernel-collector binary from OTel eBPF releases (Linux only)
 // ---------------------------------------------------------------------------
+
+/// One-time install guard — set to Some(path) once obi is successfully installed.
+#[allow(dead_code)]
+static OBI_INSTALL_TRACKER: OnceLock<String> = OnceLock::new();
 
 /// Resolves the destination path for the obi binary.
 /// Prefers `$SIGIRO_DATA_DIR/bin/obi` if SIGIRO_DATA_DIR is set,
 /// otherwise falls back to `~/.local/bin/obi`.
+#[allow(dead_code)]
 fn obi_install_path() -> std::path::PathBuf {
     if let Ok(data_dir) = std::env::var("SIGIRO_DATA_DIR") {
         let path = std::path::Path::new(&data_dir).join("bin").join("obi");
@@ -106,16 +111,144 @@ fn obi_install_path() -> std::path::PathBuf {
     path
 }
 
-/// One-time install guard — set to Some(path) once obi is successfully installed.
-static OBI_INSTALL_TRACKER: OnceLock<String> = OnceLock::new();
+/// Download and extract the OTel eBPF kernel-collector binary.
+/// The release ships as a .deb archive; we extract using `ar` (no dpkg needed).
+#[allow(dead_code)]
+fn download_kernel_collector(dest: &std::path::Path) -> Result<()> {
+    let version = "v0.11.0";
 
-/// Ensure obi binary is available on disk, downloading it from GitHub releases
+    // Detect target arch for the release asset
+    let asset_name = if cfg!(target_arch = "x86_64") {
+        format!(
+            "opentelemetry-ebpf-kernel-collector_{}_amd64.deb",
+            version.trim_start_matches('v')
+        )
+    } else {
+        anyhow::bail!(
+            "no pre-built kernel-collector deb for {}/{}; \
+             install manually or use the .rpm on CentOS/RHEL: \
+             https://github.com/open-telemetry/opentelemetry-ebpf/releases/{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            version
+        );
+    };
+    let download_url = format!(
+        "https://github.com/open-telemetry/opentelemetry-network/releases/download/{}/{}",
+        version, asset_name
+    );
+
+    info!("downloading {}", download_url);
+
+    // Download the .deb archive
+    let bytes = reqwest::blocking::get(&download_url)
+        .with_context(|| format!("failed to fetch {}", download_url))?
+        .error_for_status()
+        .with_context(|| format!("GitHub release returned error for {}", download_url))?
+        .bytes()
+        .with_context(|| "failed to read kernel-collector deb bytes")?;
+
+    // .deb format (ar archive): magic "!<arch>\n" at offset 0
+    if bytes.len() < 8 || &bytes[0..8] != b"!<arch>\n" {
+        anyhow::bail!("downloaded file is not a valid deb archive");
+    }
+
+    // Extract data.tar.gz from the ar archive
+    let data_tar_gz = extract_ar_entry(&bytes, "data.tar.gz")
+        .context("failed to find data.tar.gz inside deb archive")?;
+
+    // Decompress and extract the binary from data.tar.gz
+    extract_tar_binary(&data_tar_gz, "usr/bin/kernel-collector", dest)
+        .context("failed to extract kernel-collector binary from data.tar.gz")?;
+
+    info!("kernel-collector extracted to {}", dest.display());
+    Ok(())
+}
+
+/// Extract a named entry from an ar archive (e.g. a .deb).
+/// Returns the raw contents of the entry.
+#[allow(dead_code)]
+fn extract_ar_entry(ar_data: &[u8], entry_name: &str) -> Option<Vec<u8>> {
+    // ar archive format:
+    //   8-byte magic "!<arch>\n"
+    //   then member headers (60 bytes each):
+    //     0-16:  file name (space-padded to 16 chars)
+    //    16-28:  modification timestamp (ascii)
+    //    28-34:  owner ID (ascii)
+    //    34-40:  group ID (ascii)
+    //    40-48:  file mode (octal ascii)
+    //    48-58:  size (decimal ascii, 10 chars)
+    //    58-60:  magic "\x60\x0a"
+    //   then file data (padded to 2-byte boundary)
+    let mut offset = 8;
+    while offset + 60 <= ar_data.len() {
+        let name = std::str::from_utf8(&ar_data[offset..offset + 16])
+            .ok()?
+            .trim_end_matches(' ');
+        let size_str = std::str::from_utf8(&ar_data[offset + 48..offset + 58]).ok()?;
+        let size: usize = size_str.trim_end_matches(' ').parse().ok()?;
+        offset += 60; // skip header
+
+        if name == entry_name {
+            return Some(ar_data[offset..offset + size].to_vec());
+        }
+
+        // ar entries are aligned to 2-byte boundaries
+        offset += size;
+        if offset % 2 != 0 {
+            offset += 1;
+        }
+    }
+    None
+}
+
+/// Extract a single file from a gzip-compressed tar archive.
+#[allow(dead_code)]
+fn extract_tar_binary(gz_data: &[u8], entry_path: &str, dest: &std::path::Path) -> Result<()> {
+    let mut decoder = flate2::read::GzDecoder::new(gz_data);
+    let mut archive = tar::Archive::new(&mut decoder);
+
+    for entry in archive.entries().context("failed to read tar archive")? {
+        let mut entry = entry.context("failed to read tar entry")?;
+        let entry_path_str = entry
+            .path()
+            .context("entry has no path")?
+            .to_string_lossy()
+            .into_owned();
+
+        if entry_path_str == entry_path {
+            entry.unpack(dest).with_context(|| {
+                format!("failed to extract {} to {}", entry_path, dest.display())
+            })?;
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!("{} not found in tar archive", entry_path);
+}
+
+/// Ensure obi binary is available on disk, downloading from OTel eBPF releases
 /// if it is not found in PATH and has not already been installed by this function.
+///
+/// Downloads the `kernel-collector` binary from `open-telemetry/opentelemetry-ebpf`
+/// releases (as a `.deb` archive — extracted without dpkg).
 ///
 /// Downloads to `$SIGIRO_DATA_DIR/bin/obi` if `SIGIRO_DATA_DIR` is set,
 /// otherwise `~/.local/bin/obi`. The download is performed exactly once
 /// per process lifetime using a static `OnceLock`.
 pub fn ensure_obi_installed() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        ensure_obi_installed_linux()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        ensure_obi_installed_other()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_obi_installed_linux() -> Result<()> {
     // Fast path: already resolved this call
     if OBI_INSTALL_TRACKER.get().is_some() {
         return Ok(());
@@ -140,59 +273,13 @@ pub fn ensure_obi_installed() -> Result<()> {
     }
 
     info!(
-        "obi not found in PATH — downloading from GitHub releases to {}",
+        "obi not found in PATH — downloading OTel eBPF kernel-collector to {}",
         dest.display()
     );
 
-    // Detect target triple for the release asset
-    let target = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        "x86_64-unknown-linux-gnu"
-    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        "aarch64-unknown-linux-gnu"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else {
-        anyhow::bail!(
-            "obi auto-download is not supported for this platform ({}/{}); \
-             please install obi manually",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        );
-    };
-
-    let version = "v0.5.5".trim_start_matches('v');
-    let asset_name = format!("obi-{target}");
-    let download_url = format!(
-        "https://github.com/obi-collector/obi/releases/download/v{}/{}.tar.gz",
-        version, asset_name
-    );
-
-    // Use reqwest blocking client to download the obi release
-    let bytes = reqwest::blocking::get(&download_url)
-        .with_context(|| format!("failed to fetch {}", download_url))?
-        .error_for_status()
-        .with_context(|| format!("GitHub release returned error for {}", download_url))?
-        .bytes()
-        .with_context(|| "failed to read obi release bytes")?;
-
-    // Decode the .tar.gz archive in-memory then write the inner binary
-    let mut decoder = flate2::read::GzDecoder::new(&bytes[..]);
-    let mut archive = tar::Archive::new(&mut decoder);
-    let mut entries = archive
-        .entries()
-        .context("failed to read obi tar archive")?;
-    if let Some(Ok(mut entry)) = entries.next() {
-        entry
-            .unpack(&dest)
-            .with_context(|| format!("failed to extract obi to {}", dest.display()))?;
-    } else {
-        anyhow::bail!("obi tar archive was empty");
-    }
+    download_kernel_collector(&dest)?;
 
     // Make the binary executable
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
@@ -204,6 +291,23 @@ pub fn ensure_obi_installed() -> Result<()> {
         .set(dest.to_string_lossy().into_owned())
         .ok();
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_obi_installed_other() -> Result<()> {
+    // Check if obi is in PATH even on non-Linux
+    if which_obi().is_some() {
+        debug!("obi found in PATH, no download needed");
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "obi auto-download is not supported on {}/{}; \
+         please install the OpenTelemetry eBPF kernel-collector manually: \
+         https://github.com/open-telemetry/opentelemetry-ebpf",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    )
 }
 
 /// Determine eBPF status: check obi availability and platform capabilities.
@@ -307,12 +411,11 @@ fn has_capability(cap: &str) -> bool {
 
 /// Try to start obi as a subprocess.
 /// Returns Ok(()) if obi started successfully.
-/// Returns Err if obi is ready but failed to spawn — this is a real error, not graceful degradation.
-/// Callers handle not_installed/disabled themselves (call ebpf_status first).
+/// Returns Err if obi failed to spawn.
 pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
     use uuid::Uuid;
 
-    // Auto-download obi from GitHub releases if not already available
+    // Auto-download OTel eBPF kernel-collector if not already available (Linux only)
     ensure_obi_installed()?;
 
     let path = if obi_path.is_empty() { "obi" } else { obi_path };
@@ -321,7 +424,7 @@ pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
     let config_uuid = Uuid::new_v4();
     let config_path = format!("/tmp/sigiro-obi-{config_uuid}.yaml");
 
-    // OBI config YAML — mirrors the environment-variable setup used in k8s
+    // OBI config YAML
     let config_yaml = format!(
         r#"otel_exporter_otlp_endpoint: "{otlp_endpoint}"
 otel_ebpf_auto_target_exe: "*"
@@ -334,7 +437,6 @@ otel_ebpf_auto_target_exe: "*"
         "OTEL_EXPORTER_OTLP_ENDPOINT".to_string(),
         otlp_endpoint.to_string(),
     );
-    // Pass config path via environment variable (OBI reads this or we pass as arg)
     envs.insert("OTEL_EBPF_CONFIG".to_string(), config_path.clone());
 
     let supervisor = Supervisor::new(path, vec![format!("--config={}", config_path)], envs);
