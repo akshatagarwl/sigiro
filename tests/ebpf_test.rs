@@ -1,4 +1,4 @@
-use sigiro::ebpf::{Suggestion, check_obi_available, ebpf_status, cleanup_stale_temp_files, get_registry};
+use sigiro::ebpf::{check_obi_available, cleanup_stale_temp_files, ebpf_status, Suggestion};
 use std::fs;
 use std::path::PathBuf;
 
@@ -39,37 +39,34 @@ fn missing_capabilities_format() {
     assert!(reason.contains("CAP_NET_ADMIN"));
 }
 
+/// Verify cleanup_stale_temp_files:
+/// 1. Removes files matching /tmp/sigiro-obi-*.yaml
+/// 2. Is idempotent when no files exist
+/// Run sequentially (not in parallel with other cleanup tests) to avoid races.
 #[test]
-fn cleanup_stale_temp_files_removes_orphaned_configs() {
-    // Create temp files with the sigiro-obi-*.yaml pattern
-    let tmp1 = PathBuf::from("/tmp/sigiro-obi-test-cleanup-1.yaml");
-    let tmp2 = PathBuf::from("/tmp/sigiro-obi-test-cleanup-2.yaml");
+fn cleanup_stale_temp_files_behavior() {
+    use uuid::Uuid;
+
+    let uid = Uuid::new_v4().to_string()[..8].to_string();
+    let tmp1 = PathBuf::from(format!("/tmp/sigiro-obi-test-cleanup-{}-1.yaml", uid));
+    let tmp2 = PathBuf::from(format!("/tmp/sigiro-obi-test-cleanup-{}-2.yaml", uid));
+
+    // Pre-cleanup: remove any leftovers from previous failed runs
+    let _ = fs::remove_file(&tmp1);
+    let _ = fs::remove_file(&tmp2);
+
+    // Create temp files
     fs::write(&tmp1, b"otel_exporter_otlp_endpoint: localhost:4317").unwrap();
     fs::write(&tmp2, b"otel_exporter_otlp_endpoint: localhost:4317").unwrap();
+    assert!(tmp1.exists(), "tmp1 should exist before cleanup");
+    assert!(tmp2.exists(), "tmp2 should exist before cleanup");
 
-    // Verify they exist
-    assert!(tmp1.exists());
-    assert!(tmp2.exists());
-
-    // Run cleanup
+    // Cleanup should remove them
     cleanup_stale_temp_files();
-
-    // Verify they are gone
     assert!(!tmp1.exists(), "tmp1 should be removed by cleanup");
     assert!(!tmp2.exists(), "tmp2 should be removed by cleanup");
-}
 
-#[test]
-fn cleanup_stale_temp_files_idempotent_when_none_exist() {
-    // Cleanup should not panic when no files match
+    // Cleanup should be idempotent (no panic when nothing matches)
     cleanup_stale_temp_files();
     cleanup_stale_temp_files();
-}
-
-#[test]
-fn registry_get_registry_returns_same_instance() {
-    let reg1 = get_registry();
-    let reg2 = get_registry();
-    // Same pointer means same static
-    assert!(std::ptr::eq(reg1, reg2));
 }

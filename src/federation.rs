@@ -21,7 +21,7 @@ struct SupervisorHandle {
 impl Drop for SupervisorHandle {
     fn drop(&mut self) {
         if let Some(ref path) = self.cleanup_path {
-            let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(path).ok();
             debug!("cleaned up config file: {}", path);
         }
     }

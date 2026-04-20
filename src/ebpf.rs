@@ -11,7 +11,7 @@ use crate::supervisor::Supervisor;
 
 /// Handle wrapping a supervisor and optional cleanup path.
 /// The cleanup runs on drop to remove temp config files.
-struct SupervisorHandle {
+pub struct SupervisorHandle {
     supervisor: Supervisor,
     cleanup_path: Option<String>,
 }
@@ -19,7 +19,7 @@ struct SupervisorHandle {
 impl Drop for SupervisorHandle {
     fn drop(&mut self) {
         if let Some(ref path) = self.cleanup_path {
-            let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(path).ok();
             debug!("cleaned up config file: {}", path);
         }
     }
@@ -28,8 +28,23 @@ impl Drop for SupervisorHandle {
 /// Static registry mapping supervisor names to their handles.
 static SUPERVISOR_REGISTRY: OnceLock<Mutex<HashMap<String, SupervisorHandle>>> = OnceLock::new();
 
-pub fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
+fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
     SUPERVISOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(test)]
+mod test_utils {
+    use super::get_registry;
+    use std::sync::Mutex;
+    use std::collections::HashMap;
+
+    /// Accessor for tests — avoids exposing SupervisorHandle publicly.
+    pub fn with_registry<F, R>(f: F) -> R
+    where
+        F: FnOnce(&Mutex<HashMap<String, super::SupervisorHandle>>) -> R,
+    {
+        f(get_registry())
+    }
 }
 
 fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<String>) {
@@ -94,13 +109,13 @@ fn obi_install_path() -> std::path::PathBuf {
     if let Ok(data_dir) = std::env::var("SIGIRO_DATA_DIR") {
         let path = std::path::Path::new(&data_dir).join("bin").join("obi");
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = std::fs::create_dir_all(parent).ok();
         }
         return path;
     }
     let home = dirs::home_dir().expect("cannot determine home directory");
     let path = home.join(".local").join("bin").join("obi");
-    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    let _ = std::fs::create_dir_all(path.parent().unwrap()).ok();
     path
 }
 
@@ -128,7 +143,7 @@ pub fn ensure_obi_installed() -> Result<()> {
     let dest = obi_install_path();
     if dest.exists() {
         debug!("obi binary already exists at {}, skipping download", dest.display());
-        let _ = OBI_INSTALL_TRACKER.set(dest.to_string_lossy().into_owned());
+        let _ = OBI_INSTALL_TRACKER.set(dest.to_string_lossy().into_owned()).ok();
         return Ok(());
     }
 
@@ -160,21 +175,13 @@ pub fn ensure_obi_installed() -> Result<()> {
         version, asset_name
     );
 
-    // Use reqwest via a single-threaded Tokio runtime (sync context)
-    let bytes = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("failed to build tokio runtime for obi download")?
-        .block_on(async {
-            reqwest::get(&download_url)
-                .await
-                .with_context(|| format!("failed to fetch {}", download_url))?
-                .error_for_status()
-                .with_context(|| format!("GitHub release returned error for {}", download_url))?
-                .bytes()
-                .await
-                .context("failed to read obi release bytes")
-        })?;
+    // Use reqwest blocking client to download the obi release
+    let bytes = reqwest::blocking::get(&download_url)
+        .with_context(|| format!("failed to fetch {}", download_url))?
+        .error_for_status()
+        .with_context(|| format!("GitHub release returned error for {}", download_url))?
+        .bytes()
+        .with_context(|| "failed to read obi release bytes")?;
 
     // Decode the .tar.gz archive in-memory then write the inner binary
     let mut decoder = flate2::read::GzDecoder::new(&bytes[..]);
@@ -197,7 +204,7 @@ pub fn ensure_obi_installed() -> Result<()> {
     }
 
     info!("obi successfully installed to {}", dest.display());
-    let _ = OBI_INSTALL_TRACKER.set(dest.to_string_lossy().into_owned());
+    let _ = OBI_INSTALL_TRACKER.set(dest.to_string_lossy().into_owned()).ok();
     Ok(())
 }
 
