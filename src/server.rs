@@ -155,7 +155,6 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .expect("valid governor config");
 
     // v1 API routes — all authenticated + rate limited
-    // Layer order: request → governor → auth → handler (last .layer() runs first)
     let v1 = Router::new()
         .typed_post(query_handler)
         .typed_post(investigate_handler)

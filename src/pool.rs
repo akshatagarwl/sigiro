@@ -48,8 +48,6 @@ impl ProjectPool {
             self.evict_oldest();
         }
 
-        // Slow path: in-memory coordinator, ATTACH per-project DuckLake catalog.
-        // Each project gets: {data_dir}/{project_id}/catalog.ducklake
         let project_dir = self.data_dir.join(project_id);
 
         let conn = Connection::open_in_memory()

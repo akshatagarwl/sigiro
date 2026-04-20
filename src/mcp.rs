@@ -8,8 +8,6 @@ use serde::Deserialize;
 
 use crate::client::SigiroClient;
 
-// --- Shared MCP response serializer ---
-
 /// Serialize a value to a JSON string, or return a formatted error on failure.
 /// Consistent error format across all MCP tool responses.
 fn serialize_json<T: serde::Serialize>(value: &T) -> String {

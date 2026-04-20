@@ -213,8 +213,7 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)?;
 
-    // DuckLake init is now per-project (in pool.get_or_create).
-    // No need for a probe connection at startup.
+    // MsgRouter: handlers send directly to per-project flusher tasks.
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
     let admin_conn = sigiro::admin::open_admin_db()?;
 
@@ -318,8 +317,6 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
-    // MsgRouter: handlers send directly to per-project flusher tasks.
-    // No main channel, no dispatcher thread.
     let router = Arc::new(MsgRouter::new(Arc::clone(&pool)));
 
     // Evict idle connections every 2 minutes

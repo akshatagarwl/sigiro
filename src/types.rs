@@ -1,11 +1,4 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
-//!
-//! Previously `IngestMsg` lived in `ingest` and `SignalTable` in `inserter`,
-//! but both were needed by the other — creating ingest ↔ inserter cycle.
-//! Moving them here breaks the cycle cleanly.
-//!
-//! `SupervisorHandle` is also here because both `ebpf` and `federation`
-//! need it to register supervisors, and neither should own it.
 
 use arrow::record_batch::RecordBatch;
 use otlp2records::MetricBatches;
