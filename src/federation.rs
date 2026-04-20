@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::supervisor::Supervisor;
 
