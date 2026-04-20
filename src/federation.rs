@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 use tracing::{debug, info, warn};
+
+use crate::supervisor::Supervisor;
 
 /// Information about a federation worker.
 #[derive(Debug, Serialize, Deserialize)]
@@ -230,19 +232,20 @@ pub fn start_spice(data_dir: &Path) -> Result<()> {
 
     info!("starting spiced with config: {}", spicepod_path.display());
 
-    let mut child = Command::new("spiced")
-        .arg("--config")
-        .arg(&spicepod_path)
-        .env("SPICE_LOG", "info")
-        .spawn()
-        .context("spiced failed to start — check that spiced is installed and executable")?;
+    let mut envs = HashMap::new();
+    envs.insert("SPICE_LOG".to_string(), "info".to_string());
 
-    info!("spiced started (pid: {:?})", child.id());
+    let supervisor = Supervisor::new("spiced", vec!["--config".to_string(), spicepod_path.display().to_string()], envs);
+    supervisor.start();
+
+    info!("spiced started via supervisor");
 
     std::thread::spawn(move || {
-        if let Ok(exit) = child.wait() {
-            warn!("spiced exited: {exit}");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if !supervisor.is_running() && !supervisor.is_dead() {
+            return;
         }
+        warn!("spiced exited");
     });
 
     Ok(())
