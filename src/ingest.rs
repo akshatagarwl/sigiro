@@ -628,15 +628,9 @@ async fn otlp_http_metrics(
         }
     };
     // Only send if at least one metric batch is non-empty (consistent with traces/logs)
-    let has_data = batches
-        .gauge
-        .as_ref()
-        .is_some_and(|b| b.num_rows() > 0)
+    let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
         || batches.sum.as_ref().is_some_and(|b| b.num_rows() > 0)
-        || batches
-            .histogram
-            .as_ref()
-            .is_some_and(|b| b.num_rows() > 0)
+        || batches.histogram.as_ref().is_some_and(|b| b.num_rows() > 0)
         || batches
             .exp_histogram
             .as_ref()

@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::drain::DrainTree;
-use crate::types::{IngestMsg, SignalTable};
 use crate::pool::ProjectPool;
+use crate::types::{IngestMsg, SignalTable};
 
 /// Max rows buffered per table before forcing a flush.
 const FLUSH_ROW_THRESHOLD: usize = 10_000;

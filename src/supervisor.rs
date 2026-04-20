@@ -5,9 +5,9 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::process::Command as TokioCommand;
 use tokio::task::JoinHandle;
 use watchexec_supervisor::{
-    command::{Command, Program, SpawnOptions},
-    job::{start_job, Job as SupervisorJob},
     Signal,
+    command::{Command, Program, SpawnOptions},
+    job::{Job as SupervisorJob, start_job},
 };
 
 /// A wrapper around a watchexec-supervisor [`Job`] that takes binary name, args, and env vars.
@@ -19,6 +19,7 @@ pub struct Supervisor {
     /// The underlying watchexec-supervisor Job.
     job: SupervisorJob,
     /// Handle to the job task, retained for lifecycle management.
+    #[allow(dead_code)]
     task: JoinHandle<()>,
 }
 

@@ -12,7 +12,8 @@ use crate::supervisor::Supervisor;
 /// Handle wrapping a supervisor and optional cleanup path.
 /// The cleanup runs on drop to remove temp config files.
 pub struct SupervisorHandle {
-    supervisor: Supervisor,
+    #[allow(dead_code)]
+    supervisor: Supervisor, // intentionally held to keep the job alive
     cleanup_path: Option<String>,
 }
 
@@ -35,8 +36,8 @@ fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
 #[cfg(test)]
 mod test_utils {
     use super::get_registry;
-    use std::sync::Mutex;
     use std::collections::HashMap;
+    use std::sync::Mutex;
 
     /// Accessor for tests — avoids exposing SupervisorHandle publicly.
     pub fn with_registry<F, R>(f: F) -> R
@@ -50,7 +51,10 @@ mod test_utils {
 fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<String>) {
     let registry = get_registry();
     let mut guard = registry.lock().unwrap();
-    let handle = SupervisorHandle { supervisor, cleanup_path };
+    let handle = SupervisorHandle {
+        supervisor,
+        cleanup_path,
+    };
     guard.insert(name.to_string(), handle);
     info!("registered supervisor: {name}");
 }
@@ -125,12 +129,20 @@ pub fn ensure_obi_installed() -> Result<()> {
 
     let dest = obi_install_path();
     if dest.exists() {
-        debug!("obi binary already exists at {}, skipping download", dest.display());
-        let _ = OBI_INSTALL_TRACKER.set(dest.to_string_lossy().into_owned()).ok();
+        debug!(
+            "obi binary already exists at {}, skipping download",
+            dest.display()
+        );
+        let _ = OBI_INSTALL_TRACKER
+            .set(dest.to_string_lossy().into_owned())
+            .ok();
         return Ok(());
     }
 
-    info!("obi not found in PATH — downloading from GitHub releases to {}", dest.display());
+    info!(
+        "obi not found in PATH — downloading from GitHub releases to {}",
+        dest.display()
+    );
 
     // Detect target triple for the release asset
     let target = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
@@ -150,8 +162,7 @@ pub fn ensure_obi_installed() -> Result<()> {
         );
     };
 
-    let version = "v0.5.5"
-        .trim_start_matches('v');
+    let version = "v0.5.5".trim_start_matches('v');
     let asset_name = format!("obi-{target}");
     let download_url = format!(
         "https://github.com/obi-collector/obi/releases/download/v{}/{}.tar.gz",
@@ -169,10 +180,12 @@ pub fn ensure_obi_installed() -> Result<()> {
     // Decode the .tar.gz archive in-memory then write the inner binary
     let mut decoder = flate2::read::GzDecoder::new(&bytes[..]);
     let mut archive = tar::Archive::new(&mut decoder);
-    let mut entries = archive.entries()
+    let mut entries = archive
+        .entries()
         .context("failed to read obi tar archive")?;
     if let Some(Ok(mut entry)) = entries.next() {
-        entry.unpack(&dest)
+        entry
+            .unpack(&dest)
             .with_context(|| format!("failed to extract obi to {}", dest.display()))?;
     } else {
         anyhow::bail!("obi tar archive was empty");
@@ -187,7 +200,9 @@ pub fn ensure_obi_installed() -> Result<()> {
     }
 
     info!("obi successfully installed to {}", dest.display());
-    let _ = OBI_INSTALL_TRACKER.set(dest.to_string_lossy().into_owned()).ok();
+    let _ = OBI_INSTALL_TRACKER
+        .set(dest.to_string_lossy().into_owned())
+        .ok();
     Ok(())
 }
 
@@ -312,11 +327,13 @@ pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
 otel_ebpf_auto_target_exe: "*"
 "#,
     );
-    std::fs::write(&config_path, config_yaml)
-        .context("failed to write obi config file")?;
+    std::fs::write(&config_path, config_yaml).context("failed to write obi config file")?;
 
     let mut envs = HashMap::new();
-    envs.insert("OTEL_EXPORTER_OTLP_ENDPOINT".to_string(), otlp_endpoint.to_string());
+    envs.insert(
+        "OTEL_EXPORTER_OTLP_ENDPOINT".to_string(),
+        otlp_endpoint.to_string(),
+    );
     // Pass config path via environment variable (OBI reads this or we pass as arg)
     envs.insert("OTEL_EBPF_CONFIG".to_string(), config_path.clone());
 

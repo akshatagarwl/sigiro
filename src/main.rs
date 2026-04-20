@@ -93,7 +93,7 @@ enum AdminAction {
     RevokeKey {
         /// Short token portion of the key
         short_token: String,
-    }
+    },
 }
 
 /// Format output

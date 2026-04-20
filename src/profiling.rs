@@ -23,8 +23,7 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
         _ => return Ok(None),
     };
 
-    let service_name = std::env::var("OTEL_SERVICE_NAME")
-        .unwrap_or_else(|_| "sigiro".to_string());
+    let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "sigiro".to_string());
 
     let backend = pyroscope::backend::pprof_backend(
         pyroscope::backend::pprof::PprofConfig::default(),

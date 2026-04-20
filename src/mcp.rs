@@ -68,7 +68,11 @@ impl SigiroMcp {
     #[tool]
     async fn sigiro_investigate(&self, params: Parameters<InvestigateParams>) -> String {
         let req = crate::investigate::InvestigateRequest::from(params.0);
-        match self.client.investigate_multi(req.service.as_deref(), req.services, req.from_ts, req.to_ts).await {
+        match self
+            .client
+            .investigate_multi(req.service.as_deref(), req.services, req.from_ts, req.to_ts)
+            .await
+        {
             Ok(blocks) => serialize_json(&blocks),
             Err(e) => format_error(e),
         }

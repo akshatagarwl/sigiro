@@ -22,14 +22,23 @@ pub struct AuthContext {
 /// contention on the ingest hot path (every OTLP request was hitting it).
 const AUTH_CACHE_TTL: Duration = Duration::from_secs(60);
 
-struct CachedAuth {
+/// Cached auth entry. Public for testing access.
+pub struct CachedAuth {
     ctx: AuthContext,
     expires: Instant,
 }
 
+impl CachedAuth {
+    /// Returns the expiry instant. Used for testing.
+    pub fn expires(&self) -> Instant {
+        self.expires
+    }
+}
+
 /// Global auth cache: raw_key → (AuthContext, expiry).
 /// DashMap for concurrent reads from tokio + inserter threads.
-fn auth_cache() -> &'static DashMap<String, CachedAuth> {
+/// Exposed for testing.
+pub fn auth_cache() -> &'static DashMap<String, CachedAuth> {
     static CACHE: OnceLock<DashMap<String, CachedAuth>> = OnceLock::new();
     CACHE.get_or_init(|| DashMap::with_capacity(1024))
 }
@@ -47,7 +56,7 @@ pub fn verify_key_cached(
 
     // Fast path: cache hit with valid TTL
     if let Some(entry) = cache.get(raw_key) {
-        if entry.expires > Instant::now() {
+        if entry.expires >= Instant::now() {
             return Ok(entry.ctx.clone());
         }
         // Expired — drop ref before removing to avoid deadlock

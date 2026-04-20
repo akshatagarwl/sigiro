@@ -1,4 +1,4 @@
-use sigiro::ebpf::{check_obi_available, ebpf_status, Suggestion};
+use sigiro::ebpf::{Suggestion, check_obi_available, ebpf_status};
 
 #[test]
 fn check_obi_available_returns_false_when_not_in_path() {
@@ -36,5 +36,3 @@ fn missing_capabilities_format() {
     assert!(reason.contains("CAP_BPF"));
     assert!(reason.contains("CAP_NET_ADMIN"));
 }
-
-

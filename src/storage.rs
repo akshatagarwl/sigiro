@@ -129,7 +129,10 @@ impl HostPort {
                 let port = port_str
                     .parse()
                     .context("invalid port in postgres URI: must be a number")?;
-                Ok(Self { host: host.to_string(), port })
+                Ok(Self {
+                    host: host.to_string(),
+                    port,
+                })
             }
             None => Ok(Self {
                 host: s.to_string(),

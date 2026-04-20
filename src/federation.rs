@@ -14,7 +14,8 @@ use crate::supervisor::Supervisor;
 
 /// Handle wrapping a supervisor and optional cleanup path.
 struct SupervisorHandle {
-    supervisor: Supervisor,
+    #[allow(dead_code)]
+    supervisor: Supervisor, // intentionally held to keep the job alive
     cleanup_path: Option<String>,
 }
 
@@ -37,7 +38,10 @@ fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
 fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<String>) {
     let registry = get_registry();
     let mut guard = registry.lock().unwrap();
-    let handle = SupervisorHandle { supervisor, cleanup_path };
+    let handle = SupervisorHandle {
+        supervisor,
+        cleanup_path,
+    };
     guard.insert(name.to_string(), handle);
     info!("registered supervisor: {name}");
 }
@@ -270,7 +274,11 @@ pub fn start_spice(data_dir: &Path) -> Result<()> {
     let mut envs = HashMap::new();
     envs.insert("SPICE_LOG".to_string(), "info".to_string());
 
-    let supervisor = Supervisor::new("spiced", vec!["--config".to_string(), spicepod_path.display().to_string()], envs);
+    let supervisor = Supervisor::new(
+        "spiced",
+        vec!["--config".to_string(), spicepod_path.display().to_string()],
+        envs,
+    );
     supervisor.start();
 
     register_supervisor("spiced", supervisor, None);
