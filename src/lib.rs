@@ -30,7 +30,7 @@ use std::path::PathBuf;
 
 pub use ingest::OtlpGrpcService;
 pub use investigate::{InvestigationBlock, Window};
-pub use types::{IngestMsg, SignalTable};
+pub use types::{IngestMsg, SignalTable, SupervisorHandle};
 // Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
 pub use inserter::MsgRouter;
 

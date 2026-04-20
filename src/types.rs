@@ -3,13 +3,47 @@
 //! Previously `IngestMsg` lived in `ingest` and `SignalTable` in `inserter`,
 //! but both were needed by the other — creating ingest ↔ inserter cycle.
 //! Moving them here breaks the cycle cleanly.
+//!
+//! `SupervisorHandle` is also here because both `ebpf` and `federation`
+//! need it to register supervisors, and neither should own it.
 
 use arrow::record_batch::RecordBatch;
 use otlp2records::MetricBatches;
 
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// SupervisorHandle — process supervisor lifetime guard
+// --------------------------------------------------------------------------
+
+/// Handle wrapping a supervisor and optional cleanup path.
+/// The cleanup runs on drop to remove temp config files.
+#[derive(Debug)]
+pub struct SupervisorHandle {
+    #[allow(dead_code)]
+    supervisor: crate::supervisor::Supervisor, // intentionally held to keep the job alive
+    cleanup_path: Option<String>,
+}
+
+impl SupervisorHandle {
+    pub fn new(supervisor: crate::supervisor::Supervisor, cleanup_path: Option<String>) -> Self {
+        Self {
+            supervisor,
+            cleanup_path,
+        }
+    }
+}
+
+impl Drop for SupervisorHandle {
+    fn drop(&mut self) {
+        if let Some(ref path) = self.cleanup_path {
+            let _ = std::fs::remove_file(path).ok();
+            tracing::debug!("cleaned up config file: {}", path);
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
 // IngestMsg — carried across modules for routing
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 
 /// Pre-transformed ingest message carrying Arrow RecordBatches, not raw bytes.
 /// Transform happens on the tokio blocking pool (parallel) BEFORE the channel,

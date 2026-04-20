@@ -4,27 +4,11 @@ use std::sync::{Mutex, OnceLock};
 use tracing::{debug, info};
 
 use crate::supervisor::Supervisor;
+use crate::types::SupervisorHandle;
 
 // ---------------------------------------------------------------------------
 // Supervisor registry — keeps supervisor handles alive for the process lifetime
 // ---------------------------------------------------------------------------
-
-/// Handle wrapping a supervisor and optional cleanup path.
-/// The cleanup runs on drop to remove temp config files.
-pub struct SupervisorHandle {
-    #[allow(dead_code)]
-    supervisor: Supervisor, // intentionally held to keep the job alive
-    cleanup_path: Option<String>,
-}
-
-impl Drop for SupervisorHandle {
-    fn drop(&mut self) {
-        if let Some(ref path) = self.cleanup_path {
-            let _ = std::fs::remove_file(path).ok();
-            debug!("cleaned up config file: {}", path);
-        }
-    }
-}
 
 /// Static registry mapping supervisor names to their handles.
 static SUPERVISOR_REGISTRY: OnceLock<Mutex<HashMap<String, SupervisorHandle>>> = OnceLock::new();
@@ -51,12 +35,9 @@ mod test_utils {
 fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<String>) {
     let registry = get_registry();
     let mut guard = registry.lock().unwrap();
-    let handle = SupervisorHandle {
-        supervisor,
-        cleanup_path,
-    };
+    let handle = SupervisorHandle::new(supervisor, cleanup_path);
     guard.insert(name.to_string(), handle);
-    info!("registered supervisor: {name}");
+    info!("registered supervisor: {name}")
 }
 
 /// Result of checking eBPF readiness.
