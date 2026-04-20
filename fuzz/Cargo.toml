@@ -6,6 +6,8 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+[workspace]
+
 [dependencies]
 sigiro = { path = ".." }
 libfuzzer-sys = "0.4"
