@@ -59,7 +59,7 @@ impl DrainTree {
 
         for (i, cluster) in group.iter().enumerate() {
             let sim = similarity(&tokens, &cluster.tokens);
-            if sim > best_sim && sim >= SIMILARITY_THRESHOLD {
+            if sim >= best_sim && sim >= SIMILARITY_THRESHOLD {
                 best_sim = sim;
                 best_idx = Some(i);
             }
