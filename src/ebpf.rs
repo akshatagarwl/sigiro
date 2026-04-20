@@ -111,120 +111,66 @@ fn obi_install_path() -> std::path::PathBuf {
     path
 }
 
-/// Download and extract the OTel eBPF kernel-collector binary.
-/// The release ships as a .deb archive; we extract using `ar` (no dpkg needed).
+/// Download and extract the OBI binary from OTel eBPF Instrumentation releases.
+/// The release ships as a .tar.gz archive containing the `obi` binary directly.
 #[allow(dead_code)]
-fn download_kernel_collector(dest: &std::path::Path) -> Result<()> {
-    let version = "v0.11.0";
+fn download_obi(dest: &std::path::Path) -> Result<()> {
+    let version = "v0.8.0";
 
     // Detect target arch for the release asset
-    let asset_name = if cfg!(target_arch = "x86_64") {
-        format!(
-            "opentelemetry-ebpf-kernel-collector_{}_amd64.deb",
-            version.trim_start_matches('v')
-        )
-    } else {
-        anyhow::bail!(
-            "no pre-built kernel-collector deb for {}/{}; \
-             install manually or use the .rpm on CentOS/RHEL: \
-             https://github.com/open-telemetry/opentelemetry-ebpf/releases/{}",
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            version
-        );
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        _ => {
+            anyhow::bail!(
+                "no pre-built obi binary for {}/{}; \
+                 see https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation/releases/{} \
+                 for available assets",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                version
+            );
+        }
     };
+    let asset_name = format!(
+        "obi-{}-linux-{}.tar.gz",
+        version.trim_start_matches('v'),
+        arch
+    );
     let download_url = format!(
-        "https://github.com/open-telemetry/opentelemetry-network/releases/download/{}/{}",
+        "https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation/releases/download/{}/{}",
         version, asset_name
     );
 
     info!("downloading {}", download_url);
 
-    // Download the .deb archive
-    let bytes = reqwest::blocking::get(&download_url)
+    // Stream the tar.gz directly — extract `obi` without buffering the whole archive
+    let response = reqwest::blocking::get(&download_url)
         .with_context(|| format!("failed to fetch {}", download_url))?
         .error_for_status()
-        .with_context(|| format!("GitHub release returned error for {}", download_url))?
-        .bytes()
-        .with_context(|| "failed to read kernel-collector deb bytes")?;
+        .with_context(|| format!("GitHub release returned error for {}", download_url))?;
 
-    // .deb format (ar archive): magic "!<arch>\n" at offset 0
-    if bytes.len() < 8 || &bytes[0..8] != b"!<arch>\n" {
-        anyhow::bail!("downloaded file is not a valid deb archive");
-    }
-
-    // Extract data.tar.gz from the ar archive
-    let data_tar_gz = extract_ar_entry(&bytes, "data.tar.gz")
-        .context("failed to find data.tar.gz inside deb archive")?;
-
-    // Decompress and extract the binary from data.tar.gz
-    extract_tar_binary(&data_tar_gz, "usr/bin/kernel-collector", dest)
-        .context("failed to extract kernel-collector binary from data.tar.gz")?;
-
-    info!("kernel-collector extracted to {}", dest.display());
-    Ok(())
-}
-
-/// Extract a named entry from an ar archive (e.g. a .deb).
-/// Returns the raw contents of the entry.
-#[allow(dead_code)]
-fn extract_ar_entry(ar_data: &[u8], entry_name: &str) -> Option<Vec<u8>> {
-    // ar archive format:
-    //   8-byte magic "!<arch>\n"
-    //   then member headers (60 bytes each):
-    //     0-16:  file name (space-padded to 16 chars)
-    //    16-28:  modification timestamp (ascii)
-    //    28-34:  owner ID (ascii)
-    //    34-40:  group ID (ascii)
-    //    40-48:  file mode (octal ascii)
-    //    48-58:  size (decimal ascii, 10 chars)
-    //    58-60:  magic "\x60\x0a"
-    //   then file data (padded to 2-byte boundary)
-    let mut offset = 8;
-    while offset + 60 <= ar_data.len() {
-        let name = std::str::from_utf8(&ar_data[offset..offset + 16])
-            .ok()?
-            .trim_end_matches(' ');
-        let size_str = std::str::from_utf8(&ar_data[offset + 48..offset + 58]).ok()?;
-        let size: usize = size_str.trim_end_matches(' ').parse().ok()?;
-        offset += 60; // skip header
-
-        if name == entry_name {
-            return Some(ar_data[offset..offset + size].to_vec());
-        }
-
-        // ar entries are aligned to 2-byte boundaries
-        offset += size;
-        if offset % 2 != 0 {
-            offset += 1;
-        }
-    }
-    None
-}
-
-/// Extract a single file from a gzip-compressed tar archive.
-#[allow(dead_code)]
-fn extract_tar_binary(gz_data: &[u8], entry_path: &str, dest: &std::path::Path) -> Result<()> {
-    let mut decoder = flate2::read::GzDecoder::new(gz_data);
-    let mut archive = tar::Archive::new(&mut decoder);
+    let decoder = flate2::read::GzDecoder::new(response);
+    let mut archive = tar::Archive::new(decoder);
 
     for entry in archive.entries().context("failed to read tar archive")? {
         let mut entry = entry.context("failed to read tar entry")?;
-        let entry_path_str = entry
+        let entry_path = entry
             .path()
             .context("entry has no path")?
             .to_string_lossy()
             .into_owned();
 
-        if entry_path_str == entry_path {
-            entry.unpack(dest).with_context(|| {
-                format!("failed to extract {} to {}", entry_path, dest.display())
-            })?;
+        if entry_path == "obi" {
+            entry
+                .unpack(dest)
+                .with_context(|| format!("failed to extract obi to {}", dest.display()))?;
+            info!("obi extracted to {}", dest.display());
             return Ok(());
         }
     }
 
-    anyhow::bail!("{} not found in tar archive", entry_path);
+    anyhow::bail!("obi binary not found in tar archive");
 }
 
 /// Ensure obi binary is available on disk, downloading from OTel eBPF releases
@@ -277,7 +223,7 @@ fn ensure_obi_installed_linux() -> Result<()> {
         dest.display()
     );
 
-    download_kernel_collector(&dest)?;
+    download_obi(&dest)?;
 
     // Make the binary executable
     {
