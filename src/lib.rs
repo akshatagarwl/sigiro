@@ -14,6 +14,7 @@ pub mod profiling;
 pub mod schema;
 pub mod server;
 pub mod storage;
+pub mod supervisor;
 pub mod toon;
 pub mod types;
 

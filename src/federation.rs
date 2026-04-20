@@ -3,9 +3,44 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use tracing::{debug, info, warn};
 
 use crate::supervisor::Supervisor;
+
+// ---------------------------------------------------------------------------
+// Supervisor registry — keeps supervisor handles alive for the process lifetime
+// ---------------------------------------------------------------------------
+
+/// Handle wrapping a supervisor and optional cleanup path.
+struct SupervisorHandle {
+    supervisor: Supervisor,
+    cleanup_path: Option<String>,
+}
+
+impl Drop for SupervisorHandle {
+    fn drop(&mut self) {
+        if let Some(ref path) = self.cleanup_path {
+            let _ = std::fs::remove_file(path);
+            debug!("cleaned up config file: {}", path);
+        }
+    }
+}
+
+/// Static registry mapping supervisor names to their handles.
+static SUPERVISOR_REGISTRY: OnceLock<Mutex<HashMap<String, SupervisorHandle>>> = OnceLock::new();
+
+fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
+    SUPERVISOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<String>) {
+    let registry = get_registry();
+    let mut guard = registry.lock().unwrap();
+    let handle = SupervisorHandle { supervisor, cleanup_path };
+    guard.insert(name.to_string(), handle);
+    info!("registered supervisor: {name}");
+}
 
 /// Information about a federation worker.
 #[derive(Debug, Serialize, Deserialize)]
@@ -238,15 +273,9 @@ pub fn start_spice(data_dir: &Path) -> Result<()> {
     let supervisor = Supervisor::new("spiced", vec!["--config".to_string(), spicepod_path.display().to_string()], envs);
     supervisor.start();
 
-    info!("spiced started via supervisor");
+    register_supervisor("spiced", supervisor, None);
 
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        if !supervisor.is_running() && !supervisor.is_dead() {
-            return;
-        }
-        warn!("spiced exited");
-    });
+    info!("spiced started via supervisor");
 
     Ok(())
 }

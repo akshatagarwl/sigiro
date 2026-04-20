@@ -1,9 +1,44 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tracing::{debug, info};
 
 use crate::supervisor::Supervisor;
+
+// ---------------------------------------------------------------------------
+// Supervisor registry — keeps supervisor handles alive for the process lifetime
+// ---------------------------------------------------------------------------
+
+/// Handle wrapping a supervisor and optional cleanup path.
+/// The cleanup runs on drop to remove temp config files.
+struct SupervisorHandle {
+    supervisor: Supervisor,
+    cleanup_path: Option<String>,
+}
+
+impl Drop for SupervisorHandle {
+    fn drop(&mut self) {
+        if let Some(ref path) = self.cleanup_path {
+            let _ = std::fs::remove_file(path);
+            debug!("cleaned up config file: {}", path);
+        }
+    }
+}
+
+/// Static registry mapping supervisor names to their handles.
+static SUPERVISOR_REGISTRY: OnceLock<Mutex<HashMap<String, SupervisorHandle>>> = OnceLock::new();
+
+fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
+    SUPERVISOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<String>) {
+    let registry = get_registry();
+    let mut guard = registry.lock().unwrap();
+    let handle = SupervisorHandle { supervisor, cleanup_path };
+    guard.insert(name.to_string(), handle);
+    info!("registered supervisor: {name}");
+}
 
 /// Result of checking eBPF readiness.
 pub struct EbpfStatus {
@@ -280,6 +315,8 @@ otel_ebpf_auto_target_exe: "*"
 
     let supervisor = Supervisor::new(path, vec![format!("--config={}", config_path)], envs);
     supervisor.start();
+
+    register_supervisor("obi", supervisor, Some(config_path));
 
     info!("obi started via supervisor");
     Ok(())
