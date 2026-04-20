@@ -1,4 +1,6 @@
-use sigiro::ebpf::{Suggestion, check_obi_available, ebpf_status};
+use sigiro::ebpf::{Suggestion, check_obi_available, ebpf_status, cleanup_stale_temp_files, get_registry};
+use std::fs;
+use std::path::PathBuf;
 
 #[test]
 fn check_obi_available_returns_false_when_not_in_path() {
@@ -35,4 +37,39 @@ fn missing_capabilities_format() {
     let reason = format!("missing capabilities: {}", missing.join(", "));
     assert!(reason.contains("CAP_BPF"));
     assert!(reason.contains("CAP_NET_ADMIN"));
+}
+
+#[test]
+fn cleanup_stale_temp_files_removes_orphaned_configs() {
+    // Create temp files with the sigiro-obi-*.yaml pattern
+    let tmp1 = PathBuf::from("/tmp/sigiro-obi-test-cleanup-1.yaml");
+    let tmp2 = PathBuf::from("/tmp/sigiro-obi-test-cleanup-2.yaml");
+    fs::write(&tmp1, b"otel_exporter_otlp_endpoint: localhost:4317").unwrap();
+    fs::write(&tmp2, b"otel_exporter_otlp_endpoint: localhost:4317").unwrap();
+
+    // Verify they exist
+    assert!(tmp1.exists());
+    assert!(tmp2.exists());
+
+    // Run cleanup
+    cleanup_stale_temp_files();
+
+    // Verify they are gone
+    assert!(!tmp1.exists(), "tmp1 should be removed by cleanup");
+    assert!(!tmp2.exists(), "tmp2 should be removed by cleanup");
+}
+
+#[test]
+fn cleanup_stale_temp_files_idempotent_when_none_exist() {
+    // Cleanup should not panic when no files match
+    cleanup_stale_temp_files();
+    cleanup_stale_temp_files();
+}
+
+#[test]
+fn registry_get_registry_returns_same_instance() {
+    let reg1 = get_registry();
+    let reg2 = get_registry();
+    // Same pointer means same static
+    assert!(std::ptr::eq(reg1, reg2));
 }

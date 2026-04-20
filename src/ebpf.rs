@@ -28,7 +28,7 @@ impl Drop for SupervisorHandle {
 /// Static registry mapping supervisor names to their handles.
 static SUPERVISOR_REGISTRY: OnceLock<Mutex<HashMap<String, SupervisorHandle>>> = OnceLock::new();
 
-fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
+pub fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
     SUPERVISOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -38,6 +38,23 @@ fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<
     let handle = SupervisorHandle { supervisor, cleanup_path };
     guard.insert(name.to_string(), handle);
     info!("registered supervisor: {name}");
+}
+
+/// Remove any stale OBI config temp files left behind by previous runs.
+/// Called at startup to avoid orphaned `/tmp/sigiro-obi-*.yaml` files.
+pub fn cleanup_stale_temp_files() {
+    let pattern = "/tmp/sigiro-obi-*.yaml";
+    let matches = match glob::glob(pattern) {
+        Ok(m) => m,
+        Err(e) => {
+            debug!("glob error scanning for stale temp files: {e}");
+            return;
+        }
+    };
+    let count = matches.filter_map(|p| p.ok()).filter_map(|p| std::fs::remove_file(&p).ok()).count();
+    if count > 0 {
+        info!("cleaned up {count} stale OBI temp file(s)");
+    }
 }
 
 /// Result of checking eBPF readiness.
