@@ -84,6 +84,9 @@ fn check_capabilities() -> Vec<String> {
 fn is_root() -> bool {
     #[cfg(unix)]
     {
+        // SAFETY: geteuid() is a pure read of the effective user ID.
+        // It has no side effects and returns the same value for all threads,
+        // so there are no data races or undefined behavior invariants to uphold.
         unsafe { libc::geteuid() == 0 }
     }
     #[cfg(not(unix))]
