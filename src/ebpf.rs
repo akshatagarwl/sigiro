@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
-use std::process::Command;
-use tracing::{debug, info, warn};
+use std::collections::HashMap;
+use tracing::{debug, info};
+
+use crate::supervisor::Supervisor;
 
 /// Result of checking eBPF readiness.
 pub struct EbpfStatus {
@@ -132,19 +134,32 @@ fn has_capability(cap: &str) -> bool {
 /// Returns Err if obi is ready but failed to spawn — this is a real error, not graceful degradation.
 /// Callers handle not_installed/disabled themselves (call ebpf_status first).
 pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
+    use uuid::Uuid;
+
     let path = if obi_path.is_empty() { "obi" } else { obi_path };
     info!("starting obi with OTLP endpoint: {otlp_endpoint}");
-    let mut child = Command::new(path)
-        .env("OTEL_EXPORTER_OTLP_ENDPOINT", otlp_endpoint)
-        .spawn()
-        .context("obi failed to start — check that obi is installed and executable")?;
 
-    info!("obi started (pid: {:?})", child.id());
-    std::thread::spawn(move || {
-        if let Ok(exit) = child.wait() {
-            warn!("obi exited: {exit}");
-        }
-    });
+    let config_uuid = Uuid::new_v4();
+    let config_path = format!("/tmp/sigiro-obi-{config_uuid}.yaml");
+
+    // OBI config YAML — mirrors the environment-variable setup used in k8s
+    let config_yaml = format!(
+        r#"otel_exporter_otlp_endpoint: "{otlp_endpoint}"
+otel_ebpf_auto_target_exe: "*"
+"#,
+    );
+    std::fs::write(&config_path, config_yaml)
+        .context("failed to write obi config file")?;
+
+    let mut envs = HashMap::new();
+    envs.insert("OTEL_EXPORTER_OTLP_ENDPOINT".to_string(), otlp_endpoint.to_string());
+    // Pass config path via environment variable (OBI reads this or we pass as arg)
+    envs.insert("OTEL_EBPF_CONFIG".to_string(), config_path.clone());
+
+    let supervisor = Supervisor::new(path, vec![format!("--config={}", config_path)], envs);
+    supervisor.start();
+
+    info!("obi started via supervisor");
     Ok(())
 }
 

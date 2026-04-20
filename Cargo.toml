@@ -43,7 +43,9 @@ hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
 which = "5"
+uuid = "1"
 axum-extra = { version = "0.12.6", features = ["typed-routing"] }
+watchexec-supervisor = "5"
 
 [build-dependencies]
 ureq = { version = "3", features = ["rustls"] }
