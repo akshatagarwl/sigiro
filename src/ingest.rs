@@ -529,6 +529,7 @@ pub fn otlp_http_router(router: Arc<MsgRouter>, admin_conn: Arc<Mutex<Connection
         .route("/v1/logs", post(otlp_http_logs))
         .route("/v1/metrics", post(otlp_http_metrics))
         .route("/v1/profiles", post(otlp_http_profiles))
+        .route("/ingest/pyroscope", post(otlp_http_pyroscope))
         .with_state(state)
 }
 
@@ -681,4 +682,241 @@ async fn otlp_http_profiles(
             .await;
     }
     StatusCode::OK
+}
+
+// ─── Pyroscope native format ingest ──────────────────────────────────────────
+//
+// The pyroscope Rust crate pushes profiles in Pyroscope's own wire format:
+//   PushRequest (prost protobuf) → gzip → HTTP POST
+// Sigiro's OTLP /v1/profiles accepts only OTLP protobuf. This endpoint bridges
+// the two by decoding Pyroscope's native format and converting to the same
+// Arrow RecordBatch that transform_profiles produces.
+//
+// Note: "gen" is a reserved keyword in Rust 2021+, so we re-export the module
+// under a safe name via the `pyroscope::encode::gen` module alias below.
+
+/// HTTP handler for Pyroscope's native push format.
+async fn otlp_http_pyroscope(
+    State(state): State<Arc<OtlpHttpState>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+        Ok(id) => id,
+        Err(status) => return status,
+    };
+
+    tracing::debug!("otlp_http_pyroscope: project_id={project_id} body_len={}", body.len());
+
+    let batch = match transform_pyroscope_profiles(body.to_vec()).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("transform pyroscope profiles failed: {e}");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    tracing::info!("pyroscope ingest: project_id={project_id} rows={}", batch.num_rows());
+
+    if batch.num_rows() > 0 {
+        state
+            .router
+            .send(IngestMsg::Profiles { project_id, batch })
+            .await;
+    }
+    StatusCode::OK
+}
+
+/// Decode a Pyroscope PushRequest (gzip-compressed protobuf) into an Arrow
+/// RecordBatch using the same schema as transform_profiles.
+async fn transform_pyroscope_profiles(
+    body: Vec<u8>,
+) -> Result<RecordBatch, Status> {
+    // Stage 1: gzip decompression
+    let decompressed = {
+        let mut decoder = flate2::read::GzDecoder::new(&body[..]);
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut decoder, &mut out)
+            .map_err(|e| Status::internal(format!("gzip decompression failed: {e}")))?;
+        out
+    };
+    tracing::debug!("pyroscope: decompressed {} bytes", decompressed.len());
+
+    // Stage 2: PushRequest protobuf decode
+    let push_request = pyroscope::encode::r#gen::push::PushRequest::decode(&decompressed[..])
+        .map_err(|e| {
+            tracing::debug!("pyroscope PushRequest decode failed: {:?}", e);
+            Status::invalid_argument(format!("push request decode failed: {e}"))
+        })?;
+    tracing::debug!("pyroscope: series count={}", push_request.series.len());
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("profile_id", DataType::Utf8, true),
+        Field::new("service_name", DataType::Utf8, false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
+        Field::new("profile_type", DataType::Utf8, true),
+        Field::new(
+            "stack_trace",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+        Field::new("value", DataType::Int64, true),
+        Field::new("unit", DataType::Utf8, true),
+        Field::new("resource_attributes", DataType::Utf8, true),
+    ]));
+
+    let mut profile_ids = StringBuilder::new();
+    let mut service_names = StringBuilder::new();
+    let mut timestamps = Vec::<i64>::new();
+    let mut profile_types = StringBuilder::new();
+    let mut stack_offsets: Vec<i32> = vec![0];
+    let mut stack_values = StringBuilder::new();
+    let mut values = Vec::<i64>::new();
+    let mut units = StringBuilder::new();
+    let mut resource_attrs = StringBuilder::new();
+    let mut num_rows = 0usize;
+
+    for series in &push_request.series {
+        // Extract service.name from labels
+        let service_name = series
+            .labels
+            .iter()
+            .find(|l| l.name == "service_name")
+            .map(|l| l.value.as_str())
+            .unwrap_or("");
+
+        for sample in &series.samples {
+            // Decode the pprof Profile from raw_profile bytes.
+            // Clone bytes first so we can move them into spawn_blocking without
+            // borrowing from push_request (which would create a self-referential struct).
+            let raw_bytes = sample.raw_profile.clone();
+            let sample_id = sample.id.clone();
+            let pprof_profile = tokio::task::spawn_blocking(move || {
+                pyroscope::encode::r#gen::google::Profile::decode(&raw_bytes[..])
+            })
+            .await
+            .map_err(|e| Status::internal(format!("task join error: {e}")))?
+            .map_err(|e| Status::invalid_argument(format!("pprof profile decode failed: {e}")))?;
+
+            // Time and duration in nanoseconds → microseconds
+            let ts_us = (pprof_profile.time_nanos / 1000) as i64;
+
+            // Profile type and unit from sample_type[0]
+            let (ptype_idx, punit_idx) = pprof_profile
+                .sample_type
+                .first()
+                .map(|st| (st.r#type, st.unit))
+                .unwrap_or((0, 0));
+
+            let ptype = pprof_profile
+                .string_table
+                .get(ptype_idx as usize)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            let punit = pprof_profile
+                .string_table
+                .get(punit_idx as usize)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+
+            // Build location_id → Location map
+            let locations = &pprof_profile.location;
+            let functions = &pprof_profile.function;
+            let string_table = &pprof_profile.string_table;
+
+            for s in &pprof_profile.sample {
+                let stack: Vec<&str> = s
+                    .location_id
+                    .iter()
+                    .filter_map(|&loc_id| {
+                        locations.iter().find(|l| l.id == loc_id).and_then(|loc| {
+                            loc.line.first().and_then(|line| {
+                                functions
+                                    .iter()
+                                    .find(|f| f.id == line.function_id)
+                                    .and_then(|f| string_table.get(f.name as usize))
+                                    .map(|n| n.as_str())
+                            })
+                        })
+                    })
+                    .take(128)
+                    .collect();
+
+                let sample_values = if s.value.is_empty() {
+                    vec![0i64]
+                } else {
+                    s.value.clone()
+                };
+
+                for &val in &sample_values {
+                    profile_ids.append_value(&sample_id);
+                    service_names.append_value(service_name);
+                    timestamps.push(ts_us);
+                    profile_types.append_value(ptype);
+
+                    for frame in &stack {
+                        stack_values.append_value(frame);
+                    }
+                    let prev_offset =
+                        *stack_offsets.last().expect("stack_offsets always has an element");
+                    stack_offsets.push(prev_offset + stack.len() as i32);
+
+                    values.push(val);
+                    units.append_value(punit);
+                    resource_attrs.append_null();
+                    num_rows += 1;
+                }
+            }
+        }
+    }
+
+    if num_rows == 0 {
+        return RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(ListArray::try_new(
+                    Arc::new(Field::new("item", DataType::Utf8, true)),
+                    arrow::buffer::OffsetBuffer::new(vec![0i32].into()),
+                    Arc::new(StringBuilder::new().finish()),
+                    None,
+                )
+                .map_err(|e| Status::internal(format!("arrow error: {e}")))?),
+                Arc::new(Int64Array::from(Vec::<i64>::new())),
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(StringBuilder::new().finish()),
+            ],
+        )
+        .map_err(|e| Status::internal(format!("arrow error: {e}")));
+    }
+
+    let stack_list = ListArray::try_new(
+        Arc::new(Field::new("item", DataType::Utf8, true)),
+        arrow::buffer::OffsetBuffer::new(stack_offsets.into()),
+        Arc::new(stack_values.finish()),
+        None,
+    )
+    .map_err(|e| Status::internal(format!("arrow error: {e}")))?;
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(profile_ids.finish()),
+            Arc::new(service_names.finish()),
+            Arc::new(TimestampMicrosecondArray::from(timestamps)),
+            Arc::new(profile_types.finish()),
+            Arc::new(stack_list),
+            Arc::new(Int64Array::from(values)),
+            Arc::new(units.finish()),
+            Arc::new(resource_attrs.finish()),
+        ],
+    )
+    .map_err(|e| Status::internal(format!("arrow error: {e}")))
 }
