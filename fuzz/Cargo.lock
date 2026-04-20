@@ -3438,6 +3438,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
 ]
@@ -3927,6 +3928,7 @@ dependencies = [
  "libfuzzer-sys",
  "opentelemetry-proto",
  "prost",
+ "rmcp",
  "serde",
  "serde_json",
  "sigiro",
