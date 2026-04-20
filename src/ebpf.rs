@@ -55,23 +55,6 @@ fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<
     info!("registered supervisor: {name}");
 }
 
-/// Remove any stale OBI config temp files left behind by previous runs.
-/// Called at startup to avoid orphaned `/tmp/sigiro-obi-*.yaml` files.
-pub fn cleanup_stale_temp_files() {
-    let pattern = "/tmp/sigiro-obi-*.yaml";
-    let matches = match glob::glob(pattern) {
-        Ok(m) => m,
-        Err(e) => {
-            debug!("glob error scanning for stale temp files: {e}");
-            return;
-        }
-    };
-    let count = matches.filter_map(|p| p.ok()).filter_map(|p| std::fs::remove_file(&p).ok()).count();
-    if count > 0 {
-        info!("cleaned up {count} stale OBI temp file(s)");
-    }
-}
-
 /// Result of checking eBPF readiness.
 pub struct EbpfStatus {
     pub status: String,
