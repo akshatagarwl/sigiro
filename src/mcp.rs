@@ -18,7 +18,7 @@ fn serialize_json<T: serde::Serialize>(value: &T) -> String {
 }
 
 /// Format an error as a string, consistent across all MCP tool responses.
-fn format_error(e: anyhow::Error) -> String {
+fn format_error(e: &anyhow::Error) -> String {
     format!("error: {e:#}")
 }
 
@@ -74,7 +74,7 @@ impl SigiroMcp {
             .await
         {
             Ok(blocks) => serialize_json(&blocks),
-            Err(e) => format_error(e),
+            Err(e) => format_error(&e),
         }
     }
 
@@ -85,7 +85,7 @@ impl SigiroMcp {
     async fn sigiro_query(&self, params: Parameters<QueryParams>) -> String {
         match self.client.query(&params.0.sql).await {
             Ok(rows) => serialize_json(&rows),
-            Err(e) => format_error(e),
+            Err(e) => format_error(&e),
         }
     }
 
@@ -94,7 +94,7 @@ impl SigiroMcp {
     async fn sigiro_status(&self) -> String {
         match self.client.services().await {
             Ok(val) => serialize_json(&val),
-            Err(e) => format_error(e),
+            Err(e) => format_error(&e),
         }
     }
 }
