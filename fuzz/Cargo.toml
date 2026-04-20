@@ -1,0 +1,26 @@
+[package]
+name = "sigiro-fuzz"
+version = "0.0.0"
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+sigiro = { path = ".." }
+libfuzzer-sys = "0.4"
+prost = "0.14"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles"] }
+
+[build-dependencies]
+cc = "1"
+
+[[bin]]
+name = "otlp_traces_fuzz"
+path = "src/otlp_traces_fuzz.rs"
+
+[[bin]]
+name = "mcp_jsonrpc_fuzz"
+path = "src/mcp_jsonrpc_fuzz.rs"
