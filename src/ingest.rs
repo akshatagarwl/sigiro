@@ -2,7 +2,13 @@ use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
+use axum::{
+    Router,
+    body::Bytes,
+    extract::State,
+    http::StatusCode,
+    routing::post,
+};
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
         ExportLogsServiceRequest, ExportLogsServiceResponse,
@@ -529,6 +535,7 @@ pub fn otlp_http_router(router: Arc<MsgRouter>, admin_conn: Arc<Mutex<Connection
         .route("/v1/logs", post(otlp_http_logs))
         .route("/v1/metrics", post(otlp_http_metrics))
         .route("/v1/profiles", post(otlp_http_profiles))
+        .route("/ingest", post(otlp_http_pyroscope))
         .route("/ingest/pyroscope", post(otlp_http_pyroscope))
         .with_state(state)
 }
@@ -696,6 +703,10 @@ async fn otlp_http_profiles(
 // under a safe name via the `pyroscope::encode::gen` module alias below.
 
 /// HTTP handler for Pyroscope's native push format.
+///
+/// Accepts two formats:
+/// - `application/x-protobuf` (gzip-compressed PushRequest) — direct push
+/// - `multipart/form-data` (Pyroscope Go SDK format) — form file "profile" contains gzip-compressed PushRequest
 async fn otlp_http_pyroscope(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
@@ -708,7 +719,16 @@ async fn otlp_http_pyroscope(
 
     tracing::debug!("otlp_http_pyroscope: project_id={project_id} body_len={}", body.len());
 
-    let batch = match transform_pyroscope_profiles(body.to_vec()).await {
+    // Detect format: multipart/form-data (SDK) vs raw protobuf
+    let body_bytes = match parse_pyroscope_multipart(&headers, &body) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::error!("pyroscope multipart parse failed: {e}");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let batch = match transform_pyroscope_profiles(body_bytes).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("transform pyroscope profiles failed: {e}");
@@ -725,6 +745,106 @@ async fn otlp_http_pyroscope(
             .await;
     }
     StatusCode::OK
+}
+
+/// Parse the request body, handling both raw protobuf and Pyroscope SDK multipart/form-data.
+///
+/// The Pyroscope Go SDK sends `multipart/form-data` with a `profile` form file
+/// containing the gzip-compressed PushRequest protobuf. This function detects the
+/// content type and extracts/wraps the body appropriately.
+fn parse_pyroscope_multipart(headers: &axum::http::HeaderMap, body: &[u8]) -> Result<Vec<u8>, String> {
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if content_type.contains("multipart/form-data") {
+        // Extract boundary from Content-Type header
+        let boundary = extract_mime_param(content_type, "boundary")
+            .ok_or("missing boundary in multipart Content-Type")?;
+
+        // Parse multipart using multer
+        let cursor = std::io::Cursor::new(body.to_vec());
+        let boundary_bytes = boundary.as_bytes();
+        
+        // The profile field contains the gzip-compressed PushRequest
+        let profile_bytes = extract_form_field(cursor, boundary_bytes, "profile")
+            .ok_or("profile form field not found in multipart body")?;
+
+        tracing::debug!("pyroscope multipart: extracted {} profile bytes", profile_bytes.len());
+        Ok(profile_bytes)
+    } else {
+        // Raw protobuf body (gzip-compressed PushRequest)
+        Ok(body.to_vec())
+    }
+}
+
+/// Extract a form field value from multipart data by field name.
+fn extract_form_field(
+    mut data: std::io::Cursor<Vec<u8>>,
+    boundary: &[u8],
+    field_name: &str,
+) -> Option<Vec<u8>> {
+    // Multipart format: --boundary\r\n
+    //                  Content-Disposition: form-data; name="fieldname"\r\n\r\n
+    //                  content\r\n
+    //                  --boundary--\r\n
+
+    let mut buf = vec![0u8; 8192];
+    let field_prefix = format!("name=\"{}\"", field_name).into_bytes();
+
+    loop {
+        let n = std::io::Read::read(&mut data, &mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        data.set_position(data.position() - n as u64);
+
+        // Scan for the field
+        let slice = &buf[..n];
+        if let Some(pos) = find_bytes(slice, &field_prefix) {
+            // Found the field. Now we need to find the content after \r\n\r\n
+            let after_header = &slice[pos..];
+            if let Some(content_start) = find_bytes(after_header, b"\r\n\r\n") {
+                let content = &after_header[content_start + 4..];
+                // Find the next boundary to know content length
+                if let Some(boundary_pos) = find_bytes(content, b"--") {
+                    let raw_content = &content[..boundary_pos];
+                    // Strip trailing \r\n before next boundary
+                    let trimmed = trim_trailing_crlf(raw_content);
+                    return Some(trimmed.to_vec());
+                }
+            }
+        }
+
+        // Move back a bit to avoid missing boundary at chunk boundary
+        if data.position() > 0 {
+            data.set_position(data.position() - 2);
+        }
+    }
+    None
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+fn trim_trailing_crlf(s: &[u8]) -> &[u8] {
+    let mut end = s.len();
+    while end > 0 && (s[end - 1] == b'\n' || s[end - 1] == b'\r') {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+fn extract_mime_param(content_type: &str, param: &str) -> Option<String> {
+    for part in content_type.split(';') {
+        let part = part.trim();
+        if let Some(val) = part.strip_prefix(&format!("{}=", param)) {
+            return Some(val.trim_matches('"').to_string());
+        }
+    }
+    None
 }
 
 /// Decode a Pyroscope PushRequest (gzip-compressed protobuf) into an Arrow

@@ -45,7 +45,7 @@ flate2 = "1"
 which = "5"
 uuid = "1"
 tar = "0.4"
-axum-extra = { version = "0.12.6", features = ["typed-routing"] }
+axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
 watchexec-supervisor = "5"
 
 [build-dependencies]
