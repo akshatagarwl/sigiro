@@ -338,10 +338,11 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
 
 /// Get the per-project DuckDB connection from the pool using the AuthContext.
 fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duckdb::Connection>>> {
+    // Reads go through the dedicated read connection — never contended by writes.
     state
         .pool
-        .get_or_create(&auth.project_id)
-        .context_internal("Project DB", "failed to get project connection")
+        .get_read(&auth.project_id)
+        .context_internal("Project DB", "failed to get read connection")
 }
 
 async fn query_handler(

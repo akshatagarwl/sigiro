@@ -16,7 +16,13 @@ pub struct ProjectPool {
 }
 
 pub struct PoolEntry {
-    conn: Arc<Mutex<Connection>>,
+    /// Dedicated write connection — used by the flusher (ingester).
+    /// All schema CREATE TABLE calls also go through here (idempotent).
+    write_conn: Arc<Mutex<Connection>>,
+    /// Dedicated read connection — used by query handlers (HTTP API).
+    /// Shares the same DuckLake catalog + Parquet files as write_conn.
+    /// Opens its own DuckDB coordinator so reads never contend with writes.
+    read_conn: Arc<Mutex<Connection>>,
     last_access: Instant,
 }
 
@@ -34,13 +40,14 @@ impl ProjectPool {
         crate::storage::table_prefix()
     }
 
-    /// Get or create a DuckDB connection for a project.
+    /// Get or create the dedicated write connection for a project.
+    /// Used by the flusher (ingester). Also creates the read connection.
     /// Creates the DuckLake catalog and tables on first access.
     pub fn get_or_create(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
-        // Fast path: connection exists
-        if let Some(mut entry) = self.connections.get_mut(project_id) {
+        // Fast path: write connection exists
+        if let Some(ref mut entry) = self.connections.get_mut(project_id) {
             entry.last_access = Instant::now();
-            return Ok(Arc::clone(&entry.conn));
+            return Ok(Arc::clone(&entry.write_conn));
         }
 
         // Evict if at capacity before creating new
@@ -50,12 +57,65 @@ impl ProjectPool {
 
         let project_dir = self.data_dir.join(project_id);
 
-        let conn = Connection::open_in_memory()
-            .with_context(|| format!("failed to open in-memory DuckDB for project {project_id}"))?;
+        let (write_conn, read_conn) = self.open_conn_pair(&project_dir).with_context(|| {
+            format!("failed to open DuckDB connections for project {project_id}")
+        })?;
 
-        // Use persistent local extension cache so downloads survive restarts.
-        // Extensions are stored under {data_dir}/extensions/ — pre-downloaded by
-        // `sigiro fetch-extensions` or automatically on first LOAD.
+        let write_shared = Arc::new(Mutex::new(write_conn));
+        let read_shared = Arc::new(Mutex::new(read_conn));
+
+        self.connections.insert(
+            project_id.to_string(),
+            PoolEntry {
+                write_conn: Arc::clone(&write_shared),
+                read_conn: Arc::clone(&read_shared),
+                last_access: Instant::now(),
+            },
+        );
+
+        tracing::info!(project_id, "opened DuckDB connection pair (DuckLake)");
+        Ok(write_shared)
+    }
+
+    /// Get the dedicated read connection for a project.
+    /// Used by query handlers (HTTP API). Never contended by writes.
+    /// Returns error if the project connection hasn't been created yet —
+    /// callers should call get_or_create first to initialize.
+    pub fn get_read(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
+        if let Some(ref mut entry) = self.connections.get_mut(project_id) {
+            entry.last_access = Instant::now();
+            Ok(Arc::clone(&entry.read_conn))
+        } else {
+            Err(anyhow::anyhow!(
+                "read connection requested but project {project_id} not initialized — \
+                 call get_or_create() first"
+            ))
+        }
+    }
+
+    /// Open a pair of DuckDB connections that share the same DuckLake catalog + Parquet files.
+    /// write_conn initializes DuckLake schema; read_conn opens its own coordinator pointing
+    /// to the same catalog. Both connections read/write Parquet files through the shared
+    /// catalog.sqlite — no contention since DuckDB coordinators don't share in-memory state.
+    fn open_conn_pair(&self, project_dir: &std::path::Path) -> Result<(Connection, Connection)> {
+        // Write connection — owns schema init
+        let write_conn = self
+            .open_connection(project_dir)
+            .context("failed to open write connection")?;
+
+        // Read connection — separate coordinator, same catalog
+        let read_conn = self
+            .open_connection(project_dir)
+            .context("failed to open read connection")?;
+
+        Ok((write_conn, read_conn))
+    }
+
+    fn open_connection(&self, project_dir: &std::path::Path) -> Result<Connection> {
+        let conn = Connection::open_in_memory()
+            .with_context(|| format!("failed to open in-memory DuckDB"))?;
+
+        // Persistent local extension cache
         let ext_dir = self.data_dir.join("extensions");
         std::fs::create_dir_all(&ext_dir).context("failed to create extensions directory")?;
         if let Some(p) = ext_dir.to_str() {
@@ -63,31 +123,21 @@ impl ProjectPool {
                 .context("failed to set DuckDB extension_directory")?;
         }
 
-        // Cap memory per connection to avoid one project eating all RAM
-        conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
+        // Cap memory per connection; busy_timeout prevents indefinite reader blocks.
+        conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1; SET busy_timeout = 5000;")
             .context("failed to set DuckDB memory limit")?;
 
-        // Initialize DuckLake — use distributed storage if configured, else local.
+        // Initialize DuckLake
         if let Some(config) = crate::storage::load_config()? {
-            crate::storage::init_distributed(&conn, &config, &project_dir)?;
+            crate::storage::init_distributed(&conn, &config, project_dir)?;
         } else {
-            crate::storage::init_default(&conn, &project_dir)?;
+            crate::storage::init_default(&conn, project_dir)?;
         }
 
         crate::schema::create_tables(&conn, Self::prefix())?;
         crate::schema::load_fleet_extensions(&conn)?;
 
-        let shared = Arc::new(Mutex::new(conn));
-        self.connections.insert(
-            project_id.to_string(),
-            PoolEntry {
-                conn: Arc::clone(&shared),
-                last_access: Instant::now(),
-            },
-        );
-
-        tracing::info!(project_id, "opened DuckDB connection (DuckLake)");
-        Ok(shared)
+        Ok(conn)
     }
 
     /// Evict connections idle longer than the given duration.

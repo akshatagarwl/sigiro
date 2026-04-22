@@ -531,6 +531,8 @@ struct OtlpHttpState {
 pub fn otlp_http_router(router: Arc<MsgRouter>, admin_conn: Arc<Mutex<Connection>>) -> Router {
     let state = Arc::new(OtlpHttpState { router, admin_conn });
     Router::new()
+        .route("/", post(otlp_http_pyroscope)) // Pyroscope RS SDK posts here
+        .route("/push.v1.PusherService/Push", post(otlp_http_pyroscope)) // pyroscope-rs SDK push path
         .route("/v1/traces", post(otlp_http_traces))
         .route("/v1/logs", post(otlp_http_logs))
         .route("/v1/metrics", post(otlp_http_metrics))
@@ -727,7 +729,8 @@ async fn otlp_http_pyroscope(
         })
         .unwrap_or_else(|| "dev_project".to_string());
 
-    tracing::debug!("otlp_http_pyroscope: project_id={project_id} body_len={}", body.len());
+    let ct = headers.get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("(none)");
+    tracing::debug!("otlp_http_pyroscope: project_id={project_id} body_len={} ct={ct}", body.len());
 
     // Detect format: multipart/form-data (SDK) vs raw protobuf
     let body_bytes = match parse_pyroscope_multipart(&headers, &body) {
@@ -757,6 +760,121 @@ async fn otlp_http_pyroscope(
     StatusCode::OK
 }
 
+/// Extract a form field value from multipart data by field name.
+fn extract_form_field(
+    data: &[u8],
+    boundary: &str,
+    field_name: &str,
+) -> Option<Vec<u8>> {
+    let boundary_bytes = boundary.as_bytes();
+    let field_marker = format!("name=\"{}\"", field_name).into_bytes();
+    let marker_len = field_marker.len();
+
+    // Find start of field header: --boundary\r\n...name="fieldname"...
+    let mut search_start = 0;
+    let _data_len = data.len();
+
+    loop {
+        // Find field name marker
+        let marker_pos = find_bytes_with_start(data, &field_marker, search_start)?;
+        let after_marker = marker_pos + marker_len;
+
+        // Verify this is within a proper multipart header (should be preceded by --boundary\r\n)
+        // Find the closest preceding --boundary
+        let header_start = find_bytes_reverse(data, b"--", marker_pos)?;
+        if header_start + 2 + boundary_bytes.len() + 2 > marker_pos {
+            // Not a proper field header, continue searching after this occurrence
+            search_start = marker_pos + 1;
+            continue;
+        }
+
+        // Verify boundary matches
+        let candidate_boundary = &data[header_start + 2..header_start + 2 + boundary_bytes.len()];
+        if candidate_boundary != boundary_bytes {
+            // Wrong boundary, continue after header start
+            search_start = header_start + 2;
+            continue;
+        }
+
+        // Find \r\n\r\n that ends the header (start of content)
+        let header_end = find_bytes_with_start(data, b"\r\n\r\n", after_marker)?;
+        let content_start = header_end + 4;
+
+        // Find the next boundary marker to determine content end
+        // Look for --<boundary> or --<boundary>--
+        let next_boundary = find_next_boundary(data, boundary_bytes, content_start)?;
+
+        // Content is between content_start and next_boundary
+        // Trim trailing \r\n before the --boundary line
+        let mut content_end = next_boundary;
+        while content_end > content_start && (data[content_end - 1] == b'\r' || data[content_end - 1] == b'\n') {
+            content_end -= 1;
+        }
+
+        return Some(data[content_start..content_end].to_vec());
+    }
+}
+
+/// Find first occurrence of needle in haystack starting at offset.
+fn find_bytes_with_start(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+    if start >= haystack.len() || needle.len() > haystack.len() - start {
+        return None;
+    }
+    haystack[start..].windows(needle.len()).position(|w| w == needle).map(|p| start + p)
+}
+
+/// Find last occurrence of needle before max_pos (searching backwards).
+fn find_bytes_reverse(haystack: &[u8], needle: &[u8], max_pos: usize) -> Option<usize> {
+    if max_pos == 0 || needle.len() > max_pos {
+        return None;
+    }
+    haystack[..max_pos].windows(needle.len()).position(|w| w == needle)
+}
+
+/// Find the next multipart boundary (--boundary or --boundary--) starting from offset.
+fn find_next_boundary(data: &[u8], boundary: &[u8], start: usize) -> Option<usize> {
+    // Search for -- followed by boundary
+    let mut i = start;
+    let dash_dash = b"--";
+    while i < data.len() {
+        if let Some(pos) = find_bytes_with_start(&data[i..], dash_dash, 0) {
+            let abs_pos = i + pos;
+            if abs_pos + 2 + boundary.len() <= data.len() {
+                if &data[abs_pos + 2..abs_pos + 2 + boundary.len()] == boundary {
+                    // Found --boundary, check if followed by -- (closing boundary) or \r\n (regular)
+                    let after = abs_pos + 2 + boundary.len();
+                    if after < data.len() {
+                        if data[after] == b'-' && after + 1 < data.len() && data[after + 1] == b'-' {
+                            // Closing boundary --boundary--
+                            return Some(abs_pos);
+                        } else if data[after] == b'\r' || data[after] == b'\n' {
+                            return Some(abs_pos);
+                        }
+                    }
+                }
+            }
+            // Move past this -- for next search
+            i = abs_pos + 2;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn extract_mime_param(content_type: &str, param: &str) -> Option<String> {
+    for part in content_type.split(';') {
+        let part = part.trim();
+        if let Some(val) = part.strip_prefix(&format!("{}=\"", param)) {
+            return Some(val.trim_matches('"').to_string());
+        }
+        if let Some(val) = part.strip_prefix(&format!("{}=", param)) {
+            return Some(val.trim().to_string());
+        }
+    }
+    None
+}
+
 /// Parse the request body, handling both raw protobuf and Pyroscope SDK multipart/form-data.
 ///
 /// The Pyroscope Go SDK sends `multipart/form-data` with a `profile` form file
@@ -773,12 +891,8 @@ fn parse_pyroscope_multipart(headers: &axum::http::HeaderMap, body: &[u8]) -> Re
         let boundary = extract_mime_param(content_type, "boundary")
             .ok_or("missing boundary in multipart Content-Type")?;
 
-        // Parse multipart using multer
-        let cursor = std::io::Cursor::new(body.to_vec());
-        let boundary_bytes = boundary.as_bytes();
-        
         // The profile field contains the gzip-compressed PushRequest
-        let profile_bytes = extract_form_field(cursor, boundary_bytes, "profile")
+        let profile_bytes = extract_form_field(body, &boundary, "profile")
             .ok_or("profile form field not found in multipart body")?;
 
         tracing::debug!("pyroscope multipart: extracted {} profile bytes", profile_bytes.len());
@@ -787,74 +901,6 @@ fn parse_pyroscope_multipart(headers: &axum::http::HeaderMap, body: &[u8]) -> Re
         // Raw protobuf body (gzip-compressed PushRequest)
         Ok(body.to_vec())
     }
-}
-
-/// Extract a form field value from multipart data by field name.
-fn extract_form_field(
-    mut data: std::io::Cursor<Vec<u8>>,
-    boundary: &[u8],
-    field_name: &str,
-) -> Option<Vec<u8>> {
-    // Multipart format: --boundary\r\n
-    //                  Content-Disposition: form-data; name="fieldname"\r\n\r\n
-    //                  content\r\n
-    //                  --boundary--\r\n
-
-    let mut buf = vec![0u8; 8192];
-    let field_prefix = format!("name=\"{}\"", field_name).into_bytes();
-
-    loop {
-        let n = std::io::Read::read(&mut data, &mut buf).ok()?;
-        if n == 0 {
-            break;
-        }
-        data.set_position(data.position() - n as u64);
-
-        // Scan for the field
-        let slice = &buf[..n];
-        if let Some(pos) = find_bytes(slice, &field_prefix) {
-            // Found the field. Now we need to find the content after \r\n\r\n
-            let after_header = &slice[pos..];
-            if let Some(content_start) = find_bytes(after_header, b"\r\n\r\n") {
-                let content = &after_header[content_start + 4..];
-                // Find the next boundary to know content length
-                if let Some(boundary_pos) = find_bytes(content, b"--") {
-                    let raw_content = &content[..boundary_pos];
-                    // Strip trailing \r\n before next boundary
-                    let trimmed = trim_trailing_crlf(raw_content);
-                    return Some(trimmed.to_vec());
-                }
-            }
-        }
-
-        // Move back a bit to avoid missing boundary at chunk boundary
-        if data.position() > 0 {
-            data.set_position(data.position() - 2);
-        }
-    }
-    None
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-fn trim_trailing_crlf(s: &[u8]) -> &[u8] {
-    let mut end = s.len();
-    while end > 0 && (s[end - 1] == b'\n' || s[end - 1] == b'\r') {
-        end -= 1;
-    }
-    &s[..end]
-}
-
-fn extract_mime_param(content_type: &str, param: &str) -> Option<String> {
-    for part in content_type.split(';') {
-        let part = part.trim();
-        if let Some(val) = part.strip_prefix(&format!("{}=", param)) {
-            return Some(val.trim_matches('"').to_string());
-        }
-    }
-    None
 }
 
 /// Decode a Pyroscope PushRequest (gzip-compressed protobuf) into an Arrow
