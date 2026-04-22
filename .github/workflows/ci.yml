@@ -45,6 +45,39 @@ jobs:
       - name: Run library tests
         run: cargo test --lib --release
 
+  # --- Phase 1b: Cross-compile aarch64 binary for OrbStack VM ---
+  build-aarch64:
+    name: Build aarch64 Binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sigiro-aarch64
+
+      - name: Build aarch64 binary
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu --locked 2>&1 | tail -5
+
+      - name: Upload aarch64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: sigiro-aarch64
+          path: target/aarch64-unknown-linux-gnu/release/sigiro
+          retention-days: 1
+
       - name: Build binary size check
         run: |
           size=$(stat -c%s target/release/sigiro 2>/dev/null || stat -f%z target/release/sigiro)
