@@ -123,8 +123,8 @@ impl ProjectPool {
                 .context("failed to set DuckDB extension_directory")?;
         }
 
-        // Cap memory per connection; busy_timeout prevents indefinite reader blocks.
-        conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1; SET busy_timeout = 5000;")
+        // Cap memory per connection.
+        conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
             .context("failed to set DuckDB memory limit")?;
 
         // Initialize DuckLake
