@@ -84,13 +84,17 @@ impl ProjectPool {
     pub fn get_read(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
         if let Some(ref mut entry) = self.connections.get_mut(project_id) {
             entry.last_access = Instant::now();
-            Ok(Arc::clone(&entry.read_conn))
-        } else {
-            Err(anyhow::anyhow!(
-                "read connection requested but project {project_id} not initialized — \
-                 call get_or_create() first"
-            ))
+            return Ok(Arc::clone(&entry.read_conn));
         }
+        // Auto-initialize if data exists on disk
+        let project_dir = self.data_dir.join(project_id);
+        if project_dir.exists() {
+            return self.get_or_create(project_id);
+        }
+        Err(anyhow::anyhow!(
+            "read connection requested but project {project_id} not initialized — \
+             call get_or_create() first"
+        ))
     }
 
     /// Open a pair of DuckDB connections that share the same DuckLake catalog + Parquet files.
