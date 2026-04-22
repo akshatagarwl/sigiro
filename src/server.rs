@@ -457,6 +457,19 @@ async fn investigate_handler(
     Extension(auth): Extension<AuthContext>,
     Json(req): Json<investigate::InvestigateRequest>,
 ) -> ApiResult<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>> {
+    // Explicit pre-check: verify project data directory exists before attempting DB connection.
+    // This gives a clear 404 instead of "failed to get read connection" when no data is ingested.
+    let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
+    let project_data_path = data_dir.join(&auth.project_id);
+    if !project_data_path.exists() || project_data_path.read_dir().map(|mut i| i.next().is_none()).unwrap_or(true) {
+        return Err(axum_anyhow::not_found(
+            "No Data Found",
+            &format!(
+                "No data found for project {}. Please ingest data before calling investigate.",
+                auth.project_id
+            ),
+        ));
+    }
     let conn = project_conn(&state, &auth)?;
     let blocks = investigate::investigate(&conn, &req, ProjectPool::prefix())
         .context_internal("Investigate", "investigation failed")?;

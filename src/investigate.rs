@@ -54,6 +54,9 @@ pub fn compute_coverage(
     if !has_metrics {
         gaps.push("no metrics found — no gauge/sum/histogram data in this window".to_string());
     }
+    if !has_profiles {
+        gaps.push("no profiles found — no CPU/memory profiling data in this window".to_string());
+    }
     if has_spans && !has_logs {
         gaps.push("spans exist but no logs — rely on span data for diagnosis".to_string());
     }
@@ -524,6 +527,19 @@ fn investigate_one(
         prefix,
     };
 
+    // Early check: if all three data sources return 0, return explicit "no data" instead of
+    // proceeding with empty queries. This makes it clear the service has no ingested data yet.
+    let profile_sample_count = count_profile_samples(&ctx)?;
+    let (spans_total, error_traces_total) = count_span_stats(&ctx)?;
+    let logs_total = count_log_templates(&ctx)?;
+    if profile_sample_count == 0 && spans_total == 0 && logs_total == 0 {
+        return Err(anyhow::anyhow!(
+            "No data found for service '{}'. \
+             Ensure spans, profiles, or logs have been ingested for this service before investigating.",
+            service
+        ));
+    }
+
     let metrics =
         query_all_metrics(&ctx, config.bucket_interval).context("metrics query failed")?;
 
@@ -531,14 +547,11 @@ fn investigate_one(
         query_operation_summaries(&ctx).context("operation summaries query failed")?;
 
     // Combined: total spans + distinct error trace count in one query (was 2)
-    let (spans_total, error_traces_total) = count_span_stats(&ctx)?;
     let spans = if config.span_limit > 0 {
         query_spans(&ctx, config.span_limit).context("spans query failed")?
     } else {
         Vec::new()
     };
-
-    let logs_total = count_log_templates(&ctx)?;
     let logs = query_logs(&ctx, config.log_limit).context("logs query failed")?;
 
     let span_trees = build_span_trees(&spans);
@@ -547,7 +560,6 @@ fn investigate_one(
     let linked_spans_returned: i64 = linked_traces.iter().map(|lt| lt.spans.len() as i64).sum();
 
     let profiles = query_profiles(&ctx, 20).context("profiles query failed")?;
-    let profile_sample_count = count_profile_samples(&ctx)?;
     let coverage = compute_coverage(spans_total, logs_total, metrics.len(), profile_sample_count);
     let context = query_service_context(&ctx).context("service context query failed")?;
     let events = query_derived_events(&ctx).context("derived events query failed")?;
