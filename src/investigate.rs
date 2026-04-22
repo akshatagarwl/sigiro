@@ -462,8 +462,12 @@ pub fn investigate(
     let services = resolve_services(req)?;
     let mut results = BTreeMap::new();
     for service in &services {
-        let block = investigate_one(conn, service, req.from_ts, req.to_ts, prefix)
-            .with_context(|| format!("investigate failed for service: {service}"))?;
+        let block = investigate_one(conn, service, req.from_ts, req.to_ts, prefix).map_err(|e| {
+            tracing::error!(service = %service, error = %e,
+                "investigation query failed for service"
+            );
+            anyhow::anyhow!("investigation failed for service {service}: {e}")
+        })?;
         results.insert(service.clone(), block);
     }
     Ok(results)
