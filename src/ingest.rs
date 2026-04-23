@@ -586,10 +586,13 @@ async fn otlp_http_traces(
         }
     };
     if batch.num_rows() > 0 {
+        tracing::debug!(project_id, rows = batch.num_rows(), "otlp_http_traces: sending to router");
         state
             .router
             .send(IngestMsg::Traces { project_id, batch })
             .await;
+    } else {
+        tracing::warn!(project_id, "otlp_http_traces: batch empty after transform — trace data lost");
     }
     StatusCode::OK
 }

@@ -26,12 +26,37 @@ pub struct PoolEntry {
     last_access: Instant,
 }
 
+impl PoolEntry {
+    /// Checkpoint DuckLake before dropping connections so data is persisted to Parquet.
+    fn shutdown(&self) {
+        if let Ok(guard) = self.write_conn.lock() {
+            // DuckLake CHECKPOINT writes in-memory WAL to Parquet files.
+            let _ = guard.execute_batch("CHECKPOINT lake;");
+        }
+        if let Ok(guard) = self.read_conn.lock() {
+            let _ = guard.execute_batch("CHECKPOINT lake;");
+        }
+    }
+}
+
 impl ProjectPool {
     pub fn new(data_dir: PathBuf, max_connections: usize) -> Self {
         Self {
             connections: DashMap::new(),
             data_dir,
             max_connections,
+        }
+    }
+
+    /// Force the read connection to refresh its DuckLake snapshot so it sees
+    /// data written by the write connection. DuckLake in-memory coordinators
+    /// cache catalog state — without refresh, reads return stale snapshots.
+    pub fn refresh_read_snapshot(&self, project_id: &str) {
+        if let Some(ref mut entry) = self.connections.get_mut(project_id) {
+            if let Ok(guard) = entry.read_conn.lock() {
+                // Use latest snapshot so reads see all committed writes.
+                let _ = guard.execute_batch("USE lake AT LATEST;");
+            }
         }
     }
 
@@ -89,7 +114,9 @@ impl ProjectPool {
         // Auto-initialize if data exists on disk
         let project_dir = self.data_dir.join(project_id);
         if project_dir.exists() {
-            return self.get_or_create(project_id);
+            self.get_or_create(project_id)?;
+            // get_or_create inserts both connections — now return the READ one.
+            return self.get_read(project_id);
         }
         Err(anyhow::anyhow!(
             "read connection requested but project {project_id} not initialized — \
@@ -145,11 +172,18 @@ impl ProjectPool {
     }
 
     /// Evict connections idle longer than the given duration.
+    /// Checkpoints DuckLake before dropping so data is persisted to Parquet.
     pub fn evict_idle(&self, max_idle: std::time::Duration) {
         let now = Instant::now();
         let before = self.connections.len();
-        self.connections
-            .retain(|_, entry| now.duration_since(entry.last_access) < max_idle);
+        self.connections.retain(|_, entry| {
+            if now.duration_since(entry.last_access) >= max_idle {
+                entry.shutdown();
+                false
+            } else {
+                true
+            }
+        });
         let evicted = before - self.connections.len();
         if evicted > 0 {
             tracing::info!(evicted, "evicted idle DuckDB connections");
@@ -157,6 +191,7 @@ impl ProjectPool {
     }
 
     /// Evict the oldest connection to make room for a new one.
+    /// Checkpoints DuckLake before dropping so data is persisted to Parquet.
     fn evict_oldest(&self) {
         let oldest = self
             .connections
@@ -164,7 +199,9 @@ impl ProjectPool {
             .min_by_key(|entry| entry.last_access)
             .map(|entry| entry.key().clone());
         if let Some(key) = oldest {
-            self.connections.remove(&key);
+            if let Some((_, entry)) = self.connections.remove(&key) {
+                entry.shutdown();
+            }
             tracing::info!(project_id = %key, "evicted oldest DuckDB connection");
         }
     }

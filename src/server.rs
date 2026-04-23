@@ -337,7 +337,12 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
 }
 
 /// Get the per-project DuckDB connection from the pool using the AuthContext.
+/// Refreshes the DuckLake snapshot so reads see data written by the flusher.
 fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duckdb::Connection>>> {
+    // Refresh read snapshot so queries see data written by the flusher.
+    // DuckLake in-memory coordinators cache catalog state — without this,
+    // the read connection returns stale snapshots.
+    state.pool.refresh_read_snapshot(&auth.project_id);
     // Reads go through the dedicated read connection — never contended by writes.
     state
         .pool
