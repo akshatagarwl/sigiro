@@ -45,6 +45,7 @@ impl MsgRouter {
     /// Creates the flusher task on first message for a project.
     /// Applies backpressure via bounded channel — sender blocks when full
     /// rather than silently dropping data.
+#[tracing::instrument(skip_all, fields(otel.name = "ingest.send", project_id = %msg.project_id()))]
     pub async fn send(&self, msg: IngestMsg) {
         let project_id = msg.project_id().to_string();
 
@@ -87,43 +88,76 @@ impl MsgRouter {
     }
 
     /// Slow path: create connection + channel + flusher task.
+    /// Uses DashMap entry API to atomically check-and-insert the sender,
+    /// preventing concurrent callers from creating duplicate flushers.
     async fn send_with_fallback(&self, project_id: String, msg: IngestMsg) {
-        // get_or_create is sync — fast path is just a DashMap lookup,
-        // slow path opens in-memory DuckDB + creates dirs (low ms).
-        let conn = match self.pool.get_or_create(&project_id) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(
-                    project_id,
-                    "FATAL: failed to get project connection — message DROPPED. \
-                     This indicates a corrupt DuckDB state or filesystem error. \
-                     Error: {e:#}"
-                );
-                return;
+        use dashmap::mapref::entry::Entry;
+
+        // Atomically check if a sender exists or create one.
+        // This prevents the race where multiple concurrent callers all
+        // call get_or_create() and spawn duplicate flushers.
+        match self.project_senders.entry(project_id.clone()) {
+            Entry::Occupied(e) => {
+                // Sender exists — just send.
+                let sender = e.get().0.clone();
+                drop(e); // release DashMap guard before async send
+                match sender.send(msg).await {
+                    Ok(()) => {}
+                    Err(_) => {
+                        // Channel closed — flusher died. Remove stale entry and retry.
+                        self.project_senders.remove(&project_id);
+                        // Re-enter via send() which will call send_with_fallback again.
+                        // Note: we can't retry with the same msg because it was consumed
+                        // by the failed send. Log the drop — this is a rare edge case.
+                        tracing::warn!(
+                            project_id,
+                            "message dropped: flusher channel closed, stale entry removed. \
+                             Next message will create a new flusher."
+                        );
+                    }
+                }
             }
-        };
+            Entry::Vacant(e) => {
+                // No sender — create connection + channel + flusher.
+                let conn = match self.pool.get_or_create(&project_id) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        tracing::error!(
+                            project_id,
+                            "FATAL: failed to get project connection — message DROPPED. \
+                             This indicates a corrupt DuckDB state or filesystem error. \
+                             Error: {err:#}"
+                        );
+                        return;
+                    }
+                };
 
-        let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
-        let pid = project_id.clone();
-        let handle = tokio::spawn(async move {
-            run_flusher(&pid, conn, rx).await;
-        });
+                let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
+                let pid = project_id.clone();
+                let handle = tokio::spawn(async move {
+                    run_flusher(&pid, conn, rx).await;
+                });
 
-        // Insert — another task may have raced us, that's fine.
-        let sender = self
-            .project_senders
-            .entry(project_id.clone())
-            .or_insert((tx, handle))
-            .value()
-            .0
-            .clone();
+                // Insert atomically — entry is now committed.
+                e.insert((tx, handle));
 
-        if let Err(e) = sender.send(msg).await {
-            tracing::error!(
-                project_id,
-                "FATAL: project channel closed on new sender — message DROPPED. \
-                 The flusher task exited immediately after creation. Error: {e}"
-            );
+                // Send the message via the newly created channel.
+                if let Err(err) = self
+                    .project_senders
+                    .get(&project_id)
+                    .expect("just inserted")
+                    .value()
+                    .0
+                    .send(msg)
+                    .await
+                {
+                    tracing::error!(
+                        project_id,
+                        "FATAL: project channel closed on new sender — message DROPPED. \
+                         The flusher task exited immediately after creation. Error: {err}"
+                    );
+                }
+            }
         }
     }
 
@@ -274,6 +308,7 @@ impl ProjectFlusher {
     /// Flush all buffered batches to DuckDB using appenders per table.
     /// Acquires the mutex ONCE for the entire flush, writes all tables, releases.
     /// Uses appender_to_catalog_and_db for DuckLake catalog-qualified table access.
+#[tracing::instrument(skip_all, fields(project_id = %project_id, rows = self.total_rows))]
     fn flush(&mut self, project_id: &str) -> Result<()> {
         if self.total_rows == 0 {
             return Ok(());
@@ -337,7 +372,8 @@ impl ProjectFlusher {
 
 /// Per-project flusher loop. Receives pre-transformed RecordBatches,
 /// buffers them, and flushes to DuckDB on timer or row count threshold.
-async fn run_flusher(
+#[tracing::instrument(skip_all, fields(project_id = %project_id))]
+    async fn run_flusher(
     project_id: &str,
     conn: Arc<Mutex<Connection>>,
     mut rx: mpsc::Receiver<IngestMsg>,

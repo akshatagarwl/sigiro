@@ -16,25 +16,20 @@ pub struct ProjectPool {
 }
 
 pub struct PoolEntry {
-    /// Dedicated write connection — used by the flusher (ingester).
-    /// All schema CREATE TABLE calls also go through here (idempotent).
-    write_conn: Arc<Mutex<Connection>>,
-    /// Dedicated read connection — used by query handlers (HTTP API).
-    /// Shares the same DuckLake catalog + Parquet files as write_conn.
-    /// Opens its own DuckDB coordinator so reads never contend with writes.
-    read_conn: Arc<Mutex<Connection>>,
+    /// Single DuckDB connection shared by both flusher (writes) and HTTP API (reads).
+    /// Wrapped in Arc<Mutex> so reads and writes are serialized — DuckDB does not
+    /// support concurrent access on the same connection anyway.
+    /// Previous two-connection (read + write) pattern was broken: DuckLake has no
+    /// `USE lake AT LATEST` command, so the read coordinator could never see writes.
+    conn: Arc<Mutex<Connection>>,
     last_access: Instant,
 }
 
 impl PoolEntry {
-    /// Checkpoint DuckLake before dropping connections so data is persisted to Parquet.
+    /// Checkpoint DuckLake before dropping so data is persisted to Parquet.
     fn shutdown(&self) {
-        if let Ok(guard) = self.write_conn.lock() {
-            // DuckLake CHECKPOINT writes in-memory WAL to Parquet files.
-            let _ = guard.execute_batch("CHECKPOINT lake;");
-        }
-        if let Ok(guard) = self.read_conn.lock() {
-            let _ = guard.execute_batch("CHECKPOINT lake;");
+        if let Ok(guard) = self.conn.lock() {
+            let _result = guard.execute_batch("CHECKPOINT lake;");
         }
     }
 }
@@ -48,100 +43,85 @@ impl ProjectPool {
         }
     }
 
-    /// Force the read connection to refresh its DuckLake snapshot so it sees
-    /// data written by the write connection. DuckLake in-memory coordinators
-    /// cache catalog state — without refresh, reads return stale snapshots.
-    pub fn refresh_read_snapshot(&self, project_id: &str) {
-        if let Some(ref mut entry) = self.connections.get_mut(project_id) {
-            if let Ok(guard) = entry.read_conn.lock() {
-                // Use latest snapshot so reads see all committed writes.
-                let _ = guard.execute_batch("USE lake AT LATEST;");
-            }
-        }
-    }
-
     /// Always returns "lake." — there is no longer a non-DuckLake path.
     pub fn prefix() -> &'static str {
         crate::storage::table_prefix()
     }
 
-    /// Get or create the dedicated write connection for a project.
-    /// Used by the flusher (ingester). Also creates the read connection.
+    /// Get or create a connection for a project.
+    /// Used by both the flusher (ingester) and HTTP API (query handlers).
     /// Creates the DuckLake catalog and tables on first access.
+    ///
+    /// Thread-safe: uses DashMap entry API to prevent concurrent callers from
+    /// creating duplicate connections for the same project.
+#[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub fn get_or_create(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
-        // Fast path: write connection exists
-        if let Some(ref mut entry) = self.connections.get_mut(project_id) {
-            entry.last_access = Instant::now();
-            return Ok(Arc::clone(&entry.write_conn));
+        use dashmap::mapref::entry::Entry;
+
+        match self.connections.entry(project_id.to_string()) {
+            Entry::Occupied(ref mut entry) => {
+                entry.get_mut().last_access = Instant::now();
+                Ok(Arc::clone(&entry.get().conn))
+            }
+            Entry::Vacant(entry) => {
+                // Evict if at capacity before creating new.
+                // Entry guard is dropped first to avoid holding two entries.
+                drop(entry);
+
+                if self.connections.len() >= self.max_connections {
+                    self.evict_oldest();
+                }
+
+                let project_dir = self.data_dir.join(project_id);
+                let conn = self.open_connection(&project_dir).with_context(|| {
+                    format!("failed to open DuckDB connection for project {project_id}")
+                })?;
+
+                let shared = Arc::new(Mutex::new(conn));
+
+                // Re-enter via entry API — another task may have inserted while we
+                // were in open_connection (which downloads extensions on cold start).
+                match self.connections.entry(project_id.to_string()) {
+                    Entry::Occupied(ref mut entry) => {
+                        // Another task won the race — use their connection, discard ours.
+                        // Our connection's Drop will clean up.
+                        entry.get_mut().last_access = Instant::now();
+                        tracing::info!(project_id, "reused DuckDB connection (race loser)");
+                        Ok(Arc::clone(&entry.get().conn))
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(PoolEntry {
+                            conn: Arc::clone(&shared),
+                            last_access: Instant::now(),
+                        });
+                        tracing::info!(project_id, "opened DuckDB connection (DuckLake)");
+                        Ok(shared)
+                    }
+                }
+            }
         }
-
-        // Evict if at capacity before creating new
-        if self.connections.len() >= self.max_connections {
-            self.evict_oldest();
-        }
-
-        let project_dir = self.data_dir.join(project_id);
-
-        let (write_conn, read_conn) = self.open_conn_pair(&project_dir).with_context(|| {
-            format!("failed to open DuckDB connections for project {project_id}")
-        })?;
-
-        let write_shared = Arc::new(Mutex::new(write_conn));
-        let read_shared = Arc::new(Mutex::new(read_conn));
-
-        self.connections.insert(
-            project_id.to_string(),
-            PoolEntry {
-                write_conn: Arc::clone(&write_shared),
-                read_conn: Arc::clone(&read_shared),
-                last_access: Instant::now(),
-            },
-        );
-
-        tracing::info!(project_id, "opened DuckDB connection pair (DuckLake)");
-        Ok(write_shared)
     }
 
-    /// Get the dedicated read connection for a project.
-    /// Used by query handlers (HTTP API). Never contended by writes.
-    /// Returns error if the project connection hasn't been created yet —
-    /// callers should call get_or_create first to initialize.
+    /// Get the connection for a project (same connection used for reads and writes).
+    /// The caller must lock the mutex — no concurrent access is possible.
     pub fn get_read(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
         if let Some(ref mut entry) = self.connections.get_mut(project_id) {
             entry.last_access = Instant::now();
-            return Ok(Arc::clone(&entry.read_conn));
+            return Ok(Arc::clone(&entry.conn));
         }
         // Auto-initialize if data exists on disk
         let project_dir = self.data_dir.join(project_id);
         if project_dir.exists() {
             self.get_or_create(project_id)?;
-            // get_or_create inserts both connections — now return the READ one.
             return self.get_read(project_id);
         }
         Err(anyhow::anyhow!(
-            "read connection requested but project {project_id} not initialized — \
+            "connection requested but project {project_id} not initialized — \
              call get_or_create() first"
         ))
     }
 
-    /// Open a pair of DuckDB connections that share the same DuckLake catalog + Parquet files.
-    /// write_conn initializes DuckLake schema; read_conn opens its own coordinator pointing
-    /// to the same catalog. Both connections read/write Parquet files through the shared
-    /// catalog.sqlite — no contention since DuckDB coordinators don't share in-memory state.
-    fn open_conn_pair(&self, project_dir: &std::path::Path) -> Result<(Connection, Connection)> {
-        // Write connection — owns schema init
-        let write_conn = self
-            .open_connection(project_dir)
-            .context("failed to open write connection")?;
-
-        // Read connection — separate coordinator, same catalog
-        let read_conn = self
-            .open_connection(project_dir)
-            .context("failed to open read connection")?;
-
-        Ok((write_conn, read_conn))
-    }
-
+#[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir.display()))]
     fn open_connection(&self, project_dir: &std::path::Path) -> Result<Connection> {
         let conn = Connection::open_in_memory()
             .with_context(|| format!("failed to open in-memory DuckDB"))?;

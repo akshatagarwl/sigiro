@@ -9,6 +9,7 @@ pub mod ingest;
 pub mod inserter;
 pub mod investigate;
 pub mod mcp;
+pub mod otel;
 pub mod pool;
 pub mod profiling;
 pub mod schema;

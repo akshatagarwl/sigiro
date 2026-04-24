@@ -47,6 +47,10 @@ uuid = "1"
 tar = "0.4"
 axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
 watchexec-supervisor = "5"
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", features = ["http-proto", "reqwest-blocking-client"] }
+tracing-opentelemetry = "0.32"
 
 [build-dependencies]
 ureq = { version = "3", features = ["rustls"] }

@@ -502,6 +502,7 @@ fn resolve_services(req: &InvestigateRequest) -> Result<Vec<String>> {
     Ok(services)
 }
 
+#[tracing::instrument(skip(conn), fields(service = %service))]
 fn investigate_one(
     conn: &Arc<Mutex<Connection>>,
     service: &str,

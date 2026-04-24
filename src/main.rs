@@ -106,13 +106,35 @@ fn format_output(value: &serde_json::Value, output_format: &OutputFormat) -> Res
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "sigiro=info".parse().expect("hardcoded filter is valid")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    // OTel self-instrumentation: if OTEL_EXPORTER_OTLP_ENDPOINT is set,
+    // the subscriber is initialized with an OTel layer in init_telemetry().
+    // Otherwise, falls back to the standard fmt subscriber.
+    let _telemetry_guard = match sigiro::otel::init_telemetry() {
+        Ok(Some(guard)) => Some(guard),
+        Ok(None) => {
+            // No OTel endpoint configured — use plain fmt subscriber.
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "sigiro=info".parse().expect("hardcoded filter is valid")),
+                )
+                .with_writer(std::io::stderr)
+                .init();
+            None
+        }
+        Err(e) => {
+            // OTel init failed — fall back to plain fmt subscriber and log the error.
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "sigiro=info".parse().expect("hardcoded filter is valid")),
+                )
+                .with_writer(std::io::stderr)
+                .init();
+            tracing::warn!("OTel self-instrumentation failed to initialize: {e:#}");
+            None
+        }
+    };
 
     let cli = Cli::parse();
 
