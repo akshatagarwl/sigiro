@@ -10,20 +10,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # --- Test across Rust versions ---
+  # --- Build and test ---
   test:
-    name: Test (Rust ${{ matrix.toolchain }})
+    name: Test
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        toolchain: ['1.85', 'stable']
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: ${{ matrix.toolchain }}
+          toolchain: stable
 
       - name: Build
         run: cargo build --release --locked
@@ -31,7 +27,7 @@ jobs:
       - name: Run tests
         run: cargo test --release
 
-  # --- Lint: fmt + clippy (parallel with test) ---
+  # --- Lint ---
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -48,7 +44,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-  # --- Cross-compile aarch64 (parallel with test) ---
+  # --- Cross-compile aarch64 ---
   aarch64:
     name: Build aarch64
     runs-on: ubuntu-latest
