@@ -2,10 +2,6 @@
 /target
 /.cross
 
-# Nix
-/result
-/result-*
-
 # Fuzzing corpus — ignore generated artifacts, track curated seeds
 fuzz/target/
 fuzz/corpus/mcp_jsonrpc_fuzz/*
@@ -29,3 +25,6 @@ TASKS.md
 
 # OS
 .DS_Store
+
+# API response dumps
+response.json
