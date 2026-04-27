@@ -1,9 +1,0 @@
-# syntax=docker/dockerfile:1
-
-# Minimal runtime image that just receives a pre-built sigiro binary
-FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
-COPY --from=bin /sigiro /usr/local/bin/sigiro
-EXPOSE 4317 4318 9999
-ENV SIGIRO_DATA_DIR=/var/lib/sigiro
-CMD ["sigiro", "serve"]
