@@ -192,9 +192,10 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     ));
 
     // Cold storage dataset via S3, if configured
-    if let Ok(bucket) = std::env::var("SIGIRO_S3_BUCKET") {
-        if !bucket.is_empty() {
-            let prefix = std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default(); // empty prefix = data at bucket root, which is valid
+    let bucket = crate::config::S3_BUCKET.value().map_err(|e| anyhow::anyhow!("{e}"))?;
+        if !bucket.is_empty()
+        && !bucket.is_empty() {
+            let prefix = crate::config::S3_PREFIX.value().map_err(|e| anyhow::anyhow!("{e}"))?;
             let prefix_trimmed = prefix.trim_end_matches('/');
             let prefix_with_slash = if prefix_trimmed.is_empty() {
                 String::new()
@@ -206,7 +207,6 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
                 bucket, prefix_with_slash
             ));
         }
-    }
 
     let worker_datasets: Vec<&WorkerInfo> = workers
         .iter()

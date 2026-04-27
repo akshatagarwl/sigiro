@@ -155,10 +155,14 @@ impl TraceService for OtlpGrpcService {
         // Encode once (prost), decode once (otlp2records). Previously: decode (tonic) → encode (prost) → decode (otlp2records).
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_traces(bytes, InputFormat::Protobuf).await?;
-        if batch.num_rows() > 0 {
-            self.router
-                .send(IngestMsg::Traces { project_id, batch })
-                .await;
+        let pid = project_id.clone();
+        if let Err(e) = self.router.register_flusher(&pid) {
+            tracing::error!(pid, "failed to register flusher: {e:?}");
+            return Err(Status::internal("flusher init failed"));
+        }
+        if let Err(e) = self.router.send(IngestMsg::Traces { project_id, batch }).await {
+            tracing::error!(pid, "ingest router error: {e:?}");
+            return Err(Status::internal("ingest failed"));
         }
         Ok(Response::new(ExportTraceServiceResponse {
             partial_success: None,
@@ -175,10 +179,14 @@ impl LogsService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_logs(bytes, InputFormat::Protobuf).await?;
-        if batch.num_rows() > 0 {
-            self.router
-                .send(IngestMsg::Logs { project_id, batch })
-                .await;
+        let pid = project_id.clone();
+        if let Err(e) = self.router.register_flusher(&pid) {
+            tracing::error!(pid, "failed to register flusher: {e:?}");
+            return Err(Status::internal("flusher init failed"));
+        }
+        if let Err(e) = self.router.send(IngestMsg::Logs { project_id, batch }).await {
+            tracing::error!(pid, "ingest router error: {e:?}");
+            return Err(Status::internal("ingest failed"));
         }
         Ok(Response::new(ExportLogsServiceResponse {
             partial_success: None,
@@ -195,12 +203,15 @@ impl MetricsService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
-        self.router
-            .send(IngestMsg::Metrics {
-                project_id,
-                batches,
-            })
-            .await;
+        let pid = project_id.clone();
+        if let Err(e) = self.router.register_flusher(&pid) {
+            tracing::error!(pid, "failed to register flusher: {e:?}");
+            return Err(Status::internal("flusher init failed"));
+        }
+        if let Err(e) = self.router.send(IngestMsg::Metrics { project_id, batches }).await {
+            tracing::error!(pid, "ingest router error: {e:?}");
+            return Err(Status::internal("ingest failed"));
+        }
         Ok(Response::new(ExportMetricsServiceResponse {
             partial_success: None,
         }))
@@ -510,10 +521,14 @@ impl ProfilesService for OtlpGrpcService {
         let batch = tokio::task::spawn_blocking(move || transform_profiles(req))
             .await
             .map_err(|e| Status::internal(format!("transform task panicked: {e}")))??;
-        if batch.num_rows() > 0 {
-            self.router
-                .send(IngestMsg::Profiles { project_id, batch })
-                .await;
+        let pid = project_id.clone();
+        if let Err(e) = self.router.register_flusher(&project_id) {
+            tracing::error!(project_id, "failed to register flusher: {e:?}");
+            return Err(Status::internal("flusher init failed"));
+        }
+        if let Err(e) = self.router.send(IngestMsg::Profiles { project_id, batch }).await {
+            tracing::error!(pid, "ingest router error: {e:?}");
+            return Err(Status::internal("ingest failed"));
         }
         Ok(Response::new(ExportProfilesServiceResponse {
             partial_success: None,
@@ -586,11 +601,15 @@ async fn otlp_http_traces(
         }
     };
     if batch.num_rows() > 0 {
-        tracing::debug!(project_id, rows = batch.num_rows(), "otlp_http_traces: sending to router");
-        state
-            .router
-            .send(IngestMsg::Traces { project_id, batch })
-            .await;
+        let pid = project_id.clone();
+        if let Err(e) = state.router.register_flusher(&pid) {
+            tracing::error!(pid, "failed to register flusher: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+        if let Err(e) = state.router.send(IngestMsg::Traces { project_id, batch }).await {
+            tracing::error!(pid, "ingest router error: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     } else {
         tracing::warn!(project_id, "otlp_http_traces: batch empty after transform — trace data lost");
     }
@@ -615,10 +634,15 @@ async fn otlp_http_logs(
         }
     };
     if batch.num_rows() > 0 {
-        state
-            .router
-            .send(IngestMsg::Logs { project_id, batch })
-            .await;
+        let pid = project_id.clone();
+        if let Err(e) = state.router.register_flusher(&pid) {
+            tracing::error!(pid, "failed to register flusher: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+        if let Err(e) = state.router.send(IngestMsg::Logs { project_id, batch }).await {
+            tracing::error!(pid, "ingest router error: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     }
     StatusCode::OK
 }
@@ -649,13 +673,15 @@ async fn otlp_http_metrics(
             .as_ref()
             .is_some_and(|b| b.num_rows() > 0);
     if has_data {
-        state
-            .router
-            .send(IngestMsg::Metrics {
-                project_id,
-                batches,
-            })
-            .await;
+        let pid = project_id.clone();
+        if let Err(e) = state.router.register_flusher(&pid) {
+            tracing::error!(pid, "failed to register flusher: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+        if let Err(e) = state.router.send(IngestMsg::Metrics { project_id, batches }).await {
+            tracing::error!(pid, "ingest router error: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     }
     StatusCode::OK
 }
@@ -688,10 +714,15 @@ async fn otlp_http_profiles(
         }
     };
     if batch.num_rows() > 0 {
-        state
-            .router
-            .send(IngestMsg::Profiles { project_id, batch })
-            .await;
+        let pid = project_id.clone();
+        if let Err(e) = state.router.register_flusher(&project_id) {
+            tracing::error!(project_id, "failed to register flusher: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+        if let Err(e) = state.router.send(IngestMsg::Profiles { project_id, batch }).await {
+            tracing::error!(pid, "ingest router error: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     }
     StatusCode::OK
 }
@@ -755,10 +786,15 @@ async fn otlp_http_pyroscope(
     tracing::info!("pyroscope ingest: project_id={project_id} rows={}", batch.num_rows());
 
     if batch.num_rows() > 0 {
-        state
-            .router
-            .send(IngestMsg::Profiles { project_id, batch })
-            .await;
+        let pid = project_id.clone();
+        if let Err(e) = state.router.register_flusher(&project_id) {
+            tracing::error!(project_id, "failed to register flusher: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+        if let Err(e) = state.router.send(IngestMsg::Profiles { project_id, batch }).await {
+            tracing::error!(pid, "ingest router error: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     }
     StatusCode::OK
 }
@@ -842,8 +878,8 @@ fn find_next_boundary(data: &[u8], boundary: &[u8], start: usize) -> Option<usiz
     while i < data.len() {
         if let Some(pos) = find_bytes_with_start(&data[i..], dash_dash, 0) {
             let abs_pos = i + pos;
-            if abs_pos + 2 + boundary.len() <= data.len() {
-                if &data[abs_pos + 2..abs_pos + 2 + boundary.len()] == boundary {
+            if abs_pos + 2 + boundary.len() <= data.len()
+                && &data[abs_pos + 2..abs_pos + 2 + boundary.len()] == boundary {
                     // Found --boundary, check if followed by -- (closing boundary) or \r\n (regular)
                     let after = abs_pos + 2 + boundary.len();
                     if after < data.len() {
@@ -855,7 +891,6 @@ fn find_next_boundary(data: &[u8], boundary: &[u8], start: usize) -> Option<usiz
                         }
                     }
                 }
-            }
             // Move past this -- for next search
             i = abs_pos + 2;
         } else {
@@ -994,12 +1029,12 @@ async fn transform_pyroscope_profiles(
             let ptype = pprof_profile
                 .string_table
                 .get(ptype_idx as usize)
-                .map(|s| s.as_str())
+                .map(std::string::String::as_str)
                 .unwrap_or("");
             let punit = pprof_profile
                 .string_table
                 .get(punit_idx as usize)
-                .map(|s| s.as_str())
+                .map(std::string::String::as_str)
                 .unwrap_or("");
 
             // Build location_id → Location map
@@ -1018,7 +1053,7 @@ async fn transform_pyroscope_profiles(
                                     .iter()
                                     .find(|f| f.id == line.function_id)
                                     .and_then(|f| string_table.get(f.name as usize))
-                                    .map(|n| n.as_str())
+                                    .map(std::string::String::as_str)
                             })
                         })
                     })

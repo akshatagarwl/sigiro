@@ -146,7 +146,7 @@ impl HostPort {
 /// Returns `Ok(None)` if `SIGIRO_CATALOG_URL` is not set — caller should use local SQLite.
 /// Returns an error if env vars are set but malformed.
 pub fn load_config() -> Result<Option<StorageConfig>> {
-    let catalog_url = match std::env::var("SIGIRO_CATALOG_URL") {
+    let catalog_url = match crate::config::CATALOG_URL.value() {
         Ok(v) if !v.is_empty() => v,
         Ok(_) => anyhow::bail!(
             "SIGIRO_CATALOG_URL is set but empty — provide a valid PostgreSQL catalog URL or unset it"
@@ -154,8 +154,9 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         Err(_) => return Ok(None), // not set — use local SQLite
     };
 
-    let s3_bucket = std::env::var("SIGIRO_S3_BUCKET").unwrap_or_default();
-    let s3_region = std::env::var("SIGIRO_S3_REGION").unwrap_or_default();
+    use crate::config;
+    let s3_bucket = config::S3_BUCKET.value().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let s3_region = config::S3_REGION.value().map_err(|e| anyhow::anyhow!("{e}"))?;
     if !s3_bucket.is_empty() && s3_region.is_empty() {
         anyhow::bail!(
             "SIGIRO_S3_BUCKET is set but SIGIRO_S3_REGION is missing — provide a valid AWS region"
@@ -169,7 +170,7 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         catalog_url,
         s3_bucket,
         s3_region,
-        s3_prefix: std::env::var("SIGIRO_S3_PREFIX").unwrap_or_default(),
+        s3_prefix: config::S3_PREFIX.value().map_err(|e| anyhow::anyhow!("{e}"))?,
     }))
 }
 

@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
 use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
 use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt};
-use axum_extra::routing::{RouterExt, TypedPath};
+use axum_extra::routing::RouterExt;
 use rusqlite::Connection;
-use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
@@ -15,49 +14,7 @@ use crate::ingest::OtlpGrpcService;
 use crate::inserter::MsgRouter;
 use crate::investigate;
 use crate::pool::ProjectPool;
-
-// --- Typed path structs for compile-time route checking ---
-
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/query")]
-struct QueryPath;
-
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/investigate")]
-struct InvestigatePath;
-
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/services")]
-struct ServicesPath;
-
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/federation/workers")]
-struct FederationWorkersPath;
-
-#[derive(Debug, Clone, Deserialize, TypedPath)]
-#[typed_path("/federation/workers/{id}")]
-struct FederationWorkerPath {
-    id: String,
-}
-
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/keys")]
-struct AdminKeysPath;
-
-#[derive(Debug, Clone, Deserialize, TypedPath)]
-#[typed_path("/keys/{short_token}")]
-struct AdminKeyPath {
-    short_token: String,
-}
-
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/status")]
-struct AdminStatusPath;
-
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/health")]
-struct HealthPath;
-
+use crate::types::*;
 /// Rate limit key: extract Bearer token from Authorization header.
 /// Returns Err for requests without a parseable Bearer token — these will be
 /// rejected by auth middleware anyway, so rate-limiting them is pointless noise.
@@ -185,7 +142,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
 }
 
 /// Server port configuration — all configurable via environment variables.
-/// Defaults match the original hardcoded values.
+/// Uses typed-env for fail-fast parsing: malformed values error at startup.
 #[derive(Clone)]
 pub struct ServerPorts {
     pub http: u16,
@@ -193,22 +150,16 @@ pub struct ServerPorts {
     pub otlp_http: u16,
 }
 
-impl Default for ServerPorts {
-    fn default() -> Self {
-        Self {
-            http: std::env::var("SIGIRO_HTTP_PORT")
-                .unwrap_or_else(|_| "9999".to_string())
-                .parse()
-                .unwrap_or(9999),
-            grpc: std::env::var("SIGIRO_GRPC_PORT")
-                .unwrap_or_else(|_| "4317".to_string())
-                .parse()
-                .unwrap_or(4317),
-            otlp_http: std::env::var("SIGIRO_OTLP_HTTP_PORT")
-                .unwrap_or_else(|_| "4318".to_string())
-                .parse()
-                .unwrap_or(4318),
-        }
+impl ServerPorts {
+    /// Load ports from environment. Fails fast on malformed values.
+    /// Unset vars default to well-known OTLP ports.
+    pub fn load() -> anyhow::Result<Self> {
+        use crate::config;
+        Ok(Self {
+            http: config::HTTP_PORT.value().map_err(|e| anyhow::anyhow!("{e}"))?,
+            grpc: config::GRPC_PORT.value().map_err(|e| anyhow::anyhow!("{e}"))?,
+            otlp_http: config::OTLP_HTTP_PORT.value().map_err(|e| anyhow::anyhow!("{e}"))?,
+        })
     }
 }
 
@@ -217,7 +168,7 @@ pub async fn run_servers(
     admin_conn: Arc<Mutex<Connection>>,
     router: Arc<MsgRouter>,
 ) -> Result<()> {
-    let ports = ServerPorts::default();
+    let ports = ServerPorts::load()?;
 
     // gRPC server — authenticated via Bearer token in metadata
     let grpc_admin = Arc::clone(&admin_conn);
@@ -337,13 +288,9 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
 }
 
 /// Get the per-project DuckDB connection from the pool using the AuthContext.
-/// Refreshes the DuckLake snapshot so reads see data written by the flusher.
+/// Single connection handles both reads and writes — no snapshot refresh needed.
 fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duckdb::Connection>>> {
-    // Refresh read snapshot so queries see data written by the flusher.
-    // DuckLake in-memory coordinators cache catalog state — without this,
-    // the read connection returns stale snapshots.
-    state.pool.refresh_read_snapshot(&auth.project_id);
-    // Reads go through the dedicated read connection — never contended by writes.
+    // Reads use the same connection as writes — no snapshot refresh needed.
     state
         .pool
         .get_read(&auth.project_id)

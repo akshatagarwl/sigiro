@@ -36,7 +36,7 @@ pub use types::{IngestMsg, SignalTable, SupervisorHandle};
 pub use inserter::MsgRouter;
 
 pub fn data_dir() -> Result<PathBuf> {
-    std::env::var("SIGIRO_DATA_DIR").map(PathBuf::from).context(
+    crate::config::DATA_DIR.value().map(PathBuf::from).map_err(|e| anyhow::anyhow!("{e}")).context(
         "SIGIRO_DATA_DIR not set — export SIGIRO_DATA_DIR=/path/to/data before starting sigiro",
     )
 }

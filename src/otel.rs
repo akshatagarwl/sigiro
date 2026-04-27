@@ -19,7 +19,7 @@ impl Drop for TelemetryGuard {
 }
 
 pub fn init_telemetry() -> Result<Option<TelemetryGuard>> {
-    if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_err() {
+    if crate::config::OTEL_EXPORTER_OTLP_ENDPOINT.value().map(|s| s.is_empty()).unwrap_or(true) {
         tracing::debug!("OTEL_EXPORTER_OTLP_ENDPOINT not set — self-instrumentation disabled");
         return Ok(None);
     }
@@ -29,8 +29,7 @@ pub fn init_telemetry() -> Result<Option<TelemetryGuard>> {
         .build()
         .context("failed to build OTLP HTTP span exporter")?;
 
-    let service_name = std::env::var("OTEL_SERVICE_NAME")
-        .unwrap_or_else(|_| "sigiro".to_string());
+    let service_name = crate::config::OTEL_SERVICE_NAME.value().map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let resource = opentelemetry_sdk::Resource::builder()
         .with_service_name(service_name)

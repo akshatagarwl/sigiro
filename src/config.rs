@@ -1,6 +1,55 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
+use typed_env::{Envar, EnvarDef};
 
+// ---------------------------------------------------------------------------
+// Environment variable definitions
+// ---------------------------------------------------------------------------
+// All env vars are declared here as typed statics. Benefits:
+// - Fail-fast on malformed values (e.g., SIGIRO_HTTP_PORT=garbage → error)
+// - Clear error messages with var name, type, and bad value
+// - Defaults are explicit and centralized
+// ---------------------------------------------------------------------------
+
+/// Server ports. Default to well-known OTLP ports when unset.
+pub static HTTP_PORT: Envar<u16> = Envar::on_startup("SIGIRO_HTTP_PORT", || EnvarDef::Default(9999));
+pub static GRPC_PORT: Envar<u16> = Envar::on_startup("SIGIRO_GRPC_PORT", || EnvarDef::Default(4317));
+pub static OTLP_HTTP_PORT: Envar<u16> = Envar::on_startup("SIGIRO_OTLP_HTTP_PORT", || EnvarDef::Default(4318));
+
+/// S3 cold storage config. Empty/unset means no S3.
+pub static S3_BUCKET: Envar<String> = Envar::on_startup("SIGIRO_S3_BUCKET", || EnvarDef::Default(String::new()));
+pub static S3_REGION: Envar<String> = Envar::on_startup("SIGIRO_S3_REGION", || EnvarDef::Default(String::new()));
+pub static S3_PREFIX: Envar<String> = Envar::on_startup("SIGIRO_S3_PREFIX", || EnvarDef::Default(String::new()));
+
+/// OTel self-instrumentation endpoint. Defaults to local sigiro instance.
+pub static OTEL_ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_OTEL_ENDPOINT", || EnvarDef::Default("http://127.0.0.1:9999".to_string()));
+
+/// OTel service name for self-instrumentation.
+pub static OTEL_SERVICE_NAME: Envar<String> = Envar::on_startup("OTEL_SERVICE_NAME", || EnvarDef::Default("sigiro".to_string()));
+
+/// OTel OTLP exporter endpoint (for self-instrumentation traces).
+pub static OTEL_EXPORTER_OTLP_ENDPOINT: Envar<String> = Envar::on_startup("OTEL_EXPORTER_OTLP_ENDPOINT", || EnvarDef::Default(String::new()));
+
+/// Pyroscope profiling endpoint (optional — no profiling if unset).
+pub static PYROSCOPE_ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_PYROSCOPE_ENDPOINT", || EnvarDef::Default(String::new()));
+
+/// Data directory for sigiro (holds DuckDB files, extensions, binaries).
+pub static DATA_DIR: Envar<String> = Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Default(String::new()));
+
+/// Server URL for CLI client and admin commands.
+pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || EnvarDef::Default("http://localhost:9999".to_string()));
+
+/// PostgreSQL catalog URL (optional — enables distributed mode).
+pub static CATALOG_URL: Envar<String> = Envar::on_startup("SIGIRO_CATALOG_URL", || EnvarDef::Default(String::new()));
+
+/// Machine hostname (used for federation worker registration).
+pub static HOSTNAME: Envar<String> = Envar::on_startup("HOSTNAME", || EnvarDef::Default(String::new()));
+
+/// API key (required — no default). Env takes priority over config.toml.
+/// Uses EnvarDef::Unset so .value() fails if not set (no silent fallback).
+pub static API_KEY: Envar<String> = Envar::on_startup("SIGIRO_API_KEY", || EnvarDef::Unset);
+
+/// API key (required — no default. Set via $SIGIRO_API_KEY or config.toml).
 /// Returns the path to the sigiro config directory (~/.config/sigiro/).
 fn config_dir() -> Result<PathBuf> {
     let base = dirs::config_dir().context("cannot determine config directory")?;
@@ -14,7 +63,7 @@ fn config_path() -> Result<PathBuf> {
 
 /// Resolve API key: env var takes priority, then config.toml.
 pub fn get_api_key() -> Result<String> {
-    if let Ok(key) = std::env::var("SIGIRO_API_KEY") {
+    if let Ok(key) = crate::config::API_KEY.value() {
         return Ok(key);
     }
     let path = config_path()?;

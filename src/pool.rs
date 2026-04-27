@@ -124,7 +124,7 @@ impl ProjectPool {
 #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir.display()))]
     fn open_connection(&self, project_dir: &std::path::Path) -> Result<Connection> {
         let conn = Connection::open_in_memory()
-            .with_context(|| format!("failed to open in-memory DuckDB"))?;
+            .with_context(|| "failed to open in-memory DuckDB".to_string())?;
 
         // Persistent local extension cache
         let ext_dir = self.data_dir.join("extensions");

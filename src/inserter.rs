@@ -14,6 +14,15 @@ use crate::drain::DrainTree;
 use crate::pool::ProjectPool;
 use crate::types::{IngestMsg, SignalTable};
 
+/// Errors from the ingest router.
+#[derive(Debug)]
+pub enum RouterError {
+    /// Channel closed — flusher task exited unexpectedly.
+    ChannelClosed { project_id: String },
+    /// Failed to get or create a DuckDB connection.
+    ConnectionFailed { project_id: String },
+}
+
 /// Max rows buffered per table before forcing a flush.
 const FLUSH_ROW_THRESHOLD: usize = 10_000;
 
@@ -45,120 +54,49 @@ impl MsgRouter {
     /// Creates the flusher task on first message for a project.
     /// Applies backpressure via bounded channel — sender blocks when full
     /// rather than silently dropping data.
-#[tracing::instrument(skip_all, fields(otel.name = "ingest.send", project_id = %msg.project_id()))]
-    pub async fn send(&self, msg: IngestMsg) {
-        let project_id = msg.project_id().to_string();
-
-        // Fast path: existing sender
-        if let Some(entry) = self.project_senders.get(&project_id) {
-            let sender = &entry.value().0;
-            match sender.try_send(msg) {
-                Ok(()) => return,
-                Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
-                    // Channel full — apply backpressure by blocking send.
-                    // This is intentional: the caller (HTTP/gRPC handler) will wait
-                    // rather than silently dropping telemetry data.
-                    drop(entry);
-                    return self.send_blocking(&project_id, msg).await;
-                }
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(msg)) => {
-                    // Receiver dropped — flusher task exited. Remove stale entry and fall through.
-                    drop(entry);
-                    self.project_senders.remove(&project_id);
-                    // Re-enter with msg to create new flusher
-                    return self.send_with_fallback(project_id, msg).await;
-                }
-            }
-        }
-
-        self.send_with_fallback(project_id, msg).await;
-    }
-
-    /// Backpressure path: wait for channel capacity instead of dropping.
-    async fn send_blocking(&self, project_id: &str, msg: IngestMsg) {
-        if let Some(entry) = self.project_senders.get(project_id) {
-            if entry.value().0.send(msg).await.is_err() {
-                tracing::error!(
-                    project_id,
-                    "FATAL: project channel closed during blocking send — message DROPPED. \
-                     The flusher task for this project has exited unexpectedly."
-                );
-            }
-        }
-    }
-
-    /// Slow path: create connection + channel + flusher task.
-    /// Uses DashMap entry API to atomically check-and-insert the sender,
-    /// preventing concurrent callers from creating duplicate flushers.
-    async fn send_with_fallback(&self, project_id: String, msg: IngestMsg) {
+    /// Explicitly create and register a flusher for a project.
+    /// Caller (DI container / server setup) must invoke this before the first
+    /// send() for that project_id. Thread-safe via DashMap entry API.
+    pub fn register_flusher(&self, project_id: &str) -> Result<(), RouterError> {
         use dashmap::mapref::entry::Entry;
 
-        // Atomically check if a sender exists or create one.
-        // This prevents the race where multiple concurrent callers all
-        // call get_or_create() and spawn duplicate flushers.
-        match self.project_senders.entry(project_id.clone()) {
-            Entry::Occupied(e) => {
-                // Sender exists — just send.
-                let sender = e.get().0.clone();
-                drop(e); // release DashMap guard before async send
-                match sender.send(msg).await {
-                    Ok(()) => {}
-                    Err(_) => {
-                        // Channel closed — flusher died. Remove stale entry and retry.
-                        self.project_senders.remove(&project_id);
-                        // Re-enter via send() which will call send_with_fallback again.
-                        // Note: we can't retry with the same msg because it was consumed
-                        // by the failed send. Log the drop — this is a rare edge case.
-                        tracing::warn!(
-                            project_id,
-                            "message dropped: flusher channel closed, stale entry removed. \
-                             Next message will create a new flusher."
-                        );
-                    }
-                }
+        let conn = self.pool.get_or_create(project_id)
+            .map_err(|_| RouterError::ConnectionFailed { project_id: project_id.to_string() })?;
+
+        let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
+        let pid = project_id.to_string();
+        let handle = tokio::spawn(async move { run_flusher(&pid, conn, rx).await });
+
+        match self.project_senders.entry(project_id.to_string()) {
+            Entry::Occupied(_) => {
+                // Already registered — return Ok, caller can send immediately.
+                Ok(())
             }
             Entry::Vacant(e) => {
-                // No sender — create connection + channel + flusher.
-                let conn = match self.pool.get_or_create(&project_id) {
-                    Ok(c) => c,
-                    Err(err) => {
-                        tracing::error!(
-                            project_id,
-                            "FATAL: failed to get project connection — message DROPPED. \
-                             This indicates a corrupt DuckDB state or filesystem error. \
-                             Error: {err:#}"
-                        );
-                        return;
-                    }
-                };
-
-                let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
-                let pid = project_id.clone();
-                let handle = tokio::spawn(async move {
-                    run_flusher(&pid, conn, rx).await;
-                });
-
-                // Insert atomically — entry is now committed.
                 e.insert((tx, handle));
-
-                // Send the message via the newly created channel.
-                if let Err(err) = self
-                    .project_senders
-                    .get(&project_id)
-                    .expect("just inserted")
-                    .value()
-                    .0
-                    .send(msg)
-                    .await
-                {
-                    tracing::error!(
-                        project_id,
-                        "FATAL: project channel closed on new sender — message DROPPED. \
-                         The flusher task exited immediately after creation. Error: {err}"
-                    );
-                }
+                Ok(())
             }
         }
+    }
+
+    /// Route a message to the appropriate per-project flusher.
+    /// Flusher MUST be registered first via register_flusher().
+    /// Returns Err if no flusher is registered for this project.
+    #[tracing::instrument(skip_all, fields(otel.name = "ingest.send", project_id = %msg.project_id()))]
+    pub async fn send(&self, msg: IngestMsg) -> Result<(), RouterError> {
+        let project_id = msg.project_id().to_string();
+        let project_id_for_err = project_id.clone();
+
+        let entry = self.project_senders
+            .get(&project_id)
+            .ok_or_else(|| RouterError::ConnectionFailed { project_id: project_id.clone() })?;
+
+        let sender = &entry.value().0;
+        sender.send(msg).await.map_err(|_| {
+            drop(entry);
+            self.project_senders.remove(&project_id);
+            RouterError::ChannelClosed { project_id: project_id_for_err }
+        })
     }
 
     /// Gracefully shut down all flusher tasks: drops senders (triggering
@@ -308,7 +246,7 @@ impl ProjectFlusher {
     /// Flush all buffered batches to DuckDB using appenders per table.
     /// Acquires the mutex ONCE for the entire flush, writes all tables, releases.
     /// Uses appender_to_catalog_and_db for DuckLake catalog-qualified table access.
-#[tracing::instrument(skip_all, fields(project_id = %project_id, rows = self.total_rows))]
+    #[tracing::instrument(skip_all, fields(project_id = %project_id, rows = self.total_rows))]
     fn flush(&mut self, project_id: &str) -> Result<()> {
         if self.total_rows == 0 {
             return Ok(());
@@ -372,8 +310,8 @@ impl ProjectFlusher {
 
 /// Per-project flusher loop. Receives pre-transformed RecordBatches,
 /// buffers them, and flushes to DuckDB on timer or row count threshold.
-#[tracing::instrument(skip_all, fields(project_id = %project_id))]
-    async fn run_flusher(
+    #[tracing::instrument(skip_all, fields(project_id = %project_id))]
+async fn run_flusher(
     project_id: &str,
     conn: Arc<Mutex<Connection>>,
     mut rx: mpsc::Receiver<IngestMsg>,

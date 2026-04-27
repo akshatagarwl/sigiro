@@ -275,7 +275,6 @@ impl SigiroClient {
 pub fn try_build_client() -> anyhow::Result<SigiroClient> {
     let api_key = crate::config::get_api_key()
         .map_err(|_| anyhow::anyhow!("No API key configured. Run: sigiro auth <key>"))?;
-    let base_url = std::env::var("SIGIRO_ENDPOINT")
-        .map_err(|_| anyhow::anyhow!("SIGIRO_ENDPOINT not set. Export SIGIRO_ENDPOINT=http://localhost:9999 (or your server URL)"))?;
+    let base_url = crate::config::ENDPOINT.value().map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(SigiroClient::new(&base_url, &api_key))
 }

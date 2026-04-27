@@ -18,13 +18,14 @@ fn load_one_extension(conn: &Connection, name: &str) -> Result<()> {
 
     // Path 2: LOAD from bundled file path — works for offline deployments where
     // extensions were shipped alongside the binary in {data_dir}/extensions/{name}.duckdb_extension
-    let bundled = std::env::var("SIGIRO_DATA_DIR")
+    let bundled = crate::config::DATA_DIR.value()
+        .ok()
+        .filter(|d| !d.is_empty())
         .map(|d| {
             std::path::Path::new(&d)
                 .join("extensions")
                 .join(format!("{name}.duckdb_extension"))
-        })
-        .ok();
+        });
     if let Some(ref path) = bundled {
         if path.exists() {
             if let Ok(()) = conn.execute_batch(&format!("LOAD '{}';", path.display())) {

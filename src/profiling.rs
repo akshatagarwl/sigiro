@@ -18,12 +18,12 @@ pub struct ProfilingHandle {
 /// Start Pyroscope profiling if `SIGIRO_PYROSCOPE_ENDPOINT` is set.
 /// Returns None if the endpoint is not configured.
 pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
-    let endpoint = match std::env::var("SIGIRO_PYROSCOPE_ENDPOINT") {
+    let endpoint = match crate::config::PYROSCOPE_ENDPOINT.value() {
         Ok(v) if !v.is_empty() => v,
         _ => return Ok(None),
     };
 
-    let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "sigiro".to_string());
+    let service_name = crate::config::OTEL_SERVICE_NAME.value().map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let backend = pyroscope::backend::pprof_backend(
         pyroscope::backend::pprof::PprofConfig::default(),

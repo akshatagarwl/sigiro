@@ -16,3 +16,14 @@ too-many-arguments-threshold = 5
 
 # Cognitive complexity limit for readable functions (*ideal: 15)
 cognitive-complexity-threshold = 25
+
+# --- DI enforcement ---
+# All env var access must go through typed-env (src/config.rs).
+# Define env vars there as typed statics, then read via `.value()`.
+# This bans direct std::env::var, std::env::var_os, etc. site-wide.
+disallowed-methods = [
+    "std::env::var",
+    "std::env::var_os",
+    "std::env::set_var",
+    "std::env::remove_var",
+]

@@ -188,8 +188,7 @@ async fn main() -> Result<()> {
         Some(Command::Admin { action }) => {
             // Try HTTP to running server first (solves DuckDB single-writer lock).
             // Fall back to direct DuckDB if server isn't running (bootstrapping).
-            let server_url = std::env::var("SIGIRO_ENDPOINT")
-                .context("SIGIRO_ENDPOINT not set. Export SIGIRO_ENDPOINT=http://localhost:9999 (or your server URL)")?;
+            let server_url = sigiro::config::ENDPOINT.value().map_err(|e| anyhow::anyhow!("{e}"))?;
 
             match action {
                 AdminAction::CreateKey {
@@ -254,8 +253,7 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_status", "disabled")?;
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_reason", "--no-ebpf flag")?;
     } else {
-        let otlp_endpoint = std::env::var("SIGIRO_OTEL_ENDPOINT")
-            .unwrap_or_else(|_| "http://127.0.0.1:9999".to_string());
+        let otlp_endpoint = sigiro::config::OTEL_ENDPOINT.value().map_err(|e| anyhow::anyhow!("{e}"))?;
         let status = sigiro::ebpf::ebpf_status("obi");
         sigiro::ebpf::write_ebpf_status(&admin_conn, &status)?;
         match status.status.as_str() {
@@ -361,7 +359,7 @@ fn require_client() -> Result<sigiro::client::SigiroClient> {
 }
 
 fn hostname_or_default() -> Result<String> {
-    std::env::var("HOSTNAME")
+    sigiro::config::HOSTNAME.value().map_err(|e| anyhow::anyhow!("{e}"))
         .context("HOSTNAME env var not set — required for federation worker registration")
 }
 

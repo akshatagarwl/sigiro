@@ -74,18 +74,20 @@ static OBI_INSTALL_TRACKER: OnceLock<String> = OnceLock::new();
 /// Prefers `$SIGIRO_DATA_DIR/bin/obi` if SIGIRO_DATA_DIR is set,
 /// otherwise falls back to `~/.local/bin/obi`.
 #[allow(dead_code)]
-fn obi_install_path() -> std::path::PathBuf {
-    if let Ok(data_dir) = std::env::var("SIGIRO_DATA_DIR") {
+fn obi_install_path() -> Result<std::path::PathBuf> {
+    if let Ok(data_dir) = crate::config::DATA_DIR.value() {
         let path = std::path::Path::new(&data_dir).join("bin").join("obi");
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent).ok();
+            std::fs::create_dir_all(parent)
+                .context("failed to create obi install directory under SIGIRO_DATA_DIR")?;
         }
-        return path;
+        return Ok(path);
     }
-    let home = dirs::home_dir().expect("cannot determine home directory");
+    let home = dirs::home_dir().context("cannot determine home directory for obi install path")?;
     let path = home.join(".local").join("bin").join("obi");
-    let _ = std::fs::create_dir_all(path.parent().unwrap()).ok();
-    path
+    let parent = path.parent().context("obi install path has no parent directory")?;
+    std::fs::create_dir_all(parent).context("failed to create ~/.local/bin for obi install")?;
+    Ok(path)
 }
 
 /// Download and extract the OBI binary from OTel eBPF Instrumentation releases.
@@ -183,7 +185,7 @@ fn ensure_obi_installed_linux() -> Result<()> {
         return Ok(());
     }
 
-    let dest = obi_install_path();
+    let dest = obi_install_path()?;
     if dest.exists() {
         debug!(
             "obi binary already exists at {}, skipping download",

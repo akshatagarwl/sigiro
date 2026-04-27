@@ -120,3 +120,61 @@ impl SignalTable {
         format!("{}{}", prefix, self.table_suffix())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Typed path structs — compile-time route checking for axum router
+// ---------------------------------------------------------------------------
+// Moved from server.rs to centralize route types that span modules.
+// Used with axum_extra::routing::TypedPath for compile-time route verification.
+
+use axum_extra::routing::TypedPath;
+use serde::Deserialize;
+
+/// Route: GET /query
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/query")]
+pub struct QueryPath;
+
+/// Route: GET /investigate
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/investigate")]
+pub struct InvestigatePath;
+
+/// Route: GET /services
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/services")]
+pub struct ServicesPath;
+
+/// Route: GET /federation/workers
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/federation/workers")]
+pub struct FederationWorkersPath;
+
+/// Route: GET /federation/workers/{id}
+#[derive(Debug, Clone, Deserialize, TypedPath)]
+#[typed_path("/federation/workers/{id}")]
+pub struct FederationWorkerPath {
+    pub id: String,
+}
+
+/// Route: GET /keys
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/keys")]
+pub struct AdminKeysPath;
+
+/// Route: GET /keys/{short_token}
+#[derive(Debug, Clone, Deserialize, TypedPath)]
+#[typed_path("/keys/{short_token}")]
+pub struct AdminKeyPath {
+    pub short_token: String,
+}
+
+/// Route: GET /status
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/status")]
+pub struct AdminStatusPath;
+
+/// Route: GET /health
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/health")]
+pub struct HealthPath;
