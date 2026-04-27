@@ -192,21 +192,20 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     ));
 
     // Cold storage dataset via S3, if configured
-    let bucket = crate::config::S3_BUCKET.value().map_err(|e| anyhow::anyhow!("{e}"))?;
-        if !bucket.is_empty()
-        && !bucket.is_empty() {
-            let prefix = crate::config::S3_PREFIX.value().map_err(|e| anyhow::anyhow!("{e}"))?;
-            let prefix_trimmed = prefix.trim_end_matches('/');
-            let prefix_with_slash = if prefix_trimmed.is_empty() {
-                String::new()
-            } else {
-                format!("{}/", prefix_trimmed)
-            };
-            yaml.push_str(&format!(
-                "  - name: sigiro_spans_cold\n    from: ducklake:s3://{}/{}data\n",
-                bucket, prefix_with_slash
-            ));
-        }
+    if let Some(bucket) = crate::config::S3_BUCKET.value().ok().filter(|s| !s.is_empty()) {
+        let prefix = crate::config::S3_PREFIX.value().ok().unwrap_or_default();
+        let prefix_trimmed = prefix.trim_end_matches('/');
+        let prefix_with_slash = if prefix_trimmed.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", prefix_trimmed)
+        };
+        yaml.push_str(&format!(
+            "  - name: sigiro_spans_cold\n    from: ducklake:s3://{}/{}data\n",
+            bucket, prefix_with_slash
+        ));
+    }
+
 
     let worker_datasets: Vec<&WorkerInfo> = workers
         .iter()

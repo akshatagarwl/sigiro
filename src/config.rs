@@ -17,9 +17,9 @@ pub static GRPC_PORT: Envar<u16> = Envar::on_startup("SIGIRO_GRPC_PORT", || Enva
 pub static OTLP_HTTP_PORT: Envar<u16> = Envar::on_startup("SIGIRO_OTLP_HTTP_PORT", || EnvarDef::Default(4318));
 
 /// S3 cold storage config. Empty/unset means no S3.
-pub static S3_BUCKET: Envar<String> = Envar::on_startup("SIGIRO_S3_BUCKET", || EnvarDef::Default(String::new()));
+pub static S3_BUCKET: Envar<String> = Envar::on_startup("SIGIRO_S3_BUCKET", || EnvarDef::Unset);
 pub static S3_REGION: Envar<String> = Envar::on_startup("SIGIRO_S3_REGION", || EnvarDef::Default(String::new()));
-pub static S3_PREFIX: Envar<String> = Envar::on_startup("SIGIRO_S3_PREFIX", || EnvarDef::Default(String::new()));
+pub static S3_PREFIX: Envar<String> = Envar::on_startup("SIGIRO_S3_PREFIX", || EnvarDef::Unset);
 
 /// OTel self-instrumentation endpoint. Defaults to local sigiro instance.
 pub static OTEL_ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_OTEL_ENDPOINT", || EnvarDef::Default("http://127.0.0.1:9999".to_string()));
