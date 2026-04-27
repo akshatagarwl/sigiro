@@ -359,28 +359,10 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
     }
 
     for rp in &request.resource_profiles {
-        let service_name = rp
-            .resource
-            .as_ref()
-            .and_then(|r| {
-                r.attributes.iter().find_map(|a| {
-                    if a.key == "service.name" {
-                        a.value.as_ref().and_then(|v| {
-                            v.value.as_ref().and_then(|val| match val {
-                                opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s) => Some(s.as_str()),
-                                _ => None,
-                            })
-                        })
-                    } else {
-                        None
-                    }
-                })
-            })
-            .ok_or_else(|| {
-                Status::invalid_argument(
-                    "resource_profiles entry missing service.name attribute — every profile must identify its service",
-                )
-            })?;
+        let service_name = extract_service_name(rp.resource.as_ref())
+            .ok_or_else(|| Status::invalid_argument(
+                "resource_profiles entry missing service.name attribute — every profile must identify its service",
+            ))?;
 
         let res_attrs_json = if let Some(r) = &rp.resource {
             if r.attributes.is_empty() {
@@ -799,6 +781,22 @@ async fn otlp_http_pyroscope(
     StatusCode::OK
 }
 
+/// Extract service.name from an optional Resource's attributes.
+/// Returns None if the resource is absent or lacks the attribute.
+fn extract_service_name(resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>) -> Option<&str> {
+    let resource = resource?;
+    for attr in &resource.attributes {
+        if attr.key == "service.name" {
+            let val = attr.value.as_ref()?;
+            let inner = val.value.as_ref()?;
+            if let opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s) = inner {
+                return Some(s.as_str());
+            }
+        }
+    }
+    None
+}
+
 /// Extract a form field value from multipart data by field name.
 fn extract_form_field(
     data: &[u8],
@@ -1037,6 +1035,7 @@ async fn transform_pyroscope_profiles(
                 .map(std::string::String::as_str)
                 .unwrap_or("");
 
+
             // Build location_id → Location map
             let locations = &pprof_profile.location;
             let functions = &pprof_profile.function;
@@ -1047,15 +1046,11 @@ async fn transform_pyroscope_profiles(
                     .location_id
                     .iter()
                     .filter_map(|&loc_id| {
-                        locations.iter().find(|l| l.id == loc_id).and_then(|loc| {
-                            loc.line.first().and_then(|line| {
-                                functions
-                                    .iter()
-                                    .find(|f| f.id == line.function_id)
-                                    .and_then(|f| string_table.get(f.name as usize))
-                                    .map(std::string::String::as_str)
-                            })
-                        })
+                        let loc = locations.iter().find(|l| l.id == loc_id)?;
+                        let line = loc.line.first()?;
+                        let func = functions.iter().find(|f| f.id == line.function_id)?;
+                        let name = string_table.get(func.name as usize)?;
+                        Some(name.as_str())
                     })
                     .take(128)
                     .collect();

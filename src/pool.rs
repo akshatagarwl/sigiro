@@ -29,7 +29,9 @@ impl PoolEntry {
     /// Checkpoint DuckLake before dropping so data is persisted to Parquet.
     fn shutdown(&self) {
         if let Ok(guard) = self.conn.lock() {
-            let _result = guard.execute_batch("CHECKPOINT lake;");
+            if let Err(e) = guard.execute_batch("CHECKPOINT lake;") {
+                tracing::warn!("DuckDB CHECKPOINT failed during shutdown: {e}");
+            }
         }
     }
 }

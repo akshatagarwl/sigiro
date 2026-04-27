@@ -2,6 +2,7 @@ use sigiro::investigate::{
     InvestigateRequest, QueryCtx, SpanRow, adaptive_config, build_span_trees, compute_coverage,
     investigate, query_derived_events, query_logs, query_service_context, us_to_iso,
 };
+use sigiro::types::StatusCode;
 use std::sync::{Arc, Mutex};
 
 /// Helper: set up in-memory DB with DRAIN-classified logs and deduplicated templates.
@@ -45,7 +46,7 @@ fn setup_drain_logs(
     (Arc::new(Mutex::new(conn)), now_us)
 }
 
-fn make_span(trace_id: &str, span_id: &str, parent: &str, status: i32) -> SpanRow {
+fn make_span(trace_id: &str, span_id: &str, parent: &str, status: StatusCode) -> SpanRow {
     SpanRow {
         trace_id: trace_id.to_string(),
         span_id: span_id.to_string(),
@@ -60,10 +61,10 @@ fn make_span(trace_id: &str, span_id: &str, parent: &str, status: i32) -> SpanRo
 #[test]
 fn build_span_trees_groups_by_parent() {
     let spans = vec![
-        make_span("t1", "s1", "", 0),
-        make_span("t1", "s2", "s1", 0),
-        make_span("t1", "s3", "s1", 0),
-        make_span("t1", "s4", "s2", 0),
+        make_span("t1", "s1", "", StatusCode::Unset),
+        make_span("t1", "s2", "s1", StatusCode::Unset),
+        make_span("t1", "s3", "s1", StatusCode::Unset),
+        make_span("t1", "s4", "s2", StatusCode::Unset),
     ];
     let trees = build_span_trees(&spans);
     assert_eq!(trees.get("s1").unwrap().len(), 2);
@@ -79,7 +80,7 @@ fn build_span_trees_empty() {
 
 #[test]
 fn build_span_trees_root_only() {
-    let spans = vec![make_span("t1", "s1", "", 0)];
+    let spans = vec![make_span("t1", "s1", "", StatusCode::Unset)];
     let trees = build_span_trees(&spans);
     assert!(trees.is_empty());
 }
@@ -180,7 +181,7 @@ fn investigate_with_real_span_data() {
     assert!(health_op.exemplar_error_trace_id.is_none());
 
     assert_eq!(block.spans.len(), 5);
-    assert_eq!(block.spans[0].status_code, 2);
+    assert_eq!(block.spans[0].status_code, StatusCode::Error);
     assert_eq!(block.truncation.spans_total, 5);
     assert_eq!(block.truncation.spans_returned, 5);
     assert_eq!(block.truncation.error_traces_total, 2);

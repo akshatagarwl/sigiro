@@ -122,13 +122,141 @@ impl SignalTable {
 }
 
 // ---------------------------------------------------------------------------
+// StatusCode — OTel span status (replaces bare i32 magic numbers)
+// ---------------------------------------------------------------------------
+
+/// OTel span status code. Values match the OpenTelemetry specification:
+///   Unset = 0, Ok = 1, Error = 2
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(i32)]
+pub enum StatusCode {
+    Unset = 0,
+    Ok = 1,
+    Error = 2,
+}
+
+impl StatusCode {
+    /// Parse from the i32 value stored in DuckDB.
+    /// Unknown values are mapped to Unset (the OTel default).
+    pub fn from_i32(v: i32) -> Self {
+        match v {
+            0 => Self::Unset,
+            1 => Self::Ok,
+            2 => Self::Error,
+            _ => Self::Unset,
+        }
+    }
+
+    /// Convert back to i32 for SQL queries.
+    pub fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    /// True if this status represents an error.
+    pub fn is_error(self) -> bool {
+        self == Self::Error
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TimestampMicros — prevents sec/µs confusion at API boundaries
+// ---------------------------------------------------------------------------
+
+/// Microsecond-precision timestamp. All internal timestamps are in microseconds.
+/// CLI accepts seconds and converts via `from_seconds()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TimestampMicros(pub i64);
+
+impl TimestampMicros {
+    /// From epoch seconds (CLI input boundary).
+    pub fn from_seconds(sec: i64) -> Self {
+        Self(sec * 1_000_000)
+    }
+
+    /// From epoch microseconds (internal storage).
+    pub fn from_micros(us: i64) -> Self {
+        Self(us)
+    }
+
+    /// Current time in microseconds.
+    pub fn now() -> Self {
+        Self(chrono::Utc::now().timestamp_micros())
+    }
+
+    /// Default "15 minutes ago" window start.
+    pub fn fifteen_minutes_ago() -> Self {
+        Self(chrono::Utc::now().timestamp_micros() - 15 * 60 * 1_000_000)
+    }
+
+    /// Raw microseconds value (for SQL parameters).
+    pub fn as_micros(self) -> i64 {
+        self.0
+    }
+
+    /// Duration between two timestamps in microseconds.
+    pub fn duration_since(self, earlier: Self) -> i64 {
+        self.0.saturating_sub(earlier.0)
+    }
+}
+
+impl From<i64> for TimestampMicros {
+    fn from(us: i64) -> Self {
+        Self(us)
+    }
+}
+
+impl std::ops::Sub for TimestampMicros {
+    type Output = i64;
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.0.saturating_sub(rhs.0)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ServiceSelector — makes invalid service selections unrepresentable
+// ---------------------------------------------------------------------------
+
+/// Service selection for investigation — replaces Option<String> + Option<Vec<String>>.
+/// Makes invalid states (neither provided, or empty list) unrepresentable at the type level.
+#[derive(Debug, Clone)]
+pub enum ServiceSelector {
+    Single(String),
+    Multi(Vec<String>),
+}
+
+impl ServiceSelector {
+    /// Get all service names as a slice.
+    pub fn as_slice(&self) -> &[String] {
+        match self {
+            Self::Single(s) => std::slice::from_ref(s),
+            Self::Multi(v) => v,
+        }
+    }
+
+    /// Number of services selected.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Single(_) => 1,
+            Self::Multi(v) => v.len(),
+        }
+    }
+
+    /// Check if no services (always false — empty Multi is prevented at construction).
+    #[allow(clippy::len_without_is_empty)]
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Typed path structs — compile-time route checking for axum router
 // ---------------------------------------------------------------------------
 // Moved from server.rs to centralize route types that span modules.
 // Used with axum_extra::routing::TypedPath for compile-time route verification.
 
 use axum_extra::routing::TypedPath;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Route: GET /query
 #[derive(Debug, Clone, TypedPath)]

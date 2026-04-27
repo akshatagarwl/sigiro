@@ -175,7 +175,13 @@ impl ProjectFlusher {
 
     fn buffer(&mut self, signal: SignalTable, batch: RecordBatch) {
         let batch = if signal == SignalTable::Logs {
-            self.classify_logs(&batch)
+            match self.classify_logs(&batch) {
+                Ok(classified) => classified,
+                Err(e) => {
+                    tracing::warn!(rows = batch.num_rows(), "log classification failed, skipping batch: {e:#}");
+                    return;
+                }
+            }
         } else {
             batch
         };
@@ -184,16 +190,16 @@ impl ProjectFlusher {
     }
 
     /// Run DRAIN on each log body and append a `template_id` column to the batch.
-    fn classify_logs(&mut self, batch: &RecordBatch) -> RecordBatch {
+    fn classify_logs(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let body_idx = batch
             .schema()
             .index_of("body")
-            .expect("sigiro_logs must have body column");
+            .context("sigiro_logs missing body column")?;
         let body_col = batch
             .column(body_idx)
             .as_any()
             .downcast_ref::<StringArray>()
-            .expect("body column must be StringArray");
+            .ok_or_else(|| anyhow::anyhow!("body column is not StringArray"))?;
 
         let mut template_ids = Vec::with_capacity(batch.num_rows());
         for i in 0..batch.num_rows() {
@@ -221,7 +227,7 @@ impl ProjectFlusher {
         ));
         let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
 
-        RecordBatch::try_new(schema, columns).expect("failed to add template_id column")
+        RecordBatch::try_new(schema, columns).context("failed to add template_id column")
     }
 
     fn buffer_metrics(&mut self, batches: MetricBatches) {
