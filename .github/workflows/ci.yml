@@ -21,7 +21,7 @@ jobs:
       - run: cargo test --release
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - uses: actions-rust-lang/rustfmt@v1
-      - uses: eclipse-score/apt-install@v1
+      - uses: eclipse-score/apt-install@v1.0.0
         with:
           packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           apt_update: true
