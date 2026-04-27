@@ -4,7 +4,7 @@
 //! multi-project isolation, services endpoint simulation, query validation,
 //! and investigation with all signal types.
 
-use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray};
+use arrow::array::{Float64Array, Int32Array, Int64Array, ListArray, StringArray, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use sigiro::IngestMsg;
@@ -213,6 +213,84 @@ fn make_gauge_batch(n: usize, service_name: &str, ts_base: i64) -> RecordBatch {
         ],
     )
     .expect("valid gauge batch")
+}
+
+/// Build a profiles RecordBatch manually
+/// Build a profiles RecordBatch manually (simulating what transform_profiles produces).
+fn make_profiles_batch(
+    service_name: &str,
+    ts_base: i64,
+    stacks: &[(&[&str], i64, &str, &str)], // (stack_frames, value, profile_type, unit)
+) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("profile_id", DataType::Utf8, true),
+        Field::new("service_name", DataType::Utf8, false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
+        Field::new("profile_type", DataType::Utf8, true),
+        Field::new(
+            "stack_trace",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+        Field::new("value", DataType::Int64, true),
+        Field::new("unit", DataType::Utf8, true),
+        Field::new("resource_attributes", DataType::Utf8, true),
+    ]));
+
+    let mut profile_ids = Vec::new();
+    let mut service_names = Vec::new();
+    let mut timestamps = Vec::new();
+    let mut profile_types = Vec::new();
+    let mut values = Vec::new();
+    let mut units = Vec::new();
+    let mut resource_attrs: Vec<Option<&str>> = Vec::new();
+
+    // Build list array for stack traces
+    let mut stack_offsets: Vec<i32> = vec![0];
+    let mut stack_values_flat: Vec<&str> = Vec::new();
+
+    for (i, (frames, value, ptype, unit)) in stacks.iter().enumerate() {
+        profile_ids.push("test-profile-001");
+        service_names.push(service_name);
+        timestamps.push(ts_base + i as i64);
+        profile_types.push(*ptype);
+        values.push(*value);
+        units.push(*unit);
+        resource_attrs.push(None);
+
+        for frame in *frames {
+            stack_values_flat.push(frame);
+        }
+        let prev = *stack_offsets.last().unwrap();
+        stack_offsets.push(prev + frames.len() as i32);
+    }
+
+    let stack_list = ListArray::try_new(
+        Arc::new(Field::new("item", DataType::Utf8, true)),
+        arrow::buffer::OffsetBuffer::new(stack_offsets.into()),
+        Arc::new(StringArray::from(stack_values_flat)),
+        None,
+    )
+    .unwrap();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(profile_ids)),
+            Arc::new(StringArray::from(service_names)),
+            Arc::new(arrow::array::TimestampMicrosecondArray::from(timestamps)),
+            Arc::new(StringArray::from(profile_types)),
+            Arc::new(stack_list),
+            Arc::new(Int64Array::from(values)),
+            Arc::new(StringArray::from(units)),
+            Arc::new(StringArray::from(resource_attrs)),
+        ],
+    )
+    .unwrap()
 }
 
 // ===========================================================================
@@ -536,6 +614,18 @@ async fn e2e_investigation_all_signals() {
                 exp_histogram: None,
                 skipped: Default::default(),
             },
+        })
+        .await;
+
+    // Ingest profiles (CPU samples) so all 4 signal types are present
+    let profile_stacks = vec![
+        (&["main", "handle_request", "db_query"][..], 15_000_000i64, "cpu", "nanoseconds"),
+        (&["main", "handle_request", "serialize"][..], 8_000_000, "cpu", "nanoseconds"),
+    ];
+    let _ = router
+        .send(IngestMsg::Profiles {
+            project_id: "proj_all_signals".to_string(),
+            batch: make_profiles_batch("full-svc", now_us, &profile_stacks),
         })
         .await;
 

@@ -37,6 +37,10 @@ fn build_test_context() -> TestContext {
 
     let pool = Arc::new(ProjectPool::new(data_dir, 4));
 
+    // Explicit DI: initialize the dev_project connection before handlers access it.
+    // This mirrors production behavior where ingest path calls get_or_create first.
+    pool.get_or_create("dev_project").expect("failed to init dev_project connection");
+
     // In-memory SQLite admin DB with all required tables
     let admin_conn = Connection::open_in_memory().expect("failed to open in-memory SQLite");
     admin::create_keys_table(&admin_conn).expect("failed to create keys table");

@@ -105,20 +105,17 @@ impl ProjectPool {
     /// Get the connection for a project (same connection used for reads and writes).
     /// The caller must lock the mutex — no concurrent access is possible.
     pub fn get_read(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
-        if let Some(ref mut entry) = self.connections.get_mut(project_id) {
-            entry.last_access = Instant::now();
-            return Ok(Arc::clone(&entry.conn));
-        }
-        // Auto-initialize if data exists on disk
-        let project_dir = self.data_dir.join(project_id);
-        if project_dir.exists() {
-            self.get_or_create(project_id)?;
-            return self.get_read(project_id);
-        }
-        Err(anyhow::anyhow!(
-            "connection requested but project {project_id} not initialized — \
-             call get_or_create() first"
-        ))
+        // DI-violation-free: get_read returns only existing connections.
+        // Callers must call get_or_create() first to initialize a project.
+        // Note: last_access is updated in get_or_create, not here (no mutable access).
+        self.connections
+            .get(project_id)
+            .map(|entry| Arc::clone(&entry.conn))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "connection not found for project {project_id} —                      call get_or_create() first"
+                )
+            })
     }
 
 #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir.display()))]

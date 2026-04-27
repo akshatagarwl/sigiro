@@ -34,13 +34,15 @@ pub static OTEL_EXPORTER_OTLP_ENDPOINT: Envar<String> = Envar::on_startup("OTEL_
 pub static PYROSCOPE_ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_PYROSCOPE_ENDPOINT", || EnvarDef::Default(String::new()));
 
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
-pub static DATA_DIR: Envar<String> = Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Default(String::new()));
+/// Path to the sigiro data directory (required — no default). Unset causes fail-fast at startup.
+pub static DATA_DIR: Envar<String> = Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);
 
 /// Server URL for CLI client and admin commands.
 pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || EnvarDef::Default("http://localhost:9999".to_string()));
 
 /// PostgreSQL catalog URL (optional — enables distributed mode).
-pub static CATALOG_URL: Envar<String> = Envar::on_startup("SIGIRO_CATALOG_URL", || EnvarDef::Default(String::new()));
+/// Unset or empty means local SQLite. Empty string means misconfiguration (fail-fast).
+pub static CATALOG_URL: Envar<String> = Envar::on_startup("SIGIRO_CATALOG_URL", || EnvarDef::Unset);
 
 /// Machine hostname (used for federation worker registration).
 pub static HOSTNAME: Envar<String> = Envar::on_startup("HOSTNAME", || EnvarDef::Default(String::new()));

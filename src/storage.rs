@@ -154,6 +154,8 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         Err(_) => return Ok(None), // not set — use local SQLite
     };
 
+    // At this point catalog_url is a non-empty string (Ok + !is_empty)
+    // Proceed to use it as distributed catalog
     use crate::config;
     let s3_bucket = config::S3_BUCKET.value().map_err(|e| anyhow::anyhow!("{e}"))?;
     let s3_region = config::S3_REGION.value().map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -170,7 +172,7 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         catalog_url,
         s3_bucket,
         s3_region,
-        s3_prefix: config::S3_PREFIX.value().map_err(|e| anyhow::anyhow!("{e}"))?,
+        s3_prefix: crate::config::S3_PREFIX.value().map_err(|e| anyhow::anyhow!("{e}"))?,
     }))
 }
 

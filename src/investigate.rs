@@ -528,18 +528,11 @@ fn investigate_one(
         prefix,
     };
 
-    // Early check: if all three data sources return 0, return explicit "no data" instead of
-    // proceeding with empty queries. This makes it clear the service has no ingested data yet.
+    // Count all signals. count_* functions return 0 (not error) for a non-existent
+    // service, so this is safe to run unconditionally.
     let profile_sample_count = count_profile_samples(&ctx)?;
     let (spans_total, error_traces_total) = count_span_stats(&ctx)?;
     let logs_total = count_log_templates(&ctx)?;
-    if profile_sample_count == 0 && spans_total == 0 && logs_total == 0 {
-        return Err(anyhow::anyhow!(
-            "No data found for service '{}'. \
-             Ensure spans, profiles, or logs have been ingested for this service before investigating.",
-            service
-        ));
-    }
 
     let metrics =
         query_all_metrics(&ctx, config.bucket_interval).context("metrics query failed")?;

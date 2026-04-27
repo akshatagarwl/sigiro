@@ -221,10 +221,11 @@ fn coverage_spans_only() {
 
 #[test]
 fn coverage_all_signals() {
-    let c = compute_coverage(10, 5, 3, 0);
+    let c = compute_coverage(10, 5, 3, 1);
     assert!(c.has_spans);
     assert!(c.has_logs);
     assert!(c.has_metrics);
+    assert!(c.has_profiles);
     assert!(c.gaps.is_empty(), "no gaps when all signals present");
 }
 
@@ -593,7 +594,9 @@ fn investigate_all_three_signals() {
             severity_text, body)
          VALUES (make_timestamp({now_us}), {now_us}, 'svc', 13, 'WARN', 'something happened');
          INSERT INTO sigiro_metrics_gauge (timestamp, metric_name, value, service_name)
-         VALUES (make_timestamp({now_us}), 'cpu.usage', 42.0, 'svc');"
+         VALUES (make_timestamp({now_us}), 'cpu.usage', 42.0, 'svc');
+         INSERT INTO sigiro_profiles (profile_id, service_name, timestamp, profile_type, stack_trace, value, unit)
+         VALUES ('p1', 'svc', make_timestamp({now_us}), 'cpu', ['main', 'handler'], 1000, 'samples');"
     ))
     .expect("insert all signals");
 
