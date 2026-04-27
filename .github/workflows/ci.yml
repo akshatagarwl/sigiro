@@ -21,9 +21,11 @@ jobs:
       - run: cargo test --release
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - uses: actions-rust-lang/rustfmt@v1
-      - run: |
-          sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          cargo build --release --target aarch64-unknown-linux-gnu --locked
+      - uses: eclipse-score/apt-install@v1
+        with:
+          packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          apt_update: true
+      - run: cargo build --release --target aarch64-unknown-linux-gnu --locked
       - uses: docker/setup-buildx-action@v3
       - uses: docker/bake-action@v7
         with:
