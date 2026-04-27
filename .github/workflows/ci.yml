@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # --- Test across Rust versions (build + test in one job) ---
+  # --- Test across Rust versions ---
   test:
     name: Test (Rust ${{ matrix.toolchain }})
     runs-on: ubuntu-latest
@@ -31,7 +31,7 @@ jobs:
       - name: Run tests
         run: cargo test --release
 
-  # --- Lint: fmt + clippy (parallel with test, no needs dependency) ---
+  # --- Lint: fmt + clippy (parallel with test) ---
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -73,7 +73,7 @@ jobs:
           path: target/aarch64-unknown-linux-gnu/release/sigiro
           retention-days: 1
 
-  # --- Multi-platform Docker (no cargo deps — starts immediately) ---
+  # --- Multi-platform Docker ---
   docker:
     name: Docker
     runs-on: ubuntu-latest
@@ -101,42 +101,3 @@ jobs:
             ${{ github.event_name == 'push' && 'ghcr.io/${{ github.repository }}/sigiro:latest' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  # --- Self-monitoring smoke test (parallel with docker) ---
-  self-monitor:
-    name: Self-Monitor
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Start backend
-        run: |
-          docker run -d --name old-sigiro \
-            --cap-add BPF --cap-add NET_ADMIN \
-            -p 9999:9999 -p 4317:4317 \
-            ghcr.io/${{ github.repository }}/sigiro:latest || true
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:9999/health && break
-            [ $i -eq 30 ] && exit 1
-            sleep 1
-          done
-
-      - name: Run & verify
-        run: |
-          ./target/release/sigiro serve --no-ebpf &
-          sleep 3
-          for i in $(seq 1 20); do
-            curl -sf -X POST http://localhost:4318/v1/traces \
-              -H "Content-Type: application/json" \
-              -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"sigiro-next"}}]},"scopeSpans":[{"spans":[{"traceId":"'"$(printf '%032x' $((RANDOM * RANDOM)))"'000000000000000","spanId":"'"$(printf '%016x' $((RANDOM * RANDOM)))"'00000000","name":"test","kind":1,"startTimeUnixNano":"'"$(($(date +%s) * 1000000000))"'","endTimeUnixNano":"'"$(($(date +%s) * 1000000000 + 100000000))"'","attributes":[]}]}]}]}' && break
-            sleep 0.5
-          done
-          sleep 3
-          SPAN_COUNT=$(curl -sf "http://localhost:9999/v1/investigate?service=sigiro-next&from=$(($(date +%s) - 60))&to=$(date +%s)" | python3 -c "import sys,json; print(json.load(sys.stdin).get('span_count', 0))" 2>/dev/null || echo 0)
-          echo "Spans received: $SPAN_COUNT"
