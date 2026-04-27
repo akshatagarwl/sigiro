@@ -244,7 +244,7 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     sigiro::admin::write_instance_status(&admin_conn, "platform_os", std::env::consts::OS)?;
     sigiro::admin::write_instance_status(&admin_conn, "platform_arch", std::env::consts::ARCH)?;
 
-    // Extension probe is deferred to first project connection (pool.get_or_create).
+    // Extension probe is deferred to first project connection (pool.create_project).
     // Use `sigiro fetch-extensions` to pre-download for offline deployments.
 
     // eBPF auto-instrumentation: try obi, degrade gracefully

@@ -99,7 +99,7 @@ async fn e2e_profiles_pipeline() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Explicit DI: initialize and register flusher before sending
-    let _ = pool.get_or_create("profile_test").unwrap();
+    let _ = pool.create_project("profile_test").unwrap();
     router.register_flusher("profile_test").unwrap();
 
     // Send CPU profile samples with known stack traces
@@ -135,7 +135,7 @@ async fn e2e_profiles_pipeline() {
     router.shutdown_and_wait().await;
 
     // Verify rows landed in DuckDB
-    let conn = pool.get_or_create("profile_test").unwrap();
+    let conn = pool.create_project("profile_test").unwrap();
     let conn = conn.lock().unwrap();
 
     let total: i64 = conn
@@ -202,7 +202,7 @@ async fn e2e_profiles_multi_type() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Explicit DI: initialize and register flusher before sending
-    let _ = pool.get_or_create("multi_type").unwrap();
+    let _ = pool.create_project("multi_type").unwrap();
     router.register_flusher("multi_type").unwrap();
 
     // CPU samples
@@ -235,7 +235,7 @@ async fn e2e_profiles_multi_type() {
 
     router.shutdown_and_wait().await;
 
-    let conn = pool.get_or_create("multi_type").unwrap();
+    let conn = pool.create_project("multi_type").unwrap();
     let conn = conn.lock().unwrap();
 
     // Should have both profile types
@@ -282,7 +282,7 @@ async fn e2e_profiles_empty_batch() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Explicit DI: initialize and register flusher before sending
-    let _ = pool.get_or_create("empty_profiles").unwrap();
+    let _ = pool.create_project("empty_profiles").unwrap();
     router.register_flusher("empty_profiles").unwrap();
 
     // Empty profiles batch
@@ -295,7 +295,7 @@ async fn e2e_profiles_empty_batch() {
 
     router.shutdown_and_wait().await;
 
-    let conn = pool.get_or_create("empty_profiles").unwrap();
+    let conn = pool.create_project("empty_profiles").unwrap();
     let conn = conn.lock().unwrap();
 
     let total: i64 = conn

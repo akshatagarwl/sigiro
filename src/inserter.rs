@@ -60,7 +60,7 @@ impl MsgRouter {
     pub fn register_flusher(&self, project_id: &str) -> Result<(), RouterError> {
         use dashmap::mapref::entry::Entry;
 
-        let conn = self.pool.get_or_create(project_id)
+        let conn = self.pool.create_project(project_id)
             .map_err(|_| RouterError::ConnectionFailed { project_id: project_id.to_string() })?;
 
         let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);

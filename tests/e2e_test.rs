@@ -306,7 +306,7 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Explicit DI: initialize project connection and register flusher before sending
-    let _ = pool.get_or_create("proj_e2e").unwrap();
+    let _ = pool.create_project("proj_e2e").unwrap();
     router.register_flusher("proj_e2e").unwrap();
 
     // Send 5 batches of 20 spans for "checkout" service
@@ -323,7 +323,7 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     router.shutdown_and_wait().await;
 
     // Verify data in DuckDB
-    let conn = pool.get_or_create("proj_e2e").unwrap();
+    let conn = pool.create_project("proj_e2e").unwrap();
     let count: i64 = conn
         .lock()
         .unwrap()
@@ -371,9 +371,9 @@ async fn e2e_multi_project_isolation() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Explicit DI: initialize and register flushers for both projects before sending
-    let _ = pool.get_or_create("proj_alpha").unwrap();
+    let _ = pool.create_project("proj_alpha").unwrap();
     router.register_flusher("proj_alpha").unwrap();
-    let _ = pool.get_or_create("proj_beta").unwrap();
+    let _ = pool.create_project("proj_beta").unwrap();
     router.register_flusher("proj_beta").unwrap();
 
     // Project A: "alpha-svc" with 30 spans
@@ -395,7 +395,7 @@ async fn e2e_multi_project_isolation() {
     router.shutdown_and_wait().await;
 
     // Investigate project A — should only see alpha-svc
-    let conn_a = pool.get_or_create("proj_alpha").unwrap();
+    let conn_a = pool.create_project("proj_alpha").unwrap();
     let req_a = InvestigateRequest {
         service: Some("alpha-svc".to_string()),
         services: None,
@@ -424,7 +424,7 @@ async fn e2e_multi_project_isolation() {
     );
 
     // Investigate project B — should only see beta-svc
-    let conn_b = pool.get_or_create("proj_beta").unwrap();
+    let conn_b = pool.create_project("proj_beta").unwrap();
     let req_b = InvestigateRequest {
         service: Some("beta-svc".to_string()),
         services: None,
@@ -450,7 +450,7 @@ async fn e2e_services_endpoint_simulation() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Explicit DI: initialize and register flusher for the shared project
-    let _ = pool.get_or_create("proj_services").unwrap();
+    let _ = pool.create_project("proj_services").unwrap();
     router.register_flusher("proj_services").unwrap();
 
     // Ingest spans for 3 different services into the same project
@@ -476,7 +476,7 @@ async fn e2e_services_endpoint_simulation() {
     router.shutdown_and_wait().await;
 
     // Query the services table grouped by service_name
-    let conn = pool.get_or_create("proj_services").unwrap();
+    let conn = pool.create_project("proj_services").unwrap();
     let conn_guard = conn.lock().unwrap();
 
     let mut stmt = conn_guard
@@ -601,7 +601,7 @@ async fn e2e_investigation_all_signals() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Explicit DI: initialize and register flusher for the project
-    let _ = pool.get_or_create("proj_all_signals").unwrap();
+    let _ = pool.create_project("proj_all_signals").unwrap();
     router.register_flusher("proj_all_signals").unwrap();
 
     // Ingest spans
@@ -650,7 +650,7 @@ async fn e2e_investigation_all_signals() {
     router.shutdown_and_wait().await;
 
     // Verify raw counts in DuckDB
-    let conn = pool.get_or_create("proj_all_signals").unwrap();
+    let conn = pool.create_project("proj_all_signals").unwrap();
     {
         let guard = conn.lock().unwrap();
         let spans: i64 = guard
@@ -783,7 +783,7 @@ async fn e2e_drain_log_template_dedup() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Explicit DI: initialize and register flusher for the project
-    let _ = pool.get_or_create("drain_test").unwrap();
+    let _ = pool.create_project("drain_test").unwrap();
     router.register_flusher("drain_test").unwrap();
 
     // Send 20 logs that should collapse into 2 templates:
@@ -815,7 +815,7 @@ async fn e2e_drain_log_template_dedup() {
     router.shutdown_and_wait().await;
 
     // Verify: 20 rows in sigiro_logs, each with a template_id
-    let conn = pool.get_or_create("drain_test").unwrap();
+    let conn = pool.create_project("drain_test").unwrap();
     let conn = conn.lock().unwrap();
 
     let total_logs: i64 = conn

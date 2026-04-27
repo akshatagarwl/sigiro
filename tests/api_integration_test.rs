@@ -27,7 +27,7 @@ fn build_test_context() -> TestContext {
     let data_dir = tmp_dir.path().to_path_buf();
 
     // Set SIGIRO_DATA_DIR so crate::data_dir() resolves correctly.
-    // This is needed by pool::get_or_create -> storage::init_default
+    // This is needed by pool::create_project -> storage::init_default
     // and federation endpoints that call crate::data_dir().
     // SAFETY: This is a single-threaded test setup; no concurrent access
     // to this env var from other threads during this call.
@@ -38,8 +38,8 @@ fn build_test_context() -> TestContext {
     let pool = Arc::new(ProjectPool::new(data_dir, 4));
 
     // Explicit DI: initialize the dev_project connection before handlers access it.
-    // This mirrors production behavior where ingest path calls get_or_create first.
-    pool.get_or_create("dev_project").expect("failed to init dev_project connection");
+    // This mirrors production behavior where ingest path calls create_project first.
+    pool.create_project("dev_project").expect("failed to init dev_project connection");
 
     // In-memory SQLite admin DB with all required tables
     let admin_conn = Connection::open_in_memory().expect("failed to open in-memory SQLite");

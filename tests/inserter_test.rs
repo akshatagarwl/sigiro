@@ -90,7 +90,7 @@ async fn inserter_processes_spans_for_single_project() {
     let router = MsgRouter::new(pool.clone());
 
     // Explicit DI: initialize and register flusher before sending
-    let _ = pool.get_or_create("test_project").unwrap();
+    let _ = pool.create_project("test_project").unwrap();
     router.register_flusher("test_project").unwrap();
 
     // Send 10 batches of 100 spans
@@ -107,7 +107,7 @@ async fn inserter_processes_spans_for_single_project() {
     router.shutdown_and_wait().await;
 
     // Verify data landed in DuckDB
-    let conn = pool.get_or_create("test_project").unwrap();
+    let conn = pool.create_project("test_project").unwrap();
     let conn = conn.lock().unwrap();
     let count: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
@@ -124,9 +124,9 @@ async fn inserter_isolates_projects() {
     let router = MsgRouter::new(pool.clone());
 
     // Explicit DI: initialize and register flushers for both projects before sending
-    let _ = pool.get_or_create("project_a").unwrap();
+    let _ = pool.create_project("project_a").unwrap();
     router.register_flusher("project_a").unwrap();
-    let _ = pool.get_or_create("project_b").unwrap();
+    let _ = pool.create_project("project_b").unwrap();
     router.register_flusher("project_b").unwrap();
 
     // Send to two different projects
@@ -149,7 +149,7 @@ async fn inserter_isolates_projects() {
     router.shutdown_and_wait().await;
 
     // Each project should have its own data
-    let conn_a = pool.get_or_create("project_a").unwrap();
+    let conn_a = pool.create_project("project_a").unwrap();
     let count_a: i64 = conn_a
         .lock()
         .unwrap()
@@ -158,7 +158,7 @@ async fn inserter_isolates_projects() {
         })
         .unwrap();
 
-    let conn_b = pool.get_or_create("project_b").unwrap();
+    let conn_b = pool.create_project("project_b").unwrap();
     let count_b: i64 = conn_b
         .lock()
         .unwrap()
@@ -186,9 +186,9 @@ async fn inserter_handles_backpressure() {
     let router = MsgRouter::new(pool.clone());
 
     // Explicit DI: initialize and register flushers for both projects before sending
-    let _ = pool.get_or_create("fast_project").unwrap();
+    let _ = pool.create_project("fast_project").unwrap();
     router.register_flusher("fast_project").unwrap();
-    let _ = pool.get_or_create("slow_project").unwrap();
+    let _ = pool.create_project("slow_project").unwrap();
     router.register_flusher("slow_project").unwrap();
 
     // Send many messages quickly — with backpressure, none are dropped
@@ -215,7 +215,7 @@ async fn inserter_handles_backpressure() {
     router.shutdown_and_wait().await;
 
     // Both projects should have data — no drops under backpressure
-    let conn = pool.get_or_create("fast_project").unwrap();
+    let conn = pool.create_project("fast_project").unwrap();
     let count: i64 = conn
         .lock()
         .unwrap()
@@ -225,7 +225,7 @@ async fn inserter_handles_backpressure() {
         .unwrap();
     assert!(count > 0, "fast_project should have some spans");
 
-    let conn2 = pool.get_or_create("slow_project").unwrap();
+    let conn2 = pool.create_project("slow_project").unwrap();
     let count2: i64 = conn2
         .lock()
         .unwrap()
@@ -245,7 +245,7 @@ async fn inserter_throughput_single_project() {
     let router = MsgRouter::new(pool.clone());
 
     // Explicit DI: initialize and register flusher before sending
-    let _ = pool.get_or_create("throughput_test").unwrap();
+    let _ = pool.create_project("throughput_test").unwrap();
     router.register_flusher("throughput_test").unwrap();
 
     let start = Instant::now();
@@ -265,7 +265,7 @@ async fn inserter_throughput_single_project() {
     router.shutdown_and_wait().await;
     let elapsed = start.elapsed();
 
-    let conn = pool.get_or_create("throughput_test").unwrap();
+    let conn = pool.create_project("throughput_test").unwrap();
     let count: i64 = conn
         .lock()
         .unwrap()

@@ -48,14 +48,15 @@ impl ProjectPool {
         crate::storage::table_prefix()
     }
 
-    /// Get or create a connection for a project.
-    /// Used by both the flusher (ingester) and HTTP API (query handlers).
-    /// Creates the DuckLake catalog and tables on first access.
+    /// Create a connection for a project (idempotent — setup operation).
+    ///
+    /// Used for project initialization. If two callers race, the loser re-enters
+    /// and finds the winner's connection (no duplicate created).
     ///
     /// Thread-safe: uses DashMap entry API to prevent concurrent callers from
     /// creating duplicate connections for the same project.
 #[tracing::instrument(skip(self), fields(project_id = %project_id))]
-    pub fn get_or_create(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
+    pub fn create_project(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
         use dashmap::mapref::entry::Entry;
 
         match self.connections.entry(project_id.to_string()) {
@@ -102,18 +103,18 @@ impl ProjectPool {
         }
     }
 
-    /// Get the connection for a project (same connection used for reads and writes).
-    /// The caller must lock the mutex — no concurrent access is possible.
-    pub fn get_read(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
-        // DI-violation-free: get_read returns only existing connections.
-        // Callers must call get_or_create() first to initialize a project.
-        // Note: last_access is updated in get_or_create, not here (no mutable access).
+    /// Get the connection for a project (strict — no auto-create).
+    ///
+    /// Returns only an existing connection. Fails if the project was not created.
+    /// Use `create_project()` first to initialize a project.
+    pub fn get_project(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
         self.connections
             .get(project_id)
             .map(|entry| Arc::clone(&entry.conn))
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "connection not found for project {project_id} —                      call get_or_create() first"
+                    "connection not found for project {project_id} — \
+                     call create_project() first"
                 )
             })
     }
