@@ -23,15 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-action@1.85
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          version: ${{ matrix.toolchain }}
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: sigiro-${{ matrix.toolchain }}
+          toolchain: ${{ matrix.toolchain }}
+          cache-shared-key: sigiro-${{ matrix.toolchain }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -52,20 +48,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: aarch64-unknown-linux-gnu
+          toolchain: stable
+          target: aarch64-unknown-linux-gnu
+          cache-shared-key: sigiro-aarch64
 
       - name: Install cross-compilation toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: sigiro-aarch64
 
       - name: Build aarch64 binary
         run: |
@@ -132,10 +125,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-action@1.85
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          version: stable
+          toolchain: stable
 
       - name: Build
         run: cargo build --release
