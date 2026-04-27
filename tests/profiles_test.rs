@@ -98,6 +98,10 @@ async fn e2e_profiles_pipeline() {
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
+    // Explicit DI: initialize and register flusher before sending
+    let _ = pool.get_or_create("profile_test").unwrap();
+    router.register_flusher("profile_test").unwrap();
+
     // Send CPU profile samples with known stack traces
     let stacks = vec![
         (
@@ -197,6 +201,10 @@ async fn e2e_profiles_multi_type() {
 
     let now_us = chrono::Utc::now().timestamp_micros();
 
+    // Explicit DI: initialize and register flusher before sending
+    let _ = pool.get_or_create("multi_type").unwrap();
+    router.register_flusher("multi_type").unwrap();
+
     // CPU samples
     let cpu_stacks = vec![(
         &["main", "compute"][..],
@@ -272,6 +280,10 @@ async fn e2e_profiles_empty_batch() {
     let router = MsgRouter::new(pool.clone());
 
     let now_us = chrono::Utc::now().timestamp_micros();
+
+    // Explicit DI: initialize and register flusher before sending
+    let _ = pool.get_or_create("empty_profiles").unwrap();
+    router.register_flusher("empty_profiles").unwrap();
 
     // Empty profiles batch
     let _ = router

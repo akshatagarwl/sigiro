@@ -80,29 +80,12 @@ impl MsgRouter {
     }
 
     /// Route a message to the appropriate per-project flusher.
-    /// Creates the flusher task on first message for a project (lazy initialization).
-    /// Applies backpressure via bounded channel — sender blocks when full
-    /// rather than silently dropping data.
-    ///
-    /// Callers may also use register_flusher() for explicit initialization
-    /// (recommended in production DI containers).
+    /// Flusher MUST be registered first via register_flusher().
+    /// Returns Err if no flusher is registered for this project.
     #[tracing::instrument(skip_all, fields(otel.name = "ingest.send", project_id = %msg.project_id()))]
     pub async fn send(&self, msg: IngestMsg) -> Result<(), RouterError> {
         let project_id = msg.project_id().to_string();
-
-        // Lazy creation: if no flusher exists for this project, create one now.
-        // This preserves the original behavior that all existing tests depend on.
-        if !self.project_senders.contains_key(&project_id) {
-            let conn = self.pool.get_or_create(&project_id).map_err(|_| {
-                RouterError::ConnectionFailed { project_id: project_id.clone() }
-            })?;
-            let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
-            let pid = project_id.clone();
-            let handle = tokio::spawn(async move {
-                run_flusher(&pid, conn, rx).await
-            });
-            self.project_senders.insert(project_id.clone(), (tx, handle));
-        }
+        let project_id_for_err = project_id.clone();
 
         let entry = self.project_senders
             .get(&project_id)
@@ -112,7 +95,7 @@ impl MsgRouter {
         sender.send(msg).await.map_err(|_| {
             drop(entry);
             self.project_senders.remove(&project_id);
-            RouterError::ConnectionFailed { project_id }
+            RouterError::ChannelClosed { project_id: project_id_for_err }
         })
     }
 
