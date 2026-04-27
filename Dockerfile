@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: cargo-chef planner — extracts dependency recipe
+# Stage 1: cargo-chef planner -- extracts dependency recipe
 FROM --platform=$BUILDPLATFORM lukemathwalker/cargo-chef:latest-rust-slim AS chef
 WORKDIR /build
 
@@ -11,9 +11,6 @@ COPY benches/ benches/
 RUN cargo chef prepare --recipe-path recipe.json
 
 # Stage 2: cook dependencies (cached until Cargo.lock changes)
-# Cache mounts keyed by TARGETARCH to avoid mixing amd64/arm64 artifacts.
-# DuckDB bundled C++ compile is the bottleneck (~3-5 min); cache mounts
-# persist it across layer invalidations so it only compiles once per arch.
 FROM lukemathwalker/cargo-chef:latest-rust-slim AS deps
 WORKDIR /build
 ARG TARGETARCH
@@ -25,7 +22,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
     cargo chef cook --release --recipe-path recipe.json
 
-# Stage 3: build the sigiro binary only (no benches, no tests)
+# Stage 3: build the sigiro binary only
 FROM deps AS builder
 ARG TARGETARCH
 COPY Cargo.toml Cargo.lock ./
