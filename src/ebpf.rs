@@ -20,6 +20,7 @@ mod test_utils {
     use std::sync::Mutex;
 
     /// Accessor for tests — avoids exposing SupervisorHandle publicly.
+    #[allow(dead_code)]
     pub fn with_registry<F, R>(f: F) -> R
     where
         F: FnOnce(&Mutex<HashMap<String, super::SupervisorHandle>>) -> R,
