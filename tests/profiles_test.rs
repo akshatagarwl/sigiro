@@ -121,7 +121,7 @@ async fn e2e_profiles_pipeline() {
         (&["main", "gc_collect"], 3_000_000, "cpu", "nanoseconds"),
     ];
 
-    router
+    let _ = router
         .send(IngestMsg::Profiles {
             project_id: "profile_test".to_string(),
             batch: make_profiles_batch("api-svc", now_us, &stacks),
@@ -212,13 +212,13 @@ async fn e2e_profiles_multi_type() {
         "bytes",
     )];
 
-    router
+    let _ = router
         .send(IngestMsg::Profiles {
             project_id: "multi_type".to_string(),
             batch: make_profiles_batch("api-svc", now_us, &cpu_stacks),
         })
         .await;
-    router
+    let _ = router
         .send(IngestMsg::Profiles {
             project_id: "multi_type".to_string(),
             batch: make_profiles_batch("api-svc", now_us + 100, &heap_stacks),
@@ -274,7 +274,7 @@ async fn e2e_profiles_empty_batch() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Empty profiles batch
-    router
+    let _ = router
         .send(IngestMsg::Profiles {
             project_id: "empty_profiles".to_string(),
             batch: make_profiles_batch("api-svc", now_us, &[]),

@@ -230,7 +230,7 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     // Send 5 batches of 20 spans for "checkout" service
     for i in 0..5 {
         let batch = make_spans_batch(20, "checkout", "POST /checkout", now_us + i * 100);
-        router
+        let _ = router
             .send(IngestMsg::Traces {
                 project_id: "proj_e2e".to_string(),
                 batch,
@@ -289,7 +289,7 @@ async fn e2e_multi_project_isolation() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Project A: "alpha-svc" with 30 spans
-    router
+    let _ = router
         .send(IngestMsg::Traces {
             project_id: "proj_alpha".to_string(),
             batch: make_spans_batch(30, "alpha-svc", "GET /alpha", now_us),
@@ -297,7 +297,7 @@ async fn e2e_multi_project_isolation() {
         .await;
 
     // Project B: "beta-svc" with 50 spans
-    router
+    let _ = router
         .send(IngestMsg::Traces {
             project_id: "proj_beta".to_string(),
             batch: make_spans_batch(50, "beta-svc", "GET /beta", now_us),
@@ -362,19 +362,19 @@ async fn e2e_services_endpoint_simulation() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Ingest spans for 3 different services into the same project
-    router
+    let _ = router
         .send(IngestMsg::Traces {
             project_id: "proj_services".to_string(),
             batch: make_spans_batch(10, "api-gateway", "GET /route", now_us),
         })
         .await;
-    router
+    let _ = router
         .send(IngestMsg::Traces {
             project_id: "proj_services".to_string(),
             batch: make_spans_batch(25, "user-service", "GET /users", now_us + 100),
         })
         .await;
-    router
+    let _ = router
         .send(IngestMsg::Traces {
             project_id: "proj_services".to_string(),
             batch: make_spans_batch(15, "order-service", "POST /orders", now_us + 200),
@@ -509,7 +509,7 @@ async fn e2e_investigation_all_signals() {
     let now_us = chrono::Utc::now().timestamp_micros();
 
     // Ingest spans
-    router
+    let _ = router
         .send(IngestMsg::Traces {
             project_id: "proj_all_signals".to_string(),
             batch: make_spans_batch(10, "full-svc", "GET /data", now_us),
@@ -517,7 +517,7 @@ async fn e2e_investigation_all_signals() {
         .await;
 
     // Ingest logs
-    router
+    let _ = router
         .send(IngestMsg::Logs {
             project_id: "proj_all_signals".to_string(),
             batch: make_logs_batch(5, "full-svc", now_us),
@@ -526,7 +526,7 @@ async fn e2e_investigation_all_signals() {
 
     // Ingest gauge metrics
     let gauge_batch = make_gauge_batch(3, "full-svc", now_us);
-    router
+    let _ = router
         .send(IngestMsg::Metrics {
             project_id: "proj_all_signals".to_string(),
             batches: otlp2records::MetricBatches {
@@ -687,13 +687,13 @@ async fn e2e_drain_log_template_dedup() {
     let req_refs: Vec<&str> = request_bodies.iter().map(String::as_str).collect();
     let login_refs: Vec<&str> = login_bodies.iter().map(String::as_str).collect();
 
-    router
+    let _ = router
         .send(IngestMsg::Logs {
             project_id: "drain_test".to_string(),
             batch: make_templated_logs_batch(&req_refs, "api-svc", now_us),
         })
         .await;
-    router
+    let _ = router
         .send(IngestMsg::Logs {
             project_id: "drain_test".to_string(),
             batch: make_templated_logs_batch(&login_refs, "api-svc", now_us + 100),
