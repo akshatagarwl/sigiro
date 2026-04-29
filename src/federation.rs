@@ -3,30 +3,10 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
 use tracing::{debug, info};
 
 use crate::supervisor::Supervisor;
-use crate::types::SupervisorHandle;
-
-// ---------------------------------------------------------------------------
-// Supervisor registry
-// ---------------------------------------------------------------------------
-
-/// Static registry mapping supervisor names to their handles.
-static SUPERVISOR_REGISTRY: OnceLock<Mutex<HashMap<String, SupervisorHandle>>> = OnceLock::new();
-
-fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
-    SUPERVISOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<String>) {
-    let registry = get_registry();
-    let mut guard = registry.lock().expect("supervisor registry mutex poisoned");
-    let handle = SupervisorHandle::new(supervisor, cleanup_path);
-    guard.insert(name.to_string(), handle);
-    info!("registered supervisor: {name}");
-}
+use crate::types::register_supervisor;
 
 /// Information about a federation worker.
 #[derive(Debug, Serialize, Deserialize)]

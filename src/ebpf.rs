@@ -1,40 +1,23 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use tracing::{debug, info};
 
 use crate::supervisor::Supervisor;
-use crate::types::SupervisorHandle;
-
-/// Static registry mapping supervisor names to their handles.
-static SUPERVISOR_REGISTRY: OnceLock<Mutex<HashMap<String, SupervisorHandle>>> = OnceLock::new();
-
-fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
-    SUPERVISOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 #[cfg(test)]
 mod test_utils {
-    use super::get_registry;
+    use crate::types::{get_registry, SupervisorHandle};
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    /// Accessor for tests — avoids exposing SupervisorHandle publicly.
     #[allow(dead_code)]
     pub fn with_registry<F, R>(f: F) -> R
     where
-        F: FnOnce(&Mutex<HashMap<String, super::SupervisorHandle>>) -> R,
+        F: FnOnce(&Mutex<HashMap<String, SupervisorHandle>>) -> R,
     {
         f(get_registry())
     }
-}
-
-fn register_supervisor(name: &str, supervisor: Supervisor, cleanup_path: Option<String>) {
-    let registry = get_registry();
-    let mut guard = registry.lock().expect("supervisor registry mutex poisoned");
-    let handle = SupervisorHandle::new(supervisor, cleanup_path);
-    guard.insert(name.to_string(), handle);
-    info!("registered supervisor: {name}")
 }
 
 /// Result of checking eBPF readiness.
@@ -368,7 +351,7 @@ otel_ebpf_auto_target_exe: "*"
     let supervisor = Supervisor::new(path, vec![format!("--config={}", config_path)], envs);
     supervisor.start();
 
-    register_supervisor("obi", supervisor, Some(config_path));
+    crate::types::register_supervisor("obi", supervisor, Some(config_path));
 
     info!("obi started via supervisor");
     Ok(())
