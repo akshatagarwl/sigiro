@@ -261,14 +261,6 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     // serde_yaml prepends "---\n" — strip it to match expected format
     yaml = yaml.strip_prefix("---\n").unwrap_or(&yaml).to_string();
 
-    // Insert comment before worker datasets if any exist
-    if !worker_datasets.is_empty() {
-        let marker = "- name: worker_";
-        if let Some(pos) = yaml.find(marker) {
-            yaml.insert_str(pos, "# Dynamic worker datasets below (auto-generated, do not edit)\n");
-        }
-    }
-
     let spicepod_path = data_dir.join("spicepod.yaml");
     std::fs::write(&spicepod_path, &yaml).with_context(|| {
         format!(
@@ -516,7 +508,6 @@ mod tests {
         assert!(yaml.contains("worker_beta_spans"));
         assert!(yaml.contains("ducklake:/data2/default/catalog.sqlite"));
         assert!(!yaml.contains("worker_gamma_spans"));
-        assert!(yaml.contains("auto-generated"));
     }
 
     #[test]
@@ -531,7 +522,6 @@ mod tests {
         assert!(yaml.contains("sigiro_local_spans"));
         assert!(yaml.contains("ducklake:"));
         assert!(yaml.contains("default/catalog.sqlite"));
-        assert!(!yaml.contains("auto-generated"));
     }
 
     #[test]
