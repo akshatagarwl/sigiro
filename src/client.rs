@@ -39,6 +39,18 @@ impl SigiroClient {
             .context("no investigation block returned for service")
     }
 
+    async fn expect_ok(&self, resp: reqwest::Response) -> Result<reqwest::Response> {
+        match resp.status().as_u16() {
+            200 => Ok(resp),
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            429 => bail!("Rate limited. Try again later."),
+            s => {
+                let body = resp.text().await.context("failed to read error body")?;
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
     pub async fn query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
         let resp = self
             .http
@@ -49,15 +61,8 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => resp.json().await.context("failed to parse query response"),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            429 => bail!("Rate limited. Try again later."),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let resp = self.expect_ok(resp).await?;
+        resp.json().await.context("failed to parse query response")
     }
 
     /// Create an API key via the running server's admin endpoint.
@@ -159,18 +164,10 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => resp
-                .json()
-                .await
-                .context("failed to parse investigation response"),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            429 => bail!("Rate limited. Try again later."),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let resp = self.expect_ok(resp).await?;
+        resp.json()
+            .await
+            .context("failed to parse investigation response")
     }
 
     /// List services with first/last seen and span counts.
@@ -183,17 +180,10 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => resp
-                .json()
-                .await
-                .context("failed to parse services response"),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let resp = self.expect_ok(resp).await?;
+        resp.json()
+            .await
+            .context("failed to parse services response")
     }
 
     pub async fn waterfall(&self, trace_id: &str) -> Result<serde_json::Value> {
@@ -205,14 +195,8 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => resp.json().await.context("failed to parse waterfall response"),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let resp = self.expect_ok(resp).await?;
+        resp.json().await.context("failed to parse waterfall response")
     }
 
     /// Register a federation worker with the server.
@@ -226,14 +210,9 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => Ok(()),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
+        let resp = self.expect_ok(resp).await?;
+        let _: serde_json::Value = resp.json().await.context("failed to parse response")?;
+        Ok(())
     }
 
     /// Deregister a federation worker from the server.
