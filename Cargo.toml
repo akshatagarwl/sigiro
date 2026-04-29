@@ -48,6 +48,7 @@ which = "5"
 uuid = "1"
 tar = "0.4"
 url = "2"
+sqlparser = "0.53"
 axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
 multer = "3"
 futures-util = "0.3"

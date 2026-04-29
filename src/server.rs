@@ -3,6 +3,9 @@ use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
 use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt};
 use axum_extra::routing::RouterExt;
 use rusqlite::Connection;
+use sqlparser::ast::Statement;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
@@ -48,42 +51,35 @@ pub struct AppState {
     pub http_client: reqwest::Client,
 }
 
-/// DuckDB's access_mode is database-level, not connection-level:
-/// - `SET access_mode = 'read_only'` fails with "Cannot change access_mode setting while database is running"
-/// - `Connection::open_with_flags(path, ReadOnly)` creates a separate database instance that
-///   doesn't share in-memory state with the write connection (ingested data invisible)
-///   Therefore we use a keyword blocklist + `prepare()` single-statement guarantee.
-///   `conn.prepare()` only handles one statement — multi-statement injection via semicolons
-///   is already prevented by DuckDB itself.
-const BLOCKED_KEYWORDS: &[&str] = &[
-    "DROP",
-    "DELETE",
-    "INSERT",
-    "UPDATE",
-    "ALTER",
-    "CREATE",
-    "COPY",
-    "ATTACH",
-    "DETACH",
-    "EXPORT",
-    "IMPORT",
-    "PRAGMA",
-    "CALL",
-    "TRUNCATE",
-    "CHECKPOINT",
-    "LOAD",
-    "INSTALL",
-    "SET",
+// DuckDB's access_mode is database-level, not connection-level:
+// - `SET access_mode = 'read_only'` fails with "Cannot change access_mode setting while database is running"
+// - `Connection::open_with_flags(path, ReadOnly)` creates a separate database instance that
+//   doesn't share in-memory state with the write connection (ingested data invisible)
+//   Therefore we use AST-based SQL validation (sqlparser) + `prepare()` single-statement guarantee.
+//   `conn.prepare()` only handles one statement — multi-statement injection via semicolons
+//   is already prevented by DuckDB itself.
+
+/// DuckDB file-reading table functions blocked even in SELECT queries
+/// (e.g., read_csv('/etc/passwd') is a valid SELECT but reads arbitrary files).
+const BLOCKED_TABLE_FUNCTIONS: &[&str] = &[
     "READ_CSV",
     "READ_PARQUET",
     "READ_JSON",
 ];
 
 pub fn validate_read_only(sql: &str) -> Result<(), String> {
+    let dialect = GenericDialect {};
+    let statements = Parser::parse_sql(&dialect, sql)
+        .map_err(|e| format!("query rejected: parse error: {e}"))?;
+
+    for stmt in &statements {
+        if !matches!(stmt, Statement::Query(_)) {
+            return Err("query rejected: only SELECT queries are allowed".to_string());
+        }
+    }
+
     let upper = sql.to_uppercase();
-    for kw in BLOCKED_KEYWORDS {
-        // Word-boundary check: keyword must be preceded and followed by non-alphanumeric/underscore
-        // This prevents false positives like "updated_at" matching "UPDATE"
+    for kw in BLOCKED_TABLE_FUNCTIONS {
         for (pos, _) in upper.match_indices(kw) {
             let before_ok = pos == 0
                 || !upper.as_bytes()[pos - 1].is_ascii_alphanumeric()
