@@ -399,19 +399,14 @@ async fn run_waterfall(trace_id: &str) -> Result<()> {
 
 async fn run_waterfall_via_http(trace_id: &str) -> Result<()> {
     let client = require_client()?;
-    let response = client.waterfall(trace_id).await?;
+    let rows = client.waterfall(trace_id).await?;
 
-    let spans = response
-        .get("spans")
-        .and_then(|s| s.as_array())
-        .context("waterfall response missing 'spans' array")?;
-
-    if spans.is_empty() {
+    if rows.is_empty() {
         println!("No spans found for trace_id: {trace_id}");
         return Ok(());
     }
 
-    let spans: Vec<WaterfallSpan> = spans
+    let spans: Vec<WaterfallSpan> = rows
         .iter()
         .filter_map(|s| {
             Some(WaterfallSpan {
