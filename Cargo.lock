@@ -4388,6 +4388,7 @@ dependencies = [
  "tracing-test",
  "typed-env",
  "ureq",
+ "url",
  "uuid",
  "watchexec-supervisor",
  "which",

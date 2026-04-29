@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use duckdb::Connection;
 use std::path::Path;
+use url::Url;
 
 /// Initialize DuckLake with SQLite catalog + local Parquet (zero config).
 /// Tables accessible as `lake.sigiro_*`.
@@ -112,36 +113,6 @@ pub struct StorageConfig {
     pub s3_prefix: String,
 }
 
-/// A parsed host:port pair. Used when parsing PostgreSQL URIs to extract the host and default port.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostPort {
-    pub host: String,
-    pub port: u16,
-}
-
-impl HostPort {
-    const DEFAULT_POSTGRES_PORT: u16 = 5432;
-
-    /// Parse a host:port string, defaulting to 5432 if no port given.
-    fn parse(s: &str) -> Result<Self> {
-        match s.split_once(':') {
-            Some((host, port_str)) => {
-                let port = port_str
-                    .parse()
-                    .context("invalid port in postgres URI: must be a number")?;
-                Ok(Self {
-                    host: host.to_string(),
-                    port,
-                })
-            }
-            None => Ok(Self {
-                host: s.to_string(),
-                port: Self::DEFAULT_POSTGRES_PORT,
-            }),
-        }
-    }
-}
-
 /// Load SIGIRO_* env vars to configure distributed (PostgreSQL catalog) storage.
 /// Returns `Ok(None)` if `SIGIRO_CATALOG_URL` is not set — caller should use local SQLite.
 /// Returns an error if env vars are set but malformed.
@@ -184,29 +155,23 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
         // Check if it's a URI (contains //) or already libpq key=value
         if uri.contains("//") {
             // Parse URI: postgresql://user:***@host:port/dbname
-            let stripped = uri
-                .trim_start_matches("postgres:")
-                .trim_start_matches("postgresql://");
+            let parsed = Url::parse(uri)
+                .context("invalid postgres URI: failed to parse URL")?;
 
-            // Split user:pass@host:port/dbname
-            let (credentials, rest) = stripped
-                .split_once('@')
-                .context("invalid postgres URI: expected user:pass@host format")?;
-
-            let (user, password) = credentials
-                .split_once(':')
-                .context("invalid postgres URI: expected user:password in credentials")?;
-
-            // rest = host:port/dbname
-            let (host_port_str, dbname) = rest
-                .split_once('/')
-                .context("invalid postgres URI: expected host:port/dbname")?;
-
-            let host_port = HostPort::parse(host_port_str)?;
+            let user = parsed.username();
+            if user.is_empty() {
+                anyhow::bail!("invalid postgres URI: expected non-empty username");
+            }
+            let password = parsed.password().unwrap_or("");
+            let host = parsed.host_str().unwrap_or("localhost");
+            let port = parsed.port().unwrap_or(5432);
+            let dbname = parsed.path().trim_start_matches('/');
+            if dbname.is_empty() {
+                anyhow::bail!("invalid postgres URI: expected non-empty database name");
+            }
 
             Ok(format!(
-                "postgres:dbname={dbname} host={} user={user} password={password} port={}",
-                host_port.host, host_port.port
+                "postgres:dbname={dbname} host={host} user={user} password={password} port={port}"
             ))
         } else {
             // Already libpq format, just ensure postgres: prefix
