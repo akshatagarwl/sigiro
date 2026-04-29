@@ -186,29 +186,6 @@ impl SigiroClient {
             .context("failed to parse services response")
     }
 
-    pub async fn waterfall(&self, trace_id: &str) -> Result<Vec<serde_json::Value>> {
-        let sql = format!(
-            "SELECT span_id, parent_span_id, span_name, span_kind, service_name, status_code, \
-                    EPOCH_US(timestamp::TIMESTAMP)::BIGINT as timestamp_us, \
-                    duration * 1000 as duration_ns \
-             FROM lake.sigiro_spans \
-             WHERE trace_id = '{trace_id}' \
-             ORDER BY timestamp"
-        );
-        let resp = self
-            .http
-            .post(format!("{}/v1/query", self.base_url))
-            .bearer_auth(&self.api_key)
-            .header("Content-Type", "text/plain")
-            .body(sql)
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
-
-        let resp = self.expect_ok(resp).await?;
-        resp.json().await.context("failed to parse waterfall response")
-    }
-
     /// Register a federation worker with the server.
     pub async fn register_worker(&self, worker: &crate::federation::WorkerInfo) -> Result<()> {
         let resp = self

@@ -388,42 +388,7 @@ struct WaterfallSpan {
 }
 
 async fn run_waterfall(trace_id: &str) -> Result<()> {
-    match run_waterfall_via_http(trace_id).await {
-        Ok(()) => Ok(()),
-        Err(http_err) => {
-            tracing::debug!("waterfall via HTTP failed ({http_err}), trying direct DuckDB");
-            run_waterfall_direct(trace_id).await
-        }
-    }
-}
-
-async fn run_waterfall_via_http(trace_id: &str) -> Result<()> {
-    let client = require_client()?;
-    let rows = client.waterfall(trace_id).await?;
-
-    if rows.is_empty() {
-        println!("No spans found for trace_id: {trace_id}");
-        return Ok(());
-    }
-
-    let spans: Vec<WaterfallSpan> = rows
-        .iter()
-        .filter_map(|s| {
-            Some(WaterfallSpan {
-                span_id: s.get("span_id")?.as_str()?.to_string(),
-                parent_span_id: s.get("parent_span_id")?.as_str()?.to_string(),
-                span_name: s.get("span_name")?.as_str()?.to_string(),
-                span_kind: s.get("span_kind")?.as_i64()? as i32,
-                duration_ns: s.get("duration_ns")?.as_i64()?,
-                timestamp_us: s.get("timestamp_us")?.as_i64()?,
-                status_code: s.get("status_code")?.as_i64()? as i32,
-                service_name: s.get("service_name")?.as_str()?.to_string(),
-            })
-        })
-        .collect();
-
-    render_waterfall(&spans, trace_id);
-    Ok(())
+    run_waterfall_direct(trace_id).await
 }
 
 /// Formats a duration in nanoseconds with dynamically chosen unit (ns/µs/ms/s).
