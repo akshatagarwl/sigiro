@@ -60,20 +60,25 @@ impl MsgRouter {
     pub fn register_flusher(&self, project_id: &str) -> Result<(), RouterError> {
         use dashmap::mapref::entry::Entry;
 
-        let conn = self.pool.create_project(project_id)
-            .map_err(|_| RouterError::ConnectionFailed { project_id: project_id.to_string() })?;
-
-        let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
         let pid = project_id.to_string();
-        let handle = tokio::spawn(async move { run_flusher(&pid, conn, rx).await });
-
-        match self.project_senders.entry(project_id.to_string()) {
+        match self.project_senders.entry(pid.clone()) {
             Entry::Occupied(_) => {
                 // Already registered — return Ok, caller can send immediately.
+                tracing::warn!(project_id = %pid, "register_flusher: flusher already exists for project");
                 Ok(())
             }
             Entry::Vacant(e) => {
+                let conn = self.pool.create_project(project_id)
+                    .map_err(|_| RouterError::ConnectionFailed { project_id: project_id.to_string() })?;
+                let pool = Arc::clone(&self.pool);
+
+                let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
+                let pid_spawn = pid.clone();
+                tracing::info!(project_id = %pid, "register_flusher: spawning new flusher task");
+                let handle = tokio::spawn(async move { run_flusher(&pid_spawn, conn, rx, pool).await });
+
                 e.insert((tx, handle));
+                tracing::info!(project_id = %pid, "register_flusher: inserted new sender into project_senders");
                 Ok(())
             }
         }
@@ -92,7 +97,8 @@ impl MsgRouter {
             .ok_or_else(|| RouterError::ConnectionFailed { project_id: project_id.clone() })?;
 
         let sender = &entry.value().0;
-        sender.send(msg).await.map_err(|_| {
+        sender.send(msg).await.map_err(|e| {
+            tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
             drop(entry);
             self.project_senders.remove(&project_id);
             RouterError::ChannelClosed { project_id: project_id_for_err }
@@ -321,6 +327,7 @@ async fn run_flusher(
     project_id: &str,
     conn: Arc<Mutex<Connection>>,
     mut rx: mpsc::Receiver<IngestMsg>,
+    pool: Arc<ProjectPool>,
 ) {
     let mut flusher = ProjectFlusher::new(conn);
     let mut interval = tokio::time::interval(FLUSH_INTERVAL);
@@ -330,15 +337,18 @@ async fn run_flusher(
             biased;
 
             _ = interval.tick() => {
-                // Timer expired — flush whatever we have.
-                if let Err(e) = flusher.flush(project_id) {
-                    tracing::error!(project_id, "timer flush failed: {e:#}");
+                pool.touch_project(project_id);
+                if flusher.should_flush() {
+                    if let Err(e) = flusher.flush(project_id) {
+                        tracing::error!(project_id, "timer flush failed: {e:#}");
+                    }
                 }
             }
 
             msg = rx.recv() => {
                 match msg {
                     Some(msg) => {
+                        pool.touch_project(project_id);
                         buffer_msg(&mut flusher, msg);
                         if flusher.should_flush() {
                             if let Err(e) = flusher.flush(project_id) {
@@ -347,7 +357,6 @@ async fn run_flusher(
                         }
                     }
                     None => {
-                        // Channel closed — all senders dropped.
                         if let Err(e) = flusher.flush(project_id) {
                             tracing::error!(project_id, "final flush failed: {e:#}");
                         }

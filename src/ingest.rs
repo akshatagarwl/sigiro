@@ -570,11 +570,14 @@ async fn otlp_http_traces(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
+    tracing::info!("otlp_http_traces: received trace request, body len = {}", body.len());
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
+    tracing::info!(project_id = %project_id, "otlp_http_traces: auth OK");
     let fmt = detect_format(&headers);
+    tracing::info!(project_id = %project_id, format = ?fmt, "otlp_http_traces: detected format");
     let batch = match transform_traces(body.to_vec(), fmt).await {
         Ok(b) => b,
         Err(e) => {
@@ -582,16 +585,20 @@ async fn otlp_http_traces(
             return StatusCode::BAD_REQUEST;
         }
     };
+    tracing::info!(project_id = %project_id, rows = batch.num_rows(), "otlp_http_traces: batch transformed");
     if batch.num_rows() > 0 {
         let pid = project_id.clone();
         if let Err(e) = state.router.register_flusher(&pid) {
             tracing::error!(pid, "failed to register flusher: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
+        tracing::info!(project_id = %pid, "otlp_http_traces: flusher registered, calling send");
+        let send_pid = pid.clone();
         if let Err(e) = state.router.send(IngestMsg::Traces { project_id, batch }).await {
-            tracing::error!(pid, "ingest router error: {e:?}");
+            tracing::error!(send_pid, "ingest router error: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
+        tracing::info!(send_pid = %send_pid, "otlp_http_traces: send complete");
     } else {
         tracing::warn!(project_id, "otlp_http_traces: batch empty after transform — trace data lost");
     }

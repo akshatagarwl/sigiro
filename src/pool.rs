@@ -121,6 +121,15 @@ impl ProjectPool {
             })
     }
 
+    /// Refresh last_access for an existing project entry so it is not evicted as idle.
+    /// Callers (e.g. long-running per-project flusher tasks) should call this periodically
+    /// to prevent the idle evictor from removing their connection while they are alive.
+    pub fn touch_project(&self, project_id: &str) {
+        if let Some(mut entry) = self.connections.get_mut(project_id) {
+            entry.last_access = Instant::now();
+        }
+    }
+
 #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir.display()))]
     fn open_connection(&self, project_dir: &std::path::Path) -> Result<Connection> {
         let conn = Connection::open_in_memory()
