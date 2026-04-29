@@ -2,7 +2,6 @@ use rusqlite::Connection;
 use sigiro::admin;
 use sigiro::auth::*;
 use std::sync::Mutex;
-use std::time::Duration;
 
 fn test_admin_conn() -> Mutex<Connection> {
     let conn = Connection::open_in_memory().unwrap();
@@ -128,56 +127,40 @@ fn verify_key_cached_invalid_key_not_cached() {
     assert!(verify_key_cached(&conn, "sigiro_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBB").is_err());
 }
 
-/// Test that cache expiry is checked correctly: >= not just >.
-/// This would have caught the mutation where `>` was replaced with `==` or `<`.
+/// Test that cached entries are served on subsequent calls.
+/// Moka handles TTL-based eviction internally, so we verify the
+/// observable behavior: a cached key returns the same AuthContext.
 #[test]
-fn verify_key_cached_respects_expiry_boundary() {
+fn verify_key_cached_serves_from_cache() {
     let conn = test_admin_conn();
-    let raw_key = admin::create_key(&conn, "proj_expiry", "free", 100).unwrap();
+    let raw_key = admin::create_key(&conn, "proj_cache_hit", "free", 100).unwrap();
 
-    // First call — cache miss, hits SQLite
     let ctx1 = verify_key_cached(&conn, &raw_key).unwrap();
-    assert_eq!(ctx1.project_id, "proj_expiry");
+    assert_eq!(ctx1.project_id, "proj_cache_hit");
 
-    // Simulate time passing by directly manipulating the cache entry's expires field.
-    // We can't easily advance time, but we can verify that a just-expired entry
-    // is treated as expired by using >= check.
-    // The key insight: if the condition were `entry.expires > Instant::now()` (strictly greater),
-    // then an entry expiring exactly at `Instant::now()` would still be treated as valid.
-    // With `>=`, it is correctly treated as expired.
-    // This test verifies the same context is returned on cache hit and that the cache
-    // honors the TTL by forcing an expiry check.
+    // Second call returns same result (from cache, no DB hit needed)
+    let ctx2 = verify_key_cached(&conn, &raw_key).unwrap();
+    assert_eq!(ctx2.project_id, "proj_cache_hit");
+    assert_eq!(ctx2.plan, "free");
+
+    // Verify the entry exists in the underlying moka cache
     let cache = auth_cache();
-    if let Some(entry) = cache.get(&raw_key) {
-        // Entry exists and should be valid for >= comparison (not expired yet)
-        assert!(entry.expires() >= std::time::Instant::now());
-        drop(entry);
-    }
+    assert!(cache.get(&raw_key).is_some());
 }
 
-/// Test that the cache entry expiry is set to a future time, not past.
-/// Mutation 3 replaced `+` with `-` on line 74, making expires = Instant::now() - AUTH_CACHE_TTL,
-/// which would cause every cached entry to appear already expired.
-/// This test would catch that bug by verifying entries don't immediately expire.
+/// Test that the cache entry is populated after a successful verification.
+/// Verifies moka stores the AuthContext correctly for future lookups.
 #[test]
-fn verify_key_cached_sets_future_expiry() {
+fn verify_key_cached_populates_cache_on_success() {
     let conn = test_admin_conn();
-    let raw_key = admin::create_key(&conn, "proj_future", "builder", 500).unwrap();
+    let raw_key = admin::create_key(&conn, "proj_populate", "builder", 500).unwrap();
 
-    let ctx1 = verify_key_cached(&conn, &raw_key).unwrap();
-    assert_eq!(ctx1.project_id, "proj_future");
-    assert_eq!(ctx1.plan, "builder");
+    let ctx = verify_key_cached(&conn, &raw_key).unwrap();
+    assert_eq!(ctx.project_id, "proj_populate");
+    assert_eq!(ctx.plan, "builder");
 
-    // Verify the cached entry has an expiry in the future (not in the past)
     let cache = auth_cache();
-    let entry = cache.get(&raw_key).expect("entry should be cached");
-    let now = std::time::Instant::now();
-    // The expiry should be at least AUTH_CACHE_TTL in the future
-    assert!(entry.expires() > now, "expiry should be in the future");
-    // And not suspiciously in the past (the bug with `-` instead of `+`)
-    let sixty_secs = Duration::from_secs(60);
-    assert!(
-        entry.expires() < now + sixty_secs * 2,
-        "expiry should be roughly 60s out, not hours away"
-    );
+    let cached = cache.get(&raw_key).expect("entry should be cached");
+    assert_eq!(cached.project_id, "proj_populate");
+    assert_eq!(cached.plan, "builder");
 }

@@ -5,9 +5,9 @@ use axum::{
     response::Response,
 };
 use axum_anyhow::ApiError;
-use dashmap::DashMap;
+use moka::sync::Cache;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Auth context extracted from the API key — attached to request extensions.
 /// Handlers use this to route to the correct per-project DuckDB.
@@ -22,25 +22,17 @@ pub struct AuthContext {
 /// contention on the ingest hot path (every OTLP request was hitting it).
 const AUTH_CACHE_TTL: Duration = Duration::from_secs(60);
 
-/// Cached auth entry. Public for testing access.
-pub struct CachedAuth {
-    ctx: AuthContext,
-    expires: Instant,
-}
-
-impl CachedAuth {
-    /// Returns the expiry instant. Used for testing.
-    pub fn expires(&self) -> Instant {
-        self.expires
-    }
-}
-
-/// Global auth cache: raw_key → (AuthContext, expiry).
-/// DashMap for concurrent reads from tokio + inserter threads.
+/// Global auth cache: raw_key → AuthContext.
+/// Moka handles TTL-based eviction automatically.
 /// Exposed for testing.
-pub fn auth_cache() -> &'static DashMap<String, CachedAuth> {
-    static CACHE: OnceLock<DashMap<String, CachedAuth>> = OnceLock::new();
-    CACHE.get_or_init(|| DashMap::with_capacity(1024))
+pub fn auth_cache() -> &'static Cache<String, AuthContext> {
+    static CACHE: OnceLock<Cache<String, AuthContext>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        Cache::builder()
+            .max_capacity(1024)
+            .time_to_live(AUTH_CACHE_TTL)
+            .build()
+    })
 }
 
 /// Verify an API key with caching. Used by OTLP ingest hot path.
@@ -54,14 +46,9 @@ pub fn verify_key_cached(
 ) -> Result<AuthContext, ApiError> {
     let cache = auth_cache();
 
-    // Fast path: cache hit with valid TTL
-    if let Some(entry) = cache.get(raw_key) {
-        if entry.expires >= Instant::now() {
-            return Ok(entry.ctx.clone());
-        }
-        // Expired — drop ref before removing to avoid deadlock
-        drop(entry);
-        cache.remove(raw_key);
+    // Fast path: cache hit (moka auto-evicts expired entries)
+    if let Some(ctx) = cache.get(raw_key) {
+        return Ok(ctx);
     }
 
     // Slow path: verify against SQLite
@@ -75,14 +62,8 @@ pub fn verify_key_cached(
     })?;
     let ctx = AuthContext { project_id, plan };
 
-    // Cache successful verification
-    cache.insert(
-        raw_key.to_string(),
-        CachedAuth {
-            ctx: ctx.clone(),
-            expires: Instant::now() + AUTH_CACHE_TTL,
-        },
-    );
+    // Cache successful verification (moka auto-expires after AUTH_CACHE_TTL)
+    cache.insert(raw_key.to_string(), ctx.clone());
 
     Ok(ctx)
 }
