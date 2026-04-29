@@ -181,12 +181,14 @@ impl TimestampMicros {
 
     /// Current time in microseconds.
     pub fn now() -> Self {
-        Self(chrono::Utc::now().timestamp_micros())
+        let odt = time::OffsetDateTime::now_utc();
+        Self(odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64)
     }
 
     /// Default "15 minutes ago" window start.
     pub fn fifteen_minutes_ago() -> Self {
-        Self(chrono::Utc::now().timestamp_micros() - 15 * 60 * 1_000_000)
+        let odt = time::OffsetDateTime::now_utc();
+        Self(odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64 - 15 * 60 * 1_000_000)
     }
 
     /// Raw microseconds value (for SQL parameters).

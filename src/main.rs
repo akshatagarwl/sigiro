@@ -61,6 +61,11 @@ enum Command {
         #[arg(long)]
         to: Option<i64>,
     },
+    /// Show trace waterfall — parent/child span tree with timing
+    Waterfall {
+        /// Trace ID (hex string) to display
+        trace_id: String,
+    },
     /// Start MCP stdio server for Claude/Cursor/Codex integration
     Mcp,
     /// Save API key for hosted mode
@@ -175,6 +180,9 @@ async fn main() -> Result<()> {
                 "{}",
                 format_output(&serde_json::to_value(&block)?, &cli.output)?
             );
+        }
+        Some(Command::Waterfall { trace_id }) => {
+            run_waterfall(&trace_id).await?;
         }
         Some(Command::Mcp) => {
             let client = require_client()?;
@@ -365,4 +373,273 @@ fn hostname_or_default() -> Result<String> {
 
 fn local_ip_or_default() -> &'static str {
     "127.0.0.1"
+}
+
+#[derive(Debug)]
+struct WaterfallSpan {
+    span_id: String,
+    parent_span_id: String,
+    span_name: String,
+    span_kind: i32,
+    duration_ns: i64,
+    timestamp_us: i64,
+    status_code: i32,
+    service_name: String,
+}
+
+async fn run_waterfall(trace_id: &str) -> Result<()> {
+    match run_waterfall_via_http(trace_id).await {
+        Ok(()) => Ok(()),
+        Err(http_err) => {
+            tracing::debug!("waterfall via HTTP failed ({http_err}), trying direct DuckDB");
+            run_waterfall_direct(trace_id).await
+        }
+    }
+}
+
+async fn run_waterfall_via_http(trace_id: &str) -> Result<()> {
+    let client = require_client()?;
+    let response = client.waterfall(trace_id).await?;
+
+    let spans = response
+        .get("spans")
+        .and_then(|s| s.as_array())
+        .context("waterfall response missing 'spans' array")?;
+
+    if spans.is_empty() {
+        println!("No spans found for trace_id: {trace_id}");
+        return Ok(());
+    }
+
+    let spans: Vec<WaterfallSpan> = spans
+        .iter()
+        .filter_map(|s| {
+            Some(WaterfallSpan {
+                span_id: s.get("span_id")?.as_str()?.to_string(),
+                parent_span_id: s.get("parent_span_id")?.as_str()?.to_string(),
+                span_name: s.get("span_name")?.as_str()?.to_string(),
+                span_kind: s.get("span_kind")?.as_i64()? as i32,
+                duration_ns: s.get("duration_ns")?.as_i64()?,
+                timestamp_us: s.get("timestamp_us")?.as_i64()?,
+                status_code: s.get("status_code")?.as_i64()? as i32,
+                service_name: s.get("service_name")?.as_str()?.to_string(),
+            })
+        })
+        .collect();
+
+    render_waterfall(&spans, trace_id);
+    Ok(())
+}
+
+/// Formats a duration in nanoseconds with dynamically chosen unit (ns/µs/ms/s).
+fn format_duration_ns(ns: i64) -> String {
+    if ns < 1000 {
+        // Sub-microsecond: show as ns with 2 decimal places
+        format!("{:.2}ns", ns as f64)
+    } else if ns < 1_000_000 {
+        // Microseconds: show with 2 decimal places
+        format!("{:.2}µs", ns as f64 / 1000.0)
+    } else if ns < 1_000_000_000 {
+        // Milliseconds: show with 2 decimal places
+        format!("{:.2}ms", ns as f64 / 1_000_000.0)
+    } else {
+        // Seconds: show with 2 decimal places
+        format!("{:.2}s", ns as f64 / 1_000_000_000.0)
+    }
+}
+
+fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
+    if spans.is_empty() {
+        println!("No spans found for trace_id: {trace_id}");
+        return;
+    }
+
+    let earliest_ts = spans.iter().map(|s| s.timestamp_us).min().unwrap_or(0);
+    let latest_ts = spans
+        .iter()
+        .map(|s| {
+            // timestamp_us is in microseconds; add duration_ns/1000 (µs) to get end time in µs
+            s.timestamp_us + s.duration_ns / 1000
+        })
+        .max()
+        .unwrap_or(earliest_ts);
+    let total_duration_ns =
+        ((latest_ts - earliest_ts) * 1000).max(0); // convert µs back to ns for consistent formatting
+
+    println!("Trace: {trace_id}");
+    println!(
+        "Spans: {}  Total duration: {}\n",
+        spans.len(),
+        format_duration_ns(total_duration_ns)
+    );
+
+    let mut children: std::collections::BTreeMap<String, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (i, span) in spans.iter().enumerate() {
+        if !span.parent_span_id.is_empty() {
+            children
+                .entry(span.parent_span_id.clone())
+                .or_default()
+                .push(i);
+        }
+    }
+
+    fn render_span(
+        spans: &[WaterfallSpan],
+        children: &std::collections::BTreeMap<String, Vec<usize>>,
+        idx: usize,
+        depth: usize,
+        earliest_ts: i64,
+    ) {
+        let span = &spans[idx];
+        let rel_start_us = span.timestamp_us as f64 - earliest_ts as f64;
+        let duration_us = span.duration_ns as f64 / 1000.0;
+        let end_us = rel_start_us + duration_us;
+
+        let indent = "  ".repeat(depth);
+
+        let kind_str = match span.span_kind {
+            0 => "PRODUCER",
+            1 => "INTERNAL",
+            2 => "SERVER",
+            3 => "CLIENT",
+            4 => "CONSUMER",
+            _ => "UNKNOWN",
+        };
+
+        let time_str = format_duration_ns(span.duration_ns);
+
+        let bar_max = 40usize;
+        let bar = if duration_us > 0.0 {
+            let start_bar = ((rel_start_us / end_us.max(1.0)) * bar_max as f64) as usize;
+            let end_bar = bar_max;
+            let filled = end_bar.saturating_sub(start_bar.max(0));
+            format!("{:>width$}", "█".repeat(filled.min(bar_max)), width = bar_max)
+        } else {
+            format!("{:>width$}", "", width = bar_max)
+        };
+
+        let error_tag = if span.status_code == 2 { " [ERR]" } else { "" };
+        let service_name = format!(
+            "{}{}",
+            span.service_name.chars().take(10).collect::<String>(),
+            error_tag
+        );
+
+        println!(
+            "{indent}{} {:15} {:6} {:12} {} {time_str}",
+            bar,
+            span.span_name.chars().take(15).collect::<String>(),
+            kind_str,
+            service_name,
+            if span.parent_span_id.is_empty() { "ROOT" } else { "" },
+        );
+
+        if let Some(kids) = children.get(&span.span_id) {
+            for &child_idx in kids {
+                render_span(spans, children, child_idx, depth + 1, earliest_ts);
+            }
+        }
+    }
+
+    let root_spans: Vec<usize> = spans
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.parent_span_id.is_empty())
+        .map(|(i, _)| i)
+        .collect();
+
+    for (i, root_idx) in root_spans.iter().enumerate() {
+        if i > 0 {
+            println!("  (concurrent root span {})", i + 1);
+        }
+        render_span(&spans, &children, *root_idx, 0, earliest_ts);
+    }
+}
+
+async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
+    let dir = data_dir()?;
+
+    let project_dir = std::fs::read_dir(&dir)
+        .context("failed to read data directory")?
+        .filter_map(|entry| entry.ok())
+        .map(|e| e.path())
+        .find(|p| p.is_dir() && p.join("catalog.sqlite").exists())
+        .context("no DuckDB project found in data directory")?;
+
+    let catalog_path = project_dir.join("catalog.sqlite");
+    let project_name = project_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+
+    if !catalog_path.exists() {
+        anyhow::bail!(
+            "No data found at {}. Run sigiro serve and send it some traces first.",
+            catalog_path.display()
+        );
+    }
+
+    let conn = duckdb::Connection::open_in_memory()
+        .context("failed to open in-memory DuckDB")?;
+
+    let ext_dir = dir.join("extensions");
+    std::fs::create_dir_all(&ext_dir).context("failed to create extensions directory")?;
+    if let Some(p) = ext_dir.to_str() {
+        conn.execute_batch(&format!("SET extension_directory = '{p}';"))
+            .context("failed to set extension_directory")?;
+    }
+    conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
+        .context("failed to set DuckDB limits")?;
+
+    let catalog_str = catalog_path.to_string_lossy();
+    conn.execute_batch("INSTALL ducklake; INSTALL sqlite; LOAD ducklake; LOAD sqlite;")
+        .context("failed to load DuckLake extensions")?;
+
+    let attach_sql = format!("ATTACH 'ducklake:{catalog_str}' AS lake");
+    if let Err(attach_err) = conn.execute_batch(&attach_sql) {
+        if attach_err.to_string().contains("lock") || attach_err.to_string().contains("Conflicting lock") {
+            anyhow::bail!(
+                "DuckDB catalog is locked by a running sigiro server.\n\
+                 Stop the server first, or use sigiro query --sql \"SELECT ... FROM lake.sigiro_spans WHERE trace_id = '{trace_id}'\"\n\
+                 Alternatively, set SIGIRO_DATA_DIR to a different directory to query a separate instance."
+            );
+        }
+        anyhow::bail!("failed to attach DuckLake catalog: {attach_err}");
+    }
+
+    let prefix = sigiro::storage::table_prefix();
+    sigiro::schema::create_tables(&conn, prefix)
+        .context("failed to create/check schema")?;
+
+    let sql = format!(
+        "SELECT span_id, parent_span_id, span_name, span_kind, duration,
+                {prefix}sigiro_spans.timestamp, status_code, service_name
+         FROM {prefix}sigiro_spans
+         WHERE trace_id = ?
+         ORDER BY {prefix}sigiro_spans.timestamp",
+    );
+
+    let mut stmt = conn.prepare(&sql).context("failed to prepare query")?;
+    let mut rows = stmt
+        .query(duckdb::params![trace_id])
+        .context("failed to query spans")?;
+
+    let mut spans: Vec<WaterfallSpan> = Vec::new();
+    while let Some(row) = rows.next().context("failed to read span row")? {
+        spans.push(WaterfallSpan {
+            span_id: row.get(0).context("span_id")?,
+            parent_span_id: row.get(1).unwrap_or_default(),
+            span_name: row.get(2).context("span_name")?,
+            span_kind: row.get(3).context("span_kind")?,
+            duration_ns: row.get(4).context("duration")?,
+            timestamp_us: row.get(5).context("timestamp")?,
+            status_code: row.get(6).context("status_code")?,
+            service_name: row.get(7).context("service_name")?,
+        });
+    }
+
+    println!("Project: {project_name}  Trace: {trace_id}");
+    render_waterfall(&spans, trace_id);
+    Ok(())
 }

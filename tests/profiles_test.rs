@@ -96,7 +96,10 @@ async fn e2e_profiles_pipeline() {
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
 
     // Explicit DI: initialize and register flusher before sending
     let _ = pool.create_project("profile_test").unwrap();
@@ -199,7 +202,10 @@ async fn e2e_profiles_multi_type() {
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
 
     // Explicit DI: initialize and register flusher before sending
     let _ = pool.create_project("multi_type").unwrap();
@@ -279,7 +285,10 @@ async fn e2e_profiles_empty_batch() {
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
 
     // Explicit DI: initialize and register flusher before sending
     let _ = pool.create_project("empty_profiles").unwrap();

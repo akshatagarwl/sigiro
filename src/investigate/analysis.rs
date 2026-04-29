@@ -111,9 +111,15 @@ pub fn adaptive_config(from_ts: i64, to_ts: i64) -> AdaptiveConfig {
 // ---------------------------------------------------------------------------
 
 pub fn us_to_iso(us: i64) -> Result<String> {
-    chrono::DateTime::from_timestamp_micros(us)
-        .map(|dt| dt.to_rfc3339())
-        .ok_or_else(|| anyhow::anyhow!("invalid timestamp_micros: {us}"))
+    let ns = us
+        .checked_mul(1000)
+        .ok_or_else(|| anyhow::anyhow!("timestamp overflow: {us}"))?;
+    let dt =
+        time::OffsetDateTime::from_unix_timestamp_nanos(ns.into())
+            .map_err(|_| anyhow::anyhow!("invalid timestamp_micros: {us}"))?;
+    dt.format(&time::format_description::well_known::Rfc3339)
+        .map(|s| s.to_string())
+        .map_err(|_| anyhow::anyhow!("format failed for timestamp_micros: {us}"))
 }
 
 // ---------------------------------------------------------------------------

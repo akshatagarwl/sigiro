@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 /// Build a RecordBatch matching the full sigiro_spans schema (25 columns).
 fn make_span_batch(n: usize) -> RecordBatch {
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "timestamp",

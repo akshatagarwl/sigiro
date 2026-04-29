@@ -34,7 +34,10 @@ fn make_batch(n: usize) -> RecordBatch {
         ),
     ]));
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
     RecordBatch::try_new(
         schema,
         vec![

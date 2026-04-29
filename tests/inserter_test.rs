@@ -41,7 +41,10 @@ fn make_spans_batch(n: usize) -> RecordBatch {
         Field::new("flags", DataType::Int32, true),
     ]));
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
     let timestamps: Vec<i64> = (0..n).map(|i| now_us + i as i64).collect();
     let end_timestamps: Vec<i64> = timestamps.iter().map(|t| t + 1000).collect();
     let durations: Vec<i64> = vec![1000i64; n];

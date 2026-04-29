@@ -303,7 +303,10 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
 
     // Explicit DI: initialize project connection and register flusher before sending
     let _ = pool.create_project("proj_e2e").unwrap();
@@ -368,7 +371,10 @@ async fn e2e_multi_project_isolation() {
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
 
     // Explicit DI: initialize and register flushers for both projects before sending
     let _ = pool.create_project("proj_alpha").unwrap();
@@ -447,7 +453,10 @@ async fn e2e_services_endpoint_simulation() {
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
 
     // Explicit DI: initialize and register flusher for the shared project
     let _ = pool.create_project("proj_services").unwrap();
@@ -598,7 +607,10 @@ async fn e2e_investigation_all_signals() {
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
 
     // Explicit DI: initialize and register flusher for the project
     let _ = pool.create_project("proj_all_signals").unwrap();
@@ -780,7 +792,10 @@ async fn e2e_drain_log_template_dedup() {
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
 
-    let now_us = chrono::Utc::now().timestamp_micros();
+    let now_us = {
+    let odt = time::OffsetDateTime::now_utc();
+    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+};
 
     // Explicit DI: initialize and register flusher for the project
     let _ = pool.create_project("drain_test").unwrap();
