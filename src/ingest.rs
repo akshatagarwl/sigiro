@@ -225,6 +225,27 @@ impl MetricsService for OtlpGrpcService {
 ///   → Dictionary.location_table[].line[].function_index
 ///   → Dictionary.function_table[].name_strindex
 ///   → Dictionary.string_table[]
+fn profile_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("profile_id", DataType::Utf8, true),
+        Field::new("service_name", DataType::Utf8, false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
+        Field::new("profile_type", DataType::Utf8, true),
+        Field::new(
+            "stack_trace",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+        Field::new("value", DataType::Int64, true),
+        Field::new("unit", DataType::Utf8, true),
+        Field::new("resource_attributes", DataType::Utf8, true),
+    ]))
+}
+
 fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBatch, Status> {
     let dict = match request.dictionary {
         Some(d) => d,
@@ -232,24 +253,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
             // No dictionary = no samples can be resolved. Return empty batch.
             tracing::debug!("profiles request has no dictionary, returning empty batch");
             return RecordBatch::try_new(
-                Arc::new(Schema::new(vec![
-                    Field::new("profile_id", DataType::Utf8, true),
-                    Field::new("service_name", DataType::Utf8, false),
-                    Field::new(
-                        "timestamp",
-                        DataType::Timestamp(TimeUnit::Microsecond, None),
-                        false,
-                    ),
-                    Field::new("profile_type", DataType::Utf8, true),
-                    Field::new(
-                        "stack_trace",
-                        DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-                        true,
-                    ),
-                    Field::new("value", DataType::Int64, true),
-                    Field::new("unit", DataType::Utf8, true),
-                    Field::new("resource_attributes", DataType::Utf8, true),
-                ])),
+                profile_schema(),
                 vec![
                     Arc::new(StringBuilder::new().finish()),
                     Arc::new(StringBuilder::new().finish()),
@@ -274,24 +278,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
     };
     let string_table = &dict.string_table;
 
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("profile_id", DataType::Utf8, true),
-        Field::new("service_name", DataType::Utf8, false),
-        Field::new(
-            "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            false,
-        ),
-        Field::new("profile_type", DataType::Utf8, true),
-        Field::new(
-            "stack_trace",
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-            true,
-        ),
-        Field::new("value", DataType::Int64, true),
-        Field::new("unit", DataType::Utf8, true),
-        Field::new("resource_attributes", DataType::Utf8, true),
-    ]));
+    let schema = profile_schema();
 
     let mut profile_ids = StringBuilder::new();
     let mut service_names = StringBuilder::new();
@@ -877,24 +864,7 @@ async fn transform_pyroscope_profiles(
         })?;
     tracing::debug!("pyroscope: series count={}", push_request.series.len());
 
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("profile_id", DataType::Utf8, true),
-        Field::new("service_name", DataType::Utf8, false),
-        Field::new(
-            "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            false,
-        ),
-        Field::new("profile_type", DataType::Utf8, true),
-        Field::new(
-            "stack_trace",
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-            true,
-        ),
-        Field::new("value", DataType::Int64, true),
-        Field::new("unit", DataType::Utf8, true),
-        Field::new("resource_attributes", DataType::Utf8, true),
-    ]));
+    let schema = profile_schema();
 
     let mut profile_ids = StringBuilder::new();
     let mut service_names = StringBuilder::new();
