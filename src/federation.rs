@@ -174,6 +174,35 @@ pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
     Ok(workers)
 }
 
+// ---------------------------------------------------------------------------
+// Spicepod YAML serialization
+// ---------------------------------------------------------------------------
+
+/// Corresponds to the `acceleration` block in spicepod.yaml.
+#[derive(Debug, Serialize)]
+struct Acceleration {
+    enabled: bool,
+    engine: &'static str,
+}
+
+/// Corresponds to each entry under `datasets` in spicepod.yaml.
+#[derive(Debug, Serialize)]
+struct Dataset {
+    name: String,
+    from: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acceleration: Option<Acceleration>,
+}
+
+/// Corresponds to the top-level spicepod.yaml structure.
+#[derive(Debug, Serialize)]
+struct Spicepod {
+    version: &'static str,
+    kind: &'static str,
+    name: &'static str,
+    datasets: Vec<Dataset>,
+}
+
 /// Regenerate `spicepod.yaml` from all registered workers.
 /// Uses the "default" project directory for the local DuckLake dataset.
 /// If `SIGIRO_S3_BUCKET` is set, also adds a cold-storage S3 dataset.
@@ -181,15 +210,15 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     let workers = list_workers(conn)?;
 
     let catalog_path = data_dir.join("default").join("catalog.sqlite");
-    let mut yaml = String::new();
-    yaml.push_str("version: v1\n");
-    yaml.push_str("kind: Spicepod\n");
-    yaml.push_str("name: sigiro-central\n\n");
-    yaml.push_str("datasets:\n");
-    yaml.push_str(&format!(
-        "  - name: sigiro_local_spans\n    from: ducklake:{}\n    acceleration:\n      enabled: true\n      engine: duckdb\n",
-        catalog_path.display()
-    ));
+
+    let mut datasets = vec![Dataset {
+        name: "sigiro_local_spans".to_string(),
+        from: format!("ducklake:{}", catalog_path.display()),
+        acceleration: Some(Acceleration {
+            enabled: true,
+            engine: "duckdb",
+        }),
+    }];
 
     // Cold storage dataset via S3, if configured
     if let Some(bucket) = crate::config::S3_BUCKET.value().ok().filter(|s| !s.is_empty()) {
@@ -200,25 +229,43 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
         } else {
             format!("{}/", prefix_trimmed)
         };
-        yaml.push_str(&format!(
-            "  - name: sigiro_spans_cold\n    from: ducklake:s3://{}/{}data\n",
-            bucket, prefix_with_slash
-        ));
+        datasets.push(Dataset {
+            name: "sigiro_spans_cold".to_string(),
+            from: format!("ducklake:s3://{}/{}data", bucket, prefix_with_slash),
+            acceleration: None,
+        });
     }
-
 
     let worker_datasets: Vec<&WorkerInfo> = workers
         .iter()
         .filter(|w| !w.catalog_path.is_empty())
         .collect();
 
+    for worker in &worker_datasets {
+        datasets.push(Dataset {
+            name: format!("worker_{}_spans", worker.id),
+            from: format!("ducklake:{}", worker.catalog_path),
+            acceleration: None,
+        });
+    }
+
+    let spicepod = Spicepod {
+        version: "v1",
+        kind: "Spicepod",
+        name: "sigiro-central",
+        datasets,
+    };
+
+    let mut yaml = serde_yaml::to_string(&spicepod).context("failed to serialize spicepod")?;
+
+    // serde_yaml prepends "---\n" — strip it to match expected format
+    yaml = yaml.strip_prefix("---\n").unwrap_or(&yaml).to_string();
+
+    // Insert comment before worker datasets if any exist
     if !worker_datasets.is_empty() {
-        yaml.push_str("# Dynamic worker datasets below (auto-generated, do not edit)\n");
-        for worker in &worker_datasets {
-            yaml.push_str(&format!(
-                "  - name: worker_{}_spans\n    from: ducklake:{}\n",
-                worker.id, worker.catalog_path
-            ));
+        let marker = "- name: worker_";
+        if let Some(pos) = yaml.find(marker) {
+            yaml.insert_str(pos, "# Dynamic worker datasets below (auto-generated, do not edit)\n");
         }
     }
 
