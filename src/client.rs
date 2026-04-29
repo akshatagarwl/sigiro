@@ -196,6 +196,25 @@ impl SigiroClient {
         }
     }
 
+    pub async fn waterfall(&self, trace_id: &str) -> Result<serde_json::Value> {
+        let resp = self
+            .http
+            .get(format!("{}/v1/waterfall?trace_id={}", self.base_url, trace_id))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        match resp.status().as_u16() {
+            200 => resp.json().await.context("failed to parse waterfall response"),
+            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            s => {
+                let body = resp.text().await.context("failed to read error body")?;
+                bail!("Server error ({s}): {body}")
+            }
+        }
+    }
+
     /// Register a federation worker with the server.
     pub async fn register_worker(&self, worker: &crate::federation::WorkerInfo) -> Result<()> {
         let resp = self
