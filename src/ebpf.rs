@@ -366,9 +366,6 @@ pub fn write_ebpf_status(conn: &rusqlite::Connection, status: &EbpfStatus) -> Re
         "missing_permissions",
         &format!("{:?}", status.suggestions),
     )?;
-    if let Some(s) = status.suggestions.first() {
-        crate::admin::write_instance_status(conn, "suggestion_docker", s)?;
-    }
     Ok(())
 }
 

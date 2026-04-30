@@ -62,6 +62,7 @@ pub struct AppState {
 /// DuckDB file-reading table functions blocked even in SELECT queries
 /// (e.g., read_csv('/etc/passwd') is a valid SELECT but reads arbitrary files).
 const BLOCKED_TABLE_FUNCTIONS: &[&str] = &[
+    "DROP",
     "READ_CSV",
     "READ_PARQUET",
     "READ_JSON",
@@ -78,7 +79,17 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
         }
     }
 
-    let upper = sql.to_uppercase();
+    // Strip SQL comments before checking blocked keywords
+    let stripped = sql
+        .split_once("/*")
+        .map(|(before, after)| {
+            after.split_once("*/").map(|(_, after)| format!("{before}{after}")).unwrap_or(before.to_string())
+        })
+        .unwrap_or_else(|| sql.to_string())
+        .split_once("--")
+        .map(|(before, _)| before.to_string())
+        .unwrap_or_else(|| sql.to_string());
+    let upper = stripped.to_uppercase();
     for kw in BLOCKED_TABLE_FUNCTIONS {
         for (pos, _) in upper.match_indices(kw) {
             let before_ok = pos == 0

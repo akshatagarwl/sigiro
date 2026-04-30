@@ -187,7 +187,8 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
     }
 }
 
-/// Always returns "lake." — all tables are accessed through DuckLake.
+pub const TABLE_PREFIX: &str = "lake.";
+
 pub fn table_prefix() -> &'static str {
-    "lake."
+    TABLE_PREFIX
 }
