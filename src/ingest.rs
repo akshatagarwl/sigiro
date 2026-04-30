@@ -90,7 +90,7 @@ pub fn extract_project_id_grpc(
         .strip_prefix("Bearer ")
         .ok_or_else(|| Status::unauthenticated("Expected: Bearer <key>"))?;
 
-    if token.starts_with("sigiro_dev_") {
+    if crate::auth::is_dev_project(token) {
         return Ok("dev_project".to_string());
     }
 
@@ -542,7 +542,7 @@ pub fn extract_project_id_http(
             StatusCode::UNAUTHORIZED
         })?;
 
-    if token.starts_with("sigiro_dev_") {
+    if crate::auth::is_dev_project(token) {
         return Ok("dev_project".to_string());
     }
 
@@ -732,7 +732,7 @@ async fn otlp_http_pyroscope(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|token| {
-            if token.starts_with("sigiro_dev_") {
+            if crate::auth::is_dev_project(token) {
                 "dev_project".to_string()
             } else {
                 format!("sdk:{}", &token[..8.min(token.len())])

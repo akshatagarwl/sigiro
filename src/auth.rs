@@ -17,6 +17,11 @@ pub struct AuthContext {
     pub plan: String,
 }
 
+/// Returns true if the token is a dev token (sigiro_dev_ prefix).
+pub fn is_dev_project(token: &str) -> bool {
+    token.starts_with("sigiro_dev_")
+}
+
 /// Auth cache TTL — verified keys cached for 60 seconds.
 /// API keys don't change often; this eliminates the admin DuckDB mutex
 /// contention on the ingest hot path (every OTLP request was hitting it).
@@ -97,7 +102,7 @@ pub async fn auth_middleware(
     let token = extract_bearer_token(req.headers())?;
 
     // Dev key bypass — same middleware runs, dev keys skip DB verification
-    if token.starts_with("sigiro_dev_") {
+    if is_dev_project(token) {
         let ctx = AuthContext {
             project_id: "dev_project".to_string(),
             plan: "free".to_string(),
