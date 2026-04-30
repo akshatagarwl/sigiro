@@ -60,18 +60,12 @@ opentelemetry-appender-tracing = "0.31"
 tracing-opentelemetry = "0.32"
 typed-env = "0.3.0"
 
-[build-dependencies]
-ureq = { version = "3", features = ["rustls"] }
-
 [dev-dependencies]
-time = { version = "0.3", features = ["formatting"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 tower = "0.5"
 axum-test = "17"
 tracing-test = "0.2"
-proptest = "1"
-arbitrary = "1"
 
 [[bench]]
 name = "investigate_bench"
