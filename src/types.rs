@@ -245,45 +245,9 @@ impl std::ops::Sub for TimestampMicros {
 }
 
 // ---------------------------------------------------------------------------
-// ServiceSelector — makes invalid service selections unrepresentable
-// ---------------------------------------------------------------------------
-
-/// Service selection for investigation — replaces Option<String> + Option<Vec<String>>.
-/// Makes invalid states (neither provided, or empty list) unrepresentable at the type level.
-#[derive(Debug, Clone)]
-pub enum ServiceSelector {
-    Single(String),
-    Multi(Vec<String>),
-}
-
-impl ServiceSelector {
-    /// Get all service names as a slice.
-    pub fn as_slice(&self) -> &[String] {
-        match self {
-            Self::Single(s) => std::slice::from_ref(s),
-            Self::Multi(v) => v,
-        }
-    }
-
-    /// Number of services selected.
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Single(_) => 1,
-            Self::Multi(v) => v.len(),
-        }
-    }
-
-    /// Check if no services (always false — empty Multi is prevented at construction).
-    #[allow(clippy::len_without_is_empty)]
-    pub fn is_empty(&self) -> bool {
-        false
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Typed path structs — compile-time route checking for axum router
 // ---------------------------------------------------------------------------
-// Moved from server.rs to centralize route types that span modules.
 // Used with axum_extra::routing::TypedPath for compile-time route verification.
 
 use axum_extra::routing::TypedPath;

@@ -145,15 +145,7 @@ fn query_collect<T>(
 }
 
 // ---------------------------------------------------------------------------
-// lock_conn — mutex lock with error mapping
-// ---------------------------------------------------------------------------
 
-fn lock_conn(conn: &Arc<Mutex<Connection>>) -> Result<std::sync::MutexGuard<'_, Connection>> {
-    conn.lock().map_err(|e| {
-        tracing::error!("DuckDB connection mutex poisoned");
-        anyhow::anyhow!("{e}")
-    })
-}
 
 // ---------------------------------------------------------------------------
 // DerivedEvent — auto-detected deploys and K8s events
@@ -387,7 +379,10 @@ fn investigate_one(
     let to_ts = to_ts.unwrap_or_else(|| TimestampMicros::now().as_micros());
     let from_ts = from_ts.unwrap_or_else(|| TimestampMicros::fifteen_minutes_ago().as_micros());
 
-    let conn = lock_conn(conn)?;
+    let conn = conn.lock().map_err(|e| {
+        tracing::error!("DuckDB connection mutex poisoned");
+        anyhow::anyhow!("{e}")
+    })?;
 
     let config = adaptive_config(from_ts, to_ts);
     let ctx = QueryCtx {
