@@ -9,7 +9,7 @@ use crate::supervisor::Supervisor;
 use crate::types::register_supervisor;
 
 /// Information about a federation worker.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WorkerInfo {
     pub id: String,
     pub endpoint: String,
@@ -25,7 +25,7 @@ pub struct WorkerInfo {
 }
 
 /// Platform information for a worker.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PlatformInfo {
     pub os: String,
     pub kernel: String,
@@ -34,7 +34,7 @@ pub struct PlatformInfo {
 }
 
 /// Capabilities of a federation worker.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WorkerCapabilities {
     pub bpf: bool,
     pub net_admin: bool,

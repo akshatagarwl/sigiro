@@ -81,6 +81,13 @@ sigiro investigate checkout | llm "what's the root cause?"
 
 ## HTTP API
 
+> **OpenAPI spec for agents.** Before writing API calls, fetch the OpenAPI spec:
+> ```bash
+> curl http://localhost:9999/api-docs/openapi.json
+> ```
+> This is the authoritative source of what endpoints exist, their request/response shapes,
+> and what query parameters are available. No need to read source code.
+
 ```bash
 # Health check
 curl http://localhost:9999/health

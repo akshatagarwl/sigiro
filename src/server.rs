@@ -9,6 +9,8 @@ use sqlparser::parser::Parser;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::admin;
 use crate::auth::{self, AuthContext};
@@ -17,7 +19,45 @@ use crate::ingest::OtlpGrpcService;
 use crate::inserter::MsgRouter;
 use crate::investigate;
 use crate::pool::ProjectPool;
+use crate::responses::*;
 use crate::types::*;
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        query_handler,
+        services_handler,
+        investigate_handler,
+        admin_create_key,
+        admin_revoke_key,
+        admin_status,
+        register_worker_handler,
+        deregister_worker_handler,
+        list_workers_handler,
+    ),
+    components(
+        schemas(
+            ServicesResponse,
+            ServiceEntry,
+            CreateKeyResponse,
+            RevokeKeyResponse,
+            AdminStatusResponse,
+            RegisterWorkerResponse,
+            DeregisterWorkerResponse,
+            ListWorkersResponse,
+            crate::federation::WorkerInfo,
+            crate::federation::PlatformInfo,
+            crate::federation::WorkerCapabilities,
+        )
+    ),
+    tags(
+        (name = "query", description = "SQL query endpoints"),
+        (name = "admin", description = "Admin endpoints"),
+        (name = "federation", description = "Federation worker management")
+    )
+)]
+pub struct ApiDoc;
+
 /// Rate limit key: extract Bearer token from Authorization header.
 /// Returns Err for requests without a parseable Bearer token — these will be
 /// rejected by auth middleware anyway, so rate-limiting them is pointless noise.
@@ -139,9 +179,10 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_delete(admin_revoke_key)
         .typed_get(admin_status);
 
-    // Public routes + v1 API + admin
+    // Public routes + v1 API + admin + Swagger UI
     Router::new()
         .typed_get(health)
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .nest("/v1", v1)
         .nest("/admin", admin)
         .layer(tower_http::compression::CompressionLayer::new())
@@ -304,6 +345,15 @@ fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duc
     })
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/query",
+    request_body = String,
+    responses(
+        (status = 200, description = "Query results", body = Vec<serde_json::Value>)
+    ),
+    tag = "query"
+)]
 async fn query_handler(
     _path: QueryPath,
     State(state): State<Arc<AppState>>,
@@ -355,11 +405,19 @@ async fn query_handler(
 
 /// GET /v1/services — discover what services are sending telemetry.
 /// Agents call this before /investigate to know what services exist.
+#[utoipa::path(
+    get,
+    path = "/v1/services",
+    responses(
+        (status = 200, description = "List of services", body = ServicesResponse)
+    ),
+    tag = "query"
+)]
 async fn services_handler(
     _path: ServicesPath,
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<Json<ServicesResponse>> {
     let conn = project_conn(&state, &auth)?;
     let conn = conn
         .lock()
@@ -399,17 +457,25 @@ async fn services_handler(
         let span_count: i64 = row
             .get::<_, i64>(3)
             .context_internal("Services", "failed to read span_count")?;
-        services.push(serde_json::json!({
-            "name": name,
-            "first_seen": first_seen,
-            "last_seen": last_seen,
-            "span_count": span_count,
-        }));
+        services.push(ServiceEntry {
+            name,
+            first_seen,
+            last_seen,
+            span_count,
+        });
     }
 
-    Ok(Json(serde_json::json!({ "services": services })))
+    Ok(Json(ServicesResponse { services }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/investigate",
+    responses(
+        (status = 200, description = "Investigation results")
+    ),
+    tag = "query"
+)]
 async fn investigate_handler(
     _path: InvestigatePath,
     State(state): State<Arc<AppState>>,
@@ -457,26 +523,40 @@ fn default_rate_limit() -> u32 {
     100
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/keys",
+    responses(
+        (status = 200, description = "Created API key", body = CreateKeyResponse)
+    ),
+    tag = "admin"
+)]
 async fn admin_create_key(
     _path: AdminKeysPath,
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateKeyRequest>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<Json<CreateKeyResponse>> {
     let raw_key = admin::create_key(&state.admin_conn, &req.project, &req.plan, req.rate_limit)
         .context_internal("Admin", "failed to create API key")?;
-    Ok(Json(serde_json::json!({ "key": raw_key })))
+    Ok(Json(CreateKeyResponse { key: raw_key }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/keys/{short_token}",
+    responses(
+        (status = 200, description = "Key revoked", body = RevokeKeyResponse)
+    ),
+    tag = "admin"
+)]
 async fn admin_revoke_key(
     AdminKeyPath { short_token }: AdminKeyPath,
     State(state): State<Arc<AppState>>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<Json<RevokeKeyResponse>> {
     let revoked = admin::revoke_key(&state.admin_conn, &short_token)
         .context_internal("Admin", "failed to revoke API key")?;
     if revoked {
-        Ok(Json(
-            serde_json::json!({ "revoked": true, "short_token": short_token }),
-        ))
+        Ok(Json(RevokeKeyResponse { revoked: true, short_token }))
     } else {
         Err(axum_anyhow::not_found(
             "Key Not Found",
@@ -486,31 +566,43 @@ async fn admin_revoke_key(
 }
 
 /// GET /admin/status — returns all instance_status rows as JSON object.
+#[utoipa::path(
+    get,
+    path = "/admin/status",
+    responses(
+        (status = 200, description = "Server status", body = AdminStatusResponse)
+    ),
+    tag = "admin"
+)]
 async fn admin_status(
     _path: AdminStatusPath,
     State(state): State<Arc<AppState>>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<Json<AdminStatusResponse>> {
     let guard = state
         .admin_conn
         .lock()
         .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
     let map = admin::read_all_status(&guard).context_internal("Admin", "failed to read status")?;
-    Ok(Json(serde_json::Value::Object(
-        map.into_iter()
-            .map(|(k, v)| (k, serde_json::Value::String(v)))
-            .collect(),
-    )))
+    Ok(Json(AdminStatusResponse { status: map }))
 }
 
 // --- Federation endpoints (authenticated, under /v1/federation) ---
 
 /// POST /v1/federation/workers -- register a federation worker.
+#[utoipa::path(
+    post,
+    path = "/v1/federation/workers",
+    responses(
+        (status = 200, description = "Worker registered", body = RegisterWorkerResponse)
+    ),
+    tag = "federation"
+)]
 async fn register_worker_handler(
     _path: FederationWorkersPath,
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthContext>,
     Json(worker): Json<federation::WorkerInfo>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<Json<RegisterWorkerResponse>> {
     let id = worker.id.clone();
     let guard = state
         .admin_conn
@@ -518,18 +610,23 @@ async fn register_worker_handler(
         .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
     federation::register_worker(&guard, &worker)
         .context_internal("Federation", "failed to register worker")?;
-    Ok(Json(serde_json::json!({
-        "registered": true,
-        "id": id,
-    })))
+    Ok(Json(RegisterWorkerResponse { registered: true, id }))
 }
 
 /// DELETE /v1/federation/workers/{id} -- deregister a federation worker.
+#[utoipa::path(
+    delete,
+    path = "/v1/federation/workers/{id}",
+    responses(
+        (status = 200, description = "Worker deregistered", body = DeregisterWorkerResponse)
+    ),
+    tag = "federation"
+)]
 async fn deregister_worker_handler(
     FederationWorkerPath { id }: FederationWorkerPath,
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<Json<DeregisterWorkerResponse>> {
     let guard = state
         .admin_conn
         .lock()
@@ -537,7 +634,7 @@ async fn deregister_worker_handler(
     let deregistered = federation::deregister_worker(&guard, &id)
         .context_internal("Federation", "failed to deregister worker")?;
     if deregistered {
-        Ok(Json(serde_json::json!({ "deregistered": true })))
+        Ok(Json(DeregisterWorkerResponse { deregistered: true }))
     } else {
         Err(axum_anyhow::not_found(
             "Worker Not Found",
@@ -547,16 +644,24 @@ async fn deregister_worker_handler(
 }
 
 /// GET /v1/federation/workers -- list all federation workers.
+#[utoipa::path(
+    get,
+    path = "/v1/federation/workers",
+    responses(
+        (status = 200, description = "List of workers", body = ListWorkersResponse)
+    ),
+    tag = "federation"
+)]
 async fn list_workers_handler(
     _path: FederationWorkersPath,
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<Json<ListWorkersResponse>> {
     let guard = state
         .admin_conn
         .lock()
         .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
     let workers = federation::list_workers(&guard)
         .context_internal("Federation", "failed to list workers")?;
-    Ok(Json(serde_json::json!({ "workers": workers })))
+    Ok(Json(ListWorkersResponse { workers }))
 }

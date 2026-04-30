@@ -59,6 +59,8 @@ opentelemetry-otlp = { version = "0.31", features = ["http-proto", "reqwest-bloc
 opentelemetry-appender-tracing = "0.31"
 tracing-opentelemetry = "0.32"
 typed-env = "0.3.0"
+utoipa = "5"
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

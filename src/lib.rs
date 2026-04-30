@@ -12,6 +12,7 @@ pub mod mcp;
 pub mod otel;
 pub mod pool;
 pub mod profiling;
+pub mod responses;
 pub mod schema;
 pub mod server;
 pub mod storage;
@@ -34,6 +35,7 @@ pub use investigate::{InvestigationBlock, Window};
 pub use types::{IngestMsg, SignalTable, StatusCode, SupervisorHandle, TimestampMicros};
 // Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
 pub use inserter::MsgRouter;
+pub use server::ApiDoc;
 
 pub fn data_dir() -> Result<PathBuf> {
     crate::config::DATA_DIR.value().map(PathBuf::from).map_err(|e| anyhow::anyhow!("{e}")).context(
