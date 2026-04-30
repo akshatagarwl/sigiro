@@ -381,7 +381,7 @@ struct WaterfallSpan {
     parent_span_id: String,
     span_name: String,
     span_kind: i32,
-    duration_ns: i64,
+    duration_us: i64,
     timestamp_us: i64,
     status_code: i32,
     service_name: String,
@@ -391,21 +391,10 @@ async fn run_waterfall(trace_id: &str) -> Result<()> {
     run_waterfall_direct(trace_id).await
 }
 
-/// Formats a duration in nanoseconds with dynamically chosen unit (ns/µs/ms/s).
-fn format_duration_ns(ns: i64) -> String {
-    if ns < 1000 {
-        // Sub-microsecond: show as ns with 2 decimal places
-        format!("{:.2}ns", ns as f64)
-    } else if ns < 1_000_000 {
-        // Microseconds: show with 2 decimal places
-        format!("{:.2}µs", ns as f64 / 1000.0)
-    } else if ns < 1_000_000_000 {
-        // Milliseconds: show with 2 decimal places
-        format!("{:.2}ms", ns as f64 / 1_000_000.0)
-    } else {
-        // Seconds: show with 2 decimal places
-        format!("{:.2}s", ns as f64 / 1_000_000_000.0)
-    }
+fn format_us(us: i64) -> String {
+    time::Duration::new(us / 1_000_000, (((us % 1_000_000) as u32) * 1000) as i32)
+        .to_string()
+        .replace(' ', "")
 }
 
 fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
@@ -418,19 +407,17 @@ fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
     let latest_ts = spans
         .iter()
         .map(|s| {
-            // timestamp_us is in microseconds; add duration_ns/1000 (µs) to get end time in µs
-            s.timestamp_us + s.duration_ns / 1000
+            s.timestamp_us + s.duration_us
         })
         .max()
         .unwrap_or(earliest_ts);
-    let total_duration_ns =
-        ((latest_ts - earliest_ts) * 1000).max(0); // convert µs back to ns for consistent formatting
+    let total_duration_us = ((latest_ts - earliest_ts) as i64).max(0);
 
     println!("Trace: {trace_id}");
     println!(
         "Spans: {}  Total duration: {}\n",
         spans.len(),
-        format_duration_ns(total_duration_ns)
+        format_us(total_duration_us)
     );
 
     let mut children: std::collections::BTreeMap<String, Vec<usize>> =
@@ -453,7 +440,7 @@ fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
     ) {
         let span = &spans[idx];
         let rel_start_us = span.timestamp_us as f64 - earliest_ts as f64;
-        let duration_us = span.duration_ns as f64 / 1000.0;
+        let duration_us = span.duration_us as f64;
         let end_us = rel_start_us + duration_us;
 
         let indent = "  ".repeat(depth);
@@ -467,7 +454,7 @@ fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
             _ => "UNKNOWN",
         };
 
-        let time_str = format_duration_ns(span.duration_ns);
+        let time_str = format_us(span.duration_us);
 
         let bar_max = 40usize;
         let bar = if duration_us > 0.0 {
@@ -592,7 +579,7 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
             parent_span_id: row.get(1).unwrap_or_default(),
             span_name: row.get(2).context("span_name")?,
             span_kind: row.get(3).context("span_kind")?,
-            duration_ns: row.get(4).context("duration")?,
+            duration_us: row.get(4).context("duration")?,
             timestamp_us: row.get(5).context("timestamp")?,
             status_code: row.get(6).context("status_code")?,
             service_name: row.get(7).context("service_name")?,
