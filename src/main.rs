@@ -11,6 +11,8 @@ const STYLES: styling::Styles = styling::Styles::styled()
     .literal(styling::AnsiColor::Green.on_default().bold())
     .placeholder(styling::AnsiColor::Yellow.on_default());
 
+const FEDERATION_LOCAL_IP: &str = "127.0.0.1";
+
 #[derive(Parser)]
 #[command(name = "sigiro", version, about = "Observability for AI agents", styles = STYLES)]
 struct Cli {
@@ -117,25 +119,11 @@ async fn main() -> Result<()> {
     let _telemetry_guard = match sigiro::otel::init_telemetry() {
         Ok(Some(guard)) => Some(guard),
         Ok(None) => {
-            // No OTel endpoint configured — use plain fmt subscriber.
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| "sigiro=info".parse().expect("hardcoded filter is valid")),
-                )
-                .with_writer(std::io::stderr)
-                .init();
+            init_basic_subscriber();
             None
         }
         Err(e) => {
-            // OTel init failed — fall back to plain fmt subscriber and log the error.
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| "sigiro=info".parse().expect("hardcoded filter is valid")),
-                )
-                .with_writer(std::io::stderr)
-                .init();
+            init_basic_subscriber();
             tracing::warn!("OTel self-instrumentation failed to initialize: {e:#}");
             None
         }
@@ -309,7 +297,7 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
         let status = sigiro::admin::read_all_status(&admin_conn)?;
         let worker = sigiro::federation::WorkerInfo {
             id: hostname_or_default()?,
-            endpoint: format!("http://{}:9999", local_ip_or_default()),
+            endpoint: format!("http://{FEDERATION_LOCAL_IP}:9999"),
             catalog_path: dir.join("default").join("catalog.sqlite")
                 .to_str().context("catalog_path contains non-UTF8 characters")?.to_string(),
             mode: status.get("mode").cloned().context("instance status missing 'mode' — server not fully initialized")?,
@@ -348,12 +336,14 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     let router = Arc::new(MsgRouter::new(Arc::clone(&pool)));
 
     // Evict idle connections every 2 minutes
+    const EVICT_INTERVAL_SECS: u64 = 120;
+    const MAX_IDLE_SECS: u64 = 300;
     let evictor_pool = Arc::clone(&pool);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(120));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(EVICT_INTERVAL_SECS));
         loop {
             interval.tick().await;
-            evictor_pool.evict_idle(std::time::Duration::from_secs(300));
+            evictor_pool.evict_idle(std::time::Duration::from_secs(MAX_IDLE_SECS));
         }
     });
 
@@ -371,8 +361,18 @@ fn hostname_or_default() -> Result<String> {
         .context("HOSTNAME env var not set — required for federation worker registration")
 }
 
-fn local_ip_or_default() -> &'static str {
-    "127.0.0.1"
+fn init_basic_subscriber() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "sigiro=info".parse().expect("hardcoded filter is valid")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+}
+
+fn truncate(s: &str, len: usize) -> String {
+    s.chars().take(len).collect()
 }
 
 #[derive(Debug)]
@@ -467,16 +467,12 @@ fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
         };
 
         let error_tag = if span.status_code == 2 { " [ERR]" } else { "" };
-        let service_name = format!(
-            "{}{}",
-            span.service_name.chars().take(10).collect::<String>(),
-            error_tag
-        );
+        let service_name = format!("{}{}", truncate(&span.service_name, 10), error_tag);
 
         println!(
             "{indent}{} {:15} {:6} {:12} {} {time_str}",
             bar,
-            span.span_name.chars().take(15).collect::<String>(),
+            truncate(&span.span_name, 15),
             kind_str,
             service_name,
             if span.parent_span_id.is_empty() { "ROOT" } else { "" },
