@@ -843,7 +843,7 @@ async fn parse_pyroscope_multipart(headers: &axum::http::HeaderMap, body: &[u8])
 
 /// Decode a Pyroscope PushRequest (gzip-compressed protobuf) into an Arrow
 /// RecordBatch using the same schema as transform_profiles.
-async fn transform_pyroscope_profiles(
+pub async fn transform_pyroscope_profiles(
     body: Vec<u8>,
 ) -> Result<RecordBatch, Status> {
     // Stage 1: gzip decompression

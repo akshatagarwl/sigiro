@@ -557,7 +557,7 @@ fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
                    approx_quantile(duration, 0.50) AS p50,
                    approx_quantile(duration, 0.95) AS p95,
                    approx_quantile(duration, 0.99) AS p99,
-                   first(trace_id) FILTER (WHERE status_code = {error_code}) AS exemplar_tid
+                   first(trace_id) FILTER (WHERE status_code = {error_code}) AS exemplar_error_trace_id
             FROM {}sigiro_spans
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
             GROUP BY span_name
@@ -571,7 +571,7 @@ fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
             GROUP BY span_name
         )
-        SELECT c.span_name, c.cnt, c.err_cnt, c.err_pct, c.p50, c.p95, c.p99, c.exemplar_tid,
+        SELECT c.span_name, c.cnt, c.err_cnt, c.err_pct, c.p50, c.p95, c.p99, c.exemplar_error_trace_id,
                b.bl_err_pct, b.bl_p95, b.bl_cnt
         FROM current c
         LEFT JOIN baseline b ON c.span_name = b.span_name
