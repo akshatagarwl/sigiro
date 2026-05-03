@@ -747,7 +747,7 @@ async fn otlp_http_pyroscope(
     let body_bytes = match parse_pyroscope_multipart(&headers, &body).await {
         Ok(bytes) => bytes,
         Err(e) => {
-            tracing::error!("pyroscope multipart parse failed: {e}");
+            tracing::error!("pyroscope parse failed: {e}");
             return StatusCode::BAD_REQUEST;
         }
     };
@@ -835,9 +835,20 @@ async fn parse_pyroscope_multipart(headers: &axum::http::HeaderMap, body: &[u8])
         }
 
         Err("profile form field not found in multipart body".to_string())
-    } else {
-        // Raw protobuf body (gzip-compressed PushRequest)
+    } else if content_type.is_empty()
+        || content_type.contains("application/proto")
+        || content_type.contains("binary/octet-stream")
+    {
+        if body.is_empty() {
+            return Err("empty body".to_string());
+        }
         Ok(body.to_vec())
+    } else {
+        Err(format!(
+            "unimplemented: Content-Type '{}' is not supported for Pyroscope ingest; \
+             supported: 'multipart/form-data' (Go/Python SDK), 'application/proto' (gzip-compressed PushRequest)",
+            content_type
+        ))
     }
 }
 
