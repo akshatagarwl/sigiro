@@ -156,6 +156,9 @@ struct ProjectFlusher {
     /// New templates discovered this flush cycle: template_id → template_text.
     /// Flushed to sigiro_log_templates after DuckDB log append.
     pending_templates: HashMap<u64, String>,
+    /// True until first flush is triggered. Ensures low-volume data (e.g. single
+    /// profile) is persisted promptly instead of waiting for the timer.
+    first_flush: bool,
 }
 
 impl ProjectFlusher {
@@ -176,6 +179,7 @@ impl ProjectFlusher {
             last_flush: Instant::now(),
             drain: DrainTree::new(),
             pending_templates: HashMap::new(),
+            first_flush: true,
         }
     }
 
@@ -252,7 +256,7 @@ impl ProjectFlusher {
     }
 
     fn should_flush(&self) -> bool {
-        self.total_rows >= FLUSH_ROW_THRESHOLD || self.last_flush.elapsed() >= FLUSH_INTERVAL
+        self.first_flush || self.total_rows >= FLUSH_ROW_THRESHOLD || self.last_flush.elapsed() >= FLUSH_INTERVAL
     }
 
     /// Flush all buffered batches to DuckDB using appenders per table.
@@ -316,6 +320,7 @@ impl ProjectFlusher {
 
         self.total_rows = 0;
         self.last_flush = Instant::now();
+        self.first_flush = false;
         Ok(())
     }
 }
