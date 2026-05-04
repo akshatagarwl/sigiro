@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::{LogExporter, SpanExporter, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::trace::SdkTracerProvider;
+use opentelemetry_sdk::trace::{SdkTracerProvider, BatchConfig, BatchSpanProcessor};
 use std::collections::HashMap;
 use tracing_subscriber::prelude::*;
 
@@ -74,9 +74,17 @@ pub fn init_telemetry() -> Result<Option<TelemetryGuard>> {
         .build()
         .context("failed to build OTLP HTTP span exporter")?;
 
+    // Use batch exporter with 3s scheduled delay (default is 5s)
+    let batch_config = opentelemetry_sdk::trace::BatchConfigBuilder::default()
+        .with_scheduled_delay(std::time::Duration::from_secs(3))
+        .build();
+    let batch_processor = BatchSpanProcessor::builder(span_exporter)
+        .with_batch_config(batch_config)
+        .build();
+    
     let tracer_provider = SdkTracerProvider::builder()
         .with_resource(resource.clone())
-        .with_batch_exporter(span_exporter)
+        .with_span_processor(batch_processor)
         .build();
 
     // Register globally so #[instrument] macro can find the tracer
