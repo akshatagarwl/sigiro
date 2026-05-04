@@ -26,7 +26,7 @@ mod tests {
         let tracer = provider.tracer("test");
 
         // Create a simple span
-        let span = tracer.start("test-span");
+        let mut span = tracer.start("test-span");
         span.set_status(Status::Ok);
         span.end();
 
