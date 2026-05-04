@@ -79,7 +79,7 @@ impl KeyExtractor for BearerKeyExtractor {
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
-            .unwrap_or("__missing_auth__");
+            .unwrap_or("Bearer missing_auth_header");
         Ok(key.to_string())
     }
 }
