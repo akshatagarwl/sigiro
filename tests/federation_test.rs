@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use axum::Router;
 use axum::middleware as axum_mw;
 use axum::routing::{delete, get, post};

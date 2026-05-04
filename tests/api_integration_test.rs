@@ -4,7 +4,10 @@
 //! Test state uses temp directories for SIGIRO_DATA_DIR and an in-memory
 //! SQLite admin DB.
 
+#![allow(clippy::disallowed_methods)]
+
 use axum_test::TestServer;
+
 use rusqlite::Connection;
 use sigiro::admin;
 use sigiro::ingest;

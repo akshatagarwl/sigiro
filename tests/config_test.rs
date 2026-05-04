@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
