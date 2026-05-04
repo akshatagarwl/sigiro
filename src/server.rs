@@ -21,6 +21,7 @@ use crate::investigate;
 use crate::pool::ProjectPool;
 use crate::responses::*;
 use crate::types::*;
+use opentelemetry::trace::{Tracer, Span};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -299,6 +300,13 @@ pub async fn run_servers(
 }
 
 async fn health(_path: HealthPath) -> &'static str {
+    // Create explicit OTEL span to test self-instrumentation
+    let tracer = opentelemetry::global::tracer("sigiro");
+    let mut span = tracer.start("health_check");
+    span.set_attribute(opentelemetry::KeyValue::new("handler", "health"));
+
+    tracing::info!("health check called");
+    span.end();
     "ok"
 }
 

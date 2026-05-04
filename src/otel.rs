@@ -71,6 +71,8 @@ pub fn init_telemetry() -> Result<Option<TelemetryGuard>> {
         .with_batch_exporter(span_exporter)
         .build();
 
+    // Register globally so #[instrument] macro can find the tracer
+    opentelemetry::global::set_tracer_provider(tracer_provider.clone());
     let tracer = tracer_provider.tracer("sigiro");
 
     let log_exporter = LogExporter::builder()
