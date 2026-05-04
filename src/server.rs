@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
-use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt};
+use axum_anyhow::{bad_request, ApiResult, IntoApiError, OptionExt, ResultExt};
 use axum_extra::routing::RouterExt;
 use rusqlite::Connection;
 use sqlparser::ast::Statement;
@@ -361,7 +361,7 @@ async fn query_handler(
     body: String,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
     validate_read_only(&body).map_err(|e| {
-        anyhow::anyhow!(e).context_bad_request("Query Rejected", "query contains blocked keyword")
+        bad_request("Query Rejected", &e)
     })?;
     let conn = project_conn(&state, &auth)?;
     let conn = conn
@@ -369,7 +369,7 @@ async fn query_handler(
         .map_err(|e| anyhow::anyhow!("DuckDB connection mutex poisoned: {e}"))?;
     let mut stmt = conn
         .prepare(&body)
-        .context_bad_request("Query Rejected", "invalid SQL")?;
+        .map_err(|e| bad_request("Query Rejected", &format!("SQL error: {e}")))?;
     let mut rows = stmt
         .query([])
         .context_internal("Query", "query execution failed")?;
