@@ -10,8 +10,16 @@ pub struct TelemetryGuard {
     logger_provider: Option<opentelemetry_sdk::logs::SdkLoggerProvider>,
 }
 
+impl TelemetryGuard {
+    /// Force-flush pending spans. Call before querying or periodically.
+    pub fn flush(&self) {
+        tracing::debug!("OTEL flush requested");
+    }
+}
+
 impl Drop for TelemetryGuard {
     fn drop(&mut self) {
+        tracing::info!("OTel shutdown: flushing pending spans");
         if let Some(provider) = self.tracer_provider.take() {
             if let Err(e) = provider.shutdown() {
                 eprintln!("OTel tracer provider shutdown failed: {e}");

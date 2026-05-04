@@ -243,6 +243,12 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     // Extension probe is deferred to first project connection (pool.create_project).
     // Use `sigiro fetch-extensions` to pre-download for offline deployments.
 
+    // Pre-create dev_project so queries work without ingest
+    match pool.create_project("dev_project") {
+        Ok(_) => tracing::info!("dev_project initialized"),
+        Err(e) => tracing::warn!("dev_project init failed (non-fatal): {e}"),
+    }
+
     // eBPF auto-instrumentation: try obi, degrade gracefully
     if no_ebpf {
         tracing::info!("eBPF disabled by --no-ebpf flag");
