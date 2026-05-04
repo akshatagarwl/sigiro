@@ -425,9 +425,251 @@ def collect(notes: str = "") -> Path:
         f.write("\n".join(lines))
 
     print(f"Collected to {run_dir}")
+    generate_dashboard()
     return run_dir
 
 
+def generate_dashboard(output_path: str = "docs/self-loop/metrics-dashboard.md") -> Path:
+    base = Path(".self-loop")
+    run_dirs = sorted(base.glob("run-*"))
+    if not run_dirs:
+        print("No run directories found in .self-loop/")
+        return Path(output_path)
+
+    runs: List[Dict[str, Any]] = []
+    for rd in run_dirs:
+        entry: Dict[str, Any] = {"run_id": rd.name, "dir": str(rd)}
+
+        meta_path = rd / "meta.json"
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+            entry["started_at"] = meta.get("started_at", "")
+            entry["notes"] = meta.get("notes", "")
+            entry["sigiro_healthy"] = meta.get("sigiro_healthy")
+
+        inv_path = rd / "investigate.json"
+        if inv_path.exists():
+            with open(inv_path) as f:
+                inv = json.load(f)
+            entry["profile_count"] = inv.get("profile_count", 0)
+            entry["investigate_status"] = inv.get("status", 0)
+            entry["has_profiles"] = inv.get("has_profiles", False)
+            entry["has_spans"] = inv.get("has_spans", False)
+            entry["has_logs"] = inv.get("has_logs", False)
+
+        tb_path = rd / "token-breakdown.jsonl"
+        if tb_path.exists():
+            with open(tb_path) as f:
+                events = [json.loads(line) for line in f]
+            assistants = [e for e in events if e.get("role") == "assistant"]
+            entry["llm_calls"] = len(assistants)
+            entry["total_input"] = sum(e["tokens"]["input"] for e in assistants)
+            entry["total_output"] = sum(e["tokens"]["output"] for e in assistants)
+            entry["total_reasoning"] = sum(e["tokens"]["reasoning"] for e in assistants)
+            entry["total_cache_read"] = sum(e["tokens"]["cache_read"] for e in assistants)
+            entry["total_tokens"] = sum(e["tokens"]["total"] for e in assistants)
+            entry["total_cost"] = sum(e.get("cost", 0) for e in assistants)
+            if assistants:
+                first_ts = assistants[0].get("ts", "")
+                last_ts = assistants[-1].get("ts", "")
+                entry["first_event_ts"] = first_ts
+                entry["last_event_ts"] = last_ts
+                try:
+                    from datetime import datetime as _dt
+                    t0 = _dt.fromisoformat(first_ts)
+                    t1 = _dt.fromisoformat(last_ts)
+                    entry["duration_s"] = (t1 - t0).total_seconds()
+                except Exception:
+                    entry["duration_s"] = 0
+            else:
+                entry["duration_s"] = 0
+
+            models: Dict[str, int] = {}
+            for e in assistants:
+                m = e.get("model_id") or "unknown"
+                models[m] = models.get(m, 0) + 1
+            entry["models"] = models
+        else:
+            entry["llm_calls"] = 0
+            entry["total_tokens"] = 0
+            entry["total_cost"] = 0
+            entry["duration_s"] = 0
+            entry["models"] = {}
+
+        queries_path = rd / "queries.jsonl"
+        if queries_path.exists():
+            with open(queries_path) as f:
+                queries = [json.loads(line) for line in f]
+            entry["query_count"] = len(queries)
+            ok = sum(1 for q in queries if 200 <= q.get("status", 0) < 300)
+            entry["query_success_rate"] = round(ok / len(queries), 4) if queries else 0.0
+        else:
+            entry["query_count"] = 0
+            entry["query_success_rate"] = 0.0
+
+        runs.append(entry)
+
+    total_runs = len(runs)
+    total_llm_calls = sum(r.get("llm_calls", 0) for r in runs)
+    total_tokens_all = sum(r.get("total_tokens", 0) for r in runs)
+    total_cost_all = sum(r.get("total_cost", 0) for r in runs)
+    total_profiles = sum(r.get("profile_count", 0) for r in runs)
+    durations = [r.get("duration_s", 0) for r in runs if r.get("duration_s", 0) > 0]
+    avg_duration = round(sum(durations) / len(durations), 1) if durations else 0
+    tokens_per_run = round(total_tokens_all / total_runs, 1) if total_runs > 0 else 0
+    calls_per_run = round(total_llm_calls / total_runs, 1) if total_runs > 0 else 0
+    cost_per_run = round(total_cost_all / total_runs, 6) if total_runs > 0 else 0
+
+    all_models: Dict[str, int] = {}
+    for r in runs:
+        for m, c in r.get("models", {}).items():
+            all_models[m] = all_models.get(m, 0) + c
+
+    now = now_iso()
+    lines = [
+        "# Self-Loop Metrics Dashboard",
+        "",
+        f"> **Auto-generated** by `scripts/self-loop-collector.py --dashboard` — {now}",
+        "",
+        "## Aggregate Summary",
+        "",
+        f"| Metric | Value |",
+        f"|--------|-------|",
+        f"| Total runs | {total_runs} |",
+        f"| Total LLM calls | {total_llm_calls:,} |",
+        f"| Total tokens | {total_tokens_all:,} |",
+        f"| Total cost | ${total_cost_all:.4f} |",
+        f"| Total profiles collected | {total_profiles:,} |",
+        f"| Tokens/run (avg) | {tokens_per_run:,} |",
+        f"| Calls/run (avg) | {calls_per_run:.1f} |",
+        f"| Cost/run (avg) | ${cost_per_run:.4f} |",
+        f"| Avg duration | {_fmt_duration(avg_duration)} |",
+        "",
+    ]
+
+    if all_models:
+        lines.append("## Model Usage")
+        lines.append("")
+        lines.append("| Model | Calls | Share |")
+        lines.append("|-------|-------|-------|")
+        for m in sorted(all_models, key=all_models.get, reverse=True):  # type: ignore[arg-type]
+            c = all_models[m]
+            share = round(c / total_llm_calls * 100, 1) if total_llm_calls > 0 else 0
+            lines.append(f"| {m} | {c:,} | {share}% |")
+        lines.append("")
+
+    lines.append("## Per-Run Breakdown")
+    lines.append("")
+    lines.append("| Run | LLM Calls | Tokens | Cost | Profiles | Duration | Queries | Query OK |")
+    lines.append("|-----|-----------|--------|------|----------|----------|---------|----------|")
+    for r in runs:
+        rid = r["run_id"].replace("run-", "")
+        calls = r.get("llm_calls", 0)
+        tokens = r.get("total_tokens", 0)
+        cost = r.get("total_cost", 0)
+        profs = r.get("profile_count", 0)
+        dur = _fmt_duration(r.get("duration_s", 0))
+        qc = r.get("query_count", 0)
+        qr = f"{r.get('query_success_rate', 0):.0%}" if r.get("query_count", 0) > 0 else "—"
+        lines.append(f"| {rid} | {calls:,} | {tokens:,} | ${cost:.4f} | {profs:,} | {dur} | {qc} | {qr} |")
+    lines.append("")
+
+    has_token_data = any(r.get("total_input", 0) > 0 for r in runs)
+    if has_token_data:
+        lines.append("## Token Breakdown by Run")
+        lines.append("")
+        lines.append("| Run | Input | Output | Reasoning | Cache Read | Total |")
+        lines.append("|-----|-------|--------|-----------|------------|-------|")
+        for r in runs:
+            if r.get("total_input", 0) > 0:
+                rid = r["run_id"].replace("run-", "")
+                lines.append(
+                    f"| {rid} | {r.get('total_input', 0):,} | {r.get('total_output', 0):,} "
+                    f"| {r.get('total_reasoning', 0):,} | {r.get('total_cache_read', 0):,} "
+                    f"| {r.get('total_tokens', 0):,} |"
+                )
+        lines.append("")
+
+    if len(runs) > 1:
+        lines.append("## Trends")
+        lines.append("")
+        token_vals = [r.get("total_tokens", 0) for r in runs]
+        max_tok = max(token_vals) if token_vals else 1
+        lines.append("### Tokens per Run")
+        lines.append("```")
+        for r in runs:
+            rid = r["run_id"].replace("run-", "")
+            v = r.get("total_tokens", 0)
+            bar_len = int(v / max_tok * 50) if max_tok > 0 else 0
+            bar = "█" * bar_len
+            lines.append(f"{rid}  {v:>10,}  {bar}")
+        lines.append("```")
+        lines.append("")
+
+        cost_vals = [r.get("total_cost", 0) for r in runs]
+        max_cost = max(cost_vals) if cost_vals else 1
+        lines.append("### Cost per Run ($)")
+        lines.append("```")
+        for r in runs:
+            rid = r["run_id"].replace("run-", "")
+            v = r.get("total_cost", 0)
+            bar_len = int(v / max_cost * 50) if max_cost > 0 else 0
+            bar = "█" * bar_len
+            lines.append(f"{rid}  ${v:>9.4f}  {bar}")
+        lines.append("```")
+        lines.append("")
+
+    lines.append("## Signal Coverage")
+    lines.append("")
+    lines.append("| Run | Profiles | Spans | Logs | Investigate Status |")
+    lines.append("|-----|----------|-------|------|---------------------|")
+    for r in runs:
+        rid = r["run_id"].replace("run-", "")
+        hp = "✅" if r.get("has_profiles") else "❌"
+        hs = "✅" if r.get("has_spans") else "❌"
+        hl = "✅" if r.get("has_logs") else "❌"
+        ist = r.get("investigate_status", "—")
+        lines.append(f"| {rid} | {hp} | {hs} | {hl} | {ist} |")
+    lines.append("")
+
+    lines.append("---")
+    lines.append(f"*Last updated: {now}*")
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+    print(f"Dashboard written to {out}")
+    return out
+
+
+def _fmt_duration(seconds: float) -> str:
+    if seconds <= 0:
+        return "—"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours = int(minutes // 60)
+    mins = minutes % 60
+    return f"{hours}h {mins}m {secs}s"
+
+
 if __name__ == "__main__":
-    notes = sys.argv[1] if len(sys.argv) > 1 else ""
-    collect(notes)
+    import argparse
+    parser = argparse.ArgumentParser(description="Self-Loop Collector")
+    parser.add_argument("notes", nargs="?", default="", help="Run notes")
+    parser.add_argument("--dashboard", action="store_true",
+                        help="Generate metrics dashboard from all runs")
+    parser.add_argument("--dashboard-path", default="docs/self-loop/metrics-dashboard.md",
+                        help="Output path for dashboard (default: docs/self-loop/metrics-dashboard.md)")
+    args = parser.parse_args()
+
+    if args.dashboard:
+        generate_dashboard(args.dashboard_path)
+    else:
+        collect(args.notes)
