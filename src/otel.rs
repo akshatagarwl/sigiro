@@ -32,10 +32,11 @@ impl Drop for TelemetryGuard {
         }
     }
 }
+#[allow(clippy::disallowed_methods)]
+fn otel_auth_headers() -> HashMap<String, String> {
 
 /// Add SIGIRO_OTEL_AUTH_KEY env var for self-ingestion authentication.
 /// When set, this value is sent as the Authorization header to the OTEL endpoint.
-fn otel_auth_headers() -> HashMap<String, String> {
     let mut headers = HashMap::new();
     // Allow custom auth key via env var, default to dev auth for self-ingestion
     if let Ok(key) = std::env::var("SIGIRO_OTEL_AUTH_KEY") {
