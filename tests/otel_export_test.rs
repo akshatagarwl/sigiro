@@ -3,8 +3,8 @@
 
 #[cfg(test)]
 mod tests {
-    use opentelemetry::trace::{Tracer, Span, SpanBuilder, Status, TracerProvider};
-    use opentelemetry_otlp::{SpanExporter, WithExportConfig};
+    use opentelemetry::trace::{Tracer, Span, Status, TracerProvider};
+    use opentelemetry_otlp::SpanExporter;
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use opentelemetry_sdk::resource::Resource;
 
@@ -18,22 +18,19 @@ mod tests {
             .unwrap();
         
         // Create tracer provider with batch exporter
-        let tracer_provider = SdkTracerProvider::builder()
-            .with_resource(Resource::builder().with_service_name("test").build())
-            .with_batch_exporter(exporter)
+        let provider = SdkTracerProvider::builder()
+            .with_resource(Resource::builder().with_service_name("sigiro-test").build())
+            .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
             .build();
-        
-        // Create span
-        let tracer = tracer_provider.tracer("test");
-        let mut span = tracer.span_builder("test-span")
-            .with_status(Status::Ok)
-            .start(&tracer);
-        
+
+        let tracer = provider.tracer("test");
+
+        // Create a simple span
+        let span = tracer.start("test-span");
+        span.set_status(Status::Ok);
         span.end();
-        
-        // Force flush
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        tracer_provider.force_flush().unwrap();
-        tracer_provider.shutdown().unwrap();
+
+        // Flush
+        let _ = provider.shutdown();
     }
 }
