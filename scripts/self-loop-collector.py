@@ -11,11 +11,9 @@ Output: .self-loop/<run-id>/*.jsonl + timeline.md
 """
 
 import json
-import os
 import subprocess
 import sys
 import time
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -92,6 +90,50 @@ def query_opencode_tokens(session_id: Optional[str], run_start_ms: int) -> List[
         }
         events.append(event)
     return events
+
+
+def compute_metrics(
+    token_events: List[Dict[str, Any]],
+    queries: List[Dict[str, Any]],
+    investigate: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Compute aggregate metrics: tokens_per_call, success_rate, cost totals."""
+    llm_calls = [e for e in token_events if e.get("role") == "assistant"]
+    calls_count = len(llm_calls)
+    total_input = sum(e["tokens"]["input"] for e in llm_calls)
+    total_output = sum(e["tokens"]["output"] for e in llm_calls)
+    total_reasoning = sum(e["tokens"]["reasoning"] for e in llm_calls)
+    total_cache_read = sum(e["tokens"]["cache_read"] for e in llm_calls)
+    total_cache_write = sum(e["tokens"]["cache_write"] for e in llm_calls)
+    total_tokens = sum(e["tokens"]["total"] for e in llm_calls)
+    total_cost = sum(e.get("cost", 0) for e in llm_calls)
+    tokens_per_call = round(total_tokens / calls_count, 1) if calls_count > 0 else 0.0
+
+    attempts: List[Dict[str, Any]] = []
+    for q in queries:
+        attempts.append({"label": "query", "ok": 200 <= q.get("status", 0) < 300})
+    if investigate:
+        attempts.append({"label": "investigate", "ok": 200 <= investigate.get("status", 0) < 300})
+    ok_count = sum(1 for a in attempts if a["ok"])
+    total_attempts = len(attempts)
+    success_rate = round(ok_count / total_attempts, 4) if total_attempts > 0 else 0.0
+
+    return {
+        "tokens_per_call": tokens_per_call,
+        "calls_count": calls_count,
+        "tokens": {
+            "input": total_input,
+            "output": total_output,
+            "reasoning": total_reasoning,
+            "cache_read": total_cache_read,
+            "cache_write": total_cache_write,
+            "total": total_tokens,
+        },
+        "cost_total": round(total_cost, 6),
+        "success_rate": success_rate,
+        "success_count": ok_count,
+        "total_attempts": total_attempts,
+    }
 
 
 def sigiro_logs() -> List[Dict[str, Any]]:
@@ -242,6 +284,12 @@ def collect(notes: str = "") -> Path:
     # Profile samples
     profiles = collect_profiles_sample(3)
 
+    metrics = compute_metrics(token_events, queries, investigate)
+    meta["tokens_per_call"] = metrics["tokens_per_call"]
+    meta["success_rate"] = metrics["success_rate"]
+    meta["calls_count"] = metrics["calls_count"]
+    meta["cost_total"] = metrics["cost_total"]
+
     # Build timeline
     lines = [f"# Self-Loop Run — {run_dir.name}", "", f"Started: {run_start_iso}", f"Notes: {notes}", ""]
     lines.append("## Timeline")
@@ -251,9 +299,17 @@ def collect(notes: str = "") -> Path:
         lines.append(f"- t+X: SQL queries executed ({len(queries)} queries)")
     if investigate.get("profile_count"):
         lines.append(f"- t+X: /investigate returned {investigate['profile_count']} profile samples")
+    lines.append("")
+    lines.append("## Metrics")
+    lines.append(f"- tokens_per_call: {metrics['tokens_per_call']}")
+    lines.append(f"- llm_calls: {metrics['calls_count']}")
+    lines.append(f"- total_tokens: {metrics['tokens']['total']}")
+    lines.append(f"- cost_total: ${metrics['cost_total']:.6f}")
+    lines.append(f"- success_rate: {metrics['success_rate']:.1%} ({metrics['success_count']}/{metrics['total_attempts']})")
     if token_events:
+        lines.append("")
         lines.append(f"## Token Usage (opencode session {session_id})")
-        for e in token_events[-5:]:  # last 5 messages
+        for e in token_events[-5:]:
             t = e["tokens"]
             lines.append(f"- {e['role']}/{e['mode']}: input={t['input']} output={t['output']} "
                           f"cache_read={t['cache_read']} cost=${e['cost']:.6f}")
@@ -286,6 +342,9 @@ def collect(notes: str = "") -> Path:
 
     with open(run_dir / "investigate.json", "w") as f:
         json.dump({"type": "investigate", "ts": now_iso(), **investigate}, f, indent=2)
+
+    with open(run_dir / "metrics.json", "w") as f:
+        json.dump({"type": "metrics", "ts": now_iso(), **metrics}, f, indent=2)
 
     with open(run_dir / "timeline.md", "w") as f:
         f.write("\n".join(lines))
