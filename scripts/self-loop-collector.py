@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 OPENCODE_DB = Path.home() / ".local/share/opencode/opencode.db"
+CAR_FLOWS_DB = Path(".codex-autorunner/flows.db")
 SIGIRO_URL = "http://localhost:9999"
 DEV_AUTH = "Authorization: Bearer sigiro_dev_test"
 
@@ -92,12 +93,59 @@ def query_opencode_tokens(session_id: Optional[str], run_start_ms: int) -> List[
     return events
 
 
+def ticket_call_counts() -> Dict[str, int]:
+    """Map ticket basename -> assistant-message count via CAR flows.db + opencode DB."""
+    if not CAR_FLOWS_DB.exists() or not OPENCODE_DB.exists():
+        return {}
+
+    import sqlite3
+
+    flows_conn = sqlite3.connect(str(CAR_FLOWS_DB))
+    flows_conn.row_factory = sqlite3.Row
+    rows = flows_conn.execute("""
+        SELECT
+            json_extract(state, '$.ticket_engine.current_ticket') AS ticket_path,
+            json_extract(state, '$.ticket_engine.last_agent_turn_id') AS turn_id
+        FROM flow_runs
+        WHERE flow_type = 'ticket_flow'
+          AND json_extract(state, '$.ticket_engine.current_ticket') IS NOT NULL
+          AND json_extract(state, '$.ticket_engine.last_agent_turn_id') IS NOT NULL
+        ORDER BY created_at
+    """).fetchall()
+    flows_conn.close()
+
+    ticket_sessions: Dict[str, str] = {}
+    for row in rows:
+        turn_id = row["turn_id"]
+        session_id = turn_id.split(":")[0] if ":" in turn_id else turn_id
+        ticket_sessions[Path(row["ticket_path"]).name] = session_id
+
+    if not ticket_sessions:
+        return {}
+
+    session_ids = list(set(ticket_sessions.values()))
+    placeholders = ",".join("?" for _ in session_ids)
+    opencode_conn = sqlite3.connect(str(OPENCODE_DB))
+    rows = opencode_conn.execute(f"""
+        SELECT session_id, count(*) AS cnt
+        FROM message
+        WHERE session_id IN ({placeholders})
+          AND json_extract(data, '$.role') = 'assistant'
+        GROUP BY session_id
+    """, session_ids).fetchall()
+    opencode_conn.close()
+
+    session_counts: Dict[str, int] = {row[0]: row[1] for row in rows}
+
+    return {name: session_counts.get(sid, 0) for name, sid in ticket_sessions.items()}
+
+
 def compute_metrics(
     token_events: List[Dict[str, Any]],
     queries: List[Dict[str, Any]],
     investigate: Dict[str, Any],
+    per_ticket_calls: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
-    """Compute aggregate metrics: tokens_per_call, success_rate, cost totals."""
     llm_calls = [e for e in token_events if e.get("role") == "assistant"]
     calls_count = len(llm_calls)
     total_input = sum(e["tokens"]["input"] for e in llm_calls)
@@ -118,7 +166,7 @@ def compute_metrics(
     total_attempts = len(attempts)
     success_rate = round(ok_count / total_attempts, 4) if total_attempts > 0 else 0.0
 
-    return {
+    result = {
         "tokens_per_call": tokens_per_call,
         "calls_count": calls_count,
         "tokens": {
@@ -134,6 +182,17 @@ def compute_metrics(
         "success_count": ok_count,
         "total_attempts": total_attempts,
     }
+
+    if per_ticket_calls:
+        counts = list(per_ticket_calls.values())
+        result["calls_per_ticket"] = {
+            "tickets": per_ticket_calls,
+            "mean": round(sum(counts) / len(counts), 1) if counts else 0,
+            "max": max(counts) if counts else 0,
+            "min": min(counts) if counts else 0,
+        }
+
+    return result
 
 
 def sigiro_logs() -> List[Dict[str, Any]]:
@@ -284,7 +343,8 @@ def collect(notes: str = "") -> Path:
     # Profile samples
     profiles = collect_profiles_sample(3)
 
-    metrics = compute_metrics(token_events, queries, investigate)
+    per_ticket = ticket_call_counts()
+    metrics = compute_metrics(token_events, queries, investigate, per_ticket)
     meta["tokens_per_call"] = metrics["tokens_per_call"]
     meta["success_rate"] = metrics["success_rate"]
     meta["calls_count"] = metrics["calls_count"]
@@ -313,6 +373,21 @@ def collect(notes: str = "") -> Path:
             t = e["tokens"]
             lines.append(f"- {e['role']}/{e['mode']}: input={t['input']} output={t['output']} "
                           f"cache_read={t['cache_read']} cost=${e['cost']:.6f}")
+
+    if per_ticket:
+        lines.append("")
+        lines.append("## Calls Per Ticket")
+        cpt = metrics.get("calls_per_ticket", {})
+        lines.append(f"- mean: {cpt.get('mean', 0)}, min: {cpt.get('min', 0)}, max: {cpt.get('max', 0)}")
+        lines.append("")
+        lines.append("```")
+        max_calls = max(per_ticket.values()) if per_ticket else 0
+        scale = max(40 / max_calls, 1) if max_calls > 0 else 1
+        for name in sorted(per_ticket):
+            n = per_ticket[name]
+            bar = "█" * int(n * scale)
+            lines.append(f"{name:55s} {n:>4d} {bar}")
+        lines.append("```")
 
     # Write files
     with open(run_dir / "meta.json", "w") as f:
