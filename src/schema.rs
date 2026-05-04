@@ -9,8 +9,7 @@ pub const FLEET_EXTENSIONS: &[&str] = &["system_stats", "fsquery", "hostfs"];
 /// Load a single extension: try LOAD from name first (uses extension_directory cache),
 /// then try loading from bundled file path, then fall back to download.
 fn load_one_extension(conn: &Connection, name: &str) -> Result<()> {
-    // Path 1: LOAD by name — works if extension_directory is set and extension was
-    // previously installed/cached there by fetch-extensions or INSTALL.
+    // Path 1: LOAD by name — requires extension_directory set and extension pre-cached.
     if conn.execute_batch(&format!("LOAD {name};")).is_ok() {
         info!("loaded extension (cached): {name}");
         return Ok(());

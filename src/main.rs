@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
         Some(Command::Status) => {
             let client = require_client()?;
             let result = client.status().await?;
-            println!("{}", format_output(&result, &cli.output)?);
+            println!("{}", format_output(&serde_json::to_value(&result)?, &cli.output)?);
         }
         Some(Command::Investigate { service, from, to }) => {
             let client = require_client()?;

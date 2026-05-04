@@ -3,17 +3,19 @@
 //! Replaces `serde_json::Value` return types with compile-time verified structs,
 //! enabling accurate OpenAPI schema generation via utoipa.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
 /// GET /v1/services
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ServicesResponse {
     pub services: Vec<ServiceEntry>,
 }
 
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ServiceEntry {
     pub name: String,
     pub first_seen: Option<String>,

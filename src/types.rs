@@ -237,12 +237,6 @@ impl From<i64> for TimestampMicros {
     }
 }
 
-impl std::ops::Sub for TimestampMicros {
-    type Output = i64;
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.0.saturating_sub(rhs.0)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------

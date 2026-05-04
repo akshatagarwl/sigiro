@@ -19,8 +19,7 @@ pub struct PoolEntry {
     /// Single DuckDB connection shared by both flusher (writes) and HTTP API (reads).
     /// Wrapped in Arc<Mutex> so reads and writes are serialized — DuckDB does not
     /// support concurrent access on the same connection anyway.
-    /// Previous two-connection (read + write) pattern was broken: DuckLake has no
-    /// `USE lake AT LATEST` command, so the read coordinator could never see writes.
+    /// support concurrent access on the same connection anyway.
     conn: Arc<Mutex<Connection>>,
     last_access: Instant,
 }

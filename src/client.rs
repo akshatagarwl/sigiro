@@ -119,7 +119,7 @@ impl SigiroClient {
         }
     }
 
-    pub async fn status(&self) -> Result<serde_json::Value> {
+    pub async fn status(&self) -> Result<crate::responses::AdminStatusResponse> {
         let resp = self
             .http
             .get(format!("{}/health", self.base_url))
@@ -131,7 +131,9 @@ impl SigiroClient {
         match resp.status().as_u16() {
             200 => {
                 let body = resp.text().await.context("failed to read error body")?;
-                Ok(serde_json::json!({ "status": body }))
+                Ok(crate::responses::AdminStatusResponse {
+                    status: std::collections::HashMap::from([("status".to_string(), body)]),
+                })
             }
             401 => bail!("Invalid API key. Run: sigiro auth <key>"),
             s => {
@@ -171,7 +173,7 @@ impl SigiroClient {
     }
 
     /// List services with first/last seen and span counts.
-    pub async fn services(&self) -> Result<serde_json::Value> {
+    pub async fn services(&self) -> Result<crate::responses::ServicesResponse> {
         let resp = self
             .http
             .get(format!("{}/v1/services", self.base_url))
