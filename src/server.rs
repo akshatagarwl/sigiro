@@ -361,7 +361,7 @@ async fn query_handler(
     body: String,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
     validate_read_only(&body).map_err(|e| {
-        bad_request("Query Rejected", &e)
+        bad_request("query rejected", &e)
     })?;
     let conn = project_conn(&state, &auth)?;
     let conn = conn
@@ -369,7 +369,7 @@ async fn query_handler(
         .map_err(|e| anyhow::anyhow!("DuckDB connection mutex poisoned: {e}"))?;
     let mut stmt = conn
         .prepare(&body)
-        .map_err(|e| bad_request("Query Rejected", &format!("SQL error: {e}")))?;
+        .map_err(|e| bad_request("query rejected", &format!("SQL error: {e}")))?;
     let mut rows = stmt
         .query([])
         .context_internal("Query", "query execution failed")?;

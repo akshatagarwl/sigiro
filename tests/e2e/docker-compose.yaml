@@ -4,6 +4,7 @@ services:
       context: ../..
       dockerfile: Dockerfile
     environment:
+      - SIGIRO_OTEL_ENDPOINT=http://localhost:4318
       - SIGIRO_PYROSCOPE_ENDPOINT=http://localhost:4318
       - OTEL_SERVICE_NAME=sigiro
     ports:
