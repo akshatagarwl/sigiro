@@ -1,22 +1,23 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 env:
   CARGO_TERM_COLOR: always
-
+  # Enable sccache for Rust compilation caching
+  RUSTC_WRAPPER: sccache
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: mozilla-actions/sccache-action@v0.0.7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
+      - run: sccache --show-stats # Log initial cache stats
       - run: cargo build --release --locked
       - run: cargo test --release
       - run: cargo clippy --all-targets --all-features -- -D warnings
@@ -31,7 +32,7 @@ jobs:
         with:
           source: .
           push: ${{ github.event_name == 'push' }}
-          set: |
+          set: |-
             *.tags=ghcr.io/${{ github.repository }}/sigiro:${{ github.sha }}
             *.cache-from=type=gha
             *.cache-to=type=gha,mode=max
