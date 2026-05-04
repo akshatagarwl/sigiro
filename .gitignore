@@ -28,3 +28,32 @@ TASKS.md
 
 # API response dumps
 response.json
+
+# CAR/sworm state (managed externally, not part of repo history)
+.swarm/
+.codex-autorunner/
+
+# Cargo lock drift (dependencies managed separately)
+Cargo.lock
+
+# Prompt artifacts from prior sessions
+docs/prompts/
+
+# OpenCode state
+.opencode/
+
+# Sisyphus state
+.sisyphus/
+
+# Self-loop data (generated artifacts)
+.self-loop/
+
+# Local symlink to car
+car
+
+# Build output
+out.something
+trace-waterfall.html
+
+# Test binaries
+tests/generate_push_request.rs
