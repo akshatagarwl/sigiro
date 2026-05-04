@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::{LogExporter, SpanExporter, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::trace::{SdkTracerProvider, BatchConfig, BatchSpanProcessor};
+use opentelemetry_sdk::trace::{SdkTracerProvider, BatchSpanProcessor};
 use std::collections::HashMap;
 use tracing_subscriber::prelude::*;
 
