@@ -1,14 +1,11 @@
-x-telemetrygen: &telemetrygen-base
-  image: ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.146.0
-  depends_on:
-    sigiro:
-      condition: service_healthy
-
 services:
   sigiro:
     build:
       context: ../..
       dockerfile: Dockerfile
+    environment:
+      - SIGIRO_PYROSCOPE_ENDPOINT=http://localhost:4318
+      - OTEL_SERVICE_NAME=sigiro
     ports:
       - "4317:4317"
       - "4318:4318"
@@ -19,102 +16,6 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
       interval: 5s
       retries: 10
-
-  # --- telemetrygen: checkout service ---
-  telemetrygen-checkout-traces:
-    <<: *telemetrygen-base
-    command:
-      - traces
-      - --otlp-endpoint=sigiro:4317
-      - --otlp-insecure
-      - --service=checkout
-      - --traces=50
-      - --child-spans=3
-      - --rate=10
-      - --duration=30s
-
-  telemetrygen-checkout-metrics:
-    <<: *telemetrygen-base
-    command:
-      - metrics
-      - --otlp-endpoint=sigiro:4317
-      - --otlp-insecure
-      - --service=checkout
-      - --metrics=20
-      - --rate=5
-      - --duration=30s
-
-  telemetrygen-checkout-logs:
-    <<: *telemetrygen-base
-    command:
-      - logs
-      - --otlp-endpoint=sigiro:4317
-      - --otlp-insecure
-      - --service=checkout
-      - --logs=100
-      - --rate=20
-      - --duration=30s
-
-  # --- telemetrygen: http-svc via HTTP OTLP (:4318) ---
-  telemetrygen-http-traces:
-    <<: *telemetrygen-base
-    command:
-      - traces
-      - --otlp-endpoint=sigiro:4318
-      - --otlp-insecure
-      - --otlp-http
-      - --service=http-svc
-      - --traces=20
-      - --child-spans=2
-      - --rate=5
-      - --duration=30s
-
-  telemetrygen-http-logs:
-    <<: *telemetrygen-base
-    command:
-      - logs
-      - --otlp-endpoint=sigiro:4318
-      - --otlp-insecure
-      - --otlp-http
-      - --service=http-svc
-      - --logs=50
-      - --rate=10
-      - --duration=30s
-
-  # --- telemetrygen: payments service ---
-  telemetrygen-payments-traces:
-    <<: *telemetrygen-base
-    command:
-      - traces
-      - --otlp-endpoint=sigiro:4317
-      - --otlp-insecure
-      - --service=payments
-      - --traces=50
-      - --child-spans=2
-      - --rate=10
-      - --duration=30s
-
-  telemetrygen-payments-metrics:
-    <<: *telemetrygen-base
-    command:
-      - metrics
-      - --otlp-endpoint=sigiro:4317
-      - --otlp-insecure
-      - --service=payments
-      - --metrics=20
-      - --rate=5
-      - --duration=30s
-
-  telemetrygen-payments-logs:
-    <<: *telemetrygen-base
-    command:
-      - logs
-      - --otlp-endpoint=sigiro:4317
-      - --otlp-insecure
-      - --service=payments
-      - --logs=100
-      - --rate=20
-      - --duration=30s
 
 volumes:
   sigiro-data:

@@ -14,7 +14,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM lukemathwalker/cargo-chef:latest-rust-slim AS deps
 WORKDIR /build
 ARG TARGETARCH
-RUN apt-get update && apt-get install -y pkg-config libssl-dev g++ git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev g++ git curl && rm -rf /var/lib/apt/lists/*
 COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-${TARGETARCH} \
