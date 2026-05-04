@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use tracing_attributes::instrument;
 use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use dashmap::DashMap;
@@ -96,6 +97,7 @@ impl MsgRouter {
     /// Explicitly create and register a flusher for a project.
     /// Caller (DI container / server setup) must invoke this before the first
     /// send() for that project_id. Thread-safe via DashMap entry API.
+    #[instrument(skip_all, fields(project_id = %project_id))]
     pub fn register_flusher(&self, project_id: &str) -> Result<(), RouterError> {
         use dashmap::mapref::entry::Entry;
 
@@ -127,7 +129,7 @@ impl MsgRouter {
     /// Route a message to the appropriate per-project flusher.
     /// Flusher MUST be registered first via register_flusher().
     /// Returns Err if no flusher is registered for this project.
-    #[tracing::instrument(skip_all, fields(otel.name = "ingest.send", project_id = %msg.project_id()))]
+    #[instrument(skip_all, fields(project_id = %msg.project_id()))]
     pub async fn send(&self, msg: IngestMsg) -> Result<(), RouterError> {
         let project_id = msg.project_id().to_string();
         let project_id_for_err = project_id.clone();
@@ -238,7 +240,7 @@ impl ProjectFlusher {
             first_flush: true,
         }
     }
-
+    #[instrument(skip_all, fields(signal = ?signal, rows = batch.num_rows()))]
     fn buffer(&mut self, signal: SignalTable, batch: RecordBatch) {
         let batch = if signal == SignalTable::Logs {
             match self.classify_logs(&batch) {
@@ -254,8 +256,8 @@ impl ProjectFlusher {
         self.total_rows += batch.num_rows();
         self.buffers.entry(signal).or_default().push(batch);
     }
-
     /// Run DRAIN on each log body and append a `template_id` column to the batch.
+    #[instrument(skip_all, fields(rows = batch.num_rows()))]
     fn classify_logs(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let body_idx = batch
             .schema()
@@ -383,7 +385,7 @@ impl ProjectFlusher {
 
 /// Per-project flusher loop. Receives pre-transformed RecordBatches,
 /// buffers them, and flushes to DuckDB on timer or row count threshold.
-    #[tracing::instrument(skip_all, fields(project_id = %project_id))]
+    #[instrument(skip_all, fields(project_id = %project_id))]
 async fn run_flusher(
     project_id: &str,
     conn: Arc<Mutex<Connection>>,

@@ -185,6 +185,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .nest("/v1", v1)
         .nest("/admin", admin)
+        .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(tower_http::compression::CompressionLayer::new())
         .with_state(app_state)
 }

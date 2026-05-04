@@ -1,3 +1,4 @@
+use tracing_attributes::instrument;
 use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -118,6 +119,7 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
 
 /// Transform raw bytes into Arrow RecordBatch on the tokio blocking pool.
 /// Supports both protobuf and JSON input based on Content-Type header.
+#[instrument(skip_all, fields(endpoint = "/v1/traces"))]
 async fn transform_traces(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
     tokio::task::spawn_blocking(move || {
         otlp2records::transform_traces(&bytes, fmt)
@@ -127,6 +129,7 @@ async fn transform_traces(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatc
     .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
+#[instrument(skip_all, fields(endpoint = "/v1/logs"))]
 async fn transform_logs(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
     tokio::task::spawn_blocking(move || {
         otlp2records::transform_logs(&bytes, fmt)
@@ -136,6 +139,7 @@ async fn transform_logs(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch,
     .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
+#[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
 async fn transform_metrics(bytes: Vec<u8>, fmt: InputFormat) -> Result<MetricBatches, Status> {
     tokio::task::spawn_blocking(move || {
         otlp2records::transform_metrics(&bytes, fmt)
@@ -553,6 +557,7 @@ pub fn extract_project_id_http(
     Ok(ctx.project_id)
 }
 
+#[instrument(skip_all, fields(endpoint = "/v1/traces"))]
 async fn otlp_http_traces(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
@@ -593,6 +598,7 @@ async fn otlp_http_traces(
     StatusCode::OK
 }
 
+#[instrument(skip_all, fields(endpoint = "/v1/logs"))]
 async fn otlp_http_logs(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
@@ -624,6 +630,7 @@ async fn otlp_http_logs(
     StatusCode::OK
 }
 
+#[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
 async fn otlp_http_metrics(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
@@ -663,6 +670,7 @@ async fn otlp_http_metrics(
     StatusCode::OK
 }
 
+#[instrument(skip_all, fields(endpoint = "/v1/profiles"))]
 async fn otlp_http_profiles(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
