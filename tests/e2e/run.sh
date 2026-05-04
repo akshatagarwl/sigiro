@@ -37,13 +37,33 @@ if [ $ELAPSED -ge $TIMEOUT ]; then
   exit 1
 fi
 
-echo "=== Waiting 15s for profiling data to accumulate ==="
-sleep 15
-
 FAILURES=0
 PASSES=0
-
 DEV_AUTH="Authorization: Bearer sigiro_dev_e2e_test"
+
+echo "=== Waiting for DuckLake init + profiling data to accumulate ==="
+echo "  (pyroscope SDK needs ~90s to send first real profile batch)"
+DATA_WAIT=0
+DATA_TIMEOUT=180
+while [ $DATA_WAIT -lt $DATA_TIMEOUT ]; do
+  profile_count=$(curl -sf -X POST "$SIGIRO_URL/v1/query" \
+    -H "$DEV_AUTH" -d "SELECT count(*) AS n FROM lake.sigiro_profiles" 2>/dev/null || echo "")
+  if echo "$profile_count" | grep -q '"n"' 2>/dev/null; then
+    count_val=$(echo "$profile_count" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['n'])" 2>/dev/null || echo "0")
+    if [ "$count_val" -gt "0" ] 2>/dev/null; then
+      echo "  profiles available after ${DATA_WAIT}s (${count_val} rows)"
+      break
+    fi
+  fi
+  sleep 5
+  DATA_WAIT=$((DATA_WAIT + 5))
+  if [ $((DATA_WAIT % 30)) -eq 0 ]; then
+    echo "  still waiting... (${DATA_WAIT}s elapsed)"
+  fi
+done
+if [ $DATA_WAIT -ge $DATA_TIMEOUT ]; then
+  echo "  WARN: no profiles after ${DATA_TIMEOUT}s, continuing anyway"
+fi
 
 query() {
   curl -sf -X POST "$SIGIRO_URL/v1/query" -H "$DEV_AUTH" -d "$1" 2>&1
@@ -124,13 +144,13 @@ fi
 echo ""
 echo "=== Check 4: Profiles via self-loop (SIGIRO_PYROSCOPE_ENDPOINT) ==="
 run_check "Sigiro self-profiles count > 0" \
-  "SELECT count(*) AS n FROM sigiro_profiles" \
+  "SELECT count(*) AS n FROM lake.sigiro_profiles" \
   '"n"'
 run_check "Sigiro self-profile has stack_trace" \
-  "SELECT count(*) > 0 AS ok FROM sigiro_profiles WHERE stack_trace IS NOT NULL AND array_length(stack_trace) > 0" \
+  "SELECT count(*) > 0 AS ok FROM lake.sigiro_profiles WHERE stack_trace IS NOT NULL AND array_length(stack_trace) > 0" \
   "true"
 run_check "Sigiro self-profile has service_name" \
-  "SELECT count(*) > 0 AS ok FROM sigiro_profiles WHERE service_name = 'sigiro'" \
+  "SELECT count(*) > 0 AS ok FROM lake.sigiro_profiles WHERE service_name = 'sigiro'" \
   "true"
 
 echo ""
@@ -152,6 +172,26 @@ else
   echo "FAIL (no pyroscope ingest logs found)"
   FAILURES=$((FAILURES + 1))
 fi
+
+echo ""
+echo "=== DEBUG: DuckLake files directory ==="
+ducklake_files=$(docker compose exec -T sigiro ls -la /var/lib/sigiro/dev_project/catalog.sqlite.files/ 2>&1 || echo "directory check failed")
+echo "  DuckLake files dir: $ducklake_files"
+echo "  (Informational only — DuckLake uses in-memory coordinator + Parquet files)"
+
+echo ""
+echo "=== DEBUG: Pyroscope profiles confirmed via /v1/investigate ==="
+profile_check=$(curl -sf -X POST "$SIGIRO_URL/v1/investigate" \
+  -H "$DEV_AUTH" \
+  -H 'Content-Type: application/json' \
+  -d '{"service":"sigiro"}' 2>&1 | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+profiles = d.get('sigiro', {}).get('profiles', [])
+print(f'profile_count={len(profiles)}')
+print(f'has_cpu_profile={any(p.get(\"profile_type\")==\"cpu\" for p in profiles)}')
+" 2>/dev/null || echo "profile_check=failed")
+echo "  $profile_check"
 
 echo ""
 echo "==============================="
