@@ -23,15 +23,48 @@ pub enum RouterError {
     ConnectionFailed { project_id: String },
 }
 
-/// Max rows buffered per table before forcing a flush.
-const FLUSH_ROW_THRESHOLD: usize = 10_000;
-
-/// Max time between flushes, even if row threshold not reached.
-const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
-
 /// Per-project channel capacity. When full, messages are dropped
 /// (the OTLP SDK retries). Better to drop one project's data than block all.
 const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
+
+/// Backpressure policy for the per-project channel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BackpressurePolicy {
+    Block,
+    DropOldest,
+}
+
+/// Flusher configuration derived from env vars at startup.
+#[derive(Debug, Clone)]
+pub struct FlushConfig {
+    pub row_threshold: usize,
+    pub interval: Duration,
+    pub backpressure: BackpressurePolicy,
+}
+
+impl FlushConfig {
+    pub fn from_env() -> Self {
+        let row_threshold = crate::config::FLUSH_ROW_THRESHOLD
+            .value()
+            .unwrap_or(10_000);
+        let interval_secs = crate::config::FLUSH_INTERVAL_SECS
+            .value()
+            .unwrap_or(1);
+        let backpressure = match crate::config::BACKPRESSURE_POLICY
+            .value()
+            .as_deref()
+            .unwrap_or("block")
+        {
+            "drop-oldest" => BackpressurePolicy::DropOldest,
+            _ => BackpressurePolicy::Block,
+        };
+        Self {
+            row_threshold,
+            interval: Duration::from_secs(interval_secs),
+            backpressure,
+        }
+    }
+}
 
 /// Routes IngestMsg to per-project flusher tasks.
 /// Handlers call `router.send(msg)` directly. The router lazily creates
@@ -39,13 +72,19 @@ const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
 /// No dispatcher thread — handlers fan out directly.
 pub struct MsgRouter {
     pool: Arc<ProjectPool>,
+    flush_config: FlushConfig,
     project_senders: DashMap<String, (mpsc::Sender<IngestMsg>, JoinHandle<()>)>,
 }
 
 impl MsgRouter {
     pub fn new(pool: Arc<ProjectPool>) -> Self {
+        Self::with_config(pool, FlushConfig::from_env())
+    }
+
+    pub fn with_config(pool: Arc<ProjectPool>, flush_config: FlushConfig) -> Self {
         Self {
             pool,
+            flush_config,
             project_senders: DashMap::new(),
         }
     }
@@ -71,11 +110,12 @@ impl MsgRouter {
                 let conn = self.pool.create_project(project_id)
                     .map_err(|_| RouterError::ConnectionFailed { project_id: project_id.to_string() })?;
                 let pool = Arc::clone(&self.pool);
+                let cfg = self.flush_config.clone();
 
                 let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
                 let pid_spawn = pid.clone();
                 tracing::info!(project_id = %pid, "register_flusher: spawning new flusher task");
-                let handle = tokio::spawn(async move { run_flusher(&pid_spawn, conn, rx, pool).await });
+                let handle = tokio::spawn(async move { run_flusher(&pid_spawn, conn, rx, pool, cfg).await });
 
                 e.insert((tx, handle));
                 tracing::info!(project_id = %pid, "register_flusher: inserted new sender into project_senders");
@@ -97,12 +137,32 @@ impl MsgRouter {
             .ok_or_else(|| RouterError::ConnectionFailed { project_id: project_id.clone() })?;
 
         let sender = &entry.value().0;
-        sender.send(msg).await.map_err(|e| {
-            tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
-            drop(entry);
-            self.project_senders.remove(&project_id);
-            RouterError::ChannelClosed { project_id: project_id_for_err }
-        })
+
+        match self.flush_config.backpressure {
+            BackpressurePolicy::Block => {
+                sender.send(msg).await.map_err(|e| {
+                    tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
+                    drop(entry);
+                    self.project_senders.remove(&project_id);
+                    RouterError::ChannelClosed { project_id: project_id_for_err }
+                })
+            }
+            BackpressurePolicy::DropOldest => {
+                match sender.try_send(msg) {
+                    Ok(()) => Ok(()),
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        tracing::warn!(project_id = %project_id_for_err, "channel full, dropping message (drop-oldest)");
+                        Ok(())
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        tracing::error!(project_id = %project_id_for_err, "send failed: channel closed");
+                        drop(entry);
+                        self.project_senders.remove(&project_id);
+                        Err(RouterError::ChannelClosed { project_id: project_id_for_err })
+                    }
+                }
+            }
+        }
     }
 
     /// Gracefully shut down all flusher tasks: drops senders (triggering
@@ -144,25 +204,19 @@ impl MsgRouter {
 /// and will re-emit. See docs/designs/wal.md for the full analysis.
 struct ProjectFlusher {
     conn: Arc<Mutex<Connection>>,
-    /// Precomputed table names (prefix applied once at construction).
     table_names: BTreeMap<SignalTable, String>,
-    /// Buffered RecordBatches per signal, flushed in bulk.
     buffers: BTreeMap<SignalTable, Vec<RecordBatch>>,
-    /// Total buffered rows across all signals for flush threshold.
     total_rows: usize,
     last_flush: Instant,
-    /// DRAIN tree for log template extraction. Lives in memory per-project.
+    row_threshold: usize,
+    flush_interval: Duration,
     drain: DrainTree,
-    /// New templates discovered this flush cycle: template_id → template_text.
-    /// Flushed to sigiro_log_templates after DuckDB log append.
     pending_templates: HashMap<u64, String>,
-    /// True until first flush is triggered. Ensures low-volume data (e.g. single
-    /// profile) is persisted promptly instead of waiting for the timer.
     first_flush: bool,
 }
 
 impl ProjectFlusher {
-    fn new(conn: Arc<Mutex<Connection>>) -> Self {
+    fn new(conn: Arc<Mutex<Connection>>, cfg: &FlushConfig) -> Self {
         let signals = SignalTable::ALL;
         let table_names: BTreeMap<SignalTable, String> = signals
             .iter()
@@ -177,6 +231,8 @@ impl ProjectFlusher {
             buffers,
             total_rows: 0,
             last_flush: Instant::now(),
+            row_threshold: cfg.row_threshold,
+            flush_interval: cfg.interval,
             drain: DrainTree::new(),
             pending_templates: HashMap::new(),
             first_flush: true,
@@ -256,7 +312,7 @@ impl ProjectFlusher {
     }
 
     fn should_flush(&self) -> bool {
-        self.first_flush || self.total_rows >= FLUSH_ROW_THRESHOLD || self.last_flush.elapsed() >= FLUSH_INTERVAL
+        self.first_flush || self.total_rows >= self.row_threshold || self.last_flush.elapsed() >= self.flush_interval
     }
 
     /// Flush all buffered batches to DuckDB using appenders per table.
@@ -333,9 +389,11 @@ async fn run_flusher(
     conn: Arc<Mutex<Connection>>,
     mut rx: mpsc::Receiver<IngestMsg>,
     pool: Arc<ProjectPool>,
+    cfg: FlushConfig,
 ) {
-    let mut flusher = ProjectFlusher::new(conn);
-    let mut interval = tokio::time::interval(FLUSH_INTERVAL);
+    let flush_interval = cfg.interval;
+    let mut flusher = ProjectFlusher::new(conn, &cfg);
+    let mut interval = tokio::time::interval(flush_interval);
 
     loop {
         tokio::select! {

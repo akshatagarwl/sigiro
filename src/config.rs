@@ -33,6 +33,22 @@ pub static OTEL_EXPORTER_OTLP_ENDPOINT: Envar<String> = Envar::on_startup("OTEL_
 /// Pyroscope profiling endpoint (optional — no profiling if unset).
 pub static PYROSCOPE_ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_PYROSCOPE_ENDPOINT", || EnvarDef::Default(String::new()));
 
+/// Flush interval for per-project flusher tasks (seconds). Default: 1s.
+/// Controls how often buffered rows are flushed to DuckDB, even if the row
+/// threshold hasn't been reached. Lower values reduce data-loss window on
+/// crashes; higher values reduce I/O overhead.
+pub static FLUSH_INTERVAL_SECS: Envar<u64> = Envar::on_startup("SIGIRO_FLUSH_INTERVAL_SECS", || EnvarDef::Default(1));
+
+/// Row count threshold that triggers an immediate flush. Default: 10_000.
+/// When this many rows are buffered across all signal tables, the flusher
+/// writes them to DuckDB without waiting for the timer.
+pub static FLUSH_ROW_THRESHOLD: Envar<usize> = Envar::on_startup("SIGIRO_FLUSH_ROW_THRESHOLD", || EnvarDef::Default(10_000));
+
+/// Backpressure policy when the per-project channel is full. Default: "block".
+/// - "block": sender awaits space (preserves data, may slow ingest)
+/// - "drop-oldest": drops the oldest buffered message (prevents stalls, may lose data)
+pub static BACKPRESSURE_POLICY: Envar<String> = Envar::on_startup("SIGIRO_BACKPRESSURE_POLICY", || EnvarDef::Default("block".to_string()));
+
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
 /// Path to the sigiro data directory (required — no default). Unset causes fail-fast at startup.
 pub static DATA_DIR: Envar<String> = Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);

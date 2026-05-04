@@ -4,8 +4,14 @@
 //!   - Tag all profiles with `service=<OTEL_SERVICE_NAME or "sigiro">`
 //!   - Send CPU and memory allocation profiles to the Pyroscope server
 //!
-//! The smoke-test script fetches profiles from the same Pyroscope endpoint and
-//! includes them in the investigate blocks passed to the AI agent for reasoning.
+//! The pyroscope-rs SDK (v2.0) hardcodes a 10-second flush cycle in
+//! `PyroscopeAgentBuilder::build()` — there is no public API to change it.
+//! Each 10s tick, the SDK snapshots the profiler backend and uploads the
+//! pprof payload via an HTTP POST to `{endpoint}/push.v1.PusherService/Push`.
+//!
+//! Sigiro's own flush settings (SIGIRO_FLUSH_INTERVAL_SECS, SIGIRO_FLUSH_ROW_THRESHOLD,
+//! SIGIRO_BACKPRESSURE_POLICY) control how fast ingested profiles are persisted
+//! to DuckDB — they are independent of the SDK's upload cycle.
 
 use anyhow::{Context, Result};
 
