@@ -3,6 +3,8 @@ pub mod auth;
 pub mod client;
 pub mod config;
 pub mod drain;
+
+#[allow(clippy::items_after_test_module)]
 pub mod ebpf;
 pub mod federation;
 pub mod ingest;
