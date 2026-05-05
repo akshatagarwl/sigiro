@@ -68,15 +68,22 @@ sigiro status
 # Raw SQL query
 sigiro query "SELECT count(*) FROM sigiro_spans WHERE service_name='checkout'"
 
-# Investigate one or more services (structured JSON: metrics + spans + logs + linked traces)
-sigiro investigate checkout
-sigiro investigate checkout --from 1711000000 --to 1711001000
+# Investigate one or more services (structured JSON: metrics + traces + logs + linked traces)
+# from_ts and to_ts are REQUIRED epoch microseconds (no defaults)
+sigiro investigate checkout --from 1711000000000000 --to 1711001000000000
 
 # Investigate multiple services at once (incident topology)
-sigiro investigate checkout,payments,inventory
+sigiro investigate checkout,payments,inventory --from 1711000000000000 --to 1711001000000000
+
+# Show service dependency topology
+sigiro topology
+sigiro topology checkout --format mermaid
+
+# Show trace tree for a specific trace
+sigiro trace-tree abc123def456
 
 # Pipe investigation to an LLM
-sigiro investigate checkout | llm "what's the root cause?"
+sigiro investigate checkout --from 1711000000000000 --to 1711001000000000 | llm "what's the root cause?"
 ```
 
 ## HTTP API
@@ -95,39 +102,171 @@ curl http://localhost:9999/health
 # Raw SQL query
 curl -X POST http://localhost:9999/query -d "SELECT count(*) FROM sigiro_spans"
 
-# Investigate one service
+# Investigate one service (from_ts and to_ts REQUIRED)
 curl -X POST http://localhost:9999/investigate \
   -H 'Content-Type: application/json' \
-  -d '{"service":"checkout"}'
+  -d '{"service":"checkout","from_ts":1711000000000000,"to_ts":1711001000000000}'
 
 # Multiple services in one call (max 10)
 curl -X POST http://localhost:9999/investigate \
   -H 'Content-Type: application/json' \
-  -d '{"services":["checkout","payments","inventory"]}'
+  -d '{"services":["checkout","payments","inventory"],"from_ts":1711000000000000,"to_ts":1711001000000000}'
 
-# Custom time window (microsecond timestamps)
-curl -X POST http://localhost:9999/investigate \
-  -H 'Content-Type: application/json' \
-  -d '{"service":"checkout","from_ts":1711000000000000,"to_ts":1711001000000000}'
+# Get trace detail with full spans
+curl http://localhost:9999/v1/traces/abc123def456
+```
+
+## Investigation Response Structure
+
+```bash
+sigiro investigate checkout --from 1711000000000000 --to 1711001000000000
+```
+
+Returns an `InvestigationBlock` JSON with:
+
+### Top-level fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `service` | string | Service name investigated |
+| `window` | object | `{from_ts, to_ts, from_iso, to_iso}` |
+| `traces` | array | **Trace objects** grouped by trace_id (replaces flat spans) |
+| `timeline` | array | Chronological merged events + spans + logs |
+| `operation_summaries` | array | Aggregated stats per span_name with anomaly flags |
+| `metrics` | array | Time-series metric buckets |
+| `log_patterns` | array | Deduplicated log templates (frequency-ranked) |
+| `logs` | array | Raw chronological log entries (last 50) |
+| `events` | array | Derived events (deploys, version changes) |
+| `linked_traces` | array | Cross-service traces containing errors |
+| `profiles` | array | Profile summaries |
+| `context` | object | Service metadata + dependencies |
+| `coverage` | object | Signal availability report |
+| `truncation` | object | How much data was cut |
+
+### Trace object
+
+```json
+{
+  "trace_id": "abc123",
+  "root_span": { /* full Span with attributes */ },
+  "spans": [ /* all spans in this trace */ ],
+  "span_count": 12,
+  "error_count": 2,
+  "has_errors": true,
+  "total_duration_ns": 1500000,
+  "linked_logs": [],
+  "metric_count": 0
+}
+```
+
+### Span object (full data)
+
+```json
+{
+  "trace_id": "abc123",
+  "span_id": "def456",
+  "parent_span_id": "",
+  "span_name": "POST /checkout",
+  "span_kind": "server",
+  "duration_ns": 1500000,
+  "status_code": "ok",
+  "service_name": "gateway",
+  "start_timestamp": 1711000000000000,
+  "end_timestamp": 1711000001500000,
+  "span_attributes": {"http.method": "POST", "http.route": "/checkout"},
+  "resource_attributes": {"service.version": "2.2.0", "deployment.environment": "production"},
+  "events_json": [{"name": "exception", "timestamp": "...", "attributes": {}}],
+  "links_json": [],
+  "instrumentation_library_name": "opentelemetry-instrumentation-flask",
+  "instrumentation_library_version": "0.45b0",
+  "trace_state": ""
+}
+```
+
+### Timeline entry
+
+```json
+{
+  "type": "span",
+  "timestamp": 1711000000000000,
+  "trace_id": "abc123",
+  "span_id": "def456",
+  "span_name": "POST /checkout",
+  "service_name": "gateway",
+  "span_kind": "server",
+  "duration_ns": 1500000,
+  "is_error": false
+}
+```
+
+Types: `span`, `event`, `log`, `version`
+
+### Coverage signals
+
+```json
+{
+  "signals": [
+    {"signal_type": "spans", "available": true, "severity": "high", "reason": "9553 spans found"},
+    {"signal_type": "logs", "available": false, "severity": "none", "reason": "no logs found"},
+    {"signal_type": "metrics", "available": false, "severity": "low", "reason": "no metrics found"},
+    {"signal_type": "profiles", "available": false, "severity": "low", "reason": "no profiles found"},
+    {"signal_type": "correlated_signals", "available": true, "severity": "high", "reason": "spans + logs present"}
+  ]
+}
+```
+
+### Operation summary (with anomaly detection)
+
+```json
+{
+  "span_name": "process_payment",
+  "count": 2090,
+  "error_count": 45,
+  "error_pct": 2.15,
+  "duration_p50_ns": 500000,
+  "duration_p95_ns": 1200000,
+  "duration_p99_ns": 2500000,
+  "baseline_error_pct": 0.5,
+  "baseline_p95_ns": 800000,
+  "baseline_count": 8379,
+  "is_anomalous": true,
+  "anomaly_reason": "error_spike"
+}
+```
+
+### Service dependencies
+
+```json
+{
+  "dependencies": [
+    {"service_name": "payments", "span_count": 452, "error_count": 12, "error_rate": 2.65},
+    {"service_name": "inventory", "span_count": 312, "error_count": 0, "error_rate": 0.0}
+  ],
+  "dependents": [
+    {"service_name": "api-gateway", "span_count": 892, "error_count": 3, "error_rate": 0.34}
+  ]
+}
 ```
 
 ## Investigation Playbook
 
-Given: a service name and an approximate time of incident.
+Given: a service name and an approximate time of incident (as epoch microseconds).
 Goal: determine root cause.
 
 ### Quick start
 
 ```bash
-sigiro investigate checkout
+sigiro investigate checkout --from 1711000000000000 --to 1711001000000000
 ```
 
-Returns an InvestigationBlock JSON with:
-- **metrics**: 1-minute bucketed time series (p95, avg, count)
-- **spans**: top 50 by error status + duration
-- **span_trees**: parent_span_id → child span_ids mapping
-- **logs**: template-deduplicated (body + severity grouped, with count)
-- **linked_traces**: cross-service spans for error trace_ids (cap 5)
+Returns an InvestigationBlock JSON. AI should:
+
+1. **Check coverage signals first** — understand what data is available
+2. **Read timeline** — get chronological story of the incident
+3. **Check traces with errors** — identify failing trace paths
+4. **Read operation summaries** — find anomalous spans
+5. **Drill into spans** — use span_attributes and events_json for root cause
+6. **Check service dependencies** — see if upstream/downstream services are affected
 
 ### Manual drill-down with raw SQL
 
@@ -152,11 +291,7 @@ LIMIT 50
 
 #### Logs — two-pass investigation (saves tokens, reduces context poisoning)
 
-If the service has many logs (hundreds+), use a two-pass approach:
-
-**Pass 1 — Templates (cheap, high signal):**
-Get deduplicated log templates with counts. This compresses thousands of lines
-into a handful of patterns. Look for rare/new templates or error severity.
+**Pass 1 — Patterns (cheap, high signal):**
 ```sql
 SELECT regexp_replace(body, '[0-9a-f]{8,}|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9]+', '{id}', 'g') AS template,
        severity_text, count(*) AS n,
@@ -168,27 +303,14 @@ ORDER BY n DESC
 LIMIT 30
 ```
 
-**Pass 2 — Drill into suspicious template (targeted, full detail):**
-Once you identify a suspicious template (rare occurrence, ERROR severity, or
-new pattern), fetch the raw logs matching it to get exact values.
+**Pass 2 — Drill into suspicious template:**
 ```sql
 SELECT timestamp, body, severity_text, trace_id, span_id, log_attributes
 FROM sigiro_logs
 WHERE service_name='checkout'
-  AND body LIKE '%connection%refused%'  -- match the suspicious template
+  AND body LIKE '%connection%refused%'
 ORDER BY timestamp DESC
 LIMIT 20
-```
-
-**When to skip two-pass:** If there are <100 logs, just read them directly:
-```sql
-SELECT body, severity_text, count(*) AS n,
-       min(timestamp) AS first_seen, max(timestamp) AS last_seen
-FROM sigiro_logs
-WHERE service_name='checkout'
-GROUP BY body, severity_text
-ORDER BY n DESC
-LIMIT 30
 ```
 
 #### Follow cross-service traces
@@ -200,164 +322,14 @@ WHERE trace_id IN ('abc123...', 'def456...')
 ORDER BY trace_id, timestamp
 ```
 
-## Platform Data Correlation
-
-Sigiro stores app-level telemetry (traces, logs, metrics). It does NOT store
-platform-level data (deploys, machine events, web vitals, infra metrics).
-During investigations, YOU are the glue — fetch platform data and correlate
-timestamps with sigiro's InvestigationBlock.
-
-### Investigation workflow
-
-1. sigiro investigate <service>  → get traces, logs, anomalies, span trees
-2. Query the platform API for the same time window → deploys, events, metrics
-3. Correlate: "deploy v1.2.3 at 14:32 → error spike in sigiro at 14:33"
-
-### Vercel
-
-Data to fetch (via Vercel REST API, needs VERCEL_TOKEN):
-- Recent deployments: GET /v6/deployments?projectId=<id>&limit=10
-  → deployment times, commit SHAs, build status
-- Web Vitals: GET /v1/web-vitals?projectId=<id>
-  → LCP, FID, CLS scores (Vercel Speed Insights)
-- Serverless function logs: GET /v2/deployments/<id>/events
-  → cold starts, timeouts, errors
-- Environment: check VERCEL_REGION, VERCEL_URL env vars in spans
-
-Correlate: deployment timestamp vs error spike in sigiro_spans.
-Correlate: web vitals degradation vs slow spans (high p95 duration).
-
-### Fly.io
-
-Data to fetch (via Fly Machines API, needs FLY_API_TOKEN):
-- Machine events: GET /v1/apps/<app>/machines/<id>/events
-  → start, stop, exit (with exit code + signal), OOM kills
-- Machine state: GET /v1/apps/<app>/machines
-  → running/stopped/created, region, image ref
-- Prometheus metrics: GET https://api.fly.io/prometheus/<org>/api/v1/query
-  → fly_instance_cpu, fly_instance_memory_*, fly_instance_up
-  → fly_edge_http_response_time, fly_app_concurrency
-
-Resource attributes to check in sigiro spans:
-  FLY_APP_NAME, FLY_MACHINE_ID, FLY_REGION, FLY_ALLOC_ID,
-  FLY_IMAGE_REF, FLY_VM_MEMORY_MB, FLY_PROCESS_GROUP
-
-Correlate: machine exit event vs error logs in sigiro_logs.
-Correlate: memory metric spike vs slow spans.
-Correlate: scale-to-zero restart vs cold start latency in spans.
-
-### Railway
-
-Data to fetch (via Railway GraphQL API, needs RAILWAY_TOKEN):
-- Deployments: query { deployments(projectId: "<id>") { ... } }
-  → deployment status, commit SHA, timestamps
-- Service metrics: query { metrics(serviceId: "<id>") { ... } }
-  → CPU, memory, network usage
-- Logs: query { deploymentLogs(deploymentId: "<id>") { ... } }
-  → build + runtime logs (Railway's own log stream)
-
-Resource attributes to check in sigiro spans:
-  RAILWAY_SERVICE_NAME, RAILWAY_ENVIRONMENT, RAILWAY_DEPLOYMENT_ID
-
-Correlate: deployment timestamp vs error spike in sigiro_spans.
-
-### GitHub Actions (CI/CD)
-
-Data to fetch (via GitHub REST API, needs GITHUB_TOKEN):
-- Workflow runs: GET /repos/<owner>/<repo>/actions/runs?per_page=10
-  → run times, status, triggering commit SHA
-- Failed jobs: GET /repos/<owner>/<repo>/actions/runs/<id>/jobs
-  → step-level failure details
-
-Correlate: merge/deploy workflow completion → deployment → error spike.
-Use commit SHA to link: GitHub run → Vercel/Railway/Fly deployment → sigiro spans.
-
-### Database Platforms
-
-Sigiro captures db.statement and db.system from OTel spans (Layer 1).
-For deeper DB debugging, query the platform's own insights API (Layer 2).
-
-**PlanetScale** (needs PLANETSCALE_TOKEN):
-- Query Insights: GET /v1/organizations/{org}/databases/{db}/query-statistics
-  → slow queries, QPS, rows read/written, latency percentiles
-- Deploy requests: GET /v1/organizations/{org}/databases/{db}/deploy-requests
-  → schema migration history, timing
-
-**Neon** (needs NEON_API_KEY):
-- Project info: GET /projects/{id}
-  → compute endpoints, connection pooling config
-- Query stats: connect to Neon Postgres, run:
-  SELECT query, calls, mean_exec_time, rows FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 20
-
-**Supabase** (needs SUPABASE_SERVICE_KEY):
-- Query stats: same pg_stat_statements via SQL connection
-- Logs: GET /v1/projects/{ref}/analytics/endpoints/logs.all
-  → Postgres logs, auth logs, API gateway logs
-
-**Turso/libSQL** (needs TURSO_TOKEN):
-- Usage: GET /v1/organizations/{org}/databases/{db}/usage
-  → query count, rows read, storage used
-
-**Any Postgres** (direct connection):
-- EXPLAIN ANALYZE <slow query from sigiro spans>
-- SELECT * FROM pg_stat_activity WHERE state = 'active'
-- SELECT * FROM pg_locks WHERE NOT granted
-
-Correlate: slow db.statement spans in Sigiro → query stats in DB platform API.
-Correlate: schema migration deploy request → error spike in sigiro_spans.
-
-### System-Level Debugging (Layer 3)
-
-If Layer 1 (Sigiro) and Layer 2 (platform APIs) don't explain the problem,
-use bpftrace for kernel-level visibility. Requires MCPtrace MCP server
-(github.com/eunomia-bpf/MCPtrace) + Linux + root access.
-
-Only works on: Fly Machines, K8s nodes, self-hosted VMs.
-Does NOT work on: Vercel, Railway, PaaS databases.
-
-Useful bpftrace programs for debugging:
-- TCP retransmits: tracepoint:tcp:tcp_retransmit_skb
-- DNS latency: kprobe:tcp_v4_connect (filter port 53)
-- Disk I/O latency: tracepoint:block:block_rq_complete
-- OOM kills: tracepoint:oom:oom_score_adj_update
-- Process exec: tracepoint:syscalls:sys_enter_execve
-
-Workflow: list_probes → exec_program → get_result → correlate with Sigiro spans.
-
-### GenAI SDK telemetry
-
-If the app uses OpenAI, Anthropic, or other LLM APIs with OTel instrumentation
-(e.g., opentelemetry-instrumentation-openai), these span attributes are already
-in sigiro_spans:
-
-  gen_ai.system          → "openai", "anthropic", etc.
-  gen_ai.request.model   → "gpt-4", "claude-3-opus", etc.
-  gen_ai.usage.input_tokens
-  gen_ai.usage.output_tokens
-  gen_ai.response.finish_reason
-
-Useful queries:
-  -- Cost by model (approximate)
-  SELECT json_extract_string(span_attributes, '$.gen_ai.request.model') AS model,
-         SUM(CAST(json_extract(span_attributes, '$.gen_ai.usage.input_tokens') AS BIGINT)) AS input_tokens,
-         SUM(CAST(json_extract(span_attributes, '$.gen_ai.usage.output_tokens') AS BIGINT)) AS output_tokens
-  FROM sigiro_spans
-  WHERE json_extract_string(span_attributes, '$.gen_ai.system') IS NOT NULL
-  GROUP BY model
-
-  -- Slowest LLM calls
-  SELECT span_name, duration/1000000 AS ms,
-         json_extract_string(span_attributes, '$.gen_ai.request.model') AS model
-  FROM sigiro_spans
-  WHERE json_extract_string(span_attributes, '$.gen_ai.system') IS NOT NULL
-  ORDER BY duration DESC
-  LIMIT 20
-
 ## Environment Variables
 
 ```bash
 # Data directory (default: ~/.sigiro/data/)
 export SIGIRO_DATA_DIR=/var/lib/sigiro
+
+# OTel self-instrumentation endpoint
+export SIGIRO_OTEL_ENDPOINT=http://localhost:4318
 ```
 
 ## Gotchas
@@ -365,6 +337,6 @@ export SIGIRO_DATA_DIR=/var/lib/sigiro
 1. DuckDB file lock: only one process can open the DB for writing. Use HTTP API if server is running.
 2. duration in sigiro_spans is nanoseconds, not milliseconds.
 3. timestamp is a TIMESTAMP type (microsecond precision in DuckDB).
-4. Linked trace queries (WHERE trace_id IN (...)) scan the full spans table. Cap trace_ids.
-5. Always include service_name in WHERE for efficient filtering.
-6. No profiles table — profiles are not supported in the current schema.
+4. from_ts and to_ts in investigate are **mandatory** epoch microseconds. No defaults.
+5. Investigation response groups spans by trace (not flat list). Access via `traces[].spans`.
+6. Always include service_name in WHERE for efficient filtering.
