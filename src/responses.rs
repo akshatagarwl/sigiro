@@ -67,7 +67,7 @@ pub struct ListWorkersResponse {
 // ---------------------------------------------------------------------------
 
 /// Complete trace detail response with critical path and service breakdown.
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct TraceDetailResponse {
     pub trace_id: String,
     pub total_duration_ns: i64,
@@ -81,8 +81,7 @@ pub struct TraceDetailResponse {
 }
 
 /// Individual span detail in trace detail response.
-/// Individual span detail in trace detail response.
-#[derive(Serialize, ToSchema, Clone)]
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
 pub struct SpanDetail {
     pub trace_id: String,
     pub span_id: String,
@@ -103,33 +102,11 @@ pub struct SpanDetail {
 }
 
 /// Service duration breakdown with percentages.
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct ServiceBreakdownEntry {
     pub service: String,
     pub duration_ns: i64,
     pub percentage: f64,
 }
 
-/// Simplified trace response for CLI trace-tree command.
-#[derive(Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TraceListResponse {
-    pub trace_id: String,
-    pub root_spans: Vec<TraceSpanData>,
-    pub total_spans: i64,
-    pub total_duration_ms: f64,
-}
-
-/// Span data for trace tree rendering.
-#[derive(Serialize, Deserialize, ToSchema, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct TraceSpanData {
-    pub span_id: String,
-    pub parent_span_id: Option<String>,
-    pub span_name: String,
-    pub service_name: String,
-    pub duration_us: i64,
-    pub status_code: i32,
-    pub timestamp_us: i64,
-}
 

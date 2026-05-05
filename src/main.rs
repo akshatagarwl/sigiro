@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, builder::styling};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use sigiro::responses::TraceSpanData;
+use sigiro::responses::SpanDetail;
 use sigiro::toon::to_toon;
 use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
 
@@ -822,23 +822,33 @@ async fn run_trace_tree(trace_id: &str) -> Result<()> {
 
     let trace = client.trace(trace_id).await?;
 
-    if trace.root_spans.is_empty() {
+    if trace.spans.is_empty() {
         println!("No spans found for trace: {trace_id}");
         return Ok(());
     }
 
     println!("Trace: {trace_id}");
-    println!("Spans: {}  Duration: {:.2}ms\n", trace.total_spans, trace.total_duration_ms);
+    println!(
+        "Spans: {}  Duration: {:.2}ms\n",
+        trace.span_count,
+        trace.total_duration_ns as f64 / 1_000_000.0
+    );
 
     // Build span map
-    let mut span_map: std::collections::HashMap<String, TraceSpanData> =
-        std::collections::HashMap::new();
-    for span in &trace.root_spans {
+    let mut span_map: HashMap<String, SpanDetail> = HashMap::new();
+    for span in &trace.spans {
         span_map.insert(span.span_id.clone(), span.clone());
     }
 
+    // Find root spans (no parent or parent not in trace)
+    let root_spans: Vec<_> = trace
+        .spans
+        .iter()
+        .filter(|s| s.parent_span_id.is_empty() || !span_map.contains_key(&s.parent_span_id))
+        .collect();
+
     // Render tree for each root span
-    for (i, root) in trace.root_spans.iter().enumerate() {
+    for (i, root) in root_spans.iter().enumerate() {
         if i > 0 {
             println!();
         }
@@ -849,10 +859,10 @@ async fn run_trace_tree(trace_id: &str) -> Result<()> {
 }
 
 fn render_trace_tree_recursive(
-    spans: &std::collections::HashMap<String, TraceSpanData>,
-    span: &TraceSpanData,
+    spans: &HashMap<String, SpanDetail>,
+    span: &SpanDetail,
     depth: usize,
-    rendered: &mut std::collections::HashSet<String>,
+    rendered: &mut HashSet<String>,
 ) {
     if rendered.contains(&span.span_id) {
         return;
@@ -872,13 +882,13 @@ fn render_trace_tree_recursive(
         ""
     };
 
-    let duration_ms = span.duration_us as f64 / 1000.0;
+    let duration_ms = span.duration_ns as f64 / 1_000_000.0;
     let error_tag = if span.status_code == 2 { " [ERR]" } else { "" };
 
     // Find children
     let children: Vec<_> = spans
         .values()
-        .filter(|s| s.parent_span_id.as_ref() == Some(&span.span_id))
+        .filter(|s| s.parent_span_id == span.span_id)
         .collect();
 
     let connector = if children.is_empty() { "└─ " } else { "├─ " };

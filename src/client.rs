@@ -274,7 +274,7 @@ pub fn try_build_client() -> anyhow::Result<SigiroClient> {
 
 impl SigiroClient {
     /// Get hierarchical trace tree for a trace ID.
-    pub async fn trace(&self, trace_id: &str) -> Result<crate::responses::TraceListResponse> {
+    pub async fn trace(&self, trace_id: &str) -> Result<crate::responses::TraceDetailResponse> {
         let resp = self
             .http
             .get(format!("{}/v1/traces/{}", self.base_url, trace_id))
