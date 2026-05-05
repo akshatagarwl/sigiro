@@ -283,21 +283,6 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_anomalies view")?;
 
-    // Deployment events — structured changelog for SRE correlation
-    conn.execute_batch(&format!(
-        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_events (
-            timestamp             TIMESTAMP NOT NULL,
-            event_type            VARCHAR NOT NULL,
-            service_name          VARCHAR,
-            environment           VARCHAR,
-            version               VARCHAR,
-            description           VARCHAR,
-            metadata_json         VARCHAR,
-            source                VARCHAR,
-            actor                 VARCHAR
-        )"
-    ))
-    .context("failed to create sigiro_events")?;
 
     Ok(())
 }
