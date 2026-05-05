@@ -32,10 +32,10 @@ pub struct InvestigateParams {
     pub service: Option<String>,
     /// Multiple service names to investigate (max 10). Use for incident topology.
     pub services: Option<Vec<String>>,
-    /// Start timestamp in epoch microseconds (defaults to now - 15m)
-    pub from_ts: Option<i64>,
-    /// End timestamp in epoch microseconds (defaults to now)
-    pub to_ts: Option<i64>,
+    /// Start timestamp in epoch microseconds (required)
+    pub from_ts: i64,
+    /// End timestamp in epoch microseconds (required)
+    pub to_ts: i64,
 }
 
 impl From<InvestigateParams> for crate::investigate::InvestigateRequest {

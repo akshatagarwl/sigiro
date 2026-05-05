@@ -61,3 +61,75 @@ pub struct DeregisterWorkerResponse {
 pub struct ListWorkersResponse {
     pub workers: Vec<crate::federation::WorkerInfo>,
 }
+
+// ---------------------------------------------------------------------------
+// GET /v1/traces/{trace_id} — trace detail and tree responses
+// ---------------------------------------------------------------------------
+
+/// Complete trace detail response with critical path and service breakdown.
+#[derive(Serialize, ToSchema)]
+pub struct TraceDetailResponse {
+    pub trace_id: String,
+    pub total_duration_ns: i64,
+    pub root_span: SpanDetail,
+    pub span_count: i64,
+    pub error_count: i64,
+    pub services: Vec<String>,
+    pub spans: Vec<SpanDetail>,
+    pub critical_path: Vec<String>,
+    pub service_breakdown: Vec<ServiceBreakdownEntry>,
+}
+
+/// Individual span detail in trace detail response.
+/// Individual span detail in trace detail response.
+#[derive(Serialize, ToSchema, Clone)]
+pub struct SpanDetail {
+    pub trace_id: String,
+    pub span_id: String,
+    pub parent_span_id: String,
+    pub span_name: String,
+    pub duration_ns: i64,
+    pub status_code: i32,
+    pub service_name: String,
+    pub timestamp: String,
+    pub span_kind: Option<i32>,
+    pub span_attributes: Option<String>,
+    pub resource_attributes: Option<String>,
+    pub events_json: Option<String>,
+    pub links_json: Option<String>,
+    pub scope_name: Option<String>,
+    pub scope_version: Option<String>,
+    pub trace_state: Option<String>,
+}
+
+/// Service duration breakdown with percentages.
+#[derive(Serialize, ToSchema)]
+pub struct ServiceBreakdownEntry {
+    pub service: String,
+    pub duration_ns: i64,
+    pub percentage: f64,
+}
+
+/// Simplified trace response for CLI trace-tree command.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceListResponse {
+    pub trace_id: String,
+    pub root_spans: Vec<TraceSpanData>,
+    pub total_spans: i64,
+    pub total_duration_ms: f64,
+}
+
+/// Span data for trace tree rendering.
+#[derive(Serialize, Deserialize, ToSchema, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceSpanData {
+    pub span_id: String,
+    pub parent_span_id: Option<String>,
+    pub span_name: String,
+    pub service_name: String,
+    pub duration_us: i64,
+    pub status_code: i32,
+    pub timestamp_us: i64,
+}
+

@@ -27,8 +27,8 @@ impl SigiroClient {
     pub async fn investigate(
         &self,
         service: &str,
-        from: Option<i64>,
-        to: Option<i64>,
+        from: i64,
+        to: i64,
     ) -> Result<InvestigationBlock> {
         let blocks = self
             .investigate_multi(Some(service), None, from, to)
@@ -148,8 +148,8 @@ impl SigiroClient {
         &self,
         service: Option<&str>,
         services: Option<Vec<String>>,
-        from: Option<i64>,
-        to: Option<i64>,
+        from: i64,
+        to: i64,
     ) -> Result<std::collections::BTreeMap<String, InvestigationBlock>> {
         let body = serde_json::json!({
             "service": service,
@@ -266,4 +266,26 @@ pub fn try_build_client() -> anyhow::Result<SigiroClient> {
         .value()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(SigiroClient::new(&base_url, &api_key))
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/traces/{trace_id}
+// ---------------------------------------------------------------------------
+
+impl SigiroClient {
+    /// Get hierarchical trace tree for a trace ID.
+    pub async fn trace(&self, trace_id: &str) -> Result<crate::responses::TraceListResponse> {
+        let resp = self
+            .http
+            .get(format!("{}/v1/traces/{}", self.base_url, trace_id))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        let resp = self.expect_ok(resp).await?;
+        resp.json()
+            .await
+            .context("failed to parse trace response")
+    }
 }

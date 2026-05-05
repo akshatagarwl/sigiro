@@ -294,3 +294,10 @@ pub struct AdminStatusPath;
 #[typed_path("/health")]
 pub struct HealthPath;
 
+
+ /// Route: GET /traces/{trace_id}
+ #[derive(Debug, Clone, Deserialize, TypedPath)]
+ #[typed_path("/traces/{trace_id}")]
+ pub struct TraceDetailPath {
+     pub trace_id: String,
+ }

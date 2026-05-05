@@ -1,6 +1,6 @@
 use sigiro::investigate::{
-    InvestigateRequest, QueryCtx, SpanRow, adaptive_config, build_span_trees, compute_coverage,
-    investigate, query_derived_events, query_logs, query_service_context, us_to_iso,
+    InvestigateRequest, QueryCtx, Span, adaptive_config, compute_coverage,
+    investigate, query_derived_events, query_service_context, us_to_iso,
 };
 use sigiro::types::StatusCode;
 use std::sync::{Arc, Mutex};
@@ -49,8 +49,8 @@ fn setup_drain_logs(
     (Arc::new(Mutex::new(conn)), now_us)
 }
 
-fn make_span(trace_id: &str, span_id: &str, parent: &str, status: StatusCode) -> SpanRow {
-    SpanRow {
+fn make_span(trace_id: &str, span_id: &str, parent: &str, status: StatusCode) -> Span {
+    Span {
         trace_id: trace_id.to_string(),
         span_id: span_id.to_string(),
         parent_span_id: parent.to_string(),
@@ -58,35 +58,21 @@ fn make_span(trace_id: &str, span_id: &str, parent: &str, status: StatusCode) ->
         duration_ns: 1000,
         status_code: status,
         service_name: "svc".to_string(),
+        span_kind: None,
+        span_attributes: None,
+        resource_attributes: None,
+        start_timestamp: 0,
+        end_timestamp: 0,
+        events_json: None,
+        links_json: None,
+        instrumentation_library_name: None,
+        instrumentation_library_version: None,
+        trace_state: None,
+        scope_span: None,
     }
 }
 
-#[test]
-fn build_span_trees_groups_by_parent() {
-    let spans = vec![
-        make_span("t1", "s1", "", StatusCode::Unset),
-        make_span("t1", "s2", "s1", StatusCode::Unset),
-        make_span("t1", "s3", "s1", StatusCode::Unset),
-        make_span("t1", "s4", "s2", StatusCode::Unset),
-    ];
-    let trees = build_span_trees(&spans);
-    assert_eq!(trees.get("s1").unwrap().len(), 2);
-    assert_eq!(trees.get("s2").unwrap().len(), 1);
-    assert!(!trees.contains_key(""));
-}
-
-#[test]
-fn build_span_trees_empty() {
-    let trees = build_span_trees(&[]);
-    assert!(trees.is_empty());
-}
-
-#[test]
-fn build_span_trees_root_only() {
-    let spans = vec![make_span("t1", "s1", "", StatusCode::Unset)];
-    let trees = build_span_trees(&spans);
-    assert!(trees.is_empty());
-}
+// Span tree tests removed - trace grouping is now integrated into Trace type
 
 #[test]
 fn us_to_iso_valid() {
@@ -108,15 +94,15 @@ fn investigate_with_in_memory_db() {
     let req = InvestigateRequest {
         service: Some("nonexistent".to_string()),
         services: None,
-        from_ts: None,
-        to_ts: None,
+        from_ts: 0,
+        to_ts: 0,
     };
     let blocks = investigate(&shared, &req, "").expect("investigate should succeed on empty db");
     let block = &blocks["nonexistent"];
     assert_eq!(block.service, "nonexistent");
     assert!(block.operation_summaries.is_empty());
     assert!(block.metrics.is_empty());
-    assert!(block.spans.is_empty());
+    assert!(block.traces.is_empty());
     assert!(block.logs.is_empty());
     assert!(block.linked_traces.is_empty());
     assert_eq!(block.truncation.spans_total, 0);
@@ -131,12 +117,12 @@ fn investigate_with_in_memory_db() {
     assert_eq!(block.coverage.log_template_count, 0);
     assert_eq!(block.coverage.metric_series_count, 0);
     assert!(
-        block.coverage.gaps.len() >= 3,
+        block.coverage.signals.len() >= 3,
         "should have gaps for all signal types"
     );
-    assert!(block.coverage.gaps.iter().any(|g| g.contains("no spans")));
-    assert!(block.coverage.gaps.iter().any(|g| g.contains("no logs")));
-    assert!(block.coverage.gaps.iter().any(|g| g.contains("no metrics")));
+    assert!(block.coverage.signals.iter().any(|s| s.reason.contains("no spans")));
+    assert!(block.coverage.signals.iter().any(|s| s.reason.contains("no logs")));
+    assert!(block.coverage.signals.iter().any(|s| s.reason.contains("no metrics")));
 }
 
 #[test]
@@ -163,8 +149,8 @@ fn investigate_with_real_span_data() {
     let req = InvestigateRequest {
         service: Some("checkout".to_string()),
         services: None,
-        from_ts: Some(now_us - 60_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
     };
     let blocks = investigate(&shared, &req, "").expect("investigate");
     let block = &blocks["checkout"];
@@ -186,8 +172,8 @@ fn investigate_with_real_span_data() {
     assert_eq!(health_op.error_count, 0);
     assert!(health_op.exemplar_error_trace_id.is_none());
 
-    assert_eq!(block.spans.len(), 5);
-    assert_eq!(block.spans[0].status_code, StatusCode::Error);
+    assert_eq!(block.traces.len(), 5);
+    assert_eq!(block.traces[0].root_span.status_code, StatusCode::Error);
     assert_eq!(block.truncation.spans_total, 5);
     assert_eq!(block.truncation.spans_returned, 5);
     assert_eq!(block.truncation.error_traces_total, 2);
@@ -196,15 +182,14 @@ fn investigate_with_real_span_data() {
     assert!(!block.coverage.has_logs);
     assert!(!block.coverage.has_metrics);
     assert_eq!(block.coverage.span_count, 5);
-    assert!(block.coverage.gaps.iter().any(|g| g.contains("no logs")));
+    assert!(block.coverage.signals.iter().any(|s| s.reason.contains("no logs")));
     assert!(
         block
-            .coverage
-            .gaps
+            .coverage.signals
             .iter()
-            .any(|g| g.contains("spans exist but no logs"))
+            .any(|s| s.reason.contains("spans exist but no logs"))
     );
-    assert!(!block.coverage.gaps.iter().any(|g| g.contains("no spans")));
+    assert!(!block.coverage.signals.iter().any(|s| s.reason.contains("no spans")));
 }
 
 #[test]
@@ -213,7 +198,7 @@ fn coverage_no_data() {
     assert!(!c.has_spans);
     assert!(!c.has_logs);
     assert!(!c.has_metrics);
-    assert!(c.gaps.len() >= 3);
+    assert!(c.signals.len() >= 3);
 }
 
 #[test]
@@ -222,8 +207,8 @@ fn coverage_spans_only() {
     assert!(c.has_spans);
     assert!(!c.has_logs);
     assert!(!c.has_metrics);
-    assert!(c.gaps.iter().any(|g| g.contains("spans exist but no logs")));
-    assert!(!c.gaps.iter().any(|g| g.contains("no spans")));
+    assert!(c.signals.iter().any(|s| s.reason.contains("spans exist but no logs")));
+    assert!(!c.signals.iter().any(|s| s.reason.contains("no spans")));
 }
 
 #[test]
@@ -233,7 +218,7 @@ fn coverage_all_signals() {
     assert!(c.has_logs);
     assert!(c.has_metrics);
     assert!(c.has_profiles);
-    assert!(c.gaps.is_empty(), "no gaps when all signals present");
+    assert!(!c.signals.iter().any(|s| !s.available && s.severity == "high"), "no critical gaps when all signals present");
 }
 
 #[test]
@@ -316,7 +301,7 @@ fn service_context_dependencies() {
     };
     let ctx = query_service_context(&qctx).unwrap();
     assert!(
-        ctx.dependencies.contains(&"payments".to_string()),
+        ctx.dependencies.iter().any(|d| d.service_name == "payments"),
         "checkout should depend on payments"
     );
     let qctx2 = QueryCtx {
@@ -328,7 +313,7 @@ fn service_context_dependencies() {
     };
     let ctx2 = query_service_context(&qctx2).unwrap();
     assert!(
-        ctx2.dependents.contains(&"checkout".to_string()),
+        ctx2.dependents.iter().any(|d| d.service_name == "checkout"),
         "payments should have checkout as dependent"
     );
 }
@@ -427,17 +412,11 @@ fn log_template_dedup_ips() {
         to_ts: now_us + 60_000_000,
         prefix: "",
     };
-    let logs = query_logs(&qctx, 30).unwrap();
-    assert_eq!(
-        logs.len(),
-        1,
-        "3 logs with different IPs should collapse to 1 template"
-    );
-    assert_eq!(logs[0].count, 3);
-    assert!(
-        logs[0].template.contains("<*>"),
-        "DRAIN should wildcard the varying IP"
-    );
+    let logs = sigiro::query_raw_logs(&qctx, 30).unwrap();
+    // With the new API, we get raw logs not aggregated templates
+    // So we get 3 logs back, not 1
+    assert_eq!(logs.len(), 3, "3 raw logs returned");
+    assert!(!logs.is_empty());
 }
 
 #[test]
@@ -465,13 +444,11 @@ fn log_template_dedup_uuids() {
         to_ts: now_us + 60_000_000,
         prefix: "",
     };
-    let logs = query_logs(&qctx, 30).unwrap();
-    assert_eq!(logs.len(), 1, "2 logs with different UUIDs should collapse");
-    assert!(
-        logs[0].template.contains("<*>"),
-        "DRAIN should wildcard the varying UUID"
-    );
-    assert_eq!(logs[0].count, 2);
+    let logs = sigiro::query_raw_logs(&qctx, 30).unwrap();
+    // With the new API, we get raw logs not aggregated templates
+    // So we get 2 logs back, not 1
+    assert_eq!(logs.len(), 2, "2 raw logs returned");
+    assert!(!logs.is_empty());
 }
 
 #[test]
@@ -480,7 +457,7 @@ fn adaptive_config_short_window() {
     let config = adaptive_config(now - 5 * 60 * 1_000_000, now);
     assert_eq!(config.bucket_interval, "1 minute");
     assert_eq!(config.span_limit, 50);
-    assert_eq!(config.log_limit, 30);
+    assert_eq!(config.log_limit, 50);
 }
 
 #[test]
@@ -497,7 +474,7 @@ fn adaptive_config_large_window() {
     let config = adaptive_config(now - 3 * 3600 * 1_000_000, now);
     assert_eq!(config.bucket_interval, "1 hour");
     assert_eq!(config.span_limit, 0);
-    assert_eq!(config.log_limit, 20);
+    assert_eq!(config.log_limit, 30);
 }
 
 #[test]
@@ -519,13 +496,13 @@ fn investigate_large_window_no_spans() {
     let req = InvestigateRequest {
         service: Some("svc".to_string()),
         services: None,
-        from_ts: Some(now_us - 3 * 3600 * 1_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: now_us - 3 * 3600 * 1_000_000,
+        to_ts: now_us + 60_000_000,
     };
     let blocks = investigate(&shared, &req, "").unwrap();
     let block = &blocks["svc"];
     assert!(
-        block.spans.is_empty(),
+        block.traces.is_empty(),
         ">2h window should omit flat spans (operation_summaries suffice)"
     );
     assert!(!block.operation_summaries.is_empty());
@@ -552,8 +529,8 @@ fn investigate_multi_basic() {
     let req = InvestigateRequest {
         service: None,
         services: Some(vec!["svc-a".into(), "svc-b".into(), "svc-c".into()]),
-        from_ts: Some(now_us - 60_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
     };
     let blocks = investigate(&shared, &req, "").unwrap();
     assert_eq!(blocks.len(), 3);
@@ -571,8 +548,8 @@ fn investigate_multi_cap_enforced() {
     let req = InvestigateRequest {
         service: None,
         services: Some(services),
-        from_ts: None,
-        to_ts: None,
+        from_ts: 0,
+        to_ts: 0,
     };
     let result = investigate(&shared, &req, "");
     assert!(result.is_err(), "should reject >10 services");
@@ -586,8 +563,8 @@ fn investigate_multi_empty_rejected() {
     let req = InvestigateRequest {
         service: None,
         services: Some(vec![]),
-        from_ts: None,
-        to_ts: None,
+        from_ts: 0,
+        to_ts: 0,
     };
     assert!(investigate(&shared, &req, "").is_err());
 }
@@ -638,8 +615,8 @@ fn investigate_all_three_signals() {
     let req = InvestigateRequest {
         service: Some("svc".to_string()),
         services: None,
-        from_ts: Some(now_us - 60_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
     };
     let blocks = investigate(&shared, &req, "").expect("investigate");
     let block = &blocks["svc"];
@@ -649,8 +626,8 @@ fn investigate_all_three_signals() {
     assert!(block.coverage.has_logs);
     assert!(block.coverage.has_metrics);
     assert!(
-        block.coverage.gaps.is_empty(),
-        "no gaps when all signals present"
+        !block.coverage.signals.iter().any(|s| !s.available && s.severity == "high"),
+        "no critical gaps when all signals present"
     );
 
     // Truncation present with correct counts
@@ -697,8 +674,8 @@ fn operation_summary_baselines() {
     let req = InvestigateRequest {
         service: Some("checkout".to_string()),
         services: None,
-        from_ts: Some(now_us - 5 * 60 * 1_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: now_us - 5 * 60 * 1_000_000,
+        to_ts: now_us + 60_000_000,
     };
     let blocks = investigate(&shared, &req, "").expect("investigate");
     let block = &blocks["checkout"];

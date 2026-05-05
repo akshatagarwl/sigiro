@@ -96,6 +96,10 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
 
     let resource = opentelemetry_sdk::Resource::builder()
         .with_service_name(service_name)
+        .with_attribute(opentelemetry::KeyValue::new(
+            "service.version",
+            env!("CARGO_PKG_VERSION"),
+        ))
         .build();
 
     // Auth headers for self-ingestion — auth_key read at app entry, not at runtime

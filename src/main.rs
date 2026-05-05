@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, builder::styling};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use sigiro::responses::TraceSpanData;
 use sigiro::toon::to_toon;
 use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
 
@@ -31,6 +33,15 @@ enum OutputFormat {
     Json,
 }
 
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum TopologyFormat {
+    /// ASCII tree format (default)
+    Ascii,
+    /// Mermaid diagram format
+    Mermaid,
+}
+
+
 #[derive(Subcommand)]
 enum Command {
     /// Start gRPC + HTTP servers
@@ -56,15 +67,28 @@ enum Command {
     Investigate {
         /// Service name to investigate
         service: String,
-        /// Start of range in epoch seconds (defaults to now - 900)
+        /// Start of range in epoch seconds (required)
         #[arg(long)]
         from: Option<i64>,
-        /// End of range in epoch seconds (defaults to now)
+        /// End of range in epoch seconds (required)
         #[arg(long)]
         to: Option<i64>,
     },
     /// Show trace waterfall — parent/child span tree with timing
     Waterfall {
+        /// Trace ID (hex string) to display
+        trace_id: String,
+    },
+    /// Show ASCII dependency graph
+    Topology {
+        /// Service name to focus on (optional - shows full graph if omitted)
+        service: Option<String>,
+        /// Output format (ascii or mermaid)
+        #[arg(long, default_value = "ascii")]
+        format: TopologyFormat,
+    },
+    /// Show hierarchical trace tree
+    TraceTree {
         /// Trace ID (hex string) to display
         trace_id: String,
     },
@@ -159,11 +183,17 @@ async fn main() -> Result<()> {
         }
         Some(Command::Investigate { service, from, to }) => {
             let client = require_client()?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let from_ts = from.map(|s| s * 1_000_000).unwrap_or((now - 900) * 1_000_000);
+            let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
             let block = client
                 .investigate(
                     &service,
-                    from.map(|s| s * 1_000_000),
-                    to.map(|s| s * 1_000_000),
+                    from_ts,
+                    to_ts,
                 )
                 .await?;
             println!(
@@ -173,6 +203,12 @@ async fn main() -> Result<()> {
         }
         Some(Command::Waterfall { trace_id }) => {
             run_waterfall(&trace_id).await?;
+        }
+        Some(Command::Topology { service, format }) => {
+            run_topology(service.as_deref(), format).await?;
+        }
+        Some(Command::TraceTree { trace_id }) => {
+            run_trace_tree(&trace_id).await?;
         }
         Some(Command::Mcp) => {
             let client = require_client()?;
@@ -607,4 +643,256 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
     println!("Project: {project_name}  Trace: {trace_id}");
     render_waterfall(&spans, trace_id);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Topology command — ASCII dependency graph
+// ---------------------------------------------------------------------------
+
+async fn run_topology(service: Option<&str>, format: TopologyFormat) -> Result<()> {
+    let client = require_client()?;
+
+    // Get services list
+    let services_resp = client.services().await?;
+    let all_services: Vec<&str> = services_resp.services.iter().map(|s| s.name.as_str()).collect();
+
+    // Get dependency data from investigate
+    let services_to_query: Vec<String> = match service {
+        Some(s) => vec![s.to_string()],
+        None => all_services.iter().take(20).map(|s| s.to_string()).collect(),
+    };
+
+    let mut dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut rev_dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+
+    // Query each service for its dependencies
+    for svc_name in &services_to_query {
+        if let Ok(mut blocks) = client.investigate_multi(Some(svc_name), None, 0, i64::MAX).await {
+            if let Some(block) = blocks.remove(svc_name) {
+            // Extract dependency service names
+            let deps: HashSet<String> = block
+                .context
+                .dependencies
+                .into_iter()
+                .map(|dep| dep.service_name)
+                .collect();
+            let dependents: HashSet<String> = block
+                .context
+                .dependents
+                .into_iter()
+                .map(|dep| dep.service_name)
+                .collect();
+
+            dep_map.insert(svc_name.clone(), deps);
+            rev_dep_map.insert(svc_name.clone(), dependents);
+            }
+        }
+    }
+
+    match format {
+        TopologyFormat::Ascii => {
+            render_topology_ascii(&dep_map, &rev_dep_map, service, &all_services);
+        }
+        TopologyFormat::Mermaid => {
+            render_topology_mermaid(&dep_map, &rev_dep_map, service, &all_services);
+        }
+    }
+
+    Ok(())
+}
+
+fn render_topology_ascii(
+    deps: &HashMap<String, HashSet<String>>,
+    _rev_deps: &HashMap<String, HashSet<String>>,
+    focus: Option<&str>,
+    all_services: &[&str],
+) {
+    println!("Service Dependencies");
+    println!("====================");
+    println!();
+
+    // Find root services (no incoming dependencies)
+    let all_deps: HashSet<&str> = deps.values()
+        .flat_map(|s| s.iter().map(|s| s.as_str()))
+        .collect();
+
+    let roots: Vec<&&str> = all_services.iter().filter(|s| !all_deps.contains(*s)).collect();
+
+    // Build children map
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for (svc, dep_set) in deps {
+        for dep in dep_set {
+            children.entry(dep.clone()).or_default().push(svc.clone());
+        }
+    }
+
+    // Render from roots or focus service
+    if let Some(focus_svc) = focus {
+        render_service_tree(focus_svc, deps, &children, 0, &mut HashSet::new());
+    } else {
+        for root in &roots {
+            render_service_tree(root, deps, &children, 0, &mut HashSet::new());
+        }
+    }
+}
+
+fn render_service_tree(
+    svc: &str,
+    deps: &HashMap<String, HashSet<String>>,
+    children: &HashMap<String, Vec<String>>,
+    depth: usize,
+    visited: &mut HashSet<String>,
+) {
+    if visited.contains(svc) {
+        println!("{}└─ {svc} (cycle)", "  ".repeat(depth));
+        return;
+    }
+    visited.insert(svc.to_string());
+
+    let dependencies: Vec<&String> = deps.get(svc).map(|s| s.iter().collect()).unwrap_or_default();
+    let deps_str = if dependencies.is_empty() {
+        String::new()
+    } else {
+        format!(" → [{}]", dependencies.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
+    };
+    println!("{}└─ {svc}{deps_str}", "  ".repeat(depth));
+
+    if let Some(kids) = children.get(svc) {
+        for child in kids {
+            render_service_tree(child, deps, children, depth + 1, visited);
+        }
+    }
+}
+
+fn render_topology_mermaid(
+    deps: &HashMap<String, HashSet<String>>,
+    _rev_deps: &HashMap<String, HashSet<String>>,
+    focus: Option<&str>,
+    all_services: &[&str],
+) {
+    println!("```mermaid");
+    println!("flowchart LR");
+    println!("    direction LR");
+
+    // Collect all nodes
+    let mut nodes: HashSet<&str> = HashSet::new();
+    for svc in all_services {
+        nodes.insert(svc);
+    }
+    for (svc, dep_set) in deps {
+        nodes.insert(svc.as_str());
+        for dep in dep_set {
+            nodes.insert(dep.as_str());
+        }
+    }
+
+    // Add subgraph for focus or all services
+    let focus_str = focus.unwrap_or("services");
+    println!("    subgraph {focus_str}");
+
+    // Sort for deterministic output
+    let mut sorted_nodes: Vec<_> = nodes.into_iter().collect();
+    sorted_nodes.sort();
+
+    for node in &sorted_nodes {
+        println!("        {node}[{node}]");
+    }
+    println!("    end");
+
+    // Add edges
+    let mut edges: HashSet<(String, String)> = HashSet::new();
+    for (svc, dep_set) in deps {
+        for dep in dep_set {
+            edges.insert((svc.clone(), dep.clone()));
+        }
+    }
+
+    for (from, to) in edges {
+        println!("    {from} --> {to}");
+    }
+
+    println!("```");
+}
+// ---------------------------------------------------------------------------
+// TraceTree command — hierarchical trace tree
+// ---------------------------------------------------------------------------
+
+async fn run_trace_tree(trace_id: &str) -> Result<()> {
+    let client = require_client()?;
+
+    let trace = client.trace(trace_id).await?;
+
+    if trace.root_spans.is_empty() {
+        println!("No spans found for trace: {trace_id}");
+        return Ok(());
+    }
+
+    println!("Trace: {trace_id}");
+    println!("Spans: {}  Duration: {:.2}ms\n", trace.total_spans, trace.total_duration_ms);
+
+    // Build span map
+    let mut span_map: std::collections::HashMap<String, TraceSpanData> =
+        std::collections::HashMap::new();
+    for span in &trace.root_spans {
+        span_map.insert(span.span_id.clone(), span.clone());
+    }
+
+    // Render tree for each root span
+    for (i, root) in trace.root_spans.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        render_trace_tree_recursive(&span_map, root, 0, &mut HashSet::new());
+    }
+
+    Ok(())
+}
+
+fn render_trace_tree_recursive(
+    spans: &std::collections::HashMap<String, TraceSpanData>,
+    span: &TraceSpanData,
+    depth: usize,
+    rendered: &mut std::collections::HashSet<String>,
+) {
+    if rendered.contains(&span.span_id) {
+        return;
+    }
+    rendered.insert(span.span_id.clone());
+
+    let indent = if depth == 0 {
+        String::new()
+    } else {
+        let prefix = if depth == 1 { "└─ " } else { "  " };
+        format!("{}{prefix}", "   ".repeat(depth - 1))
+    };
+
+    let pipe = if depth > 0 {
+        if depth == 1 { "├─ " } else { "│  " }
+    } else {
+        ""
+    };
+
+    let duration_ms = span.duration_us as f64 / 1000.0;
+    let error_tag = if span.status_code == 2 { " [ERR]" } else { "" };
+
+    // Find children
+    let children: Vec<_> = spans
+        .values()
+        .filter(|s| s.parent_span_id.as_ref() == Some(&span.span_id))
+        .collect();
+
+    let connector = if children.is_empty() { "└─ " } else { "├─ " };
+
+    println!(
+        "{indent}{pipe}{connector}{} [{}] {:.2}ms{}",
+        span.span_name,
+        span.service_name,
+        duration_ms,
+        error_tag
+    );
+
+    // Render children
+    for child in &children {
+        render_trace_tree_recursive(spans, child, depth + 1, rendered);
+    }
 }
