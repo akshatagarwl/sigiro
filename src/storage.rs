@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
 use duckdb::Connection;
 use std::path::Path;
+use tracing::instrument;
 use url::Url;
 
 /// Initialize DuckLake with SQLite catalog + local Parquet (zero config).
 /// Tables accessible as `lake.sigiro_*`.
 /// Catalog stored in `project_dir/catalog.sqlite`.
 /// Parquet stored in `project_dir/catalog.ducklake.files/` (auto-created by DuckLake).
+#[instrument(skip(conn), fields(dir = %project_dir.display()))]
 pub fn init_default(conn: &Connection, project_dir: &Path) -> Result<()> {
     let project_dir_str = project_dir.to_string_lossy();
     std::fs::create_dir_all(project_dir).with_context(|| {
@@ -34,6 +36,7 @@ pub fn init_default(conn: &Connection, project_dir: &Path) -> Result<()> {
 
 /// Initialize DuckLake with PostgreSQL catalog + optional S3 data files.
 /// Multi-writer safe — multiple sigiro instances can attach to the same catalog.
+#[instrument(skip(conn), fields(dir = %project_dir.display()))]
 pub fn init_distributed(
     conn: &Connection,
     config: &StorageConfig,
@@ -104,7 +107,7 @@ pub fn init_distributed(
 /// PostgreSQL catalog for multi-writer + optional S3 data files.
 /// `catalog_url` can be:
 /// - A libpq connection string: `postgres:dbname=db host=localhost user=u password=p port=5432`
-/// - A PostgreSQL URI: `postgresql://user:***@host:5432/dbname` (auto-converted to libpq format)
+/// - A PostgreSQL URI: `postgresql://user:***@host:port/dbname` (auto-converted to libpq format)
 #[derive(Debug)]
 pub struct StorageConfig {
     pub catalog_url: String,

@@ -367,6 +367,7 @@ fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duc
     ),
     tag = "query"
 )]
+#[instrument(skip_all, fields(sql_len = body.len()))]
 async fn query_handler(
     _path: QueryPath,
     State(state): State<Arc<AppState>>,
@@ -413,6 +414,8 @@ async fn query_handler(
         results.push(serde_json::Value::Object(obj));
     }
 
+    tracing::info!(rows = results.len(), "query completed");
+
     Ok(Json(results))
 }
 
@@ -426,6 +429,7 @@ async fn query_handler(
     ),
     tag = "query"
 )]
+#[instrument(skip_all)]
 async fn services_handler(
     _path: ServicesPath,
     State(state): State<Arc<AppState>>,
@@ -489,6 +493,7 @@ async fn services_handler(
     ),
     tag = "query"
 )]
+#[instrument(skip_all)]
 async fn investigate_handler(
     _path: InvestigatePath,
     State(state): State<Arc<AppState>>,

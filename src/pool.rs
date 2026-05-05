@@ -19,7 +19,6 @@ pub struct PoolEntry {
     /// Single DuckDB connection shared by both flusher (writes) and HTTP API (reads).
     /// Wrapped in Arc<Mutex> so reads and writes are serialized — DuckDB does not
     /// support concurrent access on the same connection anyway.
-    /// support concurrent access on the same connection anyway.
     conn: Arc<Mutex<Connection>>,
     last_access: Instant,
 }
@@ -56,7 +55,7 @@ impl ProjectPool {
     ///
     /// Thread-safe: uses DashMap entry API to prevent concurrent callers from
     /// creating duplicate connections for the same project.
-#[tracing::instrument(skip(self), fields(project_id = %project_id))]
+    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub fn create_project(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
         use dashmap::mapref::entry::Entry;
 
@@ -108,6 +107,7 @@ impl ProjectPool {
     ///
     /// Returns only an existing connection. Fails if the project was not created.
     /// Use `create_project()` first to initialize a project.
+    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub fn get_project(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
         self.connections
             .get(project_id)
@@ -123,13 +123,14 @@ impl ProjectPool {
     /// Refresh last_access for an existing project entry so it is not evicted as idle.
     /// Callers (e.g. long-running per-project flusher tasks) should call this periodically
     /// to prevent the idle evictor from removing their connection while they are alive.
+    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub fn touch_project(&self, project_id: &str) {
         if let Some(mut entry) = self.connections.get_mut(project_id) {
             entry.last_access = Instant::now();
         }
     }
 
-#[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir.display()))]
+    #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir.display()))]
     fn open_connection(&self, project_dir: &std::path::Path) -> Result<Connection> {
         let conn = Connection::open_in_memory()
             .with_context(|| "failed to open in-memory DuckDB".to_string())?;
@@ -161,6 +162,7 @@ impl ProjectPool {
 
     /// Evict connections idle longer than the given duration.
     /// Checkpoints DuckLake before dropping so data is persisted to Parquet.
+    #[tracing::instrument(skip(self))]
     pub fn evict_idle(&self, max_idle: std::time::Duration) {
         let now = Instant::now();
         let before = self.connections.len();
@@ -180,6 +182,7 @@ impl ProjectPool {
 
     /// Evict the oldest connection to make room for a new one.
     /// Checkpoints DuckLake before dropping so data is persisted to Parquet.
+    #[tracing::instrument(skip(self))]
     fn evict_oldest(&self) {
         let oldest = self
             .connections
@@ -204,6 +207,7 @@ impl ProjectPool {
     }
 
     /// Remove a project's connection (for account deletion).
+    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub fn remove(&self, project_id: &str) {
         self.connections.remove(project_id);
     }
