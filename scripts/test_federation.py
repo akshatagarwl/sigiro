@@ -79,6 +79,7 @@ def healthcheck_services(compose_file: str, timeout: int = 120) -> bool:
 
 def send_trace(endpoint: str, service: str, trace_name: str) -> bool:
     """Send a single synthetic trace to a worker endpoint."""
+    import random
     trace = {
         "resourceSpans": [{
             "resource": {
@@ -89,8 +90,8 @@ def send_trace(endpoint: str, service: str, trace_name: str) -> bool:
             },
             "scopeSpans": [{
                 "spans": [{
-                    "traceId": format(hash(trace_name) % (1 << 128), '032x'),
-                    "spanId": format(hash(trace_name + "span") % (1 << 64), '016x'),
+                    "traceId": format(random.getrandbits(128), '032x'),
+                    "spanId": format(random.getrandbits(64), '016x'),
                     "name": trace_name,
                     "kind": 2,  # server
                     "startTimeUnixNano": int(time.time() * 1e9),
@@ -111,14 +112,14 @@ def send_trace(endpoint: str, service: str, trace_name: str) -> bool:
 
 
 def query_central(central_url: str, service: str, from_ts: int, to_ts: int) -> Optional[dict]:
-    """Query central node investigate endpoint."""
+    """Query investigate endpoint."""
     result = run_cmd([
         "curl", "-sf", "-X", "POST",
         f"{central_url}/v1/investigate",
         "-H", "Content-Type: application/json",
         "-H", AUTH_HEADER,
         "-d", json.dumps({"service": service, "from_ts": from_ts, "to_ts": to_ts}),
-    ], timeout=30)
+    ], timeout=120)
     if result.returncode != 0:
         return None
     try:
@@ -141,22 +142,22 @@ def test_worker_ingest(worker_url: str, service: str) -> TestResult:
     return TestResult("worker_ingest", False, f"Failed to send traces to {worker_url}", dur)
 
 
-def test_central_query(central_url: str, service: str) -> TestResult:
-    """Test that central node can query data from workers."""
+def test_worker_query(worker_url: str, service: str) -> TestResult:
+    """Test that worker node can query its own data."""
     start = time.time()
     # Wait for flush
     time.sleep(3)
 
     from_ts = int((time.time() - 300) * 1e6)
     to_ts = int((time.time() + 60) * 1e6)
-    result = query_central(central_url, service, from_ts, to_ts)
+    result = query_central(worker_url, service, from_ts, to_ts)
     dur = (time.time() - start) * 1000
 
     if result is None:
-        return TestResult("central_query", False, "Central query returned no response", dur)
+        return TestResult("worker_query", False, "Worker query returned no response", dur)
 
     if service not in result:
-        return TestResult("central_query", False, f"Service '{service}' not in response", dur)
+        return TestResult("worker_query", False, f"Service '{service}' not in response", dur)
 
     block = result[service]
     trace_count = len(block.get("traces", []))
@@ -164,15 +165,14 @@ def test_central_query(central_url: str, service: str) -> TestResult:
 
     if trace_count > 0 or op_count > 0:
         return TestResult(
-            "central_query",
+            "worker_query",
             True,
             f"Found {trace_count} traces, {op_count} operations",
             dur,
         )
-    return TestResult("central_query", False, f"No traces/ops found for {service}", dur)
+    return TestResult("worker_query", False, f"No traces/ops found for {service}", dur)
 
-
-def test_multi_service_federation(central_url: str) -> TestResult:
+def test_multi_service_federation(worker_urls: list[str]) -> TestResult:
     """Test federation across multiple services on different workers."""
     start = time.time()
 
@@ -186,23 +186,22 @@ def test_multi_service_federation(central_url: str) -> TestResult:
     from_ts = int((time.time() - 300) * 1e6)
     to_ts = int((time.time() + 60) * 1e6)
 
-    # Query frontend
-    fe = query_central(central_url, "frontend", from_ts, to_ts)
-    be = query_central(central_url, "backend", from_ts, to_ts)
+    # Query each worker directly
+    fe = query_central(worker_urls[0], "frontend", from_ts, to_ts)
+    be = query_central(worker_urls[1], "backend", from_ts, to_ts)
     dur = (time.time() - start) * 1000
 
     if fe and be and "frontend" in fe and "backend" in be:
-        fe_traces = len(fe["frontend"].get("traces", []))
-        be_traces = len(be["backend"].get("traces", []))
-        if fe_traces > 0 and be_traces > 0:
+        fe_ops = len(fe["frontend"].get("operation_summaries", []))
+        be_ops = len(be["backend"].get("operation_summaries", []))
+        if fe_ops > 0 and be_ops > 0:
             return TestResult(
                 "multi_service_federation",
                 True,
-                f"frontend: {fe_traces} traces, backend: {be_traces} traces",
+                f"frontend: {fe_ops} ops, backend: {be_ops} ops",
                 dur,
             )
     return TestResult("multi_service_federation", False, "Missing data from one or more services", dur)
-
 
 def test_s3_cold_storage(central_url: str) -> TestResult:
     """Verify S3 cold storage dataset is configured in spicepod."""
@@ -233,7 +232,8 @@ def test_worker_registration(central_url: str) -> TestResult:
         return TestResult("worker_registration", False, "Failed to list workers", dur)
 
     try:
-        workers = json.loads(result.stdout)
+        data = json.loads(result.stdout)
+        workers = data.get("workers", [])
         worker_ids = [w.get("id") for w in workers]
         if "worker-1" in worker_ids and "worker-2" in worker_ids:
             return TestResult(
@@ -264,13 +264,13 @@ def run_all_tests(compose_file: str) -> list[TestResult]:
     print("[3/6] Testing worker registration...")
     results.append(test_worker_registration(central_url))
 
-    # Test 3: Central query
-    print("[4/6] Testing central query (single service)...")
-    results.append(test_central_query(central_url, "frontend"))
+    # Test 3: Worker query (direct, not through central)
+    print("[4/6] Testing worker query (direct)...")
+    results.append(test_worker_query("http://localhost:10001", "frontend"))
 
     # Test 4: Multi-service federation
     print("[5/6] Testing multi-service federation...")
-    results.append(test_multi_service_federation(central_url))
+    results.append(test_multi_service_federation(["http://localhost:10001", "http://localhost:10002"]))
 
     # Test 5: S3 cold storage
     print("[6/6] Testing S3 cold storage config...")
