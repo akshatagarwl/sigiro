@@ -417,7 +417,7 @@ fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
         })
         .max()
         .unwrap_or(earliest_ts);
-    let total_duration_us = ((latest_ts - earliest_ts) as i64).max(0);
+    let total_duration_us = (latest_ts - earliest_ts).max(0);
 
     println!("Trace: {trace_id}");
     println!(
@@ -502,7 +502,7 @@ fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
         if i > 0 {
             println!("  (concurrent root span {})", i + 1);
         }
-        render_span(&spans, &children, *root_idx, 0, earliest_ts);
+        render_span(spans, &children, *root_idx, 0, earliest_ts);
     }
 }
 
@@ -511,7 +511,7 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
 
     let project_dir = std::fs::read_dir(&dir)
         .context("failed to read data directory")?
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .find(|p| p.is_dir() && p.join("catalog.sqlite").exists())
         .context("no DuckDB project found in data directory")?;

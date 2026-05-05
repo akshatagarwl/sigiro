@@ -1,6 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use sigiro::investigate::{
-    InvestigateRequest, QueryCtx, adaptive_config, build_span_trees, compute_coverage, investigate,
+use sigiro::investigate::{
+    InvestigateRequest, QueryCtx, StatusCode, adaptive_config, build_span_trees, compute_coverage, investigate,
     query_logs, query_service_context,
 };
 use std::sync::{Arc, Mutex};
@@ -144,7 +145,7 @@ fn bench_build_span_trees(c: &mut Criterion) {
             },
             span_name: "op".to_string(),
             duration_ns: 1_000_000,
-            status_code: 1,
+            status_code: StatusCode::Ok,
             service_name: "svc".to_string(),
         })
         .collect();
