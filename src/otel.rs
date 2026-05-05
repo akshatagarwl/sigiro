@@ -13,7 +13,16 @@ pub struct TelemetryGuard {
 impl TelemetryGuard {
     /// Force-flush pending spans. Call before querying or periodically.
     pub fn flush(&self) {
-        tracing::debug!("OTEL flush requested");
+        if let Some(ref provider) = self.tracer_provider {
+            if let Err(e) = provider.force_flush() {
+                tracing::warn!("OTEL tracer force_flush failed: {e}");
+            }
+        }
+        if let Some(ref provider) = self.logger_provider {
+            if let Err(e) = provider.force_flush() {
+                tracing::warn!("OTEL logger force_flush failed: {e}");
+            }
+        }
     }
 }
 
@@ -65,11 +74,14 @@ pub fn init_telemetry() -> Result<Option<TelemetryGuard>> {
 
     // Auth headers for self-ingestion
     let headers = otel_auth_headers();
-
     // Build OTLP HTTP exporters with auth headers
+    // Note: with_endpoint() does NOT auto-append signal paths — must include full path
+    let traces_url = format!("{}/v1/traces", endpoint.trim_end_matches('/'));
+    let logs_url = format!("{}/v1/logs", endpoint.trim_end_matches('/'));
+
     let span_exporter = SpanExporter::builder()
         .with_http()
-        .with_endpoint(&endpoint)
+        .with_endpoint(&traces_url)
         .with_headers(headers.clone())
         .build()
         .context("failed to build OTLP HTTP span exporter")?;
@@ -93,7 +105,7 @@ pub fn init_telemetry() -> Result<Option<TelemetryGuard>> {
 
     let log_exporter = LogExporter::builder()
         .with_http()
-        .with_endpoint(&endpoint)
+        .with_endpoint(&logs_url)
         .with_headers(headers)
         .build()
         .context("failed to build OTLP HTTP log exporter")?;
