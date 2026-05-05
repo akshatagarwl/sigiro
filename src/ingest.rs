@@ -42,6 +42,20 @@ impl OtlpGrpcService {
         Self { router, admin_conn }
     }
 
+    /// Route a batch to the inserter: register flusher then send.
+    /// Consolidates the repeated register_flusher+send pattern across all 4 signal handlers.
+    async fn route_batch(&self, project_id: String, msg: IngestMsg) -> Result<(), Status> {
+        if let Err(e) = self.router.register_flusher(&project_id) {
+            tracing::error!(project_id, "failed to register flusher: {e:?}");
+            return Err(Status::internal("flusher init failed"));
+        }
+        if let Err(e) = self.router.send(msg).await {
+            tracing::error!(project_id, "ingest router error: {e:?}");
+            return Err(Status::internal("ingest failed"));
+        }
+        Ok(())
+    }
+
     pub fn trace_service(&self) -> TraceServiceServer<Self> {
         TraceServiceServer::new(Self {
             router: Arc::clone(&self.router),
@@ -146,21 +160,6 @@ async fn transform_metrics(bytes: Vec<u8>, fmt: InputFormat) -> Result<MetricBat
     .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
-
-    /// Route a batch to the inserter: register flusher then send.
-    /// Consolidates the repeated register_flusher+send pattern across all 4 signal handlers.
-    async fn route_batch(&self, project_id: String, msg: IngestMsg) -> Result<(), Status> {
-        if let Err(e) = self.router.register_flusher(&project_id) {
-            tracing::error!(project_id, "failed to register flusher: {e:?}");
-            return Err(Status::internal("flusher init failed"));
-        }
-        if let Err(e) = self.router.send(msg).await {
-            tracing::error!(project_id, "ingest router error: {e:?}");
-            return Err(Status::internal("ingest failed"));
-        }
-        Ok(())
-    }
-
 #[tonic::async_trait]
 impl TraceService for OtlpGrpcService {
     async fn export(
@@ -172,19 +171,7 @@ impl TraceService for OtlpGrpcService {
         // Encode once (prost), decode once (otlp2records). Previously: decode (tonic) → encode (prost) → decode (otlp2records).
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_traces(bytes, InputFormat::Protobuf).await?;
-        let pid = project_id.clone();
-        if let Err(e) = self.router.register_flusher(&pid) {
-            tracing::error!(pid, "failed to register flusher: {e:?}");
-            return Err(Status::internal("flusher init failed"));
-        }
-        if let Err(e) = self
-            .router
-            .send(IngestMsg::Traces { project_id, batch })
-            .await
-        {
-            tracing::error!(pid, "ingest router error: {e:?}");
-            return Err(Status::internal("ingest failed"));
-        }
+        self.route_batch(project_id.clone(), IngestMsg::Traces { project_id, batch }).await?;
         Ok(Response::new(ExportTraceServiceResponse {
             partial_success: None,
         }))
@@ -200,19 +187,7 @@ impl LogsService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_logs(bytes, InputFormat::Protobuf).await?;
-        let pid = project_id.clone();
-        if let Err(e) = self.router.register_flusher(&pid) {
-            tracing::error!(pid, "failed to register flusher: {e:?}");
-            return Err(Status::internal("flusher init failed"));
-        }
-        if let Err(e) = self
-            .router
-            .send(IngestMsg::Logs { project_id, batch })
-            .await
-        {
-            tracing::error!(pid, "ingest router error: {e:?}");
-            return Err(Status::internal("ingest failed"));
-        }
+        self.route_batch(project_id.clone(), IngestMsg::Logs { project_id, batch }).await?;
         Ok(Response::new(ExportLogsServiceResponse {
             partial_success: None,
         }))
@@ -228,22 +203,7 @@ impl MetricsService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
-        let pid = project_id.clone();
-        if let Err(e) = self.router.register_flusher(&pid) {
-            tracing::error!(pid, "failed to register flusher: {e:?}");
-            return Err(Status::internal("flusher init failed"));
-        }
-        if let Err(e) = self
-            .router
-            .send(IngestMsg::Metrics {
-                project_id,
-                batches,
-            })
-            .await
-        {
-            tracing::error!(pid, "ingest router error: {e:?}");
-            return Err(Status::internal("ingest failed"));
-        }
+        self.route_batch(project_id.clone(), IngestMsg::Metrics { project_id, batches }).await?;
         Ok(Response::new(ExportMetricsServiceResponse {
             partial_success: None,
         }))

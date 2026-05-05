@@ -1,4 +1,4 @@
-use sigiro::otel::init_telemetry;
+use sigiro::otel::{init_telemetry, TelemetryConfig};
 
 // A small instrumented function to exercise #[tracing::instrument].
 // We keep the name and a field to verify instrumentation at runtime.
@@ -17,7 +17,8 @@ fn integration_otel_self_instrumentation_tests() {
     // not return a guard depending on whether the env var was set at startup).
     // The guard (if any) is dropped cleanly, and instrumented functions work.
 
-    let guard_opt = init_telemetry().expect("init_telemetry should not fail");
+    let config = TelemetryConfig::from_env().expect("TelemetryConfig should not fail");
+    let guard_opt = init_telemetry(config).expect("init_telemetry should not fail");
 
     // Use a function annotated with #[instrument] to ensure instrumentation path works
     let _ = instrumented_test_function(4);

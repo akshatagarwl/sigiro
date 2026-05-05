@@ -22,7 +22,8 @@ impl TelemetryConfig {
         let service_name = crate::config::OTEL_SERVICE_NAME
             .value()
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let auth_key = std::env::var("SIGIRO_OTEL_AUTH_KEY")
+        let auth_key = crate::config::OTEL_AUTH_KEY
+            .value()
             .ok()
             .filter(|k| !k.is_empty());
         Ok(Self { endpoint, service_name, auth_key })
@@ -158,7 +159,10 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
         .with(otel_log_layer)
         .init();
 
-    tracing::info!("OTel self-instrumentation enabled — exporting to {config.endpoint} (traces + logs)");
+    tracing::info!(
+        "OTel self-instrumentation enabled — exporting to {} (traces + logs)",
+        config.endpoint
+    );
 
     Ok(Some(TelemetryGuard {
         tracer_provider: Some(tracer_provider),
