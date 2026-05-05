@@ -1,0 +1,202 @@
+# Federation Docker Compose — Multi-node Sigiro with Spice.ai
+#
+# Architecture:
+#   - PostgreSQL: DuckLake catalog metadata
+#   - MinIO: S3 cold storage backend
+#   - worker-1, worker-2: Sigiro worker nodes (ingest OTLP, store locally)
+#   - central: Sigiro central node (runs spiced, federates queries)
+#
+# Usage:
+#   docker compose -f docker-compose.federation.yml up --build -d
+#   docker compose -f docker-compose.federation.yml logs -f central
+#
+#   # Register workers with central
+#   docker compose -f docker-compose.federation.yml exec central \
+#     sigiro register-worker worker-1 http://worker-1:9999 /data/worker-1/default/catalog.sqlite
+#
+#   # Test federation query
+#   curl http://localhost:10000/v1/investigate \
+#     -H "Authorization: Bearer sigiro_dev_fed" \
+#     -d '{"service":"frontend","from_ts":0,"to_ts":999999999999999}'
+#
+# Environment:
+#   SIGIRO_FED_API_KEY    API key for all nodes (default: sigiro_dev_fed)
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ducklake
+      POSTGRES_USER: sigiro
+      POSTGRES_PASSWORD: sigiro
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-fed-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sigiro -d ducklake"]
+      interval: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-fed-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      retries: 10
+
+  minio-setup:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb --ignore-existing local/sigiro-cold;
+      mc policy set public local/sigiro-cold;
+      "
+
+  worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - SIGIRO_DATA_DIR=/data/worker-1
+      - SIGIRO_API_KEY=${SIGIRO_FED_API_KEY:-sigiro_dev_fed}
+      - SIGIRO_HTTP_PORT=9999
+      - SIGIRO_GRPC_PORT=4317
+      - SIGIRO_OTLP_HTTP_PORT=4318
+      - SIGIRO_OTEL_ENDPOINT=http://central:9999
+      - SIGIRO_CATALOG_URL=postgresql://sigiro:sigiro@postgres:5432/ducklake
+      - SIGIRO_S3_BUCKET=sigiro-cold
+      - SIGIRO_S3_REGION=us-east-1
+      - SIGIRO_S3_PREFIX=worker-1
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_ENDPOINT_URL_S3=http://minio:9000
+      - AWS_S3_ALLOW_UNSAFE_RENAME=true
+    ports:
+      - "10001:9999"
+      - "10101:4317"
+      - "10102:4318"
+    volumes:
+      - worker-1-data:/data/worker-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9999/health"]
+      interval: 5s
+      retries: 10
+
+  worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - SIGIRO_DATA_DIR=/data/worker-2
+      - SIGIRO_API_KEY=${SIGIRO_FED_API_KEY:-sigiro_dev_fed}
+      - SIGIRO_HTTP_PORT=9999
+      - SIGIRO_GRPC_PORT=4317
+      - SIGIRO_OTLP_HTTP_PORT=4318
+      - SIGIRO_OTEL_ENDPOINT=http://central:9999
+      - SIGIRO_CATALOG_URL=postgresql://sigiro:sigiro@postgres:5432/ducklake
+      - SIGIRO_S3_BUCKET=sigiro-cold
+      - SIGIRO_S3_REGION=us-east-1
+      - SIGIRO_S3_PREFIX=worker-2
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_ENDPOINT_URL_S3=http://minio:9000
+      - AWS_S3_ALLOW_UNSAFE_RENAME=true
+    ports:
+      - "10002:9999"
+      - "10201:4317"
+      - "10202:4318"
+    volumes:
+      - worker-2-data:/data/worker-2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9999/health"]
+      interval: 5s
+      retries: 10
+
+  central:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - SIGIRO_DATA_DIR=/data/central
+      - SIGIRO_API_KEY=${SIGIRO_FED_API_KEY:-sigiro_dev_fed}
+      - SIGIRO_HTTP_PORT=9999
+      - SIGIRO_GRPC_PORT=4317
+      - SIGIRO_OTLP_HTTP_PORT=4318
+      - SIGIRO_OTEL_ENDPOINT=http://central:9999
+      - SIGIRO_CATALOG_URL=postgresql://sigiro:sigiro@postgres:5432/ducklake
+      - SIGIRO_S3_BUCKET=sigiro-cold
+      - SIGIRO_S3_REGION=us-east-1
+      - SIGIRO_S3_PREFIX=central
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_ENDPOINT_URL_S3=http://minio:9000
+      - AWS_S3_ALLOW_UNSAFE_RENAME=true
+    ports:
+      - "10000:9999"
+      - "10003:4317"
+      - "10004:4318"
+    volumes:
+      - central-data:/data/central
+      - ./scripts/register-workers.sh:/usr/local/bin/register-workers.sh:ro
+    depends_on:
+      worker-1:
+        condition: service_healthy
+      worker-2:
+        condition: service_healthy
+    command: >
+      sh -c "
+        sigiro serve &
+        SERVER_PID=\$$!
+        sleep 10
+        # Register workers with central node
+        curl -sf -X POST http://localhost:9999/v1/federation/workers \
+          -H 'Content-Type: application/json' \
+          -H 'Authorization: Bearer ${SIGIRO_FED_API_KEY:-sigiro_dev_fed}' \
+          -d '{\"id\":\"worker-1\",\"endpoint\":\"http://worker-1:9999\",\"catalog_path\":\"/data/worker-1/default/catalog.sqlite\",\"mode\":\"otlp\",\"platform\":{\"os\":\"linux\",\"kernel\":\"6.1\",\"arch\":\"x86_64\",\"container\":\"docker\"},\"ebpf_status\":\"not_applicable\",\"capabilities\":{\"bpf\":false,\"net_admin\":false}}'
+        curl -sf -X POST http://localhost:9999/v1/federation/workers \
+          -H 'Content-Type: application/json' \
+          -H 'Authorization: Bearer ${SIGIRO_FED_API_KEY:-sigiro_dev_fed}' \
+          -d '{\"id\":\"worker-2\",\"endpoint\":\"http://worker-2:9999\",\"catalog_path\":\"/data/worker-2/default/catalog.sqlite\",\"mode\":\"otlp\",\"platform\":{\"os\":\"linux\",\"kernel\":\"6.1\",\"arch\":\"x86_64\",\"container\":\"docker\"},\"ebpf_status\":\"not_applicable\",\"capabilities\":{\"bpf\":false,\"net_admin\":false}}'
+        echo 'Workers registered. Starting spiced...'
+        spiced --config /data/central/spicepod.yaml || true
+        wait \$$SERVER_PID
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9999/health"]
+      interval: 5s
+      retries: 15
+
+volumes:
+  pg-fed-data:
+  minio-fed-data:
+  worker-1-data:
+  worker-2-data:
+  central-data:
