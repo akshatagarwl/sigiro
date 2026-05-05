@@ -59,10 +59,10 @@ def make_span(
     if parent_span_id:
         span.parent_span_id = bytes.fromhex(parent_span_id)
     span.name = name
-    span.kind = OtlpSpan.SPAN_KIND_INTERNAL
+    span.kind = 1  # SPAN_KIND_INTERNAL
     span.start_time_unix_nano = int(time.time() * 1e9)
     span.end_time_unix_nano = span.start_time_unix_nano + duration_us * 1000
-    span.status.code = OtlpSpan.Status.STATUS_CODE_UNSET
+    span.status.code = 0  # STATUS_CODE_UNSET
 
     # Add some attributes
     span.attributes.append(KeyValue(key="http.method", value=AnyValue(string_value="GET")))
@@ -126,11 +126,12 @@ def make_batch(
     return traces_data.SerializeToString()
 
 
-def send_batch(endpoint: str, batch: bytes) -> float:
+def send_batch(endpoint: str, batch: bytes, auth_key: str = "sigiro_dev_xxx") -> tuple[float, bool]:
     import requests
 
     headers = {
         "Content-Type": "application/x-protobuf",
+        "Authorization": f"Bearer {auth_key}",
     }
     start = time.time()
     resp = requests.post(
@@ -140,10 +141,10 @@ def send_batch(endpoint: str, batch: bytes) -> float:
         timeout=30,
     )
     latency = time.time() - start
-    if resp.status_code != 200:
+    ok = resp.status_code == 200
+    if not ok:
         print(f"  HTTP {resp.status_code}: {resp.text[:200]}")
-    return latency
-
+    return latency, ok
 
 @dataclass
 class BenchmarkResult:
@@ -196,9 +197,11 @@ def run_benchmark(args) -> BenchmarkResult:
         next_send += batch_interval
 
         try:
-            latency = send_batch(args.endpoint, batch)
+            latency, ok = send_batch(args.endpoint, batch)
             latencies.append(latency)
             spans_sent += spans_per_batch
+            if not ok:
+                errors += 1
         except Exception as e:
             errors += 1
             print(f"  Batch {i} failed: {e}")
