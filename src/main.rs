@@ -409,14 +409,13 @@ fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
         return;
     }
 
-    let earliest_ts = spans.iter().map(|s| s.timestamp_us).min().unwrap_or(0);
+    let earliest_ts = spans.iter().map(|s| s.timestamp_us).min()
+        .expect("at least one span is required to compute trace duration — spans list came from non-empty query");
     let latest_ts = spans
         .iter()
-        .map(|s| {
-            s.timestamp_us + s.duration_us
-        })
+        .map(|s| s.timestamp_us.saturating_add(s.duration_us))
         .max()
-        .unwrap_or(earliest_ts);
+        .expect("spans is non-empty (checked above), so max is valid");
     let total_duration_us = (latest_ts - earliest_ts).max(0);
 
     println!("Trace: {trace_id}");

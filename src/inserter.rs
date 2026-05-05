@@ -95,10 +95,17 @@ impl MsgRouter {
     /// Applies backpressure via bounded channel — sender blocks when full
     /// rather than silently dropping data.
     /// Explicitly create and register a flusher for a project.
-    /// Caller (DI container / server setup) must invoke this before the first
-    /// send() for that project_id. Thread-safe via DashMap entry API.
+    /// DEPRECATED: Prefer using send() which lazily creates the flusher.
+    /// Caller (DI container / server setup) can invoke this for eager initialization.
     #[instrument(skip_all, fields(project_id = %project_id))]
     pub fn register_flusher(&self, project_id: &str) -> Result<(), RouterError> {
+        self.ensure_flusher(project_id)
+    }
+
+    /// Ensure a flusher exists for the project (lazy creation on first use).
+    /// Creates the connection and spawns the flusher task if not yet registered.
+    /// Thread-safe via DashMap entry API. No side effects if already initialized.
+    fn ensure_flusher(&self, project_id: &str) -> Result<(), RouterError> {
         use dashmap::mapref::entry::Entry;
 
         let pid = project_id.to_string();
@@ -129,10 +136,15 @@ impl MsgRouter {
     /// Route a message to the appropriate per-project flusher.
     /// Flusher MUST be registered first via register_flusher().
     /// Returns Err if no flusher is registered for this project.
+    /// Route a message to the appropriate per-project flusher.
+    /// Creates the flusher task lazily on first message for a project.
     #[instrument(skip_all, fields(project_id = %msg.project_id()))]
     pub async fn send(&self, msg: IngestMsg) -> Result<(), RouterError> {
         let project_id = msg.project_id().to_string();
         let project_id_for_err = project_id.clone();
+
+        // Lazy creation: ensure flusher exists before sending
+        self.ensure_flusher(&project_id)?;
 
         let entry = self.project_senders
             .get(&project_id)

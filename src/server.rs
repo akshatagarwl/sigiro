@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
+use axum::{Extension, Json, Router, extract::{State, Query}, middleware as axum_mw};
 use axum_anyhow::{bad_request, ApiResult, IntoApiError, OptionExt, ResultExt};
 use axum_extra::routing::RouterExt;
 use rusqlite::Connection;
@@ -35,6 +35,8 @@ use tracing_attributes::instrument;
         register_worker_handler,
         deregister_worker_handler,
         list_workers_handler,
+        events_create_handler,
+        events_list_handler,
     ),
     components(
         schemas(
@@ -49,12 +51,17 @@ use tracing_attributes::instrument;
             crate::federation::WorkerInfo,
             crate::federation::PlatformInfo,
             crate::federation::WorkerCapabilities,
+            crate::types::EventRequest,
+            crate::types::EventResponse,
+            crate::types::EventEntry,
+            crate::types::EventsListResponse,
         )
     ),
     tags(
         (name = "query", description = "SQL query endpoints"),
         (name = "admin", description = "Admin endpoints"),
-        (name = "federation", description = "Federation worker management")
+        (name = "federation", description = "Federation worker management"),
+        (name = "events", description = "Deployment event tracking")
     )
 )]
 pub struct ApiDoc;
@@ -167,10 +174,13 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_post(register_worker_handler)
         .typed_get(list_workers_handler)
         .typed_delete(deregister_worker_handler)
+        .typed_post(events_create_handler)
+        .typed_get(events_list_handler)
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
         ))
+
         .layer(GovernorLayer::new(governor_conf));
 
     // Admin routes — no bearer auth (chicken-and-egg: need admin to create first key).
@@ -682,4 +692,152 @@ async fn list_workers_handler(
     let workers = federation::list_workers(&guard)
         .context_internal("Federation", "failed to list workers")?;
     Ok(Json(ListWorkersResponse { workers }))
+}
+
+// --- Deployment events endpoints ---
+
+/// POST /v1/events — ingest a deployment/event marker
+#[utoipa::path(
+    post,
+    path = "/v1/events",
+    request_body = EventRequest,
+    responses(
+        (status = 200, description = "Event created", body = EventResponse)
+    ),
+    tag = "events"
+)]
+#[instrument(skip_all, fields(event_type = %req.event_type, service = ?req.service_name))]
+async fn events_create_handler(
+    _path: EventsPath,
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    Json(req): Json<EventRequest>,
+) -> ApiResult<Json<EventResponse>> {
+    let conn = project_conn(&state, &auth)?;
+    let conn = conn.lock().map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
+
+    // Parse ISO 8601 timestamp (e.g. "2026-05-05T12:00:00Z" or "2026-05-05T12:00:00+00:00")
+    let ts_micros = time::OffsetDateTime::parse(&req.timestamp, &time::format_description::well_known::Iso8601::DEFAULT)
+        .map(|dt| dt.unix_timestamp() * 1_000_000 + dt.microsecond() as i64)
+        .unwrap_or_else(|_| {
+            tracing::warn!("Invalid timestamp format: {}, using current time", req.timestamp);
+            TimestampMicros::now().as_micros()
+        });
+    let metadata_json = req.metadata.as_ref().map(|m| m.to_string());
+
+    conn.execute(
+        &format!("INSERT INTO {}sigiro_events (timestamp, event_type, service_name, environment, version, description, metadata_json, source, actor) VALUES (make_timestamp(?), ?, ?, ?, ?, ?, ?, ?, ?)", ProjectPool::prefix()),
+        duckdb::params![
+            ts_micros,
+            &req.event_type,
+            req.service_name.as_deref(),
+            req.environment.as_deref(),
+            req.version.as_deref(),
+            req.description.as_deref(),
+            metadata_json.as_deref(),
+            req.source.as_deref(),
+            req.actor.as_deref(),
+        ],
+    ).context_internal("Events", "failed to insert event")?;
+
+    Ok(Json(EventResponse {
+        event_id: 0,
+        timestamp: req.timestamp,
+        event_type: req.event_type,
+        service_name: req.service_name,
+        environment: req.environment,
+        version: req.version,
+        description: req.description,
+        source: req.source,
+        actor: req.actor,
+    }))
+}
+
+
+/// GET /v1/events — list events for a time window
+#[utoipa::path(
+    get,
+    path = "/v1/events",
+    params(
+        ("service" = Option<String>, Query, description = "Filter by service name"),
+        ("event_type" = Option<String>, Query, description = "Filter by event type"),
+        ("from" = Option<String>, Query, description = "Start timestamp (ISO 8601)"),
+        ("to" = Option<String>, Query, description = "End timestamp (ISO 8601)"),
+        ("limit" = Option<usize>, Query, description = "Max results (default: 100)")
+    ),
+    responses(
+        (status = 200, description = "List of events", body = EventsListResponse)
+    ),
+    tag = "events"
+)]
+#[instrument(skip_all)]
+async fn events_list_handler(
+    _path: EventsPath,
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    Query(params): Query<EventListParams>,
+) -> ApiResult<Json<EventsListResponse>> {
+    let conn = project_conn(&state, &auth)?;
+    let conn = conn.lock().map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
+
+    let limit = params.limit.min(1000);
+
+    // Build dynamic WHERE clause
+    let mut conditions = Vec::new();
+    let mut query_params: Vec<&dyn duckdb::ToSql> = Vec::new();
+
+    if let Some(ref svc) = params.service {
+        conditions.push("service_name = ?");
+        query_params.push(svc);
+    }
+    if let Some(ref evt) = params.event_type {
+        conditions.push("event_type = ?");
+        query_params.push(evt);
+    }
+    if let Some(ref from) = params.from {
+        conditions.push("timestamp >= ?");
+        query_params.push(from);
+    }
+    if let Some(ref to) = params.to {
+        conditions.push("timestamp <= ?");
+        query_params.push(to);
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT rowid, timestamp::VARCHAR, event_type, service_name, environment, version, description, metadata_json, source, actor \
+         FROM {}sigiro_events{} \
+         ORDER BY timestamp DESC \
+         LIMIT {}",
+        ProjectPool::prefix(),
+        where_clause,
+        limit
+    );
+
+    let mut stmt = conn.prepare(&sql).context_internal("Events", "failed to prepare query")?;
+    let events: Vec<EventEntry> = stmt
+        .query_map(&*query_params, |row| {
+            Ok(EventEntry {
+                event_id: row.get(0)?,
+                timestamp: row.get(1)?,
+                event_type: row.get(2)?,
+                service_name: row.get(3)?,
+                environment: row.get(4)?,
+                version: row.get(5)?,
+                description: row.get(6)?,
+                metadata_json: row.get(7)?,
+                source: row.get(8)?,
+                actor: row.get(9)?,
+            })
+        })
+        .context_internal("Events", "query execution failed")?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(Json(EventsListResponse { events }))
 }

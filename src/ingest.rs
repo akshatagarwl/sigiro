@@ -114,7 +114,10 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
                 InputFormat::Protobuf
             }
         })
-        .unwrap_or(InputFormat::Protobuf)
+        .unwrap_or_else(|| {
+            tracing::debug!("no Content-Type header, assuming OTLP protobuf (OTLP/HTTP default)");
+            InputFormat::Protobuf
+        })
 }
 
 /// Transform raw bytes into Arrow RecordBatch on the tokio blocking pool.
