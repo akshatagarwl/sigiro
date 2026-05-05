@@ -5,7 +5,6 @@ use tracing::{debug, info};
 
 use crate::supervisor::Supervisor;
 
-#![allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod test_utils {
     use crate::types::{get_registry, SupervisorHandle};
