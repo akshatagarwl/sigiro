@@ -17,7 +17,8 @@ fn load_one_extension(conn: &Connection, name: &str) -> Result<()> {
 
     // Path 2: LOAD from bundled file path — works for offline deployments where
     // extensions were shipped alongside the binary in {data_dir}/extensions/{name}.duckdb_extension
-    let bundled = crate::config::DATA_DIR.value()
+    let bundled = crate::config::DATA_DIR
+        .value()
         .ok()
         .filter(|d| !d.is_empty())
         .map(|d| {

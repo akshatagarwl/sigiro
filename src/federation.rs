@@ -201,7 +201,11 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     }];
 
     // Cold storage dataset via S3, if configured
-    if let Some(bucket) = crate::config::S3_BUCKET.value().ok().filter(|s| !s.is_empty()) {
+    if let Some(bucket) = crate::config::S3_BUCKET
+        .value()
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
         let prefix = crate::config::S3_PREFIX.value().ok().unwrap_or_default();
         let prefix_trimmed = prefix.trim_end_matches('/');
         let prefix_with_slash = if prefix_trimmed.is_empty() {

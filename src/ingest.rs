@@ -1,15 +1,8 @@
-use tracing_attributes::instrument;
 use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use axum::{
-    Router,
-    body::Bytes,
-    extract::State,
-    http::StatusCode,
-    routing::post,
-};
+use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
 use multer::Multipart;
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
@@ -34,6 +27,7 @@ use prost::Message;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tonic::{Request, Response, Status};
+use tracing_attributes::instrument;
 
 use crate::inserter::MsgRouter;
 use crate::types::IngestMsg;
@@ -152,6 +146,21 @@ async fn transform_metrics(bytes: Vec<u8>, fmt: InputFormat) -> Result<MetricBat
     .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
+
+    /// Route a batch to the inserter: register flusher then send.
+    /// Consolidates the repeated register_flusher+send pattern across all 4 signal handlers.
+    async fn route_batch(&self, project_id: String, msg: IngestMsg) -> Result<(), Status> {
+        if let Err(e) = self.router.register_flusher(&project_id) {
+            tracing::error!(project_id, "failed to register flusher: {e:?}");
+            return Err(Status::internal("flusher init failed"));
+        }
+        if let Err(e) = self.router.send(msg).await {
+            tracing::error!(project_id, "ingest router error: {e:?}");
+            return Err(Status::internal("ingest failed"));
+        }
+        Ok(())
+    }
+
 #[tonic::async_trait]
 impl TraceService for OtlpGrpcService {
     async fn export(
@@ -168,7 +177,11 @@ impl TraceService for OtlpGrpcService {
             tracing::error!(pid, "failed to register flusher: {e:?}");
             return Err(Status::internal("flusher init failed"));
         }
-        if let Err(e) = self.router.send(IngestMsg::Traces { project_id, batch }).await {
+        if let Err(e) = self
+            .router
+            .send(IngestMsg::Traces { project_id, batch })
+            .await
+        {
             tracing::error!(pid, "ingest router error: {e:?}");
             return Err(Status::internal("ingest failed"));
         }
@@ -192,7 +205,11 @@ impl LogsService for OtlpGrpcService {
             tracing::error!(pid, "failed to register flusher: {e:?}");
             return Err(Status::internal("flusher init failed"));
         }
-        if let Err(e) = self.router.send(IngestMsg::Logs { project_id, batch }).await {
+        if let Err(e) = self
+            .router
+            .send(IngestMsg::Logs { project_id, batch })
+            .await
+        {
             tracing::error!(pid, "ingest router error: {e:?}");
             return Err(Status::internal("ingest failed"));
         }
@@ -216,7 +233,14 @@ impl MetricsService for OtlpGrpcService {
             tracing::error!(pid, "failed to register flusher: {e:?}");
             return Err(Status::internal("flusher init failed"));
         }
-        if let Err(e) = self.router.send(IngestMsg::Metrics { project_id, batches }).await {
+        if let Err(e) = self
+            .router
+            .send(IngestMsg::Metrics {
+                project_id,
+                batches,
+            })
+            .await
+        {
             tracing::error!(pid, "ingest router error: {e:?}");
             return Err(Status::internal("ingest failed"));
         }
@@ -503,7 +527,11 @@ impl ProfilesService for OtlpGrpcService {
             tracing::error!(project_id, "failed to register flusher: {e:?}");
             return Err(Status::internal("flusher init failed"));
         }
-        if let Err(e) = self.router.send(IngestMsg::Profiles { project_id, batch }).await {
+        if let Err(e) = self
+            .router
+            .send(IngestMsg::Profiles { project_id, batch })
+            .await
+        {
             tracing::error!(pid, "ingest router error: {e:?}");
             return Err(Status::internal("ingest failed"));
         }
@@ -566,7 +594,10 @@ async fn otlp_http_traces(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    tracing::info!("otlp_http_traces: received trace request, body len = {}", body.len());
+    tracing::info!(
+        "otlp_http_traces: received trace request, body len = {}",
+        body.len()
+    );
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => return status,
@@ -590,13 +621,20 @@ async fn otlp_http_traces(
         }
         tracing::info!(project_id = %pid, "otlp_http_traces: flusher registered, calling send");
         let send_pid = pid.clone();
-        if let Err(e) = state.router.send(IngestMsg::Traces { project_id, batch }).await {
+        if let Err(e) = state
+            .router
+            .send(IngestMsg::Traces { project_id, batch })
+            .await
+        {
             tracing::error!(send_pid, "ingest router error: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
         tracing::info!(send_pid = %send_pid, "otlp_http_traces: send complete");
     } else {
-        tracing::warn!(project_id, "otlp_http_traces: batch empty after transform — trace data lost");
+        tracing::warn!(
+            project_id,
+            "otlp_http_traces: batch empty after transform — trace data lost"
+        );
     }
     StatusCode::OK
 }
@@ -625,7 +663,11 @@ async fn otlp_http_logs(
             tracing::error!(pid, "failed to register flusher: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
-        if let Err(e) = state.router.send(IngestMsg::Logs { project_id, batch }).await {
+        if let Err(e) = state
+            .router
+            .send(IngestMsg::Logs { project_id, batch })
+            .await
+        {
             tracing::error!(pid, "ingest router error: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
@@ -665,7 +707,14 @@ async fn otlp_http_metrics(
             tracing::error!(pid, "failed to register flusher: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
-        if let Err(e) = state.router.send(IngestMsg::Metrics { project_id, batches }).await {
+        if let Err(e) = state
+            .router
+            .send(IngestMsg::Metrics {
+                project_id,
+                batches,
+            })
+            .await
+        {
             tracing::error!(pid, "ingest router error: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
@@ -707,7 +756,11 @@ async fn otlp_http_profiles(
             tracing::error!(project_id, "failed to register flusher: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
-        if let Err(e) = state.router.send(IngestMsg::Profiles { project_id, batch }).await {
+        if let Err(e) = state
+            .router
+            .send(IngestMsg::Profiles { project_id, batch })
+            .await
+        {
             tracing::error!(pid, "ingest router error: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
@@ -751,8 +804,14 @@ async fn otlp_http_pyroscope(
         })
         .unwrap_or_else(|| "dev_project".to_string());
 
-    let ct = headers.get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("(none)");
-    tracing::debug!("otlp_http_pyroscope: project_id={project_id} body_len={} ct={ct}", body.len());
+    let ct = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("(none)");
+    tracing::debug!(
+        "otlp_http_pyroscope: project_id={project_id} body_len={} ct={ct}",
+        body.len()
+    );
 
     // Detect format: multipart/form-data (SDK) vs raw protobuf
     let body_bytes = match parse_pyroscope_multipart(&headers, &body).await {
@@ -771,7 +830,10 @@ async fn otlp_http_pyroscope(
         }
     };
 
-    tracing::info!("pyroscope ingest: project_id={project_id} rows={}", batch.num_rows());
+    tracing::info!(
+        "pyroscope ingest: project_id={project_id} rows={}",
+        batch.num_rows()
+    );
 
     if batch.num_rows() > 0 {
         let pid = project_id.clone();
@@ -779,7 +841,11 @@ async fn otlp_http_pyroscope(
             tracing::error!(project_id, "failed to register flusher: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
-        if let Err(e) = state.router.send(IngestMsg::Profiles { project_id, batch }).await {
+        if let Err(e) = state
+            .router
+            .send(IngestMsg::Profiles { project_id, batch })
+            .await
+        {
             tracing::error!(pid, "ingest router error: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
@@ -789,13 +855,16 @@ async fn otlp_http_pyroscope(
 
 /// Extract service.name from an optional Resource's attributes.
 /// Returns None if the resource is absent or lacks the attribute.
-fn extract_service_name(resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>) -> Option<&str> {
+fn extract_service_name(
+    resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,
+) -> Option<&str> {
     let resource = resource?;
     for attr in &resource.attributes {
         if attr.key == "service.name" {
             let val = attr.value.as_ref()?;
             let inner = val.value.as_ref()?;
-            if let opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s) = inner {
+            if let opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s) = inner
+            {
                 return Some(s.as_str());
             }
         }
@@ -808,7 +877,10 @@ fn extract_service_name(resource: Option<&opentelemetry_proto::tonic::resource::
 /// The Pyroscope Go SDK sends `multipart/form-data` with a `profile` form file
 /// containing the gzip-compressed PushRequest protobuf. This function detects the
 /// content type and extracts/wraps the body appropriately.
-async fn parse_pyroscope_multipart(headers: &axum::http::HeaderMap, body: &[u8]) -> Result<Vec<u8>, String> {
+async fn parse_pyroscope_multipart(
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+) -> Result<Vec<u8>, String> {
     let content_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -840,7 +912,10 @@ async fn parse_pyroscope_multipart(headers: &axum::http::HeaderMap, body: &[u8])
                     .bytes()
                     .await
                     .map_err(|e| format!("multipart field read error: {e}"))?;
-                tracing::debug!("pyroscope multipart: extracted {} profile bytes", profile_bytes.len());
+                tracing::debug!(
+                    "pyroscope multipart: extracted {} profile bytes",
+                    profile_bytes.len()
+                );
                 return Ok(profile_bytes.to_vec());
             }
         }
@@ -865,9 +940,7 @@ async fn parse_pyroscope_multipart(headers: &axum::http::HeaderMap, body: &[u8])
 
 /// Decode a Pyroscope PushRequest (gzip-compressed protobuf) into an Arrow
 /// RecordBatch using the same schema as transform_profiles.
-pub async fn transform_pyroscope_profiles(
-    body: Vec<u8>,
-) -> Result<RecordBatch, Status> {
+pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, Status> {
     // Stage 1: gzip decompression
     let decompressed = {
         let mut decoder = flate2::read::GzDecoder::new(&body[..]);
@@ -942,7 +1015,6 @@ pub async fn transform_pyroscope_profiles(
                 .map(std::string::String::as_str)
                 .unwrap_or("");
 
-
             // Build location_id → Location map
             let locations = &pprof_profile.location;
             let functions = &pprof_profile.function;
@@ -977,8 +1049,9 @@ pub async fn transform_pyroscope_profiles(
                     for frame in &stack {
                         stack_values.append_value(frame);
                     }
-                    let prev_offset =
-                        *stack_offsets.last().expect("stack_offsets always has an element");
+                    let prev_offset = *stack_offsets
+                        .last()
+                        .expect("stack_offsets always has an element");
                     stack_offsets.push(prev_offset + stack.len() as i32);
 
                     values.push(val);
@@ -998,13 +1071,15 @@ pub async fn transform_pyroscope_profiles(
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
                 Arc::new(StringBuilder::new().finish()),
-                Arc::new(ListArray::try_new(
-                    Arc::new(Field::new("item", DataType::Utf8, true)),
-                    arrow::buffer::OffsetBuffer::new(vec![0i32].into()),
-                    Arc::new(StringBuilder::new().finish()),
-                    None,
-                )
-                .map_err(|e| Status::internal(format!("arrow error: {e}")))?),
+                Arc::new(
+                    ListArray::try_new(
+                        Arc::new(Field::new("item", DataType::Utf8, true)),
+                        arrow::buffer::OffsetBuffer::new(vec![0i32].into()),
+                        Arc::new(StringBuilder::new().finish()),
+                        None,
+                    )
+                    .map_err(|e| Status::internal(format!("arrow error: {e}")))?,
+                ),
                 Arc::new(Int64Array::from(Vec::<i64>::new())),
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(StringBuilder::new().finish()),

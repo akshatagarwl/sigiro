@@ -3,10 +3,10 @@
 
 #[cfg(test)]
 mod tests {
-    use opentelemetry::trace::{Tracer, Span, Status, TracerProvider};
+    use opentelemetry::trace::{Span, Status, Tracer, TracerProvider};
     use opentelemetry_otlp::{SpanExporter, WithExportConfig};
-    use opentelemetry_sdk::trace::SdkTracerProvider;
     use opentelemetry_sdk::resource::Resource;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
 
     #[tokio::test]
     async fn test_otel_span_export() {
@@ -16,7 +16,7 @@ mod tests {
             .with_endpoint("http://localhost:4318/v1/traces")
             .build()
             .unwrap();
-        
+
         // Create tracer provider with batch exporter
         let provider = SdkTracerProvider::builder()
             .with_resource(Resource::builder().with_service_name("sigiro-test").build())

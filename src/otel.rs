@@ -1,9 +1,33 @@
 use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::{LogExporter, SpanExporter, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::trace::{SdkTracerProvider, BatchSpanProcessor};
+use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider};
 use std::collections::HashMap;
 use tracing_subscriber::prelude::*;
+
+/// OTel configuration — read once at startup, passed to init_telemetry()
+#[derive(Debug, Clone)]
+pub struct TelemetryConfig {
+    pub endpoint: String,
+    pub service_name: String,
+    pub auth_key: Option<String>,
+}
+
+impl TelemetryConfig {
+    /// Load from env vars at startup
+    pub fn from_env() -> Result<Self> {
+        let endpoint = crate::config::OTEL_ENDPOINT
+            .value()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let service_name = crate::config::OTEL_SERVICE_NAME
+            .value()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let auth_key = std::env::var("SIGIRO_OTEL_AUTH_KEY")
+            .ok()
+            .filter(|k| !k.is_empty());
+        Ok(Self { endpoint, service_name, auth_key })
+    }
+}
 
 pub struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
@@ -43,7 +67,7 @@ impl Drop for TelemetryGuard {
 }
 #[allow(clippy::disallowed_methods)]
 fn otel_auth_headers() -> HashMap<String, String> {
-// otel_auth_headers: reads SIGIRO_OTEL_AUTH_KEY env var, returns auth headers for OTEL endpoint
+    // otel_auth_headers: reads SIGIRO_OTEL_AUTH_KEY env var, returns auth headers for OTEL endpoint
 
     let mut headers = HashMap::new();
     // Allow custom auth key via env var, default to dev auth for self-ingestion
@@ -54,30 +78,33 @@ fn otel_auth_headers() -> HashMap<String, String> {
         }
     }
     // Default to dev auth for self-ingestion
-    headers.insert("authorization".to_string(), "Bearer sigiro_dev_self".to_string());
+    headers.insert(
+        "authorization".to_string(),
+        "Bearer sigiro_dev_self".to_string(),
+    );
     headers
 }
 
-pub fn init_telemetry() -> Result<Option<TelemetryGuard>> {
-    // SIGIRO_OTEL_ENDPOINT: where sigiro sends its own telemetry (traces + logs)
-    let endpoint = crate::config::OTEL_ENDPOINT.value().map_err(|e| anyhow::anyhow!("{e}"))?;
-    if endpoint.is_empty() {
+pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>> {
+    if config.endpoint.is_empty() {
         tracing::debug!("SIGIRO_OTEL_ENDPOINT not set — self-instrumentation disabled");
         return Ok(None);
     }
 
-    let service_name = crate::config::OTEL_SERVICE_NAME.value().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let service_name = config.service_name;
 
     let resource = opentelemetry_sdk::Resource::builder()
         .with_service_name(service_name)
         .build();
 
-    // Auth headers for self-ingestion
-    let headers = otel_auth_headers();
+    // Auth headers for self-ingestion — auth_key read at app entry, not at runtime
+    let auth_key = config.auth_key.as_deref().unwrap_or("sigiro_dev_self");
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("authorization".to_string(), format!("Bearer {auth_key}"));
     // Build OTLP HTTP exporters with auth headers
     // Note: with_endpoint() does NOT auto-append signal paths — must include full path
-    let traces_url = format!("{}/v1/traces", endpoint.trim_end_matches('/'));
-    let logs_url = format!("{}/v1/logs", endpoint.trim_end_matches('/'));
+    let traces_url = format!("{}/v1/traces", config.endpoint.trim_end_matches('/'));
+    let logs_url = format!("{}/v1/logs", config.endpoint.trim_end_matches('/'));
 
     let span_exporter = SpanExporter::builder()
         .with_http()
@@ -93,7 +120,7 @@ pub fn init_telemetry() -> Result<Option<TelemetryGuard>> {
     let batch_processor = BatchSpanProcessor::builder(span_exporter)
         .with_batch_config(batch_config)
         .build();
-    
+
     let tracer_provider = SdkTracerProvider::builder()
         .with_resource(resource.clone())
         .with_span_processor(batch_processor)
@@ -131,9 +158,7 @@ pub fn init_telemetry() -> Result<Option<TelemetryGuard>> {
         .with(otel_log_layer)
         .init();
 
-    tracing::info!(
-        "OTel self-instrumentation enabled — exporting to {endpoint} (traces + logs)"
-    );
+    tracing::info!("OTel self-instrumentation enabled — exporting to {config.endpoint} (traces + logs)");
 
     Ok(Some(TelemetryGuard {
         tracer_provider: Some(tracer_provider),

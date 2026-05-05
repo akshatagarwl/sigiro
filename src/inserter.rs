@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use tracing_attributes::instrument;
 use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use dashmap::DashMap;
@@ -10,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tracing_attributes::instrument;
 
 use crate::drain::DrainTree;
 use crate::pool::ProjectPool;
@@ -45,12 +45,8 @@ pub struct FlushConfig {
 
 impl FlushConfig {
     pub fn from_env() -> Self {
-        let row_threshold = crate::config::FLUSH_ROW_THRESHOLD
-            .value()
-            .unwrap_or(10_000);
-        let interval_secs = crate::config::FLUSH_INTERVAL_SECS
-            .value()
-            .unwrap_or(1);
+        let row_threshold = crate::config::FLUSH_ROW_THRESHOLD.value().unwrap_or(10_000);
+        let interval_secs = crate::config::FLUSH_INTERVAL_SECS.value().unwrap_or(1);
         let backpressure = match crate::config::BACKPRESSURE_POLICY
             .value()
             .as_deref()
@@ -116,15 +112,19 @@ impl MsgRouter {
                 Ok(())
             }
             Entry::Vacant(e) => {
-                let conn = self.pool.create_project(project_id)
-                    .map_err(|_| RouterError::ConnectionFailed { project_id: project_id.to_string() })?;
+                let conn = self.pool.create_project(project_id).map_err(|_| {
+                    RouterError::ConnectionFailed {
+                        project_id: project_id.to_string(),
+                    }
+                })?;
                 let pool = Arc::clone(&self.pool);
                 let cfg = self.flush_config.clone();
 
                 let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
                 let pid_spawn = pid.clone();
                 tracing::info!(project_id = %pid, "register_flusher: spawning new flusher task");
-                let handle = tokio::spawn(async move { run_flusher(&pid_spawn, conn, rx, pool, cfg).await });
+                let handle =
+                    tokio::spawn(async move { run_flusher(&pid_spawn, conn, rx, pool, cfg).await });
 
                 e.insert((tx, handle));
                 tracing::info!(project_id = %pid, "register_flusher: inserted new sender into project_senders");
@@ -146,9 +146,12 @@ impl MsgRouter {
         // Lazy creation: ensure flusher exists before sending
         self.ensure_flusher(&project_id)?;
 
-        let entry = self.project_senders
-            .get(&project_id)
-            .ok_or_else(|| RouterError::ConnectionFailed { project_id: project_id.clone() })?;
+        let entry =
+            self.project_senders
+                .get(&project_id)
+                .ok_or_else(|| RouterError::ConnectionFailed {
+                    project_id: project_id.clone(),
+                })?;
 
         let sender = &entry.value().0;
 
@@ -258,7 +261,10 @@ impl ProjectFlusher {
             match self.classify_logs(&batch) {
                 Ok(classified) => classified,
                 Err(e) => {
-                    tracing::warn!(rows = batch.num_rows(), "log classification failed, skipping batch: {e:#}");
+                    tracing::warn!(
+                        rows = batch.num_rows(),
+                        "log classification failed, skipping batch: {e:#}"
+                    );
                     return;
                 }
             }
@@ -326,7 +332,9 @@ impl ProjectFlusher {
     }
 
     fn should_flush(&self) -> bool {
-        self.first_flush || self.total_rows >= self.row_threshold || self.last_flush.elapsed() >= self.flush_interval
+        self.first_flush
+            || self.total_rows >= self.row_threshold
+            || self.last_flush.elapsed() >= self.flush_interval
     }
 
     /// Flush all buffered batches to DuckDB using appenders per table.
@@ -397,7 +405,7 @@ impl ProjectFlusher {
 
 /// Per-project flusher loop. Receives pre-transformed RecordBatches,
 /// buffers them, and flushes to DuckDB on timer or row count threshold.
-    #[instrument(skip_all, fields(project_id = %project_id))]
+#[instrument(skip_all, fields(project_id = %project_id))]
 async fn run_flusher(
     project_id: &str,
     conn: Arc<Mutex<Connection>>,

@@ -29,7 +29,9 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
         _ => return Ok(None),
     };
 
-    let service_name = crate::config::OTEL_SERVICE_NAME.value().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let service_name = crate::config::OTEL_SERVICE_NAME
+        .value()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let backend = pyroscope::backend::pprof_backend(
         pyroscope::backend::pprof::PprofConfig::default(),

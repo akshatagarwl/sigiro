@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
-use axum::{Extension, Json, Router, extract::{State, Query}, middleware as axum_mw};
-use axum_anyhow::{bad_request, ApiResult, IntoApiError, OptionExt, ResultExt};
+use axum::{
+    Extension, Json, Router,
+    extract::{Query, State},
+    middleware as axum_mw,
+};
+use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
 use rusqlite::Connection;
 use sqlparser::ast::Statement;
@@ -35,9 +39,7 @@ use tracing_attributes::instrument;
         register_worker_handler,
         deregister_worker_handler,
         list_workers_handler,
-        events_create_handler,
-        events_list_handler,
-    ),
+            ),
     components(
         schemas(
             ServicesResponse,
@@ -51,18 +53,13 @@ use tracing_attributes::instrument;
             crate::federation::WorkerInfo,
             crate::federation::PlatformInfo,
             crate::federation::WorkerCapabilities,
-            crate::types::EventRequest,
-            crate::types::EventResponse,
-            crate::types::EventEntry,
-            crate::types::EventsListResponse,
         )
     ),
     tags(
         (name = "query", description = "SQL query endpoints"),
         (name = "admin", description = "Admin endpoints"),
         (name = "federation", description = "Federation worker management"),
-        (name = "events", description = "Deployment event tracking")
-    )
+            )
 )]
 pub struct ApiDoc;
 
@@ -109,12 +106,7 @@ pub struct AppState {
 
 /// DuckDB file-reading table functions blocked even in SELECT queries
 /// (e.g., read_csv('/etc/passwd') is a valid SELECT but reads arbitrary files).
-const BLOCKED_TABLE_FUNCTIONS: &[&str] = &[
-    "DROP",
-    "READ_CSV",
-    "READ_PARQUET",
-    "READ_JSON",
-];
+const BLOCKED_TABLE_FUNCTIONS: &[&str] = &["DROP", "READ_CSV", "READ_PARQUET", "READ_JSON"];
 
 pub fn validate_read_only(sql: &str) -> Result<(), String> {
     let dialect = GenericDialect {};
@@ -131,7 +123,10 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
     let stripped = sql
         .split_once("/*")
         .map(|(before, after)| {
-            after.split_once("*/").map(|(_, after)| format!("{before}{after}")).unwrap_or(before.to_string())
+            after
+                .split_once("*/")
+                .map(|(_, after)| format!("{before}{after}"))
+                .unwrap_or(before.to_string())
         })
         .unwrap_or_else(|| sql.to_string())
         .split_once("--")
@@ -174,13 +169,10 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_post(register_worker_handler)
         .typed_get(list_workers_handler)
         .typed_delete(deregister_worker_handler)
-        .typed_post(events_create_handler)
-        .typed_get(events_list_handler)
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
         ))
-
         .layer(GovernorLayer::new(governor_conf));
 
     // Admin routes — no bearer auth (chicken-and-egg: need admin to create first key).
@@ -216,9 +208,15 @@ impl ServerPorts {
     pub fn load() -> anyhow::Result<Self> {
         use crate::config;
         Ok(Self {
-            http: config::HTTP_PORT.value().map_err(|e| anyhow::anyhow!("{e}"))?,
-            grpc: config::GRPC_PORT.value().map_err(|e| anyhow::anyhow!("{e}"))?,
-            otlp_http: config::OTLP_HTTP_PORT.value().map_err(|e| anyhow::anyhow!("{e}"))?,
+            http: config::HTTP_PORT
+                .value()
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+            grpc: config::GRPC_PORT
+                .value()
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+            otlp_http: config::OTLP_HTTP_PORT
+                .value()
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
         })
     }
 }
@@ -316,9 +314,9 @@ async fn health(_path: HealthPath) -> &'static str {
     let tracer = opentelemetry::global::tracer("sigiro");
     let mut span = tracer.start("health_check");
     span.add_event("health_handler_start", vec![]);
-    
+
     tracing::info!("health check called");
-    
+
     span.add_event("health_handler_end", vec![]);
     span.end();
     "ok"
@@ -363,9 +361,10 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
 fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duckdb::Connection>>> {
     // Explicit DI: get_project returns only existing connections.
     // Callers must call create_project() first to initialize a project.
-    state.pool.get_project(&auth.project_id).map_err(|e| {
-        anyhow::anyhow!(e).context_internal("Project DB", "connection not found")
-    })
+    state
+        .pool
+        .get_project(&auth.project_id)
+        .map_err(|e| anyhow::anyhow!(e).context_internal("Project DB", "connection not found"))
 }
 
 #[utoipa::path(
@@ -384,9 +383,7 @@ async fn query_handler(
     Extension(auth): Extension<AuthContext>,
     body: String,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
-    validate_read_only(&body).map_err(|e| {
-        bad_request("query rejected", &e)
-    })?;
+    validate_read_only(&body).map_err(|e| bad_request("query rejected", &e))?;
     let conn = project_conn(&state, &auth)?;
     let conn = conn
         .lock()
@@ -514,7 +511,12 @@ async fn investigate_handler(
     // This gives a clear 404 instead of "failed to get read connection" when no data is ingested.
     let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
     let project_data_path = data_dir.join(&auth.project_id);
-    if !project_data_path.exists() || project_data_path.read_dir().map(|mut i| i.next().is_none()).unwrap_or(true) {
+    if !project_data_path.exists()
+        || project_data_path
+            .read_dir()
+            .map(|mut i| i.next().is_none())
+            .unwrap_or(true)
+    {
         return Err(axum_anyhow::not_found(
             "No Data Found",
             &format!(
@@ -584,7 +586,10 @@ async fn admin_revoke_key(
     let revoked = admin::revoke_key(&state.admin_conn, &short_token)
         .context_internal("Admin", "failed to revoke API key")?;
     if revoked {
-        Ok(Json(RevokeKeyResponse { revoked: true, short_token }))
+        Ok(Json(RevokeKeyResponse {
+            revoked: true,
+            short_token,
+        }))
     } else {
         Err(axum_anyhow::not_found(
             "Key Not Found",
@@ -638,7 +643,10 @@ async fn register_worker_handler(
         .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
     federation::register_worker(&guard, &worker)
         .context_internal("Federation", "failed to register worker")?;
-    Ok(Json(RegisterWorkerResponse { registered: true, id }))
+    Ok(Json(RegisterWorkerResponse {
+        registered: true,
+        id,
+    }))
 }
 
 /// DELETE /v1/federation/workers/{id} -- deregister a federation worker.
@@ -692,152 +700,4 @@ async fn list_workers_handler(
     let workers = federation::list_workers(&guard)
         .context_internal("Federation", "failed to list workers")?;
     Ok(Json(ListWorkersResponse { workers }))
-}
-
-// --- Deployment events endpoints ---
-
-/// POST /v1/events — ingest a deployment/event marker
-#[utoipa::path(
-    post,
-    path = "/v1/events",
-    request_body = EventRequest,
-    responses(
-        (status = 200, description = "Event created", body = EventResponse)
-    ),
-    tag = "events"
-)]
-#[instrument(skip_all, fields(event_type = %req.event_type, service = ?req.service_name))]
-async fn events_create_handler(
-    _path: EventsPath,
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthContext>,
-    Json(req): Json<EventRequest>,
-) -> ApiResult<Json<EventResponse>> {
-    let conn = project_conn(&state, &auth)?;
-    let conn = conn.lock().map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
-
-    // Parse ISO 8601 timestamp (e.g. "2026-05-05T12:00:00Z" or "2026-05-05T12:00:00+00:00")
-    let ts_micros = time::OffsetDateTime::parse(&req.timestamp, &time::format_description::well_known::Iso8601::DEFAULT)
-        .map(|dt| dt.unix_timestamp() * 1_000_000 + dt.microsecond() as i64)
-        .unwrap_or_else(|_| {
-            tracing::warn!("Invalid timestamp format: {}, using current time", req.timestamp);
-            TimestampMicros::now().as_micros()
-        });
-    let metadata_json = req.metadata.as_ref().map(|m| m.to_string());
-
-    conn.execute(
-        &format!("INSERT INTO {}sigiro_events (timestamp, event_type, service_name, environment, version, description, metadata_json, source, actor) VALUES (make_timestamp(?), ?, ?, ?, ?, ?, ?, ?, ?)", ProjectPool::prefix()),
-        duckdb::params![
-            ts_micros,
-            &req.event_type,
-            req.service_name.as_deref(),
-            req.environment.as_deref(),
-            req.version.as_deref(),
-            req.description.as_deref(),
-            metadata_json.as_deref(),
-            req.source.as_deref(),
-            req.actor.as_deref(),
-        ],
-    ).context_internal("Events", "failed to insert event")?;
-
-    Ok(Json(EventResponse {
-        event_id: 0,
-        timestamp: req.timestamp,
-        event_type: req.event_type,
-        service_name: req.service_name,
-        environment: req.environment,
-        version: req.version,
-        description: req.description,
-        source: req.source,
-        actor: req.actor,
-    }))
-}
-
-
-/// GET /v1/events — list events for a time window
-#[utoipa::path(
-    get,
-    path = "/v1/events",
-    params(
-        ("service" = Option<String>, Query, description = "Filter by service name"),
-        ("event_type" = Option<String>, Query, description = "Filter by event type"),
-        ("from" = Option<String>, Query, description = "Start timestamp (ISO 8601)"),
-        ("to" = Option<String>, Query, description = "End timestamp (ISO 8601)"),
-        ("limit" = Option<usize>, Query, description = "Max results (default: 100)")
-    ),
-    responses(
-        (status = 200, description = "List of events", body = EventsListResponse)
-    ),
-    tag = "events"
-)]
-#[instrument(skip_all)]
-async fn events_list_handler(
-    _path: EventsPath,
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthContext>,
-    Query(params): Query<EventListParams>,
-) -> ApiResult<Json<EventsListResponse>> {
-    let conn = project_conn(&state, &auth)?;
-    let conn = conn.lock().map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
-
-    let limit = params.limit.min(1000);
-
-    // Build dynamic WHERE clause
-    let mut conditions = Vec::new();
-    let mut query_params: Vec<&dyn duckdb::ToSql> = Vec::new();
-
-    if let Some(ref svc) = params.service {
-        conditions.push("service_name = ?");
-        query_params.push(svc);
-    }
-    if let Some(ref evt) = params.event_type {
-        conditions.push("event_type = ?");
-        query_params.push(evt);
-    }
-    if let Some(ref from) = params.from {
-        conditions.push("timestamp >= ?");
-        query_params.push(from);
-    }
-    if let Some(ref to) = params.to {
-        conditions.push("timestamp <= ?");
-        query_params.push(to);
-    }
-
-    let where_clause = if conditions.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", conditions.join(" AND "))
-    };
-
-    let sql = format!(
-        "SELECT rowid, timestamp::VARCHAR, event_type, service_name, environment, version, description, metadata_json, source, actor \
-         FROM {}sigiro_events{} \
-         ORDER BY timestamp DESC \
-         LIMIT {}",
-        ProjectPool::prefix(),
-        where_clause,
-        limit
-    );
-
-    let mut stmt = conn.prepare(&sql).context_internal("Events", "failed to prepare query")?;
-    let events: Vec<EventEntry> = stmt
-        .query_map(&*query_params, |row| {
-            Ok(EventEntry {
-                event_id: row.get(0)?,
-                timestamp: row.get(1)?,
-                event_type: row.get(2)?,
-                service_name: row.get(3)?,
-                environment: row.get(4)?,
-                version: row.get(5)?,
-                description: row.get(6)?,
-                metadata_json: row.get(7)?,
-                source: row.get(8)?,
-                actor: row.get(9)?,
-            })
-        })
-        .context_internal("Events", "query execution failed")?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(Json(EventsListResponse { events }))
 }

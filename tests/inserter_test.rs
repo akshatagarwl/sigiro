@@ -42,9 +42,9 @@ fn make_spans_batch(n: usize) -> RecordBatch {
     ]));
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     let timestamps: Vec<i64> = (0..n).map(|i| now_us + i as i64).collect();
     let end_timestamps: Vec<i64> = timestamps.iter().map(|t| t + 1000).collect();
     let durations: Vec<i64> = vec![1000i64; n];
@@ -99,7 +99,8 @@ async fn inserter_processes_spans_for_single_project() {
     // Send 10 batches of 100 spans
     for _ in 0..10 {
         let batch = make_spans_batch(100);
-        router.send(IngestMsg::Traces {
+        router
+            .send(IngestMsg::Traces {
                 project_id: "test_project".to_string(),
                 batch,
             })
@@ -149,7 +150,6 @@ async fn inserter_isolates_projects() {
             })
             .await
             .unwrap();
-
     }
 
     router.shutdown_and_wait().await;
@@ -209,14 +209,13 @@ async fn inserter_handles_backpressure() {
 
         // Every 10th message goes to a different project
         if i % 10 == 0 {
-        router
-            .send(IngestMsg::Traces {
-                project_id: "slow_project".to_string(),
-                batch: make_spans_batch(10),
-            })
-            .await
-            .unwrap();
-
+            router
+                .send(IngestMsg::Traces {
+                    project_id: "slow_project".to_string(),
+                    batch: make_spans_batch(10),
+                })
+                .await
+                .unwrap();
         }
     }
 
@@ -268,7 +267,6 @@ async fn inserter_throughput_single_project() {
             })
             .await
             .unwrap();
-
     }
 
     router.shutdown_and_wait().await;

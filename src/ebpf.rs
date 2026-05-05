@@ -7,7 +7,7 @@ use crate::supervisor::Supervisor;
 
 #[cfg(test)]
 mod test_utils {
-    use crate::types::{get_registry, SupervisorHandle};
+    use crate::types::{SupervisorHandle, get_registry};
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -69,7 +69,9 @@ fn obi_install_path() -> Result<std::path::PathBuf> {
     }
     let home = dirs::home_dir().context("cannot determine home directory for obi install path")?;
     let path = home.join(".local").join("bin").join("obi");
-    let parent = path.parent().context("obi install path has no parent directory")?;
+    let parent = path
+        .parent()
+        .context("obi install path has no parent directory")?;
     std::fs::create_dir_all(parent).context("failed to create ~/.local/bin for obi install")?;
     Ok(path)
 }

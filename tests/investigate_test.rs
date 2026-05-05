@@ -16,9 +16,9 @@ fn setup_drain_logs(
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
 
     let mut drain = sigiro::drain::DrainTree::new();
     for example in prewarm {
@@ -145,9 +145,9 @@ fn investigate_with_real_span_data() {
     sigiro::schema::create_tables(&conn, "").expect("create tables");
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
@@ -241,9 +241,9 @@ fn service_context_empty_db() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     let qctx = QueryCtx {
         conn: &conn,
         service: "nonexistent",
@@ -264,9 +264,9 @@ fn service_context_with_k8s_attrs() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name,
@@ -296,9 +296,9 @@ fn service_context_dependencies() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
@@ -338,9 +338,9 @@ fn derived_events_deploy_detection() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name, resource_attributes)
@@ -374,9 +374,9 @@ fn derived_events_k8s_oomkilled() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
             severity_text, body)
@@ -505,9 +505,9 @@ fn investigate_large_window_no_spans() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
@@ -536,9 +536,9 @@ fn investigate_multi_basic() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
@@ -597,9 +597,9 @@ fn derived_events_no_events() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     let qctx = QueryCtx {
         conn: &conn,
         service: "api",
@@ -617,9 +617,9 @@ fn investigate_all_three_signals() {
     sigiro::schema::create_tables(&conn, "").expect("create tables");
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
@@ -677,9 +677,9 @@ fn operation_summary_baselines() {
     sigiro::schema::create_tables(&conn, "").expect("create tables");
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     let baseline_ts = now_us - 10 * 60 * 1_000_000;
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,

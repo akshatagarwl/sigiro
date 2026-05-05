@@ -42,7 +42,8 @@ fn build_test_context() -> TestContext {
 
     // Explicit DI: initialize the dev_project connection before handlers access it.
     // This mirrors production behavior where ingest path calls create_project first.
-    pool.create_project("dev_project").expect("failed to init dev_project connection");
+    pool.create_project("dev_project")
+        .expect("failed to init dev_project connection");
 
     // In-memory SQLite admin DB with all required tables
     let admin_conn = Connection::open_in_memory().expect("failed to open in-memory SQLite");

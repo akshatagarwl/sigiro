@@ -17,9 +17,9 @@ fn setup_populated_db() -> (Arc<Mutex<duckdb::Connection>>, tempfile::TempDir) {
     sigiro::schema::create_tables(&conn, "lake.").expect("create tables");
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
 
     // Insert 100 spans across 5 operations
     let mut sql = String::from(
@@ -78,9 +78,9 @@ fn setup_populated_db() -> (Arc<Mutex<duckdb::Connection>>, tempfile::TempDir) {
 fn bench_investigate(c: &mut Criterion) {
     let (shared, _dir) = setup_populated_db();
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
 
     let mut group = c.benchmark_group("investigate");
     group.sample_size(10);
@@ -109,9 +109,9 @@ fn bench_compute_coverage(c: &mut Criterion) {
 fn bench_query_logs(c: &mut Criterion) {
     let (shared, _dir) = setup_populated_db();
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     let conn = shared.lock().unwrap();
 
     let ctx = QueryCtx {
@@ -166,9 +166,9 @@ fn bench_adaptive_config(c: &mut Criterion) {
 fn bench_service_context(c: &mut Criterion) {
     let (shared, _dir) = setup_populated_db();
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
     let conn = shared.lock().unwrap();
 
     let ctx = QueryCtx {

@@ -1,7 +1,7 @@
 use prost::Message;
+use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
 use sigiro::pool::ProjectPool;
-use sigiro::IngestMsg;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -11,9 +11,7 @@ fn build_pyroscope_push_request(
     frames: &[&str],
     sample_value: i64,
 ) -> Vec<u8> {
-    use pyroscope::encode::r#gen::google::{
-        Function, Line, Location, Profile, Sample, ValueType,
-    };
+    use pyroscope::encode::r#gen::google::{Function, Line, Location, Profile, Sample, ValueType};
     use pyroscope::encode::r#gen::push::{PushRequest, RawProfileSeries, RawSample};
     use pyroscope::encode::r#gen::types::LabelPair;
 
@@ -96,9 +94,7 @@ fn build_pyroscope_push_request(
 
     let mut gzipped = Vec::new();
     let mut encoder = flate2::write::GzEncoder::new(&mut gzipped, flate2::Compression::default());
-    encoder
-        .write_all(&encoded)
-        .expect("gzip write");
+    encoder.write_all(&encoded).expect("gzip write");
     encoder.finish().expect("gzip finish");
 
     gzipped
@@ -154,7 +150,9 @@ async fn e2e_pyroscope_native_pipeline() {
     let conn = conn.lock().unwrap();
 
     let total: i64 = conn
-        .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| r.get(0))
+        .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(total, 1, "should have 1 profile sample");
 
@@ -190,21 +188,17 @@ async fn e2e_pyroscope_native_pipeline() {
 
     // Verify unit
     let unit: String = conn
-        .query_row(
-            "SELECT unit FROM lake.sigiro_profiles LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT unit FROM lake.sigiro_profiles LIMIT 1", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(unit, "nanoseconds");
 
     // Verify value
     let val: i64 = conn
-        .query_row(
-            "SELECT value FROM lake.sigiro_profiles LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT value FROM lake.sigiro_profiles LIMIT 1", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(val, 15_000_000);
 
@@ -242,7 +236,11 @@ async fn e2e_pyroscope_empty_push_request() {
     let batch = sigiro::ingest::transform_pyroscope_profiles(gzipped)
         .await
         .unwrap();
-    assert_eq!(batch.num_rows(), 0, "empty PushRequest should produce 0 rows");
+    assert_eq!(
+        batch.num_rows(),
+        0,
+        "empty PushRequest should produce 0 rows"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -264,12 +262,8 @@ async fn e2e_pyroscope_multi_series() {
     router.register_flusher("pyro_multi").unwrap();
 
     // Series 1: service_a with one sample
-    let bytes_a = build_pyroscope_push_request(
-        "service_a",
-        now_ns,
-        &["main", "process"],
-        10_000_000,
-    );
+    let bytes_a =
+        build_pyroscope_push_request("service_a", now_ns, &["main", "process"], 10_000_000);
 
     // Series 2: service_b with one sample
     let bytes_b = build_pyroscope_push_request(
@@ -311,7 +305,9 @@ async fn e2e_pyroscope_multi_series() {
     let conn = conn.lock().unwrap();
 
     let total: i64 = conn
-        .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| r.get(0))
+        .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(total, 2, "should have 2 profile samples");
 

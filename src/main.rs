@@ -113,10 +113,9 @@ fn format_output(value: &serde_json::Value, output_format: &OutputFormat) -> Res
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // OTel self-instrumentation: if OTEL_EXPORTER_OTLP_ENDPOINT is set,
-    // the subscriber is initialized with an OTel layer in init_telemetry().
-    // Otherwise, falls back to the standard fmt subscriber.
-    let _telemetry_guard = match sigiro::otel::init_telemetry() {
+    // OTel self-instrumentation: read config at startup, pass to init_telemetry()
+    let telemetry_config = sigiro::otel::TelemetryConfig::from_env()?;
+    let _telemetry_guard = match sigiro::otel::init_telemetry(telemetry_config) {
         Ok(Some(guard)) => Some(guard),
         Ok(None) => {
             init_basic_subscriber();
@@ -153,7 +152,10 @@ async fn main() -> Result<()> {
         Some(Command::Status) => {
             let client = require_client()?;
             let result = client.status().await?;
-            println!("{}", format_output(&serde_json::to_value(&result)?, &cli.output)?);
+            println!(
+                "{}",
+                format_output(&serde_json::to_value(&result)?, &cli.output)?
+            );
         }
         Some(Command::Investigate { service, from, to }) => {
             let client = require_client()?;
@@ -184,7 +186,9 @@ async fn main() -> Result<()> {
         Some(Command::Admin { action }) => {
             // Try HTTP to running server first (solves DuckDB single-writer lock).
             // Fall back to direct DuckDB if server isn't running (bootstrapping).
-            let server_url = sigiro::config::ENDPOINT.value().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let server_url = sigiro::config::ENDPOINT
+                .value()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
 
             match action {
                 AdminAction::CreateKey {
@@ -255,7 +259,9 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_status", "disabled")?;
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_reason", "--no-ebpf flag")?;
     } else {
-        let otlp_endpoint = sigiro::config::OTEL_ENDPOINT.value().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let otlp_endpoint = sigiro::config::OTEL_ENDPOINT
+            .value()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         let status = sigiro::ebpf::ebpf_status("obi");
         sigiro::ebpf::write_ebpf_status(&admin_conn, &status)?;
         match status.status.as_str() {
@@ -346,7 +352,8 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     const MAX_IDLE_SECS: u64 = 300;
     let evictor_pool = Arc::clone(&pool);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(EVICT_INTERVAL_SECS));
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(EVICT_INTERVAL_SECS));
         loop {
             interval.tick().await;
             evictor_pool.evict_idle(std::time::Duration::from_secs(MAX_IDLE_SECS));
@@ -363,7 +370,9 @@ fn require_client() -> Result<sigiro::client::SigiroClient> {
 }
 
 fn hostname_or_default() -> Result<String> {
-    sigiro::config::HOSTNAME.value().map_err(|e| anyhow::anyhow!("{e}"))
+    sigiro::config::HOSTNAME
+        .value()
+        .map_err(|e| anyhow::anyhow!("{e}"))
         .context("HOSTNAME env var not set — required for federation worker registration")
 }
 
@@ -466,7 +475,11 @@ fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
             let start_bar = ((rel_start_us / end_us.max(1.0)) * bar_max as f64) as usize;
             let end_bar = bar_max;
             let filled = end_bar.saturating_sub(start_bar.max(0));
-            format!("{:>width$}", "█".repeat(filled.min(bar_max)), width = bar_max)
+            format!(
+                "{:>width$}",
+                "█".repeat(filled.min(bar_max)),
+                width = bar_max
+            )
         } else {
             format!("{:>width$}", "", width = bar_max)
         };
@@ -480,7 +493,11 @@ fn render_waterfall(spans: &[WaterfallSpan], trace_id: &str) {
             truncate(&span.span_name, 15),
             kind_str,
             service_name,
-            if span.parent_span_id.is_empty() { "ROOT" } else { "" },
+            if span.parent_span_id.is_empty() {
+                "ROOT"
+            } else {
+                ""
+            },
         );
 
         if let Some(kids) = children.get(&span.span_id) {
@@ -528,8 +545,7 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
         );
     }
 
-    let conn = duckdb::Connection::open_in_memory()
-        .context("failed to open in-memory DuckDB")?;
+    let conn = duckdb::Connection::open_in_memory().context("failed to open in-memory DuckDB")?;
 
     let ext_dir = dir.join("extensions");
     std::fs::create_dir_all(&ext_dir).context("failed to create extensions directory")?;
@@ -546,7 +562,9 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
 
     let attach_sql = format!("ATTACH 'ducklake:{catalog_str}' AS lake");
     if let Err(attach_err) = conn.execute_batch(&attach_sql) {
-        if attach_err.to_string().contains("lock") || attach_err.to_string().contains("Conflicting lock") {
+        if attach_err.to_string().contains("lock")
+            || attach_err.to_string().contains("Conflicting lock")
+        {
             anyhow::bail!(
                 "DuckDB catalog is locked by a running sigiro server.\n\
                  Stop the server first, or use sigiro query --sql \"SELECT ... FROM lake.sigiro_spans WHERE trace_id = '{trace_id}'\"\n\
@@ -557,8 +575,7 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
     }
 
     let prefix = sigiro::storage::table_prefix();
-    sigiro::schema::create_tables(&conn, prefix)
-        .context("failed to create/check schema")?;
+    sigiro::schema::create_tables(&conn, prefix).context("failed to create/check schema")?;
 
     let sql = format!(
         "SELECT span_id, parent_span_id, span_name, span_kind, duration,

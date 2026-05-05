@@ -1,3 +1,4 @@
+use crate::MutexExt;
 use anyhow::{Context, Result};
 use prefixed_api_key::{PrefixedApiKey, PrefixedApiKeyController};
 use rusqlite::Connection;
@@ -46,9 +47,7 @@ pub fn create_key(
     let hash_str = hash.to_string();
     let key_string = pak.to_string();
 
-    let guard = conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex poisoned: {e}"))?;
+    let guard = conn.lock_poisoned()?;
     guard.execute(
         "INSERT INTO sigiro_api_keys (short_token, long_token_hash, project_id, plan, rate_limit)
          VALUES (?, ?, ?, ?, ?)",
@@ -61,9 +60,7 @@ pub fn create_key(
 
 /// Revoke an API key by short token.
 pub fn revoke_key(conn: &Mutex<Connection>, short_token: &str) -> Result<bool> {
-    let guard = conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex poisoned: {e}"))?;
+    let guard = conn.lock_poisoned()?;
     let affected = guard
         .execute(
             "DELETE FROM sigiro_api_keys WHERE short_token = ?",
@@ -142,9 +139,7 @@ pub fn verify_key_db(conn: &Mutex<Connection>, raw_key: &str) -> Result<(String,
     let short_token = pak.short_token().to_string();
     let controller = key_controller();
 
-    let guard = conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex poisoned: {e}"))?;
+    let guard = conn.lock_poisoned()?;
 
     let mut stmt = guard
         .prepare(

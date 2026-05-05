@@ -131,8 +131,12 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
     // At this point catalog_url is a non-empty string (Ok + !is_empty)
     // Proceed to use it as distributed catalog
     use crate::config;
-    let s3_bucket = config::S3_BUCKET.value().map_err(|e| anyhow::anyhow!("{e}"))?;
-    let s3_region = config::S3_REGION.value().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let s3_bucket = config::S3_BUCKET
+        .value()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let s3_region = config::S3_REGION
+        .value()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     if !s3_bucket.is_empty() && s3_region.is_empty() {
         anyhow::bail!(
             "SIGIRO_S3_BUCKET is set but SIGIRO_S3_REGION is missing — provide a valid AWS region"
@@ -146,7 +150,9 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         catalog_url,
         s3_bucket,
         s3_region,
-        s3_prefix: crate::config::S3_PREFIX.value().map_err(|e| anyhow::anyhow!("{e}"))?,
+        s3_prefix: crate::config::S3_PREFIX
+            .value()
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
     }))
 }
 
@@ -158,8 +164,7 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
         // Check if it's a URI (contains //) or already libpq key=value
         if uri.contains("//") {
             // Parse URI: postgresql://user:***@host:port/dbname
-            let parsed = Url::parse(uri)
-                .context("invalid postgres URI: failed to parse URL")?;
+            let parsed = Url::parse(uri).context("invalid postgres URI: failed to parse URL")?;
 
             let user = parsed.username();
             if user.is_empty() {

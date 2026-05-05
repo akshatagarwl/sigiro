@@ -114,9 +114,8 @@ pub fn us_to_iso(us: i64) -> Result<String> {
     let ns = us
         .checked_mul(1000)
         .ok_or_else(|| anyhow::anyhow!("timestamp overflow: {us}"))?;
-    let dt =
-        time::OffsetDateTime::from_unix_timestamp_nanos(ns.into())
-            .map_err(|_| anyhow::anyhow!("invalid timestamp_micros: {us}"))?;
+    let dt = time::OffsetDateTime::from_unix_timestamp_nanos(ns.into())
+        .map_err(|_| anyhow::anyhow!("invalid timestamp_micros: {us}"))?;
     dt.format(&time::format_description::well_known::Rfc3339)
         .map(|s| s.to_string())
         .map_err(|_| anyhow::anyhow!("format failed for timestamp_micros: {us}"))

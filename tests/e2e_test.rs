@@ -4,7 +4,9 @@
 //! multi-project isolation, services endpoint simulation, query validation,
 //! and investigation with all signal types.
 
-use arrow::array::{Float64Array, Int32Array, Int64Array, ListArray, StringArray, TimestampMicrosecondArray};
+use arrow::array::{
+    Float64Array, Int32Array, Int64Array, ListArray, StringArray, TimestampMicrosecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use sigiro::IngestMsg;
@@ -304,9 +306,9 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     let router = MsgRouter::new(pool.clone());
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
 
     // Explicit DI: initialize project connection and register flusher before sending
     let _ = pool.create_project("proj_e2e").unwrap();
@@ -319,7 +321,9 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
             .send(IngestMsg::Traces {
                 project_id: "proj_e2e".to_string(),
                 batch,
-            }).await.unwrap();
+            })
+            .await
+            .unwrap();
     }
 
     router.shutdown_and_wait().await;
@@ -371,9 +375,9 @@ async fn e2e_multi_project_isolation() {
     let router = MsgRouter::new(pool.clone());
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
 
     // Explicit DI: initialize and register flushers for both projects before sending
     let _ = pool.create_project("proj_alpha").unwrap();
@@ -386,14 +390,18 @@ async fn e2e_multi_project_isolation() {
         .send(IngestMsg::Traces {
             project_id: "proj_alpha".to_string(),
             batch: make_spans_batch(30, "alpha-svc", "GET /alpha", now_us),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
     // Project B: "beta-svc" with 50 spans
     router
         .send(IngestMsg::Traces {
             project_id: "proj_beta".to_string(),
             batch: make_spans_batch(50, "beta-svc", "GET /beta", now_us),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
     router.shutdown_and_wait().await;
 
@@ -451,9 +459,9 @@ async fn e2e_services_endpoint_simulation() {
     let router = MsgRouter::new(pool.clone());
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
 
     // Explicit DI: initialize and register flusher for the shared project
     let _ = pool.create_project("proj_services").unwrap();
@@ -464,17 +472,23 @@ async fn e2e_services_endpoint_simulation() {
         .send(IngestMsg::Traces {
             project_id: "proj_services".to_string(),
             batch: make_spans_batch(10, "api-gateway", "GET /route", now_us),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
     router
         .send(IngestMsg::Traces {
             project_id: "proj_services".to_string(),
             batch: make_spans_batch(25, "user-service", "GET /users", now_us + 100),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
     router
         .send(IngestMsg::Traces {
             project_id: "proj_services".to_string(),
             batch: make_spans_batch(15, "order-service", "POST /orders", now_us + 200),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
     router.shutdown_and_wait().await;
 
@@ -602,9 +616,9 @@ async fn e2e_investigation_all_signals() {
     let router = MsgRouter::new(pool.clone());
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
 
     // Explicit DI: initialize and register flusher for the project
     let _ = pool.create_project("proj_all_signals").unwrap();
@@ -615,14 +629,18 @@ async fn e2e_investigation_all_signals() {
         .send(IngestMsg::Traces {
             project_id: "proj_all_signals".to_string(),
             batch: make_spans_batch(10, "full-svc", "GET /data", now_us),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
     // Ingest logs
     router
         .send(IngestMsg::Logs {
             project_id: "proj_all_signals".to_string(),
             batch: make_logs_batch(5, "full-svc", now_us),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
     // Ingest gauge metrics
     let gauge_batch = make_gauge_batch(3, "full-svc", now_us);
@@ -636,18 +654,32 @@ async fn e2e_investigation_all_signals() {
                 exp_histogram: None,
                 skipped: Default::default(),
             },
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
     // Ingest profiles (CPU samples) so all 4 signal types are present
     let profile_stacks = vec![
-        (&["main", "handle_request", "db_query"][..], 15_000_000i64, "cpu", "nanoseconds"),
-        (&["main", "handle_request", "serialize"][..], 8_000_000, "cpu", "nanoseconds"),
+        (
+            &["main", "handle_request", "db_query"][..],
+            15_000_000i64,
+            "cpu",
+            "nanoseconds",
+        ),
+        (
+            &["main", "handle_request", "serialize"][..],
+            8_000_000,
+            "cpu",
+            "nanoseconds",
+        ),
     ];
     router
         .send(IngestMsg::Profiles {
             project_id: "proj_all_signals".to_string(),
             batch: make_profiles_batch("full-svc", now_us, &profile_stacks),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
     router.shutdown_and_wait().await;
 
@@ -783,9 +815,9 @@ async fn e2e_drain_log_template_dedup() {
     let router = MsgRouter::new(pool.clone());
 
     let now_us = {
-    let odt = time::OffsetDateTime::now_utc();
-    odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-};
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
 
     // Explicit DI: initialize and register flusher for the project
     let _ = pool.create_project("drain_test").unwrap();
@@ -808,12 +840,16 @@ async fn e2e_drain_log_template_dedup() {
         .send(IngestMsg::Logs {
             project_id: "drain_test".to_string(),
             batch: make_templated_logs_batch(&req_refs, "api-svc", now_us),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
     router
         .send(IngestMsg::Logs {
             project_id: "drain_test".to_string(),
             batch: make_templated_logs_batch(&login_refs, "api-svc", now_us + 100),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
     router.shutdown_and_wait().await;
 

@@ -146,7 +146,6 @@ fn query_collect<T>(
 
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // DerivedEvent — auto-detected deploys and K8s events
 // ---------------------------------------------------------------------------
@@ -333,12 +332,13 @@ pub fn investigate(
     let services = resolve_services(req)?;
     let mut results = BTreeMap::new();
     for service in &services {
-        let block = investigate_one(conn, service, req.from_ts, req.to_ts, prefix).map_err(|e| {
-            tracing::error!(service = %service, error = %e,
-                "investigation query failed for service"
-            );
-            anyhow::anyhow!("investigation failed for service {service}: {e}")
-        })?;
+        let block =
+            investigate_one(conn, service, req.from_ts, req.to_ts, prefix).map_err(|e| {
+                tracing::error!(service = %service, error = %e,
+                    "investigation query failed for service"
+                );
+                anyhow::anyhow!("investigation failed for service {service}: {e}")
+            })?;
         results.insert(service.clone(), block);
     }
     Ok(results)
@@ -422,7 +422,10 @@ fn investigate_one(
 
     Ok(InvestigationBlock {
         service: service.to_string(),
-        window: Window::new(TimestampMicros::from_micros(from_ts), TimestampMicros::from_micros(to_ts))?,
+        window: Window::new(
+            TimestampMicros::from_micros(from_ts),
+            TimestampMicros::from_micros(to_ts),
+        )?,
         coverage,
         context,
         events,
@@ -494,10 +497,18 @@ fn query_all_metrics(ctx: &QueryCtx, bucket_interval: &str) -> Result<Vec<Metric
         ctx.conn,
         &sql,
         duckdb::params![
-            ctx.service, ctx.from_ts, ctx.to_ts,
-            ctx.service, ctx.from_ts, ctx.to_ts,
-            ctx.service, ctx.from_ts, ctx.to_ts,
-            ctx.service, ctx.from_ts, ctx.to_ts
+            ctx.service,
+            ctx.from_ts,
+            ctx.to_ts,
+            ctx.service,
+            ctx.from_ts,
+            ctx.to_ts,
+            ctx.service,
+            ctx.from_ts,
+            ctx.to_ts,
+            ctx.service,
+            ctx.from_ts,
+            ctx.to_ts
         ],
         |row| {
             Ok(MetricBucket {
@@ -584,8 +595,12 @@ fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
         ctx.conn,
         &sql,
         duckdb::params![
-            ctx.service, ctx.from_ts, ctx.to_ts,
-            ctx.service, baseline_from, baseline_to
+            ctx.service,
+            ctx.from_ts,
+            ctx.to_ts,
+            ctx.service,
+            baseline_from,
+            baseline_to
         ],
         |row| {
             Ok(OperationSummary {
