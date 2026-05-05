@@ -4,6 +4,7 @@ use sigiro::investigate::{
     InvestigateRequest, QueryCtx, StatusCode, adaptive_config, build_span_trees, compute_coverage, investigate,
     query_logs, query_service_context,
 };
+use sigiro::types::StatusCode;
 use std::sync::{Arc, Mutex};
 
 /// Setup a DuckLake-backed DB matching production config.

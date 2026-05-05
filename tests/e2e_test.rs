@@ -315,12 +315,11 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     // Send 5 batches of 20 spans for "checkout" service
     for i in 0..5 {
         let batch = make_spans_batch(20, "checkout", "POST /checkout", now_us + i * 100);
-        let _ = router
+        router
             .send(IngestMsg::Traces {
                 project_id: "proj_e2e".to_string(),
                 batch,
-            })
-            .await;
+            }).await.unwrap();
     }
 
     router.shutdown_and_wait().await;
@@ -383,20 +382,18 @@ async fn e2e_multi_project_isolation() {
     router.register_flusher("proj_beta").unwrap();
 
     // Project A: "alpha-svc" with 30 spans
-    let _ = router
+    router
         .send(IngestMsg::Traces {
             project_id: "proj_alpha".to_string(),
             batch: make_spans_batch(30, "alpha-svc", "GET /alpha", now_us),
-        })
-        .await;
+        }).await.unwrap();
 
     // Project B: "beta-svc" with 50 spans
-    let _ = router
+    router
         .send(IngestMsg::Traces {
             project_id: "proj_beta".to_string(),
             batch: make_spans_batch(50, "beta-svc", "GET /beta", now_us),
-        })
-        .await;
+        }).await.unwrap();
 
     router.shutdown_and_wait().await;
 
@@ -463,24 +460,21 @@ async fn e2e_services_endpoint_simulation() {
     router.register_flusher("proj_services").unwrap();
 
     // Ingest spans for 3 different services into the same project
-    let _ = router
+    router
         .send(IngestMsg::Traces {
             project_id: "proj_services".to_string(),
             batch: make_spans_batch(10, "api-gateway", "GET /route", now_us),
-        })
-        .await;
-    let _ = router
+        }).await.unwrap();
+    router
         .send(IngestMsg::Traces {
             project_id: "proj_services".to_string(),
             batch: make_spans_batch(25, "user-service", "GET /users", now_us + 100),
-        })
-        .await;
-    let _ = router
+        }).await.unwrap();
+    router
         .send(IngestMsg::Traces {
             project_id: "proj_services".to_string(),
             batch: make_spans_batch(15, "order-service", "POST /orders", now_us + 200),
-        })
-        .await;
+        }).await.unwrap();
 
     router.shutdown_and_wait().await;
 
@@ -617,24 +611,22 @@ async fn e2e_investigation_all_signals() {
     router.register_flusher("proj_all_signals").unwrap();
 
     // Ingest spans
-    let _ = router
+    router
         .send(IngestMsg::Traces {
             project_id: "proj_all_signals".to_string(),
             batch: make_spans_batch(10, "full-svc", "GET /data", now_us),
-        })
-        .await;
+        }).await.unwrap();
 
     // Ingest logs
-    let _ = router
+    router
         .send(IngestMsg::Logs {
             project_id: "proj_all_signals".to_string(),
             batch: make_logs_batch(5, "full-svc", now_us),
-        })
-        .await;
+        }).await.unwrap();
 
     // Ingest gauge metrics
     let gauge_batch = make_gauge_batch(3, "full-svc", now_us);
-    let _ = router
+    router
         .send(IngestMsg::Metrics {
             project_id: "proj_all_signals".to_string(),
             batches: otlp2records::MetricBatches {
@@ -644,20 +636,18 @@ async fn e2e_investigation_all_signals() {
                 exp_histogram: None,
                 skipped: Default::default(),
             },
-        })
-        .await;
+        }).await.unwrap();
 
     // Ingest profiles (CPU samples) so all 4 signal types are present
     let profile_stacks = vec![
         (&["main", "handle_request", "db_query"][..], 15_000_000i64, "cpu", "nanoseconds"),
         (&["main", "handle_request", "serialize"][..], 8_000_000, "cpu", "nanoseconds"),
     ];
-    let _ = router
+    router
         .send(IngestMsg::Profiles {
             project_id: "proj_all_signals".to_string(),
             batch: make_profiles_batch("full-svc", now_us, &profile_stacks),
-        })
-        .await;
+        }).await.unwrap();
 
     router.shutdown_and_wait().await;
 
@@ -814,18 +804,16 @@ async fn e2e_drain_log_template_dedup() {
     let req_refs: Vec<&str> = request_bodies.iter().map(String::as_str).collect();
     let login_refs: Vec<&str> = login_bodies.iter().map(String::as_str).collect();
 
-    let _ = router
+    router
         .send(IngestMsg::Logs {
             project_id: "drain_test".to_string(),
             batch: make_templated_logs_batch(&req_refs, "api-svc", now_us),
-        })
-        .await;
-    let _ = router
+        }).await.unwrap();
+    router
         .send(IngestMsg::Logs {
             project_id: "drain_test".to_string(),
             batch: make_templated_logs_batch(&login_refs, "api-svc", now_us + 100),
-        })
-        .await;
+        }).await.unwrap();
 
     router.shutdown_and_wait().await;
 

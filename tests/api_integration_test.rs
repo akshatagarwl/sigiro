@@ -66,7 +66,7 @@ fn build_test_context() -> TestContext {
 }
 
 /// Build the OTLP HTTP router (port 4318).
-fn build_otlp_app(state: Arc<AppState>) -> axum::Router {
+fn build_otlp_app(state: &Arc<AppState>) -> axum::Router {
     let router = Arc::new(MsgRouter::new(Arc::clone(&state.pool)));
     ingest::otlp_http_router(router, Arc::clone(&state.admin_conn))
 }
@@ -171,7 +171,7 @@ async fn test_admin_status_returns_200() {
 #[tokio::test]
 async fn test_otlp_traces_json_returns_200() {
     let ctx = build_test_context();
-    let app = build_otlp_app(ctx.state);
+    let app = build_otlp_app(&ctx.state);
     let server = TestServer::new(app).expect("failed to build test server");
 
     // Empty JSON OTLP traces payload: {"resourceSpans":[]}

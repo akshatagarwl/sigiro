@@ -31,6 +31,6 @@ mod tests {
         span.end();
 
         // Flush
-        let _ = provider.shutdown();
+        provider.shutdown().unwrap();
     }
 }

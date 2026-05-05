@@ -128,12 +128,13 @@ async fn e2e_profiles_pipeline() {
         (&["main", "gc_collect"], 3_000_000, "cpu", "nanoseconds"),
     ];
 
-    let _ = router
+    router
         .send(IngestMsg::Profiles {
             project_id: "profile_test".to_string(),
             batch: make_profiles_batch("api-svc", now_us, &stacks),
         })
-        .await;
+        .await
+        .unwrap();
 
     router.shutdown_and_wait().await;
 
@@ -226,18 +227,20 @@ async fn e2e_profiles_multi_type() {
         "bytes",
     )];
 
-    let _ = router
+    router
         .send(IngestMsg::Profiles {
             project_id: "multi_type".to_string(),
             batch: make_profiles_batch("api-svc", now_us, &cpu_stacks),
         })
-        .await;
-    let _ = router
+        .await
+        .unwrap();
+    router
         .send(IngestMsg::Profiles {
             project_id: "multi_type".to_string(),
             batch: make_profiles_batch("api-svc", now_us + 100, &heap_stacks),
         })
-        .await;
+        .await
+        .unwrap();
 
     router.shutdown_and_wait().await;
 
@@ -295,12 +298,13 @@ async fn e2e_profiles_empty_batch() {
     router.register_flusher("empty_profiles").unwrap();
 
     // Empty profiles batch
-    let _ = router
+    router
         .send(IngestMsg::Profiles {
             project_id: "empty_profiles".to_string(),
             batch: make_profiles_batch("api-svc", now_us, &[]),
         })
-        .await;
+        .await
+        .unwrap();
 
     router.shutdown_and_wait().await;
 

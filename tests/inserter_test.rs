@@ -99,11 +99,12 @@ async fn inserter_processes_spans_for_single_project() {
     // Send 10 batches of 100 spans
     for _ in 0..10 {
         let batch = make_spans_batch(100);
-        let _ = router.send(IngestMsg::Traces {
+        router.send(IngestMsg::Traces {
                 project_id: "test_project".to_string(),
                 batch,
             })
-            .await;
+            .await
+            .unwrap();
     }
 
     // Shut down router and wait for all flushers to complete
@@ -134,18 +135,20 @@ async fn inserter_isolates_projects() {
 
     // Send to two different projects
     for _ in 0..5 {
-        let _ = router
+        router
             .send(IngestMsg::Traces {
                 project_id: "project_a".to_string(),
                 batch: make_spans_batch(100),
             })
-            .await;
-        let _ = router
+            .await
+            .unwrap();
+        router
             .send(IngestMsg::Traces {
                 project_id: "project_b".to_string(),
                 batch: make_spans_batch(50),
             })
-            .await;
+            .await
+            .unwrap();
 
     }
 
@@ -196,21 +199,23 @@ async fn inserter_handles_backpressure() {
 
     // Send many messages quickly — with backpressure, none are dropped
     for i in 0..100 {
-        let _ = router
+        router
             .send(IngestMsg::Traces {
                 project_id: "fast_project".to_string(),
                 batch: make_spans_batch(10),
             })
-            .await;
+            .await
+            .unwrap();
 
         // Every 10th message goes to a different project
         if i % 10 == 0 {
-        let _ = router
+        router
             .send(IngestMsg::Traces {
                 project_id: "slow_project".to_string(),
                 batch: make_spans_batch(10),
             })
-            .await;
+            .await
+            .unwrap();
 
         }
     }
@@ -256,12 +261,13 @@ async fn inserter_throughput_single_project() {
     let num_batches = 100; // 50,000 total rows
 
     for _ in 0..num_batches {
-        let _ = router
+        router
             .send(IngestMsg::Traces {
                 project_id: "throughput_test".to_string(),
                 batch: make_spans_batch(batch_size),
             })
-            .await;
+            .await
+            .unwrap();
 
     }
 
