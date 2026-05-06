@@ -85,7 +85,7 @@ pub struct TraceDetailResponse {
 pub struct SpanDetail {
     pub trace_id: String,
     pub span_id: String,
-    pub parent_span_id: String,
+    pub parent_span_id: Option<String>,
     pub span_name: String,
     pub duration_ns: i64,
     pub status_code: i32,

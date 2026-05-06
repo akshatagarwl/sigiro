@@ -1,0 +1,20 @@
+{
+  "config": {
+    "endpoint": "http://localhost:4318",
+    "rate": 100,
+    "duration": 3,
+    "services": 3,
+    "spans_per_trace": 5,
+    "traces_per_batch": 10
+  },
+  "results": {
+    "total_spans": 300,
+    "total_batches": 6,
+    "elapsed_sec": 2.5248301029205322,
+    "throughput": 118.81987609898295,
+    "p50_latency_ms": 18.96500587463379,
+    "p95_latency_ms": 43.054819107055664,
+    "p99_latency_ms": 43.054819107055664,
+    "errors": 0
+  }
+}

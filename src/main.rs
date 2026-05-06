@@ -844,7 +844,7 @@ async fn run_trace_tree(trace_id: &str) -> Result<()> {
     let root_spans: Vec<_> = trace
         .spans
         .iter()
-        .filter(|s| s.parent_span_id.is_empty() || !span_map.contains_key(&s.parent_span_id))
+        .filter(|s| s.parent_span_id.is_none() || s.parent_span_id.as_ref().map(|p| !span_map.contains_key(p)).unwrap_or(true))
         .collect();
 
     // Render tree for each root span
@@ -888,7 +888,7 @@ fn render_trace_tree_recursive(
     // Find children
     let children: Vec<_> = spans
         .values()
-        .filter(|s| s.parent_span_id == span.span_id)
+        .filter(|s| s.parent_span_id.as_ref() == Some(&span.span_id))
         .collect();
 
     let connector = if children.is_empty() { "└─ " } else { "├─ " };

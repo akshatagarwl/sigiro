@@ -576,7 +576,7 @@ async fn services_handler(
         let span = SpanDetail {
             trace_id: row.get::<_, String>(0).context_internal("TraceDetail", "failed to read trace_id")?,
             span_id: span_id.clone(),
-            parent_span_id: parent_span_id.clone(),
+            parent_span_id: if parent_span_id.is_empty() { None } else { Some(parent_span_id.clone()) },
             span_name: row.get::<_, String>(3).context_internal("TraceDetail", "failed to read span_name")?,
             duration_ns,
             status_code,
@@ -628,14 +628,15 @@ async fn services_handler(
          ));
      }
 
-     // Determine root span
-     let root_span = if let Some(root_id) = root_span_id {
-         span_map
-             .remove(&root_id)
-             .unwrap_or_else(|| max_duration_span.clone().unwrap())
-     } else {
-         max_duration_span.unwrap()
-     };
+    // Determine root span
+    let root_span = if let Some(root_id) = root_span_id {
+        span_map
+            .get(&root_id)
+            .cloned()
+            .unwrap_or_else(|| max_duration_span.clone().unwrap())
+    } else {
+        max_duration_span.unwrap()
+    };
 
      // Compute critical path (longest path from root to leaf by duration sum)
      let critical_path = compute_critical_path(&root_span.span_id, &parent_to_children, &span_map);
