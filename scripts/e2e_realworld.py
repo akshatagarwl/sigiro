@@ -86,12 +86,53 @@ def curl_otlp(signal_path: str, data: Any, timeout: int = 10) -> int:
     except (subprocess.TimeoutExpired, ValueError):
         return 0
 
+def send_trace_with_spans(spans: list[dict]) -> tuple[bool, str]:
+    """Send a trace with multiple related spans. Each span dict must have:
+       name, service, start_time_us, duration_us.
+       Optional: status_code, attributes, parent_idx (index of parent in list).
+       Returns (success, trace_id)."""
+    trace_id = format(random.getrandbits(128), '032x')
+    span_ids = [format(random.getrandbits(64), '016x') for _ in spans]
 
+    otlp_spans = []
+    for i, spec in enumerate(spans):
+        span = {
+            "traceId": trace_id,
+            "spanId": span_ids[i],
+            "name": spec["name"],
+            "kind": spec.get("kind", 2),
+            "startTimeUnixNano": spec["start_time_us"] * 1000,
+            "endTimeUnixNano": (spec["start_time_us"] + spec["duration_us"]) * 1000,
+            "status": {"code": spec.get("status_code", 0)},
+        }
+        parent_idx = spec.get("parent_idx")
+        if parent_idx is not None:
+            span["parentSpanId"] = span_ids[parent_idx]
+        if spec.get("attributes"):
+            span["attributes"] = spec["attributes"]
+
+        otlp_spans.append({
+            "resourceSpans": [{
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": spec["service"]}},
+                    ]
+                },
+                "scopeSpans": [{"spans": [span]}]
+            }]
+        })
+
+    # Send all spans
+    for trace in otlp_spans:
+        code = curl_otlp("/v1/traces", trace, timeout=10)
+        if code != 200:
+            return False, trace_id
+    return True, trace_id
 def send_otlp_trace(service: str, trace_name: str, trace_id: str = "",
                     parent_span_id: str = "", status_code: int = 0,
                     attributes: list = None, start_time_us: int = None,
-                    duration_us: int = 1000) -> bool:
-    """Send a single OTLP trace via HTTP JSON."""
+                    duration_us: int = 1000) -> tuple[bool, str]:
+    """Send a single OTLP trace via HTTP JSON. Returns (success, span_id)."""
     if not trace_id:
         trace_id = format(random.getrandbits(128), '032x')
     span_id = format(random.getrandbits(64), '016x')
@@ -127,7 +168,7 @@ def send_otlp_trace(service: str, trace_name: str, trace_id: str = "",
     }
 
     code = curl_otlp("/v1/traces", trace, timeout=10)
-    return code == 200
+    return code == 200, span_id
 
 
 def send_otlp_log(service: str, body: str, severity: int = 9,
@@ -219,27 +260,21 @@ def scenario_cascading_errors() -> TestResult:
     print("\n[Scenario 1] Cascading error: gateway -> payment (fails)")
     base_time = now_us() - 60_000_000
 
-    trace_id = format(random.getrandbits(128), '032x')
-
-    # Gateway span (root, succeeds)
-    send_otlp_trace("gateway", "POST /checkout",
-                    trace_id=trace_id, status_code=1,
-                    start_time_us=base_time, duration_us=150_000,
-                    attributes=[
-                        {"key": "http.method", "value": {"stringValue": "POST"}},
-                        {"key": "http.route", "value": {"stringValue": "/checkout"}},
-                        {"key": "http.status_code", "value": {"intValue": "200"}},
-                    ])
-
-    # Payment span (child, fails with connection refused)
-    send_otlp_trace("payment-service", "process_payment",
-                    trace_id=trace_id, status_code=2,
-                    start_time_us=base_time + 10_000, duration_us=50_000,
-                    attributes=[
-                        {"key": "error.type", "value": {"stringValue": "ConnectionRefused"}},
-                        {"key": "error.message", "value": {"stringValue": "connection refused to payment-db:5432"}},
-                    ])
-
+    ok, trace_id = send_trace_with_spans([
+        {"name": "POST /checkout", "service": "gateway",
+         "start_time_us": base_time, "duration_us": 150_000, "status_code": 1,
+         "attributes": [
+             {"key": "http.method", "value": {"stringValue": "POST"}},
+             {"key": "http.route", "value": {"stringValue": "/checkout"}},
+             {"key": "http.status_code", "value": {"intValue": "200"}},
+         ]},
+        {"name": "process_payment", "service": "payment-service",
+         "start_time_us": base_time + 10_000, "duration_us": 50_000, "status_code": 2,
+         "parent_idx": 0, "attributes": [
+             {"key": "error.type", "value": {"stringValue": "ConnectionRefused"}},
+             {"key": "error.message", "value": {"stringValue": "connection refused to payment-db:5432"}},
+         ]},
+    ])
     # Add error log from payment service
     send_otlp_log("payment-service",
                   "connection refused to payment-db:5432 - retrying...",
@@ -346,21 +381,18 @@ def scenario_cross_service_trace() -> TestResult:
     print("\n[Scenario 3] Cross-service trace following")
     base_time = now_us() - 60_000_000
 
-    trace_id = format(random.getrandbits(128), '032x')
-
-    send_otlp_trace("api-gateway", "GET /api/users/123",
-                    trace_id=trace_id, status_code=1,
-                    start_time_us=base_time, duration_us=200_000)
-    send_otlp_trace("user-service", "get_user_profile",
-                    trace_id=trace_id, status_code=1,
-                    start_time_us=base_time + 10_000, duration_us=100_000)
-    send_otlp_trace("auth-service", "validate_token",
-                    trace_id=trace_id, status_code=2,
-                    start_time_us=base_time + 20_000, duration_us=50_000,
-                    attributes=[
-                        {"key": "error.type", "value": {"stringValue": "TokenExpired"}},
-                    ])
-
+    ok, trace_id = send_trace_with_spans([
+        {"name": "GET /api/users/123", "service": "api-gateway",
+         "start_time_us": base_time, "duration_us": 200_000, "status_code": 1},
+        {"name": "get_user_profile", "service": "user-service",
+         "start_time_us": base_time + 10_000, "duration_us": 100_000, "status_code": 1,
+         "parent_idx": 0},
+        {"name": "validate_token", "service": "auth-service",
+         "start_time_us": base_time + 20_000, "duration_us": 50_000, "status_code": 2,
+         "parent_idx": 1, "attributes": [
+             {"key": "error.type", "value": {"stringValue": "TokenExpired"}},
+         ]},
+    ])
     time.sleep(3)
 
     code, trace_detail = curl_api("GET", f"/v1/traces/{trace_id}", timeout=30)
@@ -585,20 +617,19 @@ def scenario_trace_tree() -> TestResult:
     print("\n[Scenario 8] Trace-tree CLI rendering")
     base_time = now_us() - 60_000_000
 
-    trace_id = format(random.getrandbits(128), '032x')
-
-    send_otlp_trace("gateway", "POST /order", trace_id=trace_id,
-                    start_time_us=base_time, duration_us=300_000)
-    send_otlp_trace("orders", "create_order", trace_id=trace_id,
-                    status_code=1,
-                    start_time_us=base_time + 10_000, duration_us=200_000)
-    send_otlp_trace("payments", "charge_card", trace_id=trace_id,
-                    status_code=2,
-                    start_time_us=base_time + 20_000, duration_us=100_000)
-    send_otlp_trace("payments", "validate_fraud", trace_id=trace_id,
-                    status_code=1,
-                    start_time_us=base_time + 30_000, duration_us=50_000)
-
+    ok, trace_id = send_trace_with_spans([
+        {"name": "POST /order", "service": "gateway",
+         "start_time_us": base_time, "duration_us": 300_000, "status_code": 1},
+        {"name": "create_order", "service": "orders",
+         "start_time_us": base_time + 10_000, "duration_us": 200_000, "status_code": 1,
+         "parent_idx": 0},
+        {"name": "charge_card", "service": "payments",
+         "start_time_us": base_time + 20_000, "duration_us": 100_000, "status_code": 2,
+         "parent_idx": 1},
+        {"name": "validate_fraud", "service": "payments",
+         "start_time_us": base_time + 30_000, "duration_us": 50_000, "status_code": 1,
+         "parent_idx": 2},
+    ])
     time.sleep(3)
 
     code, detail = curl_api("GET", f"/v1/traces/{trace_id}", timeout=30)
