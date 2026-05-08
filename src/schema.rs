@@ -109,7 +109,8 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             scope_version         VARCHAR,
             scope_attributes      VARCHAR,
             log_attributes        VARCHAR,
-            template_id           UBIGINT
+            template_id           UBIGINT,
+            template_values       VARCHAR
         )"
     ))
     .context("failed to create sigiro_logs")?;

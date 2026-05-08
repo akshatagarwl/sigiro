@@ -42,12 +42,12 @@ impl DrainTree {
         }
     }
 
-    /// Classify a log line and return the template string + template_id (hash).
+    /// Classify a log line and return the template string, template_id (hash), and extracted values.
     /// If no existing cluster matches, creates a new one.
-    pub fn classify(&mut self, log_body: &str) -> (String, u64) {
+    pub fn classify(&mut self, log_body: &str) -> (String, u64, Vec<String>) {
         let tokens: Vec<&str> = log_body.split_whitespace().collect();
         if tokens.is_empty() {
-            return (String::new(), 0);
+            return (String::new(), 0, Vec::new());
         }
 
         let token_count = tokens.len();
@@ -68,15 +68,22 @@ impl DrainTree {
         if let Some(idx) = best_idx {
             // Update existing cluster: merge tokens, replacing differing positions with <*>
             let cluster = &mut group[idx];
+            let mut values = Vec::new();
             for (j, token) in tokens.iter().enumerate() {
                 if cluster.tokens[j] != "<*>" && cluster.tokens[j] != *token {
+                    // Token was literal before, now becomes wildcard.
+                    // The previous literal value becomes an extracted value for this log.
+                    values.push((*token).to_string());
                     cluster.tokens[j] = "<*>".to_string();
+                } else if cluster.tokens[j] == "<*>" {
+                    // Already wildcard — extract the value
+                    values.push((*token).to_string());
                 }
             }
             cluster.count += 1;
             let template = cluster.tokens.join(" ");
             let id = hash_template(&template);
-            (template, id)
+            (template, id, values)
         } else {
             // Create new cluster (if under limit)
             let template_tokens: Vec<String> = tokens.iter().map(|t| (*t).to_string()).collect();
@@ -89,9 +96,8 @@ impl DrainTree {
                     count: 1,
                 });
             }
-            // If at limit, still return the template but don't create a cluster.
-            // This log line won't contribute to future matching but we still classify it.
-            (template, id)
+            // New cluster has no wildcards yet, so no extracted values
+            (template, id, Vec::new())
         }
     }
 }

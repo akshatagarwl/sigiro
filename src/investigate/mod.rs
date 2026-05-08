@@ -815,7 +815,8 @@ pub fn query_raw_logs(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogEntry>> {
             l.log_attributes,
             l.scope_name,
             l.scope_version,
-            l.resource_attributes
+            l.resource_attributes,
+            l.template_values
         FROM {prefix}sigiro_logs l
         WHERE l.service_name = ? AND l.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
         ORDER BY l.timestamp DESC
@@ -840,6 +841,7 @@ pub fn query_raw_logs(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogEntry>> {
                 instrumentation_library_version: row.get::<_, Option<String>>(8)?,
                 flags: None,
                 resource_attributes_json: row.get::<_, Option<String>>(9)?,
+                template_values: row.get::<_, Option<String>>(10)?,
             })
         },
     )
@@ -851,6 +853,7 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
         "SELECT
             COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
             first(l.body) AS example_body,
+            first(l.template_values) AS template_values,
             l.severity_text,
             count(*) AS count,
             min(l.timestamp)::VARCHAR AS first_seen,
@@ -872,13 +875,14 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
         |row| {
             let pattern = row.get::<_, String>("pattern").context("pattern")?;
             let example_body = row.get::<_, Option<String>>("example_body")?;
+            let template_values = row.get::<_, Option<String>>("template_values")?;
             let severity_text = row.get::<_, String>("severity_text").context("severity_text")?;
             let count = row.get::<_, i64>("count").context("count")?;
             let first_seen = row.get::<_, Option<String>>("first_seen")?;
             let last_seen = row.get::<_, Option<String>>("last_seen")?;
             let error_count = row.get::<_, i64>("error_count").unwrap_or(0);
             Ok(LogPattern {
-                pattern, example_body, severity_text, count, first_seen, last_seen, error_count,
+                pattern, example_body, template_values, severity_text, count, first_seen, last_seen, error_count,
             })
         },
     )

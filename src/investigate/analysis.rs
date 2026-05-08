@@ -392,6 +392,9 @@ pub struct LogEntry {
     pub flags: Option<i32>,
     /// Resource attributes.
     pub resource_attributes_json: Option<String>,
+    /// Extracted template values as JSON array.
+    /// Allows reconstructing the original log from the template.
+    pub template_values: Option<String>,
 }
 
 impl LogEntry {
@@ -423,6 +426,9 @@ pub struct LogPattern {
     pub pattern: String,
     /// Example log body.
     pub example_body: Option<String>,
+    /// Extracted variable values from the example log (JSON array).
+    /// Allows reconstructing the original log from the template.
+    pub template_values: Option<String>,
     /// Severity text.
     pub severity_text: String,
     /// Total count of logs matching this pattern.

@@ -311,7 +311,7 @@ impl ProjectFlusher {
         self.total_rows += batch.num_rows();
         self.buffers.entry(signal).or_default().push(batch);
     }
-    /// Run DRAIN on each log body and append a `template_id` column to the batch.
+    /// Run DRAIN on each log body and append `template_id` and `template_values` columns.
     #[instrument(skip_all, fields(rows = batch.num_rows()))]
     fn classify_logs(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let body_idx = batch
@@ -325,17 +325,23 @@ impl ProjectFlusher {
             .ok_or_else(|| anyhow::anyhow!("body column is not StringArray"))?;
 
         let mut template_ids = Vec::with_capacity(batch.num_rows());
+        let mut template_values = Vec::with_capacity(batch.num_rows());
         for i in 0..batch.num_rows() {
             let body = body_col.value(i);
-            let (template, id) = self.drain.classify(body);
+            let (template, id, values) = self.drain.classify(body);
             template_ids.push(id);
+            // Store extracted values as JSON array so the original log can be reconstructed.
+            let values_json = serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_string());
+            template_values.push(values_json);
             self.pending_templates.entry(id).or_insert(template);
         }
 
-        // Append template_id column to the existing batch
+        // Append template_id and template_values columns to the existing batch
         let id_array = std::sync::Arc::new(UInt64Array::from(template_ids));
+        let values_array = std::sync::Arc::new(StringArray::from(template_values));
         let mut columns: Vec<std::sync::Arc<dyn Array>> = batch.columns().to_vec();
         columns.push(id_array);
+        columns.push(values_array);
 
         let mut fields: Vec<arrow::datatypes::Field> = batch
             .schema()
@@ -348,9 +354,14 @@ impl ProjectFlusher {
             arrow::datatypes::DataType::UInt64,
             true,
         ));
+        fields.push(arrow::datatypes::Field::new(
+            "template_values",
+            arrow::datatypes::DataType::Utf8,
+            true,
+        ));
         let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
 
-        RecordBatch::try_new(schema, columns).context("failed to add template_id column")
+        RecordBatch::try_new(schema, columns).context("failed to add template columns")
     }
 
     fn buffer_metrics(&mut self, batches: MetricBatches) {
