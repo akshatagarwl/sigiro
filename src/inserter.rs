@@ -162,12 +162,30 @@ impl MsgRouter {
 
         match self.flush_config.backpressure {
             BackpressurePolicy::Block => {
-                sender.send(msg).await.map_err(|e| {
-                    tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
-                    drop(entry);
-                    self.project_senders.remove(&project_id);
-                    RouterError::ChannelClosed { project_id: project_id_for_err }
-                })
+                match sender.send(msg).await {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
+                        drop(entry);
+                        // Remove the entry and check if the flusher task panicked.
+                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id) {
+                            if handle.is_finished() {
+                                match handle.await {
+                                    Err(join_err) if join_err.is_panic() => {
+                                        tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
+                                    }
+                                    Err(join_err) => {
+                                        tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
+                                    }
+                                    Ok(()) => {
+                                        tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
+                                    }
+                                }
+                            }
+                        }
+                        Err(RouterError::ChannelClosed { project_id: project_id_for_err })
+                    }
+                }
             }
             BackpressurePolicy::DropOldest => {
                 match sender.try_send(msg) {
@@ -179,7 +197,21 @@ impl MsgRouter {
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         tracing::error!(project_id = %project_id_for_err, "send failed: channel closed");
                         drop(entry);
-                        self.project_senders.remove(&project_id);
+                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id) {
+                            if handle.is_finished() {
+                                match handle.await {
+                                    Err(join_err) if join_err.is_panic() => {
+                                        tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
+                                    }
+                                    Err(join_err) => {
+                                        tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
+                                    }
+                                    Ok(()) => {
+                                        tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
+                                    }
+                                }
+                            }
+                        }
                         Err(RouterError::ChannelClosed { project_id: project_id_for_err })
                     }
                 }
