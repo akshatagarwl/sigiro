@@ -108,3 +108,10 @@ impl Supervisor {
         self.job.stop_with_signal(signal, grace);
     }
 }
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        self.job.stop();
+        self.task.abort();
+    }
+}
