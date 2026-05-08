@@ -1384,18 +1384,7 @@ fn json_u64(value: &JsonValue) -> Option<u64> {
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
 }
 
-trait StringBuilderExt {
-    fn append_option(&mut self, value: Option<String>);
-}
 
-impl StringBuilderExt for StringBuilder {
-    fn append_option(&mut self, value: Option<String>) {
-        match value {
-            Some(v) if !v.is_empty() => self.append_value(&v),
-            _ => self.append_null(),
-        }
-    }
-}
 
 fn extract_string_attr(
     resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,

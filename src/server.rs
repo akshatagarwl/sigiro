@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use axum::{
     Extension, Json, Router,
-    extract::{Query, State},
+    extract::State,
     middleware as axum_mw,
 };
 use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt, bad_request};

@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::{LogExporter, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider};
-use std::collections::HashMap;
 use tracing_subscriber::prelude::*;
 
 /// OTel configuration — read once at startup, passed to init_telemetry()
@@ -65,25 +64,6 @@ impl Drop for TelemetryGuard {
             }
         }
     }
-}
-#[allow(clippy::disallowed_methods)]
-fn otel_auth_headers() -> HashMap<String, String> {
-    // otel_auth_headers: reads SIGIRO_OTEL_AUTH_KEY env var, returns auth headers for OTEL endpoint
-
-    let mut headers = HashMap::new();
-    // Allow custom auth key via env var, default to dev auth for self-ingestion
-    if let Ok(key) = std::env::var("SIGIRO_OTEL_AUTH_KEY") {
-        if !key.is_empty() {
-            headers.insert("authorization".to_string(), format!("Bearer {key}"));
-            return headers;
-        }
-    }
-    // Default to dev auth for self-ingestion
-    headers.insert(
-        "authorization".to_string(),
-        "Bearer sigiro_dev_self".to_string(),
-    );
-    headers
 }
 
 pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>> {
