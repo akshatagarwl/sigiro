@@ -234,18 +234,18 @@ impl MsgRouter {
     /// Shut down and await all flusher tasks. Guarantees all buffered data
     /// is flushed before returning.
     pub async fn shutdown_and_wait(self) {
-        // Remove all entries — dropping senders triggers final flush in each flusher.
-        let keys: Vec<String> = self
+        // Drain all entries, taking ownership of senders and handles.
+        // Dropping senders triggers final flush in each flusher.
+        let handles: Vec<JoinHandle<()>> = self
             .project_senders
-            .iter()
-            .map(|e| e.key().clone())
+            .into_iter()
+            .map(|(_, (_, handle))| handle)
             .collect();
-        for key in keys {
-            self.project_senders.remove(&key);
-        }
 
-        // Small delay to let final flushes complete
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Await all flusher tasks with a timeout to complete their final flush.
+        for handle in handles {
+            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+        }
     }
 }
 
