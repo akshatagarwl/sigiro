@@ -246,6 +246,7 @@ pub struct Span {
     /// Span operation name.
     pub span_name: String,
     /// Span duration in nanoseconds.
+    /// NOTE: The value is actually in microseconds. The name `duration_ns` is historical.
     pub duration_ns: i64,
     /// OpenTelemetry status code.
     pub status_code: crate::types::StatusCode,
@@ -306,6 +307,7 @@ pub struct Trace {
     /// Number of metrics associated with this trace's time range.
     pub metric_count: i64,
     /// Total duration of the trace in nanoseconds (end of last span - start of first).
+    /// NOTE: The value is actually in microseconds. The name `total_duration_ns` is historical.
     pub total_duration_ns: i64,
     /// Number of spans with error status in this trace.
     pub error_count: i64,
@@ -323,13 +325,12 @@ impl Trace {
             spans.iter().map(|s| s.start_timestamp).min(),
             spans.iter().map(|s| s.end_timestamp).max(),
         ) {
-            last.saturating_sub(first)
+            last - first
         } else {
             root_span.duration_ns
         };
 
         let span_count = (spans.len() + 1) as i32;
-
         Trace {
             trace_id,
             root_span,

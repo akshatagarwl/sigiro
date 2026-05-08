@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 use tracing_attributes::instrument;
 
 use crate::drain::DrainTree;
+use crate::MutexExt;
 use crate::pool::ProjectPool;
 use crate::types::{IngestMsg, SignalTable};
 
@@ -350,7 +351,7 @@ impl ProjectFlusher {
             return Ok(());
         }
 
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let conn = self.conn.lock_poisoned()?;
 
         for (signal, buf) in &mut self.buffers {
             if buf.is_empty() {

@@ -62,6 +62,8 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_spans (
             timestamp             TIMESTAMP NOT NULL,
             end_timestamp         BIGINT NOT NULL,
+            -- duration is stored in microseconds (not nanoseconds).
+            -- The ingest path divides OTLP nanoseconds by 1_000_000 before writing.
             duration              BIGINT NOT NULL,
             trace_id              VARCHAR,
             span_id               VARCHAR,

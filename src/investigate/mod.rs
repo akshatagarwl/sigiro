@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use crate::MutexExt;
 use crate::types::{StatusCode, TimestampMicros};
 
 // Re-export pure types and functions from analysis submodule.
@@ -83,7 +84,7 @@ pub fn query_service_context(ctx: &QueryCtx) -> Result<ServiceContext> {
 /// Query service dependencies with span_count and error_count.
 fn query_service_dependencies(ctx: &QueryCtx, is_dependency: bool) -> Result<Vec<ServiceDependency>> {
     let error_code = StatusCode::Error.as_i32();
-    let (join_cond, filter_cond) = if is_dependency {
+    let (_join_cond, _filter_cond) = if is_dependency {
         ("s1.trace_id = s2.trace_id", "s1.service_name = ? AND s2.service_name != ?")
     } else {
         ("s1.trace_id = s2.trace_id", "s2.service_name = ? AND s1.service_name != ?")
@@ -439,10 +440,7 @@ fn investigate_one(
     to_ts: i64,
     prefix: &str,
 ) -> Result<InvestigationBlock> {
-    let conn = conn.lock().map_err(|e| {
-        tracing::error!("DuckDB connection mutex poisoned");
-        anyhow::anyhow!("{e}")
-    })?;
+    let conn = conn.lock_poisoned()?;
 
     let config = adaptive_config(from_ts, to_ts);
     let ctx = QueryCtx {
@@ -852,7 +850,7 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
     let sql = format!(
         "SELECT
             COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
-            first(l.body) AS exemplar_body,
+            first(l.body) AS example_body,
             l.severity_text,
             count(*) AS count,
             min(l.timestamp)::VARCHAR AS first_seen,
@@ -873,7 +871,7 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
         duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts, limit],
         |row| {
             let pattern = row.get::<_, String>("pattern").context("pattern")?;
-            let example_body = row.get::<_, Option<String>>("exemplar_body")?;
+            let example_body = row.get::<_, Option<String>>("example_body")?;
             let severity_text = row.get::<_, String>("severity_text").context("severity_text")?;
             let count = row.get::<_, i64>("count").context("count")?;
             let first_seen = row.get::<_, Option<String>>("first_seen")?;
