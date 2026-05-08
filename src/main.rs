@@ -187,7 +187,10 @@ async fn main() -> Result<()> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs() as i64;
-            let from_ts = from.map(|s| s * 1_000_000).unwrap_or((now - 900) * 1_000_000);
+            let from_ts = from.map(|s| s * 1_000_000).unwrap_or_else(|| {
+                tracing::info!("--from not specified, defaulting to 15 minutes ago");
+                (now - 900) * 1_000_000
+            });
             let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
             let block = client
                 .investigate(

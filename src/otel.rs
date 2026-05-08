@@ -102,8 +102,12 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
         ))
         .build();
 
-    // Auth headers for self-ingestion — auth_key read at app entry, not at runtime
-    let auth_key = config.auth_key.as_deref().unwrap_or("sigiro_dev_self");
+    // Auth headers for self-ingestion — auth_key read at app entry, not at runtime.
+    // Defaults to dev key for local development; production should set SIGIRO_OTEL_AUTH_KEY.
+    let auth_key = config.auth_key.as_deref().unwrap_or_else(|| {
+        tracing::warn!("SIGIRO_OTEL_AUTH_KEY not set — using default dev key. Set SIGIRO_OTEL_AUTH_KEY in production.");
+        "sigiro_dev_self"
+    });
     let mut headers = std::collections::HashMap::new();
     headers.insert("authorization".to_string(), format!("Bearer {auth_key}"));
     // Build OTLP HTTP exporters with auth headers

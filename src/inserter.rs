@@ -31,7 +31,11 @@ const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
 /// Backpressure policy for the per-project channel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BackpressurePolicy {
+    /// Block the sender until space is available. Guarantees no data loss but may
+    /// cause backpressure on the OTLP client.
     Block,
+    /// Drop the oldest message when the channel is full. This is a lossy policy —
+    /// data will be discarded when the channel buffer fills up.
     DropOldest,
 }
 
@@ -168,7 +172,7 @@ impl MsgRouter {
                 match sender.try_send(msg) {
                     Ok(()) => Ok(()),
                     Err(mpsc::error::TrySendError::Full(_)) => {
-                        tracing::warn!(project_id = %project_id_for_err, "channel full, dropping message (drop-oldest)");
+                        tracing::warn!(project_id = %project_id_for_err, "channel full — DATA LOSS: dropping oldest message (BackpressurePolicy::DropOldest is lossy)");
                         Ok(())
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => {

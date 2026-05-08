@@ -170,15 +170,17 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
             if user.is_empty() {
                 anyhow::bail!("invalid postgres URI: expected non-empty username");
             }
-            let password = parsed.password().unwrap_or("");
-            // host: required for remote connections, but localhost is valid for local dev.
-            // We allow localhost as default since it's valid for local development.
-            // The catalog_url being non-empty already means the user intends distributed mode.
+            // password: required — empty password is invalid for PostgreSQL in distributed catalog mode
+            let password = parsed.password()
+                .ok_or_else(|| anyhow::anyhow!("postgres URI missing password — required for distributed catalog"))?;
+            // host: required for remote connections; localhost is valid default for local dev.
             let host = parsed.host_str().unwrap_or_else(|| {
-                tracing::warn!("postgres URI has no host — defaulting to localhost (no password). Set host in URI for production.");
+                tracing::info!("postgres URI has no host — defaulting to localhost");
                 "localhost"
             });
-            let port = parsed.port().unwrap_or(5432);
+            // port: required — default 5432 should not be implicit
+            let port = parsed.port()
+                .ok_or_else(|| anyhow::anyhow!("postgres URI missing port — required for distributed catalog"))?;
             let dbname = parsed.path().trim_start_matches('/');
             if dbname.is_empty() {
                 anyhow::bail!("invalid postgres URI: expected non-empty database name");

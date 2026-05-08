@@ -57,7 +57,7 @@ pub fn load_fleet_extensions(conn: &Connection) -> Result<()> {
 /// Create all sigiro tables and views.
 /// `prefix` is always "lake." (DuckLake catalog-qualified tables).
 pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
-    // Traces — 25 columns, matches otlp2records::traces_schema()
+    // Traces — 25 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_spans (
             timestamp             TIMESTAMP NOT NULL,
@@ -89,7 +89,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_spans")?;
 
-    // Logs — 15 columns, matches otlp2records::logs_schema()
+    // Logs — 15 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_logs (
             timestamp             TIMESTAMP NOT NULL,
@@ -125,7 +125,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_log_templates")?;
 
-    // Gauge — 16 columns, matches otlp2records::gauge_schema()
+    // Gauge — 16 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_gauge (
             timestamp             TIMESTAMP NOT NULL,
@@ -148,7 +148,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_gauge")?;
 
-    // Sum — 18 columns, matches otlp2records::sum_schema()
+    // Sum — 18 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_sum (
             timestamp                  TIMESTAMP NOT NULL,
@@ -173,7 +173,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_sum")?;
 
-    // Histogram — 22 columns, matches otlp2records::histogram_schema()
+    // Histogram — 22 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_histogram (
             timestamp                  TIMESTAMP NOT NULL,
@@ -202,7 +202,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_histogram")?;
 
-    // ExpHistogram — 27 columns, matches otlp2records::exp_histogram_schema()
+    // ExpHistogram — 27 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_exp_histogram (
             timestamp                  TIMESTAMP NOT NULL,
@@ -282,6 +282,11 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
         SELECT 'silence', service_name, 0.0 FROM silence"
     ))
     .context("failed to create sigiro_anomalies view")?;
+    // NOTE: DuckLake (Parquet-backed catalog) does not support CREATE INDEX.
+    // Query performance relies on Parquet row group pruning and column statistics.
+    // For heavy query workloads, consider partitioning by timestamp or using
+    // DuckDB's native tables (non-DuckLake) for hot data.
+
 
 
     Ok(())

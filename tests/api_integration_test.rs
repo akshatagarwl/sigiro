@@ -170,7 +170,7 @@ async fn test_admin_status_returns_200() {
 }
 
 #[tokio::test]
-async fn test_otlp_traces_json_returns_200() {
+async fn test_otlp_traces_empty_payload_returns_400() {
     let ctx = build_test_context();
     let app = build_otlp_app(&ctx.state);
     let server = TestServer::new(app).expect("failed to build test server");
@@ -184,6 +184,6 @@ async fn test_otlp_traces_json_returns_200() {
         .bytes(empty_traces_json.into())
         .content_type("application/json")
         .await;
-    resp.assert_status_ok();
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
 }
 
