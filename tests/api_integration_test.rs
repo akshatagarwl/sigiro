@@ -186,3 +186,4 @@ async fn test_otlp_traces_json_returns_200() {
         .await;
     resp.assert_status_ok();
 }
+

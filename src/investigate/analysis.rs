@@ -421,7 +421,7 @@ pub struct LogPattern {
     /// Template or pattern string.
     pub pattern: String,
     /// Example log body.
-    pub example_body: String,
+    pub example_body: Option<String>,
     /// Severity text.
     pub severity_text: String,
     /// Total count of logs matching this pattern.

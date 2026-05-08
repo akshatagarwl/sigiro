@@ -22,7 +22,7 @@ use opentelemetry_proto::tonic::collector::{
         trace_service_server::{TraceService, TraceServiceServer},
     },
 };
-use otlp2records::{InputFormat, MetricBatches};
+use crate::otlp::{InputFormat, MetricBatches};
 use prost::Message;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
@@ -133,7 +133,7 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
 #[instrument(skip_all, fields(endpoint = "/v1/traces"))]
 async fn transform_traces(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
     tokio::task::spawn_blocking(move || {
-        otlp2records::transform_traces(&bytes, fmt)
+        crate::otlp::transform_traces(&bytes, fmt)
             .map_err(|e| Status::internal(format!("transform traces: {e}")))
     })
     .await
@@ -143,7 +143,7 @@ async fn transform_traces(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatc
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
 async fn transform_logs(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
     tokio::task::spawn_blocking(move || {
-        otlp2records::transform_logs(&bytes, fmt)
+        crate::otlp::transform_logs(&bytes, fmt)
             .map_err(|e| Status::internal(format!("transform logs: {e}")))
     })
     .await
@@ -153,7 +153,7 @@ async fn transform_logs(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch,
 #[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
 async fn transform_metrics(bytes: Vec<u8>, fmt: InputFormat) -> Result<MetricBatches, Status> {
     tokio::task::spawn_blocking(move || {
-        otlp2records::transform_metrics(&bytes, fmt)
+        crate::otlp::transform_metrics(&bytes, fmt)
             .map_err(|e| Status::internal(format!("transform metrics: {e}")))
     })
     .await
@@ -553,14 +553,19 @@ async fn otlp_http_traces(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> StatusCode {
+) -> axum::response::Response {
     tracing::info!(
         "otlp_http_traces: received trace request, body len = {}",
         body.len()
     );
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
-        Err(status) => return status,
+        Err(status) => {
+            return axum::response::Response::builder()
+                .status(status)
+                .body(axum::body::Body::empty())
+                .unwrap();
+        }
     };
     tracing::info!(project_id = %project_id, "otlp_http_traces: auth OK");
     let fmt = detect_format(&headers);
@@ -569,15 +574,22 @@ async fn otlp_http_traces(
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform traces: {e}");
-            return StatusCode::BAD_REQUEST;
+            return axum::response::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(axum::body::Body::empty())
+                .unwrap();
         }
     };
+    tracing::info!(project_id = %project_id, rows = batch.num_rows(), "otlp_http_traces: batch transformed");
     tracing::info!(project_id = %project_id, rows = batch.num_rows(), "otlp_http_traces: batch transformed");
     if batch.num_rows() > 0 {
         let pid = project_id.clone();
         if let Err(e) = state.router.register_flusher(&pid) {
             tracing::error!(pid, "failed to register flusher: {e:?}");
-            return StatusCode::INTERNAL_SERVER_ERROR;
+            return axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::empty())
+                .unwrap();
         }
         tracing::info!(project_id = %pid, "otlp_http_traces: flusher registered, calling send");
         let send_pid = pid.clone();
@@ -587,7 +599,10 @@ async fn otlp_http_traces(
             .await
         {
             tracing::error!(send_pid, "ingest router error: {e:?}");
-            return StatusCode::INTERNAL_SERVER_ERROR;
+            return axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::empty())
+                .unwrap();
         }
         tracing::info!(send_pid = %send_pid, "otlp_http_traces: send complete");
     } else {
@@ -596,9 +611,11 @@ async fn otlp_http_traces(
             "otlp_http_traces: batch empty after transform — trace data lost"
         );
     }
-    StatusCode::OK
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .body(axum::body::Body::empty())
+        .unwrap()
 }
-
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
 async fn otlp_http_logs(
     State(state): State<Arc<OtlpHttpState>>,
@@ -831,6 +848,7 @@ fn extract_service_name(
     }
     None
 }
+
 
 /// Parse the request body, handling both raw protobuf and Pyroscope SDK multipart/form-data.
 ///

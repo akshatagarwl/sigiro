@@ -1,7 +1,7 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
 
 use arrow::record_batch::RecordBatch;
-use otlp2records::MetricBatches;
+use crate::otlp::MetricBatches;
 
 // --------------------------------------------------------------------------
 // SupervisorHandle — process supervisor lifetime guard

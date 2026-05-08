@@ -89,21 +89,6 @@ fn query_service_dependencies(ctx: &QueryCtx, is_dependency: bool) -> Result<Vec
         ("s1.trace_id = s2.trace_id", "s2.service_name = ? AND s1.service_name != ?")
     };
 
-    let sql = format!(
-        "SELECT
-            s2.service_name,
-            count(*) AS span_count,
-            count(*) FILTER (WHERE s2.status_code = {error_code}) AS error_count
-        FROM {}sigiro_spans s1
-        JOIN {}sigiro_spans s2 ON {join_cond}
-        WHERE {filter_cond}
-          AND s1.span_kind IN (3, 4)
-          AND s1.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
-        GROUP BY s2.service_name
-        ORDER BY span_count DESC
-        LIMIT 20",
-        ctx.prefix, ctx.prefix
-    );
 
     let (service_param, other_param) = if is_dependency {
         (ctx.service, ctx.service)
@@ -116,7 +101,7 @@ fn query_service_dependencies(ctx: &QueryCtx, is_dependency: bool) -> Result<Vec
             "SELECT
                 s2.service_name,
                 count(*) AS span_count,
-                count(*) FILTER (WHERE s2.status_code = {error_code}) AS error_count
+                count(CASE WHEN s2.status_code = {error_code} THEN 1 END) AS error_count
             FROM {}sigiro_spans s1
             JOIN {}sigiro_spans s2 ON s1.trace_id = s2.trace_id
             WHERE s1.service_name = ? AND s2.service_name != ?
@@ -132,7 +117,7 @@ fn query_service_dependencies(ctx: &QueryCtx, is_dependency: bool) -> Result<Vec
             "SELECT
                 s1.service_name,
                 count(*) AS span_count,
-                count(*) FILTER (WHERE s1.status_code = {error_code}) AS error_count
+                count(CASE WHEN s1.status_code = {error_code} THEN 1 END) AS error_count
             FROM {}sigiro_spans s1
             JOIN {}sigiro_spans s2 ON s1.trace_id = s2.trace_id
             WHERE s2.service_name = ? AND s1.service_name != ?
@@ -155,9 +140,9 @@ fn query_service_dependencies(ctx: &QueryCtx, is_dependency: bool) -> Result<Vec
             ctx.to_ts
         ],
         |row| {
-            let service_name = row.get::<_, String>(0).context("service_name")?;
-            let span_count = row.get::<_, i64>(1).context("span_count")?;
-            let error_count = row.get::<_, i64>(2).context("error_count")?;
+            let service_name = row.get::<_, String>("service_name").context("service_name")?;
+            let span_count = row.get::<_, i64>("span_count").context("span_count")?;
+            let error_count = row.get::<_, i64>("error_count").context("error_count")?;
             let error_rate = if span_count > 0 {
                 (error_count as f64 / span_count as f64) * 100.0
             } else {
@@ -183,11 +168,20 @@ fn query_collect<T>(
     params: impl duckdb::Params,
     parse_row: impl Fn(&duckdb::Row<'_>) -> Result<T>,
 ) -> Result<Vec<T>> {
-    let mut stmt = conn.prepare(sql)?;
-    let mut rows = stmt.query(params)?;
+    let mut stmt = conn.prepare(sql).map_err(|e| {
+        anyhow::anyhow!("DuckDB prepare failed: {e}\nSQL: {sql}")
+    })?;
+    let mut rows = stmt.query(params).map_err(|e| {
+        anyhow::anyhow!("DuckDB query failed: {e}\nSQL: {sql}")
+    })?;
     let mut results = Vec::new();
-    while let Some(row) = rows.next()? {
-        results.push(parse_row(row)?);
+    while let Some(row) = rows.next().map_err(|e| {
+        anyhow::anyhow!("DuckDB row iteration failed: {e}\nSQL: {sql}")
+    })? {
+        let row_result = parse_row(row).map_err(|e| {
+            anyhow::anyhow!("DuckDB row parsing failed: {e}\nSQL: {sql}")
+        });
+        results.push(row_result?);
     }
     Ok(results)
 }
@@ -616,11 +610,11 @@ fn query_all_metrics(ctx: &QueryCtx, bucket_interval: &str) -> Result<Vec<Metric
         ],
         |row| {
             Ok(MetricBucket {
-                bucket: row.get::<_, String>(0).context("bucket")?,
-                metric_name: row.get::<_, String>(1).context("metric_name")?,
-                p95: row.get::<_, f64>(2).context("p95")?,
-                avg: row.get::<_, f64>(3).context("avg")?,
-                count: row.get::<_, i64>(4).context("count")?,
+                bucket: row.get::<_, String>("bucket").context("bucket")?,
+                metric_name: row.get::<_, String>("metric_name").context("metric_name")?,
+                p95: row.get::<_, f64>("p95").context("p95")?,
+                avg: row.get::<_, f64>("avg").context("avg")?,
+                count: row.get::<_, i64>("n").context("n")?,
             })
         },
     )
@@ -630,15 +624,15 @@ fn count_span_stats(ctx: &QueryCtx) -> Result<(i64, i64)> {
     ctx.conn
         .query_row(
             &format!(
-                "SELECT count(*),
-                count(DISTINCT CASE WHEN status_code = {} THEN trace_id END)
+                "SELECT count(*) AS total,
+                count(DISTINCT CASE WHEN status_code = {} THEN trace_id END) AS error_count
          FROM {}sigiro_spans
          WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
                 StatusCode::Error.as_i32(),
                 ctx.prefix
             ),
             duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            |row| Ok((row.get::<_, i64>("total")?, row.get::<_, i64>("error_count")?)),
         )
         .context("count span stats failed")
 }
@@ -667,12 +661,12 @@ fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
         "WITH current AS (
              SELECT span_name,
                     count(*) AS cnt,
-                   count(*) FILTER (WHERE status_code = {error_code}) AS err_cnt,
-                   count(*) FILTER (WHERE status_code = {error_code}) * 100.0 / count(*) AS err_pct,
+                   count(CASE WHEN status_code = {error_code} THEN 1 END) AS err_cnt,
+                   count(CASE WHEN status_code = {error_code} THEN 1 END) * 100.0 / count(*) AS err_pct,
                    approx_quantile(duration, 0.50) AS p50,
                    approx_quantile(duration, 0.95) AS p95,
                    approx_quantile(duration, 0.99) AS p99,
-                   first(trace_id) FILTER (WHERE status_code = {error_code}) AS exemplar_error_trace_id
+                   first(CASE WHEN status_code = {error_code} THEN trace_id END) AS exemplar_error_trace_id
             FROM {}sigiro_spans
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
             GROUP BY span_name
@@ -680,7 +674,7 @@ fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
         baseline AS (
             SELECT span_name,
                    count(*) AS bl_cnt,
-                   count(*) FILTER (WHERE status_code = {error_code}) * 100.0 / count(*) AS bl_err_pct,
+                   count(CASE WHEN status_code = {error_code} THEN 1 END) * 100.0 / count(*) AS bl_err_pct,
                    approx_quantile(duration, 0.95) AS bl_p95
             FROM {}sigiro_spans
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
@@ -707,17 +701,17 @@ fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
             baseline_to
         ],
         |row| {
-            let span_name = row.get::<_, String>(0).context("span_name")?;
-            let count = row.get::<_, i64>(1).context("count")?;
-            let error_count = row.get::<_, i64>(2).context("error_count")?;
-            let error_pct = row.get::<_, f64>(3).context("error_pct")?;
-            let duration_p50_ns = row.get::<_, f64>(4).context("duration_p50_ns")?;
-            let duration_p95_ns = row.get::<_, f64>(5).context("duration_p95_ns")?;
-            let duration_p99_ns = row.get::<_, f64>(6).context("duration_p99_ns")?;
-            let exemplar_error_trace_id = row.get::<_, String>(7).ok();
-            let baseline_error_pct = row.get::<_, f64>(8).ok();
-            let baseline_p95_ns = row.get::<_, f64>(9).ok();
-            let baseline_count = row.get::<_, i64>(10).ok();
+            let span_name = row.get::<_, String>("span_name").context("span_name")?;
+            let count = row.get::<_, i64>("cnt").context("cnt")?;
+            let error_count = row.get::<_, i64>("err_cnt").context("err_cnt")?;
+            let error_pct = row.get::<_, f64>("err_pct").context("err_pct")?;
+            let duration_p50_ns = row.get::<_, f64>("p50").context("p50")?;
+            let duration_p95_ns = row.get::<_, f64>("p95").context("p95")?;
+            let duration_p99_ns = row.get::<_, f64>("p99").context("p99")?;
+            let exemplar_error_trace_id = row.get::<_, Option<String>>("exemplar_error_trace_id")?;
+            let baseline_error_pct = row.get::<_, Option<f64>>("bl_err_pct")?;
+            let baseline_p95_ns = row.get::<_, Option<f64>>("bl_p95")?;
+            let baseline_count = row.get::<_, Option<i64>>("bl_cnt")?;
 
             // Detect anomalies.
             let is_anomalous = baseline_error_pct.map(|be| {
@@ -857,13 +851,13 @@ pub fn query_raw_logs(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogEntry>> {
 fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
     let sql = format!(
         "SELECT
-            COALESCE(t.template_text, l.body) AS pattern,
+            COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
             first(l.body) AS exemplar_body,
             l.severity_text,
             count(*) AS count,
             min(l.timestamp)::VARCHAR AS first_seen,
             max(l.timestamp)::VARCHAR AS last_seen,
-            count(*) FILTER (WHERE l.severity_text IN ('ERROR', 'ERR', 'FATAL', 'CRITICAL')) AS error_count
+            count(CASE WHEN l.severity_text IN ('ERROR', 'ERR', 'FATAL', 'CRITICAL') THEN 1 END) AS error_count
         FROM {prefix}sigiro_logs l
         LEFT JOIN {prefix}sigiro_log_templates t ON l.template_id = t.template_id
         WHERE l.service_name = ? AND l.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
@@ -878,14 +872,15 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
         &sql,
         duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts, limit],
         |row| {
+            let pattern = row.get::<_, String>("pattern").context("pattern")?;
+            let example_body = row.get::<_, Option<String>>("exemplar_body")?;
+            let severity_text = row.get::<_, String>("severity_text").context("severity_text")?;
+            let count = row.get::<_, i64>("count").context("count")?;
+            let first_seen = row.get::<_, Option<String>>("first_seen")?;
+            let last_seen = row.get::<_, Option<String>>("last_seen")?;
+            let error_count = row.get::<_, i64>("error_count").unwrap_or(0);
             Ok(LogPattern {
-                pattern: row.get::<_, String>(0).context("pattern")?,
-                example_body: row.get::<_, String>(1).context("example_body")?,
-                severity_text: row.get::<_, String>(2).context("severity_text")?,
-                count: row.get::<_, i64>(3).context("count")?,
-                first_seen: row.get::<_, Option<String>>(4)?,
-                last_seen: row.get::<_, Option<String>>(5)?,
-                error_count: row.get::<_, i64>(6).unwrap_or(0),
+                pattern, example_body, severity_text, count, first_seen, last_seen, error_count,
             })
         },
     )

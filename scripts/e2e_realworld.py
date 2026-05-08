@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import random
+random.seed(42)
 import subprocess
 import sys
 import time

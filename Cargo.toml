@@ -8,8 +8,7 @@ license = "Apache-2.0"
 [workspace]
 
 [dependencies]
-# DuckDB: pinned rev for arrow 58 compat with otlp2records (avoids main drift breaking cache)
-duckdb = { git = "https://github.com/duckdb/duckdb-rs", rev = "bcadfebcc07bace4967ecd5f80c25f7c6b8f85ea", features = ["bundled", "appender-arrow"] }
+duckdb = { version = "1.10502.0", features = ["bundled", "appender-arrow"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
@@ -22,7 +21,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 toon = "0.1.2"
 
 # OTLP ingest
-otlp2records = "0.4"
 tonic = "0.14"
 prost = "0.14"
 arrow = "58"

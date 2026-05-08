@@ -257,7 +257,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
         "CREATE OR REPLACE VIEW sigiro_anomalies AS
         WITH error_rates AS (
             SELECT service_name,
-                   count(*) FILTER (WHERE status_code = 2) * 100.0 / NULLIF(count(*), 0) AS error_pct
+                   count(CASE WHEN status_code = 2 THEN 1 END) * 100.0 / NULLIF(count(*), 0) AS error_pct
             FROM {prefix}sigiro_spans
             WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
             GROUP BY service_name

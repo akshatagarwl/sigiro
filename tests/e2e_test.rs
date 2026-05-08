@@ -10,6 +10,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use sigiro::IngestMsg;
+use sigiro::otlp::MetricBatches;
 use sigiro::inserter::MsgRouter;
 use sigiro::investigate::{InvestigateRequest, investigate};
 use sigiro::pool::ProjectPool;
@@ -647,7 +648,7 @@ async fn e2e_investigation_all_signals() {
     router
         .send(IngestMsg::Metrics {
             project_id: "proj_all_signals".to_string(),
-            batches: otlp2records::MetricBatches {
+            batches: MetricBatches {
                 gauge: Some(gauge_batch),
                 sum: None,
                 histogram: None,
