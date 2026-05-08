@@ -15,9 +15,18 @@ pub struct TelemetryConfig {
 impl TelemetryConfig {
     /// Load from env vars at startup
     pub fn from_env() -> Result<Self> {
-        let endpoint = crate::config::OTEL_ENDPOINT
+        // Standard OTel env var takes priority, fall back to SIGIRO_OTEL_ENDPOINT.
+        let endpoint = crate::config::OTEL_EXPORTER_OTLP_ENDPOINT
             .value()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            .ok()
+            .filter(|e| !e.is_empty())
+            .or_else(|| {
+                crate::config::OTEL_ENDPOINT
+                    .value()
+                    .ok()
+                    .filter(|e| !e.is_empty())
+            })
+            .unwrap_or_default();
         let service_name = crate::config::OTEL_SERVICE_NAME
             .value()
             .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -68,7 +77,9 @@ impl Drop for TelemetryGuard {
 
 pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>> {
     if config.endpoint.is_empty() {
-        tracing::debug!("SIGIRO_OTEL_ENDPOINT not set — self-instrumentation disabled");
+        tracing::debug!(
+            "OTEL_EXPORTER_OTLP_ENDPOINT and SIGIRO_OTEL_ENDPOINT not set — self-instrumentation disabled"
+        );
         return Ok(None);
     }
 

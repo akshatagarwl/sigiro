@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, info};
+use tracing_attributes::instrument;
 
 use crate::supervisor::Supervisor;
 use crate::types::register_supervisor;
@@ -60,6 +61,7 @@ pub fn create_workers_table(conn: &Connection) -> Result<()> {
 }
 
 /// Register (or update) a worker in the federation.
+#[instrument]
 pub fn register_worker(conn: &Connection, worker: &WorkerInfo) -> Result<()> {
     let platform_json =
         serde_json::to_string(&worker.platform).context("failed to serialize platform info")?;
@@ -92,6 +94,7 @@ pub fn register_worker(conn: &Connection, worker: &WorkerInfo) -> Result<()> {
 
 /// Deregister a worker from the federation.
 /// Returns `true` if a worker was actually deleted.
+#[instrument]
 pub fn deregister_worker(conn: &Connection, id: &str) -> Result<bool> {
     let affected = conn
         .execute("DELETE FROM federation_workers WHERE id = ?1", [id])
@@ -186,6 +189,7 @@ struct Spicepod {
 /// Regenerate `spicepod.yaml` from all registered workers.
 /// Uses the "default" project directory for the local DuckLake dataset.
 /// If `SIGIRO_S3_BUCKET` is set, also adds a cold-storage S3 dataset.
+#[instrument]
 pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     let workers = list_workers(conn)?;
 
@@ -262,6 +266,7 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
 
 /// Start the `spiced` subprocess for Spice.ai federation.
 /// Fails loudly if `spiced` is not in PATH or spicepod.yaml is missing.
+#[instrument]
 pub fn start_spice(data_dir: &Path) -> Result<()> {
     which::which("spiced")
         .context("spiced binary not found in PATH — install spiced for Spice federation (https://spiceai.org)")?;
@@ -492,11 +497,37 @@ mod tests {
         assert!(yaml.contains("ducklake:/data/default/catalog.sqlite"));
         assert!(yaml.contains("worker_beta_spans"));
         assert!(yaml.contains("ducklake:/data2/default/catalog.sqlite"));
+        // gamma should be excluded (no catalog_path)
         assert!(!yaml.contains("worker_gamma_spans"));
     }
 
     #[test]
-    fn test_regenerate_spicepod_no_workers() {
+    fn test_regenerate_spicepod_cold_storage() {
+        let conn = setup_db();
+        let dir = TempDir::new().unwrap();
+
+        // Enable cold storage via env
+        let _s3 = ScopedEnvVar::new("SIGIRO_S3_BUCKET", "my-bucket");
+        let _prefix = ScopedEnvVar::new("SIGIRO_S3_PREFIX", "traces/");
+
+        let w1 = test_worker(
+            "w1",
+            "http://10.0.0.1:9999",
+            "/data/default/catalog.sqlite",
+        );
+        insert_worker_directly(&conn, &w1);
+
+        regenerate_spicepod(&conn, dir.path()).unwrap();
+
+        let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
+        assert!(yaml.contains("sigiro_spans_cold"));
+        assert!(yaml.contains("ducklake:s3://my-bucket/traces/data"));
+        assert!(yaml.contains("worker_w1_spans"));
+        assert!(yaml.contains("ducklake:/data/default/catalog.sqlite"));
+    }
+
+    #[test]
+    fn test_regenerate_spicepod_empty_workers() {
         let conn = setup_db();
         let dir = TempDir::new().unwrap();
 
@@ -504,24 +535,37 @@ mod tests {
 
         let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
         assert!(yaml.contains("version: v1"));
+        assert!(yaml.contains("name: sigiro-central"));
+        // Only the local dataset, no worker datasets
         assert!(yaml.contains("sigiro_local_spans"));
         assert!(yaml.contains("ducklake:"));
-        assert!(yaml.contains("default/catalog.sqlite"));
+        assert!(!yaml.contains("worker_"));
     }
 
     #[test]
-    fn test_regenerate_spicepod_with_s3_cold() {
+    fn test_spicepod_yaml_format() {
         let conn = setup_db();
         let dir = TempDir::new().unwrap();
 
-        // Set S3 env vars for this test using a RAII guard
-        let _s3_bucket = ScopedEnvVar::new("SIGIRO_S3_BUCKET", "test-bucket");
-        let _s3_prefix = ScopedEnvVar::new("SIGIRO_S3_PREFIX", "sigiro/");
+        let w1 = test_worker(
+            "x",
+            "http://localhost:9999",
+            "/var/data/catalog.sqlite",
+        );
+        insert_worker_directly(&conn, &w1);
 
         regenerate_spicepod(&conn, dir.path()).unwrap();
 
         let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
-        assert!(yaml.contains("sigiro_spans_cold"));
-        assert!(yaml.contains("ducklake:s3://test-bucket/sigiro/data"));
+        // No YAML document marker
+        assert!(!yaml.starts_with("---"));
+        // Valid YAML structure
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let datasets = parsed
+            .as_mapping()
+            .and_then(|m| m.get(&serde_yaml::Value::String("datasets".into())))
+            .and_then(|v| v.as_sequence())
+            .unwrap();
+        assert!(!datasets.is_empty());
     }
 }

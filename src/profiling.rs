@@ -14,6 +14,7 @@
 //! to DuckDB — they are independent of the SDK's upload cycle.
 
 use anyhow::{Context, Result};
+use tracing_attributes::instrument;
 
 /// Handle to the Pyroscope agent, if configured.
 pub struct ProfilingHandle {
@@ -23,6 +24,7 @@ pub struct ProfilingHandle {
 
 /// Start Pyroscope profiling if `SIGIRO_PYROSCOPE_ENDPOINT` is set.
 /// Returns None if the endpoint is not configured.
+#[instrument(skip_all)]
 pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
     let endpoint = match crate::config::PYROSCOPE_ENDPOINT.value() {
         Ok(v) if !v.is_empty() => v,
