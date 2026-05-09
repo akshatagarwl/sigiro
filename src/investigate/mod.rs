@@ -470,8 +470,10 @@ fn investigate_one(
     };
 
     let logs = query_raw_logs(&ctx, 50).context("raw logs query failed")?;
-    let log_patterns = query_log_patterns(&ctx, config.log_limit).context("log patterns query failed")?;
-
+    let mut log_patterns =
+        query_log_patterns(&ctx, config.log_limit).context("log patterns query failed")?;
+    enrich_pattern_unique_values(&ctx, &mut log_patterns)
+        .context("enrich pattern unique values failed")?;
     let linked_traces = query_linked_traces(&ctx, &spans).context("linked traces query failed")?;
     let linked_spans_returned: i64 = linked_traces
         .iter()
@@ -882,10 +884,78 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
             let last_seen = row.get::<_, Option<String>>("last_seen")?;
             let error_count = row.get::<_, i64>("error_count").unwrap_or(0);
             Ok(LogPattern {
-                pattern, example_body, template_values, severity_text, count, first_seen, last_seen, error_count,
+                pattern,
+                example_body,
+                template_values,
+                unique_values_per_position: None,
+                severity_text,
+                count,
+                first_seen,
+                last_seen,
+                error_count,
             })
         },
     )
+}
+
+/// Enrich log patterns with all unique extracted values per wildcard position.
+/// Queries every `template_values` JSON array for logs in the window, groups by
+/// pattern, and computes unique values per `<*>` position (capped at 50 per position).
+fn enrich_pattern_unique_values(
+    ctx: &QueryCtx,
+    patterns: &mut [LogPattern],
+) -> Result<()> {
+    if patterns.is_empty() {
+        return Ok(());
+    }
+
+    let sql = format!(
+        "SELECT DISTINCT
+            COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
+            l.template_values
+        FROM {prefix}sigiro_logs l
+        LEFT JOIN {prefix}sigiro_log_templates t ON l.template_id = t.template_id
+        WHERE l.service_name = ?
+          AND l.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+          AND l.template_values IS NOT NULL
+          AND l.template_values != '[]'",
+        prefix = ctx.prefix
+    );
+
+    let mut stmt = ctx
+        .conn
+        .prepare(&sql)
+        .context("prepare enrich_pattern_unique_values")?;
+    let mut rows = stmt.query(duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts])?;
+
+    use std::collections::HashMap;
+    let mut raw: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+
+    while let Some(row) = rows.next()? {
+        let pattern: String = row.get(0)?;
+        let values_json: String = row.get(1)?;
+        let values: Vec<String> =
+            serde_json::from_str(&values_json).unwrap_or_else(|_| Vec::new());
+
+        let entry = raw.entry(pattern).or_default();
+        for (pos, val) in values.into_iter().enumerate() {
+            if entry.len() <= pos {
+                entry.push(Vec::new());
+            }
+            let slot = &mut entry[pos];
+            if !slot.contains(&val) && slot.len() < 50 {
+                slot.push(val);
+            }
+        }
+    }
+
+    for pattern in patterns.iter_mut() {
+        if let Some(vals) = raw.remove(&pattern.pattern) {
+            pattern.unique_values_per_position = Some(vals);
+        }
+    }
+
+    Ok(())
 }
 
 fn count_profile_samples(ctx: &QueryCtx) -> Result<i64> {

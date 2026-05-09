@@ -429,6 +429,10 @@ pub struct LogPattern {
     /// Extracted variable values from the example log (JSON array).
     /// Allows reconstructing the original log from the template.
     pub template_values: Option<String>,
+    /// All unique extracted values per wildcard position.
+    /// `unique_values[0]` = all unique values for the first `<*>` in the template.
+    /// Capped at 50 unique values per position to keep response size bounded.
+    pub unique_values_per_position: Option<Vec<Vec<String>>>,
     /// Severity text.
     pub severity_text: String,
     /// Total count of logs matching this pattern.
@@ -440,7 +444,6 @@ pub struct LogPattern {
     /// Number of error logs matching this pattern.
     pub error_count: i64,
 }
-
 // ---------------------------------------------------------------------------
 // Timeline types — unified event timeline
 // ---------------------------------------------------------------------------
