@@ -850,7 +850,8 @@ pub fn query_raw_logs(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogEntry>> {
 }
 
 /// Query log patterns (aggregated by template).
-fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
+#[doc(hidden)]
+pub fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
     let sql = format!(
         "SELECT
             COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
@@ -920,17 +921,72 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
     )
 }
 /// Enrich log patterns with structured variable slots.
-/// Parses the template to find each `<*>` position, collects surrounding context,
-/// and aggregates all unique values per slot (capped at 50 per slot).
-fn enrich_pattern_unique_values(
-    _ctx: &QueryCtx,
+/// Queries all template_values for each pattern, parses wildcards from the template,
+/// and aggregates unique values per slot.
+pub fn enrich_pattern_unique_values(
+    ctx: &QueryCtx,
     patterns: &mut [LogPattern],
 ) -> Result<()> {
+    if patterns.is_empty() {
+        return Ok(());
+    }
+
+    // Build a map from pattern string -> (template_id, Vec<Vec<values>>)
+    let mut pattern_map: std::collections::HashMap<
+        String,
+        (Option<u64>, Vec<Vec<String>>),
+    > = std::collections::HashMap::new();
+
+    // Seed with template_ids from patterns
+    for p in patterns.iter() {
+        pattern_map.insert(p.pattern.clone(), (p.template_id, Vec::new()));
+    }
+
+    // Query all non-empty template_values for each pattern
+    let sql = format!(
+        "SELECT
+            COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
+            l.template_values
+        FROM {prefix}sigiro_logs l
+        LEFT JOIN {prefix}sigiro_log_templates t ON l.template_id = t.template_id
+        WHERE l.service_name = ?
+          AND l.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+          AND l.template_values IS NOT NULL
+          AND l.template_values != '[]'",
+        prefix = ctx.prefix
+    );
+
+    let mut stmt = ctx
+        .conn
+        .prepare(&sql)
+        .context("prepare enrich_pattern_unique_values")?;
+    let mut rows = stmt.query(duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts])?;
+
+    while let Some(row) = rows.next()? {
+        let pattern: String = row.get(0)?;
+        let values_json: String = row.get(1)?;
+        let values: Vec<String> =
+            serde_json::from_str(&values_json).unwrap_or_else(|_| Vec::new());
+
+        if let Some((_, slots)) = pattern_map.get_mut(&pattern) {
+            // Ensure we have enough slots
+            for (pos, val) in values.into_iter().enumerate() {
+                if slots.len() <= pos {
+                    slots.push(Vec::new());
+                }
+                let slot = &mut slots[pos];
+                if !slot.contains(&val) && slot.len() < 50 {
+                    slot.push(val);
+                }
+            }
+        }
+    }
+
+    // Build TemplateVariable structs for each pattern
     for pattern in patterns.iter_mut() {
         let template = &pattern.pattern;
         let tokens: Vec<&str> = template.split_whitespace().collect();
 
-        // Find all <*> positions and their context
         let mut vars = Vec::new();
         for (pos, token) in tokens.iter().enumerate() {
             if *token == "<*>" {
@@ -953,15 +1009,11 @@ fn enrich_pattern_unique_values(
             }
         }
 
-        // Parse the example template_values to populate the first slot's values.
-        // In practice we would query all template_values for this pattern,
-        // but for now we seed from the example if available.
-        if let Some(ref tv_json) = pattern.template_values {
-            if let Ok(values) = serde_json::from_str::<Vec<String>>(tv_json) {
-                for (i, val) in values.into_iter().enumerate() {
-                    if let Some(var) = vars.get_mut(i) {
-                        var.values.push(val);
-                    }
+        // Populate values from the aggregated slots
+        if let Some((_, slots)) = pattern_map.remove(&pattern.pattern) {
+            for (i, slot_values) in slots.into_iter().enumerate() {
+                if let Some(var) = vars.get_mut(i) {
+                    var.values = slot_values;
                 }
             }
         }
