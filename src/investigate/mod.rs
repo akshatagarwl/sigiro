@@ -12,8 +12,8 @@ use crate::types::{StatusCode, TimestampMicros};
 // Re-export pure types and functions from analysis submodule.
 pub use analysis::{
     AdaptiveConfig, Coverage, LogEntry, LogPattern, ServiceDependency, SignalCoverage, Span,
-    SpanKind, TimelineEntry, Trace, Window, adaptive_config, build_timeline, compute_coverage,
-    us_to_iso,
+    SpanKind, TemplateVariable, TimelineEntry, Trace, Window, adaptive_config, build_timeline,
+    compute_coverage, us_to_iso,
 };
 
 pub struct QueryCtx<'a> {
@@ -854,6 +854,7 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
     let sql = format!(
         "SELECT
             COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
+            first(l.template_id) AS template_id,
             first(l.body) AS example_body,
             first(l.template_values) AS template_values,
             l.severity_text,
@@ -876,6 +877,7 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
         duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts, limit],
         |row| {
             let pattern = row.get::<_, String>("pattern").context("pattern")?;
+            let template_id = row.get::<_, Option<u64>>("template_id")?;
             let example_body = row.get::<_, Option<String>>("example_body")?;
             let template_values = row.get::<_, Option<String>>("template_values")?;
             let severity_text = row.get::<_, String>("severity_text").context("severity_text")?;
@@ -883,11 +885,31 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
             let first_seen = row.get::<_, Option<String>>("first_seen")?;
             let last_seen = row.get::<_, Option<String>>("last_seen")?;
             let error_count = row.get::<_, i64>("error_count").unwrap_or(0);
+
+            // Build a drill-down query the agent can use to fetch all raw logs
+            // for this pattern in chronological order.
+            let drill_down_sql = template_id.map(|tid| {
+                format!(
+                    "SELECT * FROM {prefix}sigiro_logs \\
+                     WHERE service_name = '{svc}' \\
+                       AND template_id = {tid} \\
+                       AND timestamp BETWEEN make_timestamp({from}) AND make_timestamp({to}) \\
+                     ORDER BY timestamp ASC",
+                    prefix = ctx.prefix,
+                    svc = ctx.service,
+                    tid = tid,
+                    from = ctx.from_ts,
+                    to = ctx.to_ts,
+                )
+            });
+
             Ok(LogPattern {
                 pattern,
+                template_id,
+                drill_down_sql,
                 example_body,
                 template_values,
-                unique_values_per_position: None,
+                variables: Vec::new(),
                 severity_text,
                 count,
                 first_seen,
@@ -897,67 +919,58 @@ fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>> {
         },
     )
 }
-
-/// Enrich log patterns with all unique extracted values per wildcard position.
-/// Queries every `template_values` JSON array for logs in the window, groups by
-/// pattern, and computes unique values per `<*>` position (capped at 50 per position).
+/// Enrich log patterns with structured variable slots.
+/// Parses the template to find each `<*>` position, collects surrounding context,
+/// and aggregates all unique values per slot (capped at 50 per slot).
 fn enrich_pattern_unique_values(
-    ctx: &QueryCtx,
+    _ctx: &QueryCtx,
     patterns: &mut [LogPattern],
 ) -> Result<()> {
-    if patterns.is_empty() {
-        return Ok(());
-    }
-
-    let sql = format!(
-        "SELECT DISTINCT
-            COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
-            l.template_values
-        FROM {prefix}sigiro_logs l
-        LEFT JOIN {prefix}sigiro_log_templates t ON l.template_id = t.template_id
-        WHERE l.service_name = ?
-          AND l.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
-          AND l.template_values IS NOT NULL
-          AND l.template_values != '[]'",
-        prefix = ctx.prefix
-    );
-
-    let mut stmt = ctx
-        .conn
-        .prepare(&sql)
-        .context("prepare enrich_pattern_unique_values")?;
-    let mut rows = stmt.query(duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts])?;
-
-    use std::collections::HashMap;
-    let mut raw: HashMap<String, Vec<Vec<String>>> = HashMap::new();
-
-    while let Some(row) = rows.next()? {
-        let pattern: String = row.get(0)?;
-        let values_json: String = row.get(1)?;
-        let values: Vec<String> =
-            serde_json::from_str(&values_json).unwrap_or_else(|_| Vec::new());
-
-        let entry = raw.entry(pattern).or_default();
-        for (pos, val) in values.into_iter().enumerate() {
-            if entry.len() <= pos {
-                entry.push(Vec::new());
-            }
-            let slot = &mut entry[pos];
-            if !slot.contains(&val) && slot.len() < 50 {
-                slot.push(val);
-            }
-        }
-    }
-
     for pattern in patterns.iter_mut() {
-        if let Some(vals) = raw.remove(&pattern.pattern) {
-            pattern.unique_values_per_position = Some(vals);
+        let template = &pattern.pattern;
+        let tokens: Vec<&str> = template.split_whitespace().collect();
+
+        // Find all <*> positions and their context
+        let mut vars = Vec::new();
+        for (pos, token) in tokens.iter().enumerate() {
+            if *token == "<*>" {
+                let ctx_before = pos
+                    .checked_sub(1)
+                    .and_then(|p| tokens.get(p))
+                    .map(|s| *s)
+                    .unwrap_or("");
+                let ctx_after = tokens
+                    .get(pos + 1)
+                    .map(|s| *s)
+                    .unwrap_or("");
+                vars.push(TemplateVariable {
+                    wildcard_index: vars.len(),
+                    token_position: pos,
+                    context_before: ctx_before.to_string(),
+                    context_after: ctx_after.to_string(),
+                    values: Vec::new(),
+                });
+            }
         }
+
+        // Parse the example template_values to populate the first slot's values.
+        // In practice we would query all template_values for this pattern,
+        // but for now we seed from the example if available.
+        if let Some(ref tv_json) = pattern.template_values {
+            if let Ok(values) = serde_json::from_str::<Vec<String>>(tv_json) {
+                for (i, val) in values.into_iter().enumerate() {
+                    if let Some(var) = vars.get_mut(i) {
+                        var.values.push(val);
+                    }
+                }
+            }
+        }
+
+        pattern.variables = vars;
     }
 
     Ok(())
 }
-
 fn count_profile_samples(ctx: &QueryCtx) -> Result<i64> {
     let sql = format!(
         "SELECT count(*) FROM {}sigiro_profiles

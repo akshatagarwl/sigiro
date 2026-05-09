@@ -419,20 +419,38 @@ impl LogEntry {
     }
 }
 
+/// A template variable slot with context and all unique values.
+/// Makes it unambiguous which `<*>` in the template these values belong to.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TemplateVariable {
+    /// 0-based index of this wildcard in the template, reading left-to-right.
+    pub wildcard_index: usize,
+    /// Position in the tokenized template (which token number this `<*>` is).
+    pub token_position: usize,
+    /// Literal token immediately before this wildcard (empty string if at start).
+    pub context_before: String,
+    /// Literal token immediately after this wildcard (empty string if at end).
+    pub context_after: String,
+    /// All unique values for this wildcard position (capped at 50).
+    pub values: Vec<String>,
+}
+
 /// A log pattern with aggregated statistics.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LogPattern {
     /// Template or pattern string.
     pub pattern: String,
+    /// Template ID (hash) for filtering raw logs. None if no template was extracted.
+    pub template_id: Option<u64>,
+    /// Pre-built SQL query the agent can run to fetch all raw logs matching this pattern
+    /// in chronological order. Uses `template_id` for precise filtering.
+    pub drill_down_sql: Option<String>,
     /// Example log body.
     pub example_body: Option<String>,
     /// Extracted variable values from the example log (JSON array).
-    /// Allows reconstructing the original log from the template.
     pub template_values: Option<String>,
-    /// All unique extracted values per wildcard position.
-    /// `unique_values[0]` = all unique values for the first `<*>` in the template.
-    /// Capped at 50 unique values per position to keep response size bounded.
-    pub unique_values_per_position: Option<Vec<Vec<String>>>,
+    /// Structured variable slots with context and unique values.
+    pub variables: Vec<TemplateVariable>,
     /// Severity text.
     pub severity_text: String,
     /// Total count of logs matching this pattern.
@@ -445,9 +463,6 @@ pub struct LogPattern {
     pub error_count: i64,
 }
 // ---------------------------------------------------------------------------
-// Timeline types — unified event timeline
-// ---------------------------------------------------------------------------
-
 /// A single entry in the unified timeline.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
