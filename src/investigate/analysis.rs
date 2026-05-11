@@ -571,7 +571,7 @@ pub fn build_timeline(
     }
 
     // Sort by timestamp.
-    entries.sort_by_key(|e| e.timestamp());
+    entries.sort_by_key(TimelineEntry::timestamp);
     entries
 }
 

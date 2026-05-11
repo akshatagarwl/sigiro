@@ -662,7 +662,8 @@ async fn run_topology(service: Option<&str>, format: TopologyFormat) -> Result<(
     // Get dependency data from investigate
     let services_to_query: Vec<String> = match service {
         Some(s) => vec![s.to_string()],
-        None => all_services.iter().take(20).map(|s| s.to_string()).collect(),
+        None => all_services.iter().take(20).map(std::string::ToString::to_string).collect(),
+
     };
 
     let mut dep_map: HashMap<String, HashSet<String>> = HashMap::new();
@@ -716,7 +717,7 @@ fn render_topology_ascii(
 
     // Find root services (no incoming dependencies)
     let all_deps: HashSet<&str> = deps.values()
-        .flat_map(|s| s.iter().map(|s| s.as_str()))
+        .flat_map(|s| s.iter().map(std::string::String::as_str))
         .collect();
 
     let roots: Vec<&&str> = all_services.iter().filter(|s| !all_deps.contains(*s)).collect();

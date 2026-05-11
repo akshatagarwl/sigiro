@@ -36,6 +36,7 @@ fn build_test_context() -> TestContext {
     // to this env var from other threads during this call.
     unsafe {
         std::env::set_var("SIGIRO_DATA_DIR", &data_dir);
+        std::env::set_var("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions");
     }
 
     let pool = Arc::new(ProjectPool::new(data_dir, 4));

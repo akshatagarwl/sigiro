@@ -244,7 +244,7 @@ impl MsgRouter {
 
         // Await all flusher tasks with a timeout to complete their final flush.
         for handle in handles {
-            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+            let _res = tokio::time::timeout(Duration::from_secs(5), handle).await;
         }
     }
 }

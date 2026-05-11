@@ -1,10 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use sigiro::investigate::{
-use sigiro::investigate::{
-    InvestigateRequest, QueryCtx, StatusCode, adaptive_config, build_span_trees, compute_coverage, investigate,
-    query_logs, query_service_context,
+    InvestigateRequest, QueryCtx, compute_coverage, investigate,
+    query_service_context,
 };
-use sigiro::types::StatusCode;
 use std::sync::{Arc, Mutex};
 
 /// Setup a DuckLake-backed DB matching production config.
@@ -90,8 +88,8 @@ fn bench_investigate(c: &mut Criterion) {
             let req = InvestigateRequest {
                 service: Some("bench-svc".to_string()),
                 services: None,
-                from_ts: Some(now_us - 15 * 60 * 1_000_000),
-                to_ts: Some(now_us + 60 * 1_000_000),
+                from_ts: now_us - 15 * 60 * 1_000_000,
+                to_ts: now_us + 60 * 1_000_000,
             };
             investigate(&shared, &req, "lake.").expect("investigate");
         });
@@ -103,63 +101,6 @@ fn bench_investigate(c: &mut Criterion) {
 fn bench_compute_coverage(c: &mut Criterion) {
     c.bench_function("compute_coverage", |b| {
         b.iter(|| compute_coverage(100, 50, 10, 0));
-    });
-}
-
-fn bench_query_logs(c: &mut Criterion) {
-    let (shared, _dir) = setup_populated_db();
-    let now_us = {
-        let odt = time::OffsetDateTime::now_utc();
-        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-    };
-    let conn = shared.lock().unwrap();
-
-    let ctx = QueryCtx {
-        conn: &conn,
-        service: "bench-svc",
-        from_ts: now_us - 15 * 60 * 1_000_000,
-        to_ts: now_us + 60 * 1_000_000,
-        prefix: "lake.",
-    };
-
-    let mut group = c.benchmark_group("investigate");
-    group.sample_size(10);
-
-    group.bench_function("query_logs_regex", |b| {
-        b.iter(|| query_logs(&ctx, 30).expect("query_logs"));
-    });
-
-    group.finish();
-}
-
-fn bench_build_span_trees(c: &mut Criterion) {
-    use sigiro::investigate::SpanRow;
-
-    let spans: Vec<SpanRow> = (0..100)
-        .map(|i| SpanRow {
-            trace_id: format!("trace-{}", i / 5),
-            span_id: format!("span-{i}"),
-            parent_span_id: if i % 5 == 0 {
-                String::new()
-            } else {
-                format!("span-{}", i - (i % 5))
-            },
-            span_name: "op".to_string(),
-            duration_ns: 1_000_000,
-            status_code: StatusCode::Ok,
-            service_name: "svc".to_string(),
-        })
-        .collect();
-
-    c.bench_function("build_span_trees_100", |b| {
-        b.iter(|| build_span_trees(&spans));
-    });
-}
-
-fn bench_adaptive_config(c: &mut Criterion) {
-    let now = 1_700_000_000_000_000_i64;
-    c.bench_function("adaptive_config", |b| {
-        b.iter(|| adaptive_config(now - 15 * 60 * 1_000_000, now));
     });
 }
 
@@ -193,9 +134,6 @@ criterion_group!(
     benches,
     bench_investigate,
     bench_compute_coverage,
-    bench_query_logs,
-    bench_build_span_trees,
-    bench_adaptive_config,
     bench_service_context,
 );
 criterion_main!(benches);

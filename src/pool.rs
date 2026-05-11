@@ -135,8 +135,10 @@ impl ProjectPool {
         let conn = Connection::open_in_memory()
             .with_context(|| "failed to open in-memory DuckDB".to_string())?;
 
-        // Persistent local extension cache
-        let ext_dir = self.data_dir.join("extensions");
+        // Persistent local extension cache — share across tests via env var
+        let ext_dir = std::env::var("SIGIRO_EXTENSION_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| self.data_dir.join("extensions"));
         std::fs::create_dir_all(&ext_dir).context("failed to create extensions directory")?;
         if let Some(p) = ext_dir.to_str() {
             conn.execute_batch(&format!("SET extension_directory = '{p}';"))

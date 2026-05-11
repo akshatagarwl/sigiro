@@ -1,43 +1,37 @@
 {
-  "name": "www-app",
-  "version": "0.0.0",
+  "name": "www",
+  "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "vp dev",
-    "build": "vp build",
-    "check": "vp check",
-    "preview": "vp preview"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
   },
   "dependencies": {
-    "@mdx-js/rollup": "^3.1.1",
-    "@xyflow/react": "^12.10.1",
-    "email-validator": "^2.0.4",
-    "gray-matter": "^4.0.3",
-    "lucide-react": "^0.577.0",
-    "motion": "^12.38.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "react-router": "^7.13.1",
-    "rehype-autolink-headings": "^7.1.0",
-    "rehype-slug": "^6.0.0",
-    "remark-frontmatter": "^5.0.0",
-    "remark-gfm": "^4.0.1"
+    "fumadocs-core": "^16.8.10",
+    "fumadocs-mdx": "^15.0.3",
+    "fumadocs-ui": "^16.8.10",
+    "next": "16.2.6",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
   },
   "devDependencies": {
-    "@types/node": "^24.12.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.0",
-    "playwright": "^1.58.2",
-    "typescript": "~5.9.3",
-    "vite": "npm:@voidzero-dev/vite-plus-core@latest",
-    "vite-plus": "latest",
-    "wrangler": "^4.76.0"
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.6",
+    "tailwindcss": "^4",
+    "typescript": "^6.0.3"
   },
-  "overrides": {
-    "vite": "npm:@voidzero-dev/vite-plus-core@latest",
-    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
-  },
-  "packageManager": "bun@1.3.11"
+  "ignoreScripts": [
+    "sharp",
+    "unrs-resolver"
+  ],
+  "trustedDependencies": [
+    "sharp",
+    "unrs-resolver"
+  ]
 }

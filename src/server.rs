@@ -663,7 +663,8 @@ async fn services_handler(
      parent_to_children: &std::collections::HashMap<String, Vec<String>>,
      span_map: &std::collections::HashMap<String, SpanDetail>,
  ) -> Vec<String> {
-     fn dfs(
+    #[allow(clippy::too_many_arguments)]
+    fn dfs(
          span_id: &str,
          parent_to_children: &std::collections::HashMap<String, Vec<String>>,
          span_map: &std::collections::HashMap<String, SpanDetail>,

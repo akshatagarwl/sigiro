@@ -563,7 +563,7 @@ mod tests {
         let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
         let datasets = parsed
             .as_mapping()
-            .and_then(|m| m.get(&serde_yaml::Value::String("datasets".into())))
+            .and_then(|m| m.get(serde_yaml::Value::String("datasets".into())))
             .and_then(|v| v.as_sequence())
             .unwrap();
         assert!(!datasets.is_empty());

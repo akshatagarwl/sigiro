@@ -91,11 +91,8 @@ fn query_service_dependencies(ctx: &QueryCtx, is_dependency: bool) -> Result<Vec
     };
 
 
-    let (service_param, other_param) = if is_dependency {
-        (ctx.service, ctx.service)
-    } else {
-        (ctx.service, ctx.service)
-    };
+    let service_param = ctx.service;
+    let other_param = ctx.service;
 
     let sql_with_params = if is_dependency {
         format!(
@@ -780,7 +777,7 @@ fn query_full_spans(ctx: &QueryCtx, limit: i64) -> Result<Vec<Span>> {
 
 fn parse_full_span(row: &duckdb::Row<'_>) -> Result<Span> {
     let span_kind_val: Option<i32> = row.get(7).ok();
-    let span_kind = span_kind_val.and_then(|v| SpanKind::from_i32(v));
+    let span_kind = span_kind_val.and_then(SpanKind::from_i32);
 
     Ok(Span {
         trace_id: row.get::<_, String>(0).context("trace_id")?,
@@ -992,12 +989,10 @@ pub fn enrich_pattern_unique_values(
             if *token == "<*>" {
                 let ctx_before = pos
                     .checked_sub(1)
-                    .and_then(|p| tokens.get(p))
-                    .map(|s| *s)
+                    .and_then(|p| tokens.get(p)).copied()
                     .unwrap_or("");
                 let ctx_after = tokens
-                    .get(pos + 1)
-                    .map(|s| *s)
+                    .get(pos + 1).copied()
                     .unwrap_or("");
                 vars.push(TemplateVariable {
                     wildcard_index: vars.len(),

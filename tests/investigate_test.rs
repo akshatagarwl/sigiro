@@ -1,5 +1,5 @@
 use sigiro::investigate::{
-    InvestigateRequest, QueryCtx, Span, adaptive_config, compute_coverage,
+    InvestigateRequest, QueryCtx, adaptive_config, compute_coverage,
     investigate, query_derived_events, query_service_context, us_to_iso,
 };
 use sigiro::types::StatusCode;
@@ -27,7 +27,7 @@ fn setup_drain_logs(
 
     let mut seen_templates: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for body in bodies {
-        let (template, id) = drain.classify(body);
+        let (template, id, _) = drain.classify(body);
         conn.execute(
             &format!(
                 "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
@@ -49,28 +49,6 @@ fn setup_drain_logs(
     (Arc::new(Mutex::new(conn)), now_us)
 }
 
-fn make_span(trace_id: &str, span_id: &str, parent: &str, status: StatusCode) -> Span {
-    Span {
-        trace_id: trace_id.to_string(),
-        span_id: span_id.to_string(),
-        parent_span_id: parent.to_string(),
-        span_name: "test".to_string(),
-        duration_ns: 1000,
-        status_code: status,
-        service_name: "svc".to_string(),
-        span_kind: None,
-        span_attributes: None,
-        resource_attributes: None,
-        start_timestamp: 0,
-        end_timestamp: 0,
-        events_json: None,
-        links_json: None,
-        instrumentation_library_name: None,
-        instrumentation_library_version: None,
-        trace_state: None,
-        scope_span: None,
-    }
-}
 
 // Span tree tests removed - trace grouping is now integrated into Trace type
 
