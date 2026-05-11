@@ -1,7 +1,7 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
 
-use arrow::record_batch::RecordBatch;
 use crate::otlp::MetricBatches;
+use arrow::record_batch::RecordBatch;
 
 // --------------------------------------------------------------------------
 // SupervisorHandle — process supervisor lifetime guard
@@ -294,10 +294,9 @@ pub struct AdminStatusPath;
 #[typed_path("/health")]
 pub struct HealthPath;
 
-
- /// Route: GET /traces/{trace_id}
- #[derive(Debug, Clone, Deserialize, TypedPath)]
- #[typed_path("/traces/{trace_id}")]
- pub struct TraceDetailPath {
-     pub trace_id: String,
- }
+/// Route: GET /traces/{trace_id}
+#[derive(Debug, Clone, Deserialize, TypedPath)]
+#[typed_path("/traces/{trace_id}")]
+pub struct TraceDetailPath {
+    pub trace_id: String,
+}

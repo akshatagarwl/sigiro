@@ -510,11 +510,7 @@ mod tests {
         let _s3 = ScopedEnvVar::new("SIGIRO_S3_BUCKET", "my-bucket");
         let _prefix = ScopedEnvVar::new("SIGIRO_S3_PREFIX", "traces/");
 
-        let w1 = test_worker(
-            "w1",
-            "http://10.0.0.1:9999",
-            "/data/default/catalog.sqlite",
-        );
+        let w1 = test_worker("w1", "http://10.0.0.1:9999", "/data/default/catalog.sqlite");
         insert_worker_directly(&conn, &w1);
 
         regenerate_spicepod(&conn, dir.path()).unwrap();
@@ -547,11 +543,7 @@ mod tests {
         let conn = setup_db();
         let dir = TempDir::new().unwrap();
 
-        let w1 = test_worker(
-            "x",
-            "http://localhost:9999",
-            "/var/data/catalog.sqlite",
-        );
+        let w1 = test_worker("x", "http://localhost:9999", "/var/data/catalog.sqlite");
         insert_worker_directly(&conn, &w1);
 
         regenerate_spicepod(&conn, dir.path()).unwrap();

@@ -87,7 +87,10 @@ pub struct SkippedMetrics {
 
 impl SkippedMetrics {
     pub fn has_skipped(&self) -> bool {
-        self.summaries > 0 || self.nan_values > 0 || self.infinity_values > 0 || self.missing_values > 0
+        self.summaries > 0
+            || self.nan_values > 0
+            || self.infinity_values > 0
+            || self.missing_values > 0
     }
 }
 
@@ -250,14 +253,16 @@ impl TraceBuilders {
             self.status_message.append_value(&message);
         }
 
-        self.resource_attributes
-            .append_value(attrs_to_json(resource.map(|r| &r.attributes[..]).unwrap_or(&[])));
+        self.resource_attributes.append_value(attrs_to_json(
+            resource.map(|r| &r.attributes[..]).unwrap_or(&[]),
+        ));
         self.scope_name
             .append_option(scope.map(|s| s.name.as_str()));
         self.scope_version
             .append_option(scope.map(|s| s.version.as_str()));
-        self.scope_attributes
-            .append_value(attrs_to_json(scope.map(|s| &s.attributes[..]).unwrap_or(&[])));
+        self.scope_attributes.append_value(attrs_to_json(
+            scope.map(|s| &s.attributes[..]).unwrap_or(&[]),
+        ));
         self.span_attributes
             .append_value(attrs_to_json(&span.attributes));
 
@@ -356,7 +361,9 @@ fn decode_traces_protobuf(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
         }
     }
 
-    builders.finish().map_err(|e| DecodeError::Parse(e.to_string()))
+    builders
+        .finish()
+        .map_err(|e| DecodeError::Parse(e.to_string()))
 }
 
 fn decode_traces_json(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
@@ -394,7 +401,9 @@ fn decode_traces_json(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
         }
     }
 
-    builders.finish().map_err(|e| DecodeError::Parse(e.to_string()))
+    builders
+        .finish()
+        .map_err(|e| DecodeError::Parse(e.to_string()))
 }
 
 fn decode_logs_protobuf(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
@@ -414,7 +423,9 @@ fn decode_logs_protobuf(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
         }
     }
 
-    builders.finish().map_err(|e| DecodeError::Parse(e.to_string()))
+    builders
+        .finish()
+        .map_err(|e| DecodeError::Parse(e.to_string()))
 }
 
 fn decode_logs_json(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
@@ -453,7 +464,9 @@ fn decode_logs_json(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
         }
     }
 
-    builders.finish().map_err(|e| DecodeError::Parse(e.to_string()))
+    builders
+        .finish()
+        .map_err(|e| DecodeError::Parse(e.to_string()))
 }
 
 fn decode_metrics_protobuf(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
@@ -520,10 +533,18 @@ fn decode_metrics_protobuf(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
     }
 
     Ok(MetricBatches {
-        gauge: gauge.finish().map_err(|e| DecodeError::Parse(e.to_string()))?,
-        sum: sum.finish().map_err(|e| DecodeError::Parse(e.to_string()))?,
-        histogram: histogram.finish().map_err(|e| DecodeError::Parse(e.to_string()))?,
-        exp_histogram: exp_histogram.finish().map_err(|e| DecodeError::Parse(e.to_string()))?,
+        gauge: gauge
+            .finish()
+            .map_err(|e| DecodeError::Parse(e.to_string()))?,
+        sum: sum
+            .finish()
+            .map_err(|e| DecodeError::Parse(e.to_string()))?,
+        histogram: histogram
+            .finish()
+            .map_err(|e| DecodeError::Parse(e.to_string()))?,
+        exp_histogram: exp_histogram
+            .finish()
+            .map_err(|e| DecodeError::Parse(e.to_string()))?,
         skipped,
     })
 }
@@ -563,24 +584,65 @@ fn decode_metrics_json(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
 
             for metric in &metrics {
                 let name = metric.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let description = metric.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let description = metric
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let unit = metric.get("unit").and_then(|v| v.as_str()).unwrap_or("");
 
                 if let Some(g) = metric.get("gauge") {
-                    append_gauge_json(&mut gauge, g, resource, scope, name, description, unit, &mut skipped)?;
+                    append_gauge_json(
+                        &mut gauge,
+                        g,
+                        resource,
+                        scope,
+                        name,
+                        description,
+                        unit,
+                        &mut skipped,
+                    )?;
                 }
                 if let Some(s) = metric.get("sum") {
-                    append_sum_json(&mut sum, s, resource, scope, name, description, unit, &mut skipped)?;
+                    append_sum_json(
+                        &mut sum,
+                        s,
+                        resource,
+                        scope,
+                        name,
+                        description,
+                        unit,
+                        &mut skipped,
+                    )?;
                 }
                 if let Some(h) = metric.get("histogram") {
-                    append_histogram_json(&mut histogram, h, resource, scope, name, description, unit)?;
+                    append_histogram_json(
+                        &mut histogram,
+                        h,
+                        resource,
+                        scope,
+                        name,
+                        description,
+                        unit,
+                    )?;
                 }
                 if let Some(eh) = metric.get("exponentialHistogram") {
-                    append_exp_histogram_json(&mut exp_histogram, eh, resource, scope, name, description, unit)?;
+                    append_exp_histogram_json(
+                        &mut exp_histogram,
+                        eh,
+                        resource,
+                        scope,
+                        name,
+                        description,
+                        unit,
+                    )?;
                 }
                 if metric.get("summary").is_some() {
                     if let Some(summary) = metric.get("summary") {
-                        if let Some(points) = summary.get("dataPoints").or_else(|| summary.get("data_points")).and_then(|v| v.as_array()) {
+                        if let Some(points) = summary
+                            .get("dataPoints")
+                            .or_else(|| summary.get("data_points"))
+                            .and_then(|v| v.as_array())
+                        {
                             skipped.summaries += points.len();
                         }
                     }
@@ -590,10 +652,18 @@ fn decode_metrics_json(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
     }
 
     Ok(MetricBatches {
-        gauge: gauge.finish().map_err(|e| DecodeError::Parse(e.to_string()))?,
-        sum: sum.finish().map_err(|e| DecodeError::Parse(e.to_string()))?,
-        histogram: histogram.finish().map_err(|e| DecodeError::Parse(e.to_string()))?,
-        exp_histogram: exp_histogram.finish().map_err(|e| DecodeError::Parse(e.to_string()))?,
+        gauge: gauge
+            .finish()
+            .map_err(|e| DecodeError::Parse(e.to_string()))?,
+        sum: sum
+            .finish()
+            .map_err(|e| DecodeError::Parse(e.to_string()))?,
+        histogram: histogram
+            .finish()
+            .map_err(|e| DecodeError::Parse(e.to_string()))?,
+        exp_histogram: exp_histogram
+            .finish()
+            .map_err(|e| DecodeError::Parse(e.to_string()))?,
         skipped,
     })
 }
@@ -603,8 +673,16 @@ fn track_skipped_value(
     skipped: &mut SkippedMetrics,
 ) {
     match value {
-        Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d)) if d.is_nan() => skipped.nan_values += 1,
-        Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d)) if d.is_infinite() => skipped.infinity_values += 1,
+        Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d))
+            if d.is_nan() =>
+        {
+            skipped.nan_values += 1
+        }
+        Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d))
+            if d.is_infinite() =>
+        {
+            skipped.infinity_values += 1
+        }
         None => skipped.missing_values += 1,
         _ => {}
     }
@@ -616,7 +694,11 @@ fn track_skipped_value(
 
 fn traces_schema() -> Schema {
     Schema::new(vec![
-        Field::new("timestamp", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("end_timestamp", DataType::Int64, false),
         Field::new("duration", DataType::Int64, false),
         Field::new("trace_id", DataType::Utf8, true),
@@ -646,7 +728,11 @@ fn traces_schema() -> Schema {
 
 fn logs_schema() -> Schema {
     Schema::new(vec![
-        Field::new("timestamp", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("observed_timestamp", DataType::Int64, false),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
@@ -666,7 +752,11 @@ fn logs_schema() -> Schema {
 
 fn gauge_schema() -> Schema {
     Schema::new(vec![
-        Field::new("timestamp", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("start_timestamp", DataType::Int64, false),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
@@ -687,7 +777,11 @@ fn gauge_schema() -> Schema {
 
 fn sum_schema() -> Schema {
     Schema::new(vec![
-        Field::new("timestamp", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("start_timestamp", DataType::Int64, false),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
@@ -710,7 +804,11 @@ fn sum_schema() -> Schema {
 
 fn histogram_schema() -> Schema {
     Schema::new(vec![
-        Field::new("timestamp", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("start_timestamp", DataType::Int64, false),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
@@ -737,7 +835,11 @@ fn histogram_schema() -> Schema {
 
 fn exp_histogram_schema() -> Schema {
     Schema::new(vec![
-        Field::new("timestamp", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("start_timestamp", DataType::Int64, false),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
@@ -777,9 +879,7 @@ fn append_span_json(
     resource: &JsonValue,
     scope: &JsonValue,
 ) -> Result<(), DecodeError> {
-    let get_i64 = |obj: &JsonValue, key: &str| -> Option<i64> {
-        json_i64(obj.get(key)?)
-    };
+    let get_i64 = |obj: &JsonValue, key: &str| -> Option<i64> { json_i64(obj.get(key)?) };
     let get_str = |obj: &JsonValue, key: &str| -> Option<String> {
         obj.get(key)?.as_str().map(std::string::ToString::to_string)
     };
@@ -851,9 +951,11 @@ fn append_span_json(
         ));
     }
     builders.service_name.append_value(&service_name);
-    builders.service_namespace
+    builders
+        .service_namespace
         .append_option(extract_json_string_attr(resource, "service.namespace"));
-    builders.service_instance_id
+    builders
+        .service_instance_id
         .append_option(extract_json_string_attr(resource, "service.instance.id"));
 
     let name = get_str(span, "name").unwrap_or_default();
@@ -877,20 +979,27 @@ fn append_span_json(
         builders.status_message.append_value(&message);
     }
 
-    builders.resource_attributes
+    builders
+        .resource_attributes
         .append_value(json_attrs_to_string(resource.get("attributes")));
-    builders.scope_name
+    builders
+        .scope_name
         .append_option(scope.get("name").and_then(|v| v.as_str()));
-    builders.scope_version
+    builders
+        .scope_version
         .append_option(scope.get("version").and_then(|v| v.as_str()));
-    builders.scope_attributes
+    builders
+        .scope_attributes
         .append_value(json_attrs_to_string(scope.get("attributes")));
-    builders.span_attributes
+    builders
+        .span_attributes
         .append_value(json_attrs_to_string(span.get("attributes")));
 
-    builders.events_json
+    builders
+        .events_json
         .append_value(json_events_to_string(span.get("events")));
-    builders.links_json
+    builders
+        .links_json
         .append_value(json_links_to_string(span.get("links")));
 
     let dropped_attrs = get_i64(span, "droppedAttributesCount")
@@ -904,7 +1013,9 @@ fn append_span_json(
         .unwrap_or(0) as i32;
     let flags = get_i64(span, "flags").unwrap_or(0) as i32;
 
-    builders.dropped_attributes_count.append_value(dropped_attrs);
+    builders
+        .dropped_attributes_count
+        .append_value(dropped_attrs);
     builders.dropped_events_count.append_value(dropped_events);
     builders.dropped_links_count.append_value(dropped_links);
     builders.flags.append_value(flags);
@@ -918,9 +1029,7 @@ fn append_log_json(
     resource: &JsonValue,
     scope: &JsonValue,
 ) -> Result<(), DecodeError> {
-    let get_i64 = |obj: &JsonValue, key: &str| -> Option<i64> {
-        json_i64(obj.get(key)?)
-    };
+    let get_i64 = |obj: &JsonValue, key: &str| -> Option<i64> { json_i64(obj.get(key)?) };
     let get_str = |obj: &JsonValue, key: &str| -> Option<String> {
         obj.get(key)?.as_str().map(std::string::ToString::to_string)
     };
@@ -963,9 +1072,11 @@ fn append_log_json(
         ));
     }
     builders.service_name.append_value(&service_name);
-    builders.service_namespace
+    builders
+        .service_namespace
         .append_option(extract_json_string_attr(resource, "service.namespace"));
-    builders.service_instance_id
+    builders
+        .service_instance_id
         .append_option(extract_json_string_attr(resource, "service.instance.id"));
 
     let severity_number = get_i64(log, "severityNumber")
@@ -980,7 +1091,9 @@ fn append_log_json(
     // Body
     let body = log.get("body");
     let body_str = match body {
-        Some(JsonValue::Object(map)) if map.contains_key("stringValue") || map.contains_key("string_value") => {
+        Some(JsonValue::Object(map))
+            if map.contains_key("stringValue") || map.contains_key("string_value") =>
+        {
             map.get("stringValue")
                 .or_else(|| map.get("string_value"))
                 .and_then(|v| v.as_str())
@@ -992,15 +1105,20 @@ fn append_log_json(
     };
     builders.body.append_value(&body_str);
 
-    builders.resource_attributes
+    builders
+        .resource_attributes
         .append_value(json_attrs_to_string(resource.get("attributes")));
-    builders.scope_name
+    builders
+        .scope_name
         .append_option(scope.get("name").and_then(|v| v.as_str()));
-    builders.scope_version
+    builders
+        .scope_version
         .append_option(scope.get("version").and_then(|v| v.as_str()));
-    builders.scope_attributes
+    builders
+        .scope_attributes
         .append_value(json_attrs_to_string(scope.get("attributes")));
-    builders.log_attributes
+    builders
+        .log_attributes
         .append_value(json_attrs_to_string(log.get("attributes")));
 
     Ok(())
@@ -1025,22 +1143,32 @@ fn append_gauge_json(
         .unwrap_or_default();
 
     for point in &points {
-        let time = point.get("timeUnixNano")
+        let time = point
+            .get("timeUnixNano")
             .or_else(|| point.get("time_unix_nano"))
             .and_then(json_i64)
             .unwrap_or(0);
-        let start = point.get("startTimeUnixNano")
+        let start = point
+            .get("startTimeUnixNano")
             .or_else(|| point.get("start_time_unix_nano"))
             .and_then(json_i64)
             .unwrap_or(0);
 
-        let val = if let Some(d) = point.get("asDouble").or_else(|| point.get("as_double")).and_then(json_f64) {
+        let val = if let Some(d) = point
+            .get("asDouble")
+            .or_else(|| point.get("as_double"))
+            .and_then(json_f64)
+        {
             if d.is_nan() || d.is_infinite() {
                 skipped.nan_values += 1;
                 continue;
             }
             d
-        } else if let Some(i) = point.get("asInt").or_else(|| point.get("as_int")).and_then(json_i64) {
+        } else if let Some(i) = point
+            .get("asInt")
+            .or_else(|| point.get("as_int"))
+            .and_then(json_i64)
+        {
             i as f64
         } else {
             skipped.missing_values += 1;
@@ -1056,24 +1184,31 @@ fn append_gauge_json(
 
         let service_name = extract_json_string_attr(resource, "service.name").unwrap_or_default();
         builders.service_name.append_value(&service_name);
-        builders.service_namespace
+        builders
+            .service_namespace
             .append_option(extract_json_string_attr(resource, "service.namespace"));
-        builders.service_instance_id
+        builders
+            .service_instance_id
             .append_option(extract_json_string_attr(resource, "service.instance.id"));
 
-        builders.resource_attributes
+        builders
+            .resource_attributes
             .append_value(json_attrs_to_string(resource.get("attributes")));
-        builders.scope_name
+        builders
+            .scope_name
             .append_option(scope.get("name").and_then(|v| v.as_str()));
-        builders.scope_version
+        builders
+            .scope_version
             .append_option(scope.get("version").and_then(|v| v.as_str()));
-        builders.scope_attributes
+        builders
+            .scope_attributes
             .append_value(json_attrs_to_string(scope.get("attributes")));
-        builders.metric_attributes
+        builders
+            .metric_attributes
             .append_value(json_attrs_to_string(point.get("attributes")));
-        builders.flags.append_value(
-            point.get("flags").and_then(json_i64).unwrap_or(0) as i32
-        );
+        builders
+            .flags
+            .append_value(point.get("flags").and_then(json_i64).unwrap_or(0) as i32);
         builders.exemplars_json.append_value("[]");
     }
 
@@ -1110,22 +1245,32 @@ fn append_sum_json(
         .unwrap_or_default();
 
     for point in &points {
-        let time = point.get("timeUnixNano")
+        let time = point
+            .get("timeUnixNano")
             .or_else(|| point.get("time_unix_nano"))
             .and_then(json_i64)
             .unwrap_or(0);
-        let start = point.get("startTimeUnixNano")
+        let start = point
+            .get("startTimeUnixNano")
             .or_else(|| point.get("start_time_unix_nano"))
             .and_then(json_i64)
             .unwrap_or(0);
 
-        let val = if let Some(d) = point.get("asDouble").or_else(|| point.get("as_double")).and_then(json_f64) {
+        let val = if let Some(d) = point
+            .get("asDouble")
+            .or_else(|| point.get("as_double"))
+            .and_then(json_f64)
+        {
             if d.is_nan() || d.is_infinite() {
                 skipped.nan_values += 1;
                 continue;
             }
             d
-        } else if let Some(i) = point.get("asInt").or_else(|| point.get("as_int")).and_then(json_i64) {
+        } else if let Some(i) = point
+            .get("asInt")
+            .or_else(|| point.get("as_int"))
+            .and_then(json_i64)
+        {
             i as f64
         } else {
             skipped.missing_values += 1;
@@ -1141,24 +1286,31 @@ fn append_sum_json(
 
         let service_name = extract_json_string_attr(resource, "service.name").unwrap_or_default();
         builders.service_name.append_value(&service_name);
-        builders.service_namespace
+        builders
+            .service_namespace
             .append_option(extract_json_string_attr(resource, "service.namespace"));
-        builders.service_instance_id
+        builders
+            .service_instance_id
             .append_option(extract_json_string_attr(resource, "service.instance.id"));
 
-        builders.resource_attributes
+        builders
+            .resource_attributes
             .append_value(json_attrs_to_string(resource.get("attributes")));
-        builders.scope_name
+        builders
+            .scope_name
             .append_option(scope.get("name").and_then(|v| v.as_str()));
-        builders.scope_version
+        builders
+            .scope_version
             .append_option(scope.get("version").and_then(|v| v.as_str()));
-        builders.scope_attributes
+        builders
+            .scope_attributes
             .append_value(json_attrs_to_string(scope.get("attributes")));
-        builders.metric_attributes
+        builders
+            .metric_attributes
             .append_value(json_attrs_to_string(point.get("attributes")));
-        builders.flags.append_value(
-            point.get("flags").and_then(json_i64).unwrap_or(0) as i32
-        );
+        builders
+            .flags
+            .append_value(point.get("flags").and_then(json_i64).unwrap_or(0) as i32);
         builders.exemplars_json.append_value("[]");
         builders.aggregation_temporality.append_value(temporality);
         builders.is_monotonic.append_value(monotonic);
@@ -1191,11 +1343,13 @@ fn append_histogram_json(
         .unwrap_or_default();
 
     for point in &points {
-        let time = point.get("timeUnixNano")
+        let time = point
+            .get("timeUnixNano")
             .or_else(|| point.get("time_unix_nano"))
             .and_then(json_i64)
             .unwrap_or(0);
-        let start = point.get("startTimeUnixNano")
+        let start = point
+            .get("startTimeUnixNano")
             .or_else(|| point.get("start_time_unix_nano"))
             .and_then(json_i64)
             .unwrap_or(0);
@@ -1212,44 +1366,69 @@ fn append_histogram_json(
         builders.metric_unit.append_value(unit);
         builders.count.append_value(count);
 
-        if let Some(s) = sum { builders.sum.append_value(s); } else { builders.sum.append_null(); }
-        if let Some(m) = min { builders.min.append_value(m); } else { builders.min.append_null(); }
-        if let Some(m) = max { builders.max.append_value(m); } else { builders.max.append_null(); }
+        if let Some(s) = sum {
+            builders.sum.append_value(s);
+        } else {
+            builders.sum.append_null();
+        }
+        if let Some(m) = min {
+            builders.min.append_value(m);
+        } else {
+            builders.min.append_null();
+        }
+        if let Some(m) = max {
+            builders.max.append_value(m);
+        } else {
+            builders.max.append_null();
+        }
 
-        let bucket_counts: Vec<u64> = point.get("bucketCounts")
+        let bucket_counts: Vec<u64> = point
+            .get("bucketCounts")
             .or_else(|| point.get("bucket_counts"))
             .and_then(|v| v.as_array())
             .map(|arr| arr.iter().filter_map(json_u64).collect())
             .unwrap_or_default();
-        let explicit_bounds: Vec<f64> = point.get("explicitBounds")
+        let explicit_bounds: Vec<f64> = point
+            .get("explicitBounds")
             .or_else(|| point.get("explicit_bounds"))
             .and_then(|v| v.as_array())
             .map(|arr| arr.iter().filter_map(serde_json::Value::as_f64).collect())
             .unwrap_or_default();
 
-        builders.bucket_counts.append_value(serde_json::to_string(&bucket_counts).unwrap_or_else(|_| "[]".into()));
-        builders.explicit_bounds.append_value(serde_json::to_string(&explicit_bounds).unwrap_or_else(|_| "[]".into()));
+        builders
+            .bucket_counts
+            .append_value(serde_json::to_string(&bucket_counts).unwrap_or_else(|_| "[]".into()));
+        builders
+            .explicit_bounds
+            .append_value(serde_json::to_string(&explicit_bounds).unwrap_or_else(|_| "[]".into()));
 
         let service_name = extract_json_string_attr(resource, "service.name").unwrap_or_default();
         builders.service_name.append_value(&service_name);
-        builders.service_namespace
+        builders
+            .service_namespace
             .append_option(extract_json_string_attr(resource, "service.namespace"));
-        builders.service_instance_id
+        builders
+            .service_instance_id
             .append_option(extract_json_string_attr(resource, "service.instance.id"));
 
-        builders.resource_attributes
+        builders
+            .resource_attributes
             .append_value(json_attrs_to_string(resource.get("attributes")));
-        builders.scope_name
+        builders
+            .scope_name
             .append_option(scope.get("name").and_then(|v| v.as_str()));
-        builders.scope_version
+        builders
+            .scope_version
             .append_option(scope.get("version").and_then(|v| v.as_str()));
-        builders.scope_attributes
+        builders
+            .scope_attributes
             .append_value(json_attrs_to_string(scope.get("attributes")));
-        builders.metric_attributes
+        builders
+            .metric_attributes
             .append_value(json_attrs_to_string(point.get("attributes")));
-        builders.flags.append_value(
-            point.get("flags").and_then(json_i64).unwrap_or(0) as i32
-        );
+        builders
+            .flags
+            .append_value(point.get("flags").and_then(json_i64).unwrap_or(0) as i32);
         builders.exemplars_json.append_value("[]");
         builders.aggregation_temporality.append_value(temporality);
     }
@@ -1281,11 +1460,13 @@ fn append_exp_histogram_json(
         .unwrap_or_default();
 
     for point in &points {
-        let time = point.get("timeUnixNano")
+        let time = point
+            .get("timeUnixNano")
             .or_else(|| point.get("time_unix_nano"))
             .and_then(json_i64)
             .unwrap_or(0);
-        let start = point.get("startTimeUnixNano")
+        let start = point
+            .get("startTimeUnixNano")
             .or_else(|| point.get("start_time_unix_nano"))
             .and_then(json_i64)
             .unwrap_or(0);
@@ -1295,8 +1476,16 @@ fn append_exp_histogram_json(
         let min = point.get("min").and_then(json_f64);
         let max = point.get("max").and_then(json_f64);
         let scale = point.get("scale").and_then(json_i64).unwrap_or(0) as i32;
-        let zero_count = point.get("zeroCount").or_else(|| point.get("zero_count")).and_then(json_i64).unwrap_or(0);
-        let zero_threshold = point.get("zeroThreshold").or_else(|| point.get("zero_threshold")).and_then(json_f64).unwrap_or(0.0);
+        let zero_count = point
+            .get("zeroCount")
+            .or_else(|| point.get("zero_count"))
+            .and_then(json_i64)
+            .unwrap_or(0);
+        let zero_threshold = point
+            .get("zeroThreshold")
+            .or_else(|| point.get("zero_threshold"))
+            .and_then(json_f64)
+            .unwrap_or(0.0);
 
         builders.timestamp.append_value(time / 1000);
         builders.start_timestamp.append_value(start / 1000);
@@ -1305,9 +1494,21 @@ fn append_exp_histogram_json(
         builders.metric_unit.append_value(unit);
         builders.count.append_value(count);
 
-        if let Some(s) = sum { builders.sum.append_value(s); } else { builders.sum.append_null(); }
-        if let Some(m) = min { builders.min.append_value(m); } else { builders.min.append_null(); }
-        if let Some(m) = max { builders.max.append_value(m); } else { builders.max.append_null(); }
+        if let Some(s) = sum {
+            builders.sum.append_value(s);
+        } else {
+            builders.sum.append_null();
+        }
+        if let Some(m) = min {
+            builders.min.append_value(m);
+        } else {
+            builders.min.append_null();
+        }
+        if let Some(m) = max {
+            builders.max.append_value(m);
+        } else {
+            builders.max.append_null();
+        }
 
         builders.scale.append_value(scale);
         builders.zero_count.append_value(zero_count);
@@ -1315,13 +1516,16 @@ fn append_exp_histogram_json(
 
         if let Some(pos) = point.get("positive").and_then(|v| v.as_object()) {
             let offset = pos.get("offset").and_then(json_i64).unwrap_or(0) as i32;
-            let bucket_counts: Vec<u64> = pos.get("bucketCounts")
+            let bucket_counts: Vec<u64> = pos
+                .get("bucketCounts")
                 .or_else(|| pos.get("bucket_counts"))
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(json_u64).collect())
                 .unwrap_or_default();
             builders.positive_offset.append_value(offset);
-            builders.positive_bucket_counts.append_value(serde_json::to_string(&bucket_counts).unwrap_or_else(|_| "[]".into()));
+            builders.positive_bucket_counts.append_value(
+                serde_json::to_string(&bucket_counts).unwrap_or_else(|_| "[]".into()),
+            );
         } else {
             builders.positive_offset.append_null();
             builders.positive_bucket_counts.append_value("[]");
@@ -1329,13 +1533,16 @@ fn append_exp_histogram_json(
 
         if let Some(neg) = point.get("negative").and_then(|v| v.as_object()) {
             let offset = neg.get("offset").and_then(json_i64).unwrap_or(0) as i32;
-            let bucket_counts: Vec<u64> = neg.get("bucketCounts")
+            let bucket_counts: Vec<u64> = neg
+                .get("bucketCounts")
                 .or_else(|| neg.get("bucket_counts"))
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(json_u64).collect())
                 .unwrap_or_default();
             builders.negative_offset.append_value(offset);
-            builders.negative_bucket_counts.append_value(serde_json::to_string(&bucket_counts).unwrap_or_else(|_| "[]".into()));
+            builders.negative_bucket_counts.append_value(
+                serde_json::to_string(&bucket_counts).unwrap_or_else(|_| "[]".into()),
+            );
         } else {
             builders.negative_offset.append_null();
             builders.negative_bucket_counts.append_value("[]");
@@ -1343,24 +1550,31 @@ fn append_exp_histogram_json(
 
         let service_name = extract_json_string_attr(resource, "service.name").unwrap_or_default();
         builders.service_name.append_value(&service_name);
-        builders.service_namespace
+        builders
+            .service_namespace
             .append_option(extract_json_string_attr(resource, "service.namespace"));
-        builders.service_instance_id
+        builders
+            .service_instance_id
             .append_option(extract_json_string_attr(resource, "service.instance.id"));
 
-        builders.resource_attributes
+        builders
+            .resource_attributes
             .append_value(json_attrs_to_string(resource.get("attributes")));
-        builders.scope_name
+        builders
+            .scope_name
             .append_option(scope.get("name").and_then(|v| v.as_str()));
-        builders.scope_version
+        builders
+            .scope_version
             .append_option(scope.get("version").and_then(|v| v.as_str()));
-        builders.scope_attributes
+        builders
+            .scope_attributes
             .append_value(json_attrs_to_string(scope.get("attributes")));
-        builders.metric_attributes
+        builders
+            .metric_attributes
             .append_value(json_attrs_to_string(point.get("attributes")));
-        builders.flags.append_value(
-            point.get("flags").and_then(json_i64).unwrap_or(0) as i32
-        );
+        builders
+            .flags
+            .append_value(point.get("flags").and_then(json_i64).unwrap_or(0) as i32);
         builders.exemplars_json.append_value("[]");
         builders.aggregation_temporality.append_value(temporality);
     }
@@ -1388,27 +1602,24 @@ fn json_u64(value: &JsonValue) -> Option<u64> {
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
 }
 
-
-
 fn extract_string_attr(
     resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,
     key: &str,
 ) -> Option<String> {
-    resource
-        .and_then(|r| {
-            r.attributes.iter().find_map(|kv| {
-                if kv.key == key {
-                    kv.value.as_ref().and_then(|v| match &v.value {
-                        Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s)) if !s.is_empty() => {
-                            Some(s.clone())
-                        }
-                        _ => None,
-                    })
-                } else {
-                    None
-                }
-            })
+    resource.and_then(|r| {
+        r.attributes.iter().find_map(|kv| {
+            if kv.key == key {
+                kv.value.as_ref().and_then(|v| match &v.value {
+                    Some(
+                        opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s),
+                    ) if !s.is_empty() => Some(s.clone()),
+                    _ => None,
+                })
+            } else {
+                None
+            }
         })
+    })
 }
 
 fn extract_json_string_attr(resource: &JsonValue, key: &str) -> Option<String> {
@@ -1432,9 +1643,7 @@ fn extract_json_string_attr(resource: &JsonValue, key: &str) -> Option<String> {
         })
 }
 
-fn attrs_to_json(
-    attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue],
-) -> String {
+fn attrs_to_json(attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue]) -> String {
     if attrs.is_empty() {
         return "{}".to_string();
     }
@@ -1449,9 +1658,7 @@ fn attrs_to_json(
     serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn any_value_to_json(
-    av: &opentelemetry_proto::tonic::common::v1::AnyValue,
-) -> Option<JsonValue> {
+fn any_value_to_json(av: &opentelemetry_proto::tonic::common::v1::AnyValue) -> Option<JsonValue> {
     use opentelemetry_proto::tonic::common::v1::any_value::Value;
     match &av.value {
         Some(Value::StringValue(s)) => Some(JsonValue::String(s.clone())),
@@ -1459,11 +1666,7 @@ fn any_value_to_json(
         Some(Value::IntValue(i)) => Some(JsonValue::Number((*i).into())),
         Some(Value::DoubleValue(d)) => serde_json::Number::from_f64(*d).map(JsonValue::Number),
         Some(Value::ArrayValue(arr)) => {
-            let values: Vec<JsonValue> = arr
-                .values
-                .iter()
-                .filter_map(any_value_to_json)
-                .collect();
+            let values: Vec<JsonValue> = arr.values.iter().filter_map(any_value_to_json).collect();
             Some(JsonValue::Array(values))
         }
         Some(Value::KvlistValue(kvlist)) => {
@@ -1499,9 +1702,7 @@ fn json_attrs_to_string(attrs: Option<&JsonValue>) -> String {
     }
 }
 
-fn events_to_json(
-    events: &[opentelemetry_proto::tonic::trace::v1::span::Event],
-) -> String {
+fn events_to_json(events: &[opentelemetry_proto::tonic::trace::v1::span::Event]) -> String {
     if events.is_empty() {
         return "[]".to_string();
     }
@@ -1519,9 +1720,7 @@ fn events_to_json(
     serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string())
 }
 
-fn links_to_json(
-    links: &[opentelemetry_proto::tonic::trace::v1::span::Link],
-) -> String {
+fn links_to_json(links: &[opentelemetry_proto::tonic::trace::v1::span::Link]) -> String {
     if links.is_empty() {
         return "[]".to_string();
     }
@@ -1558,9 +1757,7 @@ fn json_links_to_string(links: Option<&JsonValue>) -> String {
     }
 }
 
-fn exemplars_to_json(
-    exemplars: &[opentelemetry_proto::tonic::metrics::v1::Exemplar],
-) -> String {
+fn exemplars_to_json(exemplars: &[opentelemetry_proto::tonic::metrics::v1::Exemplar]) -> String {
     if exemplars.is_empty() {
         return "[]".to_string();
     }
@@ -1568,18 +1765,29 @@ fn exemplars_to_json(
         .iter()
         .map(|e| {
             let mut map = serde_json::Map::new();
-            map.insert("trace_id".to_string(), JsonValue::String(hex::encode(&e.trace_id)));
-            map.insert("span_id".to_string(), JsonValue::String(hex::encode(&e.span_id)));
-            map.insert("time_unix_nano".to_string(), JsonValue::Number(e.time_unix_nano.into()));
-            if let Some(filtered_attrs) = any_value_to_json(
-                &opentelemetry_proto::tonic::common::v1::AnyValue {
-                    value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::KvlistValue(
-                        opentelemetry_proto::tonic::common::v1::KeyValueList {
-                            values: e.filtered_attributes.clone(),
-                        },
-                    )),
-                }
-            ) {
+            map.insert(
+                "trace_id".to_string(),
+                JsonValue::String(hex::encode(&e.trace_id)),
+            );
+            map.insert(
+                "span_id".to_string(),
+                JsonValue::String(hex::encode(&e.span_id)),
+            );
+            map.insert(
+                "time_unix_nano".to_string(),
+                JsonValue::Number(e.time_unix_nano.into()),
+            );
+            if let Some(filtered_attrs) =
+                any_value_to_json(&opentelemetry_proto::tonic::common::v1::AnyValue {
+                    value: Some(
+                        opentelemetry_proto::tonic::common::v1::any_value::Value::KvlistValue(
+                            opentelemetry_proto::tonic::common::v1::KeyValueList {
+                                values: e.filtered_attributes.clone(),
+                            },
+                        ),
+                    ),
+                })
+            {
                 map.insert("filtered_attributes".to_string(), filtered_attrs);
             }
             let val = match &e.value {
@@ -1706,14 +1914,16 @@ impl LogBuilders {
         };
         self.body.append_value(&body_str);
 
-        self.resource_attributes
-            .append_value(attrs_to_json(resource.map(|r| &r.attributes[..]).unwrap_or(&[])));
+        self.resource_attributes.append_value(attrs_to_json(
+            resource.map(|r| &r.attributes[..]).unwrap_or(&[]),
+        ));
         self.scope_name
             .append_option(scope.map(|s| s.name.as_str()));
         self.scope_version
             .append_option(scope.map(|s| s.version.as_str()));
-        self.scope_attributes
-            .append_value(attrs_to_json(scope.map(|s| &s.attributes[..]).unwrap_or(&[])));
+        self.scope_attributes.append_value(attrs_to_json(
+            scope.map(|s| &s.attributes[..]).unwrap_or(&[]),
+        ));
         self.log_attributes
             .append_value(attrs_to_json(&log.attributes));
 
@@ -1823,8 +2033,12 @@ impl GaugeBuilders {
         ctx: &MetricContext<'_>,
     ) -> Result<bool, DecodeError> {
         let val = match &point.value {
-            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(i)) => *i as f64,
-            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d)) => {
+            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(i)) => {
+                *i as f64
+            }
+            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(
+                d,
+            )) => {
                 if d.is_nan() || d.is_infinite() {
                     return Ok(false);
                 }
@@ -1834,10 +2048,16 @@ impl GaugeBuilders {
         };
 
         let time = i64::try_from(point.time_unix_nano).map_err(|_| {
-            DecodeError::Unsupported(format!("timestamp overflow: time_unix_nano {}", point.time_unix_nano))
+            DecodeError::Unsupported(format!(
+                "timestamp overflow: time_unix_nano {}",
+                point.time_unix_nano
+            ))
         })?;
         let start = i64::try_from(point.start_time_unix_nano).map_err(|_| {
-            DecodeError::Unsupported(format!("timestamp overflow: start_time_unix_nano {}", point.start_time_unix_nano))
+            DecodeError::Unsupported(format!(
+                "timestamp overflow: start_time_unix_nano {}",
+                point.start_time_unix_nano
+            ))
         })?;
 
         self.timestamp.append_value(time / 1000);
@@ -1854,18 +2074,21 @@ impl GaugeBuilders {
         self.service_instance_id
             .append_option(extract_string_attr(ctx.resource, "service.instance.id"));
 
-        self.resource_attributes
-            .append_value(attrs_to_json(ctx.resource.map(|r| &r.attributes[..]).unwrap_or(&[])));
+        self.resource_attributes.append_value(attrs_to_json(
+            ctx.resource.map(|r| &r.attributes[..]).unwrap_or(&[]),
+        ));
         self.scope_name
             .append_option(ctx.scope.map(|s| s.name.as_str()));
         self.scope_version
             .append_option(ctx.scope.map(|s| s.version.as_str()));
-        self.scope_attributes
-            .append_value(attrs_to_json(ctx.scope.map(|s| &s.attributes[..]).unwrap_or(&[])));
+        self.scope_attributes.append_value(attrs_to_json(
+            ctx.scope.map(|s| &s.attributes[..]).unwrap_or(&[]),
+        ));
         self.metric_attributes
             .append_value(attrs_to_json(&point.attributes));
         self.flags.append_value(point.flags as i32);
-        self.exemplars_json.append_value(exemplars_to_json(&point.exemplars));
+        self.exemplars_json
+            .append_value(exemplars_to_json(&point.exemplars));
 
         Ok(true)
     }
@@ -1951,8 +2174,12 @@ impl SumBuilders {
         monotonic: bool,
     ) -> Result<bool, DecodeError> {
         let val = match &point.value {
-            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(i)) => *i as f64,
-            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d)) => {
+            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(i)) => {
+                *i as f64
+            }
+            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(
+                d,
+            )) => {
                 if d.is_nan() || d.is_infinite() {
                     return Ok(false);
                 }
@@ -1962,10 +2189,16 @@ impl SumBuilders {
         };
 
         let time = i64::try_from(point.time_unix_nano).map_err(|_| {
-            DecodeError::Unsupported(format!("timestamp overflow: time_unix_nano {}", point.time_unix_nano))
+            DecodeError::Unsupported(format!(
+                "timestamp overflow: time_unix_nano {}",
+                point.time_unix_nano
+            ))
         })?;
         let start = i64::try_from(point.start_time_unix_nano).map_err(|_| {
-            DecodeError::Unsupported(format!("timestamp overflow: start_time_unix_nano {}", point.start_time_unix_nano))
+            DecodeError::Unsupported(format!(
+                "timestamp overflow: start_time_unix_nano {}",
+                point.start_time_unix_nano
+            ))
         })?;
 
         self.timestamp.append_value(time / 1000);
@@ -1982,18 +2215,21 @@ impl SumBuilders {
         self.service_instance_id
             .append_option(extract_string_attr(ctx.resource, "service.instance.id"));
 
-        self.resource_attributes
-            .append_value(attrs_to_json(ctx.resource.map(|r| &r.attributes[..]).unwrap_or(&[])));
+        self.resource_attributes.append_value(attrs_to_json(
+            ctx.resource.map(|r| &r.attributes[..]).unwrap_or(&[]),
+        ));
         self.scope_name
             .append_option(ctx.scope.map(|s| s.name.as_str()));
         self.scope_version
             .append_option(ctx.scope.map(|s| s.version.as_str()));
-        self.scope_attributes
-            .append_value(attrs_to_json(ctx.scope.map(|s| &s.attributes[..]).unwrap_or(&[])));
+        self.scope_attributes.append_value(attrs_to_json(
+            ctx.scope.map(|s| &s.attributes[..]).unwrap_or(&[]),
+        ));
         self.metric_attributes
             .append_value(attrs_to_json(&point.attributes));
         self.flags.append_value(point.flags as i32);
-        self.exemplars_json.append_value(exemplars_to_json(&point.exemplars));
+        self.exemplars_json
+            .append_value(exemplars_to_json(&point.exemplars));
         self.aggregation_temporality.append_value(temporality);
         self.is_monotonic.append_value(monotonic);
 
@@ -2090,10 +2326,16 @@ impl HistogramBuilders {
         temporality: i32,
     ) -> Result<(), DecodeError> {
         let time = i64::try_from(point.time_unix_nano).map_err(|_| {
-            DecodeError::Unsupported(format!("timestamp overflow: time_unix_nano {}", point.time_unix_nano))
+            DecodeError::Unsupported(format!(
+                "timestamp overflow: time_unix_nano {}",
+                point.time_unix_nano
+            ))
         })?;
         let start = i64::try_from(point.start_time_unix_nano).map_err(|_| {
-            DecodeError::Unsupported(format!("timestamp overflow: start_time_unix_nano {}", point.start_time_unix_nano))
+            DecodeError::Unsupported(format!(
+                "timestamp overflow: start_time_unix_nano {}",
+                point.start_time_unix_nano
+            ))
         })?;
 
         self.timestamp.append_value(time / 1000);
@@ -2103,12 +2345,28 @@ impl HistogramBuilders {
         self.metric_unit.append_value(ctx.unit);
         self.count.append_value(point.count as i64);
 
-        if let Some(s) = point.sum { self.sum.append_value(s); } else { self.sum.append_null(); }
-        if let Some(m) = point.min { self.min.append_value(m); } else { self.min.append_null(); }
-        if let Some(m) = point.max { self.max.append_value(m); } else { self.max.append_null(); }
+        if let Some(s) = point.sum {
+            self.sum.append_value(s);
+        } else {
+            self.sum.append_null();
+        }
+        if let Some(m) = point.min {
+            self.min.append_value(m);
+        } else {
+            self.min.append_null();
+        }
+        if let Some(m) = point.max {
+            self.max.append_value(m);
+        } else {
+            self.max.append_null();
+        }
 
-        self.bucket_counts.append_value(serde_json::to_string(&point.bucket_counts).unwrap_or_else(|_| "[]".into()));
-        self.explicit_bounds.append_value(serde_json::to_string(&point.explicit_bounds).unwrap_or_else(|_| "[]".into()));
+        self.bucket_counts.append_value(
+            serde_json::to_string(&point.bucket_counts).unwrap_or_else(|_| "[]".into()),
+        );
+        self.explicit_bounds.append_value(
+            serde_json::to_string(&point.explicit_bounds).unwrap_or_else(|_| "[]".into()),
+        );
 
         let service_name = extract_string_attr(ctx.resource, "service.name").unwrap_or_default();
         self.service_name.append_value(&service_name);
@@ -2117,18 +2375,21 @@ impl HistogramBuilders {
         self.service_instance_id
             .append_option(extract_string_attr(ctx.resource, "service.instance.id"));
 
-        self.resource_attributes
-            .append_value(attrs_to_json(ctx.resource.map(|r| &r.attributes[..]).unwrap_or(&[])));
+        self.resource_attributes.append_value(attrs_to_json(
+            ctx.resource.map(|r| &r.attributes[..]).unwrap_or(&[]),
+        ));
         self.scope_name
             .append_option(ctx.scope.map(|s| s.name.as_str()));
         self.scope_version
             .append_option(ctx.scope.map(|s| s.version.as_str()));
-        self.scope_attributes
-            .append_value(attrs_to_json(ctx.scope.map(|s| &s.attributes[..]).unwrap_or(&[])));
+        self.scope_attributes.append_value(attrs_to_json(
+            ctx.scope.map(|s| &s.attributes[..]).unwrap_or(&[]),
+        ));
         self.metric_attributes
             .append_value(attrs_to_json(&point.attributes));
         self.flags.append_value(point.flags as i32);
-        self.exemplars_json.append_value(exemplars_to_json(&point.exemplars));
+        self.exemplars_json
+            .append_value(exemplars_to_json(&point.exemplars));
         self.aggregation_temporality.append_value(temporality);
 
         Ok(())
@@ -2238,10 +2499,16 @@ impl ExpHistogramBuilders {
         temporality: i32,
     ) -> Result<(), DecodeError> {
         let time = i64::try_from(point.time_unix_nano).map_err(|_| {
-            DecodeError::Unsupported(format!("timestamp overflow: time_unix_nano {}", point.time_unix_nano))
+            DecodeError::Unsupported(format!(
+                "timestamp overflow: time_unix_nano {}",
+                point.time_unix_nano
+            ))
         })?;
         let start = i64::try_from(point.start_time_unix_nano).map_err(|_| {
-            DecodeError::Unsupported(format!("timestamp overflow: start_time_unix_nano {}", point.start_time_unix_nano))
+            DecodeError::Unsupported(format!(
+                "timestamp overflow: start_time_unix_nano {}",
+                point.start_time_unix_nano
+            ))
         })?;
 
         self.timestamp.append_value(time / 1000);
@@ -2251,9 +2518,21 @@ impl ExpHistogramBuilders {
         self.metric_unit.append_value(ctx.unit);
         self.count.append_value(point.count as i64);
 
-        if let Some(s) = point.sum { self.sum.append_value(s); } else { self.sum.append_null(); }
-        if let Some(m) = point.min { self.min.append_value(m); } else { self.min.append_null(); }
-        if let Some(m) = point.max { self.max.append_value(m); } else { self.max.append_null(); }
+        if let Some(s) = point.sum {
+            self.sum.append_value(s);
+        } else {
+            self.sum.append_null();
+        }
+        if let Some(m) = point.min {
+            self.min.append_value(m);
+        } else {
+            self.min.append_null();
+        }
+        if let Some(m) = point.max {
+            self.max.append_value(m);
+        } else {
+            self.max.append_null();
+        }
 
         self.scale.append_value(point.scale);
         self.zero_count.append_value(point.zero_count as i64);
@@ -2261,7 +2540,9 @@ impl ExpHistogramBuilders {
 
         if let Some(pos) = &point.positive {
             self.positive_offset.append_value(pos.offset);
-            self.positive_bucket_counts.append_value(serde_json::to_string(&pos.bucket_counts).unwrap_or_else(|_| "[]".into()));
+            self.positive_bucket_counts.append_value(
+                serde_json::to_string(&pos.bucket_counts).unwrap_or_else(|_| "[]".into()),
+            );
         } else {
             self.positive_offset.append_null();
             self.positive_bucket_counts.append_value("[]");
@@ -2269,7 +2550,9 @@ impl ExpHistogramBuilders {
 
         if let Some(neg) = &point.negative {
             self.negative_offset.append_value(neg.offset);
-            self.negative_bucket_counts.append_value(serde_json::to_string(&neg.bucket_counts).unwrap_or_else(|_| "[]".into()));
+            self.negative_bucket_counts.append_value(
+                serde_json::to_string(&neg.bucket_counts).unwrap_or_else(|_| "[]".into()),
+            );
         } else {
             self.negative_offset.append_null();
             self.negative_bucket_counts.append_value("[]");
@@ -2282,18 +2565,21 @@ impl ExpHistogramBuilders {
         self.service_instance_id
             .append_option(extract_string_attr(ctx.resource, "service.instance.id"));
 
-        self.resource_attributes
-            .append_value(attrs_to_json(ctx.resource.map(|r| &r.attributes[..]).unwrap_or(&[])));
+        self.resource_attributes.append_value(attrs_to_json(
+            ctx.resource.map(|r| &r.attributes[..]).unwrap_or(&[]),
+        ));
         self.scope_name
             .append_option(ctx.scope.map(|s| s.name.as_str()));
         self.scope_version
             .append_option(ctx.scope.map(|s| s.version.as_str()));
-        self.scope_attributes
-            .append_value(attrs_to_json(ctx.scope.map(|s| &s.attributes[..]).unwrap_or(&[])));
+        self.scope_attributes.append_value(attrs_to_json(
+            ctx.scope.map(|s| &s.attributes[..]).unwrap_or(&[]),
+        ));
         self.metric_attributes
             .append_value(attrs_to_json(&point.attributes));
         self.flags.append_value(point.flags as i32);
-        self.exemplars_json.append_value(exemplars_to_json(&point.exemplars));
+        self.exemplars_json
+            .append_value(exemplars_to_json(&point.exemplars));
         self.aggregation_temporality.append_value(temporality);
 
         Ok(())

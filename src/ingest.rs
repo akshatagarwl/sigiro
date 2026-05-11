@@ -1,3 +1,4 @@
+use crate::otlp::{InputFormat, MetricBatches};
 use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -22,7 +23,6 @@ use opentelemetry_proto::tonic::collector::{
         trace_service_server::{TraceService, TraceServiceServer},
     },
 };
-use crate::otlp::{InputFormat, MetricBatches};
 use prost::Message;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
@@ -100,10 +100,6 @@ pub fn extract_project_id_grpc(
         .strip_prefix("Bearer ")
         .ok_or_else(|| Status::unauthenticated("Expected: Bearer <key>"))?;
 
-    if crate::auth::is_dev_project(token) {
-        return Ok("dev_project".to_string());
-    }
-
     let ctx = crate::auth::verify_key_cached(admin_conn, token)
         .map_err(|_| Status::unauthenticated("Invalid API key"))?;
     Ok(ctx.project_id)
@@ -170,10 +166,11 @@ impl TraceService for OtlpGrpcService {
     ) -> Result<Response<ExportTraceServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         // Transform on tokio blocking pool — no double decode.
-        // Encode once (prost), decode once (otlp2records). Previously: decode (tonic) → encode (prost) → decode (otlp2records).
+        // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_traces(bytes, InputFormat::Protobuf).await?;
-        self.route_batch(project_id.clone(), IngestMsg::Traces { project_id, batch }).await?;
+        self.route_batch(project_id.clone(), IngestMsg::Traces { project_id, batch })
+            .await?;
         Ok(Response::new(ExportTraceServiceResponse {
             partial_success: None,
         }))
@@ -190,7 +187,8 @@ impl LogsService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_logs(bytes, InputFormat::Protobuf).await?;
-        self.route_batch(project_id.clone(), IngestMsg::Logs { project_id, batch }).await?;
+        self.route_batch(project_id.clone(), IngestMsg::Logs { project_id, batch })
+            .await?;
         Ok(Response::new(ExportLogsServiceResponse {
             partial_success: None,
         }))
@@ -207,7 +205,14 @@ impl MetricsService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
-        self.route_batch(project_id.clone(), IngestMsg::Metrics { project_id, batches }).await?;
+        self.route_batch(
+            project_id.clone(),
+            IngestMsg::Metrics {
+                project_id,
+                batches,
+            },
+        )
+        .await?;
         Ok(Response::new(ExportMetricsServiceResponse {
             partial_success: None,
         }))
@@ -487,7 +492,11 @@ impl ProfilesService for OtlpGrpcService {
         let batch = tokio::task::spawn_blocking(move || transform_profiles(req))
             .await
             .map_err(|e| Status::internal(format!("transform task panicked: {e}")))??;
-        self.route_batch(project_id.clone(), IngestMsg::Profiles { project_id, batch }).await?;
+        self.route_batch(
+            project_id.clone(),
+            IngestMsg::Profiles { project_id, batch },
+        )
+        .await?;
         Ok(Response::new(ExportProfilesServiceResponse {
             partial_success: None,
         }))
@@ -529,10 +538,6 @@ pub fn extract_project_id_http(
             tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
             StatusCode::UNAUTHORIZED
         })?;
-
-    if crate::auth::is_dev_project(token) {
-        return Ok("dev_project".to_string());
-    }
 
     let ctx = crate::auth::verify_key_cached(admin_conn, token).map_err(|_| {
         tracing::warn!("OTLP HTTP: invalid API key");
@@ -857,7 +862,6 @@ fn extract_service_name(
     }
     None
 }
-
 
 /// Parse the request body, handling both raw protobuf and Pyroscope SDK multipart/form-data.
 ///

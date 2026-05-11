@@ -82,14 +82,22 @@ pub fn query_service_context(ctx: &QueryCtx) -> Result<ServiceContext> {
 }
 
 /// Query service dependencies with span_count and error_count.
-fn query_service_dependencies(ctx: &QueryCtx, is_dependency: bool) -> Result<Vec<ServiceDependency>> {
+fn query_service_dependencies(
+    ctx: &QueryCtx,
+    is_dependency: bool,
+) -> Result<Vec<ServiceDependency>> {
     let error_code = StatusCode::Error.as_i32();
     let (_join_cond, _filter_cond) = if is_dependency {
-        ("s1.trace_id = s2.trace_id", "s1.service_name = ? AND s2.service_name != ?")
+        (
+            "s1.trace_id = s2.trace_id",
+            "s1.service_name = ? AND s2.service_name != ?",
+        )
     } else {
-        ("s1.trace_id = s2.trace_id", "s2.service_name = ? AND s1.service_name != ?")
+        (
+            "s1.trace_id = s2.trace_id",
+            "s2.service_name = ? AND s1.service_name != ?",
+        )
     };
-
 
     let service_param = ctx.service;
     let other_param = ctx.service;
@@ -131,14 +139,11 @@ fn query_service_dependencies(ctx: &QueryCtx, is_dependency: bool) -> Result<Vec
     query_collect(
         ctx.conn,
         &sql_with_params,
-        duckdb::params![
-            service_param,
-            other_param,
-            ctx.from_ts,
-            ctx.to_ts
-        ],
+        duckdb::params![service_param, other_param, ctx.from_ts, ctx.to_ts],
         |row| {
-            let service_name = row.get::<_, String>("service_name").context("service_name")?;
+            let service_name = row
+                .get::<_, String>("service_name")
+                .context("service_name")?;
             let span_count = row.get::<_, i64>("span_count").context("span_count")?;
             let error_count = row.get::<_, i64>("error_count").context("error_count")?;
             let error_rate = if span_count > 0 {
@@ -166,19 +171,19 @@ fn query_collect<T>(
     params: impl duckdb::Params,
     parse_row: impl Fn(&duckdb::Row<'_>) -> Result<T>,
 ) -> Result<Vec<T>> {
-    let mut stmt = conn.prepare(sql).map_err(|e| {
-        anyhow::anyhow!("DuckDB prepare failed: {e}\nSQL: {sql}")
-    })?;
-    let mut rows = stmt.query(params).map_err(|e| {
-        anyhow::anyhow!("DuckDB query failed: {e}\nSQL: {sql}")
-    })?;
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| anyhow::anyhow!("DuckDB prepare failed: {e}\nSQL: {sql}"))?;
+    let mut rows = stmt
+        .query(params)
+        .map_err(|e| anyhow::anyhow!("DuckDB query failed: {e}\nSQL: {sql}"))?;
     let mut results = Vec::new();
-    while let Some(row) = rows.next().map_err(|e| {
-        anyhow::anyhow!("DuckDB row iteration failed: {e}\nSQL: {sql}")
-    })? {
-        let row_result = parse_row(row).map_err(|e| {
-            anyhow::anyhow!("DuckDB row parsing failed: {e}\nSQL: {sql}")
-        });
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| anyhow::anyhow!("DuckDB row iteration failed: {e}\nSQL: {sql}"))?
+    {
+        let row_result = parse_row(row)
+            .map_err(|e| anyhow::anyhow!("DuckDB row parsing failed: {e}\nSQL: {sql}"));
         results.push(row_result?);
     }
     Ok(results)
@@ -472,15 +477,18 @@ fn investigate_one(
     enrich_pattern_unique_values(&ctx, &mut log_patterns)
         .context("enrich pattern unique values failed")?;
     let linked_traces = query_linked_traces(&ctx, &spans).context("linked traces query failed")?;
-    let linked_spans_returned: i64 = linked_traces
-        .iter()
-        .map(|lt| lt.spans.len() as i64)
-        .sum();
+    let linked_spans_returned: i64 = linked_traces.iter().map(|lt| lt.spans.len() as i64).sum();
 
     // Build timeline from spans, events, and logs.
     let derived_events: Vec<(String, String, String)> = query_derived_events(&ctx)?
         .iter()
-        .map(|e| (e.detected_at.clone(), e.event_type.clone(), e.description.clone()))
+        .map(|e| {
+            (
+                e.detected_at.clone(),
+                e.event_type.clone(),
+                e.description.clone(),
+            )
+        })
         .collect();
     let timeline = build_timeline(&spans, &derived_events, &logs);
 
@@ -523,7 +531,10 @@ fn investigate_one(
 fn group_spans_into_traces(spans: &[Span]) -> Vec<Trace> {
     let mut trace_map: BTreeMap<String, Vec<Span>> = BTreeMap::new();
     for span in spans {
-        trace_map.entry(span.trace_id.clone()).or_default().push(span.clone());
+        trace_map
+            .entry(span.trace_id.clone())
+            .or_default()
+            .push(span.clone());
     }
 
     let mut traces = Vec::new();
@@ -629,7 +640,12 @@ fn count_span_stats(ctx: &QueryCtx) -> Result<(i64, i64)> {
                 ctx.prefix
             ),
             duckdb::params![ctx.service, ctx.from_ts, ctx.to_ts],
-            |row| Ok((row.get::<_, i64>("total")?, row.get::<_, i64>("error_count")?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>("total")?,
+                    row.get::<_, i64>("error_count")?,
+                ))
+            },
         )
         .context("count span stats failed")
 }
@@ -705,15 +721,14 @@ fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
             let duration_p50_ns = row.get::<_, f64>("p50").context("p50")?;
             let duration_p95_ns = row.get::<_, f64>("p95").context("p95")?;
             let duration_p99_ns = row.get::<_, f64>("p99").context("p99")?;
-            let exemplar_error_trace_id = row.get::<_, Option<String>>("exemplar_error_trace_id")?;
+            let exemplar_error_trace_id =
+                row.get::<_, Option<String>>("exemplar_error_trace_id")?;
             let baseline_error_pct = row.get::<_, Option<f64>>("bl_err_pct")?;
             let baseline_p95_ns = row.get::<_, Option<f64>>("bl_p95")?;
             let baseline_count = row.get::<_, Option<i64>>("bl_cnt")?;
 
             // Detect anomalies.
-            let is_anomalous = baseline_error_pct.map(|be| {
-                error_pct > be * 2.0 && error_pct > 5.0
-            });
+            let is_anomalous = baseline_error_pct.map(|be| error_pct > be * 2.0 && error_pct > 5.0);
 
             let anomaly_reason = is_anomalous.filter(|&a| a).map(|_| {
                 if let Some(be) = baseline_error_pct {
@@ -878,7 +893,9 @@ pub fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>>
             let template_id = row.get::<_, Option<u64>>("template_id")?;
             let example_body = row.get::<_, Option<String>>("example_body")?;
             let template_values = row.get::<_, Option<String>>("template_values")?;
-            let severity_text = row.get::<_, String>("severity_text").context("severity_text")?;
+            let severity_text = row
+                .get::<_, String>("severity_text")
+                .context("severity_text")?;
             let count = row.get::<_, i64>("count").context("count")?;
             let first_seen = row.get::<_, Option<String>>("first_seen")?;
             let last_seen = row.get::<_, Option<String>>("last_seen")?;
@@ -920,19 +937,14 @@ pub fn query_log_patterns(ctx: &QueryCtx, limit: i64) -> Result<Vec<LogPattern>>
 /// Enrich log patterns with structured variable slots.
 /// Queries all template_values for each pattern, parses wildcards from the template,
 /// and aggregates unique values per slot.
-pub fn enrich_pattern_unique_values(
-    ctx: &QueryCtx,
-    patterns: &mut [LogPattern],
-) -> Result<()> {
+pub fn enrich_pattern_unique_values(ctx: &QueryCtx, patterns: &mut [LogPattern]) -> Result<()> {
     if patterns.is_empty() {
         return Ok(());
     }
 
     // Build a map from pattern string -> (template_id, Vec<Vec<values>>)
-    let mut pattern_map: std::collections::HashMap<
-        String,
-        (Option<u64>, Vec<Vec<String>>),
-    > = std::collections::HashMap::new();
+    let mut pattern_map: std::collections::HashMap<String, (Option<u64>, Vec<Vec<String>>)> =
+        std::collections::HashMap::new();
 
     // Seed with template_ids from patterns
     for p in patterns.iter() {
@@ -962,8 +974,7 @@ pub fn enrich_pattern_unique_values(
     while let Some(row) = rows.next()? {
         let pattern: String = row.get(0)?;
         let values_json: String = row.get(1)?;
-        let values: Vec<String> =
-            serde_json::from_str(&values_json).unwrap_or_else(|_| Vec::new());
+        let values: Vec<String> = serde_json::from_str(&values_json).unwrap_or_else(|_| Vec::new());
 
         if let Some((_, slots)) = pattern_map.get_mut(&pattern) {
             // Ensure we have enough slots
@@ -989,11 +1000,10 @@ pub fn enrich_pattern_unique_values(
             if *token == "<*>" {
                 let ctx_before = pos
                     .checked_sub(1)
-                    .and_then(|p| tokens.get(p)).copied()
+                    .and_then(|p| tokens.get(p))
+                    .copied()
                     .unwrap_or("");
-                let ctx_after = tokens
-                    .get(pos + 1).copied()
-                    .unwrap_or("");
+                let ctx_after = tokens.get(pos + 1).copied().unwrap_or("");
                 vars.push(TemplateVariable {
                     wildcard_index: vars.len(),
                     token_position: pos,

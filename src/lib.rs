@@ -38,8 +38,8 @@ pub use investigate::{InvestigationBlock, Window, query_raw_logs};
 pub use types::{IngestMsg, SignalTable, StatusCode, SupervisorHandle, TimestampMicros};
 // Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
 pub use inserter::MsgRouter;
-pub use server::ApiDoc;
 pub use responses::{ServiceBreakdownEntry, SpanDetail, TraceDetailResponse};
+pub use server::ApiDoc;
 
 pub fn data_dir() -> Result<PathBuf> {
     crate::config::DATA_DIR

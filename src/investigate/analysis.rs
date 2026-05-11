@@ -4,7 +4,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-
 use crate::types::TimestampMicros;
 
 // ---------------------------------------------------------------------------
@@ -63,7 +62,11 @@ pub fn compute_coverage(
         SignalCoverage {
             signal_type: "spans".to_string(),
             available: has_spans,
-            severity: if has_spans { "high".to_string() } else { "none".to_string() },
+            severity: if has_spans {
+                "high".to_string()
+            } else {
+                "none".to_string()
+            },
             reason: if has_spans {
                 format!("{} spans found", spans_total)
             } else {
@@ -73,7 +76,11 @@ pub fn compute_coverage(
         SignalCoverage {
             signal_type: "logs".to_string(),
             available: has_logs,
-            severity: if has_logs { "high".to_string() } else { "none".to_string() },
+            severity: if has_logs {
+                "high".to_string()
+            } else {
+                "none".to_string()
+            },
             reason: if has_logs {
                 format!("{} log templates found", logs_total)
             } else {
@@ -83,7 +90,11 @@ pub fn compute_coverage(
         SignalCoverage {
             signal_type: "metrics".to_string(),
             available: has_metrics,
-            severity: if has_metrics { "medium".to_string() } else { "low".to_string() },
+            severity: if has_metrics {
+                "medium".to_string()
+            } else {
+                "low".to_string()
+            },
             reason: if has_metrics {
                 format!("{} metric series found", metrics_count)
             } else {
@@ -93,7 +104,11 @@ pub fn compute_coverage(
         SignalCoverage {
             signal_type: "profiles".to_string(),
             available: has_profiles,
-            severity: if has_profiles { "medium".to_string() } else { "low".to_string() },
+            severity: if has_profiles {
+                "medium".to_string()
+            } else {
+                "low".to_string()
+            },
             reason: if has_profiles {
                 format!("{} profile samples found", profile_samples)
             } else {

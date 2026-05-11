@@ -290,7 +290,5 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     // For heavy query workloads, consider partitioning by timestamp or using
     // DuckDB's native tables (non-DuckLake) for hot data.
 
-
-
     Ok(())
 }

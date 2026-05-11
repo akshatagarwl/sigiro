@@ -44,6 +44,10 @@ pub static OTEL_EXPORTER_OTLP_ENDPOINT: Envar<String> =
 /// OTel auth key for self-ingestion (optional). Empty means no auth.
 pub static OTEL_AUTH_KEY: Envar<String> =
     Envar::on_startup("SIGIRO_OTEL_AUTH_KEY", || EnvarDef::Default(String::new()));
+/// DuckDB extension directory (optional — shared cache across tests).
+pub static EXTENSION_DIR: Envar<String> =
+    Envar::on_startup("SIGIRO_EXTENSION_DIR", || EnvarDef::Default(String::new()));
+
 /// Pyroscope profiling endpoint (optional — no profiling if unset).
 pub static PYROSCOPE_ENDPOINT: Envar<String> =
     Envar::on_startup("SIGIRO_PYROSCOPE_ENDPOINT", || {

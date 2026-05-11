@@ -55,6 +55,15 @@ fn build_test_context() -> TestContext {
 
     let admin_conn = Arc::new(Mutex::new(admin_conn));
 
+    // Pre-populate auth cache so tests can use the dev token without a real key in DB.
+    sigiro::auth::auth_cache().insert(
+        "sigiro_dev_test".to_string(),
+        sigiro::auth::AuthContext {
+            project_id: "dev_project".to_string(),
+            plan: "test".to_string(),
+        },
+    );
+
     let state = Arc::new(AppState {
         pool,
         admin_conn,
@@ -187,4 +196,3 @@ async fn test_otlp_traces_empty_payload_returns_400() {
         .await;
     resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
 }
-

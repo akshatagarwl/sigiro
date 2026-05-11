@@ -34,7 +34,11 @@ impl TelemetryConfig {
             .value()
             .ok()
             .filter(|k| !k.is_empty());
-        Ok(Self { endpoint, service_name, auth_key })
+        Ok(Self {
+            endpoint,
+            service_name,
+            auth_key,
+        })
     }
 }
 
@@ -94,11 +98,16 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
         .build();
 
     // Auth headers for self-ingestion — auth_key read at app entry, not at runtime.
-    // Defaults to dev key for local development; production should set SIGIRO_OTEL_AUTH_KEY.
-    let auth_key = config.auth_key.as_deref().unwrap_or_else(|| {
-        tracing::warn!("SIGIRO_OTEL_AUTH_KEY not set — using default dev key. Set SIGIRO_OTEL_AUTH_KEY in production.");
-        "sigiro_dev_self"
-    });
+    // Require auth key when endpoint is configured; do not fall back to a hardcoded default.
+    let auth_key = match config.auth_key {
+        Some(ref k) if !k.is_empty() => k.as_str(),
+        _ => {
+            anyhow::bail!(
+                "SIGIRO_OTEL_AUTH_KEY is required when SIGIRO_OTEL_ENDPOINT is set. \
+                 Set it to a strong random value or unset SIGIRO_OTEL_ENDPOINT to disable self-telemetry."
+            );
+        }
+    };
     let mut headers = std::collections::HashMap::new();
     headers.insert("authorization".to_string(), format!("Bearer {auth_key}"));
     // Build OTLP HTTP exporters with auth headers

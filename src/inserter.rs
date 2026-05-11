@@ -1,18 +1,19 @@
+use crate::otlp::MetricBatches;
 use anyhow::{Context, Result};
 use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use dashmap::DashMap;
 use duckdb::Connection;
-use crate::otlp::MetricBatches;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing_attributes::instrument;
 
-use crate::drain::DrainTree;
 use crate::MutexExt;
+use crate::drain::DrainTree;
 use crate::pool::ProjectPool;
 use crate::types::{IngestMsg, SignalTable};
 
@@ -76,6 +77,7 @@ pub struct MsgRouter {
     pool: Arc<ProjectPool>,
     flush_config: FlushConfig,
     project_senders: DashMap<String, (mpsc::Sender<IngestMsg>, JoinHandle<()>)>,
+    drop_count: AtomicUsize,
 }
 
 impl MsgRouter {
@@ -88,6 +90,7 @@ impl MsgRouter {
             pool,
             flush_config,
             project_senders: DashMap::new(),
+            drop_count: AtomicUsize::new(0),
         }
     }
 
@@ -183,39 +186,46 @@ impl MsgRouter {
                                 }
                             }
                         }
-                        Err(RouterError::ChannelClosed { project_id: project_id_for_err })
+                        Err(RouterError::ChannelClosed {
+                            project_id: project_id_for_err,
+                        })
                     }
                 }
             }
-            BackpressurePolicy::DropOldest => {
-                match sender.try_send(msg) {
-                    Ok(()) => Ok(()),
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        tracing::warn!(project_id = %project_id_for_err, "channel full — DATA LOSS: dropping oldest message (BackpressurePolicy::DropOldest is lossy)");
-                        Ok(())
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        tracing::error!(project_id = %project_id_for_err, "send failed: channel closed");
-                        drop(entry);
-                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id) {
-                            if handle.is_finished() {
-                                match handle.await {
-                                    Err(join_err) if join_err.is_panic() => {
-                                        tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
-                                    }
-                                    Err(join_err) => {
-                                        tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
-                                    }
-                                    Ok(()) => {
-                                        tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
-                                    }
+            BackpressurePolicy::DropOldest => match sender.try_send(msg) {
+                Ok(()) => Ok(()),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    let count = self.drop_count.fetch_add(1, Ordering::Relaxed) + 1;
+                    tracing::warn!(
+                        project_id = %project_id_for_err,
+                        total_dropped = count,
+                        "channel full — DATA LOSS: dropping message (BackpressurePolicy::DropOldest)"
+                    );
+                    Ok(())
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::error!(project_id = %project_id_for_err, "send failed: channel closed");
+                    drop(entry);
+                    if let Some((_, (_, handle))) = self.project_senders.remove(&project_id) {
+                        if handle.is_finished() {
+                            match handle.await {
+                                Err(join_err) if join_err.is_panic() => {
+                                    tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
+                                }
+                                Err(join_err) => {
+                                    tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
+                                }
+                                Ok(()) => {
+                                    tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
                                 }
                             }
                         }
-                        Err(RouterError::ChannelClosed { project_id: project_id_for_err })
                     }
+                    Err(RouterError::ChannelClosed {
+                        project_id: project_id_for_err,
+                    })
                 }
-            }
+            },
         }
     }
 

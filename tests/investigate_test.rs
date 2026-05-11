@@ -1,6 +1,6 @@
 use sigiro::investigate::{
-    InvestigateRequest, QueryCtx, adaptive_config, compute_coverage,
-    investigate, query_derived_events, query_service_context, us_to_iso,
+    InvestigateRequest, QueryCtx, adaptive_config, compute_coverage, investigate,
+    query_derived_events, query_service_context, us_to_iso,
 };
 use sigiro::types::StatusCode;
 use std::sync::{Arc, Mutex};
@@ -48,7 +48,6 @@ fn setup_drain_logs(
 
     (Arc::new(Mutex::new(conn)), now_us)
 }
-
 
 // Span tree tests removed - trace grouping is now integrated into Trace type
 
@@ -98,9 +97,27 @@ fn investigate_with_in_memory_db() {
         block.coverage.signals.len() >= 3,
         "should have gaps for all signal types"
     );
-    assert!(block.coverage.signals.iter().any(|s| s.reason.contains("no spans")));
-    assert!(block.coverage.signals.iter().any(|s| s.reason.contains("no logs")));
-    assert!(block.coverage.signals.iter().any(|s| s.reason.contains("no metrics")));
+    assert!(
+        block
+            .coverage
+            .signals
+            .iter()
+            .any(|s| s.reason.contains("no spans"))
+    );
+    assert!(
+        block
+            .coverage
+            .signals
+            .iter()
+            .any(|s| s.reason.contains("no logs"))
+    );
+    assert!(
+        block
+            .coverage
+            .signals
+            .iter()
+            .any(|s| s.reason.contains("no metrics"))
+    );
 }
 
 #[test]
@@ -160,14 +177,27 @@ fn investigate_with_real_span_data() {
     assert!(!block.coverage.has_logs);
     assert!(!block.coverage.has_metrics);
     assert_eq!(block.coverage.span_count, 5);
-    assert!(block.coverage.signals.iter().any(|s| s.reason.contains("no logs")));
     assert!(
         block
-            .coverage.signals
+            .coverage
+            .signals
+            .iter()
+            .any(|s| s.reason.contains("no logs"))
+    );
+    assert!(
+        block
+            .coverage
+            .signals
             .iter()
             .any(|s| s.reason.contains("spans exist but no logs"))
     );
-    assert!(!block.coverage.signals.iter().any(|s| s.reason.contains("no spans")));
+    assert!(
+        !block
+            .coverage
+            .signals
+            .iter()
+            .any(|s| s.reason.contains("no spans"))
+    );
 }
 
 #[test]
@@ -185,7 +215,11 @@ fn coverage_spans_only() {
     assert!(c.has_spans);
     assert!(!c.has_logs);
     assert!(!c.has_metrics);
-    assert!(c.signals.iter().any(|s| s.reason.contains("spans exist but no logs")));
+    assert!(
+        c.signals
+            .iter()
+            .any(|s| s.reason.contains("spans exist but no logs"))
+    );
     assert!(!c.signals.iter().any(|s| s.reason.contains("no spans")));
 }
 
@@ -196,7 +230,12 @@ fn coverage_all_signals() {
     assert!(c.has_logs);
     assert!(c.has_metrics);
     assert!(c.has_profiles);
-    assert!(!c.signals.iter().any(|s| !s.available && s.severity == "high"), "no critical gaps when all signals present");
+    assert!(
+        !c.signals
+            .iter()
+            .any(|s| !s.available && s.severity == "high"),
+        "no critical gaps when all signals present"
+    );
 }
 
 #[test]
@@ -279,7 +318,9 @@ fn service_context_dependencies() {
     };
     let ctx = query_service_context(&qctx).unwrap();
     assert!(
-        ctx.dependencies.iter().any(|d| d.service_name == "payments"),
+        ctx.dependencies
+            .iter()
+            .any(|d| d.service_name == "payments"),
         "checkout should depend on payments"
     );
     let qctx2 = QueryCtx {
@@ -604,7 +645,11 @@ fn investigate_all_three_signals() {
     assert!(block.coverage.has_logs);
     assert!(block.coverage.has_metrics);
     assert!(
-        !block.coverage.signals.iter().any(|s| !s.available && s.severity == "high"),
+        !block
+            .coverage
+            .signals
+            .iter()
+            .any(|s| !s.available && s.severity == "high"),
         "no critical gaps when all signals present"
     );
 

@@ -10,9 +10,9 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use sigiro::IngestMsg;
-use sigiro::otlp::MetricBatches;
 use sigiro::inserter::MsgRouter;
 use sigiro::investigate::{InvestigateRequest, investigate};
+use sigiro::otlp::MetricBatches;
 use sigiro::pool::ProjectPool;
 use sigiro::server::validate_read_only;
 use std::sync::Arc;
@@ -729,7 +729,10 @@ async fn e2e_investigation_all_signals() {
     assert_eq!(block.coverage.span_count, 10);
 
     // When all 3 signals are present, there should be no critical gaps
-    let critical_gaps: Vec<_> = block.coverage.signals.iter()
+    let critical_gaps: Vec<_> = block
+        .coverage
+        .signals
+        .iter()
         .filter(|s| !s.available && s.severity == "high")
         .collect();
     assert!(
@@ -928,7 +931,7 @@ async fn e2e_drain_log_template_dedup() {
     );
 
     // NEW: Verify structured template variables in log patterns
-    use sigiro::investigate::{query_log_patterns, enrich_pattern_unique_values};
+    use sigiro::investigate::{enrich_pattern_unique_values, query_log_patterns};
     let mut patterns = query_log_patterns(&qctx, 10).unwrap();
     enrich_pattern_unique_values(&qctx, &mut patterns).unwrap();
 
@@ -957,7 +960,10 @@ async fn e2e_drain_log_template_dedup() {
     assert_eq!(user_var.wildcard_index, 0, "first wildcard index");
     assert_eq!(user_var.context_before, "User", "context before username");
     assert_eq!(user_var.context_after, "logged", "context after username");
-    assert!(!user_var.values.is_empty(), "should have extracted username values");
+    assert!(
+        !user_var.values.is_empty(),
+        "should have extracted username values"
+    );
 
     // Verify second variable (IP) has correct context
     let ip_var = &login_pattern.variables[1];
@@ -988,5 +994,9 @@ async fn e2e_drain_log_template_dedup() {
     // With the new API, we get raw log entries, not aggregated templates
     // The count is limited by the query limit (30), not by deduplication
     let log_count: i64 = logs.len() as i64;
-    assert!(log_count <= 30, "log count should be ≤30 limit, got {}", log_count);
+    assert!(
+        log_count <= 30,
+        "log count should be ≤30 limit, got {}",
+        log_count
+    );
 }

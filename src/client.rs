@@ -284,8 +284,6 @@ impl SigiroClient {
             .context("failed to connect to sigiro server")?;
 
         let resp = self.expect_ok(resp).await?;
-        resp.json()
-            .await
-            .context("failed to parse trace response")
+        resp.json().await.context("failed to parse trace response")
     }
 }

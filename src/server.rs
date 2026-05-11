@@ -1,9 +1,5 @@
 use anyhow::{Context, Result};
-use axum::{
-    Extension, Json, Router,
-    extract::State,
-    middleware as axum_mw,
-};
+use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
 use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
 use rusqlite::Connection;
@@ -498,7 +494,7 @@ async fn services_handler(
 }
 
 /// GET /v1/traces/{trace_id} -- return a single trace with full detail including critical path and service breakdown.
- #[utoipa::path(
+#[utoipa::path(
      get,
      path = "/v1/traces/{trace_id}",
      params(
@@ -509,18 +505,18 @@ async fn services_handler(
      ),
      tag = "query"
  )]
- #[instrument(skip_all)]
- async fn trace_detail_handler(
-     _path: TraceDetailPath,
-     State(state): State<Arc<AppState>>,
-     Extension(auth): Extension<AuthContext>,
- ) -> ApiResult<Json<TraceDetailResponse>> {
-     let conn = project_conn(&state, &auth)?;
-     let conn = conn
-         .lock()
-         .map_err(|e| anyhow::anyhow!("DuckDB connection mutex poisoned: {e}"))?;
-     let prefix = ProjectPool::prefix();
-     let trace_id = _path.trace_id.clone();
+#[instrument(skip_all)]
+async fn trace_detail_handler(
+    _path: TraceDetailPath,
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+) -> ApiResult<Json<TraceDetailResponse>> {
+    let conn = project_conn(&state, &auth)?;
+    let conn = conn
+        .lock()
+        .map_err(|e| anyhow::anyhow!("DuckDB connection mutex poisoned: {e}"))?;
+    let prefix = ProjectPool::prefix();
+    let trace_id = _path.trace_id.clone();
 
     let sql = format!(
         "SELECT
@@ -537,32 +533,32 @@ async fn services_handler(
          ORDER BY timestamp",
         prefix
     );
-     let mut stmt = conn
-         .prepare(&sql)
-         .context_internal("TraceDetail", "failed to prepare query")?;
-     let mut rows = stmt
-         .query([&trace_id])
-         .context_internal("TraceDetail", "query execution failed")?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .context_internal("TraceDetail", "failed to prepare query")?;
+    let mut rows = stmt
+        .query([&trace_id])
+        .context_internal("TraceDetail", "query execution failed")?;
 
-     let mut spans: Vec<SpanDetail> = Vec::new();
-     let mut span_map: std::collections::HashMap<String, SpanDetail> = std::collections::HashMap::new();
-     let mut parent_to_children: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-     let mut root_span_id: Option<String> = None;
-     let mut total_duration_ns: i64 = 0;
-     let mut error_count: i64 = 0;
-     let mut services_set: std::collections::HashSet<String> = std::collections::HashSet::new();
-     let mut max_duration_span: Option<SpanDetail> = None;
+    let mut spans: Vec<SpanDetail> = Vec::new();
+    let mut span_map: std::collections::HashMap<String, SpanDetail> =
+        std::collections::HashMap::new();
+    let mut parent_to_children: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut root_span_id: Option<String> = None;
+    let mut total_duration_ns: i64 = 0;
+    let mut error_count: i64 = 0;
+    let mut services_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut max_duration_span: Option<SpanDetail> = None;
 
-     while let Some(row) = rows
-         .next()
-         .context_internal("TraceDetail", "row iteration failed")?
-     {
+    while let Some(row) = rows
+        .next()
+        .context_internal("TraceDetail", "row iteration failed")?
+    {
         let span_id: String = row
             .get::<_, String>(1)
             .context_internal("TraceDetail", "failed to read span_id")?;
-        let parent_span_id: String = row
-            .get::<_, String>(2)
-            .unwrap_or_default();
+        let parent_span_id: String = row.get::<_, String>(2).unwrap_or_default();
         let duration_ns: i64 = row
             .get::<_, i64>(4)
             .context_internal("TraceDetail", "failed to read duration")?;
@@ -574,14 +570,24 @@ async fn services_handler(
             .context_internal("TraceDetail", "failed to read service_name")?;
 
         let span = SpanDetail {
-            trace_id: row.get::<_, String>(0).context_internal("TraceDetail", "failed to read trace_id")?,
+            trace_id: row
+                .get::<_, String>(0)
+                .context_internal("TraceDetail", "failed to read trace_id")?,
             span_id: span_id.clone(),
-            parent_span_id: if parent_span_id.is_empty() { None } else { Some(parent_span_id.clone()) },
-            span_name: row.get::<_, String>(3).context_internal("TraceDetail", "failed to read span_name")?,
+            parent_span_id: if parent_span_id.is_empty() {
+                None
+            } else {
+                Some(parent_span_id.clone())
+            },
+            span_name: row
+                .get::<_, String>(3)
+                .context_internal("TraceDetail", "failed to read span_name")?,
             duration_ns,
             status_code,
             service_name: service_name.clone(),
-            timestamp: row.get::<_, String>(10).context_internal("TraceDetail", "failed to read timestamp")?,
+            timestamp: row
+                .get::<_, String>(10)
+                .context_internal("TraceDetail", "failed to read timestamp")?,
             span_kind: row.get::<_, Option<i32>>(7).ok().flatten(),
             span_attributes: row.get::<_, Option<String>>(8).ok().flatten(),
             resource_attributes: row.get::<_, Option<String>>(9).ok().flatten(),
@@ -591,42 +597,42 @@ async fn services_handler(
             scope_version: row.get::<_, Option<String>>(15).ok().flatten(),
             trace_state: row.get::<_, Option<String>>(16).ok().flatten(),
         };
-         total_duration_ns = total_duration_ns.saturating_add(duration_ns);
-         if status_code == 2 {
-             error_count += 1;
-         }
-         services_set.insert(service_name);
+        total_duration_ns = total_duration_ns.saturating_add(duration_ns);
+        if status_code == 2 {
+            error_count += 1;
+        }
+        services_set.insert(service_name);
 
-         if parent_span_id.is_empty() {
-             root_span_id = Some(span_id.clone());
-         } else {
-             parent_to_children
-                 .entry(parent_span_id)
-                 .or_default()
-                 .push(span_id.clone());
-         }
+        if parent_span_id.is_empty() {
+            root_span_id = Some(span_id.clone());
+        } else {
+            parent_to_children
+                .entry(parent_span_id)
+                .or_default()
+                .push(span_id.clone());
+        }
 
-         let is_longer = max_duration_span
-             .as_ref()
-             .map(|s| duration_ns > s.duration_ns)
-             .unwrap_or(true);
-         if is_longer {
-             max_duration_span = Some(span.clone());
-         }
+        let is_longer = max_duration_span
+            .as_ref()
+            .map(|s| duration_ns > s.duration_ns)
+            .unwrap_or(true);
+        if is_longer {
+            max_duration_span = Some(span.clone());
+        }
 
-         span_map.insert(span_id.clone(), span.clone());
-         spans.push(span);
-     }
+        span_map.insert(span_id.clone(), span.clone());
+        spans.push(span);
+    }
 
-     drop(rows);
-     drop(stmt);
+    drop(rows);
+    drop(stmt);
 
-     if spans.is_empty() {
-         return Err(axum_anyhow::not_found(
-             "Trace Not Found",
-             &format!("No trace found with id: {}", trace_id),
-         ));
-     }
+    if spans.is_empty() {
+        return Err(axum_anyhow::not_found(
+            "Trace Not Found",
+            &format!("No trace found with id: {}", trace_id),
+        ));
+    }
 
     // Determine root span
     let root_span = if let Some(root_id) = root_span_id {
@@ -638,87 +644,113 @@ async fn services_handler(
         max_duration_span.unwrap()
     };
 
-     // Compute critical path (longest path from root to leaf by duration sum)
-     let critical_path = compute_critical_path(&root_span.span_id, &parent_to_children, &span_map);
+    // Compute critical path (longest path from root to leaf by duration sum)
+    let critical_path = compute_critical_path(&root_span.span_id, &parent_to_children, &span_map);
 
-     // Compute service breakdown
-     let service_breakdown = compute_service_breakdown(&spans, total_duration_ns);
+    // Compute service breakdown
+    let service_breakdown = compute_service_breakdown(&spans, total_duration_ns);
 
-     Ok(Json(TraceDetailResponse {
-         trace_id,
-         total_duration_ns,
-         root_span,
-         span_count: spans.len() as i64,
-         error_count,
-         services: services_set.into_iter().collect(),
-         spans,
-         critical_path,
-         service_breakdown,
-     }))
- }
+    Ok(Json(TraceDetailResponse {
+        trace_id,
+        total_duration_ns,
+        root_span,
+        span_count: spans.len() as i64,
+        error_count,
+        services: services_set.into_iter().collect(),
+        spans,
+        critical_path,
+        service_breakdown,
+    }))
+}
 
- /// Compute the critical path: longest duration-sum path from root to any leaf.
- fn compute_critical_path(
-     root_id: &str,
-     parent_to_children: &std::collections::HashMap<String, Vec<String>>,
-     span_map: &std::collections::HashMap<String, SpanDetail>,
- ) -> Vec<String> {
+/// Compute the critical path: longest duration-sum path from root to any leaf.
+fn compute_critical_path(
+    root_id: &str,
+    parent_to_children: &std::collections::HashMap<String, Vec<String>>,
+    span_map: &std::collections::HashMap<String, SpanDetail>,
+) -> Vec<String> {
     #[allow(clippy::too_many_arguments)]
     fn dfs(
-         span_id: &str,
-         parent_to_children: &std::collections::HashMap<String, Vec<String>>,
-         span_map: &std::collections::HashMap<String, SpanDetail>,
-         current_path: &[String],
-         current_duration: i64,
-         best_path: &mut Vec<String>,
-         best_duration: &mut i64,
-     ) {
-         let span = match span_map.get(span_id) {
-             Some(s) => s,
-             None => return,
-         };
-         let mut path = current_path.to_vec();
-         path.push(span_id.to_string());
-         let new_duration = current_duration.saturating_add(span.duration_ns);
+        span_id: &str,
+        parent_to_children: &std::collections::HashMap<String, Vec<String>>,
+        span_map: &std::collections::HashMap<String, SpanDetail>,
+        current_path: &[String],
+        current_duration: i64,
+        best_path: &mut Vec<String>,
+        best_duration: &mut i64,
+    ) {
+        let span = match span_map.get(span_id) {
+            Some(s) => s,
+            None => return,
+        };
+        let mut path = current_path.to_vec();
+        path.push(span_id.to_string());
+        let new_duration = current_duration.saturating_add(span.duration_ns);
 
-         // Leaf node: check if this path is the critical path
-         if let Some(children) = parent_to_children.get(span_id) {
-             for child_id in children {
-                 dfs(child_id, parent_to_children, span_map, &path, new_duration, best_path, best_duration);
-             }
-         } else {
-             // Leaf node
-             if new_duration > *best_duration {
-                 *best_duration = new_duration;
-                 *best_path = path;
-             }
-         }
-     }
+        // Leaf node: check if this path is the critical path
+        if let Some(children) = parent_to_children.get(span_id) {
+            for child_id in children {
+                dfs(
+                    child_id,
+                    parent_to_children,
+                    span_map,
+                    &path,
+                    new_duration,
+                    best_path,
+                    best_duration,
+                );
+            }
+        } else {
+            // Leaf node
+            if new_duration > *best_duration {
+                *best_duration = new_duration;
+                *best_path = path;
+            }
+        }
+    }
 
-     let mut best_path = Vec::new();
-     let mut best_duration = i64::MIN;
-     dfs(root_id, parent_to_children, span_map, &[], 0, &mut best_path, &mut best_duration);
-     best_path
- }
+    let mut best_path = Vec::new();
+    let mut best_duration = i64::MIN;
+    dfs(
+        root_id,
+        parent_to_children,
+        span_map,
+        &[],
+        0,
+        &mut best_path,
+        &mut best_duration,
+    );
+    best_path
+}
 
- /// Compute service duration breakdown with percentages.
- fn compute_service_breakdown(spans: &[SpanDetail], total_duration_ns: i64) -> Vec<ServiceBreakdownEntry> {
-     let mut service_durations: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
-     for span in spans {
-         *service_durations.entry(span.service_name.clone()).or_insert(0) += span.duration_ns;
-     }
+/// Compute service duration breakdown with percentages.
+fn compute_service_breakdown(
+    spans: &[SpanDetail],
+    total_duration_ns: i64,
+) -> Vec<ServiceBreakdownEntry> {
+    let mut service_durations: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+    for span in spans {
+        *service_durations
+            .entry(span.service_name.clone())
+            .or_insert(0) += span.duration_ns;
+    }
 
-     let total = if total_duration_ns > 0 { total_duration_ns as f64 } else { 1.0 };
-     let mut breakdown: Vec<ServiceBreakdownEntry> = service_durations
-         .into_iter()
-         .map(|(service, duration_ns)| ServiceBreakdownEntry {
-             service,
-             duration_ns,
-             percentage: (duration_ns as f64 / total) * 100.0,
-         })
-         .collect();
-     breakdown.sort_by(|a, b| b.duration_ns.cmp(&a.duration_ns));
-     breakdown
+    let total = if total_duration_ns > 0 {
+        total_duration_ns as f64
+    } else {
+        1.0
+    };
+    let mut breakdown: Vec<ServiceBreakdownEntry> = service_durations
+        .into_iter()
+        .map(|(service, duration_ns)| ServiceBreakdownEntry {
+            service,
+            duration_ns,
+            percentage: (duration_ns as f64 / total) * 100.0,
+        })
+        .collect();
+    breakdown.sort_by(|a, b| b.duration_ns.cmp(&a.duration_ns));
+    breakdown
 }
 
 #[utoipa::path(
@@ -736,15 +768,24 @@ async fn investigate_handler(
     Extension(auth): Extension<AuthContext>,
     Json(req): Json<investigate::InvestigateRequest>,
 ) -> ApiResult<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>> {
-// Validate mandatory timestamp parameters.
+    // Validate mandatory timestamp parameters.
     if req.from_ts == 0 {
-        return Err(bad_request("Invalid Request", "from_ts is required and must be a positive Unix timestamp in microseconds"));
+        return Err(bad_request(
+            "Invalid Request",
+            "from_ts is required and must be a positive Unix timestamp in microseconds",
+        ));
     }
     if req.to_ts == 0 {
-        return Err(bad_request("Invalid Request", "to_ts is required and must be a positive Unix timestamp in microseconds"));
+        return Err(bad_request(
+            "Invalid Request",
+            "to_ts is required and must be a positive Unix timestamp in microseconds",
+        ));
     }
     if req.to_ts <= req.from_ts {
-        return Err(bad_request("Invalid Request", "to_ts must be greater than from_ts"));
+        return Err(bad_request(
+            "Invalid Request",
+            "to_ts must be greater than from_ts",
+        ));
     }
 
     // This gives a clear 404 instead of "failed to get read connection" when no data is ingested.
@@ -940,4 +981,3 @@ async fn list_workers_handler(
         .context_internal("Federation", "failed to list workers")?;
     Ok(Json(ListWorkersResponse { workers }))
 }
-

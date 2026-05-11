@@ -1,7 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use sigiro::investigate::{
-    InvestigateRequest, QueryCtx, compute_coverage, investigate,
-    query_service_context,
+    InvestigateRequest, QueryCtx, compute_coverage, investigate, query_service_context,
 };
 use std::sync::{Arc, Mutex};
 

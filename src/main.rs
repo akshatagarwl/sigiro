@@ -41,7 +41,6 @@ pub enum TopologyFormat {
     Mermaid,
 }
 
-
 #[derive(Subcommand)]
 enum Command {
     /// Start gRPC + HTTP servers
@@ -67,10 +66,10 @@ enum Command {
     Investigate {
         /// Service name to investigate
         service: String,
-        /// Start of range in epoch seconds (required)
+        /// Start of range in epoch seconds. Defaults to 15 minutes ago if omitted.
         #[arg(long)]
         from: Option<i64>,
-        /// End of range in epoch seconds (required)
+        /// End of range in epoch seconds. Defaults to now if omitted.
         #[arg(long)]
         to: Option<i64>,
     },
@@ -192,13 +191,7 @@ async fn main() -> Result<()> {
                 (now - 900) * 1_000_000
             });
             let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
-            let block = client
-                .investigate(
-                    &service,
-                    from_ts,
-                    to_ts,
-                )
-                .await?;
+            let block = client.investigate(&service, from_ts, to_ts).await?;
             println!(
                 "{}",
                 format_output(&serde_json::to_value(&block)?, &cli.output)?
@@ -657,13 +650,20 @@ async fn run_topology(service: Option<&str>, format: TopologyFormat) -> Result<(
 
     // Get services list
     let services_resp = client.services().await?;
-    let all_services: Vec<&str> = services_resp.services.iter().map(|s| s.name.as_str()).collect();
+    let all_services: Vec<&str> = services_resp
+        .services
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
 
     // Get dependency data from investigate
     let services_to_query: Vec<String> = match service {
         Some(s) => vec![s.to_string()],
-        None => all_services.iter().take(20).map(std::string::ToString::to_string).collect(),
-
+        None => all_services
+            .iter()
+            .take(20)
+            .map(std::string::ToString::to_string)
+            .collect(),
     };
 
     let mut dep_map: HashMap<String, HashSet<String>> = HashMap::new();
@@ -671,24 +671,27 @@ async fn run_topology(service: Option<&str>, format: TopologyFormat) -> Result<(
 
     // Query each service for its dependencies
     for svc_name in &services_to_query {
-        if let Ok(mut blocks) = client.investigate_multi(Some(svc_name), None, 0, i64::MAX).await {
+        if let Ok(mut blocks) = client
+            .investigate_multi(Some(svc_name), None, 0, i64::MAX)
+            .await
+        {
             if let Some(block) = blocks.remove(svc_name) {
-            // Extract dependency service names
-            let deps: HashSet<String> = block
-                .context
-                .dependencies
-                .into_iter()
-                .map(|dep| dep.service_name)
-                .collect();
-            let dependents: HashSet<String> = block
-                .context
-                .dependents
-                .into_iter()
-                .map(|dep| dep.service_name)
-                .collect();
+                // Extract dependency service names
+                let deps: HashSet<String> = block
+                    .context
+                    .dependencies
+                    .into_iter()
+                    .map(|dep| dep.service_name)
+                    .collect();
+                let dependents: HashSet<String> = block
+                    .context
+                    .dependents
+                    .into_iter()
+                    .map(|dep| dep.service_name)
+                    .collect();
 
-            dep_map.insert(svc_name.clone(), deps);
-            rev_dep_map.insert(svc_name.clone(), dependents);
+                dep_map.insert(svc_name.clone(), deps);
+                rev_dep_map.insert(svc_name.clone(), dependents);
             }
         }
     }
@@ -716,11 +719,15 @@ fn render_topology_ascii(
     println!();
 
     // Find root services (no incoming dependencies)
-    let all_deps: HashSet<&str> = deps.values()
+    let all_deps: HashSet<&str> = deps
+        .values()
         .flat_map(|s| s.iter().map(std::string::String::as_str))
         .collect();
 
-    let roots: Vec<&&str> = all_services.iter().filter(|s| !all_deps.contains(*s)).collect();
+    let roots: Vec<&&str> = all_services
+        .iter()
+        .filter(|s| !all_deps.contains(*s))
+        .collect();
 
     // Build children map
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
@@ -753,11 +760,21 @@ fn render_service_tree(
     }
     visited.insert(svc.to_string());
 
-    let dependencies: Vec<&String> = deps.get(svc).map(|s| s.iter().collect()).unwrap_or_default();
+    let dependencies: Vec<&String> = deps
+        .get(svc)
+        .map(|s| s.iter().collect())
+        .unwrap_or_default();
     let deps_str = if dependencies.is_empty() {
         String::new()
     } else {
-        format!(" → [{}]", dependencies.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
+        format!(
+            " → [{}]",
+            dependencies
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
     println!("{}└─ {svc}{deps_str}", "  ".repeat(depth));
 
@@ -848,7 +865,13 @@ async fn run_trace_tree(trace_id: &str) -> Result<()> {
     let root_spans: Vec<_> = trace
         .spans
         .iter()
-        .filter(|s| s.parent_span_id.is_none() || s.parent_span_id.as_ref().map(|p| !span_map.contains_key(p)).unwrap_or(true))
+        .filter(|s| {
+            s.parent_span_id.is_none()
+                || s.parent_span_id
+                    .as_ref()
+                    .map(|p| !span_map.contains_key(p))
+                    .unwrap_or(true)
+        })
         .collect();
 
     // Render tree for each root span
@@ -895,14 +918,15 @@ fn render_trace_tree_recursive(
         .filter(|s| s.parent_span_id.as_ref() == Some(&span.span_id))
         .collect();
 
-    let connector = if children.is_empty() { "└─ " } else { "├─ " };
+    let connector = if children.is_empty() {
+        "└─ "
+    } else {
+        "├─ "
+    };
 
     println!(
         "{indent}{pipe}{connector}{} [{}] {:.2}ms{}",
-        span.span_name,
-        span.service_name,
-        duration_ms,
-        error_tag
+        span.span_name, span.service_name, duration_ms, error_tag
     );
 
     // Render children
