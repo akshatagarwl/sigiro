@@ -1,0 +1,18 @@
+[package]
+name = "drain3"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port of Axiom's drain3 — fast log template extraction via fixed-depth prefix trees"
+license = "Apache-2.0"
+repository = "https://github.com/axiomhq/drain3"
+keywords = ["log", "parsing", "template", "drain", "clustering"]
+categories = ["algorithms", "text-processing"]
+
+[dependencies]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "drain3_bench"
+harness = false
