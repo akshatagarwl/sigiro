@@ -1281,6 +1281,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "drain3"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+]
+
+[[package]]
 name = "duckdb"
 version = "1.10502.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4033,6 +4040,7 @@ dependencies = [
  "criterion",
  "dashmap",
  "dirs",
+ "drain3",
  "duckdb",
  "flate2",
  "futures-util",
@@ -4048,6 +4056,7 @@ dependencies = [
  "prefixed-api-key",
  "prost",
  "pyroscope",
+ "regex",
  "reqwest 0.12.28",
  "rmcp",
  "rusqlite",

@@ -6,6 +6,7 @@ rust-version = "1.85"
 license = "Apache-2.0"
 
 [workspace]
+members = ["crates/drain3"]
 
 [dependencies]
 duckdb = { version = "1.10502.0", features = ["bundled", "appender-arrow"] }
@@ -40,6 +41,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
 pyroscope = { version = "2.0.0", features = ["backend-pprof-rs"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 rmcp = { version = "1.2.0", features = ["server", "transport-io"] }
+regex = "1"
+drain3 = { path = "crates/drain3" }
 hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
