@@ -1,5 +1,6 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
 
+use crate::MutexExt;
 use crate::otlp::MetricBatches;
 use arrow::record_batch::RecordBatch;
 
@@ -39,28 +40,41 @@ impl Drop for SupervisorHandle {
 // --------------------------------------------------------------------------
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
-/// Static registry mapping supervisor names to their handles.
-pub static SUPERVISOR_REGISTRY: OnceLock<Mutex<HashMap<String, SupervisorHandle>>> =
-    OnceLock::new();
-
-/// Get the global supervisor registry.
-pub fn get_registry() -> &'static Mutex<HashMap<String, SupervisorHandle>> {
-    SUPERVISOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+/// Registry mapping supervisor names to their handles.
+/// Passed as a constructor parameter to avoid global mutable state.
+#[derive(Debug)]
+pub struct SupervisorRegistry {
+    pub(crate) inner: Mutex<HashMap<String, SupervisorHandle>>,
 }
 
-/// Register a supervisor with a name and optional cleanup path.
-pub fn register_supervisor(
-    name: &str,
-    supervisor: crate::supervisor::Supervisor,
-    cleanup_path: Option<String>,
-) {
-    let registry = get_registry();
-    let mut guard = registry.lock().expect("supervisor registry mutex poisoned");
-    let handle = SupervisorHandle::new(supervisor, cleanup_path);
-    guard.insert(name.to_string(), handle);
-    tracing::info!("registered supervisor: {name}");
+impl SupervisorRegistry {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Register a supervisor with a name and optional cleanup path.
+    pub fn register(
+        &self,
+        name: &str,
+        supervisor: crate::supervisor::Supervisor,
+        cleanup_path: Option<String>,
+    ) -> anyhow::Result<()> {
+        let mut guard = self.inner.lock_poisoned()?;
+        let handle = SupervisorHandle::new(supervisor, cleanup_path);
+        guard.insert(name.to_string(), handle);
+        tracing::info!("registered supervisor: {name}");
+        Ok(())
+    }
+}
+
+impl Default for SupervisorRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // --------------------------------------------------------------------------

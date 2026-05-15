@@ -24,7 +24,7 @@ pub struct ServiceEntry {
 }
 
 /// POST /admin/keys
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct CreateKeyResponse {
     pub key: String,
 }
@@ -70,7 +70,7 @@ pub struct ListWorkersResponse {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct TraceDetailResponse {
     pub trace_id: String,
-    pub total_duration_ns: i64,
+    pub total_duration_us: i64,
     pub root_span: SpanDetail,
     pub span_count: i64,
     pub error_count: i64,
@@ -87,7 +87,7 @@ pub struct SpanDetail {
     pub span_id: String,
     pub parent_span_id: Option<String>,
     pub span_name: String,
-    pub duration_ns: i64,
+    pub duration_us: i64,
     pub status_code: i32,
     pub service_name: String,
     pub timestamp: String,
@@ -105,6 +105,6 @@ pub struct SpanDetail {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct ServiceBreakdownEntry {
     pub service: String,
-    pub duration_ns: i64,
+    pub duration_us: i64,
     pub percentage: f64,
 }

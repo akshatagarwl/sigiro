@@ -7,7 +7,7 @@ use tracing::{debug, info};
 use tracing_attributes::instrument;
 
 use crate::supervisor::Supervisor;
-use crate::types::register_supervisor;
+use crate::types::SupervisorRegistry;
 
 /// Information about a federation worker.
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -210,7 +210,9 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
         .ok()
         .filter(|s| !s.is_empty())
     {
-        let prefix = crate::config::S3_PREFIX.value().ok().unwrap_or_default();
+        let prefix = crate::config::S3_PREFIX
+            .value()
+            .expect("S3_PREFIX config must be valid");
         let prefix_trimmed = prefix.trim_end_matches('/');
         let prefix_with_slash = if prefix_trimmed.is_empty() {
             String::new()
@@ -267,7 +269,7 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
 /// Start the `spiced` subprocess for Spice.ai federation.
 /// Fails loudly if `spiced` is not in PATH or spicepod.yaml is missing.
 #[instrument]
-pub fn start_spice(data_dir: &Path) -> Result<()> {
+pub fn start_spice(data_dir: &Path, registry: &SupervisorRegistry) -> Result<()> {
     which::which("spiced")
         .context("spiced binary not found in PATH — install spiced for Spice federation (https://spiceai.org)")?;
 
@@ -283,14 +285,14 @@ pub fn start_spice(data_dir: &Path) -> Result<()> {
     let mut envs = HashMap::new();
     envs.insert("SPICE_LOG".to_string(), "info".to_string());
 
-    let supervisor = Supervisor::new(
+    let mut supervisor = Supervisor::new(
         "spiced",
         vec!["--config".to_string(), spicepod_path.display().to_string()],
         envs,
     );
     supervisor.start();
 
-    register_supervisor("spiced", supervisor, None);
+    registry.register("spiced", supervisor, None)?;
 
     info!("spiced started via supervisor");
 

@@ -118,7 +118,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     // Log template lookup table — maps template_id to template text.
     // Populated at insert time by the DRAIN algorithm.
     // No PRIMARY KEY — DuckLake does not support PK/UNIQUE constraints.
-    // Duplicate template rows are harmless; dedup can be added to the compactor.
+    // Duplicate template rows are harmless; dedup is done at insert time.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_log_templates (
             template_id           UBIGINT,

@@ -86,12 +86,9 @@ impl SigiroClient {
 
         match resp.status().as_u16() {
             200 => {
-                let body: serde_json::Value =
+                let body: crate::responses::CreateKeyResponse =
                     resp.json().await.context("failed to parse response")?;
-                body["key"]
-                    .as_str()
-                    .map(String::from)
-                    .context("response missing 'key' field")
+                Ok(body.key)
             }
             s => {
                 let body = resp.text().await.context("failed to read error body")?;
@@ -200,7 +197,8 @@ impl SigiroClient {
             .context("failed to connect to sigiro server")?;
 
         let resp = self.expect_ok(resp).await?;
-        let _: serde_json::Value = resp.json().await.context("failed to parse response")?;
+        // Discard body — registration success is implicit from 200 OK.
+        let _ = resp.bytes().await.ok();
         Ok(())
     }
 

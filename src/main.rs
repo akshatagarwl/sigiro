@@ -285,20 +285,22 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
         Err(e) => tracing::warn!("dev_project init failed (non-fatal): {e}"),
     }
 
+    let supervisor_registry = sigiro::types::SupervisorRegistry::new();
+
     // eBPF auto-instrumentation: try obi, degrade gracefully
     if no_ebpf {
         tracing::info!("eBPF disabled by --no-ebpf flag");
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_status", "disabled")?;
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_reason", "--no-ebpf flag")?;
     } else {
-        let otlp_endpoint = sigiro::config::OTEL_ENDPOINT
+        let otlp_endpoint = sigiro::config::OTEL_EXPORTER_OTLP_ENDPOINT
             .value()
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let status = sigiro::ebpf::ebpf_status("obi");
         sigiro::ebpf::write_ebpf_status(&admin_conn, &status)?;
         match status.status.as_str() {
             "ready" => {
-                sigiro::ebpf::start_obi("obi", &otlp_endpoint)?;
+                sigiro::ebpf::start_obi("obi", &otlp_endpoint, &supervisor_registry)?;
             }
             _ => {
                 tracing::warn!(
@@ -331,7 +333,7 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     // Federation: central node mode
     if central {
         tracing::info!("running as central federation node");
-        sigiro::federation::start_spice(&dir)?;
+        sigiro::federation::start_spice(&dir, &supervisor_registry)?;
     }
 
     // Federation: collector self-registration with central node
@@ -378,22 +380,28 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
     let router = Arc::new(MsgRouter::new(Arc::clone(&pool)));
+    router.start();
 
     // Evict idle connections every 2 minutes
     const EVICT_INTERVAL_SECS: u64 = 120;
     const MAX_IDLE_SECS: u64 = 300;
-    let evictor_pool = Arc::clone(&pool);
-    tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(EVICT_INTERVAL_SECS));
-        loop {
-            interval.tick().await;
-            evictor_pool.evict_idle(std::time::Duration::from_secs(MAX_IDLE_SECS));
-        }
-    });
+    tokio::spawn(run_evictor(
+        Arc::clone(&pool),
+        EVICT_INTERVAL_SECS,
+        MAX_IDLE_SECS,
+    ));
 
     sigiro::server::run_servers(pool, shared_admin, router).await?;
     Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn run_evictor(pool: Arc<ProjectPool>, interval_secs: u64, max_idle_secs: u64) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        pool.evict_idle(std::time::Duration::from_secs(max_idle_secs));
+    }
 }
 
 /// Build HTTP client from config. Fails fast if API key or endpoint is not configured.
@@ -568,7 +576,7 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
     let project_name = project_dir
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
+        .context("project directory name is not valid UTF-8")?;
 
     if !catalog_path.exists() {
         anyhow::bail!(
@@ -852,7 +860,7 @@ async fn run_trace_tree(trace_id: &str) -> Result<()> {
     println!(
         "Spans: {}  Duration: {:.2}ms\n",
         trace.span_count,
-        trace.total_duration_ns as f64 / 1_000_000.0
+        trace.total_duration_us as f64 / 1_000_000.0
     );
 
     // Build span map
@@ -909,7 +917,7 @@ fn render_trace_tree_recursive(
         ""
     };
 
-    let duration_ms = span.duration_ns as f64 / 1_000_000.0;
+    let duration_ms = span.duration_us as f64 / 1_000_000.0;
     let error_tag = if span.status_code == 2 { " [ERR]" } else { "" };
 
     // Find children

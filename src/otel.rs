@@ -15,17 +15,10 @@ pub struct TelemetryConfig {
 impl TelemetryConfig {
     /// Load from env vars at startup
     pub fn from_env() -> Result<Self> {
-        // Standard OTel env var takes priority, fall back to SIGIRO_OTEL_ENDPOINT.
         let endpoint = crate::config::OTEL_EXPORTER_OTLP_ENDPOINT
             .value()
             .ok()
             .filter(|e| !e.is_empty())
-            .or_else(|| {
-                crate::config::OTEL_ENDPOINT
-                    .value()
-                    .ok()
-                    .filter(|e| !e.is_empty())
-            })
             .unwrap_or_default();
         let service_name = crate::config::OTEL_SERVICE_NAME
             .value()
@@ -81,9 +74,7 @@ impl Drop for TelemetryGuard {
 
 pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>> {
     if config.endpoint.is_empty() {
-        tracing::debug!(
-            "OTEL_EXPORTER_OTLP_ENDPOINT and SIGIRO_OTEL_ENDPOINT not set — self-instrumentation disabled"
-        );
+        tracing::debug!("OTEL_EXPORTER_OTLP_ENDPOINT not set — self-instrumentation disabled");
         return Ok(None);
     }
 
@@ -103,8 +94,8 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
         Some(ref k) if !k.is_empty() => k.as_str(),
         _ => {
             anyhow::bail!(
-                "SIGIRO_OTEL_AUTH_KEY is required when SIGIRO_OTEL_ENDPOINT is set. \
-                 Set it to a strong random value or unset SIGIRO_OTEL_ENDPOINT to disable self-telemetry."
+                "SIGIRO_OTEL_AUTH_KEY is required when OTEL_EXPORTER_OTLP_ENDPOINT is set. \
+                 Set it to a strong random value or unset OTEL_EXPORTER_OTLP_ENDPOINT to disable self-telemetry."
             );
         }
     };

@@ -16,15 +16,19 @@ use watchexec_supervisor::{
 /// underlying `Command` does not expose an env field directly.
 #[derive(Debug)]
 pub struct Supervisor {
-    /// The underlying watchexec-supervisor Job.
-    job: SupervisorJob,
+    /// The command definition (binary, args).
+    cmd: Arc<Command>,
+    /// Environment variables to apply on spawn.
+    envs: HashMap<String, String>,
+    /// The underlying watchexec-supervisor Job (created on first `start()`).
+    job: Option<SupervisorJob>,
     /// Handle to the job task, retained for lifecycle management.
-    #[allow(dead_code)]
-    task: JoinHandle<()>,
+    task: Option<JoinHandle<()>>,
 }
 
 impl Supervisor {
     /// Create a new [`Supervisor`] for the given binary with args and env vars.
+    /// Does not spawn the process until [`Self::start()`] is called.
     ///
     /// # Arguments
     /// * `binary` - Path or name of the program to run.
@@ -43,28 +47,38 @@ impl Supervisor {
             options: SpawnOptions::default(),
         });
 
-        let (job, task) = start_job(cmd.clone());
-
-        // Apply environment variables via custom spawn function.
-        // set_spawn_fn lets us mutate the tokio::Command before it is spawned.
-        if !envs.is_empty() {
-            let envs_clone = envs;
-            job.set_spawn_fn(move |cmd: &mut TokioCommand| {
-                // Clear inherited envs and set only the ones provided.
-                cmd.env_clear();
-                for (key, val) in &envs_clone {
-                    cmd.env(key, val);
-                }
-                cmd.spawn()
-            });
+        Self {
+            cmd,
+            envs,
+            job: None,
+            task: None,
         }
-
-        Self { job, task }
     }
 
-    /// Start the command if it is not running.
-    pub fn start(&self) {
-        self.job.start();
+    /// Start the supervised process. Spawns the supervisor task on first call.
+    pub fn start(&mut self) {
+        if self.job.is_none() {
+            let (job, task) = start_job(self.cmd.clone());
+
+            // Apply environment variables via custom spawn function.
+            if !self.envs.is_empty() {
+                let envs_clone = self.envs.clone();
+                job.set_spawn_fn(move |cmd: &mut TokioCommand| {
+                    cmd.env_clear();
+                    for (key, val) in &envs_clone {
+                        cmd.env(key, val);
+                    }
+                    cmd.spawn()
+                });
+            }
+
+            self.job = Some(job);
+            self.task = Some(task);
+        }
+
+        if let Some(ref job) = self.job {
+            job.start();
+        }
     }
 
     /// Stop the command if it is running and wait for completion.
@@ -72,7 +86,9 @@ impl Supervisor {
     /// If you don't want to wait for completion, use [`Self::signal`] with
     /// [`Signal::ForceStop`] instead.
     pub fn stop(&self) {
-        self.job.stop();
+        if let Some(ref job) = self.job {
+            job.stop();
+        }
     }
 
     /// Send a signal to the running command.
@@ -82,22 +98,30 @@ impl Supervisor {
     ///
     /// On Windows, only [`Signal::ForceStop`] has any effect.
     pub fn signal(&self, sig: Signal) {
-        self.job.signal(sig);
+        if let Some(ref job) = self.job {
+            job.signal(sig);
+        }
     }
 
     /// Check if the supervised command is currently running.
     pub fn is_running(&self) -> bool {
-        self.job.is_running()
+        self.job
+            .as_ref()
+            .is_some_and(watchexec_supervisor::job::Job::is_running)
     }
 
     /// Check if the job task has stopped entirely.
     pub fn is_dead(&self) -> bool {
-        self.job.is_dead()
+        self.job
+            .as_ref()
+            .is_none_or(watchexec_supervisor::job::Job::is_dead)
     }
 
     /// Wait for the supervised command to end.
     pub async fn wait(&self) {
-        self.job.to_wait().await;
+        if let Some(ref job) = self.job {
+            job.to_wait().await;
+        }
     }
 
     /// Gracefully stop the command with a signal and grace period.
@@ -105,13 +129,19 @@ impl Supervisor {
     /// The command will be sent `signal` and then given `grace` time before being
     /// forcefully terminated. On Windows this is equivalent to [`Self::stop`].
     pub fn stop_with_signal(&self, signal: Signal, grace: std::time::Duration) {
-        self.job.stop_with_signal(signal, grace);
+        if let Some(ref job) = self.job {
+            job.stop_with_signal(signal, grace);
+        }
     }
 }
 
 impl Drop for Supervisor {
     fn drop(&mut self) {
-        self.job.stop();
-        self.task.abort();
+        if let Some(ref job) = self.job {
+            job.stop();
+        }
+        if let Some(ref task) = self.task {
+            task.abort();
+        }
     }
 }

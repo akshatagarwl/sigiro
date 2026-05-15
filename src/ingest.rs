@@ -7,19 +7,19 @@ use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post}
 use multer::Multipart;
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
-        ExportLogsServiceRequest, ExportLogsServiceResponse,
+        ExportLogsPartialSuccess, ExportLogsServiceRequest, ExportLogsServiceResponse,
         logs_service_server::{LogsService, LogsServiceServer},
     },
     metrics::v1::{
-        ExportMetricsServiceRequest, ExportMetricsServiceResponse,
+        ExportMetricsPartialSuccess, ExportMetricsServiceRequest, ExportMetricsServiceResponse,
         metrics_service_server::{MetricsService, MetricsServiceServer},
     },
     profiles::v1development::{
-        ExportProfilesServiceRequest, ExportProfilesServiceResponse,
+        ExportProfilesPartialSuccess, ExportProfilesServiceRequest, ExportProfilesServiceResponse,
         profiles_service_server::{ProfilesService, ProfilesServiceServer},
     },
     trace::v1::{
-        ExportTraceServiceRequest, ExportTraceServiceResponse,
+        ExportTracePartialSuccess, ExportTraceServiceRequest, ExportTraceServiceResponse,
         trace_service_server::{TraceService, TraceServiceServer},
     },
 };
@@ -169,6 +169,15 @@ impl TraceService for OtlpGrpcService {
         // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_traces(bytes, InputFormat::Protobuf).await?;
+        if batch.num_rows() == 0 {
+            tracing::warn!(project_id, "export traces: empty batch after transform");
+            return Ok(Response::new(ExportTraceServiceResponse {
+                partial_success: Some(ExportTracePartialSuccess {
+                    rejected_spans: 1,
+                    error_message: "empty batch after transform".to_string(),
+                }),
+            }));
+        }
         self.route_batch(project_id.clone(), IngestMsg::Traces { project_id, batch })
             .await?;
         Ok(Response::new(ExportTraceServiceResponse {
@@ -187,6 +196,15 @@ impl LogsService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_logs(bytes, InputFormat::Protobuf).await?;
+        if batch.num_rows() == 0 {
+            tracing::warn!(project_id, "export logs: empty batch after transform");
+            return Ok(Response::new(ExportLogsServiceResponse {
+                partial_success: Some(ExportLogsPartialSuccess {
+                    rejected_log_records: 1,
+                    error_message: "empty batch after transform".to_string(),
+                }),
+            }));
+        }
         self.route_batch(project_id.clone(), IngestMsg::Logs { project_id, batch })
             .await?;
         Ok(Response::new(ExportLogsServiceResponse {
@@ -205,6 +223,22 @@ impl MetricsService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
+        let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
+            || batches.sum.as_ref().is_some_and(|b| b.num_rows() > 0)
+            || batches.histogram.as_ref().is_some_and(|b| b.num_rows() > 0)
+            || batches
+                .exp_histogram
+                .as_ref()
+                .is_some_and(|b| b.num_rows() > 0);
+        if !has_data {
+            tracing::warn!(project_id, "export metrics: empty batch after transform");
+            return Ok(Response::new(ExportMetricsServiceResponse {
+                partial_success: Some(ExportMetricsPartialSuccess {
+                    rejected_data_points: 1,
+                    error_message: "empty batch after transform".to_string(),
+                }),
+            }));
+        }
         self.route_batch(
             project_id.clone(),
             IngestMsg::Metrics {
@@ -492,6 +526,15 @@ impl ProfilesService for OtlpGrpcService {
         let batch = tokio::task::spawn_blocking(move || transform_profiles(req))
             .await
             .map_err(|e| Status::internal(format!("transform task panicked: {e}")))??;
+        if batch.num_rows() == 0 {
+            tracing::warn!(project_id, "export profiles: empty batch after transform");
+            return Ok(Response::new(ExportProfilesServiceResponse {
+                partial_success: Some(ExportProfilesPartialSuccess {
+                    rejected_profiles: 1,
+                    error_message: "empty batch after transform".to_string(),
+                }),
+            }));
+        }
         self.route_batch(
             project_id.clone(),
             IngestMsg::Profiles { project_id, batch },

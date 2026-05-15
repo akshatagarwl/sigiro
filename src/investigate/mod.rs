@@ -799,7 +799,7 @@ fn parse_full_span(row: &duckdb::Row<'_>) -> Result<Span> {
         span_id: row.get::<_, String>(1).context("span_id")?,
         parent_span_id: row.get::<_, String>(2).unwrap_or_default(),
         span_name: row.get::<_, String>(3).context("span_name")?,
-        duration_ns: row.get::<_, i64>(4).context("duration")?,
+        duration_us: row.get::<_, i64>(4).context("duration")?,
         status_code: StatusCode::from_i32(row.get::<_, i32>(5).context("status_code")?),
         service_name: row.get::<_, String>(6).context("service_name")?,
         span_kind,
@@ -974,7 +974,8 @@ pub fn enrich_pattern_unique_values(ctx: &QueryCtx, patterns: &mut [LogPattern])
     while let Some(row) = rows.next()? {
         let pattern: String = row.get(0)?;
         let values_json: String = row.get(1)?;
-        let values: Vec<String> = serde_json::from_str(&values_json).unwrap_or_else(|_| Vec::new());
+        let values: Vec<String> =
+            serde_json::from_str(&values_json).context("deserialize values_json")?;
 
         if let Some((_, slots)) = pattern_map.get_mut(&pattern) {
             // Ensure we have enough slots
@@ -997,7 +998,12 @@ pub fn enrich_pattern_unique_values(ctx: &QueryCtx, patterns: &mut [LogPattern])
 
         let mut vars = Vec::new();
         for (pos, token) in tokens.iter().enumerate() {
-            if *token == "<*>" {
+            if token.contains("<*>")
+                || token.contains("<NUM>")
+                || token.contains("<IP>")
+                || token.contains("<UUID>")
+                || token.contains("<HEX>")
+            {
                 let ctx_before = pos
                     .checked_sub(1)
                     .and_then(|p| tokens.get(p))

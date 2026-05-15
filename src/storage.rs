@@ -176,10 +176,9 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
                     "postgres URI missing or empty password — required for distributed catalog"
                 )
             })?;
-            let host = parsed.host_str().unwrap_or_else(|| {
-                tracing::info!("postgres URI has no host — defaulting to localhost");
-                "localhost"
-            });
+            let host = parsed.host_str().ok_or_else(|| {
+                anyhow::anyhow!("postgres URI missing host — required for distributed catalog")
+            })?;
             // port: required — default 5432 should not be implicit
             let port = parsed.port().ok_or_else(|| {
                 anyhow::anyhow!("postgres URI missing port — required for distributed catalog")

@@ -94,6 +94,7 @@ pub struct AppState {
     /// Admin SQLite for API key storage (separate from per-project data)
     pub admin_conn: Arc<Mutex<Connection>>,
     pub http_client: reqwest::Client,
+    pub router: Arc<crate::inserter::MsgRouter>,
 }
 
 // DuckDB's access_mode is database-level, not connection-level:
@@ -253,6 +254,7 @@ pub async fn run_servers(
         pool,
         admin_conn: Arc::clone(&admin_conn),
         http_client: reqwest::Client::new(),
+        router: Arc::clone(&router),
     });
 
     {
@@ -275,7 +277,8 @@ pub async fn run_servers(
     });
 
     // OTLP HTTP — authenticated via Authorization header
-    let otlp_http_app = crate::ingest::otlp_http_router(router, Arc::clone(&admin_conn));
+    let otlp_http_app =
+        crate::ingest::otlp_http_router(Arc::clone(&router), Arc::clone(&admin_conn));
     let otlp_http_port = ports.otlp_http;
     let otlp_http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{otlp_http_port}")).await?;
@@ -287,40 +290,54 @@ pub async fn run_servers(
 
     // Servers should run forever. Any exit is unexpected and fatal.
     // Match on the result to log the specific server and error before propagating.
-    tokio::select! {
+    let result = tokio::select! {
         r = grpc_handle => {
             let result = r?;
             tracing::error!("gRPC server exited: {result:?}");
-            result?
+            result
         },
         r = http_handle => {
             let result = r?;
             tracing::error!("HTTP server exited: {result:?}");
-            result?
+            result
         },
         r = otlp_http_handle => {
             let result = r?;
             tracing::error!("OTLP HTTP server exited: {result:?}");
-            result?
+            result
         },
-    }
+    };
 
-    Ok(())
+    router.shutdown().await;
+    result
 }
 
-#[instrument]
-async fn health(_path: HealthPath) -> &'static str {
+#[instrument(skip(state))]
+async fn health(_path: HealthPath, State(state): State<Arc<AppState>>) -> axum::response::Response {
     // Create explicit OTEL span using global tracer
     use opentelemetry::trace::{Span, Tracer};
     let tracer = opentelemetry::global::tracer("sigiro");
     let mut span = tracer.start("health_check");
     span.add_event("health_handler_start", vec![]);
 
+    if state.router.has_dead_flushers() {
+        tracing::warn!("health check: dead flushers detected");
+        span.add_event("health_handler_dead_flushers", vec![]);
+        span.end();
+        return axum::response::Response::builder()
+            .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
+            .body(axum::body::Body::from("dead flushers"))
+            .unwrap();
+    }
+
     tracing::info!("health check called");
 
     span.add_event("health_handler_end", vec![]);
     span.end();
-    "ok"
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .body(axum::body::Body::from("ok"))
+        .unwrap()
 }
 
 /// Convert a DuckDB ValueRef to a serde_json::Value.
@@ -546,7 +563,7 @@ async fn trace_detail_handler(
     let mut parent_to_children: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     let mut root_span_id: Option<String> = None;
-    let mut total_duration_ns: i64 = 0;
+    let mut total_duration_us: i64 = 0;
     let mut error_count: i64 = 0;
     let mut services_set: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut max_duration_span: Option<SpanDetail> = None;
@@ -559,7 +576,7 @@ async fn trace_detail_handler(
             .get::<_, String>(1)
             .context_internal("TraceDetail", "failed to read span_id")?;
         let parent_span_id: String = row.get::<_, String>(2).unwrap_or_default();
-        let duration_ns: i64 = row
+        let duration_us: i64 = row
             .get::<_, i64>(4)
             .context_internal("TraceDetail", "failed to read duration")?;
         let status_code: i32 = row
@@ -582,7 +599,7 @@ async fn trace_detail_handler(
             span_name: row
                 .get::<_, String>(3)
                 .context_internal("TraceDetail", "failed to read span_name")?,
-            duration_ns,
+            duration_us,
             status_code,
             service_name: service_name.clone(),
             timestamp: row
@@ -597,7 +614,7 @@ async fn trace_detail_handler(
             scope_version: row.get::<_, Option<String>>(15).ok().flatten(),
             trace_state: row.get::<_, Option<String>>(16).ok().flatten(),
         };
-        total_duration_ns = total_duration_ns.saturating_add(duration_ns);
+        total_duration_us = total_duration_us.saturating_add(duration_us);
         if status_code == 2 {
             error_count += 1;
         }
@@ -614,7 +631,7 @@ async fn trace_detail_handler(
 
         let is_longer = max_duration_span
             .as_ref()
-            .map(|s| duration_ns > s.duration_ns)
+            .map(|s| duration_us > s.duration_us)
             .unwrap_or(true);
         if is_longer {
             max_duration_span = Some(span.clone());
@@ -648,11 +665,11 @@ async fn trace_detail_handler(
     let critical_path = compute_critical_path(&root_span.span_id, &parent_to_children, &span_map);
 
     // Compute service breakdown
-    let service_breakdown = compute_service_breakdown(&spans, total_duration_ns);
+    let service_breakdown = compute_service_breakdown(&spans, total_duration_us);
 
     Ok(Json(TraceDetailResponse {
         trace_id,
-        total_duration_ns,
+        total_duration_us,
         root_span,
         span_count: spans.len() as i64,
         error_count,
@@ -685,7 +702,7 @@ fn compute_critical_path(
         };
         let mut path = current_path.to_vec();
         path.push(span_id.to_string());
-        let new_duration = current_duration.saturating_add(span.duration_ns);
+        let new_duration = current_duration.saturating_add(span.duration_us);
 
         // Leaf node: check if this path is the critical path
         if let Some(children) = parent_to_children.get(span_id) {
@@ -726,30 +743,30 @@ fn compute_critical_path(
 /// Compute service duration breakdown with percentages.
 fn compute_service_breakdown(
     spans: &[SpanDetail],
-    total_duration_ns: i64,
+    total_duration_us: i64,
 ) -> Vec<ServiceBreakdownEntry> {
     let mut service_durations: std::collections::HashMap<String, i64> =
         std::collections::HashMap::new();
     for span in spans {
         *service_durations
             .entry(span.service_name.clone())
-            .or_insert(0) += span.duration_ns;
+            .or_insert(0) += span.duration_us;
     }
 
-    let total = if total_duration_ns > 0 {
-        total_duration_ns as f64
+    let total = if total_duration_us > 0 {
+        total_duration_us as f64
     } else {
         1.0
     };
     let mut breakdown: Vec<ServiceBreakdownEntry> = service_durations
         .into_iter()
-        .map(|(service, duration_ns)| ServiceBreakdownEntry {
+        .map(|(service, duration_us)| ServiceBreakdownEntry {
             service,
-            duration_ns,
-            percentage: (duration_ns as f64 / total) * 100.0,
+            duration_us,
+            percentage: (duration_us as f64 / total) * 100.0,
         })
         .collect();
-    breakdown.sort_by(|a, b| b.duration_ns.cmp(&a.duration_ns));
+    breakdown.sort_by(|a, b| b.duration_us.cmp(&a.duration_us));
     breakdown
 }
 

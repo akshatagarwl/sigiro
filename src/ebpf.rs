@@ -7,7 +7,7 @@ use crate::supervisor::Supervisor;
 
 #[cfg(test)]
 mod test_utils {
-    use crate::types::{SupervisorHandle, get_registry};
+    use crate::types::{SupervisorHandle, SupervisorRegistry};
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -16,7 +16,8 @@ mod test_utils {
     where
         F: FnOnce(&Mutex<HashMap<String, SupervisorHandle>>) -> R,
     {
-        f(get_registry())
+        let registry = SupervisorRegistry::new();
+        f(&registry.inner)
     }
 }
 
@@ -323,7 +324,11 @@ fn has_capability(cap: &str) -> bool {
 /// Try to start obi as a subprocess.
 /// Returns Ok(()) if obi started successfully.
 /// Returns Err if obi failed to spawn.
-pub fn start_obi(obi_path: &str, otlp_endpoint: &str) -> Result<()> {
+pub fn start_obi(
+    obi_path: &str,
+    otlp_endpoint: &str,
+    registry: &crate::types::SupervisorRegistry,
+) -> Result<()> {
     use uuid::Uuid;
 
     // Auto-download OTel eBPF kernel-collector if not already available (Linux only)
@@ -350,10 +355,10 @@ otel_ebpf_auto_target_exe: "*"
     );
     envs.insert("OTEL_EBPF_CONFIG".to_string(), config_path.clone());
 
-    let supervisor = Supervisor::new(path, vec![format!("--config={}", config_path)], envs);
+    let mut supervisor = Supervisor::new(path, vec![format!("--config={}", config_path)], envs);
     supervisor.start();
 
-    crate::types::register_supervisor("obi", supervisor, Some(config_path));
+    registry.register("obi", supervisor, Some(config_path))?;
 
     info!("obi started via supervisor");
     Ok(())

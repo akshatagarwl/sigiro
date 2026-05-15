@@ -25,11 +25,6 @@ pub static S3_REGION: Envar<String> =
     Envar::on_startup("SIGIRO_S3_REGION", || EnvarDef::Default(String::new()));
 pub static S3_PREFIX: Envar<String> = Envar::on_startup("SIGIRO_S3_PREFIX", || EnvarDef::Unset);
 
-/// OTel self-instrumentation endpoint. Defaults to local sigiro OTLP HTTP endpoint.
-pub static OTEL_ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_OTEL_ENDPOINT", || {
-    EnvarDef::Default("http://127.0.0.1:4318".to_string())
-});
-
 /// OTel service name for self-instrumentation.
 pub static OTEL_SERVICE_NAME: Envar<String> = Envar::on_startup("OTEL_SERVICE_NAME", || {
     EnvarDef::Default("sigiro".to_string())

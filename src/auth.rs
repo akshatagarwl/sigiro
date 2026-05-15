@@ -49,6 +49,14 @@ pub fn verify_key_cached(
     conn: &Mutex<rusqlite::Connection>,
     raw_key: &str,
 ) -> Result<AuthContext, ApiError> {
+    // Dev key bypass — same project for all dev tokens
+    if is_dev_project(raw_key) {
+        return Ok(AuthContext {
+            project_id: "dev_project".to_string(),
+            plan: "free".to_string(),
+        });
+    }
+
     let cache = auth_cache();
 
     // Fast path: cache hit (moka auto-evicts expired entries)
@@ -101,27 +109,7 @@ pub async fn auth_middleware(
 ) -> Result<Response, ApiError> {
     let token = extract_bearer_token(req.headers())?;
 
-    // Dev key bypass — same middleware runs, dev keys skip DB verification
-    if is_dev_project(token) {
-        let ctx = AuthContext {
-            project_id: "dev_project".to_string(),
-            plan: "free".to_string(),
-        };
-        let mut req = req;
-        req.extensions_mut().insert(ctx);
-        return Ok(next.run(req).await);
-    }
-
-    let (project_id, plan) =
-        crate::admin::verify_key_db(&state.admin_conn, token).map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("Malformed API key") || msg.contains("Invalid API key") {
-                axum_anyhow::unauthorized("Invalid API Key", &msg)
-            } else {
-                axum_anyhow::internal_error("Internal Error", &msg)
-            }
-        })?;
-    let ctx = AuthContext { project_id, plan };
+    let ctx = verify_key_cached(&state.admin_conn, token)?;
     let mut req = req;
     req.extensions_mut().insert(ctx);
     Ok(next.run(req).await)
