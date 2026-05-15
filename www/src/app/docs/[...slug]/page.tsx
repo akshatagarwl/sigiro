@@ -26,7 +26,11 @@ export default async function Page({
 }
 
 export async function generateStaticParams() {
-  return source.generateParams();
+  return source.generateParams()
+    .filter((item) => item.slug.length > 0)
+    .map((item) => ({
+      slug: item.slug,
+    }));
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ slug?: string[] }> }) {
