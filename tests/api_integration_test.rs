@@ -64,10 +64,13 @@ fn build_test_context() -> TestContext {
         },
     );
 
+    let router = Arc::new(sigiro::inserter::MsgRouter::new(Arc::clone(&pool)));
+    router.start();
     let state = Arc::new(AppState {
         pool,
         admin_conn,
         http_client: reqwest::Client::new(),
+        router,
     });
 
     TestContext {
@@ -79,6 +82,7 @@ fn build_test_context() -> TestContext {
 /// Build the OTLP HTTP router (port 4318).
 fn build_otlp_app(state: &Arc<AppState>) -> axum::Router {
     let router = Arc::new(MsgRouter::new(Arc::clone(&state.pool)));
+    router.start();
     ingest::otlp_http_router(router, Arc::clone(&state.admin_conn))
 }
 

@@ -91,6 +91,7 @@ async fn inserter_processes_spans_for_single_project() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     // Explicit DI: initialize and register flusher before sending
     let _ = pool.create_project("test_project").unwrap();
@@ -127,6 +128,7 @@ async fn inserter_isolates_projects() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     // Explicit DI: initialize and register flushers for both projects before sending
     let _ = pool.create_project("project_a").unwrap();
@@ -190,6 +192,7 @@ async fn inserter_handles_backpressure() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     // Explicit DI: initialize and register flushers for both projects before sending
     let _ = pool.create_project("fast_project").unwrap();
@@ -250,6 +253,7 @@ async fn inserter_throughput_single_project() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     // Explicit DI: initialize and register flusher before sending
     let _ = pool.create_project("throughput_test").unwrap();

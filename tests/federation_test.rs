@@ -104,10 +104,16 @@ fn setup() -> (TempDir, Arc<Mutex<Connection>>) {
 fn make_state(admin_conn: &Arc<Mutex<Connection>>) -> Arc<AppState> {
     let data_dir =
         std::path::PathBuf::from(std::env::var("SIGIRO_DATA_DIR").expect("data dir set"));
+    let pool = Arc::new(ProjectPool::new(data_dir, 16));
     Arc::new(AppState {
-        pool: Arc::new(ProjectPool::new(data_dir, 16)),
+        pool: Arc::clone(&pool),
         admin_conn: Arc::clone(admin_conn),
         http_client: reqwest::Client::new(),
+        router: {
+            let r = Arc::new(sigiro::inserter::MsgRouter::new(pool));
+            r.start();
+            r
+        },
     })
 }
 

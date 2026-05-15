@@ -95,6 +95,7 @@ async fn e2e_profiles_pipeline() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
@@ -202,6 +203,7 @@ async fn e2e_profiles_multi_type() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
@@ -287,6 +289,7 @@ async fn e2e_profiles_empty_batch() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();

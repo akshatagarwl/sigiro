@@ -109,6 +109,7 @@ async fn e2e_pyroscope_native_pipeline() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_ns = {
         let odt = time::OffsetDateTime::now_utc();
@@ -252,6 +253,7 @@ async fn e2e_pyroscope_multi_series() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_ns = {
         let odt = time::OffsetDateTime::now_utc();

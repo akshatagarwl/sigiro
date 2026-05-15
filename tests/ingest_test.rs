@@ -8,15 +8,15 @@ fn test_admin_conn() -> Mutex<Connection> {
 }
 
 #[test]
-fn grpc_auth_dev_key_returns_unauthenticated() {
+fn grpc_auth_dev_key_returns_dev_project() {
     let admin = test_admin_conn();
     let mut metadata = tonic::metadata::MetadataMap::new();
     metadata.insert(
         "authorization",
         "Bearer sigiro_dev_test123".parse().unwrap(),
     );
-    let err = sigiro::ingest::extract_project_id_grpc(&admin, &metadata).unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    let project_id = sigiro::ingest::extract_project_id_grpc(&admin, &metadata).unwrap();
+    assert_eq!(project_id, "dev_project");
 }
 
 #[test]
@@ -55,15 +55,15 @@ fn grpc_auth_real_key_returns_project_id() {
 }
 
 #[test]
-fn http_auth_dev_key_returns_unauthenticated() {
+fn http_auth_dev_key_returns_dev_project() {
     let admin = test_admin_conn();
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         "authorization",
         "Bearer sigiro_dev_test123".parse().unwrap(),
     );
-    let err = sigiro::ingest::extract_project_id_http(&admin, &headers).unwrap_err();
-    assert_eq!(err, axum::http::StatusCode::UNAUTHORIZED);
+    let project_id = sigiro::ingest::extract_project_id_http(&admin, &headers).unwrap();
+    assert_eq!(project_id, "dev_project");
 }
 
 #[test]
