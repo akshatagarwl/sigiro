@@ -51,15 +51,22 @@ pub struct FlushConfig {
 
 impl FlushConfig {
     pub fn from_env() -> Self {
-        let row_threshold = crate::config::FLUSH_ROW_THRESHOLD.value().unwrap_or(10_000);
-        let interval_secs = crate::config::FLUSH_INTERVAL_SECS.value().unwrap_or(1);
+        let row_threshold = crate::config::FLUSH_ROW_THRESHOLD
+            .value()
+            .expect("FLUSH_ROW_THRESHOLD config must be valid");
+        let interval_secs = crate::config::FLUSH_INTERVAL_SECS
+            .value()
+            .expect("FLUSH_INTERVAL_SECS config must be valid");
         let backpressure = match crate::config::BACKPRESSURE_POLICY
             .value()
             .as_deref()
             .unwrap_or("block")
         {
+            "block" => BackpressurePolicy::Block,
             "drop-oldest" => BackpressurePolicy::DropOldest,
-            _ => BackpressurePolicy::Block,
+            other => panic!(
+                "unknown SIGIRO_BACKPRESSURE_POLICY: {other}. Expected 'block' or 'drop-oldest'"
+            ),
         };
         Self {
             row_threshold,
@@ -92,6 +99,19 @@ impl MsgRouter {
             project_senders: DashMap::new(),
             drop_count: AtomicUsize::new(0),
         }
+    }
+
+    /// Explicit lifecycle start. Logs activation and ensures the router is ready.
+    /// Callers should invoke this once after `new()` before accepting traffic.
+    pub fn start(&self) {
+        tracing::info!("MsgRouter started — accepting ingest messages");
+    }
+
+    /// Return true if any flusher task has panicked or exited unexpectedly.
+    pub fn has_dead_flushers(&self) -> bool {
+        self.project_senders
+            .iter()
+            .any(|entry| entry.value().1.is_finished())
     }
 
     /// Route a message to the appropriate per-project flusher.
@@ -231,7 +251,7 @@ impl MsgRouter {
 
     /// Gracefully shut down all flusher tasks: drops senders (triggering
     /// final flush in each flusher), then awaits task completion.
-    pub async fn shutdown(self) {
+    pub async fn shutdown(&self) {
         // Dropping all senders signals each flusher to do a final flush and exit.
         self.project_senders.clear();
         // NOTE: JoinHandles are dropped here too. Tokio JoinHandle::drop
@@ -341,7 +361,8 @@ impl ProjectFlusher {
             let (template, id, values) = self.drain.classify(body);
             template_ids.push(id);
             // Store extracted values as JSON array so the original log can be reconstructed.
-            let values_json = serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_string());
+            let values_json =
+                serde_json::to_string(&values).expect("values must serialize to JSON");
             template_values.push(values_json);
             self.pending_templates.entry(id).or_insert(template);
         }
@@ -436,9 +457,18 @@ impl ProjectFlusher {
                     .map_or("", |t| { t.strip_suffix("sigiro_logs").unwrap_or("") })
             );
             for (id, text) in self.pending_templates.drain() {
-                // Plain INSERT — DuckLake does not support PRIMARY KEY.
-                // Duplicate template rows are harmless (templates are tiny,
-                // dedup can be added to the compactor if needed).
+                // Dedup: skip insert if template already exists.
+                // DuckLake does not support UNIQUE constraints, so we check manually.
+                let exists: bool = conn
+                    .query_row(
+                        &format!("SELECT 1 FROM {tpl_table} WHERE template_id = ? LIMIT 1"),
+                        duckdb::params![id],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false);
+                if exists {
+                    continue;
+                }
                 if let Err(e) = conn.execute(
                     &format!("INSERT INTO {tpl_table} (template_id, template_text) VALUES (?, ?)"),
                     duckdb::params![id, text],
