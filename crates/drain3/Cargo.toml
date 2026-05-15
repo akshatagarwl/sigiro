@@ -2,9 +2,10 @@
 name = "drain3"
 version = "0.1.0"
 edition = "2024"
-description = "Rust port of Axiom's drain3 — fast log template extraction via fixed-depth prefix trees"
+authors = ["Akshat Agarwal <akshat@example.com>"]
+description = "Fast log template extraction via fixed-depth prefix trees (Rust port of Axiom's drain3)"
 license = "Apache-2.0"
-repository = "https://github.com/axiomhq/drain3"
+repository = "https://github.com/akshatagarwl/drain3"
 keywords = ["log", "parsing", "template", "drain", "clustering"]
 categories = ["algorithms", "text-processing"]
 
