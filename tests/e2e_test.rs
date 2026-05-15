@@ -305,6 +305,7 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
@@ -374,6 +375,7 @@ async fn e2e_multi_project_isolation() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
@@ -458,6 +460,7 @@ async fn e2e_services_endpoint_simulation() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
@@ -615,6 +618,7 @@ async fn e2e_investigation_all_signals() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
@@ -820,6 +824,7 @@ async fn e2e_drain_log_template_dedup() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
     let router = MsgRouter::new(pool.clone());
+    router.start();
 
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
@@ -903,17 +908,17 @@ async fn e2e_drain_log_template_dedup() {
         "sigiro_log_templates should have entries"
     );
 
-    // At least one template should contain <*> (wildcard from DRAIN)
+    // At least one template should contain a placeholder (<*>, <NUM>, <IP>, etc.)
     let wildcard_count: i64 = conn
         .query_row(
-            "SELECT count(*) FROM lake.sigiro_log_templates WHERE template_text LIKE '%<*>%'",
+            "SELECT count(*) FROM lake.sigiro_log_templates WHERE template_text LIKE '%<%>%'",
             [],
             |r| r.get(0),
         )
         .unwrap();
     assert!(
         wildcard_count >= 1,
-        "at least one template should have <*> wildcards"
+        "at least one template should have placeholder wildcards"
     );
 
     // Verify via investigate query: should get ≤4 grouped templates, not 20 raw lines
@@ -979,8 +984,8 @@ async fn e2e_drain_log_template_dedup() {
         .expect("should have request pattern");
     assert_eq!(
         req_pattern.variables.len(),
-        1,
-        "request pattern should have 1 variable slot: Request <*> failed"
+        2,
+        "request pattern should have 2 variable slots: Request <*> failed with code <NUM>"
     );
     assert_eq!(
         req_pattern.variables[0].context_before, "Request",
@@ -989,6 +994,14 @@ async fn e2e_drain_log_template_dedup() {
     assert_eq!(
         req_pattern.variables[0].context_after, "failed",
         "context after request id"
+    );
+    assert_eq!(
+        req_pattern.variables[1].context_before, "code",
+        "context before status code"
+    );
+    assert_eq!(
+        req_pattern.variables[1].context_after, "",
+        "context after status code"
     );
 
     // With the new API, we get raw log entries, not aggregated templates

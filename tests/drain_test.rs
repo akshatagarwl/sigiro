@@ -13,7 +13,8 @@ use sigiro::drain::DrainTree;
 fn first_log_returns_exact_body() {
     let mut tree = DrainTree::new();
     let (template, _, _) = tree.classify("Connection refused to host 10.0.0.1");
-    assert_eq!(template, "Connection refused to host 10.0.0.1");
+    // IP is pre-masked before DRAIN clustering.
+    assert_eq!(template, "Connection refused to host <IP>");
 }
 
 #[test]
@@ -21,7 +22,8 @@ fn second_log_with_variable_token_creates_wildcard() {
     let mut tree = DrainTree::new();
     tree.classify("User 12345 failed login");
     let (template, _, _) = tree.classify("User 67890 failed login");
-    assert_eq!(template, "User <*> failed login");
+    // Numbers are pre-masked to <NUM> before DRAIN sees them.
+    assert_eq!(template, "User <NUM> failed login");
 }
 
 #[test]
@@ -41,8 +43,8 @@ fn constant_tokens_preserved() {
         tree.classify(&format!("Order {i} shipped to warehouse 42"));
     }
     let (template, _, _) = tree.classify("Order 999 shipped to warehouse 42");
-    // "42" is constant across all logs — should NOT become <*>
-    assert_eq!(template, "Order <*> shipped to warehouse 42");
+    // With pre-masking, ALL numbers become <NUM> before DRAIN clustering.
+    assert_eq!(template, "Order <NUM> shipped to warehouse <NUM>");
 }
 
 // ---------------------------------------------------------------------------
@@ -63,9 +65,10 @@ fn similar_structure_same_group() {
     let mut tree = DrainTree::new();
     tree.classify("GET /api/users/100 200 15ms");
     let (t, _, _) = tree.classify("GET /api/users/200 200 23ms");
+    // Pre-masking turns numbers into <NUM>; path segments differ → <*>.
     assert!(
-        t.contains("<*>"),
-        "variable path/timing should be wildcarded"
+        t.contains("<*>") || t.contains("<NUM>"),
+        "variable tokens should be masked: {t}"
     );
 }
 
@@ -116,9 +119,9 @@ fn http_access_logs() {
     // Warm up
     tree.classify("GET /api/v1/users/1001 HTTP/1.1 200 42ms");
     tree.classify("GET /api/v1/users/2002 HTTP/1.1 200 38ms");
-    // Should converge: user ID and timing are variable
+    // Should converge: user IDs, HTTP version, status and timing are pre-masked numbers.
     let (t, _, _) = tree.classify("GET /api/v1/users/3003 HTTP/1.1 200 51ms");
-    assert_eq!(t, "GET <*> HTTP/1.1 200 <*>");
+    assert_eq!(t, "GET /api/v1/users/<NUM> HTTP/<NUM> <NUM> <NUM>ms");
 }
 
 #[test]
@@ -127,7 +130,8 @@ fn kubernetes_pod_events() {
     tree.classify("Pod api-server-abc12 started on node worker-1");
     tree.classify("Pod api-server-def34 started on node worker-2");
     let (t, _, _) = tree.classify("Pod api-server-ghi56 started on node worker-3");
-    assert_eq!(t, "Pod <*> started on node <*>");
+    // Pod names vary in their letter suffix → <*>; worker numbers are pre-masked.
+    assert_eq!(t, "Pod <*> started on node worker-<NUM>");
 }
 
 #[test]
@@ -136,8 +140,8 @@ fn database_query_logs() {
     tree.classify("Query SELECT * FROM users WHERE id = 1001 took 5ms");
     tree.classify("Query SELECT * FROM users WHERE id = 2002 took 12ms");
     let (t, _, _) = tree.classify("Query SELECT * FROM users WHERE id = 3003 took 8ms");
-    // id and timing are variable, the rest is constant
-    assert!(t.contains("<*>"));
+    // id and timing are pre-masked to <NUM>; the rest is constant.
+    assert!(t.contains("<NUM>"));
     assert!(t.contains("Query"));
     assert!(t.contains("users"));
 }
@@ -148,7 +152,8 @@ fn error_with_uuid() {
     tree.classify("Failed to process request 550e8400-e29b-41d4-a716-446655440000");
     tree.classify("Failed to process request a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     let (t, _, _) = tree.classify("Failed to process request 99999999-aaaa-bbbb-cccc-dddddddddddd");
-    assert_eq!(t, "Failed to process request <*>");
+    // UUIDs are pre-masked to <UUID>.
+    assert_eq!(t, "Failed to process request <UUID>");
 }
 
 #[test]
@@ -157,8 +162,8 @@ fn error_with_ip_addresses() {
     tree.classify("Connection timeout for 192.168.1.1 port 5432");
     tree.classify("Connection timeout for 10.0.0.5 port 5432");
     let (t, _, _) = tree.classify("Connection timeout for 172.16.0.99 port 5432");
-    // IP varies, port is constant
-    assert_eq!(t, "Connection timeout for <*> port 5432");
+    // IPs are pre-masked to <IP>; port is also a number → <NUM>.
+    assert_eq!(t, "Connection timeout for <IP> port <NUM>");
 }
 
 #[test]
@@ -169,8 +174,8 @@ fn mixed_severity_same_structure() {
     tree.classify("INFO Request 100 completed in 5ms");
     tree.classify("WARN Request 200 completed in 15ms");
     let (t, _, _) = tree.classify("ERROR Request 300 completed in 50ms");
-    // All three differ at position 0 (INFO/WARN/ERROR) and positions 2,5
-    assert!(t.contains("<*>"));
+    // All three differ at position 0 (INFO/WARN/ERROR); numbers are pre-masked.
+    assert!(t.contains("<*>") || t.contains("<NUM>"));
 }
 
 // ---------------------------------------------------------------------------
@@ -251,8 +256,8 @@ fn majority_matching_tokens_merges() {
     // 6 tokens, 4 match → 4/6 = 0.67 > 0.5 threshold
     tree.classify("server alpha is running on port 8080");
     let (t, _, _) = tree.classify("server beta is running on port 9090");
-    // "alpha"/"beta" and "8080"/"9090" should become <*>
-    assert_eq!(t, "server <*> is running on port <*>");
+    // "alpha"/"beta" become <*>; ports are pre-masked to <NUM>.
+    assert_eq!(t, "server <*> is running on port <NUM>");
 }
 
 // ---------------------------------------------------------------------------
@@ -271,8 +276,9 @@ fn batch_of_similar_logs_converges() {
         ));
         last_id = id;
     }
-    // After 100 similar logs, template should be stable
+    // After 100 similar logs, template should be stable.
+    // All numbers are pre-masked to <NUM>; "thread-" prefix is constant.
     let (t, id, _) = tree.classify("Worker thread-999 processed batch 9990 in 1004ms");
     assert_eq!(id, last_id);
-    assert_eq!(t, "Worker <*> processed batch <*> in <*>");
+    assert_eq!(t, "Worker thread-<NUM> processed batch <NUM> in <NUM>ms");
 }
