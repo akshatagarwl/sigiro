@@ -85,11 +85,12 @@ fi
 
 # --- Wait for sigiro to be ready ---
 READY_WAIT=0
+READY_TIMEOUT=90
 until curl -sf "http://127.0.0.1:9999/health" > /dev/null 2>&1; do
     sleep 1
     READY_WAIT=$((READY_WAIT + 1))
-    if [ "$READY_WAIT" -ge 15 ]; then
-        echo "ERROR: sigiro HTTP API not ready after 15s"
+    if [ "$READY_WAIT" -ge "$READY_TIMEOUT" ]; then
+        echo "ERROR: sigiro HTTP API not ready after ${READY_TIMEOUT}s"
         exit 1
     fi
 done
@@ -272,11 +273,13 @@ print(json.dumps(profiles))
 fi
 
 # --- Build output JSON ---
+# Pass JSON via stdin to avoid shell string interpolation breaking triple-quotes
 OUTPUT=$(python3 -c "
 import json, sys
 
-investigate = json.loads('''${INVESTIGATE_JSON}''')
-pyroscope = json.loads('''${PYROSCOPE_PROFILES}''')
+raw = sys.stdin.read().split('\n---PYROSCOPE---\n')
+investigate = json.loads(raw[0]) if raw[0] else {}
+pyroscope = json.loads(raw[1]) if len(raw) > 1 and raw[1] else None
 
 output = {
     'smoke_test': {
@@ -291,7 +294,12 @@ output = {
 }
 
 print(json.dumps(output, indent=2))
-")
+" <<PYEOF
+${INVESTIGATE_JSON}
+---PYROSCOPE---
+${PYROSCOPE_PROFILES}
+PYEOF
+)
 
 echo "$OUTPUT" | python3 -m json.tool 2>/dev/null || echo "$OUTPUT"
 
