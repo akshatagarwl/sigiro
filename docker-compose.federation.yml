@@ -76,7 +76,7 @@ services:
       - SIGIRO_HTTP_PORT=9999
       - SIGIRO_GRPC_PORT=4317
       - SIGIRO_OTLP_HTTP_PORT=4318
-      - SIGIRO_OTEL_ENDPOINT=http://central:9999
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://central:9999
       - SIGIRO_CATALOG_URL=postgresql://sigiro:sigiro@postgres:5432/ducklake
       - SIGIRO_S3_BUCKET=sigiro-cold
       - SIGIRO_S3_REGION=us-east-1
@@ -113,7 +113,7 @@ services:
       - SIGIRO_HTTP_PORT=9999
       - SIGIRO_GRPC_PORT=4317
       - SIGIRO_OTLP_HTTP_PORT=4318
-      - SIGIRO_OTEL_ENDPOINT=http://central:9999
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://central:9999
       - SIGIRO_CATALOG_URL=postgresql://sigiro:sigiro@postgres:5432/ducklake
       - SIGIRO_S3_BUCKET=sigiro-cold
       - SIGIRO_S3_REGION=us-east-1
@@ -150,7 +150,7 @@ services:
       - SIGIRO_HTTP_PORT=9999
       - SIGIRO_GRPC_PORT=4317
       - SIGIRO_OTLP_HTTP_PORT=4318
-      - SIGIRO_OTEL_ENDPOINT=http://central:9999
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://central:9999
       - SIGIRO_CATALOG_URL=postgresql://sigiro:sigiro@postgres:5432/ducklake
       - SIGIRO_S3_BUCKET=sigiro-cold
       - SIGIRO_S3_REGION=us-east-1

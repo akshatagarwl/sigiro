@@ -54,7 +54,7 @@ provision:
     export SIGIRO_OTLP_HTTP_PORT=4315
 
     # Point obi/Sigiro OTLP export at the "old" instance
-    export SIGIRO_OTEL_ENDPOINT=http://10.0.0.2:4317
+    export OTEL_EXPORTER_OTLP_ENDPOINT=http://10.0.0.2:4317
     export SIGIRO_PYROSCOPE_ENDPOINT=http://10.0.0.2:9999
 
     mkdir -p "$SIGIRO_DATA_DIR"

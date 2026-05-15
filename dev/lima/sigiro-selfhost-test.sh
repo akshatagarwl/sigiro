@@ -116,7 +116,7 @@ vm_ssh "$NEW_VM" "cd /home/akshat.guest && \
   SIGIRO_HTTP_PORT=9989 \
   SIGIRO_GRPC_PORT=4316 \
   SIGIRO_OTLP_HTTP_PORT=4315 \
-  SIGIRO_OTEL_ENDPOINT=http://${OLD_IP}:4317 \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://${OLD_IP}:4317 \
   SIGIRO_PYROSCOPE_ENDPOINT=http://${OLD_IP}:9999 \
   nohup ./target/release/sigiro serve --ebpf > /tmp/sigiro-new.log 2>&1 & \
   echo \"New PID: \$!\""
