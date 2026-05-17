@@ -1,0 +1,46 @@
+---
+source: tests/investigate_test.rs
+expression: coverage
+---
+{
+  "has_spans": false,
+  "has_logs": false,
+  "has_metrics": false,
+  "has_profiles": false,
+  "span_count": 0,
+  "log_template_count": 0,
+  "metric_series_count": 0,
+  "profile_sample_count": 0,
+  "signals": [
+    {
+      "signal_type": "spans",
+      "available": false,
+      "severity": "none",
+      "reason": "no spans found — service may not be instrumented for tracing"
+    },
+    {
+      "signal_type": "logs",
+      "available": false,
+      "severity": "none",
+      "reason": "no logs found — consider enabling log collection"
+    },
+    {
+      "signal_type": "metrics",
+      "available": false,
+      "severity": "low",
+      "reason": "no metrics found — no gauge/sum/histogram data in this window"
+    },
+    {
+      "signal_type": "profiles",
+      "available": false,
+      "severity": "low",
+      "reason": "no profiles found — no CPU/memory profiling data in this window"
+    },
+    {
+      "signal_type": "correlated_signals",
+      "available": false,
+      "severity": "none",
+      "reason": "neither spans nor logs available"
+    }
+  ]
+}

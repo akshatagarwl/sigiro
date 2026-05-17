@@ -1,0 +1,46 @@
+---
+source: tests/investigate_test.rs
+expression: coverage
+---
+{
+  "has_spans": true,
+  "has_logs": true,
+  "has_metrics": true,
+  "has_profiles": true,
+  "span_count": 10,
+  "log_template_count": 5,
+  "metric_series_count": 3,
+  "profile_sample_count": 1,
+  "signals": [
+    {
+      "signal_type": "spans",
+      "available": true,
+      "severity": "high",
+      "reason": "10 spans found"
+    },
+    {
+      "signal_type": "logs",
+      "available": true,
+      "severity": "high",
+      "reason": "5 log templates found"
+    },
+    {
+      "signal_type": "metrics",
+      "available": true,
+      "severity": "medium",
+      "reason": "3 metric series found"
+    },
+    {
+      "signal_type": "profiles",
+      "available": true,
+      "severity": "medium",
+      "reason": "1 profile samples found"
+    },
+    {
+      "signal_type": "correlated_signals",
+      "available": true,
+      "severity": "high",
+      "reason": "spans and logs are both available for correlation"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+---
+source: src/federation.rs
+expression: parsed
+---
+version: v1
+kind: Spicepod
+name: sigiro-central
+datasets:
+  - name: sigiro_local_spans
+    from: "ducklake:<DATA_DIR>/default/catalog.sqlite"
+    acceleration:
+      enabled: true
+      engine: duckdb
+  - name: worker_alpha_spans
+    from: "ducklake:/data/default/catalog.sqlite"
+  - name: worker_beta_spans
+    from: "ducklake:/data2/default/catalog.sqlite"
