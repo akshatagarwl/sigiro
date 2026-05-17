@@ -46,17 +46,7 @@ pub enum TopologyFormat {
 #[derive(Subcommand)]
 enum Command {
     /// Start gRPC + HTTP servers
-    Serve {
-        /// Disable eBPF auto-instrumentation (run in OTLP-only mode)
-        #[arg(long)]
-        no_ebpf: bool,
-        /// Run as central federation node (spawns Spice.ai for distributed query)
-        #[arg(long)]
-        central: bool,
-        /// URL of central node for collector self-registration (e.g. http://central:9999)
-        #[arg(long)]
-        central_url: Option<String>,
-    },
+    Serve,
     /// Run SQL query
     Query {
         /// SQL statement to execute
@@ -156,15 +146,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Serve {
-            no_ebpf,
-            central,
-            central_url,
-        }) => {
-            run_serve(no_ebpf, central, central_url).await?;
-        }
-        None => {
-            run_serve(false, false, None).await?;
+        Some(Command::Serve) | None => {
+            run_serve().await?;
         }
         Some(Command::Query { sql }) => {
             let client = require_client()?;
@@ -264,7 +247,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) -> Result<()> {
+async fn run_serve() -> Result<()> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)?;
 
@@ -290,10 +273,11 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     let supervisor_registry = sigiro::types::SupervisorRegistry::new();
 
     // eBPF auto-instrumentation: try obi, degrade gracefully
-    if no_ebpf {
-        tracing::info!("eBPF disabled by --no-ebpf flag");
+    let ebpf_enabled = sigiro::config::EBPF_ENABLED.value().unwrap_or(false);
+    if !ebpf_enabled {
+        tracing::info!("eBPF disabled (set SIGIRO_EBPF=true to enable)");
         sigiro::admin::write_instance_status(&admin_conn, "ebpf_status", "disabled")?;
-        sigiro::admin::write_instance_status(&admin_conn, "ebpf_reason", "--no-ebpf flag")?;
+        sigiro::admin::write_instance_status(&admin_conn, "ebpf_reason", "SIGIRO_EBPF not set")?;
     } else {
         let otlp_endpoint = sigiro::config::OTEL_EXPORTER_OTLP_ENDPOINT
             .value()
@@ -333,13 +317,14 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     };
 
     // Federation: central node mode
+    let central = sigiro::config::CENTRAL.value().unwrap_or(false);
     if central {
         tracing::info!("running as central federation node");
         sigiro::federation::start_spice(&dir, &supervisor_registry)?;
     }
 
     // Federation: collector self-registration with central node
-    if let Some(ref url) = central_url {
+    if let Ok(ref url) = sigiro::config::CENTRAL_URL.value() {
         tracing::info!("collector self-registering with central node at {url}");
         let client = sigiro::client::SigiroClient::new(url, "");
         let status = sigiro::admin::read_all_status(&admin_conn)?;
