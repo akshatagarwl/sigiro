@@ -294,7 +294,6 @@ pub fn start_spice(data_dir: &Utf8Path, registry: &SupervisorRegistry) -> Result
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
