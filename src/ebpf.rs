@@ -46,7 +46,7 @@ fn which_obi() -> Option<String> {
         .inspect_err(|e| debug!("obi not found in PATH: {e}"))
         .ok()
         .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
-        .map(|p| p.into_string())
+        .map(camino::Utf8PathBuf::into_string)
 }
 
 // ---------------------------------------------------------------------------
