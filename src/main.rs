@@ -554,20 +554,18 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
     let project_dir = std::fs::read_dir(&dir)
         .context("failed to read data directory")?
         .filter_map(std::result::Result::ok)
-        .map(|e| e.path())
+        .filter_map(|e| camino::Utf8PathBuf::from_path_buf(e.path()).ok())
         .find(|p| p.is_dir() && p.join("catalog.sqlite").exists())
         .context("no DuckDB project found in data directory")?;
 
     let catalog_path = project_dir.join("catalog.sqlite");
     let project_name = project_dir
         .file_name()
-        .and_then(|n| n.to_str())
         .context("project directory name is not valid UTF-8")?;
 
     if !catalog_path.exists() {
         anyhow::bail!(
-            "No data found at {}. Run sigiro serve and send it some traces first.",
-            catalog_path.display()
+            "No data found at {catalog_path}. Run sigiro serve and send it some traces first.",
         );
     }
 
@@ -581,7 +579,7 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
     conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
         .context("failed to set DuckDB limits")?;
 
-    let catalog_str = catalog_path.to_string_lossy();
+    let catalog_str = catalog_path.as_str();
     conn.execute_batch("INSTALL ducklake; INSTALL sqlite; LOAD ducklake; LOAD sqlite;")
         .context("failed to load DuckLake extensions")?;
 

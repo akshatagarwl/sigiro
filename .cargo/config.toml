@@ -1,0 +1,2 @@
+[build]
+rustflags = ["-W", "dead_code", "-W", "unused_imports"]
