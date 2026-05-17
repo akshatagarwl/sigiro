@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "bun run scripts/dev.ts",
-    "build": "bun run scripts/build.ts",
+    "sync-docs": "bun run scripts/sync-docs.ts",
+    "dev": "bun run sync-docs && bun run scripts/dev.ts",
+    "build": "bun run sync-docs && bun run scripts/build.ts",
     "start": "next start",
     "lint": "eslint"
   },
