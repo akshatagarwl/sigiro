@@ -45,7 +45,8 @@ fn which_obi() -> Option<String> {
     which::which("obi")
         .inspect_err(|e| debug!("obi not found in PATH: {e}"))
         .ok()
-        .map(|p| p.to_string_lossy().into_owned())
+        .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
+        .map(|p| p.into_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -124,13 +125,9 @@ fn download_obi(dest: &camino::Utf8Path) -> Result<()> {
 
     for entry in archive.entries().context("failed to read tar archive")? {
         let mut entry = entry.context("failed to read tar entry")?;
-        let entry_path = entry
-            .path()
-            .context("entry has no path")?
-            .to_string_lossy()
-            .into_owned();
+        let entry_path = entry.path().context("entry has no path")?;
 
-        if entry_path == "obi" {
+        if entry_path.as_os_str() == "obi" {
             entry
                 .unpack(dest)
                 .with_context(|| format!("failed to extract obi to {dest}"))?;
