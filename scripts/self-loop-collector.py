@@ -429,7 +429,7 @@ def collect(notes: str = "") -> Path:
     return run_dir
 
 
-def generate_dashboard(output_path: str = "docs/self-loop/metrics-dashboard.md") -> Path:
+def generate_dashboard(output_path: str = ".self-loop/metrics-dashboard.md") -> Path:
     base = Path(".self-loop")
     run_dirs = sorted(base.glob("run-*"))
     if not run_dirs:
@@ -665,8 +665,8 @@ if __name__ == "__main__":
     parser.add_argument("notes", nargs="?", default="", help="Run notes")
     parser.add_argument("--dashboard", action="store_true",
                         help="Generate metrics dashboard from all runs")
-    parser.add_argument("--dashboard-path", default="docs/self-loop/metrics-dashboard.md",
-                        help="Output path for dashboard (default: docs/self-loop/metrics-dashboard.md)")
+    parser.add_argument("--dashboard-path", default=".self-loop/metrics-dashboard.md",
+                        help="Output path for dashboard (default: .self-loop/metrics-dashboard.md)")
     args = parser.parse_args()
 
     if args.dashboard:
