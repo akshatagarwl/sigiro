@@ -88,12 +88,10 @@ pub static EBPF_ENABLED: Envar<bool> =
     Envar::on_startup("SIGIRO_EBPF", || EnvarDef::Default(false));
 
 /// Run as central federation node (default: false). Set SIGIRO_CENTRAL=true to enable.
-pub static CENTRAL: Envar<bool> =
-    Envar::on_startup("SIGIRO_CENTRAL", || EnvarDef::Default(false));
+pub static CENTRAL: Envar<bool> = Envar::on_startup("SIGIRO_CENTRAL", || EnvarDef::Default(false));
 
 /// URL of central node for collector self-registration (optional).
-pub static CENTRAL_URL: Envar<String> =
-    Envar::on_startup("SIGIRO_CENTRAL_URL", || EnvarDef::Unset);
+pub static CENTRAL_URL: Envar<String> = Envar::on_startup("SIGIRO_CENTRAL_URL", || EnvarDef::Unset);
 
 /// Machine hostname (used for federation worker registration).
 pub static HOSTNAME: Envar<String> =
