@@ -116,8 +116,8 @@ pub fn open_admin_db() -> Result<Connection> {
     let dir = crate::data_dir()?;
     std::fs::create_dir_all(&dir).context("failed to create data directory")?;
     let path = dir.join("admin.sqlite");
-    let conn = Connection::open(&path)
-        .with_context(|| format!("failed to open admin DB at {}", path.display()))?;
+    let conn =
+        Connection::open(&path).with_context(|| format!("failed to open admin DB at {path}"))?;
 
     // Enable WAL mode for better concurrency
     // Note: PRAGMA returns a result so we use query_row to capture it

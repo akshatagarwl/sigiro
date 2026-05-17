@@ -95,7 +95,7 @@ fn setup() -> (TempDir, Arc<Mutex<Connection>>) {
 
 fn make_state(admin_conn: &Arc<Mutex<Connection>>) -> Arc<AppState> {
     let data_dir =
-        std::path::PathBuf::from(std::env::var("SIGIRO_DATA_DIR").expect("data dir set"));
+        camino::Utf8PathBuf::from(std::env::var("SIGIRO_DATA_DIR").expect("data dir set"));
     let pool = Arc::new(ProjectPool::new(data_dir, 16));
     Arc::new(AppState {
         pool: Arc::clone(&pool),

@@ -60,9 +60,9 @@ static OBI_INSTALL_TRACKER: OnceLock<String> = OnceLock::new();
 /// Prefers `$SIGIRO_DATA_DIR/bin/obi` if SIGIRO_DATA_DIR is set,
 /// otherwise falls back to `~/.local/bin/obi`.
 #[allow(dead_code)]
-fn obi_install_path() -> Result<std::path::PathBuf> {
+fn obi_install_path() -> Result<camino::Utf8PathBuf> {
     if let Ok(data_dir) = crate::config::DATA_DIR.value() {
-        let path = std::path::Path::new(&data_dir).join("bin").join("obi");
+        let path = camino::Utf8PathBuf::from(data_dir).join("bin").join("obi");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .context("failed to create obi install directory under SIGIRO_DATA_DIR")?;
@@ -70,6 +70,8 @@ fn obi_install_path() -> Result<std::path::PathBuf> {
         return Ok(path);
     }
     let home = dirs::home_dir().context("cannot determine home directory for obi install path")?;
+    let home = camino::Utf8PathBuf::from_path_buf(home)
+        .map_err(|_| anyhow::anyhow!("home directory path is not valid UTF-8"))?;
     let path = home.join(".local").join("bin").join("obi");
     let parent = path
         .parent()
@@ -81,7 +83,7 @@ fn obi_install_path() -> Result<std::path::PathBuf> {
 /// Download and extract the OBI binary from OTel eBPF Instrumentation releases.
 /// The release ships as a .tar.gz archive containing the `obi` binary directly.
 #[allow(dead_code)]
-fn download_obi(dest: &std::path::Path) -> Result<()> {
+fn download_obi(dest: &camino::Utf8Path) -> Result<()> {
     let version = "v0.8.0";
 
     // Detect target arch for the release asset
@@ -131,8 +133,8 @@ fn download_obi(dest: &std::path::Path) -> Result<()> {
         if entry_path == "obi" {
             entry
                 .unpack(dest)
-                .with_context(|| format!("failed to extract obi to {}", dest.display()))?;
-            info!("obi extracted to {}", dest.display());
+                .with_context(|| format!("failed to extract obi to {dest}"))?;
+            info!("obi extracted to {dest}");
             return Ok(());
         }
     }
@@ -175,20 +177,12 @@ fn ensure_obi_installed_linux() -> Result<()> {
 
     let dest = obi_install_path()?;
     if dest.exists() {
-        debug!(
-            "obi binary already exists at {}, skipping download",
-            dest.display()
-        );
-        let _ = OBI_INSTALL_TRACKER
-            .set(dest.to_string_lossy().into_owned())
-            .ok();
+        debug!("obi binary already exists at {dest}, skipping download",);
+        let _ = OBI_INSTALL_TRACKER.set(dest.as_str().to_string()).ok();
         return Ok(());
     }
 
-    info!(
-        "obi not found in PATH — downloading OTel eBPF kernel-collector to {}",
-        dest.display()
-    );
+    info!("obi not found in PATH — downloading OTel eBPF kernel-collector to {dest}",);
 
     download_obi(&dest)?;
 
@@ -199,10 +193,8 @@ fn ensure_obi_installed_linux() -> Result<()> {
             .context("failed to set executable permission on obi")?;
     }
 
-    info!("obi successfully installed to {}", dest.display());
-    let _ = OBI_INSTALL_TRACKER
-        .set(dest.to_string_lossy().into_owned())
-        .ok();
+    info!("obi successfully installed to {dest}");
+    let _ = OBI_INSTALL_TRACKER.set(dest.as_str().to_string()).ok();
     Ok(())
 }
 
@@ -345,19 +337,23 @@ otel_ebpf_auto_target_exe: "*"
     let (_, config_path) = tmpfile
         .keep()
         .context("failed to persist temp config file")?;
-    let config_path = config_path.to_string_lossy().into_owned();
+    let config_path = camino::Utf8PathBuf::from_path_buf(config_path)
+        .map_err(|_| anyhow::anyhow!("temp config path is not valid UTF-8"))?;
 
     let mut envs = HashMap::new();
     envs.insert(
         "OTEL_EXPORTER_OTLP_ENDPOINT".to_string(),
         otlp_endpoint.to_string(),
     );
-    envs.insert("OTEL_EBPF_CONFIG".to_string(), config_path.clone());
+    envs.insert(
+        "OTEL_EBPF_CONFIG".to_string(),
+        config_path.as_str().to_string(),
+    );
 
     let mut supervisor = Supervisor::new(path, vec![format!("--config={}", config_path)], envs);
     supervisor.start();
 
-    registry.register("obi", supervisor, Some(config_path))?;
+    registry.register("obi", supervisor, Some(config_path.as_str().to_string()))?;
 
     info!("obi started via supervisor");
     Ok(())

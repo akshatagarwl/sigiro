@@ -6,7 +6,7 @@ fn setup_conn() -> Connection {
     conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
-    sigiro::storage::init_default(&conn, dir.path()).unwrap();
+    sigiro::storage::init_default(&conn, camino::Utf8Path::from_path(dir.path()).unwrap()).unwrap();
     conn
 }
 

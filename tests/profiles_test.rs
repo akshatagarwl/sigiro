@@ -93,7 +93,10 @@ fn make_profiles_batch(
 #[tokio::test]
 async fn e2e_profiles_pipeline() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -201,7 +204,10 @@ async fn e2e_profiles_pipeline() {
 #[tokio::test]
 async fn e2e_profiles_multi_type() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -287,7 +293,10 @@ async fn e2e_profiles_multi_type() {
 #[tokio::test]
 async fn e2e_profiles_empty_batch() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 

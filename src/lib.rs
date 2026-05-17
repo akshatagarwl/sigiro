@@ -24,7 +24,7 @@ pub mod toon;
 pub mod types;
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use camino::Utf8PathBuf;
 
 // ---------------------------------------------------------------------------
 // Shared type re-exports
@@ -41,10 +41,10 @@ pub use inserter::MsgRouter;
 pub use responses::{ServiceBreakdownEntry, SpanDetail, TraceDetailResponse};
 pub use server::ApiDoc;
 
-pub fn data_dir() -> Result<PathBuf> {
+pub fn data_dir() -> Result<Utf8PathBuf> {
     crate::config::DATA_DIR
         .value()
-        .map(PathBuf::from)
+        .map(Utf8PathBuf::from)
         .map_err(anyhow::Error::from)
         .context(
             "SIGIRO_DATA_DIR not set — export SIGIRO_DATA_DIR=/path/to/data before starting sigiro",

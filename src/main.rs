@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use itertools::Itertools;
 use sigiro::responses::SpanDetail;
 use sigiro::toon::to_toon;
 use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
@@ -214,7 +215,7 @@ async fn main() -> Result<()> {
         }
         Some(Command::Auth { key }) => {
             let path = sigiro::config::save_api_key(&key)?;
-            println!("API key saved to {}", path.display());
+            println!("API key saved to {}", path);
         }
         Some(Command::Admin { action }) => {
             // Try HTTP to running server first (solves DuckDB single-writer lock).
@@ -345,8 +346,7 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
         let worker = sigiro::federation::WorkerInfo {
             id: hostname_or_default()?,
             endpoint: format!("http://{FEDERATION_LOCAL_IP}:9999"),
-            catalog_path: dir.join("default").join("catalog.sqlite")
-                .to_str().context("catalog_path contains non-UTF8 characters")?.to_string(),
+            catalog_path: dir.join("default").join("catalog.sqlite").to_string(),
             mode: status.get("mode").cloned().context("instance status missing 'mode' — server not fully initialized")?,
             platform: sigiro::federation::PlatformInfo {
                 os: status.get("platform_os").cloned().context("instance status missing 'platform_os' — server not fully initialized")?,
@@ -376,7 +376,7 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
         }
     }
 
-    tracing::info!("sigiro ready — data_dir={}", dir.display());
+    tracing::info!("sigiro ready — data_dir={}", dir);
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
@@ -590,10 +590,9 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
 
     let ext_dir = dir.join("extensions");
     std::fs::create_dir_all(&ext_dir).context("failed to create extensions directory")?;
-    if let Some(p) = ext_dir.to_str() {
-        conn.execute_batch(&format!("SET extension_directory = '{p}';"))
-            .context("failed to set extension_directory")?;
-    }
+    let p = ext_dir.as_str();
+    conn.execute_batch(&format!("SET extension_directory = '{p}';"))
+        .context("failed to set extension_directory")?;
     conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
         .context("failed to set DuckDB limits")?;
 
@@ -778,11 +777,7 @@ fn render_service_tree(
     } else {
         format!(
             " → [{}]",
-            dependencies
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            dependencies.iter().map(|s| s.as_str()).join(", ")
         )
     };
     println!("{}└─ {svc}{deps_str}", "  ".repeat(depth));
@@ -820,9 +815,7 @@ fn render_topology_mermaid(
     let focus_str = focus.unwrap_or("services");
     println!("    subgraph {focus_str}");
 
-    // Sort for deterministic output
-    let mut sorted_nodes: Vec<_> = nodes.into_iter().collect();
-    sorted_nodes.sort();
+    let sorted_nodes: Vec<_> = nodes.into_iter().sorted().collect();
 
     for node in &sorted_nodes {
         println!("        {node}[{node}]");

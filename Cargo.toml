@@ -69,6 +69,8 @@ tracing-opentelemetry = "0.32"
 typed-env = "0.3.0"
 utoipa = "5"
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
+camino = "1.2.2"
+itertools = "0.14.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 caps = "0.5"
@@ -79,6 +81,7 @@ tower = "0.5"
 axum-test = "17"
 tracing-test = "0.2"
 temp-env = "0.3"
+insta = { version = "1.47.2", features = ["yaml", "json"] }
 
 [[bench]]
 name = "investigate_bench"

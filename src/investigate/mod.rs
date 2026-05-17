@@ -5,8 +5,10 @@ use anyhow::{Context, Result};
 use duckdb::Connection;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
+
+use itertools::Itertools;
 
 // Re-export pure types and functions from analysis submodule.
 pub use analysis::{
@@ -383,15 +385,10 @@ fn resolve_services(req: &InvestigateRequest) -> Result<Vec<String>> {
     let services = match (&req.service, &req.services) {
         (Some(s), None) => vec![s.clone()],
         (None, Some(list)) => list.clone(),
-        (Some(s), Some(list)) => {
-            let mut merged = vec![s.clone()];
-            for item in list {
-                if item != s {
-                    merged.push(item.clone());
-                }
-            }
-            merged
-        }
+        (Some(s), Some(list)) => std::iter::once(s.clone())
+            .chain(list.iter().cloned())
+            .unique()
+            .collect(),
         (None, None) => anyhow::bail!("either 'service' or 'services' must be provided"),
     };
     anyhow::ensure!(!services.is_empty(), "services list must not be empty");
@@ -1052,17 +1049,11 @@ pub fn query_profiles(ctx: &QueryCtx, limit: i64) -> Result<Vec<ProfileSummary>>
 }
 
 fn query_linked_traces(ctx: &QueryCtx, spans: &[Span]) -> Result<Vec<Trace>> {
-    let mut seen = HashSet::new();
     let unique: Vec<&str> = spans
         .iter()
         .filter(|s| s.is_error())
-        .filter_map(|s| {
-            if seen.insert(s.trace_id.as_str()) {
-                Some(s.trace_id.as_str())
-            } else {
-                None
-            }
-        })
+        .map(|s| s.trace_id.as_str())
+        .unique()
         .take(5)
         .collect();
 

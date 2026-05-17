@@ -303,7 +303,10 @@ fn make_profiles_batch(
 #[tokio::test]
 async fn e2e_full_pipeline_ingest_and_investigate() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -372,7 +375,10 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
 #[tokio::test]
 async fn e2e_multi_project_isolation() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -457,7 +463,10 @@ async fn e2e_multi_project_isolation() {
 #[tokio::test]
 async fn e2e_services_endpoint_simulation() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -615,7 +624,10 @@ fn e2e_query_validation() {
 #[tokio::test]
 async fn e2e_investigation_all_signals() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -821,7 +833,10 @@ async fn e2e_drain_log_template_dedup() {
     // Verify the full pipeline: OTLP logs → inserter (DRAIN) → DuckDB → investigate
     // Logs with variable tokens should collapse into a single template.
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 

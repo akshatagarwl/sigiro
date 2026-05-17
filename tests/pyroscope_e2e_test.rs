@@ -107,7 +107,10 @@ fn build_pyroscope_push_request(
 #[tokio::test]
 async fn e2e_pyroscope_native_pipeline() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -251,7 +254,10 @@ async fn e2e_pyroscope_empty_push_request() {
 #[tokio::test]
 async fn e2e_pyroscope_multi_series() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 

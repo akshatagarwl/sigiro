@@ -89,7 +89,10 @@ fn make_spans_batch(n: usize) -> RecordBatch {
 #[tokio::test]
 async fn inserter_processes_spans_for_single_project() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -126,7 +129,10 @@ async fn inserter_processes_spans_for_single_project() {
 #[tokio::test]
 async fn inserter_isolates_projects() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -188,7 +194,10 @@ async fn inserter_handles_backpressure() {
     // Backpressure is now applied via bounded channels — senders block
     // rather than dropping data. All messages should be delivered.
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -247,7 +256,10 @@ async fn inserter_throughput_single_project() {
     // Throughput test: 50,000 rows should complete in under 60 seconds.
     // This validates the buffered flush path is working (not per-message appender create/destroy).
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(dir.path().to_path_buf(), 10));
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
     let router = MsgRouter::new(pool.clone());
     router.start();
 

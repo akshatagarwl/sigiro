@@ -1,6 +1,7 @@
 //! Process supervisor wrapper using watchexec-supervisor.
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use camino::Utf8PathBuf;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::process::Command as TokioCommand;
 use tokio::task::JoinHandle;
@@ -35,13 +36,14 @@ impl Supervisor {
     /// * `args` - Command-line arguments to pass to the program.
     /// * `envs` - Environment variables to set for the program.
     pub fn new(
-        binary: impl Into<PathBuf>,
+        binary: impl Into<Utf8PathBuf>,
         args: Vec<String>,
         envs: HashMap<String, String>,
     ) -> Self {
+        let binary = binary.into();
         let cmd = Arc::new(Command {
             program: Program::Exec {
-                prog: binary.into(),
+                prog: binary.into_std_path_buf(),
                 args,
             },
             options: SpawnOptions::default(),

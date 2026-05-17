@@ -186,3 +186,57 @@ fn test_toon_performance_comparison() {
         compression_ratio
     );
 }
+
+#[test]
+fn snapshot_toon_simple_object() {
+    let value = json!({
+        "status": "ok",
+        "version": "1.0.0"
+    });
+    let toon = sigiro::toon::to_toon(&value);
+    insta::assert_snapshot!(toon);
+}
+
+#[test]
+fn snapshot_toon_array_of_objects() {
+    let value = json!([
+        {"name": "checkout", "spans": 1500},
+        {"name": "payments", "spans": 800}
+    ]);
+    let toon = sigiro::toon::to_toon(&value);
+    insta::assert_snapshot!(toon);
+}
+
+#[test]
+fn snapshot_toon_nested_object() {
+    let value = json!({
+        "service": "checkout",
+        "window": {
+            "from_ts": 1711000000,
+            "to_ts": 1711001000
+        }
+    });
+    let toon = sigiro::toon::to_toon(&value);
+    insta::assert_snapshot!(toon);
+}
+
+#[test]
+fn snapshot_toon_performance_comparison() {
+    let mut operations = Vec::new();
+    for i in 0..10 {
+        operations.push(json!({
+            "span_name": format!("operation_{}", i),
+            "count": i * 100,
+            "error_pct": i as f64 * 0.5,
+            "duration_p95_ns": i as f64 * 1000000.0
+        }));
+    }
+
+    let large_structure = json!({
+        "service": "test-service",
+        "operations": operations
+    });
+
+    let toon = sigiro::toon::to_toon(&large_structure);
+    insta::assert_snapshot!(toon);
+}

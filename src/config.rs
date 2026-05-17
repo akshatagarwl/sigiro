@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use camino::Utf8PathBuf;
 use typed_env::{Envar, EnvarDef};
 
 // ---------------------------------------------------------------------------
@@ -93,13 +93,15 @@ pub static API_KEY: Envar<String> = Envar::on_startup("SIGIRO_API_KEY", || Envar
 
 /// API key (required — no default. Set via $SIGIRO_API_KEY or config.toml).
 /// Returns the path to the sigiro config directory (~/.config/sigiro/).
-fn config_dir() -> Result<PathBuf> {
+fn config_dir() -> Result<Utf8PathBuf> {
     let base = dirs::config_dir().context("cannot determine config directory")?;
+    let base = Utf8PathBuf::from_path_buf(base)
+        .map_err(|_| anyhow::anyhow!("config directory path is not valid UTF-8"))?;
     Ok(base.join("sigiro"))
 }
 
 /// Returns the path to config.toml.
-fn config_path() -> Result<PathBuf> {
+fn config_path() -> Result<Utf8PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }
 
@@ -111,8 +113,7 @@ pub fn get_api_key() -> Result<String> {
     let path = config_path()?;
     let content = std::fs::read_to_string(&path).with_context(|| {
         format!(
-            "No API key found. Run: sigiro auth <key>\n  (looked in {} and $SIGIRO_API_KEY)",
-            path.display()
+            "No API key found. Run: sigiro auth <key>\n  (looked in {path} and $SIGIRO_API_KEY)",
         )
     })?;
     let config: toml::Value = content.parse().context("invalid config.toml")?;
@@ -123,13 +124,12 @@ pub fn get_api_key() -> Result<String> {
 }
 
 /// Save API key to ~/.config/sigiro/config.toml with 0600 permissions on Unix.
-pub fn save_api_key(key: &str) -> Result<PathBuf> {
+pub fn save_api_key(key: &str) -> Result<Utf8PathBuf> {
     let dir = config_dir()?;
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create config dir: {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create config dir: {dir}"))?;
     let path = dir.join("config.toml");
     std::fs::write(&path, format!("api_key = \"{key}\"\n"))
-        .with_context(|| format!("failed to write {}", path.display()))?;
+        .with_context(|| format!("failed to write {path}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

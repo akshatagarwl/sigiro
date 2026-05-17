@@ -7,6 +7,7 @@
 //! Widely used for production log clustering. Reference:
 //! "Drain: An Online Log Parsing Approach with Fixed Depth Tree" (2017).
 
+use itertools::Itertools;
 use regex::Regex;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::LazyLock;
@@ -143,19 +144,16 @@ impl DrainTree {
         let template = if matched {
             if let Some(t) = self.matcher.template_for_id(template_id) {
                 // Reconstruct full token sequence including params.
-                let mut tokens = Vec::with_capacity(t.token_count());
-                let mut dense_idx = 0;
-                for i in 0..t.token_count() {
-                    if t.is_param(i) {
-                        tokens.push("<*>".to_string());
-                    } else if let Some(tok) = t.tokens().get(dense_idx) {
-                        tokens.push(tok.clone());
-                        dense_idx += 1;
-                    } else {
-                        tokens.push("<*>".to_string());
-                    }
-                }
-                tokens.join(" ")
+                let mut dense = t.tokens().iter();
+                (0..t.token_count())
+                    .map(|i| {
+                        if t.is_param(i) {
+                            "<*>".to_string()
+                        } else {
+                            dense.next().cloned().unwrap_or_else(|| "<*>".to_string())
+                        }
+                    })
+                    .join(" ")
             } else {
                 masked.clone()
             }
@@ -169,13 +167,11 @@ impl DrainTree {
         let masked_tokens: Vec<&str> = masked.split_whitespace().collect();
         let original_tokens: Vec<&str> = log_body.split_whitespace().collect();
         let mut values = args;
-        for (j, masked_token) in masked_tokens.iter().enumerate() {
-            if is_pre_masked(masked_token) {
-                if let Some(orig) = original_tokens.get(j) {
-                    values.push((*orig).to_string());
-                }
-            }
-        }
+        values.extend(
+            itertools::zip_eq(&masked_tokens, &original_tokens)
+                .filter(|(m, _)| is_pre_masked(m))
+                .map(|(_, o)| o.to_string()),
+        );
 
         (template, id, values)
     }

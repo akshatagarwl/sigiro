@@ -716,3 +716,42 @@ fn operation_summary_baselines() {
     assert!(op.baseline_p95_ns.is_some());
     assert!(op.baseline_p95_ns.unwrap() < 100_000_000.0);
 }
+
+#[test]
+fn snapshot_compute_coverage_full() {
+    let coverage = compute_coverage(10, 5, 3, 1);
+    insta::assert_json_snapshot!(coverage);
+}
+
+#[test]
+fn snapshot_compute_coverage_empty() {
+    let coverage = compute_coverage(0, 0, 0, 0);
+    insta::assert_json_snapshot!(coverage);
+}
+
+#[test]
+fn snapshot_query_service_context_shape() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = 1_700_000_000_000_000_i64;
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+            parent_span_id, span_name, span_kind, status_code, service_name,
+            service_instance_id, resource_attributes)
+         VALUES
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx1', '', 'POST /pay', 3, 1, 'checkout',
+             'pod-1', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments',
+             'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"payments-v1\"}}')"
+    ))
+    .expect("insert");
+    let qctx = QueryCtx {
+        conn: &conn,
+        service: "checkout",
+        from_ts: now_us - 60_000_000,
+        to_ts: now_us + 60_000_000,
+        prefix: "",
+    };
+    let ctx = query_service_context(&qctx).unwrap();
+    insta::assert_json_snapshot!(ctx);
+}

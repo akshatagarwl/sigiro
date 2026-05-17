@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
+use camino::Utf8PathBuf;
 use dashmap::DashMap;
 use duckdb::Connection;
 use parking_lot::Mutex;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -12,7 +12,7 @@ use std::time::Instant;
 /// the `.ducklake` catalog file + Parquet files under the project directory.
 pub struct ProjectPool {
     pub connections: DashMap<String, PoolEntry>,
-    data_dir: PathBuf,
+    data_dir: Utf8PathBuf,
     max_connections: usize,
 }
 
@@ -35,7 +35,7 @@ impl PoolEntry {
 }
 
 impl ProjectPool {
-    pub fn new(data_dir: PathBuf, max_connections: usize) -> Self {
+    pub fn new(data_dir: Utf8PathBuf, max_connections: usize) -> Self {
         Self {
             connections: DashMap::new(),
             data_dir,
@@ -130,8 +130,8 @@ impl ProjectPool {
         }
     }
 
-    #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir.display()))]
-    fn open_connection(&self, project_dir: &std::path::Path) -> Result<Connection> {
+    #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir))]
+    fn open_connection(&self, project_dir: &camino::Utf8Path) -> Result<Connection> {
         let conn = Connection::open_in_memory()
             .with_context(|| "failed to open in-memory DuckDB".to_string())?;
 
@@ -140,12 +140,13 @@ impl ProjectPool {
             .value()
             .ok()
             .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
+            .map(Utf8PathBuf::from)
             .unwrap_or_else(|| self.data_dir.join("extensions"));
-        if let Some(p) = ext_dir.to_str() {
-            conn.execute_batch(&format!("SET extension_directory = '{p}';"))
-                .context("failed to set DuckDB extension_directory")?;
-        }
+        conn.execute_batch(&format!(
+            "SET extension_directory = '{}';",
+            ext_dir.as_str()
+        ))
+        .context("failed to set DuckDB extension_directory")?;
 
         // Cap memory per connection.
         conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")

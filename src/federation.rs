@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
+use camino::Utf8Path;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use tracing::{debug, info};
 use tracing_attributes::instrument;
 
@@ -190,14 +190,14 @@ struct Spicepod {
 /// Uses the "default" project directory for the local DuckLake dataset.
 /// If `SIGIRO_S3_BUCKET` is set, also adds a cold-storage S3 dataset.
 #[instrument]
-pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
+pub fn regenerate_spicepod(conn: &Connection, data_dir: &Utf8Path) -> Result<()> {
     let workers = list_workers(conn)?;
 
     let catalog_path = data_dir.join("default").join("catalog.sqlite");
 
     let mut datasets = vec![Dataset {
         name: "sigiro_local_spans".to_string(),
-        from: format!("ducklake:{}", catalog_path.display()),
+        from: format!("ducklake:{catalog_path}"),
         acceleration: Some(Acceleration {
             enabled: true,
             engine: "duckdb",
@@ -252,12 +252,8 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
     yaml = yaml.strip_prefix("---\n").unwrap_or(&yaml).to_string();
 
     let spicepod_path = data_dir.join("spicepod.yaml");
-    std::fs::write(&spicepod_path, &yaml).with_context(|| {
-        format!(
-            "failed to write spicepod.yaml to {}",
-            spicepod_path.display()
-        )
-    })?;
+    std::fs::write(&spicepod_path, &yaml)
+        .with_context(|| format!("failed to write spicepod.yaml to {spicepod_path}",))?;
 
     info!(
         "regenerated spicepod.yaml with {} worker dataset(s)",
@@ -269,25 +265,24 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Path) -> Result<()> {
 /// Start the `spiced` subprocess for Spice.ai federation.
 /// Fails loudly if `spiced` is not in PATH or spicepod.yaml is missing.
 #[instrument]
-pub fn start_spice(data_dir: &Path, registry: &SupervisorRegistry) -> Result<()> {
+pub fn start_spice(data_dir: &Utf8Path, registry: &SupervisorRegistry) -> Result<()> {
     which::which("spiced")
         .context("spiced binary not found in PATH — install spiced for Spice federation (https://spiceai.org)")?;
 
     let spicepod_path = data_dir.join("spicepod.yaml");
     anyhow::ensure!(
         spicepod_path.exists(),
-        "spicepod.yaml not found at {} — central federation requires a spicepod config",
-        spicepod_path.display()
+        "spicepod.yaml not found at {spicepod_path} — central federation requires a spicepod config",
     );
 
-    info!("starting spiced with config: {}", spicepod_path.display());
+    info!("starting spiced with config: {spicepod_path}");
 
     let mut envs = HashMap::new();
     envs.insert("SPICE_LOG".to_string(), "info".to_string());
 
     let mut supervisor = Supervisor::new(
         "spiced",
-        vec!["--config".to_string(), spicepod_path.display().to_string()],
+        vec!["--config".to_string(), spicepod_path.to_string()],
         envs,
     );
     supervisor.start();
@@ -450,7 +445,7 @@ mod tests {
         insert_worker_directly(&conn, &w2);
         insert_worker_directly(&conn, &w3);
 
-        regenerate_spicepod(&conn, dir.path()).unwrap();
+        regenerate_spicepod(&conn, camino::Utf8Path::from_path(dir.path()).unwrap()).unwrap();
 
         let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
         assert!(yaml.contains("version: v1"));
@@ -484,7 +479,8 @@ mod tests {
                 let w1 = test_worker("w1", "http://10.0.0.1:9999", "/data/default/catalog.sqlite");
                 insert_worker_directly(&conn, &w1);
 
-                regenerate_spicepod(&conn, dir.path()).unwrap();
+                regenerate_spicepod(&conn, camino::Utf8Path::from_path(dir.path()).unwrap())
+                    .unwrap();
 
                 let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
                 assert!(yaml.contains("sigiro_spans_cold"));
@@ -500,7 +496,7 @@ mod tests {
         let conn = setup_db();
         let dir = TempDir::new().unwrap();
 
-        regenerate_spicepod(&conn, dir.path()).unwrap();
+        regenerate_spicepod(&conn, camino::Utf8Path::from_path(dir.path()).unwrap()).unwrap();
 
         let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
         assert!(yaml.contains("version: v1"));
@@ -519,7 +515,7 @@ mod tests {
         let w1 = test_worker("x", "http://localhost:9999", "/var/data/catalog.sqlite");
         insert_worker_directly(&conn, &w1);
 
-        regenerate_spicepod(&conn, dir.path()).unwrap();
+        regenerate_spicepod(&conn, camino::Utf8Path::from_path(dir.path()).unwrap()).unwrap();
 
         let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
         // No YAML document marker
@@ -532,5 +528,44 @@ mod tests {
             .and_then(|v| v.as_sequence())
             .unwrap();
         assert!(!datasets.is_empty());
+    }
+
+    #[test]
+    fn snapshot_regenerate_spicepod_yaml() {
+        // Isolate from env vars set by other tests in the same process.
+        temp_env::with_vars(
+            [
+                ("SIGIRO_S3_BUCKET", None::<&str>),
+                ("SIGIRO_S3_PREFIX", None::<&str>),
+            ],
+            || {
+                let conn = setup_db();
+                let dir = TempDir::new().unwrap();
+
+                let w1 = test_worker(
+                    "alpha",
+                    "http://10.0.0.1:9999",
+                    "/data/default/catalog.sqlite",
+                );
+                let w2 = test_worker(
+                    "beta",
+                    "http://10.0.0.2:9999",
+                    "/data2/default/catalog.sqlite",
+                );
+                let w3 = test_worker("gamma", "http://10.0.0.3:9999", "");
+                insert_worker_directly(&conn, &w1);
+                insert_worker_directly(&conn, &w2);
+                insert_worker_directly(&conn, &w3);
+
+                regenerate_spicepod(&conn, camino::Utf8Path::from_path(dir.path()).unwrap())
+                    .unwrap();
+
+                let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
+                let data_dir = dir.path().to_str().unwrap();
+                let stable = yaml.replace(data_dir, "<DATA_DIR>");
+                let parsed: serde_yaml::Value = serde_yaml::from_str(&stable).unwrap();
+                insta::assert_yaml_snapshot!(parsed);
+            },
+        );
     }
 }

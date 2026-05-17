@@ -28,7 +28,7 @@ struct TestContext {
 /// an in-memory SQLite admin DB with all required tables.
 fn build_test_context() -> TestContext {
     let tmp_dir = TempDir::new().expect("failed to create temp dir");
-    let data_dir = tmp_dir.path().to_path_buf();
+    let data_dir = camino::Utf8PathBuf::from_path_buf(tmp_dir.path().to_path_buf()).unwrap();
 
     // Set SIGIRO_DATA_DIR so crate::data_dir() resolves correctly.
     // This is needed by pool::create_project -> storage::init_default
@@ -36,7 +36,7 @@ fn build_test_context() -> TestContext {
     // SAFETY: This is a single-threaded test setup; no concurrent access
     // to this env var from other threads during this call.
     unsafe {
-        std::env::set_var("SIGIRO_DATA_DIR", &data_dir);
+        std::env::set_var("SIGIRO_DATA_DIR", data_dir.as_str());
         std::env::set_var("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions");
     }
 

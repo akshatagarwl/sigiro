@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
+use camino::Utf8Path;
 use duckdb::Connection;
-use std::path::Path;
 use tracing::instrument;
 use url::Url;
 
@@ -8,15 +8,11 @@ use url::Url;
 /// Tables accessible as `lake.sigiro_*`.
 /// Catalog stored in `project_dir/catalog.sqlite`.
 /// Parquet stored in `project_dir/catalog.ducklake.files/` (auto-created by DuckLake).
-#[instrument(skip(conn), fields(dir = %project_dir.display()))]
-pub fn init_default(conn: &Connection, project_dir: &Path) -> Result<()> {
-    let project_dir_str = project_dir.to_string_lossy();
-    std::fs::create_dir_all(project_dir).with_context(|| {
-        format!(
-            "failed to create project directory: {}",
-            project_dir.display()
-        )
-    })?;
+#[instrument(skip(conn), fields(dir = %project_dir))]
+pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
+    let project_dir_str = project_dir.as_str();
+    std::fs::create_dir_all(project_dir)
+        .with_context(|| format!("failed to create project directory: {project_dir}",))?;
 
     // Load required extensions (ducklake for storage, sqlite for catalog)
     conn.execute_batch("INSTALL ducklake; INSTALL sqlite; LOAD ducklake; LOAD sqlite;")
@@ -36,11 +32,11 @@ pub fn init_default(conn: &Connection, project_dir: &Path) -> Result<()> {
 
 /// Initialize DuckLake with PostgreSQL catalog + optional S3 data files.
 /// Multi-writer safe — multiple sigiro instances can attach to the same catalog.
-#[instrument(skip(conn), fields(dir = %project_dir.display()))]
+#[instrument(skip(conn), fields(dir = %project_dir))]
 pub fn init_distributed(
     conn: &Connection,
     config: &StorageConfig,
-    project_dir: &Path,
+    project_dir: &Utf8Path,
 ) -> Result<()> {
     // Load required extensions
     conn.execute_batch("INSTALL ducklake; INSTALL postgres; LOAD ducklake; LOAD postgres;")
@@ -83,12 +79,9 @@ pub fn init_distributed(
     } else {
         // PostgreSQL catalog + local Parquet (useful for multi-writer without S3)
         std::fs::create_dir_all(project_dir).with_context(|| {
-            format!(
-                "failed to create project directory for local data: {}",
-                project_dir.display()
-            )
+            format!("failed to create project directory for local data: {project_dir}",)
         })?;
-        let local_data_path = project_dir.to_string_lossy();
+        let local_data_path = project_dir.as_str();
         let attach_sql =
             format!("ATTACH 'ducklake:{catalog_path}' AS lake (DATA_PATH '{local_data_path}')");
         conn.execute_batch(&attach_sql)

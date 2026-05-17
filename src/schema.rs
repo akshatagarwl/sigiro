@@ -22,13 +22,13 @@ fn load_one_extension(conn: &Connection, name: &str) -> Result<()> {
         .ok()
         .filter(|d| !d.is_empty())
         .map(|d| {
-            std::path::Path::new(&d)
+            camino::Utf8PathBuf::from(d)
                 .join("extensions")
                 .join(format!("{name}.duckdb_extension"))
         });
     if let Some(ref path) = bundled {
         if path.exists() {
-            if let Ok(()) = conn.execute_batch(&format!("LOAD '{}';", path.display())) {
+            if let Ok(()) = conn.execute_batch(&format!("LOAD '{path}';")) {
                 info!("loaded extension (bundled): {name}");
                 return Ok(());
             }

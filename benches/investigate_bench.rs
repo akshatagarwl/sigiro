@@ -11,7 +11,8 @@ fn setup_populated_db() -> (Arc<Mutex<duckdb::Connection>>, tempfile::TempDir) {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
 
     // DuckLake file catalog — matches production default
-    sigiro::storage::init_default(&conn, dir.path()).expect("init ducklake");
+    sigiro::storage::init_default(&conn, camino::Utf8Path::from_path(dir.path()).unwrap())
+        .expect("init ducklake");
     sigiro::schema::create_tables(&conn, "lake.").expect("create tables");
 
     let now_us = {

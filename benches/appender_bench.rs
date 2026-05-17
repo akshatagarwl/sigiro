@@ -101,7 +101,8 @@ fn make_span_batch(n: usize) -> RecordBatch {
 fn setup_ducklake_db() -> (Connection, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = Connection::open_in_memory().expect("in-memory db");
-    sigiro::storage::init_default(&conn, dir.path()).expect("init ducklake");
+    sigiro::storage::init_default(&conn, camino::Utf8Path::from_path(dir.path()).unwrap())
+        .expect("init ducklake");
     sigiro::schema::create_tables(&conn, "lake.").expect("create tables");
     (conn, dir)
 }
