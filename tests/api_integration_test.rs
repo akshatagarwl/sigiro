@@ -8,13 +8,14 @@
 
 use axum_test::TestServer;
 
+use parking_lot::Mutex;
 use rusqlite::Connection;
 use sigiro::admin;
 use sigiro::ingest;
 use sigiro::inserter::MsgRouter;
 use sigiro::pool::ProjectPool;
 use sigiro::server::{AppState, build_http_router};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 struct TestContext {

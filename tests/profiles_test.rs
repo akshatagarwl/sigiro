@@ -141,7 +141,7 @@ async fn e2e_profiles_pipeline() {
 
     // Verify rows landed in DuckDB
     let conn = pool.create_project("profile_test").unwrap();
-    let conn = conn.lock().unwrap();
+    let conn = conn.lock();
 
     let total: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {
@@ -247,7 +247,7 @@ async fn e2e_profiles_multi_type() {
     router.shutdown_and_wait().await;
 
     let conn = pool.create_project("multi_type").unwrap();
-    let conn = conn.lock().unwrap();
+    let conn = conn.lock();
 
     // Should have both profile types
     let type_count: i64 = conn
@@ -312,7 +312,7 @@ async fn e2e_profiles_empty_batch() {
     router.shutdown_and_wait().await;
 
     let conn = pool.create_project("empty_profiles").unwrap();
-    let conn = conn.lock().unwrap();
+    let conn = conn.lock();
 
     let total: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {

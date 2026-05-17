@@ -8,14 +8,11 @@ use serde::Deserialize;
 
 use crate::client::SigiroClient;
 
-/// Serialize a value to a JSON string, or return a formatted error on failure.
-/// Consistent error format across all MCP tool responses.
 fn serialize_json<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value)
         .unwrap_or_else(|e| format!("internal error: failed to serialize response: {e}"))
 }
 
-/// Format an error as a string, consistent across all MCP tool responses.
 fn format_error(e: &anyhow::Error) -> String {
     format!("error: {e:#}")
 }

@@ -209,44 +209,17 @@ pub fn us_to_iso(us: i64) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 /// OpenTelemetry span kind enum values.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, strum::FromRepr, strum::Display,
+)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum SpanKind {
-    #[serde(rename = "server")]
     Server = 1,
     Client = 2,
     Producer = 3,
     Consumer = 4,
     Internal = 5,
-}
-
-impl SpanKind {
-    pub fn from_i32(v: i32) -> Option<Self> {
-        match v {
-            1 => Some(Self::Server),
-            2 => Some(Self::Client),
-            3 => Some(Self::Producer),
-            4 => Some(Self::Consumer),
-            5 => Some(Self::Internal),
-            _ => None,
-        }
-    }
-
-    pub fn as_i32(&self) -> i32 {
-        *self as i32
-    }
-}
-
-impl std::fmt::Display for SpanKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SpanKind::Server => write!(f, "server"),
-            SpanKind::Client => write!(f, "client"),
-            SpanKind::Producer => write!(f, "producer"),
-            SpanKind::Consumer => write!(f, "consumer"),
-            SpanKind::Internal => write!(f, "internal"),
-        }
-    }
 }
 
 /// Full span with all attributes and event data.
@@ -291,47 +264,27 @@ pub struct Span {
 }
 
 impl Span {
-    /// Returns true if this is a root span (no parent).
-    pub fn is_root(&self) -> bool {
-        self.parent_span_id.is_empty()
-    }
-
     /// Returns true if the span has an error status.
     pub fn is_error(&self) -> bool {
         self.status_code.is_error()
-    }
-
-    /// Returns the duration in milliseconds as a float.
-    pub fn duration_ms(&self) -> f64 {
-        self.duration_us as f64 / 1_000_000.0
     }
 }
 
 /// A complete trace with root span and all child spans.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Trace {
-    /// The trace ID.
     pub trace_id: String,
-    /// The root span of this trace.
     pub root_span: Span,
-    /// All spans in this trace (including root).
     pub spans: Vec<Span>,
-    /// Logs linked to this trace (chronological, limited).
     pub linked_logs: Vec<LogEntry>,
-    /// Number of metrics associated with this trace's time range.
     pub metric_count: i64,
-    /// Total duration of the trace in nanoseconds (end of last span - start of first).
     pub total_duration_us: i64,
-    /// Number of spans with error status in this trace.
     pub error_count: i64,
-    /// Whether this trace contains errors.
     pub has_errors: bool,
-    /// Total number of spans in this trace.
     pub span_count: i32,
 }
 
 impl Trace {
-    /// Creates a new trace from the root span and all child spans.
     pub fn new(trace_id: String, root_span: Span, spans: Vec<Span>) -> Self {
         let error_count = spans.iter().filter(|s| s.is_error()).count() as i64;
         let total_duration_us = if let (Some(first), Some(last)) = (
@@ -356,11 +309,6 @@ impl Trace {
             span_count,
         }
     }
-
-    /// Returns the trace ID.
-    pub fn trace_id_ref(&self) -> &str {
-        &self.trace_id
-    }
 }
 
 /// Service dependency graph node with aggregated stats.
@@ -383,52 +331,29 @@ pub struct ServiceDependency {
 /// A single log entry (chronological).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LogEntry {
-    /// Unix timestamp in microseconds.
     pub timestamp: i64,
-    /// ISO-formatted timestamp string.
     pub timestamp_iso: String,
-    /// Log body/content.
     pub body: String,
-    /// Severity text (DEBUG, INFO, WARN, ERROR, etc.).
+    /// DEBUG, INFO, WARN, ERROR, etc.
     pub severity_text: String,
-    /// Trace ID if this log is linked to a trace.
     pub trace_id: Option<String>,
-    /// Span ID if this log is linked to a span.
     pub span_id: Option<String>,
-    /// Log attributes as a JSON string.
     pub attributes_json: Option<String>,
-    /// Instrumentation library name.
     pub instrumentation_library_name: Option<String>,
-    /// Instrumentation library version.
     pub instrumentation_library_version: Option<String>,
-    /// Flags field.
     pub flags: Option<i32>,
-    /// Resource attributes.
     pub resource_attributes_json: Option<String>,
-    /// Extracted template values as JSON array.
     /// Allows reconstructing the original log from the template.
     pub template_values: Option<String>,
 }
 
 impl LogEntry {
-    /// Returns true if this log has an associated trace.
-    pub fn has_trace(&self) -> bool {
-        self.trace_id.is_some()
-    }
-
     /// Returns true if this is an error-level log.
     pub fn is_error(&self) -> bool {
         self.severity_text.eq_ignore_ascii_case("error")
             || self.severity_text.eq_ignore_ascii_case("err")
             || self.severity_text.eq_ignore_ascii_case("fatal")
             || self.severity_text.eq_ignore_ascii_case("critical")
-    }
-
-    /// Returns true if this is a warning or higher.
-    pub fn is_warning(&self) -> bool {
-        self.severity_text.eq_ignore_ascii_case("warn")
-            || self.severity_text.eq_ignore_ascii_case("warning")
-            || self.is_error()
     }
 }
 
@@ -523,16 +448,6 @@ impl TimelineEntry {
             TimelineEntry::Event { timestamp, .. } => *timestamp,
             TimelineEntry::Log { timestamp, .. } => *timestamp,
             TimelineEntry::Version { timestamp, .. } => *timestamp,
-        }
-    }
-
-    /// Returns the entry type name for display.
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            TimelineEntry::Span { .. } => "span",
-            TimelineEntry::Event { .. } => "event",
-            TimelineEntry::Log { .. } => "log",
-            TimelineEntry::Version { .. } => "version",
         }
     }
 }

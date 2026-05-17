@@ -114,7 +114,7 @@ async fn inserter_processes_spans_for_single_project() {
 
     // Verify data landed in DuckDB
     let conn = pool.create_project("test_project").unwrap();
-    let conn = conn.lock().unwrap();
+    let conn = conn.lock();
     let count: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
@@ -160,7 +160,6 @@ async fn inserter_isolates_projects() {
     let conn_a = pool.create_project("project_a").unwrap();
     let count_a: i64 = conn_a
         .lock()
-        .unwrap()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -169,7 +168,6 @@ async fn inserter_isolates_projects() {
     let conn_b = pool.create_project("project_b").unwrap();
     let count_b: i64 = conn_b
         .lock()
-        .unwrap()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -228,7 +226,6 @@ async fn inserter_handles_backpressure() {
     let conn = pool.create_project("fast_project").unwrap();
     let count: i64 = conn
         .lock()
-        .unwrap()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -238,7 +235,6 @@ async fn inserter_handles_backpressure() {
     let conn2 = pool.create_project("slow_project").unwrap();
     let count2: i64 = conn2
         .lock()
-        .unwrap()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -279,7 +275,6 @@ async fn inserter_throughput_single_project() {
     let conn = pool.create_project("throughput_test").unwrap();
     let count: i64 = conn
         .lock()
-        .unwrap()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })

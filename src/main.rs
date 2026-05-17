@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, builder::styling};
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use sigiro::responses::SpanDetail;
 use sigiro::toon::to_toon;
@@ -220,7 +221,7 @@ async fn main() -> Result<()> {
             // Fall back to direct DuckDB if server isn't running (bootstrapping).
             let server_url = sigiro::config::ENDPOINT
                 .value()
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                .map_err(anyhow::Error::from)?;
 
             match action {
                 AdminAction::CreateKey {
@@ -295,7 +296,7 @@ async fn run_serve(no_ebpf: bool, central: bool, central_url: Option<String>) ->
     } else {
         let otlp_endpoint = sigiro::config::OTEL_EXPORTER_OTLP_ENDPOINT
             .value()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            .map_err(anyhow::Error::from)?;
         let status = sigiro::ebpf::ebpf_status("obi");
         sigiro::ebpf::write_ebpf_status(&admin_conn, &status)?;
         match status.status.as_str() {
@@ -412,7 +413,7 @@ fn require_client() -> Result<sigiro::client::SigiroClient> {
 fn hostname_or_default() -> Result<String> {
     sigiro::config::HOSTNAME
         .value()
-        .map_err(|e| anyhow::anyhow!("{e}"))
+        .map_err(anyhow::Error::from)
         .context("HOSTNAME env var not set — required for federation worker registration")
 }
 

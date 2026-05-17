@@ -5,8 +5,10 @@ use axum::{
     response::Response,
 };
 use axum_anyhow::ApiError;
+use headers::{Authorization, HeaderMapExt, authorization::Bearer};
 use moka::sync::Cache;
-use std::sync::{Arc, Mutex, OnceLock};
+use parking_lot::Mutex;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 /// Auth context extracted from the API key — attached to request extensions.
@@ -82,22 +84,14 @@ pub fn verify_key_cached(
 }
 
 /// Extract bearer token from Authorization header.
-pub fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
-    let value = headers
-        .get("authorization")
-        .ok_or_else(|| {
-            axum_anyhow::unauthorized("Missing Authentication", "Missing Authorization header")
-        })?
-        .to_str()
-        .map_err(|_| {
-            axum_anyhow::unauthorized(
-                "Missing Authentication",
-                "Invalid Authorization header encoding",
-            )
-        })?;
-    value.strip_prefix("Bearer ").ok_or_else(|| {
-        axum_anyhow::unauthorized("Missing Authentication", "Expected: Bearer <key>")
-    })
+pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
+    let auth: Authorization<Bearer> = headers.typed_get().ok_or_else(|| {
+        axum_anyhow::unauthorized(
+            "Missing Authentication",
+            "Missing or malformed Authorization header",
+        )
+    })?;
+    Ok(auth.token().to_string())
 }
 
 /// axum middleware: verify API key against local DuckDB.
@@ -109,7 +103,7 @@ pub async fn auth_middleware(
 ) -> Result<Response, ApiError> {
     let token = extract_bearer_token(req.headers())?;
 
-    let ctx = verify_key_cached(&state.admin_conn, token)?;
+    let ctx = verify_key_cached(&state.admin_conn, &token)?;
     let mut req = req;
     req.extensions_mut().insert(ctx);
     Ok(next.run(req).await)

@@ -6,7 +6,7 @@ rust-version = "1.85"
 license = "Apache-2.0"
 
 [workspace]
-members = ["crates/drain3"]
+members = []
 
 [dependencies]
 duckdb = { version = "1.10502.0", features = ["bundled", "appender-arrow"] }
@@ -42,14 +42,20 @@ pyroscope = { version = "2.0.0", features = ["backend-pprof-rs"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 rmcp = { version = "1.2.0", features = ["server", "transport-io"] }
 regex = "1"
-drain3 = { path = "crates/drain3" }
+drain3 = "0.1.4"
 hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
 which = "5"
 uuid = "1"
 tar = "0.4"
+parking_lot = "0.12"
+thiserror = "2"
+strum = { version = "0.27", features = ["derive"] }
 url = "2"
+tempfile = "3"
+headers = "0.4"
+mime = "0.3"
 sqlparser = "0.53"
 axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
 multer = "3"
@@ -64,12 +70,15 @@ typed-env = "0.3.0"
 utoipa = "5"
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+caps = "0.5"
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-tempfile = "3"
 tower = "0.5"
 axum-test = "17"
 tracing-test = "0.2"
+temp-env = "0.3"
 
 [[bench]]
 name = "investigate_bench"
@@ -97,6 +106,14 @@ inefficient-to-string = "warn"
 [lints.rust]
 # Compiler-level: unused Results are errors
 unused-must-use = "deny"
+
+[profile.dev]
+split-debuginfo = "unpacked"
+debug = 1
+
+[profile.test]
+split-debuginfo = "unpacked"
+debug = 1
 
 [profile.release]
 lto = "thin"

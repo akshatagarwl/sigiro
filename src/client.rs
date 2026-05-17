@@ -262,7 +262,7 @@ pub fn try_build_client() -> anyhow::Result<SigiroClient> {
         .map_err(|_| anyhow::anyhow!("No API key configured. Run: sigiro auth <key>"))?;
     let base_url = crate::config::ENDPOINT
         .value()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(anyhow::Error::from)?;
     Ok(SigiroClient::new(&base_url, &api_key))
 }
 
@@ -271,7 +271,6 @@ pub fn try_build_client() -> anyhow::Result<SigiroClient> {
 // ---------------------------------------------------------------------------
 
 impl SigiroClient {
-    /// Get hierarchical trace tree for a trace ID.
     pub async fn trace(&self, trace_id: &str) -> Result<crate::responses::TraceDetailResponse> {
         let resp = self
             .http

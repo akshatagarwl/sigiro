@@ -334,7 +334,6 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     let conn = pool.create_project("proj_e2e").unwrap();
     let count: i64 = conn
         .lock()
-        .unwrap()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -498,7 +497,7 @@ async fn e2e_services_endpoint_simulation() {
 
     // Query the services table grouped by service_name
     let conn = pool.create_project("proj_services").unwrap();
-    let conn_guard = conn.lock().unwrap();
+    let conn_guard = conn.lock();
 
     let mut stmt = conn_guard
         .prepare(
@@ -691,7 +690,7 @@ async fn e2e_investigation_all_signals() {
     // Verify raw counts in DuckDB
     let conn = pool.create_project("proj_all_signals").unwrap();
     {
-        let guard = conn.lock().unwrap();
+        let guard = conn.lock();
         let spans: i64 = guard
             .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |r| r.get(0))
             .unwrap();
@@ -867,7 +866,7 @@ async fn e2e_drain_log_template_dedup() {
 
     // Verify: 20 rows in sigiro_logs, each with a template_id
     let conn = pool.create_project("drain_test").unwrap();
-    let conn = conn.lock().unwrap();
+    let conn = conn.lock();
 
     let total_logs: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_logs", [], |r| r.get(0))

@@ -131,12 +131,8 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
     // At this point catalog_url is a non-empty string (Ok + !is_empty)
     // Proceed to use it as distributed catalog
     use crate::config;
-    let s3_bucket = config::S3_BUCKET
-        .value()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let s3_region = config::S3_REGION
-        .value()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let s3_bucket = config::S3_BUCKET.value().map_err(anyhow::Error::from)?;
+    let s3_region = config::S3_REGION.value().map_err(anyhow::Error::from)?;
     if !s3_bucket.is_empty() && s3_region.is_empty() {
         anyhow::bail!(
             "SIGIRO_S3_BUCKET is set but SIGIRO_S3_REGION is missing — provide a valid AWS region"
@@ -152,7 +148,7 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         s3_region,
         s3_prefix: crate::config::S3_PREFIX
             .value()
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
+            .map_err(anyhow::Error::from)?,
     }))
 }
 

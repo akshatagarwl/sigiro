@@ -1,8 +1,9 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+use parking_lot::Mutex;
 use sigiro::investigate::{
     InvestigateRequest, QueryCtx, compute_coverage, investigate, query_service_context,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Setup a DuckLake-backed DB matching production config.
 fn setup_populated_db() -> (Arc<Mutex<duckdb::Connection>>, tempfile::TempDir) {
@@ -109,7 +110,7 @@ fn bench_service_context(c: &mut Criterion) {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let conn = shared.lock().unwrap();
+    let conn = shared.lock();
 
     let ctx = QueryCtx {
         conn: &conn,

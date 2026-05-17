@@ -3,13 +3,16 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use tracing::{debug, info};
 
+#[cfg(target_os = "linux")]
+use caps::{CapSet, Capability};
+
 use crate::supervisor::Supervisor;
 
 #[cfg(test)]
 mod test_utils {
     use crate::types::{SupervisorHandle, SupervisorRegistry};
+    use parking_lot::Mutex;
     use std::collections::HashMap;
-    use std::sync::Mutex;
 
     #[allow(dead_code)]
     pub fn with_registry<F, R>(f: F) -> R
@@ -28,7 +31,6 @@ pub struct EbpfStatus {
     pub suggestions: Vec<String>,
 }
 
-/// Check if obi binary exists at the given path or in PATH.
 pub fn check_obi_available(obi_path: &str) -> bool {
     if obi_path != "obi" && !obi_path.is_empty() {
         // Explicit path — check file exists
@@ -39,7 +41,6 @@ pub fn check_obi_available(obi_path: &str) -> bool {
     }
 }
 
-/// Find obi in PATH using the `which` crate.
 fn which_obi() -> Option<String> {
     which::which("obi")
         .inspect_err(|e| debug!("obi not found in PATH: {e}"))
@@ -296,29 +297,21 @@ fn has_capability(cap: &str) -> bool {
         return true;
     }
 
-    // On Linux, check /proc/self/status for CapEff
     #[cfg(target_os = "linux")]
     {
-        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-            for line in status.lines() {
-                if let Some(hex) = line.strip_prefix("CapEff:") {
-                    if let Ok(bits) = u64::from_str_radix(hex.trim(), 16) {
-                        return match cap {
-                            "CAP_BPF" => bits & (1 << 39) != 0,
-                            "CAP_NET_ADMIN" => bits & (1 << 12) != 0,
-                            "CAP_SYS_ADMIN" => bits & (1 << 21) != 0,
-                            _ => false,
-                        };
-                    }
-                }
-            }
-        }
+        let capability = match cap {
+            "CAP_BPF" => Capability::CAP_BPF,
+            "CAP_NET_ADMIN" => Capability::CAP_NET_ADMIN,
+            "CAP_SYS_ADMIN" => Capability::CAP_SYS_ADMIN,
+            _ => return false,
+        };
+        caps::has_cap(None, CapSet::Effective, capability).unwrap_or(false)
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = cap;
+        false
     }
-    false
 }
 
 /// Try to start obi as a subprocess.
@@ -329,24 +322,30 @@ pub fn start_obi(
     otlp_endpoint: &str,
     registry: &crate::types::SupervisorRegistry,
 ) -> Result<()> {
-    use uuid::Uuid;
-
     // Auto-download OTel eBPF kernel-collector if not already available (Linux only)
     ensure_obi_installed()?;
 
     let path = if obi_path.is_empty() { "obi" } else { obi_path };
     info!("starting obi with OTLP endpoint: {otlp_endpoint}");
 
-    let config_uuid = Uuid::new_v4();
-    let config_path = format!("/tmp/sigiro-obi-{config_uuid}.yaml");
-
-    // OBI config YAML
+    let mut tmpfile = tempfile::Builder::new()
+        .prefix("sigiro-obi-")
+        .suffix(".yaml")
+        .tempfile()
+        .context("failed to create temp config file")?;
     let config_yaml = format!(
         r#"otel_exporter_otlp_endpoint: "{otlp_endpoint}"
 otel_ebpf_auto_target_exe: "*"
 "#,
     );
-    std::fs::write(&config_path, config_yaml).context("failed to write obi config file")?;
+    use std::io::Write;
+    tmpfile
+        .write_all(config_yaml.as_bytes())
+        .context("failed to write obi config file")?;
+    let (_, config_path) = tmpfile
+        .keep()
+        .context("failed to persist temp config file")?;
+    let config_path = config_path.to_string_lossy().into_owned();
 
     let mut envs = HashMap::new();
     envs.insert(

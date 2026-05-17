@@ -305,40 +305,6 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// RAII guard that sets an environment variable for the duration of a scope,
-    /// then restores the prior state (or removes the variable) on drop.
-    ///
-    /// SAFETY: `set_var` and `remove_var` are marked unsafe in Rust 1.94+ because
-    /// concurrent modification from other threads is UB. This guard is safe to use
-    /// when: (a) no other threads concurrently modify the same env vars, and (b) the
-    /// drop runs on the same thread where the guard was created. Tests satisfy both.
-    struct ScopedEnvVar(&'static str, Option<String>);
-
-    impl ScopedEnvVar {
-        fn new(key: &'static str, value: &str) -> Self {
-            let prior = std::env::var(key).ok();
-            // SAFETY: Only this thread sets this var, and Drop restores it.
-            // No other thread accesses these test-only env vars concurrently.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            ScopedEnvVar(key, prior)
-        }
-    }
-
-    impl Drop for ScopedEnvVar {
-        fn drop(&mut self) {
-            // SAFETY: Only this thread modifies env vars during test execution,
-            // and Drop runs on the same thread. No data race possible.
-            unsafe {
-                match self.1 {
-                    Some(ref v) => std::env::set_var(self.0, v),
-                    None => std::env::remove_var(self.0),
-                }
-            }
-        }
-    }
-
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_workers_table(&conn).unwrap();
@@ -509,19 +475,24 @@ mod tests {
         let dir = TempDir::new().unwrap();
 
         // Enable cold storage via env
-        let _s3 = ScopedEnvVar::new("SIGIRO_S3_BUCKET", "my-bucket");
-        let _prefix = ScopedEnvVar::new("SIGIRO_S3_PREFIX", "traces/");
+        temp_env::with_vars(
+            [
+                ("SIGIRO_S3_BUCKET", Some("my-bucket")),
+                ("SIGIRO_S3_PREFIX", Some("traces/")),
+            ],
+            || {
+                let w1 = test_worker("w1", "http://10.0.0.1:9999", "/data/default/catalog.sqlite");
+                insert_worker_directly(&conn, &w1);
 
-        let w1 = test_worker("w1", "http://10.0.0.1:9999", "/data/default/catalog.sqlite");
-        insert_worker_directly(&conn, &w1);
+                regenerate_spicepod(&conn, dir.path()).unwrap();
 
-        regenerate_spicepod(&conn, dir.path()).unwrap();
-
-        let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
-        assert!(yaml.contains("sigiro_spans_cold"));
-        assert!(yaml.contains("ducklake:s3://my-bucket/traces/data"));
-        assert!(yaml.contains("worker_w1_spans"));
-        assert!(yaml.contains("ducklake:/data/default/catalog.sqlite"));
+                let yaml = std::fs::read_to_string(dir.path().join("spicepod.yaml")).unwrap();
+                assert!(yaml.contains("sigiro_spans_cold"));
+                assert!(yaml.contains("ducklake:s3://my-bucket/traces/data"));
+                assert!(yaml.contains("worker_w1_spans"));
+                assert!(yaml.contains("ducklake:/data/default/catalog.sqlite"));
+            },
+        );
     }
 
     #[test]

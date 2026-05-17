@@ -1,8 +1,7 @@
-use crate::MutexExt;
 use anyhow::{Context, Result};
+use parking_lot::Mutex;
 use prefixed_api_key::{PrefixedApiKey, PrefixedApiKeyController};
 use rusqlite::Connection;
-use std::sync::Mutex;
 
 /// Build prefixed-api-key controller with sigiro's key format.
 /// Keys look like: sigiro_BRTRKFsL_51FwqftsmMDHHbJAMEXXHCgG
@@ -47,7 +46,7 @@ pub fn create_key(
     let hash_str = hash.to_string();
     let key_string = pak.to_string();
 
-    let guard = conn.lock_poisoned()?;
+    let guard = conn.lock();
     guard.execute(
         "INSERT INTO sigiro_api_keys (short_token, long_token_hash, project_id, plan, rate_limit)
          VALUES (?, ?, ?, ?, ?)",
@@ -60,7 +59,7 @@ pub fn create_key(
 
 /// Revoke an API key by short token.
 pub fn revoke_key(conn: &Mutex<Connection>, short_token: &str) -> Result<bool> {
-    let guard = conn.lock_poisoned()?;
+    let guard = conn.lock();
     let affected = guard
         .execute(
             "DELETE FROM sigiro_api_keys WHERE short_token = ?",
@@ -139,7 +138,7 @@ pub fn verify_key_db(conn: &Mutex<Connection>, raw_key: &str) -> Result<(String,
     let short_token = pak.short_token().to_string();
     let controller = key_controller();
 
-    let guard = conn.lock_poisoned()?;
+    let guard = conn.lock();
 
     let mut stmt = guard
         .prepare(

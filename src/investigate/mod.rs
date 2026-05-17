@@ -1,13 +1,12 @@
 pub mod analysis;
 
+use crate::types::{StatusCode, TimestampMicros};
 use anyhow::{Context, Result};
 use duckdb::Connection;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
-use std::sync::{Arc, Mutex};
-
-use crate::MutexExt;
-use crate::types::{StatusCode, TimestampMicros};
+use std::sync::Arc;
 
 // Re-export pure types and functions from analysis submodule.
 pub use analysis::{
@@ -329,12 +328,6 @@ pub struct MetricBucket {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct LinkedTrace {
-    pub trace_id: String,
-    pub spans: Vec<Span>,
-}
-
-#[derive(Serialize, Deserialize)]
 pub struct ProfileSummary {
     pub function: String,
     pub profile_type: String,
@@ -360,30 +353,6 @@ pub struct OperationSummary {
     pub is_anomalous: Option<bool>,
     /// Reason for anomaly if detected.
     pub anomaly_reason: Option<String>,
-}
-
-impl OperationSummary {
-    /// Returns true if error rate is significantly higher than baseline.
-    pub fn detect_error_anomaly(&self) -> bool {
-        if let (Some(baseline_err), Some(current_err)) =
-            (self.baseline_error_pct, Some(self.error_pct))
-        {
-            current_err > baseline_err * 2.0 && current_err > 5.0
-        } else {
-            false
-        }
-    }
-
-    /// Returns true if duration is significantly higher than baseline.
-    pub fn detect_duration_anomaly(&self) -> bool {
-        if let (Some(baseline_p95), Some(current_p95)) =
-            (self.baseline_p95_ns, Some(self.duration_p95_ns))
-        {
-            current_p95 > baseline_p95 * 3.0 && current_p95 > 1_000_000_000.0
-        } else {
-            false
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +411,7 @@ fn investigate_one(
     to_ts: i64,
     prefix: &str,
 ) -> Result<InvestigationBlock> {
-    let conn = conn.lock_poisoned()?;
+    let conn = conn.lock();
 
     let config = adaptive_config(from_ts, to_ts);
     let ctx = QueryCtx {
@@ -792,7 +761,7 @@ fn query_full_spans(ctx: &QueryCtx, limit: i64) -> Result<Vec<Span>> {
 
 fn parse_full_span(row: &duckdb::Row<'_>) -> Result<Span> {
     let span_kind_val: Option<i32> = row.get(7).ok();
-    let span_kind = span_kind_val.and_then(SpanKind::from_i32);
+    let span_kind = span_kind_val.and_then(|v| SpanKind::from_repr(v as usize));
 
     Ok(Span {
         trace_id: row.get::<_, String>(0).context("trace_id")?,

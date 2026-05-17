@@ -103,21 +103,18 @@ impl Supervisor {
         }
     }
 
-    /// Check if the supervised command is currently running.
     pub fn is_running(&self) -> bool {
         self.job
             .as_ref()
             .is_some_and(watchexec_supervisor::job::Job::is_running)
     }
 
-    /// Check if the job task has stopped entirely.
     pub fn is_dead(&self) -> bool {
         self.job
             .as_ref()
             .is_none_or(watchexec_supervisor::job::Job::is_dead)
     }
 
-    /// Wait for the supervised command to end.
     pub async fn wait(&self) {
         if let Some(ref job) = self.job {
             job.to_wait().await;

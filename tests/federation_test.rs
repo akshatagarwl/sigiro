@@ -3,13 +3,14 @@
 use axum::Router;
 use axum::middleware as axum_mw;
 use axum::routing::{delete, get, post};
+use parking_lot::Mutex;
 use rusqlite::Connection;
 use sigiro::admin;
 use sigiro::auth;
 use sigiro::federation;
 use sigiro::pool::ProjectPool;
 use sigiro::server::AppState;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -36,10 +37,7 @@ async fn register_worker_handler(
     axum::Json(worker): axum::Json<federation::WorkerInfo>,
 ) -> Result<axum::Json<serde_json::Value>, axum_anyhow::ApiError> {
     let id = worker.id.clone();
-    let guard = state
-        .admin_conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let guard = state.admin_conn.lock();
     federation::register_worker(&guard, &worker)
         .map_err(|e| axum_anyhow::internal_error("Federation", &e.to_string()))?;
     Ok(axum::Json(serde_json::json!({
@@ -53,10 +51,7 @@ async fn deregister_worker_handler(
     axum::Extension(_auth): axum::Extension<auth::AuthContext>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<axum::Json<serde_json::Value>, axum_anyhow::ApiError> {
-    let guard = state
-        .admin_conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let guard = state.admin_conn.lock();
     let deregistered = federation::deregister_worker(&guard, &id)
         .map_err(|e| axum_anyhow::internal_error("Federation", &e.to_string()))?;
     if deregistered {
@@ -73,10 +68,7 @@ async fn list_workers_handler(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     axum::Extension(_auth): axum::Extension<auth::AuthContext>,
 ) -> Result<axum::Json<serde_json::Value>, axum_anyhow::ApiError> {
-    let guard = state
-        .admin_conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let guard = state.admin_conn.lock();
     let workers = federation::list_workers(&guard)
         .map_err(|e| axum_anyhow::internal_error("Federation", &e.to_string()))?;
     Ok(axum::Json(serde_json::json!({ "workers": workers })))

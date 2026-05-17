@@ -143,12 +143,12 @@ impl DrainTree {
         let template = if matched {
             if let Some(t) = self.matcher.template_for_id(template_id) {
                 // Reconstruct full token sequence including params.
-                let mut tokens = Vec::with_capacity(t.token_count);
+                let mut tokens = Vec::with_capacity(t.token_count());
                 let mut dense_idx = 0;
-                for i in 0..t.token_count {
-                    if t.params.get(i).copied().unwrap_or(false) {
+                for i in 0..t.token_count() {
+                    if t.is_param(i) {
                         tokens.push("<*>".to_string());
-                    } else if let Some(tok) = t.tokens.get(dense_idx) {
+                    } else if let Some(tok) = t.tokens().get(dense_idx) {
                         tokens.push(tok.clone());
                         dense_idx += 1;
                     } else {

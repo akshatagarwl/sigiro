@@ -1,9 +1,10 @@
+use parking_lot::Mutex;
 use sigiro::investigate::{
     InvestigateRequest, QueryCtx, adaptive_config, compute_coverage, investigate,
     query_derived_events, query_service_context, us_to_iso,
 };
 use sigiro::types::StatusCode;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Helper: set up in-memory DB with DRAIN-classified logs and deduplicated templates.
 /// Returns (shared_conn, now_us).
@@ -423,7 +424,7 @@ fn log_template_dedup_ips() {
         "WARN",
     );
 
-    let conn = shared.lock().unwrap();
+    let conn = shared.lock();
     let qctx = QueryCtx {
         conn: &conn,
         service: "api",
@@ -455,7 +456,7 @@ fn log_template_dedup_uuids() {
         "ERROR",
     );
 
-    let conn = shared.lock().unwrap();
+    let conn = shared.lock();
     let qctx = QueryCtx {
         conn: &conn,
         service: "api",

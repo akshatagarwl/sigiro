@@ -33,7 +33,7 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
 
     let service_name = crate::config::OTEL_SERVICE_NAME
         .value()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(anyhow::Error::from)?;
 
     let backend = pyroscope::backend::pprof_backend(
         pyroscope::backend::pprof::PprofConfig::default(),

@@ -45,24 +45,8 @@ pub fn data_dir() -> Result<PathBuf> {
     crate::config::DATA_DIR
         .value()
         .map(PathBuf::from)
-        .map_err(|e| anyhow::anyhow!("{e}"))
+        .map_err(anyhow::Error::from)
         .context(
             "SIGIRO_DATA_DIR not set — export SIGIRO_DATA_DIR=/path/to/data before starting sigiro",
         )
-}
-
-// ---------------------------------------------------------------------------
-// Mutex helper — eliminates repeated `.lock().map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))` patterns.
-// ---------------------------------------------------------------------------
-use std::sync::{Mutex, MutexGuard};
-
-pub trait MutexExt<T> {
-    fn lock_poisoned(&self) -> Result<MutexGuard<'_, T>>;
-}
-
-impl<T> MutexExt<T> for Mutex<T> {
-    fn lock_poisoned(&self) -> Result<MutexGuard<'_, T>> {
-        self.lock()
-            .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))
-    }
 }

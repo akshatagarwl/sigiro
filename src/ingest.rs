@@ -4,6 +4,7 @@ use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArr
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
+use headers::{Authorization, HeaderMapExt, authorization::Bearer};
 use multer::Multipart;
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
@@ -23,14 +24,20 @@ use opentelemetry_proto::tonic::collector::{
         trace_service_server::{TraceService, TraceServiceServer},
     },
 };
+use parking_lot::Mutex;
 use prost::Message;
 use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing_attributes::instrument;
 
 use crate::inserter::MsgRouter;
 use crate::types::IngestMsg;
+
+/// Wrap an Arrow/record-batch construction error into a tonic Status.
+fn arrow_status<E: std::fmt::Display>(e: E) -> Status {
+    Status::internal(format!("arrow error: {e}"))
+}
 
 pub struct OtlpGrpcService {
     router: Arc<MsgRouter>,
@@ -109,11 +116,9 @@ pub fn extract_project_id_grpc(
 /// OTLP/HTTP spec: application/x-protobuf (default) or application/json.
 fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
     headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
+        .typed_get::<headers::ContentType>()
         .map(|ct| {
-            let ct_lower = ct.to_lowercase();
-            if ct_lower.contains("json") {
+            if ct == headers::ContentType::json() {
                 InputFormat::Json
             } else {
                 InputFormat::Protobuf
@@ -125,36 +130,45 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
         })
 }
 
+/// Run a CPU-bound transform on the tokio blocking pool.
+/// Maps both transform errors and task-panic errors to `Status::internal`.
+async fn spawn_transform<T, E>(
+    name: &'static str,
+    f: impl FnOnce() -> Result<T, E> + Send + 'static,
+) -> Result<T, Status>
+where
+    T: Send + 'static,
+    E: std::fmt::Display,
+{
+    tokio::task::spawn_blocking(move || f().map_err(|e| Status::internal(format!("{name}: {e}"))))
+        .await
+        .map_err(|e| Status::internal(format!("{name} task panicked: {e}")))?
+}
+
 /// Transform raw bytes into Arrow RecordBatch on the tokio blocking pool.
 /// Supports both protobuf and JSON input based on Content-Type header.
 #[instrument(skip_all, fields(endpoint = "/v1/traces"))]
 async fn transform_traces(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
-    tokio::task::spawn_blocking(move || {
+    spawn_transform("transform traces", move || {
         crate::otlp::transform_traces(&bytes, fmt)
-            .map_err(|e| Status::internal(format!("transform traces: {e}")))
     })
     .await
-    .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
 async fn transform_logs(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
-    tokio::task::spawn_blocking(move || {
+    spawn_transform("transform logs", move || {
         crate::otlp::transform_logs(&bytes, fmt)
-            .map_err(|e| Status::internal(format!("transform logs: {e}")))
     })
     .await
-    .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
 async fn transform_metrics(bytes: Vec<u8>, fmt: InputFormat) -> Result<MetricBatches, Status> {
-    tokio::task::spawn_blocking(move || {
+    spawn_transform("transform metrics", move || {
         crate::otlp::transform_metrics(&bytes, fmt)
-            .map_err(|e| Status::internal(format!("transform metrics: {e}")))
     })
     .await
-    .map_err(|e| Status::internal(format!("transform task panicked: {e}")))?
 }
 
 #[tonic::async_trait]
@@ -300,14 +314,14 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                             Arc::new(StringBuilder::new().finish()),
                             None,
                         )
-                        .map_err(|e| Status::internal(format!("arrow error: {e}")))?,
+                        .map_err(arrow_status)?,
                     ),
                     Arc::new(Int64Array::from(Vec::<i64>::new())),
                     Arc::new(StringBuilder::new().finish()),
                     Arc::new(StringBuilder::new().finish()),
                 ],
             )
-            .map_err(|e| Status::internal(format!("arrow error: {e}")));
+            .map_err(arrow_status);
         }
     };
     let string_table = &dict.string_table;
@@ -480,14 +494,14 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                         Arc::new(stack_values.finish()),
                         None,
                     )
-                    .map_err(|e| Status::internal(format!("arrow error: {e}")))?,
+                    .map_err(arrow_status)?,
                 ),
                 Arc::new(Int64Array::from(Vec::<i64>::new())),
                 Arc::new(units.finish()),
                 Arc::new(resource_attrs.finish()),
             ],
         )
-        .map_err(|e| Status::internal(format!("arrow error: {e}")));
+        .map_err(arrow_status);
     }
 
     let stack_list = ListArray::try_new(
@@ -496,7 +510,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
         Arc::new(stack_values.finish()),
         None,
     )
-    .map_err(|e| Status::internal(format!("arrow error: {e}")))?;
+    .map_err(arrow_status)?;
 
     RecordBatch::try_new(
         schema,
@@ -511,7 +525,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
             Arc::new(resource_attrs.finish()),
         ],
     )
-    .map_err(|e| Status::internal(format!("arrow error: {e}")))
+    .map_err(arrow_status)
 }
 
 #[tonic::async_trait]
@@ -523,9 +537,7 @@ impl ProfilesService for OtlpGrpcService {
     ) -> Result<Response<ExportProfilesServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
         let req = request.into_inner();
-        let batch = tokio::task::spawn_blocking(move || transform_profiles(req))
-            .await
-            .map_err(|e| Status::internal(format!("transform task panicked: {e}")))??;
+        let batch = spawn_transform("transform profiles", move || transform_profiles(req)).await?;
         if batch.num_rows() == 0 {
             tracing::warn!(project_id, "export profiles: empty batch after transform");
             return Ok(Response::new(ExportProfilesServiceResponse {
@@ -573,14 +585,11 @@ pub fn extract_project_id_http(
     admin_conn: &Mutex<Connection>,
     headers: &axum::http::HeaderMap,
 ) -> Result<String, StatusCode> {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(|| {
-            tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
-            StatusCode::UNAUTHORIZED
-        })?;
+    let auth: Authorization<Bearer> = headers.typed_get().ok_or_else(|| {
+        tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
+        StatusCode::UNAUTHORIZED
+    })?;
+    let token = auth.token();
 
     let ctx = crate::auth::verify_key_cached(admin_conn, token).map_err(|_| {
         tracing::warn!("OTLP HTTP: invalid API key");
@@ -834,9 +843,9 @@ async fn otlp_http_pyroscope(
     };
 
     let ct = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("(none)");
+        .typed_get::<headers::ContentType>()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "(none)".to_string());
     tracing::debug!(
         "otlp_http_pyroscope: project_id={project_id} body_len={} ct={ct}",
         body.len()
@@ -916,19 +925,19 @@ async fn parse_pyroscope_multipart(
     body: &[u8],
 ) -> Result<Vec<u8>, String> {
     let content_type = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+        .typed_get::<headers::ContentType>()
+        .map(|c| c.to_string())
+        .unwrap_or_default();
 
     if content_type.contains("multipart/form-data") {
-        // Extract boundary from Content-Type header
-        let boundary = content_type
-            .split(';')
-            .find_map(|part| {
-                let part = part.trim();
-                part.strip_prefix("boundary=")
-                    .map(|v| v.trim_matches('"').to_string())
-            })
+        // Extract boundary from Content-Type header via typed mime parsing
+        let mime: mime::Mime = headers
+            .typed_get::<headers::ContentType>()
+            .ok_or("missing Content-Type header")?
+            .into();
+        let boundary = mime
+            .get_param("boundary")
+            .map(|b| b.to_string())
             .ok_or("missing boundary in multipart Content-Type")?;
 
         let stream = futures_util::stream::once(std::future::ready(Ok::<_, std::io::Error>(
@@ -1112,14 +1121,14 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
                         Arc::new(StringBuilder::new().finish()),
                         None,
                     )
-                    .map_err(|e| Status::internal(format!("arrow error: {e}")))?,
+                    .map_err(arrow_status)?,
                 ),
                 Arc::new(Int64Array::from(Vec::<i64>::new())),
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(StringBuilder::new().finish()),
             ],
         )
-        .map_err(|e| Status::internal(format!("arrow error: {e}")));
+        .map_err(arrow_status);
     }
 
     let stack_list = ListArray::try_new(
@@ -1128,7 +1137,7 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
         Arc::new(stack_values.finish()),
         None,
     )
-    .map_err(|e| Status::internal(format!("arrow error: {e}")))?;
+    .map_err(arrow_status)?;
 
     RecordBatch::try_new(
         schema,
@@ -1143,5 +1152,5 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
             Arc::new(resource_attrs.finish()),
         ],
     )
-    .map_err(|e| Status::internal(format!("arrow error: {e}")))
+    .map_err(arrow_status)
 }

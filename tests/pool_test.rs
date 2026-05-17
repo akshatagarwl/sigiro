@@ -14,7 +14,7 @@ fn create_project_opens_connection() {
     assert_eq!(pool.len(), 1);
 
     // Verify tables were created (now in lake.* schema)
-    let guard = conn.lock().unwrap();
+    let guard = conn.lock();
     let mut stmt = guard
         .prepare("SELECT count(*) FROM lake.sigiro_spans")
         .unwrap();
@@ -52,7 +52,7 @@ fn data_isolation_between_projects() {
     // Insert into project A using raw SQL with all required columns
     let conn_a = pool.create_project("proj_a").unwrap();
     {
-        let guard = conn_a.lock().unwrap();
+        let guard = conn_a.lock();
         guard
             .execute_batch(
                 "INSERT INTO lake.sigiro_metrics_gauge (timestamp, metric_name, service_name, value) \
@@ -64,7 +64,7 @@ fn data_isolation_between_projects() {
     // Project B should have no data
     let conn_b = pool.create_project("proj_b").unwrap();
     {
-        let guard = conn_b.lock().unwrap();
+        let guard = conn_b.lock();
         let mut stmt = guard
             .prepare("SELECT count(*) FROM lake.sigiro_metrics_gauge")
             .unwrap();

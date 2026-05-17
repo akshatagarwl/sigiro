@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 use duckdb::Connection;
+use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Per-project DuckDB connection pool.
@@ -26,10 +27,9 @@ pub struct PoolEntry {
 impl PoolEntry {
     /// Checkpoint DuckLake before dropping so data is persisted to Parquet.
     fn shutdown(&self) {
-        if let Ok(guard) = self.conn.lock() {
-            if let Err(e) = guard.execute_batch("CHECKPOINT lake;") {
-                tracing::warn!("DuckDB CHECKPOINT failed during shutdown: {e}");
-            }
+        let guard = self.conn.lock();
+        if let Err(e) = guard.execute_batch("CHECKPOINT lake;") {
+            tracing::warn!("DuckDB CHECKPOINT failed during shutdown: {e}");
         }
     }
 }

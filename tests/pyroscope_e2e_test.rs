@@ -148,7 +148,7 @@ async fn e2e_pyroscope_native_pipeline() {
 
     // Verify in DuckDB
     let conn = pool.create_project("pyro_test").unwrap();
-    let conn = conn.lock().unwrap();
+    let conn = conn.lock();
 
     let total: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {
@@ -304,7 +304,7 @@ async fn e2e_pyroscope_multi_series() {
     router.shutdown_and_wait().await;
 
     let conn = pool.create_project("pyro_multi").unwrap();
-    let conn = conn.lock().unwrap();
+    let conn = conn.lock();
 
     let total: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {

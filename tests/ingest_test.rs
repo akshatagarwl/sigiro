@@ -1,5 +1,5 @@
+use parking_lot::Mutex;
 use rusqlite::Connection;
-use std::sync::Mutex;
 
 fn test_admin_conn() -> Mutex<Connection> {
     let conn = Connection::open_in_memory().unwrap();

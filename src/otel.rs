@@ -22,7 +22,7 @@ impl TelemetryConfig {
             .unwrap_or_default();
         let service_name = crate::config::OTEL_SERVICE_NAME
             .value()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            .map_err(anyhow::Error::from)?;
         let auth_key = crate::config::OTEL_AUTH_KEY
             .value()
             .ok()
@@ -40,21 +40,7 @@ pub struct TelemetryGuard {
     logger_provider: Option<opentelemetry_sdk::logs::SdkLoggerProvider>,
 }
 
-impl TelemetryGuard {
-    /// Force-flush pending spans. Call before querying or periodically.
-    pub fn flush(&self) {
-        if let Some(ref provider) = self.tracer_provider {
-            if let Err(e) = provider.force_flush() {
-                tracing::warn!("OTEL tracer force_flush failed: {e}");
-            }
-        }
-        if let Some(ref provider) = self.logger_provider {
-            if let Err(e) = provider.force_flush() {
-                tracing::warn!("OTEL logger force_flush failed: {e}");
-            }
-        }
-    }
-}
+impl TelemetryGuard {}
 
 impl Drop for TelemetryGuard {
     fn drop(&mut self) {

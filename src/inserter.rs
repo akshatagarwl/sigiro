@@ -4,25 +4,27 @@ use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use dashmap::DashMap;
 use duckdb::Connection;
+use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing_attributes::instrument;
 
-use crate::MutexExt;
 use crate::drain::DrainTree;
 use crate::pool::ProjectPool;
 use crate::types::{IngestMsg, SignalTable};
 
 /// Errors from the ingest router.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RouterError {
     /// Channel closed — flusher task exited unexpectedly.
+    #[error("channel closed for project {project_id}")]
     ChannelClosed { project_id: String },
     /// Failed to get or create a DuckDB connection.
+    #[error("connection failed for project {project_id}")]
     ConnectionFailed { project_id: String },
 }
 
@@ -425,7 +427,7 @@ impl ProjectFlusher {
             return Ok(());
         }
 
-        let conn = self.conn.lock_poisoned()?;
+        let conn = self.conn.lock();
 
         for (signal, buf) in &mut self.buffers {
             if buf.is_empty() {

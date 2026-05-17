@@ -25,45 +25,16 @@ pub enum InputFormat {
 }
 
 /// Errors that can occur during OTLP decoding.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
-    Protobuf(prost::DecodeError),
-    Json(serde_json::Error),
+    #[error("protobuf decode error: {0}")]
+    Protobuf(#[from] prost::DecodeError),
+    #[error("json decode error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("parse error: {0}")]
     Parse(String),
+    #[error("unsupported payload: {0}")]
     Unsupported(String),
-}
-
-impl std::fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DecodeError::Protobuf(e) => write!(f, "protobuf decode error: {e}"),
-            DecodeError::Json(e) => write!(f, "json decode error: {e}"),
-            DecodeError::Parse(msg) => write!(f, "parse error: {msg}"),
-            DecodeError::Unsupported(msg) => write!(f, "unsupported payload: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for DecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            DecodeError::Protobuf(e) => Some(e),
-            DecodeError::Json(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<prost::DecodeError> for DecodeError {
-    fn from(e: prost::DecodeError) -> Self {
-        DecodeError::Protobuf(e)
-    }
-}
-
-impl From<serde_json::Error> for DecodeError {
-    fn from(e: serde_json::Error) -> Self {
-        DecodeError::Json(e)
-    }
 }
 
 /// Result of transforming OTLP metrics to Arrow RecordBatches.
@@ -83,15 +54,6 @@ pub struct SkippedMetrics {
     pub nan_values: usize,
     pub infinity_values: usize,
     pub missing_values: usize,
-}
-
-impl SkippedMetrics {
-    pub fn has_skipped(&self) -> bool {
-        self.summaries > 0
-            || self.nan_values > 0
-            || self.infinity_values > 0
-            || self.missing_values > 0
-    }
 }
 
 // ============================================================================

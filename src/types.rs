@@ -1,6 +1,5 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
 
-use crate::MutexExt;
 use crate::otlp::MetricBatches;
 use arrow::record_batch::RecordBatch;
 
@@ -39,8 +38,8 @@ impl Drop for SupervisorHandle {
 // Supervisor registry — shared across federation.rs and ebpf.rs
 // --------------------------------------------------------------------------
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 /// Registry mapping supervisor names to their handles.
 /// Passed as a constructor parameter to avoid global mutable state.
@@ -63,7 +62,7 @@ impl SupervisorRegistry {
         supervisor: crate::supervisor::Supervisor,
         cleanup_path: Option<String>,
     ) -> anyhow::Result<()> {
-        let mut guard = self.inner.lock_poisoned()?;
+        let mut guard = self.inner.lock();
         let handle = SupervisorHandle::new(supervisor, cleanup_path);
         guard.insert(name.to_string(), handle);
         tracing::info!("registered supervisor: {name}");
@@ -226,12 +225,6 @@ impl TimestampMicros {
     pub fn now() -> Self {
         let odt = time::OffsetDateTime::now_utc();
         Self(odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64)
-    }
-
-    /// Default "15 minutes ago" window start.
-    pub fn fifteen_minutes_ago() -> Self {
-        let odt = time::OffsetDateTime::now_utc();
-        Self(odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64 - 15 * 60 * 1_000_000)
     }
 
     /// Raw microseconds value (for SQL parameters).

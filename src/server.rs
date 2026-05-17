@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
 use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
+use parking_lot::Mutex;
 use rusqlite::Connection;
 use sqlparser::ast::Statement;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
 use utoipa::OpenApi;
@@ -210,15 +211,11 @@ impl ServerPorts {
     pub fn load() -> anyhow::Result<Self> {
         use crate::config;
         Ok(Self {
-            http: config::HTTP_PORT
-                .value()
-                .map_err(|e| anyhow::anyhow!("{e}"))?,
-            grpc: config::GRPC_PORT
-                .value()
-                .map_err(|e| anyhow::anyhow!("{e}"))?,
+            http: config::HTTP_PORT.value().map_err(anyhow::Error::from)?,
+            grpc: config::GRPC_PORT.value().map_err(anyhow::Error::from)?,
             otlp_http: config::OTLP_HTTP_PORT
                 .value()
-                .map_err(|e| anyhow::anyhow!("{e}"))?,
+                .map_err(anyhow::Error::from)?,
         })
     }
 }
@@ -258,9 +255,7 @@ pub async fn run_servers(
     });
 
     {
-        let guard = admin_conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+        let guard = admin_conn.lock();
         federation::create_workers_table(&guard)
             .context("failed to create federation workers table")?;
     }
@@ -314,16 +309,8 @@ pub async fn run_servers(
 
 #[instrument(skip(state))]
 async fn health(_path: HealthPath, State(state): State<Arc<AppState>>) -> axum::response::Response {
-    // Create explicit OTEL span using global tracer
-    use opentelemetry::trace::{Span, Tracer};
-    let tracer = opentelemetry::global::tracer("sigiro");
-    let mut span = tracer.start("health_check");
-    span.add_event("health_handler_start", vec![]);
-
     if state.router.has_dead_flushers() {
         tracing::warn!("health check: dead flushers detected");
-        span.add_event("health_handler_dead_flushers", vec![]);
-        span.end();
         return axum::response::Response::builder()
             .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
             .body(axum::body::Body::from("dead flushers"))
@@ -332,8 +319,6 @@ async fn health(_path: HealthPath, State(state): State<Arc<AppState>>) -> axum::
 
     tracing::info!("health check called");
 
-    span.add_event("health_handler_end", vec![]);
-    span.end();
     axum::response::Response::builder()
         .status(axum::http::StatusCode::OK)
         .body(axum::body::Body::from("ok"))
@@ -403,9 +388,7 @@ async fn query_handler(
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
     validate_read_only(&body).map_err(|e| bad_request("query rejected", &e))?;
     let conn = project_conn(&state, &auth)?;
-    let conn = conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("DuckDB connection mutex poisoned: {e}"))?;
+    let conn = conn.lock();
     let mut stmt = conn
         .prepare(&body)
         .map_err(|e| bad_request("query rejected", &format!("SQL error: {e}")))?;
@@ -461,9 +444,7 @@ async fn services_handler(
     Extension(auth): Extension<AuthContext>,
 ) -> ApiResult<Json<ServicesResponse>> {
     let conn = project_conn(&state, &auth)?;
-    let conn = conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("DuckDB connection mutex poisoned: {e}"))?;
+    let conn = conn.lock();
     let prefix = ProjectPool::prefix();
     let sql = format!(
         "SELECT service_name, \
@@ -529,9 +510,7 @@ async fn trace_detail_handler(
     Extension(auth): Extension<AuthContext>,
 ) -> ApiResult<Json<TraceDetailResponse>> {
     let conn = project_conn(&state, &auth)?;
-    let conn = conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("DuckDB connection mutex poisoned: {e}"))?;
+    let conn = conn.lock();
     let prefix = ProjectPool::prefix();
     let trace_id = _path.trace_id.clone();
 
@@ -908,10 +887,7 @@ async fn admin_status(
     _path: AdminStatusPath,
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<AdminStatusResponse>> {
-    let guard = state
-        .admin_conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let guard = state.admin_conn.lock();
     let map = admin::read_all_status(&guard).context_internal("Admin", "failed to read status")?;
     Ok(Json(AdminStatusResponse { status: map }))
 }
@@ -934,10 +910,7 @@ async fn register_worker_handler(
     Json(worker): Json<federation::WorkerInfo>,
 ) -> ApiResult<Json<RegisterWorkerResponse>> {
     let id = worker.id.clone();
-    let guard = state
-        .admin_conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let guard = state.admin_conn.lock();
     federation::register_worker(&guard, &worker)
         .context_internal("Federation", "failed to register worker")?;
     Ok(Json(RegisterWorkerResponse {
@@ -960,10 +933,7 @@ async fn deregister_worker_handler(
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthContext>,
 ) -> ApiResult<Json<DeregisterWorkerResponse>> {
-    let guard = state
-        .admin_conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let guard = state.admin_conn.lock();
     let deregistered = federation::deregister_worker(&guard, &id)
         .context_internal("Federation", "failed to deregister worker")?;
     if deregistered {
@@ -990,10 +960,7 @@ async fn list_workers_handler(
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthContext>,
 ) -> ApiResult<Json<ListWorkersResponse>> {
-    let guard = state
-        .admin_conn
-        .lock()
-        .map_err(|e| anyhow::anyhow!("admin DB mutex: {e}"))?;
+    let guard = state.admin_conn.lock();
     let workers = federation::list_workers(&guard)
         .context_internal("Federation", "failed to list workers")?;
     Ok(Json(ListWorkersResponse { workers }))
