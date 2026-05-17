@@ -36,7 +36,12 @@ use crate::types::IngestMsg;
 
 /// Wrap an Arrow/record-batch construction error into a tonic Status.
 fn arrow_status<E: std::fmt::Display>(e: E) -> Status {
-    Status::internal(format!("arrow error: {e}"))
+    status_internal(format!("arrow error: {e}"))
+}
+
+/// Convenience helper for `Status::internal` to avoid repeating `format!` at call sites.
+fn status_internal(msg: impl std::fmt::Display) -> Status {
+    Status::internal(msg.to_string())
 }
 
 pub struct OtlpGrpcService {
@@ -140,9 +145,9 @@ where
     T: Send + 'static,
     E: std::fmt::Display,
 {
-    tokio::task::spawn_blocking(move || f().map_err(|e| Status::internal(format!("{name}: {e}"))))
+    tokio::task::spawn_blocking(move || f().map_err(|e| status_internal(format!("{name}: {e}"))))
         .await
-        .map_err(|e| Status::internal(format!("{name} task panicked: {e}")))?
+        .map_err(|e| status_internal(format!("{name} task panicked: {e}")))?
 }
 
 /// Transform raw bytes into Arrow RecordBatch on the tokio blocking pool.
@@ -989,7 +994,7 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
         let mut decoder = flate2::read::GzDecoder::new(&body[..]);
         let mut out = Vec::new();
         std::io::Read::read_to_end(&mut decoder, &mut out)
-            .map_err(|e| Status::internal(format!("gzip decompression failed: {e}")))?;
+            .map_err(|e| status_internal(format!("gzip decompression failed: {e}")))?;
         out
     };
     tracing::debug!("pyroscope: decompressed {} bytes", decompressed.len());
@@ -1034,7 +1039,7 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
                 pyroscope::encode::r#gen::google::Profile::decode(&raw_bytes[..])
             })
             .await
-            .map_err(|e| Status::internal(format!("task join error: {e}")))?
+            .map_err(|e| status_internal(format!("task join error: {e}")))?
             .map_err(|e| Status::invalid_argument(format!("pprof profile decode failed: {e}")))?;
 
             // Time and duration in nanoseconds → microseconds
