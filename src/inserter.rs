@@ -287,7 +287,7 @@ impl MsgRouter {
 /// returns, the data is durable. The only data-loss window is the buffer
 /// here (up to 1s / 10k rows between 200 OK and DuckDB append). This is
 /// acceptable for a debugging tool where the data source is still running
-/// and will re-emit. See docs/decisions/001-wal-not-needed.md for the full analysis.
+/// and will re-emit. See www/content/docs/decisions/001-wal-not-needed.md for the full analysis.
 struct ProjectFlusher {
     conn: Arc<Mutex<Connection>>,
     table_names: BTreeMap<SignalTable, String>,
