@@ -253,6 +253,10 @@ async fn run_serve() -> Result<()> {
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
     let admin_conn = sigiro::admin::open_admin_db()?;
 
+    // Ensure federation schema exists before central mode may regenerate spicepod.
+    sigiro::federation::create_workers_table(&admin_conn)
+        .context("failed to create federation workers table")?;
+
     // Write instance status at startup
     sigiro::admin::write_instance_status(&admin_conn, "version", env!("CARGO_PKG_VERSION"))?;
     sigiro::admin::write_instance_status(&admin_conn, "mode", "otlp")?;
@@ -355,6 +359,8 @@ async fn run_serve() -> Result<()> {
     let central = sigiro::config::CENTRAL.value().unwrap_or(false);
     if central {
         tracing::info!("running as central federation node");
+        // Ensure spicepod.yaml exists even before any workers register.
+        sigiro::federation::regenerate_spicepod(&admin_conn, &dir)?;
         sigiro::federation::start_spice(&dir, &supervisor_registry)?;
     }
 

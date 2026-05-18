@@ -15,6 +15,15 @@ ssh:
 networks:
 - vzNAT: true
 
+# Port forwards so host (and other VMs via host.lima.internal) can reach the worker.
+portForwards:
+- guestPort: 9999
+  hostIP: "0.0.0.0"
+  hostPort: 10001
+- guestPort: 4318
+  hostIP: "0.0.0.0"
+  hostPort: 10102
+
 containerd:
   system: false
   user: false

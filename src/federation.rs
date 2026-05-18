@@ -301,7 +301,7 @@ pub fn start_spice(data_dir: &Utf8Path, registry: &SupervisorRegistry) -> Result
 
     let mut supervisor = Supervisor::new(
         "spiced",
-        vec!["--config".to_string(), spicepod_path.to_string()],
+        vec![spicepod_path.to_string()],
         envs,
     );
     supervisor.start();

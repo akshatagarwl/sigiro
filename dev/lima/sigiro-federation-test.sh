@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # sigiro-federation-test.sh — Multi-node federation test on Lima VMs
 #
-# Design (one correct way):
-#   1. Build sigiro Linux ARM64 binary on host via Docker (fast, cached)
-#   2. Copy binary to both VMs
-#   3. Start central + worker, test federation control plane
+# Architecture (vzNAT):
+#   - Central VM forwards guest:9999 → host:10000 (0.0.0.0)
+#   - Worker VM forwards guest:9999 → host:10001, guest:4318 → host:10102 (0.0.0.0)
+#   - VMs reach each other via host.lima.internal:<host_port>
 #
 set -eux -o pipefail
 
@@ -14,15 +14,16 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CENTRAL_VM="sigiro-fed-central"
 WORKER_VM="sigiro-fed-worker"
 
+# Host-side ports (forwarded from VMs)
+CENTRAL_HOST_PORT=10000
+WORKER_HTTP_HOST_PORT=10001
+WORKER_OTLP_HOST_PORT=10102
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 vm_ssh() { limactl shell "$1" bash -lc "$2"; }
 vm_cp() { limactl copy "$1" "$2"; }
-
-get_vm_internal_ip() {
-  limactl shell "$1" bash -lc "ip -4 addr show lima0 2>/dev/null | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}' | head -1"
-}
 
 wait_for_health() {
   local host=$1 port=$2 retries=${3:-30}
@@ -72,19 +73,15 @@ echo "Waiting for VMs to boot..."
 sleep 10
 
 # ---------------------------------------------------------------------------
-# Step 3 — get IPs
+# Step 3 — install spiced on central VM
 # ---------------------------------------------------------------------------
-CENTRAL_IP=$(get_vm_internal_ip "$CENTRAL_VM")
-WORKER_IP=$(get_vm_internal_ip "$WORKER_VM")
-
-if [[ -z "$CENTRAL_IP" ]] || [[ -z "$WORKER_IP" ]]; then
-  echo "ERROR: Could not determine VM internal IPs"
-  limactl list
-  exit 1
-fi
-
-echo "Central VM: $CENTRAL_VM @ $CENTRAL_IP"
-echo "Worker VM:  $WORKER_VM @ $WORKER_IP"
+echo "=== [CENTRAL] Installing spiced ==="
+vm_ssh "$CENTRAL_VM" "curl -fsSL https://install.spiceai.org | /bin/bash || echo 'spice cli may already be installed'"
+# spice install downloads the spiced runtime binary
+vm_ssh "$CENTRAL_VM" "export PATH=\"\$HOME/.spice/bin:\$PATH\"; spice install || echo 'spiced may already be installed'"
+# Ensure spiced is in PATH for the sigiro process
+vm_ssh "$CENTRAL_VM" "sudo ln -sf /home/akshat.guest/.spice/bin/spiced /usr/local/bin/spiced || true"
+vm_ssh "$CENTRAL_VM" "which spiced"
 
 # ---------------------------------------------------------------------------
 # Step 4 — copy binary to VMs
@@ -98,12 +95,13 @@ vm_ssh "$WORKER_VM" "chmod +x /home/akshat.guest/sigiro"
 # ---------------------------------------------------------------------------
 # Step 5 — start central node
 # ---------------------------------------------------------------------------
-echo "=== [CENTRAL] Starting sigiro central on $CENTRAL_IP ==="
+echo "=== [CENTRAL] Starting sigiro central ==="
 vm_ssh "$CENTRAL_VM" "pkill -9 sigiro 2>/dev/null || true; rm -rf /tmp/sigiro-central; mkdir -p /tmp/sigiro-central"
 vm_ssh "$CENTRAL_VM" "SIGIRO_DATA_DIR=/tmp/sigiro-central \
   SIGIRO_HTTP_PORT=9999 \
   SIGIRO_GRPC_PORT=4317 \
   SIGIRO_OTLP_HTTP_PORT=4318 \
+  SIGIRO_CENTRAL=true \
   HOSTNAME=sigiro-fed-central \
   SIGIRO_API_KEY=sigiro_dev_fed \
   setsid /home/akshat.guest/sigiro serve > /tmp/sigiro-central.log 2>&1 & \
@@ -111,8 +109,8 @@ vm_ssh "$CENTRAL_VM" "SIGIRO_DATA_DIR=/tmp/sigiro-central \
 
 sleep 5
 
-if wait_for_health "$CENTRAL_IP" 9999 30; then
-  echo "[CENTRAL] Health check OK on port 9999"
+if wait_for_health "localhost" "$CENTRAL_HOST_PORT" 30; then
+  echo "[CENTRAL] Health check OK on port $CENTRAL_HOST_PORT"
 else
   echo "[CENTRAL] WARNING: health check failed, checking logs"
   vm_ssh "$CENTRAL_VM" "tail -40 /tmp/sigiro-central.log"
@@ -122,14 +120,14 @@ fi
 # ---------------------------------------------------------------------------
 # Step 6 — start worker node
 # ---------------------------------------------------------------------------
-echo "=== [WORKER] Starting sigiro worker on $WORKER_IP (central=$CENTRAL_IP) ==="
+echo "=== [WORKER] Starting sigiro worker (central=host.lima.internal:$CENTRAL_HOST_PORT) ==="
 vm_ssh "$WORKER_VM" "pkill -9 sigiro 2>/dev/null || true; rm -rf /tmp/sigiro-worker; mkdir -p /tmp/sigiro-worker"
 vm_ssh "$WORKER_VM" "SIGIRO_DATA_DIR=/tmp/sigiro-worker \
   SIGIRO_HTTP_PORT=9999 \
   SIGIRO_GRPC_PORT=4317 \
   SIGIRO_OTLP_HTTP_PORT=4318 \
-  SIGIRO_ENDPOINT=http://${WORKER_IP}:9999 \
-  SIGIRO_CENTRAL_URL=http://host.lima.internal:9999 \
+  SIGIRO_ENDPOINT=http://host.lima.internal:${WORKER_HTTP_HOST_PORT} \
+  SIGIRO_CENTRAL_URL=http://host.lima.internal:${CENTRAL_HOST_PORT} \
   HOSTNAME=sigiro-fed-worker \
   SIGIRO_API_KEY=sigiro_dev_fed \
   setsid /home/akshat.guest/sigiro serve > /tmp/sigiro-worker.log 2>&1 & \
@@ -137,8 +135,8 @@ vm_ssh "$WORKER_VM" "SIGIRO_DATA_DIR=/tmp/sigiro-worker \
 
 sleep 5
 
-if wait_for_health "$WORKER_IP" 9999 30; then
-  echo "[WORKER] Health check OK on port 9999"
+if wait_for_health "localhost" "$WORKER_HTTP_HOST_PORT" 30; then
+  echo "[WORKER] Health check OK on port $WORKER_HTTP_HOST_PORT"
 else
   echo "[WORKER] WARNING: health check failed, checking logs"
   vm_ssh "$WORKER_VM" "tail -40 /tmp/sigiro-worker.log"
@@ -153,7 +151,7 @@ sleep 3
 # ---------------------------------------------------------------------------
 echo "=== [TEST] Verifying worker registration ==="
 
-WORKERS_RESP=$(curl -s --connect-timeout 5 "http://${CENTRAL_IP}:9999/v1/federation/workers" \
+WORKERS_RESP=$(curl -s --connect-timeout 5 "http://localhost:${CENTRAL_HOST_PORT}/v1/federation/workers" \
   -H "Authorization: Bearer sigiro_dev_fed")
 
 echo "$WORKERS_RESP" | jq . || echo "Raw response: $WORKERS_RESP"
@@ -180,8 +178,8 @@ echo "  id:       $WORKER_ID"
 echo "  endpoint: $WORKER_ENDPOINT"
 echo "  catalog:  $WORKER_CATALOG"
 
-if [[ "$WORKER_ENDPOINT" != "http://${WORKER_IP}:9999" ]]; then
-  echo "[FAIL] Worker endpoint mismatch: expected http://${WORKER_IP}:9999, got $WORKER_ENDPOINT"
+if [[ "$WORKER_ENDPOINT" != "http://host.lima.internal:${WORKER_HTTP_HOST_PORT}" ]]; then
+  echo "[FAIL] Worker endpoint mismatch: expected http://host.lima.internal:${WORKER_HTTP_HOST_PORT}, got $WORKER_ENDPOINT"
   exit 1
 fi
 echo "[PASS] Worker endpoint is correct"
@@ -213,8 +211,9 @@ NOW_US=$(date +%s000000)
 TRACE_ID=$(openssl rand -hex 16)
 SPAN_ID=$(openssl rand -hex 8)
 
-curl -s -X POST "http://${WORKER_IP}:4318/v1/traces" \
+curl -s -X POST "http://localhost:${WORKER_OTLP_HOST_PORT}/v1/traces" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sigiro_dev_fed" \
   -d "{
     \"resourceSpans\": [{
       \"resource\": { \"attributes\": [{ \"key\": \"service.name\", \"value\": { \"stringValue\": \"test-service\" } }] },
@@ -239,7 +238,7 @@ sleep 2
 # Step 10 — query worker directly for the trace
 # ---------------------------------------------------------------------------
 echo "=== [TEST] Querying worker for trace ==="
-QUERY_RESP=$(curl -s --connect-timeout 5 "http://${WORKER_IP}:9999/v1/query" \
+QUERY_RESP=$(curl -s --connect-timeout 5 "http://localhost:${WORKER_HTTP_HOST_PORT}/v1/query" \
   -H "Authorization: Bearer sigiro_dev_fed" \
   -H "Content-Type: text/plain" \
   -d "SELECT trace_id FROM lake.sigiro_spans WHERE trace_id = '${TRACE_ID}'")
@@ -253,7 +252,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 11 — logs summary
+# Step 11 — verify spiced is running on central
+# ---------------------------------------------------------------------------
+echo "=== [TEST] Verifying spiced process on central ==="
+if vm_ssh "$CENTRAL_VM" "pgrep -x spiced > /dev/null"; then
+  echo "[PASS] spiced process is running on central"
+else
+  echo "[WARN] spiced process not found on central (check logs)"
+  vm_ssh "$CENTRAL_VM" "tail -20 /tmp/sigiro-central.log"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 12 — logs summary
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== [CENTRAL] Logs (last 30 lines) ==="
@@ -265,5 +275,6 @@ vm_ssh "$WORKER_VM" "tail -30 /tmp/sigiro-worker.log"
 
 echo ""
 echo "=== Federation Test Complete ==="
-echo "Central: http://${CENTRAL_IP}:9999"
-echo "Worker:  http://${WORKER_IP}:9999"
+echo "Central: http://localhost:${CENTRAL_HOST_PORT}"
+echo "Worker:  http://localhost:${WORKER_HTTP_HOST_PORT}"
+echo "Worker OTLP: http://localhost:${WORKER_OTLP_HOST_PORT}"

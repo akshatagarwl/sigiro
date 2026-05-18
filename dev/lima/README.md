@@ -28,6 +28,8 @@ See `.cargo/config.toml` for details on the cross-compile workaround.
 |---|---|---|
 | `sigiro-local` | `sigiro-local.yaml` | Local storage mode (DuckLake files on disk) |
 | `sigiro-s3` | `sigiro-s3.yaml` | S3 storage mode (MinIO + PostgreSQL catalog) |
+| `sigiro-fed-central` | `sigiro-fed-central.yaml` | Federation central node (runs spiced) |
+| `sigiro-fed-worker` | `sigiro-fed-worker.yaml` | Federation worker node (self-registers with central) |
 
 ## Quick Start
 
@@ -48,12 +50,20 @@ limactl shell sigiro-local bash -c \
    SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'
 ```
 
+## Federation Test
+
+```bash
+# Multi-node cross-VM federation test (central + worker)
+./dev/lima/sigiro-federation-test.sh
+```
+
 ## Known Issues
 
 - **9p mount stale caching**: Files written on the host may not appear immediately in the VM.
   Use `limactl copy <file> <vm>:/tmp/<file>` instead of relying on the shared mount.
-- **Federated mode**: Not yet supported by these VMs. Will need a `sigiro-central` config
-  plus multiple `sigiro-collector` instances.
+- **Federation data-plane**: Cross-VM `spiced` querying requires shared storage (S3/PostgreSQL
+  catalog) since VMs do not share local filesystems. The test validates control-plane
+  registration and local worker queries only.
 
 ## Teardown
 

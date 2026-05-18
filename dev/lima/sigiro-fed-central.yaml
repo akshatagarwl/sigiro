@@ -18,6 +18,7 @@ networks:
 portForwards:
 - guestPort: 9999
   hostIP: "0.0.0.0"
+  hostPort: 10000
 
 containerd:
   system: false
