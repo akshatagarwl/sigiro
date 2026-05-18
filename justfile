@@ -32,9 +32,10 @@ run:
 image *args:
     docker buildx bake sigiro {{args}}
 
-# Build spiced query engine from submodule (first run ~1h, cached ~5m).
+# Build spiced query engine from submodule with only required features.
+# First run ~1h, cached ~5m. Override features via SPICED_FEATURES env var.
 spiced:
-    cd third_party/spiceai && make install
+    cd third_party/spiceai && SPICED_CUSTOM_FEATURES="{{ env('SPICED_FEATURES', 'duckdb,alloc-snmalloc') }}" make install
 
 # Clean all build artifacts and dev containers.
 clean:
