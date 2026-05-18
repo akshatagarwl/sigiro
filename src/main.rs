@@ -15,8 +15,6 @@ const STYLES: styling::Styles = styling::Styles::styled()
     .literal(styling::AnsiColor::Green.on_default().bold())
     .placeholder(styling::AnsiColor::Yellow.on_default());
 
-const FEDERATION_LOCAL_IP: &str = "127.0.0.1";
-
 #[derive(Parser)]
 #[command(name = "sigiro", version, about = "Observability for AI agents", styles = STYLES)]
 struct Cli {
@@ -260,6 +258,43 @@ async fn run_serve() -> Result<()> {
     sigiro::admin::write_instance_status(&admin_conn, "mode", "otlp")?;
     sigiro::admin::write_instance_status(&admin_conn, "platform_os", std::env::consts::OS)?;
     sigiro::admin::write_instance_status(&admin_conn, "platform_arch", std::env::consts::ARCH)?;
+    let kernel = unsafe {
+        let mut utsname: libc::utsname = std::mem::zeroed();
+        if libc::uname(&mut utsname) == 0 {
+            std::ffi::CStr::from_ptr(utsname.release.as_ptr())
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            "unknown".to_string()
+        }
+    };
+    sigiro::admin::write_instance_status(&admin_conn, "platform_kernel", &kernel)?;
+    #[cfg(target_os = "linux")]
+    {
+        let has_bpf = caps::has_cap(None, caps::CapSet::Effective, caps::Capability::CAP_BPF)
+            .unwrap_or(false);
+        let has_net_admin = caps::has_cap(
+            None,
+            caps::CapSet::Effective,
+            caps::Capability::CAP_NET_ADMIN,
+        )
+        .unwrap_or(false);
+        sigiro::admin::write_instance_status(
+            &admin_conn,
+            "capability_bpf",
+            if has_bpf { "true" } else { "false" },
+        )?;
+        sigiro::admin::write_instance_status(
+            &admin_conn,
+            "capability_net_admin",
+            if has_net_admin { "true" } else { "false" },
+        )?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        sigiro::admin::write_instance_status(&admin_conn, "capability_bpf", "false")?;
+        sigiro::admin::write_instance_status(&admin_conn, "capability_net_admin", "false")?;
+    }
 
     // Extension probe is deferred to first project connection (pool.create_project).
     // Use `sigiro fetch-extensions` to pre-download for offline deployments.
@@ -326,11 +361,12 @@ async fn run_serve() -> Result<()> {
     // Federation: collector self-registration with central node
     if let Ok(ref url) = sigiro::config::CENTRAL_URL.value() {
         tracing::info!("collector self-registering with central node at {url}");
-        let client = sigiro::client::SigiroClient::new(url, "");
+        let api_key = sigiro::config::API_KEY.value().unwrap_or_default();
+        let client = sigiro::client::SigiroClient::new(url, &api_key);
         let status = sigiro::admin::read_all_status(&admin_conn)?;
         let worker = sigiro::federation::WorkerInfo {
             id: hostname_or_default()?,
-            endpoint: format!("http://{FEDERATION_LOCAL_IP}:9999"),
+            endpoint: sigiro::config::ENDPOINT.value().map_err(anyhow::Error::from)?,
             catalog_path: dir.join("default").join("catalog.sqlite").to_string(),
             mode: status.get("mode").cloned().context("instance status missing 'mode' — server not fully initialized")?,
             platform: sigiro::federation::PlatformInfo {

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
-use axum_anyhow::{ApiResult, IntoApiError, OptionExt, ResultExt, bad_request};
+use axum_anyhow::{ApiResult, IntoApiError, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
 use parking_lot::Mutex;
 use rusqlite::Connection;
@@ -370,6 +370,86 @@ fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duc
         .map_err(|e| anyhow::anyhow!(e).context_internal("Project DB", "connection not found"))
 }
 
+/// Escape a string for safe use inside a SQL single-quoted string literal.
+fn escape_sql_string(s: &str) -> String {
+    s.replace("'", "''")
+}
+
+/// Rewrite SQL for Spice by stripping the DuckDB schema prefix from known sigiro tables.
+/// Spice datasets are flat — `lake.sigiro_spans` becomes `sigiro_spans`.
+fn sql_for_spice(sql: &str) -> String {
+    sql.replace("lake.sigiro_spans", "sigiro_spans")
+        .replace("lake.sigiro_logs", "sigiro_logs")
+        .replace("lake.sigiro_metrics_gauge", "sigiro_metrics_gauge")
+        .replace("lake.sigiro_metrics_sum", "sigiro_metrics_sum")
+        .replace("lake.sigiro_metrics_histogram", "sigiro_metrics_histogram")
+        .replace(
+            "lake.sigiro_metrics_exp_histogram",
+            "sigiro_metrics_exp_histogram",
+        )
+}
+
+/// Execute SQL against Spice (if configured) or local DuckDB.
+/// Returns rows as a JSON array of objects so both paths have the same shape.
+async fn execute_sql(
+    state: &AppState,
+    auth: &AuthContext,
+    sql: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    if let Ok(spice_url) = crate::config::SPICE_HTTP_URL.value() {
+        let spice_sql = sql_for_spice(sql);
+        let url = format!("{}/v1/sql", spice_url.trim_end_matches('/'));
+        let resp = state
+            .http_client
+            .post(&url)
+            .header("Accept", "application/json")
+            .body(spice_sql)
+            .send()
+            .await
+            .context("spice query request failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("spice query failed ({status}): {err_body}");
+        }
+
+        let results: Vec<serde_json::Value> = resp
+            .json()
+            .await
+            .context("failed to parse spice response")?;
+        return Ok(results);
+    }
+
+    let conn = project_conn(state, auth).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let conn = conn.lock();
+    let mut stmt = conn.prepare(sql).context("failed to prepare query")?;
+    let mut rows = stmt.query([]).context("query execution failed")?;
+
+    let stmt_ref = rows.as_ref().context("no result set")?;
+    let column_count = stmt_ref.column_count();
+    let column_names: Vec<String> = (0..column_count)
+        .map(|i| {
+            stmt_ref
+                .column_name(i)
+                .map(ToString::to_string)
+                .unwrap_or_else(|_| "?".to_string())
+        })
+        .collect();
+
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().context("row iteration failed")? {
+        let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        for (i, name) in column_names.iter().enumerate() {
+            let val = row.get_ref(i).context("column read failed")?;
+            obj.insert(name.clone(), value_ref_to_json(val));
+        }
+        results.push(serde_json::Value::Object(obj));
+    }
+
+    Ok(results)
+}
+
 #[utoipa::path(
     post,
     path = "/v1/query",
@@ -387,43 +467,10 @@ async fn query_handler(
     body: String,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
     validate_read_only(&body).map_err(|e| bad_request("query rejected", &e))?;
-    let conn = project_conn(&state, &auth)?;
-    let conn = conn.lock();
-    let mut stmt = conn
-        .prepare(&body)
-        .map_err(|e| bad_request("query rejected", &format!("SQL error: {e}")))?;
-    let mut rows = stmt
-        .query([])
-        .context_internal("Query", "query execution failed")?;
-
-    let stmt_ref = rows.as_ref().context_internal("Query", "no result set")?;
-    let column_count = stmt_ref.column_count();
-    let column_names: Vec<String> = (0..column_count)
-        .map(|i| {
-            stmt_ref
-                .column_name(i)
-                .map(ToString::to_string)
-                .unwrap_or_else(|_| "?".to_string())
-        })
-        .collect();
-
-    let mut results = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .context_internal("Query", "row iteration failed")?
-    {
-        let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-        for (i, name) in column_names.iter().enumerate() {
-            let val = row
-                .get_ref(i)
-                .context_internal("Query", "column read failed")?;
-            obj.insert(name.clone(), value_ref_to_json(val));
-        }
-        results.push(serde_json::Value::Object(obj));
-    }
-
+    let results = execute_sql(&state, &auth, &body)
+        .await
+        .map_err(|e| bad_request("query rejected", &format!("{e:#}")))?;
     tracing::info!(rows = results.len(), "query completed");
-
     Ok(Json(results))
 }
 
@@ -443,8 +490,6 @@ async fn services_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
 ) -> ApiResult<Json<ServicesResponse>> {
-    let conn = project_conn(&state, &auth)?;
-    let conn = conn.lock();
     let prefix = ProjectPool::prefix();
     let sql = format!(
         "SELECT service_name, \
@@ -456,30 +501,32 @@ async fn services_handler(
          ORDER BY span_count DESC",
         prefix
     );
-    let mut stmt = conn
-        .prepare(&sql)
-        .context_internal("Services", "failed to prepare query")?;
-    let mut rows = stmt
-        .query([])
-        .context_internal("Services", "query execution failed")?;
+    let results = execute_sql(&state, &auth, &sql)
+        .await
+        .map_err(|e| bad_request("services query failed", &format!("{e:#}")))?;
 
     let mut services = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .context_internal("Services", "row iteration failed")?
-    {
-        let name: String = row
-            .get::<_, String>(0)
-            .context_internal("Services", "failed to read service_name")?;
-        let first_seen: Option<String> = row
-            .get::<_, Option<String>>(1)
-            .context_internal("Services", "failed to read first_seen")?;
-        let last_seen: Option<String> = row
-            .get::<_, Option<String>>(2)
-            .context_internal("Services", "failed to read last_seen")?;
-        let span_count: i64 = row
-            .get::<_, i64>(3)
-            .context_internal("Services", "failed to read span_count")?;
+    for row in results {
+        let obj = row.as_object().ok_or_else(|| {
+            bad_request("services query failed", "expected object row from query")
+        })?;
+        let name = obj
+            .get("service_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let first_seen = obj
+            .get("first_seen")
+            .and_then(|v| v.as_str())
+            .map(std::string::ToString::to_string);
+        let last_seen = obj
+            .get("last_seen")
+            .and_then(|v| v.as_str())
+            .map(std::string::ToString::to_string);
+        let span_count = obj
+            .get("span_count")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
         services.push(ServiceEntry {
             name,
             first_seen,
@@ -509,10 +556,9 @@ async fn trace_detail_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
 ) -> ApiResult<Json<TraceDetailResponse>> {
-    let conn = project_conn(&state, &auth)?;
-    let conn = conn.lock();
     let prefix = ProjectPool::prefix();
     let trace_id = _path.trace_id.clone();
+    let safe_trace_id = escape_sql_string(&trace_id);
 
     let sql = format!(
         "SELECT
@@ -525,16 +571,13 @@ async fn trace_detail_handler(
             scope_name, scope_version,
             trace_state
          FROM {}sigiro_spans
-         WHERE trace_id = ?
+         WHERE trace_id = '{}'
          ORDER BY timestamp",
-        prefix
+        prefix, safe_trace_id
     );
-    let mut stmt = conn
-        .prepare(&sql)
-        .context_internal("TraceDetail", "failed to prepare query")?;
-    let mut rows = stmt
-        .query([&trace_id])
-        .context_internal("TraceDetail", "query execution failed")?;
+    let results = execute_sql(&state, &auth, &sql)
+        .await
+        .map_err(|e| bad_request("trace detail query failed", &format!("{e:#}")))?;
 
     let mut spans: Vec<SpanDetail> = Vec::new();
     let mut span_map: std::collections::HashMap<String, SpanDetail> =
@@ -547,51 +590,95 @@ async fn trace_detail_handler(
     let mut services_set: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut max_duration_span: Option<SpanDetail> = None;
 
-    while let Some(row) = rows
-        .next()
-        .context_internal("TraceDetail", "row iteration failed")?
-    {
-        let span_id: String = row
-            .get::<_, String>(1)
-            .context_internal("TraceDetail", "failed to read span_id")?;
-        let parent_span_id: String = row.get::<_, String>(2).unwrap_or_default();
-        let duration_us: i64 = row
-            .get::<_, i64>(4)
-            .context_internal("TraceDetail", "failed to read duration")?;
-        let status_code: i32 = row
-            .get::<_, i32>(5)
-            .context_internal("TraceDetail", "failed to read status_code")?;
-        let service_name: String = row
-            .get::<_, String>(6)
-            .context_internal("TraceDetail", "failed to read service_name")?;
+    for row in results {
+        let obj = row.as_object().ok_or_else(|| {
+            bad_request(
+                "trace detail query failed",
+                "expected object row from query",
+            )
+        })?;
+
+        let span_id = obj
+            .get("span_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let parent_span_id = obj
+            .get("parent_span_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let duration_us = obj
+            .get("duration")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        let status_code = obj
+            .get("status_code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0) as i32;
+        let service_name = obj
+            .get("service_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let span = SpanDetail {
-            trace_id: row
-                .get::<_, String>(0)
-                .context_internal("TraceDetail", "failed to read trace_id")?,
+            trace_id: obj
+                .get("trace_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             span_id: span_id.clone(),
             parent_span_id: if parent_span_id.is_empty() {
                 None
             } else {
                 Some(parent_span_id.clone())
             },
-            span_name: row
-                .get::<_, String>(3)
-                .context_internal("TraceDetail", "failed to read span_name")?,
+            span_name: obj
+                .get("span_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             duration_us,
             status_code,
             service_name: service_name.clone(),
-            timestamp: row
-                .get::<_, String>(10)
-                .context_internal("TraceDetail", "failed to read timestamp")?,
-            span_kind: row.get::<_, Option<i32>>(7).ok().flatten(),
-            span_attributes: row.get::<_, Option<String>>(8).ok().flatten(),
-            resource_attributes: row.get::<_, Option<String>>(9).ok().flatten(),
-            events_json: row.get::<_, Option<String>>(12).ok().flatten(),
-            links_json: row.get::<_, Option<String>>(13).ok().flatten(),
-            scope_name: row.get::<_, Option<String>>(14).ok().flatten(),
-            scope_version: row.get::<_, Option<String>>(15).ok().flatten(),
-            trace_state: row.get::<_, Option<String>>(16).ok().flatten(),
+            timestamp: obj
+                .get("start_timestamp")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            span_kind: obj
+                .get("span_kind")
+                .and_then(serde_json::Value::as_i64)
+                .map(|n| n as i32),
+            span_attributes: obj
+                .get("span_attributes")
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string),
+            resource_attributes: obj
+                .get("resource_attributes")
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string),
+            events_json: obj
+                .get("events_json")
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string),
+            links_json: obj
+                .get("links_json")
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string),
+            scope_name: obj
+                .get("scope_name")
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string),
+            scope_version: obj
+                .get("scope_version")
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string),
+            trace_state: obj
+                .get("trace_state")
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string),
         };
         total_duration_us = total_duration_us.saturating_add(duration_us);
         if status_code == 2 {
@@ -619,9 +706,6 @@ async fn trace_detail_handler(
         span_map.insert(span_id.clone(), span.clone());
         spans.push(span);
     }
-
-    drop(rows);
-    drop(stmt);
 
     if spans.is_empty() {
         return Err(axum_anyhow::not_found(

@@ -174,7 +174,15 @@ struct Dataset {
     name: String,
     from: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<Params>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     acceleration: Option<Acceleration>,
+}
+
+#[derive(Debug, Serialize)]
+struct Params {
+    #[serde(rename = "ducklake_connection_string")]
+    ducklake_connection_string: String,
 }
 
 /// Corresponds to the top-level spicepod.yaml structure.
@@ -195,9 +203,14 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Utf8Path) -> Result<()>
 
     let catalog_path = data_dir.join("default").join("catalog.sqlite");
 
+    let catalog_path_str = catalog_path.to_string();
+
     let mut datasets = vec![Dataset {
-        name: "sigiro_local_spans".to_string(),
-        from: format!("ducklake:{catalog_path}"),
+        name: "sigiro_spans".to_string(),
+        from: "ducklake:sigiro_spans".to_string(),
+        params: Some(Params {
+            ducklake_connection_string: catalog_path_str.clone(),
+        }),
         acceleration: Some(Acceleration {
             enabled: true,
             engine: "duckdb",
@@ -222,6 +235,9 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Utf8Path) -> Result<()>
         datasets.push(Dataset {
             name: "sigiro_spans_cold".to_string(),
             from: format!("ducklake:s3://{}/{}data", bucket, prefix_with_slash),
+            params: Some(Params {
+                ducklake_connection_string: format!("s3://{}/{}data", bucket, prefix_with_slash),
+            }),
             acceleration: None,
         });
     }
@@ -234,7 +250,10 @@ pub fn regenerate_spicepod(conn: &Connection, data_dir: &Utf8Path) -> Result<()>
     for worker in &worker_datasets {
         datasets.push(Dataset {
             name: format!("worker_{}_spans", worker.id),
-            from: format!("ducklake:{}", worker.catalog_path),
+            from: "ducklake:sigiro_spans".to_string(),
+            params: Some(Params {
+                ducklake_connection_string: worker.catalog_path.clone(),
+            }),
             acceleration: None,
         });
     }
@@ -450,15 +469,15 @@ mod tests {
         assert!(yaml.contains("version: v1"));
         assert!(yaml.contains("kind: Spicepod"));
         assert!(yaml.contains("name: sigiro-central"));
-        assert!(yaml.contains("sigiro_local_spans"));
+        assert!(yaml.contains("sigiro_spans"));
         assert!(yaml.contains("ducklake:"));
         assert!(yaml.contains("default/catalog.sqlite"));
         assert!(yaml.contains("enabled: true"));
         assert!(yaml.contains("engine: duckdb"));
         assert!(yaml.contains("worker_alpha_spans"));
-        assert!(yaml.contains("ducklake:/data/default/catalog.sqlite"));
+        assert!(yaml.contains("ducklake_connection_string: /data/default/catalog.sqlite"));
         assert!(yaml.contains("worker_beta_spans"));
-        assert!(yaml.contains("ducklake:/data2/default/catalog.sqlite"));
+        assert!(yaml.contains("ducklake_connection_string: /data2/default/catalog.sqlite"));
         // gamma should be excluded (no catalog_path)
         assert!(!yaml.contains("worker_gamma_spans"));
     }
@@ -485,7 +504,7 @@ mod tests {
                 assert!(yaml.contains("sigiro_spans_cold"));
                 assert!(yaml.contains("ducklake:s3://my-bucket/traces/data"));
                 assert!(yaml.contains("worker_w1_spans"));
-                assert!(yaml.contains("ducklake:/data/default/catalog.sqlite"));
+                assert!(yaml.contains("ducklake_connection_string: /data/default/catalog.sqlite"));
             },
         );
     }
@@ -501,7 +520,7 @@ mod tests {
         assert!(yaml.contains("version: v1"));
         assert!(yaml.contains("name: sigiro-central"));
         // Only the local dataset, no worker datasets
-        assert!(yaml.contains("sigiro_local_spans"));
+        assert!(yaml.contains("sigiro_spans"));
         assert!(yaml.contains("ducklake:"));
         assert!(!yaml.contains("worker_"));
     }

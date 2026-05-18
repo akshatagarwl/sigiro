@@ -2,7 +2,7 @@
 set -e
 
 # ============================================================================
-# Sigiro pre-commit hook — all quality gates (all blocking)
+# Sigiro pre-commit hook — delegates to just for core gates.
 # Skip: git commit --no-verify (emergency only)
 # ============================================================================
 
@@ -13,71 +13,40 @@ NC='\033[0m'
 pass() { echo -e "${GREEN}==> $1${NC}"; }
 fail() { echo -e "${RED}==> FAILED: $1${NC}"; exit 1; }
 
-TIMEOUT_TEST=180
-TIMEOUT_CLIPPY=120
-TIMEOUT_UDEPS=120
-TIMEOUT_DENY=60
-TIMEOUT_MUTANTS=300
+# ---- Core gate: just check -------------------------------------------------
+just check || fail "just check"
+pass "just check"
 
-# ---- 1. Orphaned module check ------------------------------------------------
-echo "==> checking for orphaned modules in src/"
-declared=$(grep '^pub mod ' src/lib.rs | sed 's/pub mod //;s/;//' | sort)
-actual=$(ls src/*.rs 2>/dev/null | xargs -I{} basename {} .rs \
-  | grep -v '^lib$' | grep -v '^main$' | sort)
-orphans=$(comm -23 <(echo "$actual") <(echo "$declared"))
-if [ -n "$orphans" ]; then
-  echo "ORPHANED: files in src/ not declared in lib.rs"
-  echo "$orphans" | while read f; do echo "  src/$f.rs"; done
-  echo "Declare with 'pub mod $f;' in lib.rs, or delete the file."
-  exit 1
-fi
-pass "no orphaned modules"
+# ---- Optional: cargo deny (licenses, advisories, bans, sources) ------------
+timeout 60 cargo deny check advisories licenses bans sources 2>/dev/null || \
+  echo "SKIP: cargo deny (not installed or timed out)"
+pass "cargo deny"
 
-# ---- 2. cargo fmt ------------------------------------------------------------
-cargo fmt --check
-pass "cargo fmt --check"
-
-# ---- 3. cargo clippy ---------------------------------------------------------
-timeout "$TIMEOUT_CLIPPY" cargo clippy -- -D warnings
-pass "cargo clippy -D warnings"
-
-# ---- 4. cargo test -----------------------------------------------------------
-timeout "$TIMEOUT_TEST" cargo test
-pass "cargo test"
-
-# ---- 5. cargo bench (must compile) -------------------------------------------
-timeout "$TIMEOUT_CLIPPY" cargo bench --bench investigate_bench --no-run 2>/dev/null || true
-pass "cargo bench --no-run"
-
-# ---- 6. cargo deny (licenses, advisories, bans, sources) ---------------------
-timeout "$TIMEOUT_DENY" cargo deny check advisories licenses bans sources 2>/dev/null || echo "==> SKIP: cargo deny (not installed or timed out)"
-pass "cargo deny check"
-
-# ---- 7. semgrep (Tiger Style rules, staged .rs only) -------------------------
+# ---- Optional: semgrep (Tiger Style rules, staged .rs only) ----------------
 staged_rs=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs' || true)
 if [ -n "$staged_rs" ]; then
-  echo "$staged_rs" | xargs semgrep --config .semgrep/ --error --quiet \
-    || fail "semgrep"
+  echo "$staged_rs" | xargs semgrep --config .semgrep/ --error --quiet || fail "semgrep"
 else
   echo "(no staged .rs files — semgrep skipped)"
 fi
 pass "semgrep"
 
-# ---- 8. cargo-modules (orphans) ----------------------------------------------
+# ---- Optional: cargo-modules (orphans) -------------------------------------
 orphans_out=$(cargo modules orphans --lib 2>/dev/null)
 if [ -n "$orphans_out" ]; then
   echo "$orphans_out"
-  fail "cargo-modules orphans detected orphaned files"
+  fail "cargo-modules orphans"
 fi
 pass "cargo-modules orphans"
 
-# ---- 9. cargo +nightly udeps (unused dependencies) ---------------------------
-timeout "$TIMEOUT_UDEPS" rustup run nightly cargo udeps --all-targets 2>/dev/null || echo "==> SKIP: cargo udeps (not installed or timed out)"
-pass "cargo +nightly udeps"
+# ---- Optional: cargo +nightly udeps -----------------------------------------
+timeout 120 rustup run nightly cargo udeps --all-targets 2>/dev/null || \
+  echo "SKIP: cargo udeps (not installed or timed out)"
+pass "cargo udeps"
 
-# ---- 10. cargo mutants (diff-only, staged changes) ---------------------------
+# ---- Optional: cargo mutants (diff-only, staged changes) --------------------
 if command -v cargo-mutants &>/dev/null; then
-  timeout "$TIMEOUT_MUTANTS" cargo mutants --no-shuffle --in-diff <(git diff --cached) || fail "cargo mutants"
+  timeout 300 cargo mutants --no-shuffle --in-diff <(git diff --cached) || fail "cargo mutants"
 else
   echo "(cargo-mutants not installed — skipped)"
 fi

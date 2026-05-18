@@ -1,3 +1,6 @@
 [submodule "tests/microservices-demo/online-boutique"]
 	path = tests/microservices-demo/online-boutique
 	url = https://github.com/GoogleCloudPlatform/microservices-demo.git
+[submodule "third_party/spiceai"]
+	path = third_party/spiceai
+	url = https://github.com/spiceai/spiceai.git

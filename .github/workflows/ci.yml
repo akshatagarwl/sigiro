@@ -6,33 +6,26 @@ on:
     branches: [main]
 env:
   CARGO_TERM_COLOR: always
-  # Enable sccache for Rust compilation caching
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: "true"
 jobs:
-  build:
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: extractions/setup-just@v2
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
-      - run: cargo build --release --locked
-      - run: cargo test --release
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - uses: actions-rust-lang/rustfmt@v1
+      - run: just check
+      - run: just build
       - uses: eclipse-score/apt-install@v1.0.0
         with:
           packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           apt_update: true
-      - run: cargo build --release --target aarch64-unknown-linux-gnu --locked
+      - run: TARGET=aarch64-unknown-linux-gnu just build
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/bake-action@v7
-        with:
-          source: .
-          push: ${{ github.event_name == 'push' }}
-          set: |-
-            *.tags=ghcr.io/${{ github.repository }}/sigiro:${{ github.sha }}
-            *.cache-from=type=gha
-            *.cache-to=type=gha,mode=max
+      - run: just image
+      - if: github.event_name == 'push'
+        run: docker buildx bake sigiro --push --set "*.tags=ghcr.io/${{ github.repository }}/sigiro:${{ github.sha }}" --set "*.cache-from=type=gha" --set "*.cache-to=type=gha,mode=max"
