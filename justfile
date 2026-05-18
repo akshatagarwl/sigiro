@@ -25,9 +25,12 @@ run:
     trap 'docker compose -f docker-compose.dev.yml down' EXIT
     cargo run --release --bin sigiro
 
-# Build Docker image for local use.
-image:
-    docker buildx bake local
+# Build multi-arch Docker image. Pass --push to publish.
+#   just image
+#   just image --push
+#   just image --set "*.tags=myregistry/sigiro:v1.2.3"
+image *args:
+    docker buildx bake sigiro {{args}}
 
 # Build spiced query engine from submodule (first run ~1h, cached ~5m).
 spiced:

@@ -18,12 +18,3 @@ target "sigiro" {
   cache-from = ["type=registry,ref=${REGISTRY}/sigiro:buildcache"]
   cache-to   = ["type=registry,ref=${REGISTRY}/sigiro:buildcache,mode=max"]
 }
-
-# Single-platform build for local dev (fast, no QEMU)
-target "local" {
-  inherits  = ["sigiro"]
-  platforms = []
-  tags      = ["sigiro:local"]
-  cache-to  = []
-  output    = ["type=docker"]
-}
