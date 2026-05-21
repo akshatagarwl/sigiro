@@ -42,7 +42,7 @@ pyroscope = { version = "2.0.0", features = ["backend-pprof-rs"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 rmcp = { version = "1.2.0", features = ["server", "transport-io"] }
 regex = "1"
-drain3 = "0.1.4"
+drain3 = "0.1.5"
 hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"

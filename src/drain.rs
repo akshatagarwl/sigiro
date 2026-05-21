@@ -134,7 +134,9 @@ impl DrainTree {
         let masked = Self::mask_tokens(trimmed);
 
         // Train/update the matcher with the masked line.
-        self.matcher.add_log_message(&masked);
+        if let Err(e) = self.matcher.add_log_message(&masked) {
+            tracing::debug!("drain3 training failed for line: {e}");
+        }
 
         // Match to get the template id and drain3-extracted args.
         let mut args = Vec::new();
@@ -150,7 +152,10 @@ impl DrainTree {
                         if t.is_param(i) {
                             "<*>".to_string()
                         } else {
-                            dense.next().cloned().unwrap_or_else(|| "<*>".to_string())
+                            dense
+                                .next()
+                                .map(|s| s.as_ref().to_string())
+                                .unwrap_or_else(|| "<*>".to_string())
                         }
                     })
                     .join(" ")
