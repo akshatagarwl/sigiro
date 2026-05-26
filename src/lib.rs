@@ -15,6 +15,7 @@ pub mod otel;
 pub mod otlp;
 pub mod pool;
 pub mod profiling;
+pub mod quack_federation;
 pub mod responses;
 pub mod schema;
 pub mod server;

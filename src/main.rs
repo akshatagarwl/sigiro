@@ -306,7 +306,13 @@ async fn run_serve() -> Result<()> {
     // Pre-create dev_project so queries work without ingest
     match pool.create_project("dev_project") {
         Ok(_) => tracing::info!("dev_project initialized"),
-        Err(e) => tracing::warn!("dev_project init failed (non-fatal): {e}"),
+        Err(e) => {
+            let mut chain = format!("{e}");
+            for cause in e.chain().skip(1) {
+                chain.push_str(&format!("\n  Caused by: {cause}"));
+            }
+            tracing::warn!("dev_project init failed (non-fatal): {chain}");
+        }
     }
 
     let supervisor_registry = sigiro::types::SupervisorRegistry::new();
@@ -355,13 +361,36 @@ async fn run_serve() -> Result<()> {
         }
     };
 
-    // Federation: central node mode
+    // Federation requires a shared catalog (PostgreSQL). Local SQLite cannot be shared across nodes.
     let central = sigiro::config::CENTRAL.value().unwrap_or(false);
+    let has_central_url = sigiro::config::CENTRAL_URL.value().is_ok();
+    if central || has_central_url {
+        match sigiro::config::CATALOG_URL.value() {
+            Ok(ref url) if !url.is_empty() => {}
+            _ => anyhow::bail!(
+                "Federation mode requires SIGIRO_CATALOG_URL (PostgreSQL catalog). \
+                 Local SQLite cannot be shared across nodes. \
+                 Set SIGIRO_CATALOG_URL=postgresql://user:pass@host/db to enable federation."
+            ),
+        }
+    }
+
+    // Federation: central node mode
     if central {
         tracing::info!("running as central federation node");
-        // Ensure spicepod.yaml exists even before any workers register.
-        sigiro::federation::regenerate_spicepod(&admin_conn, &dir)?;
-        sigiro::federation::start_spice(&dir, &supervisor_registry)?;
+
+        let quack_port = sigiro::config::QUACK_PORT
+            .value()
+            .expect("SIGIRO_QUACK_PORT must be set for central federation node");
+        let quack_token = sigiro::config::QUACK_TOKEN
+            .value()
+            .expect("SIGIRO_QUACK_TOKEN must be set for central federation node");
+
+        let federation_conn = pool.create_federation_connection()?;
+        let conn = federation_conn.lock();
+
+        sigiro::quack_federation::start_quack_server(&conn, quack_port, &quack_token)?;
+        tracing::info!("quack federation server started on port {}", quack_port);
     }
 
     // Federation: collector self-registration with central node
