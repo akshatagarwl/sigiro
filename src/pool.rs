@@ -216,4 +216,32 @@ impl ProjectPool {
     pub fn remove(&self, project_id: &str) {
         self.connections.remove(project_id);
     }
+
+    /// Create a dedicated DuckDB connection for federation (quack server).
+    /// This connection is separate from project pool connections because quack server
+    /// runs in background threads that must remain alive for the lifetime of the server.
+    pub fn create_federation_connection(&self) -> Result<Arc<Mutex<Connection>>> {
+        let conn = Connection::open_in_memory()
+            .context("failed to open in-memory DuckDB for federation")?;
+
+        let ext_dir = crate::config::EXTENSION_DIR
+            .value()
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(Utf8PathBuf::from)
+            .unwrap_or_else(|| self.data_dir.join("extensions"));
+
+        conn.execute_batch(&format!(
+            "SET extension_directory = '{}';",
+            ext_dir.as_str()
+        ))
+        .context("failed to set extension_directory")?;
+
+        conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
+            .context("failed to set DuckDB memory limit")?;
+
+        crate::schema::create_tables(&conn, Self::prefix())?;
+
+        Ok(Arc::new(Mutex::new(conn)))
+    }
 }
