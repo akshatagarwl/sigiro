@@ -20,7 +20,6 @@ pub mod responses;
 pub mod schema;
 pub mod server;
 pub mod storage;
-pub mod supervisor;
 pub mod toon;
 pub mod types;
 
@@ -36,7 +35,7 @@ use camino::Utf8PathBuf;
 
 pub use ingest::OtlpGrpcService;
 pub use investigate::{InvestigationBlock, Window, query_raw_logs};
-pub use types::{IngestMsg, SignalTable, StatusCode, SupervisorHandle, TimestampMicros};
+pub use types::{IngestMsg, SignalTable, StatusCode, TimestampMicros};
 // Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
 pub use inserter::MsgRouter;
 pub use responses::{ServiceBreakdownEntry, SpanDetail, TraceDetailResponse};

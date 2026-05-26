@@ -103,12 +103,6 @@ pub static CENTRAL: Envar<bool> = Envar::on_startup("SIGIRO_CENTRAL", || EnvarDe
 /// URL of central node for collector self-registration (optional).
 pub static CENTRAL_URL: Envar<String> = Envar::on_startup("SIGIRO_CENTRAL_URL", || EnvarDef::Unset);
 
-/// Spice.ai HTTP query endpoint (optional). When set, /v1/query proxies to Spice instead of local DuckDB.
-/// HTTP base URL for spiced `/v1/sql` (federated central only). Unset → queries use local DuckDB.
-/// Must not be set in local mode. See docs/architecture/deployment-modes.html.
-pub static SPICE_HTTP_URL: Envar<String> =
-    Envar::on_startup("SIGIRO_SPICE_HTTP_URL", || EnvarDef::Unset);
-
 /// Machine hostname (used for federation worker registration).
 pub static HOSTNAME: Envar<String> =
     Envar::on_startup("HOSTNAME", || EnvarDef::Default(String::new()));

@@ -253,7 +253,6 @@ async fn run_serve() -> Result<()> {
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
     let admin_conn = sigiro::admin::open_admin_db()?;
 
-    // Ensure federation schema exists before central mode may regenerate spicepod.
     sigiro::federation::create_workers_table(&admin_conn)
         .context("failed to create federation workers table")?;
 
@@ -315,8 +314,6 @@ async fn run_serve() -> Result<()> {
         }
     }
 
-    let supervisor_registry = sigiro::types::SupervisorRegistry::new();
-
     // eBPF auto-instrumentation: try obi, degrade gracefully
     let ebpf_enabled = sigiro::config::EBPF_ENABLED.value().unwrap_or(false);
     if !ebpf_enabled {
@@ -331,7 +328,7 @@ async fn run_serve() -> Result<()> {
         sigiro::ebpf::write_ebpf_status(&admin_conn, &status)?;
         match status.status.as_str() {
             "ready" => {
-                sigiro::ebpf::start_obi("obi", &otlp_endpoint, &supervisor_registry)?;
+                sigiro::ebpf::start_obi("obi", &otlp_endpoint, &())?;
             }
             _ => {
                 tracing::warn!(

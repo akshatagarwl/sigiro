@@ -375,20 +375,6 @@ fn escape_sql_string(s: &str) -> String {
     s.replace("'", "''")
 }
 
-/// Rewrite SQL for Spice by stripping the DuckDB schema prefix from known sigiro tables.
-/// Spice datasets are flat — `lake.sigiro_spans` becomes `sigiro_spans`.
-fn sql_for_spice(sql: &str) -> String {
-    sql.replace("lake.sigiro_spans", "sigiro_spans")
-        .replace("lake.sigiro_logs", "sigiro_logs")
-        .replace("lake.sigiro_metrics_gauge", "sigiro_metrics_gauge")
-        .replace("lake.sigiro_metrics_sum", "sigiro_metrics_sum")
-        .replace("lake.sigiro_metrics_histogram", "sigiro_metrics_histogram")
-        .replace(
-            "lake.sigiro_metrics_exp_histogram",
-            "sigiro_metrics_exp_histogram",
-        )
-}
-
 /// Execute SQL against Spice (if configured) or local DuckDB.
 /// Returns rows as a JSON array of objects so both paths have the same shape.
 async fn execute_sql(
@@ -396,30 +382,24 @@ async fn execute_sql(
     auth: &AuthContext,
     sql: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    if let Ok(spice_url) = crate::config::SPICE_HTTP_URL.value() {
-        let spice_sql = sql_for_spice(sql);
-        let url = format!("{}/v1/sql", spice_url.trim_end_matches('/'));
-        let resp = state
-            .http_client
-            .post(&url)
-            .header("Accept", "application/json")
-            .body(spice_sql)
-            .send()
-            .await
-            .context("spice query request failed")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let err_body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("spice query failed ({status}): {err_body}");
-        }
-
-        let results: Vec<serde_json::Value> = resp
-            .json()
-            .await
-            .context("failed to parse spice response")?;
-        return Ok(results);
+    // Federated query via quack ATTACH to all registered workers
+    let workers = federation::list_workers(&state.admin_conn.lock())?;
+    if !workers.is_empty() {
+        let quack_port = crate::config::QUACK_PORT
+            .value()
+            .expect("SIGIRO_QUACK_PORT must be set");
+        let quack_token = crate::config::QUACK_TOKEN
+            .value()
+            .expect("SIGIRO_QUACK_TOKEN must be set");
+        let conn = project_conn(state, auth)?.lock();
+        return quack_federation::federated_query(&conn, &workers, quack_port, &quack_token, sql)
+            .await;
     }
+
+    // NO FALLBACK: if workers registered but query still reaches here, error
+    anyhow::bail!(
+        "no federation workers registered — set workers via /v1/workers endpoint or disable --central mode"
+    );
 
     let conn = project_conn(state, auth).map_err(|e| anyhow::anyhow!("{e:?}"))?;
     let conn = conn.lock();

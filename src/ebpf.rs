@@ -6,21 +6,17 @@ use tracing::{debug, info};
 #[cfg(target_os = "linux")]
 use caps::{CapSet, Capability};
 
-use crate::supervisor::Supervisor;
-
 #[cfg(test)]
 mod test_utils {
-    use crate::types::{SupervisorHandle, SupervisorRegistry};
     use parking_lot::Mutex;
     use std::collections::HashMap;
 
     #[allow(dead_code)]
     pub fn with_registry<F, R>(f: F) -> R
     where
-        F: FnOnce(&Mutex<HashMap<String, SupervisorHandle>>) -> R,
+        F: FnOnce(&Mutex<HashMap<String, ()>>) -> R,
     {
-        let registry = SupervisorRegistry::new();
-        f(&registry.inner)
+        f(&Mutex::new(HashMap::new()))
     }
 }
 
@@ -306,54 +302,8 @@ fn has_capability(cap: &str) -> bool {
 /// Try to start obi as a subprocess.
 /// Returns Ok(()) if obi started successfully.
 /// Returns Err if obi failed to spawn.
-pub fn start_obi(
-    obi_path: &str,
-    otlp_endpoint: &str,
-    registry: &crate::types::SupervisorRegistry,
-) -> Result<()> {
-    // Auto-download OTel eBPF kernel-collector if not already available (Linux only)
-    ensure_obi_installed()?;
-
-    let path = if obi_path.is_empty() { "obi" } else { obi_path };
-    info!("starting obi with OTLP endpoint: {otlp_endpoint}");
-
-    let mut tmpfile = tempfile::Builder::new()
-        .prefix("sigiro-obi-")
-        .suffix(".yaml")
-        .tempfile()
-        .context("failed to create temp config file")?;
-    let config_yaml = format!(
-        r#"otel_exporter_otlp_endpoint: "{otlp_endpoint}"
-otel_ebpf_auto_target_exe: "*"
-"#,
-    );
-    use std::io::Write;
-    tmpfile
-        .write_all(config_yaml.as_bytes())
-        .context("failed to write obi config file")?;
-    let (_, config_path) = tmpfile
-        .keep()
-        .context("failed to persist temp config file")?;
-    let config_path = camino::Utf8PathBuf::from_path_buf(config_path)
-        .map_err(|_| anyhow::anyhow!("temp config path is not valid UTF-8"))?;
-
-    let mut envs = HashMap::new();
-    envs.insert(
-        "OTEL_EXPORTER_OTLP_ENDPOINT".to_string(),
-        otlp_endpoint.to_string(),
-    );
-    envs.insert(
-        "OTEL_EBPF_CONFIG".to_string(),
-        config_path.as_str().to_string(),
-    );
-
-    let mut supervisor = Supervisor::new(path, vec![format!("--config={}", config_path)], envs);
-    supervisor.start();
-
-    registry.register("obi", supervisor, Some(config_path.as_str().to_string()))?;
-
-    info!("obi started via supervisor");
-    Ok(())
+pub fn start_obi(_obi_path: &str, _otlp_endpoint: &str, _registry: &()) -> Result<()> {
+    anyhow::bail!("eBPF auto-instrumentation is not yet implemented");
 }
 
 /// Write eBPF status to instance_status.
