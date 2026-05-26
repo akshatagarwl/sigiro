@@ -20,10 +20,14 @@ pub static OTLP_HTTP_PORT: Envar<u16> =
     Envar::on_startup("SIGIRO_OTLP_HTTP_PORT", || EnvarDef::Default(4318));
 
 /// S3 cold storage config. Empty/unset means no S3.
-pub static S3_BUCKET: Envar<String> = Envar::on_startup("SIGIRO_S3_BUCKET", || EnvarDef::Unset);
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
+pub static S3_BUCKET: Envar<String> =
+    Envar::on_demand("SIGIRO_S3_BUCKET", || EnvarDef::Default(String::new()));
 pub static S3_REGION: Envar<String> =
     Envar::on_startup("SIGIRO_S3_REGION", || EnvarDef::Default(String::new()));
-pub static S3_PREFIX: Envar<String> = Envar::on_startup("SIGIRO_S3_PREFIX", || EnvarDef::Unset);
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
+pub static S3_PREFIX: Envar<String> =
+    Envar::on_demand("SIGIRO_S3_PREFIX", || EnvarDef::Default(String::new()));
 
 /// OTel service name for self-instrumentation.
 pub static OTEL_SERVICE_NAME: Envar<String> = Envar::on_startup("OTEL_SERVICE_NAME", || {
@@ -79,8 +83,14 @@ pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
     EnvarDef::Default("http://localhost:9999".to_string())
 });
 
-/// PostgreSQL catalog URL (optional — enables distributed mode).
-/// Unset or empty means local SQLite. Empty string means misconfiguration (fail-fast).
+pub static QUACK_PORT: Envar<u16> = Envar::on_startup("SIGIRO_QUACK_PORT", || EnvarDef::Unset);
+
+pub static QUACK_TOKEN: Envar<String> = Envar::on_startup("SIGIRO_QUACK_TOKEN", || EnvarDef::Unset);
+
+/// PostgreSQL catalog URL (required for federation, optional otherwise).
+/// Unset means local SQLite catalog. When SIGIRO_CENTRAL or SIGIRO_CENTRAL_URL is set,
+/// this becomes a hard requirement — the process will fail-fast if missing.
+/// Deployment modes: docs/architecture/deployment-modes.html
 pub static CATALOG_URL: Envar<String> = Envar::on_startup("SIGIRO_CATALOG_URL", || EnvarDef::Unset);
 
 /// Enable eBPF auto-instrumentation (default: false). Set SIGIRO_EBPF=true to enable.
@@ -94,6 +104,8 @@ pub static CENTRAL: Envar<bool> = Envar::on_startup("SIGIRO_CENTRAL", || EnvarDe
 pub static CENTRAL_URL: Envar<String> = Envar::on_startup("SIGIRO_CENTRAL_URL", || EnvarDef::Unset);
 
 /// Spice.ai HTTP query endpoint (optional). When set, /v1/query proxies to Spice instead of local DuckDB.
+/// HTTP base URL for spiced `/v1/sql` (federated central only). Unset → queries use local DuckDB.
+/// Must not be set in local mode. See docs/architecture/deployment-modes.html.
 pub static SPICE_HTTP_URL: Envar<String> =
     Envar::on_startup("SIGIRO_SPICE_HTTP_URL", || EnvarDef::Unset);
 
