@@ -114,8 +114,10 @@ FED_TMPDIR=$(mktemp -d)
 
 gen_collector_yaml() {
   local out="$1"
-  sed -e "s|\\\${K3S_SERVER_IP}|$CENTRAL_IP|g" \
-      -e "s|\\\${K3S_AGENT_TOKEN}|$K3S_TOKEN|g" \
+  # K3S_SERVER_IP is now hardcoded as host.lima.internal in the YAML
+  # (Lima NAT gives all VMs the same eth0 IP, so we use host.lima.internal
+  # which resolves to the host where the central VM's k3s API is forwarded)
+  sed -e "s|\\\${K3S_AGENT_TOKEN}|$K3S_TOKEN|g" \
       "$SCRIPT_DIR/sigiro-fed-collector.yaml" > "$out"
 }
 

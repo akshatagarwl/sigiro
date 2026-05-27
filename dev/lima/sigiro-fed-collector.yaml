@@ -2,9 +2,8 @@
 # Joins the k3s server at K3S_SERVER_IP and runs sigiro serve --ebpf as a collector
 #
 # Usage:
-#   1. Generate a per-instance YAML with env vars substituted:
-#      sed -e "s|\\\${K3S_SERVER_IP}|<server-ip>|g" \
-#          -e "s|\\\${K3S_AGENT_TOKEN}|<agent-token>|g" \
+#   1. Generate a per-instance YAML with the agent token substituted:
+#      sed -e "s|\\\${K3S_AGENT_TOKEN}|<agent-token>|g" \
 #          dev/lima/sigiro-fed-collector.yaml > /tmp/collector.yaml
 #   2. limactl start --name=sigiro-fed-collector /tmp/collector.yaml
 #   3. limactl copy ./result/bin/sigiro sigiro-fed-collector:/home/akshat.guest/sigiro
@@ -42,17 +41,17 @@ provision:
 
     # Wait for k3s server to be reachable before joining
     for i in $(seq 1 60); do
-      if curl -sfk "https://${K3S_SERVER_IP}:6443/ping" >/dev/null 2>&1; then
+      if curl -sfk "https://host.lima.internal:6443/ping" >/dev/null 2>&1; then
         echo "k3s server is reachable"
         break
       fi
-      echo "Waiting for k3s server at ${K3S_SERVER_IP}:6443... ($i/60)"
+      echo "Waiting for k3s server at host.lima.internal:6443... ($i/60)"
       sleep 5
     done
 
     # Install k3s agent and join the cluster
     curl -sfL https://get.k3s.io | \
-      K3S_URL="https://${K3S_SERVER_IP}:6443" \
+      K3S_URL="https://host.lima.internal:6443" \
       K3S_KUBECONFIG_MODE="644" \
       K3S_AGENT_TOKEN="${K3S_AGENT_TOKEN}" \
       sh -

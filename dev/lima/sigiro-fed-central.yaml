@@ -35,7 +35,7 @@ provision:
     apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git gnupg lsb-release
 
     # Install k3s server (single-node, then workers will join)
-    curl -sfL https://get.k3s.io | K3S_KUBECONFIG_MODE="644" sh -s - server --cluster-init --tls-san 127.0.0.1 --tls-san localhost
+    curl -sfL https://get.k3s.io | K3S_KUBECONFIG_MODE="644" sh -s - server --cluster-init --tls-san 127.0.0.1 --tls-san localhost --tls-san host.lima.internal
 
     # Wait for k3s to be active
     sleep 10
