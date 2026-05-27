@@ -5,7 +5,7 @@ use tracing::{debug, info};
 use tracing_attributes::instrument;
 
 /// Information about a federation worker.
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WorkerInfo {
     pub id: String,
     pub endpoint: String,
@@ -21,7 +21,7 @@ pub struct WorkerInfo {
 }
 
 /// Platform information for a worker.
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PlatformInfo {
     pub os: String,
     pub kernel: String,
@@ -30,7 +30,7 @@ pub struct PlatformInfo {
 }
 
 /// Capabilities of a federation worker.
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WorkerCapabilities {
     pub bpf: bool,
     pub net_admin: bool,
@@ -151,7 +151,6 @@ pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

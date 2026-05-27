@@ -375,14 +375,12 @@ fn escape_sql_string(s: &str) -> String {
     s.replace("'", "''")
 }
 
-/// Execute SQL against Spice (if configured) or local DuckDB.
-/// Returns rows as a JSON array of objects so both paths have the same shape.
+/// Execute SQL against DuckDB (local or federated).
 async fn execute_sql(
     state: &AppState,
     auth: &AuthContext,
     sql: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    // Federated query via quack ATTACH to all registered workers
     let workers = federation::list_workers(&state.admin_conn.lock())?;
     if !workers.is_empty() {
         let quack_port = crate::config::QUACK_PORT
@@ -391,43 +389,25 @@ async fn execute_sql(
         let quack_token = crate::config::QUACK_TOKEN
             .value()
             .expect("SIGIRO_QUACK_TOKEN must be set");
-        let conn = project_conn(state, auth)?.lock();
-        return quack_federation::federated_query(&conn, &workers, quack_port, &quack_token, sql)
-            .await;
-    }
-
-    // NO FALLBACK: if workers registered but query still reaches here, error
-    anyhow::bail!(
-        "no federation workers registered — set workers via /v1/workers endpoint or disable --central mode"
-    );
-
-    let conn = project_conn(state, auth).map_err(|e| anyhow::anyhow!("{e:?}"))?;
-    let conn = conn.lock();
-    let mut stmt = conn.prepare(sql).context("failed to prepare query")?;
-    let mut rows = stmt.query([]).context("query execution failed")?;
-
-    let stmt_ref = rows.as_ref().context("no result set")?;
-    let column_count = stmt_ref.column_count();
-    let column_names: Vec<String> = (0..column_count)
-        .map(|i| {
-            stmt_ref
-                .column_name(i)
-                .map(ToString::to_string)
-                .unwrap_or_else(|_| "?".to_string())
+        let conn_raw = project_conn(state, auth)
+            .map_err(|e: axum_anyhow::ApiError| anyhow::anyhow!("{:?}", e))?;
+        let workers_clone = workers.to_vec();
+        let sql_clone = sql.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let conn_guard = conn_raw.lock();
+            let conn_ref: &duckdb::Connection = &conn_guard;
+            crate::quack_federation::blocking_federated_query(
+                conn_ref,
+                &workers_clone,
+                quack_port,
+                &quack_token,
+                &sql_clone,
+            )
         })
-        .collect();
-
-    let mut results = Vec::new();
-    while let Some(row) = rows.next().context("row iteration failed")? {
-        let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-        for (i, name) in column_names.iter().enumerate() {
-            let val = row.get_ref(i).context("column read failed")?;
-            obj.insert(name.clone(), value_ref_to_json(val));
-        }
-        results.push(serde_json::Value::Object(obj));
+        .await??;
+        return Ok(result);
     }
-
-    Ok(results)
+    Ok(vec![])
 }
 
 #[utoipa::path(
