@@ -1,0 +1,68 @@
+# Sigiro federation collector — k3s worker node that self-registers with fed-central
+# Joins the k3s server at K3S_SERVER_IP and runs sigiro serve --ebpf as a collector
+#
+# Usage:
+#   limactl start --name=sigiro-fed-collector \
+#     --env K3S_SERVER_IP=<server-ip> \
+#     --env K3S_AGENT_TOKEN=<agent-token> \
+#     dev/lima/sigiro-fed-collector.yaml
+#   limactl copy ./result/bin/sigiro sigiro-fed-collector:/home/akshat.guest/sigiro
+#   limactl shell sigiro-fed-collector /home/akshat.guest/run-collector.sh
+
+images:
+- location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+  arch: "aarch64"
+
+cpus: 4
+memory: "4GiB"
+disk: "60GiB"
+
+ssh:
+  localPort: 0
+
+containerd:
+  system: false
+  user: false
+
+mounts:
+- location: "~/workspace"
+  writable: false
+
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    export DEBIAN_FRONTEND=noninteractive
+
+    # Install eBPF dependencies
+    apt-get update
+    apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git bpfcc-tools linux-headers-generic
+
+    # Install k3s agent (waits for server, then joins)
+    curl -sfL https://get.k3s.io | K3S_URL="https://${K3S_SERVER_IP}:6443" K3S_KUBECONFIG_MODE="644" K3S_AGENT_TOKEN="${K3S_AGENT_TOKEN}" sh - || true
+
+    # Create sigiro user and data directory
+    useradd -m -s /bin/bash sigiro || true
+    mkdir -p /home/sigiro/sigiro-data
+    chown sigiro:sigiro /home/sigiro/sigiro-data
+
+- mode: user
+  script: |
+    #!/bin/bash
+    cat > /home/akshat.guest/run-collector.sh << 'RUNCOLLECTOR'
+    #!/bin/bash
+    set -eux -o pipefail
+    cd /home/akshat.guest
+
+    # Federation collector configuration
+    export SIGIRO_DATA_DIR=/home/sigiro/sigiro-data
+    export SIGIRO_HTTP_PORT=9999
+    export SIGIRO_OTLP_HTTP_PORT=4318
+    export SIGIRO_CENTRAL_URL=http://fed-central:9999
+    export SIGIRO_API_KEY=sigiro_dev_test
+
+    # Run as federation collector with eBPF
+    ./sigiro serve --ebpf 2>&1 | tee /tmp/sigiro-collector.log
+    RUNCOLLECTOR
+    chmod +x /home/akshat.guest/run-collector.sh

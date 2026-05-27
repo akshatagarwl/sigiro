@@ -40,7 +40,7 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
   echo ""
   echo "=== Building collector image ==="
   cd "$REPO_ROOT"
-  docker build -t sigiro-collector:local -f collector/Dockerfile .
+  docker build -t sigiro-collector:local -f "$REPO_ROOT/Dockerfile" "$REPO_ROOT"
 
   # Load image into K8s runtime if not OrbStack (OrbStack shares Docker images)
   if [[ "$K8S_CTX" != "orbstack" ]]; then
