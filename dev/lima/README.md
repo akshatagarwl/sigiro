@@ -76,11 +76,15 @@ limactl start --name=fed-central dev/lima/sigiro-fed-central.yaml
 
 # 2. Get k3s token
 TOKEN=$(limactl shell fed-central sudo cat /var/lib/rancher/k3s/server/node-token)
-IP=$(limactl list fed-central --json | jq -r '.[0].ssh_address' | sed 's/127.0.0.1://')
+IP=$(limactl shell fed-central -- ip -4 addr show eth0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
 
-# 3. Start collector VMs
-limactl start --name=fed-collector-1 --env K3S_SERVER_IP=$IP --env K3S_AGENT_TOKEN=$TOKEN dev/lima/sigiro-fed-collector.yaml
-limactl start --name=fed-collector-2 --env K3S_SERVER_IP=$IP --env K3S_AGENT_TOKEN=$TOKEN dev/lima/sigiro-fed-collector.yaml
+# 3. Generate per-instance collector YAMLs (Lima does not support --env)
+sed -e "s|\\\${K3S_SERVER_IP}|$IP|g" -e "s|\\\${K3S_AGENT_TOKEN}|$TOKEN|g" dev/lima/sigiro-fed-collector.yaml > /tmp/collector-1.yaml
+sed -e "s|\\\${K3S_SERVER_IP}|$IP|g" -e "s|\\\${K3S_AGENT_TOKEN}|$TOKEN|g" dev/lima/sigiro-fed-collector.yaml > /tmp/collector-2.yaml
+
+# 4. Start collector VMs
+limactl start --name=fed-collector-1 /tmp/collector-1.yaml
+limactl start --name=fed-collector-2 /tmp/collector-2.yaml
 ```
 
 ## Known Issues

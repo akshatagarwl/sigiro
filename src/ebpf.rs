@@ -1,23 +1,17 @@
-use anyhow::{Context, Result};
-use std::sync::OnceLock;
-use tracing::{debug, info};
+use anyhow::Result;
+use tracing::debug;
 
 #[cfg(target_os = "linux")]
 use caps::{CapSet, Capability};
 
-#[cfg(test)]
-mod test_utils {
-    use parking_lot::Mutex;
-    use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 
-    #[allow(dead_code)]
-    pub fn with_registry<F, R>(f: F) -> R
-    where
-        F: FnOnce(&Mutex<HashMap<String, ()>>) -> R,
-    {
-        f(&Mutex::new(HashMap::new()))
-    }
-}
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
+
+#[cfg(target_os = "linux")]
+use tracing::info;
 
 /// Result of checking eBPF readiness.
 pub struct EbpfStatus {
@@ -48,14 +42,14 @@ fn which_obi() -> Option<String> {
 // Auto-install: kernel-collector binary from OTel eBPF releases (Linux only)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "linux")]
 /// One-time install guard — set to Some(path) once obi is successfully installed.
-#[allow(dead_code)]
 static OBI_INSTALL_TRACKER: OnceLock<String> = OnceLock::new();
 
+#[cfg(target_os = "linux")]
 /// Resolves the destination path for the obi binary.
 /// Prefers `$SIGIRO_DATA_DIR/bin/obi` if SIGIRO_DATA_DIR is set,
 /// otherwise falls back to `~/.local/bin/obi`.
-#[allow(dead_code)]
 fn obi_install_path() -> Result<camino::Utf8PathBuf> {
     if let Ok(data_dir) = crate::config::DATA_DIR.value() {
         let path = camino::Utf8PathBuf::from(data_dir).join("bin").join("obi");
@@ -76,9 +70,9 @@ fn obi_install_path() -> Result<camino::Utf8PathBuf> {
     Ok(path)
 }
 
+#[cfg(target_os = "linux")]
 /// Download and extract the OBI binary from OTel eBPF Instrumentation releases.
 /// The release ships as a .tar.gz archive containing the `obi` binary directly.
-#[allow(dead_code)]
 fn download_obi(dest: &camino::Utf8Path) -> Result<()> {
     let version = "v0.8.0";
 

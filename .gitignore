@@ -1,6 +1,6 @@
 # Build artifacts
 /target
-/.cross
+
 
 # Fuzzing corpus — ignore generated artifacts, track curated seeds
 fuzz/target/
@@ -18,7 +18,7 @@ vendor/
 
 # Local cargo
 .cargo-home/
-.cargo-config.toml
+
 
 # Local task list
 TASKS.md

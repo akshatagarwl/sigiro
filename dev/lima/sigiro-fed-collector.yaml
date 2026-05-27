@@ -2,12 +2,13 @@
 # Joins the k3s server at K3S_SERVER_IP and runs sigiro serve --ebpf as a collector
 #
 # Usage:
-#   limactl start --name=sigiro-fed-collector \
-#     --env K3S_SERVER_IP=<server-ip> \
-#     --env K3S_AGENT_TOKEN=<agent-token> \
-#     dev/lima/sigiro-fed-collector.yaml
-#   limactl copy ./result/bin/sigiro sigiro-fed-collector:/home/akshat.guest/sigiro
-#   limactl shell sigiro-fed-collector /home/akshat.guest/run-collector.sh
+#   1. Generate a per-instance YAML with env vars substituted:
+#      sed -e "s|\\\${K3S_SERVER_IP}|<server-ip>|g" \
+#          -e "s|\\\${K3S_AGENT_TOKEN}|<agent-token>|g" \
+#          dev/lima/sigiro-fed-collector.yaml > /tmp/collector.yaml
+#   2. limactl start --name=sigiro-fed-collector /tmp/collector.yaml
+#   3. limactl copy ./result/bin/sigiro sigiro-fed-collector:/home/akshat.guest/sigiro
+#   4. limactl shell sigiro-fed-collector /home/akshat.guest/run-collector.sh
 
 images:
 - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"

@@ -17,6 +17,7 @@ spec:
         - name: sigiro-central
           image: sigiro-collector:local
           imagePullPolicy: Never
+          command: ["sigiro"]
           args:
             - serve
             - --no-ebpf

@@ -50,6 +50,7 @@ spec:
         - name: sigiro-collector
           image: sigiro-collector:local
           imagePullPolicy: Never
+          command: ["sigiro"]
           args:
             - serve
             - --ebpf

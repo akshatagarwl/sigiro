@@ -5,7 +5,7 @@
 exclude_globs = [
     "src/main.rs",       # CLI entrypoint, tested via integration
     "src/mcp.rs",        # MCP stdio transport, tested manually
-    "src/compactor.rs",  # S3 side effects, tested via integration
+    # Add new files here when they have side effects that are tested via integration
 ]
 
 # Timeout per mutant (DuckDB compile is slow)

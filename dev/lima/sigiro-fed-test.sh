@@ -18,13 +18,17 @@ FED_COLLECTOR_2="fed-collector-2"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-vm_ssh() { limactl shell "$1" -- bash -lc "$2"; }
+vm_ssh() {
+  local vm="$1"
+  shift
+  limactl shell "$vm" -- bash -lc "$*"
+}
 vm_cp() { limactl copy "$1" "$2"; }
 
 get_vm_ip() {
-  limactl list "$1" --json 2>/dev/null | \
-    jq -r '.[] | select(.name=="'"$1"'") | .ssh_address' | \
-    sed 's/127.0.0.1://' | head -1
+  # Get the VM's internal Lima network IP (eth0) so other VMs can reach it
+  limactl shell "$1" -- ip -4 addr show eth0 2>/dev/null | \
+    grep 'inet ' | awk '{print $2}' | cut -d/ -f1 | head -1
 }
 
 wait_for_port() {
@@ -44,6 +48,9 @@ cleanup() {
     limactl stop "$vm" 2>/dev/null || true
     limactl delete "$vm" 2>/dev/null || true
   done
+  if [[ -n "${FED_TMPDIR:-}" && -d "$FED_TMPDIR" ]]; then
+    rm -rf "$FED_TMPDIR"
+  fi
   echo "Cleanup complete"
 }
 trap cleanup EXIT
@@ -99,18 +106,27 @@ echo "Token obtained (length: ${#K3S_TOKEN})"
 # ---------------------------------------------------------------------------
 # Step 4 — start collector VMs (k3s workers)
 # ---------------------------------------------------------------------------
+# Lima does not support --env on limactl start, so we generate per-instance
+# YAMLs with the k3s values embedded.
+FED_TMPDIR=$(mktemp -d)
+
+gen_collector_yaml() {
+  local out="$1"
+  sed -e "s|\\\${K3S_SERVER_IP}|$CENTRAL_IP|g" \
+      -e "s|\\\${K3S_AGENT_TOKEN}|$K3S_TOKEN|g" \
+      "$SCRIPT_DIR/sigiro-fed-collector.yaml" > "$out"
+}
+
 echo "=== Starting collector-1 VM ==="
-limactl start --name="$FED_COLLECTOR_1" \
-  --env K3S_SERVER_IP="$CENTRAL_IP" \
-  --env K3S_AGENT_TOKEN="$K3S_TOKEN" \
-  "$SCRIPT_DIR/sigiro-fed-collector.yaml" 2>&1 || \
+COLLECTOR_1_YAML="$FED_TMPDIR/collector-1.yaml"
+gen_collector_yaml "$COLLECTOR_1_YAML"
+limactl start --name="$FED_COLLECTOR_1" "$COLLECTOR_1_YAML" 2>&1 || \
   echo "VM $FED_COLLECTOR_1 may already exist"
 
 echo "=== Starting collector-2 VM ==="
-limactl start --name="$FED_COLLECTOR_2" \
-  --env K3S_SERVER_IP="$CENTRAL_IP" \
-  --env K3S_AGENT_TOKEN="$K3S_TOKEN" \
-  "$SCRIPT_DIR/sigiro-fed-collector.yaml" 2>&1 || \
+COLLECTOR_2_YAML="$FED_TMPDIR/collector-2.yaml"
+gen_collector_yaml "$COLLECTOR_2_YAML"
+limactl start --name="$FED_COLLECTOR_2" "$COLLECTOR_2_YAML" 2>&1 || \
   echo "VM $FED_COLLECTOR_2 may already exist"
 
 echo "Waiting for collector VMs to boot..."
@@ -147,7 +163,10 @@ echo "=== Building Docker image ==="
 docker build -t sigiro-collector:local -f "$REPO_ROOT/Dockerfile" "$REPO_ROOT" 2>&1 | tail -10
 
 echo "=== Loading Docker image into k3s ==="
-docker save sigiro-collector:local | vm_ssh "$FED_CENTRAL" sudo k3s ctr images import -
+IMG_TAR="$FED_TMPDIR/sigiro-collector.tar"
+docker save sigiro-collector:local -o "$IMG_TAR"
+limactl copy "$IMG_TAR" "$FED_CENTRAL:/tmp/sigiro-collector.tar"
+vm_ssh "$FED_CENTRAL" "sudo k3s ctr -n k8s.io images import /tmp/sigiro-collector.tar"
 
 # ---------------------------------------------------------------------------
 # Step 8 — deploy k8s manifests
@@ -168,11 +187,23 @@ kubectl -n sigiro-fed wait --for=condition=ready pod -l app=minio --timeout=120s
 
 kubectl apply -f "$REPO_ROOT/tests/k8s/federation/sigiro-central.yaml"
 echo "Waiting for sigiro-central pod..."
-kubectl -n sigiro-fed wait --for=condition=ready pod -l app=sigiro-central --timeout=180s
+if ! kubectl -n sigiro-fed wait --for=condition=ready pod -l app=sigiro-central --timeout=180s; then
+  echo "ERROR: sigiro-central pod did not become ready"
+  kubectl -n sigiro-fed get pods -o wide
+  kubectl -n sigiro-fed describe pod -l app=sigiro-central
+  kubectl -n sigiro-fed logs -l app=sigiro-central --tail=50 || true
+  exit 1
+fi
 
 kubectl apply -f "$REPO_ROOT/tests/k8s/federation/sigiro-collector-daemonset.yaml"
 echo "Waiting for sigiro-collector pods..."
-kubectl -n sigiro-fed wait --for=condition=ready pod -l app=sigiro-collector --timeout=180s
+if ! kubectl -n sigiro-fed wait --for=condition=ready pod -l app=sigiro-collector --timeout=180s; then
+  echo "ERROR: sigiro-collector pods did not become ready"
+  kubectl -n sigiro-fed get pods -o wide
+  kubectl -n sigiro-fed describe pod -l app=sigiro-collector
+  kubectl -n sigiro-fed logs -l app=sigiro-collector --tail=50 || true
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Step 9 — wait for demo services
@@ -181,7 +212,10 @@ if [[ -f "$REPO_ROOT/tests/k8s/federation/demo-services.yaml" ]]; then
   echo "=== Deploying demo services ==="
   kubectl apply -f "$REPO_ROOT/tests/k8s/federation/demo-services.yaml"
   echo "Waiting for frontend to be ready..."
-  kubectl -n sigiro-fed wait --for=condition=ready deployment frontend --timeout=180s 2>/dev/null || true
+  if ! kubectl -n sigiro-fed wait --for=condition=ready deployment frontend --timeout=180s; then
+    echo "WARNING: frontend deployment did not become ready"
+    kubectl -n sigiro-fed get pods -o wide
+  fi
 fi
 
 # ---------------------------------------------------------------------------

@@ -20,9 +20,9 @@ vm_ssh() { limactl shell "$1" -- bash -lc "$2"; }
 vm_cp() { limactl copy "$1" "$2"; }
 
 get_vm_ip() {
-  limactl list "$1" --json 2>/dev/null | \
-    jq -r '.[] | select(.name=="'"$1"'") | .ssh_address' | \
-    sed 's/127.0.0.1://' | head -1
+  # Get the VM's internal Lima network IP (eth0) so other VMs can reach it
+  limactl shell "$1" -- ip -4 addr show eth0 2>/dev/null | \
+    grep 'inet ' | awk '{print $2}' | cut -d/ -f1 | head -1
 }
 
 wait_for_port() {

@@ -1,8 +1,7 @@
 target/
 dist/
 www/
-test/
-predict/
+
 docs/
 .git/
 .github/
@@ -12,5 +11,4 @@ fuzz/
 *.pen
 .dockerignore
 docker-bake.hcl
-railway.toml
-render.yaml
+
