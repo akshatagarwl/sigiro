@@ -147,10 +147,12 @@ cd "$REPO_ROOT"
 source scripts/lima-cross-env.sh
 ulimit -n 65536
 # Use ccache for C++ compilation (DuckDB) to speed up rebuilds
-export CC="ccache ${CC_aarch64_unknown_linux_gnu}"
-export CXX="ccache ${CXX_aarch64_unknown_linux_gnu}"
-export CC_aarch64_unknown_linux_gnu="$CC"
-export CXX_aarch64_unknown_linux_gnu="$CXX"
+if command -v ccache >/dev/null 2>&1; then
+  export CC="ccache ${CC_aarch64_unknown_linux_gnu}"
+  export CXX="ccache ${CXX_aarch64_unknown_linux_gnu}"
+  export CC_aarch64_unknown_linux_gnu="$CC"
+  export CXX_aarch64_unknown_linux_gnu="$CXX"
+fi
 cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro 2>&1 | tail -10
 
 # ---------------------------------------------------------------------------
