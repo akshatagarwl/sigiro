@@ -35,25 +35,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
     cargo build --release --bin sigiro && \
     cp /build/target/release/sigiro /build/sigiro
 
-# Stage 4: build spiced from submodule (duckdb connector for federation central)
-FROM deps AS spiced-builder
-ARG TARGETARCH
-RUN apt-get update && apt-get install -y make cmake clang lld protobuf-compiler && rm -rf /var/lib/apt/lists/*
-COPY scripts/build-spiced.sh ./scripts/build-spiced.sh
-COPY third_party/spiceai/ ./third_party/spiceai/
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
-    --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-shared,sharing=shared \
-    --mount=type=cache,target=/build/target,id=cargo-target-${TARGETARCH} \
-    --mount=type=cache,target=/build/third_party/spiceai/target,id=spice-target-shared,sharing=shared \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true \
-    chmod +x scripts/build-spiced.sh && \
-    SPICED_INSTALL=/build SPICED_FEATURES=duckdb,alloc-snmalloc scripts/build-spiced.sh
-
-# Stage 5: minimal runtime
+# Stage 4: minimal runtime
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/sigiro /usr/local/bin/sigiro
-COPY --from=spiced-builder /build/spiced /usr/local/bin/spiced
 EXPOSE 4317 4318 9999
 ENV SIGIRO_DATA_DIR=/var/lib/sigiro
 CMD ["sigiro", "serve"]
