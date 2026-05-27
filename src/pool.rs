@@ -240,6 +240,9 @@ impl ProjectPool {
         conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
             .context("failed to set DuckDB memory limit")?;
 
+        conn.execute_batch("CREATE SCHEMA IF NOT EXISTS lake;")
+            .context("failed to create lake schema for federation")?;
+
         crate::schema::create_tables(&conn, Self::prefix())?;
 
         Ok(Arc::new(Mutex::new(conn)))

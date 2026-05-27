@@ -18,7 +18,10 @@ pub fn start_quack_server(conn: &Connection, port: u16, token: &str) -> Result<Q
     }
 
     let uri = format!("quack:0.0.0.0:{}", port);
-    let sql = format!("SELECT * FROM quack_serve('{}', token='{}');", uri, token);
+    let sql = format!(
+        "SELECT * FROM quack_serve('{}', token='{}', allow_other_hostname => true);",
+        uri, token
+    );
     let mut stmt = conn
         .prepare(&sql)
         .context("failed to prepare quack_serve")?;
