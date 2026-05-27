@@ -146,13 +146,24 @@ echo "=== Cross-compiling sigiro for aarch64 ==="
 cd "$REPO_ROOT"
 source scripts/lima-cross-env.sh
 ulimit -n 65536
-# Use ccache for C++ compilation (DuckDB) to speed up rebuilds
-if command -v ccache >/dev/null 2>&1; then
-  export CC="ccache ${CC_aarch64_unknown_linux_gnu}"
-  export CXX="ccache ${CXX_aarch64_unknown_linux_gnu}"
-  export CC_aarch64_unknown_linux_gnu="$CC"
-  export CXX_aarch64_unknown_linux_gnu="$CXX"
+# ccache is required for DuckDB C++ compilation — without it, every rebuild
+# recompiles 500+ C++ files from scratch (~8-10 minutes).
+if ! command -v ccache >/dev/null 2>&1; then
+  echo "============================================================"
+  echo "ERROR: ccache is required but not installed."
+  echo ""
+  echo "DuckDB's C++ compilation takes ~8-10 minutes without ccache."
+  echo "Install it now:"
+  echo "  macOS:   brew install ccache"
+  echo "  Debian:  apt-get install ccache"
+  echo "  Fedora:  dnf install ccache"
+  echo "============================================================"
+  exit 1
 fi
+export CC="ccache ${CC_aarch64_unknown_linux_gnu}"
+export CXX="ccache ${CXX_aarch64_unknown_linux_gnu}"
+export CC_aarch64_unknown_linux_gnu="$CC"
+export CXX_aarch64_unknown_linux_gnu="$CXX"
 cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro 2>&1 | tail -10
 
 # ---------------------------------------------------------------------------
