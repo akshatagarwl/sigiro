@@ -243,6 +243,15 @@ impl ProjectPool {
         conn.execute_batch("CREATE SCHEMA IF NOT EXISTS lake;")
             .context("failed to create lake schema for federation")?;
 
+        // Attach DuckLake catalog so the quack server serves actual project data.
+        // Central nodes don't have local project data (they federate queries),
+        // but collectors need their DuckLake catalog attached for remote queries.
+        if let Ok(Some(config)) = crate::storage::load_config() {
+            let project_dir = self.data_dir.join("default");
+            crate::storage::init_distributed(&conn, &config, &project_dir)
+                .context("failed to init DuckLake for federation connection")?;
+        }
+
         crate::schema::create_tables(&conn, Self::prefix())?;
 
         Ok(Arc::new(Mutex::new(conn)))

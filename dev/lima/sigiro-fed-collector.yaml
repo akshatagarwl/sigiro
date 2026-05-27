@@ -40,8 +40,29 @@ provision:
     apt-get update
     apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git bpfcc-tools linux-headers-generic
 
-    # Install k3s agent (waits for server, then joins)
-    curl -sfL https://get.k3s.io | K3S_URL="https://${K3S_SERVER_IP}:6443" K3S_KUBECONFIG_MODE="644" K3S_AGENT_TOKEN="${K3S_AGENT_TOKEN}" sh - || true
+    # Wait for k3s server to be reachable before joining
+    for i in $(seq 1 60); do
+      if curl -sfk "https://${K3S_SERVER_IP}:6443/ping" >/dev/null 2>&1; then
+        echo "k3s server is reachable"
+        break
+      fi
+      echo "Waiting for k3s server at ${K3S_SERVER_IP}:6443... ($i/60)"
+      sleep 5
+    done
+
+    # Install k3s agent and join the cluster
+    curl -sfL https://get.k3s.io | \
+      K3S_URL="https://${K3S_SERVER_IP}:6443" \
+      K3S_KUBECONFIG_MODE="644" \
+      K3S_AGENT_TOKEN="${K3S_AGENT_TOKEN}" \
+      sh -
+
+    # Verify k3s agent is running
+    until systemctl is-active --quiet k3s-agent; do
+      echo "Waiting for k3s-agent to start..."
+      sleep 2
+    done
+    echo "k3s agent joined successfully"
 
     # Create sigiro user and data directory
     useradd -m -s /bin/bash sigiro || true
@@ -62,8 +83,9 @@ provision:
     export SIGIRO_OTLP_HTTP_PORT=4318
     export SIGIRO_CENTRAL_URL=http://fed-central:9999
     export SIGIRO_API_KEY=sigiro_dev_test
+    export SIGIRO_EBPF=true
 
     # Run as federation collector with eBPF
-    ./sigiro serve --ebpf 2>&1 | tee /tmp/sigiro-collector.log
+    ./sigiro serve 2>&1 | tee /tmp/sigiro-collector.log
     RUNCOLLECTOR
     chmod +x /home/akshat.guest/run-collector.sh

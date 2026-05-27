@@ -50,9 +50,13 @@ spec:
         - name: sigiro-collector
           image: sigiro-collector:local
           imagePullPolicy: Never
-          command: ["sigiro"]
+          command: ["/bin/sh"]
           args:
-            - serve
+            - "-c"
+            - |
+              export SIGIRO_ENDPOINT="http://$(ip -4 route get 1 | awk '{print $7; exit}'):9999"
+              export SIGIRO_HOSTNAME="$(hostname)"
+              exec sigiro serve
           securityContext:
             privileged: true
           env:
@@ -70,9 +74,16 @@ spec:
               value: "true"
             - name: SIGIRO_CENTRAL_URL
               value: http://sigiro-central.sigiro-fed.svc:9999
+            - name: SIGIRO_QUACK_PORT
+              value: "5432"
+            - name: SIGIRO_QUACK_TOKEN
+              value: fed-token-central
           ports:
             - containerPort: 4318
               hostPort: 4318
+              protocol: TCP
+            - containerPort: 5432
+              hostPort: 5432
               protocol: TCP
           volumeMounts:
             - name: bpffs

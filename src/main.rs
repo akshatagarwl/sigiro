@@ -372,22 +372,20 @@ async fn run_serve() -> Result<()> {
         }
     }
 
-    // Federation: central node mode
-    if central {
-        tracing::info!("running as central federation node");
-
-        let quack_port = sigiro::config::QUACK_PORT
-            .value()
-            .expect("SIGIRO_QUACK_PORT must be set for central federation node");
-        let quack_token = sigiro::config::QUACK_TOKEN
-            .value()
-            .expect("SIGIRO_QUACK_TOKEN must be set for central federation node");
-
+    // Federation: start quack server on any node that has quack config.
+    // Central nodes use it to serve federated catalog metadata;
+    // collectors use it to expose their local DuckLake data for remote ATTACH.
+    if let (Ok(quack_port), Ok(quack_token)) = (
+        sigiro::config::QUACK_PORT.value(),
+        sigiro::config::QUACK_TOKEN.value(),
+    ) {
+        if central {
+            tracing::info!("running as central federation node");
+        }
         let federation_conn = pool.create_federation_connection()?;
         let conn = federation_conn.lock();
-
         sigiro::quack_federation::start_quack_server(&conn, quack_port, &quack_token)?;
-        tracing::info!("quack federation server started on port {}", quack_port);
+        tracing::info!("quack server started on port {}", quack_port);
     }
 
     // Federation: collector self-registration with central node

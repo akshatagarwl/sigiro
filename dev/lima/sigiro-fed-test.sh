@@ -212,6 +212,28 @@ if ! kubectl -n sigiro-fed wait --for=condition=ready pod -l app=sigiro-collecto
   exit 1
 fi
 
+# Verify k3s cluster has 3 nodes
+echo "=== Verifying k3s cluster nodes ==="
+for i in $(seq 1 30); do
+  NODE_COUNT=$(kubectl get nodes -o json 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)['items']))" || echo 0)
+  if [[ "$NODE_COUNT" -ge 3 ]]; then
+    echo "OK: $NODE_COUNT nodes in cluster"
+    kubectl get nodes -o wide
+    break
+  fi
+  echo "Waiting for collector nodes to join... ($i/30, current: $NODE_COUNT nodes)"
+  sleep 5
+done
+if [[ "${NODE_COUNT:-0}" -lt 3 ]]; then
+  echo "ERROR: Expected 3 k8s nodes, found ${NODE_COUNT:-0}"
+  kubectl get nodes -o wide || true
+  echo "--- collector-1 logs ---"
+  vm_ssh "$FED_COLLECTOR_1" "sudo journalctl -u k3s-agent --no-pager -n 20" || true
+  echo "--- collector-2 logs ---"
+  vm_ssh "$FED_COLLECTOR_2" "sudo journalctl -u k3s-agent --no-pager -n 20" || true
+  exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Step 9 — wait for demo services
 # ---------------------------------------------------------------------------
@@ -256,8 +278,23 @@ INVESTIGATE_RESP=$(kubectl exec -n sigiro-fed "$CENTRAL_POD" -- \
   curl -s -X POST "http://localhost:9999/v1/investigate" \
     -H "Authorization: Bearer sigiro_dev_test" \
     -H "Content-Type: application/json" \
-    -d "{\"service\":\"sigiro\",\"from\":$SINCE,\"now\":$NOW}")
+    -d "{\"service\":\"frontend\",\"from\":$SINCE,\"to\":$NOW}")
 echo "$INVESTIGATE_RESP" | jq . || echo "Raw: $INVESTIGATE_RESP"
+
+# Run federated query
+echo "--- /v1/query (federated) ---"
+QUERY_RESP=$(kubectl exec -n sigiro-fed "$CENTRAL_POD" -- \
+  curl -s -X POST "http://localhost:9999/v1/query" \
+    -H "Authorization: Bearer sigiro_dev_test" \
+    -H "Content-Type: application/json" \
+    -d '{"sql":"SELECT service_name, count(*) as span_count FROM lake.sigiro_spans GROUP BY service_name ORDER BY span_count DESC LIMIT 10"}')
+QUERY_COUNT=$(echo "$QUERY_RESP" | jq 'length' || echo 0)
+if [[ "$QUERY_COUNT" -eq 0 ]]; then
+  echo "WARNING: Federated query returned no rows"
+else
+  echo "OK: Federated query returned $QUERY_COUNT rows"
+fi
+echo "$QUERY_RESP" | jq . || echo "Raw: $QUERY_RESP"
 
 # ---------------------------------------------------------------------------
 # Summary
