@@ -11,8 +11,11 @@ pub struct QuackServer {
 
 /// Start quack server on `conn` at `port` with `token` auth.
 pub fn start_quack_server(conn: &Connection, port: u16, token: &str) -> Result<QuackServer> {
-    conn.execute_batch("LOAD quack;")
-        .context("failed to LOAD quack extension")?;
+    // Try loading quack directly (may be bundled); if not, install from nightly.
+    if conn.execute_batch("LOAD quack;").is_err() {
+        conn.execute_batch("INSTALL quack FROM core_nightly; LOAD quack;")
+            .context("failed to INSTALL or LOAD quack extension")?;
+    }
 
     let uri = format!("quack:0.0.0.0:{}", port);
     let sql = format!("SELECT * FROM quack_serve('{}', token='{}');", uri, token);
@@ -92,6 +95,10 @@ fn query_single_worker(
     let quack_uri = format!("quack:{}:{}", host, quack_port);
 
     let conn = Connection::open_in_memory()?;
+    if conn.execute_batch("LOAD quack;").is_err() {
+        conn.execute_batch("INSTALL quack FROM core_nightly; LOAD quack;")
+            .context("failed to INSTALL or LOAD quack extension for federated query")?;
+    }
     conn.execute_batch(&format!("CREATE SECRET (TYPE quack, TOKEN '{}');", token))?;
     conn.execute_batch(&format!("ATTACH '{}' AS remote;", quack_uri))?;
 

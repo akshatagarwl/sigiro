@@ -67,6 +67,8 @@ spec:
               value: "9999"
             - name: SIGIRO_OTLP_HTTP_PORT
               value: "4318"
+            - name: SIGIRO_CATALOG_URL
+              value: postgresql://sigiro:sigiro_pass@postgresql.sigiro-fed.svc:5432/sigiro_fed
           ports:
             - containerPort: 4318
               hostPort: 4318
