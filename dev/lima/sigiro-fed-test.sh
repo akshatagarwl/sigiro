@@ -160,10 +160,10 @@ if ! command -v ccache >/dev/null 2>&1; then
   echo "============================================================"
   exit 1
 fi
-export CC="ccache ${CC_aarch64_unknown_linux_gnu}"
-export CXX="ccache ${CXX_aarch64_unknown_linux_gnu}"
-export CC_aarch64_unknown_linux_gnu="$CC"
-export CXX_aarch64_unknown_linux_gnu="$CXX"
+# Only set target-specific vars — global CC/CXX breaks build scripts
+# (e.g. ring) that compile for the host during the build.
+export CC_aarch64_unknown_linux_gnu="ccache ${CC_aarch64_unknown_linux_gnu}"
+export CXX_aarch64_unknown_linux_gnu="ccache ${CXX_aarch64_unknown_linux_gnu}"
 cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro 2>&1 | tail -10
 
 # ---------------------------------------------------------------------------
