@@ -20,7 +20,6 @@ spec:
           command: ["sigiro"]
           args:
             - serve
-            - --no-ebpf
           env:
             - name: SIGIRO_CENTRAL
               value: "true"

@@ -53,9 +53,6 @@ spec:
           command: ["sigiro"]
           args:
             - serve
-            - --ebpf
-            - --central-url
-            - http://sigiro-central.sigiro-fed.svc:9999
           securityContext:
             privileged: true
           env:
@@ -69,6 +66,10 @@ spec:
               value: "4318"
             - name: SIGIRO_CATALOG_URL
               value: postgresql://sigiro:sigiro_pass@postgresql.sigiro-fed.svc:5432/sigiro_fed
+            - name: SIGIRO_EBPF
+              value: "true"
+            - name: SIGIRO_CENTRAL_URL
+              value: http://sigiro-central.sigiro-fed.svc:9999
           ports:
             - containerPort: 4318
               hostPort: 4318
