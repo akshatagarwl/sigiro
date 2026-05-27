@@ -21,7 +21,9 @@ FED_COLLECTOR_2="fed-collector-2"
 vm_ssh() {
   local vm="$1"
   shift
-  limactl shell "$vm" -- bash -lc "$*"
+  # Redirect stdin from /dev/null so limactl shell doesn't consume the
+  # parent script's stdin when called inside $(...) command substitutions.
+  limactl shell "$vm" -- bash -lc "$*" < /dev/null
 }
 vm_cp() { limactl copy "$1" "$2"; }
 
@@ -142,9 +144,14 @@ echo "Collector-2: $FED_COLLECTOR_2 @ $COLLECTOR_2_IP"
 # ---------------------------------------------------------------------------
 echo "=== Cross-compiling sigiro for aarch64 ==="
 cd "$REPO_ROOT"
-export AR_aarch64_unknown_linux_gnu=/opt/homebrew/opt/llvm/bin/llvm-ar
+source scripts/lima-cross-env.sh
 ulimit -n 65536
-cargo zigbuild --release --target aarch64-unknown-linux-gnu 2>&1 | tail -10
+# Use ccache for C++ compilation (DuckDB) to speed up rebuilds
+export CC="ccache ${CC_aarch64_unknown_linux_gnu}"
+export CXX="ccache ${CXX_aarch64_unknown_linux_gnu}"
+export CC_aarch64_unknown_linux_gnu="$CC"
+export CXX_aarch64_unknown_linux_gnu="$CXX"
+cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro 2>&1 | tail -10
 
 # ---------------------------------------------------------------------------
 # Step 6 — copy binary to all VMs

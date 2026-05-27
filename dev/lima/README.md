@@ -5,19 +5,23 @@ Lima VM configs for local E2E testing on macOS (Apple Silicon).
 ## Prerequisites
 
 - [Lima](https://lima-vm.io/) installed (`brew install lima`)
-- [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) for cross-compilation (`brew install zig && cargo install cargo-zigbuild`)
-- LLVM's `llvm-ar` for cross-compile archiving (`brew install llvm`)
+- GNU aarch64-linux cross-compiler (`brew install aarch64-elf-gcc` or `brew install messense/homebrew-macos-cross-toolchains/aarch64-unknown-linux-gnu`)
 
 ## Cross-Compilation Setup
 
 Lima VMs run Linux aarch64. Cross-compile from macOS arm64:
 
 ```bash
-# Required: zig 0.16.0's built-in ar is broken, use homebrew llvm-ar
-export AR_aarch64_unknown_linux_gnu=/opt/homebrew/opt/llvm/bin/llvm-ar
+source scripts/lima-cross-env.sh
 ulimit -n 65536
 
-cargo zigbuild --release --target aarch64-unknown-linux-gnu
+# Optional: ccache for faster DuckDB C++ rebuilds
+export CC="ccache ${CC_aarch64_unknown_linux_gnu}"
+export CXX="ccache ${CXX_aarch64_unknown_linux_gnu}"
+export CC_aarch64_unknown_linux_gnu="$CC"
+export CXX_aarch64_unknown_linux_gnu="$CXX"
+
+cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro
 ```
 
 See `.cargo/config.toml` for details on the cross-compile workaround.
@@ -39,9 +43,9 @@ See `.cargo/config.toml` for details on the cross-compile workaround.
 limactl start --name=sigiro-local dev/lima/sigiro-local.yaml
 
 # 2. Cross-compile and copy binary
-ulimit -n 65536 && \
-  AR_aarch64_unknown_linux_gnu=/opt/homebrew/opt/llvm/bin/llvm-ar \
-  cargo zigbuild --release --target aarch64-unknown-linux-gnu
+source scripts/lima-cross-env.sh
+ulimit -n 65536
+cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro
 limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-local:/home/akshat.guest/sigiro-latest
 
 # 3. Run E2E test
