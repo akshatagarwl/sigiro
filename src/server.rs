@@ -375,13 +375,44 @@ fn escape_sql_string(s: &str) -> String {
     s.replace("'", "''")
 }
 
+/// Filter out the current node from the worker list to avoid forwarding loops.
+fn exclude_self_workers(
+    workers: Vec<crate::federation::WorkerInfo>,
+) -> Vec<crate::federation::WorkerInfo> {
+    let advertise_endpoint = crate::config::ADVERTISE_ENDPOINT.value().ok();
+    let endpoint = crate::config::ENDPOINT.value().ok();
+    workers
+        .into_iter()
+        .filter(|w| {
+            if w.id.is_empty() {
+                return false;
+            }
+            if let Some(ref adv) = advertise_endpoint {
+                if w.endpoint == *adv {
+                    return false;
+                }
+            }
+            if let Some(ref ep) = endpoint {
+                if w.endpoint == *ep {
+                    return false;
+                }
+            }
+            // Also exclude obvious localhost self-references
+            if w.endpoint.contains("://localhost:") || w.endpoint.contains("://127.0.0.1:") {
+                return false;
+            }
+            true
+        })
+        .collect()
+}
+
 /// Execute SQL against DuckDB (local or federated).
 async fn execute_sql(
     state: &AppState,
     auth: &AuthContext,
     sql: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let workers = federation::list_workers(&state.admin_conn.lock())?;
+    let workers = exclude_self_workers(federation::list_workers(&state.admin_conn.lock())?);
     if !workers.is_empty() {
         let quack_port = crate::config::QUACK_PORT
             .value()
@@ -389,15 +420,16 @@ async fn execute_sql(
         let quack_token = crate::config::QUACK_TOKEN
             .value()
             .expect("SIGIRO_QUACK_TOKEN must be set");
-        let conn_raw = project_conn(state, auth)
-            .map_err(|e: axum_anyhow::ApiError| anyhow::anyhow!("{:?}", e))?;
+        // Federated queries don't need a local project connection;
+        // each worker is queried via HTTP over the network.
         let workers_clone = workers.to_vec();
         let sql_clone = sql.to_string();
         let result = tokio::task::spawn_blocking(move || {
-            let conn_guard = conn_raw.lock();
-            let conn_ref: &duckdb::Connection = &conn_guard;
+            // dummy connection to satisfy the signature (not actually used)
+            let dummy_conn = duckdb::Connection::open_in_memory()
+                .map_err(|e| anyhow::anyhow!("failed to open dummy connection: {e}"))?;
             crate::quack_federation::blocking_federated_query(
-                conn_ref,
+                &dummy_conn,
                 &workers_clone,
                 quack_port,
                 &quack_token,
@@ -407,7 +439,60 @@ async fn execute_sql(
         .await??;
         return Ok(result);
     }
-    Ok(vec![])
+
+    // No federation workers — execute locally against the project connection.
+    let conn_raw =
+        project_conn(state, auth).map_err(|e: axum_anyhow::ApiError| anyhow::anyhow!("{:?}", e))?;
+    let sql_clone = sql.to_string();
+    tokio::task::spawn_blocking(move || {
+        let conn_guard = conn_raw.lock();
+        let conn_ref: &duckdb::Connection = &conn_guard;
+        let mut stmt = conn_ref
+            .prepare(&sql_clone)
+            .map_err(|e| anyhow::anyhow!("failed to prepare query: {e}"))?;
+        let _dummy = stmt
+            .query([])
+            .map_err(|e| anyhow::anyhow!("failed to execute query: {e}"))?;
+        drop(_dummy);
+        let column_count = stmt.column_count();
+        let column_names: Vec<String> = (0..column_count)
+            .map(|i| {
+                stmt.column_name(i)
+                    .map_or("?".to_string(), std::string::ToString::to_string)
+            })
+            .collect();
+        let mut rows = stmt.query([])?;
+        let mut results = Vec::new();
+        while let Ok(Some(row)) = rows.next() {
+            let mut obj = serde_json::Map::new();
+            for (i, name) in column_names.iter().enumerate() {
+                let val = row
+                    .get_ref(i)
+                    .map_err(|e| anyhow::anyhow!("column read failed: {e}"))?;
+                obj.insert(name.clone(), duckdb_value_to_json(val));
+            }
+            results.push(serde_json::Value::Object(obj));
+        }
+        Ok(results)
+    })
+    .await?
+}
+
+fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
+    use duckdb::types::ValueRef;
+    match val {
+        ValueRef::Null => serde_json::Value::Null,
+        ValueRef::Boolean(b) => serde_json::Value::Bool(b),
+        ValueRef::TinyInt(b) => serde_json::json!(b),
+        ValueRef::SmallInt(b) => serde_json::json!(b),
+        ValueRef::Int(b) => serde_json::json!(b),
+        ValueRef::BigInt(b) => serde_json::json!(b),
+        ValueRef::Float(b) => serde_json::json!(b),
+        ValueRef::Double(b) => serde_json::json!(b),
+        ValueRef::Text(b) => serde_json::Value::String(String::from_utf8_lossy(b).to_string()),
+        ValueRef::Blob(b) => serde_json::Value::String(format!("[blob {} bytes]", b.len())),
+        _ => serde_json::Value::String(format!("{:?}", val)),
+    }
 }
 
 #[utoipa::path(
@@ -828,7 +913,72 @@ async fn investigate_handler(
         ));
     }
 
-    // This gives a clear 404 instead of "failed to get read connection" when no data is ingested.
+    let workers = exclude_self_workers(
+        federation::list_workers(&state.admin_conn.lock())
+            .context_internal("Investigate", "failed to list workers")?,
+    );
+
+    if !workers.is_empty() {
+        // Federated investigate: forward to all workers and merge results.
+        let api_key = crate::config::API_KEY
+            .value()
+            .context_internal("Investigate", "SIGIRO_API_KEY not set")?;
+        let mut merged: std::collections::BTreeMap<String, investigate::InvestigationBlock> =
+            std::collections::BTreeMap::new();
+
+        for worker in &workers {
+            let url = format!("{}/v1/investigate", worker.endpoint);
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .context_internal("Investigate", "failed to build HTTP client")?;
+            let response = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .json(&req)
+                .send()
+                .await
+                .with_context(|| format!("HTTP request failed for worker {}", worker.id))
+                .context_internal("Investigate", "worker request failed")?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                tracing::warn!(worker_id=%worker.id, status=%status, text=%text, "worker investigate failed");
+                continue;
+            }
+
+            let blocks: std::collections::BTreeMap<String, investigate::InvestigationBlock> =
+                response
+                    .json()
+                    .await
+                    .with_context(|| format!("failed to parse JSON from worker {}", worker.id))
+                    .context_internal("Investigate", "worker response parse failed")?;
+
+            for (service, block) in blocks {
+                match merged.entry(service) {
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        e.insert(block);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut e) => {
+                        merge_investigation_blocks(e.get_mut(), block);
+                    }
+                }
+            }
+        }
+
+        if merged.is_empty() {
+            return Err(axum_anyhow::not_found(
+                "No Data Found",
+                "No investigation results from any worker.",
+            ));
+        }
+
+        return Ok(Json(merged));
+    }
+
+    // Local investigate (no workers).
     let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
     let project_data_path = data_dir.join(&auth.project_id);
     if !project_data_path.exists()
@@ -849,6 +999,119 @@ async fn investigate_handler(
     let blocks = investigate::investigate(&conn, &req, ProjectPool::prefix())
         .context_internal("Investigate", "investigation failed")?;
     Ok(Json(blocks))
+}
+
+/// Merge `other` into `base` for the same service.
+fn merge_investigation_blocks(
+    base: &mut investigate::InvestigationBlock,
+    other: investigate::InvestigationBlock,
+) {
+    // Merge truncation counts.
+    base.truncation.spans_total += other.truncation.spans_total;
+    base.truncation.spans_returned += other.truncation.spans_returned;
+    base.truncation.logs_total += other.truncation.logs_total;
+    base.truncation.logs_returned += other.truncation.logs_returned;
+    base.truncation.error_traces_total += other.truncation.error_traces_total;
+    base.truncation.error_traces_returned += other.truncation.error_traces_returned;
+    base.truncation.linked_spans_total += other.truncation.linked_spans_total;
+    base.truncation.linked_spans_returned += other.truncation.linked_spans_returned;
+
+    // Merge coverage.
+    base.coverage.has_spans |= other.coverage.has_spans;
+    base.coverage.has_logs |= other.coverage.has_logs;
+    base.coverage.has_metrics |= other.coverage.has_metrics;
+    base.coverage.has_profiles |= other.coverage.has_profiles;
+    base.coverage.span_count += other.coverage.span_count;
+    base.coverage.log_template_count += other.coverage.log_template_count;
+    base.coverage.metric_series_count += other.coverage.metric_series_count;
+    base.coverage.profile_sample_count += other.coverage.profile_sample_count;
+
+    // Merge context pod_count (take max since it's instance count per node).
+    base.context.pod_count = base.context.pod_count.max(other.context.pod_count);
+    base.context.dependencies.extend(other.context.dependencies);
+    base.context.dependents.extend(other.context.dependents);
+    base.context
+        .dependencies
+        .sort_by(|a, b| a.service_name.cmp(&b.service_name));
+    base.context
+        .dependencies
+        .dedup_by(|a, b| a.service_name == b.service_name);
+    base.context
+        .dependents
+        .sort_by(|a, b| a.service_name.cmp(&b.service_name));
+    base.context
+        .dependents
+        .dedup_by(|a, b| a.service_name == b.service_name);
+
+    // Merge vectors.
+    base.events.extend(other.events);
+    // Deduplicate operation summaries by span_name, summing counts.
+    {
+        let mut op_map: std::collections::BTreeMap<String, investigate::OperationSummary> =
+            std::collections::BTreeMap::new();
+        for op in base.operation_summaries.drain(..) {
+            let key = op.span_name.clone();
+            op_map.insert(key, op);
+        }
+        for op in other.operation_summaries {
+            match op_map.entry(op.span_name.clone()) {
+                std::collections::btree_map::Entry::Vacant(e) => {
+                    e.insert(op);
+                }
+                std::collections::btree_map::Entry::Occupied(mut e) => {
+                    let existing = e.get_mut();
+                    existing.count += op.count;
+                    existing.error_count += op.error_count;
+                    existing.error_pct = if existing.count > 0 {
+                        (existing.error_count as f64 / existing.count as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    existing.duration_p50_ns =
+                        (existing.duration_p50_ns + op.duration_p50_ns) / 2.0;
+                    existing.duration_p95_ns = existing.duration_p95_ns.max(op.duration_p95_ns);
+                    existing.duration_p99_ns = existing.duration_p99_ns.max(op.duration_p99_ns);
+                    if existing.exemplar_error_trace_id.is_none() {
+                        existing.exemplar_error_trace_id = op.exemplar_error_trace_id;
+                    }
+                }
+            }
+        }
+        base.operation_summaries = op_map.into_values().collect();
+    }
+    base.metrics.extend(other.metrics);
+    base.traces.extend(other.traces);
+    base.traces.sort_by(|a, b| a.trace_id.cmp(&b.trace_id));
+    base.traces.dedup_by(|a, b| a.trace_id == b.trace_id);
+    base.timeline.extend(other.timeline);
+    base.log_patterns.extend(other.log_patterns);
+    base.logs.extend(other.logs);
+    base.linked_traces.extend(other.linked_traces);
+    base.linked_traces
+        .sort_by(|a, b| a.trace_id.cmp(&b.trace_id));
+    base.linked_traces.dedup_by(|a, b| a.trace_id == b.trace_id);
+    base.profiles.extend(other.profiles);
+
+    // Merge signals: keep the one that's available if the other isn't.
+    let mut signal_map: std::collections::BTreeMap<String, investigate::SignalCoverage> = base
+        .coverage
+        .signals
+        .drain(..)
+        .map(|s| (s.signal_type.clone(), s))
+        .collect();
+    for s in other.coverage.signals {
+        match signal_map.entry(s.signal_type.clone()) {
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(s);
+            }
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                if s.available && !e.get().available {
+                    e.insert(s);
+                }
+            }
+        }
+    }
+    base.coverage.signals = signal_map.into_values().collect();
 }
 
 // --- Admin endpoints ---

@@ -42,11 +42,12 @@ pub fn query_service_context(ctx: &QueryCtx) -> Result<ServiceContext> {
         "SELECT
         ANY_VALUE(resource_attributes::JSON->>'k8s.namespace.name') AS namespace,
         ANY_VALUE(resource_attributes::JSON->>'k8s.deployment.name') AS deployment,
-        count(DISTINCT service_instance_id) AS pod_count,
+        CASE WHEN count(*) = 0 THEN 0 WHEN count(DISTINCT service_instance_id) > 0 THEN count(DISTINCT service_instance_id) ELSE 1 END AS pod_count,
         min(timestamp)::VARCHAR AS first_seen,
         max(timestamp)::VARCHAR AS last_seen
     FROM {}sigiro_spans
-    WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+    WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+      AND span_name NOT LIKE '%TraceService/Export%'",
         ctx.prefix
     );
 
@@ -103,6 +104,7 @@ fn query_service_dependencies(
     let service_param = ctx.service;
     let other_param = ctx.service;
 
+    let export_filter = "AND s1.span_name NOT LIKE '%TraceService/Export%'";
     let sql_with_params = if is_dependency {
         format!(
             "SELECT
@@ -113,6 +115,7 @@ fn query_service_dependencies(
             JOIN {}sigiro_spans s2 ON s1.trace_id = s2.trace_id
             WHERE s1.service_name = ? AND s2.service_name != ?
               AND s1.span_kind IN (3, 4)
+              {export_filter}
               AND s1.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
             GROUP BY s2.service_name
             ORDER BY span_count DESC
@@ -129,6 +132,7 @@ fn query_service_dependencies(
             JOIN {}sigiro_spans s2 ON s1.trace_id = s2.trace_id
             WHERE s2.service_name = ? AND s1.service_name != ?
               AND s1.span_kind IN (3, 4)
+              {export_filter}
               AND s2.timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
             GROUP BY s1.service_name
             ORDER BY span_count DESC
@@ -272,7 +276,7 @@ pub fn query_derived_events(ctx: &QueryCtx) -> Result<Vec<DerivedEvent>> {
 // InvestigateRequest — API input (from_ts/to_ts now mandatory)
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, schemars::JsonSchema)]
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
 pub struct InvestigateRequest {
     pub service: Option<String>,
     pub services: Option<Vec<String>>,
@@ -601,7 +605,8 @@ fn count_span_stats(ctx: &QueryCtx) -> Result<(i64, i64)> {
                 "SELECT count(*) AS total,
                 count(DISTINCT CASE WHEN status_code = {} THEN trace_id END) AS error_count
          FROM {}sigiro_spans
-         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)",
+         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+           AND span_name NOT LIKE '%TraceService/Export%'",
                 StatusCode::Error.as_i32(),
                 ctx.prefix
             ),
@@ -648,6 +653,7 @@ fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
                    first(CASE WHEN status_code = {error_code} THEN trace_id END) AS exemplar_error_trace_id
             FROM {}sigiro_spans
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+              AND span_name NOT LIKE '%TraceService/Export%'
             GROUP BY span_name
         ),
         baseline AS (
@@ -657,6 +663,7 @@ fn query_operation_summaries(ctx: &QueryCtx) -> Result<Vec<OperationSummary>> {
                    approx_quantile(duration, 0.95) AS bl_p95
             FROM {}sigiro_spans
             WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+              AND span_name NOT LIKE '%TraceService/Export%'
             GROUP BY span_name
         )
         SELECT c.span_name, c.cnt, c.err_cnt, c.err_pct, c.p50, c.p95, c.p99, c.exemplar_error_trace_id,
@@ -743,6 +750,7 @@ fn query_full_spans(ctx: &QueryCtx, limit: i64) -> Result<Vec<Span>> {
             trace_state, scope_attributes
         FROM {}sigiro_spans
         WHERE service_name = ? AND timestamp BETWEEN make_timestamp(?) AND make_timestamp(?)
+          AND span_name NOT LIKE '%TraceService/Export%'
         ORDER BY CASE WHEN status_code = {error_code} THEN 0 ELSE 1 END, duration DESC
         LIMIT {limit}",
         ctx.prefix
