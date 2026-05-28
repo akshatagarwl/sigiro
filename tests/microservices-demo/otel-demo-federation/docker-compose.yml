@@ -1,0 +1,589 @@
+x-default-logging: &logging
+  driver: "json-file"
+  options:
+    max-size: "5m"
+    max-file: "2"
+
+networks:
+  default:
+    name: otel-demo-sigiro
+    driver: bridge
+
+services:
+  # ******************
+  # Sigiro Federation
+  # ******************
+  sigiro-central:
+    image: sigiro:local
+    container_name: sigiro-central
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    ports:
+      - "9999:9999"
+    environment:
+      - SIGIRO_DATA_DIR=/var/lib/sigiro
+      - SIGIRO_HTTP_PORT=9999
+      - SIGIRO_CENTRAL=true
+      - SIGIRO_CATALOG_URL=postgresql://postgres:changeit@postgres/sigiro_catalog?sslmode=disable
+      - SIGIRO_API_KEY=${SIGIRO_API_KEY}
+      - RUST_LOG=sigiro=info
+    depends_on:
+      - postgres
+    volumes:
+      - sigiro-central-data:/var/lib/sigiro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9999/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+    logging: *logging
+
+  sigiro-collector:
+    image: sigiro:local
+    container_name: sigiro-collector
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    ports:
+      - "4319:4319"
+    environment:
+      - SIGIRO_DATA_DIR=/var/lib/sigiro
+      - SIGIRO_HTTP_PORT=9998
+      - SIGIRO_OTLP_HTTP_PORT=4319
+      - SIGIRO_QUACK_PORT=15433
+      - SIGIRO_ENDPOINT=http://sigiro-collector:9998
+      - SIGIRO_CENTRAL_URL=http://sigiro-central:9999
+      - SIGIRO_API_KEY=${SIGIRO_API_KEY}
+      - RUST_LOG=sigiro=info
+    volumes:
+      - sigiro-collector-data:/var/lib/sigiro
+    depends_on:
+      sigiro-central:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9998/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+    logging: *logging
+
+  accounting:
+    image: otel/demo:2.2.0-accounting
+    container_name: accounting
+    deploy:
+      resources:
+        limits:
+          memory: 160M
+    environment:
+      - KAFKA_ADDR
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=low
+      - OTEL_SERVICE_NAME=accounting
+      - DB_CONNECTION_STRING=Host=${POSTGRES_HOST};Username=astronomy_user;Password=${POSTGRES_ASTRONOMY_PASSWORD};Database=astronomy_db
+      - OTEL_DOTNET_AUTO_TRACES_ENTITYFRAMEWORKCORE_INSTRUMENTATION_ENABLED=false
+    depends_on:
+      - otel-collector
+      - kafka
+    logging: *logging
+
+  ad:
+    image: otel/demo:2.2.0-ad
+    container_name: ad
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+    ports:
+      - "${AD_PORT}"
+    environment:
+      - AD_PORT
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=medium
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_SERVICE_NAME=ad
+    depends_on:
+      - otel-collector
+    logging: *logging
+
+  cart:
+    image: otel/demo:2.2.0-cart
+    container_name: cart
+    deploy:
+      resources:
+        limits:
+          memory: 160M
+    ports:
+      - "${CART_PORT}"
+    environment:
+      - CART_PORT
+      - VALKEY_ADDR
+      - OTEL_EXPORTER_OTLP_ENDPOINT
+      - OTEL_EXPORTER_OTLP_PROTOCOL
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=high
+      - OTEL_SERVICE_NAME=cart
+      - ASPNETCORE_URLS=http://*:${CART_PORT}
+    depends_on:
+      - valkey-cart
+      - otel-collector
+    logging: *logging
+
+  checkout:
+    image: otel/demo:2.2.0-checkout
+    container_name: checkout
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+    ports:
+      - "${CHECKOUT_PORT}"
+    environment:
+      - CHECKOUT_PORT
+      - CART_ADDR
+      - CURRENCY_ADDR
+      - EMAIL_ADDR
+      - PAYMENT_ADDR
+      - PRODUCT_CATALOG_ADDR
+      - SHIPPING_ADDR
+      - KAFKA_ADDR
+      - GOMEMLIMIT=16MiB
+      - OTEL_EXPORTER_OTLP_ENDPOINT
+      - OTEL_EXPORTER_OTLP_PROTOCOL
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=critical
+      - OTEL_SERVICE_NAME=checkout
+    depends_on:
+      - cart
+      - currency
+      - email
+      - payment
+      - product-catalog
+      - shipping
+      - otel-collector
+      - kafka
+    logging: *logging
+
+  currency:
+    image: otel/demo:2.2.0-currency
+    container_name: currency
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+    ports:
+      - "${CURRENCY_PORT}"
+    environment:
+      - CURRENCY_PORT
+      - IPV6_ENABLED
+      - VERSION=${IMAGE_VERSION}
+      - OTEL_EXPORTER_OTLP_ENDPOINT
+      - OTEL_EXPORTER_OTLP_PROTOCOL
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=high
+      - OTEL_SERVICE_NAME=currency
+    depends_on:
+      - otel-collector
+    logging: *logging
+
+  email:
+    image: otel/demo:2.2.0-email
+    container_name: email
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+    ports:
+      - "${EMAIL_PORT}"
+    environment:
+      - APP_ENV=production
+      - EMAIL_PORT
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=medium
+      - OTEL_SERVICE_NAME=email
+    depends_on:
+      - otel-collector
+    logging: *logging
+
+  fraud-detection:
+    image: otel/demo:2.2.0-fraud-detection
+    container_name: fraud-detection
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+    environment:
+      - KAFKA_ADDR
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_INSTRUMENTATION_KAFKA_EXPERIMENTAL_SPAN_ATTRIBUTES=true
+      - OTEL_INSTRUMENTATION_MESSAGING_EXPERIMENTAL_RECEIVE_TELEMETRY_ENABLED=true
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=low
+      - OTEL_SERVICE_NAME=fraud-detection
+    depends_on:
+      - otel-collector
+      - kafka
+    logging: *logging
+
+  frontend:
+    image: otel/demo:2.2.0-frontend
+    container_name: frontend
+    deploy:
+      resources:
+        limits:
+          memory: 250M
+    ports:
+      - "${FRONTEND_PORT}"
+    environment:
+      - PORT=${FRONTEND_PORT}
+      - FRONTEND_ADDR
+      - AD_ADDR
+      - CART_ADDR
+      - CHECKOUT_ADDR
+      - CURRENCY_ADDR
+      - PRODUCT_CATALOG_ADDR
+      - PRODUCT_REVIEWS_ADDR
+      - RECOMMENDATION_ADDR
+      - SHIPPING_ADDR
+      - OTEL_EXPORTER_OTLP_ENDPOINT
+      - OTEL_EXPORTER_OTLP_PROTOCOL
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=critical
+      - ENV_PLATFORM
+      - OTEL_SERVICE_NAME=frontend
+      - PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - WEB_OTEL_SERVICE_NAME=frontend-web
+      - OTEL_COLLECTOR_HOST
+    depends_on:
+      - ad
+      - cart
+      - checkout
+      - currency
+      - product-catalog
+      - quote
+      - recommendation
+      - shipping
+      - otel-collector
+      - image-provider
+    logging: *logging
+
+  frontend-proxy:
+    image: otel/demo:2.2.0-frontend-proxy
+    container_name: frontend-proxy
+    deploy:
+      resources:
+        limits:
+          memory: 65M
+    ports:
+      - "${ENVOY_PORT}:${ENVOY_PORT}"
+    environment:
+      - FRONTEND_PORT
+      - FRONTEND_HOST
+      - LOCUST_WEB_HOST
+      - LOCUST_WEB_PORT
+      - OTEL_COLLECTOR_HOST
+      - IMAGE_PROVIDER_HOST
+      - IMAGE_PROVIDER_PORT
+      - OTEL_COLLECTOR_PORT_GRPC
+      - OTEL_COLLECTOR_PORT_HTTP
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=critical
+      - OTEL_SERVICE_NAME=frontend-proxy
+      - ENVOY_PORT
+      - ENVOY_ADDR
+      - ENVOY_ADMIN_PORT
+      - FLAGD_HOST
+      - FLAGD_PORT
+      - FLAGD_UI_HOST
+      - FLAGD_UI_PORT
+      - GRAFANA_HOST
+      - GRAFANA_PORT
+      - JAEGER_HOST
+      - JAEGER_UI_PORT
+    depends_on:
+      - frontend
+      - load-generator
+    logging: *logging
+
+  image-provider:
+    image: otel/demo:2.2.0-image-provider
+    container_name: image-provider
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+    ports:
+      - "${IMAGE_PROVIDER_PORT}"
+    environment:
+      - IMAGE_PROVIDER_PORT
+      - OTEL_COLLECTOR_HOST
+      - OTEL_COLLECTOR_PORT_GRPC
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=low
+      - OTEL_SERVICE_NAME=image-provider
+    depends_on:
+      - otel-collector
+    logging: *logging
+
+  load-generator:
+    image: otel/demo:2.2.0-load-generator
+    container_name: load-generator
+    deploy:
+      resources:
+        limits:
+          memory: 1500M
+    ports:
+      - "${LOCUST_WEB_PORT}"
+    environment:
+      - LOCUST_WEB_PORT
+      - LOCUST_USERS
+      - LOCUST_HOST
+      - LOCUST_HEADLESS
+      - LOCUST_AUTOSTART
+      - LOCUST_BROWSER_TRAFFIC_ENABLED=false
+      - OTEL_EXPORTER_OTLP_ENDPOINT
+      - OTEL_EXPORTER_OTLP_PROTOCOL
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=low
+      - OTEL_SERVICE_NAME=load-generator
+      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+      - LOCUST_WEB_HOST=0.0.0.0
+    depends_on:
+      - frontend
+    logging: *logging
+
+  payment:
+    image: otel/demo:2.2.0-payment
+    container_name: payment
+    deploy:
+      resources:
+        limits:
+          memory: 140M
+    ports:
+      - "${PAYMENT_PORT}"
+    environment:
+      - IPV6_ENABLED
+      - PAYMENT_PORT
+      - OTEL_EXPORTER_OTLP_ENDPOINT
+      - OTEL_EXPORTER_OTLP_PROTOCOL
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=critical
+      - OTEL_SERVICE_NAME=payment
+    depends_on:
+      - otel-collector
+    logging: *logging
+
+  product-catalog:
+    image: product-catalog:sigiro
+    container_name: product-catalog
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+    ports:
+      - "${PRODUCT_CATALOG_PORT}"
+    environment:
+      - PRODUCT_CATALOG_PORT
+      - DB_CONNECTION_STRING=host=postgres user=astronomy_user password=astronomy_password dbname=astronomy_db sslmode=disable
+      - OTEL_EXPORTER_OTLP_ENDPOINT
+      - OTEL_EXPORTER_OTLP_PROTOCOL
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=high
+      - OTEL_SERVICE_NAME=product-catalog
+    depends_on:
+      - otel-collector
+      - postgres
+    logging: *logging
+
+  product-reviews:
+    image: otel/demo:2.2.0-product-reviews
+    container_name: product-reviews
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+    ports:
+      - "${PRODUCT_REVIEWS_PORT}"
+    environment:
+      - DB_CONNECTION_STRING=host=postgres user=astronomy_user password=astronomy_password dbname=astronomy_db sslmode=disable
+      - PRODUCT_CATALOG_ADDR
+      - OPENAI_API_KEY=dummy
+      - LLM_HOST=${LLM_HOST}
+      - LLM_PORT=${LLM_PORT}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_MODEL=${LLM_MODEL}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=medium
+      - OTEL_SERVICE_NAME=product-reviews
+      - OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+    depends_on:
+      - otel-collector
+      - postgres
+      - llm
+    logging: *logging
+
+  quote:
+    image: otel/demo:2.2.0-quote
+    container_name: quote
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+    ports:
+      - "${QUOTE_PORT}"
+    environment:
+      - QUOTE_PORT
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=medium
+      - OTEL_SERVICE_NAME=quote
+    depends_on:
+      - otel-collector
+    logging: *logging
+
+  recommendation:
+    image: otel/demo:2.2.0-recommendation
+    container_name: recommendation
+    deploy:
+      resources:
+        limits:
+          memory: 500M
+    ports:
+      - "${RECOMMENDATION_PORT}"
+    environment:
+      - RECOMMENDATION_PORT
+      - PRODUCT_CATALOG_ADDR
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=critical
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTEL_SERVICE_NAME=recommendation
+    depends_on:
+      - product-catalog
+      - otel-collector
+    logging: *logging
+
+  shipping:
+    image: otel/demo:2.2.0-shipping
+    container_name: shipping
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+    ports:
+      - "${SHIPPING_PORT}"
+    environment:
+      - SHIPPING_PORT
+      - QUOTE_ADDR
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=high
+      - OTEL_SERVICE_NAME=shipping
+    depends_on:
+      - quote
+      - otel-collector
+    logging: *logging
+
+  kafka:
+    image: otel/demo:2.2.0-kafka
+    container_name: kafka
+    deploy:
+      resources:
+        limits:
+          memory: 350M
+    environment:
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+    healthcheck:
+      test: nc -z kafka 9092
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    logging: *logging
+
+  flagd:
+    image: ${FLAGD_IMAGE}
+    container_name: flagd
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+    command: ["start", "--uri", "file:/etc/flagd/flags.json"]
+    volumes:
+      - ./flagd:/etc/flagd:ro
+    ports:
+      - "8013"
+    logging: *logging
+
+  llm:
+    image: otel/demo:2.2.0-llm
+    container_name: llm
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+    environment:
+      - FLAGD_HOST
+      - FLAGD_PORT
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES},service.criticality=medium
+      - OTEL_SERVICE_NAME=llm
+    ports:
+      - "${LLM_PORT}"
+    depends_on:
+      - otel-collector
+      - flagd
+    logging: *logging
+
+  valkey-cart:
+    image: valkey/valkey:9.0.2-alpine3.23
+    container_name: valkey-cart
+    deploy:
+      resources:
+        limits:
+          memory: 40M
+    logging: *logging
+
+  postgres:
+    image: postgres:17.8
+    container_name: postgres
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+    volumes:
+      - ./postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    logging: *logging
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.146.1
+    container_name: otel-collector
+    command: ["--config=/etc/otelcol-config.yml"]
+    volumes:
+      - ./otelcol-config.yml:/etc/otelcol-config.yml:ro
+    deploy:
+      resources:
+        limits:
+          memory: 250M
+    ports:
+      - "14317:4317"
+      - "14318:4318"
+    logging: *logging
+
+volumes:
+  sigiro-central-data:
+  sigiro-collector-data:

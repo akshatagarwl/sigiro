@@ -1,0 +1,9 @@
+# Minimal sigiro image for E2E testing
+# Build context: repo root (../../.. from this file)
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
+COPY sigiro /usr/local/bin/sigiro
+RUN chmod +x /usr/local/bin/sigiro
+EXPOSE 4317 4318 9999
+ENV SIGIRO_DATA_DIR=/var/lib/sigiro
+CMD ["sigiro", "serve"]
