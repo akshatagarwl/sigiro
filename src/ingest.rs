@@ -136,9 +136,12 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
 }
 
 const GZIP: &[u8] = b"gzip";
+const DEFLATE: &[u8] = b"deflate";
+const ZSTD: &[u8] = b"zstd";
 
 /// Decode request body according to Content-Encoding.
-/// Identity: pass through. Gzip: decompress. Anything else: 415.
+/// Supported: identity (none), gzip, deflate, zstd.
+/// Unsupported encodings return 415 Unsupported Media Type.
 fn decode_body(
     headers: &axum::http::HeaderMap,
     body: axum::body::Bytes,
@@ -146,19 +149,40 @@ fn decode_body(
     let Some(enc) = headers.get(axum::http::header::CONTENT_ENCODING) else {
         return Ok(body);
     };
-    if enc.as_bytes() == GZIP {
-        use std::io::Read;
-        let mut decoder = flate2::read::GzDecoder::new(&body[..]);
-        let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed).map_err(|e| {
-            tracing::warn!("gzip decompression failed: {}", e);
-            axum::http::StatusCode::BAD_REQUEST
-        })?;
-        return Ok(axum::body::Bytes::from(decompressed));
+    use std::io::Read;
+    let bytes = enc.as_bytes();
+    let mut decompressed = Vec::new();
+    if bytes == GZIP {
+        flate2::read::GzDecoder::new(&body[..])
+            .read_to_end(&mut decompressed)
+            .map_err(|e| {
+                tracing::warn!("gzip decompression failed: {}", e);
+                axum::http::StatusCode::BAD_REQUEST
+            })?;
+    } else if bytes == DEFLATE {
+        flate2::read::ZlibDecoder::new(&body[..])
+            .read_to_end(&mut decompressed)
+            .map_err(|e| {
+                tracing::warn!("deflate decompression failed: {}", e);
+                axum::http::StatusCode::BAD_REQUEST
+            })?;
+    } else if bytes == ZSTD {
+        zstd::stream::read::Decoder::new(&body[..])
+            .map_err(|e| {
+                tracing::warn!("zstd decoder init failed: {}", e);
+                axum::http::StatusCode::BAD_REQUEST
+            })?
+            .read_to_end(&mut decompressed)
+            .map_err(|e| {
+                tracing::warn!("zstd decompression failed: {}", e);
+                axum::http::StatusCode::BAD_REQUEST
+            })?;
+    } else {
+        let enc_str = std::str::from_utf8(bytes).unwrap_or("<invalid>");
+        tracing::warn!("unsupported Content-Encoding: {}", enc_str);
+        return Err(axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
-    let enc_str = std::str::from_utf8(enc.as_bytes()).unwrap_or("<invalid>");
-    tracing::warn!("unsupported Content-Encoding: {}", enc_str);
-    Err(axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
+    Ok(axum::body::Bytes::from(decompressed))
 }
 
 /// Run a CPU-bound transform on the tokio blocking pool.
