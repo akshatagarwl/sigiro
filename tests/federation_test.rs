@@ -128,6 +128,7 @@ fn test_worker(id: &str) -> federation::WorkerInfo {
         },
         missing_permissions: vec![],
         suggestions: vec![],
+        quack_port: 5432,
     }
 }
 

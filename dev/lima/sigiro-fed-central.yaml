@@ -1,4 +1,7 @@
-# Sigiro federation central node — k3s server + sigiro serve --central
+# Sigiro federation central node — bare-metal PostgreSQL + sigiro serve --central
+#
+# No k8s needed for this VM. PostgreSQL runs as systemd service,
+# and sigiro-central runs bare-metal on port 9999.
 #
 # Usage:
 #   limactl start --name=fed-central dev/lima/sigiro-fed-central.yaml
@@ -16,6 +19,16 @@ disk: "60GiB"
 ssh:
   localPort: 0
 
+# Port forwarding so other Lima VMs can reach central via host.lima.internal
+portForwards:
+- guestPort: 9999
+  hostIP: "0.0.0.0"
+- guestPort: 4318
+  hostIP: "0.0.0.0"
+- guestPort: 5433
+  hostPort: 15432
+  hostIP: "0.0.0.0"
+
 containerd:
   system: false
   user: false
@@ -32,20 +45,13 @@ provision:
     export DEBIAN_FRONTEND=noninteractive
 
     apt-get update
-    apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git gnupg lsb-release
+    apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git gnupg lsb-release postgresql postgresql-client
 
-    # Install k3s server (single-node, then workers will join)
-    curl -sfL https://get.k3s.io | K3S_KUBECONFIG_MODE="644" sh -s - server --cluster-init --tls-san 127.0.0.1 --tls-san localhost --tls-san host.lima.internal
-
-    # Wait for k3s to be active
-    sleep 10
-    until systemctl is-active --quiet k3s; do sleep 2; done
-
-    # Install PostgreSQL for federation catalog
-    apt-get install -y postgresql postgresql-client
+    # Start PostgreSQL for federation catalog
     systemctl enable --now postgresql
     su - postgres -c "createuser -s sigiro 2>/dev/null || true"
     su - postgres -c "createdb sigiro_fed 2>/dev/null || true"
+    su - postgres -c "psql -c \"ALTER USER sigiro WITH PASSWORD 'sigiro_pass';\" 2>/dev/null || true"
 
     # Create sigiro user and data dir
     useradd -m -s /bin/bash sigiro || true
@@ -59,18 +65,19 @@ provision:
     #!/bin/bash
     set -eux -o pipefail
 
-    export SIGIRO_DATA_DIR=/home/sigiro/sigiro-data
+    export SIGIRO_DATA_DIR=/home/akshat.guest/sigiro-data
     export SIGIRO_HTTP_PORT=9999
     export SIGIRO_OTLP_HTTP_PORT=4318
     export SIGIRO_GRPC_PORT=4317
     export SIGIRO_CENTRAL=true
-    export SIGIRO_CATALOG_URL=postgresql://sigiro@localhost/sigiro_fed
-    export SIGIRO_QUACK_PORT=5432
+    export SIGIRO_CATALOG_URL=postgresql://sigiro:sigiro_pass@localhost:5432/sigiro_fed
+    export SIGIRO_QUACK_PORT=5433
     export SIGIRO_QUACK_TOKEN=fed-token-central
     export SIGIRO_API_KEY=sigiro_dev_test
     export SIGIRO_HOST=0.0.0.0
 
+    mkdir -p /home/akshat.guest/sigiro-data
     cd /home/akshat.guest
-    ./sigiro serve --no-ebpf 2>&1 | tee /tmp/sigiro-central.log
+    exec ./sigiro serve
     RUNCENTRAL
     chmod +x /home/akshat.guest/run-central.sh

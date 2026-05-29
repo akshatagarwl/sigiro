@@ -424,9 +424,11 @@ impl ProjectFlusher {
     #[tracing::instrument(skip_all, fields(project_id = %project_id, rows = self.total_rows))]
     fn flush(&mut self, project_id: &str) -> Result<()> {
         if self.total_rows == 0 {
+            tracing::debug!(project_id, "flush skipped: no rows");
             return Ok(());
         }
 
+        tracing::info!(project_id, rows = self.total_rows, tables = ?self.buffers.keys().collect::<Vec<_>>(), "flushing batches");
         let conn = self.conn.lock();
 
         for (signal, buf) in &mut self.buffers {
@@ -447,7 +449,10 @@ impl ProjectFlusher {
                         .with_context(|| format!("failed to append {table} batch"))?;
                 }
             }
-            // Appender::drop flushes automatically
+            appender
+                .flush()
+                .with_context(|| format!("failed to flush {table} appender"))?;
+            // Appender::drop cleans up
         }
 
         // Flush new log templates to the lookup table
@@ -484,7 +489,12 @@ impl ProjectFlusher {
             }
         }
 
-        tracing::debug!(project_id, rows = self.total_rows, "flushed batches");
+        tracing::info!(project_id, rows = self.total_rows, "flushed batches");
+
+        // Force DuckLake to write Parquet files so data is visible to other connections.
+        if let Err(e) = conn.execute_batch("CHECKPOINT lake;") {
+            tracing::warn!(project_id, "DuckLake CHECKPOINT failed: {e}");
+        }
 
         self.total_rows = 0;
         self.last_flush = Instant::now();
@@ -513,6 +523,7 @@ async fn run_flusher(
 
             _ = interval.tick() => {
                 pool.touch_project(project_id);
+                tracing::debug!(project_id, "flusher timer tick");
                 if flusher.should_flush() {
                     if let Err(e) = flusher.flush(project_id) {
                         tracing::error!(project_id, "timer flush failed: {e:#}");
@@ -524,6 +535,7 @@ async fn run_flusher(
                 match msg {
                     Some(msg) => {
                         pool.touch_project(project_id);
+                        tracing::debug!(project_id, "flusher received message");
                         buffer_msg(&mut flusher, msg);
                         if flusher.should_flush() {
                             if let Err(e) = flusher.flush(project_id) {

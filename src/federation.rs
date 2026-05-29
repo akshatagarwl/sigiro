@@ -18,6 +18,9 @@ pub struct WorkerInfo {
     pub capabilities: WorkerCapabilities,
     pub missing_permissions: Vec<String>,
     pub suggestions: Vec<String>,
+    /// Quack port advertised by this worker for federated queries.
+    /// Defaults to 5432 if not provided.
+    pub quack_port: u16,
 }
 
 /// Platform information for a worker.
@@ -47,6 +50,7 @@ pub fn create_workers_table(conn: &Connection) -> Result<()> {
             platform_json TEXT NOT NULL DEFAULT '{}',
             ebpf_status TEXT NOT NULL DEFAULT 'unknown',
             capabilities_json TEXT NOT NULL DEFAULT '{}',
+            quack_port INTEGER NOT NULL DEFAULT 5432,
             registered_at TEXT DEFAULT (datetime('now')),
             last_heartbeat TEXT DEFAULT (datetime('now'))
         );",
@@ -65,8 +69,8 @@ pub fn register_worker(conn: &Connection, worker: &WorkerInfo) -> Result<()> {
 
     conn.execute(
         "INSERT OR REPLACE INTO federation_workers
-            (id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json, quack_port)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             worker.id,
             worker.endpoint,
@@ -75,6 +79,7 @@ pub fn register_worker(conn: &Connection, worker: &WorkerInfo) -> Result<()> {
             platform_json,
             worker.ebpf_status,
             capabilities_json,
+            worker.quack_port,
         ],
     )
     .context("failed to register worker")?;
@@ -106,7 +111,7 @@ pub fn deregister_worker(conn: &Connection, id: &str) -> Result<bool> {
 pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json
+            "SELECT id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json, quack_port
              FROM federation_workers",
         )
         .context("failed to prepare workers query")?;
@@ -121,14 +126,23 @@ pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, u16>(7)?,
             ))
         })
         .context("failed to query workers")?;
 
     let mut workers = Vec::new();
     for row in rows {
-        let (id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json) =
-            row.context("failed to read worker row")?;
+        let (
+            id,
+            endpoint,
+            catalog_path,
+            mode,
+            platform_json,
+            ebpf_status,
+            capabilities_json,
+            quack_port,
+        ) = row.context("failed to read worker row")?;
         let platform: PlatformInfo =
             serde_json::from_str(&platform_json).context("failed to parse platform JSON")?;
         let capabilities: WorkerCapabilities = serde_json::from_str(&capabilities_json)
@@ -143,6 +157,7 @@ pub fn list_workers(conn: &Connection) -> Result<Vec<WorkerInfo>> {
             capabilities,
             missing_permissions: Vec::new(),
             suggestions: Vec::new(),
+            quack_port,
         });
     }
     Ok(workers)
@@ -177,6 +192,7 @@ mod tests {
             },
             missing_permissions: vec![],
             suggestions: vec![],
+            quack_port: 5432,
         }
     }
 
@@ -185,8 +201,8 @@ mod tests {
         let capabilities_json = serde_json::to_string(&worker.capabilities).unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO federation_workers
-                (id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (id, endpoint, catalog_path, mode, platform_json, ebpf_status, capabilities_json, quack_port)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 worker.id,
                 worker.endpoint,
@@ -195,6 +211,7 @@ mod tests {
                 platform_json,
                 worker.ebpf_status,
                 capabilities_json,
+                worker.quack_port,
             ],
         )
         .unwrap();

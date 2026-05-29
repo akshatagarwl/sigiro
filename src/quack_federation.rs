@@ -85,72 +85,80 @@ pub async fn federated_query(
 
 fn query_single_worker(
     worker: &super::federation::WorkerInfo,
-    quack_port: u16,
-    token: &str,
+    _quack_port: u16,
+    _token: &str,
     sql: &str,
 ) -> Result<Vec<serde_json::Value>> {
-    let host = extract_host(&worker.endpoint).with_context(|| {
-        format!(
-            "failed to extract host from worker endpoint: {}",
-            worker.endpoint
-        )
-    })?;
-    let quack_uri = format!("quack:{}:{}", host, quack_port);
+    let url = format!("{}/v1/query", worker.endpoint);
+    tracing::info!(worker_id=%worker.id, url=%url, "federated query via HTTP");
 
-    let conn = Connection::open_in_memory()?;
+    let api_key = crate::config::API_KEY
+        .value()
+        .context("SIGIRO_API_KEY not set")?;
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("failed to build HTTP client")?;
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "text/plain")
+        .body(sql.to_string())
+        .send()
+        .with_context(|| format!("HTTP request failed for worker {}", worker.id))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().unwrap_or_default();
+        anyhow::bail!("worker {} returned HTTP {}: {}", worker.id, status, text);
+    }
+
+    let rows: Vec<serde_json::Value> = response
+        .json()
+        .with_context(|| format!("failed to parse JSON from worker {}", worker.id))?;
+
+    Ok(rows)
+}
+
+/// Start quack server on a dedicated connection and block forever (or until error).
+#[allow(clippy::needless_pass_by_value)] // conn is moved to keep the session alive
+///
+/// The quack server is tied to the DuckDB session lifetime — closing the connection
+/// shuts the server down.  This function keeps `conn` alive by sleeping after the
+/// `quack_serve` query completes.
+pub fn start_quack_server_blocking(conn: Connection, port: u16, token: &str) -> Result<()> {
     if conn.execute_batch("LOAD quack;").is_err() {
         conn.execute_batch("INSTALL quack FROM core_nightly; LOAD quack;")
-            .context("failed to INSTALL or LOAD quack extension for federated query")?;
+            .context("failed to INSTALL or LOAD quack extension")?;
     }
-    conn.execute_batch(&format!("CREATE SECRET (TYPE quack, TOKEN '{}');", token))?;
-    conn.execute_batch(&format!("ATTACH '{}' AS remote;", quack_uri))?;
 
-    let remote_sql = sql.replace("lake.", "remote.lake.");
-
+    let uri = format!("quack:0.0.0.0:{}", port);
+    let sql = format!(
+        "SELECT * FROM quack_serve('{}', token='{}', allow_other_hostname => true);",
+        uri, token
+    );
     let mut stmt = conn
-        .prepare(&remote_sql)
-        .with_context(|| format!("failed to prepare federated query for worker {}", worker.id))?;
+        .prepare(&sql)
+        .context("failed to prepare quack_serve")?;
+    let mut rows = stmt.query([]).context("failed to execute quack_serve")?;
 
-    let column_count = stmt.column_count();
-    let column_names: Vec<String> = (0..column_count)
-        .map(|i| {
-            stmt.column_name(i)
-                .map(std::string::ToString::to_string)
-                .unwrap_or_else(|_e| "?".to_string())
-        })
-        .collect();
+    let row = rows
+        .next()
+        .context("quack_serve returned no rows")?
+        .context("quack_serve failed")?;
+    let listen_url: String = row.get(1).context("failed to get listen_url")?;
 
-    let mut rows = stmt.query([])?;
-    let mut results = Vec::new();
-    while let Some(row) = rows.next().context("row iteration failed")? {
-        let row_json = row_to_json(&column_names, row)?;
-        results.push(row_json);
-    }
-    Ok(results)
-}
+    tracing::info!("quack server listening at {}", listen_url);
 
-fn row_to_json(column_names: &[String], row: &duckdb::Row) -> Result<serde_json::Value> {
-    let mut obj = serde_json::Map::new();
-    for (i, name) in column_names.iter().enumerate() {
-        let val = row.get_ref(i).context("column read failed")?;
-        obj.insert(name.clone(), duckdb_value_to_json(val));
-    }
-    Ok(serde_json::Value::Object(obj))
-}
+    // Consume any remaining rows so the query finishes cleanly.
+    while let Ok(Some(_)) = rows.next() {}
 
-fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
-    use duckdb::types::ValueRef;
-    match val {
-        ValueRef::Null => serde_json::Value::Null,
-        ValueRef::Boolean(b) => serde_json::Value::Bool(b),
-        ValueRef::TinyInt(b) => serde_json::json!(b),
-        ValueRef::SmallInt(b) => serde_json::json!(b),
-        ValueRef::Int(b) => serde_json::json!(b),
-        ValueRef::BigInt(b) => serde_json::json!(b),
-        ValueRef::Float(b) => serde_json::json!(b),
-        ValueRef::Double(b) => serde_json::json!(b),
-        ValueRef::Text(b) => serde_json::Value::String(String::from_utf8_lossy(b).to_string()),
-        ValueRef::Blob(b) => serde_json::Value::String(format!("[blob {} bytes]", b.len())),
-        _ => serde_json::Value::String(format!("{:?}", val)),
+    // The quack server runs for the lifetime of the DuckDB session.
+    // Keep the connection alive by blocking this thread.
+    tracing::info!("quack server keeping session alive on port {}", port);
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
     }
 }

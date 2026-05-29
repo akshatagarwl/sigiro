@@ -135,6 +135,29 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
         })
 }
 
+/// Decompress request body if Content-Encoding is gzip.
+fn maybe_decompress_body(
+    headers: &axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<axum::body::Bytes, axum::http::StatusCode> {
+    if headers
+        .get(axum::http::header::CONTENT_ENCODING)
+        .map(|v| v.as_bytes() == b"gzip")
+        .unwrap_or(false)
+    {
+        use std::io::Read;
+        let mut decoder = flate2::read::GzDecoder::new(&body[..]);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).map_err(|e| {
+            tracing::warn!("gzip decompression failed: {}", e);
+            axum::http::StatusCode::BAD_REQUEST
+        })?;
+        Ok(axum::body::Bytes::from(decompressed))
+    } else {
+        Ok(body)
+    }
+}
+
 /// Run a CPU-bound transform on the tokio blocking pool.
 /// Maps both transform errors and task-panic errors to `Status::internal`.
 async fn spawn_transform<T, E>(
@@ -609,10 +632,15 @@ async fn otlp_http_traces(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> axum::response::Response {
-    tracing::info!(
-        "otlp_http_traces: received trace request, body len = {}",
-        body.len()
-    );
+    let body = match maybe_decompress_body(&headers, body) {
+        Ok(b) => b,
+        Err(status) => {
+            return axum::response::Response::builder()
+                .status(status)
+                .body(axum::body::Body::empty())
+                .unwrap();
+        }
+    };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => {
@@ -622,9 +650,7 @@ async fn otlp_http_traces(
                 .unwrap();
         }
     };
-    tracing::info!(project_id = %project_id, "otlp_http_traces: auth OK");
     let fmt = detect_format(&headers);
-    tracing::info!(project_id = %project_id, format = ?fmt, "otlp_http_traces: detected format");
     let batch = match transform_traces(body.to_vec(), fmt).await {
         Ok(b) => b,
         Err(e) => {
@@ -635,16 +661,14 @@ async fn otlp_http_traces(
                 .unwrap();
         }
     };
-    tracing::info!(project_id = %project_id, rows = batch.num_rows(), "otlp_http_traces: batch transformed");
-    tracing::info!(project_id = %project_id, rows = batch.num_rows(), "otlp_http_traces: batch transformed");
     if batch.num_rows() == 0 {
         tracing::warn!(
             project_id,
-            "otlp_http_traces: batch empty after transform — trace data lost"
+            "otlp HTTP traces: batch empty after transform — trace data lost"
         );
         return axum::response::Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .body(axum::body::Body::from("empty batch after transform"))
+            .body(axum::body::Body::empty())
             .unwrap();
     }
     let pid = project_id.clone();
@@ -655,20 +679,17 @@ async fn otlp_http_traces(
             .body(axum::body::Body::empty())
             .unwrap();
     }
-    tracing::info!(project_id = %pid, "otlp_http_traces: flusher registered, calling send");
-    let send_pid = pid.clone();
     if let Err(e) = state
         .router
         .send(IngestMsg::Traces { project_id, batch })
         .await
     {
-        tracing::error!(send_pid, "ingest router error: {e:?}");
+        tracing::error!(send_pid = pid, "ingest router error: {e:?}");
         return axum::response::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(axum::body::Body::empty())
             .unwrap();
     }
-    tracing::info!(send_pid = %send_pid, "otlp_http_traces: send complete");
     axum::response::Response::builder()
         .status(StatusCode::OK)
         .body(axum::body::Body::empty())
@@ -680,6 +701,10 @@ async fn otlp_http_logs(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
+    let body = match maybe_decompress_body(&headers, body) {
+        Ok(b) => b,
+        Err(status) => return status,
+    };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => return status,
@@ -721,6 +746,10 @@ async fn otlp_http_metrics(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
+    let body = match maybe_decompress_body(&headers, body) {
+        Ok(b) => b,
+        Err(status) => return status,
+    };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => return status,
@@ -773,6 +802,10 @@ async fn otlp_http_profiles(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
+    let body = match maybe_decompress_body(&headers, body) {
+        Ok(b) => b,
+        Err(status) => return status,
+    };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => return status,

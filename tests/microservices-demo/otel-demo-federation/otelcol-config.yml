@@ -16,7 +16,6 @@ exporters:
   otlphttp/sigiro:
     endpoint: http://sigiro-collector:4319
     encoding: json
-    compression: none
     headers:
       Authorization: Bearer sigiro_dev_test
     tls:

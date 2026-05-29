@@ -1,13 +1,9 @@
-# Sigiro federation collector — k3s worker node that self-registers with fed-central
-# Joins the k3s server at K3S_SERVER_IP and runs sigiro serve --ebpf as a collector
+# Sigiro federation collector — bare-metal node that self-registers with fed-central
 #
 # Usage:
-#   1. Generate a per-instance YAML with the agent token substituted:
-#      sed -e "s|\\\${K3S_AGENT_TOKEN}|<agent-token>|g" \
-#          dev/lima/sigiro-fed-collector.yaml > /tmp/collector.yaml
-#   2. limactl start --name=sigiro-fed-collector /tmp/collector.yaml
-#   3. limactl copy ./result/bin/sigiro sigiro-fed-collector:/home/akshat.guest/sigiro
-#   4. limactl shell sigiro-fed-collector /home/akshat.guest/run-collector.sh
+#   1. limactl start --name=fed-collector-1 dev/lima/sigiro-fed-collector.yaml
+#   2. limactl copy ./result/bin/sigiro fed-collector-1:/home/akshat.guest/sigiro
+#   3. limactl shell fed-collector-1 /home/akshat.guest/run-collector.sh
 
 images:
 - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
@@ -19,6 +15,15 @@ disk: "60GiB"
 
 ssh:
   localPort: 0
+
+# Port forwarding so central VM can reach this collector via host.lima.internal
+portForwards:
+- guestPort: 9999
+  hostIP: "0.0.0.0"
+- guestPort: 4318
+  hostIP: "0.0.0.0"
+- guestPort: 5432
+  hostIP: "0.0.0.0"
 
 containerd:
   system: false
@@ -39,30 +44,6 @@ provision:
     apt-get update
     apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git bpfcc-tools linux-headers-generic
 
-    # Wait for k3s server to be reachable before joining
-    for i in $(seq 1 60); do
-      if curl -sfk "https://host.lima.internal:6443/ping" >/dev/null 2>&1; then
-        echo "k3s server is reachable"
-        break
-      fi
-      echo "Waiting for k3s server at host.lima.internal:6443... ($i/60)"
-      sleep 5
-    done
-
-    # Install k3s agent and join the cluster
-    curl -sfL https://get.k3s.io | \
-      K3S_URL="https://host.lima.internal:6443" \
-      K3S_KUBECONFIG_MODE="644" \
-      K3S_AGENT_TOKEN="${K3S_AGENT_TOKEN}" \
-      sh -
-
-    # Verify k3s agent is running
-    until systemctl is-active --quiet k3s-agent; do
-      echo "Waiting for k3s-agent to start..."
-      sleep 2
-    done
-    echo "k3s agent joined successfully"
-
     # Create sigiro user and data directory
     useradd -m -s /bin/bash sigiro || true
     mkdir -p /home/sigiro/sigiro-data
@@ -80,9 +61,14 @@ provision:
     export SIGIRO_DATA_DIR=/home/sigiro/sigiro-data
     export SIGIRO_HTTP_PORT=9999
     export SIGIRO_OTLP_HTTP_PORT=4318
-    export SIGIRO_CENTRAL_URL=http://fed-central:9999
+    export SIGIRO_CENTRAL_URL=http://host.lima.internal:9999
     export SIGIRO_API_KEY=sigiro_dev_test
     export SIGIRO_EBPF=true
+    export SIGIRO_QUACK_PORT=5432
+    export SIGIRO_QUACK_TOKEN=fed-token-central
+
+    # SIGIRO_ENDPOINT and SIGIRO_QUACK_ADVERTISE_PORT are set by the test script
+    # based on the host port-forward mapping for this VM.
 
     # Run as federation collector with eBPF
     ./sigiro serve 2>&1 | tee /tmp/sigiro-collector.log

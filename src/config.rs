@@ -83,7 +83,18 @@ pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
     EnvarDef::Default("http://localhost:9999".to_string())
 });
 
+/// Advertised server URL for federation worker registration.
+/// When behind NAT/port-forward, set this to the externally-reachable URL
+/// (e.g. http://host.lima.internal:9998) while SIGIRO_ENDPOINT controls the bind address.
+pub static ADVERTISE_ENDPOINT: Envar<String> =
+    Envar::on_startup("SIGIRO_ADVERTISE_ENDPOINT", || EnvarDef::Unset);
+
 pub static QUACK_PORT: Envar<u16> = Envar::on_startup("SIGIRO_QUACK_PORT", || EnvarDef::Unset);
+
+/// Port advertised to central for quack federated queries.
+/// Defaults to SIGIRO_QUACK_PORT when unset (e.g. when behind a port-forward).
+pub static QUACK_ADVERTISE_PORT: Envar<u16> =
+    Envar::on_startup("SIGIRO_QUACK_ADVERTISE_PORT", || EnvarDef::Unset);
 
 pub static QUACK_TOKEN: Envar<String> = Envar::on_startup("SIGIRO_QUACK_TOKEN", || EnvarDef::Unset);
 

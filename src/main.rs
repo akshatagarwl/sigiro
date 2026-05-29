@@ -358,14 +358,14 @@ async fn run_serve() -> Result<()> {
         }
     };
 
-    // Federation requires a shared catalog (PostgreSQL). Local SQLite cannot be shared across nodes.
+    // Federation central node requires a shared catalog (PostgreSQL).
+    // Local SQLite cannot be shared across nodes.
     let central = sigiro::config::CENTRAL.value().unwrap_or(false);
-    let has_central_url = sigiro::config::CENTRAL_URL.value().is_ok();
-    if central || has_central_url {
+    if central {
         match sigiro::config::CATALOG_URL.value() {
             Ok(ref url) if !url.is_empty() => {}
             _ => anyhow::bail!(
-                "Federation mode requires SIGIRO_CATALOG_URL (PostgreSQL catalog). \
+                "Federation central node requires SIGIRO_CATALOG_URL (PostgreSQL catalog). \
                  Local SQLite cannot be shared across nodes. \
                  Set SIGIRO_CATALOG_URL=postgresql://user:pass@host/db to enable federation."
             ),
@@ -375,6 +375,9 @@ async fn run_serve() -> Result<()> {
     // Federation: start quack server on any node that has quack config.
     // Central nodes use it to serve federated catalog metadata;
     // collectors use it to expose their local DuckLake data for remote ATTACH.
+    // The server runs in a dedicated background thread because `quack_serve` is a
+    // streaming table function — dropping the `Rows` iterator cancels the query
+    // and shuts the server down.
     if let (Ok(quack_port), Ok(quack_token)) = (
         sigiro::config::QUACK_PORT.value(),
         sigiro::config::QUACK_TOKEN.value(),
@@ -382,9 +385,17 @@ async fn run_serve() -> Result<()> {
         if central {
             tracing::info!("running as central federation node");
         }
-        let federation_conn = pool.create_federation_connection()?;
-        let conn = federation_conn.lock();
-        sigiro::quack_federation::start_quack_server(&conn, quack_port, &quack_token)?;
+        let quack_conn = pool.create_raw_federation_connection()?;
+        let token = quack_token.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = sigiro::quack_federation::start_quack_server_blocking(
+                quack_conn, quack_port, &token,
+            ) {
+                tracing::error!("quack server thread exited: {e:#}");
+            }
+        });
+        // Brief pause so the thread has time to bind the port before we continue.
+        std::thread::sleep(std::time::Duration::from_millis(300));
         tracing::info!("quack server started on port {}", quack_port);
     }
 
@@ -394,9 +405,20 @@ async fn run_serve() -> Result<()> {
         let api_key = sigiro::config::API_KEY.value().unwrap_or_default();
         let client = sigiro::client::SigiroClient::new(url, &api_key);
         let status = sigiro::admin::read_all_status(&admin_conn)?;
+        let quack_port = sigiro::config::QUACK_ADVERTISE_PORT
+            .value()
+            .ok()
+            .or_else(|| sigiro::config::QUACK_PORT.value().ok())
+            .unwrap_or(5432);
+        let endpoint = sigiro::config::ADVERTISE_ENDPOINT
+            .value()
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| sigiro::config::ENDPOINT.value().ok())
+            .unwrap_or_else(|| "http://localhost:9999".to_string());
         let worker = sigiro::federation::WorkerInfo {
             id: hostname_or_default()?,
-            endpoint: sigiro::config::ENDPOINT.value().map_err(anyhow::Error::from)?,
+            endpoint,
             catalog_path: dir.join("default").join("catalog.sqlite").to_string(),
             mode: status.get("mode").cloned().context("instance status missing 'mode' — server not fully initialized")?,
             platform: sigiro::federation::PlatformInfo {
@@ -421,6 +443,7 @@ async fn run_serve() -> Result<()> {
             },
             missing_permissions: vec![],
             suggestions: vec![],
+            quack_port,
         };
         if let Err(e) = client.register_worker(&worker).await {
             tracing::warn!("failed to register with central node: {e:#}");

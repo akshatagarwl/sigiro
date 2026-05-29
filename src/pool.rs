@@ -162,6 +162,10 @@ impl ProjectPool {
         crate::schema::create_tables(&conn, Self::prefix())?;
         crate::schema::load_fleet_extensions(&conn)?;
 
+        // Ensure DuckLake tables are discoverable without schema prefix.
+        conn.execute_batch("USE lake;")
+            .context("failed to set DuckDB default schema")?;
+
         Ok(conn)
     }
 
@@ -240,20 +244,77 @@ impl ProjectPool {
         conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
             .context("failed to set DuckDB memory limit")?;
 
-        conn.execute_batch("CREATE SCHEMA IF NOT EXISTS lake;")
-            .context("failed to create lake schema for federation")?;
-
         // Attach DuckLake catalog so the quack server serves actual project data.
-        // Central nodes don't have local project data (they federate queries),
-        // but collectors need their DuckLake catalog attached for remote queries.
-        if let Ok(Some(config)) = crate::storage::load_config() {
-            let project_dir = self.data_dir.join("default");
+        // Collectors need their local DuckLake catalog attached for remote queries.
+        let project_dir = self.data_dir.join("dev_project");
+        let ducklake_attached = if let Ok(Some(config)) = crate::storage::load_config() {
             crate::storage::init_distributed(&conn, &config, &project_dir)
                 .context("failed to init DuckLake for federation connection")?;
+            true
+        } else {
+            crate::storage::init_default(&conn, &project_dir)
+                .context("failed to init local DuckLake for federation connection")?;
+            true
+        };
+
+        // Only create the lake schema manually when DuckLake is not attached.
+        // DuckLake attaches its own "lake" catalog; creating a schema with the
+        // same name causes "Ambiguous reference to catalog or schema" errors.
+        if !ducklake_attached {
+            conn.execute_batch("CREATE SCHEMA IF NOT EXISTS lake;")
+                .context("failed to create lake schema for federation")?;
         }
 
         crate::schema::create_tables(&conn, Self::prefix())?;
 
         Ok(Arc::new(Mutex::new(conn)))
+    }
+
+    /// Same as `create_federation_connection` but returns an owned `Connection`
+    /// (not wrapped in `Arc<Mutex>`) so it can be moved to a background thread.
+    pub fn create_raw_federation_connection(&self) -> Result<Connection> {
+        let conn = Connection::open_in_memory()
+            .context("failed to open in-memory DuckDB for federation")?;
+
+        let ext_dir = crate::config::EXTENSION_DIR
+            .value()
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(Utf8PathBuf::from)
+            .unwrap_or_else(|| self.data_dir.join("extensions"));
+
+        conn.execute_batch(&format!(
+            "SET extension_directory = '{}';",
+            ext_dir.as_str()
+        ))
+        .context("failed to set extension_directory")?;
+
+        conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
+            .context("failed to set DuckDB memory limit")?;
+
+        // Attach DuckLake catalog so the quack server serves actual project data.
+        // Collectors need their local DuckLake catalog attached for remote queries.
+        let project_dir = self.data_dir.join("dev_project");
+        let ducklake_attached = if let Ok(Some(config)) = crate::storage::load_config() {
+            crate::storage::init_distributed(&conn, &config, &project_dir)
+                .context("failed to init DuckLake for federation connection")?;
+            true
+        } else {
+            crate::storage::init_default(&conn, &project_dir)
+                .context("failed to init local DuckLake for federation connection")?;
+            true
+        };
+
+        // Only create the lake schema manually when DuckLake is not attached.
+        // DuckLake attaches its own "lake" catalog; creating a schema with the
+        // same name causes "Ambiguous reference to catalog or schema" errors.
+        if !ducklake_attached {
+            conn.execute_batch("CREATE SCHEMA IF NOT EXISTS lake;")
+                .context("failed to create lake schema for federation")?;
+        }
+
+        crate::schema::create_tables(&conn, Self::prefix())?;
+
+        Ok(conn)
     }
 }

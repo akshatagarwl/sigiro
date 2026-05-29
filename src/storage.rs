@@ -19,13 +19,14 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
         .context("failed to install/load extensions")?;
     tracing::info!("loaded DuckDB extensions: ducklake, sqlite");
 
-    // Attach DuckLake with SQLite catalog + local Parquet.
-    // catalog.sqlite is a SQLite database with DuckLake schema.
-    // Data files go to catalog.ducklake.files/ (auto-created).
-    let attach_sql = format!("ATTACH 'ducklake:{project_dir_str}/catalog.sqlite' AS lake");
+    // Attach DuckLake with DuckDB file catalog + local Parquet.
+    // Uses catalog.ducklake (DuckDB native catalog) instead of SQLite
+    // because the appender API is tested and verified to work with
+    // DuckDB file catalogs (see tests/ducklake_appender_test.rs).
+    let attach_sql = format!("ATTACH 'ducklake:{project_dir_str}/catalog.ducklake' AS lake");
     conn.execute_batch(&attach_sql)
         .context("failed to attach DuckLake catalog")?;
-    tracing::info!("DuckLake attached — catalog: SQLite file, data: local Parquet");
+    tracing::info!("DuckLake attached — catalog: DuckDB file, data: local Parquet");
 
     Ok(())
 }

@@ -398,6 +398,7 @@ services:
     depends_on:
       - otel-collector
       - postgres
+    restart: unless-stopped
     logging: *logging
 
   product-reviews:

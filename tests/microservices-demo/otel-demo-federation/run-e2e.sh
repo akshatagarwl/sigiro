@@ -67,7 +67,7 @@ pass "product-catalog:sigiro image ready"
 
 # ─── Step 1: Start the stack ─────────────────────────────────────
 log "Starting sigiro federation + OpenTelemetry Demo..."
-docker compose up -d --wait --timeout 120
+docker compose up -d --wait --wait-timeout 120
 
 # Give a moment for registration
 sleep 3
