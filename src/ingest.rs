@@ -603,66 +603,53 @@ pub fn extract_project_id_http(
     Ok(ctx.project_id)
 }
 
+/// Common helper: register flusher and send ingest message.
+/// Returns 500 on failure, 200 on success.
+async fn route_ingest_msg(state: &OtlpHttpState, project_id: &str, msg: IngestMsg) -> StatusCode {
+    if let Err(e) = state.router.register_flusher(project_id) {
+        tracing::error!(project_id, "failed to register flusher: {e:?}");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    if let Err(e) = state.router.send(msg).await {
+        tracing::error!(project_id, "ingest router error: {e:?}");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    StatusCode::OK
+}
+
 #[instrument(skip_all, fields(endpoint = "/v1/traces"))]
 async fn otlp_http_traces(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> axum::response::Response {
+) -> StatusCode {
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
-        Err(status) => {
-            return axum::response::Response::builder()
-                .status(status)
-                .body(axum::body::Body::empty())
-                .unwrap();
-        }
+        Err(status) => return status,
     };
     let fmt = detect_format(&headers);
     let batch = match transform_traces(body.to_vec(), fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform traces: {e}");
-            return axum::response::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(axum::body::Body::empty())
-                .unwrap();
+            return StatusCode::BAD_REQUEST;
         }
     };
     if batch.num_rows() == 0 {
-        tracing::warn!(
-            project_id,
-            "otlp HTTP traces: batch empty after transform — trace data lost"
-        );
-        return axum::response::Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(axum::body::Body::empty())
-            .unwrap();
+        tracing::warn!(project_id, "batch empty after transform — trace data lost");
+        return StatusCode::BAD_REQUEST;
     }
-    let pid = project_id.clone();
-    if let Err(e) = state.router.register_flusher(&pid) {
-        tracing::error!(pid, "failed to register flusher: {e:?}");
-        return axum::response::Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(axum::body::Body::empty())
-            .unwrap();
-    }
-    if let Err(e) = state
-        .router
-        .send(IngestMsg::Traces { project_id, batch })
-        .await
-    {
-        tracing::error!(send_pid = pid, "ingest router error: {e:?}");
-        return axum::response::Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(axum::body::Body::empty())
-            .unwrap();
-    }
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .body(axum::body::Body::empty())
-        .unwrap()
+    route_ingest_msg(
+        &state,
+        &project_id,
+        IngestMsg::Traces {
+            project_id: project_id.clone(),
+            batch,
+        },
+    )
+    .await
 }
+
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
 async fn otlp_http_logs(
     State(state): State<Arc<OtlpHttpState>>,
@@ -682,26 +669,18 @@ async fn otlp_http_logs(
         }
     };
     if batch.num_rows() == 0 {
-        tracing::warn!(
-            project_id,
-            "otlp_http_logs: batch empty after transform — log data lost"
-        );
+        tracing::warn!(project_id, "batch empty after transform — log data lost");
         return StatusCode::BAD_REQUEST;
     }
-    let pid = project_id.clone();
-    if let Err(e) = state.router.register_flusher(&pid) {
-        tracing::error!(pid, "failed to register flusher: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
-    if let Err(e) = state
-        .router
-        .send(IngestMsg::Logs { project_id, batch })
-        .await
-    {
-        tracing::error!(pid, "ingest router error: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
-    StatusCode::OK
+    route_ingest_msg(
+        &state,
+        &project_id,
+        IngestMsg::Logs {
+            project_id: project_id.clone(),
+            batch,
+        },
+    )
+    .await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
@@ -722,7 +701,6 @@ async fn otlp_http_metrics(
             return StatusCode::BAD_REQUEST;
         }
     };
-    // Only send if at least one metric batch is non-empty (consistent with traces/logs)
     let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
         || batches.sum.as_ref().is_some_and(|b| b.num_rows() > 0)
         || batches.histogram.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -731,29 +709,18 @@ async fn otlp_http_metrics(
             .as_ref()
             .is_some_and(|b| b.num_rows() > 0);
     if !has_data {
-        tracing::warn!(
-            project_id,
-            "otlp_http_metrics: batch empty after transform — metric data lost"
-        );
+        tracing::warn!(project_id, "batch empty after transform — metric data lost");
         return StatusCode::BAD_REQUEST;
     }
-    let pid = project_id.clone();
-    if let Err(e) = state.router.register_flusher(&pid) {
-        tracing::error!(pid, "failed to register flusher: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
-    if let Err(e) = state
-        .router
-        .send(IngestMsg::Metrics {
-            project_id,
+    route_ingest_msg(
+        &state,
+        &project_id,
+        IngestMsg::Metrics {
+            project_id: project_id.clone(),
             batches,
-        })
-        .await
-    {
-        tracing::error!(pid, "ingest router error: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
-    StatusCode::OK
+        },
+    )
+    .await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/profiles"))]
@@ -787,24 +754,19 @@ async fn otlp_http_profiles(
     if batch.num_rows() == 0 {
         tracing::warn!(
             project_id,
-            "otlp_http_profiles: batch empty after transform — profile data lost"
+            "batch empty after transform — profile data lost"
         );
         return StatusCode::BAD_REQUEST;
     }
-    let pid = project_id.clone();
-    if let Err(e) = state.router.register_flusher(&project_id) {
-        tracing::error!(project_id, "failed to register flusher: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
-    if let Err(e) = state
-        .router
-        .send(IngestMsg::Profiles { project_id, batch })
-        .await
-    {
-        tracing::error!(pid, "ingest router error: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
-    StatusCode::OK
+    route_ingest_msg(
+        &state,
+        &project_id,
+        IngestMsg::Profiles {
+            project_id: project_id.clone(),
+            batch,
+        },
+    )
+    .await
 }
 
 // ─── Pyroscope native format ingest ──────────────────────────────────────────

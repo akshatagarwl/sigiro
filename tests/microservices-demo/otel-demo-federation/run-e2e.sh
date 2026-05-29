@@ -39,8 +39,8 @@ if ! command -v docker &>/dev/null; then
     exit 1
 fi
 
-if ! command -v python3 &>/dev/null; then
-    fail "python3 not found (required for JSON parsing)"
+if ! command -v jq &>/dev/null; then
+    fail "jq not found (required for JSON parsing). Install: https://jqlang.github.io/jq/download/"
     exit 1
 fi
 
@@ -136,7 +136,7 @@ log "Verifying federation workers..."
 for i in {1..30}; do
     WORKERS=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
         "http://localhost:9999/v1/federation/workers" 2>/dev/null | \
-        python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('workers',[])))" 2>/dev/null || echo "0")
+        jq '.workers | length' 2>/dev/null || echo "0")
     if [ "$WORKERS" -ge 1 ]; then
         pass "Federation: $WORKERS worker(s) registered"
         break
@@ -160,19 +160,19 @@ for i in {1..60}; do
         -H "Content-Type: text/plain" \
         -d "SELECT COUNT(*) FROM sigiro_spans" \
         "http://localhost:9999/v1/query" 2>/dev/null | \
-        python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('count_star()','0') if isinstance(d,list) and d else '0')" 2>/dev/null || echo "0")
+        jq -r '.[0]."count_star()" // 0' 2>/dev/null || echo "0")
 
     LOGS=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
         -H "Content-Type: text/plain" \
         -d "SELECT COUNT(*) FROM sigiro_logs" \
         "http://localhost:9999/v1/query" 2>/dev/null | \
-        python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('count_star()','0') if isinstance(d,list) and d else '0')" 2>/dev/null || echo "0")
+        jq -r '.[0]."count_star()" // 0' 2>/dev/null || echo "0")
 
     METRICS=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
         -H "Content-Type: text/plain" \
         -d "SELECT COUNT(*) FROM sigiro_metrics_sum" \
         "http://localhost:9999/v1/query" 2>/dev/null | \
-        python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('count_star()','0') if isinstance(d,list) and d else '0')" 2>/dev/null || echo "0")
+        jq -r '.[0]."count_star()" // 0' 2>/dev/null || echo "0")
 
     if [ "$SPANS" -ge 100 ] && [ "$LOGS" -ge 10 ] && [ "$METRICS" -ge 10 ]; then
         pass "Telemetry flowing: spans=$SPANS logs=$LOGS metrics=$METRICS"
@@ -199,7 +199,7 @@ SERVICES=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
     -H "Content-Type: text/plain" \
     -d "SELECT DISTINCT service_name FROM sigiro_spans ORDER BY service_name" \
     "http://localhost:9999/v1/query" 2>/dev/null | \
-    python3 -c "import sys,json; d=json.load(sys.stdin); print(','.join([r['service_name'] for r in d]) if isinstance(d,list) else '')" 2>/dev/null || echo "")
+    jq -r '[.[].service_name] | join(",")' 2>/dev/null || echo "")
 
 log "Services: $SERVICES"
 
@@ -236,7 +236,7 @@ TRACE=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
     -H "Content-Type: text/plain" \
     -d "SELECT trace_id FROM sigiro_spans WHERE service_name = 'frontend-proxy' LIMIT 1" \
     "http://localhost:9999/v1/query" 2>/dev/null | \
-    python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['trace_id'] if isinstance(d,list) and d else '')" 2>/dev/null || echo "")
+    jq -r '.[0].trace_id // empty' 2>/dev/null || echo "")
 
 if [ -n "$TRACE" ]; then
     TRACE_DETAIL=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \

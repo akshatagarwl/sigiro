@@ -154,7 +154,9 @@ impl ProjectPool {
 
         // Extensions are downloaded on first use (cold start). This may take 20-30s.
         // Run `sigiro fetch-extensions` to pre-download for offline deployments.
-        tracing::info!("DuckDB: loading extensions (downloading on first use, may take a moment)...");
+        tracing::info!(
+            "DuckDB: loading extensions (downloading on first use, may take a moment)..."
+        );
 
         // Initialize DuckLake
         if let Some(config) = crate::storage::load_config()? {
