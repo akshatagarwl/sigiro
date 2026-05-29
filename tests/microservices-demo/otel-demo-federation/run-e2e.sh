@@ -39,6 +39,39 @@ if ! command -v docker &>/dev/null; then
     exit 1
 fi
 
+# Auto-init git submodules if the opentelemetry-demo directory is empty
+if [ ! -f "$REPO_ROOT/tests/microservices-demo/opentelemetry-demo/.git" ]; then
+    log "Initializing git submodules..."
+    cd "$REPO_ROOT"
+    git submodule update --init --recursive
+    cd "$SCRIPT_DIR"
+fi
+
+# Generate .env if missing
+if [ ! -f ".env" ]; then
+    log "Generating .env..."
+    cat > .env <<'EOF'
+# OpenTelemetry Demo — Sigiro E2E Test Environment
+IMAGE_VERSION=2.2.0
+FLAGD_IMAGE=ghcr.io/open-feature/flagd:v0.14.2
+POSTGRES_IMAGE=postgres:17.8
+POSTGRES_PASSWORD=changeit
+POSTGRES_ASTRONOMY_PASSWORD=astronomy_password
+POSTGRES_MONITORING_PASSWORD=monitoring_password
+OTEL_COLLECTOR_HOST=otel-collector
+OTEL_COLLECTOR_PORT_GRPC=4317
+OTEL_COLLECTOR_PORT_HTTP=4318
+OTEL_RESOURCE_ATTRIBUTES=service.namespace=opentelemetry-demo,service.version=2.2.0
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+SIGIRO_API_KEY=sigiro_dev_e2e
+EOF
+    pass ".env generated"
+fi
+
+# Load SIGIRO_API_KEY from .env for use throughout the script
+SIGIRO_API_KEY="${SIGIRO_API_KEY:-$(grep '^SIGIRO_API_KEY=' .env | cut -d= -f2-)}"
+export SIGIRO_API_KEY
+
 # Check for sigiro binary — build image if needed
 if [ ! -f "$SIGIRO_BIN" ]; then
     log "Building sigiro binary..."
@@ -75,7 +108,7 @@ sleep 3
 # ─── Step 2: Verify federation workers ───────────────────────────
 log "Verifying federation workers..."
 for i in {1..30}; do
-    WORKERS=$(curl -sf -H "Authorization: Bearer sigiro_dev_e2e" \
+    WORKERS=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
         "http://localhost:9999/v1/federation/workers" 2>/dev/null | \
         python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('workers',[])))" 2>/dev/null || echo "0")
     if [ "$WORKERS" -ge 1 ]; then
@@ -87,7 +120,7 @@ done
 
 if [ "${WORKERS:-0}" -lt 1 ]; then
     fail "No federation workers registered"
-    curl -s -H "Authorization: Bearer sigiro_dev_e2e" \
+    curl -s -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
         "http://localhost:9999/v1/federation/workers" 2>/dev/null || true
 fi
 
@@ -97,19 +130,19 @@ SPANS=0
 LOGS=0
 METRICS=0
 for i in {1..60}; do
-    SPANS=$(curl -sf -H "Authorization: Bearer sigiro_dev_e2e" \
+    SPANS=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
         -H "Content-Type: text/plain" \
         -d "SELECT COUNT(*) FROM sigiro_spans" \
         "http://localhost:9999/v1/query" 2>/dev/null | \
         python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('count_star()','0') if isinstance(d,list) and d else '0')" 2>/dev/null || echo "0")
 
-    LOGS=$(curl -sf -H "Authorization: Bearer sigiro_dev_e2e" \
+    LOGS=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
         -H "Content-Type: text/plain" \
         -d "SELECT COUNT(*) FROM sigiro_logs" \
         "http://localhost:9999/v1/query" 2>/dev/null | \
         python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('count_star()','0') if isinstance(d,list) and d else '0')" 2>/dev/null || echo "0")
 
-    METRICS=$(curl -sf -H "Authorization: Bearer sigiro_dev_e2e" \
+    METRICS=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
         -H "Content-Type: text/plain" \
         -d "SELECT COUNT(*) FROM sigiro_metrics_sum" \
         "http://localhost:9999/v1/query" 2>/dev/null | \
@@ -136,7 +169,7 @@ fi
 
 # ─── Step 4: Verify services ─────────────────────────────────────
 log "Checking detected services..."
-SERVICES=$(curl -sf -H "Authorization: Bearer sigiro_dev_e2e" \
+SERVICES=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
     -H "Content-Type: text/plain" \
     -d "SELECT DISTINCT service_name FROM sigiro_spans ORDER BY service_name" \
     "http://localhost:9999/v1/query" 2>/dev/null | \
@@ -160,7 +193,7 @@ fi
 
 # ─── Step 5: Federated query ─────────────────────────────────────
 log "Testing federated query..."
-FED_RESULT=$(curl -sf -H "Authorization: Bearer sigiro_dev_e2e" \
+FED_RESULT=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
     -H "Content-Type: text/plain" \
     -d "SELECT service_name, COUNT(*) as c FROM sigiro_spans GROUP BY service_name ORDER BY c DESC LIMIT 5" \
     "http://localhost:9999/v1/query" 2>/dev/null || echo "[]")
@@ -173,14 +206,14 @@ fi
 
 # ─── Step 6: Distributed trace ───────────────────────────────────
 log "Checking distributed traces..."
-TRACE=$(curl -sf -H "Authorization: Bearer sigiro_dev_e2e" \
+TRACE=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
     -H "Content-Type: text/plain" \
     -d "SELECT trace_id FROM sigiro_spans WHERE service_name = 'frontend-proxy' LIMIT 1" \
     "http://localhost:9999/v1/query" 2>/dev/null | \
     python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['trace_id'] if isinstance(d,list) and d else '')" 2>/dev/null || echo "")
 
 if [ -n "$TRACE" ]; then
-    TRACE_DETAIL=$(curl -sf -H "Authorization: Bearer sigiro_dev_e2e" \
+    TRACE_DETAIL=$(curl -sf -H "Authorization: Bearer ${SIGIRO_API_KEY}" \
         "http://localhost:9999/v1/traces/$TRACE" 2>/dev/null || echo "")
     if echo "$TRACE_DETAIL" | grep -q "trace_id"; then
         pass "Trace retrieval works (trace_id=$TRACE)"

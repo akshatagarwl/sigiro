@@ -27,7 +27,7 @@ prost = "0.14"
 arrow = "58"
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles"] }
 axum = "0.8"
-tower-http = { version = "0.6", features = ["compression-full", "cors", "trace"] }
+tower-http = { version = "0.6", features = ["compression-full", "decompression-full", "cors", "trace"] }
 axum-anyhow = "0.10"
 prefixed-api-key = { version = "0.3", features = ["sha2"] }
 tower_governor = { version = "0.8", features = ["axum"] }
@@ -46,7 +46,6 @@ drain3 = "0.1.5"
 hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
-zstd = "0.13"
 which = "5"
 uuid = "1"
 tar = "0.4"

@@ -135,56 +135,6 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
         })
 }
 
-const GZIP: &[u8] = b"gzip";
-const DEFLATE: &[u8] = b"deflate";
-const ZSTD: &[u8] = b"zstd";
-
-/// Decode request body according to Content-Encoding.
-/// Supported: identity (none), gzip, deflate, zstd.
-/// Unsupported encodings return 415 Unsupported Media Type.
-fn decode_body(
-    headers: &axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> Result<axum::body::Bytes, axum::http::StatusCode> {
-    let Some(enc) = headers.get(axum::http::header::CONTENT_ENCODING) else {
-        return Ok(body);
-    };
-    use std::io::Read;
-    let bytes = enc.as_bytes();
-    let mut decompressed = Vec::new();
-    if bytes == GZIP {
-        flate2::read::GzDecoder::new(&body[..])
-            .read_to_end(&mut decompressed)
-            .map_err(|e| {
-                tracing::warn!("gzip decompression failed: {}", e);
-                axum::http::StatusCode::BAD_REQUEST
-            })?;
-    } else if bytes == DEFLATE {
-        flate2::read::ZlibDecoder::new(&body[..])
-            .read_to_end(&mut decompressed)
-            .map_err(|e| {
-                tracing::warn!("deflate decompression failed: {}", e);
-                axum::http::StatusCode::BAD_REQUEST
-            })?;
-    } else if bytes == ZSTD {
-        zstd::stream::read::Decoder::new(&body[..])
-            .map_err(|e| {
-                tracing::warn!("zstd decoder init failed: {}", e);
-                axum::http::StatusCode::BAD_REQUEST
-            })?
-            .read_to_end(&mut decompressed)
-            .map_err(|e| {
-                tracing::warn!("zstd decompression failed: {}", e);
-                axum::http::StatusCode::BAD_REQUEST
-            })?;
-    } else {
-        let enc_str = std::str::from_utf8(bytes).unwrap_or("<invalid>");
-        tracing::warn!("unsupported Content-Encoding: {}", enc_str);
-        return Err(axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    }
-    Ok(axum::body::Bytes::from(decompressed))
-}
-
 /// Run a CPU-bound transform on the tokio blocking pool.
 /// Maps both transform errors and task-panic errors to `Status::internal`.
 async fn spawn_transform<T, E>(
@@ -659,15 +609,6 @@ async fn otlp_http_traces(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> axum::response::Response {
-    let body = match decode_body(&headers, body) {
-        Ok(b) => b,
-        Err(status) => {
-            return axum::response::Response::builder()
-                .status(status)
-                .body(axum::body::Body::empty())
-                .unwrap();
-        }
-    };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => {
@@ -728,10 +669,6 @@ async fn otlp_http_logs(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let body = match decode_body(&headers, body) {
-        Ok(b) => b,
-        Err(status) => return status,
-    };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => return status,
@@ -773,10 +710,6 @@ async fn otlp_http_metrics(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let body = match decode_body(&headers, body) {
-        Ok(b) => b,
-        Err(status) => return status,
-    };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => return status,
@@ -829,10 +762,6 @@ async fn otlp_http_profiles(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let body = match decode_body(&headers, body) {
-        Ok(b) => b,
-        Err(status) => return status,
-    };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
         Err(status) => return status,

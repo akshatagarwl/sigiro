@@ -273,7 +273,8 @@ pub async fn run_servers(
 
     // OTLP HTTP — authenticated via Authorization header
     let otlp_http_app =
-        crate::ingest::otlp_http_router(Arc::clone(&router), Arc::clone(&admin_conn));
+        crate::ingest::otlp_http_router(Arc::clone(&router), Arc::clone(&admin_conn))
+            .layer(tower_http::decompression::RequestDecompressionLayer::new());
     let otlp_http_port = ports.otlp_http;
     let otlp_http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{otlp_http_port}")).await?;
