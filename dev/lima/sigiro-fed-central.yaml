@@ -34,6 +34,7 @@ containerd:
   user: false
 
 mounts:
+# NOTE: Change this to your repository root path.
 - location: "~/workspace"
   writable: false
 

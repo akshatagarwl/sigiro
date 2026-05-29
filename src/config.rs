@@ -75,7 +75,7 @@ pub static BACKPRESSURE_POLICY: Envar<String> =
     });
 
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
-/// Path to the sigiro data directory (required — no default). Unset causes fail-fast at startup.
+/// Defaults to the platform data dir (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).
 pub static DATA_DIR: Envar<String> = Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);
 
 /// Server URL for CLI client and admin commands.

@@ -42,11 +42,12 @@ pub use responses::{ServiceBreakdownEntry, SpanDetail, TraceDetailResponse};
 pub use server::ApiDoc;
 
 pub fn data_dir() -> Result<Utf8PathBuf> {
-    crate::config::DATA_DIR
-        .value()
-        .map(Utf8PathBuf::from)
-        .map_err(anyhow::Error::from)
-        .context(
-            "SIGIRO_DATA_DIR not set — export SIGIRO_DATA_DIR=/path/to/data before starting sigiro",
-        )
+    if let Ok(path) = crate::config::DATA_DIR.value() {
+        return Ok(Utf8PathBuf::from(path));
+    }
+    // Fallback to platform-specific data directory
+    let base = dirs::data_dir().context("cannot determine data directory")?;
+    let base = Utf8PathBuf::from_path_buf(base)
+        .map_err(|_| anyhow::anyhow!("data directory path is not valid UTF-8"))?;
+    Ok(base.join("sigiro"))
 }

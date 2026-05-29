@@ -1,0 +1,63 @@
+# Sigiro
+
+Observability platform with DuckDB-based storage, OTLP ingestion, and federated queries.
+
+## Quick Start
+
+Download the latest binary for your platform from the releases page, then run:
+
+```bash
+sigiro serve
+```
+
+The server starts on:
+- HTTP API: `http://localhost:9999`
+- OTLP gRPC: `localhost:4317`
+- OTLP HTTP: `localhost:4318`
+
+No configuration required. Data is stored in the platform data directory (`~/.local/share/sigiro` on Unix, `%LOCALAPPDATA%\sigiro` on Windows). Override with `SIGIRO_DATA_DIR`.
+
+## Authentication
+
+In development, any bearer token starting with `sigiro_dev_` is accepted:
+
+```bash
+curl -H "Authorization: Bearer sigiro_dev_test" http://localhost:9999/health
+```
+
+For production, create API keys via the admin endpoint:
+
+```bash
+sigiro admin create-key --project my_app
+```
+
+## End-to-End Test
+
+Verify the full stack (OpenTelemetry Demo + Sigiro federation) with one command:
+
+```bash
+cd tests/microservices-demo/otel-demo-federation
+./run-e2e.sh
+```
+
+This starts the complete demo environment and verifies telemetry flows from collectors through to queries.
+
+## Documentation
+
+Full documentation is available at [sigiro.com/docs](https://sigiro.com/docs) (or in `www/content/docs/`).
+
+## Development
+
+```bash
+# Build
+cargo build --release
+
+# Run with custom data directory
+SIGIRO_DATA_DIR=./data cargo run -- serve
+
+# Run tests
+cargo test --release
+
+# Run E2E test
+cd tests/microservices-demo/otel-demo-federation && ./run-e2e.sh
+```

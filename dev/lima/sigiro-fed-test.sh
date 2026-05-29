@@ -104,7 +104,7 @@ containerd:
   system: false
   user: false
 mounts:
-- location: "~/workspace"
+- location: "${REPO_ROOT}"
   writable: false
 provision:
 - mode: system
@@ -117,6 +117,45 @@ provision:
 EOF
 }
 
+gen_central_yaml() {
+  local out="$1"
+  cat > "$out" << EOF
+images:
+- location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+  arch: "aarch64"
+cpus: 4
+memory: "4GiB"
+disk: "60GiB"
+ssh:
+  localPort: 0
+portForwards:
+- guestPort: 9999
+  hostIP: "0.0.0.0"
+- guestPort: 4318
+  hostIP: "0.0.0.0"
+- guestPort: 5433
+  hostPort: 15432
+  hostIP: "0.0.0.0"
+containerd:
+  system: false
+  user: false
+mounts:
+- location: "${REPO_ROOT}"
+  writable: false
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git gnupg lsb-release postgresql postgresql-client
+EOF
+}
+
+CENTRAL_YAML="$FED_TMPDIR/central.yaml"
+gen_central_yaml "$CENTRAL_YAML"
+
 COLLECTOR_1_YAML="$FED_TMPDIR/collector-1.yaml"
 gen_collector_yaml "$COLLECTOR_1_YAML" "$COLLECTOR_1_HTTP_PORT" "$COLLECTOR_1_OTLP_PORT" "$COLLECTOR_1_QUACK_PORT"
 
@@ -128,7 +167,7 @@ gen_collector_yaml "$COLLECTOR_2_YAML" "$COLLECTOR_2_HTTP_PORT" "$COLLECTOR_2_OT
 # ---------------------------------------------------------------------------
 echo "=== Starting all VMs in parallel ==="
 
-limactl start --name="$FED_CENTRAL" "$SCRIPT_DIR/sigiro-fed-central.yaml" 2>&1 &
+limactl start --name="$FED_CENTRAL" "$CENTRAL_YAML" 2>&1 &
 CENTRAL_PID=$!
 
 limactl start --name="$FED_COLLECTOR_1" "$COLLECTOR_1_YAML" 2>&1 &
