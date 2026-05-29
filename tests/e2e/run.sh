@@ -49,7 +49,7 @@ while [ $DATA_WAIT -lt $DATA_TIMEOUT ]; do
   profile_count=$(curl -sf -X POST "$SIGIRO_URL/v1/query" \
     -H "$DEV_AUTH" -d "SELECT count(*) AS n FROM lake.sigiro_profiles" 2>/dev/null || echo "")
   if echo "$profile_count" | grep -q '"n"' 2>/dev/null; then
-    count_val=$(echo "$profile_count" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['n'])" 2>/dev/null || echo "0")
+    count_val=$(echo "$profile_count" | jq -r '.[0].n // 0' 2>/dev/null || echo "0")
     if [ "$count_val" -gt "0" ] 2>/dev/null; then
       echo "  profiles available after ${DATA_WAIT}s (${count_val} rows)"
       break
@@ -184,13 +184,11 @@ echo "=== DEBUG: Pyroscope profiles confirmed via /v1/investigate ==="
 profile_check=$(curl -sf -X POST "$SIGIRO_URL/v1/investigate" \
   -H "$DEV_AUTH" \
   -H 'Content-Type: application/json' \
-  -d '{"service":"sigiro"}' 2>&1 | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-profiles = d.get('sigiro', {}).get('profiles', [])
-print(f'profile_count={len(profiles)}')
-print(f'has_cpu_profile={any(p.get(\"profile_type\")==\"cpu\" for p in profiles)}')
-" 2>/dev/null || echo "profile_check=failed")
+  -d '{"service":"sigiro"}' 2>&1 | jq -r '
+    .sigiro.profiles // [] |
+    "profile_count=\(length)",
+    "has_cpu_profile=\(map(select(.profile_type == "cpu")) | length > 0)"
+' 2>/dev/null | paste -sd ',' - || echo "profile_check=failed")
 echo "  $profile_check"
 
 echo ""
