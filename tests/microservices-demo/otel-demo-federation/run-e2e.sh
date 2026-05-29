@@ -39,6 +39,16 @@ if ! command -v docker &>/dev/null; then
     exit 1
 fi
 
+if ! command -v python3 &>/dev/null; then
+    fail "python3 not found (required for JSON parsing)"
+    exit 1
+fi
+
+if ! docker compose version &>/dev/null; then
+    fail "docker compose plugin not found"
+    exit 1
+fi
+
 # Auto-init git submodules if the opentelemetry-demo directory is empty
 if [ ! -f "$REPO_ROOT/tests/microservices-demo/opentelemetry-demo/.git" ]; then
     log "Initializing git submodules..."
@@ -47,23 +57,18 @@ if [ ! -f "$REPO_ROOT/tests/microservices-demo/opentelemetry-demo/.git" ]; then
     cd "$SCRIPT_DIR"
 fi
 
-# Generate .env if missing
+# Generate .env if missing — base it on upstream demo .env and append sigiro overrides
 if [ ! -f ".env" ]; then
-    log "Generating .env..."
-    cat > .env <<'EOF'
-# OpenTelemetry Demo — Sigiro E2E Test Environment
-IMAGE_VERSION=2.2.0
-FLAGD_IMAGE=ghcr.io/open-feature/flagd:v0.14.2
-POSTGRES_IMAGE=postgres:17.8
-POSTGRES_PASSWORD=changeit
-POSTGRES_ASTRONOMY_PASSWORD=astronomy_password
-POSTGRES_MONITORING_PASSWORD=monitoring_password
-OTEL_COLLECTOR_HOST=otel-collector
-OTEL_COLLECTOR_PORT_GRPC=4317
-OTEL_COLLECTOR_PORT_HTTP=4318
-OTEL_RESOURCE_ATTRIBUTES=service.namespace=opentelemetry-demo,service.version=2.2.0
-OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+    log "Generating .env from upstream template..."
+    UPSTREAM_ENV="$REPO_ROOT/tests/microservices-demo/opentelemetry-demo/.env"
+    if [ -f "$UPSTREAM_ENV" ]; then
+        cp "$UPSTREAM_ENV" .env
+    fi
+    cat >> .env <<'EOF'
+
+# Sigiro Federation overrides
 SIGIRO_API_KEY=sigiro_dev_e2e
+SIGIRO_CENTRAL_URL=http://sigiro-central:9999
 EOF
     pass ".env generated"
 fi
@@ -72,12 +77,23 @@ fi
 SIGIRO_API_KEY="${SIGIRO_API_KEY:-$(grep '^SIGIRO_API_KEY=' .env | cut -d= -f2-)}"
 export SIGIRO_API_KEY
 
-# Check for sigiro binary — build image if needed
-if [ ! -f "$SIGIRO_BIN" ]; then
-    log "Building sigiro binary..."
-    cd "$REPO_ROOT"
-    cargo build --release --bin sigiro
-    cd "$SCRIPT_DIR"
+# Check for sigiro binary — build from source if missing and not skipped
+if [ "${SIGIRO_SKIP_BUILD:-}" = "1" ]; then
+    if [ ! -f "$SIGIRO_BIN" ]; then
+        fail "SIGIRO_SKIP_BUILD=1 but binary not found at $SIGIRO_BIN"
+        exit 1
+    fi
+else
+    if [ ! -f "$SIGIRO_BIN" ]; then
+        if ! command -v cargo &>/dev/null; then
+            fail "cargo not found. Install Rust or set SIGIRO_BIN to a pre-built binary."
+            exit 1
+        fi
+        log "Building sigiro binary (this may take a few minutes)..."
+        cd "$REPO_ROOT"
+        cargo build --release --bin sigiro
+        cd "$SCRIPT_DIR"
+    fi
 fi
 
 # Build minimal sigiro Docker image if not present
@@ -102,8 +118,18 @@ pass "product-catalog:sigiro image ready"
 log "Starting sigiro federation + OpenTelemetry Demo..."
 docker compose up -d --wait --wait-timeout 120
 
-# Give a moment for registration
-sleep 3
+# Wait for key demo services to be running (not just created)
+log "Waiting for demo services to start..."
+for i in $(seq 1 60); do
+    RUNNING=$(docker compose ps --format '{{.Name}}' --filter status=running 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$RUNNING" -ge 15 ]; then
+        pass "$RUNNING containers running"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+echo ""
 
 # ─── Step 2: Verify federation workers ───────────────────────────
 log "Verifying federation workers..."
@@ -226,20 +252,13 @@ fi
 
 # ─── Step 7: Container health ────────────────────────────────────
 log "Checking container health..."
-UNHEALTHY=$(docker compose ps --format json 2>/dev/null | python3 -c "
-import sys, json
-containers = json.load(sys.stdin) if sys.stdin.read().strip().startswith('[') else []
-if not isinstance(containers, list): containers = [containers]
-for c in containers:
-    if c.get('State') != 'running':
-        print(f\"{c.get('Name','?')}: {c.get('State','?')}\")
-" 2>/dev/null || echo "")
-
-if [ -z "$UNHEALTHY" ]; then
-    pass "All containers running"
+TOTAL=$(docker compose ps --format '{{.Name}}' 2>/dev/null | wc -l | tr -d ' ')
+RUNNING=$(docker compose ps --format '{{.Name}}' --filter status=running 2>/dev/null | wc -l | tr -d ' ')
+if [ "$RUNNING" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+    pass "All $TOTAL containers running"
 else
-    warn "Some containers not running:"
-    echo "$UNHEALTHY"
+    warn "$RUNNING/$TOTAL containers running"
+    docker compose ps --format 'table {{.Name}}	{{.Status}}' 2>/dev/null || true
 fi
 
 # ─── Summary ─────────────────────────────────────────────────────

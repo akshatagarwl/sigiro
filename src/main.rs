@@ -156,12 +156,20 @@ async fn main() -> Result<()> {
             );
         }
         Some(Command::Status) => {
-            let client = require_client()?;
-            let result = client.status().await?;
-            println!(
-                "{}",
-                format_output(&serde_json::to_value(&result)?, &cli.output)?
-            );
+            // Health is public — no auth needed. Use a simple client so dev users
+            // don't have to configure a key just to check local server health.
+            let base_url = sigiro::config::ENDPOINT
+                .value()
+                .unwrap_or_else(|_| "http://localhost:9999".to_string());
+            let resp = reqwest::get(format!("{}/health", base_url.trim_end_matches('/')))
+                .await
+                .context("failed to connect to sigiro server")?;
+            let status = if resp.status().is_success() {
+                resp.text().await.unwrap_or_else(|_| "ok".to_string())
+            } else {
+                format!("error: {}", resp.status())
+            };
+            println!("{}", format_output(&serde_json::json!({"status": status }), &cli.output)?);
         }
         Some(Command::Investigate { service, from, to }) => {
             let client = require_client()?;

@@ -576,6 +576,8 @@ services:
     command: ["--config=/etc/otelcol-config.yml"]
     volumes:
       - ./otelcol-config.yml:/etc/otelcol-config.yml:ro
+    environment:
+      - SIGIRO_API_KEY=${SIGIRO_API_KEY}
     deploy:
       resources:
         limits:
