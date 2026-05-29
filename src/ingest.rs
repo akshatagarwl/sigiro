@@ -135,25 +135,30 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
         })
 }
 
-/// Decompress request body if Content-Encoding is gzip.
 const GZIP: &[u8] = b"gzip";
 
-fn is_gzip(headers: &axum::http::HeaderMap) -> bool {
-    headers
-        .get(axum::http::header::CONTENT_ENCODING)
-        .map(|v| v.as_bytes() == GZIP)
-        .unwrap_or(false)
-}
-
-fn decompress_gzip(body: &axum::body::Bytes) -> Result<axum::body::Bytes, axum::http::StatusCode> {
-    use std::io::Read;
-    let mut decoder = flate2::read::GzDecoder::new(&body[..]);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed).map_err(|e| {
-        tracing::warn!("gzip decompression failed: {}", e);
-        axum::http::StatusCode::BAD_REQUEST
-    })?;
-    Ok(axum::body::Bytes::from(decompressed))
+/// Decode request body according to Content-Encoding.
+/// Identity: pass through. Gzip: decompress. Anything else: 415.
+fn decode_body(
+    headers: &axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<axum::body::Bytes, axum::http::StatusCode> {
+    let Some(enc) = headers.get(axum::http::header::CONTENT_ENCODING) else {
+        return Ok(body);
+    };
+    if enc.as_bytes() == GZIP {
+        use std::io::Read;
+        let mut decoder = flate2::read::GzDecoder::new(&body[..]);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).map_err(|e| {
+            tracing::warn!("gzip decompression failed: {}", e);
+            axum::http::StatusCode::BAD_REQUEST
+        })?;
+        return Ok(axum::body::Bytes::from(decompressed));
+    }
+    let enc_str = std::str::from_utf8(enc.as_bytes()).unwrap_or("<invalid>");
+    tracing::warn!("unsupported Content-Encoding: {}", enc_str);
+    Err(axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
 }
 
 /// Run a CPU-bound transform on the tokio blocking pool.
@@ -630,18 +635,14 @@ async fn otlp_http_traces(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> axum::response::Response {
-    let body = if is_gzip(&headers) {
-        match decompress_gzip(&body) {
-            Ok(b) => b,
-            Err(status) => {
-                return axum::response::Response::builder()
-                    .status(status)
-                    .body(axum::body::Body::empty())
-                    .unwrap();
-            }
+    let body = match decode_body(&headers, body) {
+        Ok(b) => b,
+        Err(status) => {
+            return axum::response::Response::builder()
+                .status(status)
+                .body(axum::body::Body::empty())
+                .unwrap();
         }
-    } else {
-        body
     };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
@@ -703,13 +704,9 @@ async fn otlp_http_logs(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let body = if is_gzip(&headers) {
-        match decompress_gzip(&body) {
-            Ok(b) => b,
-            Err(status) => return status,
-        }
-    } else {
-        body
+    let body = match decode_body(&headers, body) {
+        Ok(b) => b,
+        Err(status) => return status,
     };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
@@ -752,13 +749,9 @@ async fn otlp_http_metrics(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let body = if is_gzip(&headers) {
-        match decompress_gzip(&body) {
-            Ok(b) => b,
-            Err(status) => return status,
-        }
-    } else {
-        body
+    let body = match decode_body(&headers, body) {
+        Ok(b) => b,
+        Err(status) => return status,
     };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
@@ -812,13 +805,9 @@ async fn otlp_http_profiles(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let body = if is_gzip(&headers) {
-        match decompress_gzip(&body) {
-            Ok(b) => b,
-            Err(status) => return status,
-        }
-    } else {
-        body
+    let body = match decode_body(&headers, body) {
+        Ok(b) => b,
+        Err(status) => return status,
     };
     let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
         Ok(id) => id,
