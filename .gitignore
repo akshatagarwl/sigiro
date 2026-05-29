@@ -1,6 +1,11 @@
 # Build artifacts
 /target
 
+# Docker buildx caches
+.buildx-cache*
+
+# Local env files
+.env
 
 # Fuzzing corpus — ignore generated artifacts, track curated seeds
 fuzz/target/
