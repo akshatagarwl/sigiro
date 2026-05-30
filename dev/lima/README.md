@@ -61,7 +61,7 @@ cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro
 limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-local:~/sigiro/bin/sigiro-latest
 
 # 4. Run E2E test
-limactl copy tests/lima-e2e-test.sh sigiro-local:/tmp/lima-e2e-test.sh
+limactl copy tests/vm/lima-e2e-test.sh sigiro-local:/tmp/lima-e2e-test.sh
 limactl shell sigiro-local bash -c \
   'SIGIRO_BIN=~/sigiro/bin/sigiro-latest MODE=local \
    SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'

@@ -36,7 +36,7 @@ sigiro admin create-key --project my_app
 Verify the full stack (OpenTelemetry Demo + Sigiro federation) with one command:
 
 ```bash
-cd tests/microservices-demo/otel-demo-federation
+cd tests/e2e/federation
 ./run-e2e.sh
 ```
 
@@ -59,5 +59,5 @@ SIGIRO_DATA_DIR=./data cargo run -- serve
 cargo test --release
 
 # Run E2E test
-cd tests/microservices-demo/otel-demo-federation && ./run-e2e.sh
+cd tests/e2e/federation && ./run-e2e.sh
 ```

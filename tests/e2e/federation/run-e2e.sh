@@ -50,7 +50,7 @@ if ! docker compose version &>/dev/null; then
 fi
 
 # Auto-init git submodules if the opentelemetry-demo directory is empty
-if [ ! -f "$REPO_ROOT/tests/microservices-demo/opentelemetry-demo/.git" ]; then
+if [ ! -f "$REPO_ROOT/tests/fixtures/opentelemetry-demo/.git" ]; then
     log "Initializing git submodules..."
     cd "$REPO_ROOT"
     git submodule update --init --recursive
@@ -60,7 +60,7 @@ fi
 # Generate .env if missing — base it on upstream demo .env and append sigiro overrides
 if [ ! -f ".env" ]; then
     log "Generating .env from upstream template..."
-    UPSTREAM_ENV="$REPO_ROOT/tests/microservices-demo/opentelemetry-demo/.env"
+    UPSTREAM_ENV="$REPO_ROOT/tests/fixtures/opentelemetry-demo/.env"
     if [ -f "$UPSTREAM_ENV" ]; then
         cp "$UPSTREAM_ENV" .env
     fi
@@ -108,7 +108,7 @@ pass "sigiro:local image ready"
 # Check for product-catalog custom image
 if ! docker image inspect product-catalog:sigiro &>/dev/null 2>&1; then
     warn "product-catalog:sigiro image not found. Building from submodule..."
-    cd "$REPO_ROOT/tests/microservices-demo/opentelemetry-demo/src/product-catalog"
+    cd "$REPO_ROOT/tests/fixtures/opentelemetry-demo/src/product-catalog"
     docker build -t product-catalog:sigiro -f Dockerfile .
     cd "$SCRIPT_DIR"
 fi

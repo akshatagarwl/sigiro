@@ -9,7 +9,7 @@
 #   limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-s3:~/sigiro/bin/sigiro
 #
 # Run E2E test:
-#   limactl copy tests/lima-e2e-test.sh sigiro-s3:/tmp/lima-e2e-test.sh
+#   limactl copy tests/vm/lima-e2e-test.sh sigiro-s3:/tmp/lima-e2e-test.sh
 #   limactl shell sigiro-s3 bash -c \
 #     'SIGIRO_BIN=~/sigiro/bin/sigiro MODE=s3 \
 #      SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'
