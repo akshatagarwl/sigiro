@@ -1,14 +1,7 @@
 target/
-dist/
-www/
-
-docs/
 .git/
 .github/
 .worktrees/
-fuzz/
 *.md
-*.pen
 .dockerignore
 docker-bake.hcl
-
