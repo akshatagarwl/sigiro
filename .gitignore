@@ -1,61 +1,22 @@
-# Build artifacts
 /target
-
-# Docker buildx caches
 .buildx-cache*
-
-# Local env files
 .env
-
-# Fuzzing corpus — ignore generated artifacts, track curated seeds
 fuzz/target/
 fuzz/corpus/mcp_jsonrpc_fuzz/*
 fuzz/corpus/otlp_traces_fuzz/*
 !fuzz/corpus/mcp_jsonrpc_fuzz/seed_*.json
 !fuzz/corpus/otlp_traces_fuzz/seed_*.bin
-
-# Mutation testing
 mutants.out/
 mutants.out.old/
-
-# Vendored deps
 vendor/
-
-# Local cargo
 .cargo-home/
-
-
-# Local task list
 TASKS.md
-
-# OS
 .DS_Store
-
-# API response dumps
 response.json
-
-# CAR/sworm state (managed externally, not part of repo history)
 .swarm/
 .codex-autorunner/
-
-# Cargo lock drift (dependencies managed separately)
-Cargo.lock
-
-# Prompt artifacts from prior sessions
-docs/prompts/
-
-# OpenCode state
 .opencode/
-
-# Sisyphus state
 .sisyphus/
-
-# Local symlink to car
 car
-
-# Build output
 out.something
 trace-waterfall.html
-
-# Test binaries
-tests/generate_push_request.rs

@@ -1,6 +1,5 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: cargo-chef planner -- extracts dependency recipe
 FROM --platform=$BUILDPLATFORM lukemathwalker/cargo-chef:latest-rust-slim AS chef
 WORKDIR /build
 
@@ -10,7 +9,6 @@ COPY src/ src/
 COPY benches/ benches/
 RUN cargo chef prepare --recipe-path recipe.json
 
-# Stage 2: cook dependencies (cached until Cargo.lock changes)
 FROM lukemathwalker/cargo-chef:latest-rust-slim AS deps
 WORKDIR /build
 ARG TARGETARCH
@@ -24,7 +22,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
     cargo chef cook --release --recipe-path recipe.json
 
-# Stage 3: build the sigiro binary only
 FROM deps AS builder
 ARG TARGETARCH
 COPY Cargo.toml Cargo.lock ./
@@ -39,7 +36,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
     cargo build --release --bin sigiro && \
     cp /build/target/release/sigiro /build/sigiro
 
-# Stage 4: minimal runtime
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/sigiro /usr/local/bin/sigiro
