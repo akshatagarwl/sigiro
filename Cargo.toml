@@ -107,8 +107,9 @@ manual-string-new = "warn"
 inefficient-to-string = "warn"
 
 [lints.rust]
-# Compiler-level: unused Results are errors
 unused-must-use = "deny"
+dead_code = "warn"
+unused_imports = "warn"
 
 [profile.dev]
 split-debuginfo = "unpacked"
