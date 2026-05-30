@@ -5,8 +5,8 @@
 #
 # Usage:
 #   limactl start --name=fed-central dev/lima/sigiro-fed-central.yaml
-#   limactl copy target/aarch64-unknown-linux-gnu/release/sigiro fed-central:/home/akshat.guest/sigiro
-#   limactl shell fed-central /home/akshat.guest/run-central.sh
+#   limactl copy target/aarch64-unknown-linux-gnu/release/sigiro fed-central:~/sigiro/bin/sigiro
+#   limactl shell fed-central ~/sigiro/bin/run-central.sh
 
 images:
 - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
@@ -34,8 +34,7 @@ containerd:
   user: false
 
 mounts:
-# NOTE: Change this to your repository root path.
-- location: "~/workspace"
+- location: "{{.Home}}/sigiro"
   writable: false
 
 provision:
@@ -62,11 +61,15 @@ provision:
 - mode: user
   script: |
     #!/bin/bash
-    cat > /home/akshat.guest/run-central.sh << 'RUNCENTRAL'
+    set -eux -o pipefail
+    VM_HOME="$(eval echo ~"$(whoami)")"
+    mkdir -p "${VM_HOME}/sigiro/bin" "${VM_HOME}/sigiro/data"
+    cat > "${VM_HOME}/sigiro/bin/run-central.sh" << 'RUNCENTRAL'
     #!/bin/bash
     set -eux -o pipefail
 
-    export SIGIRO_DATA_DIR=/home/akshat.guest/sigiro-data
+    VM_HOME="$(eval echo ~"$(whoami)")"
+    export SIGIRO_DATA_DIR="${VM_HOME}/sigiro/data"
     export SIGIRO_HTTP_PORT=9999
     export SIGIRO_OTLP_HTTP_PORT=4318
     export SIGIRO_GRPC_PORT=4317
@@ -77,8 +80,8 @@ provision:
     export SIGIRO_API_KEY=sigiro_dev_test
     export SIGIRO_HOST=0.0.0.0
 
-    mkdir -p /home/akshat.guest/sigiro-data
-    cd /home/akshat.guest
+    mkdir -p "${SIGIRO_DATA_DIR}"
+    cd "${VM_HOME}/sigiro/bin"
     exec ./sigiro serve
     RUNCENTRAL
-    chmod +x /home/akshat.guest/run-central.sh
+    chmod +x "${VM_HOME}/sigiro/bin/run-central.sh"

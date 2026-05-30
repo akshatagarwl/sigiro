@@ -7,6 +7,17 @@ Lima VM configs for local E2E testing on macOS (Apple Silicon).
 - [Lima](https://lima-vm.io/) installed (`brew install lima`)
 - GNU aarch64-linux cross-compiler (`brew install aarch64-elf-gcc` or `brew install messense/homebrew-macos-cross-toolchains/aarch64-unknown-linux-gnu`)
 
+## Setup
+
+The VM configs use `{{.Home}}/sigiro` as the mount point. Before starting VMs, create a symlink from your repo to `~/sigiro`:
+
+```bash
+# One-time: symlink your repo clone to ~/sigiro
+ln -s "$(pwd)" ~/sigiro
+```
+
+This ensures the mount works regardless of where the repository is cloned.
+
 ## Cross-Compilation Setup
 
 Lima VMs run Linux aarch64. Cross-compile from macOS arm64:
@@ -39,19 +50,20 @@ See `.cargo/config.toml` for details on the cross-compile workaround.
 ## Quick Start
 
 ```bash
-# 1. Start a VM
+# 1. Ensure ~/sigiro symlink exists (see Setup above)
+# 2. Start a VM
 limactl start --name=sigiro-local dev/lima/sigiro-local.yaml
 
-# 2. Cross-compile and copy binary
+# 3. Cross-compile and copy binary
 source scripts/lima-cross-env.sh
 ulimit -n 65536
 cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro
-limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-local:/home/akshat.guest/sigiro-latest
+limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-local:~/sigiro/bin/sigiro-latest
 
-# 3. Run E2E test
+# 4. Run E2E test
 limactl copy tests/lima-e2e-test.sh sigiro-local:/tmp/lima-e2e-test.sh
 limactl shell sigiro-local bash -c \
-  'SIGIRO_BIN=/home/akshat.guest/sigiro-latest MODE=local \
+  'SIGIRO_BIN=~/sigiro/bin/sigiro-latest MODE=local \
    SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'
 ```
 

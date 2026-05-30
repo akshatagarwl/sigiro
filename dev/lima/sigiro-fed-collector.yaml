@@ -2,8 +2,8 @@
 #
 # Usage:
 #   1. limactl start --name=fed-collector-1 dev/lima/sigiro-fed-collector.yaml
-#   2. limactl copy ./result/bin/sigiro fed-collector-1:/home/akshat.guest/sigiro
-#   3. limactl shell fed-collector-1 /home/akshat.guest/run-collector.sh
+#   2. limactl copy target/aarch64-unknown-linux-gnu/release/sigiro fed-collector-1:~/sigiro/bin/sigiro
+#   3. limactl shell fed-collector-1 ~/sigiro/bin/run-collector.sh
 
 images:
 - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
@@ -30,7 +30,7 @@ containerd:
   user: false
 
 mounts:
-- location: "~/workspace"
+- location: "{{.Home}}/sigiro"
   writable: false
 
 provision:
@@ -52,10 +52,15 @@ provision:
 - mode: user
   script: |
     #!/bin/bash
-    cat > /home/akshat.guest/run-collector.sh << 'RUNCOLLECTOR'
+    set -eux -o pipefail
+    VM_HOME="$(eval echo ~"$(whoami)")"
+    mkdir -p "${VM_HOME}/sigiro/bin"
+    cat > "${VM_HOME}/sigiro/bin/run-collector.sh" << 'RUNCOLLECTOR'
     #!/bin/bash
     set -eux -o pipefail
-    cd /home/akshat.guest
+
+    VM_HOME="$(eval echo ~"$(whoami)")"
+    cd "${VM_HOME}/sigiro/bin"
 
     # Federation collector configuration
     export SIGIRO_DATA_DIR=/home/sigiro/sigiro-data
@@ -73,4 +78,4 @@ provision:
     # Run as federation collector with eBPF
     ./sigiro serve 2>&1 | tee /tmp/sigiro-collector.log
     RUNCOLLECTOR
-    chmod +x /home/akshat.guest/run-collector.sh
+    chmod +x "${VM_HOME}/sigiro/bin/run-collector.sh"

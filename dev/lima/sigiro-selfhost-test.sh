@@ -4,7 +4,7 @@
 # Architecture:
 #   sigiro-selfhost-old  — "backend" Sigiro (HTTP:9999, gRPC:4317, OTLP HTTP:4318)
 #   sigiro-selfhost-new  — "self-hosted" Sigiro (HTTP:9989, gRPC:4316, OTLP HTTP:4315)
-#                          obi instruments it and exports OTLP to old instance
+#                          exports OTLP to old instance
 #
 set -eux -o pipefail
 
@@ -66,30 +66,29 @@ echo "Old VM: $OLD_VM @ $OLD_IP"
 echo "New VM: $NEW_IP @ $NEW_VM"
 
 # ---------------------------------------------------------------------------
-# Step 3 — on OLD VM: clone repo and build natively
+# Step 3 — on OLD VM: build natively from mounted repo
 # ---------------------------------------------------------------------------
 echo "=== [OLD] Setting up Sigiro from source ==="
 vm_ssh "$OLD_VM" "which cargo || (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable && rustup target add aarch64-unknown-linux-gnu)"
 
-# Clone and build on the old VM (uses the mounted workspace path)
 vm_ssh "$OLD_VM" "rustup target add aarch64-unknown-linux-gnu 2>/dev/null || true"
 
-# Build sigiro natively on the old VM using the workspace mount at /home/akshat.guest
-vm_ssh "$OLD_VM" "cd /home/akshat.guest && cargo build --release 2>&1 | tail -5"
+# Build sigiro natively on the old VM using the workspace mount
+vm_ssh "$OLD_VM" "cd ~/sigiro && cargo build --release 2>&1 | tail -5"
 
 # ---------------------------------------------------------------------------
-# Step 4 — on NEW VM: clone repo and build natively
+# Step 4 — on NEW VM: build natively from mounted repo
 # ---------------------------------------------------------------------------
 echo "=== [NEW] Setting up Sigiro from source ==="
 vm_ssh "$NEW_VM" "rustup target add aarch64-unknown-linux-gnu 2>/dev/null || true"
-vm_ssh "$NEW_VM" "cd /home/akshat.guest && cargo build --release 2>&1 | tail -5"
+vm_ssh "$NEW_VM" "cd ~/sigiro && cargo build --release 2>&1 | tail -5"
 
 # ---------------------------------------------------------------------------
 # Step 5 — start OLD instance (backend) on default ports
 # ---------------------------------------------------------------------------
 echo "=== [OLD] Starting Sigiro backend on $OLD_IP ==="
 vm_ssh "$OLD_VM" "pkill -f sigiro 2>/dev/null || true; rm -rf /tmp/sigiro-old; mkdir -p /tmp/sigiro-old"
-vm_ssh "$OLD_VM" "cd /home/akshat.guest && \
+vm_ssh "$OLD_VM" "cd ~/sigiro && \
   SIGIRO_DATA_DIR=/tmp/sigiro-old \
   SIGIRO_HTTP_PORT=9999 \
   SIGIRO_GRPC_PORT=4317 \
@@ -107,11 +106,11 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6 — start NEW instance with obi pointing at OLD
+# Step 6 — start NEW instance pointing at OLD
 # ---------------------------------------------------------------------------
 echo "=== [NEW] Starting Sigiro self-hosted on $NEW_IP (pointing at $OLD_IP) ==="
 vm_ssh "$NEW_VM" "pkill -f sigiro 2>/dev/null || true; rm -rf /tmp/sigiro-new; mkdir -p /tmp/sigiro-new"
-vm_ssh "$NEW_VM" "cd /home/akshat.guest && \
+vm_ssh "$NEW_VM" "cd ~/sigiro && \
   SIGIRO_DATA_DIR=/tmp/sigiro-new \
   SIGIRO_HTTP_PORT=9989 \
   SIGIRO_GRPC_PORT=4316 \
@@ -154,12 +153,3 @@ vm_ssh "$OLD_VM" "tail -40 /tmp/sigiro-old.log"
 echo ""
 echo "=== [NEW] Logs (last 40 lines) ==="
 vm_ssh "$NEW_VM" "tail -40 /tmp/sigiro-new.log"
-
-# ---------------------------------------------------------------------------
-# Step 9 — if obi binary available, copy it to new VM
-# ---------------------------------------------------------------------------
-if [[ -f "$SCRIPT_DIR/obi-aarch64" ]]; then
-  echo "=== Copying obi binary to new VM ==="
-  vm_cp "$SCRIPT_DIR/obi-aarch64" "$NEW_VM:/home/akshat.guest/obi"
-  vm_ssh "$NEW_VM" "chmod +x /home/akshat.guest/obi && ls -la /home/akshat.guest/obi"
-fi

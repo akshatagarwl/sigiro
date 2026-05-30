@@ -50,9 +50,6 @@ docs/prompts/
 # Sisyphus state
 .sisyphus/
 
-# Self-loop data (generated artifacts)
-.self-loop/
-
 # Local symlink to car
 car
 

@@ -20,6 +20,10 @@ MINIO_PORT="${MINIO_PORT:-9000}"
 PG_PORT="${PG_PORT:-5432}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SIGIRO_BIN="${SIGIRO_BIN:-${SCRIPT_DIR}/../target/release/sigiro}"
+# When running inside a Lima VM, default to the standard VM install path
+if [ ! -f "$SIGIRO_BIN" ] && [ -f "$HOME/sigiro/bin/sigiro" ]; then
+    SIGIRO_BIN="$HOME/sigiro/bin/sigiro"
+fi
 SIGIRO_PID=""
 FAILED=0
 

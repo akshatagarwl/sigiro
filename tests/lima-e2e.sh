@@ -4,7 +4,7 @@
 set -euo pipefail
 
 MODE="${MODE:-local}"
-BIN="/home/akshat.guest/sigiro-binary"
+BIN="${SIGIRO_BIN:-$HOME/sigiro/bin/sigiro}"
 DATA_DIR="/tmp/sigiro-e2e-$$"
 FAILED=0
 PID_FILE="/tmp/sigiro-e2e-$$-pid"

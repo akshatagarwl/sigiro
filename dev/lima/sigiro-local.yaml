@@ -4,15 +4,15 @@
 #   limactl start --name=sigiro-local dev/lima/sigiro-local.yaml
 #
 # Cross-compile and copy binary:
-#   nix build .#sigiro-aarch64-linux
-#   limactl copy ./result/bin/sigiro sigiro-local:/home/akshat.guest/sigiro-latest
+#   source scripts/lima-cross-env.sh
+#   cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro
+#   limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-local:~/sigiro/bin/sigiro
 #
 # Run E2E test:
-#   limactl shell sigiro-local bash -c \
-#     'SIGIRO_BIN=/home/akshat.guest/sigiro-latest MODE=local \
-#      SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'
-#   # Note: copy the test script first because 9p mount has stale caching:
 #   limactl copy tests/lima-e2e-test.sh sigiro-local:/tmp/lima-e2e-test.sh
+#   limactl shell sigiro-local bash -c \
+#     'SIGIRO_BIN=~/sigiro/bin/sigiro MODE=local \
+#      SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'
 
 images:
 - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
@@ -30,7 +30,7 @@ containerd:
   user: false
 
 mounts:
-- location: "../.."
+- location: "{{.Home}}/sigiro"
   writable: true
 
 provision:

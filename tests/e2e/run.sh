@@ -17,7 +17,7 @@ trap cleanup EXIT
 echo "=== Building sigiro image ==="
 docker compose build
 
-echo "=== Starting sigiro (self-loop profiling enabled) ==="
+echo "=== Starting sigiro (self-profiling enabled) ==="
 docker compose up -d sigiro
 
 echo "Waiting for sigiro to be healthy..."
@@ -142,7 +142,7 @@ else
 fi
 
 echo ""
-echo "=== Check 4: Profiles via self-loop (SIGIRO_PYROSCOPE_ENDPOINT) ==="
+echo "=== Check 4: Self-profiling (SIGIRO_PYROSCOPE_ENDPOINT) ==="
 run_check "Sigiro self-profiles count > 0" \
   "SELECT count(*) AS n FROM lake.sigiro_profiles" \
   '"n"'

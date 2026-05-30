@@ -1,11 +1,10 @@
-# Sigiro "new" instance — self-hosts using obi instrumentation, sends to "old"
+# Sigiro "new" instance — self-hosted collector that exports to "old"
 # Uses different ports to avoid conflict, points OTLP to old instance
 #
 # Usage:
 #   limactl start --name=sigiro-selfhost-new dev/lima/sigiro-selfhost-new.yaml
-#   limactl copy ./result/bin/sigiro sigiro-selfhost-new:/home/akshat.guest/sigiro
-#   limactl copy dev/lima/obi-{linux,arm64} sigiro-selfhost-new:/home/akshat.guest/ 2>/dev/null || true
-#   limactl shell sigiro-selfhost-new /home/akshat.guest/run-new.sh
+#   limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-selfhost-new:~/sigiro/bin/sigiro
+#   limactl shell sigiro-selfhost-new ~/sigiro/bin/run-new.sh
 
 images:
 - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
@@ -23,7 +22,7 @@ containerd:
   user: false
 
 mounts:
-- location: "~/workspace"
+- location: "{{.Home}}/sigiro"
   writable: false
 
 provision:
@@ -42,10 +41,14 @@ provision:
 - mode: user
   script: |
     #!/bin/bash
-    cat > /home/akshat.guest/run-new.sh << 'RUNNEW'
+    set -eux -o pipefail
+    VM_HOME="$(eval echo ~"$(whoami)")"
+    mkdir -p "${VM_HOME}/sigiro/bin"
+    cat > "${VM_HOME}/sigiro/bin/run-new.sh" << 'RUNNEW'
     #!/bin/bash
     set -eux -o pipefail
-    cd /home/akshat.guest
+    VM_HOME="$(eval echo ~"$(whoami)")"
+    cd "${VM_HOME}/sigiro/bin"
 
     # Ports for the "new" Sigiro instance (different from old)
     export SIGIRO_DATA_DIR=/tmp/sigiro-new
@@ -53,14 +56,13 @@ provision:
     export SIGIRO_GRPC_PORT=4316
     export SIGIRO_OTLP_HTTP_PORT=4315
 
-    # Point obi/Sigiro OTLP export at the "old" instance
+    # Point Sigiro OTLP export at the "old" instance
     export OTEL_EXPORTER_OTLP_ENDPOINT=http://10.0.0.2:4317
     export SIGIRO_PYROSCOPE_ENDPOINT=http://10.0.0.2:9999
 
     mkdir -p "$SIGIRO_DATA_DIR"
 
-    # Run with eBPF — obi will instrument this new Sigiro process
-    # and send traces to the old Sigiro instance
+    # Run with eBPF auto-instrumentation
     ./sigiro serve --ebpf 2>&1 | tee /tmp/sigiro-new.log
     RUNNEW
-    chmod +x /home/akshat.guest/run-new.sh
+    chmod +x "${VM_HOME}/sigiro/bin/run-new.sh"

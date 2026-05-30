@@ -50,23 +50,20 @@ fn missing_config_returns_error() {
 }
 
 #[test]
-fn data_dir_requires_env_var() {
-    // data_dir() must read SIGIRO_DATA_DIR — if unset it must error,
-    // not silently return an empty path. This catches the mutant that
-    // replaces data_dir with Ok(Default::default()).
+fn data_dir_uses_platform_default_when_unset() {
+    // data_dir() falls back to the platform data directory when SIGIRO_DATA_DIR
+    // is unset (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).
     let _guard = ENV_MUTEX.lock().unwrap();
     unsafe { std::env::remove_var("SIGIRO_DATA_DIR") };
     let result = sigiro::data_dir();
-    // Env var is restored by the mutex guard dropping, but verify the
-    // error path explicitly.
     assert!(
-        result.is_err(),
-        "data_dir should error when SIGIRO_DATA_DIR is unset"
+        result.is_ok(),
+        "data_dir should return platform default when SIGIRO_DATA_DIR is unset"
     );
-    let err_msg = result.unwrap_err().to_string();
+    let path = result.unwrap();
     assert!(
-        err_msg.contains("SIGIRO_DATA_DIR"),
-        "error message should mention SIGIRO_DATA_DIR, got: {err_msg}"
+        path.as_str().ends_with("sigiro"),
+        "data_dir should end with 'sigiro', got: {path}"
     );
 }
 

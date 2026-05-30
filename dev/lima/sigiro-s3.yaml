@@ -4,13 +4,14 @@
 #   limactl start --name=sigiro-s3 dev/lima/sigiro-s3.yaml
 #
 # Cross-compile and copy binary:
-#   nix build .#sigiro-aarch64-linux
-#   limactl copy ./result/bin/sigiro sigiro-s3:/home/akshat.guest/sigiro-latest
+#   source scripts/lima-cross-env.sh
+#   cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro
+#   limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-s3:~/sigiro/bin/sigiro
 #
 # Run E2E test:
 #   limactl copy tests/lima-e2e-test.sh sigiro-s3:/tmp/lima-e2e-test.sh
 #   limactl shell sigiro-s3 bash -c \
-#     'SIGIRO_BIN=/home/akshat.guest/sigiro-latest MODE=s3 \
+#     'SIGIRO_BIN=~/sigiro/bin/sigiro MODE=s3 \
 #      SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'
 
 images:
@@ -29,7 +30,7 @@ containerd:
   user: false
 
 mounts:
-- location: "../.."
+- location: "{{.Home}}/sigiro"
   writable: true
 
 provision:

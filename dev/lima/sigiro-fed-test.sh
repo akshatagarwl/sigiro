@@ -41,6 +41,11 @@ vm_ssh() {
   limactl shell "$vm" -- bash -lc "$*" < /dev/null
 }
 
+vm_home() {
+  local vm="$1"
+  vm_ssh "$vm" "eval echo ~\"\$(whoami)\""
+}
+
 wait_for_port() {
   local host=$1 port=$2 retries=${3:-30}
   for i in $(seq 1 $retries); do
@@ -211,15 +216,17 @@ cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro 2>&1 | tai
 echo "=== Copying sigiro binary to all VMs ==="
 for vm in "$FED_CENTRAL" "$FED_COLLECTOR_1" "$FED_COLLECTOR_2"; do
   echo "Copying to $vm..."
-  limactl copy target/aarch64-unknown-linux-gnu/release/sigiro "$vm:/home/akshat.guest/sigiro"
-  vm_ssh "$vm" "chmod +x /home/akshat.guest/sigiro && ls -la /home/akshat.guest/sigiro"
+  VM_H="$(vm_home "$vm")"
+  limactl copy target/aarch64-unknown-linux-gnu/release/sigiro "$vm:${VM_H}/sigiro/bin/sigiro"
+  vm_ssh "$vm" "chmod +x ~/sigiro/bin/sigiro && ls -la ~/sigiro/bin/sigiro"
 done
 
 # ---------------------------------------------------------------------------
 # Step 6 — start central sigiro on central VM
 # ---------------------------------------------------------------------------
 echo "=== Starting sigiro-central on central VM ==="
-vm_ssh "$FED_CENTRAL" "setsid /home/akshat.guest/run-central.sh > /tmp/sigiro-central.log 2>&1 & echo \"Central PID: \$!\""
+CENTRAL_HOME="$(vm_home "$FED_CENTRAL")"
+vm_ssh "$FED_CENTRAL" "setsid ${CENTRAL_HOME}/sigiro/bin/run-central.sh > /tmp/sigiro-central.log 2>&1 & echo \"Central PID: \$!\""
 
 echo "Waiting for central to start (up to 120s)..."
 sleep 30
@@ -236,12 +243,15 @@ echo "Central health check OK (port $CENTRAL_HTTP_PORT)"
 # ---------------------------------------------------------------------------
 echo "=== Starting sigiro collectors on collector VMs ==="
 
+C1_HOME="$(vm_home "$FED_COLLECTOR_1")"
+C2_HOME="$(vm_home "$FED_COLLECTOR_2")"
+
 cat > "$FED_TMPDIR/start-collector-1.sh" << EOF
 #!/bin/bash
 set -eux -o pipefail
 export SIGIRO_ENDPOINT='http://host.lima.internal:${COLLECTOR_1_QUACK_PORT}'
 export SIGIRO_QUACK_ADVERTISE_PORT='${COLLECTOR_1_QUACK_PORT}'
-export SIGIRO_DATA_DIR=/home/akshat.guest/sigiro-data
+export SIGIRO_DATA_DIR=${C1_HOME}/sigiro/data
 export SIGIRO_HTTP_PORT=9999
 export SIGIRO_OTLP_HTTP_PORT=4318
 export SIGIRO_CENTRAL_URL=http://host.lima.internal:${CENTRAL_HTTP_PORT}
@@ -249,8 +259,8 @@ export SIGIRO_API_KEY=sigiro_dev_test
 export SIGIRO_EBPF=false
 export SIGIRO_QUACK_PORT=5432
 export SIGIRO_QUACK_TOKEN=fed-token-central
-mkdir -p /home/akshat.guest/sigiro-data
-cd /home/akshat.guest
+mkdir -p ${C1_HOME}/sigiro/data
+cd ${C1_HOME}/sigiro/bin
 exec ./sigiro serve
 EOF
 
@@ -259,7 +269,7 @@ cat > "$FED_TMPDIR/start-collector-2.sh" << EOF
 set -eux -o pipefail
 export SIGIRO_ENDPOINT='http://host.lima.internal:${COLLECTOR_2_QUACK_PORT}'
 export SIGIRO_QUACK_ADVERTISE_PORT='${COLLECTOR_2_QUACK_PORT}'
-export SIGIRO_DATA_DIR=/home/akshat.guest/sigiro-data
+export SIGIRO_DATA_DIR=${C2_HOME}/sigiro/data
 export SIGIRO_HTTP_PORT=9999
 export SIGIRO_OTLP_HTTP_PORT=4318
 export SIGIRO_CENTRAL_URL=http://host.lima.internal:${CENTRAL_HTTP_PORT}
@@ -267,8 +277,8 @@ export SIGIRO_API_KEY=sigiro_dev_test
 export SIGIRO_EBPF=false
 export SIGIRO_QUACK_PORT=5432
 export SIGIRO_QUACK_TOKEN=fed-token-central
-mkdir -p /home/akshat.guest/sigiro-data
-cd /home/akshat.guest
+mkdir -p ${C2_HOME}/sigiro/data
+cd ${C2_HOME}/sigiro/bin
 exec ./sigiro serve
 EOF
 
