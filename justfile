@@ -22,19 +22,6 @@ run:
 image *args:
     docker buildx bake sigiro {{args}}
 
-image-ci *args:
-    docker buildx bake sigiro \
-        --set "*.cache-from=type=gha" \
-        --set "*.cache-to=type=gha,mode=max" \
-        {{args}}
-
-image-push:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    TOKEN=$(gh auth token)
-    echo "$TOKEN" | docker login ghcr.io -u "$(gh api user --jq .login)" --password-stdin
-    docker buildx bake sigiro --push
-
 lima-build:
     #!/usr/bin/env bash
     set -euo pipefail
