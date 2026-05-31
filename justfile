@@ -7,11 +7,13 @@ _default:
 build:
     cargo build --release --bin sigiro {{ if env("TARGET", "") != "" { "--target " + env("TARGET") } else { "" } }}
 
+# Full verification gate. Run this before every commit.
 check:
     cargo fmt --check
     cargo clippy --all-targets --all-features -- -D warnings
     cargo test --release
 
+# Run sigiro locally with dev dependencies (Postgres, MinIO).
 run:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -19,9 +21,11 @@ run:
     trap 'docker compose -f docker-compose.dev.yml down' EXIT
     cargo run --release --bin sigiro
 
+# Build multi-arch Docker image. Pass --push to push, or --set flags for cache config.
 image *args:
     docker buildx bake sigiro {{args}}
 
+# Cross-compile sigiro for Linux ARM64 Lima VMs.
 lima-build:
     #!/usr/bin/env bash
     set -euo pipefail
