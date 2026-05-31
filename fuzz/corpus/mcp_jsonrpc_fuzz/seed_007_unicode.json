@@ -1,1 +1,0 @@
-{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"filter": {"name": "\u5de5\u5177", "description": "DESCRIPTION"}}}
