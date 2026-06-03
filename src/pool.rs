@@ -20,7 +20,7 @@ pub struct PoolEntry {
     /// Single DuckDB connection shared by both flusher (writes) and HTTP API (reads).
     /// Wrapped in Arc<Mutex> so reads and writes are serialized — DuckDB does not
     /// support concurrent access on the same connection anyway.
-    conn: Arc<Mutex<Connection>>,
+    pub conn: Arc<Mutex<Connection>>,
     last_access: Instant,
 }
 
@@ -252,7 +252,7 @@ impl ProjectPool {
 
         // Attach DuckLake catalog so the quack server serves actual project data.
         // Collectors need their local DuckLake catalog attached for remote queries.
-        let project_dir = self.data_dir.join("dev_project");
+        let project_dir = self.data_dir.join("default");
         let ducklake_attached = if let Ok(Some(config)) = crate::storage::load_config() {
             crate::storage::init_distributed(&conn, &config, &project_dir)
                 .context("failed to init DuckLake for federation connection")?;
@@ -300,7 +300,7 @@ impl ProjectPool {
 
         // Attach DuckLake catalog so the quack server serves actual project data.
         // Collectors need their local DuckLake catalog attached for remote queries.
-        let project_dir = self.data_dir.join("dev_project");
+        let project_dir = self.data_dir.join("default");
         let ducklake_attached = if let Ok(Some(config)) = crate::storage::load_config() {
             crate::storage::init_distributed(&conn, &config, &project_dir)
                 .context("failed to init DuckLake for federation connection")?;

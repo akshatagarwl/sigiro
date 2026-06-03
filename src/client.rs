@@ -52,11 +52,14 @@ impl SigiroClient {
     }
 
     pub async fn query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
-        let resp = self
+        let mut req = self
             .http
             .post(format!("{}/v1/query", self.base_url))
-            .bearer_auth(&self.api_key)
-            .body(sql.to_string())
+            .body(sql.to_string());
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
             .send()
             .await
             .context("failed to connect to sigiro server")?;
@@ -65,62 +68,12 @@ impl SigiroClient {
         resp.json().await.context("failed to parse query response")
     }
 
-    /// Create an API key via the running server's admin endpoint.
-    pub async fn admin_create_key(
-        &self,
-        project: &str,
-        plan: &str,
-        rate_limit: u32,
-    ) -> Result<String> {
-        let resp = self
-            .http
-            .post(format!("{}/admin/keys", self.base_url))
-            .json(&serde_json::json!({
-                "project": project,
-                "plan": plan,
-                "rate_limit": rate_limit,
-            }))
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
-
-        match resp.status().as_u16() {
-            200 => {
-                let body: crate::responses::CreateKeyResponse =
-                    resp.json().await.context("failed to parse response")?;
-                Ok(body.key)
-            }
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
-    }
-
-    /// Revoke an API key via the running server's admin endpoint.
-    pub async fn admin_revoke_key(&self, short_token: &str) -> Result<bool> {
-        let resp = self
-            .http
-            .delete(format!("{}/admin/keys/{}", self.base_url, short_token))
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
-
-        match resp.status().as_u16() {
-            200 => Ok(true),
-            404 => Ok(false),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
-    }
-
     pub async fn status(&self) -> Result<crate::responses::AdminStatusResponse> {
-        let resp = self
-            .http
-            .get(format!("{}/health", self.base_url))
-            .bearer_auth(&self.api_key)
+        let mut req = self.http.get(format!("{}/health", self.base_url));
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
             .send()
             .await
             .context("failed to connect to sigiro server")?;
@@ -154,11 +107,14 @@ impl SigiroClient {
             "from_ts": from,
             "to_ts": to,
         });
-        let resp = self
+        let mut req = self
             .http
             .post(format!("{}/v1/investigate", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&body)
+            .json(&body);
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
             .send()
             .await
             .context("failed to connect to sigiro server")?;
@@ -171,10 +127,11 @@ impl SigiroClient {
 
     /// List services with first/last seen and span counts.
     pub async fn services(&self) -> Result<crate::responses::ServicesResponse> {
-        let resp = self
-            .http
-            .get(format!("{}/v1/services", self.base_url))
-            .bearer_auth(&self.api_key)
+        let mut req = self.http.get(format!("{}/v1/services", self.base_url));
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
             .send()
             .await
             .context("failed to connect to sigiro server")?;
@@ -187,11 +144,14 @@ impl SigiroClient {
 
     /// Register a federation worker with the server.
     pub async fn register_worker(&self, worker: &crate::federation::WorkerInfo) -> Result<()> {
-        let resp = self
+        let mut req = self
             .http
             .post(format!("{}/v1/federation/workers", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(worker)
+            .json(worker);
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
             .send()
             .await
             .context("failed to connect to sigiro server")?;
@@ -205,10 +165,13 @@ impl SigiroClient {
     /// Deregister a federation worker from the server.
     /// Returns `true` if the worker was found and removed, `false` if 404.
     pub async fn deregister_worker(&self, id: &str) -> Result<bool> {
-        let resp = self
+        let mut req = self
             .http
-            .delete(format!("{}/v1/federation/workers/{}", self.base_url, id))
-            .bearer_auth(&self.api_key)
+            .delete(format!("{}/v1/federation/workers/{}", self.base_url, id));
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
             .send()
             .await
             .context("failed to connect to sigiro server")?;
@@ -231,10 +194,13 @@ impl SigiroClient {
             workers: Vec<crate::federation::WorkerInfo>,
         }
 
-        let resp = self
+        let mut req = self
             .http
-            .get(format!("{}/v1/federation/workers", self.base_url))
-            .bearer_auth(&self.api_key)
+            .get(format!("{}/v1/federation/workers", self.base_url));
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
             .send()
             .await
             .context("failed to connect to sigiro server")?;
@@ -256,10 +222,10 @@ impl SigiroClient {
     }
 }
 
-/// Build a client from config. Fails if API key or endpoint is not configured.
+/// Build a client from config. Returns empty API key if none is configured
+/// (works against servers running in open mode).
 pub fn try_build_client() -> anyhow::Result<SigiroClient> {
-    let api_key = crate::config::get_api_key()
-        .map_err(|_| anyhow::anyhow!("No API key configured. Run: sigiro auth <key>"))?;
+    let api_key = crate::config::get_api_key().unwrap_or_default();
     let base_url = crate::config::ENDPOINT
         .value()
         .map_err(anyhow::Error::from)?;
@@ -272,10 +238,13 @@ pub fn try_build_client() -> anyhow::Result<SigiroClient> {
 
 impl SigiroClient {
     pub async fn trace(&self, trace_id: &str) -> Result<crate::responses::TraceDetailResponse> {
-        let resp = self
+        let mut req = self
             .http
-            .get(format!("{}/v1/traces/{}", self.base_url, trace_id))
-            .bearer_auth(&self.api_key)
+            .get(format!("{}/v1/traces/{}", self.base_url, trace_id));
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
             .send()
             .await
             .context("failed to connect to sigiro server")?;

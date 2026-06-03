@@ -42,28 +42,17 @@ fn build_test_context() -> TestContext {
 
     let pool = Arc::new(ProjectPool::new(data_dir, 4));
 
-    // Explicit DI: initialize the dev_project connection before handlers access it.
-    // This mirrors production behavior where ingest path calls create_project first.
-    pool.create_project("dev_project")
-        .expect("failed to init dev_project connection");
+    // Explicit DI: initialize the default project connection before handlers access it.
+    pool.create_project("default")
+        .expect("failed to init default project connection");
 
     // In-memory SQLite admin DB with all required tables
     let admin_conn = Connection::open_in_memory().expect("failed to open in-memory SQLite");
-    admin::create_keys_table(&admin_conn).expect("failed to create keys table");
     admin::create_instance_status_table(&admin_conn)
         .expect("failed to create instance_status table");
     sigiro::federation::create_workers_table(&admin_conn).expect("failed to create workers table");
 
     let admin_conn = Arc::new(Mutex::new(admin_conn));
-
-    // Pre-populate auth cache so tests can use the dev token without a real key in DB.
-    sigiro::auth::auth_cache().insert(
-        "sigiro_dev_test".to_string(),
-        sigiro::auth::AuthContext {
-            project_id: "dev_project".to_string(),
-            plan: "test".to_string(),
-        },
-    );
 
     let router = Arc::new(sigiro::inserter::MsgRouter::new(Arc::clone(&pool)));
     router.start();
@@ -72,6 +61,7 @@ fn build_test_context() -> TestContext {
         admin_conn,
         http_client: reqwest::Client::new(),
         router,
+        configured_key: "sigiro_dev_test".to_string(),
     });
 
     TestContext {
@@ -84,7 +74,7 @@ fn build_test_context() -> TestContext {
 fn build_otlp_app(state: &Arc<AppState>) -> axum::Router {
     let router = Arc::new(MsgRouter::new(Arc::clone(&state.pool)));
     router.start();
-    ingest::otlp_http_router(router, Arc::clone(&state.admin_conn))
+    ingest::otlp_http_router(router, state.configured_key.clone())
 }
 
 // -- Tests ----------------------------------------------------------------
@@ -140,33 +130,6 @@ async fn test_services_with_dev_auth_returns_200() {
     assert!(
         body.get("services").is_some(),
         "expected 'services' key in response"
-    );
-}
-
-#[tokio::test]
-async fn test_admin_create_key() {
-    let ctx = build_test_context();
-    let app = build_http_router(ctx.state);
-    let server = TestServer::new(app).expect("failed to build test server");
-
-    let body = serde_json::json!({
-        "project": "test_project",
-        "plan": "free",
-        "rate_limit": 100
-    });
-
-    let resp = server.post("/admin/keys").json(&body).await;
-    resp.assert_status_ok();
-
-    let result: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
-    let key = result
-        .get("key")
-        .expect("expected 'key' in response")
-        .as_str()
-        .expect("key should be a string");
-    assert!(
-        key.starts_with("sigiro_"),
-        "key should start with 'sigiro_' prefix, got: {key}"
     );
 }
 

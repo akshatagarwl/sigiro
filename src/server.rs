@@ -8,6 +8,7 @@ use sqlparser::ast::Statement;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use std::sync::Arc;
+use std::time::Duration;
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
 use utoipa::OpenApi;
@@ -31,8 +32,6 @@ use tracing_attributes::instrument;
         services_handler,
         trace_detail_handler,
         investigate_handler,
-        admin_create_key,
-        admin_revoke_key,
         admin_status,
         register_worker_handler,
         deregister_worker_handler,
@@ -92,10 +91,12 @@ impl KeyExtractor for BearerKeyExtractor {
 
 pub struct AppState {
     pub pool: Arc<ProjectPool>,
-    /// Admin SQLite for API key storage (separate from per-project data)
+    /// Admin SQLite for federation worker storage and instance status
     pub admin_conn: Arc<Mutex<Connection>>,
     pub http_client: reqwest::Client,
     pub router: Arc<crate::inserter::MsgRouter>,
+    /// Configured API key for self-hosted auth. Empty means open mode.
+    pub configured_key: String,
 }
 
 // DuckDB's access_mode is database-level, not connection-level:
@@ -178,12 +179,8 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         ))
         .layer(GovernorLayer::new(governor_conf));
 
-    // Admin routes — no bearer auth (chicken-and-egg: need admin to create first key).
-    // These are on :9999 which should only be exposed internally.
-    let admin = Router::new()
-        .typed_post(admin_create_key)
-        .typed_delete(admin_revoke_key)
-        .typed_get(admin_status);
+    // Admin routes — no auth required. Self-hosted: expose only internally.
+    let admin = Router::new().typed_get(admin_status);
 
     // Public routes + v1 API + admin + Swagger UI
     Router::new()
@@ -227,13 +224,41 @@ pub async fn run_servers(
 ) -> Result<()> {
     let ports = ServerPorts::load()?;
 
+    let configured_key = crate::config::API_KEY.value().unwrap_or_default();
+    if configured_key.is_empty() {
+        tracing::warn!("SIGIRO_API_KEY not set — running in open mode (no auth required)");
+    } else {
+        tracing::info!("API key configured — requests require Bearer token");
+    }
+
+    // TLS configuration
+    let tls_acceptor = match (
+        crate::config::TLS_CERT.value(),
+        crate::config::TLS_KEY.value(),
+    ) {
+        (Ok(cert), Ok(key)) => {
+            tracing::info!("TLS enabled — cert={cert}, key={key}");
+            Some(crate::tls::tls_acceptor(&cert, &key).context("failed to load TLS config")?)
+        }
+        (Ok(_), Err(_)) => {
+            anyhow::bail!("SIGIRO_TLS_CERT is set but SIGIRO_TLS_KEY is missing");
+        }
+        (Err(_), Ok(_)) => {
+            anyhow::bail!("SIGIRO_TLS_KEY is set but SIGIRO_TLS_CERT is missing");
+        }
+        (Err(_), Err(_)) => {
+            tracing::info!("TLS not configured — serving plain TCP");
+            None
+        }
+    };
+
     // gRPC server — authenticated via Bearer token in metadata
-    let grpc_admin = Arc::clone(&admin_conn);
     let grpc_router = Arc::clone(&router);
+    let grpc_key = configured_key.clone();
     let grpc_port = ports.grpc;
     let grpc_handle = tokio::spawn(async move {
         let addr = format!("[::]:{grpc_port}").parse().expect("valid addr");
-        let svc = OtlpGrpcService::new(grpc_router, grpc_admin);
+        let svc = OtlpGrpcService::new(grpc_router, grpc_key);
         tracing::info!("gRPC listening on {addr}");
         TonicServer::builder()
             .add_service(svc.trace_service())
@@ -245,13 +270,12 @@ pub async fn run_servers(
             .context("gRPC server failed")
     });
 
-    tracing::info!("dev mode — use Bearer sigiro_dev_<anything> to authenticate");
-
     let app_state = Arc::new(AppState {
-        pool,
+        pool: Arc::clone(&pool),
         admin_conn: Arc::clone(&admin_conn),
         http_client: reqwest::Client::new(),
         router: Arc::clone(&router),
+        configured_key: configured_key.clone(),
     });
 
     {
@@ -263,49 +287,153 @@ pub async fn run_servers(
     let http_app = build_http_router(app_state);
 
     let http_port = ports.http;
+    let http_acceptor = tls_acceptor.clone();
     let http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{http_port}")).await?;
-        tracing::info!("HTTP listening on 0.0.0.0:{http_port}");
-        axum::serve(listener, http_app)
-            .await
-            .context("HTTP server failed")
+        if let Some(acceptor) = http_acceptor {
+            tracing::info!("HTTPS listening on 0.0.0.0:{http_port}");
+            crate::tls::serve_tls(listener, acceptor, http_app, "HTTP").await
+        } else {
+            tracing::info!("HTTP listening on 0.0.0.0:{http_port}");
+            axum::serve(listener, http_app)
+                .await
+                .context("HTTP server failed")
+        }
     });
 
     // OTLP HTTP — authenticated via Authorization header
-    let otlp_http_app =
-        crate::ingest::otlp_http_router(Arc::clone(&router), Arc::clone(&admin_conn))
-            .layer(tower_http::decompression::RequestDecompressionLayer::new());
+    let otlp_http_app = crate::ingest::otlp_http_router(Arc::clone(&router), configured_key)
+        .layer(tower_http::decompression::RequestDecompressionLayer::new());
     let otlp_http_port = ports.otlp_http;
+    let otlp_acceptor = tls_acceptor.clone();
     let otlp_http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{otlp_http_port}")).await?;
-        tracing::info!("OTLP HTTP listening on 0.0.0.0:{otlp_http_port}");
-        axum::serve(listener, otlp_http_app)
-            .await
-            .context("OTLP HTTP server failed")
+        if let Some(acceptor) = otlp_acceptor {
+            tracing::info!("OTLP HTTPS listening on 0.0.0.0:{otlp_http_port}");
+            crate::tls::serve_tls(listener, acceptor, otlp_http_app, "OTLP HTTP").await
+        } else {
+            tracing::info!("OTLP HTTP listening on 0.0.0.0:{otlp_http_port}");
+            axum::serve(listener, otlp_http_app)
+                .await
+                .context("OTLP HTTP server failed")
+        }
     });
 
+    // Graceful shutdown: wait for SIGTERM or SIGINT, then drain.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+
+    // Data retention background task (only if retention is configured).
+    let retention_handle = spawn_retention_task(Arc::clone(&pool));
+
     // Servers should run forever. Any exit is unexpected and fatal.
-    // Match on the result to log the specific server and error before propagating.
-    let result = tokio::select! {
+    // Also listen for shutdown signals.
+    tokio::select! {
         r = grpc_handle => {
             let result = r?;
             tracing::error!("gRPC server exited: {result:?}");
-            result
         },
         r = http_handle => {
             let result = r?;
             tracing::error!("HTTP server exited: {result:?}");
-            result
         },
         r = otlp_http_handle => {
             let result = r?;
             tracing::error!("OTLP HTTP server exited: {result:?}");
-            result
         },
+        _ = sigterm.recv() => {
+            tracing::info!("SIGTERM received — starting graceful shutdown");
+        },
+        _ = sigint.recv() => {
+            tracing::info!("SIGINT received — starting graceful shutdown");
+        },
+    }
+
+    // Graceful shutdown: stop accepting new connections, drain in-flight requests,
+    // flush all buffered data to DuckDB.
+    tracing::info!("draining flusher tasks (up to 10s)...");
+    let drain = tokio::time::timeout(Duration::from_secs(10), async {
+        // Try to take exclusive ownership of the router for clean shutdown.
+        match Arc::try_unwrap(router) {
+            Ok(router) => router.shutdown_and_wait().await,
+            Err(r) => {
+                tracing::warn!("router still referenced — forcing shutdown");
+                r.shutdown().await;
+            }
+        }
+    });
+    if drain.await.is_err() {
+        tracing::warn!("flusher drain timed out — some data may be lost");
+    }
+
+    // Cancel the retention task.
+    if let Some(h) = retention_handle {
+        h.abort();
+    }
+
+    Ok(())
+}
+
+/// Spawn a background task that periodically deletes old data based on
+/// SIGIRO_RETENTION_DAYS. Runs once per hour.
+fn spawn_retention_task(pool: Arc<ProjectPool>) -> Option<tokio::task::JoinHandle<()>> {
+    let days = match crate::config::RETENTION_DAYS.value() {
+        Ok(d) if d > 0 => d,
+        _ => return None,
     };
 
-    router.shutdown().await;
-    result
+    tracing::info!(retention_days = days, "data retention enabled");
+
+    Some(tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            if let Err(e) = run_retention_cleanup(&pool, days).await {
+                tracing::error!("retention cleanup failed: {e:#}");
+            }
+        }
+    }))
+}
+
+/// Execute retention cleanup: delete spans/logs/metrics older than N days.
+async fn run_retention_cleanup(pool: &ProjectPool, days: u32) -> anyhow::Result<()> {
+    let cutoff = format!("now() - INTERVAL '{days} days'");
+    let tables = [
+        "lake.sigiro_spans",
+        "lake.sigiro_logs",
+        "lake.sigiro_metrics_sum",
+        "lake.sigiro_metrics_gauge",
+        "lake.sigiro_metrics_histogram",
+        "lake.sigiro_metrics_exp_histogram",
+        "lake.sigiro_profiles",
+    ];
+
+    for project_entry in pool.connections.iter() {
+        let project_id = project_entry.key().clone();
+        let conn = Arc::clone(&project_entry.conn);
+        for table in &tables {
+            let sql = format!("DELETE FROM {table} WHERE timestamp < {cutoff}");
+            let c = Arc::clone(&conn);
+            let t = table.to_string();
+            match tokio::task::spawn_blocking(move || {
+                let guard = c.lock();
+                guard.execute_batch(&sql)
+            })
+            .await
+            {
+                Ok(Ok(_)) => {
+                    tracing::debug!(project = %project_id, table = %t, "retention cleanup completed")
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(project = %project_id, table = %t, "retention cleanup error: {e}")
+                }
+                Err(e) => {
+                    tracing::warn!(project = %project_id, table = %t, "retention cleanup task failed: {e}")
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[instrument(skip(state))]
@@ -1116,71 +1244,8 @@ fn merge_investigation_blocks(
 }
 
 // --- Admin endpoints ---
-// No bearer auth required — :9999 should only be exposed internally.
-// This solves the DuckDB single-writer lock problem: the CLI talks to the
-// running server over HTTP instead of opening admin.sqlite directly.
-
-#[derive(serde::Deserialize)]
-struct CreateKeyRequest {
-    project: String,
-    #[serde(default = "default_plan")]
-    plan: String,
-    #[serde(default = "default_rate_limit")]
-    rate_limit: u32,
-}
-
-fn default_plan() -> String {
-    "free".to_string()
-}
-
-fn default_rate_limit() -> u32 {
-    100
-}
-
-#[utoipa::path(
-    post,
-    path = "/admin/keys",
-    responses(
-        (status = 200, description = "Created API key", body = CreateKeyResponse)
-    ),
-    tag = "admin"
-)]
-async fn admin_create_key(
-    _path: AdminKeysPath,
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateKeyRequest>,
-) -> ApiResult<Json<CreateKeyResponse>> {
-    let raw_key = admin::create_key(&state.admin_conn, &req.project, &req.plan, req.rate_limit)
-        .context_internal("Admin", "failed to create API key")?;
-    Ok(Json(CreateKeyResponse { key: raw_key }))
-}
-
-#[utoipa::path(
-    delete,
-    path = "/admin/keys/{short_token}",
-    responses(
-        (status = 200, description = "Key revoked", body = RevokeKeyResponse)
-    ),
-    tag = "admin"
-)]
-async fn admin_revoke_key(
-    AdminKeyPath { short_token }: AdminKeyPath,
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<Json<RevokeKeyResponse>> {
-    let revoked = admin::revoke_key(&state.admin_conn, &short_token)
-        .context_internal("Admin", "failed to revoke API key")?;
-    if revoked {
-        Ok(Json(RevokeKeyResponse {
-            revoked: true,
-            short_token,
-        }))
-    } else {
-        Err(axum_anyhow::not_found(
-            "Key Not Found",
-            &format!("No key found with short token: {short_token}"),
-        ))
-    }
-}
+// Self-hosted: admin endpoints are unauthenticated. Run sigiro behind a
+// reverse proxy or firewall if you need to restrict access.
 
 /// GET /admin/status — returns all instance_status rows as JSON object.
 #[utoipa::path(

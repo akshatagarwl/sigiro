@@ -19,14 +19,17 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
+    restart: unless-stopped
     ports:
       - "9999:9999"
     environment:
       - SIGIRO_DATA_DIR=/var/lib/sigiro
       - SIGIRO_HTTP_PORT=9999
       - SIGIRO_CENTRAL=true
-      - SIGIRO_CATALOG_URL=postgresql://postgres:changeit@postgres/sigiro_catalog?sslmode=disable
+      - SIGIRO_CATALOG_URL=postgresql://postgres:changeit@postgres:5432/sigiro_catalog?sslmode=disable
+      - SIGIRO_QUACK_PORT=15433
+      - SIGIRO_QUACK_TOKEN=dev_quack_token
       - SIGIRO_API_KEY=${SIGIRO_API_KEY}
       - RUST_LOG=sigiro=info
     depends_on:
@@ -37,8 +40,8 @@ services:
       test: ["CMD", "curl", "-sf", "http://localhost:9999/health"]
       interval: 2s
       timeout: 5s
-      retries: 10
-      start_period: 3s
+      retries: 60
+      start_period: 120s
     logging: *logging
 
   sigiro-collector:
@@ -47,7 +50,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
+    restart: unless-stopped
     ports:
       - "4319:4319"
     environment:
@@ -55,6 +59,7 @@ services:
       - SIGIRO_HTTP_PORT=9998
       - SIGIRO_OTLP_HTTP_PORT=4319
       - SIGIRO_QUACK_PORT=15433
+      - SIGIRO_QUACK_TOKEN=dev_quack_token
       - SIGIRO_ENDPOINT=http://sigiro-collector:9998
       - SIGIRO_CENTRAL_URL=http://sigiro-central:9999
       - SIGIRO_API_KEY=${SIGIRO_API_KEY}
@@ -68,8 +73,8 @@ services:
       test: ["CMD", "curl", "-sf", "http://localhost:9998/health"]
       interval: 2s
       timeout: 5s
-      retries: 10
-      start_period: 3s
+      retries: 60
+      start_period: 120s
     logging: *logging
 
   accounting:
@@ -168,6 +173,7 @@ services:
       - shipping
       - otel-collector
       - kafka
+    restart: unless-stopped
     logging: *logging
 
   currency:
@@ -411,6 +417,7 @@ services:
     ports:
       - "${PRODUCT_REVIEWS_PORT}"
     environment:
+      - PRODUCT_REVIEWS_PORT
       - DB_CONNECTION_STRING=host=postgres user=astronomy_user password=astronomy_password dbname=astronomy_db sslmode=disable
       - PRODUCT_CATALOG_ADDR
       - OPENAI_API_KEY=dummy

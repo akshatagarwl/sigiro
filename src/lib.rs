@@ -2,6 +2,7 @@ pub mod admin;
 pub mod auth;
 pub mod client;
 pub mod config;
+pub mod diagnose;
 pub mod drain;
 
 #[allow(clippy::items_after_test_module)]
@@ -20,6 +21,7 @@ pub mod responses;
 pub mod schema;
 pub mod server;
 pub mod storage;
+pub mod tls;
 pub mod toon;
 pub mod types;
 

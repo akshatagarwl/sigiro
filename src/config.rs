@@ -74,6 +74,15 @@ pub static BACKPRESSURE_POLICY: Envar<String> =
         EnvarDef::Default("block".to_string())
     });
 
+/// Byte-size threshold that triggers an immediate flush. Default: 8_388_608 (8 MiB).
+/// When the total buffered bytes across all signal tables reaches this limit,
+/// the flusher writes to DuckDB without waiting for the row threshold or timer.
+/// This prevents unbounded memory growth when individual rows are large.
+pub static FLUSH_BYTE_THRESHOLD: Envar<usize> =
+    Envar::on_startup("SIGIRO_FLUSH_BYTE_THRESHOLD", || {
+        EnvarDef::Default(8_388_608)
+    });
+
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
 /// Defaults to the platform data dir (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).
 pub static DATA_DIR: Envar<String> = Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);
@@ -88,6 +97,15 @@ pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
 /// (e.g. http://host.lima.internal:9998) while SIGIRO_ENDPOINT controls the bind address.
 pub static ADVERTISE_ENDPOINT: Envar<String> =
     Envar::on_startup("SIGIRO_ADVERTISE_ENDPOINT", || EnvarDef::Unset);
+
+/// Path to TLS certificate PEM file. Unset = no TLS.
+pub static TLS_CERT: Envar<String> = Envar::on_startup("SIGIRO_TLS_CERT", || EnvarDef::Unset);
+/// Path to TLS private key PEM file. Unset = no TLS.
+pub static TLS_KEY: Envar<String> = Envar::on_startup("SIGIRO_TLS_KEY", || EnvarDef::Unset);
+
+/// Data retention days. 0 = no automatic cleanup.
+pub static RETENTION_DAYS: Envar<u32> =
+    Envar::on_startup("SIGIRO_RETENTION_DAYS", || EnvarDef::Default(0));
 
 pub static QUACK_PORT: Envar<u16> = Envar::on_startup("SIGIRO_QUACK_PORT", || EnvarDef::Unset);
 

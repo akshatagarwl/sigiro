@@ -6,81 +6,34 @@ use axum::{
 };
 use axum_anyhow::ApiError;
 use headers::{Authorization, HeaderMapExt, authorization::Bearer};
-use moka::sync::Cache;
-use parking_lot::Mutex;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::Arc;
 
 /// Auth context extracted from the API key — attached to request extensions.
-/// Handlers use this to route to the correct per-project DuckDB.
+/// Self-hosted: all requests route to the default project.
 #[derive(Clone, Debug)]
 pub struct AuthContext {
     pub project_id: String,
-    pub plan: String,
 }
 
-/// Returns true if the token is a dev token (sigiro_dev_ prefix).
-pub fn is_dev_project(token: &str) -> bool {
-    token.starts_with("sigiro_dev_")
-}
-
-/// Auth cache TTL — verified keys cached for 60 seconds.
-/// API keys don't change often; this eliminates the admin DuckDB mutex
-/// contention on the ingest hot path (every OTLP request was hitting it).
-const AUTH_CACHE_TTL: Duration = Duration::from_secs(60);
-
-/// Global auth cache: raw_key → AuthContext.
-/// Moka handles TTL-based eviction automatically.
-/// Exposed for testing.
-pub fn auth_cache() -> &'static Cache<String, AuthContext> {
-    static CACHE: OnceLock<Cache<String, AuthContext>> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        Cache::builder()
-            .max_capacity(1024)
-            .time_to_live(AUTH_CACHE_TTL)
-            .build()
-    })
-}
-
-/// Verify an API key with caching. Used by OTLP ingest hot path.
-/// Checks in-memory cache first; on miss, falls back to SQLite verify
-/// and caches result for AUTH_CACHE_TTL.
-/// Returns AuthContext on success, ApiError on failure.
-/// Failed verifications are NOT cached (attacker can't poison cache).
-pub fn verify_key_cached(
-    conn: &Mutex<rusqlite::Connection>,
-    raw_key: &str,
-) -> Result<AuthContext, ApiError> {
-    // Dev key bypass — same project for all dev tokens
-    if is_dev_project(raw_key) {
+/// Verify an API key against the configured key.
+/// Self-hosted: single API key set via SIGIRO_API_KEY env var.
+/// Empty configured_key means open mode (no auth required).
+pub fn verify_key(configured_key: &str, raw_key: &str) -> Result<AuthContext, ApiError> {
+    if configured_key.is_empty() {
         return Ok(AuthContext {
-            project_id: "dev_project".to_string(),
-            plan: "free".to_string(),
+            project_id: "default".to_string(),
         });
     }
-
-    let cache = auth_cache();
-
-    // Fast path: cache hit (moka auto-evicts expired entries)
-    if let Some(ctx) = cache.get(raw_key) {
-        return Ok(ctx);
+    if raw_key == configured_key {
+        Ok(AuthContext {
+            project_id: "default".to_string(),
+        })
+    } else {
+        Err(axum_anyhow::unauthorized(
+            "Invalid API Key",
+            "The provided API key does not match SIGIRO_API_KEY",
+        ))
     }
-
-    // Slow path: verify against SQLite
-    let (project_id, plan) = crate::admin::verify_key_db(conn, raw_key).map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("Malformed API key") || msg.contains("Invalid API key") {
-            axum_anyhow::unauthorized("Invalid API Key", &msg)
-        } else {
-            axum_anyhow::internal_error("Internal Error", &msg)
-        }
-    })?;
-    let ctx = AuthContext { project_id, plan };
-
-    // Cache successful verification (moka auto-expires after AUTH_CACHE_TTL)
-    cache.insert(raw_key.to_string(), ctx.clone());
-
-    Ok(ctx)
 }
 
 /// Extract bearer token from Authorization header.
@@ -94,16 +47,25 @@ pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
     Ok(auth.token().to_string())
 }
 
-/// axum middleware: verify API key against local DuckDB.
-/// No network calls. No cache needed. Hash comparison is <1us.
+/// axum middleware: verify API key against the configured key.
+/// Self-hosted: simple constant-time comparison. No DB needed.
+/// Open mode (empty configured_key): allow requests without Authorization header.
 pub async fn auth_middleware(
     State(state): State<Arc<crate::server::AppState>>,
     req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let token = extract_bearer_token(req.headers())?;
+    // Open mode: no auth required, but still inject default context
+    if state.configured_key.is_empty() {
+        let mut req = req;
+        req.extensions_mut().insert(AuthContext {
+            project_id: "default".to_string(),
+        });
+        return Ok(next.run(req).await);
+    }
 
-    let ctx = verify_key_cached(&state.admin_conn, &token)?;
+    let token = extract_bearer_token(req.headers())?;
+    let ctx = verify_key(&state.configured_key, &token)?;
     let mut req = req;
     req.extensions_mut().insert(ctx);
     Ok(next.run(req).await)

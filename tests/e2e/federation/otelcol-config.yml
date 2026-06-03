@@ -15,7 +15,7 @@ exporters:
     verbosity: detailed
   otlphttp/sigiro:
     endpoint: http://sigiro-collector:4319
-    encoding: json
+    compression: none
     headers:
       Authorization: Bearer ${SIGIRO_API_KEY}
     tls:

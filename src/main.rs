@@ -83,37 +83,13 @@ enum Command {
     },
     /// Start MCP stdio server for Claude/Cursor/Codex integration
     Mcp,
-    /// Save API key for hosted mode
+    /// Save API key for CLI authentication
     Auth {
-        /// API key (e.g. sigiro_...)
+        /// API key (set SIGIRO_API_KEY on the server to the same value)
         key: String,
     },
-    /// Admin commands for key management
-    Admin {
-        #[command(subcommand)]
-        action: AdminAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum AdminAction {
-    /// Create a new API key for a project
-    CreateKey {
-        /// Project ID
-        #[arg(long)]
-        project: String,
-        /// Plan (free, builder, team, pro)
-        #[arg(long, default_value = "free")]
-        plan: String,
-        /// Rate limit (requests per minute)
-        #[arg(long, default_value = "100")]
-        rate_limit: u32,
-    },
-    /// Revoke an API key by short token
-    RevokeKey {
-        /// Short token portion of the key
-        short_token: String,
-    },
+    /// Diagnose sigiro using its own telemetry — no docker logs
+    Diagnose,
 }
 
 /// Format output
@@ -209,48 +185,9 @@ async fn main() -> Result<()> {
             let path = sigiro::config::save_api_key(&key)?;
             println!("API key saved to {}", path);
         }
-        Some(Command::Admin { action }) => {
-            // Try HTTP to running server first (solves DuckDB single-writer lock).
-            // Fall back to direct DuckDB if server isn't running (bootstrapping).
-            let server_url = sigiro::config::ENDPOINT
-                .value()
-                .map_err(anyhow::Error::from)?;
-
-            match action {
-                AdminAction::CreateKey {
-                    project,
-                    plan,
-                    rate_limit,
-                } => {
-                    let client = sigiro::client::SigiroClient::new(&server_url, "");
-                    match client.admin_create_key(&project, &plan, rate_limit).await {
-                        Ok(raw_key) => {
-                            println!("{raw_key}");
-                        }
-                        Err(http_err) => {
-                            anyhow::bail!(
-                                "server not reachable at {server_url}: {http_err:#} — start the sigiro server first, or ensure SIGIRO_ENDPOINT points to a running instance"
-                            );
-                        }
-                    }
-                }
-                AdminAction::RevokeKey { short_token } => {
-                    let client = sigiro::client::SigiroClient::new(&server_url, "");
-                    match client.admin_revoke_key(&short_token).await {
-                        Ok(true) => {
-                            println!("Key revoked: {short_token}");
-                        }
-                        Ok(false) => {
-                            println!("No key found with short token: {short_token}");
-                        }
-                        Err(http_err) => {
-                            anyhow::bail!(
-                                "server not reachable at {server_url}: {http_err:#} — start the sigiro server first, or ensure SIGIRO_ENDPOINT points to a running instance"
-                            );
-                        }
-                    }
-                }
-            }
+        Some(Command::Diagnose) => {
+            let client = require_client()?;
+            sigiro::diagnose::run(&client).await?;
         }
     }
     Ok(())
@@ -313,15 +250,15 @@ async fn run_serve() -> Result<()> {
     // Extension probe is deferred to first project connection (pool.create_project).
     // Use `sigiro fetch-extensions` to pre-download for offline deployments.
 
-    // Pre-create dev_project so queries work without ingest
-    match pool.create_project("dev_project") {
-        Ok(_) => tracing::info!("dev_project initialized"),
+    // Pre-create default project so queries work without ingest
+    match pool.create_project("default") {
+        Ok(_) => tracing::info!("default project initialized"),
         Err(e) => {
             let mut chain = format!("{e}");
             for cause in e.chain().skip(1) {
                 chain.push_str(&format!("\n  Caused by: {cause}"));
             }
-            tracing::warn!("dev_project init failed (non-fatal): {chain}");
+            tracing::warn!("default project init failed (non-fatal): {chain}");
         }
     }
 

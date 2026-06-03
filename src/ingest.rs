@@ -24,9 +24,7 @@ use opentelemetry_proto::tonic::collector::{
         trace_service_server::{TraceService, TraceServiceServer},
     },
 };
-use parking_lot::Mutex;
 use prost::Message;
-use rusqlite::Connection;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing_attributes::instrument;
@@ -46,12 +44,15 @@ fn status_internal(msg: impl std::fmt::Display) -> Status {
 
 pub struct OtlpGrpcService {
     router: Arc<MsgRouter>,
-    admin_conn: Arc<Mutex<Connection>>,
+    configured_key: String,
 }
 
 impl OtlpGrpcService {
-    pub fn new(router: Arc<MsgRouter>, admin_conn: Arc<Mutex<Connection>>) -> Self {
-        Self { router, admin_conn }
+    pub fn new(router: Arc<MsgRouter>, configured_key: String) -> Self {
+        Self {
+            router,
+            configured_key,
+        }
     }
 
     /// Route a batch to the inserter: register flusher then send.
@@ -72,38 +73,44 @@ impl OtlpGrpcService {
     pub fn trace_service(&self) -> TraceServiceServer<Self> {
         TraceServiceServer::new(Self {
             router: Arc::clone(&self.router),
-            admin_conn: Arc::clone(&self.admin_conn),
+            configured_key: self.configured_key.clone(),
         })
     }
 
     pub fn logs_service(&self) -> LogsServiceServer<Self> {
         LogsServiceServer::new(Self {
             router: Arc::clone(&self.router),
-            admin_conn: Arc::clone(&self.admin_conn),
+            configured_key: self.configured_key.clone(),
         })
     }
 
     pub fn metrics_service(&self) -> MetricsServiceServer<Self> {
         MetricsServiceServer::new(Self {
             router: Arc::clone(&self.router),
-            admin_conn: Arc::clone(&self.admin_conn),
+            configured_key: self.configured_key.clone(),
         })
     }
 
     pub fn profiles_service(&self) -> ProfilesServiceServer<Self> {
         ProfilesServiceServer::new(Self {
             router: Arc::clone(&self.router),
-            admin_conn: Arc::clone(&self.admin_conn),
+            configured_key: self.configured_key.clone(),
         })
     }
 }
 
 /// Extract project_id from gRPC metadata Bearer token.
-/// Uses the auth cache to avoid DuckDB lookups on every request.
+/// Self-hosted: simple key comparison, no DB lookup.
+/// Extract project_id from gRPC metadata.
+/// Open mode (empty configured_key): no auth required.
 pub fn extract_project_id_grpc(
-    admin_conn: &Mutex<Connection>,
+    configured_key: &str,
     metadata: &tonic::metadata::MetadataMap,
 ) -> Result<String, Status> {
+    if configured_key.is_empty() {
+        return Ok("default".to_string());
+    }
+
     let token = metadata
         .get("authorization")
         .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
@@ -112,7 +119,7 @@ pub fn extract_project_id_grpc(
         .strip_prefix("Bearer ")
         .ok_or_else(|| Status::unauthenticated("Expected: Bearer <key>"))?;
 
-    let ctx = crate::auth::verify_key_cached(admin_conn, token)
+    let ctx = crate::auth::verify_key(configured_key, token)
         .map_err(|_| Status::unauthenticated("Invalid API key"))?;
     Ok(ctx.project_id)
 }
@@ -183,7 +190,7 @@ impl TraceService for OtlpGrpcService {
         &self,
         request: Request<ExportTraceServiceRequest>,
     ) -> Result<Response<ExportTraceServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.configured_key, request.metadata())?;
         // Transform on tokio blocking pool — no double decode.
         // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
         let bytes = request.into_inner().encode_to_vec();
@@ -212,7 +219,7 @@ impl LogsService for OtlpGrpcService {
         &self,
         request: Request<ExportLogsServiceRequest>,
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.configured_key, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_logs(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
@@ -239,7 +246,7 @@ impl MetricsService for OtlpGrpcService {
         &self,
         request: Request<ExportMetricsServiceRequest>,
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.configured_key, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
         let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -540,7 +547,7 @@ impl ProfilesService for OtlpGrpcService {
         &self,
         request: Request<ExportProfilesServiceRequest>,
     ) -> Result<Response<ExportProfilesServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.admin_conn, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.configured_key, request.metadata())?;
         let req = request.into_inner();
         let batch = spawn_transform("transform profiles", move || transform_profiles(req)).await?;
         if batch.num_rows() == 0 {
@@ -567,11 +574,14 @@ impl ProfilesService for OtlpGrpcService {
 
 struct OtlpHttpState {
     router: Arc<MsgRouter>,
-    admin_conn: Arc<Mutex<Connection>>,
+    configured_key: String,
 }
 
-pub fn otlp_http_router(router: Arc<MsgRouter>, admin_conn: Arc<Mutex<Connection>>) -> Router {
-    let state = Arc::new(OtlpHttpState { router, admin_conn });
+pub fn otlp_http_router(router: Arc<MsgRouter>, configured_key: String) -> Router {
+    let state = Arc::new(OtlpHttpState {
+        router,
+        configured_key,
+    });
     Router::new()
         .route("/", post(otlp_http_pyroscope)) // Pyroscope RS SDK posts here
         .route("/push.v1.PusherService/Push", post(otlp_http_pyroscope)) // pyroscope-rs SDK push path
@@ -585,18 +595,23 @@ pub fn otlp_http_router(router: Arc<MsgRouter>, admin_conn: Arc<Mutex<Connection
 }
 
 /// Extract project_id from HTTP Authorization header.
-/// Uses the auth cache to avoid DuckDB lookups on every request.
+/// Self-hosted: simple key comparison, no DB lookup.
+/// Open mode (empty configured_key): no auth required.
 pub fn extract_project_id_http(
-    admin_conn: &Mutex<Connection>,
+    configured_key: &str,
     headers: &axum::http::HeaderMap,
 ) -> Result<String, StatusCode> {
+    if configured_key.is_empty() {
+        return Ok("default".to_string());
+    }
+
     let auth: Authorization<Bearer> = headers.typed_get().ok_or_else(|| {
         tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
         StatusCode::UNAUTHORIZED
     })?;
     let token = auth.token();
 
-    let ctx = crate::auth::verify_key_cached(admin_conn, token).map_err(|_| {
+    let ctx = crate::auth::verify_key(configured_key, token).map_err(|_| {
         tracing::warn!("OTLP HTTP: invalid API key");
         StatusCode::UNAUTHORIZED
     })?;
@@ -623,7 +638,7 @@ async fn otlp_http_traces(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -656,7 +671,7 @@ async fn otlp_http_logs(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -689,7 +704,7 @@ async fn otlp_http_metrics(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -729,7 +744,7 @@ async fn otlp_http_profiles(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -790,7 +805,7 @@ async fn otlp_http_pyroscope(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.admin_conn, &headers) {
+    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
         Ok(id) => id,
         Err(status) => {
             tracing::warn!("pyroscope: auth failed: {status}");

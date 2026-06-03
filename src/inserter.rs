@@ -47,6 +47,7 @@ pub enum BackpressurePolicy {
 #[derive(Debug, Clone)]
 pub struct FlushConfig {
     pub row_threshold: usize,
+    pub byte_threshold: usize,
     pub interval: Duration,
     pub backpressure: BackpressurePolicy,
 }
@@ -56,6 +57,9 @@ impl FlushConfig {
         let row_threshold = crate::config::FLUSH_ROW_THRESHOLD
             .value()
             .expect("FLUSH_ROW_THRESHOLD config must be valid");
+        let byte_threshold = crate::config::FLUSH_BYTE_THRESHOLD
+            .value()
+            .expect("FLUSH_BYTE_THRESHOLD config must be valid");
         let interval_secs = crate::config::FLUSH_INTERVAL_SECS
             .value()
             .expect("FLUSH_INTERVAL_SECS config must be valid");
@@ -72,6 +76,7 @@ impl FlushConfig {
         };
         Self {
             row_threshold,
+            byte_threshold,
             interval: Duration::from_secs(interval_secs),
             backpressure,
         }
@@ -293,8 +298,10 @@ struct ProjectFlusher {
     table_names: BTreeMap<SignalTable, String>,
     buffers: BTreeMap<SignalTable, Vec<RecordBatch>>,
     total_rows: usize,
+    total_bytes: usize,
     last_flush: Instant,
     row_threshold: usize,
+    byte_threshold: usize,
     flush_interval: Duration,
     drain: DrainTree,
     pending_templates: HashMap<u64, String>,
@@ -316,8 +323,10 @@ impl ProjectFlusher {
             table_names,
             buffers,
             total_rows: 0,
+            total_bytes: 0,
             last_flush: Instant::now(),
             row_threshold: cfg.row_threshold,
+            byte_threshold: cfg.byte_threshold,
             flush_interval: cfg.interval,
             drain: DrainTree::new(),
             pending_templates: HashMap::new(),
@@ -340,7 +349,9 @@ impl ProjectFlusher {
         } else {
             batch
         };
+        let batch_bytes = batch_byte_size(&batch);
         self.total_rows += batch.num_rows();
+        self.total_bytes += batch_bytes;
         self.buffers.entry(signal).or_default().push(batch);
     }
     /// Run DRAIN on each log body and append `template_id` and `template_values` columns.
@@ -415,6 +426,7 @@ impl ProjectFlusher {
     fn should_flush(&self) -> bool {
         self.first_flush
             || self.total_rows >= self.row_threshold
+            || self.total_bytes >= self.byte_threshold
             || self.last_flush.elapsed() >= self.flush_interval
     }
 
@@ -489,18 +501,42 @@ impl ProjectFlusher {
             }
         }
 
-        tracing::info!(project_id, rows = self.total_rows, "flushed batches");
-
-        // Force DuckLake to write Parquet files so data is visible to other connections.
-        if let Err(e) = conn.execute_batch("CHECKPOINT lake;") {
-            tracing::warn!(project_id, "DuckLake CHECKPOINT failed: {e}");
-        }
+        tracing::info!(
+            project_id,
+            rows = self.total_rows,
+            bytes = self.total_bytes,
+            "flushed batches"
+        );
 
         self.total_rows = 0;
+        self.total_bytes = 0;
         self.last_flush = Instant::now();
         self.first_flush = false;
         Ok(())
     }
+}
+
+/// Approximate in-memory byte size of an Arrow RecordBatch.
+/// Sums the buffer sizes of all arrays (data + validity + offsets).
+fn batch_byte_size(batch: &RecordBatch) -> usize {
+    let mut total = 0usize;
+    for col in batch.columns() {
+        total += array_byte_size(col.as_ref());
+    }
+    total
+}
+
+fn array_byte_size(array: &dyn Array) -> usize {
+    let data = array.to_data();
+    let mut total = data
+        .buffers()
+        .iter()
+        .map(arrow::buffer::Buffer::len)
+        .sum::<usize>();
+    if let Some(nulls) = data.nulls() {
+        total += nulls.buffer().len();
+    }
+    total
 }
 
 /// Per-project flusher loop. Receives pre-transformed RecordBatches,
@@ -514,8 +550,9 @@ async fn run_flusher(
     cfg: FlushConfig,
 ) {
     let flush_interval = cfg.interval;
-    let mut flusher = ProjectFlusher::new(conn, &cfg);
+    let mut flusher = ProjectFlusher::new(conn.clone(), &cfg);
     let mut interval = tokio::time::interval(flush_interval);
+    let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(30));
 
     loop {
         tokio::select! {
@@ -528,6 +565,19 @@ async fn run_flusher(
                     if let Err(e) = flusher.flush(project_id) {
                         tracing::error!(project_id, "timer flush failed: {e:#}");
                     }
+                }
+            }
+
+            _ = checkpoint_interval.tick() => {
+                pool.touch_project(project_id);
+                let c = Arc::clone(&conn);
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    let guard = c.lock();
+                    guard.execute_batch("CHECKPOINT lake;")
+                }).await {
+                    tracing::warn!(project_id, "DuckLake CHECKPOINT task failed: {e}");
+                } else {
+                    tracing::debug!(project_id, "DuckLake CHECKPOINT completed");
                 }
             }
 
@@ -553,6 +603,17 @@ async fn run_flusher(
                 }
             }
         }
+    }
+
+    // Final CHECKPOINT before exit so data is persisted.
+    let c = Arc::clone(&conn);
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        let guard = c.lock();
+        guard.execute_batch("CHECKPOINT lake;")
+    })
+    .await
+    {
+        tracing::warn!(project_id, "final DuckLake CHECKPOINT failed: {e}");
     }
 }
 

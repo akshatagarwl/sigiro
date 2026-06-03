@@ -86,7 +86,6 @@ fn setup() -> (TempDir, Arc<Mutex<Connection>>) {
     }
 
     let admin_conn = Connection::open_in_memory().expect("in-memory admin db");
-    admin::create_keys_table(&admin_conn).expect("keys table");
     admin::create_instance_status_table(&admin_conn).expect("status table");
     federation::create_workers_table(&admin_conn).expect("workers table");
 
@@ -106,6 +105,7 @@ fn make_state(admin_conn: &Arc<Mutex<Connection>>) -> Arc<AppState> {
             r.start();
             r
         },
+        configured_key: "test_key".to_string(),
     })
 }
 
@@ -158,7 +158,7 @@ async fn federation_endpoints_e2e() {
             axum::http::Request::builder()
                 .method("POST")
                 .uri("/v1/federation/workers")
-                .header("authorization", "Bearer sigiro_dev_test")
+                .header("authorization", "Bearer test_key")
                 .header("content-type", "application/json")
                 .body(axum::body::Body::from(
                     serde_json::to_string(&worker).expect("serialize worker"),
@@ -183,7 +183,7 @@ async fn federation_endpoints_e2e() {
             axum::http::Request::builder()
                 .method("GET")
                 .uri("/v1/federation/workers")
-                .header("authorization", "Bearer sigiro_dev_test")
+                .header("authorization", "Bearer test_key")
                 .body(axum::body::Body::empty())
                 .expect("build request"),
         )
@@ -210,7 +210,7 @@ async fn federation_endpoints_e2e() {
             axum::http::Request::builder()
                 .method("DELETE")
                 .uri("/v1/federation/workers/worker-1")
-                .header("authorization", "Bearer sigiro_dev_test")
+                .header("authorization", "Bearer test_key")
                 .body(axum::body::Body::empty())
                 .expect("build request"),
         )
@@ -231,7 +231,7 @@ async fn federation_endpoints_e2e() {
             axum::http::Request::builder()
                 .method("GET")
                 .uri("/v1/federation/workers")
-                .header("authorization", "Bearer sigiro_dev_test")
+                .header("authorization", "Bearer test_key")
                 .body(axum::body::Body::empty())
                 .expect("build request"),
         )
@@ -256,7 +256,7 @@ async fn federation_endpoints_e2e() {
             axum::http::Request::builder()
                 .method("DELETE")
                 .uri("/v1/federation/workers/ghost-worker")
-                .header("authorization", "Bearer sigiro_dev_test")
+                .header("authorization", "Bearer test_key")
                 .body(axum::body::Body::empty())
                 .expect("build request"),
         )
