@@ -351,7 +351,8 @@ async fn run_serve() -> Result<()> {
     if let Ok(ref url) = sigiro::config::CENTRAL_URL.value() {
         tracing::info!("collector self-registering with central node at {url}");
         let api_key = sigiro::config::API_KEY.value().unwrap_or_default();
-        let client = sigiro::client::SigiroClient::new(url, &api_key);
+        let auth = sigiro::client::ClientAuth::from_key(api_key);
+        let client = sigiro::client::SigiroClient::new(url, auth);
         let status = sigiro::admin::read_all_status(&admin_conn)?;
         let quack_port = sigiro::config::QUACK_ADVERTISE_PORT
             .value()

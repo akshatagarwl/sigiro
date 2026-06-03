@@ -61,7 +61,9 @@ fn build_test_context() -> TestContext {
         admin_conn,
         http_client: reqwest::Client::new(),
         router,
-        configured_key: "sigiro_dev_test".to_string(),
+        auth_mode: sigiro::auth::AuthMode::Key {
+            key: "sigiro_dev_test".to_string(),
+        },
     });
 
     TestContext {
@@ -74,7 +76,7 @@ fn build_test_context() -> TestContext {
 fn build_otlp_app(state: &Arc<AppState>) -> axum::Router {
     let router = Arc::new(MsgRouter::new(Arc::clone(&state.pool)));
     router.start();
-    ingest::otlp_http_router(router, state.configured_key.clone())
+    ingest::otlp_http_router(router, state.auth_mode.clone())
 }
 
 // -- Tests ----------------------------------------------------------------

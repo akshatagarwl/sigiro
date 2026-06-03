@@ -105,7 +105,9 @@ fn make_state(admin_conn: &Arc<Mutex<Connection>>) -> Arc<AppState> {
             r.start();
             r
         },
-        configured_key: "test_key".to_string(),
+        auth_mode: sigiro::auth::AuthMode::Key {
+            key: "test_key".to_string(),
+        },
     })
 }
 

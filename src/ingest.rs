@@ -44,15 +44,12 @@ fn status_internal(msg: impl std::fmt::Display) -> Status {
 
 pub struct OtlpGrpcService {
     router: Arc<MsgRouter>,
-    configured_key: String,
+    auth_mode: crate::auth::AuthMode,
 }
 
 impl OtlpGrpcService {
-    pub fn new(router: Arc<MsgRouter>, configured_key: String) -> Self {
-        Self {
-            router,
-            configured_key,
-        }
+    pub fn new(router: Arc<MsgRouter>, auth_mode: crate::auth::AuthMode) -> Self {
+        Self { router, auth_mode }
     }
 
     /// Route a batch to the inserter: register flusher then send.
@@ -73,55 +70,55 @@ impl OtlpGrpcService {
     pub fn trace_service(&self) -> TraceServiceServer<Self> {
         TraceServiceServer::new(Self {
             router: Arc::clone(&self.router),
-            configured_key: self.configured_key.clone(),
+            auth_mode: self.auth_mode.clone(),
         })
     }
 
     pub fn logs_service(&self) -> LogsServiceServer<Self> {
         LogsServiceServer::new(Self {
             router: Arc::clone(&self.router),
-            configured_key: self.configured_key.clone(),
+            auth_mode: self.auth_mode.clone(),
         })
     }
 
     pub fn metrics_service(&self) -> MetricsServiceServer<Self> {
         MetricsServiceServer::new(Self {
             router: Arc::clone(&self.router),
-            configured_key: self.configured_key.clone(),
+            auth_mode: self.auth_mode.clone(),
         })
     }
 
     pub fn profiles_service(&self) -> ProfilesServiceServer<Self> {
         ProfilesServiceServer::new(Self {
             router: Arc::clone(&self.router),
-            configured_key: self.configured_key.clone(),
+            auth_mode: self.auth_mode.clone(),
         })
     }
 }
 
-/// Extract project_id from gRPC metadata Bearer token.
-/// Self-hosted: simple key comparison, no DB lookup.
 /// Extract project_id from gRPC metadata.
-/// Open mode (empty configured_key): no auth required.
+/// Uses the explicit AuthMode — Open mode skips auth, Key mode validates Bearer token.
 pub fn extract_project_id_grpc(
-    configured_key: &str,
+    auth_mode: &crate::auth::AuthMode,
     metadata: &tonic::metadata::MetadataMap,
 ) -> Result<String, Status> {
-    if configured_key.is_empty() {
-        return Ok("default".to_string());
+    match auth_mode {
+        crate::auth::AuthMode::Open => Ok("default".to_string()),
+        crate::auth::AuthMode::Key { .. } => {
+            let token = metadata
+                .get("authorization")
+                .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
+                .to_str()
+                .map_err(|_| Status::unauthenticated("Invalid Authorization encoding"))?
+                .strip_prefix("Bearer ")
+                .ok_or_else(|| Status::unauthenticated("Expected: Bearer <key>"))?;
+
+            let ctx = auth_mode
+                .verify(token)
+                .map_err(|_| Status::unauthenticated("Invalid API key"))?;
+            Ok(ctx.project_id)
+        }
     }
-
-    let token = metadata
-        .get("authorization")
-        .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
-        .to_str()
-        .map_err(|_| Status::unauthenticated("Invalid Authorization encoding"))?
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| Status::unauthenticated("Expected: Bearer <key>"))?;
-
-    let ctx = crate::auth::verify_key(configured_key, token)
-        .map_err(|_| Status::unauthenticated("Invalid API key"))?;
-    Ok(ctx.project_id)
 }
 
 /// Detect InputFormat from Content-Type header.
@@ -190,7 +187,7 @@ impl TraceService for OtlpGrpcService {
         &self,
         request: Request<ExportTraceServiceRequest>,
     ) -> Result<Response<ExportTraceServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.configured_key, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
         // Transform on tokio blocking pool — no double decode.
         // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
         let bytes = request.into_inner().encode_to_vec();
@@ -219,7 +216,7 @@ impl LogsService for OtlpGrpcService {
         &self,
         request: Request<ExportLogsServiceRequest>,
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.configured_key, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batch = transform_logs(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
@@ -246,7 +243,7 @@ impl MetricsService for OtlpGrpcService {
         &self,
         request: Request<ExportMetricsServiceRequest>,
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.configured_key, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
         let bytes = request.into_inner().encode_to_vec();
         let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
         let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -547,7 +544,7 @@ impl ProfilesService for OtlpGrpcService {
         &self,
         request: Request<ExportProfilesServiceRequest>,
     ) -> Result<Response<ExportProfilesServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.configured_key, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
         let req = request.into_inner();
         let batch = spawn_transform("transform profiles", move || transform_profiles(req)).await?;
         if batch.num_rows() == 0 {
@@ -574,14 +571,11 @@ impl ProfilesService for OtlpGrpcService {
 
 struct OtlpHttpState {
     router: Arc<MsgRouter>,
-    configured_key: String,
+    auth_mode: crate::auth::AuthMode,
 }
 
-pub fn otlp_http_router(router: Arc<MsgRouter>, configured_key: String) -> Router {
-    let state = Arc::new(OtlpHttpState {
-        router,
-        configured_key,
-    });
+pub fn otlp_http_router(router: Arc<MsgRouter>, auth_mode: crate::auth::AuthMode) -> Router {
+    let state = Arc::new(OtlpHttpState { router, auth_mode });
     Router::new()
         .route("/", post(otlp_http_pyroscope)) // Pyroscope RS SDK posts here
         .route("/push.v1.PusherService/Push", post(otlp_http_pyroscope)) // pyroscope-rs SDK push path
@@ -595,27 +589,27 @@ pub fn otlp_http_router(router: Arc<MsgRouter>, configured_key: String) -> Route
 }
 
 /// Extract project_id from HTTP Authorization header.
-/// Self-hosted: simple key comparison, no DB lookup.
-/// Open mode (empty configured_key): no auth required.
+/// Uses the explicit AuthMode — Open mode skips auth, Key mode validates Bearer token.
 pub fn extract_project_id_http(
-    configured_key: &str,
+    auth_mode: &crate::auth::AuthMode,
     headers: &axum::http::HeaderMap,
 ) -> Result<String, StatusCode> {
-    if configured_key.is_empty() {
-        return Ok("default".to_string());
+    match auth_mode {
+        crate::auth::AuthMode::Open => Ok("default".to_string()),
+        crate::auth::AuthMode::Key { .. } => {
+            let auth: Authorization<Bearer> = headers.typed_get().ok_or_else(|| {
+                tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
+                StatusCode::UNAUTHORIZED
+            })?;
+            let token = auth.token();
+
+            let ctx = auth_mode.verify(token).map_err(|_| {
+                tracing::warn!("OTLP HTTP: invalid API key");
+                StatusCode::UNAUTHORIZED
+            })?;
+            Ok(ctx.project_id)
+        }
     }
-
-    let auth: Authorization<Bearer> = headers.typed_get().ok_or_else(|| {
-        tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
-        StatusCode::UNAUTHORIZED
-    })?;
-    let token = auth.token();
-
-    let ctx = crate::auth::verify_key(configured_key, token).map_err(|_| {
-        tracing::warn!("OTLP HTTP: invalid API key");
-        StatusCode::UNAUTHORIZED
-    })?;
-    Ok(ctx.project_id)
 }
 
 /// Common helper: register flusher and send ingest message.
@@ -638,7 +632,7 @@ async fn otlp_http_traces(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -671,7 +665,7 @@ async fn otlp_http_logs(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -704,7 +698,7 @@ async fn otlp_http_metrics(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -744,7 +738,7 @@ async fn otlp_http_profiles(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -805,7 +799,7 @@ async fn otlp_http_pyroscope(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.configured_key, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => {
             tracing::warn!("pyroscope: auth failed: {status}");

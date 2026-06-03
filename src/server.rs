@@ -95,8 +95,8 @@ pub struct AppState {
     pub admin_conn: Arc<Mutex<Connection>>,
     pub http_client: reqwest::Client,
     pub router: Arc<crate::inserter::MsgRouter>,
-    /// Configured API key for self-hosted auth. Empty means open mode.
-    pub configured_key: String,
+    /// Explicit auth mode — Open or Key. Never implicit.
+    pub auth_mode: crate::auth::AuthMode,
 }
 
 // DuckDB's access_mode is database-level, not connection-level:
@@ -225,11 +225,7 @@ pub async fn run_servers(
     let ports = ServerPorts::load()?;
 
     let configured_key = crate::config::API_KEY.value().unwrap_or_default();
-    if configured_key.is_empty() {
-        tracing::warn!("SIGIRO_API_KEY not set — running in open mode (no auth required)");
-    } else {
-        tracing::info!("API key configured — requests require Bearer token");
-    }
+    let auth_mode = crate::auth::AuthMode::from_config(configured_key.clone());
 
     // TLS configuration
     let tls_acceptor = match (
@@ -254,11 +250,11 @@ pub async fn run_servers(
 
     // gRPC server — authenticated via Bearer token in metadata
     let grpc_router = Arc::clone(&router);
-    let grpc_key = configured_key.clone();
+    let grpc_auth_mode = auth_mode.clone();
     let grpc_port = ports.grpc;
     let grpc_handle = tokio::spawn(async move {
         let addr = format!("[::]:{grpc_port}").parse().expect("valid addr");
-        let svc = OtlpGrpcService::new(grpc_router, grpc_key);
+        let svc = OtlpGrpcService::new(grpc_router, grpc_auth_mode);
         tracing::info!("gRPC listening on {addr}");
         TonicServer::builder()
             .add_service(svc.trace_service())
@@ -275,7 +271,7 @@ pub async fn run_servers(
         admin_conn: Arc::clone(&admin_conn),
         http_client: reqwest::Client::new(),
         router: Arc::clone(&router),
-        configured_key: configured_key.clone(),
+        auth_mode: auth_mode.clone(),
     });
 
     {
@@ -302,7 +298,7 @@ pub async fn run_servers(
     });
 
     // OTLP HTTP — authenticated via Authorization header
-    let otlp_http_app = crate::ingest::otlp_http_router(Arc::clone(&router), configured_key)
+    let otlp_http_app = crate::ingest::otlp_http_router(Arc::clone(&router), auth_mode)
         .layer(tower_http::decompression::RequestDecompressionLayer::new());
     let otlp_http_port = ports.otlp_http;
     let otlp_acceptor = tls_acceptor.clone();

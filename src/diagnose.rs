@@ -224,6 +224,7 @@ async fn check_federation(client: &SigiroClient) -> Result<(usize, Vec<String>)>
 }
 
 /// Row counts per table.
+/// Missing tables are reported as 0 with a warning — they may not exist yet (no data ingested).
 async fn check_storage(client: &SigiroClient) -> Result<HashMap<String, i64>> {
     let tables = [
         "sigiro_spans",
@@ -244,7 +245,12 @@ async fn check_storage(client: &SigiroClient) -> Result<HashMap<String, i64>> {
                     .unwrap_or(0);
                 counts.insert(table.to_string(), count);
             }
-            Err(_) => {
+            Err(e) => {
+                // Table may not exist yet (no data ingested for this signal type).
+                // Log at debug so the user knows, but don't fail the check.
+                tracing::debug!(
+                    "storage check: table {table} query failed — likely not created yet: {e:#}"
+                );
                 counts.insert(table.to_string(), 0);
             }
         }

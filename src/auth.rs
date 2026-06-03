@@ -15,24 +15,57 @@ pub struct AuthContext {
     pub project_id: String,
 }
 
-/// Verify an API key against the configured key.
-/// Self-hosted: single API key set via SIGIRO_API_KEY env var.
-/// Empty configured_key means open mode (no auth required).
-pub fn verify_key(configured_key: &str, raw_key: &str) -> Result<AuthContext, ApiError> {
-    if configured_key.is_empty() {
-        return Ok(AuthContext {
-            project_id: "default".to_string(),
-        });
+/// Explicit auth mode — never implicit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuthMode {
+    /// No auth required. Any request is accepted.
+    Open,
+    /// Single shared API key. Requests must provide matching Bearer token.
+    Key { key: String },
+}
+
+impl AuthMode {
+    /// Build from the configured key string.
+    /// Empty string → Open mode (logged).
+    /// Non-empty → Key mode (logged).
+    pub fn from_config(configured_key: String) -> Self {
+        if configured_key.is_empty() {
+            tracing::warn!("auth_mode=open — SIGIRO_API_KEY not set, no auth required");
+            AuthMode::Open
+        } else {
+            tracing::info!("auth_mode=key — requests require Bearer token");
+            AuthMode::Key {
+                key: configured_key,
+            }
+        }
     }
-    if raw_key == configured_key {
-        Ok(AuthContext {
-            project_id: "default".to_string(),
-        })
-    } else {
-        Err(axum_anyhow::unauthorized(
-            "Invalid API Key",
-            "The provided API key does not match SIGIRO_API_KEY",
-        ))
+
+    /// True if this mode requires an Authorization header.
+    pub fn requires_auth(&self) -> bool {
+        matches!(self, AuthMode::Key { .. })
+    }
+
+    /// Verify a raw bearer token against this auth mode.
+    /// Open mode: always succeeds.
+    /// Key mode: token must match exactly.
+    pub fn verify(&self, raw_key: &str) -> Result<AuthContext, ApiError> {
+        match self {
+            AuthMode::Open => Ok(AuthContext {
+                project_id: "default".to_string(),
+            }),
+            AuthMode::Key { key } => {
+                if raw_key == key {
+                    Ok(AuthContext {
+                        project_id: "default".to_string(),
+                    })
+                } else {
+                    Err(axum_anyhow::unauthorized(
+                        "Invalid API Key",
+                        "The provided API key does not match SIGIRO_API_KEY",
+                    ))
+                }
+            }
+        }
     }
 }
 
@@ -47,26 +80,28 @@ pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
     Ok(auth.token().to_string())
 }
 
-/// axum middleware: verify API key against the configured key.
-/// Self-hosted: simple constant-time comparison. No DB needed.
-/// Open mode (empty configured_key): allow requests without Authorization header.
+/// axum middleware: verify API key against the configured mode.
+/// Open mode: injects default context without checking headers.
+/// Key mode: requires valid Bearer token.
 pub async fn auth_middleware(
     State(state): State<Arc<crate::server::AppState>>,
     req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    // Open mode: no auth required, but still inject default context
-    if state.configured_key.is_empty() {
-        let mut req = req;
-        req.extensions_mut().insert(AuthContext {
-            project_id: "default".to_string(),
-        });
-        return Ok(next.run(req).await);
+    match &state.auth_mode {
+        AuthMode::Open => {
+            let mut req = req;
+            req.extensions_mut().insert(AuthContext {
+                project_id: "default".to_string(),
+            });
+            Ok(next.run(req).await)
+        }
+        AuthMode::Key { .. } => {
+            let token = extract_bearer_token(req.headers())?;
+            let ctx = state.auth_mode.verify(&token)?;
+            let mut req = req;
+            req.extensions_mut().insert(ctx);
+            Ok(next.run(req).await)
+        }
     }
-
-    let token = extract_bearer_token(req.headers())?;
-    let ctx = verify_key(&state.configured_key, &token)?;
-    let mut req = req;
-    req.extensions_mut().insert(ctx);
-    Ok(next.run(req).await)
 }

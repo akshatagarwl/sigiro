@@ -21,23 +21,47 @@ fn extract_bearer_token_malformed() {
 }
 
 #[test]
-fn verify_key_open_mode_allows_any() {
-    let ctx = verify_key("", "anything").unwrap();
+fn auth_mode_open_allows_any() {
+    let mode = AuthMode::Open;
+    let ctx = mode.verify("anything").unwrap();
     assert_eq!(ctx.project_id, "default");
 }
 
 #[test]
-fn verify_key_matching_key_succeeds() {
-    let ctx = verify_key("my_secret", "my_secret").unwrap();
+fn auth_mode_key_matching_succeeds() {
+    let mode = AuthMode::Key {
+        key: "my_secret".to_string(),
+    };
+    let ctx = mode.verify("my_secret").unwrap();
     assert_eq!(ctx.project_id, "default");
 }
 
 #[test]
-fn verify_key_wrong_key_fails() {
-    assert!(verify_key("my_secret", "wrong_key").is_err());
+fn auth_mode_key_wrong_fails() {
+    let mode = AuthMode::Key {
+        key: "my_secret".to_string(),
+    };
+    assert!(mode.verify("wrong_key").is_err());
 }
 
 #[test]
-fn verify_key_empty_token_fails_when_key_set() {
-    assert!(verify_key("my_secret", "").is_err());
+fn auth_mode_key_empty_token_fails() {
+    let mode = AuthMode::Key {
+        key: "my_secret".to_string(),
+    };
+    assert!(mode.verify("").is_err());
+}
+
+#[test]
+fn auth_mode_from_config_empty_is_open() {
+    let mode = AuthMode::from_config(String::new());
+    assert!(matches!(mode, AuthMode::Open));
+    assert!(!mode.requires_auth());
+}
+
+#[test]
+fn auth_mode_from_config_non_empty_is_key() {
+    let mode = AuthMode::from_config("secret".to_string());
+    assert!(matches!(mode, AuthMode::Key { .. }));
+    assert!(mode.requires_auth());
 }
