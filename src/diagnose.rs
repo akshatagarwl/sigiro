@@ -32,7 +32,18 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
         }
     }
 
-    // Check 2: Recent error spans
+    // Check 2: Server health (dead flushers)
+    match check_health(client).await {
+        Ok(HealthStatus::Healthy) => report.pass("health", "no dead flushers detected"),
+        Ok(HealthStatus::DeadFlushers) => report.warn(
+            "health",
+            "dead flusher tasks detected — ingest may be stalled",
+        ),
+        Ok(HealthStatus::Unknown(msg)) => report.warn("health", &msg),
+        Err(e) => report.warn("health", &format!("health check failed: {e:#}")),
+    }
+
+    // Check 3: Recent error spans
     match check_errors(client).await {
         Ok((count, sample_trace)) => {
             if count > 0 {
@@ -50,7 +61,28 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
         Err(e) => report.warn("errors", &format!("check failed: {e:#}")),
     }
 
-    // Check 3: Slow spans (p99 > 1s)
+    // Check 4: Service-level error hotspots
+    match check_service_errors(client).await {
+        Ok(hotspots) => {
+            if hotspots.is_empty() {
+                report.pass("svc-errors", "no services with elevated error rate");
+            } else {
+                report.warn(
+                    "svc-errors",
+                    &format!("{} services with error rate > 5%", hotspots.len()),
+                );
+                for (svc, rate, count) in hotspots.iter().take(3) {
+                    report.hint(
+                        "svc-errors",
+                        &format!("  {svc}: {rate:.1}% ({count} errors)"),
+                    );
+                }
+            }
+        }
+        Err(e) => report.warn("svc-errors", &format!("check failed: {e:#}")),
+    }
+
+    // Check 5: Slow spans (p99 > 1s)
     match check_slow_spans(client).await {
         Ok((p99_us, count)) => {
             let p99_ms = p99_us / 1000;
@@ -66,7 +98,50 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
         Err(e) => report.warn("latency", &format!("check failed: {e:#}")),
     }
 
-    // Check 4: Ingest rate (spans/min)
+    // Check 6: Top slow operations by service
+    match check_slow_operations(client).await {
+        Ok(ops) => {
+            if ops.is_empty() {
+                report.pass("slow-ops", "no slow operations detected");
+            } else {
+                report.warn(
+                    "slow-ops",
+                    &format!("{} slow operations (>1s p95)", ops.len()),
+                );
+                for (svc, op, p95_ms) in ops.iter().take(3) {
+                    report.hint("slow-ops", &format!("  {svc}/{op}: p95={p95_ms}ms"));
+                }
+            }
+        }
+        Err(e) => report.warn("slow-ops", &format!("check failed: {e:#}")),
+    }
+
+    // Check 7: Span kind distribution (anomaly: no client spans = possible missing egress telemetry)
+    match check_span_kind_distribution(client).await {
+        Ok((server, client, internal, consumer, producer)) => {
+            let total = server + client + internal + consumer + producer;
+            if total == 0 {
+                report.pass("span-kinds", "no spans to analyze");
+            } else {
+                if server > 0 && client == 0 {
+                    report.warn(
+                        "span-kinds",
+                        "server spans present but zero client spans — egress telemetry may be missing",
+                    );
+                } else {
+                    report.pass(
+                        "span-kinds",
+                        &format!(
+                            "srv={server} cli={client} int={internal} con={consumer} prod={producer}"
+                        ),
+                    );
+                }
+            }
+        }
+        Err(e) => report.warn("span-kinds", &format!("check failed: {e:#}")),
+    }
+
+    // Check 8: Ingest rate (spans/min)
     match check_ingest_rate(client).await {
         Ok(rate) => {
             if rate < 1.0 {
@@ -78,7 +153,25 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
         Err(e) => report.warn("ingest", &format!("check failed: {e:#}")),
     }
 
-    // Check 5: Federation worker health
+    // Check 9: Log error patterns
+    match check_log_errors(client).await {
+        Ok((error_logs, patterns)) => {
+            if error_logs == 0 {
+                report.pass("log-errors", "no error-level logs in last 15 min");
+            } else {
+                report.warn(
+                    "log-errors",
+                    &format!("{error_logs} error-level logs in last 15 min"),
+                );
+                for (pattern, count) in patterns.iter().take(3) {
+                    report.hint("log-errors", &format!("  ({count}x) {pattern}"));
+                }
+            }
+        }
+        Err(e) => report.warn("log-errors", &format!("check failed: {e:#}")),
+    }
+
+    // Check 10: Federation worker health
     match check_federation(client).await {
         Ok((worker_count, unhealthy)) => {
             if worker_count == 0 {
@@ -98,9 +191,9 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
         Err(e) => report.warn("federation", &format!("check failed: {e:#}")),
     }
 
-    // Check 6: Storage bloat (row counts)
+    // Check 11: Storage bloat (row counts + growth)
     match check_storage(client).await {
-        Ok(counts) => {
+        Ok(StorageReport { counts, growth }) => {
             let total: i64 = counts.values().sum();
             report.pass("storage", &format!("{total} total rows across all tables"));
             for (table, count) in counts {
@@ -111,8 +204,28 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
                     );
                 }
             }
+            if let Some((prev, curr, delta_pct)) = growth {
+                if delta_pct > 50.0 {
+                    report.warn(
+                        "storage",
+                        &format!(
+                            "rapid growth: {prev} → {curr} rows (+{delta_pct:.0}%) since last check"
+                        ),
+                    );
+                }
+            }
         }
         Err(e) => report.warn("storage", &format!("check failed: {e:#}")),
+    }
+
+    // Check 12: Retention configuration
+    match check_retention().await {
+        Ok(Some(days)) => report.pass("retention", &format!("{days} days configured")),
+        Ok(None) => report.warn(
+            "retention",
+            "no retention configured — storage will grow unbounded",
+        ),
+        Err(e) => report.warn("retention", &format!("check failed: {e:#}")),
     }
 
     report.print();
@@ -122,6 +235,29 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Individual checks — each runs a SQL query via the HTTP API
 // ---------------------------------------------------------------------------
+
+enum HealthStatus {
+    Healthy,
+    DeadFlushers,
+    Unknown(String),
+}
+
+/// Check /health for dead flushers.
+async fn check_health(client: &SigiroClient) -> Result<HealthStatus> {
+    match client.status().await {
+        Ok(resp) => {
+            let body = resp.status.get("status").cloned().unwrap_or_default();
+            if body == "ok" {
+                Ok(HealthStatus::Healthy)
+            } else if body.contains("dead flushers") {
+                Ok(HealthStatus::DeadFlushers)
+            } else {
+                Ok(HealthStatus::Unknown(body))
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
 
 /// Count error spans (status_code = 2) in the last 15 minutes.
 async fn check_errors(client: &SigiroClient) -> Result<(i64, Option<String>)> {
@@ -152,6 +288,48 @@ async fn check_errors(client: &SigiroClient) -> Result<(i64, Option<String>)> {
     Ok((count, sample))
 }
 
+/// Services with error rate > 5% in the last 15 minutes.
+async fn check_service_errors(client: &SigiroClient) -> Result<Vec<(String, f64, i64)>> {
+    let sql = r#"
+        SELECT
+            service_name,
+            count(*) AS total,
+            count(CASE WHEN status_code = 2 THEN 1 END) AS errors
+        FROM lake.sigiro_spans
+        WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+        GROUP BY service_name
+        HAVING count(*) > 10
+        ORDER BY errors DESC
+        LIMIT 10
+    "#;
+    let rows = client
+        .query(sql)
+        .await
+        .context("service errors query failed")?;
+    let mut hotspots = Vec::new();
+    for row in rows {
+        let svc = row
+            .get("service_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let total = row
+            .get("total")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0)
+            .max(1);
+        let errors = row
+            .get("errors")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        let rate = (errors as f64 / total as f64) * 100.0;
+        if rate > 5.0 {
+            hotspots.push((svc, rate, errors));
+        }
+    }
+    Ok(hotspots)
+}
+
 /// Compute p99 span duration and count of spans > 1s in last 15 min.
 async fn check_slow_spans(client: &SigiroClient) -> Result<(i64, i64)> {
     let sql = r#"
@@ -176,6 +354,78 @@ async fn check_slow_spans(client: &SigiroClient) -> Result<(i64, i64)> {
     Ok((p99, slow))
 }
 
+/// Top slow operations by service (p95 > 1s) in last 15 min.
+async fn check_slow_operations(client: &SigiroClient) -> Result<Vec<(String, String, i64)>> {
+    let sql = r#"
+        SELECT
+            service_name,
+            span_name,
+            quantile_cont(duration, 0.95) AS p95
+        FROM lake.sigiro_spans
+        WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+        GROUP BY service_name, span_name
+        HAVING quantile_cont(duration, 0.95) > 1000000
+        ORDER BY p95 DESC
+        LIMIT 10
+    "#;
+    let rows = client
+        .query(sql)
+        .await
+        .context("slow operations query failed")?;
+    let mut ops = Vec::new();
+    for row in rows {
+        let svc = row
+            .get("service_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let op = row
+            .get("span_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let p95 = row
+            .get("p95")
+            .and_then(serde_json::Value::as_f64)
+            .map(|f| f as i64 / 1000)
+            .unwrap_or(0);
+        ops.push((svc, op, p95));
+    }
+    Ok(ops)
+}
+
+/// Span kind distribution in last 15 minutes.
+/// Returns (server, client, internal, consumer, producer) counts.
+async fn check_span_kind_distribution(client: &SigiroClient) -> Result<(i64, i64, i64, i64, i64)> {
+    let sql = r#"
+        SELECT
+            count(CASE WHEN span_kind = 2 THEN 1 END) AS server,
+            count(CASE WHEN span_kind = 3 THEN 1 END) AS client,
+            count(CASE WHEN span_kind = 1 THEN 1 END) AS internal,
+            count(CASE WHEN span_kind = 4 THEN 1 END) AS consumer,
+            count(CASE WHEN span_kind = 0 THEN 1 END) AS producer
+        FROM lake.sigiro_spans
+        WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+    "#;
+    let rows = client
+        .query(sql)
+        .await
+        .context("span kind distribution query failed")?;
+    let row = rows.first();
+    let get = |key: &str| {
+        row.and_then(|r| r.get(key))
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0)
+    };
+    Ok((
+        get("server"),
+        get("client"),
+        get("internal"),
+        get("consumer"),
+        get("producer"),
+    ))
+}
+
 /// Spans per minute over the last 15 minutes.
 async fn check_ingest_rate(client: &SigiroClient) -> Result<f64> {
     let sql = r#"
@@ -193,6 +443,38 @@ async fn check_ingest_rate(client: &SigiroClient) -> Result<f64> {
         .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
     Ok(count as f64 / 15.0)
+}
+
+/// Error-level logs in last 15 minutes, grouped by pattern.
+async fn check_log_errors(client: &SigiroClient) -> Result<(i64, Vec<(String, i64)>)> {
+    let sql = r#"
+        SELECT
+            COUNT(*) AS total,
+            COALESCE(NULLIF(template_text, ''), body) AS pattern
+        FROM lake.sigiro_logs
+        WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+          AND severity_text IN ('ERROR', 'ERR', 'FATAL', 'CRITICAL')
+        GROUP BY pattern
+        ORDER BY total DESC
+        LIMIT 10
+    "#;
+    let rows = client.query(sql).await.context("log errors query failed")?;
+    let mut total = 0i64;
+    let mut patterns = Vec::new();
+    for row in rows {
+        let count = row
+            .get("total")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        total += count;
+        let pattern = row
+            .get("pattern")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        patterns.push((pattern, count));
+    }
+    Ok((total, patterns))
 }
 
 /// Federation worker health.
@@ -223,9 +505,19 @@ async fn check_federation(client: &SigiroClient) -> Result<(usize, Vec<String>)>
     Ok((count, unhealthy))
 }
 
-/// Row counts per table.
+// ---------------------------------------------------------------------------
+// Storage check with growth tracking
+// ---------------------------------------------------------------------------
+
+struct StorageReport {
+    counts: HashMap<String, i64>,
+    /// (previous_total, current_total, delta_percent)
+    growth: Option<(i64, i64, f64)>,
+}
+
+/// Row counts per table + optional growth since last check (via local state file).
 /// Missing tables are reported as 0 with a warning — they may not exist yet (no data ingested).
-async fn check_storage(client: &SigiroClient) -> Result<HashMap<String, i64>> {
+async fn check_storage(client: &SigiroClient) -> Result<StorageReport> {
     let tables = [
         "sigiro_spans",
         "sigiro_logs",
@@ -255,7 +547,65 @@ async fn check_storage(client: &SigiroClient) -> Result<HashMap<String, i64>> {
             }
         }
     }
-    Ok(counts)
+
+    let current_total: i64 = counts.values().sum();
+    let growth = read_previous_storage_total()
+        .map(|prev| {
+            let delta = if prev > 0 {
+                ((current_total - prev) as f64 / prev as f64) * 100.0
+            } else {
+                0.0
+            };
+            (prev, current_total, delta)
+        })
+        .ok();
+
+    // Best-effort persist current total for next run
+    if let Err(e) = write_storage_total(current_total) {
+        tracing::debug!("failed to persist storage state: {e:#}");
+    }
+
+    Ok(StorageReport { counts, growth })
+}
+
+fn storage_state_path() -> camino::Utf8PathBuf {
+    let dir = crate::data_dir().unwrap_or_else(|_| camino::Utf8PathBuf::from("."));
+    dir.join(".diagnose_storage_state.json")
+}
+
+fn read_previous_storage_total() -> anyhow::Result<i64> {
+    let path = storage_state_path();
+    let content =
+        std::fs::read_to_string(&path).with_context(|| format!("failed to read {path:?}"))?;
+    let state: serde_json::Value =
+        serde_json::from_str(&content).context("failed to parse storage state")?;
+    state
+        .get("total")
+        .and_then(serde_json::Value::as_i64)
+        .context("missing 'total' field")
+}
+
+fn write_storage_total(total: i64) -> anyhow::Result<()> {
+    let path = storage_state_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let state = serde_json::json!({ "total": total, "checked_at": now });
+    std::fs::write(&path, serde_json::to_string_pretty(&state)?)
+        .with_context(|| format!("failed to write {path:?}"))?;
+    Ok(())
+}
+
+/// Read retention days from config.
+async fn check_retention() -> Result<Option<u32>> {
+    match crate::config::RETENTION_DAYS.value() {
+        Ok(d) if d > 0 => Ok(Some(d)),
+        _ => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------
