@@ -297,6 +297,49 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
         Err(e) => report.warn("retention", &format!("check failed: {e:#}")),
     }
 
+    // Check 16: Cross-signal coverage — services sending spans but no metrics.
+    // A service with telemetry but no metrics is a sign of incomplete
+    // instrumentation (metrics exporter missing or not configured).
+    match check_metrics_coverage(client).await {
+        Ok(uncovered) => {
+            if uncovered.is_empty() {
+                report.pass(
+                    "metrics-coverage",
+                    "all span-emitting services also send metrics",
+                );
+            } else {
+                report.warn(
+                    "metrics-coverage",
+                    &format!(
+                        "{} services send spans but no metrics — incomplete instrumentation",
+                        uncovered.len()
+                    ),
+                );
+                for svc in uncovered.iter().take(5) {
+                    report.hint("metrics-coverage", &format!("  - {svc}"));
+                }
+            }
+        }
+        Err(e) => report.warn("metrics-coverage", &format!("check failed: {e:#}")),
+    }
+
+    // Check 17: eBPF status — read /admin/status for the kernel-collector state.
+    // "ready" means obi is on disk with the right capabilities; "not_installed"
+    // or "disabled" means the user can install/configure eBPF, or accept the gap.
+    match check_ebpf_status(client).await {
+        Ok(EbpfState::Ready) => report.pass("ebpf", "ready (obi installed, capabilities ok)"),
+        Ok(EbpfState::Disabled(reason)) => {
+            report.warn("ebpf", &format!("disabled — {reason}"));
+        }
+        Ok(EbpfState::Unknown) => {
+            report.warn(
+                "ebpf",
+                "status not initialized — server may be a fresh install or pre-restart",
+            );
+        }
+        Err(e) => report.warn("ebpf", &format!("check failed: {e:#}")),
+    }
+
     report.print();
     Ok(())
 }
@@ -766,6 +809,80 @@ async fn check_orphan_spans(client: &SigiroClient) -> Result<(i64, Vec<(String, 
         sample.push((svc, tid, sid));
     }
     Ok((count, sample))
+}
+
+/// Find services that emitted spans in the last 15 minutes but did not emit
+/// any metrics (sum/gauge/histogram) in the same window — a strong signal
+/// of incomplete instrumentation (metrics exporter not wired up).
+async fn check_metrics_coverage(client: &SigiroClient) -> Result<Vec<String>> {
+    let sql = r#"
+        WITH span_services AS (
+            SELECT DISTINCT service_name
+            FROM lake.sigiro_spans
+            WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+        ),
+        metric_services AS (
+            SELECT service_name FROM lake.sigiro_metrics_sum
+                WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+            UNION
+            SELECT service_name FROM lake.sigiro_metrics_gauge
+                WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+            UNION
+            SELECT service_name FROM lake.sigiro_metrics_histogram
+                WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+        )
+        SELECT s.service_name
+        FROM span_services s
+        WHERE s.service_name NOT IN (SELECT service_name FROM metric_services)
+        ORDER BY s.service_name
+    "#;
+    let rows = query_with_retry(client, sql)
+        .await
+        .context("metrics coverage query failed")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let svc = row
+            .get("service_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        out.push(svc);
+    }
+    Ok(out)
+}
+
+enum EbpfState {
+    Ready,
+    Disabled(String),
+    /// /admin/status did not contain an `ebpf_status` key — likely a fresh
+    /// install or the server hasn't run the eBPF readiness check yet.
+    Unknown,
+}
+
+/// Surface the eBPF auto-instrumentation status from the server's admin
+/// status table. The server writes the status via `write_ebpf_status`
+/// (see src/ebpf.rs); we just read it back.
+async fn check_ebpf_status(client: &SigiroClient) -> Result<EbpfState> {
+    let resp = client
+        .admin_status()
+        .await
+        .context("admin/status call failed")?;
+    let status = match resp.status.get("ebpf_status") {
+        Some(s) => s.as_str(),
+        None => return Ok(EbpfState::Unknown),
+    };
+    match status {
+        "ready" => Ok(EbpfState::Ready),
+        "not_installed" | "disabled" => {
+            let reason = resp
+                .status
+                .get("ebpf_reason")
+                .cloned()
+                .unwrap_or_else(|| "no reason provided".to_string());
+            Ok(EbpfState::Disabled(reason))
+        }
+        other => Ok(EbpfState::Disabled(format!("unexpected status: {other}"))),
+    }
 }
 
 // ---------------------------------------------------------------------------

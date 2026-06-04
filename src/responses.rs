@@ -37,7 +37,7 @@ pub struct RevokeKeyResponse {
 }
 
 /// GET /admin/status
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct AdminStatusResponse {
     #[schema(value_type = HashMap<String, String>)]
     pub status: HashMap<String, String>,
