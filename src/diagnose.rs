@@ -43,6 +43,33 @@ async fn query_with_retry(client: &SigiroClient, sql: &str) -> Result<Vec<serde_
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("query_with_retry: exhausted retries")))
 }
 
+/// Run an investigation with the same 429-backoff as SQL queries. The
+/// deep-dive fires this after ~17 prior SQL queries in the same run, so
+/// it's the most likely call in the report to hit a governor rejection.
+async fn investigate_with_retry(
+    client: &SigiroClient,
+    service: &str,
+    from_us: i64,
+    to_us: i64,
+) -> Result<crate::investigate::InvestigationBlock> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..5 {
+        match client.investigate(service, from_us, to_us).await {
+            Ok(block) => return Ok(block),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                if msg.contains("Rate limited") && attempt < 4 {
+                    tokio::time::sleep(Duration::from_millis(600 * (attempt + 1))).await;
+                    last_err = Some(e);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("investigate_with_retry: exhausted retries")))
+}
+
 /// Run all diagnostic checks and print a report.
 pub async fn run(client: &SigiroClient) -> Result<()> {
     let mut report = DiagnosisReport::new();
@@ -389,6 +416,67 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
             }
         }
         Err(e) => report.warn("config-drift", &format!("check failed: {e:#}")),
+    }
+
+    // Check 20: Deep-dive on the worst service-error hotspot. If svc-errors
+    // found a service with elevated errors, run /v1/investigate on it and
+    // surface any operations flagged as anomalous (is_anomalous=true).
+    // Failures here are non-fatal — fall back to the surface hotspot list.
+    match check_investigate_deep_dive(client).await {
+        Ok(DeepDiveReport { service, anomalies }) => match (service, anomalies.is_empty()) {
+            (None, _) => {
+                report.pass("deep-dive", "no hotspot to deep-dive");
+            }
+            (Some(svc), true) => {
+                report.pass(
+                    "deep-dive",
+                    &format!("{svc}: investigated last 15 min, no anomalous operations"),
+                );
+            }
+            (Some(svc), false) => {
+                report.warn(
+                    "deep-dive",
+                    &format!(
+                        "{svc}: {} anomalous operation(s) in last 15 min",
+                        anomalies.len()
+                    ),
+                );
+                for (op, reason) in anomalies.iter().take(5) {
+                    report.hint("deep-dive", &format!("  {op} — {reason}"));
+                }
+            }
+        },
+        Err(e) => report.warn("deep-dive", &format!("check failed: {e:#}")),
+    }
+
+    // Check 21: DuckDB health — read memory usage and thread count via
+    // pragma_database_size() + current_setting(). Warn on memory pressure
+    // (usage > 80 % of limit) or single-threaded execution on a box that
+    // clearly has cores to spare.
+    match check_duckdb_health(client).await {
+        Ok(DuckDbReport {
+            mem_limit_bytes,
+            mem_usage_bytes,
+            mem_used_pct,
+            threads,
+        }) => {
+            let mem_str = format!(
+                "{:.1} / {:.1} MiB ({mem_used_pct:.0}%)",
+                bytes_to_mib(mem_usage_bytes),
+                bytes_to_mib(mem_limit_bytes)
+            );
+            if mem_used_pct >= 80.0 {
+                report.warn("duckdb", &format!("memory pressure — {mem_str}"));
+            } else if threads == 1 {
+                report.warn(
+                    "duckdb",
+                    &format!("{mem_str}, threads=1 — consider raising thread_count"),
+                );
+            } else {
+                report.pass("duckdb", &format!("{mem_str}, threads={threads}"));
+            }
+        }
+        Err(e) => report.warn("duckdb", &format!("check failed: {e:#}")),
     }
 
     report.print();
@@ -1041,6 +1129,176 @@ async fn check_config_drift() -> Result<Vec<String>> {
     }
 
     Ok(findings)
+}
+
+struct DeepDiveReport {
+    /// The service that was investigated, if any hotspot was found.
+    service: Option<String>,
+    /// (operation_name, anomaly_reason) pairs flagged by investigate.
+    anomalies: Vec<(String, String)>,
+}
+
+/// Run /v1/investigate on the worst svc-errors hotspot and surface the
+/// operations that investigate flagged as anomalous. This is a *deep-dive*
+/// on top of the surface hotspots from check_service_errors — it gives the
+/// operator the next click: which specific operations are the actual cause.
+async fn check_investigate_deep_dive(client: &SigiroClient) -> Result<DeepDiveReport> {
+    // Re-query svc-errors locally to pick the worst hotspot. We don't pass
+    // the result through because run() has already consumed the first batch.
+    let sql = r#"
+        SELECT service_name,
+               count(*) AS total,
+               count(CASE WHEN status_code = 2 THEN 1 END) AS errors
+        FROM lake.sigiro_spans
+        WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+        GROUP BY service_name
+        HAVING count(*) > 10
+        ORDER BY errors DESC
+        LIMIT 1
+    "#;
+    let rows = query_with_retry(client, sql)
+        .await
+        .context("deep-dive candidate query failed")?;
+    let worst = rows.first().and_then(|r| {
+        let svc = r
+            .get("service_name")
+            .and_then(serde_json::Value::as_str)?
+            .to_string();
+        let total = r
+            .get("total")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0)
+            .max(1);
+        let errors = r
+            .get("errors")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        let rate = (errors as f64 / total as f64) * 100.0;
+        if rate > 5.0 { Some((svc, rate)) } else { None }
+    });
+
+    let (svc, _rate) = match worst {
+        Some(t) => t,
+        None => {
+            return Ok(DeepDiveReport {
+                service: None,
+                anomalies: Vec::new(),
+            });
+        }
+    };
+
+    // investigate() wants from/to in microseconds.
+    let now_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0);
+    let from_us = now_us - 15 * 60 * 1_000_000;
+
+    let block = investigate_with_retry(client, &svc, from_us, now_us)
+        .await
+        .context("investigate call failed")?;
+
+    let anomalies = block
+        .operation_summaries
+        .iter()
+        .filter(|op| op.is_anomalous.unwrap_or(false))
+        .map(|op| {
+            let reason = op
+                .anomaly_reason
+                .clone()
+                .unwrap_or_else(|| "flagged anomalous (no reason given)".to_string());
+            (op.span_name.clone(), reason)
+        })
+        .collect();
+
+    Ok(DeepDiveReport {
+        service: Some(svc),
+        anomalies,
+    })
+}
+
+struct DuckDbReport {
+    mem_limit_bytes: u64,
+    mem_usage_bytes: u64,
+    mem_used_pct: f64,
+    threads: u64,
+}
+
+/// Query DuckDB's runtime state via `pragma_database_size()` (memory limit
+/// and current usage for the project DB) plus `current_setting('threads')`.
+/// Warn on memory pressure or single-threaded execution.
+async fn check_duckdb_health(client: &SigiroClient) -> Result<DuckDbReport> {
+    // Note: pragma_database_size() returns human-readable strings like
+    // "244.1 MiB". We parse them in Rust (see parse_size_str) since DuckDB
+    // doesn't expose a numeric form via this pragma.
+    let sql = r#"
+        SELECT memory_limit, memory_usage
+        FROM pragma_database_size()
+        WHERE database_name = 'lake'
+    "#;
+    let rows = query_with_retry(client, sql)
+        .await
+        .context("duckdb pragma query failed")?;
+    let row = rows
+        .first()
+        .context("no row returned for database_name='lake'")?;
+    let mem_limit = row
+        .get("memory_limit")
+        .and_then(serde_json::Value::as_str)
+        .and_then(parse_size_str)
+        .context("memory_limit missing or unparseable")?;
+    let mem_usage = row
+        .get("memory_usage")
+        .and_then(serde_json::Value::as_str)
+        .and_then(parse_size_str)
+        .context("memory_usage missing or unparseable")?;
+
+    let threads_sql = "SELECT current_setting('threads') AS threads";
+    let threads_rows = query_with_retry(client, threads_sql)
+        .await
+        .context("duckdb threads query failed")?;
+    let threads: u64 = threads_rows
+        .first()
+        .and_then(|r| r.get("threads"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+
+    let mem_used_pct = if mem_limit > 0 {
+        (mem_usage as f64 / mem_limit as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    Ok(DuckDbReport {
+        mem_limit_bytes: mem_limit,
+        mem_usage_bytes: mem_usage,
+        mem_used_pct,
+        threads,
+    })
+}
+
+/// Parse a DuckDB size string like "244.1 MiB" or "11.4 KiB" into bytes.
+/// Returns None on unrecognised input — caller treats that as "unknown".
+fn parse_size_str(s: &str) -> Option<u64> {
+    let s = s.trim();
+    // Split on whitespace: ["244.1", "MiB"]
+    let mut parts = s.split_whitespace();
+    let num: f64 = parts.next()?.parse().ok()?;
+    let unit = parts.next().unwrap_or("B");
+    let multiplier: u64 = match unit {
+        "B" => 1,
+        "KiB" | "KB" => 1024,
+        "MiB" | "MB" => 1024 * 1024,
+        "GiB" | "GB" => 1024 * 1024 * 1024,
+        "TiB" | "TB" => 1024 * 1024 * 1024 * 1024,
+        _ => return None,
+    };
+    Some((num * multiplier as f64) as u64)
+}
+
+fn bytes_to_mib(b: u64) -> f64 {
+    b as f64 / (1024.0 * 1024.0)
 }
 
 // ---------------------------------------------------------------------------
