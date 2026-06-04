@@ -340,6 +340,57 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
         Err(e) => report.warn("ebpf", &format!("check failed: {e:#}")),
     }
 
+    // Check 18: Rate-limit pressure — flag services that dominate the
+    // recent ingest rate. A single service emitting most of the spans is
+    // a signal that it is hammering the API and may soon be the only one
+    // the governor bucket serves.
+    match check_rate_pressure(client).await {
+        Ok(PressureReport { top, dominant_pct }) => {
+            if top.is_empty() {
+                report.pass("rate-pressure", "no recent spans to analyze");
+            } else if dominant_pct >= 50.0 {
+                report.warn(
+                    "rate-pressure",
+                    &format!(
+                        "1 service accounts for {dominant_pct:.0}% of last 1 min — risk of governor starvation"
+                    ),
+                );
+                if let Some((svc, n, pct)) = top.first() {
+                    report.hint("rate-pressure", &format!("  {svc}: {n} spans ({pct:.0}%)"));
+                }
+            } else {
+                report.pass(
+                    "rate-pressure",
+                    &format!("{dominant_pct:.0}% from top service, no dominance"),
+                );
+            }
+        }
+        Err(e) => report.warn("rate-pressure", &format!("check failed: {e:#}")),
+    }
+
+    // Check 19: Config drift — read typed env vars and warn on suspicious
+    // values that hurt durability (large flush windows), correctness
+    // (unknown backpressure policy), or performance (tiny byte threshold).
+    match check_config_drift().await {
+        Ok(report_lines) => {
+            if report_lines.is_empty() {
+                report.pass(
+                    "config-drift",
+                    "all runtime config values within known-good range",
+                );
+            } else {
+                report.warn(
+                    "config-drift",
+                    &format!("{} suspicious runtime config value(s)", report_lines.len()),
+                );
+                for line in report_lines {
+                    report.hint("config-drift", &format!("  - {line}"));
+                }
+            }
+        }
+        Err(e) => report.warn("config-drift", &format!("check failed: {e:#}")),
+    }
+
     report.print();
     Ok(())
 }
@@ -883,6 +934,113 @@ async fn check_ebpf_status(client: &SigiroClient) -> Result<EbpfState> {
         }
         other => Ok(EbpfState::Disabled(format!("unexpected status: {other}"))),
     }
+}
+
+struct PressureReport {
+    /// Up to 5 top services in the last 1 min, ordered by span count desc.
+    top: Vec<(String, i64, f64)>,
+    /// The share (0–100) held by the top service, or 0.0 if there is no traffic.
+    dominant_pct: f64,
+}
+
+/// Look at the last 1 minute of spans and report top services by volume.
+/// A single service holding ≥ 50 % of the share is treated as pressure
+/// on the governor bucket — it can starve the rest.
+async fn check_rate_pressure(client: &SigiroClient) -> Result<PressureReport> {
+    let sql = r#"
+        SELECT service_name, COUNT(*) AS cnt
+        FROM lake.sigiro_spans
+        WHERE timestamp > now()::TIMESTAMP - INTERVAL '1 minute'
+        GROUP BY service_name
+        ORDER BY cnt DESC
+        LIMIT 5
+    "#;
+    let rows = query_with_retry(client, sql)
+        .await
+        .context("rate-pressure query failed")?;
+
+    let mut top: Vec<(String, i64, f64)> = Vec::with_capacity(rows.len());
+    let mut total: i64 = 0;
+    let mut raw: Vec<(String, i64)> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let svc = row
+            .get("service_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let n = row
+            .get("cnt")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        total += n;
+        raw.push((svc, n));
+    }
+    let denom = if total > 0 { total as f64 } else { 1.0 };
+    for (svc, n) in raw {
+        let pct = (n as f64 / denom) * 100.0;
+        top.push((svc, n, pct));
+    }
+    let dominant_pct = top.first().map(|t| t.2).unwrap_or(0.0);
+    Ok(PressureReport { top, dominant_pct })
+}
+
+/// Read typed env vars and flag values that hurt durability, correctness,
+/// or performance. Each line is a self-contained explanation suitable for
+/// a `hint` under the "config-drift" check.
+///
+/// Note: this reads the **CLI process**'s env, not the server's. In typical
+/// deployments (single host, docker compose, shared `.env`) the two match
+/// and the check is accurate. A future improvement would expose the
+/// server's effective config via `/admin/config` so the check is exact
+/// regardless of how the CLI was launched.
+async fn check_config_drift() -> Result<Vec<String>> {
+    use crate::config;
+
+    let mut findings = Vec::new();
+
+    // FLUSH_INTERVAL_SECS — too high means a large data-loss window on crash.
+    // 0 is fatal (timer never fires; rows only flush on threshold).
+    match config::FLUSH_INTERVAL_SECS.value() {
+        Ok(0) => findings.push(
+            "SIGIRO_FLUSH_INTERVAL_SECS=0 — flush timer disabled; rows will only flush on row/byte threshold (data loss on crash)".to_string(),
+        ),
+        Ok(s) if s > 60 => findings.push(format!(
+            "SIGIRO_FLUSH_INTERVAL_SECS={s} — large data-loss window on crash; recommend ≤ 10"
+        )),
+        Ok(_) => {}
+        Err(_) => {}
+    }
+
+    // FLUSH_ROW_THRESHOLD — too high means the in-memory buffer can grow
+    // unbounded for low-volume projects, then dump a huge batch on next flush.
+    if let Ok(n) = config::FLUSH_ROW_THRESHOLD.value() {
+        if n > 1_000_000 {
+            findings.push(format!(
+                "SIGIRO_FLUSH_ROW_THRESHOLD={n} — very high; in-memory buffer can grow large between flushes"
+            ));
+        }
+    }
+
+    // FLUSH_BYTE_THRESHOLD — too low causes constant small flushes (I/O thrash).
+    if let Ok(b) = config::FLUSH_BYTE_THRESHOLD.value() {
+        if b < 1_000_000 {
+            findings.push(format!(
+                "SIGIRO_FLUSH_BYTE_THRESHOLD={b} — very low; expect frequent small flushes (I/O overhead)"
+            ));
+        }
+    }
+
+    // BACKPRESSURE_POLICY — must be one of the recognized values, otherwise
+    // MsgRouter falls back silently and the operator's intent is lost.
+    if let Ok(p) = config::BACKPRESSURE_POLICY.value() {
+        if p != "block" && p != "drop-oldest" {
+            findings.push(format!(
+                "SIGIRO_BACKPRESSURE_POLICY={p:?} — unknown; expected \"block\" or \"drop-oldest\""
+            ));
+        }
+    }
+
+    Ok(findings)
 }
 
 // ---------------------------------------------------------------------------
