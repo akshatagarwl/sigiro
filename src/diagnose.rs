@@ -14,8 +14,34 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::client::SigiroClient;
+
+/// Send a SQL query via the HTTP client, retrying on 429 with backoff.
+///
+/// The diagnose CLI fires many SQL queries in rapid succession. The server's
+/// governor config (2 req/sec, burst 10) can reject late ones in the run with
+/// HTTP 429. We back off and retry — 5 attempts × 600 ms = 3 s of patience,
+/// enough for the bucket to refill while keeping total diagnose latency low.
+async fn query_with_retry(client: &SigiroClient, sql: &str) -> Result<Vec<serde_json::Value>> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..5 {
+        match client.query(sql).await {
+            Ok(rows) => return Ok(rows),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                if msg.contains("Rate limited") && attempt < 4 {
+                    tokio::time::sleep(Duration::from_millis(600 * (attempt + 1))).await;
+                    last_err = Some(e);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("query_with_retry: exhausted retries")))
+}
 
 /// Run all diagnostic checks and print a report.
 pub async fn run(client: &SigiroClient) -> Result<()> {
@@ -218,7 +244,50 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
         Err(e) => report.warn("storage", &format!("check failed: {e:#}")),
     }
 
-    // Check 12: Retention configuration
+    // Check 13: Duplicate spans (same trace_id+span_id arriving multiple times).
+    // Common cause: OTLP exporter retry storm, or broken span ID generation in
+    // an instrumented library. Either way the data is corrupt.
+    match check_duplicate_spans(client).await {
+        Ok((count, sample)) => {
+            if count > 0 {
+                report.warn(
+                    "dup-spans",
+                    &format!("{count} duplicate (trace_id, span_id) pairs in last 15 min"),
+                );
+                for (tid, sid, n) in sample.iter().take(3) {
+                    report.hint("dup-spans", &format!("  trace={tid} span={sid} ×{n}"));
+                }
+            } else {
+                report.pass("dup-spans", "no duplicate spans in last 15 min");
+            }
+        }
+        Err(e) => report.warn("dup-spans", &format!("check failed: {e:#}")),
+    }
+
+    // Check 14: Orphan spans — parent_span_id set but the parent never arrived
+    // in the same trace. Strong signal of broken OTLP instrumentation (sampling,
+    // dropped spans at the collector, or a parent service that is not exporting).
+    match check_orphan_spans(client).await {
+        Ok((count, sample)) => {
+            if count > 0 {
+                report.warn(
+                    "orphan-spans",
+                    &format!(
+                        "{count} spans reference a missing parent in last 15 min — \
+                         broken trace tree"
+                    ),
+                );
+                for (svc, tid, sid) in sample.iter().take(3) {
+                    report.hint("orphan-spans", &format!("  {svc} trace={tid} span={sid}"));
+                }
+            } else {
+                report.pass("orphan-spans", "all spans have a present parent");
+            }
+        }
+        Err(e) => report.warn("orphan-spans", &format!("check failed: {e:#}")),
+    }
+
+    // Check 15: Retention configuration
     match check_retention().await {
         Ok(Some(days)) => report.pass("retention", &format!("{days} days configured")),
         Ok(None) => report.warn(
@@ -606,6 +675,97 @@ async fn check_retention() -> Result<Option<u32>> {
         Ok(d) if d > 0 => Ok(Some(d)),
         _ => Ok(None),
     }
+}
+
+/// Detect duplicate (trace_id, span_id) pairs in the last 15 minutes.
+/// Returns (count_of_duplicate_pairs, sample_up_to_10_worst).
+///
+/// Each duplicate is a sign that the same span arrived twice — either an OTLP
+/// exporter retry storm, or an instrumented library generating conflicting IDs.
+/// Either way the resulting trace is unreliable.
+async fn check_duplicate_spans(client: &SigiroClient) -> Result<(i64, Vec<(String, String, i64)>)> {
+    let sql = r#"
+        SELECT trace_id,
+               span_id,
+               COUNT(*) AS dup_count
+        FROM lake.sigiro_spans
+        WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+        GROUP BY trace_id, span_id
+        HAVING COUNT(*) > 1
+        ORDER BY dup_count DESC
+        LIMIT 10
+    "#;
+    let rows = query_with_retry(client, sql)
+        .await
+        .context("duplicate spans query failed")?;
+    let count = rows.len() as i64;
+    let mut sample = Vec::with_capacity(rows.len());
+    for row in rows {
+        let tid = row
+            .get("trace_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?")
+            .to_string();
+        let sid = row
+            .get("span_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?")
+            .to_string();
+        let n = row
+            .get("dup_count")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        sample.push((tid, sid, n));
+    }
+    Ok((count, sample))
+}
+
+/// Detect orphan spans — a span whose parent_span_id is set but no span in the
+/// same trace carries that id. Returns (count_of_orphans, sample_up_to_10).
+///
+/// Common cause: a service in the trace stopped exporting (e.g. k8s rollout,
+/// network policy, broken init). The parent never shows up, leaving the child
+/// branches disconnected from the trace tree.
+async fn check_orphan_spans(client: &SigiroClient) -> Result<(i64, Vec<(String, String, String)>)> {
+    let sql = r#"
+        SELECT child.service_name,
+               child.trace_id,
+               child.span_id
+        FROM lake.sigiro_spans child
+        WHERE child.timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
+          AND child.parent_span_id != ''
+          AND NOT EXISTS (
+            SELECT 1 FROM lake.sigiro_spans parent
+            WHERE parent.trace_id = child.trace_id
+              AND parent.span_id = child.parent_span_id
+          )
+        ORDER BY child.timestamp DESC
+        LIMIT 10
+    "#;
+    let rows = query_with_retry(client, sql)
+        .await
+        .context("orphan spans query failed")?;
+    let count = rows.len() as i64;
+    let mut sample = Vec::with_capacity(rows.len());
+    for row in rows {
+        let svc = row
+            .get("service_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let tid = row
+            .get("trace_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?")
+            .to_string();
+        let sid = row
+            .get("span_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?")
+            .to_string();
+        sample.push((svc, tid, sid));
+    }
+    Ok((count, sample))
 }
 
 // ---------------------------------------------------------------------------
