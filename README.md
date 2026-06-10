@@ -42,6 +42,33 @@ cd tests/e2e/federation
 
 This starts the complete demo environment and verifies telemetry flows from collectors through to queries.
 
+## Output Formats
+
+Sigiro commands print results in **TOON** (Token-Oriented Object Notation) by default when
+stdout is a terminal, and **JSON** when piped. TOON is ~40% fewer tokens than JSON for
+typical observability data and stays readable.
+
+To force a format:
+
+```bash
+sigiro status --output json      # always JSON
+sigiro investigate my-service --output toon
+sigiro query "SELECT 1" --output json | jq .
+```
+
+In scripts, prefer `--output json` for stable parsing:
+
+```bash
+# grep / jq / awk all work
+sigiro services --output json | jq -r '.services[].service_name'
+
+# pipe a long SQL file
+sigiro query --sql-file ./report.sql --output json > report.json
+```
+
+**Tip:** if you see `key: value` pairs that look like indented YAML, that's TOON. Add
+`--output json` to get JSON.
+
 ## Documentation
 
 Full documentation is available at [sigiro.com/docs](https://sigiro.com/docs) (or in `www/content/docs/`).

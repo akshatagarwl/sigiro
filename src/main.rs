@@ -621,6 +621,32 @@ async fn run_serve() -> Result<()> {
         MAX_IDLE_SECS,
     ));
 
+    // F-18: write last_known_state.json every 30s so a SIGKILL leaves a
+    // recent snapshot for forensics.
+    let state_dir = dir.clone();
+    let state_admin = Arc::clone(&shared_admin);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let map = {
+                let guard = state_admin.lock();
+                sigiro::admin::read_all_status(&guard).unwrap_or_default()
+            };
+            let payload = serde_json::json!({
+                "updated_at": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+                "data_dir": state_dir.as_str(),
+                "instance": map,
+            });
+            if let Ok(s) = serde_json::to_string_pretty(&payload) {
+                let _ = std::fs::write(state_dir.join("last_known_state.json"), s);
+            }
+        }
+    });
+
     sigiro::server::run_servers(pool, shared_admin, router).await?;
     Ok(())
 }

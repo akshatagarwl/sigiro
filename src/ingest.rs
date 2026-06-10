@@ -676,9 +676,11 @@ async fn otlp_http_traces(
             return StatusCode::BAD_REQUEST;
         }
     };
+    // F-05: empty batch is a valid no-op (e.g. OTel SDK shutdown sends an
+    // empty final flush). Return 200 OK with no body — not 400 with WARN
+    // "trace data lost" — so the sender doesn't log an error.
     if batch.num_rows() == 0 {
-        tracing::warn!(project_id, "batch empty after transform — trace data lost");
-        return StatusCode::BAD_REQUEST;
+        return StatusCode::OK;
     }
     route_ingest_msg(
         &state,
@@ -709,9 +711,9 @@ async fn otlp_http_logs(
             return StatusCode::BAD_REQUEST;
         }
     };
+    // F-05: empty batch is a valid no-op (see otlp_http_traces).
     if batch.num_rows() == 0 {
-        tracing::warn!(project_id, "batch empty after transform — log data lost");
-        return StatusCode::BAD_REQUEST;
+        return StatusCode::OK;
     }
     route_ingest_msg(
         &state,
