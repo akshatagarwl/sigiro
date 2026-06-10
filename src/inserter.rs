@@ -143,7 +143,7 @@ impl MsgRouter {
         match self.project_senders.entry(pid.clone()) {
             Entry::Occupied(_) => {
                 // Already registered — return Ok, caller can send immediately.
-                tracing::warn!(project_id = %pid, "register_flusher: flusher already exists for project");
+                tracing::debug!(project_id = %pid, "register_flusher: flusher already exists for project");
                 Ok(())
             }
             Entry::Vacant(e) => {

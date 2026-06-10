@@ -185,6 +185,8 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     // Public routes + v1 API + admin + Swagger UI
     Router::new()
         .typed_get(health)
+        .typed_get(v1_health)
+        .typed_get(healthz)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .nest("/v1", v1)
         .nest("/admin", admin)
@@ -448,6 +450,22 @@ async fn health(_path: HealthPath, State(state): State<Arc<AppState>>) -> axum::
         .status(axum::http::StatusCode::OK)
         .body(axum::body::Body::from("ok"))
         .unwrap()
+}
+
+#[instrument(skip(state))]
+async fn v1_health(
+    _path: V1HealthPath,
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    health(HealthPath, State(state)).await
+}
+
+#[instrument(skip(state))]
+async fn healthz(
+    _path: HealthzPath,
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    health(HealthPath, State(state)).await
 }
 
 /// Convert a DuckDB ValueRef to a serde_json::Value.

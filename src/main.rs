@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand, builder::styling};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::io::IsTerminal;  // for stdout().is_terminal()
 
 use itertools::Itertools;
 use sigiro::responses::SpanDetail;
@@ -20,9 +21,10 @@ const STYLES: styling::Styles = styling::Styles::styled()
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
-    /// Output format (toon or json)
-    #[arg(long, default_value = "toon")]
-    output: OutputFormat,
+    /// Output format (toon or json). When unset, auto-detects: JSON if stdout
+    /// is not a TTY (piped to jq, a file, etc.), TOON otherwise.
+    #[arg(long, value_enum)]
+    output: Option<OutputFormat>,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -44,7 +46,20 @@ pub enum TopologyFormat {
 #[derive(Subcommand)]
 enum Command {
     /// Start gRPC + HTTP servers
-    Serve,
+    Serve {
+        /// Data directory (overrides SIGIRO_DATA_DIR)
+        #[arg(long)]
+        data_dir: Option<String>,
+        /// HTTP API port (overrides SIGIRO_HTTP_PORT)
+        #[arg(long)]
+        http_port: Option<u16>,
+        /// OTLP HTTP port (overrides SIGIRO_OTLP_HTTP_PORT)
+        #[arg(long)]
+        otlp_http_port: Option<u16>,
+        /// OTLP gRPC port (overrides SIGIRO_GRPC_PORT)
+        #[arg(long)]
+        otlp_grpc_port: Option<u16>,
+    },
     /// Run SQL query
     Query {
         /// SQL statement to execute
@@ -92,13 +107,19 @@ enum Command {
     Diagnose,
 }
 
-/// Format output
-fn format_output(value: &serde_json::Value, output_format: &OutputFormat) -> Result<String> {
-    match output_format {
-        OutputFormat::Toon => Ok(to_toon(value)),
-        OutputFormat::Json => Ok(serde_json::to_string_pretty(value)?),
+/// Format output. If the user did not explicitly pass --output, and stdout
+/// is not a TTY (we are being piped to jq, a file, another process, etc.),
+/// default to JSON. TOON is great for humans at a terminal but unfriendly
+/// to jq / grep / any text pipeline.
+fn format_output(value: &serde_json::Value, output_format: Option<&OutputFormat>) -> Result<String> {
+    let use_json = output_format.is_none() && !std::io::stdout().is_terminal();
+    let fmt = output_format.unwrap_or(&OutputFormat::Toon);
+    match (use_json, fmt) {
+        (true, _) | (false, OutputFormat::Json) => Ok(serde_json::to_string_pretty(value)?),
+        (false, OutputFormat::Toon) => Ok(to_toon(value)),
     }
 }
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -120,15 +141,43 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Serve) | None => {
+        Some(Command::Serve {
+            data_dir,
+            http_port,
+            otlp_http_port,
+            otlp_grpc_port,
+        }) => {
+            // Apply CLI flags to env before any config::*.value() is called.
+            // The on_startup Envar machinery reads env::var at first .value(),
+            // so this is the only correct ordering. std::env::set_var is
+            // marked unsafe in edition 2024 because it's not thread-safe; we
+            // are single-threaded here (before tokio starts the runtime).
+            unsafe {
+                if let Some(v) = data_dir {
+                    std::env::set_var("SIGIRO_DATA_DIR", v);
+                }
+                if let Some(v) = http_port {
+                    std::env::set_var("SIGIRO_HTTP_PORT", v.to_string());
+                }
+                if let Some(v) = otlp_http_port {
+                    std::env::set_var("SIGIRO_OTLP_HTTP_PORT", v.to_string());
+                }
+                if let Some(v) = otlp_grpc_port {
+                    std::env::set_var("SIGIRO_GRPC_PORT", v.to_string());
+                }
+            }
+            run_serve().await?;
+        }
+        None => {
             run_serve().await?;
         }
         Some(Command::Query { sql }) => {
             let client = require_client()?;
             let result = client.query(&sql).await?;
+            let value = serde_json::to_value(&result)?;
             println!(
                 "{}",
-                format_output(&serde_json::to_value(&result)?, &cli.output)?
+                format_output(&value, cli.output.as_ref())?
             );
         }
         Some(Command::Status) => {
@@ -145,9 +194,10 @@ async fn main() -> Result<()> {
             } else {
                 format!("error: {}", resp.status())
             };
+            let value = serde_json::json!({"status": status});
             println!(
                 "{}",
-                format_output(&serde_json::json!({"status": status }), &cli.output)?
+                format_output(&value, cli.output.as_ref())?
             );
         }
         Some(Command::Investigate { service, from, to }) => {
@@ -162,9 +212,10 @@ async fn main() -> Result<()> {
             });
             let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
             let block = client.investigate(&service, from_ts, to_ts).await?;
+            let value = serde_json::to_value(&block)?;
             println!(
                 "{}",
-                format_output(&serde_json::to_value(&block)?, &cli.output)?
+                format_output(&value, cli.output.as_ref())?
             );
         }
         Some(Command::Waterfall { trace_id }) => {
