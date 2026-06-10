@@ -155,7 +155,7 @@ impl ProjectPool {
         // Extensions are downloaded on first use (cold start). This may take 20-30s.
         // Run `sigiro fetch-extensions` to pre-download for offline deployments.
         tracing::info!(
-            "DuckDB: loading extensions (downloading on first use, may take a moment)..."
+            "DuckDB: loading extensions (downloading on first use, may take 20-90s on cold cache) — run `sigiro fetch-extensions` to pre-warm"
         );
 
         // Initialize DuckLake

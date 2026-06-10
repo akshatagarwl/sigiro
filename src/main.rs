@@ -105,6 +105,10 @@ enum Command {
     },
     /// Diagnose sigiro using its own telemetry — no docker logs
     Diagnose,
+    /// Pre-download DuckDB extensions into the data dir so the first
+    /// `sigiro serve` doesn't hang on a 30-90s blocking download (F-01).
+    /// Use this once after installing sigiro, or before an offline deploy.
+    FetchExtensions,
 }
 
 /// Format output. If the user did not explicitly pass --output, and stdout
@@ -123,6 +127,31 @@ fn format_output(value: &serde_json::Value, output_format: Option<&OutputFormat>
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install a panic hook that writes a breadcrumb to stderr and to
+    // data_dir/crash.log so any future silent death leaves a trace
+    // (F-02, F-29). The default panic hook only writes to stderr and
+    // can be missed when stdout is captured by nohup / docker.
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        eprintln!("\n[panic] {info}\n[backtrace]\n{bt}");
+        let ts = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| "unknown-time".to_string());
+        let crash_dir = std::env::var("SIGIRO_DATA_DIR")
+            .ok()
+            .map(camino::Utf8PathBuf::from)
+            .or_else(|| sigiro::data_dir().ok());
+        if let Some(dir) = crash_dir {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(
+                dir.join("crash.log"),
+                format!(
+                    "[{ts}] [panic] {info}\n[backtrace]\n{bt}\n"
+                ),
+            );
+        }
+    }));
+
     // OTel self-instrumentation: read config at startup, pass to init_telemetry()
     let telemetry_config = sigiro::otel::TelemetryConfig::from_env()?;
     let _telemetry_guard = match sigiro::otel::init_telemetry(telemetry_config) {
@@ -186,15 +215,37 @@ async fn main() -> Result<()> {
             let base_url = sigiro::config::ENDPOINT
                 .value()
                 .unwrap_or_else(|_| "http://localhost:9999".to_string());
-            let resp = reqwest::get(format!("{}/health", base_url.trim_end_matches('/')))
-                .await
-                .context("failed to connect to sigiro server")?;
-            let status = if resp.status().is_success() {
-                resp.text().await.unwrap_or_else(|_| "ok".to_string())
-            } else {
-                format!("error: {}", resp.status())
+            // F-03: distinguish "starting" from "ready" by reading the
+            // `.ready` sentinel written at the tail of init.
+            let data_dir = sigiro::data_dir().ok();
+            let ready_info = data_dir
+                .as_ref()
+                .and_then(|d| std::fs::read_to_string(d.join(".ready")).ok())
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+            let health_resp = reqwest::get(format!("{}/health", base_url.trim_end_matches('/')))
+                .await;
+            let (state, detail) = match health_resp {
+                Ok(resp) if resp.status().is_success() => {
+                    if ready_info.is_some() {
+                        ("ready".to_string(), "ok".to_string())
+                    } else {
+                        (
+                            "starting".to_string(),
+                            "http up, init not complete".to_string(),
+                        )
+                    }
+                }
+                Ok(resp) => (
+                    "unreachable".to_string(),
+                    format!("http returned {}", resp.status()),
+                ),
+                Err(e) => ("unreachable".to_string(), format!("connect failed: {e}")),
             };
-            let value = serde_json::json!({"status": status});
+            let value = serde_json::json!({
+                "status": state,
+                "detail": detail,
+                "ready_info": ready_info,
+            });
             println!(
                 "{}",
                 format_output(&value, cli.output.as_ref())?
@@ -240,6 +291,14 @@ async fn main() -> Result<()> {
             let client = require_client()?;
             sigiro::diagnose::run(&client).await?;
         }
+        Some(Command::FetchExtensions) => {
+            let dir = data_dir()?;
+            std::fs::create_dir_all(&dir)?;
+            let project_dir = dir.join("default");
+            std::fs::create_dir_all(&project_dir)?;
+            sigiro::storage::prewarm_extensions(&project_dir)?;
+            println!("DuckDB extensions pre-warmed into {}", project_dir);
+        }
     }
     Ok(())
 }
@@ -247,6 +306,10 @@ async fn main() -> Result<()> {
 async fn run_serve() -> Result<()> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)?;
+    tracing::info!(
+        "sigiro starting — data_dir={}, first-run extension download may take 30-90s",
+        dir
+    );
 
     // MsgRouter: handlers send directly to per-project flusher tasks.
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
@@ -451,6 +514,20 @@ async fn run_serve() -> Result<()> {
     }
 
     tracing::info!("sigiro ready — data_dir={}", dir);
+    // F-03: write a sentinel so `sigiro status` can distinguish
+    // "alive but still initializing" from "ready to serve traffic".
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(json) = serde_json::to_string_pretty(&serde_json::json!({
+        "started_at": started_at,
+        "data_dir": dir.as_str(),
+        "version": env!("CARGO_PKG_VERSION"),
+    })) {
+        let _ = std::fs::write(dir.join(".ready"), json);
+    }
+
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
@@ -669,8 +746,7 @@ async fn run_waterfall_direct(trace_id: &str) -> Result<()> {
         .context("failed to set DuckDB limits")?;
 
     let catalog_str = catalog_path.as_str();
-    conn.execute_batch("INSTALL ducklake; INSTALL sqlite; LOAD ducklake; LOAD sqlite;")
-        .context("failed to load DuckLake extensions")?;
+    sigiro::storage::install_extensions_with_progress(&conn, &["ducklake", "sqlite"])?;
 
     let attach_sql = format!("ATTACH 'ducklake:{catalog_str}' AS lake");
     if let Err(attach_err) = conn.execute_batch(&attach_sql) {

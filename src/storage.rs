@@ -14,10 +14,12 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     std::fs::create_dir_all(project_dir)
         .with_context(|| format!("failed to create project directory: {project_dir}",))?;
 
-    // Load required extensions (ducklake for storage, sqlite for catalog)
-    conn.execute_batch("INSTALL ducklake; INSTALL sqlite; LOAD ducklake; LOAD sqlite;")
-        .context("failed to install/load extensions")?;
-    tracing::info!("loaded DuckDB extensions: ducklake, sqlite");
+    // Load required extensions (ducklake for storage, sqlite for catalog).
+    // Emit a progress line before each step so cold starts don't look like
+    // a hang (F-01/F-29). With a fresh extension dir, DuckDB synchronously
+    // downloads ~5MB of .duckdb_extension files over HTTP and emits no
+    // output of its own; users see nothing for 30-90s.
+    install_extensions_with_progress(conn, &["ducklake", "sqlite"])?;
 
     // Attach DuckLake with DuckDB file catalog + local Parquet.
     // Uses catalog.ducklake (DuckDB native catalog) instead of SQLite
@@ -39,10 +41,7 @@ pub fn init_distributed(
     config: &StorageConfig,
     project_dir: &Utf8Path,
 ) -> Result<()> {
-    // Load required extensions
-    conn.execute_batch("INSTALL ducklake; INSTALL postgres; LOAD ducklake; LOAD postgres;")
-        .context("failed to install/load ducklake + postgres extensions")?;
-    tracing::info!("loaded DuckDB extensions: ducklake, postgres");
+    install_extensions_with_progress(conn, &["ducklake", "postgres"])?;
 
     // Convert catalog URL to libpq format that DuckLake expects.
     // Accepts both postgresql:// URI and postgres:host=... (libpq format, auto-converted).
@@ -199,4 +198,47 @@ pub const TABLE_PREFIX: &str = "lake.";
 
 pub fn table_prefix() -> &'static str {
     TABLE_PREFIX
+}
+
+/// Install and load a list of DuckDB extensions, emitting a progress line
+/// before and after each so cold starts don't appear to hang (F-01/F-29).
+///
+/// DuckDB's `INSTALL` command silently downloads ~5MB of `.duckdb_extension`
+/// files on first use. The download is synchronous and can take 30-90s
+/// on a fresh data dir, with no progress output. The user sees nothing
+/// and concludes the process has died.
+pub fn install_extensions_with_progress(conn: &Connection, names: &[&str]) -> Result<()> {
+    let total = names.len();
+    for (i, name) in names.iter().enumerate() {
+        tracing::info!(
+            "installing DuckDB extension {name} ({}/{}) — first run may download ~5MB, please wait",
+            i + 1,
+            total
+        );
+        conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
+            .with_context(|| format!("failed to install/load extension {name}"))?;
+        tracing::info!("loaded DuckDB extension: {name}");
+    }
+    Ok(())
+}
+
+/// Pre-download DuckDB extensions into the standard extension directory
+/// so the first `sigiro serve` doesn't hang on a 30-90s blocking download.
+/// This is what `sigiro fetch-extensions` invokes.
+pub fn prewarm_extensions(project_dir: &Utf8Path) -> Result<()> {
+    let ext_dir = project_dir.join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .with_context(|| format!("failed to create extensions directory: {ext_dir}"))?;
+    let conn = Connection::open_in_memory()
+        .context("failed to open in-memory DuckDB for extension prewarm")?;
+    let ext_dir_str = ext_dir.as_str();
+    conn.execute_batch(&format!("SET extension_directory = '{ext_dir_str}';"))
+        .context("failed to set extension_directory")?;
+    tracing::info!(
+        "pre-warming DuckDB extensions into {} (may take 30-90s on first run)...",
+        ext_dir
+    );
+    install_extensions_with_progress(&conn, &["ducklake", "sqlite", "json", "parquet"])?;
+    tracing::info!("DuckDB extensions pre-warmed successfully");
+    Ok(())
 }
