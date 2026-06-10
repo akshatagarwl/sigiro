@@ -278,10 +278,34 @@ async fn main() -> Result<()> {
                 ),
                 Err(e) => ("unreachable".to_string(), format!("connect failed: {e}")),
             };
+            // F-21: include a recent_ingest block so the user can see at a
+            // glance whether the server is actually receiving data. Tolerate
+            // failure (e.g. when not authenticated) and return null.
+            let recent_ingest = if matches!(state.as_str(), "ready" | "starting") {
+                match sigiro::client::try_build_client() {
+                    Ok(client) => match client.query(
+                        "SELECT (SELECT count(*) FROM lake.sigiro_spans WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS spans_5m, (SELECT count(*) FROM lake.sigiro_logs WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS logs_5m, CAST((SELECT max(timestamp) FROM lake.sigiro_spans) AS VARCHAR) AS last_span_ts, CAST((SELECT max(timestamp) FROM lake.sigiro_logs) AS VARCHAR) AS last_log_ts",
+                    ).await {
+                        Ok(rows) => rows.into_iter().next().map(|r| {
+                            serde_json::json!({
+                                "spans_5m": r.get("spans_5m").cloned().unwrap_or(serde_json::Value::Null),
+                                "logs_5m": r.get("logs_5m").cloned().unwrap_or(serde_json::Value::Null),
+                                "last_span_ts": r.get("last_span_ts").cloned().unwrap_or(serde_json::Value::Null),
+                                "last_log_ts": r.get("last_log_ts").cloned().unwrap_or(serde_json::Value::Null),
+                            })
+                        }),
+                        Err(_) => None,
+                    },
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
             let value = serde_json::json!({
                 "status": state,
                 "detail": detail,
                 "ready_info": ready_info,
+                "recent_ingest": recent_ingest,
             });
             println!("{}", format_output(&value, cli.output.as_ref())?);
         }
