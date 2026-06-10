@@ -1,5 +1,6 @@
 ---
 source: tests/investigate_test.rs
+assertion_line: 756
 expression: ctx
 ---
 {
@@ -9,6 +10,7 @@ expression: ctx
   "namespace": "prod",
   "deployment": "checkout-v2",
   "pod_count": 1,
+  "has_instance_id": true,
   "dependencies": [
     {
       "service_name": "payments",

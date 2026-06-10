@@ -150,7 +150,9 @@ async fn test_admin_status_returns_200() {
 }
 
 #[tokio::test]
-async fn test_otlp_traces_empty_payload_returns_400() {
+// F-05: empty batch is a valid no-op (e.g. OTel SDK shutdown sends an
+// empty final flush). The server should return 200 OK, not 400.
+async fn test_otlp_traces_empty_payload_returns_200() {
     let ctx = build_test_context();
     let app = build_otlp_app(&ctx.state);
     let server = TestServer::new(app).expect("failed to build test server");
@@ -164,5 +166,5 @@ async fn test_otlp_traces_empty_payload_returns_400() {
         .bytes(empty_traces_json.into())
         .content_type("application/json")
         .await;
-    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    resp.assert_status(axum::http::StatusCode::OK);
 }

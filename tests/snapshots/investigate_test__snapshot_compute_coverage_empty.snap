@@ -1,5 +1,6 @@
 ---
 source: tests/investigate_test.rs
+assertion_line: 729
 expression: coverage
 ---
 {
@@ -16,7 +17,7 @@ expression: coverage
       "signal_type": "spans",
       "available": false,
       "severity": "none",
-      "reason": "no spans found — service may not be instrumented for tracing"
+      "reason": "no spans, logs, or metrics found for this service in the time window — check service_name spelling, the time window (--from/--to), and that the service is actually sending OTLP"
     },
     {
       "signal_type": "logs",
