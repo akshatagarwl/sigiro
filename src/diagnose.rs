@@ -587,12 +587,10 @@ async fn check_health(client: &SigiroClient) -> Result<HealthStatus> {
     match client.status().await {
         Ok(resp) => {
             let body = resp.status.get("status").cloned().unwrap_or_default();
-            if body == "ok" {
-                Ok(HealthStatus::Healthy)
-            } else if body.contains("dead flushers") {
-                Ok(HealthStatus::DeadFlushers)
-            } else {
-                Ok(HealthStatus::Unknown(body))
+            match body.as_str() {
+                "ok" | "ready" => Ok(HealthStatus::Healthy),
+                "degraded" => Ok(HealthStatus::DeadFlushers),
+                _ => Ok(HealthStatus::Unknown(body)),
             }
         }
         Err(e) => Err(e),

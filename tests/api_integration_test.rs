@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 struct TestContext {
-    _tmp_dir: TempDir,
+    data_dir: TempDir,
     state: Arc<AppState>,
 }
 
@@ -40,7 +40,7 @@ fn build_test_context() -> TestContext {
         std::env::set_var("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions");
     }
 
-    let pool = Arc::new(ProjectPool::new(data_dir, 4));
+    let pool = Arc::new(ProjectPool::new(data_dir.clone(), 4));
 
     // Explicit DI: initialize the default project connection before handlers access it.
     pool.create_project("default")
@@ -64,10 +64,11 @@ fn build_test_context() -> TestContext {
         auth_mode: sigiro::auth::AuthMode::Key {
             key: "sigiro_dev_test".to_string(),
         },
+        data_dir: data_dir.clone(),
     });
 
     TestContext {
-        _tmp_dir: tmp_dir,
+        data_dir: tmp_dir,
         state,
     }
 }
@@ -81,15 +82,61 @@ fn build_otlp_app(state: &Arc<AppState>) -> axum::Router {
 
 // -- Tests ----------------------------------------------------------------
 
+/// Mark the test data dir as "init complete" by writing the `.ready`
+/// sentinel that the production server writes at the tail of init
+/// (see src/main.rs). Health checks must reflect that state.
+fn mark_test_context_ready(ctx: &TestContext) {
+    let data_dir = camino::Utf8PathBuf::from_path_buf(ctx.data_dir.path().to_path_buf()).unwrap();
+    let json = serde_json::json!({
+        "started_at": 0,
+        "data_dir": data_dir.as_str(),
+        "version": "test",
+    });
+    std::fs::write(
+        data_dir.join(".ready"),
+        serde_json::to_string_pretty(&json).unwrap(),
+    )
+    .expect("failed to write .ready sentinel");
+}
+
 #[tokio::test]
-async fn test_health_returns_ok() {
+async fn test_health_returns_ok_when_ready() {
     let ctx = build_test_context();
+    mark_test_context_ready(&ctx);
     let app = build_http_router(ctx.state);
     let server = TestServer::new(app).expect("failed to build test server");
 
     let resp = server.get("/health").await;
     resp.assert_status_ok();
-    resp.assert_text("ok");
+    let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("health body is JSON");
+    assert_eq!(
+        body.get("status").and_then(|v| v.as_str()),
+        Some("ready"),
+        "expected ready status, got {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_health_returns_503_when_starting() {
+    // No .ready sentinel — simulates a server that just bound the HTTP
+    // listener but hasn't finished init (DuckDB attach, federation setup,
+    // etc.). Health probes must see this as not ready.
+    let ctx = build_test_context();
+    let app = build_http_router(ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    let resp = server.get("/health").await;
+    resp.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("health body is JSON");
+    assert_eq!(
+        body.get("status").and_then(|v| v.as_str()),
+        Some("starting"),
+        "expected starting status, got {body}"
+    );
+    assert!(
+        body.get("reason").is_some(),
+        "expected reason field in starting body"
+    );
 }
 
 #[tokio::test]

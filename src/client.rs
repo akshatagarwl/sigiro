@@ -111,18 +111,42 @@ impl SigiroClient {
             .await
             .context("failed to connect to sigiro server")?;
 
-        match resp.status().as_u16() {
-            200 => {
-                let body = resp.text().await.context("failed to read error body")?;
-                Ok(crate::responses::AdminStatusResponse {
-                    status: std::collections::HashMap::from([("status".to_string(), body)]),
-                })
-            }
+        let status = resp.status();
+        let body = resp.text().await.context("failed to read health body")?;
+        let json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+
+        let get_str = |key: &str| -> String {
+            json.as_ref()
+                .and_then(|j| j.get(key))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+
+        match status.as_u16() {
+            200 => Ok(crate::responses::AdminStatusResponse {
+                status: std::collections::HashMap::from([(
+                    "status".to_string(),
+                    if get_str("status").is_empty() {
+                        body.clone()
+                    } else {
+                        get_str("status")
+                    },
+                )]),
+            }),
             401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
+            503 => {
+                let state = get_str("status");
+                let reason = get_str("reason");
+                let label = if state.is_empty() {
+                    "not_ready"
+                } else {
+                    &state
+                };
+                let detail = if reason.is_empty() { &body } else { &reason };
+                bail!("Server not ready ({label}): {detail}")
             }
+            s => bail!("Server error ({s}): {body}"),
         }
     }
 

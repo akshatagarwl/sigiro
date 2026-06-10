@@ -313,7 +313,12 @@ async fn main() -> Result<()> {
             });
             println!("{}", format_output(&value, cli.output.as_ref())?);
         }
-        Some(Command::Investigate { service, from, to, grep }) => {
+        Some(Command::Investigate {
+            service,
+            from,
+            to,
+            grep,
+        }) => {
             let client = require_client()?;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -329,12 +334,12 @@ async fn main() -> Result<()> {
             // log patterns, and traces by case-insensitive substring.
             if let Some(pattern) = grep {
                 let pat = pattern.to_lowercase();
-                block.operation_summaries.retain(|op| {
-                    op.span_name.to_lowercase().contains(&pat)
-                });
-                block.log_patterns.retain(|lp| {
-                    lp.pattern.to_lowercase().contains(&pat)
-                });
+                block
+                    .operation_summaries
+                    .retain(|op| op.span_name.to_lowercase().contains(&pat));
+                block
+                    .log_patterns
+                    .retain(|lp| lp.pattern.to_lowercase().contains(&pat));
                 block.traces.retain(|t| {
                     t.trace_id.to_lowercase().contains(&pat)
                         || t.root_span.span_name.to_lowercase().contains(&pat)
@@ -706,7 +711,7 @@ async fn run_serve() -> Result<()> {
         }
     });
 
-    sigiro::server::run_servers(pool, shared_admin, router).await?;
+    sigiro::server::run_servers(pool, shared_admin, router, dir.clone()).await?;
     Ok(())
 }
 

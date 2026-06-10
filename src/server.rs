@@ -97,6 +97,11 @@ pub struct AppState {
     pub router: Arc<crate::inserter::MsgRouter>,
     /// Explicit auth mode — Open or Key. Never implicit.
     pub auth_mode: crate::auth::AuthMode,
+    /// Resolved data directory. Stored explicitly (not re-derived from env
+    /// at request time) so the health check and other handlers don't race
+    /// with env var mutations, and so tests can run in parallel without
+    /// each test overwriting the global SIGIRO_DATA_DIR for the others.
+    pub data_dir: camino::Utf8PathBuf,
 }
 
 // DuckDB's access_mode is database-level, not connection-level:
@@ -223,6 +228,7 @@ pub async fn run_servers(
     pool: Arc<ProjectPool>,
     admin_conn: Arc<Mutex<Connection>>,
     router: Arc<MsgRouter>,
+    data_dir: camino::Utf8PathBuf,
 ) -> Result<()> {
     let ports = ServerPorts::load()?;
 
@@ -274,6 +280,7 @@ pub async fn run_servers(
         http_client: reqwest::Client::new(),
         router: Arc::clone(&router),
         auth_mode: auth_mode.clone(),
+        data_dir,
     });
 
     {
@@ -436,19 +443,52 @@ async fn run_retention_cleanup(pool: &ProjectPool, days: u32) -> anyhow::Result<
 
 #[instrument(skip(state))]
 async fn health(_path: HealthPath, State(state): State<Arc<AppState>>) -> axum::response::Response {
+    // 1. Flusher health — most critical. A dead flusher silently drops
+    //    telemetry, so we must report degraded even if init completed.
     if state.router.has_dead_flushers() {
         tracing::warn!("health check: dead flushers detected");
-        return axum::response::Response::builder()
-            .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
-            .body(axum::body::Body::from("dead flushers"))
-            .unwrap();
+        return json_health_response(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            &serde_json::json!({
+                "status": "degraded",
+                "reason": "dead flushers",
+            }),
+        );
+    }
+
+    // 2. Init completeness — the `.ready` sentinel is written at the tail
+    //    of init (see main.rs). While the HTTP listener is up before init
+    //    finishes, the server is not actually serving traffic yet, so
+    //    probes (k8s readiness, docker healthcheck) must see 503.
+    let init_complete = state.data_dir.join(".ready").exists();
+
+    if !init_complete {
+        return json_health_response(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            &serde_json::json!({
+                "status": "starting",
+                "reason": "init not complete",
+            }),
+        );
     }
 
     tracing::info!("health check called");
 
+    json_health_response(
+        axum::http::StatusCode::OK,
+        &serde_json::json!({"status": "ready"}),
+    )
+}
+
+/// Build a JSON health response with the given status code and body.
+fn json_health_response(
+    status: axum::http::StatusCode,
+    body: &serde_json::Value,
+) -> axum::response::Response {
     axum::response::Response::builder()
-        .status(axum::http::StatusCode::OK)
-        .body(axum::body::Body::from("ok"))
+        .status(status)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body.to_string()))
         .unwrap()
 }
 

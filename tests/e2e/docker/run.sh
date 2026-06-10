@@ -103,14 +103,15 @@ assert_contains() {
 }
 
 echo ""
-echo "=== Check 1: /health returns 200 ==="
-printf "  %-50s" "/health returns ok..."
-health=$(curl -sf "$SIGIRO_URL/health") || true
-if [ "$health" = "ok" ]; then
+echo "=== Check 1: /health returns 200 with status:ready ==="
+printf "  %-50s" "/health returns 200 with status:ready..."
+health_code=$(curl -s -o /tmp/health_body -w "%{http_code}" "$SIGIRO_URL/health") || true
+health_body=$(cat /tmp/health_body 2>/dev/null || echo "")
+if [ "$health_code" = "200" ] && echo "$health_body" | grep -q '"status":"ready"'; then
   echo "PASS"
   PASSES=$((PASSES + 1))
 else
-  echo "FAIL (got: $health)"
+  echo "FAIL (code=$health_code body=$health_body)"
   FAILURES=$((FAILURES + 1))
 fi
 
