@@ -63,7 +63,10 @@ enum Command {
     /// Run SQL query
     Query {
         /// SQL statement to execute
-        sql: String,
+        sql: Option<String>,
+        /// Path to a .sql file to execute (use - for stdin)
+        #[arg(long, value_name = "PATH")]
+        sql_file: Option<String>,
     },
     /// Show server health
     Status,
@@ -109,6 +112,29 @@ enum Command {
     /// `sigiro serve` doesn't hang on a 30-90s blocking download (F-01).
     /// Use this once after installing sigiro, or before an offline deploy.
     FetchExtensions,
+    /// Mark a service with a status flag, or list all marks (F-22).
+    /// Useful for flagging "known bad" services, deprecations, or owners.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+}
+
+/// Subcommands of `sigiro service` (F-22).
+#[derive(Subcommand)]
+enum ServiceAction {
+    /// Mark a service with a status and optional note
+    Mark {
+        /// Service name (matches `service.name` resource attribute)
+        service: String,
+        /// Status: ok, deprecated, known_bad, owner=<email>
+        status: String,
+        /// Free-form note
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// List all service marks
+    List,
 }
 
 /// Format output. If the user did not explicitly pass --output, and stdout
@@ -200,7 +226,21 @@ async fn main() -> Result<()> {
         None => {
             run_serve().await?;
         }
-        Some(Command::Query { sql }) => {
+        Some(Command::Query { sql, sql_file }) => {
+            // F-14: support --sql-file for long queries, reuse file across runs,
+            // or piping `cat foo.sql | sigiro query --sql-file -`
+            let sql = match (sql, sql_file) {
+                (Some(s), _) => s,
+                (None, Some(path)) if path == "-" => {
+                    use std::io::Read;
+                    let mut s = String::new();
+                    std::io::stdin().read_to_string(&mut s)?;
+                    s
+                }
+                (None, Some(path)) => std::fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read SQL file {path}"))?,
+                (None, None) => anyhow::bail!("provide SQL as argument or via --sql-file"),
+            };
             let client = require_client()?;
             let result = client.query(&sql).await?;
             let value = serde_json::to_value(&result)?;
@@ -299,6 +339,42 @@ async fn main() -> Result<()> {
             sigiro::storage::prewarm_extensions(&project_dir)?;
             println!("DuckDB extensions pre-warmed into {}", project_dir);
         }
+        Some(Command::Service { action }) => match action {
+            ServiceAction::Mark { service, status, note } => {
+                let conn = sigiro::admin::open_admin_db()?;
+                sigiro::admin::create_service_marks_table(&conn)?;
+                conn.execute(
+                    "INSERT INTO service_marks (service_name, status, note, updated_at) VALUES (?1, ?2, ?3, datetime('now'))
+                     ON CONFLICT(service_name) DO UPDATE SET status = excluded.status, note = excluded.note, updated_at = datetime('now')",
+                    rusqlite::params![service, status, note],
+                )
+                .with_context(|| format!("failed to mark service {service}"))?;
+                println!("{service}: {status}{}", note.as_ref().map(|n| format!(" ({n})")).unwrap_or_default());
+            }
+            ServiceAction::List => {
+                let conn = sigiro::admin::open_admin_db()?;
+                sigiro::admin::create_service_marks_table(&conn)?;
+                let mut stmt = conn
+                    .prepare("SELECT service_name, status, note, updated_at FROM service_marks ORDER BY service_name")
+                    .context("failed to prepare service_marks query")?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok(serde_json::json!({
+                            "service_name": row.get::<_, String>(0)?,
+                            "status": row.get::<_, String>(1)?,
+                            "note": row.get::<_, Option<String>>(2)?,
+                            "updated_at": row.get::<_, String>(3)?,
+                        }))
+                    })
+                    .context("failed to query service_marks")?;
+                let mut list = Vec::new();
+                for row in rows {
+                    list.push(row.context("failed to read service_marks row")?);
+                }
+                let value = serde_json::json!({"marks": list, "count": list.len()});
+                println!("{}", format_output(&value, cli.output.as_ref())?);
+            }
+        },
     }
     Ok(())
 }
@@ -317,6 +393,8 @@ async fn run_serve() -> Result<()> {
 
     sigiro::federation::create_workers_table(&admin_conn)
         .context("failed to create federation workers table")?;
+    sigiro::admin::create_service_marks_table(&admin_conn)
+        .context("failed to create service_marks table")?;
 
     // Write instance status at startup
     sigiro::admin::write_instance_status(&admin_conn, "version", env!("CARGO_PKG_VERSION"))?;

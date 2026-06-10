@@ -43,6 +43,22 @@ pub fn read_all_status(conn: &Connection) -> Result<std::collections::HashMap<St
     Ok(map)
 }
 
+/// F-22: create the service_marks table for `sigiro service mark/list`.
+/// Service marks let users flag a service as "known bad" or "deprecated"
+/// so downstream tools (e.g. investigate) can surface that context.
+pub fn create_service_marks_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS service_marks (
+            service_name TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            note TEXT,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );",
+    )
+    .context("failed to create service_marks table")?;
+    Ok(())
+}
+
 /// Open or create the admin SQLite database (for instance status and federation).
 pub fn open_admin_db() -> Result<Connection> {
     let dir = crate::data_dir()?;

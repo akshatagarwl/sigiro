@@ -70,7 +70,14 @@ pub fn compute_coverage(
             reason: if has_spans {
                 format!("{} spans found", spans_total)
             } else {
-                "no spans found — service may not be instrumented for tracing".to_string()
+                // F-08: the old message blamed the user when the real cause
+                // was a sigiro crash on ingest. Distinguish the cases so the
+                // message helps diagnose, not scold.
+                if has_logs || has_metrics {
+                    "no spans but logs/metrics present — check if OTLP trace endpoint is reachable and SDK is configured to export traces (not just logs/metrics)".to_string()
+                } else {
+                    "no spans, logs, or metrics found for this service in the time window — check service_name spelling, the time window (--from/--to), and that the service is actually sending OTLP".to_string()
+                }
             },
         },
         SignalCoverage {

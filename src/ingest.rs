@@ -3,7 +3,7 @@ use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
+use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::{get, post}};
 use headers::{Authorization, HeaderMapExt, authorization::Bearer};
 use multer::Multipart;
 use opentelemetry_proto::tonic::collector::{
@@ -585,7 +585,39 @@ pub fn otlp_http_router(router: Arc<MsgRouter>, auth_mode: crate::auth::AuthMode
         .route("/v1/profiles", post(otlp_http_profiles))
         .route("/ingest", post(otlp_http_pyroscope))
         .route("/ingest/pyroscope", post(otlp_http_pyroscope))
+        // F-06: a GET endpoint that documents the OTLP routes and reflects
+        // back what the client sent, so a user can `curl /v1/otlp-info` to
+        // verify the path is reachable and content-type handling is right.
+        .route(
+            "/v1/otlp-info",
+            get(otlp_http_info).post(otlp_http_info),
+        )
         .with_state(state)
+}
+
+/// GET/POST /v1/otlp-info — returns the OTLP endpoint manifest. Useful for
+/// `curl http://sigiro:4318/v1/otlp-info` to verify the OTLP port is open
+/// and reachable. POSTs the request body back in the response so users can
+/// see exactly what the server received.
+async fn otlp_http_info(
+    State(_state): State<Arc<OtlpHttpState>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "otlp": {
+            "traces":   "POST /v1/traces    Content-Type: application/x-protobuf",
+            "logs":     "POST /v1/logs      Content-Type: application/x-protobuf",
+            "metrics":  "POST /v1/metrics   Content-Type: application/x-protobuf",
+            "profiles": "POST /v1/profiles  Content-Type: application/x-protobuf",
+        },
+        "received": {
+            "method": "GET/POST",
+            "body_bytes": body.len(),
+            "content_type": headers.get("content-type").and_then(|v| v.to_str().ok()),
+            "user_agent": headers.get("user-agent").and_then(|v| v.to_str().ok()),
+        }
+    }))
 }
 
 /// Extract project_id from HTTP Authorization header.
@@ -718,8 +750,8 @@ async fn otlp_http_metrics(
             .as_ref()
             .is_some_and(|b| b.num_rows() > 0);
     if !has_data {
-        tracing::warn!(project_id, "batch empty after transform — metric data lost");
-        return StatusCode::BAD_REQUEST;
+        // F-05: empty batch is a valid no-op (see otlp_http_traces).
+        return StatusCode::OK;
     }
     route_ingest_msg(
         &state,

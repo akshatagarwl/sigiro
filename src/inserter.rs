@@ -436,7 +436,10 @@ impl ProjectFlusher {
     #[tracing::instrument(skip_all, fields(project_id = %project_id, rows = self.total_rows))]
     fn flush(&mut self, project_id: &str) -> Result<()> {
         if self.total_rows == 0 {
-            tracing::debug!(project_id, "flush skipped: no rows");
+            // F-25: demoted from debug! to trace! — fires every flush interval
+            // per project (default 5s) and was polluting `RUST_LOG=debug` runs
+            // with 12 lines/minute per project of "nothing happened" noise.
+            tracing::trace!(project_id, "flush skipped: no rows");
             return Ok(());
         }
 
@@ -560,7 +563,8 @@ async fn run_flusher(
 
             _ = interval.tick() => {
                 pool.touch_project(project_id);
-                tracing::debug!(project_id, "flusher timer tick");
+                // F-25: demoted from debug! to trace! (see flush skipped above).
+                tracing::trace!(project_id, "flusher timer tick");
                 if flusher.should_flush() {
                     if let Err(e) = flusher.flush(project_id) {
                         tracing::error!(project_id, "timer flush failed: {e:#}");

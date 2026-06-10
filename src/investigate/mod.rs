@@ -32,7 +32,11 @@ pub struct ServiceContext {
     pub last_seen: Option<String>,
     pub namespace: Option<String>,
     pub deployment: Option<String>,
+    /// F-26: distinct pod count when `service.instance.id` is present in
+    /// resource attributes, else 0. Use `has_instance_id` to distinguish
+    /// "no pods identified" from "service not seen".
     pub pod_count: i64,
+    pub has_instance_id: bool,
     pub dependencies: Vec<ServiceDependency>,
     pub dependents: Vec<ServiceDependency>,
 }
@@ -42,7 +46,8 @@ pub fn query_service_context(ctx: &QueryCtx) -> Result<ServiceContext> {
         "SELECT
         ANY_VALUE(resource_attributes::JSON->>'k8s.namespace.name') AS namespace,
         ANY_VALUE(resource_attributes::JSON->>'k8s.deployment.name') AS deployment,
-        CASE WHEN count(*) = 0 THEN 0 WHEN count(DISTINCT service_instance_id) > 0 THEN count(DISTINCT service_instance_id) ELSE 1 END AS pod_count,
+        CASE WHEN count(DISTINCT service_instance_id) > 0 THEN count(DISTINCT service_instance_id) ELSE 0 END AS pod_count,
+        (count(DISTINCT service_instance_id) > 0) AS has_instance_id,
         min(timestamp)::VARCHAR AS first_seen,
         max(timestamp)::VARCHAR AS last_seen
     FROM {}sigiro_spans
@@ -51,7 +56,7 @@ pub fn query_service_context(ctx: &QueryCtx) -> Result<ServiceContext> {
         ctx.prefix
     );
 
-    let (namespace, deployment, pod_count, first_seen, last_seen) = ctx
+    let (namespace, deployment, pod_count, has_instance_id, first_seen, last_seen) = ctx
         .conn
         .query_row(
             &meta_sql,
@@ -61,8 +66,9 @@ pub fn query_service_context(ctx: &QueryCtx) -> Result<ServiceContext> {
                     row.get::<_, String>(0).ok().filter(|s| !s.is_empty()),
                     row.get::<_, String>(1).ok().filter(|s| !s.is_empty()),
                     row.get::<_, i64>(2)?,
-                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, bool>(3)?,
                     row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             },
         )
@@ -78,6 +84,7 @@ pub fn query_service_context(ctx: &QueryCtx) -> Result<ServiceContext> {
         namespace,
         deployment,
         pod_count,
+        has_instance_id,
         dependencies,
         dependents,
     })
