@@ -80,6 +80,10 @@ enum Command {
         /// End of range in epoch seconds. Defaults to now if omitted.
         #[arg(long)]
         to: Option<i64>,
+        /// F-23: client-side filter for span/operation names (case-insensitive
+        /// substring). Useful for narrowing a busy investigate output.
+        #[arg(long)]
+        grep: Option<String>,
     },
     /// Show trace waterfall — parent/child span tree with timing
     Waterfall {
@@ -309,7 +313,7 @@ async fn main() -> Result<()> {
             });
             println!("{}", format_output(&value, cli.output.as_ref())?);
         }
-        Some(Command::Investigate { service, from, to }) => {
+        Some(Command::Investigate { service, from, to, grep }) => {
             let client = require_client()?;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -320,7 +324,26 @@ async fn main() -> Result<()> {
                 (now - 900) * 1_000_000
             });
             let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
-            let block = client.investigate(&service, from_ts, to_ts).await?;
+            let mut block = client.investigate(&service, from_ts, to_ts).await?;
+            // F-23: client-side --grep filter. Filter operation summaries,
+            // log patterns, and traces by case-insensitive substring.
+            if let Some(pattern) = grep {
+                let pat = pattern.to_lowercase();
+                block.operation_summaries.retain(|op| {
+                    op.span_name.to_lowercase().contains(&pat)
+                });
+                block.log_patterns.retain(|lp| {
+                    lp.pattern.to_lowercase().contains(&pat)
+                });
+                block.traces.retain(|t| {
+                    t.trace_id.to_lowercase().contains(&pat)
+                        || t.root_span.span_name.to_lowercase().contains(&pat)
+                });
+                block.linked_traces.retain(|t| {
+                    t.trace_id.to_lowercase().contains(&pat)
+                        || t.root_span.span_name.to_lowercase().contains(&pat)
+                });
+            }
             let value = serde_json::to_value(&block)?;
             println!("{}", format_output(&value, cli.output.as_ref())?);
         }
