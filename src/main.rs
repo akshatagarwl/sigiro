@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, builder::styling};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::io::IsTerminal;  // for stdout().is_terminal()
+use std::io::IsTerminal;
+use std::sync::Arc; // for stdout().is_terminal()
 
 use itertools::Itertools;
 use sigiro::responses::SpanDetail;
@@ -141,7 +141,10 @@ enum ServiceAction {
 /// is not a TTY (we are being piped to jq, a file, another process, etc.),
 /// default to JSON. TOON is great for humans at a terminal but unfriendly
 /// to jq / grep / any text pipeline.
-fn format_output(value: &serde_json::Value, output_format: Option<&OutputFormat>) -> Result<String> {
+fn format_output(
+    value: &serde_json::Value,
+    output_format: Option<&OutputFormat>,
+) -> Result<String> {
     let use_json = output_format.is_none() && !std::io::stdout().is_terminal();
     let fmt = output_format.unwrap_or(&OutputFormat::Toon);
     match (use_json, fmt) {
@@ -149,7 +152,6 @@ fn format_output(value: &serde_json::Value, output_format: Option<&OutputFormat>
         (false, OutputFormat::Toon) => Ok(to_toon(value)),
     }
 }
-
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -168,13 +170,11 @@ async fn main() -> Result<()> {
             .map(camino::Utf8PathBuf::from)
             .or_else(|| sigiro::data_dir().ok());
         if let Some(dir) = crash_dir {
-            let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::write(
+            drop(std::fs::create_dir_all(&dir));
+            drop(std::fs::write(
                 dir.join("crash.log"),
-                format!(
-                    "[{ts}] [panic] {info}\n[backtrace]\n{bt}\n"
-                ),
-            );
+                format!("[{ts}] [panic] {info}\n[backtrace]\n{bt}\n"),
+            ));
         }
     }));
 
@@ -244,10 +244,7 @@ async fn main() -> Result<()> {
             let client = require_client()?;
             let result = client.query(&sql).await?;
             let value = serde_json::to_value(&result)?;
-            println!(
-                "{}",
-                format_output(&value, cli.output.as_ref())?
-            );
+            println!("{}", format_output(&value, cli.output.as_ref())?);
         }
         Some(Command::Status) => {
             // Health is public — no auth needed. Use a simple client so dev users
@@ -262,8 +259,8 @@ async fn main() -> Result<()> {
                 .as_ref()
                 .and_then(|d| std::fs::read_to_string(d.join(".ready")).ok())
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-            let health_resp = reqwest::get(format!("{}/health", base_url.trim_end_matches('/')))
-                .await;
+            let health_resp =
+                reqwest::get(format!("{}/health", base_url.trim_end_matches('/'))).await;
             let (state, detail) = match health_resp {
                 Ok(resp) if resp.status().is_success() => {
                     if ready_info.is_some() {
@@ -286,10 +283,7 @@ async fn main() -> Result<()> {
                 "detail": detail,
                 "ready_info": ready_info,
             });
-            println!(
-                "{}",
-                format_output(&value, cli.output.as_ref())?
-            );
+            println!("{}", format_output(&value, cli.output.as_ref())?);
         }
         Some(Command::Investigate { service, from, to }) => {
             let client = require_client()?;
@@ -304,10 +298,7 @@ async fn main() -> Result<()> {
             let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
             let block = client.investigate(&service, from_ts, to_ts).await?;
             let value = serde_json::to_value(&block)?;
-            println!(
-                "{}",
-                format_output(&value, cli.output.as_ref())?
-            );
+            println!("{}", format_output(&value, cli.output.as_ref())?);
         }
         Some(Command::Waterfall { trace_id }) => {
             run_waterfall(&trace_id).await?;
@@ -340,7 +331,11 @@ async fn main() -> Result<()> {
             println!("DuckDB extensions pre-warmed into {}", project_dir);
         }
         Some(Command::Service { action }) => match action {
-            ServiceAction::Mark { service, status, note } => {
+            ServiceAction::Mark {
+                service,
+                status,
+                note,
+            } => {
                 let conn = sigiro::admin::open_admin_db()?;
                 sigiro::admin::create_service_marks_table(&conn)?;
                 conn.execute(
@@ -349,7 +344,10 @@ async fn main() -> Result<()> {
                     rusqlite::params![service, status, note],
                 )
                 .with_context(|| format!("failed to mark service {service}"))?;
-                println!("{service}: {status}{}", note.as_ref().map(|n| format!(" ({n})")).unwrap_or_default());
+                println!(
+                    "{service}: {status}{}",
+                    note.as_ref().map(|n| format!(" ({n})")).unwrap_or_default()
+                );
             }
             ServiceAction::List => {
                 let conn = sigiro::admin::open_admin_db()?;
@@ -603,9 +601,8 @@ async fn run_serve() -> Result<()> {
         "data_dir": dir.as_str(),
         "version": env!("CARGO_PKG_VERSION"),
     })) {
-        let _ = std::fs::write(dir.join(".ready"), json);
+        drop(std::fs::write(dir.join(".ready"), json));
     }
-
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
@@ -642,7 +639,7 @@ async fn run_serve() -> Result<()> {
                 "instance": map,
             });
             if let Ok(s) = serde_json::to_string_pretty(&payload) {
-                let _ = std::fs::write(state_dir.join("last_known_state.json"), s);
+                std::fs::write(state_dir.join("last_known_state.json"), s).ok();
             }
         }
     });

@@ -3,7 +3,13 @@ use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::{get, post}};
+use axum::{
+    Router,
+    body::Bytes,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
 use headers::{Authorization, HeaderMapExt, authorization::Bearer};
 use multer::Multipart;
 use opentelemetry_proto::tonic::collector::{
@@ -588,10 +594,7 @@ pub fn otlp_http_router(router: Arc<MsgRouter>, auth_mode: crate::auth::AuthMode
         // F-06: a GET endpoint that documents the OTLP routes and reflects
         // back what the client sent, so a user can `curl /v1/otlp-info` to
         // verify the path is reachable and content-type handling is right.
-        .route(
-            "/v1/otlp-info",
-            get(otlp_http_info).post(otlp_http_info),
-        )
+        .route("/v1/otlp-info", get(otlp_http_info).post(otlp_http_info))
         .with_state(state)
 }
 
