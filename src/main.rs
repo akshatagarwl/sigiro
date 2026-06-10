@@ -344,7 +344,22 @@ async fn main() -> Result<()> {
                         || t.root_span.span_name.to_lowercase().contains(&pat)
                 });
             }
-            let value = serde_json::to_value(&block)?;
+            let mut value = serde_json::to_value(&block)?;
+            // F-12: include a hint in the response telling the user how to
+            // follow a trace_id they find. The agent then can run
+            // `sigiro waterfall <trace_id>` or `curl /v1/traces/<id>`.
+            if let serde_json::Value::Object(ref mut map) = value {
+                let base = sigiro::config::ENDPOINT
+                    .value()
+                    .unwrap_or_else(|_| "http://localhost:9999".to_string());
+                map.insert(
+                    "_follow_trace_hint".to_string(),
+                    serde_json::json!(format!(
+                        "for any trace_id above, run: sigiro waterfall <id>  or  curl {}/v1/traces/<id>",
+                        base
+                    )),
+                );
+            }
             println!("{}", format_output(&value, cli.output.as_ref())?);
         }
         Some(Command::Waterfall { trace_id }) => {
