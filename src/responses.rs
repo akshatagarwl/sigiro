@@ -43,6 +43,23 @@ pub struct AdminStatusResponse {
     pub status: HashMap<String, String>,
 }
 
+/// GET /health — server liveness/readiness with the *reason* if not ready.
+///
+/// Returned for both 200 (Ready) and 503 (Starting/Degraded) so callers can
+/// distinguish the two not-ready states without parsing the body shape.
+#[derive(Serialize, Deserialize, ToSchema, PartialEq, Eq, Debug)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum HealthResponse {
+    /// Init complete, no dead flushers.
+    Ready,
+    /// HTTP listener is up but init is still in progress (cold start). Probe
+    /// should retry; no operator action required.
+    Starting,
+    /// Init complete but a flusher task has panicked. Operator intervention
+    /// required; ingest is silently dropping data.
+    Degraded { reason: String },
+}
+
 /// POST /v1/federation/workers
 #[derive(Serialize, ToSchema)]
 pub struct RegisterWorkerResponse {

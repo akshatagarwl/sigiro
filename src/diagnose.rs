@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::client::SigiroClient;
+use crate::responses::HealthResponse;
 
 /// Send a SQL query via the HTTP client, retrying on 429 with backoff.
 ///
@@ -181,7 +182,6 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
             "health",
             "dead flusher tasks detected — ingest may be stalled",
         ),
-        Ok(HealthStatus::Unknown(msg)) => report.warn("health", &msg),
         Err(e) => report.warn("health", &format!("health check failed: {e:#}")),
     }
 
@@ -576,24 +576,20 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
 // Individual checks — each runs a SQL query via the HTTP API
 // ---------------------------------------------------------------------------
 
+/// Two-state health summary for the diagnose report. The /health endpoint
+/// returns three states (Ready/Starting/Degraded); Starting maps to Healthy
+/// here because the diagnose run is non-critical — if the server is still
+/// warming up, the rest of the checks will fail and surface that.
 enum HealthStatus {
     Healthy,
     DeadFlushers,
-    Unknown(String),
 }
 
 /// Check /health for dead flushers.
 async fn check_health(client: &SigiroClient) -> Result<HealthStatus> {
-    match client.status().await {
-        Ok(resp) => {
-            let body = resp.status.get("status").cloned().unwrap_or_default();
-            match body.as_str() {
-                "ok" | "ready" => Ok(HealthStatus::Healthy),
-                "degraded" => Ok(HealthStatus::DeadFlushers),
-                _ => Ok(HealthStatus::Unknown(body)),
-            }
-        }
-        Err(e) => Err(e),
+    match client.health().await? {
+        HealthResponse::Ready | HealthResponse::Starting => Ok(HealthStatus::Healthy),
+        HealthResponse::Degraded { .. } => Ok(HealthStatus::DeadFlushers),
     }
 }
 

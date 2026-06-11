@@ -8,6 +8,7 @@ use sqlparser::ast::Statement;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
@@ -97,11 +98,30 @@ pub struct AppState {
     pub router: Arc<crate::inserter::MsgRouter>,
     /// Explicit auth mode — Open or Key. Never implicit.
     pub auth_mode: crate::auth::AuthMode,
-    /// Resolved data directory. Stored explicitly (not re-derived from env
-    /// at request time) so the health check and other handlers don't race
-    /// with env var mutations, and so tests can run in parallel without
-    /// each test overwriting the global SIGIRO_DATA_DIR for the others.
+    /// Resolved data directory.
+    /// --- DI pattern: injected at construction; never read from env at request time. ---
+    /// The previous design re-derived data_dir from the SIGIRO_DATA_DIR env var
+    /// on every health check, which raced with parallel tests (each test
+    /// called `std::env::set_var` to set up its own data dir, and the last
+    /// writer won for all concurrent tests). Carrying data_dir through
+    /// AppState makes the value request-scoped by construction — there is
+    /// no shared mutable state to race on.
     pub data_dir: camino::Utf8PathBuf,
+    /// True after `run_serve` finishes init (DuckLake attached, schema
+    /// created, federation started). Replaces the previous `.ready`
+    /// sentinel file — typed in-memory state is checked at request time
+    /// instead of a file existence check, which is faster and impossible
+    /// to forget to set.
+    /// --- DI pattern: production code calls `mark_init_complete()`; tests call `.store(true)` directly. ---
+    pub init_complete: Arc<AtomicBool>,
+}
+
+impl AppState {
+    /// Mark init as complete. Called by `run_serve` at the tail of init.
+    /// Idempotent — safe to call more than once.
+    pub fn mark_init_complete(&self) {
+        self.init_complete.store(true, Ordering::Release);
+    }
 }
 
 // DuckDB's access_mode is database-level, not connection-level:
@@ -229,6 +249,7 @@ pub async fn run_servers(
     admin_conn: Arc<Mutex<Connection>>,
     router: Arc<MsgRouter>,
     data_dir: camino::Utf8PathBuf,
+    init_complete: Arc<AtomicBool>,
 ) -> Result<()> {
     let ports = ServerPorts::load()?;
 
@@ -281,6 +302,7 @@ pub async fn run_servers(
         router: Arc::clone(&router),
         auth_mode: auth_mode.clone(),
         data_dir,
+        init_complete: Arc::clone(&init_complete),
     });
 
     {
@@ -442,61 +464,45 @@ async fn run_retention_cleanup(pool: &ProjectPool, days: u32) -> anyhow::Result<
 }
 
 #[instrument(skip(state))]
-async fn health(_path: HealthPath, State(state): State<Arc<AppState>>) -> axum::response::Response {
+async fn health(
+    _path: HealthPath,
+    State(state): State<Arc<AppState>>,
+) -> impl axum::response::IntoResponse {
     // 1. Flusher health — most critical. A dead flusher silently drops
     //    telemetry, so we must report degraded even if init completed.
     if state.router.has_dead_flushers() {
         tracing::warn!("health check: dead flushers detected");
-        return json_health_response(
+        return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            &serde_json::json!({
-                "status": "degraded",
-                "reason": "dead flushers",
+            axum::Json(HealthResponse::Degraded {
+                reason: "dead flushers".to_string(),
             }),
         );
     }
 
-    // 2. Init completeness — the `.ready` sentinel is written at the tail
-    //    of init (see main.rs). While the HTTP listener is up before init
+    // 2. Init completeness — `AppState::init_complete` is flipped at the
+    //    tail of `run_serve`. While the HTTP listener is up before init
     //    finishes, the server is not actually serving traffic yet, so
     //    probes (k8s readiness, docker healthcheck) must see 503.
-    let init_complete = state.data_dir.join(".ready").exists();
-
-    if !init_complete {
-        return json_health_response(
+    if !state.init_complete.load(Ordering::Acquire) {
+        return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            &serde_json::json!({
-                "status": "starting",
-                "reason": "init not complete",
-            }),
+            axum::Json(HealthResponse::Starting),
         );
     }
 
     tracing::info!("health check called");
-
-    json_health_response(
+    (
         axum::http::StatusCode::OK,
-        &serde_json::json!({"status": "ready"}),
+        axum::Json(HealthResponse::Ready),
     )
-}
-
-/// Build a JSON health response with the given status code and body.
-fn json_health_response(
-    status: axum::http::StatusCode,
-    body: &serde_json::Value,
-) -> axum::response::Response {
-    axum::response::Response::builder()
-        .status(status)
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(body.to_string()))
-        .unwrap()
 }
 
 #[instrument(skip(state))]
 async fn v1_health(
     _path: V1HealthPath,
     State(state): State<Arc<AppState>>,
-) -> axum::response::Response {
+) -> impl axum::response::IntoResponse {
     health(HealthPath, State(state)).await
 }
 
@@ -504,7 +510,7 @@ async fn v1_health(
 async fn healthz(
     _path: HealthzPath,
     State(state): State<Arc<AppState>>,
-) -> axum::response::Response {
+) -> impl axum::response::IntoResponse {
     health(HealthPath, State(state)).await
 }
 

@@ -6,9 +6,10 @@ use std::io::IsTerminal;
 use std::sync::Arc; // for stdout().is_terminal()
 
 use itertools::Itertools;
-use sigiro::responses::SpanDetail;
+use sigiro::responses::{HealthResponse, SpanDetail};
 use sigiro::toon::to_toon;
 use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
+use std::sync::atomic::AtomicBool;
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
@@ -251,36 +252,23 @@ async fn main() -> Result<()> {
             println!("{}", format_output(&value, cli.output.as_ref())?);
         }
         Some(Command::Status) => {
-            // Health is public — no auth needed. Use a simple client so dev users
-            // don't have to configure a key just to check local server health.
+            // Health is public — no auth needed. The /health endpoint is the
+            // single source of truth for "ready" vs "starting" vs "degraded";
+            // the CLI does not read the .ready file directly (would be a
+            // second path that can drift from the server's view).
             let base_url = sigiro::config::ENDPOINT
                 .value()
                 .unwrap_or_else(|_| "http://localhost:9999".to_string());
-            // F-03: distinguish "starting" from "ready" by reading the
-            // `.ready` sentinel written at the tail of init.
-            let data_dir = sigiro::data_dir().ok();
-            let ready_info = data_dir
-                .as_ref()
-                .and_then(|d| std::fs::read_to_string(d.join(".ready")).ok())
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-            let health_resp =
-                reqwest::get(format!("{}/health", base_url.trim_end_matches('/'))).await;
-            let (state, detail) = match health_resp {
-                Ok(resp) if resp.status().is_success() => {
-                    if ready_info.is_some() {
-                        ("ready".to_string(), "ok".to_string())
-                    } else {
-                        (
-                            "starting".to_string(),
-                            "http up, init not complete".to_string(),
-                        )
-                    }
-                }
-                Ok(resp) => (
-                    "unreachable".to_string(),
-                    format!("http returned {}", resp.status()),
+            let health_client =
+                sigiro::client::SigiroClient::new(&base_url, sigiro::client::ClientAuth::Open);
+            let (state, detail) = match health_client.health().await {
+                Ok(HealthResponse::Ready) => ("ready".to_string(), "ok".to_string()),
+                Ok(HealthResponse::Starting) => (
+                    "starting".to_string(),
+                    "http up, init not complete".to_string(),
                 ),
-                Err(e) => ("unreachable".to_string(), format!("connect failed: {e}")),
+                Ok(HealthResponse::Degraded { reason }) => ("degraded".to_string(), reason),
+                Err(e) => ("unreachable".to_string(), format!("{e:#}")),
             };
             // F-21: include a recent_ingest block so the user can see at a
             // glance whether the server is actually receiving data. Tolerate
@@ -308,7 +296,6 @@ async fn main() -> Result<()> {
             let value = serde_json::json!({
                 "status": state,
                 "detail": detail,
-                "ready_info": ready_info,
                 "recent_ingest": recent_ingest,
             });
             println!("{}", format_output(&value, cli.output.as_ref())?);
@@ -452,6 +439,11 @@ async fn run_serve() -> Result<()> {
         dir
     );
 
+    // Init-complete flag — flipped at the tail of init so /health reports
+    // Ready only after the server is actually serving traffic. Owned by
+    // run_serve, borrowed by AppState via Arc<AtomicBool>.
+    let init_complete = Arc::new(AtomicBool::new(false));
+
     // MsgRouter: handlers send directly to per-project flusher tasks.
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
     let admin_conn = sigiro::admin::open_admin_db()?;
@@ -590,7 +582,7 @@ async fn run_serve() -> Result<()> {
         if central {
             tracing::info!("running as central federation node");
         }
-        let quack_conn = pool.create_raw_federation_connection()?;
+        let quack_conn = pool.open_federation_connection()?;
         let token = quack_token.clone();
         std::thread::spawn(move || {
             if let Err(e) = sigiro::quack_federation::start_quack_server_blocking(
@@ -657,19 +649,12 @@ async fn run_serve() -> Result<()> {
     }
 
     tracing::info!("sigiro ready — data_dir={}", dir);
-    // F-03: write a sentinel so `sigiro status` can distinguish
-    // "alive but still initializing" from "ready to serve traffic".
-    let started_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    if let Ok(json) = serde_json::to_string_pretty(&serde_json::json!({
-        "started_at": started_at,
-        "data_dir": dir.as_str(),
-        "version": env!("CARGO_PKG_VERSION"),
-    })) {
-        drop(std::fs::write(dir.join(".ready"), json));
-    }
+    // F-03: flip the typed init-complete flag so /health reports Ready.
+    // The previous .ready file approach required a disk write on every
+    // server start (silently dropped on failure) plus a disk read on every
+    // health probe. In-memory state is faster, type-checked, and cannot
+    // be forgotten by `run_serve` (we're already here at the tail).
+    init_complete.store(true, std::sync::atomic::Ordering::Release);
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
@@ -711,7 +696,7 @@ async fn run_serve() -> Result<()> {
         }
     });
 
-    sigiro::server::run_servers(pool, shared_admin, router, dir.clone()).await?;
+    sigiro::server::run_servers(pool, shared_admin, router, dir.clone(), init_complete).await?;
     Ok(())
 }
 

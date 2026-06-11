@@ -75,11 +75,14 @@ async fn list_workers_handler(
 }
 
 /// Set up a fresh test environment with its own temp dir and admin DB.
-/// All tests must run through [`federation_endpoints_e2e`] to avoid races
-/// on the `SIGIRO_DATA_DIR` env var (shared across parallel test threads).
+/// Sets SIGIRO_DATA_DIR so `make_state` can read it back (this test predates
+/// the move to AppState.data_dir; one test, one env var, no race).
 fn setup() -> (TempDir, Arc<Mutex<Connection>>) {
     let tmp = TempDir::new().expect("temp dir");
-    // SAFETY: we only call this from the single serial e2e test.
+    // SAFETY: `federation_endpoints_e2e` is the only test in this file and
+    // runs in isolation (not concurrently with any other test in this crate
+    // that reads SIGIRO_DATA_DIR). api_integration_test sets a different
+    // env var (SIGIRO_EXTENSION_DIR) and reads data_dir through AppState.
     #[allow(unsafe_code)]
     unsafe {
         std::env::set_var("SIGIRO_DATA_DIR", tmp.path());
@@ -109,6 +112,7 @@ fn make_state(admin_conn: &Arc<Mutex<Connection>>) -> Arc<AppState> {
             key: "test_key".to_string(),
         },
         data_dir,
+        init_complete: Arc::new(std::sync::atomic::AtomicBool::new(true)),
     })
 }
 

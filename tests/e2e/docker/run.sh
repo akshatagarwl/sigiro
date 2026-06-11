@@ -22,7 +22,7 @@ docker compose up -d sigiro
 
 echo "Waiting for sigiro to be healthy..."
 # Cold start budget (image WITHOUT pre-warmed extensions): DuckDB extension
-# download (30-90s per extension × 3) + DuckLake init + .ready write.
+# download (30-90s per extension × 3) + DuckLake init + init_complete flip.
 # Cold start budget (image WITH pre-warmed extensions): <5s.
 # 300s comfortably covers either case; subsequent runs are typically <5s.
 TIMEOUT=300

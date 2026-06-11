@@ -19,24 +19,30 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 struct TestContext {
-    data_dir: TempDir,
     state: Arc<AppState>,
 }
 
 /// Build a test AppState with temp directories.
-/// Sets SIGIRO_DATA_DIR to a temp dir for DuckDB and creates
+/// Sets SIGIRO_EXTENSION_DIR to a stable path so all tests share one
+/// extension cache (downloads happen once, not per-test), and creates
 /// an in-memory SQLite admin DB with all required tables.
 fn build_test_context() -> TestContext {
     let tmp_dir = TempDir::new().expect("failed to create temp dir");
     let data_dir = camino::Utf8PathBuf::from_path_buf(tmp_dir.path().to_path_buf()).unwrap();
 
-    // Set SIGIRO_DATA_DIR so crate::data_dir() resolves correctly.
-    // This is needed by pool::create_project -> storage::init_default
-    // and federation endpoints that call crate::data_dir().
-    // SAFETY: This is a single-threaded test setup; no concurrent access
-    // to this env var from other threads during this call.
+    // `pool::open_connection` reads SIGIRO_EXTENSION_DIR via
+    // `crate::config::EXTENSION_DIR.value()` to locate the shared DuckDB
+    // extension cache. This env var is process-global and therefore racy
+    // across parallel tests, but it is read-only after the first
+    // download — the worst case is two tests downloading the same file,
+    // never a correctness bug. SIGIRO_DATA_DIR is NOT set here: data_dir
+    // is passed explicitly through `AppState` so the env var is no
+    // longer needed for any test code path.
+    //
+    // SAFETY: set_var is unsafe in concurrent programs; this is a test
+    // helper that runs in the same process as the server under test. The
+    // race is benign for the read-only cache (see comment above).
     unsafe {
-        std::env::set_var("SIGIRO_DATA_DIR", data_dir.as_str());
         std::env::set_var("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions");
     }
 
@@ -65,12 +71,10 @@ fn build_test_context() -> TestContext {
             key: "sigiro_dev_test".to_string(),
         },
         data_dir: data_dir.clone(),
+        init_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
-    TestContext {
-        data_dir: tmp_dir,
-        state,
-    }
+    TestContext { state }
 }
 
 /// Build the OTLP HTTP router (port 4318).
@@ -82,21 +86,11 @@ fn build_otlp_app(state: &Arc<AppState>) -> axum::Router {
 
 // -- Tests ----------------------------------------------------------------
 
-/// Mark the test data dir as "init complete" by writing the `.ready`
-/// sentinel that the production server writes at the tail of init
-/// (see src/main.rs). Health checks must reflect that state.
+/// Mark the test AppState as "init complete" by flipping the
+/// `init_complete` AtomicBool that the production server flips at the tail
+/// of init (see src/main.rs). Health checks must reflect that state.
 fn mark_test_context_ready(ctx: &TestContext) {
-    let data_dir = camino::Utf8PathBuf::from_path_buf(ctx.data_dir.path().to_path_buf()).unwrap();
-    let json = serde_json::json!({
-        "started_at": 0,
-        "data_dir": data_dir.as_str(),
-        "version": "test",
-    });
-    std::fs::write(
-        data_dir.join(".ready"),
-        serde_json::to_string_pretty(&json).unwrap(),
-    )
-    .expect("failed to write .ready sentinel");
+    ctx.state.mark_init_complete();
 }
 
 #[tokio::test]
@@ -118,9 +112,9 @@ async fn test_health_returns_ok_when_ready() {
 
 #[tokio::test]
 async fn test_health_returns_503_when_starting() {
-    // No .ready sentinel — simulates a server that just bound the HTTP
-    // listener but hasn't finished init (DuckDB attach, federation setup,
-    // etc.). Health probes must see this as not ready.
+    // init_complete is false (default) — simulates a server that just
+    // bound the HTTP listener but hasn't finished init (DuckDB attach,
+    // federation setup, etc.). Health probes must see this as not ready.
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);
     let server = TestServer::new(app).expect("failed to build test server");
@@ -133,10 +127,13 @@ async fn test_health_returns_503_when_starting() {
         Some("starting"),
         "expected starting status, got {body}"
     );
-    assert!(
-        body.get("reason").is_some(),
-        "expected reason field in starting body"
-    );
+    // Deserializes into the typed HealthResponse — guards the wire format.
+    let health: sigiro::responses::HealthResponse =
+        serde_json::from_value(body).expect("starting body should deserialize to HealthResponse");
+    assert!(matches!(
+        health,
+        sigiro::responses::HealthResponse::Starting
+    ));
 }
 
 #[tokio::test]

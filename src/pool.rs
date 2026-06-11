@@ -130,12 +130,19 @@ impl ProjectPool {
         }
     }
 
-    #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir))]
-    fn open_connection(&self, project_dir: &camino::Utf8Path) -> Result<Connection> {
-        let conn = Connection::open_in_memory()
-            .with_context(|| "failed to open in-memory DuckDB".to_string())?;
-
-        // Persistent local extension cache — share across tests via env var
+    /// Shared setup for a fresh in-memory DuckDB connection: set the
+    /// extension cache, cap memory/threads, attach DuckLake (PostgreSQL or
+    /// local file), and create the sigiro tables. Used by both per-project
+    /// connections and the federation quack server connection.
+    ///
+    /// The attach is retried up to `ATTACH_ATTEMPTS` times with
+    /// `ATTACH_BACKOFF` between attempts. This handles the cold-start race
+    /// where any node with a PostgreSQL catalog comes up before Postgres
+    /// is ready to accept connections — the first attempt fails with
+    /// "Connection refused" or "the database system is starting up", and
+    /// a later attempt succeeds. For the local-DuckDB-file path (no
+    /// Postgres) the first attempt succeeds and the loop is a no-op.
+    fn attach_ducklake(&self, conn: &Connection, project_dir: &camino::Utf8Path) -> Result<()> {
         let ext_dir = crate::config::EXTENSION_DIR
             .value()
             .ok()
@@ -147,31 +154,52 @@ impl ProjectPool {
             ext_dir.as_str()
         ))
         .context("failed to set DuckDB extension_directory")?;
-
-        // Cap memory per connection.
         conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
-            .context("failed to set DuckDB memory limit")?;
+            .context("failed to set DuckDB memory/threads")?;
 
-        // Extensions are downloaded on first use (cold start). This may take 20-30s.
-        // Run `sigiro fetch-extensions` to pre-download for offline deployments.
-        tracing::info!(
-            "DuckDB: loading extensions (downloading on first use, may take 20-90s on cold cache) — run `sigiro fetch-extensions` to pre-warm"
-        );
-
-        // Initialize DuckLake
-        if let Some(config) = crate::storage::load_config()? {
-            crate::storage::init_distributed(&conn, &config, project_dir)?;
-        } else {
-            crate::storage::init_default(&conn, project_dir)?;
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 1..=ATTACH_ATTEMPTS {
+            let attach_result = if let Some(config) = crate::storage::load_config()? {
+                crate::storage::init_distributed(conn, &config, project_dir)
+            } else {
+                crate::storage::init_default(conn, project_dir)
+            };
+            match attach_result {
+                Ok(()) => {
+                    crate::schema::create_tables(conn, Self::prefix())?;
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        attempt,
+                        max = ATTACH_ATTEMPTS,
+                        "DuckLake attach failed: {e:#}"
+                    );
+                    last_err = Some(e);
+                    std::thread::sleep(ATTACH_BACKOFF);
+                }
+            }
         }
+        Err(last_err
+            .unwrap_or_else(|| anyhow::anyhow!("no attach attempts made"))
+            .context(format!(
+                "exhausted {ATTACH_ATTEMPTS} DuckLake attach attempts; \
+                 is the storage backend (PostgreSQL for distributed, filesystem for local) reachable?"
+            )))
+    }
 
-        crate::schema::create_tables(&conn, Self::prefix())?;
+    #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir))]
+    fn open_connection(&self, project_dir: &camino::Utf8Path) -> Result<Connection> {
+        let conn = Connection::open_in_memory()
+            .with_context(|| "failed to open in-memory DuckDB".to_string())?;
+        tracing::info!(
+            "DuckDB: loading extensions on first use (run `sigiro fetch-extensions` to pre-warm)"
+        );
+        self.attach_ducklake(&conn, project_dir)?;
         crate::schema::load_fleet_extensions(&conn)?;
-
         // Ensure DuckLake tables are discoverable without schema prefix.
         conn.execute_batch("USE lake;")
             .context("failed to set DuckDB default schema")?;
-
         Ok(conn)
     }
 
@@ -227,111 +255,30 @@ impl ProjectPool {
         self.connections.remove(project_id);
     }
 
-    /// Create a dedicated DuckDB connection for federation (quack server).
-    /// This connection is separate from project pool connections because quack server
-    /// runs in background threads that must remain alive for the lifetime of the server.
-    pub fn create_federation_connection(&self) -> Result<Arc<Mutex<Connection>>> {
-        let conn = self.create_raw_federation_connection()?;
-        Ok(Arc::new(Mutex::new(conn)))
-    }
-
-    /// Same as `create_federation_connection` but returns an owned `Connection`
-    /// (not wrapped in `Arc<Mutex>`) so it can be moved to a background thread.
-    ///
-    /// The DuckLake attach step is retried up to `FEDERATION_ATTACH_ATTEMPTS`
-    /// times with `FEDERATION_ATTACH_BACKOFF` between attempts. This handles
-    /// the cold-start race where the central node comes up before PostgreSQL
-    /// is ready to accept connections — the first attempt fails with
-    /// "Connection refused" or "the database system is starting up", and
-    /// the next attempt succeeds once PG has finished initializing.
-    pub fn create_raw_federation_connection(&self) -> Result<Connection> {
+    /// Open the dedicated DuckDB connection that backs the quack federation
+    /// server. Separate from `open_connection` because the quack server holds
+    /// this connection in a background thread for the lifetime of the process.
+    /// The DuckLake attach is retried inside `attach_ducklake` to handle
+    /// the cold-start Postgres race.
+    #[tracing::instrument(skip(self))]
+    pub fn open_federation_connection(&self) -> Result<Connection> {
         let conn = Connection::open_in_memory()
             .context("failed to open in-memory DuckDB for federation")?;
-
-        let ext_dir = crate::config::EXTENSION_DIR
-            .value()
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(Utf8PathBuf::from)
-            .unwrap_or_else(|| self.data_dir.join("extensions"));
-
-        conn.execute_batch(&format!(
-            "SET extension_directory = '{}';",
-            ext_dir.as_str()
-        ))
-        .context("failed to set extension_directory")?;
-
-        conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
-            .context("failed to set DuckDB memory limit")?;
-
-        // Attach DuckLake catalog so the quack server serves actual project data.
-        // Collectors need their local DuckLake catalog attached for remote queries.
         let project_dir = self.data_dir.join("default");
-        let mut last_err: Option<anyhow::Error> = None;
-        let mut ducklake_attached = false;
-        for attempt in 1..=FEDERATION_ATTACH_ATTEMPTS {
-            match crate::storage::load_config() {
-                Ok(Some(config)) => {
-                    match crate::storage::init_distributed(&conn, &config, &project_dir) {
-                        Ok(()) => {
-                            ducklake_attached = true;
-                            last_err = None;
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                attempt,
-                                max = FEDERATION_ATTACH_ATTEMPTS,
-                                "federation DuckLake attach failed: {e:#}"
-                            );
-                            last_err = Some(e);
-                        }
-                    }
-                }
-                Ok(None) => match crate::storage::init_default(&conn, &project_dir) {
-                    Ok(()) => {
-                        ducklake_attached = true;
-                        last_err = None;
-                        break;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            attempt,
-                            max = FEDERATION_ATTACH_ATTEMPTS,
-                            "federation DuckLake attach failed: {e:#}"
-                        );
-                        last_err = Some(e);
-                    }
-                },
-                Err(e) => {
-                    last_err = Some(e);
-                    break;
-                }
-            }
-            std::thread::sleep(FEDERATION_ATTACH_BACKOFF);
-        }
-        if !ducklake_attached {
-            return Err(last_err.unwrap_or_else(|| {
-                anyhow::anyhow!("federation DuckLake attach: no attempts made")
-            }));
-        }
-
-        // DuckLake attaches its own "lake" catalog; schema is created by
-        // init_distributed/init_default so no manual CREATE SCHEMA is needed.
-
-        crate::schema::create_tables(&conn, Self::prefix())?;
-
+        self.attach_ducklake(&conn, &project_dir)?;
         Ok(conn)
     }
 }
 
-/// Number of attempts to attach the federation DuckLake catalog at startup.
+/// Number of attempts to attach the DuckLake catalog at startup.
 /// Cold starts (e.g. central node coming up before PostgreSQL is ready) can
 /// fail the first attempt with "Connection refused" or "the database system
 /// is starting up". 30 attempts × 1s = 30s of patience is well within the
 /// Docker `start_period` budget and the compose healthcheck grace window.
-const FEDERATION_ATTACH_ATTEMPTS: u32 = 30;
+/// Applies to both per-project connections (cold default project init)
+/// and the federation quack server connection.
+const ATTACH_ATTEMPTS: u32 = 30;
 
-/// Backoff between federation DuckLake attach attempts. 1s matches typical
-/// Postgres initdb time on a small data directory.
-const FEDERATION_ATTACH_BACKOFF: Duration = Duration::from_secs(1);
+/// Backoff between DuckLake attach attempts. 1s matches typical Postgres
+/// initdb time on a small data directory.
+const ATTACH_BACKOFF: Duration = Duration::from_secs(1);
