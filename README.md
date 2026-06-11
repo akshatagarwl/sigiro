@@ -25,10 +25,15 @@ In development, any bearer token starting with `sigiro_dev_` is accepted:
 curl -H "Authorization: Bearer sigiro_dev_test" http://localhost:9999/health
 ```
 
-For production, create API keys via the admin endpoint:
+For production, generate an API key (e.g. `openssl rand -hex 32`) and set it on
+both the server and client:
 
 ```bash
-sigiro admin create-key --project my_app
+# Server
+SIGIRO_API_KEY=<key> sigiro serve
+
+# Client
+sigiro auth <key>
 ```
 
 ## End-to-End Test
