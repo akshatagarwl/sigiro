@@ -21,7 +21,11 @@ echo "=== Starting sigiro (self-profiling enabled) ==="
 docker compose up -d sigiro
 
 echo "Waiting for sigiro to be healthy..."
-TIMEOUT=60
+# Cold start budget (image WITHOUT pre-warmed extensions): DuckDB extension
+# download (30-90s per extension × 3) + DuckLake init + .ready write.
+# Cold start budget (image WITH pre-warmed extensions): <5s.
+# 300s comfortably covers either case; subsequent runs are typically <5s.
+TIMEOUT=300
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
   if curl -sf "$SIGIRO_URL/health" >/dev/null 2>&1; then
@@ -116,9 +120,9 @@ else
 fi
 
 echo ""
-echo "=== Check 2: Auth — sk_dev_ key accepted ==="
+echo "=== Check 2: Auth — sigiro_dev_ key accepted ==="
 auth_result=$(curl -sf -o /dev/null -w "%{http_code}" -X POST "$SIGIRO_URL/v1/query" \
-  -H "Authorization: Bearer sigiro_dev_test" \
+  -H "$DEV_AUTH" \
   -d "SELECT 1 AS ok") || true
 printf "  %-50s" "sk_dev_ key returns 200..."
 if [ "$auth_result" = "200" ]; then
@@ -144,29 +148,44 @@ fi
 
 echo ""
 echo "=== Check 4: Self-profiling (SIGIRO_PYROSCOPE_ENDPOINT) ==="
+# DuckLake schema is "main" for local DuckDB-file catalogs and "lake" for
+# PostgreSQL-backed federation catalogs. Detect which is in use and run
+# against that schema so the test works in both deployments.
+PROFILE_SCHEMA=$(curl -sf -X POST "$SIGIRO_URL/v1/query" \
+  -H "$DEV_AUTH" \
+  -d "SELECT table_schema FROM information_schema.tables WHERE table_name = 'sigiro_profiles' LIMIT 1" 2>/dev/null \
+  | jq -r '.[0].table_schema // "main"' 2>/dev/null)
+PROFILE_SCHEMA="${PROFILE_SCHEMA:-main}"
+echo "  detected profile schema: $PROFILE_SCHEMA"
 run_check "Sigiro self-profiles count > 0" \
-  "SELECT count(*) AS n FROM lake.sigiro_profiles" \
+  "SELECT count(*) AS n FROM $PROFILE_SCHEMA.sigiro_profiles" \
   '"n"'
 run_check "Sigiro self-profile has stack_trace" \
-  "SELECT count(*) > 0 AS ok FROM lake.sigiro_profiles WHERE stack_trace IS NOT NULL AND array_length(stack_trace) > 0" \
+  "SELECT count(*) > 0 AS ok FROM $PROFILE_SCHEMA.sigiro_profiles WHERE stack_trace IS NOT NULL AND array_length(stack_trace) > 0" \
   "true"
 run_check "Sigiro self-profile has service_name" \
-  "SELECT count(*) > 0 AS ok FROM lake.sigiro_profiles WHERE service_name = 'sigiro'" \
+  "SELECT count(*) > 0 AS ok FROM $PROFILE_SCHEMA.sigiro_profiles WHERE service_name = 'sigiro'" \
   "true"
 
 echo ""
 echo "=== Check 5: /v1/investigate profiles ==="
+# Investigate requires from_ts and to_ts (Unix microseconds). Use a wide
+# window (last 1 hour) so any recent self-profile is included.
+NOW_US=$(($(date +%s) * 1000000))
+HOUR_AGO_US=$((NOW_US - 3600 * 1000000))
 inv=$(curl -sf -X POST "$SIGIRO_URL/v1/investigate" \
   -H "$DEV_AUTH" \
   -H 'Content-Type: application/json' \
-  -d '{"service":"sigiro"}') || true
+  -d "{\"service\":\"sigiro\",\"from_ts\":${HOUR_AGO_US},\"to_ts\":${NOW_US}}") || true
 assert_contains "$inv" '"profiles"' "investigate: profiles section present"
 
 echo ""
 echo "=== Check 6: Pyroscope self-send to :4318 ==="
-sigiro_logs=$(docker compose logs sigiro 2>&1 | grep -c "pyroscope ingest" || echo "0")
+# Use grep -c with || true so a "no matches" result (exit 1) doesn't trigger
+# the fallback echo, which produces "0\n0" and confuses the integer compare.
+sigiro_logs=$(docker compose logs sigiro 2>&1 | { grep -c "pyroscope ingest" || true; })
 printf "  %-50s" "sigiro received pyroscope ingest logs..."
-if [ "$sigiro_logs" -gt "0" ]; then
+if [ "${sigiro_logs:-0}" -gt "0" ] 2>/dev/null; then
   echo "PASS (found $sigiro_logs ingest log lines)"
   PASSES=$((PASSES + 1))
 else
@@ -185,11 +204,11 @@ echo "=== DEBUG: Pyroscope profiles confirmed via /v1/investigate ==="
 profile_check=$(curl -sf -X POST "$SIGIRO_URL/v1/investigate" \
   -H "$DEV_AUTH" \
   -H 'Content-Type: application/json' \
-  -d '{"service":"sigiro"}' 2>&1 | jq -r '
+  -d "{\"service\":\"sigiro\",\"from_ts\":${HOUR_AGO_US},\"to_ts\":${NOW_US}}" 2>&1 | jq -r '
     .sigiro.profiles // [] |
     "profile_count=\(length)",
     "has_cpu_profile=\(map(select(.profile_type == "cpu")) | length > 0)"
-' 2>/dev/null | paste -sd ',' - || echo "profile_check=failed")
+  ' 2>/dev/null | paste -sd ',' - || echo "profile_check=failed")
 echo "  $profile_check"
 
 echo ""

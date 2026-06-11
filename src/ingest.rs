@@ -986,15 +986,25 @@ async fn parse_pyroscope_multipart(
 /// Decode a Pyroscope PushRequest (gzip-compressed protobuf) into an Arrow
 /// RecordBatch using the same schema as transform_profiles.
 pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, Status> {
-    // Stage 1: gzip decompression
-    let decompressed = {
+    // Stage 1: gzip decompression.
+    //
+    // The OTLP HTTP router has a RequestDecompressionLayer that
+    // auto-decompresses any request with Content-Encoding: gzip, so the
+    // body we receive here is already decompressed in the common case.
+    // The pyroscope-rs SDK, however, always sends Content-Encoding: gzip
+    // — but reqwest's behavior is not always honored by intermediate
+    // proxies, and the layer may not fire on every code path. So detect
+    // the gzip magic bytes (1f 8b) and only decompress if still gzipped.
+    let decompressed = if body.len() >= 2 && body[0] == 0x1f && body[1] == 0x8b {
         let mut decoder = flate2::read::GzDecoder::new(&body[..]);
         let mut out = Vec::new();
         std::io::Read::read_to_end(&mut decoder, &mut out)
             .map_err(|e| status_internal(format!("gzip decompression failed: {e}")))?;
         out
+    } else {
+        body
     };
-    tracing::debug!("pyroscope: decompressed {} bytes", decompressed.len());
+    tracing::debug!("pyroscope: payload {} bytes", decompressed.len());
 
     // Stage 2: PushRequest protobuf decode
     let push_request = pyroscope::encode::r#gen::push::PushRequest::decode(&decompressed[..])

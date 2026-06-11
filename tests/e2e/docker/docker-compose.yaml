@@ -1,11 +1,13 @@
 services:
   sigiro:
     build:
-      context: ../..
+      context: ../../..
       dockerfile: Dockerfile
     environment:
+      - SIGIRO_API_KEY=sigiro_dev_e2e_test
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
       - SIGIRO_PYROSCOPE_ENDPOINT=http://localhost:4318
+      - SIGIRO_OTEL_AUTH_KEY=sigiro_dev_e2e_test
       - OTEL_SERVICE_NAME=sigiro
     ports:
       - "4317:4317"
@@ -14,9 +16,11 @@ services:
     volumes:
       - sigiro-data:/var/lib/sigiro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:9999/health"]
       interval: 5s
-      retries: 10
+      timeout: 5s
+      retries: 30
+      start_period: 120s
 
 volumes:
   sigiro-data:

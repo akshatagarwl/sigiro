@@ -39,6 +39,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/sigiro /usr/local/bin/sigiro
+# Pre-download DuckDB extensions so the first `sigiro serve` doesn't hang
+# on a 30-90s blocking download. Both the pre-warm CLI and `sigiro serve`
+# use SIGIRO_EXTENSION_DIR (default: $SIGIRO_DATA_DIR/extensions) — set it
+# explicitly here so pre-warm and serve write to the same location.
+ENV SIGIRO_DATA_DIR=/var/lib/sigiro \
+    SIGIRO_EXTENSION_DIR=/var/lib/sigiro/extensions
+RUN sigiro fetch-extensions
 EXPOSE 4317 4318 9999
-ENV SIGIRO_DATA_DIR=/var/lib/sigiro
 CMD ["sigiro", "serve"]

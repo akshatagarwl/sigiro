@@ -14,6 +14,7 @@
 //! to DuckDB — they are independent of the SDK's upload cycle.
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use tracing_attributes::instrument;
 
 /// Handle to the Pyroscope agent, if configured.
@@ -40,16 +41,33 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
         pyroscope::backend::BackendConfig::default(),
     );
 
-    let agent = pyroscope::pyroscope::PyroscopeAgentBuilder::new(
+    // When sigiro is self-profiling into its own OTLP endpoint, the SDK
+    // must authenticate so the server doesn't reject the push with 401.
+    // `SIGIRO_OTEL_AUTH_KEY` is the same key the OTel self-instrumentation
+    // uses (see src/otel.rs) — reusing it here keeps self-profiling working
+    // out of the box without inventing a new env var.
+    let http_headers = match crate::config::OTEL_AUTH_KEY.value() {
+        Ok(k) if !k.is_empty() => {
+            let mut h = HashMap::new();
+            h.insert("Authorization".to_string(), format!("Bearer {k}"));
+            Some(h)
+        }
+        _ => None,
+    };
+
+    let mut builder = pyroscope::pyroscope::PyroscopeAgentBuilder::new(
         &endpoint,
         &service_name,
         100, // sample rate Hz
         "pyroscope-rs",
         env!("CARGO_PKG_VERSION"),
         backend,
-    )
-    .build()
-    .context("failed to build Pyroscope agent")?;
+    );
+    if let Some(headers) = http_headers {
+        builder = builder.http_headers(headers);
+    }
+
+    let agent = builder.build().context("failed to build Pyroscope agent")?;
 
     let agent = agent.start().context("failed to start Pyroscope agent")?;
 
@@ -57,6 +75,7 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
         pyroscope_endpoint = %endpoint,
         service = %service_name,
         sample_rate = 100,
+        auth_configured = crate::config::OTEL_AUTH_KEY.value().map(|k| !k.is_empty()).unwrap_or(false),
         "Pyroscope profiling enabled"
     );
 
