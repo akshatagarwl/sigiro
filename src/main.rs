@@ -104,8 +104,6 @@ enum Command {
         /// Trace ID (hex string) to display
         trace_id: String,
     },
-    /// Start MCP stdio server for Claude/Cursor/Codex integration
-    Mcp,
     /// Save API key for CLI authentication
     Auth {
         /// API key (set SIGIRO_API_KEY on the server to the same value)
@@ -362,11 +360,6 @@ async fn main() -> Result<()> {
         }
         Some(Command::TraceTree { trace_id }) => {
             run_trace_tree(&trace_id).await?;
-        }
-        Some(Command::Mcp) => {
-            let client = require_client()?;
-            tracing::info!("MCP server connecting to {}", client.base_url());
-            sigiro::mcp::run_mcp_server(client).await?;
         }
         Some(Command::Auth { key }) => {
             let path = sigiro::config::save_api_key(&key)?;
