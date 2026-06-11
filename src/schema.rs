@@ -1,58 +1,5 @@
 use anyhow::{Context, Result};
 use duckdb::Connection;
-use tracing::info;
-
-/// Fleet observability extensions — loaded on each project connection.
-/// Each extension provides SQL functions agents can query to debug system state.
-pub const FLEET_EXTENSIONS: &[&str] = &["system_stats", "fsquery", "hostfs"];
-
-/// Load a single extension: try LOAD from name first (uses extension_directory cache),
-/// then try loading from bundled file path, then fall back to download.
-fn load_one_extension(conn: &Connection, name: &str) -> Result<()> {
-    // Path 1: LOAD by name — requires extension_directory set and extension pre-cached.
-    if conn.execute_batch(&format!("LOAD {name};")).is_ok() {
-        info!("loaded extension (cached): {name}");
-        return Ok(());
-    }
-
-    // Path 2: LOAD from bundled file path — works for offline deployments where
-    // extensions were shipped alongside the binary in {data_dir}/extensions/{name}.duckdb_extension
-    let bundled = crate::config::DATA_DIR
-        .value()
-        .ok()
-        .filter(|d| !d.is_empty())
-        .map(|d| {
-            camino::Utf8PathBuf::from(d)
-                .join("extensions")
-                .join(format!("{name}.duckdb_extension"))
-        });
-    if let Some(ref path) = bundled {
-        if path.exists() {
-            if let Ok(()) = conn.execute_batch(&format!("LOAD '{path}';")) {
-                info!("loaded extension (bundled): {name}");
-                return Ok(());
-            }
-        }
-    }
-
-    // Path 3: download from community repository, then LOAD — requires network
-    conn.execute_batch(&format!("INSTALL {name} FROM community; LOAD {name};"))
-        .with_context(|| format!(
-            "failed to load extension '{name}' — run `sigiro fetch-extensions` to pre-download, or place {name}.duckdb_extension in $SIGIRO_DATA_DIR/extensions/"
-        ))?;
-    info!("loaded extension (downloaded): {name}");
-    Ok(())
-}
-
-/// Load all fleet observability DuckDB community extensions.
-/// Uses local cache when available, downloads only on first use.
-/// Fails hard if ANY extension cannot be loaded — run `sigiro fetch-extensions` first.
-pub fn load_fleet_extensions(conn: &Connection) -> Result<()> {
-    for name in FLEET_EXTENSIONS {
-        load_one_extension(conn, name)?;
-    }
-    Ok(())
-}
 
 /// Create all sigiro tables and views.
 /// `prefix` is always "lake." (DuckLake catalog-qualified tables).

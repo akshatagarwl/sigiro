@@ -196,7 +196,6 @@ impl ProjectPool {
             "DuckDB: loading extensions on first use (run `sigiro fetch-extensions` to pre-warm)"
         );
         self.attach_ducklake(&conn, project_dir)?;
-        crate::schema::load_fleet_extensions(&conn)?;
         // Ensure DuckLake tables are discoverable without schema prefix.
         conn.execute_batch("USE lake;")
             .context("failed to set DuckDB default schema")?;
