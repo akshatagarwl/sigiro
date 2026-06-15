@@ -3,13 +3,7 @@ use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use axum::{
-    Router,
-    body::Bytes,
-    extract::State,
-    http::StatusCode,
-    routing::post,
-};
+use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
 use headers::{Authorization, HeaderMapExt, authorization::Bearer};
 use multer::Multipart;
 use opentelemetry_proto::tonic::collector::{

@@ -591,5 +591,4 @@ fn init_basic_subscriber() {
         )
         .with_writer(std::io::stderr)
         .init();
- }
-
+}

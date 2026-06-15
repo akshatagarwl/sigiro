@@ -38,7 +38,7 @@ impl ClientAuth {
     }
 }
 
-/// HTTP client for hosted mode — CLI and MCP go through sigiro serve instead of direct DuckDB.
+/// HTTP client for hosted mode — CLI clients go through sigiro serve instead of direct DuckDB.
 #[derive(Clone)]
 pub struct SigiroClient {
     http: reqwest::Client,

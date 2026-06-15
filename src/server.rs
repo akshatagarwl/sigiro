@@ -516,7 +516,7 @@ async fn healthz(
 
 /// Convert a DuckDB ValueRef to a serde_json::Value.
 /// Uses pattern matching on the actual type — no cascading type-try guessing.
-/// Public for reuse by the MCP server.
+/// Public for reuse by HTTP query handling and tests.
 pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
     use duckdb::types::ValueRef;
     match val {
