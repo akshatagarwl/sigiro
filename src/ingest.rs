@@ -157,7 +157,7 @@ where
 /// Transform raw bytes into Arrow RecordBatch on the tokio blocking pool.
 /// Supports both protobuf and JSON input based on Content-Type header.
 #[instrument(skip_all, fields(endpoint = "/v1/traces"))]
-async fn transform_traces(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
+async fn transform_traces(bytes: Bytes, fmt: InputFormat) -> Result<RecordBatch, Status> {
     spawn_transform("transform traces", move || {
         crate::otlp::transform_traces(&bytes, fmt)
     })
@@ -165,7 +165,7 @@ async fn transform_traces(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatc
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
-async fn transform_logs(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch, Status> {
+async fn transform_logs(bytes: Bytes, fmt: InputFormat) -> Result<RecordBatch, Status> {
     spawn_transform("transform logs", move || {
         crate::otlp::transform_logs(&bytes, fmt)
     })
@@ -173,7 +173,7 @@ async fn transform_logs(bytes: Vec<u8>, fmt: InputFormat) -> Result<RecordBatch,
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
-async fn transform_metrics(bytes: Vec<u8>, fmt: InputFormat) -> Result<MetricBatches, Status> {
+async fn transform_metrics(bytes: Bytes, fmt: InputFormat) -> Result<MetricBatches, Status> {
     spawn_transform("transform metrics", move || {
         crate::otlp::transform_metrics(&bytes, fmt)
     })
@@ -190,7 +190,7 @@ impl TraceService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
         // Transform on tokio blocking pool — no double decode.
         // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
-        let bytes = request.into_inner().encode_to_vec();
+        let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let batch = transform_traces(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
             tracing::warn!(project_id, "export traces: empty batch after transform");
@@ -217,7 +217,7 @@ impl LogsService for OtlpGrpcService {
         request: Request<ExportLogsServiceRequest>,
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
-        let bytes = request.into_inner().encode_to_vec();
+        let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let batch = transform_logs(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
             tracing::warn!(project_id, "export logs: empty batch after transform");
@@ -244,7 +244,7 @@ impl MetricsService for OtlpGrpcService {
         request: Request<ExportMetricsServiceRequest>,
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
-        let bytes = request.into_inner().encode_to_vec();
+        let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
         let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
             || batches.sum.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -637,7 +637,7 @@ async fn otlp_http_traces(
         Err(status) => return status,
     };
     let fmt = detect_format(&headers);
-    let batch = match transform_traces(body.to_vec(), fmt).await {
+    let batch = match transform_traces(body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform traces: {e}");
@@ -672,7 +672,7 @@ async fn otlp_http_logs(
         Err(status) => return status,
     };
     let fmt = detect_format(&headers);
-    let batch = match transform_logs(body.to_vec(), fmt).await {
+    let batch = match transform_logs(body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform logs: {e}");
@@ -705,7 +705,7 @@ async fn otlp_http_metrics(
         Err(status) => return status,
     };
     let fmt = detect_format(&headers);
-    let batches = match transform_metrics(body.to_vec(), fmt).await {
+    let batches = match transform_metrics(body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform metrics: {e}");
