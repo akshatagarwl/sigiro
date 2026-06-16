@@ -1002,8 +1002,13 @@ fn append_log_json(
     let observed = get_i64(log, "observedTimeUnixNano")
         .or_else(|| get_i64(log, "observed_time_unix_nano"))
         .unwrap_or(0);
+    let timestamp = if time == 0 && observed != 0 {
+        observed
+    } else {
+        time
+    };
 
-    builders.timestamp.append_value(time / 1000);
+    builders.timestamp.append_value(timestamp / 1000);
     builders.observed_timestamp.append_value(observed / 1000);
 
     let trace_id = get_str(log, "traceId")
@@ -1830,8 +1835,13 @@ impl LogBuilders {
                 log.observed_time_unix_nano
             ))
         })?;
+        let timestamp = if time == 0 && observed != 0 {
+            observed
+        } else {
+            time
+        };
 
-        self.timestamp.append_value(time / 1000);
+        self.timestamp.append_value(timestamp / 1000);
         self.observed_timestamp.append_value(observed / 1000);
 
         let trace_id = hex::encode(&log.trace_id);
