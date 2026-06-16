@@ -12,6 +12,8 @@ Usage:
 Requires: pip install requests opentelemetry-proto
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import random
@@ -22,23 +24,27 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import List
 
-try:
-    from opentelemetry.proto.trace.v1.trace_pb2 import (
-        ResourceSpans,
-        ScopeSpans,
-        Span as OtlpSpan,
-        TracesData,
-    )
-    from opentelemetry.proto.resource.v1.resource_pb2 import Resource as OtlpResource
-    from opentelemetry.proto.common.v1.common_pb2 import (
-        KeyValue,
-        AnyValue,
-        InstrumentationScope,
-    )
-except ImportError:
-    print("ERROR: opentelemetry-proto not installed.")
-    print("Run: pip install opentelemetry-proto")
-    sys.exit(1)
+def ensure_otlp_imports() -> None:
+    global ResourceSpans, ScopeSpans, OtlpSpan, TracesData
+    global OtlpResource, KeyValue, AnyValue, InstrumentationScope
+
+    try:
+        from opentelemetry.proto.common.v1.common_pb2 import (
+            AnyValue,
+            InstrumentationScope,
+            KeyValue,
+        )
+        from opentelemetry.proto.resource.v1.resource_pb2 import Resource as OtlpResource
+        from opentelemetry.proto.trace.v1.trace_pb2 import (
+            ResourceSpans,
+            ScopeSpans,
+            Span as OtlpSpan,
+            TracesData,
+        )
+    except ImportError:
+        print("ERROR: opentelemetry-proto not installed.")
+        print("Run: pip install opentelemetry-proto")
+        sys.exit(1)
 
 
 def random_id(length: int = 16) -> str:
@@ -126,7 +132,7 @@ def make_batch(
     return traces_data.SerializeToString()
 
 
-def send_batch(endpoint: str, batch: bytes, auth_key: str = "sigiro_dev_xxx") -> tuple[float, bool]:
+def send_batch(endpoint: str, batch: bytes, auth_key: str) -> tuple[float, bool]:
     import requests
 
     headers = {
@@ -159,6 +165,8 @@ class BenchmarkResult:
 
 
 def run_benchmark(args) -> BenchmarkResult:
+    ensure_otlp_imports()
+
     services = [f"service-{i}" for i in range(args.services)]
     total_spans_target = args.rate * args.duration
     spans_per_batch = args.spans_per_trace * args.traces_per_batch
@@ -197,7 +205,7 @@ def run_benchmark(args) -> BenchmarkResult:
         next_send += batch_interval
 
         try:
-            latency, ok = send_batch(args.endpoint, batch)
+            latency, ok = send_batch(args.endpoint, batch, args.auth_key)
             latencies.append(latency)
             spans_sent += spans_per_batch
             if not ok:
@@ -244,6 +252,7 @@ def main():
     parser.add_argument("--services", type=int, default=3, help="Number of services")
     parser.add_argument("--spans-per-trace", type=int, default=5, help="Spans per trace")
     parser.add_argument("--traces-per-batch", type=int, default=10, help="Traces per batch")
+    parser.add_argument("--auth-key", default="sigiro_dev_xxx", help="Bearer token for Sigiro")
     args = parser.parse_args()
 
     result = run_benchmark(args)
