@@ -52,14 +52,10 @@ impl OtlpGrpcService {
         Self { router, auth_mode }
     }
 
-    /// Route a batch to the inserter: register flusher then send.
-    /// Consolidates the repeated register_flusher+send pattern across all 4 signal handlers.
+    /// Route a batch to the inserter.
     #[instrument(skip_all, fields(project_id))]
-    async fn route_batch(&self, project_id: String, msg: IngestMsg) -> Result<(), Status> {
-        if let Err(e) = self.router.register_flusher(&project_id) {
-            tracing::error!(project_id, "failed to register flusher: {e:?}");
-            return Err(Status::internal("flusher init failed"));
-        }
+    async fn route_batch(&self, msg: IngestMsg) -> Result<(), Status> {
+        let project_id = msg.project_id().to_string();
         if let Err(e) = self.router.send(msg).await {
             tracing::error!(project_id, "ingest router error: {e:?}");
             return Err(Status::internal("ingest failed"));
@@ -201,7 +197,7 @@ impl TraceService for OtlpGrpcService {
                 }),
             }));
         }
-        self.route_batch(project_id.clone(), IngestMsg::Traces { project_id, batch })
+        self.route_batch(IngestMsg::Traces { project_id, batch })
             .await?;
         Ok(Response::new(ExportTraceServiceResponse {
             partial_success: None,
@@ -228,7 +224,7 @@ impl LogsService for OtlpGrpcService {
                 }),
             }));
         }
-        self.route_batch(project_id.clone(), IngestMsg::Logs { project_id, batch })
+        self.route_batch(IngestMsg::Logs { project_id, batch })
             .await?;
         Ok(Response::new(ExportLogsServiceResponse {
             partial_success: None,
@@ -262,13 +258,10 @@ impl MetricsService for OtlpGrpcService {
                 }),
             }));
         }
-        self.route_batch(
-            project_id.clone(),
-            IngestMsg::Metrics {
-                project_id,
-                batches,
-            },
-        )
+        self.route_batch(IngestMsg::Metrics {
+            project_id,
+            batches,
+        })
         .await?;
         Ok(Response::new(ExportMetricsServiceResponse {
             partial_success: None,
@@ -556,11 +549,8 @@ impl ProfilesService for OtlpGrpcService {
                 }),
             }));
         }
-        self.route_batch(
-            project_id.clone(),
-            IngestMsg::Profiles { project_id, batch },
-        )
-        .await?;
+        self.route_batch(IngestMsg::Profiles { project_id, batch })
+            .await?;
         Ok(Response::new(ExportProfilesServiceResponse {
             partial_success: None,
         }))
@@ -612,13 +602,10 @@ pub fn extract_project_id_http(
     }
 }
 
-/// Common helper: register flusher and send ingest message.
+/// Common helper: send ingest message.
 /// Returns 500 on failure, 200 on success.
-async fn route_ingest_msg(state: &OtlpHttpState, project_id: &str, msg: IngestMsg) -> StatusCode {
-    if let Err(e) = state.router.register_flusher(project_id) {
-        tracing::error!(project_id, "failed to register flusher: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
+async fn route_ingest_msg(state: &OtlpHttpState, msg: IngestMsg) -> StatusCode {
+    let project_id = msg.project_id().to_string();
     if let Err(e) = state.router.send(msg).await {
         tracing::error!(project_id, "ingest router error: {e:?}");
         return StatusCode::INTERNAL_SERVER_ERROR;
@@ -650,15 +637,7 @@ async fn otlp_http_traces(
     if batch.num_rows() == 0 {
         return StatusCode::OK;
     }
-    route_ingest_msg(
-        &state,
-        &project_id,
-        IngestMsg::Traces {
-            project_id: project_id.clone(),
-            batch,
-        },
-    )
-    .await
+    route_ingest_msg(&state, IngestMsg::Traces { project_id, batch }).await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
@@ -683,15 +662,7 @@ async fn otlp_http_logs(
     if batch.num_rows() == 0 {
         return StatusCode::OK;
     }
-    route_ingest_msg(
-        &state,
-        &project_id,
-        IngestMsg::Logs {
-            project_id: project_id.clone(),
-            batch,
-        },
-    )
-    .await
+    route_ingest_msg(&state, IngestMsg::Logs { project_id, batch }).await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
@@ -725,9 +696,8 @@ async fn otlp_http_metrics(
     }
     route_ingest_msg(
         &state,
-        &project_id,
         IngestMsg::Metrics {
-            project_id: project_id.clone(),
+            project_id,
             batches,
         },
     )
@@ -769,15 +739,7 @@ async fn otlp_http_profiles(
         );
         return StatusCode::BAD_REQUEST;
     }
-    route_ingest_msg(
-        &state,
-        &project_id,
-        IngestMsg::Profiles {
-            project_id: project_id.clone(),
-            batch,
-        },
-    )
-    .await
+    route_ingest_msg(&state, IngestMsg::Profiles { project_id, batch }).await
 }
 
 // ─── Pyroscope native format ingest ──────────────────────────────────────────
@@ -848,10 +810,6 @@ async fn otlp_http_pyroscope(
         return StatusCode::BAD_REQUEST;
     }
     let pid = project_id.clone();
-    if let Err(e) = state.router.register_flusher(&project_id) {
-        tracing::error!(project_id, "failed to register flusher: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
     if let Err(e) = state
         .router
         .send(IngestMsg::Profiles { project_id, batch })
