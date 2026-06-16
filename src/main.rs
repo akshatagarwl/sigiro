@@ -217,9 +217,10 @@ async fn main() -> Result<()> {
                 Ok(HealthResponse::Degraded { reason }) => ("degraded".to_string(), reason),
                 Err(e) => ("unreachable".to_string(), format!("{e:#}")),
             };
-            // F-21: include a recent_ingest block so the user can see at a
-            // glance whether the server is actually receiving data. Tolerate
-            // failure (e.g. when not authenticated) and return null.
+            // F-21/F-31: include a recent_ingest block so the user can see at a
+            // glance whether the server is actually receiving data. If auth or
+            // query setup fails, report the exact failure instead of silently
+            // collapsing it to null.
             let recent_ingest = if matches!(state.as_str(), "ready" | "starting") {
                 match sigiro::client::try_build_client() {
                     Ok(client) => match client.query(
@@ -232,10 +233,19 @@ async fn main() -> Result<()> {
                                 "last_span_ts": r.get("last_span_ts").cloned().unwrap_or(serde_json::Value::Null),
                                 "last_log_ts": r.get("last_log_ts").cloned().unwrap_or(serde_json::Value::Null),
                             })
-                        }),
-                        Err(_) => None,
+                        }).or_else(|| Some(serde_json::json!({
+                            "error": "empty_query_result",
+                            "detail": "recent ingest query returned no rows",
+                        }))),
+                        Err(e) => Some(serde_json::json!({
+                            "error": "query_error",
+                            "detail": format!("{e:#}"),
+                        })),
                     },
-                    Err(_) => None,
+                    Err(e) => Some(serde_json::json!({
+                        "error": "auth_config_error",
+                        "detail": format!("{e:#}"),
+                    })),
                 }
             } else {
                 None

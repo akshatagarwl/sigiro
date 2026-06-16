@@ -40,8 +40,6 @@ pub struct TelemetryGuard {
     logger_provider: Option<opentelemetry_sdk::logs::SdkLoggerProvider>,
 }
 
-impl TelemetryGuard {}
-
 impl Drop for TelemetryGuard {
     fn drop(&mut self) {
         tracing::info!("OTel shutdown: flushing pending spans");
