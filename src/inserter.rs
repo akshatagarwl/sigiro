@@ -256,33 +256,49 @@ impl MsgRouter {
         }
     }
 
-    /// Gracefully shut down all flusher tasks: drops senders (triggering
-    /// final flush in each flusher), then awaits task completion.
-    pub async fn shutdown(&self) {
-        // Dropping all senders signals each flusher to do a final flush and exit.
-        self.project_senders.clear();
-        // NOTE: JoinHandles are dropped here too. Tokio JoinHandle::drop
-        // detaches the task (doesn't cancel it). The flusher tasks will
-        // complete their final flush and exit on their own since we already
-        // dropped all senders above. For tests that need to await completion,
-        // collect handles before clearing.
-    }
-
     /// Shut down and await all flusher tasks. Guarantees all buffered data
     /// is flushed before returning.
-    pub async fn shutdown_and_wait(self) {
-        // Drain all entries, taking ownership of senders and handles.
-        // Dropping senders triggers final flush in each flusher.
-        let handles: Vec<JoinHandle<()>> = self
+    pub async fn shutdown_and_wait(&self) -> Result<()> {
+        let project_ids: Vec<String> = self
             .project_senders
-            .into_iter()
-            .map(|(_, (_, handle))| handle)
+            .iter()
+            .map(|entry| entry.key().clone())
             .collect();
-
-        // Await all flusher tasks with a timeout to complete their final flush.
-        for handle in handles {
-            let _res = tokio::time::timeout(Duration::from_secs(5), handle).await;
+        let mut flushers = Vec::with_capacity(project_ids.len());
+        for project_id in project_ids {
+            if let Some((project_id, (sender, handle))) = self.project_senders.remove(&project_id) {
+                drop(sender);
+                flushers.push((project_id, handle));
+            }
         }
+
+        let mut failures = Vec::new();
+        for (project_id, mut handle) in flushers {
+            match tokio::time::timeout(Duration::from_secs(5), &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    failures.push(format!("{project_id}: flusher task failed: {error}"));
+                }
+                Err(_) => {
+                    handle.abort();
+                    if let Err(error) = handle.await
+                        && !error.is_cancelled()
+                    {
+                        failures.push(format!("{project_id}: flusher abort failed: {error}"));
+                    }
+                    failures.push(format!(
+                        "{project_id}: flusher did not stop within 5 seconds"
+                    ));
+                }
+            }
+        }
+
+        anyhow::ensure!(
+            failures.is_empty(),
+            "flusher shutdown failed: {}",
+            failures.join("; ")
+        );
+        Ok(())
     }
 }
 

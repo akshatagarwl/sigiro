@@ -160,7 +160,7 @@ async fn e2e_pyroscope_native_pipeline() {
         .await
         .unwrap();
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Verify in DuckDB
     let conn = pool.create_project("pyro_test").unwrap();
@@ -326,7 +326,7 @@ async fn e2e_pyroscope_multi_series() {
         .await
         .unwrap();
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     let conn = pool.create_project("pyro_multi").unwrap();
     let conn = conn.lock();

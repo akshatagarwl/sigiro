@@ -113,7 +113,7 @@ async fn inserter_processes_spans_for_single_project() {
     }
 
     // Shut down router and wait for all flushers to complete
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Verify data landed in DuckDB
     let conn = pool.create_project("test_project").unwrap();
@@ -160,7 +160,7 @@ async fn inserter_isolates_projects() {
             .unwrap();
     }
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Each project should have its own data
     let conn_a = pool.create_project("project_a").unwrap();
@@ -229,7 +229,7 @@ async fn inserter_handles_backpressure() {
         }
     }
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Both projects should have data — no drops under backpressure
     let conn = pool.create_project("fast_project").unwrap();
@@ -281,7 +281,7 @@ async fn inserter_throughput_single_project() {
             .unwrap();
     }
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
     let elapsed = start.elapsed();
 
     let conn = pool.create_project("throughput_test").unwrap();

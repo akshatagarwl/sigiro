@@ -331,7 +331,7 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
             .unwrap();
     }
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Verify data in DuckDB
     let conn = pool.create_project("proj_e2e").unwrap();
@@ -411,7 +411,7 @@ async fn e2e_multi_project_isolation() {
         .await
         .unwrap();
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Investigate project A — should only see alpha-svc
     let conn_a = pool.create_project("proj_alpha").unwrap();
@@ -502,7 +502,7 @@ async fn e2e_services_endpoint_simulation() {
         .await
         .unwrap();
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Query the services table grouped by service_name
     let conn = pool.create_project("proj_services").unwrap();
@@ -697,7 +697,7 @@ async fn e2e_investigation_all_signals() {
         .await
         .unwrap();
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Verify raw counts in DuckDB
     let conn = pool.create_project("proj_all_signals").unwrap();
@@ -877,7 +877,7 @@ async fn e2e_drain_log_template_dedup() {
         .await
         .unwrap();
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Verify: 20 rows in sigiro_logs, each with a template_id
     let conn = pool.create_project("drain_test").unwrap();

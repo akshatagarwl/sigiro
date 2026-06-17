@@ -140,7 +140,7 @@ async fn e2e_profiles_pipeline() {
         .await
         .unwrap();
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     // Verify rows landed in DuckDB
     let conn = pool.create_project("profile_test").unwrap();
@@ -250,7 +250,7 @@ async fn e2e_profiles_multi_type() {
         .await
         .unwrap();
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     let conn = pool.create_project("multi_type").unwrap();
     let conn = conn.lock();
@@ -318,7 +318,7 @@ async fn e2e_profiles_empty_batch() {
         .await
         .unwrap();
 
-    router.shutdown_and_wait().await;
+    router.shutdown_and_wait().await.unwrap();
 
     let conn = pool.create_project("empty_profiles").unwrap();
     let conn = conn.lock();

@@ -7,6 +7,8 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 use tower::util::ServiceExt;
 
@@ -43,17 +45,31 @@ pub async fn serve_tls(
     acceptor: TlsAcceptor,
     app: axum::Router,
     name: &str,
+    mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     use hyper_util::rt::TokioIo;
     use hyper_util::server::conn::auto::Builder;
 
     let app = Arc::new(app);
+    let mut connections = JoinSet::new();
     loop {
-        let (stream, peer) = listener.accept().await?;
+        let accepted = tokio::select! {
+            accepted = listener.accept() => Some(accepted?),
+            result = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(error)) = result {
+                    return Err(error).context("TLS connection task panicked");
+                }
+                None
+            }
+            _ = shutdown.changed() => break,
+        };
+        let Some((stream, peer)) = accepted else {
+            continue;
+        };
         let acceptor = acceptor.clone();
         let app = Arc::clone(&app);
         let name = name.to_string();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
                     let io = TokioIo::new(tls_stream);
@@ -76,4 +92,9 @@ pub async fn serve_tls(
             }
         });
     }
+
+    while let Some(result) = connections.join_next().await {
+        result.context("TLS connection task panicked")?;
+    }
+    Ok(())
 }

@@ -10,6 +10,8 @@ use sqlparser::parser::Parser;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
 use utoipa::OpenApi;
@@ -281,18 +283,27 @@ pub async fn run_servers(
     let grpc_router = Arc::clone(&router);
     let grpc_auth_mode = auth_mode.clone();
     let grpc_port = ports.grpc;
-    let grpc_handle = tokio::spawn(async move {
+    let mut servers = JoinSet::new();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut grpc_shutdown = shutdown_rx.clone();
+    servers.spawn(async move {
         let addr = format!("[::]:{grpc_port}").parse().expect("valid addr");
         let svc = OtlpGrpcService::new(grpc_router, grpc_auth_mode);
         tracing::info!("gRPC listening on {addr}");
-        TonicServer::builder()
+        let result = TonicServer::builder()
             .add_service(svc.trace_service())
             .add_service(svc.logs_service())
             .add_service(svc.metrics_service())
             .add_service(svc.profiles_service())
-            .serve(addr)
+            .serve_with_shutdown(addr, async move {
+                grpc_shutdown
+                    .changed()
+                    .await
+                    .expect("server shutdown sender must outlive gRPC");
+            })
             .await
-            .context("gRPC server failed")
+            .context("gRPC server failed");
+        ("gRPC", result)
     });
 
     let app_state = Arc::new(AppState {
@@ -315,17 +326,28 @@ pub async fn run_servers(
 
     let http_port = ports.http;
     let http_acceptor = tls_acceptor.clone();
-    let http_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{http_port}")).await?;
-        if let Some(acceptor) = http_acceptor {
-            tracing::info!("HTTPS listening on 0.0.0.0:{http_port}");
-            crate::tls::serve_tls(listener, acceptor, http_app, "HTTP").await
-        } else {
-            tracing::info!("HTTP listening on 0.0.0.0:{http_port}");
-            axum::serve(listener, http_app)
-                .await
-                .context("HTTP server failed")
+    let mut http_shutdown = shutdown_rx.clone();
+    servers.spawn(async move {
+        let result = async {
+            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{http_port}")).await?;
+            if let Some(acceptor) = http_acceptor {
+                tracing::info!("HTTPS listening on 0.0.0.0:{http_port}");
+                crate::tls::serve_tls(listener, acceptor, http_app, "HTTP", http_shutdown).await
+            } else {
+                tracing::info!("HTTP listening on 0.0.0.0:{http_port}");
+                axum::serve(listener, http_app)
+                    .with_graceful_shutdown(async move {
+                        http_shutdown
+                            .changed()
+                            .await
+                            .expect("server shutdown sender must outlive HTTP");
+                    })
+                    .await
+                    .context("HTTP server failed")
+            }
         }
+        .await;
+        ("HTTP", result)
     });
 
     // OTLP HTTP — authenticated via Authorization header
@@ -333,17 +355,36 @@ pub async fn run_servers(
         .layer(tower_http::decompression::RequestDecompressionLayer::new());
     let otlp_http_port = ports.otlp_http;
     let otlp_acceptor = tls_acceptor.clone();
-    let otlp_http_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{otlp_http_port}")).await?;
-        if let Some(acceptor) = otlp_acceptor {
-            tracing::info!("OTLP HTTPS listening on 0.0.0.0:{otlp_http_port}");
-            crate::tls::serve_tls(listener, acceptor, otlp_http_app, "OTLP HTTP").await
-        } else {
-            tracing::info!("OTLP HTTP listening on 0.0.0.0:{otlp_http_port}");
-            axum::serve(listener, otlp_http_app)
+    let mut otlp_http_shutdown = shutdown_rx;
+    servers.spawn(async move {
+        let result = async {
+            let listener =
+                tokio::net::TcpListener::bind(format!("0.0.0.0:{otlp_http_port}")).await?;
+            if let Some(acceptor) = otlp_acceptor {
+                tracing::info!("OTLP HTTPS listening on 0.0.0.0:{otlp_http_port}");
+                crate::tls::serve_tls(
+                    listener,
+                    acceptor,
+                    otlp_http_app,
+                    "OTLP HTTP",
+                    otlp_http_shutdown,
+                )
                 .await
-                .context("OTLP HTTP server failed")
+            } else {
+                tracing::info!("OTLP HTTP listening on 0.0.0.0:{otlp_http_port}");
+                axum::serve(listener, otlp_http_app)
+                    .with_graceful_shutdown(async move {
+                        otlp_http_shutdown
+                            .changed()
+                            .await
+                            .expect("server shutdown sender must outlive OTLP HTTP");
+                    })
+                    .await
+                    .context("OTLP HTTP server failed")
+            }
         }
+        .await;
+        ("OTLP HTTP", result)
     });
 
     // Graceful shutdown: wait for SIGTERM or SIGINT, then drain.
@@ -353,50 +394,89 @@ pub async fn run_servers(
     // Data retention background task (only if retention is configured).
     let retention_handle = spawn_retention_task(Arc::clone(&pool));
 
-    // Servers should run forever. Any exit is unexpected and fatal.
-    // Also listen for shutdown signals.
-    tokio::select! {
-        r = grpc_handle => {
-            let result = r?;
-            tracing::error!("gRPC server exited: {result:?}");
-        },
-        r = http_handle => {
-            let result = r?;
-            tracing::error!("HTTP server exited: {result:?}");
-        },
-        r = otlp_http_handle => {
-            let result = r?;
-            tracing::error!("OTLP HTTP server exited: {result:?}");
+    let server_error = tokio::select! {
+        result = servers.join_next() => {
+            let error = match result {
+                Some(Ok((name, Ok(())))) => anyhow::anyhow!("{name} server exited unexpectedly"),
+                Some(Ok((name, Err(error)))) => error.context(format!("{name} server exited")),
+                Some(Err(error)) => anyhow::Error::new(error).context("server task panicked"),
+                None => anyhow::anyhow!("server task set became empty unexpectedly"),
+            };
+            tracing::error!("{error:#}");
+            Some(error)
         },
         _ = sigterm.recv() => {
             tracing::info!("SIGTERM received — starting graceful shutdown");
+            None
         },
         _ = sigint.recv() => {
             tracing::info!("SIGINT received — starting graceful shutdown");
+            None
         },
-    }
+    };
 
-    // Graceful shutdown: stop accepting new connections, drain in-flight requests,
-    // flush all buffered data to DuckDB.
-    tracing::info!("draining flusher tasks (up to 10s)...");
-    let drain = tokio::time::timeout(Duration::from_secs(10), async {
-        // Try to take exclusive ownership of the router for clean shutdown.
-        match Arc::try_unwrap(router) {
-            Ok(router) => router.shutdown_and_wait().await,
-            Err(r) => {
-                tracing::warn!("router still referenced — forcing shutdown");
-                r.shutdown().await;
+    let shutdown_send = shutdown_tx
+        .send(true)
+        .map_err(|_| anyhow::anyhow!("all server shutdown receivers dropped unexpectedly"));
+    let server_cleanup = match tokio::time::timeout(Duration::from_secs(10), async {
+        let mut first_error = None;
+        while let Some(result) = servers.join_next().await {
+            match result {
+                Ok((_name, Ok(()))) => {}
+                Ok((name, Err(error))) => {
+                    tracing::error!("{name} server failed while stopping: {error:#}");
+                    first_error.get_or_insert_with(|| {
+                        error.context(format!("{name} server failed while stopping"))
+                    });
+                }
+                Err(error) => {
+                    tracing::error!("server task failed while stopping: {error}");
+                    first_error.get_or_insert_with(|| {
+                        anyhow::Error::new(error).context("server task failed while stopping")
+                    });
+                }
             }
         }
-    });
-    if drain.await.is_err() {
-        tracing::warn!("flusher drain timed out — some data may be lost");
-    }
+        first_error.map_or(Ok(()), Err)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            servers.abort_all();
+            while servers.join_next().await.is_some() {}
+            Err(anyhow::anyhow!(
+                "server connections did not drain within 10 seconds"
+            ))
+        }
+    };
 
-    // Cancel the retention task.
-    if let Some(h) = retention_handle {
-        h.abort();
+    let retention_cleanup = if let Some(handle) = retention_handle {
+        handle.abort();
+        match handle.await {
+            Err(error) if error.is_cancelled() => Ok(()),
+            Err(error) => Err(anyhow::Error::new(error).context("retention task failed to stop")),
+            Ok(()) => Ok(()),
+        }
+    } else {
+        Ok(())
+    };
+
+    // Network tasks are gone, so no request can create a new flusher while the
+    // existing channels are closed and drained.
+    tracing::info!("draining flusher tasks...");
+    let router_cleanup = router
+        .shutdown_and_wait()
+        .await
+        .context("failed to drain flusher tasks");
+
+    if let Some(error) = server_error {
+        return Err(error);
     }
+    shutdown_send?;
+    server_cleanup?;
+    retention_cleanup?;
+    router_cleanup?;
 
     Ok(())
 }
