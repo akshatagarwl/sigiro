@@ -21,6 +21,8 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +32,8 @@ SERVICE_COUNTS_SQL = (
     "(SELECT count(*) FROM lake.sigiro_spans WHERE service_name = 'sigiro-candidate') AS spans_all_time, "
     "(SELECT count(*) FROM lake.sigiro_logs WHERE service_name = 'sigiro-candidate') AS logs_all_time, "
     "(SELECT count(*) FROM lake.sigiro_profiles WHERE service_name = 'sigiro-candidate') AS profiles_all_time, "
-    "CAST((SELECT min(timestamp) FROM lake.sigiro_logs WHERE service_name = 'sigiro-candidate') AS VARCHAR) AS first_log_ts, "
-    "CAST((SELECT min(timestamp) FROM lake.sigiro_profiles WHERE service_name = 'sigiro-candidate') AS VARCHAR) AS first_profile_ts"
+    "CAST((SELECT max(timestamp) FROM lake.sigiro_logs WHERE service_name = 'sigiro-candidate') AS VARCHAR) AS latest_log_ts, "
+    "CAST((SELECT max(timestamp) FROM lake.sigiro_profiles WHERE service_name = 'sigiro-candidate') AS VARCHAR) AS latest_profile_ts"
 )
 
 
@@ -138,25 +140,70 @@ def wait_for_profiles(
     stable_bin: Path,
     env: dict[str, str],
     timeout_sec: int,
+    profiles_before: int,
 ) -> list[dict[str, Any]]:
     deadline = time.monotonic() + timeout_sec
     last_counts: list[dict[str, Any]] = []
     while time.monotonic() < deadline:
         last_counts = query_service_counts(stable_bin, env)
-        if last_counts and last_counts[0].get("profiles_all_time", 0) > 0:
+        profiles_after = int(
+            last_counts[0].get("profiles_all_time", 0) if last_counts else 0
+        )
+        if profiles_after > profiles_before:
             return last_counts
         time.sleep(1)
+    profiles_after = int(
+        last_counts[0].get("profiles_all_time", 0) if last_counts else 0
+    )
     raise RuntimeError(
-        "candidate produced no Pyroscope profiles before timeout; "
+        "candidate produced no new Pyroscope profiles before timeout "
+        f"(before={profiles_before}, after={profiles_after}); "
         "inspect candidate.log and stable.log"
     )
 
 
+def load_records(records_path: Path) -> list[dict[str, Any]]:
+    if not records_path.exists():
+        raise RuntimeError(f"no measurement history found at {records_path}")
+    records = []
+    for line_number, line in enumerate(records_path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"invalid JSON in {records_path} line {line_number}: {exc}"
+            ) from exc
+        for field in ("iteration", "commit", "throughput", "p95_latency_ms"):
+            if field not in record:
+                raise RuntimeError(
+                    f"{records_path} line {line_number} is missing required field {field}"
+                )
+        records.append(record)
+    if not records:
+        raise RuntimeError(f"measurement history is empty at {records_path}")
+    workloads = {
+        (record.get("target_rate"), record.get("duration_sec"))
+        for record in records
+        if record.get("target_rate") is not None
+        and record.get("duration_sec") is not None
+    }
+    if len(workloads) > 1:
+        raise RuntimeError(
+            f"measurement history in {records_path} mixes workloads: {sorted(workloads)}"
+        )
+    return records
+
+
 def write_csv(records_path: Path, csv_path: Path) -> list[dict[str, Any]]:
-    records = [json.loads(line) for line in records_path.read_text().splitlines() if line.strip()]
+    records = load_records(records_path)
     fields = [
         "iteration",
         "commit",
+        "measured_at",
+        "target_rate",
+        "duration_sec",
         "candidate_startup_ms",
         "throughput",
         "p50_latency_ms",
@@ -175,98 +222,193 @@ def write_csv(records_path: Path, csv_path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def scaled_points(records: list[dict[str, Any]], key: str, width: int, height: int) -> list[tuple[float, float]]:
+def axis_bounds(values: list[float]) -> tuple[float, float]:
+    low = min(values)
+    high = max(values)
+    if low == high:
+        padding = max(abs(low) * 0.05, 1.0)
+    else:
+        padding = (high - low) * 0.08
+    return max(0.0, low - padding), high + padding
+
+
+def scaled_points(
+    records: list[dict[str, Any]],
+    key: str,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+    bounds: tuple[float, float],
+) -> list[tuple[float, float]]:
     values = [float(r.get(key) or 0.0) for r in records]
-    if not values:
-        return []
-    lo = min(values)
-    hi = max(values)
-    span = hi - lo or 1.0
+    low, high = bounds
     if len(values) == 1:
-        return [(width / 2, height / 2)]
+        x_positions = [(left + right) / 2]
+    else:
+        x_positions = [
+            left + (index * (right - left) / (len(values) - 1))
+            for index in range(len(values))
+        ]
     return [
-        (20 + (i * (width - 40) / (len(values) - 1)), height - 20 - ((v - lo) * (height - 40) / span))
-        for i, v in enumerate(values)
+        (x, bottom - ((value - low) * (bottom - top) / (high - low)))
+        for x, value in zip(x_positions, values)
     ]
 
 
-def write_svg(records: list[dict[str, Any]], path: Path) -> None:
-    width, height = 720, 320
-    throughput = scaled_points(records, "throughput", width, height)
-    latency = scaled_points(records, "p95_latency_ms", width, height)
+def metric_label(value: float) -> str:
+    if abs(value) >= 100:
+        return f"{value:,.0f}"
+    if abs(value) >= 10:
+        return f"{value:.1f}"
+    return f"{value:.2f}"
+
+
+def build_svg(records: list[dict[str, Any]], animated: bool = False) -> str:
+    width, height = 960, 480
+    left, right, top, bottom = 90.0, 870.0, 105.0, 390.0
+    throughput_values = [float(record.get("throughput") or 0.0) for record in records]
+    latency_values = [float(record.get("p95_latency_ms") or 0.0) for record in records]
+    throughput_bounds = axis_bounds(throughput_values)
+    latency_bounds = axis_bounds(latency_values)
+    throughput = scaled_points(
+        records, "throughput", left, right, top, bottom, throughput_bounds
+    )
+    latency = scaled_points(
+        records, "p95_latency_ms", left, right, top, bottom, latency_bounds
+    )
+
     def poly(points: list[tuple[float, float]]) -> str:
         return " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
-    path.write_text(
-        "\n".join(
+
+    elements = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title description">',
+        '<title id="title">Sigiro self-improvement trajectory</title>',
+        '<desc id="description">Ingest throughput and p95 latency by measured iteration.</desc>',
+        '<rect width="100%" height="100%" fill="#101418" rx="12"/>',
+        '<text x="48" y="42" fill="#f8fafc" font-family="ui-sans-serif, system-ui" font-size="22" font-weight="600">Sigiro self-improvement trajectory</text>',
+        '<text x="48" y="68" fill="#94a3b8" font-family="ui-sans-serif, system-ui" font-size="13">Comparable ingest runs over time. Failed iterations are marked with a red X.</text>',
+        '<line x1="510" y1="60" x2="540" y2="60" stroke="#22c55e" stroke-width="3"/>',
+        '<text x="548" y="65" fill="#22c55e" font-family="ui-sans-serif, system-ui" font-size="13">throughput (higher is better)</text>',
+        '<line x1="735" y1="60" x2="765" y2="60" stroke="#f59e0b" stroke-width="3"/>',
+        '<text x="773" y="65" fill="#f59e0b" font-family="ui-sans-serif, system-ui" font-size="13">p95 (lower is better)</text>',
+        '<defs><clipPath id="progress-reveal"><rect id="progress-reveal-rect" x="90" y="95" width="%s" height="315"/></clipPath></defs>'
+        % ("0" if animated else f"{right - left:.0f}"),
+    ]
+
+    tick_count = 4
+    for tick in range(tick_count + 1):
+        ratio = tick / tick_count
+        y = bottom - ratio * (bottom - top)
+        throughput_value = throughput_bounds[0] + ratio * (
+            throughput_bounds[1] - throughput_bounds[0]
+        )
+        latency_value = latency_bounds[0] + ratio * (
+            latency_bounds[1] - latency_bounds[0]
+        )
+        elements.extend(
             [
-                f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-                '<rect width="100%" height="100%" fill="#101418"/>',
-                '<text x="20" y="32" fill="#f8fafc" font-family="ui-sans-serif, system-ui" font-size="20">Sigiro self-improvement trajectory</text>',
-                '<text x="20" y="58" fill="#94a3b8" font-family="ui-sans-serif, system-ui" font-size="13">green = throughput, amber = p95 latency</text>',
-                '<line x1="20" y1="300" x2="700" y2="300" stroke="#334155"/>',
-                '<line x1="20" y1="20" x2="20" y2="300" stroke="#334155"/>',
-                f'<polyline points="{poly(throughput)}" fill="none" stroke="#22c55e" stroke-width="3"/>',
-                f'<polyline points="{poly(latency)}" fill="none" stroke="#f59e0b" stroke-width="3"/>',
-                *[
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#22c55e"/>'
-                    for x, y in throughput
-                ],
-                *[
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#f59e0b"/>'
-                    for x, y in latency
-                ],
-                "</svg>",
+                f'<line x1="{left:.0f}" y1="{y:.1f}" x2="{right:.0f}" y2="{y:.1f}" stroke="#263241"/>',
+                f'<text x="{left - 12:.0f}" y="{y + 4:.1f}" text-anchor="end" fill="#22c55e" font-family="ui-monospace, monospace" font-size="11">{metric_label(throughput_value)}</text>',
+                f'<text x="{right + 12:.0f}" y="{y + 4:.1f}" fill="#f59e0b" font-family="ui-monospace, monospace" font-size="11">{metric_label(latency_value)}</text>',
             ]
         )
-        + "\n"
+
+    elements.extend(
+        [
+            f'<line x1="{left:.0f}" y1="{top:.0f}" x2="{left:.0f}" y2="{bottom:.0f}" stroke="#64748b"/>',
+            f'<line x1="{right:.0f}" y1="{top:.0f}" x2="{right:.0f}" y2="{bottom:.0f}" stroke="#64748b"/>',
+            f'<line x1="{left:.0f}" y1="{bottom:.0f}" x2="{right:.0f}" y2="{bottom:.0f}" stroke="#64748b"/>',
+            '<text x="20" y="248" transform="rotate(-90 20 248)" text-anchor="middle" fill="#22c55e" font-family="ui-sans-serif, system-ui" font-size="12">throughput (spans/sec)</text>',
+            '<text x="940" y="248" transform="rotate(90 940 248)" text-anchor="middle" fill="#f59e0b" font-family="ui-sans-serif, system-ui" font-size="12">p95 latency (ms)</text>',
+        ]
     )
+
+    label_step = max(1, len(records) // 8)
+    for index, (record, (x, _)) in enumerate(zip(records, throughput)):
+        if index % label_step != 0 and index != len(records) - 1:
+            continue
+        label = escape(f"#{record['iteration']} {str(record['commit'])[:7]}")
+        elements.append(
+            f'<text x="{x:.1f}" y="414" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, monospace" font-size="10">{label}</text>'
+        )
+
+    elements.extend(
+        [
+            '<g clip-path="url(#progress-reveal)">',
+            f'<polyline points="{poly(throughput)}" fill="none" stroke="#22c55e" stroke-width="3" stroke-linejoin="round"/>',
+            f'<polyline points="{poly(latency)}" fill="none" stroke="#f59e0b" stroke-width="3" stroke-linejoin="round"/>',
+        ]
+    )
+    for index, (record, throughput_point, latency_point) in enumerate(
+        zip(records, throughput, latency)
+    ):
+        throughput_x, throughput_y = throughput_point
+        latency_x, latency_y = latency_point
+        tooltip = escape(
+            f"iteration {record['iteration']} commit {record['commit']}: "
+            f"{float(record['throughput']):.2f} spans/sec, "
+            f"p95 {float(record['p95_latency_ms']):.2f} ms, "
+            f"errors {record.get('errors', 0)}"
+        )
+        elements.extend(
+            [
+                f'<circle data-index="{index}" cx="{throughput_x:.1f}" cy="{throughput_y:.1f}" r="5" fill="#22c55e"><title>{tooltip}</title></circle>',
+                f'<circle data-index="{index}" cx="{latency_x:.1f}" cy="{latency_y:.1f}" r="5" fill="#f59e0b"><title>{tooltip}</title></circle>',
+            ]
+        )
+        if int(record.get("errors") or 0) > 0:
+            elements.extend(
+                [
+                    f'<line x1="{throughput_x - 7:.1f}" y1="{top:.1f}" x2="{throughput_x + 7:.1f}" y2="{top + 14:.1f}" stroke="#ef4444" stroke-width="3"/>',
+                    f'<line x1="{throughput_x + 7:.1f}" y1="{top:.1f}" x2="{throughput_x - 7:.1f}" y2="{top + 14:.1f}" stroke="#ef4444" stroke-width="3"/>',
+                ]
+            )
+    elements.extend(
+        [
+            "</g>",
+            '<text x="480" y="455" text-anchor="middle" fill="#64748b" font-family="ui-sans-serif, system-ui" font-size="11">iteration and commit</text>',
+            "</svg>",
+        ]
+    )
+    return "\n".join(elements) + "\n"
+
+
+def write_svg(records: list[dict[str, Any]], path: Path) -> None:
+    path.write_text(build_svg(records))
 
 
 def write_animation(records: list[dict[str, Any]], path: Path) -> None:
-    payload = json.dumps(records, indent=2)
+    payload = json.dumps(records).replace("</", "<\\/")
+    svg = build_svg(records, animated=True)
     path.write_text(
         f"""<!doctype html>
 <meta charset="utf-8">
 <title>Sigiro self-improvement trajectory</title>
 <style>
 body {{ margin: 0; background: #101418; color: #f8fafc; font: 14px system-ui, sans-serif; }}
-main {{ max-width: 880px; margin: 32px auto; padding: 0 20px; }}
-canvas {{ width: 100%; height: 360px; background: #0b1117; border: 1px solid #263241; }}
+main {{ max-width: 960px; margin: 32px auto; padding: 0 20px; }}
+svg {{ width: 100%; height: auto; }}
 pre {{ white-space: pre-wrap; color: #cbd5e1; }}
 </style>
 <main>
-<h1>Sigiro self-improvement trajectory</h1>
-<canvas id="chart" width="880" height="360"></canvas>
+{svg}
 <pre id="caption"></pre>
 </main>
 <script>
 const records = {payload};
-const canvas = document.getElementById("chart");
-const ctx = canvas.getContext("2d");
 const caption = document.getElementById("caption");
-function value(key, i) {{ return Number(records[i]?.[key] || 0); }}
-function y(key, i) {{
-  const vals = records.map((_, n) => value(key, n));
-  const min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
-  return 320 - ((value(key, i) - min) / span) * 260;
-}}
-function x(i) {{ return records.length <= 1 ? 440 : 50 + i * 780 / (records.length - 1); }}
-let frame = 0;
+const reveal = document.getElementById("progress-reveal-rect");
+function pointX(index) {{ return records.length <= 1 ? 480 : 90 + index * 780 / (records.length - 1); }}
+let index = 0;
 function draw() {{
-  const upto = Math.min(records.length - 1, Math.floor(frame / 20));
-  ctx.clearRect(0, 0, 880, 360);
-  ctx.strokeStyle = "#334155"; ctx.beginPath(); ctx.moveTo(50, 20); ctx.lineTo(50, 320); ctx.lineTo(840, 320); ctx.stroke();
-  for (const [key, color] of [["throughput", "#22c55e"], ["p95_latency_ms", "#f59e0b"]]) {{
-    ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
-    for (let i = 0; i <= upto; i++) {{ i === 0 ? ctx.moveTo(x(i), y(key, i)) : ctx.lineTo(x(i), y(key, i)); }}
-    ctx.stroke();
-  }}
-  const r = records[upto] || {{}};
-  caption.textContent = `iteration=${{r.iteration}} commit=${{r.commit}} throughput=${{r.throughput}} spans/s p95=${{r.p95_latency_ms}}ms errors=${{r.errors}}`;
-  frame = (frame + 1) % Math.max(1, records.length * 20);
-  requestAnimationFrame(draw);
+  const record = records[index];
+  reveal.setAttribute("width", Math.max(0, pointX(index) - 90 + 6));
+  caption.textContent = `iteration=${{record.iteration}} commit=${{record.commit}} throughput=${{record.throughput}} spans/s p95=${{record.p95_latency_ms}}ms errors=${{record.errors}}`;
+  index = (index + 1) % records.length;
 }}
 draw();
+if (records.length > 1) setInterval(draw, 1200);
 </script>
 """
     )
@@ -281,7 +423,7 @@ description: Stable Sigiro watches candidate Sigiro, Codex reads the evidence, a
 
 # How Sigiro Improves Itself With Sigiro
 
-Sigiro's self-improvement loop uses two binaries. A stable Sigiro instance is the observer. A candidate Sigiro instance is the system under test. Candidate exports its own OpenTelemetry traces, logs, and Pyroscope CPU profiles to stable while the harness drives real ingest traffic through candidate.
+Sigiro's self-improvement loop uses two binaries. A stable Sigiro instance is the observer. A candidate Sigiro instance is the system under test. Candidate is configured to export its own OpenTelemetry traces and logs plus Pyroscope CPU profiles to stable while the harness drives real ingest traffic through candidate. Per-run signal deltas show which exports actually arrived.
 
 The point is not a synthetic score. The point is a repeatable evidence loop:
 
@@ -318,8 +460,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run one Sigiro self-improvement loop iteration")
     parser.add_argument("--stable-bin", type=Path, default=Path("target/release/sigiro"))
     parser.add_argument("--candidate-bin", type=Path, default=Path("target/debug/sigiro"))
+    parser.add_argument(
+        "--candidate-commit",
+        help="Commit represented by candidate-bin (defaults to the current checkout)",
+    )
     parser.add_argument("--out-dir", type=Path, default=Path("target/self-improve"))
-    parser.add_argument("--iteration", type=int, default=1)
+    parser.add_argument("--iteration", type=int, help="Iteration number (defaults to the next recorded value)")
+    parser.add_argument(
+        "--plot-only",
+        action="store_true",
+        help="Regenerate CSV, SVG, and HTML from iterations.jsonl without starting Sigiro",
+    )
     parser.add_argument("--api-key", default="sigiro_dev_self_improve")
     parser.add_argument("--timeout-sec", type=int, default=90)
     parser.add_argument("--rate", type=int, default=500)
@@ -342,6 +493,46 @@ def main() -> int:
     stable_ports = Ports(args.stable_http, args.stable_otlp_http, args.stable_otlp_grpc)
     candidate_ports = Ports(args.candidate_http, args.candidate_otlp_http, args.candidate_otlp_grpc)
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    records_path = args.out_dir / "iterations.jsonl"
+    if args.plot_only:
+        records = write_csv(records_path, args.out_dir / "iterations.csv")
+        write_svg(records, args.out_dir / "progress.svg")
+        write_animation(records, args.out_dir / "progress.html")
+        print(
+            json.dumps(
+                {
+                    "iterations": len(records),
+                    "csv": str(args.out_dir / "iterations.csv"),
+                    "svg": str(args.out_dir / "progress.svg"),
+                    "html": str(args.out_dir / "progress.html"),
+                },
+                indent=2,
+            )
+        )
+        return 0
+
+    existing_records = load_records(records_path) if records_path.exists() else []
+    iteration = (
+        args.iteration
+        if args.iteration is not None
+        else max((int(record["iteration"]) for record in existing_records), default=0) + 1
+    )
+    if iteration < 1:
+        raise RuntimeError("iteration must be greater than zero")
+    if any(int(record["iteration"]) == iteration for record in existing_records):
+        raise RuntimeError(f"iteration {iteration} already exists in {records_path}")
+    existing_workloads = {
+        (record.get("target_rate"), record.get("duration_sec"))
+        for record in existing_records
+        if record.get("target_rate") is not None
+        and record.get("duration_sec") is not None
+    }
+    if existing_workloads and existing_workloads != {(args.rate, args.duration)}:
+        raise RuntimeError(
+            f"existing history uses workload {sorted(existing_workloads)}; "
+            f"requested rate={args.rate}, duration={args.duration}"
+        )
+
     extension_dir = args.extension_dir.expanduser().resolve()
     extension_dir.mkdir(parents=True, exist_ok=True)
 
@@ -357,10 +548,15 @@ def main() -> int:
             args.out_dir / "stable.log",
         )
         stable_startup, _ = wait_health(f"http://127.0.0.1:{stable_ports.http}", args.timeout_sec)
+        env = os.environ.copy()
+        env["SIGIRO_ENDPOINT"] = f"http://127.0.0.1:{stable_ports.http}"
+        env["SIGIRO_API_KEY"] = args.api_key
+        counts_before_result = query_service_counts(args.stable_bin, env)
+        counts_before = counts_before_result[0] if counts_before_result else {}
 
         candidate_proc = start_sigiro(
             args.candidate_bin,
-            args.out_dir / "candidate-data",
+            args.out_dir / f"candidate-data-{iteration}",
             candidate_ports,
             args.api_key,
             {
@@ -393,10 +589,12 @@ def main() -> int:
             raise RuntimeError(f"bench failed with exit {bench.returncode}; see {args.out_dir / 'bench.stderr'}")
         bench_result = newest_bench_result(args.out_dir)
 
-        env = os.environ.copy()
-        env["SIGIRO_ENDPOINT"] = f"http://127.0.0.1:{stable_ports.http}"
-        env["SIGIRO_API_KEY"] = args.api_key
-        wait_for_profiles(args.stable_bin, env, args.profile_timeout_sec)
+        wait_for_profiles(
+            args.stable_bin,
+            env,
+            args.profile_timeout_sec,
+            int(counts_before.get("profiles_all_time", 0) or 0),
+        )
 
         stop_process(candidate_proc)
         candidate_proc = None
@@ -404,13 +602,28 @@ def main() -> int:
         investigate = run_json([str(args.stable_bin), "--output", "json", "investigate", "sigiro-candidate"], env)
         (args.out_dir / "investigate-sigiro-candidate.json").write_text(json.dumps(investigate, indent=2) + "\n")
         service_counts = query_service_counts(args.stable_bin, env)
-        (args.out_dir / "service-counts.json").write_text(json.dumps(service_counts, indent=2) + "\n")
         counts = service_counts[0] if service_counts else {}
+        (args.out_dir / "service-counts.json").write_text(
+            json.dumps({"before": counts_before, "after": counts}, indent=2) + "\n"
+        )
+
+        def signal_delta(field: str) -> int:
+            before = int(counts_before.get(field, 0) or 0)
+            after = int(counts.get(field, 0) or 0)
+            if after < before:
+                raise RuntimeError(
+                    f"stable observer count for {field} decreased from {before} to {after}"
+                )
+            return after - before
 
         results = bench_result["results"]
+        benchmark_config = bench_result["config"]
         record = {
-            "iteration": args.iteration,
-            "commit": git_commit(),
+            "iteration": iteration,
+            "commit": args.candidate_commit or git_commit(),
+            "measured_at": datetime.now(timezone.utc).isoformat(),
+            "target_rate": benchmark_config["rate"],
+            "duration_sec": benchmark_config["duration"],
             "stable_startup_ms": round(stable_startup * 1000, 2),
             "candidate_startup_ms": round(candidate_startup * 1000, 2),
             "throughput": round(results["throughput"], 2),
@@ -418,13 +631,12 @@ def main() -> int:
             "p95_latency_ms": round(results["p95_latency_ms"], 2),
             "p99_latency_ms": round(results["p99_latency_ms"], 2),
             "errors": results["errors"],
-            "stable_spans": counts.get("spans_all_time", 0),
-            "stable_logs": counts.get("logs_all_time", 0),
-            "stable_profiles": counts.get("profiles_all_time", 0),
-            "first_log_ts": counts.get("first_log_ts"),
-            "first_profile_ts": counts.get("first_profile_ts"),
+            "stable_spans": signal_delta("spans_all_time"),
+            "stable_logs": signal_delta("logs_all_time"),
+            "stable_profiles": signal_delta("profiles_all_time"),
+            "latest_log_ts": counts.get("latest_log_ts"),
+            "latest_profile_ts": counts.get("latest_profile_ts"),
         }
-        records_path = args.out_dir / "iterations.jsonl"
         with records_path.open("a") as f:
             f.write(json.dumps(record, sort_keys=True) + "\n")
         records = write_csv(records_path, args.out_dir / "iterations.csv")
