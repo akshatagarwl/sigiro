@@ -756,7 +756,7 @@ async fn otlp_http_profiles(
 /// HTTP handler for Pyroscope's native push format.
 ///
 /// Accepts two formats:
-/// - `application/x-protobuf` (gzip-compressed PushRequest) — direct push
+/// - `application/proto` (gzip-compressed PushRequest) — Pyroscope Rust SDK
 /// - `multipart/form-data` (Pyroscope Go SDK format) — form file "profile" contains gzip-compressed PushRequest
 async fn otlp_http_pyroscope(
     State(state): State<Arc<OtlpHttpState>>,
@@ -969,54 +969,116 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
             // Time and duration in nanoseconds → microseconds
             let ts_us = (pprof_profile.time_nanos / 1000) as i64;
 
-            // Profile type and unit from sample_type[0]
-            let (ptype_idx, punit_idx) = pprof_profile
+            if service_name.is_empty() {
+                return Err(Status::invalid_argument(
+                    "Pyroscope series is missing the service_name label",
+                ));
+            }
+
+            let resolve_string = |index: i64, field: &str| -> Result<&str, Status> {
+                let index = usize::try_from(index).map_err(|_| {
+                    Status::invalid_argument(format!(
+                        "pprof {field} string index {index} must not be negative"
+                    ))
+                })?;
+                pprof_profile
+                    .string_table
+                    .get(index)
+                    .map(String::as_str)
+                    .ok_or_else(|| {
+                        Status::invalid_argument(format!(
+                            "pprof {field} string index {index} out of bounds (table has {} entries)",
+                            pprof_profile.string_table.len()
+                        ))
+                    })
+            };
+
+            let sample_types = pprof_profile
                 .sample_type
-                .first()
-                .map(|st| (st.r#type, st.unit))
-                .unwrap_or((0, 0));
+                .iter()
+                .enumerate()
+                .map(|(index, sample_type)| {
+                    let profile_type =
+                        resolve_string(sample_type.r#type, &format!("sample_type[{index}].type"))?;
+                    let unit =
+                        resolve_string(sample_type.unit, &format!("sample_type[{index}].unit"))?;
+                    if profile_type.is_empty() || unit.is_empty() {
+                        return Err(Status::invalid_argument(format!(
+                            "pprof sample_type[{index}] must have non-empty type and unit"
+                        )));
+                    }
+                    Ok((profile_type, unit))
+                })
+                .collect::<Result<Vec<_>, Status>>()?;
 
-            let ptype = pprof_profile
-                .string_table
-                .get(ptype_idx as usize)
-                .map(std::string::String::as_str)
-                .unwrap_or("");
-            let punit = pprof_profile
-                .string_table
-                .get(punit_idx as usize)
-                .map(std::string::String::as_str)
-                .unwrap_or("");
-
-            // Build location_id → Location map
             let locations = &pprof_profile.location;
             let functions = &pprof_profile.function;
             let string_table = &pprof_profile.string_table;
 
-            for s in &pprof_profile.sample {
-                let stack: Vec<&str> = s
-                    .location_id
-                    .iter()
-                    .filter_map(|&loc_id| {
-                        let loc = locations.iter().find(|l| l.id == loc_id)?;
-                        let line = loc.line.first()?;
-                        let func = functions.iter().find(|f| f.id == line.function_id)?;
-                        let name = string_table.get(func.name as usize)?;
-                        Some(name.as_str())
-                    })
-                    .take(128)
-                    .collect();
+            for (sample_index, pprof_sample) in pprof_profile.sample.iter().enumerate() {
+                if pprof_sample.value.len() != sample_types.len() {
+                    return Err(Status::invalid_argument(format!(
+                        "pprof sample[{sample_index}] has {} values but the profile declares {} sample types",
+                        pprof_sample.value.len(),
+                        sample_types.len()
+                    )));
+                }
 
-                let sample_values = if s.value.is_empty() {
-                    vec![0i64]
-                } else {
-                    s.value.clone()
-                };
+                let mut stack = Vec::with_capacity(pprof_sample.location_id.len().min(128));
+                for (frame_index, &location_id) in
+                    pprof_sample.location_id.iter().take(128).enumerate()
+                {
+                    let location = locations
+                        .iter()
+                        .find(|location| location.id == location_id)
+                        .ok_or_else(|| {
+                            Status::invalid_argument(format!(
+                                "pprof sample[{sample_index}] frame[{frame_index}] references missing location id {location_id}"
+                            ))
+                        })?;
+                    let line = location.line.first().ok_or_else(|| {
+                        Status::invalid_argument(format!(
+                            "pprof location id {location_id} has no line entries"
+                        ))
+                    })?;
+                    let function = functions
+                        .iter()
+                        .find(|function| function.id == line.function_id)
+                        .ok_or_else(|| {
+                            Status::invalid_argument(format!(
+                                "pprof location id {location_id} references missing function id {}",
+                                line.function_id
+                            ))
+                        })?;
+                    let function_name_index = usize::try_from(function.name).map_err(|_| {
+                        Status::invalid_argument(format!(
+                            "pprof function id {} has negative name index {}",
+                            function.id, function.name
+                        ))
+                    })?;
+                    let function_name = string_table.get(function_name_index).ok_or_else(|| {
+                        Status::invalid_argument(format!(
+                            "pprof function id {} name index {function_name_index} out of bounds (table has {} entries)",
+                            function.id,
+                            string_table.len()
+                        ))
+                    })?;
+                    if function_name.is_empty() {
+                        return Err(Status::invalid_argument(format!(
+                            "pprof function id {} has an empty name",
+                            function.id
+                        )));
+                    }
+                    stack.push(function_name.as_str());
+                }
+                // pprof stores leaf-first; Sigiro stores caller-first for folded stacks.
+                stack.reverse();
 
-                for &val in &sample_values {
+                for ((profile_type, unit), &value) in sample_types.iter().zip(&pprof_sample.value) {
                     profile_ids.append_value(&sample_id);
                     service_names.append_value(service_name);
                     timestamps.push(ts_us);
-                    profile_types.append_value(ptype);
+                    profile_types.append_value(profile_type);
 
                     for frame in &stack {
                         stack_values.append_value(frame);
@@ -1026,8 +1088,8 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
                         .expect("stack_offsets always has an element");
                     stack_offsets.push(prev_offset + stack.len() as i32);
 
-                    values.push(val);
-                    units.append_value(punit);
+                    values.push(value);
+                    units.append_value(unit);
                     resource_attrs.append_null();
                     num_rows += 1;
                 }

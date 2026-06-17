@@ -9,16 +9,31 @@ fn build_pyroscope_push_request(
     service_name: &str,
     timestamp_ns: i64,
     frames: &[&str],
-    sample_value: i64,
+    sample_types: &[(&str, &str)],
+    sample_values: &[i64],
 ) -> Vec<u8> {
     use pyroscope::encode::r#gen::google::{Function, Line, Location, Profile, Sample, ValueType};
     use pyroscope::encode::r#gen::push::{PushRequest, RawProfileSeries, RawSample};
     use pyroscope::encode::r#gen::types::LabelPair;
 
-    // pprof string_table: [0]="", [1]="cpu", [2]="nanoseconds", [3..]=frame names
     let mut string_table = vec![String::new()];
-    string_table.push("cpu".to_string());
-    string_table.push("nanoseconds".to_string());
+
+    fn intern(string_table: &mut Vec<String>, value: &str) -> i64 {
+        if let Some(index) = string_table.iter().position(|entry| entry == value) {
+            index as i64
+        } else {
+            string_table.push(value.to_string());
+            (string_table.len() - 1) as i64
+        }
+    }
+
+    let sample_types = sample_types
+        .iter()
+        .map(|(profile_type, unit)| ValueType {
+            r#type: intern(&mut string_table, profile_type),
+            unit: intern(&mut string_table, unit),
+        })
+        .collect();
 
     let frame_base = string_table.len() as i64;
     for frame in frames {
@@ -52,15 +67,12 @@ fn build_pyroscope_push_request(
     let location_ids: Vec<u64> = (1..=frames.len() as u64).rev().collect();
     let sample = Sample {
         location_id: location_ids,
-        value: vec![sample_value],
+        value: sample_values.to_vec(),
         ..Default::default()
     };
 
     let profile = Profile {
-        sample_type: vec![ValueType {
-            r#type: 1, // string_table[1] = "cpu"
-            unit: 2,   // string_table[2] = "nanoseconds"
-        }],
+        sample_type: sample_types,
         sample: vec![sample],
         location: locations,
         function: functions,
@@ -128,7 +140,8 @@ async fn e2e_pyroscope_native_pipeline() {
         "pyro-svc",
         now_ns,
         &["main", "handle_req", "db_query"],
-        15_000_000,
+        &[("cpu", "nanoseconds")],
+        &[15_000_000],
     );
 
     // Call transform directly (bytes → Arrow RecordBatch)
@@ -270,15 +283,21 @@ async fn e2e_pyroscope_multi_series() {
     router.register_flusher("pyro_multi").unwrap();
 
     // Series 1: service_a with one sample
-    let bytes_a =
-        build_pyroscope_push_request("service_a", now_ns, &["main", "process"], 10_000_000);
+    let bytes_a = build_pyroscope_push_request(
+        "service_a",
+        now_ns,
+        &["main", "process"],
+        &[("cpu", "nanoseconds")],
+        &[10_000_000],
+    );
 
     // Series 2: service_b with one sample
     let bytes_b = build_pyroscope_push_request(
         "service_b",
         now_ns + 1_000_000_000, // +1s
         &["worker", "run_task"],
-        20_000_000,
+        &[("cpu", "nanoseconds")],
+        &[20_000_000],
     );
 
     // Process each through transform
@@ -337,4 +356,110 @@ async fn e2e_pyroscope_multi_series() {
         )
         .unwrap();
     assert_eq!(svc_b, 1);
+}
+
+#[tokio::test]
+async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
+    let router = Arc::new(MsgRouter::new(pool.clone()));
+    router.start();
+    let app = sigiro::ingest::otlp_http_router(
+        router,
+        sigiro::auth::AuthMode::Key {
+            key: "sigiro_dev_test".to_string(),
+        },
+    );
+    let server = TestServer::new(app).unwrap();
+
+    let now_ns = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let profile = build_pyroscope_push_request(
+        "heap-svc",
+        now_ns,
+        &["main", "handle_request", "allocate_buffer"],
+        &[
+            ("alloc_objects", "count"),
+            ("alloc_space", "bytes"),
+            ("inuse_objects", "count"),
+            ("inuse_space", "bytes"),
+        ],
+        &[40, 4096, 20, 2048],
+    );
+
+    let response = server
+        .post("/push.v1.PusherService/Push")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/proto")
+        .bytes(profile.into())
+        .await;
+    response.assert_status_ok();
+
+    let shared_conn = pool.get_project("default").unwrap();
+    let mut stored_rows = 0;
+    for _ in 0..50 {
+        stored_rows = shared_conn
+            .lock()
+            .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        if stored_rows == 4 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(stored_rows, 4, "every heap sample type must be stored");
+
+    {
+        let conn = shared_conn.lock();
+        for (profile_type, unit, value) in [
+            ("alloc_objects", "count", 40),
+            ("alloc_space", "bytes", 4096),
+            ("inuse_objects", "count", 20),
+            ("inuse_space", "bytes", 2048),
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM lake.sigiro_profiles
+                     WHERE service_name = ?1 AND profile_type = ?2 AND unit = ?3 AND value = ?4
+                       AND stack_trace[1] = 'main' AND stack_trace[-1] = 'allocate_buffer'",
+                    duckdb::params!["heap-svc", profile_type, unit, value],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "missing {profile_type}/{unit} heap sample");
+        }
+    }
+
+    let invalid_profile = build_pyroscope_push_request(
+        "heap-svc",
+        now_ns,
+        &["main", "allocate_buffer"],
+        &[("alloc_objects", "count"), ("alloc_space", "bytes")],
+        &[1],
+    );
+    let response = server
+        .post("/push.v1.PusherService/Push")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/proto")
+        .bytes(invalid_profile.into())
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+
+    let rows_after_rejection: i64 = shared_conn
+        .lock()
+        .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        rows_after_rejection, 4,
+        "invalid profiles must not be ingested"
+    );
 }
