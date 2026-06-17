@@ -1,0 +1,4 @@
+iteration,commit,measured_at,target_rate,duration_sec,candidate_startup_ms,throughput,p50_latency_ms,p95_latency_ms,p99_latency_ms,errors,stable_spans,stable_logs,stable_profiles
+1,c114ffd,2026-06-17T13:50:32.614647+00:00,500,5,1012.53,509.46,2.14,2.72,9.1,0,0,1,19
+2,02cbdfa,2026-06-17T13:50:47.139795+00:00,500,5,759.66,509.47,2.12,3.74,8.87,0,0,1,11
+3,2b800f7,2026-06-17T14:26:13.446601+00:00,500,5,763.53,509.43,2.49,3.13,9.01,0,0,0,20

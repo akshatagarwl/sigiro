@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="480" viewBox="0 0 960 480" role="img" aria-labelledby="title description">
+<title id="title">Sigiro self-improvement trajectory</title>
+<desc id="description">Ingest throughput and p95 latency by measured iteration.</desc>
+<rect width="100%" height="100%" fill="#101418" rx="12"/>
+<text x="48" y="42" fill="#f8fafc" font-family="ui-sans-serif, system-ui" font-size="22" font-weight="600">Sigiro self-improvement trajectory</text>
+<text x="48" y="68" fill="#94a3b8" font-family="ui-sans-serif, system-ui" font-size="13">Comparable ingest runs over time. Failed iterations are marked with a red X.</text>
+<line x1="510" y1="60" x2="540" y2="60" stroke="#22c55e" stroke-width="3"/>
+<text x="548" y="65" fill="#22c55e" font-family="ui-sans-serif, system-ui" font-size="13">throughput (higher is better)</text>
+<line x1="735" y1="60" x2="765" y2="60" stroke="#f59e0b" stroke-width="3"/>
+<text x="773" y="65" fill="#f59e0b" font-family="ui-sans-serif, system-ui" font-size="13">p95 (lower is better)</text>
+<defs><clipPath id="progress-reveal"><rect id="progress-reveal-rect" x="90" y="95" width="780" height="315"/></clipPath></defs>
+<line x1="90" y1="390.0" x2="870" y2="390.0" stroke="#263241"/>
+<text x="78" y="394.0" text-anchor="end" fill="#22c55e" font-family="ui-monospace, monospace" font-size="11">509.43</text>
+<text x="882" y="394.0" fill="#f59e0b" font-family="ui-monospace, monospace" font-size="11">2.64</text>
+<line x1="90" y1="318.8" x2="870" y2="318.8" stroke="#263241"/>
+<text x="78" y="322.8" text-anchor="end" fill="#22c55e" font-family="ui-monospace, monospace" font-size="11">509.44</text>
+<text x="882" y="322.8" fill="#f59e0b" font-family="ui-monospace, monospace" font-size="11">2.93</text>
+<line x1="90" y1="247.5" x2="870" y2="247.5" stroke="#263241"/>
+<text x="78" y="251.5" text-anchor="end" fill="#22c55e" font-family="ui-monospace, monospace" font-size="11">509.45</text>
+<text x="882" y="251.5" fill="#f59e0b" font-family="ui-monospace, monospace" font-size="11">3.23</text>
+<line x1="90" y1="176.2" x2="870" y2="176.2" stroke="#263241"/>
+<text x="78" y="180.2" text-anchor="end" fill="#22c55e" font-family="ui-monospace, monospace" font-size="11">509.46</text>
+<text x="882" y="180.2" fill="#f59e0b" font-family="ui-monospace, monospace" font-size="11">3.53</text>
+<line x1="90" y1="105.0" x2="870" y2="105.0" stroke="#263241"/>
+<text x="78" y="109.0" text-anchor="end" fill="#22c55e" font-family="ui-monospace, monospace" font-size="11">509.47</text>
+<text x="882" y="109.0" fill="#f59e0b" font-family="ui-monospace, monospace" font-size="11">3.82</text>
+<line x1="90" y1="105" x2="90" y2="390" stroke="#64748b"/>
+<line x1="870" y1="105" x2="870" y2="390" stroke="#64748b"/>
+<line x1="90" y1="390" x2="870" y2="390" stroke="#64748b"/>
+<text x="20" y="248" transform="rotate(-90 20 248)" text-anchor="middle" fill="#22c55e" font-family="ui-sans-serif, system-ui" font-size="12">throughput (spans/sec)</text>
+<text x="940" y="248" transform="rotate(90 940 248)" text-anchor="middle" fill="#f59e0b" font-family="ui-sans-serif, system-ui" font-size="12">p95 latency (ms)</text>
+<text x="90.0" y="414" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, monospace" font-size="10">#1 c114ffd</text>
+<text x="480.0" y="414" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, monospace" font-size="10">#2 02cbdfa</text>
+<text x="870.0" y="414" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, monospace" font-size="10">#3 2b800f7</text>
+<g clip-path="url(#progress-reveal)">
+<polyline points="90.0,186.1 480.0,124.7 870.0,370.3" fill="none" stroke="#22c55e" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="90.0,370.3 480.0,124.7 870.0,271.6" fill="none" stroke="#f59e0b" stroke-width="3" stroke-linejoin="round"/>
+<circle data-index="0" cx="90.0" cy="186.1" r="5" fill="#22c55e"><title>iteration 1 commit c114ffd: 509.46 spans/sec, p95 2.72 ms, errors 0</title></circle>
+<circle data-index="0" cx="90.0" cy="370.3" r="5" fill="#f59e0b"><title>iteration 1 commit c114ffd: 509.46 spans/sec, p95 2.72 ms, errors 0</title></circle>
+<circle data-index="1" cx="480.0" cy="124.7" r="5" fill="#22c55e"><title>iteration 2 commit 02cbdfa: 509.47 spans/sec, p95 3.74 ms, errors 0</title></circle>
+<circle data-index="1" cx="480.0" cy="124.7" r="5" fill="#f59e0b"><title>iteration 2 commit 02cbdfa: 509.47 spans/sec, p95 3.74 ms, errors 0</title></circle>
+<circle data-index="2" cx="870.0" cy="370.3" r="5" fill="#22c55e"><title>iteration 3 commit 2b800f7: 509.43 spans/sec, p95 3.13 ms, errors 0</title></circle>
+<circle data-index="2" cx="870.0" cy="271.6" r="5" fill="#f59e0b"><title>iteration 3 commit 2b800f7: 509.43 spans/sec, p95 3.13 ms, errors 0</title></circle>
+</g>
+<text x="480" y="455" text-anchor="middle" fill="#64748b" font-family="ui-sans-serif, system-ui" font-size="11">iteration and commit</text>
+</svg>

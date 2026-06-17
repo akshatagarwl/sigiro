@@ -256,11 +256,14 @@ def scaled_points(
     ]
 
 
-def metric_label(value: float) -> str:
+def metric_label(value: float, bounds: tuple[float, float]) -> str:
+    span = bounds[1] - bounds[0]
+    if span < 10:
+        return f"{value:.2f}"
+    if span < 100:
+        return f"{value:.1f}"
     if abs(value) >= 100:
         return f"{value:,.0f}"
-    if abs(value) >= 10:
-        return f"{value:.1f}"
     return f"{value:.2f}"
 
 
@@ -309,8 +312,8 @@ def build_svg(records: list[dict[str, Any]], animated: bool = False) -> str:
         elements.extend(
             [
                 f'<line x1="{left:.0f}" y1="{y:.1f}" x2="{right:.0f}" y2="{y:.1f}" stroke="#263241"/>',
-                f'<text x="{left - 12:.0f}" y="{y + 4:.1f}" text-anchor="end" fill="#22c55e" font-family="ui-monospace, monospace" font-size="11">{metric_label(throughput_value)}</text>',
-                f'<text x="{right + 12:.0f}" y="{y + 4:.1f}" fill="#f59e0b" font-family="ui-monospace, monospace" font-size="11">{metric_label(latency_value)}</text>',
+                f'<text x="{left - 12:.0f}" y="{y + 4:.1f}" text-anchor="end" fill="#22c55e" font-family="ui-monospace, monospace" font-size="11">{metric_label(throughput_value, throughput_bounds)}</text>',
+                f'<text x="{right + 12:.0f}" y="{y + 4:.1f}" fill="#f59e0b" font-family="ui-monospace, monospace" font-size="11">{metric_label(latency_value, latency_bounds)}</text>',
             ]
         )
 
