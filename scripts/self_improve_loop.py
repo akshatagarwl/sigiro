@@ -25,6 +25,16 @@ from pathlib import Path
 from typing import Any
 
 
+SERVICE_COUNTS_SQL = (
+    "SELECT "
+    "(SELECT count(*) FROM lake.sigiro_spans WHERE service_name = 'sigiro-candidate') AS spans_all_time, "
+    "(SELECT count(*) FROM lake.sigiro_logs WHERE service_name = 'sigiro-candidate') AS logs_all_time, "
+    "(SELECT count(*) FROM lake.sigiro_profiles WHERE service_name = 'sigiro-candidate') AS profiles_all_time, "
+    "CAST((SELECT min(timestamp) FROM lake.sigiro_logs WHERE service_name = 'sigiro-candidate') AS VARCHAR) AS first_log_ts, "
+    "CAST((SELECT min(timestamp) FROM lake.sigiro_profiles WHERE service_name = 'sigiro-candidate') AS VARCHAR) AS first_profile_ts"
+)
+
+
 @dataclass
 class Ports:
     http: int
@@ -117,6 +127,31 @@ def newest_bench_result(out_dir: Path) -> dict[str, Any]:
     return json.loads(files[-1].read_text())
 
 
+def query_service_counts(stable_bin: Path, env: dict[str, str]) -> list[dict[str, Any]]:
+    return run_json(
+        [str(stable_bin), "--output", "json", "query", SERVICE_COUNTS_SQL],
+        env,
+    )
+
+
+def wait_for_profiles(
+    stable_bin: Path,
+    env: dict[str, str],
+    timeout_sec: int,
+) -> list[dict[str, Any]]:
+    deadline = time.monotonic() + timeout_sec
+    last_counts: list[dict[str, Any]] = []
+    while time.monotonic() < deadline:
+        last_counts = query_service_counts(stable_bin, env)
+        if last_counts and last_counts[0].get("profiles_all_time", 0) > 0:
+            return last_counts
+        time.sleep(1)
+    raise RuntimeError(
+        "candidate produced no Pyroscope profiles before timeout; "
+        "inspect candidate.log and stable.log"
+    )
+
+
 def write_csv(records_path: Path, csv_path: Path) -> list[dict[str, Any]]:
     records = [json.loads(line) for line in records_path.read_text().splitlines() if line.strip()]
     fields = [
@@ -130,6 +165,7 @@ def write_csv(records_path: Path, csv_path: Path) -> list[dict[str, Any]]:
         "errors",
         "stable_spans",
         "stable_logs",
+        "stable_profiles",
     ]
     with csv_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -245,12 +281,12 @@ description: Stable Sigiro watches candidate Sigiro, Codex reads the evidence, a
 
 # How Sigiro Improves Itself With Sigiro
 
-Sigiro's self-improvement loop uses two binaries. A stable Sigiro instance is the observer. A candidate Sigiro instance is the system under test. Candidate exports its own OpenTelemetry traces and logs to stable while the harness drives real ingest traffic through candidate.
+Sigiro's self-improvement loop uses two binaries. A stable Sigiro instance is the observer. A candidate Sigiro instance is the system under test. Candidate exports its own OpenTelemetry traces, logs, and Pyroscope CPU profiles to stable while the harness drives real ingest traffic through candidate.
 
 The point is not a synthetic score. The point is a repeatable evidence loop:
 
 1. Start stable Sigiro on isolated ports.
-2. Start candidate Sigiro with `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at stable.
+2. Start candidate Sigiro with `OTEL_EXPORTER_OTLP_ENDPOINT` and `SIGIRO_PYROSCOPE_ENDPOINT` pointing at stable.
 3. Run the existing `scripts/bench_ingest.py` workload against candidate's OTLP HTTP endpoint.
 4. Query stable with `sigiro investigate sigiro-candidate`.
 5. Save the benchmark, investigate output, logs, CSV, SVG plot, animated HTML trajectory, and a Codex next-step prompt.
@@ -267,6 +303,7 @@ Latest measured iteration:
 - Benchmark errors: `{record.get("errors")}`
 - Stable observed spans: `{record.get("stable_spans")}`
 - Stable observed log templates: `{record.get("stable_logs")}`
+- Stable observed profile samples: `{record.get("stable_profiles")}`
 
 The loop deliberately keeps one obvious path: measure, inspect, change, validate, promote. No hidden controller rewrites code on its own. Codex remains the decision point, and Sigiro remains the source of operational truth.
 """
@@ -287,6 +324,12 @@ def main() -> int:
     parser.add_argument("--timeout-sec", type=int, default=90)
     parser.add_argument("--rate", type=int, default=500)
     parser.add_argument("--duration", type=int, default=10)
+    parser.add_argument("--profile-timeout-sec", type=int, default=25)
+    parser.add_argument(
+        "--extension-dir",
+        type=Path,
+        default=Path.home() / ".duckdb" / "extensions",
+    )
     parser.add_argument("--stable-http", type=int, default=19999)
     parser.add_argument("--stable-otlp-http", type=int, default=14318)
     parser.add_argument("--stable-otlp-grpc", type=int, default=14317)
@@ -299,6 +342,8 @@ def main() -> int:
     stable_ports = Ports(args.stable_http, args.stable_otlp_http, args.stable_otlp_grpc)
     candidate_ports = Ports(args.candidate_http, args.candidate_otlp_http, args.candidate_otlp_grpc)
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    extension_dir = args.extension_dir.expanduser().resolve()
+    extension_dir.mkdir(parents=True, exist_ok=True)
 
     stable_proc: subprocess.Popen[str] | None = None
     candidate_proc: subprocess.Popen[str] | None = None
@@ -308,7 +353,7 @@ def main() -> int:
             args.out_dir / "stable-data",
             stable_ports,
             args.api_key,
-            {},
+            {"SIGIRO_EXTENSION_DIR": str(extension_dir)},
             args.out_dir / "stable.log",
         )
         stable_startup, _ = wait_health(f"http://127.0.0.1:{stable_ports.http}", args.timeout_sec)
@@ -321,7 +366,9 @@ def main() -> int:
             {
                 "OTEL_SERVICE_NAME": "sigiro-candidate",
                 "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://127.0.0.1:{stable_ports.otlp_http}",
+                "SIGIRO_PYROSCOPE_ENDPOINT": f"http://127.0.0.1:{stable_ports.otlp_http}",
                 "SIGIRO_OTEL_AUTH_KEY": args.api_key,
+                "SIGIRO_EXTENSION_DIR": str(extension_dir),
             },
             args.out_dir / "candidate.log",
         )
@@ -346,27 +393,17 @@ def main() -> int:
             raise RuntimeError(f"bench failed with exit {bench.returncode}; see {args.out_dir / 'bench.stderr'}")
         bench_result = newest_bench_result(args.out_dir)
 
-        stop_process(candidate_proc)
-        candidate_proc = None
-        time.sleep(2)
         env = os.environ.copy()
         env["SIGIRO_ENDPOINT"] = f"http://127.0.0.1:{stable_ports.http}"
         env["SIGIRO_API_KEY"] = args.api_key
+        wait_for_profiles(args.stable_bin, env, args.profile_timeout_sec)
+
+        stop_process(candidate_proc)
+        candidate_proc = None
+        time.sleep(2)
         investigate = run_json([str(args.stable_bin), "--output", "json", "investigate", "sigiro-candidate"], env)
         (args.out_dir / "investigate-sigiro-candidate.json").write_text(json.dumps(investigate, indent=2) + "\n")
-        service_counts = run_json(
-            [
-                str(args.stable_bin),
-                "--output",
-                "json",
-                "query",
-                "SELECT "
-                "(SELECT count(*) FROM lake.sigiro_spans WHERE service_name = 'sigiro-candidate') AS spans_all_time, "
-                "(SELECT count(*) FROM lake.sigiro_logs WHERE service_name = 'sigiro-candidate') AS logs_all_time, "
-                "CAST((SELECT min(timestamp) FROM lake.sigiro_logs WHERE service_name = 'sigiro-candidate') AS VARCHAR) AS first_log_ts",
-            ],
-            env,
-        )
+        service_counts = query_service_counts(args.stable_bin, env)
         (args.out_dir / "service-counts.json").write_text(json.dumps(service_counts, indent=2) + "\n")
         counts = service_counts[0] if service_counts else {}
 
@@ -383,7 +420,9 @@ def main() -> int:
             "errors": results["errors"],
             "stable_spans": counts.get("spans_all_time", 0),
             "stable_logs": counts.get("logs_all_time", 0),
+            "stable_profiles": counts.get("profiles_all_time", 0),
             "first_log_ts": counts.get("first_log_ts"),
+            "first_profile_ts": counts.get("first_profile_ts"),
         }
         records_path = args.out_dir / "iterations.jsonl"
         with records_path.open("a") as f:
