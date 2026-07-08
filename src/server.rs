@@ -2,15 +2,17 @@ use anyhow::{Context, Result};
 use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
 use axum_anyhow::{ApiResult, IntoApiError, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
+use axum_server::{Handle, tls_rustls::RustlsConfig};
 use parking_lot::Mutex;
 use rusqlite::Connection;
 use sqlparser::ast::Statement;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tonic::transport::Server as TonicServer;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
@@ -259,13 +261,18 @@ pub async fn run_servers(
     let auth_mode = crate::auth::AuthMode::from_config(configured_key.clone());
 
     // TLS configuration
-    let tls_acceptor = match (
+    let tls_config = match (
         crate::config::TLS_CERT.value(),
         crate::config::TLS_KEY.value(),
     ) {
         (Ok(cert), Ok(key)) => {
             tracing::info!("TLS enabled — cert={cert}, key={key}");
-            Some(crate::tls::tls_acceptor(&cert, &key).context("failed to load TLS config")?)
+            ensure_rustls_provider()?;
+            Some(
+                RustlsConfig::from_pem_file(cert, key)
+                    .await
+                    .context("failed to load TLS config")?,
+            )
         }
         (Ok(_), Err(_)) => {
             anyhow::bail!("SIGIRO_TLS_CERT is set but SIGIRO_TLS_KEY is missing");
@@ -284,8 +291,7 @@ pub async fn run_servers(
     let grpc_auth_mode = auth_mode.clone();
     let grpc_port = ports.grpc;
     let mut servers = JoinSet::new();
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let mut grpc_shutdown = shutdown_rx.clone();
+    let (grpc_shutdown_tx, grpc_shutdown_rx) = oneshot::channel();
     servers.spawn(async move {
         let addr = format!("[::]:{grpc_port}").parse().expect("valid addr");
         let svc = OtlpGrpcService::new(grpc_router, grpc_auth_mode);
@@ -296,10 +302,9 @@ pub async fn run_servers(
             .add_service(svc.metrics_service())
             .add_service(svc.profiles_service())
             .serve_with_shutdown(addr, async move {
-                grpc_shutdown
-                    .changed()
-                    .await
-                    .expect("server shutdown sender must outlive gRPC");
+                if grpc_shutdown_rx.await.is_err() {
+                    tracing::debug!("gRPC shutdown sender dropped");
+                }
             })
             .await
             .context("gRPC server failed");
@@ -325,27 +330,17 @@ pub async fn run_servers(
     let http_app = build_http_router(app_state);
 
     let http_port = ports.http;
-    let http_acceptor = tls_acceptor.clone();
-    let mut http_shutdown = shutdown_rx.clone();
+    let http_tls_config = tls_config.clone();
+    let http_handle = Handle::new();
+    let http_server_handle = http_handle.clone();
     servers.spawn(async move {
-        let result = async {
-            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{http_port}")).await?;
-            if let Some(acceptor) = http_acceptor {
-                tracing::info!("HTTPS listening on 0.0.0.0:{http_port}");
-                crate::tls::serve_tls(listener, acceptor, http_app, "HTTP", http_shutdown).await
-            } else {
-                tracing::info!("HTTP listening on 0.0.0.0:{http_port}");
-                axum::serve(listener, http_app)
-                    .with_graceful_shutdown(async move {
-                        http_shutdown
-                            .changed()
-                            .await
-                            .expect("server shutdown sender must outlive HTTP");
-                    })
-                    .await
-                    .context("HTTP server failed")
-            }
-        }
+        let result = serve_http_app(
+            "HTTP",
+            http_port,
+            http_app,
+            http_tls_config,
+            http_server_handle,
+        )
         .await;
         ("HTTP", result)
     });
@@ -354,35 +349,17 @@ pub async fn run_servers(
     let otlp_http_app = crate::ingest::otlp_http_router(Arc::clone(&router), auth_mode)
         .layer(tower_http::decompression::RequestDecompressionLayer::new());
     let otlp_http_port = ports.otlp_http;
-    let otlp_acceptor = tls_acceptor.clone();
-    let mut otlp_http_shutdown = shutdown_rx;
+    let otlp_tls_config = tls_config;
+    let otlp_http_handle = Handle::new();
+    let otlp_http_server_handle = otlp_http_handle.clone();
     servers.spawn(async move {
-        let result = async {
-            let listener =
-                tokio::net::TcpListener::bind(format!("0.0.0.0:{otlp_http_port}")).await?;
-            if let Some(acceptor) = otlp_acceptor {
-                tracing::info!("OTLP HTTPS listening on 0.0.0.0:{otlp_http_port}");
-                crate::tls::serve_tls(
-                    listener,
-                    acceptor,
-                    otlp_http_app,
-                    "OTLP HTTP",
-                    otlp_http_shutdown,
-                )
-                .await
-            } else {
-                tracing::info!("OTLP HTTP listening on 0.0.0.0:{otlp_http_port}");
-                axum::serve(listener, otlp_http_app)
-                    .with_graceful_shutdown(async move {
-                        otlp_http_shutdown
-                            .changed()
-                            .await
-                            .expect("server shutdown sender must outlive OTLP HTTP");
-                    })
-                    .await
-                    .context("OTLP HTTP server failed")
-            }
-        }
+        let result = serve_http_app(
+            "OTLP HTTP",
+            otlp_http_port,
+            otlp_http_app,
+            otlp_tls_config,
+            otlp_http_server_handle,
+        )
         .await;
         ("OTLP HTTP", result)
     });
@@ -415,9 +392,11 @@ pub async fn run_servers(
         },
     };
 
-    let shutdown_send = shutdown_tx
-        .send(true)
-        .map_err(|_| anyhow::anyhow!("all server shutdown receivers dropped unexpectedly"));
+    http_handle.graceful_shutdown(None);
+    otlp_http_handle.graceful_shutdown(None);
+    let shutdown_send = grpc_shutdown_tx
+        .send(())
+        .map_err(|_| anyhow::anyhow!("gRPC shutdown receiver dropped unexpectedly"));
     let server_cleanup = match tokio::time::timeout(Duration::from_secs(10), async {
         let mut first_error = None;
         while let Some(result) = servers.join_next().await {
@@ -479,6 +458,43 @@ pub async fn run_servers(
     router_cleanup?;
 
     Ok(())
+}
+
+fn ensure_rustls_provider() -> Result<()> {
+    if rustls::crypto::CryptoProvider::get_default().is_some() {
+        return Ok(());
+    }
+
+    match rustls::crypto::aws_lc_rs::default_provider().install_default() {
+        Ok(()) => Ok(()),
+        Err(_) if rustls::crypto::CryptoProvider::get_default().is_some() => Ok(()),
+        Err(_) => anyhow::bail!("failed to install Rustls AWS-LC crypto provider"),
+    }
+}
+
+async fn serve_http_app(
+    name: &'static str,
+    port: u16,
+    app: Router,
+    tls_config: Option<RustlsConfig>,
+    handle: Handle<SocketAddr>,
+) -> Result<()> {
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    if let Some(config) = tls_config {
+        tracing::info!(server = name, protocol = "HTTPS", "listening on {addr}");
+        axum_server::bind_rustls(addr, config)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await
+            .with_context(|| format!("{name} HTTPS server failed"))
+    } else {
+        tracing::info!(server = name, protocol = "HTTP", "listening on {addr}");
+        axum_server::bind(addr)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await
+            .with_context(|| format!("{name} HTTP server failed"))
+    }
 }
 
 /// Spawn a background task that periodically deletes old data based on

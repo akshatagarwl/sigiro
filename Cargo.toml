@@ -27,6 +27,8 @@ prost = "0.14"
 arrow = "58"
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles"] }
 axum = "0.8"
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 tower-http = { version = "0.6", features = ["compression-full", "decompression-full", "cors", "trace"] }
 axum-anyhow = "0.10"
 prefixed-api-key = { version = "0.3", features = ["sha2"] }
@@ -59,11 +61,6 @@ sqlparser = "0.53"
 axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
 multer = "3"
 futures-util = "0.3"
-rustls = "0.23"
-rustls-pemfile = "2"
-tokio-rustls = "0.26"
-hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
-tower-service = "0.3"
 
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "logs"] }
@@ -75,8 +72,6 @@ utoipa = "5"
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 camino = "1.2.2"
 itertools = "0.14.0"
-hyper = { version = "1", features = ["full"] }
-tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 caps = "0.5"
