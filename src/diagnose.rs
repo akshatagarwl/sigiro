@@ -76,68 +76,17 @@ fn check_data_dir_size() -> Result<(u64, u64)> {
     let dir = crate::data_dir()?;
     let mut total: u64 = 0;
     let path: &std::path::Path = dir.as_ref();
-    for entry in walkdir(path) {
-        if let Ok(meta) = std::fs::symlink_metadata(&entry) {
-            if meta.is_file() {
-                total += meta.len();
-            }
+    for entry in walkdir::WalkDir::new(path) {
+        let entry = entry.context("failed to walk data directory")?;
+        if entry.file_type().is_file() {
+            total += entry
+                .metadata()
+                .with_context(|| format!("failed to stat {}", entry.path().display()))?
+                .len();
         }
     }
-    // Free space on the data dir's volume (best-effort)
-    let free = free_space(path).unwrap_or(0);
+    let free = fs4::available_space(path).context("failed to read available disk space")?;
     Ok((total, free))
-}
-
-fn walkdir(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(p) = stack.pop() {
-        match std::fs::read_dir(&p) {
-            Ok(rd) => {
-                for e in rd.flatten() {
-                    let path = e.path();
-                    if let Ok(ft) = e.file_type() {
-                        if ft.is_dir() {
-                            stack.push(path);
-                        } else if ft.is_file() {
-                            out.push(path);
-                        }
-                    }
-                }
-            }
-            Err(_) => continue,
-        }
-    }
-    out
-}
-
-#[cfg(unix)]
-fn free_space(dir: &std::path::Path) -> std::io::Result<u64> {
-    nix_statvfs(dir)
-}
-
-#[cfg(not(unix))]
-fn free_space(_dir: &std::path::Path) -> std::io::Result<u64> {
-    Ok(0)
-}
-
-#[cfg(unix)]
-fn nix_statvfs(dir: &std::path::Path) -> std::io::Result<u64> {
-    // Use libc::statvfs to get fragment-size * available blocks.
-    // Avoid pulling in the nix crate; call libc directly.
-    unsafe extern "C" {
-        fn statvfs(path: *const libc::c_char, buf: *mut libc::statvfs) -> libc::c_int;
-    }
-    let c_path = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).unwrap();
-    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-    let rc = unsafe { statvfs(c_path.as_ptr(), &mut stat) };
-    if rc != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // f_bavail * f_frsize is bytes available to non-root users
-    let bsize = stat.f_frsize as u64;
-    let bavail = stat.f_bavail as u64;
-    Ok(bsize * bavail)
 }
 
 /// Run all diagnostic checks and print a report.
