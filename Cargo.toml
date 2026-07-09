@@ -25,7 +25,7 @@ toon = "0.1.2"
 tonic = "0.14"
 prost = "0.14"
 arrow = "58"
-opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles"] }
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
 axum = "0.8"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }

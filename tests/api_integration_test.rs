@@ -78,10 +78,18 @@ fn build_test_context() -> TestContext {
 }
 
 /// Build the OTLP HTTP router (port 4318).
-fn build_otlp_app(state: &Arc<AppState>) -> axum::Router {
+fn build_otlp_app_with_router(state: &Arc<AppState>) -> (axum::Router, Arc<MsgRouter>) {
     let router = Arc::new(MsgRouter::new(Arc::clone(&state.pool)));
     router.start();
-    ingest::otlp_http_router(router, state.auth_mode.clone())
+    (
+        ingest::otlp_http_router(Arc::clone(&router), state.auth_mode.clone()),
+        router,
+    )
+}
+
+/// Build the OTLP HTTP router (port 4318).
+fn build_otlp_app(state: &Arc<AppState>) -> axum::Router {
+    build_otlp_app_with_router(state).0
 }
 
 // -- Tests ----------------------------------------------------------------
@@ -211,4 +219,112 @@ async fn test_otlp_traces_empty_payload_returns_200() {
         .content_type("application/json")
         .await;
     resp.assert_status(axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_otlp_json_payloads_ingest_all_signal_types() {
+    let ctx = build_test_context();
+    let (app, router) = build_otlp_app_with_router(&ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    let traces_json = r#"{
+      "resourceSpans": [{
+        "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "json-svc"}}]},
+        "scopeSpans": [{
+          "scope": {"name": "json-test"},
+          "spans": [{
+            "traceId": "11111111111111111111111111111111",
+            "spanId": "2222222222222222",
+            "name": "GET /json",
+            "kind": 2,
+            "startTimeUnixNano": "1700000000000000000",
+            "endTimeUnixNano": "1700000001000000000",
+            "status": {"code": 1}
+          }]
+        }]
+      }]
+    }"#;
+    let logs_json = r#"{
+      "resourceLogs": [{
+        "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "json-svc"}}]},
+        "scopeLogs": [{
+          "scope": {"name": "json-test"},
+          "logRecords": [{
+            "timeUnixNano": "1700000000500000000",
+            "severityNumber": 17,
+            "severityText": "ERROR",
+            "body": {"stringValue": "json log body"},
+            "traceId": "11111111111111111111111111111111",
+            "spanId": "2222222222222222"
+          }]
+        }]
+      }]
+    }"#;
+    let metrics_json = r#"{
+      "resourceMetrics": [{
+        "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "json-svc"}}]},
+        "scopeMetrics": [{
+          "scope": {"name": "json-test"},
+          "metrics": [{
+            "name": "json.request.duration",
+            "unit": "ms",
+            "gauge": {"dataPoints": [{
+              "timeUnixNano": "1700000000500000000",
+              "asDouble": 42.5
+            }]}
+          }]
+        }]
+      }]
+    }"#;
+
+    for (path, payload) in [
+        ("/v1/traces", traces_json),
+        ("/v1/logs", logs_json),
+        ("/v1/metrics", metrics_json),
+    ] {
+        let resp = server
+            .post(path)
+            .add_header("Authorization", "Bearer sigiro_dev_test")
+            .bytes(payload.into())
+            .content_type("application/json")
+            .await;
+        resp.assert_status(axum::http::StatusCode::OK);
+    }
+
+    router
+        .shutdown_and_wait()
+        .await
+        .expect("flusher should persist OTLP JSON rows");
+
+    let conn = ctx
+        .state
+        .pool
+        .get_project("default")
+        .expect("default project connection should exist");
+    let guard = conn.lock();
+    let spans: i64 = guard
+        .query_row(
+            "SELECT count(*) FROM lake.sigiro_spans WHERE trace_id = '11111111111111111111111111111111'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("span count query should succeed");
+    let logs: i64 = guard
+        .query_row(
+            "SELECT count(*) FROM lake.sigiro_logs WHERE body = 'json log body'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("log count query should succeed");
+    let gauges: i64 = guard
+        .query_row(
+            "SELECT count(*) FROM lake.sigiro_metrics_gauge WHERE metric_name = 'json.request.duration' AND service_name = 'json-svc'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("gauge count query should succeed");
+
+    assert_eq!(spans, 1);
+    assert_eq!(logs, 1);
+    assert_eq!(gauges, 1);
 }
