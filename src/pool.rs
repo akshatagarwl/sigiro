@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use dashmap::DashMap;
 use duckdb::Connection;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,21 +18,106 @@ pub struct ProjectPool {
 }
 
 pub struct PoolEntry {
-    /// Single DuckDB connection shared by both flusher (writes) and HTTP API (reads).
-    /// Wrapped in Arc<Mutex> so reads and writes are serialized — DuckDB does not
-    /// support concurrent access on the same connection anyway.
-    pub conn: Arc<Mutex<Connection>>,
+    /// The single writer connection while no flusher owns it. A flusher takes
+    /// this once and returns it on clean shutdown; no DuckDB work is performed
+    /// while holding this mutex.
+    writer: Mutex<Option<Connection>>,
+    readers: ReaderPool,
     last_access: Instant,
 }
 
 impl PoolEntry {
     /// Checkpoint DuckLake before dropping so data is persisted to Parquet.
     fn shutdown(&self) {
-        let guard = self.conn.lock();
-        if let Err(e) = guard.execute_batch("CHECKPOINT lake;") {
-            tracing::warn!("DuckDB CHECKPOINT failed during shutdown: {e}");
+        let guard = self.writer.lock();
+        if let Some(writer) = guard.as_ref() {
+            if let Err(e) = writer.execute_batch("CHECKPOINT lake;") {
+                tracing::warn!("DuckDB CHECKPOINT failed during shutdown: {e}");
+            }
+        } else {
+            tracing::debug!("skipping pool-entry shutdown checkpoint; flusher owns writer");
         }
     }
+}
+
+#[derive(Clone)]
+pub struct ReaderPool {
+    inner: Arc<ReaderPoolInner>,
+}
+
+struct ReaderPoolInner {
+    available: Mutex<Vec<Connection>>,
+    ready: Condvar,
+}
+
+pub struct ReaderConnection {
+    conn: Option<Connection>,
+    pool: Arc<ReaderPoolInner>,
+}
+
+impl ReaderPool {
+    fn new(base: &Connection, size: usize) -> Result<Self> {
+        anyhow::ensure!(size > 0, "reader pool size must be greater than zero");
+        let mut available = Vec::with_capacity(size);
+        for _ in 0..size {
+            let reader = base
+                .try_clone()
+                .context("failed to clone DuckDB reader connection")?;
+            reader
+                .execute_batch("USE lake;")
+                .context("failed to set reader default schema")?;
+            available.push(reader);
+        }
+
+        Ok(Self {
+            inner: Arc::new(ReaderPoolInner {
+                available: Mutex::new(available),
+                ready: Condvar::new(),
+            }),
+        })
+    }
+
+    pub fn get(&self) -> ReaderConnection {
+        let mut available = self.inner.available.lock();
+        loop {
+            if let Some(conn) = available.pop() {
+                return ReaderConnection {
+                    conn: Some(conn),
+                    pool: Arc::clone(&self.inner),
+                };
+            }
+            self.inner.ready.wait(&mut available);
+        }
+    }
+
+    pub fn same_pool(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Deref for ReaderConnection {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        self.conn
+            .as_ref()
+            .expect("reader connection missing before drop")
+    }
+}
+
+impl Drop for ReaderConnection {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            let mut available = self.pool.available.lock();
+            available.push(conn);
+            self.pool.ready.notify_one();
+        }
+    }
+}
+
+struct OpenedProject {
+    writer: Connection,
+    readers: ReaderPool,
 }
 
 impl ProjectPool {
@@ -56,13 +142,13 @@ impl ProjectPool {
     /// Thread-safe: uses DashMap entry API to prevent concurrent callers from
     /// creating duplicate connections for the same project.
     #[tracing::instrument(skip(self), fields(project_id = %project_id))]
-    pub fn create_project(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
+    pub fn create_project(&self, project_id: &str) -> Result<ReaderPool> {
         use dashmap::mapref::entry::Entry;
 
         match self.connections.entry(project_id.to_string()) {
             Entry::Occupied(ref mut entry) => {
                 entry.get_mut().last_access = Instant::now();
-                Ok(Arc::clone(&entry.get().conn))
+                Ok(entry.get().readers.clone())
             }
             Entry::Vacant(entry) => {
                 // Evict if at capacity before creating new.
@@ -74,11 +160,11 @@ impl ProjectPool {
                 }
 
                 let project_dir = self.data_dir.join(project_id);
-                let conn = self.open_connection(&project_dir).with_context(|| {
-                    format!("failed to open DuckDB connection for project {project_id}")
-                })?;
-
-                let shared = Arc::new(Mutex::new(conn));
+                let opened = self
+                    .open_project_connections(&project_dir)
+                    .with_context(|| {
+                        format!("failed to open DuckDB connection for project {project_id}")
+                    })?;
 
                 // Re-enter via entry API — another task may have inserted while we
                 // were in open_connection (which downloads extensions on cold start).
@@ -88,15 +174,17 @@ impl ProjectPool {
                         // Our connection's Drop will clean up.
                         entry.get_mut().last_access = Instant::now();
                         tracing::info!(project_id, "reused DuckDB connection (race loser)");
-                        Ok(Arc::clone(&entry.get().conn))
+                        Ok(entry.get().readers.clone())
                     }
                     Entry::Vacant(entry) => {
+                        let readers = opened.readers.clone();
                         entry.insert(PoolEntry {
-                            conn: Arc::clone(&shared),
+                            writer: Mutex::new(Some(opened.writer)),
+                            readers,
                             last_access: Instant::now(),
                         });
                         tracing::info!(project_id, "opened DuckDB connection (DuckLake)");
-                        Ok(shared)
+                        Ok(opened.readers)
                     }
                 }
             }
@@ -108,16 +196,62 @@ impl ProjectPool {
     /// Returns only an existing connection. Fails if the project was not created.
     /// Use `create_project()` first to initialize a project.
     #[tracing::instrument(skip(self), fields(project_id = %project_id))]
-    pub fn get_project(&self, project_id: &str) -> Result<Arc<Mutex<Connection>>> {
+    pub fn get_project(&self, project_id: &str) -> Result<ReaderPool> {
+        if let Some(mut entry) = self.connections.get_mut(project_id) {
+            entry.last_access = Instant::now();
+            Ok(entry.readers.clone())
+        } else {
+            Err(anyhow::anyhow!(
+                "connection not found for project {project_id} — \
+                 call create_project() first"
+            ))
+        }
+    }
+
+    /// Transfer the single writer connection to the per-project flusher.
+    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
+    pub fn take_writer(&self, project_id: &str) -> Result<Connection> {
+        let entry = self.connections.get(project_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "connection not found for project {project_id} — \
+                 call create_project() first"
+            )
+        })?;
+        let mut writer = entry.writer.lock();
+        writer.take().ok_or_else(|| {
+            anyhow::anyhow!("writer already owned by flusher for project {project_id}")
+        })
+    }
+
+    /// Return the writer connection after a flusher exits cleanly.
+    #[tracing::instrument(skip(self, writer), fields(project_id = %project_id))]
+    pub fn return_writer(&self, project_id: &str, writer: Connection) {
+        if let Some(entry) = self.connections.get(project_id) {
+            let mut slot = entry.writer.lock();
+            if slot.is_some() {
+                tracing::warn!(
+                    project_id,
+                    "writer returned while idle writer already exists"
+                );
+                return;
+            }
+            *slot = Some(writer);
+        } else {
+            if let Err(e) = writer.execute_batch("CHECKPOINT lake;") {
+                tracing::warn!(
+                    project_id,
+                    "DuckDB CHECKPOINT failed for removed project: {e}"
+                );
+            }
+            tracing::debug!(project_id, "dropped writer for removed project");
+        }
+    }
+
+    pub fn project_ids(&self) -> Vec<String> {
         self.connections
-            .get(project_id)
-            .map(|entry| Arc::clone(&entry.conn))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "connection not found for project {project_id} — \
-                     call create_project() first"
-                )
-            })
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     /// Refresh last_access for an existing project entry so it is not evicted as idle.
@@ -154,8 +288,13 @@ impl ProjectPool {
             ext_dir.as_str()
         ))
         .context("failed to set DuckDB extension_directory")?;
-        conn.execute_batch("SET memory_limit = '256MB'; SET threads = 1;")
-            .context("failed to set DuckDB memory/threads")?;
+        let memory_limit = crate::config::duckdb_memory_limit()?;
+        let memory_limit = memory_limit.replace('\'', "''");
+        let threads = crate::config::duckdb_threads()?;
+        conn.execute_batch(&format!(
+            "SET memory_limit = '{memory_limit}'; SET threads = {threads};"
+        ))
+        .context("failed to set DuckDB memory/threads")?;
 
         let mut last_err: Option<anyhow::Error> = None;
         for attempt in 1..=ATTACH_ATTEMPTS {
@@ -189,17 +328,25 @@ impl ProjectPool {
     }
 
     #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir))]
-    fn open_connection(&self, project_dir: &camino::Utf8Path) -> Result<Connection> {
-        let conn = Connection::open_in_memory()
+    fn open_project_connections(&self, project_dir: &camino::Utf8Path) -> Result<OpenedProject> {
+        let base = Connection::open_in_memory()
             .with_context(|| "failed to open in-memory DuckDB".to_string())?;
         tracing::info!(
             "DuckDB: loading extensions on first use (run `sigiro fetch-extensions` to pre-warm)"
         );
-        self.attach_ducklake(&conn, project_dir)?;
+        self.attach_ducklake(&base, project_dir)?;
         // Ensure DuckLake tables are discoverable without schema prefix.
-        conn.execute_batch("USE lake;")
+        base.execute_batch("USE lake;")
             .context("failed to set DuckDB default schema")?;
-        Ok(conn)
+        let writer = base
+            .try_clone()
+            .context("failed to clone DuckDB writer connection")?;
+        writer
+            .execute_batch("USE lake;")
+            .context("failed to set writer default schema")?;
+        let readers = ReaderPool::new(&base, crate::config::duckdb_threads()?)
+            .context("failed to create DuckDB reader pool")?;
+        Ok(OpenedProject { writer, readers })
     }
 
     /// Evict connections idle longer than the given duration.
@@ -251,7 +398,9 @@ impl ProjectPool {
     /// Remove a project's connection (for account deletion).
     #[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub fn remove(&self, project_id: &str) {
-        self.connections.remove(project_id);
+        if let Some((_, entry)) = self.connections.remove(project_id) {
+            entry.shutdown();
+        }
     }
 
     /// Open the dedicated DuckDB connection that backs the quack federation
@@ -265,6 +414,8 @@ impl ProjectPool {
             .context("failed to open in-memory DuckDB for federation")?;
         let project_dir = self.data_dir.join("default");
         self.attach_ducklake(&conn, &project_dir)?;
+        conn.execute_batch("USE lake;")
+            .context("failed to set DuckDB default schema for federation")?;
         Ok(conn)
     }
 }

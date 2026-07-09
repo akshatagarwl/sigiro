@@ -25,7 +25,7 @@ use crate::federation;
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::MsgRouter;
 use crate::investigate;
-use crate::pool::ProjectPool;
+use crate::pool::{ProjectPool, ReaderPool};
 use crate::responses::*;
 use crate::types::*;
 use tracing_attributes::instrument;
@@ -241,17 +241,9 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
 /// Extracted from `run_servers` so integration tests can build the same
 /// router with test state without starting TCP listeners.
 pub fn build_http_router(app_state: Arc<AppState>) -> Router {
-    // Rate limit (GCRA, in-memory): ~20 req/s sustained, burst 100 — a sane
-    // ceiling for an ops/agent-facing API. Keyed per Bearer token, or per peer
-    // IP for unauthenticated clients (see RateLimitKeyExtractor).
-    let governor_conf = GovernorConfigBuilder::default()
-        .key_extractor(RateLimitKeyExtractor)
-        .per_second(20)
-        .burst_size(100)
-        .finish()
-        .expect("valid governor config");
+    let rate_limit_v1 = matches!(&app_state.auth_mode, auth::AuthMode::Key { .. });
 
-    // v1 API routes — all authenticated + rate limited
+    // v1 API routes — authenticated in key mode; open mode injects the default project.
     let v1 = Router::new()
         .typed_post(query_handler)
         .typed_post(investigate_handler)
@@ -263,8 +255,21 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
-        ))
-        .layer(GovernorLayer::new(governor_conf).error_handler(rate_limit_error_response));
+        ));
+
+    let v1 = if rate_limit_v1 {
+        // Rate limit (GCRA, in-memory): ~20 req/s sustained, burst 100 — a sane
+        // ceiling when the API is exposed behind an API key.
+        let governor_conf = GovernorConfigBuilder::default()
+            .key_extractor(RateLimitKeyExtractor)
+            .per_second(20)
+            .burst_size(100)
+            .finish()
+            .expect("valid governor config");
+        v1.layer(GovernorLayer::new(governor_conf).error_handler(rate_limit_error_response))
+    } else {
+        v1
+    };
 
     // Admin routes — no auth required. Self-hosted: expose only internally.
     let admin = Router::new().typed_get(admin_status);
@@ -427,7 +432,7 @@ pub async fn run_servers(
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
     // Data retention background task (only if retention is configured).
-    let retention_handle = spawn_retention_task(Arc::clone(&pool));
+    let retention_handle = spawn_retention_task(Arc::clone(&router));
 
     let server_error = tokio::select! {
         result = servers.join_next() => {
@@ -557,7 +562,7 @@ async fn serve_http_app(
 
 /// Spawn a background task that periodically deletes old data based on
 /// SIGIRO_RETENTION_DAYS. Runs once per hour.
-fn spawn_retention_task(pool: Arc<ProjectPool>) -> Option<tokio::task::JoinHandle<()>> {
+fn spawn_retention_task(router: Arc<MsgRouter>) -> Option<tokio::task::JoinHandle<()>> {
     let days = match crate::config::RETENTION_DAYS.value() {
         Ok(d) if d > 0 => d,
         _ => return None,
@@ -569,52 +574,11 @@ fn spawn_retention_task(pool: Arc<ProjectPool>) -> Option<tokio::task::JoinHandl
         let mut interval = tokio::time::interval(Duration::from_secs(3600));
         loop {
             interval.tick().await;
-            if let Err(e) = run_retention_cleanup(&pool, days).await {
+            if let Err(e) = router.run_retention_cleanup(days).await {
                 tracing::error!("retention cleanup failed: {e:#}");
             }
         }
     }))
-}
-
-/// Execute retention cleanup: delete spans/logs/metrics older than N days.
-async fn run_retention_cleanup(pool: &ProjectPool, days: u32) -> anyhow::Result<()> {
-    let cutoff = format!("now() - INTERVAL '{days} days'");
-    let tables = [
-        "lake.sigiro_spans",
-        "lake.sigiro_logs",
-        "lake.sigiro_metrics_sum",
-        "lake.sigiro_metrics_gauge",
-        "lake.sigiro_metrics_histogram",
-        "lake.sigiro_metrics_exp_histogram",
-        "lake.sigiro_profiles",
-    ];
-
-    for project_entry in pool.connections.iter() {
-        let project_id = project_entry.key().clone();
-        let conn = Arc::clone(&project_entry.conn);
-        for table in &tables {
-            let sql = format!("DELETE FROM {table} WHERE timestamp < {cutoff}");
-            let c = Arc::clone(&conn);
-            let t = table.to_string();
-            match tokio::task::spawn_blocking(move || {
-                let guard = c.lock();
-                guard.execute_batch(&sql)
-            })
-            .await
-            {
-                Ok(Ok(_)) => {
-                    tracing::debug!(project = %project_id, table = %t, "retention cleanup completed")
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!(project = %project_id, table = %t, "retention cleanup error: {e}")
-                }
-                Err(e) => {
-                    tracing::warn!(project = %project_id, table = %t, "retention cleanup task failed: {e}")
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 #[instrument(skip(state))]
@@ -702,10 +666,9 @@ pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value 
     }
 }
 
-/// Get the per-project DuckDB connection from the pool using the AuthContext.
-/// Single connection handles both reads and writes — no snapshot refresh needed.
-fn project_conn(state: &AppState, auth: &AuthContext) -> ApiResult<Arc<Mutex<duckdb::Connection>>> {
-    // Explicit DI: get_project returns only existing connections.
+/// Get the per-project DuckDB reader pool using the AuthContext.
+fn project_reader_pool(state: &AppState, auth: &AuthContext) -> ApiResult<ReaderPool> {
+    // Explicit DI: get_project returns only existing projects.
     // Callers must call create_project() first to initialize a project.
     state
         .pool
@@ -784,13 +747,12 @@ async fn execute_sql(
     }
 
     // No federation workers — execute locally against the project connection.
-    let conn_raw =
-        project_conn(state, auth).map_err(|e: axum_anyhow::ApiError| anyhow::anyhow!("{:?}", e))?;
+    let readers = project_reader_pool(state, auth)
+        .map_err(|e: axum_anyhow::ApiError| anyhow::anyhow!("{:?}", e))?;
     let sql_clone = sql.to_string();
     tokio::task::spawn_blocking(move || {
-        let conn_guard = conn_raw.lock();
-        let conn_ref: &duckdb::Connection = &conn_guard;
-        let mut stmt = conn_ref
+        let conn = readers.get();
+        let mut stmt = conn
             .prepare(&sql_clone)
             .map_err(|e| anyhow::anyhow!("failed to prepare query: {e}"))?;
         // Execute ONCE. Column names come from the live statement behind the
@@ -1352,9 +1314,15 @@ async fn investigate_handler(
             ),
         ));
     }
-    let conn = project_conn(&state, &auth)?;
-    let blocks = investigate::investigate(&conn, &req, ProjectPool::prefix())
-        .context_internal("Investigate", "investigation failed")?;
+    let readers = project_reader_pool(&state, &auth)?;
+    let blocks = tokio::task::spawn_blocking(move || {
+        let conn = readers.get();
+        investigate::investigate(&conn, &req, ProjectPool::prefix())
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("investigation task failed: {e}"))
+    .context_internal("Investigate", "investigation task failed")?
+    .context_internal("Investigate", "investigation failed")?;
     Ok(Json(blocks))
 }
 
@@ -1489,7 +1457,12 @@ async fn admin_status(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<AdminStatusResponse>> {
     let guard = state.admin_conn.lock();
-    let map = admin::read_all_status(&guard).context_internal("Admin", "failed to read status")?;
+    let mut map =
+        admin::read_all_status(&guard).context_internal("Admin", "failed to read status")?;
+    map.insert(
+        "ingest_dropped_messages_total".to_string(),
+        state.router.dropped_messages().to_string(),
+    );
     Ok(Json(AdminStatusResponse { status: map }))
 }
 

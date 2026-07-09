@@ -92,7 +92,7 @@ fn bench_investigate(c: &mut Criterion) {
                 from_ts: now_us - 15 * 60 * 1_000_000,
                 to_ts: now_us + 60 * 1_000_000,
             };
-            investigate(&shared, &req, "lake.").expect("investigate");
+            investigate(&shared.lock(), &req, "lake.").expect("investigate");
         });
     });
 

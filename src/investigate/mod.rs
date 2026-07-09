@@ -3,10 +3,8 @@ pub mod analysis;
 use crate::types::{StatusCode, TimestampMicros};
 use anyhow::{Context, Result};
 use duckdb::Connection;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use itertools::Itertools;
 
@@ -283,7 +281,7 @@ pub fn query_derived_events(ctx: &QueryCtx) -> Result<Vec<DerivedEvent>> {
 // InvestigateRequest — API input (from_ts/to_ts now mandatory)
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct InvestigateRequest {
     pub service: Option<String>,
     pub services: Option<Vec<String>>,
@@ -373,7 +371,7 @@ pub struct OperationSummary {
 // ---------------------------------------------------------------------------
 
 pub fn investigate(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &Connection,
     req: &InvestigateRequest,
     prefix: &str,
 ) -> Result<BTreeMap<String, InvestigationBlock>> {
@@ -413,17 +411,15 @@ fn resolve_services(req: &InvestigateRequest) -> Result<Vec<String>> {
 
 #[tracing::instrument(skip(conn), fields(service = %service))]
 fn investigate_one(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &Connection,
     service: &str,
     from_ts: i64,
     to_ts: i64,
     prefix: &str,
 ) -> Result<InvestigationBlock> {
-    let conn = conn.lock();
-
     let config = adaptive_config(from_ts, to_ts);
     let ctx = QueryCtx {
-        conn: &conn,
+        conn,
         service,
         from_ts,
         to_ts,

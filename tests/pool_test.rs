@@ -1,10 +1,31 @@
 use sigiro::pool::ProjectPool;
-use std::sync::Arc;
+use std::sync::Once;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 fn test_pool(dir: &std::path::Path) -> ProjectPool {
+    test_pool_with_max(dir, 10)
+}
+
+fn test_extension_dir() -> String {
+    std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .map(|home| format!("{home}/.duckdb/extensions"))
+            .unwrap_or_else(|_| "/tmp/sigiro-test-extensions".to_string())
+    })
+}
+
+fn test_pool_with_max(dir: &std::path::Path, max_connections: usize) -> ProjectPool {
+    static EXTENSION_ENV: Once = Once::new();
+    EXTENSION_ENV.call_once(|| {
+        // SAFETY: all tests in this binary use the same read-only extension cache.
+        unsafe {
+            std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
+        }
+    });
     ProjectPool::new(
         camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
-        10,
+        max_connections,
     )
 }
 
@@ -13,12 +34,12 @@ fn create_project_opens_connection() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
 
-    let conn = pool.create_project("proj_a").unwrap();
+    let readers = pool.create_project("proj_a").unwrap();
     assert_eq!(pool.len(), 1);
 
     // Verify tables were created (now in lake.* schema)
-    let guard = conn.lock();
-    let mut stmt = guard
+    let conn = readers.get();
+    let mut stmt = conn
         .prepare("SELECT count(*) FROM lake.sigiro_spans")
         .unwrap();
     let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
@@ -32,7 +53,7 @@ fn get_returns_same_connection() {
 
     let conn1 = pool.create_project("proj_a").unwrap();
     let conn2 = pool.create_project("proj_a").unwrap();
-    assert!(Arc::ptr_eq(&conn1, &conn2));
+    assert!(conn1.same_pool(&conn2));
     assert_eq!(pool.len(), 1);
 }
 
@@ -43,7 +64,7 @@ fn different_projects_different_connections() {
 
     let conn_a = pool.create_project("proj_a").unwrap();
     let conn_b = pool.create_project("proj_b").unwrap();
-    assert!(!Arc::ptr_eq(&conn_a, &conn_b));
+    assert!(!conn_a.same_pool(&conn_b));
     assert_eq!(pool.len(), 2);
 }
 
@@ -55,25 +76,80 @@ fn data_isolation_between_projects() {
     // Insert into project A using raw SQL with all required columns
     let conn_a = pool.create_project("proj_a").unwrap();
     {
-        let guard = conn_a.lock();
-        guard
-            .execute_batch(
-                "INSERT INTO lake.sigiro_metrics_gauge (timestamp, metric_name, service_name, value) \
+        let conn = conn_a.get();
+        conn.execute_batch(
+            "INSERT INTO lake.sigiro_metrics_gauge (timestamp, metric_name, service_name, value) \
                  VALUES (current_timestamp, 'cpu', 'svc', 42.0)",
-            )
-            .unwrap();
+        )
+        .unwrap();
     }
 
     // Project B should have no data
     let conn_b = pool.create_project("proj_b").unwrap();
     {
-        let guard = conn_b.lock();
-        let mut stmt = guard
+        let conn = conn_b.get();
+        let mut stmt = conn
             .prepare("SELECT count(*) FROM lake.sigiro_metrics_gauge")
             .unwrap();
         let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(count, 0, "project B should have no data from project A");
     }
+}
+
+#[test]
+fn reader_queries_do_not_wait_for_writer_transaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = test_pool(dir.path());
+
+    let readers = pool.create_project("proj_a").unwrap();
+    let writer = pool.take_writer("proj_a").unwrap();
+    let (writer_started_tx, writer_started_rx) = mpsc::channel();
+    let (commit_tx, commit_rx) = mpsc::channel();
+
+    let writer_thread = std::thread::spawn(move || {
+        writer
+            .execute_batch(
+                "BEGIN TRANSACTION;
+                 INSERT INTO lake.sigiro_metrics_gauge (timestamp, metric_name, service_name, value)
+                 VALUES (current_timestamp, 'cpu', 'svc', 42.0);",
+            )
+            .unwrap();
+        writer_started_tx.send(()).unwrap();
+        commit_rx.recv().unwrap();
+        writer.execute_batch("COMMIT;").unwrap();
+        writer
+    });
+
+    writer_started_rx.recv().unwrap();
+    let start = Instant::now();
+    let reader = readers.get();
+    let count_before_commit: i64 = reader
+        .query_row(
+            "SELECT count(*) FROM lake.sigiro_metrics_gauge",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count_before_commit, 0);
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "reader query waited for writer transaction"
+    );
+    drop(reader);
+
+    commit_tx.send(()).unwrap();
+    let writer = writer_thread.join().unwrap();
+    pool.return_writer("proj_a", writer);
+
+    let reader = readers.get();
+    let count_after_commit: i64 = reader
+        .query_row(
+            "SELECT count(*) FROM lake.sigiro_metrics_gauge",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count_after_commit, 1);
 }
 
 #[test]
@@ -93,10 +169,7 @@ fn evict_idle_removes_old_connections() {
 #[test]
 fn evict_oldest_at_capacity() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        2,
-    );
+    let pool = test_pool_with_max(dir.path(), 2);
 
     pool.create_project("proj_a").unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));

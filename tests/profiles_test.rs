@@ -8,7 +8,30 @@ use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
 use sigiro::investigate::QueryCtx;
 use sigiro::pool::ProjectPool;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
+
+static EXTENSION_ENV: Once = Once::new();
+
+fn test_extension_dir() -> String {
+    std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .map(|home| format!("{home}/.duckdb/extensions"))
+            .unwrap_or_else(|_| "/tmp/sigiro-test-extensions".to_string())
+    })
+}
+
+fn test_pool(dir: &std::path::Path) -> Arc<ProjectPool> {
+    EXTENSION_ENV.call_once(|| {
+        // SAFETY: all tests in this binary use the same read-only extension cache.
+        unsafe {
+            std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
+        }
+    });
+    Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
+        10,
+    ))
+}
 
 /// Build a profiles RecordBatch manually (simulating what transform_profiles produces).
 fn make_profiles_batch(
@@ -210,10 +233,7 @@ fn build_linked_otlp_profile_request(
 #[tokio::test]
 async fn e2e_profiles_pipeline() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -261,7 +281,7 @@ async fn e2e_profiles_pipeline() {
 
     // Verify rows landed in DuckDB
     let conn = pool.create_project("profile_test").unwrap();
-    let conn = conn.lock();
+    let conn = conn.get();
 
     let total: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {
@@ -320,10 +340,7 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
     use axum_test::TestServer;
 
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = Arc::new(MsgRouter::new(pool.clone()));
     router.start();
     let app = sigiro::ingest::otlp_http_router(
@@ -360,7 +377,7 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
     let mut linked_rows = 0;
     for _ in 0..50 {
         linked_rows = shared_conn
-            .lock()
+            .get()
             .query_row(
                 "SELECT count(*) FROM lake.sigiro_profiles
                  WHERE service_name = 'linked-svc'
@@ -394,7 +411,7 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
     response.assert_status(StatusCode::BAD_REQUEST);
 
     let rows_after_rejection: i64 = shared_conn
-        .lock()
+        .get()
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |row| {
             row.get(0)
         })
@@ -412,10 +429,7 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
 #[tokio::test]
 async fn e2e_profiles_multi_type() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -461,7 +475,7 @@ async fn e2e_profiles_multi_type() {
     router.shutdown_and_wait().await.unwrap();
 
     let conn = pool.create_project("multi_type").unwrap();
-    let conn = conn.lock();
+    let conn = conn.get();
 
     // Should have both profile types
     let type_count: i64 = conn
@@ -501,10 +515,7 @@ async fn e2e_profiles_multi_type() {
 #[tokio::test]
 async fn e2e_profiles_empty_batch() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -529,7 +540,7 @@ async fn e2e_profiles_empty_batch() {
     router.shutdown_and_wait().await.unwrap();
 
     let conn = pool.create_project("empty_profiles").unwrap();
-    let conn = conn.lock();
+    let conn = conn.get();
 
     let total: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {

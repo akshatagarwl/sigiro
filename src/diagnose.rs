@@ -1151,11 +1151,11 @@ async fn check_config_drift() -> Result<Vec<String>> {
     }
 
     // BACKPRESSURE_POLICY — must be one of the recognized values, otherwise
-    // MsgRouter falls back silently and the operator's intent is lost.
+    // startup fails fast.
     if let Ok(p) = config::BACKPRESSURE_POLICY.value() {
-        if p != "block" && p != "drop-oldest" {
+        if p != "block" && p != "drop-newest" {
             findings.push(format!(
-                "SIGIRO_BACKPRESSURE_POLICY={p:?} — unknown; expected \"block\" or \"drop-oldest\""
+                "SIGIRO_BACKPRESSURE_POLICY={p:?} — unknown; expected \"block\" or \"drop-newest\""
             ));
         }
     }

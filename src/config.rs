@@ -48,6 +48,18 @@ pub static OTEL_AUTH_KEY: Envar<String> =
 pub static EXTENSION_DIR: Envar<String> =
     Envar::on_startup("SIGIRO_EXTENSION_DIR", || EnvarDef::Default(String::new()));
 
+/// DuckDB worker threads per shared project database. Default: host parallelism.
+pub static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS", || {
+    EnvarDef::Default(default_duckdb_threads())
+});
+
+/// DuckDB memory cap per shared project database. Default: 2 GiB for a
+/// dedicated single-tenant observability box.
+pub static DUCKDB_MEMORY_LIMIT: Envar<String> =
+    Envar::on_startup("SIGIRO_DUCKDB_MEMORY_LIMIT", || {
+        EnvarDef::Default("2GB".to_string())
+    });
+
 /// Pyroscope profiling endpoint (optional — no profiling if unset).
 pub static PYROSCOPE_ENDPOINT: Envar<String> =
     Envar::on_startup("SIGIRO_PYROSCOPE_ENDPOINT", || {
@@ -69,11 +81,55 @@ pub static FLUSH_ROW_THRESHOLD: Envar<usize> =
 
 /// Backpressure policy when the per-project channel is full. Default: "block".
 /// - "block": sender awaits space (preserves data, may slow ingest)
-/// - "drop-oldest": drops the oldest buffered message (prevents stalls, may lose data)
+/// - "drop-newest": drops the incoming message (prevents stalls, loses newest data)
 pub static BACKPRESSURE_POLICY: Envar<String> =
     Envar::on_startup("SIGIRO_BACKPRESSURE_POLICY", || {
         EnvarDef::Default("block".to_string())
     });
+
+/// Backpressure policy for per-project ingest channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackpressurePolicy {
+    /// Block the sender until space is available. Guarantees no data loss but may
+    /// cause backpressure on the OTLP client.
+    Block,
+    /// Drop the incoming message when the channel is full.
+    DropNewest,
+}
+
+pub fn backpressure_policy() -> Result<BackpressurePolicy> {
+    match BACKPRESSURE_POLICY.value()?.as_str() {
+        "block" => Ok(BackpressurePolicy::Block),
+        "drop-newest" => Ok(BackpressurePolicy::DropNewest),
+        other => anyhow::bail!(
+            "unknown SIGIRO_BACKPRESSURE_POLICY: {other}. Expected 'block' or 'drop-newest'"
+        ),
+    }
+}
+
+pub fn duckdb_threads() -> Result<usize> {
+    let threads = DUCKDB_THREADS.value()?;
+    anyhow::ensure!(
+        threads > 0,
+        "SIGIRO_DUCKDB_THREADS must be greater than zero"
+    );
+    Ok(threads)
+}
+
+pub fn duckdb_memory_limit() -> Result<String> {
+    let memory_limit = DUCKDB_MEMORY_LIMIT.value()?;
+    anyhow::ensure!(
+        !memory_limit.trim().is_empty(),
+        "SIGIRO_DUCKDB_MEMORY_LIMIT must not be empty"
+    );
+    Ok(memory_limit)
+}
+
+fn default_duckdb_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+}
 
 /// Byte-size threshold that triggers an immediate flush. Default: 8_388_608 (8 MiB).
 /// When the total buffered bytes across all signal tables reaches this limit,

@@ -7,12 +7,22 @@ use arrow::record_batch::RecordBatch;
 use duckdb::Connection;
 use std::sync::Arc;
 
+fn extension_dir() -> String {
+    std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .map(|home| format!("{home}/.duckdb/extensions"))
+            .unwrap_or_else(|_| "/tmp/sigiro-test-extensions".to_string())
+    })
+}
+
 fn attach_ducklake_default(conn: &Connection, dir: &std::path::Path) {
     // Point DuckDB's home_directory at the temp dir so INSTALL/LOAD works
     // even in restricted environments (Nix sandbox, CI, containers).
     let data_path = dir.to_string_lossy();
     conn.execute_batch(&format!("SET home_directory='{data_path}';"))
         .expect("set home_directory");
+    conn.execute_batch(&format!("SET extension_directory='{}';", extension_dir()))
+        .expect("set extension_directory");
 
     conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
         .expect("install/load ducklake");
@@ -134,6 +144,8 @@ fn ducklake_data_survives_reattach() {
     {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(&format!("SET home_directory='{data_path}';"))
+            .unwrap();
+        conn.execute_batch(&format!("SET extension_directory='{}';", extension_dir()))
             .unwrap();
         conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
             .unwrap();

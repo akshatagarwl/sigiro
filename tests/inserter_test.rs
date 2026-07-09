@@ -4,8 +4,31 @@ use arrow::record_batch::RecordBatch;
 use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
 use sigiro::pool::ProjectPool;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
+
+static EXTENSION_ENV: Once = Once::new();
+
+fn test_extension_dir() -> String {
+    std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .map(|home| format!("{home}/.duckdb/extensions"))
+            .unwrap_or_else(|_| "/tmp/sigiro-test-extensions".to_string())
+    })
+}
+
+fn test_pool(dir: &std::path::Path) -> Arc<ProjectPool> {
+    EXTENSION_ENV.call_once(|| {
+        // SAFETY: all tests in this binary use the same read-only extension cache.
+        unsafe {
+            std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
+        }
+    });
+    Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
+        10,
+    ))
+}
 
 /// Create a minimal spans RecordBatch matching sigiro_spans schema.
 fn make_spans_batch(n: usize) -> RecordBatch {
@@ -89,10 +112,7 @@ fn make_spans_batch(n: usize) -> RecordBatch {
 #[tokio::test]
 async fn inserter_processes_spans_for_single_project() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -117,7 +137,7 @@ async fn inserter_processes_spans_for_single_project() {
 
     // Verify data landed in DuckDB
     let conn = pool.create_project("test_project").unwrap();
-    let conn = conn.lock();
+    let conn = conn.get();
     let count: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
@@ -129,10 +149,7 @@ async fn inserter_processes_spans_for_single_project() {
 #[tokio::test]
 async fn inserter_isolates_projects() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -165,7 +182,7 @@ async fn inserter_isolates_projects() {
     // Each project should have its own data
     let conn_a = pool.create_project("project_a").unwrap();
     let count_a: i64 = conn_a
-        .lock()
+        .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -173,7 +190,7 @@ async fn inserter_isolates_projects() {
 
     let conn_b = pool.create_project("project_b").unwrap();
     let count_b: i64 = conn_b
-        .lock()
+        .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -194,10 +211,7 @@ async fn inserter_handles_backpressure() {
     // Backpressure is now applied via bounded channels — senders block
     // rather than dropping data. All messages should be delivered.
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -234,7 +248,7 @@ async fn inserter_handles_backpressure() {
     // Both projects should have data — no drops under backpressure
     let conn = pool.create_project("fast_project").unwrap();
     let count: i64 = conn
-        .lock()
+        .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -243,7 +257,7 @@ async fn inserter_handles_backpressure() {
 
     let conn2 = pool.create_project("slow_project").unwrap();
     let count2: i64 = conn2
-        .lock()
+        .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -256,10 +270,7 @@ async fn inserter_throughput_single_project() {
     // Throughput test: 50,000 rows should complete in under 60 seconds.
     // This validates the buffered flush path is working (not per-message appender create/destroy).
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -286,7 +297,7 @@ async fn inserter_throughput_single_project() {
 
     let conn = pool.create_project("throughput_test").unwrap();
     let count: i64 = conn
-        .lock()
+        .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })

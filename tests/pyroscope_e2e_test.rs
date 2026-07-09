@@ -3,7 +3,30 @@ use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
 use sigiro::pool::ProjectPool;
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
+
+static EXTENSION_ENV: Once = Once::new();
+
+fn test_extension_dir() -> String {
+    std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .map(|home| format!("{home}/.duckdb/extensions"))
+            .unwrap_or_else(|_| "/tmp/sigiro-test-extensions".to_string())
+    })
+}
+
+fn test_pool(dir: &std::path::Path) -> Arc<ProjectPool> {
+    EXTENSION_ENV.call_once(|| {
+        // SAFETY: all tests in this binary use the same read-only extension cache.
+        unsafe {
+            std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
+        }
+    });
+    Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
+        10,
+    ))
+}
 
 fn build_pyroscope_push_request(
     service_name: &str,
@@ -119,10 +142,7 @@ fn build_pyroscope_push_request(
 #[tokio::test]
 async fn e2e_pyroscope_native_pipeline() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -164,7 +184,7 @@ async fn e2e_pyroscope_native_pipeline() {
 
     // Verify in DuckDB
     let conn = pool.create_project("pyro_test").unwrap();
-    let conn = conn.lock();
+    let conn = conn.get();
 
     let total: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {
@@ -267,10 +287,7 @@ async fn e2e_pyroscope_empty_push_request() {
 #[tokio::test]
 async fn e2e_pyroscope_multi_series() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -329,7 +346,7 @@ async fn e2e_pyroscope_multi_series() {
     router.shutdown_and_wait().await.unwrap();
 
     let conn = pool.create_project("pyro_multi").unwrap();
-    let conn = conn.lock();
+    let conn = conn.get();
 
     let total: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |r| {
@@ -364,10 +381,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
     use axum_test::TestServer;
 
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = Arc::new(MsgRouter::new(pool.clone()));
     router.start();
     let app = sigiro::ingest::otlp_http_router(
@@ -404,7 +418,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
     let mut stored_rows = 0;
     for _ in 0..50 {
         stored_rows = shared_conn
-            .lock()
+            .get()
             .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |row| {
                 row.get(0)
             })
@@ -417,7 +431,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
     assert_eq!(stored_rows, 4, "every heap sample type must be stored");
 
     {
-        let conn = shared_conn.lock();
+        let conn = shared_conn.get();
         for (profile_type, unit, value) in [
             ("alloc_objects", "count", 40),
             ("alloc_space", "bytes", 4096),
@@ -453,7 +467,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
     response.assert_status(StatusCode::BAD_REQUEST);
 
     let rows_after_rejection: i64 = shared_conn
-        .lock()
+        .get()
         .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |row| {
             row.get(0)
         })

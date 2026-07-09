@@ -4,15 +4,15 @@ use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use dashmap::DashMap;
 use duckdb::Connection;
-use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle as TokioJoinHandle;
 use tracing_attributes::instrument;
 
+use crate::config::BackpressurePolicy;
 use crate::drain::DrainTree;
 use crate::pool::ProjectPool;
 use crate::types::{IngestMsg, SignalTable};
@@ -31,17 +31,6 @@ pub enum RouterError {
 /// Per-project channel capacity. When full, messages are dropped
 /// (the OTLP SDK retries). Better to drop one project's data than block all.
 const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
-
-/// Backpressure policy for the per-project channel.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BackpressurePolicy {
-    /// Block the sender until space is available. Guarantees no data loss but may
-    /// cause backpressure on the OTLP client.
-    Block,
-    /// Drop the oldest message when the channel is full. This is a lossy policy —
-    /// data will be discarded when the channel buffer fills up.
-    DropOldest,
-}
 
 /// Flusher configuration derived from env vars at startup.
 #[derive(Debug, Clone)]
@@ -63,17 +52,8 @@ impl FlushConfig {
         let interval_secs = crate::config::FLUSH_INTERVAL_SECS
             .value()
             .expect("FLUSH_INTERVAL_SECS config must be valid");
-        let backpressure = match crate::config::BACKPRESSURE_POLICY
-            .value()
-            .as_deref()
-            .unwrap_or("block")
-        {
-            "block" => BackpressurePolicy::Block,
-            "drop-oldest" => BackpressurePolicy::DropOldest,
-            other => panic!(
-                "unknown SIGIRO_BACKPRESSURE_POLICY: {other}. Expected 'block' or 'drop-oldest'"
-            ),
-        };
+        let backpressure =
+            crate::config::backpressure_policy().expect("BACKPRESSURE_POLICY config must be valid");
         Self {
             row_threshold,
             byte_threshold,
@@ -90,8 +70,27 @@ impl FlushConfig {
 pub struct MsgRouter {
     pool: Arc<ProjectPool>,
     flush_config: FlushConfig,
-    project_senders: DashMap<String, (mpsc::Sender<IngestMsg>, JoinHandle<()>)>,
+    project_senders: DashMap<String, (mpsc::Sender<FlusherCommand>, TokioJoinHandle<()>)>,
     drop_count: AtomicUsize,
+}
+
+enum FlusherCommand {
+    Ingest(Box<IngestMsg>),
+    RetentionCleanup {
+        days: u32,
+        ack: oneshot::Sender<Result<(), String>>,
+    },
+}
+
+enum WriterCommand {
+    Ingest(Box<IngestMsg>),
+    FlushIfNeeded,
+    Checkpoint,
+    RetentionCleanup {
+        days: u32,
+        ack: oneshot::Sender<Result<(), String>>,
+    },
+    Shutdown,
 }
 
 impl MsgRouter {
@@ -121,6 +120,37 @@ impl MsgRouter {
             .any(|entry| entry.value().1.is_finished())
     }
 
+    pub fn dropped_messages(&self) -> usize {
+        self.drop_count.load(Ordering::Relaxed)
+    }
+
+    pub async fn run_retention_cleanup(&self, days: u32) -> Result<()> {
+        for project_id in self.pool.project_ids() {
+            self.ensure_flusher(&project_id)
+                .map_err(|e| anyhow::anyhow!("failed to ensure retention flusher: {e}"))?;
+            let sender = self
+                .project_senders
+                .get(&project_id)
+                .map(|entry| entry.value().0.clone())
+                .ok_or_else(|| anyhow::anyhow!("flusher missing for project {project_id}"))?;
+            let (ack, done) = oneshot::channel();
+            sender
+                .send(FlusherCommand::RetentionCleanup { days, ack })
+                .await
+                .with_context(|| format!("retention flusher channel closed for {project_id}"))?;
+            match done
+                .await
+                .with_context(|| format!("retention writer stopped for {project_id}"))?
+            {
+                Ok(()) => {
+                    tracing::debug!(project_id, days, "retention cleanup completed");
+                }
+                Err(error) => anyhow::bail!("retention cleanup failed for {project_id}: {error}"),
+            }
+        }
+        Ok(())
+    }
+
     /// Route a message to the appropriate per-project flusher.
     /// Creates the flusher task on first message for a project.
     /// Applies backpressure via bounded channel — sender blocks when full
@@ -147,7 +177,12 @@ impl MsgRouter {
                 Ok(())
             }
             Entry::Vacant(e) => {
-                let conn = self.pool.create_project(project_id).map_err(|_| {
+                self.pool.create_project(project_id).map_err(|_| {
+                    RouterError::ConnectionFailed {
+                        project_id: project_id.to_string(),
+                    }
+                })?;
+                let writer = self.pool.take_writer(project_id).map_err(|_| {
                     RouterError::ConnectionFailed {
                         project_id: project_id.to_string(),
                     }
@@ -155,11 +190,12 @@ impl MsgRouter {
                 let pool = Arc::clone(&self.pool);
                 let cfg = self.flush_config.clone();
 
-                let (tx, rx) = mpsc::channel::<IngestMsg>(PROJECT_CHANNEL_CAPACITY);
+                let (tx, rx) = mpsc::channel::<FlusherCommand>(PROJECT_CHANNEL_CAPACITY);
                 let pid_spawn = pid.clone();
                 tracing::info!(project_id = %pid, "register_flusher: spawning new flusher task");
-                let handle =
-                    tokio::spawn(async move { run_flusher(&pid_spawn, conn, rx, pool, cfg).await });
+                let handle = tokio::spawn(async move {
+                    run_flusher(pid_spawn, writer, rx, pool, cfg).await;
+                });
 
                 e.insert((tx, handle));
                 tracing::info!(project_id = %pid, "register_flusher: inserted new sender into project_senders");
@@ -192,7 +228,7 @@ impl MsgRouter {
 
         match self.flush_config.backpressure {
             BackpressurePolicy::Block => {
-                match sender.send(msg).await {
+                match sender.send(FlusherCommand::Ingest(Box::new(msg))).await {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
@@ -219,40 +255,42 @@ impl MsgRouter {
                     }
                 }
             }
-            BackpressurePolicy::DropOldest => match sender.try_send(msg) {
-                Ok(()) => Ok(()),
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    let count = self.drop_count.fetch_add(1, Ordering::Relaxed) + 1;
-                    tracing::warn!(
-                        project_id = %project_id_for_err,
-                        total_dropped = count,
-                        "channel full — DATA LOSS: dropping message (BackpressurePolicy::DropOldest)"
-                    );
-                    Ok(())
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    tracing::error!(project_id = %project_id_for_err, "send failed: channel closed");
-                    drop(entry);
-                    if let Some((_, (_, handle))) = self.project_senders.remove(&project_id) {
-                        if handle.is_finished() {
-                            match handle.await {
-                                Err(join_err) if join_err.is_panic() => {
-                                    tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
-                                }
-                                Err(join_err) => {
-                                    tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
-                                }
-                                Ok(()) => {
-                                    tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
+            BackpressurePolicy::DropNewest => {
+                match sender.try_send(FlusherCommand::Ingest(Box::new(msg))) {
+                    Ok(()) => Ok(()),
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        let count = self.drop_count.fetch_add(1, Ordering::Relaxed) + 1;
+                        tracing::warn!(
+                            project_id = %project_id_for_err,
+                            total_dropped = count,
+                            "channel full — DATA LOSS: dropping incoming message (BackpressurePolicy::DropNewest)"
+                        );
+                        Ok(())
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        tracing::error!(project_id = %project_id_for_err, "send failed: channel closed");
+                        drop(entry);
+                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id) {
+                            if handle.is_finished() {
+                                match handle.await {
+                                    Err(join_err) if join_err.is_panic() => {
+                                        tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
+                                    }
+                                    Err(join_err) => {
+                                        tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
+                                    }
+                                    Ok(()) => {
+                                        tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
+                                    }
                                 }
                             }
                         }
+                        Err(RouterError::ChannelClosed {
+                            project_id: project_id_for_err,
+                        })
                     }
-                    Err(RouterError::ChannelClosed {
-                        project_id: project_id_for_err,
-                    })
                 }
-            },
+            }
         }
     }
 
@@ -310,7 +348,7 @@ impl MsgRouter {
 /// acceptable for a debugging tool where the data source is still running
 /// and will re-emit. See www/content/docs/decisions/001-wal-not-needed.md for the full analysis.
 struct ProjectFlusher {
-    conn: Arc<Mutex<Connection>>,
+    conn: Connection,
     table_names: BTreeMap<SignalTable, String>,
     buffers: BTreeMap<SignalTable, Vec<RecordBatch>>,
     total_rows: usize,
@@ -325,7 +363,7 @@ struct ProjectFlusher {
 }
 
 impl ProjectFlusher {
-    fn new(conn: Arc<Mutex<Connection>>, cfg: &FlushConfig) -> Self {
+    fn new(conn: Connection, cfg: &FlushConfig) -> Self {
         let signals = SignalTable::ALL;
         let table_names: BTreeMap<SignalTable, String> = signals
             .iter()
@@ -447,7 +485,6 @@ impl ProjectFlusher {
     }
 
     /// Flush all buffered batches to DuckDB using appenders per table.
-    /// Acquires the mutex ONCE for the entire flush, writes all tables, releases.
     /// Uses appender_to_catalog_and_db for DuckLake catalog-qualified table access.
     #[tracing::instrument(skip_all, fields(project_id = %project_id, rows = self.total_rows))]
     fn flush(&mut self, project_id: &str) -> Result<()> {
@@ -460,7 +497,7 @@ impl ProjectFlusher {
         }
 
         tracing::info!(project_id, rows = self.total_rows, tables = ?self.buffers.keys().collect::<Vec<_>>(), "flushing batches");
-        let conn = self.conn.lock();
+        let conn = &self.conn;
 
         for (signal, buf) in &mut self.buffers {
             if buf.is_empty() {
@@ -533,6 +570,32 @@ impl ProjectFlusher {
         self.first_flush = false;
         Ok(())
     }
+
+    #[tracing::instrument(skip_all, fields(project_id = %project_id))]
+    fn checkpoint(&self, project_id: &str) -> Result<()> {
+        self.conn
+            .execute_batch("CHECKPOINT lake;")
+            .context("DuckLake CHECKPOINT failed")?;
+        tracing::debug!(project_id, "DuckLake CHECKPOINT completed");
+        Ok(())
+    }
+
+    #[tracing::instrument(skip_all, fields(project_id = %project_id, days))]
+    fn retention_cleanup(&self, project_id: &str, days: u32) -> Result<()> {
+        let cutoff = format!("now() - INTERVAL '{days} days'");
+        for table in self.table_names.values() {
+            let sql = format!("DELETE FROM {table} WHERE timestamp < {cutoff}");
+            self.conn
+                .execute_batch(&sql)
+                .with_context(|| format!("retention cleanup failed for {table}"))?;
+        }
+        tracing::info!(project_id, days, "retention cleanup completed");
+        Ok(())
+    }
+
+    fn into_connection(self) -> Connection {
+        self.conn
+    }
 }
 
 /// Approximate in-memory byte size of an Arrow RecordBatch.
@@ -562,14 +625,26 @@ fn array_byte_size(array: &dyn Array) -> usize {
 /// buffers them, and flushes to DuckDB on timer or row count threshold.
 #[instrument(skip_all, fields(project_id = %project_id))]
 async fn run_flusher(
-    project_id: &str,
-    conn: Arc<Mutex<Connection>>,
-    mut rx: mpsc::Receiver<IngestMsg>,
+    project_id: String,
+    writer: Connection,
+    mut rx: mpsc::Receiver<FlusherCommand>,
     pool: Arc<ProjectPool>,
     cfg: FlushConfig,
 ) {
     let flush_interval = cfg.interval;
-    let mut flusher = ProjectFlusher::new(conn.clone(), &cfg);
+    let (writer_tx, writer_rx) = mpsc::channel::<WriterCommand>(PROJECT_CHANNEL_CAPACITY);
+    let writer_project_id = project_id.clone();
+    let writer_cfg = cfg.clone();
+    let writer_handle = match std::thread::Builder::new()
+        .name(format!("sigiro-flusher-{project_id}"))
+        .spawn(move || run_writer_thread(&writer_project_id, writer, writer_rx, &writer_cfg))
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            tracing::error!(project_id, "failed to spawn writer thread: {error}");
+            return;
+        }
+    };
     let mut interval = tokio::time::interval(flush_interval);
     let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(30));
 
@@ -578,44 +653,43 @@ async fn run_flusher(
             biased;
 
             _ = interval.tick() => {
-                pool.touch_project(project_id);
+                pool.touch_project(&project_id);
                 // F-25: demoted from debug! to trace! (see flush skipped above).
                 tracing::trace!(project_id, "flusher timer tick");
-                if flusher.should_flush() {
-                    if let Err(e) = flusher.flush(project_id) {
-                        tracing::error!(project_id, "timer flush failed: {e:#}");
-                    }
+                if writer_tx.send(WriterCommand::FlushIfNeeded).await.is_err() {
+                    tracing::error!(project_id, "writer thread stopped before timer flush");
+                    break;
                 }
             }
 
             _ = checkpoint_interval.tick() => {
-                pool.touch_project(project_id);
-                let c = Arc::clone(&conn);
-                if let Err(e) = tokio::task::spawn_blocking(move || {
-                    let guard = c.lock();
-                    guard.execute_batch("CHECKPOINT lake;")
-                }).await {
-                    tracing::warn!(project_id, "DuckLake CHECKPOINT task failed: {e}");
-                } else {
-                    tracing::debug!(project_id, "DuckLake CHECKPOINT completed");
+                pool.touch_project(&project_id);
+                if writer_tx.send(WriterCommand::Checkpoint).await.is_err() {
+                    tracing::error!(project_id, "writer thread stopped before checkpoint");
+                    break;
                 }
             }
 
-            msg = rx.recv() => {
-                match msg {
-                    Some(msg) => {
-                        pool.touch_project(project_id);
+            command = rx.recv() => {
+                match command {
+                    Some(FlusherCommand::Ingest(msg)) => {
+                        pool.touch_project(&project_id);
                         tracing::debug!(project_id, "flusher received message");
-                        buffer_msg(&mut flusher, msg);
-                        if flusher.should_flush() {
-                            if let Err(e) = flusher.flush(project_id) {
-                                tracing::error!(project_id, "flush failed: {e:#}");
-                            }
+                        if writer_tx.send(WriterCommand::Ingest(msg)).await.is_err() {
+                            tracing::error!(project_id, "writer thread stopped before ingest");
+                            break;
+                        }
+                    }
+                    Some(FlusherCommand::RetentionCleanup { days, ack }) => {
+                        pool.touch_project(&project_id);
+                        if writer_tx.send(WriterCommand::RetentionCleanup { days, ack }).await.is_err() {
+                            tracing::error!(project_id, "writer thread stopped before retention cleanup");
+                            break;
                         }
                     }
                     None => {
-                        if let Err(e) = flusher.flush(project_id) {
-                            tracing::error!(project_id, "final flush failed: {e:#}");
+                        if writer_tx.send(WriterCommand::Shutdown).await.is_err() {
+                            tracing::debug!(project_id, "writer already stopped during shutdown");
                         }
                         tracing::info!(project_id, "flusher task exiting (channel closed)");
                         break;
@@ -625,16 +699,68 @@ async fn run_flusher(
         }
     }
 
-    // Final CHECKPOINT before exit so data is persisted.
-    let c = Arc::clone(&conn);
-    if let Err(e) = tokio::task::spawn_blocking(move || {
-        let guard = c.lock();
-        guard.execute_batch("CHECKPOINT lake;")
-    })
-    .await
-    {
-        tracing::warn!(project_id, "final DuckLake CHECKPOINT failed: {e}");
+    drop(writer_tx);
+    match tokio::task::spawn_blocking(move || writer_handle.join()).await {
+        Ok(Ok(writer)) => {
+            pool.return_writer(&project_id, writer);
+        }
+        Ok(Err(_panic)) => {
+            tracing::error!(project_id, "writer thread panicked");
+        }
+        Err(error) => {
+            tracing::error!(project_id, "writer join task failed: {error}");
+        }
     }
+}
+
+fn run_writer_thread(
+    project_id: &str,
+    writer: Connection,
+    mut rx: mpsc::Receiver<WriterCommand>,
+    cfg: &FlushConfig,
+) -> Connection {
+    let mut flusher = ProjectFlusher::new(writer, cfg);
+    while let Some(command) = rx.blocking_recv() {
+        match command {
+            WriterCommand::Ingest(msg) => {
+                buffer_msg(&mut flusher, *msg);
+                if flusher.should_flush()
+                    && let Err(e) = flusher.flush(project_id)
+                {
+                    tracing::error!(project_id, "flush failed: {e:#}");
+                }
+            }
+            WriterCommand::FlushIfNeeded => {
+                if flusher.should_flush()
+                    && let Err(e) = flusher.flush(project_id)
+                {
+                    tracing::error!(project_id, "timer flush failed: {e:#}");
+                }
+            }
+            WriterCommand::Checkpoint => {
+                if let Err(e) = flusher.checkpoint(project_id) {
+                    tracing::warn!(project_id, "{e:#}");
+                }
+            }
+            WriterCommand::RetentionCleanup { days, ack } => {
+                let result = flusher
+                    .retention_cleanup(project_id, days)
+                    .map_err(|e| format!("{e:#}"));
+                if ack.send(result).is_err() {
+                    tracing::debug!(project_id, "retention cleanup receiver dropped");
+                }
+            }
+            WriterCommand::Shutdown => break,
+        }
+    }
+
+    if let Err(e) = flusher.flush(project_id) {
+        tracing::error!(project_id, "final flush failed: {e:#}");
+    }
+    if let Err(e) = flusher.checkpoint(project_id) {
+        tracing::warn!(project_id, "final DuckLake CHECKPOINT failed: {e:#}");
+    }
+    flusher.into_connection()
 }
 
 /// Route an IngestMsg into the flusher's signal-keyed buffers.

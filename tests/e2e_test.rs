@@ -16,7 +16,30 @@ use sigiro::investigate::{InvestigateRequest, investigate};
 use sigiro::otlp::MetricBatches;
 use sigiro::pool::ProjectPool;
 use sigiro::server::validate_read_only;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
+
+static EXTENSION_ENV: Once = Once::new();
+
+fn test_extension_dir() -> String {
+    std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .map(|home| format!("{home}/.duckdb/extensions"))
+            .unwrap_or_else(|_| "/tmp/sigiro-test-extensions".to_string())
+    })
+}
+
+fn test_pool(dir: &std::path::Path) -> Arc<ProjectPool> {
+    EXTENSION_ENV.call_once(|| {
+        // SAFETY: all tests in this binary use the same read-only extension cache.
+        unsafe {
+            std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
+        }
+    });
+    Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
+        10,
+    ))
+}
 
 // ---------------------------------------------------------------------------
 // Helper: build a spans RecordBatch with configurable service_name and span_name
@@ -305,10 +328,7 @@ fn make_profiles_batch(
 #[tokio::test]
 async fn e2e_full_pipeline_ingest_and_investigate() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -338,7 +358,7 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     // Verify data in DuckDB
     let conn = pool.create_project("proj_e2e").unwrap();
     let count: i64 = conn
-        .lock()
+        .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
             row.get(0)
         })
@@ -352,7 +372,8 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&conn, &req, "lake.").expect("investigate should succeed");
+    let reader = conn.get();
+    let blocks = investigate(&reader, &req, "lake.").expect("investigate should succeed");
     let block = &blocks["checkout"];
 
     // Coverage
@@ -377,10 +398,7 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
 #[tokio::test]
 async fn e2e_multi_project_isolation() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -423,7 +441,8 @@ async fn e2e_multi_project_isolation() {
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks_a = investigate(&conn_a, &req_a, "lake.").expect("investigate failed");
+    let reader_a = conn_a.get();
+    let blocks_a = investigate(&reader_a, &req_a, "lake.").expect("investigate failed");
     let block_a = &blocks_a["alpha-svc"];
     assert_eq!(block_a.coverage.span_count, 30);
     assert_eq!(block_a.operation_summaries.len(), 1);
@@ -437,7 +456,7 @@ async fn e2e_multi_project_isolation() {
         to_ts: now_us + 60_000_000,
     };
     let blocks_beta_on_a =
-        investigate(&conn_a, &req_beta_on_a, "lake.").expect("investigate failed");
+        investigate(&reader_a, &req_beta_on_a, "lake.").expect("investigate failed");
     let block_beta_on_a = &blocks_beta_on_a["beta-svc"];
     assert_eq!(
         block_beta_on_a.coverage.span_count, 0,
@@ -452,7 +471,8 @@ async fn e2e_multi_project_isolation() {
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks_b = investigate(&conn_b, &req_b, "lake.").expect("investigate failed");
+    let reader_b = conn_b.get();
+    let blocks_b = investigate(&reader_b, &req_b, "lake.").expect("investigate failed");
     let block_b = &blocks_b["beta-svc"];
     assert_eq!(block_b.coverage.span_count, 50);
     assert_eq!(block_b.operation_summaries[0].span_name, "GET /beta");
@@ -465,10 +485,7 @@ async fn e2e_multi_project_isolation() {
 #[tokio::test]
 async fn e2e_services_endpoint_simulation() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -508,7 +525,7 @@ async fn e2e_services_endpoint_simulation() {
 
     // Query the services table grouped by service_name
     let conn = pool.create_project("proj_services").unwrap();
-    let conn_guard = conn.lock();
+    let conn_guard = conn.get();
 
     let mut stmt = conn_guard
         .prepare(
@@ -626,10 +643,7 @@ fn e2e_query_validation() {
 #[tokio::test]
 async fn e2e_investigation_all_signals() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -704,7 +718,7 @@ async fn e2e_investigation_all_signals() {
     // Verify raw counts in DuckDB
     let conn = pool.create_project("proj_all_signals").unwrap();
     {
-        let guard = conn.lock();
+        let guard = conn.get();
         let spans: i64 = guard
             .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |r| r.get(0))
             .unwrap();
@@ -728,7 +742,8 @@ async fn e2e_investigation_all_signals() {
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&conn, &req, "lake.").expect("investigate with all signals");
+    let reader = conn.get();
+    let blocks = investigate(&reader, &req, "lake.").expect("investigate with all signals");
     let block = &blocks["full-svc"];
 
     assert!(
@@ -835,10 +850,7 @@ async fn e2e_drain_log_template_dedup() {
     // Verify the full pipeline: OTLP logs → inserter (DRAIN) → DuckDB → investigate
     // Logs with variable tokens should collapse into a single template.
     let dir = tempfile::tempdir().unwrap();
-    let pool = Arc::new(ProjectPool::new(
-        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
-        10,
-    ));
+    let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
 
@@ -883,7 +895,7 @@ async fn e2e_drain_log_template_dedup() {
 
     // Verify: 20 rows in sigiro_logs, each with a template_id
     let conn = pool.create_project("drain_test").unwrap();
-    let conn = conn.lock();
+    let conn = conn.get();
 
     let total_logs: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_logs", [], |r| r.get(0))

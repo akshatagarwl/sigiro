@@ -75,7 +75,8 @@ fn investigate_with_in_memory_db() {
         from_ts: 0,
         to_ts: 0,
     };
-    let blocks = investigate(&shared, &req, "").expect("investigate should succeed on empty db");
+    let blocks =
+        investigate(&shared.lock(), &req, "").expect("investigate should succeed on empty db");
     let block = &blocks["nonexistent"];
     assert_eq!(block.service, "nonexistent");
     assert!(block.operation_summaries.is_empty());
@@ -148,7 +149,7 @@ fn investigate_with_real_span_data() {
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared, &req, "").expect("investigate");
+    let blocks = investigate(&shared.lock(), &req, "").expect("investigate");
     let block = &blocks["checkout"];
 
     assert_eq!(block.operation_summaries.len(), 2);
@@ -519,7 +520,7 @@ fn investigate_large_window_no_spans() {
         from_ts: now_us - 3 * 3600 * 1_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared, &req, "").unwrap();
+    let blocks = investigate(&shared.lock(), &req, "").unwrap();
     let block = &blocks["svc"];
     assert!(
         block.traces.is_empty(),
@@ -552,7 +553,7 @@ fn investigate_multi_basic() {
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared, &req, "").unwrap();
+    let blocks = investigate(&shared.lock(), &req, "").unwrap();
     assert_eq!(blocks.len(), 3);
     assert!(blocks.contains_key("svc-a"));
     assert!(blocks.contains_key("svc-b"));
@@ -571,7 +572,7 @@ fn investigate_multi_cap_enforced() {
         from_ts: 0,
         to_ts: 0,
     };
-    let result = investigate(&shared, &req, "");
+    let result = investigate(&shared.lock(), &req, "");
     assert!(result.is_err(), "should reject >10 services");
 }
 
@@ -586,7 +587,7 @@ fn investigate_multi_empty_rejected() {
         from_ts: 0,
         to_ts: 0,
     };
-    assert!(investigate(&shared, &req, "").is_err());
+    assert!(investigate(&shared.lock(), &req, "").is_err());
 }
 
 #[test]
@@ -638,7 +639,7 @@ fn investigate_all_three_signals() {
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared, &req, "").expect("investigate");
+    let blocks = investigate(&shared.lock(), &req, "").expect("investigate");
     let block = &blocks["svc"];
 
     // Coverage: all 3 signal types present, no gaps
@@ -701,7 +702,7 @@ fn operation_summary_baselines() {
         from_ts: now_us - 5 * 60 * 1_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared, &req, "").expect("investigate");
+    let blocks = investigate(&shared.lock(), &req, "").expect("investigate");
     let block = &blocks["checkout"];
 
     let op = &block.operation_summaries[0];

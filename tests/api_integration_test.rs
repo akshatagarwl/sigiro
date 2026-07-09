@@ -223,6 +223,11 @@ async fn test_admin_status_returns_200() {
     let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
     // Empty status is a valid JSON object
     assert!(body.is_object(), "expected JSON object");
+    assert_eq!(
+        body.pointer("/status/ingest_dropped_messages_total")
+            .and_then(|v| v.as_str()),
+        Some("0")
+    );
 }
 
 #[tokio::test]
@@ -325,7 +330,7 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
         .pool
         .get_project("default")
         .expect("default project connection should exist");
-    let guard = conn.lock();
+    let guard = conn.get();
     let spans: i64 = guard
         .query_row(
             "SELECT count(*) FROM lake.sigiro_spans WHERE trace_id = '11111111111111111111111111111111'",
