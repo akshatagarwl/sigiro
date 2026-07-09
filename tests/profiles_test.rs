@@ -3,6 +3,7 @@
 use arrow::array::{Int64Array, ListBuilder, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
+use prost::Message;
 use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
 use sigiro::investigate::QueryCtx;
@@ -17,6 +18,8 @@ fn make_profiles_batch(
 ) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
         Field::new("profile_id", DataType::Utf8, true),
+        Field::new("trace_id", DataType::Utf8, true),
+        Field::new("span_id", DataType::Utf8, true),
         Field::new("service_name", DataType::Utf8, false),
         Field::new(
             "timestamp",
@@ -35,6 +38,8 @@ fn make_profiles_batch(
     ]));
 
     let mut profile_ids = Vec::new();
+    let mut trace_ids: Vec<Option<&str>> = Vec::new();
+    let mut span_ids: Vec<Option<&str>> = Vec::new();
     let mut service_names = Vec::new();
     let mut timestamps = Vec::new();
     let mut profile_types = Vec::new();
@@ -50,6 +55,8 @@ fn make_profiles_batch(
 
     for (i, (frames, value, ptype, unit)) in stacks.iter().enumerate() {
         profile_ids.push("test-profile-001");
+        trace_ids.push(None);
+        span_ids.push(None);
         service_names.push(service_name);
         timestamps.push(ts_base + i as i64);
         profile_types.push(*ptype);
@@ -67,6 +74,8 @@ fn make_profiles_batch(
         schema,
         vec![
             Arc::new(StringArray::from(profile_ids)),
+            Arc::new(StringArray::from(trace_ids)),
+            Arc::new(StringArray::from(span_ids)),
             Arc::new(StringArray::from(service_names)),
             Arc::new(arrow::array::TimestampMicrosecondArray::from(timestamps)),
             Arc::new(StringArray::from(profile_types)),
@@ -77,6 +86,121 @@ fn make_profiles_batch(
         ],
     )
     .unwrap()
+}
+
+fn build_linked_otlp_profile_request(
+    service_name: &str,
+    timestamp_ns: u64,
+    trace_id: Vec<u8>,
+    span_id: Vec<u8>,
+) -> Vec<u8> {
+    use opentelemetry_proto::tonic::collector::profiles::v1development::ExportProfilesServiceRequest;
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+    use opentelemetry_proto::tonic::profiles::v1development::{
+        Function, Line, Link, Location, Profile, ProfilesDictionary, ResourceProfiles, Sample,
+        ScopeProfiles, Stack, ValueType,
+    };
+    use opentelemetry_proto::tonic::resource::v1::Resource;
+
+    let request = ExportProfilesServiceRequest {
+        resource_profiles: vec![ResourceProfiles {
+            resource: Some(Resource {
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue {
+                        value: Some(any_value::Value::StringValue(service_name.to_string())),
+                    }),
+                }],
+                dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
+            }),
+            scope_profiles: vec![ScopeProfiles {
+                scope: None,
+                profiles: vec![Profile {
+                    sample_type: Some(ValueType {
+                        type_strindex: 1,
+                        unit_strindex: 2,
+                        aggregation_temporality: 0,
+                    }),
+                    sample: vec![Sample {
+                        stack_index: 1,
+                        values: vec![42],
+                        attribute_indices: Vec::new(),
+                        link_index: 1,
+                        timestamps_unix_nano: Vec::new(),
+                    }],
+                    time_unix_nano: timestamp_ns,
+                    duration_nano: 1_000_000_000,
+                    period_type: None,
+                    period: 0,
+                    comment_strindices: Vec::new(),
+                    profile_id: vec![0x33; 16],
+                    dropped_attributes_count: 0,
+                    original_payload_format: String::new(),
+                    original_payload: Vec::new(),
+                    attribute_indices: Vec::new(),
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+        dictionary: Some(ProfilesDictionary {
+            mapping_table: Vec::new(),
+            location_table: vec![
+                Location::default(),
+                Location {
+                    line: vec![Line {
+                        function_index: 1,
+                        line: 0,
+                        column: 0,
+                    }],
+                    ..Default::default()
+                },
+                Location {
+                    line: vec![Line {
+                        function_index: 2,
+                        line: 0,
+                        column: 0,
+                    }],
+                    ..Default::default()
+                },
+            ],
+            function_table: vec![
+                Function::default(),
+                Function {
+                    name_strindex: 3,
+                    ..Default::default()
+                },
+                Function {
+                    name_strindex: 4,
+                    ..Default::default()
+                },
+            ],
+            link_table: vec![
+                Link {
+                    trace_id: Vec::new(),
+                    span_id: Vec::new(),
+                },
+                Link { trace_id, span_id },
+            ],
+            string_table: vec![
+                String::new(),
+                "cpu".to_string(),
+                "nanoseconds".to_string(),
+                "main".to_string(),
+                "handler".to_string(),
+            ],
+            attribute_table: Vec::new(),
+            stack_table: vec![
+                Stack::default(),
+                Stack {
+                    location_indices: vec![1, 2],
+                },
+            ],
+        }),
+    };
+
+    request.encode_to_vec()
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +311,97 @@ async fn e2e_profiles_pipeline() {
         db_query_summary.unwrap().total_value,
         27_000_000,
         "db_query total should be 27M ns"
+    );
+}
+
+#[tokio::test]
+async fn e2e_otlp_profiles_store_sample_trace_span_link() {
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(ProjectPool::new(
+        camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+        10,
+    ));
+    let router = Arc::new(MsgRouter::new(pool.clone()));
+    router.start();
+    let app = sigiro::ingest::otlp_http_router(
+        router,
+        sigiro::auth::AuthMode::Key {
+            key: "sigiro_dev_test".to_string(),
+        },
+    );
+    let server = TestServer::new(app).unwrap();
+
+    let trace_id = vec![
+        0x11, 0x11, 0x11, 0x11, 0x22, 0x22, 0x22, 0x22, 0x33, 0x33, 0x33, 0x33, 0x44, 0x44, 0x44,
+        0x44,
+    ];
+    let span_id = vec![0xaa, 0xaa, 0xbb, 0xbb, 0xcc, 0xcc, 0xdd, 0xdd];
+    let request = build_linked_otlp_profile_request(
+        "linked-svc",
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64,
+        trace_id.clone(),
+        span_id.clone(),
+    );
+
+    let response = server
+        .post("/v1/profiles")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/x-protobuf")
+        .bytes(request.into())
+        .await;
+    response.assert_status_ok();
+
+    let shared_conn = pool.get_project("default").unwrap();
+    let expected_trace_id = hex::encode(&trace_id);
+    let expected_span_id = hex::encode(&span_id);
+    let mut linked_rows = 0;
+    for _ in 0..50 {
+        linked_rows = shared_conn
+            .lock()
+            .query_row(
+                "SELECT count(*) FROM lake.sigiro_profiles
+                 WHERE service_name = 'linked-svc'
+                   AND trace_id = ?1
+                   AND span_id = ?2
+                   AND stack_trace[1] = 'main'
+                   AND stack_trace[-1] = 'handler'",
+                duckdb::params![&expected_trace_id, &expected_span_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if linked_rows == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(linked_rows, 1, "OTLP profile sample link should be stored");
+
+    let invalid_request = build_linked_otlp_profile_request(
+        "linked-svc",
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64,
+        vec![0x11; 15],
+        vec![0x22; 8],
+    );
+    let response = server
+        .post("/v1/profiles")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/x-protobuf")
+        .bytes(invalid_request.into())
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+
+    let rows_after_rejection: i64 = shared_conn
+        .lock()
+        .query_row("SELECT count(*) FROM lake.sigiro_profiles", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        rows_after_rejection, 1,
+        "malformed profile links must not be ingested"
     );
 }
 

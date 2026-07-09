@@ -278,6 +278,8 @@ impl MetricsService for OtlpGrpcService {
 fn profile_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("profile_id", DataType::Utf8, true),
+        Field::new("trace_id", DataType::Utf8, true),
+        Field::new("span_id", DataType::Utf8, true),
         Field::new("service_name", DataType::Utf8, false),
         Field::new(
             "timestamp",
@@ -326,6 +328,8 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                 vec![
                     Arc::new(StringBuilder::new().finish()),
                     Arc::new(StringBuilder::new().finish()),
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(StringBuilder::new().finish()),
                     Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
                     Arc::new(StringBuilder::new().finish()),
                     Arc::new(empty_stack_trace_array()),
@@ -342,6 +346,8 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
     let schema = profile_schema();
 
     let mut profile_ids = StringBuilder::new();
+    let mut trace_ids = StringBuilder::new();
+    let mut span_ids = StringBuilder::new();
     let mut service_names = StringBuilder::new();
     let mut timestamps = Vec::new();
     let mut profile_types = StringBuilder::new();
@@ -406,6 +412,54 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
         Ok(frames)
     }
 
+    fn resolve_link(
+        link_index: i32,
+        dict: &opentelemetry_proto::tonic::profiles::v1development::ProfilesDictionary,
+    ) -> Result<Option<(String, String)>, Status> {
+        if link_index == 0 {
+            return Ok(None);
+        }
+
+        let link_index = usize::try_from(link_index).map_err(|_| {
+            Status::invalid_argument(format!(
+                "link_table index {link_index} must not be negative"
+            ))
+        })?;
+        let link = dict.link_table.get(link_index).ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "link_table index {link_index} out of bounds (table has {} entries)",
+                dict.link_table.len()
+            ))
+        })?;
+        if link.trace_id.len() != 16 {
+            return Err(Status::invalid_argument(format!(
+                "profile link trace_id at index {link_index} must be 16 bytes, got {}",
+                link.trace_id.len()
+            )));
+        }
+        if link.span_id.len() != 8 {
+            return Err(Status::invalid_argument(format!(
+                "profile link span_id at index {link_index} must be 8 bytes, got {}",
+                link.span_id.len()
+            )));
+        }
+        if link.trace_id.iter().all(|b| *b == 0) {
+            return Err(Status::invalid_argument(format!(
+                "profile link trace_id at index {link_index} must not be all zeros"
+            )));
+        }
+        if link.span_id.iter().all(|b| *b == 0) {
+            return Err(Status::invalid_argument(format!(
+                "profile link span_id at index {link_index} must not be all zeros"
+            )));
+        }
+
+        Ok(Some((
+            hex::encode(&link.trace_id),
+            hex::encode(&link.span_id),
+        )))
+    }
+
     for rp in &request.resource_profiles {
         let service_name = extract_service_name(rp.resource.as_ref())
             .ok_or_else(|| Status::invalid_argument(
@@ -458,6 +512,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
 
                 for sample in &profile.sample {
                     let stack = resolve_stack(sample.stack_index, &dict, string_table)?;
+                    let link = resolve_link(sample.link_index, &dict)?;
                     let sample_values = if sample.values.is_empty() {
                         vec![0i64]
                     } else {
@@ -467,6 +522,16 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                     // For multi-value profiles, write one row per value
                     for &val in &sample_values {
                         profile_ids.append_value(pid);
+                        match &link {
+                            Some((trace_id, span_id)) => {
+                                trace_ids.append_value(trace_id);
+                                span_ids.append_value(span_id);
+                            }
+                            None => {
+                                trace_ids.append_null();
+                                span_ids.append_null();
+                            }
+                        }
                         service_names.append_value(service_name);
                         timestamps.push(ts_us);
                         profile_types.append_value(ptype);
@@ -489,6 +554,8 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
             schema,
             vec![
                 Arc::new(profile_ids.finish()),
+                Arc::new(trace_ids.finish()),
+                Arc::new(span_ids.finish()),
                 Arc::new(service_names.finish()),
                 Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
                 Arc::new(profile_types.finish()),
@@ -505,6 +572,8 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
         schema,
         vec![
             Arc::new(profile_ids.finish()),
+            Arc::new(trace_ids.finish()),
+            Arc::new(span_ids.finish()),
             Arc::new(service_names.finish()),
             Arc::new(TimestampMicrosecondArray::from(timestamps)),
             Arc::new(profile_types.finish()),
@@ -921,6 +990,8 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
     let schema = profile_schema();
 
     let mut profile_ids = StringBuilder::new();
+    let mut trace_ids = StringBuilder::new();
+    let mut span_ids = StringBuilder::new();
     let mut service_names = StringBuilder::new();
     let mut timestamps = Vec::<i64>::new();
     let mut profile_types = StringBuilder::new();
@@ -1062,6 +1133,8 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
 
                 for ((profile_type, unit), &value) in sample_types.iter().zip(&pprof_sample.value) {
                     profile_ids.append_value(&sample_id);
+                    trace_ids.append_null();
+                    span_ids.append_null();
                     service_names.append_value(service_name);
                     timestamps.push(ts_us);
                     profile_types.append_value(profile_type);
@@ -1082,6 +1155,8 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
             vec![
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(StringBuilder::new().finish()),
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(StringBuilder::new().finish()),
                 Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(empty_stack_trace_array()),
@@ -1097,6 +1172,8 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
         schema,
         vec![
             Arc::new(profile_ids.finish()),
+            Arc::new(trace_ids.finish()),
+            Arc::new(span_ids.finish()),
             Arc::new(service_names.finish()),
             Arc::new(TimestampMicrosecondArray::from(timestamps)),
             Arc::new(profile_types.finish()),

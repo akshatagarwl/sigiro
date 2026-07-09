@@ -228,6 +228,8 @@ fn make_profiles_batch(
 ) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
         Field::new("profile_id", DataType::Utf8, true),
+        Field::new("trace_id", DataType::Utf8, true),
+        Field::new("span_id", DataType::Utf8, true),
         Field::new("service_name", DataType::Utf8, false),
         Field::new(
             "timestamp",
@@ -246,6 +248,8 @@ fn make_profiles_batch(
     ]));
 
     let mut profile_ids = Vec::new();
+    let mut trace_ids: Vec<Option<&str>> = Vec::new();
+    let mut span_ids: Vec<Option<&str>> = Vec::new();
     let mut service_names = Vec::new();
     let mut timestamps = Vec::new();
     let mut profile_types = Vec::new();
@@ -261,6 +265,8 @@ fn make_profiles_batch(
 
     for (i, (frames, value, ptype, unit)) in stacks.iter().enumerate() {
         profile_ids.push("test-profile-001");
+        trace_ids.push(None);
+        span_ids.push(None);
         service_names.push(service_name);
         timestamps.push(ts_base + i as i64);
         profile_types.push(*ptype);
@@ -278,6 +284,8 @@ fn make_profiles_batch(
         schema,
         vec![
             Arc::new(StringArray::from(profile_ids)),
+            Arc::new(StringArray::from(trace_ids)),
+            Arc::new(StringArray::from(span_ids)),
             Arc::new(StringArray::from(service_names)),
             Arc::new(arrow::array::TimestampMicrosecondArray::from(timestamps)),
             Arc::new(StringArray::from(profile_types)),

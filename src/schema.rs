@@ -191,6 +191,8 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_profiles (
             profile_id            VARCHAR,
+            trace_id              VARCHAR,
+            span_id               VARCHAR,
             service_name          VARCHAR NOT NULL,
             timestamp             TIMESTAMP NOT NULL,
             profile_type          VARCHAR,
