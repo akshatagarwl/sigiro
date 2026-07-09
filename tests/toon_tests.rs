@@ -6,7 +6,7 @@ fn test_toon_status_output() {
         "status": "ok",
         "version": "1.0.0"
     });
-    let toon = sigiro::toon::to_toon(&status);
+    let toon = toon::encode(&status, None);
 
     // TOON should be more compact than JSON
     let json_str = serde_json::to_string_pretty(&status).unwrap();
@@ -32,7 +32,7 @@ fn test_toon_services_array() {
         {"name": "checkout", "spans": 1500, "logs": 300},
         {"name": "payments", "spans": 800, "logs": 200}
     ]);
-    let toon = sigiro::toon::to_toon(&services);
+    let toon = toon::encode(&services, None);
 
     // TOON should use table format for arrays of objects
     assert!(toon.contains("["), "TOON should have array indicator");
@@ -64,7 +64,7 @@ fn test_toon_investigate_structure() {
             }
         ]
     });
-    let toon = sigiro::toon::to_toon(&investigate);
+    let toon = toon::encode(&investigate, None);
 
     // Should handle nested objects
     assert!(
@@ -84,13 +84,13 @@ fn test_toon_investigate_structure() {
 #[test]
 fn test_toon_empty_values() {
     let empty_array = json!([]);
-    let toon = sigiro::toon::to_toon(&empty_array);
+    let toon = toon::encode(&empty_array, None);
     // Empty arrays might return empty string or some indicator
     // The important thing is it doesn't panic
     let _ = toon; // Just verify it doesn't panic
 
     let empty_object = json!({});
-    let toon = sigiro::toon::to_toon(&empty_object);
+    let toon = toon::encode(&empty_object, None);
     // Empty objects might return empty string
     // The important thing is it doesn't panic
     let _ = toon; // Just verify it doesn't panic
@@ -102,7 +102,7 @@ fn test_toon_special_characters() {
         "message": "Hello, world",
         "description": "This has, commas"
     });
-    let toon = sigiro::toon::to_toon(&with_commas);
+    let toon = toon::encode(&with_commas, None);
 
     // Should handle strings with commas
     assert!(
@@ -122,7 +122,7 @@ fn test_toon_numeric_types() {
         "float": 1.61803,
         "negative": -100
     });
-    let toon = sigiro::toon::to_toon(&numbers);
+    let toon = toon::encode(&numbers, None);
 
     assert!(toon.contains("42"), "TOON should contain integer");
     assert!(toon.contains("1.618"), "TOON should contain float");
@@ -135,7 +135,7 @@ fn test_toon_boolean_values() {
         "active": true,
         "deleted": false
     });
-    let toon = sigiro::toon::to_toon(&booleans);
+    let toon = toon::encode(&booleans, None);
 
     assert!(toon.contains("true"), "TOON should contain true");
     assert!(toon.contains("false"), "TOON should contain false");
@@ -147,7 +147,7 @@ fn test_toon_null_values() {
         "present": "value",
         "missing": null
     });
-    let toon = sigiro::toon::to_toon(&with_null);
+    let toon = toon::encode(&with_null, None);
 
     assert!(
         toon.contains("present: value"),
@@ -175,7 +175,7 @@ fn test_toon_performance_comparison() {
         "operations": operations
     });
 
-    let toon = sigiro::toon::to_toon(&large_structure);
+    let toon = toon::encode(&large_structure, None);
     let json_str = serde_json::to_string_pretty(&large_structure).unwrap();
 
     // TOON should be significantly more compact
@@ -193,7 +193,7 @@ fn snapshot_toon_simple_object() {
         "status": "ok",
         "version": "1.0.0"
     });
-    let toon = sigiro::toon::to_toon(&value);
+    let toon = toon::encode(&value, None);
     insta::assert_snapshot!(toon);
 }
 
@@ -203,7 +203,7 @@ fn snapshot_toon_array_of_objects() {
         {"name": "checkout", "spans": 1500},
         {"name": "payments", "spans": 800}
     ]);
-    let toon = sigiro::toon::to_toon(&value);
+    let toon = toon::encode(&value, None);
     insta::assert_snapshot!(toon);
 }
 
@@ -216,7 +216,7 @@ fn snapshot_toon_nested_object() {
             "to_ts": 1711001000
         }
     });
-    let toon = sigiro::toon::to_toon(&value);
+    let toon = toon::encode(&value, None);
     insta::assert_snapshot!(toon);
 }
 
@@ -237,6 +237,6 @@ fn snapshot_toon_performance_comparison() {
         "operations": operations
     });
 
-    let toon = sigiro::toon::to_toon(&large_structure);
+    let toon = toon::encode(&large_structure, None);
     insta::assert_snapshot!(toon);
 }

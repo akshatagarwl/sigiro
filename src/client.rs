@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
 
-use crate::investigate::InvestigationBlock;
+use crate::investigate::{InvestigateRequest, InvestigationBlock};
+use crate::responses::ListWorkersResponse;
 
 /// Explicit client auth mode — mirrors server-side AuthMode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,12 +135,12 @@ impl SigiroClient {
         from: i64,
         to: i64,
     ) -> Result<std::collections::BTreeMap<String, InvestigationBlock>> {
-        let body = serde_json::json!({
-            "service": service,
-            "services": services,
-            "from_ts": from,
-            "to_ts": to,
-        });
+        let body = InvestigateRequest {
+            service: service.map(str::to_string),
+            services,
+            from_ts: from,
+            to_ts: to,
+        };
         let req = self
             .http
             .post(format!("{}/v1/investigate", self.base_url))
@@ -237,11 +237,6 @@ impl SigiroClient {
 
     /// List all registered federation workers.
     pub async fn list_workers(&self) -> Result<Vec<crate::federation::WorkerInfo>> {
-        #[derive(Deserialize)]
-        struct ListWorkersResponse {
-            workers: Vec<crate::federation::WorkerInfo>,
-        }
-
         let req = self
             .http
             .get(format!("{}/v1/federation/workers", self.base_url));

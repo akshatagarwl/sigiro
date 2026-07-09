@@ -20,7 +20,6 @@ pub mod responses;
 pub mod schema;
 pub mod server;
 pub mod storage;
-pub mod toon;
 pub mod types;
 
 use anyhow::{Context, Result};

@@ -74,7 +74,7 @@ pub struct DeregisterWorkerResponse {
 }
 
 /// GET /v1/federation/workers
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct ListWorkersResponse {
     pub workers: Vec<crate::federation::WorkerInfo>,
 }

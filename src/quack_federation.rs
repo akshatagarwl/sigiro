@@ -41,15 +41,6 @@ pub fn start_quack_server(conn: &Connection, port: u16, token: &str) -> Result<Q
     })
 }
 
-/// Extract host from an endpoint URL.
-pub fn extract_host(endpoint: &str) -> Result<&str> {
-    let endpoint = endpoint
-        .strip_prefix("http://")
-        .or_else(|| endpoint.strip_prefix("https://"))
-        .unwrap_or(endpoint);
-    Ok(endpoint.split(':').next().unwrap_or(endpoint))
-}
-
 pub fn blocking_federated_query(
     _conn: &Connection,
     workers: &[super::federation::WorkerInfo],

@@ -5,7 +5,6 @@ use std::io::IsTerminal;
 use std::sync::Arc; // for stdout().is_terminal()
 
 use sigiro::responses::HealthResponse;
-use sigiro::toon::to_toon;
 use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
 use std::sync::atomic::AtomicBool;
 
@@ -101,7 +100,7 @@ fn format_output(
     let fmt = output_format.unwrap_or(&OutputFormat::Toon);
     match (use_json, fmt) {
         (true, _) | (false, OutputFormat::Json) => Ok(serde_json::to_string_pretty(value)?),
-        (false, OutputFormat::Toon) => Ok(to_toon(value)),
+        (false, OutputFormat::Toon) => Ok(toon::encode(value, None)),
     }
 }
 
