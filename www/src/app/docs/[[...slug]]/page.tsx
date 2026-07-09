@@ -9,7 +9,7 @@ export default async function Page({
   params: Promise<{ slug?: string[] }>;
 }) {
   const { slug } = await params;
-  const page = source.getPage(slug);
+  const page = source.getPage(slug ?? []);
   if (!page) notFound();
 
   const MDX = page.data.body;
@@ -26,16 +26,14 @@ export default async function Page({
 }
 
 export async function generateStaticParams() {
-  return source.generateParams()
-    .filter((item) => item.slug.length > 0)
-    .map((item) => ({
-      slug: item.slug,
-    }));
+  return source.generateParams().map((item) => ({
+    slug: item.slug,
+  }));
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ slug?: string[] }> }) {
   const { slug } = await params;
-  const page = source.getPage(slug);
+  const page = source.getPage(slug ?? []);
   if (!page) notFound();
   return {
     title: page.data.title,
