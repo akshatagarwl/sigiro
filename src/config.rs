@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
+use serde::{Deserialize, Serialize};
 use typed_env::{Envar, EnvarDef};
 
 // ---------------------------------------------------------------------------
@@ -140,6 +141,11 @@ pub static HOSTNAME: Envar<String> =
 /// Uses EnvarDef::Unset so .value() fails if not set (no silent fallback).
 pub static API_KEY: Envar<String> = Envar::on_startup("SIGIRO_API_KEY", || EnvarDef::Unset);
 
+#[derive(Deserialize, Serialize)]
+struct ConfigFile {
+    api_key: String,
+}
+
 /// API key (required — no default. Set via $SIGIRO_API_KEY or config.toml).
 /// Returns the path to the sigiro config directory (~/.config/sigiro/).
 fn config_dir() -> Result<Utf8PathBuf> {
@@ -165,11 +171,8 @@ pub fn get_api_key() -> Result<String> {
             "No API key found. Run: sigiro auth <key>\n  (looked in {path} and $SIGIRO_API_KEY)",
         )
     })?;
-    let config: toml::Value = content.parse().context("invalid config.toml")?;
-    config["api_key"]
-        .as_str()
-        .map(String::from)
-        .context("api_key not found in config.toml")
+    let config: ConfigFile = toml::from_str(&content).context("invalid config.toml")?;
+    Ok(config.api_key)
 }
 
 /// Save API key to ~/.config/sigiro/config.toml with 0600 permissions on Unix.
@@ -177,8 +180,11 @@ pub fn save_api_key(key: &str) -> Result<Utf8PathBuf> {
     let dir = config_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("failed to create config dir: {dir}"))?;
     let path = dir.join("config.toml");
-    std::fs::write(&path, format!("api_key = \"{key}\"\n"))
-        .with_context(|| format!("failed to write {path}"))?;
+    let content = toml::to_string(&ConfigFile {
+        api_key: key.to_string(),
+    })
+    .context("failed to serialize config.toml")?;
+    std::fs::write(&path, content).with_context(|| format!("failed to write {path}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
