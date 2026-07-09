@@ -1,6 +1,6 @@
 use crate::otlp::{InputFormat, MetricBatches};
 use anyhow::Result;
-use arrow::array::{Int64Array, ListArray, StringBuilder, TimestampMicrosecondArray};
+use arrow::array::{Int64Array, ListArray, ListBuilder, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
@@ -296,6 +296,25 @@ fn profile_schema() -> Arc<Schema> {
     ]))
 }
 
+fn stack_trace_builder() -> ListBuilder<StringBuilder> {
+    ListBuilder::new(StringBuilder::new()).with_field(Arc::new(Field::new(
+        "item",
+        DataType::Utf8,
+        true,
+    )))
+}
+
+fn append_stack_trace(builder: &mut ListBuilder<StringBuilder>, stack: &[&str]) {
+    for &frame in stack {
+        builder.values().append_value(frame);
+    }
+    builder.append(true);
+}
+
+fn empty_stack_trace_array() -> ListArray {
+    stack_trace_builder().finish()
+}
+
 fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBatch, Status> {
     let dict = match request.dictionary {
         Some(d) => d,
@@ -309,15 +328,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                     Arc::new(StringBuilder::new().finish()),
                     Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
                     Arc::new(StringBuilder::new().finish()),
-                    Arc::new(
-                        ListArray::try_new(
-                            Arc::new(Field::new("item", DataType::Utf8, true)),
-                            arrow::buffer::OffsetBuffer::new(vec![0i32].into()),
-                            Arc::new(StringBuilder::new().finish()),
-                            None,
-                        )
-                        .map_err(arrow_status)?,
-                    ),
+                    Arc::new(empty_stack_trace_array()),
                     Arc::new(Int64Array::from(Vec::<i64>::new())),
                     Arc::new(StringBuilder::new().finish()),
                     Arc::new(StringBuilder::new().finish()),
@@ -334,8 +345,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
     let mut service_names = StringBuilder::new();
     let mut timestamps = Vec::new();
     let mut profile_types = StringBuilder::new();
-    let mut stack_offsets: Vec<i32> = vec![0]; // list offsets
-    let mut stack_values = StringBuilder::new();
+    let mut stack_traces = stack_trace_builder();
     let mut values = Vec::new();
     let mut units = StringBuilder::new();
     let mut resource_attrs = StringBuilder::new();
@@ -460,14 +470,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                         service_names.append_value(service_name);
                         timestamps.push(ts_us);
                         profile_types.append_value(ptype);
-
-                        for frame in &stack {
-                            stack_values.append_value(frame);
-                        }
-                        let prev_offset = *stack_offsets
-                            .last()
-                            .expect("invariant: stack_offsets always has at least one element");
-                        stack_offsets.push(prev_offset + stack.len() as i32);
+                        append_stack_trace(&mut stack_traces, &stack);
 
                         values.push(val);
                         units.append_value(punit);
@@ -489,15 +492,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                 Arc::new(service_names.finish()),
                 Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
                 Arc::new(profile_types.finish()),
-                Arc::new(
-                    ListArray::try_new(
-                        Arc::new(Field::new("item", DataType::Utf8, true)),
-                        arrow::buffer::OffsetBuffer::new(vec![0i32].into()),
-                        Arc::new(stack_values.finish()),
-                        None,
-                    )
-                    .map_err(arrow_status)?,
-                ),
+                Arc::new(stack_traces.finish()),
                 Arc::new(Int64Array::from(Vec::<i64>::new())),
                 Arc::new(units.finish()),
                 Arc::new(resource_attrs.finish()),
@@ -506,14 +501,6 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
         .map_err(arrow_status);
     }
 
-    let stack_list = ListArray::try_new(
-        Arc::new(Field::new("item", DataType::Utf8, true)),
-        arrow::buffer::OffsetBuffer::new(stack_offsets.into()),
-        Arc::new(stack_values.finish()),
-        None,
-    )
-    .map_err(arrow_status)?;
-
     RecordBatch::try_new(
         schema,
         vec![
@@ -521,7 +508,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
             Arc::new(service_names.finish()),
             Arc::new(TimestampMicrosecondArray::from(timestamps)),
             Arc::new(profile_types.finish()),
-            Arc::new(stack_list),
+            Arc::new(stack_traces.finish()),
             Arc::new(Int64Array::from(values)),
             Arc::new(units.finish()),
             Arc::new(resource_attrs.finish()),
@@ -937,8 +924,7 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
     let mut service_names = StringBuilder::new();
     let mut timestamps = Vec::<i64>::new();
     let mut profile_types = StringBuilder::new();
-    let mut stack_offsets: Vec<i32> = vec![0];
-    let mut stack_values = StringBuilder::new();
+    let mut stack_traces = stack_trace_builder();
     let mut values = Vec::<i64>::new();
     let mut units = StringBuilder::new();
     let mut resource_attrs = StringBuilder::new();
@@ -1079,14 +1065,7 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
                     service_names.append_value(service_name);
                     timestamps.push(ts_us);
                     profile_types.append_value(profile_type);
-
-                    for frame in &stack {
-                        stack_values.append_value(frame);
-                    }
-                    let prev_offset = *stack_offsets
-                        .last()
-                        .expect("stack_offsets always has an element");
-                    stack_offsets.push(prev_offset + stack.len() as i32);
+                    append_stack_trace(&mut stack_traces, &stack);
 
                     values.push(value);
                     units.append_value(unit);
@@ -1105,15 +1084,7 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
                 Arc::new(StringBuilder::new().finish()),
-                Arc::new(
-                    ListArray::try_new(
-                        Arc::new(Field::new("item", DataType::Utf8, true)),
-                        arrow::buffer::OffsetBuffer::new(vec![0i32].into()),
-                        Arc::new(StringBuilder::new().finish()),
-                        None,
-                    )
-                    .map_err(arrow_status)?,
-                ),
+                Arc::new(empty_stack_trace_array()),
                 Arc::new(Int64Array::from(Vec::<i64>::new())),
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(StringBuilder::new().finish()),
@@ -1122,14 +1093,6 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
         .map_err(arrow_status);
     }
 
-    let stack_list = ListArray::try_new(
-        Arc::new(Field::new("item", DataType::Utf8, true)),
-        arrow::buffer::OffsetBuffer::new(stack_offsets.into()),
-        Arc::new(stack_values.finish()),
-        None,
-    )
-    .map_err(arrow_status)?;
-
     RecordBatch::try_new(
         schema,
         vec![
@@ -1137,7 +1100,7 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
             Arc::new(service_names.finish()),
             Arc::new(TimestampMicrosecondArray::from(timestamps)),
             Arc::new(profile_types.finish()),
-            Arc::new(stack_list),
+            Arc::new(stack_traces.finish()),
             Arc::new(Int64Array::from(values)),
             Arc::new(units.finish()),
             Arc::new(resource_attrs.finish()),

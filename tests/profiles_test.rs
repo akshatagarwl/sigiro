@@ -1,6 +1,6 @@
 //! Tests for OTLP Profiles: dictionary resolution, inserter pipeline, investigate queries.
 
-use arrow::array::{Int64Array, ListArray, StringArray};
+use arrow::array::{Int64Array, ListBuilder, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use sigiro::IngestMsg;
@@ -42,9 +42,11 @@ fn make_profiles_batch(
     let mut units = Vec::new();
     let mut resource_attrs: Vec<Option<&str>> = Vec::new();
 
-    // Build list array for stack traces
-    let mut stack_offsets: Vec<i32> = vec![0];
-    let mut stack_values_flat: Vec<&str> = Vec::new();
+    let mut stack_traces = ListBuilder::new(StringBuilder::new()).with_field(Arc::new(Field::new(
+        "item",
+        DataType::Utf8,
+        true,
+    )));
 
     for (i, (frames, value, ptype, unit)) in stacks.iter().enumerate() {
         profile_ids.push("test-profile-001");
@@ -56,19 +58,10 @@ fn make_profiles_batch(
         resource_attrs.push(None);
 
         for frame in *frames {
-            stack_values_flat.push(frame);
+            stack_traces.values().append_value(*frame);
         }
-        let prev = *stack_offsets.last().unwrap();
-        stack_offsets.push(prev + frames.len() as i32);
+        stack_traces.append(true);
     }
-
-    let stack_list = ListArray::try_new(
-        Arc::new(Field::new("item", DataType::Utf8, true)),
-        arrow::buffer::OffsetBuffer::new(stack_offsets.into()),
-        Arc::new(StringArray::from(stack_values_flat)),
-        None,
-    )
-    .unwrap();
 
     RecordBatch::try_new(
         schema,
@@ -77,7 +70,7 @@ fn make_profiles_batch(
             Arc::new(StringArray::from(service_names)),
             Arc::new(arrow::array::TimestampMicrosecondArray::from(timestamps)),
             Arc::new(StringArray::from(profile_types)),
-            Arc::new(stack_list),
+            Arc::new(stack_traces.finish()),
             Arc::new(Int64Array::from(values)),
             Arc::new(StringArray::from(units)),
             Arc::new(StringArray::from(resource_attrs)),
