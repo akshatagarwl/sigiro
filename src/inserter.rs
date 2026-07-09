@@ -499,28 +499,23 @@ impl ProjectFlusher {
         tracing::info!(project_id, rows = self.total_rows, tables = ?self.buffers.keys().collect::<Vec<_>>(), "flushing batches");
         let conn = &self.conn;
 
+        let mut failures: Vec<String> = Vec::new();
         for (signal, buf) in &mut self.buffers {
             if buf.is_empty() {
                 continue;
             }
             let table = &self.table_names[signal];
-            // Extract bare table name (strip "lake." prefix for catalog-qualified appender).
-            // conn.appender("lake.table") fails — must use appender_to_catalog_and_db.
-            let bare_table = table.strip_prefix("lake.").unwrap_or(table);
-            let mut appender = conn
-                .appender_to_catalog_and_db(bare_table, "lake", "main")
-                .with_context(|| format!("failed to create {table} appender"))?;
-            for batch in buf.drain(..) {
-                if batch.num_rows() > 0 {
-                    appender
-                        .append_record_batch(batch)
-                        .with_context(|| format!("failed to append {table} batch"))?;
-                }
+            let batches = std::mem::take(buf);
+            let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+            if let Err(e) = append_batches(conn, table, batches) {
+                tracing::error!(
+                    project_id,
+                    table = %table,
+                    rows_lost = rows,
+                    "flush failed — dropping buffered batches: {e:#}"
+                );
+                failures.push(format!("{table}: {e:#}"));
             }
-            appender
-                .flush()
-                .with_context(|| format!("failed to flush {table} appender"))?;
-            // Appender::drop cleans up
         }
 
         // Flush new log templates to the lookup table
@@ -568,6 +563,13 @@ impl ProjectFlusher {
         self.total_bytes = 0;
         self.last_flush = Instant::now();
         self.first_flush = false;
+
+        anyhow::ensure!(
+            failures.is_empty(),
+            "flush failed for {} table(s): {}",
+            failures.len(),
+            failures.join("; ")
+        );
         Ok(())
     }
 
@@ -596,6 +598,30 @@ impl ProjectFlusher {
     fn into_connection(self) -> Connection {
         self.conn
     }
+}
+
+/// Append a table's buffered batches via a DuckLake catalog-qualified appender.
+/// Isolated as a free function (not a `&mut self` method) so `ProjectFlusher::flush`
+/// can call it per-table inside a loop that also borrows `self.buffers` mutably.
+fn append_batches(conn: &Connection, table: &str, batches: Vec<RecordBatch>) -> Result<()> {
+    // Extract bare table name (strip "lake." prefix for catalog-qualified appender).
+    // conn.appender("lake.table") fails — must use appender_to_catalog_and_db.
+    let bare_table = table.strip_prefix("lake.").unwrap_or(table);
+    let mut appender = conn
+        .appender_to_catalog_and_db(bare_table, "lake", "main")
+        .with_context(|| format!("failed to create {table} appender"))?;
+    for batch in batches {
+        if batch.num_rows() > 0 {
+            appender
+                .append_record_batch(batch)
+                .with_context(|| format!("failed to append {table} batch"))?;
+        }
+    }
+    appender
+        .flush()
+        .with_context(|| format!("failed to flush {table} appender"))?;
+    // Appender::drop cleans up
+    Ok(())
 }
 
 /// Approximate in-memory byte size of an Arrow RecordBatch.
@@ -770,5 +796,133 @@ fn buffer_msg(flusher: &mut ProjectFlusher, msg: IngestMsg) {
         IngestMsg::Logs { batch, .. } => flusher.buffer(SignalTable::Logs, batch),
         IngestMsg::Metrics { batches, .. } => flusher.buffer_metrics(batches),
         IngestMsg::Profiles { batch, .. } => flusher.buffer(SignalTable::Profiles, batch),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    // Copied from tests/ducklake_appender_test.rs — no attach helper is exposed
+    // via crate::storage, and this test needs private ProjectFlusher access
+    // so it must live in-module rather than in tests/.
+    fn extension_dir() -> String {
+        std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|home| format!("{home}/.duckdb/extensions"))
+                .unwrap_or_else(|_| "/tmp/sigiro-test-extensions".to_string())
+        })
+    }
+
+    fn attach_ducklake(conn: &Connection, dir: &std::path::Path) {
+        let data_path = dir.to_string_lossy();
+        conn.execute_batch(&format!("SET home_directory='{data_path}';"))
+            .expect("set home_directory");
+        conn.execute_batch(&format!("SET extension_directory='{}';", extension_dir()))
+            .expect("set extension_directory");
+        conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
+            .expect("install/load ducklake");
+        conn.execute_batch(&format!(
+            "ATTACH 'ducklake:{data_path}/catalog.ducklake' AS lake"
+        ))
+        .expect("attach DuckDB file catalog");
+    }
+
+    /// A batch matching the test-only `lake.sigiro_metrics_gauge (id INTEGER)` table.
+    fn int_batch(n: usize) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(
+                (0..n as i32).collect::<Vec<_>>(),
+            ))],
+        )
+        .expect("valid int batch")
+    }
+
+    fn test_flush_config() -> FlushConfig {
+        FlushConfig {
+            row_threshold: 1_000_000,
+            byte_threshold: 1_000_000_000,
+            interval: Duration::from_secs(3600),
+            backpressure: BackpressurePolicy::Block,
+        }
+    }
+
+    #[test]
+    fn flush_isolates_per_table_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        attach_ducklake(&conn, dir.path());
+
+        // Deliberately create ONLY the gauge table — sigiro_spans is missing,
+        // so its appender creation fails.
+        conn.execute_batch("CREATE TABLE lake.sigiro_metrics_gauge (id INTEGER)")
+            .expect("create gauge table");
+
+        let cfg = test_flush_config();
+        let mut flusher = ProjectFlusher::new(conn, &cfg);
+
+        // Spans sorts before MetricsGauge in the BTreeMap (SignalTable::Spans
+        // is the first variant), so the old code's early-return on the Spans
+        // error would have starved MetricsGauge entirely.
+        flusher.buffer(SignalTable::Spans, int_batch(5));
+        flusher.buffer(SignalTable::MetricsGauge, int_batch(7));
+
+        let err = flusher
+            .flush("test_project")
+            .expect_err("flush should fail: sigiro_spans table does not exist");
+        assert!(
+            format!("{err:#}").contains("sigiro_spans"),
+            "error should mention the failing table sigiro_spans: {err:#}"
+        );
+
+        // The healthy MetricsGauge table must still have been written despite
+        // the Spans failure — this assertion fails on the old drain-based code.
+        let count: i64 = flusher
+            .conn
+            .query_row(
+                "SELECT count(*) FROM lake.sigiro_metrics_gauge",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 7,
+            "gauge batch should have been flushed despite the spans failure"
+        );
+
+        // Buffers drain and counters reset even though one table failed.
+        assert!(
+            flusher.buffers.values().all(Vec::is_empty),
+            "all buffers should be empty after flush"
+        );
+        assert_eq!(flusher.total_rows, 0, "total_rows should reset after flush");
+        assert_eq!(
+            flusher.total_bytes, 0,
+            "total_bytes should reset after flush"
+        );
+
+        // Recovery: the spans buffer is now empty so it's skipped (not
+        // reattempted), and a further gauge flush succeeds cleanly.
+        flusher.buffer(SignalTable::MetricsGauge, int_batch(3));
+        flusher
+            .flush("test_project")
+            .expect("second flush should succeed once the failing table is idle");
+
+        let count: i64 = flusher
+            .conn
+            .query_row(
+                "SELECT count(*) FROM lake.sigiro_metrics_gauge",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 10,
+            "gauge count should increment after recovery flush"
+        );
     }
 }
