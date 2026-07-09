@@ -68,30 +68,76 @@ use tracing_attributes::instrument;
 )]
 pub struct ApiDoc;
 
-/// Rate limit key: extract Bearer token from Authorization header.
-/// Returns Err for requests without a parseable Bearer token — these will be
-/// rejected by auth middleware anyway, so rate-limiting them is pointless noise.
+/// Rate-limit key: the Bearer token when present, otherwise the peer IP.
+/// Keying unauthenticated requests by peer IP (instead of a single shared
+/// placeholder) stops one anonymous client's burst from throttling every
+/// other anonymous client — the bug that made open-mode queries appear to
+/// intermittently "lose" data. ConnectInfo is populated by the connect-info
+/// make-service in `serve_http_app`.
 #[derive(Clone)]
-struct BearerKeyExtractor;
+struct RateLimitKeyExtractor;
 
-impl KeyExtractor for BearerKeyExtractor {
+impl KeyExtractor for RateLimitKeyExtractor {
     type Key = String;
 
     fn extract<T>(
         &self,
         req: &axum::http::Request<T>,
     ) -> Result<Self::Key, tower_governor::GovernorError> {
-        // Use a placeholder when auth is missing/malformed so the request
-        // reaches the auth middleware, which returns a proper 401 instead of
-        // the governor's generic 500 "Unable To Extract Key".
-        let key = req
+        if let Some(token) = req
             .headers()
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
-            .unwrap_or("Bearer missing_auth_header");
-        Ok(key.to_string())
+        {
+            return Ok(format!("tok:{token}"));
+        }
+        let ip = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip());
+        Ok(match ip {
+            Some(ip) => format!("ip:{ip}"),
+            None => "ip:unknown".to_string(),
+        })
     }
+}
+
+/// Render a `GovernorError` as a JSON body matching the shape of every other
+/// API error (`{status, title, detail}`) so a rate-limited client cannot
+/// mistake the plain-text default ("Too Many Requests!") for query output.
+fn rate_limit_error_response(err: tower_governor::GovernorError) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use tower_governor::GovernorError;
+
+    let (status, detail, extra_headers) = match err {
+        GovernorError::TooManyRequests { wait_time, headers } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("rate limit exceeded — retry after {wait_time}s"),
+            headers,
+        ),
+        GovernorError::UnableToExtractKey => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "unable to extract rate-limit key".to_string(),
+            None,
+        ),
+        GovernorError::Other { code, msg, headers } => (
+            code,
+            msg.unwrap_or_else(|| "rate limit error".to_string()),
+            headers,
+        ),
+    };
+    let body = serde_json::json!({
+        "status": status.as_u16(),
+        "title": "rate limited",
+        "detail": detail,
+    });
+    let mut response = (status, Json(body)).into_response();
+    if let Some(headers) = extra_headers {
+        response.headers_mut().extend(headers);
+    }
+    response
 }
 
 pub struct AppState {
@@ -140,9 +186,19 @@ impl AppState {
 /// (e.g., read_csv('/etc/passwd') is a valid SELECT but reads arbitrary files).
 const BLOCKED_TABLE_FUNCTIONS: &[&str] = &["DROP", "READ_CSV", "READ_PARQUET", "READ_JSON"];
 
+/// DuckLake time-travel qualifier, e.g. `AT (VERSION => 3)` or
+/// `AT (TIMESTAMP => '2026-07-09 19:55:00')`. sqlparser's GenericDialect can't
+/// parse the `=>` form, so it is stripped before the SELECT-only structural
+/// check. The keyword denylist below still scans the ORIGINAL sql, so this
+/// widens reads without weakening the write/DDL/file-access guards.
+static TIME_TRAVEL_AT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?i)\bAT\s*\([^)]*=>[^)]*\)").expect("valid time-travel regex")
+});
+
 pub fn validate_read_only(sql: &str) -> Result<(), String> {
     let dialect = GenericDialect {};
-    let statements = Parser::parse_sql(&dialect, sql)
+    let parseable = TIME_TRAVEL_AT.replace_all(sql, " ");
+    let statements = Parser::parse_sql(&dialect, &parseable)
         .map_err(|e| format!("query rejected: parse error: {e}"))?;
 
     for stmt in &statements {
@@ -185,11 +241,13 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
 /// Extracted from `run_servers` so integration tests can build the same
 /// router with test state without starting TCP listeners.
 pub fn build_http_router(app_state: Arc<AppState>) -> Router {
-    // Rate limit: 100 requests/minute per API key (GCRA algorithm, in-memory)
+    // Rate limit (GCRA, in-memory): ~20 req/s sustained, burst 100 — a sane
+    // ceiling for an ops/agent-facing API. Keyed per Bearer token, or per peer
+    // IP for unauthenticated clients (see RateLimitKeyExtractor).
     let governor_conf = GovernorConfigBuilder::default()
-        .key_extractor(BearerKeyExtractor)
-        .per_second(2)
-        .burst_size(10)
+        .key_extractor(RateLimitKeyExtractor)
+        .per_second(20)
+        .burst_size(100)
         .finish()
         .expect("valid governor config");
 
@@ -206,7 +264,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
             app_state.clone(),
             auth::auth_middleware,
         ))
-        .layer(GovernorLayer::new(governor_conf));
+        .layer(GovernorLayer::new(governor_conf).error_handler(rate_limit_error_response));
 
     // Admin routes — no auth required. Self-hosted: expose only internally.
     let admin = Router::new().typed_get(admin_status);
@@ -484,14 +542,14 @@ async fn serve_http_app(
         tracing::info!(server = name, protocol = "HTTPS", "listening on {addr}");
         axum_server::bind_rustls(addr, config)
             .handle(handle)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await
             .with_context(|| format!("{name} HTTPS server failed"))
     } else {
         tracing::info!(server = name, protocol = "HTTP", "listening on {addr}");
         axum_server::bind(addr)
             .handle(handle)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await
             .with_context(|| format!("{name} HTTP server failed"))
     }
@@ -735,20 +793,22 @@ async fn execute_sql(
         let mut stmt = conn_ref
             .prepare(&sql_clone)
             .map_err(|e| anyhow::anyhow!("failed to prepare query: {e}"))?;
-        let _dummy = stmt
+        // Execute ONCE. Column names come from the live statement behind the
+        // Rows handle (owned Vec, so the borrow ends before we iterate).
+        let mut rows = stmt
             .query([])
             .map_err(|e| anyhow::anyhow!("failed to execute query: {e}"))?;
-        drop(_dummy);
-        let column_count = stmt.column_count();
-        let column_names: Vec<String> = (0..column_count)
-            .map(|i| {
-                stmt.column_name(i)
-                    .map_or("?".to_string(), std::string::ToString::to_string)
-            })
-            .collect();
-        let mut rows = stmt.query([])?;
+        let column_names: Vec<String> = rows
+            .as_ref()
+            .map(duckdb::Statement::column_names)
+            .unwrap_or_default();
         let mut results = Vec::new();
-        while let Ok(Some(row)) = rows.next() {
+        // Propagate a mid-stream error instead of silently truncating the
+        // result and returning partial rows as HTTP 200.
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| anyhow::anyhow!("row read failed: {e}"))?
+        {
             let mut obj = serde_json::Map::new();
             for (i, name) in column_names.iter().enumerate() {
                 let val = row
@@ -796,12 +856,24 @@ async fn query_handler(
     Extension(auth): Extension<AuthContext>,
     body: String,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
-    validate_read_only(&body).map_err(|e| bad_request("query rejected", &e))?;
-    let results = execute_sql(&state, &auth, &body)
-        .await
-        .map_err(|e| bad_request("query rejected", &format!("{e:#}")))?;
-    tracing::info!(rows = results.len(), "query completed");
-    Ok(Json(results))
+    // Truncated SQL preview so every query outcome (reject / fail / complete)
+    // leaves a server-side trace — a silently-throttled or errored query used
+    // to leave none, which is what let a false "data loss" RCA take hold.
+    let sql_preview: String = body.chars().take(200).collect();
+    if let Err(e) = validate_read_only(&body) {
+        tracing::warn!(sql = %sql_preview, "query rejected (validation): {e}");
+        return Err(bad_request("query rejected", &e));
+    }
+    match execute_sql(&state, &auth, &body).await {
+        Ok(results) => {
+            tracing::info!(rows = results.len(), sql = %sql_preview, "query completed");
+            Ok(Json(results))
+        }
+        Err(e) => {
+            tracing::warn!(sql = %sql_preview, "query failed: {e:#}");
+            Err(bad_request("query rejected", &format!("{e:#}")))
+        }
+    }
 }
 
 /// GET /v1/services — discover what services are sending telemetry.

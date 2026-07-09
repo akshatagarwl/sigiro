@@ -155,6 +155,30 @@ async fn test_query_without_auth_returns_401() {
 }
 
 #[tokio::test]
+async fn test_query_midstream_error_never_returns_partial_rows() {
+    let ctx = build_test_context();
+    let app = build_http_router(ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    // A query that produces rows but raises an error partway through the scan.
+    // The old handler used `while let Ok(Some(row)) = rows.next()`, which
+    // swallowed the row-stream Err and returned 200 with the rows accumulated
+    // so far. It must now surface the error and never emit partial data.
+    let resp = server
+        .post("/v1/query")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .text("SELECT CASE WHEN i = 3 THEN error('boom') ELSE i END AS v FROM range(5) t(i)")
+        .await;
+
+    assert_ne!(
+        resp.status_code(),
+        axum::http::StatusCode::OK,
+        "mid-stream query error must not return 200 with partial rows"
+    );
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_query_with_dev_auth_bad_sql_returns_400() {
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);

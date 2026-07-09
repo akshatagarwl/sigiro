@@ -292,7 +292,14 @@ pub fn transform_traces(bytes: &[u8], format: InputFormat) -> Result<RecordBatch
     }
 }
 
-pub fn transform_logs(bytes: &[u8], format: InputFormat) -> Result<RecordBatch, DecodeError> {
+/// Transform OTLP logs. Returns the RecordBatch of accepted rows plus the
+/// count of records skipped for an unusable `service.name` (or other per-record
+/// decode error) so the caller can report OTLP `partialSuccess` instead of
+/// failing the whole batch on one bad sibling record.
+pub fn transform_logs(
+    bytes: &[u8],
+    format: InputFormat,
+) -> Result<(RecordBatch, u64), DecodeError> {
     match format {
         InputFormat::Protobuf => decode_logs_protobuf(bytes),
         InputFormat::Json => decode_logs_json(bytes),
@@ -341,7 +348,7 @@ fn decode_traces_request(
         .map_err(|e| DecodeError::Parse(e.to_string()))
 }
 
-fn decode_logs_protobuf(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
+fn decode_logs_protobuf(bytes: &[u8]) -> Result<(RecordBatch, u64), DecodeError> {
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use prost::Message;
 
@@ -349,7 +356,7 @@ fn decode_logs_protobuf(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
     decode_logs_request(request)
 }
 
-fn decode_logs_json(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
+fn decode_logs_json(bytes: &[u8]) -> Result<(RecordBatch, u64), DecodeError> {
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 
     let request: ExportLogsServiceRequest = serde_json::from_slice(bytes)?;
@@ -358,22 +365,29 @@ fn decode_logs_json(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
 
 fn decode_logs_request(
     request: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest,
-) -> Result<RecordBatch, DecodeError> {
+) -> Result<(RecordBatch, u64), DecodeError> {
     let mut builders = LogBuilders::new();
+    let mut rejected: u64 = 0;
 
     for resource_logs in request.resource_logs {
         let resource = resource_logs.resource.as_ref();
         for scope_logs in resource_logs.scope_logs {
             let scope = scope_logs.scope.as_ref();
             for log in scope_logs.log_records {
-                builders.append_log(&log, resource, scope)?;
+                // Skip + count an unusable record instead of aborting the whole
+                // batch; the append is atomic so no partial columns are written.
+                if let Err(e) = builders.append_log(&log, resource, scope) {
+                    rejected += 1;
+                    tracing::debug!("skipping unusable log record: {e}");
+                }
             }
         }
     }
 
-    builders
+    let batch = builders
         .finish()
-        .map_err(|e| DecodeError::Parse(e.to_string()))
+        .map_err(|e| DecodeError::Parse(e.to_string()))?;
+    Ok((batch, rejected))
 }
 
 fn decode_metrics_protobuf(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
@@ -891,6 +905,21 @@ impl LogBuilders {
             time
         };
 
+        // Validate the service_name BEFORE mutating any builder so a rejected
+        // record leaves every column untouched (atomic append — no column
+        // desync). The caller skips + counts the record for partialSuccess
+        // rather than dropping the whole batch.
+        let service_name = extract_string_attr(resource, "service.name").unwrap_or_default();
+        if service_name.is_empty()
+            || service_name == "unknown"
+            || service_name == "unknown_service"
+            || service_name.starts_with("unknown_service:")
+        {
+            return Err(DecodeError::Parse(
+                "log with unusable service_name detected — set OTEL_SERVICE_NAME (or service.name resource attribute) on the sending application".into(),
+            ));
+        }
+
         self.timestamp.append_value(timestamp / 1000);
         self.observed_timestamp.append_value(observed / 1000);
 
@@ -907,16 +936,6 @@ impl LogBuilders {
             self.span_id.append_value(&span_id);
         }
 
-        let service_name = extract_string_attr(resource, "service.name").unwrap_or_default();
-        if service_name.is_empty()
-            || service_name == "unknown"
-            || service_name == "unknown_service"
-            || service_name.starts_with("unknown_service:")
-        {
-            return Err(DecodeError::Parse(
-                "log with unusable service_name detected — set OTEL_SERVICE_NAME (or service.name resource attribute) on the sending application".into(),
-            ));
-        }
         self.service_name.append_value(&service_name);
         self.service_namespace
             .append_option(extract_string_attr(resource, "service.namespace"));

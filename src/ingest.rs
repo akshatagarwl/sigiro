@@ -161,7 +161,7 @@ async fn transform_traces(bytes: Bytes, fmt: InputFormat) -> Result<RecordBatch,
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
-async fn transform_logs(bytes: Bytes, fmt: InputFormat) -> Result<RecordBatch, Status> {
+async fn transform_logs(bytes: Bytes, fmt: InputFormat) -> Result<(RecordBatch, u64), Status> {
     spawn_transform("transform logs", move || {
         crate::otlp::transform_logs(&bytes, fmt)
     })
@@ -214,21 +214,35 @@ impl LogsService for OtlpGrpcService {
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
-        let batch = transform_logs(bytes, InputFormat::Protobuf).await?;
+        let (batch, rejected) = transform_logs(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
-            tracing::warn!(project_id, "export logs: empty batch after transform");
+            tracing::warn!(
+                project_id,
+                rejected,
+                "export logs: empty batch after transform"
+            );
             return Ok(Response::new(ExportLogsServiceResponse {
                 partial_success: Some(ExportLogsPartialSuccess {
-                    rejected_log_records: 1,
-                    error_message: "empty batch after transform".to_string(),
+                    rejected_log_records: rejected.max(1) as i64,
+                    error_message: "no usable log records after transform".to_string(),
                 }),
             }));
         }
+        if rejected > 0 {
+            tracing::warn!(
+                project_id,
+                rejected,
+                "export logs: skipped unusable records"
+            );
+        }
         self.route_batch(IngestMsg::Logs { project_id, batch })
             .await?;
-        Ok(Response::new(ExportLogsServiceResponse {
-            partial_success: None,
-        }))
+        let partial_success = (rejected > 0).then(|| ExportLogsPartialSuccess {
+            rejected_log_records: rejected as i64,
+            error_message: "some log records had an unusable service.name and were skipped"
+                .to_string(),
+        });
+        Ok(Response::new(ExportLogsServiceResponse { partial_success }))
     }
 }
 
@@ -707,13 +721,18 @@ async fn otlp_http_logs(
         Err(status) => return status,
     };
     let fmt = detect_format(&headers);
-    let batch = match transform_logs(body, fmt).await {
+    let (batch, rejected) = match transform_logs(body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform logs: {e}");
             return StatusCode::BAD_REQUEST;
         }
     };
+    // Per-record failures (e.g. unusable service.name) skip that record rather
+    // than rejecting the batch; valid siblings are still routed.
+    if rejected > 0 {
+        tracing::warn!(project_id, rejected, "otlp logs: skipped unusable records");
+    }
     // F-05: empty batch is a valid no-op (see otlp_http_traces).
     if batch.num_rows() == 0 {
         return StatusCode::OK;

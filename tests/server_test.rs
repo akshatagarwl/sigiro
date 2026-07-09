@@ -141,6 +141,28 @@ fn validate_blocks_comment_wrapped() {
 }
 
 #[test]
+fn validate_allows_ducklake_time_travel() {
+    // DuckLake time-travel reads (the `=>` form sqlparser cannot parse) must
+    // be accepted — they are first-class debugging reads for this system.
+    assert!(validate_read_only("SELECT count(*) FROM lake.sigiro_logs AT (VERSION => 3)").is_ok());
+    assert!(
+        validate_read_only(
+            "SELECT * FROM lake.sigiro_logs AT (TIMESTAMP => '2026-07-09 19:55:00') \
+             WHERE service_name = 'x'"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn validate_time_travel_does_not_bypass_guards() {
+    // Stripping the AT clause for parsing must not become a hole in the
+    // write/DDL/file-access guards, which still scan the original SQL.
+    assert!(validate_read_only("SELECT * FROM read_csv('/etc/passwd') AT (VERSION => 1)").is_err());
+    assert!(validate_read_only("DROP TABLE sigiro_logs AT (VERSION => 1)").is_err());
+}
+
+#[test]
 fn value_ref_mixed_types_from_table() {
     let conn = test_conn();
     let mut stmt = conn
