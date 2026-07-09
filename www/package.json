@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "effect": "^3.21.2",
-    "flexsearch": "^0.8.212",
     "fumadocs-core": "^16.8.10",
     "fumadocs-mdx": "^15.0.3",
     "fumadocs-ui": "^16.8.10",
