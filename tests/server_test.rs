@@ -1,5 +1,5 @@
 use duckdb::Connection;
-use sigiro::server::{validate_read_only, value_ref_to_json};
+use sigiro::server::{duckdb_value_to_json, validate_read_only};
 
 fn test_conn() -> Connection {
     let conn = Connection::open_in_memory().expect("in-memory db");
@@ -60,7 +60,7 @@ fn value_ref_integer() {
     let mut rows = stmt.query([]).unwrap();
     let row = rows.next().unwrap().unwrap();
     assert_eq!(
-        value_ref_to_json(row.get_ref(0).unwrap()),
+        duckdb_value_to_json(row.get_ref(0).unwrap()),
         serde_json::json!(42)
     );
 }
@@ -72,7 +72,7 @@ fn value_ref_text() {
     let mut rows = stmt.query([]).unwrap();
     let row = rows.next().unwrap().unwrap();
     assert_eq!(
-        value_ref_to_json(row.get_ref(0).unwrap()),
+        duckdb_value_to_json(row.get_ref(0).unwrap()),
         serde_json::json!("hello")
     );
 }
@@ -84,7 +84,7 @@ fn value_ref_bool() {
     let mut rows = stmt.query([]).unwrap();
     let row = rows.next().unwrap().unwrap();
     assert_eq!(
-        value_ref_to_json(row.get_ref(0).unwrap()),
+        duckdb_value_to_json(row.get_ref(0).unwrap()),
         serde_json::json!(true)
     );
 }
@@ -95,7 +95,7 @@ fn value_ref_null() {
     let mut stmt = conn.prepare("SELECT NULL AS n").unwrap();
     let mut rows = stmt.query([]).unwrap();
     let row = rows.next().unwrap().unwrap();
-    assert!(value_ref_to_json(row.get_ref(0).unwrap()).is_null());
+    assert!(duckdb_value_to_json(row.get_ref(0).unwrap()).is_null());
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn value_ref_double() {
     let mut rows = stmt.query([]).unwrap();
     let row = rows.next().unwrap().unwrap();
     assert_eq!(
-        value_ref_to_json(row.get_ref(0).unwrap()),
+        duckdb_value_to_json(row.get_ref(0).unwrap()),
         serde_json::json!(std::f64::consts::PI)
     );
 }
@@ -271,15 +271,15 @@ fn value_ref_mixed_types_from_table() {
     let mut rows = stmt.query([]).unwrap();
     let row = rows.next().unwrap().unwrap();
     assert_eq!(
-        value_ref_to_json(row.get_ref(0).unwrap()),
+        duckdb_value_to_json(row.get_ref(0).unwrap()),
         serde_json::json!(1)
     );
     assert_eq!(
-        value_ref_to_json(row.get_ref(1).unwrap()),
+        duckdb_value_to_json(row.get_ref(1).unwrap()),
         serde_json::json!("hello")
     );
     assert_eq!(
-        value_ref_to_json(row.get_ref(2).unwrap()),
+        duckdb_value_to_json(row.get_ref(2).unwrap()),
         serde_json::json!(true)
     );
 }

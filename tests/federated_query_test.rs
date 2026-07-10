@@ -195,6 +195,19 @@ fn run_query(
     token: &str,
     extra_args: &[&str],
 ) -> std::process::Output {
+    run_query_env(sql, edges, token, extra_args, &[])
+}
+
+/// Same as `run_query`, plus extra environment variables on the child
+/// process — used by the `SIGIRO_QUERY_ROW_CAP` fail-loud test, which needs
+/// a cap override scoped to one query rather than the whole test binary.
+fn run_query_env(
+    sql: &str,
+    edges: &[String],
+    token: &str,
+    extra_args: &[&str],
+    extra_env: &[(&str, &str)],
+) -> std::process::Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sigiro"));
     cmd.arg("--output").arg("json").arg("query").arg(sql);
     for e in edges {
@@ -208,6 +221,9 @@ fn run_query(
         .env("RUST_LOG", "error")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
     cmd.output().expect("failed to run `sigiro query`")
 }
 
@@ -363,6 +379,75 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
         "  [top-N] ORDER BY duration DESC LIMIT 3 = {topn_durations:?} — matches global ground truth"
     );
 
+    // --- Same top-N, but selecting ONLY trace_id (duration not in the
+    // SELECT list). Before the fix, this failed at the coordinator fold
+    // with a confusing binder error ("Referenced column duration not
+    // found") because the per-edge partial only projected the SELECT list
+    // (trace_id), never the ORDER BY key. Ground truth: the exact same 3
+    // rows as the trace_id+duration query above (trace_id is unique per
+    // span), but each row must carry ONLY the trace_id key — duration was
+    // pulled into the per-edge partial only to sort by, and must be
+    // dropped from the final output.
+    let topn_ids_output = run_query(
+        "SELECT trace_id FROM sigiro_spans WHERE timestamp > '2000-01-01' \
+         ORDER BY duration DESC LIMIT 3",
+        &edges,
+        &token,
+        &[],
+    );
+    if !topn_ids_output.status.success() {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "ORDER BY on a non-selected column failed unexpectedly: stdout={} stderr={}",
+            String::from_utf8_lossy(&topn_ids_output.stdout),
+            String::from_utf8_lossy(&topn_ids_output.stderr)
+        ));
+    }
+    let topn_ids_rows: Vec<serde_json::Value> = serde_json::from_slice(&topn_ids_output.stdout)
+        .map_err(|e| format!("failed to parse trace_id-only top-N JSON output: {e}"))?;
+    if topn_ids_rows.len() != 3 {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "trace_id-only top-N: expected 3 rows, got {}: {topn_ids_rows:?}",
+            topn_ids_rows.len()
+        ));
+    }
+    for row in &topn_ids_rows {
+        let obj = row
+            .as_object()
+            .ok_or_else(|| format!("row not an object: {row:?}"))?;
+        if obj.len() != 1 || !obj.contains_key("trace_id") {
+            edge_a.shutdown();
+            edge_b.shutdown();
+            return Err(format!(
+                "trace_id-only top-N row must contain ONLY trace_id (the ORDER BY sort column, \
+                 duration, must be dropped from the output): {row:?}"
+            ));
+        }
+    }
+    let expected_trace_ids: std::collections::HashSet<&str> = topn_rows
+        .iter()
+        .filter_map(|r| r.get("trace_id").and_then(|v| v.as_str()))
+        .collect();
+    let got_trace_ids: std::collections::HashSet<&str> = topn_ids_rows
+        .iter()
+        .filter_map(|r| r.get("trace_id").and_then(|v| v.as_str()))
+        .collect();
+    if got_trace_ids != expected_trace_ids {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "trace_id-only top-N returned a different row set than the trace_id+duration top-N: \
+             got {got_trace_ids:?}, expected {expected_trace_ids:?}"
+        ));
+    }
+    println!(
+        "  [order-by non-selected column] SELECT trace_id ... ORDER BY duration (unselected) = \
+         {got_trace_ids:?} — matches the trace_id+duration top-N, output carries only trace_id"
+    );
+
     // --- Fractional WHERE literal: `duration > 15.5` must be deparsed at the
     // correct decimal scale (a mis-scaled deparser emits `155`, ten times too
     // large). Ground truth proves the exact boundary: a duration=15 row must
@@ -409,6 +494,226 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
     }
     println!(
         "  [fractional predicate] duration > 15.5 excludes 15, includes 16 on both edges: {frac_durations:?}"
+    );
+
+    // --- Alias fold: a plain-column alias (`service_name AS svc`) and an
+    // aggregate alias (`count(*) AS n`) must both come back under the
+    // ALIASED JSON key, not the underlying column/function name. svcA's
+    // total count (3) is already established above.
+    let alias_output = run_query(
+        "SELECT service_name AS svc, count(*) AS n FROM sigiro_spans \
+         WHERE timestamp > '2000-01-01' AND service_name = 'svcA' GROUP BY service_name",
+        &edges,
+        &token,
+        &[],
+    );
+    if !alias_output.status.success() {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "aliased SELECT failed unexpectedly: stdout={} stderr={}",
+            String::from_utf8_lossy(&alias_output.stdout),
+            String::from_utf8_lossy(&alias_output.stderr)
+        ));
+    }
+    let alias_rows: Vec<serde_json::Value> = serde_json::from_slice(&alias_output.stdout)
+        .map_err(|e| format!("failed to parse aliased-SELECT JSON output: {e}"))?;
+    if alias_rows.len() != 1 {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "aliased SELECT: expected exactly 1 row for svcA, got {}: {alias_rows:?}",
+            alias_rows.len()
+        ));
+    }
+    let alias_row = &alias_rows[0];
+    if alias_row.get("svc").and_then(|v| v.as_str()) != Some("svcA") {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "aliased SELECT: expected key \"svc\" == \"svcA\", got {alias_row:?} (plain-column \
+             alias dropped — output key regressed to the underlying column name)"
+        ));
+    }
+    if alias_row.get("n").and_then(serde_json::Value::as_i64) != Some(3) {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "aliased SELECT: expected key \"n\" == 3, got {alias_row:?} (aggregate alias dropped)"
+        ));
+    }
+    println!("  [alias] service_name AS svc, count(*) AS n -> keys svc/n present: {alias_row:?}");
+
+    // --- Zero-matching-rows edge + a GROUP BY key that exists on only ONE
+    // edge: edge B never receives any `svcOnlyA` span, so its per-edge
+    // GROUP BY partial for this WHERE-filtered query returns literally ZERO
+    // rows (GROUP BY over zero matching input rows produces zero output
+    // groups — unlike a bare aggregate, which would still emit one row of
+    // NULLs). `fetch_edge` must treat that as a legitimate "contributed
+    // nothing" edge, and the fold must be exactly edge A's numbers alone —
+    // not NaN/NULL-corrupted by the absent edge.
+    edge_a.ingest_durations("svcOnlyA", &[40, 60]);
+    edge_a.wait_for_ingest("svcOnlyA", 2, &token);
+
+    let only_a_output = run_query(
+        "SELECT service_name, count(*) AS c, sum(duration) AS s, avg(duration) AS a, \
+         min(duration) AS mn, max(duration) AS mx FROM sigiro_spans \
+         WHERE timestamp > '2000-01-01' AND service_name = 'svcOnlyA' GROUP BY service_name",
+        &edges,
+        &token,
+        &[],
+    );
+    if !only_a_output.status.success() {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "single-edge GROUP BY key query failed unexpectedly: stdout={} stderr={}",
+            String::from_utf8_lossy(&only_a_output.stdout),
+            String::from_utf8_lossy(&only_a_output.stderr)
+        ));
+    }
+    let only_a_rows: Vec<serde_json::Value> = serde_json::from_slice(&only_a_output.stdout)
+        .map_err(|e| format!("failed to parse single-edge GROUP BY JSON output: {e}"))?;
+    if only_a_rows.len() != 1 {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "single-edge GROUP BY key: expected exactly 1 row (edge B contributes zero rows, \
+             must not duplicate or drop the group), got {}: {only_a_rows:?}",
+            only_a_rows.len()
+        ));
+    }
+    let only_a_row = &only_a_rows[0];
+    let only_a_i64 = |field: &str| -> Result<i64, String> {
+        only_a_row
+            .get(field)
+            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
+            .ok_or_else(|| format!("svcOnlyA.{field} missing/non-numeric in {only_a_row:?}"))
+    };
+    let only_a_c = only_a_i64("c")?;
+    let only_a_s = only_a_i64("s")?;
+    let only_a_mn = only_a_i64("mn")?;
+    let only_a_mx = only_a_i64("mx")?;
+    let only_a_a = only_a_row
+        .get("a")
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| format!("svcOnlyA.a missing/non-numeric in {only_a_row:?}"))?;
+    if (only_a_c, only_a_s, only_a_mn, only_a_mx) != (2, 100, 40, 60)
+        || (only_a_a - 50.0).abs() > 1e-9
+    {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "single-edge GROUP BY key: got c={only_a_c} s={only_a_s} a={only_a_a} mn={only_a_mn} \
+             mx={only_a_mx}, expected c=2 s=100 a=50.0 mn=40 mx=60 (edge B's zero-row \
+             contribution must not corrupt the fold)"
+        ));
+    }
+    println!(
+        "  [zero-row edge + single-edge group key] svcOnlyA (edge B contributes nothing): \
+         c={only_a_c} s={only_a_s} a={only_a_a} mn={only_a_mn} mx={only_a_mx} — matches ground truth"
+    );
+
+    // --- A NULL GROUP BY key. Root spans (as created by `ingest_durations`,
+    // which never sets an explicit parent) always have parent_span_id =
+    // NULL — a real, naturally-occurring NULL group key.
+    edge_a.ingest_durations("svcNullGroup", &[5, 7]);
+    edge_b.ingest_durations("svcNullGroup", &[9]);
+    edge_a.wait_for_ingest("svcNullGroup", 2, &token);
+    edge_b.wait_for_ingest("svcNullGroup", 1, &token);
+
+    let null_group_output = run_query(
+        "SELECT parent_span_id, count(*) AS c, sum(duration) AS s FROM sigiro_spans \
+         WHERE timestamp > '2000-01-01' AND service_name = 'svcNullGroup' \
+         GROUP BY parent_span_id",
+        &edges,
+        &token,
+        &[],
+    );
+    if !null_group_output.status.success() {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "NULL-group-key query failed unexpectedly: stdout={} stderr={}",
+            String::from_utf8_lossy(&null_group_output.stdout),
+            String::from_utf8_lossy(&null_group_output.stderr)
+        ));
+    }
+    let null_group_rows: Vec<serde_json::Value> = serde_json::from_slice(&null_group_output.stdout)
+        .map_err(|e| format!("failed to parse NULL-group-key JSON output: {e}"))?;
+    if null_group_rows.len() != 1 {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "NULL-group-key: expected exactly 1 group (all root spans share parent_span_id = \
+             NULL), got {}: {null_group_rows:?}",
+            null_group_rows.len()
+        ));
+    }
+    let null_group_row = &null_group_rows[0];
+    if !null_group_row
+        .get("parent_span_id")
+        .is_some_and(serde_json::Value::is_null)
+    {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "NULL-group-key: expected parent_span_id to fold to JSON null, got {null_group_row:?}"
+        ));
+    }
+    let null_group_i64 = |field: &str| -> Result<i64, String> {
+        null_group_row
+            .get(field)
+            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
+            .ok_or_else(|| {
+                format!("NULL-group-key: {field} missing/non-numeric in {null_group_row:?}")
+            })
+    };
+    let null_group_c = null_group_i64("c")?;
+    let null_group_s = null_group_i64("s")?;
+    if (null_group_c, null_group_s) != (3, 21) {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "NULL-group-key: got c={null_group_c} s={null_group_s}, expected c=3 s=21 (2 rows on \
+             edge A [5,7] + 1 row on edge B [9])"
+        ));
+    }
+    println!(
+        "  [NULL group key] parent_span_id folds to NULL across both edges: c={null_group_c} \
+         s={null_group_s} — matches ground truth"
+    );
+
+    // --- A user LIMIT that exceeds SIGIRO_QUERY_ROW_CAP must fail loud,
+    // never silently truncate to the cap.
+    let limit_cap_output = run_query_env(
+        "SELECT trace_id FROM sigiro_spans WHERE timestamp > '2000-01-01' LIMIT 1000",
+        &edges,
+        &token,
+        &[],
+        &[("SIGIRO_QUERY_ROW_CAP", "5")],
+    );
+    if limit_cap_output.status.success() {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(
+            "LIMIT 1000 with SIGIRO_QUERY_ROW_CAP=5 unexpectedly SUCCEEDED — must fail loud \
+             instead of silently truncating to the row cap"
+                .to_string(),
+        );
+    }
+    let limit_cap_stderr = String::from_utf8_lossy(&limit_cap_output.stderr).to_string();
+    if !limit_cap_stderr.contains("LIMIT") || !limit_cap_stderr.contains("SIGIRO_QUERY_ROW_CAP") {
+        edge_a.shutdown();
+        edge_b.shutdown();
+        return Err(format!(
+            "LIMIT-exceeds-cap was rejected, but not with a clear reason naming LIMIT and \
+             SIGIRO_QUERY_ROW_CAP: {limit_cap_stderr}"
+        ));
+    }
+    println!(
+        "  [LIMIT > row cap] LIMIT 1000 with SIGIRO_QUERY_ROW_CAP=5 rejected as expected: {}",
+        limit_cap_stderr.trim()
     );
 
     // --- A qualified/struct column reference that isn't the FROM table's own

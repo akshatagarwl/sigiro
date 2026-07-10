@@ -90,9 +90,15 @@ pub fn resolve_edges(cli_edges: &[String]) -> Result<Vec<Edge>> {
          or tag a tailnet peer tag:sigiro-edge."
     );
 
+    // ponytail: best-effort textual normalization only (lowercase +
+    // loopback-alias folding) — does not resolve DNS or compare IPs
+    // numerically, so e.g. a hostname that merely resolves to the same box
+    // as another entry still slips through as a "different" edge.
     let mut seen: std::collections::HashMap<(String, u16), &str> = std::collections::HashMap::new();
     for edge in &edges {
-        if let Some(prev_name) = seen.insert((edge.host.clone(), edge.port), edge.name.as_str()) {
+        if let Some(prev_name) =
+            seen.insert((normalize_host(&edge.host), edge.port), edge.name.as_str())
+        {
             anyhow::bail!(
                 "duplicate edge {}:{} listed twice (as {prev_name:?} and {:?}) — federating the \
                  same edge twice would silently double-count every count/sum/avg; remove the \
@@ -105,6 +111,17 @@ pub fn resolve_edges(cli_edges: &[String]) -> Result<Vec<Edge>> {
     }
 
     Ok(edges)
+}
+
+/// Normalize a host for edge-duplicate detection: lowercase, and fold the
+/// three common loopback spellings (`localhost`, `127.0.0.1`, `::1`) to one
+/// canonical form so the SAME machine listed under two different loopback
+/// names is caught as a duplicate edge.
+fn normalize_host(host: &str) -> String {
+    match host.to_lowercase().as_str() {
+        "localhost" | "127.0.0.1" | "::1" => "127.0.0.1".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn parse_edge_spec(spec: &str) -> Result<Edge> {
@@ -213,10 +230,19 @@ struct AggregateItem {
     alias: String,
 }
 
+/// A plain-column SELECT item. `name` is the resolved real column (never an
+/// alias); `output` is the JSON key the caller sees — the user's `AS` alias
+/// when given, else `name` itself.
+#[derive(Debug, Clone)]
+struct ColumnItem {
+    name: String,
+    output: String,
+}
+
 #[derive(Debug, Clone)]
 enum SelectItem {
     Star,
-    Column(String),
+    Column(ColumnItem),
     Aggregate(AggregateItem),
 }
 
@@ -483,11 +509,16 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
     for item in select_list {
         match field_str(item, "class")? {
             "STAR" => select_items.push(SelectItem::Star),
-            "COLUMN_REF" => select_items.push(SelectItem::Column(column_ref_name(
-                item,
-                &table,
-                &table_alias,
-            )?)),
+            "COLUMN_REF" => {
+                let name = column_ref_name(item, &table, &table_alias)?;
+                let output = item
+                    .get("alias")
+                    .and_then(Value::as_str)
+                    .filter(|a| !a.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| name.clone());
+                select_items.push(SelectItem::Column(ColumnItem { name, output }));
+            }
             "FUNCTION" => {
                 anyhow::ensure!(
                     !item
@@ -575,11 +606,12 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
         .any(|i| matches!(i, SelectItem::Aggregate(_)));
     if is_aggregate_query {
         for item in &select_items {
-            if let SelectItem::Column(name) = item {
+            if let SelectItem::Column(col) = item {
                 anyhow::ensure!(
-                    group_keys.iter().any(|k| k.eq_ignore_ascii_case(name)),
-                    "column {name:?} is selected alongside an aggregate but does not appear in \
-                     GROUP BY — not federatable"
+                    group_keys.iter().any(|k| k.eq_ignore_ascii_case(&col.name)),
+                    "column {:?} is selected alongside an aggregate but does not appear in \
+                     GROUP BY — not federatable",
+                    col.name
                 );
             }
         }
@@ -592,6 +624,30 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
         .map(|w| deparse_expr(w, &table, &table_alias))
         .transpose()?;
     let has_time_bound = where_clause.is_some_and(|w| contains_column_named(w, "timestamp"));
+
+    // ORDER BY may reference a SELECT-list alias (e.g. `SELECT duration AS d
+    // ... ORDER BY d`) rather than the real column — `json_serialize_sql`
+    // runs pre-bind, so an alias reference and a real column reference parse
+    // identically as a bare COLUMN_REF (same as the struct-field ambiguity
+    // `column_ref_name` already documents). Rewrite any ORDER BY key that
+    // matches a Column alias back to the real underlying column name: the
+    // real name is the only thing that is ever a genuine column at the
+    // per-edge push and in the coordinator fold's FROM scope — the alias is
+    // applied exactly once, in the final SELECT list.
+    let alias_to_col: std::collections::HashMap<String, String> = select_items
+        .iter()
+        .filter_map(|item| match item {
+            SelectItem::Column(c) if !c.output.eq_ignore_ascii_case(&c.name) => {
+                Some((c.output.to_lowercase(), c.name.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    for (col, _, _) in &mut order_by {
+        if let Some(real) = alias_to_col.get(&col.to_lowercase()) {
+            *col = real.clone();
+        }
+    }
 
     Ok(ParsedQuery {
         table,
@@ -918,6 +974,25 @@ fn order_by_sql(order_by: &[(String, bool, NullOrder)]) -> String {
         .join(", ")
 }
 
+/// For a non-aggregate passthrough, a user `LIMIT n` beyond `row_cap` gets
+/// pushed to each edge as `LIMIT min(n, row_cap)` (see `effective_edge_cap`)
+/// — which means the edge can never return more than `row_cap` rows, so the
+/// `cap+1` overflow sentinel (see `build_partial_sql`/`fetch_edge`) can never
+/// trip. Left unchecked, that silently returns `row_cap` rows instead of the
+/// `n` the user asked for. Fail loud instead, before that pushdown happens.
+fn check_limit_within_cap(parsed: &ParsedQuery, row_cap: usize) -> Result<()> {
+    if parsed.group_keys.is_empty() && !parsed.is_aggregate() {
+        if let Some(n) = parsed.limit {
+            anyhow::ensure!(
+                n <= row_cap as i64,
+                "LIMIT {n} exceeds SIGIRO_QUERY_ROW_CAP = {row_cap}; narrow the query or raise \
+                 the cap"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The per-edge row cap actually enforced for this query. For a pure
 /// passthrough SELECT (no GROUP BY, no aggregate) with a user LIMIT n, the
 /// edge is capped at `min(n, row_cap)` — the user's own LIMIT already bounds
@@ -933,6 +1008,43 @@ fn effective_edge_cap(parsed: &ParsedQuery, row_cap: usize) -> i64 {
     }
 }
 
+/// For a passthrough top-N (`ORDER BY ... LIMIT n`, no GROUP BY/aggregate),
+/// an ORDER BY key that isn't itself in the SELECT list still needs to reach
+/// the coordinator so the fold can sort by it (e.g. `SELECT trace_id ...
+/// ORDER BY duration`) — the coordinator only ever sees columns the per-edge
+/// partial actually projected. Returns the (deduplicated) extra real column
+/// names to add to that projection; the final SELECT list is built purely
+/// from `parsed.select_items`, so these never leak into the query's output.
+fn passthrough_extra_order_cols(parsed: &ParsedQuery) -> Vec<String> {
+    if !parsed.group_keys.is_empty() || parsed.is_aggregate() {
+        return Vec::new();
+    }
+    if parsed
+        .select_items
+        .iter()
+        .any(|i| matches!(i, SelectItem::Star))
+    {
+        return Vec::new();
+    }
+    let selected: std::collections::HashSet<String> = parsed
+        .select_items
+        .iter()
+        .filter_map(|i| match i {
+            SelectItem::Column(c) => Some(c.name.to_lowercase()),
+            _ => None,
+        })
+        .collect();
+    let mut extra = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (name, _, _) in &parsed.order_by {
+        let key = name.to_lowercase();
+        if !selected.contains(&key) && seen.insert(key) {
+            extra.push(name.clone());
+        }
+    }
+    extra
+}
+
 /// Build the SQL sent to each edge via `quack_query`. Always wrapped in an
 /// outer `LIMIT {cap}+1` so a result of exactly `cap+1` rows is a
 /// distinguishable "this edge blew past the cap" signal (see `fetch_edge`).
@@ -942,13 +1054,16 @@ fn build_partial_sql(parsed: &ParsedQuery, row_cap: usize) -> String {
     for (idx, item) in parsed.select_items.iter().enumerate() {
         match item {
             SelectItem::Star => select_parts.push("*".to_string()),
-            SelectItem::Column(name) => select_parts.push(quote_ident(name)),
+            SelectItem::Column(col) => select_parts.push(quote_ident(&col.name)),
             SelectItem::Aggregate(agg) => {
                 for (col, expr) in partial_cols(idx, agg) {
                     select_parts.push(format!("{expr} AS {}", quote_ident(&col)));
                 }
             }
         }
+    }
+    for col in passthrough_extra_order_cols(parsed) {
+        select_parts.push(quote_ident(&col));
     }
     // Qualify the table with the DuckLake catalog (`lake`). The edge's quack
     // server runs each request in a fresh connection with NO `USE lake`
@@ -1004,7 +1119,11 @@ fn build_final_sql(parsed: &ParsedQuery, part_tables: &[String]) -> String {
     for (idx, item) in parsed.select_items.iter().enumerate() {
         match item {
             SelectItem::Star => select_parts.push("*".to_string()),
-            SelectItem::Column(name) => select_parts.push(quote_ident(name)),
+            SelectItem::Column(col) => select_parts.push(format!(
+                "{} AS {}",
+                quote_ident(&col.name),
+                quote_ident(&col.output)
+            )),
             SelectItem::Aggregate(agg) => select_parts.push(final_expr(idx, agg)),
         }
     }
@@ -1165,6 +1284,7 @@ pub async fn run_federated_query(
     );
 
     let row_cap = crate::config::query_row_cap()?;
+    check_limit_within_cap(&parsed, row_cap)?;
     let effective_cap = effective_edge_cap(&parsed, row_cap);
     let timeout = Duration::from_secs(crate::config::query_timeout_secs()?);
     let raw_token = crate::config::QUACK_TOKEN
@@ -1267,4 +1387,42 @@ pub async fn run_federated_query(
         results.push(Value::Object(obj));
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn type_info(scale: i64) -> Value {
+        json!({ "scale": scale })
+    }
+
+    /// `deparse_decimal` reconstructs the exact literal text from DuckDB's
+    /// unscaled-mantissa + scale serialization. The E2E's `duration > 15.5`
+    /// assertion only proves the boundary lands somewhere between 15 and 16
+    /// — it can't tell "15.5" from a truncated "15" (a 10x-scale bug that
+    /// coincidentally still excludes 15 for other reasons). This asserts the
+    /// produced SQL literal text directly.
+    #[test]
+    fn deparse_decimal_reconstructs_exact_literal() {
+        assert_eq!(deparse_decimal(&json!(15), &type_info(1)).unwrap(), "1.5");
+        assert_eq!(deparse_decimal(&json!(5), &type_info(2)).unwrap(), "0.05");
+        assert_eq!(deparse_decimal(&json!(-15), &type_info(1)).unwrap(), "-1.5");
+        assert_eq!(deparse_decimal(&json!(150), &type_info(2)).unwrap(), "1.50");
+        assert_eq!(deparse_decimal(&json!(42), &type_info(0)).unwrap(), "42");
+    }
+
+    /// A mantissa that doesn't fit in a 64-bit integer (e.g. a
+    /// HUGEINT-backed DECIMAL) must fail loud, never silently
+    /// truncate/wrap/misrender.
+    #[test]
+    fn deparse_decimal_bails_on_oversized_mantissa() {
+        let oversized = json!(u64::MAX);
+        let err = deparse_decimal(&oversized, &type_info(2)).unwrap_err();
+        assert!(
+            err.to_string().contains("does not fit"),
+            "expected a 'does not fit' error, got: {err}"
+        );
+    }
 }

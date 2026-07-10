@@ -917,40 +917,6 @@ async fn healthz(
     health(HealthPath, State(state)).await
 }
 
-/// Convert a DuckDB ValueRef to a serde_json::Value.
-/// Uses pattern matching on the actual type — no cascading type-try guessing.
-/// Public for reuse by HTTP query handling and tests.
-pub fn value_ref_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
-    use duckdb::types::ValueRef;
-    match val {
-        ValueRef::Null => serde_json::Value::Null,
-        ValueRef::Boolean(b) => serde_json::json!(b),
-        ValueRef::TinyInt(n) => serde_json::json!(n),
-        ValueRef::SmallInt(n) => serde_json::json!(n),
-        ValueRef::Int(n) => serde_json::json!(n),
-        ValueRef::BigInt(n) => serde_json::json!(n),
-        ValueRef::HugeInt(n) => serde_json::json!(n.to_string()),
-        ValueRef::UTinyInt(n) => serde_json::json!(n),
-        ValueRef::USmallInt(n) => serde_json::json!(n),
-        ValueRef::UInt(n) => serde_json::json!(n),
-        ValueRef::UBigInt(n) => serde_json::json!(n),
-        ValueRef::Float(f) => serde_json::json!(f),
-        ValueRef::Double(f) => serde_json::json!(f),
-        ValueRef::Text(bytes) => {
-            let s = std::str::from_utf8(bytes).unwrap_or("<invalid utf8>");
-            serde_json::Value::String(s.to_string())
-        }
-        ValueRef::Blob(bytes) => serde_json::json!(format!("<blob {} bytes>", bytes.len())),
-        ValueRef::Timestamp(_, us) => serde_json::json!(us),
-        ValueRef::Date32(d) => serde_json::json!(d),
-        ValueRef::Time64(_, t) => serde_json::json!(t),
-        // TRADEOFF: DuckDB ValueRef has 20+ variants including Map, List, Enum, Union, etc.
-        // Exhaustive matching would break on every duckdb-rs update. Debug-format is safe
-        // because this is user-facing query output, not internal data flow.
-        val => serde_json::Value::String(format!("{val:?}")),
-    }
-}
-
 /// Get the per-project DuckDB reader pool using the AuthContext.
 fn project_reader_pool(state: &AppState, auth: &AuthContext) -> ApiResult<ReaderPool> {
     // Explicit DI: get_project returns only existing projects.
@@ -1052,11 +1018,13 @@ async fn execute_sql(
     }
 }
 
-/// Convert one DuckDB column value to a `serde_json::Value`. Shared with the
-/// federated query coordinator (`crate::federate`), which reads rows off its
-/// own local coordinator connection the same way this handler reads rows off
-/// a project reader connection.
-pub(crate) fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
+/// Convert one DuckDB column value to a `serde_json::Value`. The ONE
+/// canonical value converter — shared by the `/v1/query` HTTP path
+/// (`execute_sql` above) and the federated query coordinator
+/// (`crate::federate::run_federated_query`), which reads rows off its own
+/// local coordinator connection the same way this handler reads rows off a
+/// project reader connection. Public so tests can exercise it directly too.
+pub fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
     use duckdb::types::ValueRef;
     match val {
         ValueRef::Null => serde_json::Value::Null,
@@ -1087,9 +1055,8 @@ pub(crate) fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_js
         // text, not by comparing floats), else a decimal string so a
         // high-precision DECIMAL never silently loses digits.
         ValueRef::Decimal(d) => decimal_to_json(&d.to_string()),
-        // Timestamp/Date32/Time64 — raw ticks (matching `value_ref_to_json`'s
-        // existing convention below for the same DuckDB types), not a
-        // Debug-formatted enum tuple.
+        // Timestamp/Date32/Time64 — raw ticks, not a Debug-formatted enum
+        // tuple.
         ValueRef::Timestamp(_, us) => serde_json::json!(us),
         ValueRef::Date32(d) => serde_json::json!(d),
         ValueRef::Time64(_, t) => serde_json::json!(t),
