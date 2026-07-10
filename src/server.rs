@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
+use axum::{Extension, Json, Router, extract::State, http::HeaderMap, middleware as axum_mw};
 use axum_anyhow::{ApiResult, IntoApiError, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
@@ -42,6 +42,9 @@ use tracing_attributes::instrument;
         trace_detail_handler,
         investigate_handler,
         admin_status,
+        create_tenant_handler,
+        create_key_handler,
+        revoke_key_handler,
         register_worker_handler,
         deregister_worker_handler,
         list_workers_handler,
@@ -55,6 +58,9 @@ use tracing_attributes::instrument;
             ServiceBreakdownEntry,
             CreateKeyResponse,
             RevokeKeyResponse,
+            CreateTenantRequest,
+            CreateTenantResponse,
+            CreateKeyRequest,
             AdminStatusResponse,
             RegisterWorkerResponse,
             DeregisterWorkerResponse,
@@ -424,7 +430,7 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
 /// Extracted from `run_servers` so integration tests can build the same
 /// router with test state without starting TCP listeners.
 pub fn build_http_router(app_state: Arc<AppState>) -> Router {
-    let rate_limit_v1 = matches!(&app_state.auth_mode, auth::AuthMode::Key { .. });
+    let rate_limit_v1 = app_state.auth_mode.requires_auth();
 
     // v1 API routes — authenticated in key mode; open mode injects the default project.
     let v1 = Router::new()
@@ -454,8 +460,13 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         v1
     };
 
-    // Admin routes — no auth required. Self-hosted: expose only internally.
-    let admin = Router::new().typed_get(admin_status);
+    // Existing status endpoint remains open; provisioning mutations are
+    // individually admin-token gated by their handlers.
+    let admin = Router::new()
+        .typed_get(admin_status)
+        .typed_post(create_tenant_handler)
+        .typed_post(create_key_handler)
+        .typed_delete(revoke_key_handler);
 
     // Public routes + v1 API + admin + Swagger UI
     Router::new()
@@ -505,7 +516,7 @@ pub async fn run_servers(
     let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?;
 
     let configured_key = crate::config::API_KEY.value().unwrap_or_default();
-    let auth_mode = crate::auth::AuthMode::from_config(configured_key.clone());
+    let auth_mode = crate::auth::AuthMode::from_runtime_config(configured_key.clone(), &data_dir)?;
 
     // TLS configuration
     let tls_config = match (
@@ -857,7 +868,7 @@ fn project_reader_pool(state: &AppState, auth: &AuthContext) -> ApiResult<Reader
     // Callers must call create_project() first to initialize a project.
     state
         .pool
-        .get_project(&auth.project_id)
+        .get_project(&auth.tenant_id)
         .map_err(|e| anyhow::anyhow!(e).context_internal("Project DB", "connection not found"))
 }
 
@@ -1547,7 +1558,7 @@ async fn investigate_handler(
 
     // Local investigate (no workers).
     let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
-    let project_data_path = data_dir.join(&auth.project_id);
+    let project_data_path = data_dir.join(&auth.tenant_id);
     if !project_data_path.exists()
         || project_data_path
             .read_dir()
@@ -1558,7 +1569,7 @@ async fn investigate_handler(
             "No Data Found",
             &format!(
                 "No data found for project {}. Please ingest data before calling investigate.",
-                auth.project_id
+                auth.tenant_id
             ),
         ));
     }
@@ -1688,8 +1699,7 @@ fn merge_investigation_blocks(
 }
 
 // --- Admin endpoints ---
-// Self-hosted: admin endpoints are unauthenticated. Run sigiro behind a
-// reverse proxy or firewall if you need to restrict access.
+// Existing status stays open. Tenant/key mutations are admin-token gated.
 
 /// GET /admin/status — returns all instance_status rows as JSON object.
 #[utoipa::path(
@@ -1712,6 +1722,122 @@ async fn admin_status(
         state.router.dropped_messages().to_string(),
     );
     Ok(Json(AdminStatusResponse { status: map }))
+}
+
+fn require_admin_token(headers: &HeaderMap) -> Result<(), axum_anyhow::ApiError> {
+    let expected = crate::config::ADMIN_TOKEN.value().map_err(|_| {
+        axum_anyhow::unauthorized(
+            "Missing Admin Token",
+            "SIGIRO_ADMIN_TOKEN is not configured",
+        )
+    })?;
+    if expected.is_empty() {
+        return Err(axum_anyhow::unauthorized(
+            "Missing Admin Token",
+            "SIGIRO_ADMIN_TOKEN is empty",
+        ));
+    }
+    let token = auth::extract_bearer_token(headers)?;
+    if token == expected {
+        Ok(())
+    } else {
+        Err(axum_anyhow::unauthorized(
+            "Invalid Admin Token",
+            "The provided admin bearer token is invalid",
+        ))
+    }
+}
+
+fn control_plane_from_state(state: &AppState) -> ApiResult<Arc<auth::ControlPlane>> {
+    state.auth_mode.control_plane().ok_or_else(|| {
+        bad_request(
+            "distributed auth required",
+            "tenant provisioning requires SIGIRO_CATALOG_URL distributed mode",
+        )
+    })
+}
+
+/// POST /admin/tenants — create or reactivate a tenant in the distributed control plane.
+#[utoipa::path(
+    post,
+    path = "/admin/tenants",
+    request_body = CreateTenantRequest,
+    responses(
+        (status = 200, description = "Tenant created", body = CreateTenantResponse)
+    ),
+    tag = "admin"
+)]
+async fn create_tenant_handler(
+    _path: AdminTenantsPath,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateTenantRequest>,
+) -> ApiResult<Json<CreateTenantResponse>> {
+    require_admin_token(&headers)?;
+    let control = control_plane_from_state(&state)?;
+    control
+        .create_tenant(&req.id)
+        .context_internal("Admin", "failed to create tenant")?;
+    Ok(Json(CreateTenantResponse {
+        id: req.id,
+        status: "active".to_string(),
+    }))
+}
+
+/// POST /admin/keys — mint an API key for an existing tenant.
+#[utoipa::path(
+    post,
+    path = "/admin/keys",
+    request_body = CreateKeyRequest,
+    responses(
+        (status = 200, description = "API key created", body = CreateKeyResponse)
+    ),
+    tag = "admin"
+)]
+async fn create_key_handler(
+    _path: AdminKeysPath,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateKeyRequest>,
+) -> ApiResult<Json<CreateKeyResponse>> {
+    require_admin_token(&headers)?;
+    let control = control_plane_from_state(&state)?;
+    let minted = control
+        .mint_key(&req.tenant_id)
+        .context_internal("Admin", "failed to mint API key")?;
+    Ok(Json(CreateKeyResponse {
+        key: minted.key,
+        key_hash: minted.key_hash,
+        tenant_id: minted.tenant_id,
+    }))
+}
+
+/// DELETE /admin/keys/{short_token} — revoke an API key by hash prefix.
+#[utoipa::path(
+    delete,
+    path = "/admin/keys/{short_token}",
+    params(
+        ("short_token" = String, Path, description = "8-64 character key hash prefix")
+    ),
+    responses(
+        (status = 200, description = "API key revoked", body = RevokeKeyResponse)
+    ),
+    tag = "admin"
+)]
+async fn revoke_key_handler(
+    AdminKeyPath { short_token }: AdminKeyPath,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<RevokeKeyResponse>> {
+    require_admin_token(&headers)?;
+    let control = control_plane_from_state(&state)?;
+    let revoked = control
+        .revoke_key_hash_prefix(&short_token)
+        .context_internal("Admin", "failed to revoke API key")?;
+    Ok(Json(RevokeKeyResponse {
+        revoked,
+        short_token,
+    }))
 }
 
 // --- Federation endpoints (authenticated, under /v1/federation) ---

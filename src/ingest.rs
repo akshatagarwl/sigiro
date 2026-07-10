@@ -110,7 +110,7 @@ pub fn extract_project_id_grpc(
 ) -> Result<String, Status> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::Key { .. } => {
+        crate::auth::AuthMode::Key { .. } | crate::auth::AuthMode::TenantKeys { .. } => {
             let token = metadata
                 .get("authorization")
                 .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
@@ -122,7 +122,7 @@ pub fn extract_project_id_grpc(
             let ctx = auth_mode
                 .verify(token)
                 .map_err(|_| Status::unauthenticated("Invalid API key"))?;
-            Ok(ctx.project_id)
+            Ok(ctx.tenant_id)
         }
     }
 }
@@ -680,7 +680,7 @@ pub fn extract_project_id_http(
 ) -> Result<String, StatusCode> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::Key { .. } => {
+        crate::auth::AuthMode::Key { .. } | crate::auth::AuthMode::TenantKeys { .. } => {
             let auth: Authorization<Bearer> = headers.typed_get().ok_or_else(|| {
                 tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
                 StatusCode::UNAUTHORIZED
@@ -691,7 +691,7 @@ pub fn extract_project_id_http(
                 tracing::warn!("OTLP HTTP: invalid API key");
                 StatusCode::UNAUTHORIZED
             })?;
-            Ok(ctx.project_id)
+            Ok(ctx.tenant_id)
         }
     }
 }

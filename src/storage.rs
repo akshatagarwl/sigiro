@@ -40,56 +40,44 @@ pub fn init_distributed(
     conn: &Connection,
     config: &StorageConfig,
     project_dir: &Utf8Path,
+    tenant_id: &str,
 ) -> Result<()> {
-    install_extensions_with_progress(conn, &["ducklake", "postgres"])?;
+    if config.s3_bucket.is_empty() {
+        install_extensions_with_progress(conn, &["ducklake", "postgres"])?;
+    } else {
+        install_extensions_with_progress(conn, &["ducklake", "postgres", "httpfs"])?;
+    }
 
-    // Convert catalog URL to libpq format that DuckLake expects.
-    // Accepts both postgresql:// URI and postgres:host=... (libpq format, auto-converted).
-    let catalog_path = postgres_uri_to_libpq(&config.catalog_url)?;
+    let attach = distributed_attach_sql(config, project_dir, tenant_id)?;
 
-    // Configure S3 credentials if bucket is set
-    if !config.s3_bucket.is_empty() {
-        let s3_prefix = if config.s3_prefix.is_empty() {
-            String::new()
-        } else {
-            format!("{}/", config.s3_prefix.trim_end_matches('/'))
-        };
-
-        let secret_sql = format!(
-            "CREATE SECRET s3_sigiro (TYPE S3, REGION '{}');",
-            config.s3_region
-        );
-        conn.execute_batch(&secret_sql)
+    if let Some(secret_sql) = &attach.secret_sql {
+        conn.execute_batch(secret_sql)
             .context("failed to configure S3 secret")?;
-        tracing::info!(region = %config.s3_region, bucket = %config.s3_bucket, "S3 credentials configured");
-
-        // Attach DuckLake with PostgreSQL catalog + S3 data path
-        let s3_data_path = format!("s3://{}/{}data", config.s3_bucket, s3_prefix);
-        let attach_sql = format!(
-            "ATTACH 'ducklake:{catalog_path}' AS lake (DATA_PATH '{}')",
-            s3_data_path
-        );
-        conn.execute_batch(&attach_sql)
-            .context("failed to attach DuckLake with PostgreSQL catalog + S3")?;
         tracing::info!(
-            catalog = %catalog_path,
-            data_path = %s3_data_path,
-            "DuckLake attached — catalog: PostgreSQL, data: S3"
+            region = %config.s3_region,
+            bucket = %config.s3_bucket,
+            scope = ?attach.s3_scope,
+            "S3 credentials configured"
+        );
+    }
+
+    conn.execute_batch(&attach.attach_sql)
+        .context("failed to attach DuckLake with PostgreSQL catalog")?;
+    if config.s3_bucket.is_empty() {
+        tracing::info!(
+            catalog = %attach.catalog_path,
+            tenant_id,
+            metadata_schema = %attach.metadata_schema,
+            data_path = %attach.data_path,
+            "DuckLake attached — catalog: PostgreSQL, data: local Parquet"
         );
     } else {
-        // PostgreSQL catalog + local Parquet (useful for multi-writer without S3)
-        std::fs::create_dir_all(project_dir).with_context(|| {
-            format!("failed to create project directory for local data: {project_dir}",)
-        })?;
-        let local_data_path = project_dir.as_str();
-        let attach_sql =
-            format!("ATTACH 'ducklake:{catalog_path}' AS lake (DATA_PATH '{local_data_path}')");
-        conn.execute_batch(&attach_sql)
-            .context("failed to attach DuckLake with PostgreSQL catalog")?;
         tracing::info!(
-            catalog = %catalog_path,
-            data_path = %local_data_path,
-            "DuckLake attached — catalog: PostgreSQL, data: local Parquet"
+            catalog = %attach.catalog_path,
+            tenant_id,
+            metadata_schema = %attach.metadata_schema,
+            data_path = %attach.data_path,
+            "DuckLake attached — catalog: PostgreSQL, data: S3"
         );
     }
 
@@ -107,6 +95,79 @@ pub struct StorageConfig {
     pub s3_bucket: String,
     pub s3_region: String,
     pub s3_prefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistributedAttachSql {
+    pub catalog_path: String,
+    pub metadata_schema: String,
+    pub data_path: String,
+    pub secret_sql: Option<String>,
+    pub s3_scope: Option<String>,
+    pub attach_sql: String,
+}
+
+pub fn sanitize_tenant_id(tenant_id: &str) -> Result<String> {
+    anyhow::ensure!(!tenant_id.is_empty(), "tenant id must not be empty");
+    anyhow::ensure!(
+        tenant_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+        "tenant id must contain only ASCII letters, digits, and underscores"
+    );
+    anyhow::ensure!(
+        tenant_id.len() <= 56,
+        "tenant id is too long: metadata schema tenant_<id> must fit PostgreSQL's 63-byte identifier limit"
+    );
+    Ok(tenant_id.to_string())
+}
+
+pub fn tenant_metadata_schema(tenant_id: &str) -> Result<String> {
+    let token = sanitize_tenant_id(tenant_id)?;
+    Ok(format!("tenant_{token}"))
+}
+
+pub fn distributed_attach_sql(
+    config: &StorageConfig,
+    project_dir: &Utf8Path,
+    tenant_id: &str,
+) -> Result<DistributedAttachSql> {
+    let tenant_token = sanitize_tenant_id(tenant_id)?;
+    let metadata_schema = format!("tenant_{tenant_token}");
+    let catalog_path = postgres_uri_to_libpq(&config.catalog_url)?;
+    let catalog_path_sql = escape_sql_string(&catalog_path);
+    let metadata_schema_sql = escape_sql_string(&metadata_schema);
+
+    let (data_path, secret_sql, s3_scope) = if config.s3_bucket.is_empty() {
+        std::fs::create_dir_all(project_dir).with_context(|| {
+            format!("failed to create project directory for local data: {project_dir}",)
+        })?;
+        (project_dir.as_str().to_string(), None, None)
+    } else {
+        let data_path = format!("s3://{}/{tenant_token}/", config.s3_bucket);
+        let scope = data_path.clone();
+        let secret_sql = format!(
+            "CREATE OR REPLACE SECRET s3_sigiro (TYPE S3, REGION '{}', SCOPE '{}');",
+            escape_sql_string(&config.s3_region),
+            escape_sql_string(&scope)
+        );
+        (data_path, Some(secret_sql), Some(scope))
+    };
+
+    let attach_sql = format!(
+        "ATTACH 'ducklake:{catalog_path_sql}' AS lake \
+         (METADATA_SCHEMA '{metadata_schema_sql}', DATA_PATH '{}', CREATE_IF_NOT_EXISTS true)",
+        escape_sql_string(&data_path)
+    );
+
+    Ok(DistributedAttachSql {
+        catalog_path,
+        metadata_schema,
+        data_path,
+        secret_sql,
+        s3_scope,
+        attach_sql,
+    })
 }
 
 /// Load SIGIRO_* env vars to configure distributed (PostgreSQL catalog) storage.
@@ -147,7 +208,7 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
 
 /// Convert a `postgresql://user:***@host:port/dbname` URI to libpq `key=value` format
 /// that DuckLake expects: `postgres:dbname=db host=h user=u password=p port=5432`
-fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
+pub(crate) fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
     // Already in libpq format — return as-is with postgres: prefix
     if uri.starts_with("postgres:") || uri.starts_with("postgresql://") {
         // Check if it's a URI (contains //) or already libpq key=value
@@ -194,10 +255,23 @@ fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
     }
 }
 
+pub(crate) fn escape_sql_string(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
 pub const TABLE_PREFIX: &str = "lake.";
 
 pub fn table_prefix() -> &'static str {
     TABLE_PREFIX
+}
+
+pub fn resolve_extension_dir(data_dir: &Utf8Path) -> camino::Utf8PathBuf {
+    crate::config::EXTENSION_DIR
+        .value()
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(camino::Utf8PathBuf::from)
+        .unwrap_or_else(|| data_dir.join("extensions"))
 }
 
 /// Install and load a list of DuckDB extensions, emitting a progress line

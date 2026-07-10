@@ -159,9 +159,14 @@ impl ProjectPool {
                     self.evict_oldest();
                 }
 
-                let project_dir = self.data_dir.join(project_id);
+                let project_dir = match crate::storage::load_config()? {
+                    Some(_) => self
+                        .data_dir
+                        .join(crate::storage::sanitize_tenant_id(project_id)?),
+                    None => self.data_dir.join(project_id),
+                };
                 let opened = self
-                    .open_project_connections(&project_dir)
+                    .open_project_connections(project_id, &project_dir)
                     .with_context(|| {
                         format!("failed to open DuckDB connection for project {project_id}")
                     })?;
@@ -276,13 +281,13 @@ impl ProjectPool {
     /// "Connection refused" or "the database system is starting up", and
     /// a later attempt succeeds. For the local-DuckDB-file path (no
     /// Postgres) the first attempt succeeds and the loop is a no-op.
-    fn attach_ducklake(&self, conn: &Connection, project_dir: &camino::Utf8Path) -> Result<()> {
-        let ext_dir = crate::config::EXTENSION_DIR
-            .value()
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(Utf8PathBuf::from)
-            .unwrap_or_else(|| self.data_dir.join("extensions"));
+    fn attach_ducklake(
+        &self,
+        conn: &Connection,
+        project_id: &str,
+        project_dir: &camino::Utf8Path,
+    ) -> Result<()> {
+        let ext_dir = crate::storage::resolve_extension_dir(&self.data_dir);
         conn.execute_batch(&format!(
             "SET extension_directory = '{}';",
             ext_dir.as_str()
@@ -300,7 +305,9 @@ impl ProjectPool {
         let mut last_err: Option<anyhow::Error> = None;
         for attempt in 1..=ATTACH_ATTEMPTS {
             let attach_result = match storage_config.as_ref() {
-                Some(config) => crate::storage::init_distributed(conn, config, project_dir),
+                Some(config) => {
+                    crate::storage::init_distributed(conn, config, project_dir, project_id)
+                }
                 None => crate::storage::init_default(conn, project_dir),
             };
             match attach_result {
@@ -358,13 +365,17 @@ impl ProjectPool {
     }
 
     #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir))]
-    fn open_project_connections(&self, project_dir: &camino::Utf8Path) -> Result<OpenedProject> {
+    fn open_project_connections(
+        &self,
+        project_id: &str,
+        project_dir: &camino::Utf8Path,
+    ) -> Result<OpenedProject> {
         let base = Connection::open_in_memory()
             .with_context(|| "failed to open in-memory DuckDB".to_string())?;
         tracing::info!(
             "DuckDB: loading extensions on first use (run `sigiro fetch-extensions` to pre-warm)"
         );
-        self.attach_ducklake(&base, project_dir)?;
+        self.attach_ducklake(&base, project_id, project_dir)?;
         // Ensure DuckLake tables are discoverable without schema prefix.
         base.execute_batch("USE lake;")
             .context("failed to set DuckDB default schema")?;
@@ -443,7 +454,7 @@ impl ProjectPool {
         let conn = Connection::open_in_memory()
             .context("failed to open in-memory DuckDB for federation")?;
         let project_dir = self.data_dir.join("default");
-        self.attach_ducklake(&conn, &project_dir)?;
+        self.attach_ducklake(&conn, "default", &project_dir)?;
         conn.execute_batch("USE lake;")
             .context("failed to set DuckDB default schema for federation")?;
         Ok(conn)

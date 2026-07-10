@@ -396,16 +396,21 @@ async fn run_serve() -> Result<()> {
     // Extension probe is deferred to first project connection (pool.create_project).
     // Use `sigiro fetch-extensions` to pre-download for offline deployments.
 
-    // Pre-create default project so queries work without ingest
-    match pool.create_project("default") {
-        Ok(_) => tracing::info!("default project initialized"),
-        Err(e) => {
-            let mut chain = format!("{e}");
-            for cause in e.chain().skip(1) {
-                chain.push_str(&format!("\n  Caused by: {cause}"));
+    // Pre-create default project so local queries work without ingest. In
+    // distributed mode tenants are created explicitly through the control plane.
+    if sigiro::storage::load_config()?.is_none() {
+        match pool.create_project("default") {
+            Ok(_) => tracing::info!("default project initialized"),
+            Err(e) => {
+                let mut chain = format!("{e}");
+                for cause in e.chain().skip(1) {
+                    chain.push_str(&format!("\n  Caused by: {cause}"));
+                }
+                tracing::warn!("default project init failed (non-fatal): {chain}");
             }
-            tracing::warn!("default project init failed (non-fatal): {chain}");
         }
+    } else {
+        tracing::info!("distributed storage configured — skipping default project pre-create");
     }
 
     // eBPF auto-instrumentation: try obi, degrade gracefully

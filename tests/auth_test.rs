@@ -1,4 +1,5 @@
 use sigiro::auth::*;
+use std::sync::Arc;
 
 #[test]
 fn extract_bearer_token_valid() {
@@ -64,4 +65,28 @@ fn auth_mode_from_config_non_empty_is_key() {
     let mode = AuthMode::from_config("secret".to_string());
     assert!(matches!(mode, AuthMode::Key { .. }));
     assert!(mode.requires_auth());
+}
+
+#[test]
+fn tenant_key_auth_resolves_valid_key_and_rejects_revoked_or_unknown_keys() {
+    let control = Arc::new(ControlPlane::open_in_memory_for_tests().unwrap());
+    control.create_tenant("tenant_a").unwrap();
+    let minted = control.mint_key("tenant_a").unwrap();
+
+    let mode = AuthMode::TenantKeys {
+        control: Arc::clone(&control),
+    };
+    let ctx = mode.verify(&minted.key).unwrap();
+    assert_eq!(ctx.tenant_id, "tenant_a");
+    assert_eq!(ctx.project_id, "tenant_a");
+    assert_ne!(minted.key_hash, minted.key);
+    assert_eq!(minted.key_hash, hash_api_key(&minted.key));
+
+    assert!(mode.verify("sk_tenant_a_unknown").is_err());
+
+    let revoked = control
+        .revoke_key_hash_prefix(&minted.key_hash[..12])
+        .unwrap();
+    assert!(revoked);
+    assert!(mode.verify(&minted.key).is_err());
 }

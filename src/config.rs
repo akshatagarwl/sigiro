@@ -247,6 +247,10 @@ pub static HOSTNAME: Envar<String> =
 /// Uses EnvarDef::Unset so .value() fails if not set (no silent fallback).
 pub static API_KEY: Envar<String> = Envar::on_startup("SIGIRO_API_KEY", || EnvarDef::Unset);
 
+/// Admin bearer token for distributed tenant/key provisioning endpoints.
+/// Unset disables those mutation endpoints.
+pub static ADMIN_TOKEN: Envar<String> = Envar::on_startup("SIGIRO_ADMIN_TOKEN", || EnvarDef::Unset);
+
 #[derive(Deserialize, Serialize)]
 struct ConfigFile {
     api_key: String,

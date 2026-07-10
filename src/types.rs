@@ -211,6 +211,11 @@ pub struct FederationWorkerPath {
 #[typed_path("/keys")]
 pub struct AdminKeysPath;
 
+/// Route: GET /tenants
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/tenants")]
+pub struct AdminTenantsPath;
+
 /// Route: GET /keys/{short_token}
 #[derive(Debug, Clone, Deserialize, TypedPath)]
 #[typed_path("/keys/{short_token}")]

@@ -27,6 +27,8 @@ pub struct ServiceEntry {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct CreateKeyResponse {
     pub key: String,
+    pub key_hash: String,
+    pub tenant_id: String,
 }
 
 /// DELETE /admin/keys/{short_token}
@@ -34,6 +36,23 @@ pub struct CreateKeyResponse {
 pub struct RevokeKeyResponse {
     pub revoked: bool,
     pub short_token: String,
+}
+
+/// POST /admin/tenants
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct CreateTenantResponse {
+    pub id: String,
+    pub status: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct CreateTenantRequest {
+    pub id: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct CreateKeyRequest {
+    pub tenant_id: String,
 }
 
 /// GET /admin/status
