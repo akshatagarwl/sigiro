@@ -121,12 +121,29 @@ pub fn sanitize_tenant_id(tenant_id: &str) -> Result<String> {
         tenant_id.len() <= 56,
         "tenant id is too long: metadata schema tenant_<id> must fit PostgreSQL's 63-byte identifier limit"
     );
+    anyhow::ensure!(
+        !matches!(tenant_id, "default" | "extensions" | "tenants"),
+        "tenant id {tenant_id:?} is reserved (collides with the federation connection dir, \
+         the extension dir, or the tenants/ parent dir)"
+    );
     Ok(tenant_id.to_string())
 }
 
 pub fn tenant_metadata_schema(tenant_id: &str) -> Result<String> {
     let token = sanitize_tenant_id(tenant_id)?;
     Ok(format!("tenant_{token}"))
+}
+
+/// Per-tenant data directory in distributed mode: `<data_dir>/tenants/<tenant_id>`.
+/// Nesting under `tenants/` (rather than `<data_dir>/<tenant_id>` directly) keeps
+/// per-tenant dirs from ever colliding with sibling top-level dirs (the federation
+/// connection's `default/`, the shared `extensions/` dir). Shared by `ProjectPool`
+/// (the actual per-tenant connection) and the investigate handler's data-existence
+/// check so the two can never disagree on layout.
+pub fn tenant_data_dir(data_dir: &Utf8Path, tenant_id: &str) -> Result<camino::Utf8PathBuf> {
+    Ok(data_dir
+        .join("tenants")
+        .join(sanitize_tenant_id(tenant_id)?))
 }
 
 pub fn distributed_attach_sql(
@@ -177,7 +194,7 @@ pub fn distributed_attach_sql(
     };
 
     let attach_sql = format!(
-        "ATTACH 'ducklake:{catalog_path_sql}' AS lake \
+        "ATTACH 'ducklake:postgres:{catalog_path_sql}' AS lake \
          (METADATA_SCHEMA '{metadata_schema_sql}', DATA_PATH '{}', CREATE_IF_NOT_EXISTS true)",
         escape_sql_string(&data_path)
     );
@@ -247,8 +264,12 @@ fn resolve_with_aws_fallback(
     }
 }
 
-/// Convert a `postgresql://user:***@host:port/dbname` URI to libpq `key=value` format
-/// that DuckLake expects: `postgres:dbname=db host=h user=u password=p port=5432`
+/// Convert a `postgresql://user:***@host:port/dbname` URI to a BARE libpq
+/// keyword string: `dbname=db host=h user=u password=p port=5432`.
+/// Callers add their own context prefix: DuckLake wraps it as
+/// `ducklake:postgres:<libpq>`, and the control-plane attaches it directly via
+/// `ATTACH '<libpq>' AS ... (TYPE postgres)`. A stray `postgres:` prefix here
+/// broke the direct control-plane attach ("invalid connection option postgres:dbname").
 pub(crate) fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
     // Already in libpq format — return as-is with postgres: prefix
     if uri.starts_with("postgres:") || uri.starts_with("postgresql://") {
@@ -280,15 +301,12 @@ pub(crate) fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
             }
 
             Ok(format!(
-                "postgres:dbname={dbname} host={host} user={user} password={password} port={port}"
+                "dbname={dbname} host={host} user={user} password={password} port={port}"
             ))
         } else {
-            // Already libpq format, just ensure postgres: prefix
-            if uri.starts_with("postgres:") {
-                Ok(uri.to_string())
-            } else {
-                Ok(format!("postgres:{uri}"))
-            }
+            // Already libpq key=value — strip any leading `postgres:` so the
+            // result is a bare libpq string in every case.
+            Ok(uri.strip_prefix("postgres:").unwrap_or(uri).to_string())
         }
     } else {
         // Assume it's a path or other format — return as-is
@@ -353,7 +371,10 @@ pub fn prewarm_extensions(project_dir: &Utf8Path) -> Result<()> {
         "pre-warming DuckDB extensions into {} (may take 30-90s on first run)...",
         ext_dir
     );
-    install_extensions_with_progress(&conn, &["ducklake", "sqlite", "json", "parquet"])?;
+    install_extensions_with_progress(
+        &conn,
+        &["ducklake", "sqlite", "json", "parquet", "postgres"],
+    )?;
     tracing::info!("DuckDB extensions pre-warmed successfully");
     Ok(())
 }

@@ -397,3 +397,34 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
     assert_eq!(logs, 1);
     assert_eq!(gauges, 1);
 }
+
+#[tokio::test]
+// M-C: `run_servers` merges the OTLP HTTP ingest router (this test's
+// `otlp_router`) into the same app as the v1/admin API (`build_http_router`)
+// so :9999 serves both. axum panics at Router construction time on a
+// duplicate method+path, so building this merged app for real (not just the
+// two routers separately, as the tests above do) is what actually proves
+// there is no collision — and that both sides remain reachable afterward.
+async fn test_otlp_merged_into_http_app_has_no_route_collision() {
+    let ctx = build_test_context();
+    mark_test_context_ready(&ctx);
+
+    let otlp_router = ingest::otlp_http_router(
+        Arc::clone(&ctx.state.router),
+        ctx.state.auth_mode.clone(),
+        8_388_608,
+    );
+    let app = build_http_router(Arc::clone(&ctx.state)).merge(otlp_router);
+    let server = TestServer::new(app).expect("merged app must not panic on route collision");
+
+    let health = server.get("/health").await;
+    health.assert_status_ok();
+
+    let traces = server
+        .post("/v1/traces")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .bytes("{\"resourceSpans\":[]}".into())
+        .content_type("application/json")
+        .await;
+    traces.assert_status(axum::http::StatusCode::OK);
+}

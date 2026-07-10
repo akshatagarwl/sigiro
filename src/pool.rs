@@ -160,9 +160,7 @@ impl ProjectPool {
                 }
 
                 let project_dir = match crate::storage::load_config()? {
-                    Some(_) => self
-                        .data_dir
-                        .join(crate::storage::sanitize_tenant_id(project_id)?),
+                    Some(_) => crate::storage::tenant_data_dir(&self.data_dir, project_id)?,
                     None => self.data_dir.join(project_id),
                 };
                 let opened = self
@@ -313,7 +311,10 @@ impl ProjectPool {
             match attach_result {
                 Ok(()) => {
                     crate::schema::create_tables(conn, Self::prefix())?;
-                    if storage_config.is_none() {
+                    let lock_local = storage_config
+                        .as_ref()
+                        .is_none_or(|c| c.s3_bucket.is_empty());
+                    if lock_local {
                         self.lock_filesystem(conn, &ext_dir)?;
                     }
                     return Ok(());
@@ -337,12 +338,15 @@ impl ProjectPool {
             )))
     }
 
-    /// Local mode only: restrict DuckDB file access to sigiro's own dirs so no
+    /// Local storage only: restrict DuckDB file access to sigiro's own dirs so no
     /// query (regardless of function name) can read arbitrary paths. Applied AFTER
     /// the DuckLake attach + table creation (attach/extension-load need external
     /// access on). enable_external_access=false is instance-global and irreversible
     /// at runtime, so it propagates to every try_clone'd connection and cannot be
-    /// re-widened by a query. NOT applied in distributed mode (Postgres/S3 need network).
+    /// re-widened by a query. Gated on the DATA path, not the catalog: a distributed
+    /// (PostgreSQL catalog) setup with LOCAL per-tenant data (no S3 bucket) still
+    /// locks down, since its data files sit on this same local filesystem. Only
+    /// skipped when data lives in S3 (network access is required for that).
     ///
     /// `LOAD parquet; LOAD json;` runs first, while access is still open:
     /// `init_default` only installs `ducklake`/`sqlite`, so `parquet` (DuckLake's
@@ -473,3 +477,75 @@ const ATTACH_ATTEMPTS: u32 = 30;
 /// Backoff between DuckLake attach attempts. 1s matches typical Postgres
 /// initdb time on a small data directory.
 const ATTACH_BACKOFF: Duration = Duration::from_secs(1);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::StorageConfig;
+
+    fn s3_config(bucket: &str) -> StorageConfig {
+        StorageConfig {
+            catalog_url: "postgresql://u:p@localhost:5432/db".to_string(),
+            s3_bucket: bucket.to_string(),
+            s3_region: "us-east-1".to_string(),
+            s3_endpoint: "example.r2.cloudflarestorage.com".to_string(),
+            s3_key_id: "key".to_string(),
+            s3_secret: "secret".to_string(),
+        }
+    }
+
+    /// M-B: mirrors the `lock_local` gate in `attach_ducklake` — local-SQLite
+    /// mode (`None`) and distributed-with-local-data mode (empty bucket) both
+    /// take the lockdown path; only distributed-with-S3-data skips it.
+    #[test]
+    fn lock_local_gate_locks_unless_s3_bucket_configured() {
+        let lock_local = |storage_config: Option<&StorageConfig>| {
+            storage_config.is_none_or(|c| c.s3_bucket.is_empty())
+        };
+
+        assert!(lock_local(None), "local SQLite mode must stay locked");
+        assert!(
+            lock_local(Some(&s3_config(""))),
+            "distributed catalog + local per-tenant data must lock down"
+        );
+        assert!(
+            !lock_local(Some(&s3_config("sigiro-tenant-data"))),
+            "distributed catalog + S3 data must NOT lock down (needs network)"
+        );
+    }
+
+    /// M-B (asserted-SQL): `lock_filesystem` actually sets
+    /// `enable_external_access = false` and restricts `allowed_directories`
+    /// on the connection it locks — not just the gate boolean above.
+    #[test]
+    fn lock_filesystem_disables_external_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
+        let ext_dir = data_dir.join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+
+        let pool = ProjectPool::new(data_dir, 10);
+        let conn = Connection::open_in_memory().unwrap();
+        pool.lock_filesystem(&conn, &ext_dir).unwrap();
+
+        let locked: bool = conn
+            .query_row(
+                "SELECT current_setting('enable_external_access')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!locked, "enable_external_access must be false after lock");
+
+        // A path outside allowed_directories must now be rejected.
+        let err = conn
+            .execute_batch("SELECT * FROM read_text('/etc/hostname');")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("external")
+                || err.to_string().contains("disabled")
+                || err.to_string().contains("not allowed"),
+            "expected an external-access error, got: {err}"
+        );
+    }
+}

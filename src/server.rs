@@ -585,7 +585,18 @@ pub async fn run_servers(
             .context("failed to create federation workers table")?;
     }
 
-    let http_app = build_http_router(app_state);
+    // OTLP HTTP ingest sub-router (POST /v1/traces|logs|metrics|profiles + the
+    // pyroscope paths) — a composable Router with its own auth/DefaultBodyLimit/
+    // state. RequestDecompressionLayer is applied to THIS sub-router only, not
+    // the whole :9999 app, matching what the dedicated :4318 listener already
+    // does. Merged into the :9999 app below so there is one public port; the
+    // :4318/:4317 listeners keep running too (unexposed), reusing the same
+    // router (axum's Router is cheap to clone — Arc-backed).
+    let otlp_ingest_router =
+        crate::ingest::otlp_http_router(Arc::clone(&router), auth_mode, max_ingest_body_bytes)
+            .layer(tower_http::decompression::RequestDecompressionLayer::new());
+
+    let http_app = build_http_router(app_state).merge(otlp_ingest_router.clone());
 
     let http_port = ports.http;
     let http_tls_config = tls_config.clone();
@@ -604,9 +615,7 @@ pub async fn run_servers(
     });
 
     // OTLP HTTP — authenticated via Authorization header
-    let otlp_http_app =
-        crate::ingest::otlp_http_router(Arc::clone(&router), auth_mode, max_ingest_body_bytes)
-            .layer(tower_http::decompression::RequestDecompressionLayer::new());
+    let otlp_http_app = otlp_ingest_router;
     let otlp_http_port = ports.otlp_http;
     let otlp_tls_config = tls_config;
     let otlp_http_handle = Handle::new();
@@ -1558,7 +1567,13 @@ async fn investigate_handler(
 
     // Local investigate (no workers).
     let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
-    let project_data_path = data_dir.join(&auth.tenant_id);
+    let project_data_path = match crate::storage::load_config()
+        .context_internal("Investigate", "failed to load storage config")?
+    {
+        Some(_) => crate::storage::tenant_data_dir(&data_dir, &auth.tenant_id)
+            .context_internal("Investigate", "invalid tenant id")?,
+        None => data_dir.join(&auth.tenant_id),
+    };
     if !project_data_path.exists()
         || project_data_path
             .read_dir()

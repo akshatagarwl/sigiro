@@ -178,3 +178,29 @@ fn tenant_id_sanitization_rejects_injection_and_path_tokens() {
         "tenant_tenant_123"
     );
 }
+
+#[test]
+fn sanitize_tenant_id_rejects_reserved_ids() {
+    for reserved in ["default", "extensions", "tenants"] {
+        assert!(
+            storage::sanitize_tenant_id(reserved).is_err(),
+            "{reserved:?} collides with a fixed directory name and must be rejected"
+        );
+    }
+}
+
+#[test]
+fn tenant_data_dir_nests_under_tenants() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = camino::Utf8Path::from_path(dir.path()).unwrap();
+
+    let path = storage::tenant_data_dir(data_dir, "tenant_123").unwrap();
+    assert_eq!(path, data_dir.join("tenants").join("tenant_123"));
+
+    for reserved in ["default", "extensions", "tenants"] {
+        assert!(
+            storage::tenant_data_dir(data_dir, reserved).is_err(),
+            "{reserved:?} must be rejected via sanitize_tenant_id"
+        );
+    }
+}
