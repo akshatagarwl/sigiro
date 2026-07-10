@@ -185,7 +185,26 @@ impl AppState {
 
 /// DuckDB file-reading table functions blocked even in SELECT queries
 /// (e.g., read_csv('/etc/passwd') is a valid SELECT but reads arbitrary files).
-const BLOCKED_TABLE_FUNCTIONS: &[&str] = &["DROP", "READ_CSV", "READ_PARQUET", "READ_JSON"];
+/// This SQL-layer denylist is defense-in-depth: in local mode the engine-level
+/// filesystem lockdown (pool::lock_filesystem) is the real, name-independent
+/// guard, but distributed mode has no engine lock, and the denylist also shrinks
+/// the in-data_dir cross-project read surface. A denylist can never be complete
+/// against DuckDB's reader family; keep the engine lockdown as the primary guard.
+const BLOCKED_TABLE_FUNCTIONS: &[&str] = &[
+    "DROP",
+    "READ_CSV",
+    "READ_CSV_AUTO",
+    "READ_PARQUET",
+    "PARQUET_SCAN",
+    "READ_JSON",
+    "READ_JSON_AUTO",
+    "READ_NDJSON",
+    "READ_NDJSON_AUTO",
+    "READ_TEXT",
+    "READ_BLOB",
+    "GLOB",
+    "SNIFF_CSV",
+];
 
 /// DuckLake time-travel qualifier, e.g. `AT (VERSION => 3)` or
 /// `AT (TIMESTAMP => '2026-07-09 19:55:00')`. sqlparser's GenericDialect can't

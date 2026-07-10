@@ -133,6 +133,15 @@ fn validate_blocks_file_access() {
     assert!(validate_read_only("SELECT * FROM read_csv('/etc/passwd')").is_err());
     assert!(validate_read_only("SELECT * FROM read_parquet('data.parquet')").is_err());
     assert!(validate_read_only("SELECT * FROM read_json('data.json')").is_err());
+    // The wider file-reader family the SQL guard also denies (defense-in-depth
+    // alongside the engine-level filesystem lockdown).
+    assert!(validate_read_only("SELECT * FROM read_text('/etc/passwd')").is_err());
+    assert!(validate_read_only("SELECT * FROM read_blob('/etc/passwd')").is_err());
+    assert!(validate_read_only("SELECT * FROM read_csv_auto('/etc/passwd')").is_err());
+    assert!(validate_read_only("SELECT * FROM parquet_scan('x.parquet')").is_err());
+    assert!(validate_read_only("SELECT * FROM read_json_auto('x.json')").is_err());
+    assert!(validate_read_only("SELECT * FROM read_ndjson_auto('x.json')").is_err());
+    assert!(validate_read_only("SELECT file FROM glob('/etc/*')").is_err());
 }
 
 #[test]
