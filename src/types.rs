@@ -194,18 +194,6 @@ pub struct InvestigatePath;
 #[typed_path("/services")]
 pub struct ServicesPath;
 
-/// Route: GET /federation/workers
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/federation/workers")]
-pub struct FederationWorkersPath;
-
-/// Route: GET /federation/workers/{id}
-#[derive(Debug, Clone, Deserialize, TypedPath)]
-#[typed_path("/federation/workers/{id}")]
-pub struct FederationWorkerPath {
-    pub id: String,
-}
-
 /// Route: GET /keys
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/keys")]

@@ -216,12 +216,6 @@ pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
     EnvarDef::Default("http://localhost:9999".to_string())
 });
 
-/// Advertised server URL for federation worker registration.
-/// When behind NAT/port-forward, set this to the externally-reachable URL
-/// (e.g. http://host.lima.internal:9998) while SIGIRO_ENDPOINT controls the bind address.
-pub static ADVERTISE_ENDPOINT: Envar<String> =
-    Envar::on_startup("SIGIRO_ADVERTISE_ENDPOINT", || EnvarDef::Unset);
-
 /// Path to TLS certificate PEM file. Unset = no TLS.
 pub static TLS_CERT: Envar<String> = Envar::on_startup("SIGIRO_TLS_CERT", || EnvarDef::Unset);
 /// Path to TLS private key PEM file. Unset = no TLS.
@@ -231,34 +225,33 @@ pub static TLS_KEY: Envar<String> = Envar::on_startup("SIGIRO_TLS_KEY", || Envar
 pub static RETENTION_DAYS: Envar<u32> =
     Envar::on_startup("SIGIRO_RETENTION_DAYS", || EnvarDef::Default(0));
 
-pub static QUACK_PORT: Envar<u16> = Envar::on_startup("SIGIRO_QUACK_PORT", || EnvarDef::Unset);
-
-/// Port advertised to central for quack federated queries.
-/// Defaults to SIGIRO_QUACK_PORT when unset (e.g. when behind a port-forward).
-pub static QUACK_ADVERTISE_PORT: Envar<u16> =
-    Envar::on_startup("SIGIRO_QUACK_ADVERTISE_PORT", || EnvarDef::Unset);
-
-pub static QUACK_TOKEN: Envar<String> = Envar::on_startup("SIGIRO_QUACK_TOKEN", || EnvarDef::Unset);
-
-/// PostgreSQL catalog URL (required for federation, optional otherwise).
-/// Unset means local SQLite catalog. When SIGIRO_CENTRAL or SIGIRO_CENTRAL_URL is set,
-/// this becomes a hard requirement — the process will fail-fast if missing.
+/// PostgreSQL catalog URL (required for distributed/multi-tenant mode, optional
+/// otherwise). Unset means local SQLite catalog.
 /// Deployment modes: docs/architecture/deployment-modes.html
 pub static CATALOG_URL: Envar<String> = Envar::on_startup("SIGIRO_CATALOG_URL", || EnvarDef::Unset);
 
-/// Enable eBPF auto-instrumentation (default: false). Set SIGIRO_EBPF=true to enable.
-pub static EBPF_ENABLED: Envar<bool> =
-    Envar::on_startup("SIGIRO_EBPF", || EnvarDef::Default(false));
+/// Which cross-project query surface (if any) this node exposes.
+/// - "none" (default): no cross-project query surface.
+/// - "quack": the DuckDB `quack` extension serves this node's DuckLake data
+///   for external ATTACH. Inert until the query-surface feature lands.
+pub static QUERY_SURFACE: Envar<String> = Envar::on_startup("SIGIRO_QUERY_SURFACE", || {
+    EnvarDef::Default("none".to_string())
+});
 
-/// Run as central federation node (default: false). Set SIGIRO_CENTRAL=true to enable.
-pub static CENTRAL: Envar<bool> = Envar::on_startup("SIGIRO_CENTRAL", || EnvarDef::Default(false));
+/// Parsed form of `QUERY_SURFACE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuerySurface {
+    None,
+    Quack,
+}
 
-/// URL of central node for collector self-registration (optional).
-pub static CENTRAL_URL: Envar<String> = Envar::on_startup("SIGIRO_CENTRAL_URL", || EnvarDef::Unset);
-
-/// Machine hostname (used for federation worker registration).
-pub static HOSTNAME: Envar<String> =
-    Envar::on_startup("HOSTNAME", || EnvarDef::Default(String::new()));
+pub fn query_surface() -> Result<QuerySurface> {
+    match QUERY_SURFACE.value()?.as_str() {
+        "none" => Ok(QuerySurface::None),
+        "quack" => Ok(QuerySurface::Quack),
+        other => anyhow::bail!("unknown SIGIRO_QUERY_SURFACE: {other}. Expected 'none' or 'quack'"),
+    }
+}
 
 /// API key (required — no default). Env takes priority over config.toml.
 /// Uses EnvarDef::Unset so .value() fails if not set (no silent fallback).

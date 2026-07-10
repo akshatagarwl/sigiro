@@ -269,8 +269,8 @@ impl ProjectPool {
 
     /// Shared setup for a fresh in-memory DuckDB connection: set the
     /// extension cache, cap memory/threads, attach DuckLake (PostgreSQL or
-    /// local file), and create the sigiro tables. Used by both per-project
-    /// connections and the federation quack server connection.
+    /// local file), and create the sigiro tables. Used by per-project
+    /// connections.
     ///
     /// The attach is retried up to `ATTACH_ATTEMPTS` times with
     /// `ATTACH_BACKOFF` between attempts. This handles the cold-start race
@@ -447,31 +447,13 @@ impl ProjectPool {
             entry.shutdown();
         }
     }
-
-    /// Open the dedicated DuckDB connection that backs the quack federation
-    /// server. Separate from `open_connection` because the quack server holds
-    /// this connection in a background thread for the lifetime of the process.
-    /// The DuckLake attach is retried inside `attach_ducklake` to handle
-    /// the cold-start Postgres race.
-    #[tracing::instrument(skip(self))]
-    pub fn open_federation_connection(&self) -> Result<Connection> {
-        let conn = Connection::open_in_memory()
-            .context("failed to open in-memory DuckDB for federation")?;
-        let project_dir = self.data_dir.join("default");
-        self.attach_ducklake(&conn, "default", &project_dir)?;
-        conn.execute_batch("USE lake;")
-            .context("failed to set DuckDB default schema for federation")?;
-        Ok(conn)
-    }
 }
 
 /// Number of attempts to attach the DuckLake catalog at startup.
-/// Cold starts (e.g. central node coming up before PostgreSQL is ready) can
-/// fail the first attempt with "Connection refused" or "the database system
-/// is starting up". 30 attempts × 1s = 30s of patience is well within the
-/// Docker `start_period` budget and the compose healthcheck grace window.
-/// Applies to both per-project connections (cold default project init)
-/// and the federation quack server connection.
+/// Cold starts (e.g. a distributed node coming up before PostgreSQL is ready)
+/// can fail the first attempt with "Connection refused" or "the database
+/// system is starting up". 30 attempts × 1s = 30s of patience is well within
+/// the Docker `start_period` budget and the compose healthcheck grace window.
 const ATTACH_ATTEMPTS: u32 = 30;
 
 /// Backoff between DuckLake attach attempts. 1s matches typical Postgres

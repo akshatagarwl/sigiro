@@ -123,7 +123,7 @@ pub fn sanitize_tenant_id(tenant_id: &str) -> Result<String> {
     );
     anyhow::ensure!(
         !matches!(tenant_id, "default" | "extensions" | "tenants"),
-        "tenant id {tenant_id:?} is reserved (collides with the federation connection dir, \
+        "tenant id {tenant_id:?} is reserved (collides with the default project dir, \
          the extension dir, or the tenants/ parent dir)"
     );
     Ok(tenant_id.to_string())
@@ -136,8 +136,8 @@ pub fn tenant_metadata_schema(tenant_id: &str) -> Result<String> {
 
 /// Per-tenant data directory in distributed mode: `<data_dir>/tenants/<tenant_id>`.
 /// Nesting under `tenants/` (rather than `<data_dir>/<tenant_id>` directly) keeps
-/// per-tenant dirs from ever colliding with sibling top-level dirs (the federation
-/// connection's `default/`, the shared `extensions/` dir). Shared by `ProjectPool`
+/// per-tenant dirs from ever colliding with sibling top-level dirs (the default
+/// project's `default/`, the shared `extensions/` dir). Shared by `ProjectPool`
 /// (the actual per-tenant connection) and the investigate handler's data-existence
 /// check so the two can never disagree on layout.
 pub fn tenant_data_dir(data_dir: &Utf8Path, tenant_id: &str) -> Result<camino::Utf8PathBuf> {

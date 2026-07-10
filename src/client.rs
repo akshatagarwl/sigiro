@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
 
 use crate::investigate::{InvestigateRequest, InvestigationBlock};
-use crate::responses::ListWorkersResponse;
 
 /// Explicit client auth mode — mirrors server-side AuthMode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,77 +190,6 @@ impl SigiroClient {
         resp.json()
             .await
             .context("failed to parse services response")
-    }
-
-    /// Register a federation worker with the server.
-    pub async fn register_worker(&self, worker: &crate::federation::WorkerInfo) -> Result<()> {
-        let req = self
-            .http
-            .post(format!("{}/v1/federation/workers", self.base_url))
-            .json(worker);
-        let resp = self
-            .auth
-            .apply(req)
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
-
-        let resp = self.expect_ok(resp).await?;
-        // Discard body — registration success is implicit from 200 OK.
-        let _ = resp.bytes().await.ok();
-        Ok(())
-    }
-
-    /// Deregister a federation worker from the server.
-    /// Returns `true` if the worker was found and removed, `false` if 404.
-    pub async fn deregister_worker(&self, id: &str) -> Result<bool> {
-        let req = self
-            .http
-            .delete(format!("{}/v1/federation/workers/{}", self.base_url, id));
-        let resp = self
-            .auth
-            .apply(req)
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
-
-        match resp.status().as_u16() {
-            200 => Ok(true),
-            404 => Ok(false),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
-    }
-
-    /// List all registered federation workers.
-    pub async fn list_workers(&self) -> Result<Vec<crate::federation::WorkerInfo>> {
-        let req = self
-            .http
-            .get(format!("{}/v1/federation/workers", self.base_url));
-        let resp = self
-            .auth
-            .apply(req)
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
-
-        match resp.status().as_u16() {
-            200 => {
-                let body: ListWorkersResponse = resp
-                    .json()
-                    .await
-                    .context("failed to parse list_workers response")?;
-                Ok(body.workers)
-            }
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
-            s => {
-                let body = resp.text().await.context("failed to read error body")?;
-                bail!("Server error ({s}): {body}")
-            }
-        }
     }
 }
 

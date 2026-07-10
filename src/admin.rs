@@ -43,7 +43,7 @@ pub fn read_all_status(conn: &Connection) -> Result<std::collections::HashMap<St
     Ok(map)
 }
 
-/// Open or create the admin SQLite database (for instance status and federation).
+/// Open or create the admin SQLite database (for instance status).
 pub fn open_admin_db() -> Result<Connection> {
     let dir = crate::data_dir()?;
     std::fs::create_dir_all(&dir).context("failed to create data directory")?;

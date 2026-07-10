@@ -5,9 +5,6 @@ pub mod config;
 pub mod diagnose;
 pub mod drain;
 
-#[allow(clippy::items_after_test_module)]
-pub mod ebpf;
-pub mod federation;
 pub mod ingest;
 pub mod inserter;
 pub mod investigate;
@@ -15,7 +12,6 @@ pub mod otel;
 pub mod otlp;
 pub mod pool;
 pub mod profiling;
-pub mod quack_federation;
 pub mod responses;
 pub mod schema;
 pub mod server;

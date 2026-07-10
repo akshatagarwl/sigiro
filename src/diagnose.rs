@@ -7,7 +7,6 @@
 //! - Slow spans (p99 duration)
 //! - OOM patterns (memory pressure from span attributes)
 //! - Ingest stalls (gap in span timestamps)
-//! - Federation problems (worker health, quack connectivity)
 //!
 //! All data comes from `/v1/query`, `/v1/investigate`, `/v1/traces/{id}` —
 //! the same endpoints users already have. No direct DB access, no docker logs.
@@ -260,26 +259,6 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
             }
         }
         Err(e) => report.warn("log-errors", &format!("check failed: {e:#}")),
-    }
-
-    // Check 10: Federation worker health
-    match check_federation(client).await {
-        Ok((worker_count, unhealthy)) => {
-            if worker_count == 0 {
-                report.pass("federation", "no workers registered (single-node mode)");
-            } else if !unhealthy.is_empty() {
-                report.warn(
-                    "federation",
-                    &format!("{} of {worker_count} workers unhealthy", unhealthy.len()),
-                );
-                for w in &unhealthy {
-                    report.hint("federation", &format!("  - {w}"));
-                }
-            } else {
-                report.pass("federation", &format!("{worker_count} workers healthy"));
-            }
-        }
-        Err(e) => report.warn("federation", &format!("check failed: {e:#}")),
     }
 
     // Check 11: Storage bloat (row counts + growth)
@@ -760,34 +739,6 @@ async fn check_log_errors(client: &SigiroClient) -> Result<(i64, Vec<(String, i6
     Ok((total, patterns))
 }
 
-/// Federation worker health.
-async fn check_federation(client: &SigiroClient) -> Result<(usize, Vec<String>)> {
-    let workers = client.list_workers().await.context("list workers failed")?;
-    let count = workers.len();
-    // Workers without recent spans are considered stale
-    let mut unhealthy = Vec::new();
-    for w in &workers {
-        let sql = format!(
-            "SELECT COUNT(*) AS cnt FROM lake.sigiro_spans WHERE service_name = '{}' AND timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'",
-            w.id
-        );
-        match client.query(&sql).await {
-            Ok(rows) => {
-                let recent = rows
-                    .first()
-                    .and_then(|r| r.get("cnt"))
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0);
-                if recent == 0 {
-                    unhealthy.push(format!("{}: no spans in last 5 min", w.id));
-                }
-            }
-            Err(_) => unhealthy.push(format!("{}: query failed", w.id)),
-        }
-    }
-    Ok((count, unhealthy))
-}
-
 // ---------------------------------------------------------------------------
 // Storage check with growth tracking
 // ---------------------------------------------------------------------------
@@ -1032,7 +983,7 @@ enum EbpfState {
 
 /// Surface the eBPF auto-instrumentation status from the server's admin
 /// status table. The server writes the status via `write_ebpf_status`
-/// (see src/ebpf.rs); we just read it back.
+/// (below); we just read it back.
 async fn check_ebpf_status(client: &SigiroClient) -> Result<EbpfState> {
     let resp = client
         .admin_status()
@@ -1442,5 +1393,157 @@ impl DiagnosisReport {
             .filter(|c| matches!(c.status, Status::Fail))
             .count();
         (pass, warn, fail)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// eBPF capability probe — "can this host run eBPF auto-instrumentation".
+// Read-only reporting only; the process that actually runs obi is a future
+// feature (the auto-download/launch machinery was removed as broken).
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+use caps::{CapSet, Capability};
+
+/// Result of checking eBPF readiness.
+pub struct EbpfStatus {
+    pub status: String,
+    pub reason: String,
+    pub suggestions: Vec<String>,
+}
+
+pub fn check_obi_available(obi_path: &str) -> bool {
+    if obi_path != "obi" && !obi_path.is_empty() {
+        // Explicit path — check file exists
+        std::path::Path::new(obi_path).exists()
+    } else {
+        // Check PATH
+        which_obi().is_some()
+    }
+}
+
+fn which_obi() -> Option<String> {
+    which::which("obi")
+        .inspect_err(|e| tracing::debug!("obi not found in PATH: {e}"))
+        .ok()
+        .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
+        .map(camino::Utf8PathBuf::into_string)
+}
+
+/// Determine eBPF status: check obi availability and platform capabilities.
+pub fn ebpf_status(obi_path: &str) -> EbpfStatus {
+    if !check_obi_available(obi_path) {
+        return EbpfStatus {
+            status: "not_installed".to_string(),
+            reason: "obi binary not found".to_string(),
+            suggestions: vec![
+                Suggestion::docker(),
+                Suggestion::k8s(),
+                Suggestion::bare_metal(),
+            ],
+        };
+    }
+
+    // Platform capability check (Unix only)
+    let missing = check_capabilities();
+    if !missing.is_empty() {
+        return EbpfStatus {
+            status: "disabled".to_string(),
+            reason: format!("missing capabilities: {}", missing.join(", ")),
+            suggestions: vec![
+                Suggestion::docker(),
+                Suggestion::k8s(),
+                Suggestion::bare_metal(),
+            ],
+        };
+    }
+
+    EbpfStatus {
+        status: "ready".to_string(),
+        reason: String::new(),
+        suggestions: vec![],
+    }
+}
+
+/// Check Unix capabilities needed for eBPF.
+/// Returns list of missing capability names.
+fn check_capabilities() -> Vec<String> {
+    let mut missing = Vec::new();
+    let is_root = is_root();
+    let has_bpf = has_capability("CAP_BPF");
+    let has_net_admin = has_capability("CAP_NET_ADMIN");
+
+    if !is_root && !has_bpf {
+        missing.push("CAP_BPF".to_string());
+    }
+    if !is_root && !has_net_admin {
+        missing.push("CAP_NET_ADMIN".to_string());
+    }
+    missing
+}
+
+/// Check if running as root (euid == 0).
+fn is_root() -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid() is a pure read of the effective user ID.
+        // It has no side effects and returns the same value for all threads,
+        // so there are no data races or undefined behavior invariants to uphold.
+        unsafe { libc::geteuid() == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// Check if the process has a specific Linux capability.
+fn has_capability(cap: &str) -> bool {
+    // Root always has all capabilities
+    if is_root() {
+        return true;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let capability = match cap {
+            "CAP_BPF" => Capability::CAP_BPF,
+            "CAP_NET_ADMIN" => Capability::CAP_NET_ADMIN,
+            "CAP_SYS_ADMIN" => Capability::CAP_SYS_ADMIN,
+            _ => return false,
+        };
+        caps::has_cap(None, CapSet::Effective, capability).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cap;
+        false
+    }
+}
+
+/// Write eBPF status to instance_status.
+pub fn write_ebpf_status(conn: &rusqlite::Connection, status: &EbpfStatus) -> Result<()> {
+    crate::admin::write_instance_status(conn, "ebpf_status", &status.status)?;
+    crate::admin::write_instance_status(conn, "ebpf_reason", &status.reason)?;
+    crate::admin::write_instance_status(
+        conn,
+        "missing_permissions",
+        &format!("{:?}", status.suggestions),
+    )?;
+    Ok(())
+}
+
+/// Suggestion strings for eBPF setup on different platforms.
+pub struct Suggestion;
+
+impl Suggestion {
+    pub fn docker() -> String {
+        "docker run --cap-add BPF --cap-add NET_ADMIN ...".to_string()
+    }
+    pub fn k8s() -> String {
+        "securityContext:\n  capabilities:\n    add: [BPF, NET_ADMIN, SYS_ADMIN]".to_string()
+    }
+    pub fn bare_metal() -> String {
+        "sudo setcap cap_bpf,cap_net_admin+ep /usr/local/bin/obi".to_string()
     }
 }

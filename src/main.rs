@@ -347,9 +347,6 @@ async fn run_serve() -> Result<()> {
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
     let admin_conn = sigiro::admin::open_admin_db()?;
 
-    sigiro::federation::create_workers_table(&admin_conn)
-        .context("failed to create federation workers table")?;
-
     // Write instance status at startup
     sigiro::admin::write_instance_status(&admin_conn, "version", env!("CARGO_PKG_VERSION"))?;
     sigiro::admin::write_instance_status(&admin_conn, "mode", "otlp")?;
@@ -413,29 +410,16 @@ async fn run_serve() -> Result<()> {
         tracing::info!("distributed storage configured — skipping default project pre-create");
     }
 
-    // eBPF auto-instrumentation: try obi, degrade gracefully
-    let ebpf_enabled = sigiro::config::EBPF_ENABLED.value().unwrap_or(false);
-    if !ebpf_enabled {
-        tracing::info!("eBPF disabled (set SIGIRO_EBPF=true to enable)");
-        sigiro::admin::write_instance_status(&admin_conn, "ebpf_status", "disabled")?;
-        sigiro::admin::write_instance_status(&admin_conn, "ebpf_reason", "SIGIRO_EBPF not set")?;
-    } else {
-        let otlp_endpoint = sigiro::config::OTEL_EXPORTER_OTLP_ENDPOINT
-            .value()
-            .map_err(anyhow::Error::from)?;
-        let status = sigiro::ebpf::ebpf_status("obi");
-        sigiro::ebpf::write_ebpf_status(&admin_conn, &status)?;
-        match status.status.as_str() {
-            "ready" => {
-                sigiro::ebpf::start_obi("obi", &otlp_endpoint, &())?;
-            }
-            _ => {
-                tracing::warn!(
-                    "eBPF unavailable: {} — running in OTLP-only mode",
-                    status.reason
-                );
-            }
-        }
+    // eBPF capability probe: read-only "could this host run eBPF
+    // auto-instrumentation" check, recorded to instance_status. The launcher
+    // itself is a future feature — there is nothing to start here yet.
+    let ebpf_status = sigiro::diagnose::ebpf_status("obi");
+    sigiro::diagnose::write_ebpf_status(&admin_conn, &ebpf_status)?;
+    if ebpf_status.status != "ready" {
+        tracing::info!(
+            "eBPF unavailable: {} — running in OTLP-only mode",
+            ebpf_status.reason
+        );
     }
 
     // Pyroscope continuous profiling: enabled when SIGIRO_PYROSCOPE_ENDPOINT is set.
@@ -456,99 +440,6 @@ async fn run_serve() -> Result<()> {
             None
         }
     };
-
-    // Federation central node requires a shared catalog (PostgreSQL).
-    // Local SQLite cannot be shared across nodes.
-    let central = sigiro::config::CENTRAL.value().unwrap_or(false);
-    if central {
-        match sigiro::config::CATALOG_URL.value() {
-            Ok(ref url) if !url.is_empty() => {}
-            _ => anyhow::bail!(
-                "Federation central node requires SIGIRO_CATALOG_URL (PostgreSQL catalog). \
-                 Local SQLite cannot be shared across nodes. \
-                 Set SIGIRO_CATALOG_URL=postgresql://user:pass@host/db to enable federation."
-            ),
-        }
-    }
-
-    // Federation: start quack server on any node that has quack config.
-    // Central nodes use it to serve federated catalog metadata;
-    // collectors use it to expose their local DuckLake data for remote ATTACH.
-    // The server runs in a dedicated background thread because `quack_serve` is a
-    // streaming table function — dropping the `Rows` iterator cancels the query
-    // and shuts the server down.
-    if let (Ok(quack_port), Ok(quack_token)) = (
-        sigiro::config::QUACK_PORT.value(),
-        sigiro::config::QUACK_TOKEN.value(),
-    ) {
-        if central {
-            tracing::info!("running as central federation node");
-        }
-        let quack_conn = pool.open_federation_connection()?;
-        let token = quack_token.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = sigiro::quack_federation::start_quack_server_blocking(
-                quack_conn, quack_port, &token,
-            ) {
-                tracing::error!("quack server thread exited: {e:#}");
-            }
-        });
-        // Brief pause so the thread has time to bind the port before we continue.
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        tracing::info!("quack server started on port {}", quack_port);
-    }
-
-    // Federation: collector self-registration with central node
-    if let Ok(ref url) = sigiro::config::CENTRAL_URL.value() {
-        tracing::info!("collector self-registering with central node at {url}");
-        let api_key = sigiro::config::API_KEY.value().unwrap_or_default();
-        let auth = sigiro::client::ClientAuth::from_key(api_key);
-        let client = sigiro::client::SigiroClient::new(url, auth);
-        let status = sigiro::admin::read_all_status(&admin_conn)?;
-        let quack_port = sigiro::config::QUACK_ADVERTISE_PORT
-            .value()
-            .ok()
-            .or_else(|| sigiro::config::QUACK_PORT.value().ok())
-            .unwrap_or(5432);
-        let endpoint = sigiro::config::ADVERTISE_ENDPOINT
-            .value()
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| sigiro::config::ENDPOINT.value().ok())
-            .unwrap_or_else(|| "http://localhost:9999".to_string());
-        let worker = sigiro::federation::WorkerInfo {
-            id: hostname_or_default()?,
-            endpoint,
-            catalog_path: dir.join("default").join("catalog.sqlite").to_string(),
-            mode: status.get("mode").cloned().context("instance status missing 'mode' — server not fully initialized")?,
-            platform: sigiro::federation::PlatformInfo {
-                os: status.get("platform_os").cloned().context("instance status missing 'platform_os' — server not fully initialized")?,
-                kernel: status.get("platform_kernel").cloned().context("instance status missing 'platform_kernel' — server not fully initialized")?,
-                arch: status.get("platform_arch").cloned().context("instance status missing 'platform_arch' — server not fully initialized")?,
-                container: String::new(),
-            },
-            ebpf_status: status
-                .get("ebpf_status")
-                .cloned()
-                .context("instance status missing 'ebpf_status' — server not fully initialized")?,
-            capabilities: sigiro::federation::WorkerCapabilities {
-                bpf: status
-                    .get("capability_bpf")
-                    .map(|v| v == "true")
-                    .context("instance status missing 'capability_bpf' — server not fully initialized")?,
-                net_admin: status
-                    .get("capability_net_admin")
-                    .map(|v| v == "true")
-                    .context("instance status missing 'capability_net_admin' — server not fully initialized")?,
-            },
-            missing_permissions: vec![],
-            suggestions: vec![],
-            quack_port,
-        };
-        if let Err(e) = client.register_worker(&worker).await {
-            tracing::warn!("failed to register with central node: {e:#}");
-        }
-    }
 
     tracing::info!("sigiro ready — data_dir={}", dir);
     // F-03: flip the typed init-complete flag so /health reports Ready.
@@ -588,13 +479,6 @@ async fn run_evictor(pool: Arc<ProjectPool>, interval_secs: u64, max_idle_secs: 
 /// Build HTTP client from config. Fails fast if API key or endpoint is not configured.
 fn require_client() -> Result<sigiro::client::SigiroClient> {
     sigiro::client::try_build_client()
-}
-
-fn hostname_or_default() -> Result<String> {
-    sigiro::config::HOSTNAME
-        .value()
-        .map_err(anyhow::Error::from)
-        .context("HOSTNAME env var not set — required for federation worker registration")
 }
 
 fn init_basic_subscriber() {

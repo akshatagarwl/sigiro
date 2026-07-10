@@ -38,11 +38,11 @@ sigiro auth <key>
 
 ## End-to-End Test
 
-Verify the full stack (OpenTelemetry Demo + Sigiro federation) with one command:
+Verify the full stack (OpenTelemetry Demo + Sigiro) with one command:
 
 ```bash
-cd tests/e2e/federation
-./run-e2e.sh
+cd tests/e2e/k8s
+./run.sh
 ```
 
 This starts the complete demo environment and verifies telemetry flows from collectors through to queries.
@@ -91,5 +91,5 @@ SIGIRO_DATA_DIR=./data cargo run -- serve
 cargo test --release
 
 # Run E2E test
-cd tests/e2e/federation && ./run-e2e.sh
+cd tests/e2e/k8s && ./run.sh
 ```

@@ -60,7 +60,6 @@ fn build_test_context() -> TestContext {
     let admin_conn = Connection::open_in_memory().expect("failed to open in-memory SQLite");
     admin::create_instance_status_table(&admin_conn)
         .expect("failed to create instance_status table");
-    sigiro::federation::create_workers_table(&admin_conn).expect("failed to create workers table");
 
     let admin_conn = Arc::new(Mutex::new(admin_conn));
 
@@ -76,6 +75,7 @@ fn build_test_context() -> TestContext {
         },
         data_dir: data_dir.clone(),
         init_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        query_surface: sigiro::config::QuerySurface::None,
     });
 
     TestContext {
@@ -129,7 +129,7 @@ async fn test_health_returns_ok_when_ready() {
 async fn test_health_returns_503_when_starting() {
     // init_complete is false (default) — simulates a server that just
     // bound the HTTP listener but hasn't finished init (DuckDB attach,
-    // federation setup, etc.). Health probes must see this as not ready.
+    // etc.). Health probes must see this as not ready.
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);
     let server = TestServer::new(app).expect("failed to build test server");

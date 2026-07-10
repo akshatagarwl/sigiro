@@ -25,7 +25,6 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::admin;
 use crate::auth::{self, AuthContext};
-use crate::federation;
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::MsgRouter;
 use crate::investigate;
@@ -45,9 +44,6 @@ use tracing_attributes::instrument;
         create_tenant_handler,
         create_key_handler,
         revoke_key_handler,
-        register_worker_handler,
-        deregister_worker_handler,
-        list_workers_handler,
             ),
     components(
         schemas(
@@ -62,18 +58,11 @@ use tracing_attributes::instrument;
             CreateTenantResponse,
             CreateKeyRequest,
             AdminStatusResponse,
-            RegisterWorkerResponse,
-            DeregisterWorkerResponse,
-            ListWorkersResponse,
-            crate::federation::WorkerInfo,
-            crate::federation::PlatformInfo,
-            crate::federation::WorkerCapabilities,
         )
     ),
     tags(
         (name = "query", description = "SQL query endpoints"),
         (name = "admin", description = "Admin endpoints"),
-        (name = "federation", description = "Federation worker management"),
             )
 )]
 pub struct ApiDoc;
@@ -152,7 +141,7 @@ fn rate_limit_error_response(err: tower_governor::GovernorError) -> axum::respon
 
 pub struct AppState {
     pub pool: Arc<ProjectPool>,
-    /// Admin SQLite for federation worker storage and instance status
+    /// Admin SQLite for instance status (and, historically, worker registry).
     pub admin_conn: Arc<Mutex<Connection>>,
     pub http_client: reqwest::Client,
     pub router: Arc<crate::inserter::MsgRouter>,
@@ -168,12 +157,15 @@ pub struct AppState {
     /// no shared mutable state to race on.
     pub data_dir: camino::Utf8PathBuf,
     /// True after `run_serve` finishes init (DuckLake attached, schema
-    /// created, federation started). Replaces the previous `.ready`
-    /// sentinel file — typed in-memory state is checked at request time
-    /// instead of a file existence check, which is faster and impossible
-    /// to forget to set.
+    /// created). Replaces the previous `.ready` sentinel file — typed
+    /// in-memory state is checked at request time instead of a file
+    /// existence check, which is faster and impossible to forget to set.
     /// --- DI pattern: production code calls `mark_init_complete()`; tests call `.store(true)` directly. ---
     pub init_complete: Arc<AtomicBool>,
+    /// Which cross-project query surface (if any) this node exposes.
+    /// Currently inert — set from `SIGIRO_QUERY_SURFACE` at startup, read by
+    /// a future feature (see `crate::config::QuerySurface`).
+    pub query_surface: crate::config::QuerySurface,
 }
 
 impl AppState {
@@ -438,9 +430,6 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_post(investigate_handler)
         .typed_get(services_handler)
         .typed_get(trace_detail_handler)
-        .typed_post(register_worker_handler)
-        .typed_get(list_workers_handler)
-        .typed_delete(deregister_worker_handler)
         .layer(axum_mw::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
@@ -577,13 +566,8 @@ pub async fn run_servers(
         auth_mode: auth_mode.clone(),
         data_dir,
         init_complete: Arc::clone(&init_complete),
+        query_surface: crate::config::query_surface()?,
     });
-
-    {
-        let guard = admin_conn.lock();
-        federation::create_workers_table(&guard)
-            .context("failed to create federation workers table")?;
-    }
 
     // OTLP HTTP ingest sub-router (POST /v1/traces|logs|metrics|profiles + the
     // pyroscope paths) — a composable Router with its own auth/DefaultBodyLimit/
@@ -886,76 +870,14 @@ fn escape_sql_string(s: &str) -> String {
     s.replace("'", "''")
 }
 
-/// Filter out the current node from the worker list to avoid forwarding loops.
-fn exclude_self_workers(
-    workers: Vec<crate::federation::WorkerInfo>,
-) -> Vec<crate::federation::WorkerInfo> {
-    let advertise_endpoint = crate::config::ADVERTISE_ENDPOINT.value().ok();
-    let endpoint = crate::config::ENDPOINT.value().ok();
-    workers
-        .into_iter()
-        .filter(|w| {
-            if w.id.is_empty() {
-                return false;
-            }
-            if let Some(ref adv) = advertise_endpoint {
-                if w.endpoint == *adv {
-                    return false;
-                }
-            }
-            if let Some(ref ep) = endpoint {
-                if w.endpoint == *ep {
-                    return false;
-                }
-            }
-            // Also exclude obvious localhost self-references
-            if w.endpoint.contains("://localhost:") || w.endpoint.contains("://127.0.0.1:") {
-                return false;
-            }
-            true
-        })
-        .collect()
-}
-
-/// Execute SQL against DuckDB (local or federated). Returns the result rows
-/// plus whether the row cap (`SIGIRO_MAX_RESULT_ROWS`) truncated them.
+/// Execute SQL against the local DuckDB project connection. Returns the
+/// result rows plus whether the row cap (`SIGIRO_MAX_RESULT_ROWS`) truncated
+/// them.
 async fn execute_sql(
     state: &AppState,
     auth: &AuthContext,
     sql: &str,
 ) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
-    let workers = exclude_self_workers(federation::list_workers(&state.admin_conn.lock())?);
-    if !workers.is_empty() {
-        let quack_port = crate::config::QUACK_PORT
-            .value()
-            .expect("SIGIRO_QUACK_PORT must be set");
-        let quack_token = crate::config::QUACK_TOKEN
-            .value()
-            .expect("SIGIRO_QUACK_TOKEN must be set");
-        // Federated queries don't need a local project connection;
-        // each worker is queried via HTTP over the network.
-        let workers_clone = workers.to_vec();
-        let sql_clone = sql.to_string();
-        let result = tokio::task::spawn_blocking(move || {
-            // dummy connection to satisfy the signature (not actually used)
-            let dummy_conn = duckdb::Connection::open_in_memory()
-                .map_err(|e| anyhow::anyhow!("failed to open dummy connection: {e}"))?;
-            crate::quack_federation::blocking_federated_query(
-                &dummy_conn,
-                &workers_clone,
-                quack_port,
-                &quack_token,
-                &sql_clone,
-            )
-        })
-        .await??;
-        // Row-cap/timeout guards below apply to the local reader connection;
-        // federated queries go over HTTP to each worker's own guarded
-        // /v1/query, so no separate cap is applied here.
-        return Ok((result, false));
-    }
-
-    // No federation workers — execute locally against the project connection.
     let readers = project_reader_pool(state, auth)
         .map_err(|e: axum_anyhow::ApiError| anyhow::anyhow!("{:?}", e))?;
     let sql_clone = sql.to_string();
@@ -1500,72 +1422,6 @@ async fn investigate_handler(
         ));
     }
 
-    let workers = exclude_self_workers(
-        federation::list_workers(&state.admin_conn.lock())
-            .context_internal("Investigate", "failed to list workers")?,
-    );
-
-    if !workers.is_empty() {
-        // Federated investigate: forward to all workers and merge results.
-        let api_key = crate::config::API_KEY
-            .value()
-            .context_internal("Investigate", "SIGIRO_API_KEY not set")?;
-        let mut merged: std::collections::BTreeMap<String, investigate::InvestigationBlock> =
-            std::collections::BTreeMap::new();
-
-        for worker in &workers {
-            let url = format!("{}/v1/investigate", worker.endpoint);
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .context_internal("Investigate", "failed to build HTTP client")?;
-            let response = client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&req)
-                .send()
-                .await
-                .with_context(|| format!("HTTP request failed for worker {}", worker.id))
-                .context_internal("Investigate", "worker request failed")?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let text = response.text().await.unwrap_or_default();
-                tracing::warn!(worker_id=%worker.id, status=%status, text=%text, "worker investigate failed");
-                continue;
-            }
-
-            let blocks: std::collections::BTreeMap<String, investigate::InvestigationBlock> =
-                response
-                    .json()
-                    .await
-                    .with_context(|| format!("failed to parse JSON from worker {}", worker.id))
-                    .context_internal("Investigate", "worker response parse failed")?;
-
-            for (service, block) in blocks {
-                match merged.entry(service) {
-                    std::collections::btree_map::Entry::Vacant(e) => {
-                        e.insert(block);
-                    }
-                    std::collections::btree_map::Entry::Occupied(mut e) => {
-                        merge_investigation_blocks(e.get_mut(), block);
-                    }
-                }
-            }
-        }
-
-        if merged.is_empty() {
-            return Err(axum_anyhow::not_found(
-                "No Data Found",
-                "No investigation results from any worker.",
-            ));
-        }
-
-        return Ok(Json(merged));
-    }
-
-    // Local investigate (no workers).
     let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
     let project_data_path = match crate::storage::load_config()
         .context_internal("Investigate", "failed to load storage config")?
@@ -1598,119 +1454,6 @@ async fn investigate_handler(
     .context_internal("Investigate", "investigation task failed")?
     .context_internal("Investigate", "investigation failed")?;
     Ok(Json(blocks))
-}
-
-/// Merge `other` into `base` for the same service.
-fn merge_investigation_blocks(
-    base: &mut investigate::InvestigationBlock,
-    other: investigate::InvestigationBlock,
-) {
-    // Merge truncation counts.
-    base.truncation.spans_total += other.truncation.spans_total;
-    base.truncation.spans_returned += other.truncation.spans_returned;
-    base.truncation.logs_total += other.truncation.logs_total;
-    base.truncation.logs_returned += other.truncation.logs_returned;
-    base.truncation.error_traces_total += other.truncation.error_traces_total;
-    base.truncation.error_traces_returned += other.truncation.error_traces_returned;
-    base.truncation.linked_spans_total += other.truncation.linked_spans_total;
-    base.truncation.linked_spans_returned += other.truncation.linked_spans_returned;
-
-    // Merge coverage.
-    base.coverage.has_spans |= other.coverage.has_spans;
-    base.coverage.has_logs |= other.coverage.has_logs;
-    base.coverage.has_metrics |= other.coverage.has_metrics;
-    base.coverage.has_profiles |= other.coverage.has_profiles;
-    base.coverage.span_count += other.coverage.span_count;
-    base.coverage.log_template_count += other.coverage.log_template_count;
-    base.coverage.metric_series_count += other.coverage.metric_series_count;
-    base.coverage.profile_sample_count += other.coverage.profile_sample_count;
-
-    // Merge context pod_count (take max since it's instance count per node).
-    base.context.pod_count = base.context.pod_count.max(other.context.pod_count);
-    base.context.dependencies.extend(other.context.dependencies);
-    base.context.dependents.extend(other.context.dependents);
-    base.context
-        .dependencies
-        .sort_by(|a, b| a.service_name.cmp(&b.service_name));
-    base.context
-        .dependencies
-        .dedup_by(|a, b| a.service_name == b.service_name);
-    base.context
-        .dependents
-        .sort_by(|a, b| a.service_name.cmp(&b.service_name));
-    base.context
-        .dependents
-        .dedup_by(|a, b| a.service_name == b.service_name);
-
-    // Merge vectors.
-    base.events.extend(other.events);
-    // Deduplicate operation summaries by span_name, summing counts.
-    {
-        let mut op_map: std::collections::BTreeMap<String, investigate::OperationSummary> =
-            std::collections::BTreeMap::new();
-        for op in base.operation_summaries.drain(..) {
-            let key = op.span_name.clone();
-            op_map.insert(key, op);
-        }
-        for op in other.operation_summaries {
-            match op_map.entry(op.span_name.clone()) {
-                std::collections::btree_map::Entry::Vacant(e) => {
-                    e.insert(op);
-                }
-                std::collections::btree_map::Entry::Occupied(mut e) => {
-                    let existing = e.get_mut();
-                    existing.count += op.count;
-                    existing.error_count += op.error_count;
-                    existing.error_pct = if existing.count > 0 {
-                        (existing.error_count as f64 / existing.count as f64) * 100.0
-                    } else {
-                        0.0
-                    };
-                    existing.duration_p50_ns =
-                        (existing.duration_p50_ns + op.duration_p50_ns) / 2.0;
-                    existing.duration_p95_ns = existing.duration_p95_ns.max(op.duration_p95_ns);
-                    existing.duration_p99_ns = existing.duration_p99_ns.max(op.duration_p99_ns);
-                    if existing.exemplar_error_trace_id.is_none() {
-                        existing.exemplar_error_trace_id = op.exemplar_error_trace_id;
-                    }
-                }
-            }
-        }
-        base.operation_summaries = op_map.into_values().collect();
-    }
-    base.metrics.extend(other.metrics);
-    base.traces.extend(other.traces);
-    base.traces.sort_by(|a, b| a.trace_id.cmp(&b.trace_id));
-    base.traces.dedup_by(|a, b| a.trace_id == b.trace_id);
-    base.timeline.extend(other.timeline);
-    base.log_patterns.extend(other.log_patterns);
-    base.logs.extend(other.logs);
-    base.linked_traces.extend(other.linked_traces);
-    base.linked_traces
-        .sort_by(|a, b| a.trace_id.cmp(&b.trace_id));
-    base.linked_traces.dedup_by(|a, b| a.trace_id == b.trace_id);
-    base.profiles.extend(other.profiles);
-
-    // Merge signals: keep the one that's available if the other isn't.
-    let mut signal_map: std::collections::BTreeMap<String, investigate::SignalCoverage> = base
-        .coverage
-        .signals
-        .drain(..)
-        .map(|s| (s.signal_type.clone(), s))
-        .collect();
-    for s in other.coverage.signals {
-        match signal_map.entry(s.signal_type.clone()) {
-            std::collections::btree_map::Entry::Vacant(e) => {
-                e.insert(s);
-            }
-            std::collections::btree_map::Entry::Occupied(mut e) => {
-                if s.available && !e.get().available {
-                    e.insert(s);
-                }
-            }
-        }
-    }
-    base.coverage.signals = signal_map.into_values().collect();
 }
 
 // --- Admin endpoints ---
@@ -1855,78 +1598,4 @@ async fn revoke_key_handler(
         revoked,
         short_token,
     }))
-}
-
-// --- Federation endpoints (authenticated, under /v1/federation) ---
-
-/// POST /v1/federation/workers -- register a federation worker.
-#[utoipa::path(
-    post,
-    path = "/v1/federation/workers",
-    responses(
-        (status = 200, description = "Worker registered", body = RegisterWorkerResponse)
-    ),
-    tag = "federation"
-)]
-async fn register_worker_handler(
-    _path: FederationWorkersPath,
-    State(state): State<Arc<AppState>>,
-    Extension(_auth): Extension<AuthContext>,
-    Json(worker): Json<federation::WorkerInfo>,
-) -> ApiResult<Json<RegisterWorkerResponse>> {
-    let id = worker.id.clone();
-    let guard = state.admin_conn.lock();
-    federation::register_worker(&guard, &worker)
-        .context_internal("Federation", "failed to register worker")?;
-    Ok(Json(RegisterWorkerResponse {
-        registered: true,
-        id,
-    }))
-}
-
-/// DELETE /v1/federation/workers/{id} -- deregister a federation worker.
-#[utoipa::path(
-    delete,
-    path = "/v1/federation/workers/{id}",
-    responses(
-        (status = 200, description = "Worker deregistered", body = DeregisterWorkerResponse)
-    ),
-    tag = "federation"
-)]
-async fn deregister_worker_handler(
-    FederationWorkerPath { id }: FederationWorkerPath,
-    State(state): State<Arc<AppState>>,
-    Extension(_auth): Extension<AuthContext>,
-) -> ApiResult<Json<DeregisterWorkerResponse>> {
-    let guard = state.admin_conn.lock();
-    let deregistered = federation::deregister_worker(&guard, &id)
-        .context_internal("Federation", "failed to deregister worker")?;
-    if deregistered {
-        Ok(Json(DeregisterWorkerResponse { deregistered: true }))
-    } else {
-        Err(axum_anyhow::not_found(
-            "Worker Not Found",
-            &format!("No worker found with id: {id}"),
-        ))
-    }
-}
-
-/// GET /v1/federation/workers -- list all federation workers.
-#[utoipa::path(
-    get,
-    path = "/v1/federation/workers",
-    responses(
-        (status = 200, description = "List of workers", body = ListWorkersResponse)
-    ),
-    tag = "federation"
-)]
-async fn list_workers_handler(
-    _path: FederationWorkersPath,
-    State(state): State<Arc<AppState>>,
-    Extension(_auth): Extension<AuthContext>,
-) -> ApiResult<Json<ListWorkersResponse>> {
-    let guard = state.admin_conn.lock();
-    let workers = federation::list_workers(&guard)
-        .context_internal("Federation", "failed to list workers")?;
-    Ok(Json(ListWorkersResponse { workers }))
 }

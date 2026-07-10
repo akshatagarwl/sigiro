@@ -79,25 +79,6 @@ pub enum HealthResponse {
     Degraded { reason: String },
 }
 
-/// POST /v1/federation/workers
-#[derive(Serialize, ToSchema)]
-pub struct RegisterWorkerResponse {
-    pub registered: bool,
-    pub id: String,
-}
-
-/// DELETE /v1/federation/workers/{id}
-#[derive(Serialize, ToSchema)]
-pub struct DeregisterWorkerResponse {
-    pub deregistered: bool,
-}
-
-/// GET /v1/federation/workers
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct ListWorkersResponse {
-    pub workers: Vec<crate::federation::WorkerInfo>,
-}
-
 // ---------------------------------------------------------------------------
 // GET /v1/traces/{trace_id} — trace detail and tree responses
 // ---------------------------------------------------------------------------
