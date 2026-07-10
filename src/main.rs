@@ -50,13 +50,28 @@ enum Command {
         #[arg(long)]
         otlp_grpc_port: Option<u16>,
     },
-    /// Run SQL query
+    /// Run a federated SQL query across one or more sigiro edges.
+    ///
+    /// This is a coordinator: an embedded DuckDB plans the query, pushes a
+    /// per-edge partial to each resolved edge over the `quack` wire protocol
+    /// (SIGIRO_QUERY_SURFACE=quack on the edge), and folds the results
+    /// (never avg-of-avgs — see `sigiro::federate`). Edges are resolved from
+    /// the tailnet (peers tagged tag:sigiro-edge) unless overridden.
     Query {
         /// SQL statement to execute
         sql: Option<String>,
         /// Path to a .sql file to execute (use - for stdin)
         #[arg(long, value_name = "PATH")]
         sql_file: Option<String>,
+        /// Edge override: name=host:port. Repeatable. Also settable via
+        /// SIGIRO_EDGES (comma-separated). When either is given, tailnet
+        /// discovery is skipped entirely.
+        #[arg(long = "edge", value_name = "NAME=HOST:PORT")]
+        edge: Vec<String>,
+        /// Allow a query with no WHERE bound on the timestamp column — the
+        /// un-prunable cross-edge blowup case. Refused by default.
+        #[arg(long)]
+        full_scan: bool,
     },
     /// Show server health
     Status,
@@ -177,7 +192,12 @@ async fn main() -> Result<()> {
         None => {
             run_serve().await?;
         }
-        Some(Command::Query { sql, sql_file }) => {
+        Some(Command::Query {
+            sql,
+            sql_file,
+            edge,
+            full_scan,
+        }) => {
             // F-14: support --sql-file for long queries, reuse file across runs,
             // or piping `cat foo.sql | sigiro query --sql-file -`
             let sql = match (sql, sql_file) {
@@ -192,8 +212,7 @@ async fn main() -> Result<()> {
                     .with_context(|| format!("failed to read SQL file {path}"))?,
                 (None, None) => anyhow::bail!("provide SQL as argument or via --sql-file"),
             };
-            let client = require_client()?;
-            let result = client.query(&sql).await?;
+            let result = sigiro::federate::run_federated_query(&sql, &edge, full_scan).await?;
             let value = serde_json::to_value(&result)?;
             println!("{}", format_output(&value, cli.output.as_ref())?);
         }

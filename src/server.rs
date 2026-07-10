@@ -1052,7 +1052,11 @@ async fn execute_sql(
     }
 }
 
-fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
+/// Convert one DuckDB column value to a `serde_json::Value`. Shared with the
+/// federated query coordinator (`crate::federate`), which reads rows off its
+/// own local coordinator connection the same way this handler reads rows off
+/// a project reader connection.
+pub(crate) fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
     use duckdb::types::ValueRef;
     match val {
         ValueRef::Null => serde_json::Value::Null,
@@ -1061,11 +1065,53 @@ fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
         ValueRef::SmallInt(b) => serde_json::json!(b),
         ValueRef::Int(b) => serde_json::json!(b),
         ValueRef::BigInt(b) => serde_json::json!(b),
+        // HUGEINT (int128) — produced e.g. by SUM over BIGINT (the federated
+        // fold's sum(count)/sum(sum)). Emit as a JSON number when it fits i64,
+        // else as a string to avoid silent precision loss. Without this arm it
+        // fell through to the Debug catch-all ("HugeInt(3)").
+        ValueRef::HugeInt(b) => match i64::try_from(b) {
+            Ok(n) => serde_json::json!(n),
+            Err(_) => serde_json::Value::String(b.to_string()),
+        },
+        // Unsigned integer variants — a passthrough `SELECT *` over a
+        // sigiro_* table (e.g. a UBIGINT column) used to fall through to the
+        // `{:?}` catch-all below and print e.g. `"UBigInt(5)"` instead of `5`.
+        ValueRef::UTinyInt(b) => serde_json::json!(b),
+        ValueRef::USmallInt(b) => serde_json::json!(b),
+        ValueRef::UInt(b) => serde_json::json!(b),
+        ValueRef::UBigInt(b) => serde_json::json!(b),
         ValueRef::Float(b) => serde_json::json!(b),
         ValueRef::Double(b) => serde_json::json!(b),
+        // DECIMAL — emit a JSON number when the value round-trips through f64
+        // exactly (checked by reformatting at the same scale and comparing
+        // text, not by comparing floats), else a decimal string so a
+        // high-precision DECIMAL never silently loses digits.
+        ValueRef::Decimal(d) => decimal_to_json(&d.to_string()),
+        // Timestamp/Date32/Time64 — raw ticks (matching `value_ref_to_json`'s
+        // existing convention below for the same DuckDB types), not a
+        // Debug-formatted enum tuple.
+        ValueRef::Timestamp(_, us) => serde_json::json!(us),
+        ValueRef::Date32(d) => serde_json::json!(d),
+        ValueRef::Time64(_, t) => serde_json::json!(t),
         ValueRef::Text(b) => serde_json::Value::String(String::from_utf8_lossy(b).to_string()),
         ValueRef::Blob(b) => serde_json::Value::String(format!("[blob {} bytes]", b.len())),
         _ => serde_json::Value::String(format!("{:?}", val)),
+    }
+}
+
+/// Render a DuckDB DECIMAL's exact text (`d.to_string()`, e.g. `"15.50"`) as a
+/// JSON number when converting it to `f64` and back at the same scale
+/// reproduces the identical text (i.e. no precision was lost), else as a
+/// string. Pure text/parse round-trip — never trusts float equality.
+fn decimal_to_json(exact: &str) -> serde_json::Value {
+    let Ok(f) = exact.parse::<f64>() else {
+        return serde_json::Value::String(exact.to_string());
+    };
+    let scale = exact.split_once('.').map_or(0, |(_, frac)| frac.len());
+    if format!("{f:.scale$}") == exact {
+        serde_json::json!(f)
+    } else {
+        serde_json::Value::String(exact.to_string())
     }
 }
 

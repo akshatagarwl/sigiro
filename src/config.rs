@@ -275,6 +275,27 @@ pub static QUACK_PORT: Envar<u16> =
 pub static QUACK_TOKEN: Envar<String> =
     Envar::on_demand("SIGIRO_QUACK_TOKEN", || EnvarDef::Default(String::new()));
 
+/// Federated query coordinator (`sigiro query`) edge override: comma-separated
+/// `name=host:port` entries. When set (together with any `--edge` CLI flags),
+/// used verbatim and tailnet discovery (peers tagged `tag:sigiro-edge`) is
+/// skipped entirely. Empty (the default) means: discover from the tailnet.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
+pub static EDGES: Envar<String> =
+    Envar::on_demand("SIGIRO_EDGES", || EnvarDef::Default(String::new()));
+
+/// Row-count safety cap enforced on every per-edge partial query result in
+/// the federated query coordinator. Protects against a query with no
+/// prunable time bound (or a non-selective one) pulling unbounded rows
+/// across the network from a single edge. Default: 1_000_000.
+pub static QUERY_ROW_CAP: Envar<usize> =
+    Envar::on_startup("SIGIRO_QUERY_ROW_CAP", || EnvarDef::Default(1_000_000));
+
+pub fn query_row_cap() -> Result<usize> {
+    let cap = QUERY_ROW_CAP.value()?;
+    anyhow::ensure!(cap > 0, "SIGIRO_QUERY_ROW_CAP must be greater than zero");
+    Ok(cap)
+}
+
 /// API key (required — no default). Env takes priority over config.toml.
 /// Uses EnvarDef::Unset so .value() fails if not set (no silent fallback).
 pub static API_KEY: Envar<String> = Envar::on_startup("SIGIRO_API_KEY", || EnvarDef::Unset);
