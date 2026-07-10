@@ -137,7 +137,29 @@ fn validate_blocks_file_access() {
 
 #[test]
 fn validate_blocks_comment_wrapped() {
-    assert!(validate_read_only("SELECT 1 /* DROP TABLE evil */").is_err());
+    // DROP inside a comment is a harmless SELECT; the real DROP guard is the
+    // SELECT-only AST check, not the tokenizer word scan.
+    assert!(validate_read_only("SELECT 1 /* DROP TABLE evil */").is_ok());
+}
+
+#[test]
+fn validate_blocks_file_access_hidden_by_string_literal() {
+    // The confirmed bypass: substring-scanning after naive comment-stripping
+    // let `--` inside a string literal truncate the scan before `read_csv`.
+    // The tokenizer scans the real token stream, so it isn't fooled.
+    assert!(validate_read_only("SELECT '--' AS c, t.* FROM read_csv('/etc/passwd') AS t").is_err());
+    assert!(validate_read_only("SELECT '/*' AS c, t.* FROM read_parquet('x') AS t").is_err());
+    assert!(validate_read_only("SELECT '/* */', t.* FROM read_json('x') AS t").is_err());
+}
+
+#[test]
+fn validate_allows_blocked_words_inside_string_literals() {
+    // False-positive gone: a blocked keyword appearing only inside a string
+    // literal (not as an identifier/table-function token) must not trip the
+    // guard.
+    assert!(
+        validate_read_only("SELECT 'read_csv is a function' AS note FROM sigiro_spans").is_ok()
+    );
 }
 
 #[test]

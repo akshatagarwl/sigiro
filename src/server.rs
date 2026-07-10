@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use sqlparser::ast::Statement;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -207,30 +208,14 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
         }
     }
 
-    // Strip SQL comments before checking blocked keywords
-    let stripped = sql
-        .split_once("/*")
-        .map(|(before, after)| {
-            after
-                .split_once("*/")
-                .map(|(_, after)| format!("{before}{after}"))
-                .unwrap_or(before.to_string())
-        })
-        .unwrap_or_else(|| sql.to_string())
-        .split_once("--")
-        .map(|(before, _)| before.to_string())
-        .unwrap_or_else(|| sql.to_string());
-    let upper = stripped.to_uppercase();
-    for kw in BLOCKED_TABLE_FUNCTIONS {
-        for (pos, _) in upper.match_indices(kw) {
-            let before_ok = pos == 0
-                || !upper.as_bytes()[pos - 1].is_ascii_alphanumeric()
-                    && upper.as_bytes()[pos - 1] != b'_';
-            let end = pos + kw.len();
-            let after_ok = end >= upper.len()
-                || !upper.as_bytes()[end].is_ascii_alphanumeric() && upper.as_bytes()[end] != b'_';
-            if before_ok && after_ok {
-                return Err(format!("query rejected: {kw} not allowed"));
+    let tokens = Tokenizer::new(&dialect, sql)
+        .tokenize()
+        .map_err(|e| format!("query rejected: tokenize error: {e}"))?;
+    for token in &tokens {
+        if let Token::Word(w) = token {
+            let word = w.value.to_uppercase();
+            if BLOCKED_TABLE_FUNCTIONS.contains(&word.as_str()) {
+                return Err(format!("query rejected: {word} not allowed"));
             }
         }
     }
