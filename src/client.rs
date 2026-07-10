@@ -158,11 +158,12 @@ impl SigiroClient {
             .context("failed to parse investigation response")
     }
 
-    /// Read /admin/status — the unauthenticated instance status key/value map.
+    /// Read /admin/status — the instance status key/value map.
     /// The server populates this from its admin SQLite (e.g., eBPF status,
-    /// pyroscope status). We deliberately do NOT apply Bearer auth here so
-    /// the call works in open mode and stays consistent with the unauthenticated
-    /// nature of /admin endpoints.
+    /// pyroscope status). The server now requires `SIGIRO_ADMIN_TOKEN` on this
+    /// route (M-4); this client sends no Bearer token, so callers in
+    /// distributed/hosted mode should expect a 401 here (e.g. `sigiro diagnose`'s
+    /// eBPF check degrades to a warning, it does not have the admin token).
     pub async fn admin_status(&self) -> Result<crate::responses::AdminStatusResponse> {
         let resp = self
             .http

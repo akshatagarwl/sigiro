@@ -94,7 +94,9 @@ pub struct StorageConfig {
     pub catalog_url: String,
     pub s3_bucket: String,
     pub s3_region: String,
-    pub s3_prefix: String,
+    pub s3_endpoint: String,
+    pub s3_key_id: String,
+    pub s3_secret: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,11 +146,31 @@ pub fn distributed_attach_sql(
         })?;
         (project_dir.as_str().to_string(), None, None)
     } else {
+        anyhow::ensure!(
+            !config.s3_endpoint.is_empty(),
+            "SIGIRO_S3_BUCKET is set but SIGIRO_S3_ENDPOINT is missing — required to reach an \
+             S3-compatible store (e.g. Cloudflare R2's <account>.r2.cloudflarestorage.com)"
+        );
+        anyhow::ensure!(
+            !config.s3_key_id.is_empty(),
+            "SIGIRO_S3_BUCKET is set but no S3 key ID is configured — set SIGIRO_S3_KEY_ID or \
+             AWS_ACCESS_KEY_ID"
+        );
+        anyhow::ensure!(
+            !config.s3_secret.is_empty(),
+            "SIGIRO_S3_BUCKET is set but no S3 secret is configured — set SIGIRO_S3_SECRET or \
+             AWS_SECRET_ACCESS_KEY"
+        );
+
         let data_path = format!("s3://{}/{tenant_token}/", config.s3_bucket);
         let scope = data_path.clone();
         let secret_sql = format!(
-            "CREATE OR REPLACE SECRET s3_sigiro (TYPE S3, REGION '{}', SCOPE '{}');",
+            "CREATE OR REPLACE SECRET s3_sigiro (TYPE S3, KEY_ID '{}', SECRET '{}', REGION '{}', \
+             ENDPOINT '{}', URL_STYLE 'path', USE_SSL true, SCOPE '{}');",
+            escape_sql_string(&config.s3_key_id),
+            escape_sql_string(&config.s3_secret),
             escape_sql_string(&config.s3_region),
+            escape_sql_string(&config.s3_endpoint),
             escape_sql_string(&scope)
         );
         (data_path, Some(secret_sql), Some(scope))
@@ -195,15 +217,34 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
     if s3_bucket.is_empty() && !s3_region.is_empty() {
         tracing::warn!("SIGIRO_S3_REGION is set but SIGIRO_S3_BUCKET is empty — S3 region ignored");
     }
+    let s3_endpoint = config::S3_ENDPOINT.value().map_err(anyhow::Error::from)?;
+    let s3_key_id = resolve_with_aws_fallback(&config::S3_KEY_ID, &config::AWS_ACCESS_KEY_ID)?;
+    let s3_secret = resolve_with_aws_fallback(&config::S3_SECRET, &config::AWS_SECRET_ACCESS_KEY)?;
 
     Ok(Some(StorageConfig {
         catalog_url,
         s3_bucket,
         s3_region,
-        s3_prefix: crate::config::S3_PREFIX
-            .value()
-            .map_err(anyhow::Error::from)?,
+        s3_endpoint,
+        s3_key_id,
+        s3_secret,
     }))
+}
+
+/// Read `primary`, falling back to `secondary` (the conventional AWS_* name)
+/// when `primary` is unset/empty. Used so SIGIRO_S3_KEY_ID/SIGIRO_S3_SECRET
+/// can be overridden explicitly while still picking up plain AWS_ACCESS_KEY_ID/
+/// AWS_SECRET_ACCESS_KEY from the environment by default.
+fn resolve_with_aws_fallback(
+    primary: &typed_env::Envar<String>,
+    secondary: &typed_env::Envar<String>,
+) -> Result<String> {
+    let value = primary.value().map_err(anyhow::Error::from)?;
+    if value.is_empty() {
+        secondary.value().map_err(anyhow::Error::from)
+    } else {
+        Ok(value)
+    }
 }
 
 /// Convert a `postgresql://user:***@host:port/dbname` URI to libpq `key=value` format

@@ -219,12 +219,45 @@ async fn test_services_with_dev_auth_returns_200() {
 }
 
 #[tokio::test]
-async fn test_admin_status_returns_200() {
+async fn test_admin_status_requires_admin_token() {
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);
     let server = TestServer::new(app).expect("failed to build test server");
 
+    // No Authorization header at all — must be rejected regardless of
+    // whether SIGIRO_ADMIN_TOKEN happens to be configured in this process
+    // (M-4: /admin/status leaked ingest_dropped_messages_total + init state
+    // to anyone, unauthenticated, in every mode).
     let resp = server.get("/admin/status").await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+
+    // Wrong token — also rejected.
+    let resp = server
+        .get("/admin/status")
+        .add_header("Authorization", "Bearer wrong-token")
+        .await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_admin_status_returns_200_with_admin_token() {
+    // SAFETY: set_var is unsafe in concurrent programs; this is a test
+    // helper that runs in the same process as the server under test.
+    // SIGIRO_ADMIN_TOKEN is on_startup (typed_env), so it's cached in a
+    // OnceLock on first successful read — set it before any request in
+    // this test so the cached value is the one we expect.
+    unsafe {
+        std::env::set_var("SIGIRO_ADMIN_TOKEN", "test-admin-token");
+    }
+
+    let ctx = build_test_context();
+    let app = build_http_router(ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    let resp = server
+        .get("/admin/status")
+        .add_header("Authorization", "Bearer test-admin-token")
+        .await;
     resp.assert_status_ok();
 
     let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");

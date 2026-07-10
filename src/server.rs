@@ -460,8 +460,8 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         v1
     };
 
-    // Existing status endpoint remains open; provisioning mutations are
-    // individually admin-token gated by their handlers.
+    // All /admin routes, including status, are admin-token gated by their
+    // handlers (see require_admin_token).
     let admin = Router::new()
         .typed_get(admin_status)
         .typed_post(create_tenant_handler)
@@ -1699,7 +1699,7 @@ fn merge_investigation_blocks(
 }
 
 // --- Admin endpoints ---
-// Existing status stays open. Tenant/key mutations are admin-token gated.
+// All endpoints, including status, are admin-token gated (see require_admin_token).
 
 /// GET /admin/status — returns all instance_status rows as JSON object.
 #[utoipa::path(
@@ -1713,7 +1713,9 @@ fn merge_investigation_blocks(
 async fn admin_status(
     _path: AdminStatusPath,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> ApiResult<Json<AdminStatusResponse>> {
+    require_admin_token(&headers)?;
     let guard = state.admin_conn.lock();
     let mut map =
         admin::read_all_status(&guard).context_internal("Admin", "failed to read status")?;

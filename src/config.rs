@@ -26,9 +26,26 @@ pub static S3_BUCKET: Envar<String> =
     Envar::on_demand("SIGIRO_S3_BUCKET", || EnvarDef::Default(String::new()));
 pub static S3_REGION: Envar<String> =
     Envar::on_startup("SIGIRO_S3_REGION", || EnvarDef::Default(String::new()));
+/// S3-compatible endpoint host (no scheme), e.g. `<account>.r2.cloudflarestorage.com`
+/// for Cloudflare R2. Required when `SIGIRO_S3_BUCKET` is set — R2/most S3-compatible
+/// stores are unreachable via DuckDB's default AWS endpoint resolution.
 /// on_demand (not on_startup) so temp_env::with_vars works in tests.
-pub static S3_PREFIX: Envar<String> =
-    Envar::on_demand("SIGIRO_S3_PREFIX", || EnvarDef::Default(String::new()));
+pub static S3_ENDPOINT: Envar<String> =
+    Envar::on_demand("SIGIRO_S3_ENDPOINT", || EnvarDef::Default(String::new()));
+/// S3 access key ID. Falls back to the conventional `AWS_ACCESS_KEY_ID` when unset.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
+pub static S3_KEY_ID: Envar<String> =
+    Envar::on_demand("SIGIRO_S3_KEY_ID", || EnvarDef::Default(String::new()));
+/// S3 secret access key. Falls back to the conventional `AWS_SECRET_ACCESS_KEY` when unset.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
+pub static S3_SECRET: Envar<String> =
+    Envar::on_demand("SIGIRO_S3_SECRET", || EnvarDef::Default(String::new()));
+/// Conventional AWS credential env vars — fallback source for S3_KEY_ID/S3_SECRET.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
+pub static AWS_ACCESS_KEY_ID: Envar<String> =
+    Envar::on_demand("AWS_ACCESS_KEY_ID", || EnvarDef::Default(String::new()));
+pub static AWS_SECRET_ACCESS_KEY: Envar<String> =
+    Envar::on_demand("AWS_SECRET_ACCESS_KEY", || EnvarDef::Default(String::new()));
 
 /// OTel service name for self-instrumentation.
 pub static OTEL_SERVICE_NAME: Envar<String> = Envar::on_startup("OTEL_SERVICE_NAME", || {
