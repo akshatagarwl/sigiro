@@ -250,6 +250,21 @@ impl ProjectPool {
         }
     }
 
+    /// Clone a fresh connection sharing the SAME in-memory DuckDB instance
+    /// (and therefore the same attached DuckLake catalog) as `project_id`'s
+    /// writer/readers. Used by the quack query-surface server, which needs
+    /// one long-lived dedicated connection for the life of the process —
+    /// not one borrowed from, and competing with, the bounded reader pool.
+    pub fn clone_connection(&self, project_id: &str) -> Result<Connection> {
+        let reader = self.get_project(project_id)?.get();
+        let conn = reader
+            .try_clone()
+            .context("failed to clone DuckDB connection for the quack query surface")?;
+        conn.execute_batch("USE lake;")
+            .context("failed to set default schema on cloned connection")?;
+        Ok(conn)
+    }
+
     pub fn project_ids(&self) -> Vec<String> {
         self.connections
             .iter()
@@ -315,6 +330,34 @@ impl ProjectPool {
                         .as_ref()
                         .is_none_or(|c| c.s3_bucket.is_empty());
                     if lock_local {
+                        // `enable_external_access = false` (set inside
+                        // lock_filesystem) is instance-global and
+                        // irreversible — any extension not already loaded
+                        // before that point can never be loaded afterward,
+                        // on this or any cloned connection (see
+                        // lock_filesystem's own doc comment re: parquet/
+                        // json). The quack query-surface extension has the
+                        // exact same requirement, so it must load here too,
+                        // while access is still open — not later, from the
+                        // dedicated connection crate::server::run_servers
+                        // clones for it. quack also lazily autoloads `httpfs`
+                        // internally for its own network transport (observed
+                        // directly via duckdb_logs(): "Failed to load
+                        // extension 'httpfs'" on every request once access is
+                        // locked down, even though `quack_serve` itself
+                        // "succeeds") — local/default mode never installs
+                        // httpfs otherwise (only the S3-backed distributed
+                        // path does), so it must be preloaded here too.
+                        if crate::config::query_surface()? == crate::config::QuerySurface::Quack {
+                            conn.execute_batch("INSTALL httpfs; LOAD httpfs;").context(
+                                "failed to preload httpfs (required internally by quack) before \
+                                 locking down filesystem access",
+                            )?;
+                            crate::quack::load_and_pin(conn).context(
+                                "failed to load/pin the quack extension before locking down \
+                                 filesystem access",
+                            )?;
+                        }
                         self.lock_filesystem(conn, &ext_dir)?;
                     }
                     return Ok(());

@@ -494,6 +494,39 @@ impl ServerPorts {
     }
 }
 
+/// Refuse configurations where the quack query surface would serve without its
+/// read-side backstop.
+///
+/// The quack authorization gate (`crate::quack`) is SELECT-only and does NOT
+/// block file/URL reader functions (`read_csv`, `read_parquet('https://…')`,
+/// `httpfs`, `glob`). The only thing that stops those is the filesystem
+/// lockdown (`enable_external_access=false`), which `pool.rs` SKIPS whenever an
+/// S3 bucket is configured. So serving quack with S3 configured would expose
+/// arbitrary file read + SSRF/exfiltration on the read surface. Refuse it,
+/// keyed on `s3_bucket` directly (the actual lockdown-skip condition) rather
+/// than on `CATALOG_URL`, so the guard stays correct even if the distributed
+/// restriction below is later relaxed. Lifting the S3 refusal requires adding a
+/// reader/table allowlist to the quack gate first (see `crate::quack`).
+pub(crate) fn ensure_quack_config_safe(
+    storage_config: &Option<crate::storage::StorageConfig>,
+) -> Result<()> {
+    let Some(cfg) = storage_config else {
+        return Ok(()); // local file catalog: lockdown always runs — safe.
+    };
+    anyhow::ensure!(
+        cfg.s3_bucket.is_empty(),
+        "SIGIRO_QUERY_SURFACE=quack refused: an S3-backed catalog disables the \
+         filesystem lockdown that guards the quack read surface against \
+         read_csv/read_parquet(url)/httpfs exfiltration — add a reader/table \
+         allowlist to the quack authorization gate before enabling this"
+    );
+    anyhow::bail!(
+        "SIGIRO_QUERY_SURFACE=quack is not supported in distributed \
+         (SIGIRO_CATALOG_URL) mode yet — it currently serves only the single \
+         non-distributed \"default\" project"
+    )
+}
+
 pub async fn run_servers(
     pool: Arc<ProjectPool>,
     admin_conn: Arc<Mutex<Connection>>,
@@ -558,6 +591,7 @@ pub async fn run_servers(
         ("gRPC", result)
     });
 
+    let query_surface = crate::config::query_surface()?;
     let app_state = Arc::new(AppState {
         pool: Arc::clone(&pool),
         admin_conn: Arc::clone(&admin_conn),
@@ -566,8 +600,63 @@ pub async fn run_servers(
         auth_mode: auth_mode.clone(),
         data_dir,
         init_complete: Arc::clone(&init_complete),
-        query_surface: crate::config::query_surface()?,
+        query_surface,
     });
+
+    // Edge query-serving surface: served in-process, on a connection cloned
+    // from the SAME DuckDB instance ingest writes to (a DuckDB-file catalog
+    // is one-writer-XOR-many-readers, so a separate process cannot share the
+    // lock — see crate::quack module docs). `query_surface == None` (the
+    // default) changes nothing: no extension load, no server, no new port.
+    let quack_shutdown_tx = if query_surface == crate::config::QuerySurface::Quack {
+        ensure_quack_config_safe(&crate::storage::load_config()?)?;
+        let bind = crate::config::QUACK_BIND
+            .value()
+            .map_err(anyhow::Error::from)?;
+        anyhow::ensure!(
+            bind != "0.0.0.0",
+            "SIGIRO_QUACK_BIND must not be 0.0.0.0 — quack has no working TLS \
+             of its own; bind an explicit loopback/private interface and rely \
+             on a network perimeter (e.g. Tailscale) for anything wider"
+        );
+        let port = crate::config::QUACK_PORT
+            .value()
+            .map_err(anyhow::Error::from)?;
+        let token = crate::config::QUACK_TOKEN
+            .value()
+            .map_err(anyhow::Error::from)?;
+        let token = if token.is_empty() { None } else { Some(token) };
+
+        let quack_conn = pool
+            .clone_connection("default")
+            .context("failed to open the quack query-surface connection")?;
+        crate::quack::load_and_pin(&quack_conn)?;
+        crate::quack::install_authorization_gate(&quack_conn)?;
+        let listen = crate::quack::start_server(&quack_conn, &bind, port, token.as_deref())?;
+        tracing::info!(
+            bind,
+            port,
+            listen_uri = %listen.listen_uri,
+            "quack query surface serving (in-process, read-only)"
+        );
+
+        let (tx, rx) = oneshot::channel::<()>();
+        servers.spawn_blocking(move || {
+            if rx.blocking_recv().is_err() {
+                tracing::debug!("quack shutdown sender dropped");
+            }
+            let result = crate::quack::stop_server(&quack_conn, &bind, port)
+                .context("failed to stop the quack query surface cleanly");
+            if let Err(ref error) = result {
+                tracing::warn!("{error:#}");
+            }
+            drop(quack_conn);
+            ("quack", result)
+        });
+        Some(tx)
+    } else {
+        None
+    };
 
     // OTLP HTTP ingest sub-router (POST /v1/traces|logs|metrics|profiles + the
     // pyroscope paths) — a composable Router with its own auth/DefaultBodyLimit/
@@ -649,6 +738,10 @@ pub async fn run_servers(
     let shutdown_send = grpc_shutdown_tx
         .send(())
         .map_err(|_| anyhow::anyhow!("gRPC shutdown receiver dropped unexpectedly"));
+    let quack_shutdown_send = quack_shutdown_tx.map(|tx| {
+        tx.send(())
+            .map_err(|_| anyhow::anyhow!("quack shutdown receiver dropped unexpectedly"))
+    });
     let server_cleanup = match tokio::time::timeout(Duration::from_secs(10), async {
         let mut first_error = None;
         while let Some(result) = servers.join_next().await {
@@ -705,6 +798,9 @@ pub async fn run_servers(
         return Err(error);
     }
     shutdown_send?;
+    if let Some(result) = quack_shutdown_send {
+        result?;
+    }
     server_cleanup?;
     retention_cleanup?;
     router_cleanup?;
@@ -1598,4 +1694,42 @@ async fn revoke_key_handler(
         revoked,
         short_token,
     }))
+}
+
+#[cfg(test)]
+mod quack_config_guard_tests {
+    use super::ensure_quack_config_safe;
+    use crate::storage::StorageConfig;
+
+    fn distributed(s3_bucket: &str) -> StorageConfig {
+        StorageConfig {
+            catalog_url: "postgres://host/db".to_string(),
+            s3_bucket: s3_bucket.to_string(),
+            s3_region: String::new(),
+            s3_endpoint: String::new(),
+            s3_key_id: String::new(),
+            s3_secret: String::new(),
+        }
+    }
+
+    #[test]
+    fn local_mode_is_allowed() {
+        assert!(ensure_quack_config_safe(&None).is_ok());
+    }
+
+    #[test]
+    fn s3_backed_catalog_is_refused_for_exfiltration_reason() {
+        let err = ensure_quack_config_safe(&Some(distributed("my-bucket")))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("exfiltration"),
+            "S3 refusal must cite the read-side exfiltration risk, got: {err}"
+        );
+    }
+
+    #[test]
+    fn distributed_without_s3_is_still_refused() {
+        assert!(ensure_quack_config_safe(&Some(distributed(""))).is_err());
+    }
 }

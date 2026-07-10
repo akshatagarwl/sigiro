@@ -253,6 +253,28 @@ pub fn query_surface() -> Result<QuerySurface> {
     }
 }
 
+/// Bind address for the quack read-only query-serving surface (only used
+/// when `SIGIRO_QUERY_SURFACE=quack`). NEVER default to `0.0.0.0` — quack
+/// speaks plain HTTP with no working TLS of its own, so binding every
+/// interface by default would put an unauthenticated-by-default protocol
+/// straight on the open network. Operators opt into a wider bind explicitly
+/// (e.g. a Tailscale interface IP) and own the network perimeter themselves.
+pub static QUACK_BIND: Envar<String> = Envar::on_startup("SIGIRO_QUACK_BIND", || {
+    EnvarDef::Default("127.0.0.1".to_string())
+});
+
+/// Port for the quack query-serving surface.
+pub static QUACK_PORT: Envar<u16> =
+    Envar::on_startup("SIGIRO_QUACK_PORT", || EnvarDef::Default(7777));
+
+/// Optional bearer token quack clients must present. Empty (the default)
+/// means no token — an acceptable choice only because the bind address
+/// above defaults to loopback and any wider exposure is the operator's own,
+/// explicit choice. on_demand (not on_startup) so temp_env::with_vars works
+/// in tests, matching the S3_* secret pattern above.
+pub static QUACK_TOKEN: Envar<String> =
+    Envar::on_demand("SIGIRO_QUACK_TOKEN", || EnvarDef::Default(String::new()));
+
 /// API key (required — no default). Env takes priority over config.toml.
 /// Uses EnvarDef::Unset so .value() fails if not set (no silent fallback).
 pub static API_KEY: Envar<String> = Envar::on_startup("SIGIRO_API_KEY", || EnvarDef::Unset);
