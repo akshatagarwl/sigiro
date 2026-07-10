@@ -20,6 +20,10 @@ use tempfile::TempDir;
 
 struct TestContext {
     state: Arc<AppState>,
+    // Hold the TempDir guard for the test's lifetime; dropping it deletes the
+    // data dir. Under the DuckDB filesystem lockdown a vanished dir is a hard
+    // error (previously it was silently recreated), so this must outlive the state.
+    _tmp_dir: TempDir,
 }
 
 /// Build a test AppState with temp directories.
@@ -74,7 +78,10 @@ fn build_test_context() -> TestContext {
         init_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
-    TestContext { state }
+    TestContext {
+        state,
+        _tmp_dir: tmp_dir,
+    }
 }
 
 /// Build the OTLP HTTP router (port 4318).

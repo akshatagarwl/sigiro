@@ -296,16 +296,19 @@ impl ProjectPool {
         ))
         .context("failed to set DuckDB memory/threads")?;
 
+        let storage_config = crate::storage::load_config()?;
         let mut last_err: Option<anyhow::Error> = None;
         for attempt in 1..=ATTACH_ATTEMPTS {
-            let attach_result = if let Some(config) = crate::storage::load_config()? {
-                crate::storage::init_distributed(conn, &config, project_dir)
-            } else {
-                crate::storage::init_default(conn, project_dir)
+            let attach_result = match storage_config.as_ref() {
+                Some(config) => crate::storage::init_distributed(conn, config, project_dir),
+                None => crate::storage::init_default(conn, project_dir),
             };
             match attach_result {
                 Ok(()) => {
                     crate::schema::create_tables(conn, Self::prefix())?;
+                    if storage_config.is_none() {
+                        self.lock_filesystem(conn, &ext_dir)?;
+                    }
                     return Ok(());
                 }
                 Err(e) => {
@@ -325,6 +328,33 @@ impl ProjectPool {
                 "exhausted {ATTACH_ATTEMPTS} DuckLake attach attempts; \
                  is the storage backend (PostgreSQL for distributed, filesystem for local) reachable?"
             )))
+    }
+
+    /// Local mode only: restrict DuckDB file access to sigiro's own dirs so no
+    /// query (regardless of function name) can read arbitrary paths. Applied AFTER
+    /// the DuckLake attach + table creation (attach/extension-load need external
+    /// access on). enable_external_access=false is instance-global and irreversible
+    /// at runtime, so it propagates to every try_clone'd connection and cannot be
+    /// re-widened by a query. NOT applied in distributed mode (Postgres/S3 need network).
+    ///
+    /// `LOAD parquet; LOAD json;` runs first, while access is still open:
+    /// `init_default` only installs `ducklake`/`sqlite`, so `parquet` (DuckLake's
+    /// storage format) and `json` (used by `resource_attributes::JSON->>...` in
+    /// investigate queries) are normally autoloaded on first use — but autoloading
+    /// IS external access, so once `enable_external_access` is off it can never
+    /// happen and every first use of either fails with "Loading external
+    /// extensions is disabled through configuration".
+    fn lock_filesystem(&self, conn: &Connection, ext_dir: &camino::Utf8Path) -> Result<()> {
+        let data_dir = self.data_dir.as_str().replace('\'', "''");
+        let ext = ext_dir.as_str().replace('\'', "''");
+        conn.execute_batch("INSTALL parquet; LOAD parquet; INSTALL json; LOAD json;")
+            .context("failed to preload DuckDB extensions before locking filesystem access")?;
+        conn.execute_batch(&format!(
+            "SET allowed_directories = ['{data_dir}', '{ext}']; SET enable_external_access = false;"
+        ))
+        .context("failed to lock DuckDB filesystem access")?;
+        tracing::info!(data_dir = %self.data_dir, "DuckDB filesystem access locked to data + extension dirs");
+        Ok(())
     }
 
     #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir))]

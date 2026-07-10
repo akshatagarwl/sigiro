@@ -184,6 +184,35 @@ fn evict_oldest_at_capacity() {
 }
 
 #[test]
+fn local_mode_locks_filesystem_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = test_pool(dir.path());
+    let readers = pool.create_project("proj_a").unwrap();
+    let conn = readers.get();
+    for call in [
+        "read_csv('/etc/passwd')",
+        "read_text('/etc/passwd')",
+        "read_blob('/etc/passwd')",
+        "read_json('/etc/passwd')",
+        "glob('/etc/*')",
+    ] {
+        let sql = format!("SELECT count(*) FROM {call}");
+        let res = conn
+            .prepare(&sql)
+            .and_then(|mut s| s.query_row([], |r| r.get::<_, i64>(0)));
+        let msg = format!("{:?}", res.err());
+        assert!(
+            msg.contains("disabled by configuration"),
+            "{call} should be engine-blocked, got: {msg}"
+        );
+    }
+    let mut stmt = conn
+        .prepare("SELECT count(*) FROM lake.sigiro_spans")
+        .unwrap();
+    assert_eq!(stmt.query_row([], |r| r.get::<_, i64>(0)).unwrap(), 0);
+}
+
+#[test]
 fn remove_project() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
