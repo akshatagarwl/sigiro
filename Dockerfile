@@ -39,12 +39,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/sigiro /usr/local/bin/sigiro
-# Pre-download DuckDB extensions so the first `sigiro serve` doesn't hang
-# on a 30-90s blocking download. Both the pre-warm CLI and `sigiro serve`
-# use SIGIRO_EXTENSION_DIR (default: $SIGIRO_DATA_DIR/extensions) — set it
-# explicitly here so pre-warm and serve write to the same location.
+# Pre-download DuckDB extensions so the first `sigiro serve` doesn't hang on a
+# 30-90s blocking download. CRITICAL: keep the extension dir OUTSIDE the data dir.
+# In hosted deploys a persistent volume mounts over SIGIRO_DATA_DIR (/var/lib/sigiro),
+# which would MASK anything baked under it and force a re-download on every cold
+# start. /opt/sigiro/extensions is baked into the image and never masked. The Fly
+# deploy sets the same SIGIRO_EXTENSION_DIR so serve reads these baked extensions.
 ENV SIGIRO_DATA_DIR=/var/lib/sigiro \
-    SIGIRO_EXTENSION_DIR=/var/lib/sigiro/extensions
+    SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
 RUN sigiro fetch-extensions
 EXPOSE 4317 4318 9999
 CMD ["sigiro", "serve"]
