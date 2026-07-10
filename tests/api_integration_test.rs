@@ -89,7 +89,7 @@ fn build_otlp_app_with_router(state: &Arc<AppState>) -> (axum::Router, Arc<MsgRo
     let router = Arc::new(MsgRouter::new(Arc::clone(&state.pool)));
     router.start();
     (
-        ingest::otlp_http_router(Arc::clone(&router), state.auth_mode.clone()),
+        ingest::otlp_http_router(Arc::clone(&router), state.auth_mode.clone(), 8_388_608),
         router,
     )
 }

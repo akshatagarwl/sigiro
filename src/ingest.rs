@@ -45,11 +45,24 @@ fn status_internal(msg: impl std::fmt::Display) -> Status {
 pub struct OtlpGrpcService {
     router: Arc<MsgRouter>,
     auth_mode: crate::auth::AuthMode,
+    /// `SIGIRO_MAX_INGEST_BODY_BYTES` — resolved once at construction (see
+    /// `crate::config::max_ingest_body_bytes`) and applied to every gRPC
+    /// service via `max_decoding_message_size` below, matching the cap the
+    /// OTLP HTTP router applies via `DefaultBodyLimit` (`otlp_http_router`).
+    max_body_bytes: usize,
 }
 
 impl OtlpGrpcService {
-    pub fn new(router: Arc<MsgRouter>, auth_mode: crate::auth::AuthMode) -> Self {
-        Self { router, auth_mode }
+    pub fn new(
+        router: Arc<MsgRouter>,
+        auth_mode: crate::auth::AuthMode,
+        max_body_bytes: usize,
+    ) -> Self {
+        Self {
+            router,
+            auth_mode,
+            max_body_bytes,
+        }
     }
 
     /// Route a batch to the inserter.
@@ -63,32 +76,29 @@ impl OtlpGrpcService {
         Ok(())
     }
 
-    pub fn trace_service(&self) -> TraceServiceServer<Self> {
-        TraceServiceServer::new(Self {
+    fn clone_inner(&self) -> Self {
+        Self {
             router: Arc::clone(&self.router),
             auth_mode: self.auth_mode.clone(),
-        })
+            max_body_bytes: self.max_body_bytes,
+        }
+    }
+
+    pub fn trace_service(&self) -> TraceServiceServer<Self> {
+        TraceServiceServer::new(self.clone_inner()).max_decoding_message_size(self.max_body_bytes)
     }
 
     pub fn logs_service(&self) -> LogsServiceServer<Self> {
-        LogsServiceServer::new(Self {
-            router: Arc::clone(&self.router),
-            auth_mode: self.auth_mode.clone(),
-        })
+        LogsServiceServer::new(self.clone_inner()).max_decoding_message_size(self.max_body_bytes)
     }
 
     pub fn metrics_service(&self) -> MetricsServiceServer<Self> {
-        MetricsServiceServer::new(Self {
-            router: Arc::clone(&self.router),
-            auth_mode: self.auth_mode.clone(),
-        })
+        MetricsServiceServer::new(self.clone_inner()).max_decoding_message_size(self.max_body_bytes)
     }
 
     pub fn profiles_service(&self) -> ProfilesServiceServer<Self> {
-        ProfilesServiceServer::new(Self {
-            router: Arc::clone(&self.router),
-            auth_mode: self.auth_mode.clone(),
-        })
+        ProfilesServiceServer::new(self.clone_inner())
+            .max_decoding_message_size(self.max_body_bytes)
     }
 }
 
@@ -634,7 +644,20 @@ struct OtlpHttpState {
     auth_mode: crate::auth::AuthMode,
 }
 
-pub fn otlp_http_router(router: Arc<MsgRouter>, auth_mode: crate::auth::AuthMode) -> Router {
+/// `max_body_bytes` is `SIGIRO_MAX_INGEST_BODY_BYTES` (see
+/// `crate::config::max_ingest_body_bytes`), resolved once by the caller.
+/// `DefaultBodyLimit` only marks the request (an extension flag consulted by
+/// the `Bytes` extractor each handler uses); the actual cap is enforced when
+/// that extractor collects the body, which happens *after*
+/// `RequestDecompressionLayer` (applied by the caller around this whole
+/// router — see `run_servers`) has already un-gzipped it. So this bounds the
+/// DECOMPRESSED size regardless of which layer is nested outside the other —
+/// closing the gzip-bomb hole, not just capping wire size.
+pub fn otlp_http_router(
+    router: Arc<MsgRouter>,
+    auth_mode: crate::auth::AuthMode,
+    max_body_bytes: usize,
+) -> Router {
     let state = Arc::new(OtlpHttpState { router, auth_mode });
     Router::new()
         .route("/", post(otlp_http_pyroscope)) // Pyroscope RS SDK posts here
@@ -645,6 +668,7 @@ pub fn otlp_http_router(router: Arc<MsgRouter>, auth_mode: crate::auth::AuthMode
         .route("/v1/profiles", post(otlp_http_profiles))
         .route("/ingest", post(otlp_http_pyroscope))
         .route("/ingest/pyroscope", post(otlp_http_pyroscope))
+        .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         .with_state(state)
 }
 

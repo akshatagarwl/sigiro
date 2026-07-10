@@ -389,6 +389,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
         sigiro::auth::AuthMode::Key {
             key: "sigiro_dev_test".to_string(),
         },
+        8_388_608,
     );
     let server = TestServer::new(app).unwrap();
 

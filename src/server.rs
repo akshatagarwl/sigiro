@@ -5,11 +5,14 @@ use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use parking_lot::Mutex;
 use rusqlite::Connection;
-use sqlparser::ast::Statement;
+use sqlparser::ast::{
+    Expr, ObjectName, Query as SqlQuery, SetExpr, Statement, TableFactor, Visit, Visitor,
+};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
 use std::net::SocketAddr;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -215,6 +218,179 @@ static TIME_TRAVEL_AT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::
     regex::Regex::new(r"(?i)\bAT\s*\([^)]*=>[^)]*\)").expect("valid time-travel regex")
 });
 
+/// The entire allowed FROM-target surface for user queries: every table
+/// sigiro itself creates (src/schema.rs CREATE TABLE names) plus the
+/// read-only `sigiro_anomalies` view it also creates there. Matched
+/// case-insensitively against the FINAL identifier — see `is_allowed_table`
+/// for how the schema-qualifier prefix (`lake.` / `main.`) is handled.
+const ALLOWED_TABLES: &[&str] = &[
+    "SIGIRO_SPANS",
+    "SIGIRO_LOGS",
+    "SIGIRO_LOG_TEMPLATES",
+    "SIGIRO_METRICS_GAUGE",
+    "SIGIRO_METRICS_SUM",
+    "SIGIRO_METRICS_HISTOGRAM",
+    "SIGIRO_METRICS_EXP_HISTOGRAM",
+    "SIGIRO_PROFILES",
+    "SIGIRO_ANOMALIES",
+];
+
+/// Table-valued / pragma functions sigiro's OWN code calls through this same
+/// `/v1/query` guard — allowlist EXACTLY these, sourced from real call sites:
+/// - `PRAGMA_DATABASE_SIZE` — src/diagnose.rs `check_duckdb_health` (DuckDB
+///   memory-limit/usage self-check via `FROM pragma_database_size()`).
+/// - `RANGE` — tests/api_integration_test.rs
+///   `test_query_midstream_error_never_returns_partial_rows` (`FROM range(5) t(i)`,
+///   a pure row generator with no filesystem/network access).
+const SAFE_FUNCTIONS: &[&str] = &["PRAGMA_DATABASE_SIZE", "RANGE"];
+
+/// Schema qualifiers accepted ahead of an allowed table name. DuckLake attaches
+/// its catalog `AS lake` (src/storage.rs); the same data reads as schema `main`
+/// under a local-file catalog and `lake` under a PostgreSQL-backed one (see
+/// tests/e2e/docker/run.sh's `PROFILE_SCHEMA` detection). `information_schema`
+/// is DuckDB's static, file-system-free catalog metadata — inherently safe to
+/// expose in full (used by the same e2e script to detect the schema above).
+fn is_allowed_table(name: &ObjectName) -> bool {
+    let idents = &name.0;
+    match idents.len() {
+        1 => ALLOWED_TABLES.contains(&idents[0].value.to_uppercase().as_str()),
+        2 => {
+            let schema = idents[0].value.to_uppercase();
+            let table = idents[1].value.to_uppercase();
+            if schema == "INFORMATION_SCHEMA" {
+                return true;
+            }
+            matches!(schema.as_str(), "LAKE" | "MAIN") && ALLOWED_TABLES.contains(&table.as_str())
+        }
+        // Fail closed: no legitimate sigiro query uses 3+-part relation names.
+        _ => false,
+    }
+}
+
+/// A table-valued-function / pivot-style relation is safe only if its
+/// (possibly qualified) name is on `SAFE_FUNCTIONS` — matched on the final
+/// identifier so `main.pragma_database_size()` and `pragma_database_size()`
+/// are treated the same.
+fn is_safe_function(name: &ObjectName) -> bool {
+    name.0
+        .last()
+        .is_some_and(|ident| SAFE_FUNCTIONS.contains(&ident.value.to_uppercase().as_str()))
+}
+
+/// Reject the Postgres/DuckDB `TABLE <name>` query-shorthand (equivalent to
+/// `SELECT * FROM <name>`). It is a distinct `SetExpr::Table` AST node whose
+/// `table_name`/`schema_name` fields are plain `String`s, not an `ObjectName`
+/// routed through sqlparser's relation/table-factor visitor hooks — so
+/// without this explicit check it would bypass `AllowlistVisitor` entirely.
+/// Not used anywhere in sigiro's own queries or tests, so fail closed.
+fn reject_table_shorthand(expr: &SetExpr) -> ControlFlow<String> {
+    match expr {
+        SetExpr::SetOperation { left, right, .. } => match reject_table_shorthand(left) {
+            ControlFlow::Continue(()) => reject_table_shorthand(right),
+            brk => brk,
+        },
+        SetExpr::Table(_) => {
+            ControlFlow::Break("query rejected: TABLE shorthand not allowed".to_string())
+        }
+        _ => ControlFlow::Continue(()),
+    }
+}
+
+/// Walks the full AST (via sqlparser's `visitor` feature — CTEs, set
+/// operations, every FROM/JOIN, derived tables, and subqueries nested in
+/// expressions/WHERE/scalar positions are all covered by the crate's own
+/// recursive Visit derive, not hand-enumerated here) and rejects any
+/// relation that is not an allowed sigiro table or safe function.
+///
+/// This closes the replacement-scan hole: `SELECT * FROM 's3://...'` or
+/// `FROM '/etc/passwd'` parses as `TableFactor::Table` with a
+/// single-element, unquoted-string `ObjectName` — it is not on
+/// `ALLOWED_TABLES`, so `is_allowed_table` rejects it regardless of what
+/// DuckDB's replacement-scan would have done with it.
+#[derive(Default)]
+struct AllowlistVisitor {
+    /// Every `WITH <alias> AS (...)` name seen so far. `pre_visit_query`
+    /// registers a query's own CTE aliases before the derived Visit impl
+    /// recurses into its `with`/`body` children, so a CTE is always known by
+    /// the time anything (a sibling CTE, the main body, or the CTE's own
+    /// RECURSIVE self-reference) tries to select FROM it — a CTE alias is
+    /// not a real table and would otherwise be rejected by `is_allowed_table`.
+    cte_names: std::collections::HashSet<String>,
+}
+
+impl Visitor for AllowlistVisitor {
+    type Break = String;
+
+    fn pre_visit_query(&mut self, query: &SqlQuery) -> ControlFlow<String> {
+        if let Some(with) = &query.with {
+            for cte in &with.cte_tables {
+                self.cte_names.insert(cte.alias.name.value.to_uppercase());
+            }
+        }
+        reject_table_shorthand(&query.body)
+    }
+
+    fn pre_visit_table_factor(&mut self, table_factor: &TableFactor) -> ControlFlow<String> {
+        match table_factor {
+            TableFactor::Table { name, args, .. } => {
+                let allowed = if args.is_some() {
+                    is_safe_function(name)
+                } else {
+                    self.is_known_cte(name) || is_allowed_table(name)
+                };
+                if allowed {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(format!("query rejected: {name} not allowed"))
+                }
+            }
+            // Subqueries / parenthesized joins: no relation of their own,
+            // recurse into their children (handled automatically by the
+            // derived Visit impl once we return Continue here).
+            TableFactor::Derived { .. } | TableFactor::NestedJoin { .. } => {
+                ControlFlow::Continue(())
+            }
+            TableFactor::Function { name, .. } => {
+                if is_safe_function(name) {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(format!("query rejected: function {name} not allowed"))
+                }
+            }
+            TableFactor::TableFunction { expr, .. } => match expr {
+                Expr::Function(f) if is_safe_function(&f.name) => ControlFlow::Continue(()),
+                _ => ControlFlow::Break("query rejected: table function not allowed".to_string()),
+            },
+            // UNNEST, PIVOT, UNPIVOT, JSON_TABLE, OPENJSON, MATCH_RECOGNIZE, etc.
+            // — fail closed, none of sigiro's own queries or tests use them.
+            other => ControlFlow::Break(format!(
+                "query rejected: relation kind not allowed: {other}"
+            )),
+        }
+    }
+
+    fn pre_visit_statement(&mut self, _statement: &Statement) -> ControlFlow<String> {
+        // The only Statement this visitor ever walks into is the top-level
+        // Statement::Query we matched on before calling `.visit()` — any
+        // OTHER Statement node reachable here means one snuck in as a nested
+        // AST node (e.g. a data-modifying CTE arm parsed as
+        // `SetExpr::Insert(Statement)`/`SetExpr::Update(Statement)`). Reject
+        // it; a read-only query tree never legitimately contains one.
+        ControlFlow::Break("query rejected: nested statement not allowed".to_string())
+    }
+}
+
+impl AllowlistVisitor {
+    /// A bare (unqualified, single-part) name matching a CTE alias seen so
+    /// far is a reference to that CTE, not a real table.
+    fn is_known_cte(&self, name: &ObjectName) -> bool {
+        match name.0.as_slice() {
+            [ident] => self.cte_names.contains(&ident.value.to_uppercase()),
+            _ => false,
+        }
+    }
+}
+
 pub fn validate_read_only(sql: &str) -> Result<(), String> {
     let dialect = GenericDialect {};
     let parseable = TIME_TRAVEL_AT.replace_all(sql, " ");
@@ -222,8 +398,11 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
         .map_err(|e| format!("query rejected: parse error: {e}"))?;
 
     for stmt in &statements {
-        if !matches!(stmt, Statement::Query(_)) {
+        let Statement::Query(query) = stmt else {
             return Err("query rejected: only SELECT queries are allowed".to_string());
+        };
+        if let ControlFlow::Break(msg) = query.visit(&mut AllowlistVisitor::default()) {
+            return Err(msg);
         }
     }
 
@@ -323,6 +502,7 @@ pub async fn run_servers(
     init_complete: Arc<AtomicBool>,
 ) -> Result<()> {
     let ports = ServerPorts::load()?;
+    let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?;
 
     let configured_key = crate::config::API_KEY.value().unwrap_or_default();
     let auth_mode = crate::auth::AuthMode::from_config(configured_key.clone());
@@ -361,7 +541,7 @@ pub async fn run_servers(
     let (grpc_shutdown_tx, grpc_shutdown_rx) = oneshot::channel();
     servers.spawn(async move {
         let addr = format!("[::]:{grpc_port}").parse().expect("valid addr");
-        let svc = OtlpGrpcService::new(grpc_router, grpc_auth_mode);
+        let svc = OtlpGrpcService::new(grpc_router, grpc_auth_mode, max_ingest_body_bytes);
         tracing::info!("gRPC listening on {addr}");
         let result = TonicServer::builder()
             .add_service(svc.trace_service())
@@ -413,8 +593,9 @@ pub async fn run_servers(
     });
 
     // OTLP HTTP — authenticated via Authorization header
-    let otlp_http_app = crate::ingest::otlp_http_router(Arc::clone(&router), auth_mode)
-        .layer(tower_http::decompression::RequestDecompressionLayer::new());
+    let otlp_http_app =
+        crate::ingest::otlp_http_router(Arc::clone(&router), auth_mode, max_ingest_body_bytes)
+            .layer(tower_http::decompression::RequestDecompressionLayer::new());
     let otlp_http_port = ports.otlp_http;
     let otlp_tls_config = tls_config;
     let otlp_http_handle = Handle::new();
@@ -716,12 +897,13 @@ fn exclude_self_workers(
         .collect()
 }
 
-/// Execute SQL against DuckDB (local or federated).
+/// Execute SQL against DuckDB (local or federated). Returns the result rows
+/// plus whether the row cap (`SIGIRO_MAX_RESULT_ROWS`) truncated them.
 async fn execute_sql(
     state: &AppState,
     auth: &AuthContext,
     sql: &str,
-) -> anyhow::Result<Vec<serde_json::Value>> {
+) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
     let workers = exclude_self_workers(federation::list_workers(&state.admin_conn.lock())?);
     if !workers.is_empty() {
         let quack_port = crate::config::QUACK_PORT
@@ -747,15 +929,31 @@ async fn execute_sql(
             )
         })
         .await??;
-        return Ok(result);
+        // Row-cap/timeout guards below apply to the local reader connection;
+        // federated queries go over HTTP to each worker's own guarded
+        // /v1/query, so no separate cap is applied here.
+        return Ok((result, false));
     }
 
     // No federation workers — execute locally against the project connection.
     let readers = project_reader_pool(state, auth)
         .map_err(|e: axum_anyhow::ApiError| anyhow::anyhow!("{:?}", e))?;
     let sql_clone = sql.to_string();
-    tokio::task::spawn_blocking(move || {
+    let timeout_secs = crate::config::query_timeout_secs()?;
+    let max_rows = crate::config::max_result_rows()?;
+    let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
+
+    let mut query_task = tokio::task::spawn_blocking(move || {
         let conn = readers.get();
+        // Sent before `prepare`/`query` so the timeout branch below can
+        // interrupt this exact connection even if it never gets a chance to
+        // run (e.g. still waiting on `readers.get()` for a free connection).
+        // An error here just means the async side gave up waiting — nothing
+        // to interrupt for, so there is nothing to report.
+        if handle_tx.send(conn.interrupt_handle()).is_err() {
+            tracing::debug!("query timeout watchdog receiver dropped before send");
+        }
+
         let mut stmt = conn
             .prepare(&sql_clone)
             .map_err(|e| anyhow::anyhow!("failed to prepare query: {e}"))?;
@@ -769,12 +967,18 @@ async fn execute_sql(
             .map(duckdb::Statement::column_names)
             .unwrap_or_default();
         let mut results = Vec::new();
+        let mut truncated = false;
         // Propagate a mid-stream error instead of silently truncating the
-        // result and returning partial rows as HTTP 200.
+        // result and returning partial rows as HTTP 200. Row-cap truncation
+        // (below) is the one deliberate, reported exception.
         while let Some(row) = rows
             .next()
             .map_err(|e| anyhow::anyhow!("row read failed: {e}"))?
         {
+            if results.len() >= max_rows {
+                truncated = true;
+                break;
+            }
             let mut obj = serde_json::Map::new();
             for (i, name) in column_names.iter().enumerate() {
                 let val = row
@@ -784,9 +988,30 @@ async fn execute_sql(
             }
             results.push(serde_json::Value::Object(obj));
         }
-        Ok(results)
-    })
-    .await?
+        Ok((results, truncated))
+    });
+
+    // ponytail: timeout enforcement polls a shared oneshot handle rather than
+    // tracking per-connection "busy" state, so there's a narrow window where
+    // the deadline fires just as the query finishes and the now-idle pooled
+    // connection gets a spurious interrupt(). DuckDB (this bundled version)
+    // has no `statement_timeout` setting to enforce this engine-side instead;
+    // revisit if spurious interrupts on adjacent queries are ever observed.
+    tokio::select! {
+        joined = &mut query_task => {
+            joined
+                .map_err(|e| anyhow::anyhow!("query task failed: {e}"))?
+        }
+        () = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
+            if let Ok(handle) = handle_rx.await {
+                tracing::warn!(timeout_secs, "query exceeded timeout — interrupting");
+                handle.interrupt();
+            }
+            (&mut query_task)
+                .await
+                .map_err(|e| anyhow::anyhow!("query task failed: {e}"))?
+        }
+    }
 }
 
 fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
@@ -806,6 +1031,14 @@ fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
     }
 }
 
+/// `x-sigiro-truncated` header + JSON rows — signals `SIGIRO_MAX_RESULT_ROWS`
+/// truncation without changing the response body shape (still a bare array,
+/// so existing callers like `SigiroClient::query` keep working unchanged).
+type QueryResponse = (
+    [(&'static str, &'static str); 1],
+    Json<Vec<serde_json::Value>>,
+);
+
 #[utoipa::path(
     post,
     path = "/v1/query",
@@ -821,7 +1054,7 @@ async fn query_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
     body: String,
-) -> ApiResult<Json<Vec<serde_json::Value>>> {
+) -> ApiResult<QueryResponse> {
     // Truncated SQL preview so every query outcome (reject / fail / complete)
     // leaves a server-side trace — a silently-throttled or errored query used
     // to leave none, which is what let a false "data loss" RCA take hold.
@@ -831,9 +1064,20 @@ async fn query_handler(
         return Err(bad_request("query rejected", &e));
     }
     match execute_sql(&state, &auth, &body).await {
-        Ok(results) => {
-            tracing::info!(rows = results.len(), sql = %sql_preview, "query completed");
-            Ok(Json(results))
+        Ok((results, truncated)) => {
+            tracing::info!(
+                rows = results.len(),
+                truncated,
+                sql = %sql_preview,
+                "query completed"
+            );
+            // SIGIRO_MAX_RESULT_ROWS was hit — the client must not mistake a
+            // capped result for the complete answer.
+            let truncated_header = [(
+                "x-sigiro-truncated",
+                if truncated { "true" } else { "false" },
+            )];
+            Ok((truncated_header, Json(results)))
         }
         Err(e) => {
             tracing::warn!(sql = %sql_preview, "query failed: {e:#}");
@@ -869,7 +1113,7 @@ async fn services_handler(
          ORDER BY span_count DESC",
         prefix
     );
-    let results = execute_sql(&state, &auth, &sql)
+    let (results, _truncated) = execute_sql(&state, &auth, &sql)
         .await
         .map_err(|e| bad_request("services query failed", &format!("{e:#}")))?;
 
@@ -943,7 +1187,7 @@ async fn trace_detail_handler(
          ORDER BY timestamp",
         prefix, safe_trace_id
     );
-    let results = execute_sql(&state, &auth, &sql)
+    let (results, _truncated) = execute_sql(&state, &auth, &sql)
         .await
         .map_err(|e| bad_request("trace detail query failed", &format!("{e:#}")))?;
 

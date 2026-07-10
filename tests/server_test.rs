@@ -193,6 +193,75 @@ fn validate_time_travel_does_not_bypass_guards() {
     assert!(validate_read_only("DROP TABLE sigiro_logs AT (VERSION => 1)").is_err());
 }
 
+// ---------------------------------------------------------------------------
+// M1: AST allowlist — closes the replacement-scan hole (a string-literal FROM
+// target parses as a plain relation name, not a Word token, so the old
+// tokenizer-only denylist never saw it). See ALLOWED_TABLES/SAFE_FUNCTIONS in
+// src/server.rs for the exact sourced sets.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_blocks_replacement_scan_string_literals() {
+    assert!(validate_read_only("SELECT * FROM 's3://b/x.parquet'").is_err());
+    assert!(validate_read_only("SELECT * FROM '/etc/passwd'").is_err());
+    assert!(validate_read_only("SELECT * FROM 'https://x/y'").is_err());
+}
+
+#[test]
+fn validate_blocks_unsafe_function_in_subquery() {
+    assert!(validate_read_only("SELECT * FROM (SELECT * FROM read_csv('/etc/passwd'))").is_err());
+}
+
+#[test]
+fn validate_blocks_unsafe_function_in_cte() {
+    assert!(
+        validate_read_only("WITH e AS (SELECT * FROM read_parquet('x')) SELECT * FROM e").is_err()
+    );
+}
+
+#[test]
+fn validate_blocks_unsafe_function_in_union() {
+    assert!(validate_read_only("SELECT 1 UNION SELECT * FROM read_text('/etc/passwd')").is_err());
+}
+
+#[test]
+fn validate_allows_allowlisted_tables() {
+    assert!(validate_read_only("SELECT count(*) FROM sigiro_spans").is_ok());
+    assert!(validate_read_only("SELECT * FROM lake.sigiro_logs WHERE service_name='x'").is_ok());
+}
+
+#[test]
+fn validate_allows_safe_functions_actually_used_by_sigiro() {
+    // src/diagnose.rs `check_duckdb_health` — DuckDB memory self-check.
+    assert!(
+        validate_read_only(
+            "SELECT memory_limit, memory_usage FROM pragma_database_size() WHERE database_name = 'lake'"
+        )
+        .is_ok()
+    );
+    // tests/e2e/docker/run.sh — schema-detection query against /v1/query.
+    assert!(
+        validate_read_only(
+            "SELECT table_schema FROM information_schema.tables WHERE table_name = 'sigiro_profiles' LIMIT 1"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn validate_blocks_unknown_relation_even_when_bare() {
+    // A bare identifier that simply isn't a sigiro table/view must still be
+    // rejected — the allowlist is positive, not a denylist.
+    assert!(validate_read_only("SELECT * FROM some_other_table").is_err());
+}
+
+#[test]
+fn validate_blocks_unrecognized_schema_qualifier() {
+    // A recognized table name under an unrecognized schema/catalog qualifier
+    // must not slip through on the final-identifier match alone.
+    assert!(validate_read_only("SELECT * FROM evil_schema.sigiro_spans").is_err());
+}
+
 #[test]
 fn value_ref_mixed_types_from_table() {
     let conn = test_conn();

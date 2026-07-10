@@ -53,12 +53,27 @@ pub static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREA
     EnvarDef::Default(default_duckdb_threads())
 });
 
-/// DuckDB memory cap per shared project database. Default: 2 GiB for a
-/// dedicated single-tenant observability box.
+/// DuckDB memory cap per shared project database. Default: 400 MB — safely
+/// under the smallest hosted VM (fly.toml provisions 512 MB), so DuckDB
+/// errors/spills instead of the OS OOM-killing the whole process. Still
+/// env-overridable for larger boxes.
 pub static DUCKDB_MEMORY_LIMIT: Envar<String> =
     Envar::on_startup("SIGIRO_DUCKDB_MEMORY_LIMIT", || {
-        EnvarDef::Default("2GB".to_string())
+        EnvarDef::Default("400MB".to_string())
     });
+
+/// Per-query wall-clock timeout in seconds. DuckDB (bundled version) has no
+/// `statement_timeout` setting, so this is enforced by interrupting the
+/// reader connection from a watchdog once the deadline passes (see
+/// `execute_sql` in server.rs). Default: 30s.
+pub static QUERY_TIMEOUT_SECONDS: Envar<u64> =
+    Envar::on_startup("SIGIRO_QUERY_TIMEOUT_SECONDS", || EnvarDef::Default(30));
+
+/// Max rows a single `/v1/query` call will collect before stopping early and
+/// reporting truncation. Default: 100_000 — bounds the in-memory result Vec
+/// and the JSON response size for a hosted multi-tenant instance.
+pub static MAX_RESULT_ROWS: Envar<usize> =
+    Envar::on_startup("SIGIRO_MAX_RESULT_ROWS", || EnvarDef::Default(100_000));
 
 /// Pyroscope profiling endpoint (optional — no profiling if unset).
 pub static PYROSCOPE_ENDPOINT: Envar<String> =
@@ -125,6 +140,21 @@ pub fn duckdb_memory_limit() -> Result<String> {
     Ok(memory_limit)
 }
 
+pub fn query_timeout_secs() -> Result<u64> {
+    let secs = QUERY_TIMEOUT_SECONDS.value()?;
+    anyhow::ensure!(
+        secs > 0,
+        "SIGIRO_QUERY_TIMEOUT_SECONDS must be greater than zero"
+    );
+    Ok(secs)
+}
+
+pub fn max_result_rows() -> Result<usize> {
+    let rows = MAX_RESULT_ROWS.value()?;
+    anyhow::ensure!(rows > 0, "SIGIRO_MAX_RESULT_ROWS must be greater than zero");
+    Ok(rows)
+}
+
 fn default_duckdb_threads() -> usize {
     std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
@@ -139,6 +169,26 @@ pub static FLUSH_BYTE_THRESHOLD: Envar<usize> =
     Envar::on_startup("SIGIRO_FLUSH_BYTE_THRESHOLD", || {
         EnvarDef::Default(8_388_608)
     });
+
+/// Max ingest request body size in bytes (OTLP HTTP `DefaultBodyLimit`, and
+/// the matching gRPC `max_decoding_message_size` — see `crate::ingest`).
+/// Default: 8_388_608 (8 MiB). The HTTP cap applies to the DECOMPRESSED size
+/// (enforced when the body is collected into `Bytes`, which happens after
+/// `RequestDecompressionLayer` has already un-gzipped it), so this also
+/// bounds a gzip-bomb, not just the wire size.
+pub static MAX_INGEST_BODY_BYTES: Envar<usize> =
+    Envar::on_startup("SIGIRO_MAX_INGEST_BODY_BYTES", || {
+        EnvarDef::Default(8_388_608)
+    });
+
+pub fn max_ingest_body_bytes() -> Result<usize> {
+    let bytes = MAX_INGEST_BODY_BYTES.value()?;
+    anyhow::ensure!(
+        bytes > 0,
+        "SIGIRO_MAX_INGEST_BODY_BYTES must be greater than zero"
+    );
+    Ok(bytes)
+}
 
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
 /// Defaults to the platform data dir (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).

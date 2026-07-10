@@ -348,6 +348,7 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
         sigiro::auth::AuthMode::Key {
             key: "sigiro_dev_test".to_string(),
         },
+        8_388_608,
     );
     let server = TestServer::new(app).unwrap();
 
