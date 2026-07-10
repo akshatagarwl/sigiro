@@ -101,7 +101,10 @@ impl QuackEdgeServer {
     }
 
     fn wait_ready(&self) {
-        let deadline = Instant::now() + Duration::from_secs(30);
+        // 90s (not 30s): under concurrent test load / first-boot quack
+        // extension download+load, 30s was too tight and produced flaky
+        // false failures unrelated to the thing under test.
+        let deadline = Instant::now() + Duration::from_secs(90);
         loop {
             if let Ok(resp) =
                 reqwest::blocking::get(format!("http://127.0.0.1:{}/health", self.http_port))
@@ -113,7 +116,7 @@ impl QuackEdgeServer {
             }
             assert!(
                 Instant::now() < deadline,
-                "sigiro serve did not report /health ready within 30s"
+                "sigiro serve did not report /health ready within 90s"
             );
             std::thread::sleep(Duration::from_millis(200));
         }
@@ -279,6 +282,90 @@ fn security_assertions(server: &QuackEdgeServer, service_name: &str) {
     }
 }
 
+/// Proves the gate is now table/reader-restricted, not just SELECT-only —
+/// the whole point of replacing the old SELECT-only SQL macro with a Rust
+/// UDF that runs `validate_read_only`. Every one of these is a syntactically
+/// valid read-only `SELECT`, so the OLD `json_serialize_sql`-based gate would
+/// have allowed all of them; the new gate must reject every one except the
+/// two explicitly-allowed reads.
+fn reader_restriction_assertions(server: &QuackEdgeServer, service_name: &str) {
+    let rejected: &[(&str, &str)] = &[
+        (
+            "file read via read_csv",
+            "SELECT * FROM read_csv('/etc/passwd')",
+        ),
+        (
+            "URL read via read_parquet",
+            "SELECT * FROM read_parquet('https://127.0.0.1:1/x.parquet')",
+        ),
+        ("directory listing via glob", "SELECT * FROM glob('/etc/*')"),
+        (
+            "credential exfil via duckdb_secrets",
+            "SELECT * FROM duckdb_secrets()",
+        ),
+        ("non-sigiro table", "SELECT * FROM some_other_table"),
+        // Former CTE-scope-leak bypass — still rejected over the actual quack
+        // wire, now because CTE-name allowlisting was abandoned and
+        // `validate_read_only` rejects ANY `WITH` clause outright (see
+        // src/server.rs `AllowlistVisitor::pre_visit_query` and
+        // tests/server_test.rs `validate_blocks_cte_scope_leak_into_outer_from`).
+        // A nested scalar subquery defines `WITH evil AS (...)`; the outer
+        // FROM then reads a REAL, non-allowlisted table of the same name.
+        (
+            "CTE-scope leak (nested WITH poisons outer FROM)",
+            "SELECT (WITH evil AS (SELECT 1) SELECT 1), secret FROM evil",
+        ),
+        // Any plain `WITH` is also rejected over the wire — CTEs are banned
+        // by policy, not analyzed.
+        (
+            "plain WITH banned by policy",
+            "WITH x AS (SELECT 1 AS n) SELECT count(*) FROM x",
+        ),
+    ];
+    for (label, sql) in rejected {
+        let result = server.quack_exec(sql);
+        assert!(
+            result.is_err(),
+            "SECURITY FAILURE: {label} ({sql:?}) was NOT rejected by the quack authorization gate"
+        );
+        let message = result.unwrap_err();
+        assert!(
+            message.contains("Authorization failed"),
+            "{label} was rejected, but not by the authorization gate (got: {message}) — \
+             a rejection for the wrong reason could mask a real gap"
+        );
+        println!("  [{label}] rejected: {message}");
+    }
+
+    // information_schema is DuckDB's static, filesystem-free catalog metadata
+    // — explicitly allowed by `is_allowed_table` alongside the sigiro_* data
+    // tables. Confirm it still works over the wire under the new gate.
+    server
+        .quack_exec("SELECT * FROM information_schema.schemata")
+        .expect("information_schema.schemata must remain ALLOWED under the new gate");
+    println!("  [information_schema.schemata] allowed, as expected");
+
+    // A normal read against real sigiro data must still work under the new
+    // gate — the security upgrade must not have collaterally broken reads.
+    let count = server
+        .quack_select_i64(&format!(
+            "SELECT count(*) FROM lake.sigiro_spans WHERE service_name = '{service_name}'"
+        ))
+        .expect("a normal SELECT count(*) FROM sigiro_spans must still work under the new gate");
+    println!("  [SELECT count(*) FROM sigiro_spans] allowed, {count} rows, as expected");
+
+    // Subqueries are the sanctioned replacement for CTEs (which are banned
+    // outright): a derived-table subquery against a real sigiro_* table must
+    // still work over the wire — the WITH-ban must not have collaterally
+    // broken ordinary subquery reads.
+    let subquery_count = server
+        .quack_select_i64(&format!(
+            "SELECT count(*) FROM (SELECT service_name FROM lake.sigiro_spans WHERE service_name = '{service_name}') t"
+        ))
+        .expect("a subquery-form SELECT over sigiro_spans must still work under the new gate");
+    println!("  [SELECT count(*) FROM (subquery) t] allowed, {subquery_count} rows, as expected");
+}
+
 /// One full lifecycle: spawn, ingest, verify read, run every security
 /// assertion, verify count unchanged, verify concurrent ingest still works,
 /// then shut down cleanly. Returns `Err` describing the first failure.
@@ -305,6 +392,12 @@ fn run_one_iteration(iteration: u16) -> Result<(), String> {
     // 2. Security assertions: every write form must be rejected, and the
     //    gate's own denial (not some other coincidental failure) must be why.
     security_assertions(&server, &service_name);
+
+    // 2b. Reader-restriction assertions: the new gate must also reject
+    //     syntactically-valid SELECTs that read files/URLs/secrets or
+    //     non-sigiro tables, while still allowing information_schema and
+    //     real sigiro_* reads.
+    reader_restriction_assertions(&server, &service_name);
 
     // 3. Nothing mutated: count must be exactly what it was before the attacks.
     let after_attacks = server.quack_select_i64(&format!(

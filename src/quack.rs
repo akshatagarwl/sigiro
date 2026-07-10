@@ -6,48 +6,65 @@
 //!
 //! Two independent guards, both required:
 //! - [`load_and_pin`]: refuses to serve an unpinned/unexpected quack build.
-//! - [`install_authorization_gate`]: the actual security boundary — a
-//!   DuckDB-parser-classified, fail-closed, SELECT-only allowlist.
+//! - [`install_authorization_gate`]: the actual security boundary — a Rust
+//!   scalar UDF that runs the SAME [`crate::server::validate_read_only`]
+//!   firewall `/v1/query` enforces (SELECT-only + `sigiro_*` table allowlist
+//!   + reader-function denylist), fail-closed.
 
 use anyhow::{Context, Result};
 use duckdb::Connection;
+use duckdb::core::{DataChunkHandle, LogicalTypeHandle, LogicalTypeId};
+use duckdb::ffi::duckdb_string_t;
+use duckdb::types::DuckString;
+use duckdb::vscalar::{ScalarFunctionSignature, VScalar};
+use duckdb::vtab::arrow::WritableVector;
 
 /// Pinned quack extension build. Asserted on every load (see
 /// [`load_and_pin`]) so a silent quack upgrade can never change
 /// authorization semantics underneath this gate without a deliberate,
 /// re-verified bump here.
 ///
-/// NOTE: the task brief this module was built from assumed quack ships from
-/// the `core_nightly` repository at version `29fc039`. Empirically, against
-/// the DuckDB build actually vendored by this crate's `duckdb = "1.10503.1"`
-/// dependency (DuckDB v1.5.3), a bare `LOAD quack;` succeeds with NO
-/// `core_nightly` install step — quack autoinstalls from the default `core`
-/// repository, and `duckdb_extensions()` reports `extension_version =
-/// '1693647'`, `install_mode = 'REPOSITORY'`, `installed_from = 'core'`.
-/// This constant reflects that directly-observed reality, not the brief's
-/// assumption; the `core_nightly` path is kept below as a fallback for
-/// older/other DuckDB builds where quack isn't in the default repo yet.
+/// Empirically, against the DuckDB build actually vendored by this crate's
+/// `duckdb = "1.10503.1"` dependency (DuckDB v1.5.3): quack is NOT in
+/// DuckDB's autoloadable "known extensions" list, so a bare `LOAD quack;`
+/// always fails with "Extension \"quack\" is an existing extension. Install
+/// it first" — [`load_and_pin`] must always `INSTALL` it explicitly. The
+/// `core` repository (DuckDB's default, i.e. plain `INSTALL quack;` with no
+/// `FROM` clause) serves this pinned version. **`core_nightly` serves a
+/// DIFFERENT, newer, UNVERIFIED build** (confirmed empirically: version
+/// `40de7ba` vs. this pin's `1693647`, for the same DuckDB v1.5.3/platform)
+/// — using it as a fallback here was the actual root cause of a boot failure
+/// (`quack extension version mismatch: installed "40de7ba", pinned
+/// "1693647"`) once `core_nightly`'s build drifted away from what this gate
+/// was verified against. Never fall back to `core_nightly`; if `core` stops
+/// serving this exact version, that is exactly the drift this pin exists to
+/// catch — re-verify the authorization gate against the new build and bump
+/// this constant deliberately, rather than widening the install source.
 pub const EXPECTED_QUACK_VERSION: &str = "1693647";
 
-/// SQL macro name installed as the quack authorization gate. Re-created from
-/// this Rust source on every server boot (see [`install_authorization_gate`])
-/// — never trusted from whatever a previous run may have left in the catalog.
+/// Scalar UDF name installed as the quack authorization gate. Re-registered
+/// from this Rust source on every server boot (see
+/// [`install_authorization_gate`]) — never trusted from whatever a previous
+/// run may have left in the catalog.
 const AUTH_FUNCTION_NAME: &str = "sigiro_quack_authorize";
 
 /// Install (if needed) and load the `quack` DuckDB extension on `conn`, then
 /// assert the loaded build matches [`EXPECTED_QUACK_VERSION`]. Fails loud on
 /// a mismatch — refuses to serve rather than trust an unpinned extension.
 ///
-// TODO(phase-B): vendor the .duckdb_extension artifact into sigiro's own
-// extension dir (alongside `storage::prewarm_extensions`) instead of relying
-// on a network INSTALL/autoload the first time a quack-enabled node boots.
+/// Also called by [`crate::storage::prewarm_extensions`] so `sigiro
+/// fetch-extensions` and the quack E2E test warm (and version-verify) this
+/// exact same pinned build ahead of time, not just at serve-time.
 pub fn load_and_pin(conn: &Connection) -> Result<()> {
     if let Err(bare_load_error) = conn.execute_batch("LOAD quack;") {
-        conn.execute_batch("INSTALL quack FROM core_nightly; LOAD quack;")
+        // `FROM core` is required, not merely the default: see
+        // [`EXPECTED_QUACK_VERSION`]'s doc comment for why `core_nightly`
+        // must never be used here.
+        conn.execute_batch("INSTALL quack FROM core; LOAD quack;")
             .with_context(|| {
                 format!(
-                    "failed to INSTALL/LOAD the quack extension; bare `LOAD quack;` \
-                     failed first with: {bare_load_error:#}"
+                    "failed to INSTALL/LOAD the quack extension from the core repository; \
+                     bare `LOAD quack;` failed first with: {bare_load_error:#}"
                 )
             })?;
     }
@@ -72,61 +89,162 @@ pub fn load_and_pin(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Fail-closed Rust scalar UDF backing `quack_authorization_function`.
+///
+/// Signature: `sigiro_quack_authorize(connection_id VARCHAR, query VARCHAR) ->
+/// BOOLEAN` — matches quack's authorization-callback contract exactly.
+/// `connection_id` is ignored: sigiro's guard is per-query, not
+/// per-connection. Returns `true` iff [`crate::server::validate_read_only`]
+/// — the SAME firewall `/v1/query` enforces — accepts `query`: SELECT-only,
+/// `sigiro_*` table allowlist, reader-function denylist.
+///
+/// Fails closed on every edge:
+/// - a NULL `query` row this function's OWN `row_is_null` check sees is
+///   denied without ever calling into the validator. In practice, per-row
+///   NULL propagation happens a level ABOVE this: this crate's `VScalar` has
+///   no hook to opt into DuckDB's "special" null handling (see
+///   `self_test_authorization_gate`'s doc comment below), so DuckDB's
+///   DEFAULT null handling intercepts any row where `query` is NULL and
+///   substitutes SQL NULL as that row's output directly — `invoke` is never
+///   called for it at all. Either way (SQL NULL from DuckDB's own
+///   interception, or this function explicitly returning `false`) the
+///   authorization result for that row is something other than the SQL
+///   literal `TRUE`, and quack's authorization callback contract treats
+///   `TRUE` as the ONLY value that authorizes a query — `FALSE` and `NULL`
+///   are both denials. So a query whose `query` argument is NULL is denied
+///   either way; this function's own `row_is_null` branch is redundant
+///   defense-in-depth (for any duckdb-crate version/build where that
+///   default-null-interception assumption doesn't hold), not the sole guard;
+/// - `DuckString::as_str` lossily replaces invalid UTF-8 rather than
+///   erroring — the resulting mangled text simply fails to parse as valid
+///   SQL, which `validate_read_only` already rejects, so no special case is
+///   needed for it;
+/// - the validator call is wrapped in `catch_unwind` — a panic must never
+///   unwind across the DuckDB FFI boundary (undefined behavior), so one is
+///   converted into a denial instead.
+struct QuackAuthorizeScalar;
+
+impl VScalar for QuackAuthorizeScalar {
+    type State = ();
+
+    unsafe fn invoke(
+        _: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let len = input.len();
+        // Param 0 is `connection_id` (ignored); param 1 is `query`.
+        let query_col = input.flat_vector(1);
+        let query_ptrs = unsafe { query_col.as_slice_with_len::<duckdb_string_t>(len) };
+
+        let mut output_vec = output.flat_vector();
+        let out_slice = unsafe { output_vec.as_mut_slice::<bool>() };
+        for (i, ptr) in query_ptrs.iter().enumerate().take(len) {
+            out_slice[i] = if query_col.row_is_null(i as u64) {
+                false
+            } else {
+                let query = DuckString::new(&mut { *ptr }).as_str().to_string();
+                std::panic::catch_unwind(|| crate::server::validate_read_only(&query).is_ok())
+                    .unwrap_or(false)
+            };
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![
+                LogicalTypeHandle::from(LogicalTypeId::Varchar),
+                LogicalTypeHandle::from(LogicalTypeId::Varchar),
+            ],
+            LogicalTypeHandle::from(LogicalTypeId::Boolean),
+        )]
+    }
+}
+
+/// Boot-time self-test: invoke the just-registered gate directly by SQL name
+/// (not over the quack wire — quack isn't serving yet) with one known-good
+/// and one known-bad query, and refuse to serve if either misbehaves. This
+/// catches a registration mistake (wrong resolvable name, wrong signature)
+/// before quack ever binds a port, rather than discovering it as a silent
+/// "Authorization failed" on every real client request.
+///
+/// Uses a non-NULL placeholder for `connection_id` (never literal SQL
+/// `NULL`, and never something a real quack call would send): the
+/// `duckdb = "1.10503.1"` crate's `VScalar` API has no hook for DuckDB's
+/// "special" null handling, so a registered scalar UDF gets DEFAULT null
+/// handling — DuckDB substitutes SQL NULL as the *whole row's output*
+/// whenever ANY argument is NULL, without ever calling into
+/// [`QuackAuthorizeScalar::invoke`]. A literal NULL connection_id here
+/// previously made every self-test call return NULL instead of a boolean
+/// (`row.get::<_, bool>(0)` then failed with "Invalid column type Null"),
+/// regardless of whether `query` was good or bad — a self-test bug, not a
+/// gate bug: quack's real authorization callback always sends a real
+/// per-connection id, never NULL.
+fn self_test_authorization_gate(conn: &Connection) -> Result<()> {
+    let allowed: bool = conn
+        .query_row(
+            &format!(
+                "SELECT {AUTH_FUNCTION_NAME}('self-test', 'SELECT 1 FROM sigiro_spans LIMIT 1')"
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .context("authorization gate self-test: failed to invoke the gate on a known-good query")?;
+    anyhow::ensure!(
+        allowed,
+        "authorization gate self-test FAILED: a known-good SELECT against an \
+         allowlisted table was DENIED — refusing to serve the quack query surface"
+    );
+
+    let denied: bool = conn
+        .query_row(
+            &format!("SELECT {AUTH_FUNCTION_NAME}('self-test', 'DROP TABLE sigiro_spans')"),
+            [],
+            |row| row.get(0),
+        )
+        .context("authorization gate self-test: failed to invoke the gate on a known-bad query")?;
+    anyhow::ensure!(
+        !denied,
+        "authorization gate self-test FAILED: a known-bad DROP TABLE was ALLOWED — \
+         refusing to serve the quack query surface"
+    );
+
+    Ok(())
+}
+
 /// Install the read-only authorization gate and point quack at it.
 ///
-/// Classification uses DuckDB's OWN parser via `json_serialize_sql`, not a
-/// naive prefix/keyword match (a prefix gate is bypassable, e.g. leading
-/// whitespace/comments, and a denylist can never enumerate every write
-/// surface). Empirically verified against the real DuckDB build (see
-/// `EXPECTED_QUACK_VERSION`'s doc comment): `json_serialize_sql(sql)` returns
-/// `{"error": false, ...}` ONLY when every statement in `sql` parses as a
-/// pure SELECT-family statement (plain SELECT, `WITH ... SELECT`, the bare
-/// `TABLE t` / `FROM t` shorthands, and multi-statement batches where every
-/// statement is one of those). For literally everything else — INSERT,
-/// UPDATE, DELETE, CREATE, DROP, ALTER, ATTACH, COPY, CALL, PRAGMA, SET,
-/// EXPLAIN, LOAD, or a syntax error — DuckDB itself throws
-/// `NotImplementedException("Only SELECT statements can be serialized to
-/// json!")`, which `json_serialize_sql` surfaces as `{"error": true, ...}`
-/// rather than propagating the exception. The gate allows exactly the
-/// `error: false` case.
-///
-/// Fail-closed by construction: `COALESCE(..., 'true')` treats anything the
-/// extraction can't classify (a missing/malformed `error` key) as `error =
-/// true`, i.e. denied — there is no default-allow path.
-///
-/// (Re)created on every server boot from this Rust source — never trusted
-/// from a persisted catalog macro a previous run may have left behind, so a
-/// stale or tampered macro definition can never survive a restart.
+/// (Re)registered on every server boot from this Rust source — never trusted
+/// from anything a previous run may have left behind, so a stale/tampered
+/// definition can never survive a restart.
 pub fn install_authorization_gate(conn: &Connection) -> Result<()> {
-    conn.execute_batch("INSTALL json; LOAD json;")
-        .context("failed to load the json extension required by the quack authorization gate")?;
+    conn.register_scalar_function::<QuackAuthorizeScalar>(AUTH_FUNCTION_NAME)
+        .context("failed to register the quack authorization scalar UDF")?;
+
+    self_test_authorization_gate(conn)
+        .context("quack authorization gate self-test failed immediately after registration")?;
 
     // Quack's authorization callback runs in a fresh, transient server-side
     // connection per call (per quack's own docs) — NOT the connection this
-    // gate is installed from, and NOT one that inherits the `USE lake;`
-    // default-catalog setting `pool::clone_connection` sets on `conn`.
-    // Qualifying the macro as `memory.main.<name>` (DuckDB's always-present
-    // built-in catalog/schema, distinct from the `lake` DuckLake catalog)
-    // guarantees it resolves from that fresh connection regardless of
-    // ambient `USE`/search_path state — confirmed necessary: creating the
-    // macro unqualified while `USE lake;` was active left every real
-    // PREPARE_REQUEST authorization check unable to resolve the function,
-    // which quack reports uniformly as "Authorization failed" (indistinguishable
-    // from a real denial without server-side duckdb_logs() inspection).
+    // gate is installed from. Empirically proved by a since-deleted spike
+    // (tests/spike_quack_udf_authz.rs): unlike the SQL-macro gate this
+    // replaces — which needed catalog-qualifying as `memory.main.<name>` to
+    // resolve from that transient connection — a Rust-registered scalar UDF
+    // resolves from its UNQUALIFIED name instead; `memory.main.<name>` does
+    // NOT resolve for a UDF (only for a macro). Qualifying it here would
+    // silently break every authorization check exactly the way the
+    // unqualified macro once did.
     conn.execute_batch(&format!(
-        "CREATE OR REPLACE MACRO memory.main.{AUTH_FUNCTION_NAME}(connection_id, query) AS \
-         COALESCE(json_extract_string(json_serialize_sql(query::VARCHAR), '$.error'), 'true') = 'false';"
-    ))
-    .context("failed to create the quack authorization macro")?;
-
-    conn.execute_batch(&format!(
-        "SET GLOBAL quack_authorization_function = 'memory.main.{AUTH_FUNCTION_NAME}';"
+        "SET GLOBAL quack_authorization_function = '{AUTH_FUNCTION_NAME}';"
     ))
     .context("failed to install quack_authorization_function")?;
 
     tracing::info!(
         function = AUTH_FUNCTION_NAME,
-        "quack authorization gate installed — SELECT-only, DuckDB-parser-classified, fail-closed"
+        "quack authorization gate installed — Rust scalar UDF running sigiro's \
+         validate_read_only firewall (SELECT-only + sigiro_* table allowlist + \
+         reader-function denylist), fail-closed, self-tested"
     );
     Ok(())
 }

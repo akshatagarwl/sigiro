@@ -592,21 +592,24 @@ fn e2e_query_validation() {
         .is_ok()
     );
 
-    // Allowed: complex CTE
+    // Allowed: complex analytical query (subquery form). CTEs (WITH) are
+    // banned by policy — see validate_read_only; use a derived-table subquery.
     assert!(
         validate_read_only(
-            "WITH error_spans AS (
+            "SELECT trace_id, span_name, duration
+        FROM (
             SELECT trace_id, span_name, duration
             FROM sigiro_spans
             WHERE status_code = 2
-        )
-        SELECT trace_id, span_name, duration
-        FROM error_spans
+        ) error_spans
         ORDER BY duration DESC
         LIMIT 10"
         )
         .is_ok()
     );
+
+    // Rejected: WITH/CTE clauses are banned by policy (firewall hardening).
+    assert!(validate_read_only("WITH e AS (SELECT * FROM sigiro_spans) SELECT * FROM e").is_err());
 
     // Allowed: JOIN
     assert!(

@@ -358,8 +358,31 @@ pub fn install_extensions_with_progress(conn: &Connection, names: &[&str]) -> Re
 /// Pre-download DuckDB extensions into the standard extension directory
 /// so the first `sigiro serve` doesn't hang on a 30-90s blocking download.
 /// This is what `sigiro fetch-extensions` invokes.
-pub fn prewarm_extensions(project_dir: &Utf8Path) -> Result<()> {
-    let ext_dir = project_dir.join("extensions");
+///
+/// Takes the pool's overall `data_dir` (not a per-project dir) and resolves
+/// the target directory via [`resolve_extension_dir`] — the SAME resolution
+/// `attach_ducklake` uses at serve-time (`SIGIRO_EXTENSION_DIR` if set, else
+/// `data_dir/extensions`, deliberately WITHOUT a per-project segment: the
+/// extension cache is shared across all projects). Previously this hardcoded
+/// `<project_dir>/extensions`, which for the common case (no
+/// `SIGIRO_EXTENSION_DIR` override, prewarming the "default" project)
+/// resolved to `<data_dir>/default/extensions` — a directory
+/// `attach_ducklake` never reads from (it reads `<data_dir>/extensions`) —
+/// so `sigiro fetch-extensions` silently prewarmed a directory serve-time
+/// never consulted, defeating its entire purpose.
+///
+/// Includes `httpfs` and `quack`: `attach_ducklake` loads both, unconditionally
+/// of `SIGIRO_QUERY_SURFACE`, right before it locks down filesystem access
+/// (`enable_external_access = false` is instance-global and irreversible — an
+/// extension not already loaded before that point can never load afterward on
+/// this or any cloned connection). Pre-warming them here means that lockdown
+/// never has to fall back to a live network install. `quack` is warmed via
+/// [`crate::quack::load_and_pin`] (not [`install_extensions_with_progress`])
+/// so its version pin is verified here too, not just at serve-time — a drift
+/// between what `sigiro fetch-extensions` cached and what serve-time expects
+/// would otherwise surface as a confusing later failure.
+pub fn prewarm_extensions(data_dir: &Utf8Path) -> Result<()> {
+    let ext_dir = resolve_extension_dir(data_dir);
     std::fs::create_dir_all(&ext_dir)
         .with_context(|| format!("failed to create extensions directory: {ext_dir}"))?;
     let conn = Connection::open_in_memory()
@@ -373,8 +396,12 @@ pub fn prewarm_extensions(project_dir: &Utf8Path) -> Result<()> {
     );
     install_extensions_with_progress(
         &conn,
-        &["ducklake", "sqlite", "json", "parquet", "postgres"],
+        &[
+            "ducklake", "sqlite", "json", "parquet", "postgres", "httpfs",
+        ],
     )?;
+    tracing::info!("pre-warming the quack query-surface extension (version-pinned)...");
+    crate::quack::load_and_pin(&conn).context("failed to pre-warm the quack extension")?;
     tracing::info!("DuckDB extensions pre-warmed successfully");
     Ok(())
 }

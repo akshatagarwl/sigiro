@@ -9,7 +9,7 @@ license = "Apache-2.0"
 members = []
 
 [dependencies]
-duckdb = { version = "1.10503.1", features = ["bundled", "appender-arrow"] }
+duckdb = { version = "1.10503.1", features = ["bundled", "appender-arrow", "vscalar"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"

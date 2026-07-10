@@ -340,10 +340,11 @@ async fn main() -> Result<()> {
         Some(Command::FetchExtensions) => {
             let dir = data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let project_dir = dir.join("default");
-            std::fs::create_dir_all(&project_dir)?;
-            sigiro::storage::prewarm_extensions(&project_dir)?;
-            println!("DuckDB extensions pre-warmed into {}", project_dir);
+            sigiro::storage::prewarm_extensions(&dir)?;
+            println!(
+                "DuckDB extensions pre-warmed into {}",
+                sigiro::storage::resolve_extension_dir(&dir)
+            );
         }
     }
     Ok(())
@@ -421,6 +422,23 @@ async fn run_serve() -> Result<()> {
                 let mut chain = format!("{e}");
                 for cause in e.chain().skip(1) {
                     chain.push_str(&format!("\n  Caused by: {cause}"));
+                }
+                // The quack query surface is served over a connection
+                // *cloned from the "default" project's* pool entry (see
+                // crate::server::run_servers's `pool.clone_connection("default")`).
+                // A pre-create failure here used to be downgraded to a
+                // non-fatal WARN unconditionally, which let boot continue
+                // into a server that then failed minutes later with the
+                // misleading "connection not found for project default —
+                // call create_project() first" instead of this, its real
+                // cause. When quack is required, fail loud here instead.
+                if sigiro::config::query_surface()? == sigiro::config::QuerySurface::Quack {
+                    anyhow::bail!(
+                        "default project init failed and SIGIRO_QUERY_SURFACE=quack requires \
+                         it (the quack query surface serves from the \"default\" project's \
+                         connection) — refusing to boot into a server that would fail later \
+                         with a misleading \"connection not found\" instead:\n{chain}"
+                    );
                 }
                 tracing::warn!("default project init failed (non-fatal): {chain}");
             }

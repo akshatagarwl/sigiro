@@ -937,13 +937,19 @@ async fn check_orphan_spans(client: &SigiroClient) -> Result<(i64, Vec<(String, 
 /// any metrics (sum/gauge/histogram) in the same window — a strong signal
 /// of incomplete instrumentation (metrics exporter not wired up).
 async fn check_metrics_coverage(client: &SigiroClient) -> Result<Vec<String>> {
+    // Derived-table subqueries rather than CTEs: `validate_read_only`
+    // rejects any `WITH` clause (CTE-name allowlisting was abandoned as too
+    // fragile a security boundary), and this query routes through
+    // `/v1/query`. Subqueries preserve the exact behavior (services with
+    // spans but no metrics in the last 15 minutes).
     let sql = r#"
-        WITH span_services AS (
+        SELECT s.service_name
+        FROM (
             SELECT DISTINCT service_name
             FROM lake.sigiro_spans
             WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
-        ),
-        metric_services AS (
+        ) s
+        WHERE s.service_name NOT IN (
             SELECT service_name FROM lake.sigiro_metrics_sum
                 WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
             UNION
@@ -953,9 +959,6 @@ async fn check_metrics_coverage(client: &SigiroClient) -> Result<Vec<String>> {
             SELECT service_name FROM lake.sigiro_metrics_histogram
                 WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'
         )
-        SELECT s.service_name
-        FROM span_services s
-        WHERE s.service_name NOT IN (SELECT service_name FROM metric_services)
         ORDER BY s.service_name
     "#;
     let rows = query_with_retry(client, sql)

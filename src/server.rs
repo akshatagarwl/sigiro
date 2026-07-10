@@ -205,6 +205,9 @@ const BLOCKED_TABLE_FUNCTIONS: &[&str] = &[
     "READ_BLOB",
     "GLOB",
     "SNIFF_CSV",
+    "CSV_SCAN",
+    "DUCKDB_SECRETS",
+    "DUCKDB_SETTINGS",
 ];
 
 /// DuckLake time-travel qualifier, e.g. `AT (VERSION => 3)` or
@@ -305,25 +308,28 @@ fn reject_table_shorthand(expr: &SetExpr) -> ControlFlow<String> {
 /// single-element, unquoted-string `ObjectName` — it is not on
 /// `ALLOWED_TABLES`, so `is_allowed_table` rejects it regardless of what
 /// DuckDB's replacement-scan would have done with it.
-#[derive(Default)]
-struct AllowlistVisitor {
-    /// Every `WITH <alias> AS (...)` name seen so far. `pre_visit_query`
-    /// registers a query's own CTE aliases before the derived Visit impl
-    /// recurses into its `with`/`body` children, so a CTE is always known by
-    /// the time anything (a sibling CTE, the main body, or the CTE's own
-    /// RECURSIVE self-reference) tries to select FROM it — a CTE alias is
-    /// not a real table and would otherwise be rejected by `is_allowed_table`.
-    cte_names: std::collections::HashSet<String>,
-}
+/// CTE-name allowlisting used to be handled here via a per-`Query` scope
+/// stack (push CTE aliases in `pre_visit_query`, pop in `post_visit_query`,
+/// treat a bare name matching an in-scope alias as safe). That design was
+/// abandoned after two subtle bypasses: a cross-scope leak from sqlparser
+/// visiting a `Select`'s `projection` before its `from`, and a
+/// forward-reference where a later CTE named `evil` shadows nothing and
+/// `FROM evil` inside an earlier CTE resolves to the *physical* table
+/// (`WITH a AS (SELECT * FROM evil), evil AS (SELECT 1) SELECT * FROM a`).
+/// CTE scoping is too easy to get subtly wrong for a security boundary, so
+/// `WITH` is rejected outright in `pre_visit_query` below instead of being
+/// analyzed. Subqueries (`SELECT * FROM (SELECT ... ) t`) cover the same
+/// legitimate use cases and remain fully supported.
+struct AllowlistVisitor;
 
 impl Visitor for AllowlistVisitor {
     type Break = String;
 
     fn pre_visit_query(&mut self, query: &SqlQuery) -> ControlFlow<String> {
-        if let Some(with) = &query.with {
-            for cte in &with.cte_tables {
-                self.cte_names.insert(cte.alias.name.value.to_uppercase());
-            }
+        if query.with.is_some() {
+            return ControlFlow::Break(
+                "query rejected: WITH/CTE clauses are not allowed".to_string(),
+            );
         }
         reject_table_shorthand(&query.body)
     }
@@ -334,7 +340,7 @@ impl Visitor for AllowlistVisitor {
                 let allowed = if args.is_some() {
                     is_safe_function(name)
                 } else {
-                    self.is_known_cte(name) || is_allowed_table(name)
+                    is_allowed_table(name)
                 };
                 if allowed {
                     ControlFlow::Continue(())
@@ -378,30 +384,29 @@ impl Visitor for AllowlistVisitor {
     }
 }
 
-impl AllowlistVisitor {
-    /// A bare (unqualified, single-part) name matching a CTE alias seen so
-    /// far is a reference to that CTE, not a real table.
-    fn is_known_cte(&self, name: &ObjectName) -> bool {
-        match name.0.as_slice() {
-            [ident] => self.cte_names.contains(&ident.value.to_uppercase()),
-            _ => false,
-        }
-    }
-}
-
 pub fn validate_read_only(sql: &str) -> Result<(), String> {
     let dialect = GenericDialect {};
     let parseable = TIME_TRAVEL_AT.replace_all(sql, " ");
     let statements = Parser::parse_sql(&dialect, &parseable)
         .map_err(|e| format!("query rejected: parse error: {e}"))?;
 
-    for stmt in &statements {
-        let Statement::Query(query) = stmt else {
-            return Err("query rejected: only SELECT queries are allowed".to_string());
-        };
-        if let ControlFlow::Break(msg) = query.visit(&mut AllowlistVisitor::default()) {
-            return Err(msg);
-        }
+    // A firewall admits exactly one statement: zero (empty/whitespace-only
+    // SQL) is not a query to run, and DuckDB's own semicolon-separated batch
+    // form would let a second, unvalidated-by-this-loop statement ride along
+    // — `execute_sql`/`conn.prepare()` only ever runs one statement anyway
+    // (see this module's doc comment), so this matches the real contract.
+    let [stmt] = statements.as_slice() else {
+        return Err(format!(
+            "query rejected: exactly one SQL statement is required, found {}",
+            statements.len()
+        ));
+    };
+
+    let Statement::Query(query) = stmt else {
+        return Err("query rejected: only SELECT queries are allowed".to_string());
+    };
+    if let ControlFlow::Break(msg) = query.visit(&mut AllowlistVisitor) {
+        return Err(msg);
     }
 
     let tokens = Tokenizer::new(&dialect, sql)

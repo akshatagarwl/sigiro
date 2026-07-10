@@ -262,6 +262,106 @@ fn validate_blocks_unrecognized_schema_qualifier() {
     assert!(validate_read_only("SELECT * FROM evil_schema.sigiro_spans").is_err());
 }
 
+// ---------------------------------------------------------------------------
+// CTE (`WITH`) policy: REJECTED outright. CTE-name allowlisting was abandoned
+// as too fragile a security boundary after two subtle bypasses were found —
+// a cross-scope leak (a nested scalar subquery's `WITH evil AS (...)` name
+// leaking into an unrelated outer physical `FROM evil`, because sqlparser
+// visits a SELECT's projection before its FROM) and a forward reference (a
+// later CTE named `evil` failing to shadow the physical `evil` table read by
+// an earlier CTE). `validate_read_only` now rejects ANY query with a `WITH`
+// clause at any depth; subqueries cover the same legitimate use cases.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_blocks_cte_scope_leak_into_outer_from() {
+    // Former cross-scope-leak bypass: a scalar subquery in the projection
+    // list defines `WITH evil AS (...)`; the outer FROM then reads a REAL,
+    // non-allowlisted table also named `evil`. Still rejected — now simply
+    // because it uses `WITH` at all.
+    assert!(
+        validate_read_only("SELECT (WITH evil AS (SELECT 1) SELECT 1), secret FROM evil").is_err()
+    );
+}
+
+#[test]
+fn validate_blocks_cte_forward_reference_to_physical_table() {
+    // Former forward-reference bypass: a later CTE named `evil` does not
+    // shadow the physical `evil` table that the earlier CTE `a` reads via
+    // `FROM evil`. Still rejected — now because `WITH` is banned outright.
+    assert!(
+        validate_read_only("WITH a AS (SELECT * FROM evil), evil AS (SELECT 1) SELECT * FROM a")
+            .is_err()
+    );
+}
+
+#[test]
+fn validate_blocks_cte_scope_leak_deeper_nesting() {
+    // Deeper nesting of the former leak bypass — all rejected because they
+    // use `WITH` anywhere in the tree (nested scalar subquery, sibling
+    // projection item, FROM-list sibling).
+    assert!(
+        validate_read_only(
+            "SELECT (SELECT (WITH evil AS (SELECT 1) SELECT 1) FROM sigiro_spans LIMIT 1), secret FROM evil"
+        )
+        .is_err()
+    );
+    assert!(
+        validate_read_only(
+            "SELECT (WITH evil AS (SELECT 1) SELECT 1) AS a, (SELECT 1 FROM evil) AS b FROM sigiro_spans"
+        )
+        .is_err()
+    );
+    assert!(
+        validate_read_only(
+            "SELECT 1 FROM (SELECT (WITH evil AS (SELECT 1) SELECT 1) AS x) t, evil"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn validate_rejects_all_cte_usage_by_policy() {
+    // CTEs are disallowed by policy (see the section comment): even a plain,
+    // fully-allowlisted `WITH` query is now REJECTED — CTE-name allowlisting
+    // was too fragile a security boundary, so `WITH` is banned outright.
+    // (Previously `validate_allows_legit_cte_usage`, now flipped.)
+    assert!(
+        validate_read_only(
+            "WITH x AS (SELECT service_name FROM sigiro_spans WHERE timestamp > now() - interval 1 hour) SELECT count(*) FROM x"
+        )
+        .is_err()
+    );
+    // A CTE referencing an earlier CTE in the same WITH clause — also rejected.
+    assert!(
+        validate_read_only(
+            "WITH a AS (SELECT service_name FROM sigiro_spans), b AS (SELECT * FROM a) SELECT * FROM b"
+        )
+        .is_err()
+    );
+    // A CTE reusing an allowlisted table name — also rejected (no more
+    // shadowing exception). (Previously
+    // `validate_allows_cte_shadowing_allowlisted_table_name`, now flipped.)
+    assert!(
+        validate_read_only("WITH sigiro_spans AS (SELECT 1 AS x) SELECT * FROM sigiro_spans")
+            .is_err()
+    );
+}
+
+#[test]
+fn validate_allows_subquery_forms_that_replace_ctes() {
+    // Subqueries are the sanctioned replacement for CTEs and remain fully
+    // allowed — this is what keeps legitimate read patterns working under
+    // the WITH-ban.
+    assert!(validate_read_only("SELECT * FROM (SELECT service_name FROM sigiro_spans) t").is_ok());
+    assert!(
+        validate_read_only(
+            "SELECT count(*) FROM sigiro_spans WHERE timestamp > now() - interval 1 hour"
+        )
+        .is_ok()
+    );
+}
+
 #[test]
 fn value_ref_mixed_types_from_table() {
     let conn = test_conn();
