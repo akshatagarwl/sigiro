@@ -228,9 +228,13 @@ pub static TLS_CERT: Envar<String> = Envar::on_startup("SIGIRO_TLS_CERT", || Env
 /// Path to TLS private key PEM file. Unset = no TLS.
 pub static TLS_KEY: Envar<String> = Envar::on_startup("SIGIRO_TLS_KEY", || EnvarDef::Unset);
 
-/// Data retention days. 0 = no automatic cleanup.
+/// Data retention days. 0 = disabled (no automatic cleanup). Default 7 —
+/// retention is ON by default so an unattended box reclaims disk instead of
+/// filling up. Each per-table DELETE is followed by a DuckLake snapshot-expiry
+/// and file-cleanup pass (`inserter::reclaim_ducklake_disk`), because a DELETE
+/// writes only delete-files and frees no bytes on its own.
 pub static RETENTION_DAYS: Envar<u32> =
-    Envar::on_startup("SIGIRO_RETENTION_DAYS", || EnvarDef::Default(0));
+    Envar::on_startup("SIGIRO_RETENTION_DAYS", || EnvarDef::Default(7));
 
 /// PostgreSQL catalog URL (required for distributed/multi-tenant mode, optional
 /// otherwise). Unset means local SQLite catalog.
