@@ -7,8 +7,14 @@ _default:
 build:
     cargo build --release --bin sigiro {{ if env("TARGET", "") != "" { "--target " + env("TARGET") } else { "" } }}
 
-# Full verification gate. Run this before every commit.
+# Fast verification gate (debug). Run this before every commit.
 check:
+    cargo fmt --check
+    cargo clippy --all-targets --all-features -- -D warnings
+    cargo test
+
+# Full release-mode gate. Run before building a deploy image / cutting a release.
+check-release:
     cargo fmt --check
     cargo clippy --all-targets --all-features -- -D warnings
     cargo test --release
