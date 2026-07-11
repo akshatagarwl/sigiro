@@ -29,7 +29,7 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing_attributes::instrument;
 
-use crate::inserter::MsgRouter;
+use crate::inserter::{MsgRouter, RouterError};
 use crate::types::IngestMsg;
 
 /// Wrap an Arrow/record-batch construction error into a tonic Status.
@@ -71,7 +71,12 @@ impl OtlpGrpcService {
         let project_id = msg.project_id().to_string();
         if let Err(e) = self.router.send(msg).await {
             tracing::error!(project_id, "ingest router error: {e:?}");
-            return Err(Status::internal("ingest failed"));
+            return Err(match e {
+                RouterError::DiskCapacityExceeded => {
+                    Status::resource_exhausted("disk capacity exceeded")
+                }
+                _ => Status::internal("ingest failed"),
+            });
         }
         Ok(())
     }
@@ -702,7 +707,10 @@ async fn route_ingest_msg(state: &OtlpHttpState, msg: IngestMsg) -> StatusCode {
     let project_id = msg.project_id().to_string();
     if let Err(e) = state.router.send(msg).await {
         tracing::error!(project_id, "ingest router error: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
+        return match e {
+            RouterError::DiskCapacityExceeded => StatusCode::INSUFFICIENT_STORAGE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
     }
     StatusCode::OK
 }
@@ -915,7 +923,10 @@ async fn otlp_http_pyroscope(
         .await
     {
         tracing::error!(pid, "ingest router error: {e:?}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
+        return match e {
+            RouterError::DiskCapacityExceeded => StatusCode::INSUFFICIENT_STORAGE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
     }
     StatusCode::OK
 }

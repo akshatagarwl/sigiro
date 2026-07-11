@@ -214,6 +214,53 @@ pub fn max_ingest_body_bytes() -> Result<usize> {
     Ok(bytes)
 }
 
+/// Hard cap on total bytes under `SIGIRO_DATA_DIR`. 0 = disabled (default).
+/// When a periodic sample of the on-disk footprint reaches this, ingest is
+/// rejected (HTTP 507 / gRPC `resource_exhausted`) until retention/cleanup
+/// brings usage back under 90% of the cap (hysteresis). This is the backstop
+/// that keeps a runaway box from filling its disk and crashing Postgres/the
+/// host. In S3 mode it caps only the LOCAL catalog/inline/temp footprint, not
+/// cold Parquet in the bucket. Raw bytes; `0` disables the gate.
+///
+/// This is a SAMPLED SOFT cap, not an instantaneous hard limit: the gate only
+/// blocks NEW `send()` enqueues, so after a breach the already-queued backlog
+/// still drains to disk. Post-breach overshoot is roughly one sampling window
+/// of ingest (`sample_interval × ingest_rate`) plus the full queued backlog —
+/// and that backlog scales with the number of active tenants, NOT a fixed
+/// amount: each project has its own `PROJECT_CHANNEL_CAPACITY`-deep channel of
+/// messages up to `SIGIRO_MAX_INGEST_BODY_BYTES` each, plus in-flush buffers.
+/// SET THE CAP BELOW PHYSICAL DISK WITH ENOUGH HEADROOM TO ABSORB THAT. For the
+/// single-tenant / few-project self-host-edge deployments this serves today the
+/// backlog is small against a multi-GB margin (and DuckLake compresses on write,
+/// so on-disk overshoot is well under the raw queued bytes); a many-tenant box
+/// must size headroom to its project count. Do not set it at the disk's true
+/// limit.
+///
+// ponytail: soft cap sized by headroom is right for single/few-tenant edges.
+// A large multi-tenant deployment wants a per-tenant cap or a global
+// buffered-bytes gate to bound the backlog directly — add with the hosted
+// multi-tenant track, not before it exists.
+pub static MAX_DISK_BYTES: Envar<u64> =
+    Envar::on_startup("SIGIRO_MAX_DISK_BYTES", || EnvarDef::Default(0));
+
+/// How often the storage-maintenance task samples the `SIGIRO_DATA_DIR`
+/// on-disk byte size for the disk cap. Default: 30s.
+pub static DISK_SAMPLE_SECONDS: Envar<u64> =
+    Envar::on_startup("SIGIRO_DISK_SAMPLE_SECONDS", || EnvarDef::Default(30));
+
+pub fn max_disk_bytes() -> Result<u64> {
+    MAX_DISK_BYTES.value().map_err(anyhow::Error::from)
+}
+
+pub fn disk_sample_seconds() -> Result<u64> {
+    let secs = DISK_SAMPLE_SECONDS.value()?;
+    anyhow::ensure!(
+        secs > 0,
+        "SIGIRO_DISK_SAMPLE_SECONDS must be greater than zero"
+    );
+    Ok(secs)
+}
+
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
 /// Defaults to the platform data dir (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).
 pub static DATA_DIR: Envar<String> = Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);

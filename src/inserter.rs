@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use duckdb::Connection;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle as TokioJoinHandle;
@@ -26,6 +26,85 @@ pub enum RouterError {
     /// Failed to get or create a DuckDB connection.
     #[error("connection failed for project {project_id}")]
     ConnectionFailed { project_id: String },
+    /// On-disk footprint reached the configured `SIGIRO_MAX_DISK_BYTES` cap —
+    /// ingest is rejected to keep the box from filling its disk. Maps to HTTP
+    /// 507 / gRPC `resource_exhausted`, distinct from an internal 500.
+    #[error("disk capacity exceeded — ingest rejected to protect the box")]
+    DiskCapacityExceeded,
+}
+
+/// Box-level disk-capacity gate, shared (`Arc`) between the ingest router —
+/// which reads `over_cap` at the top of `send` to reject when tripped — and
+/// the storage-maintenance task, which samples `SIGIRO_DATA_DIR` and trips/
+/// clears `over_cap` with hysteresis. `cap == 0` disables the gate entirely.
+#[derive(Debug)]
+pub struct DiskCapacityState {
+    /// `SIGIRO_MAX_DISK_BYTES`. 0 disables the gate.
+    pub cap: u64,
+    /// Most recent sampled on-disk byte size of `SIGIRO_DATA_DIR`.
+    pub sampled_bytes: AtomicU64,
+    /// Whether ingest is currently rejected (cap breached, not yet recovered).
+    pub over_cap: AtomicBool,
+    /// Single-flight guard for the self-heal retention cleanup kicked on the
+    /// OFF→ON transition.
+    pub cleanup_in_flight: AtomicBool,
+}
+
+impl DiskCapacityState {
+    pub fn new(cap: u64) -> Arc<Self> {
+        Arc::new(Self {
+            cap,
+            sampled_bytes: AtomicU64::new(0),
+            over_cap: AtomicBool::new(false),
+            cleanup_in_flight: AtomicBool::new(false),
+        })
+    }
+
+    /// A disabled (`cap == 0`) gate — the no-op default for constructors/tests.
+    pub fn disabled() -> Arc<Self> {
+        Self::new(0)
+    }
+
+    /// True when the gate is armed AND currently tripped. Cheap enough to call
+    /// on the ingest hot path.
+    pub fn is_over_cap(&self) -> bool {
+        self.cap > 0 && self.over_cap.load(Ordering::Relaxed)
+    }
+
+    /// Fold a fresh byte sample into the gate with hysteresis: trip when
+    /// `bytes >= cap`, and clear only once `bytes <= cap * 9 / 10`. Returns
+    /// `Some(true)` on an OFF→ON transition, `Some(false)` on ON→OFF, and
+    /// `None` when the state is unchanged. Pure state logic — unit-tested.
+    ///
+    /// `reliable` is `false` when the disk walk hit an unreadable entry, so the
+    /// byte total is an UNDER-count. Tripping is still allowed on an unreliable
+    /// sample (an under-count already over the cap is definitely over —
+    /// rejecting is fail-safe), but CLEARING is not: an under-count must never
+    /// re-open ingest while real usage may still be over.
+    ///
+    /// MUST be called from a single serialized context (the one maintenance
+    /// loop). The load-then-store is not atomic across concurrent callers, so
+    /// two overlapping samplers could let a stale under-cap sample clobber a
+    /// newer over-cap one — the maintenance task keeps exactly one sampler.
+    pub fn apply_sample(&self, bytes: u64, reliable: bool) -> Option<bool> {
+        if self.cap == 0 {
+            return None;
+        }
+        self.sampled_bytes.store(bytes, Ordering::Relaxed);
+        let was_over = self.over_cap.load(Ordering::Relaxed);
+        if !was_over && bytes >= self.cap {
+            self.over_cap.store(true, Ordering::Relaxed);
+            return Some(true);
+        }
+        // u128 keeps 90% exact (no `cap/10*9` truncation that breaks small caps,
+        // e.g. cap=9 would clear only at 0 bytes) while never overflowing u64.
+        let clear_threshold = ((self.cap as u128 * 9) / 10) as u64;
+        if was_over && reliable && bytes <= clear_threshold {
+            self.over_cap.store(false, Ordering::Relaxed);
+            return Some(false);
+        }
+        None
+    }
 }
 
 /// Per-project channel capacity. When full, messages are dropped
@@ -72,6 +151,7 @@ pub struct MsgRouter {
     flush_config: FlushConfig,
     project_senders: DashMap<String, (mpsc::Sender<FlusherCommand>, TokioJoinHandle<()>)>,
     drop_count: AtomicUsize,
+    disk: Arc<DiskCapacityState>,
 }
 
 enum FlusherCommand {
@@ -99,12 +179,34 @@ impl MsgRouter {
     }
 
     pub fn with_config(pool: Arc<ProjectPool>, flush_config: FlushConfig) -> Self {
+        Self::with_config_and_disk(pool, flush_config, DiskCapacityState::disabled())
+    }
+
+    /// Build a router with the disk-capacity gate enabled from config. Used by
+    /// the production server (`main::run_serve`); tests/other callers get a
+    /// disabled gate via `new`/`with_config`.
+    pub fn new_with_disk(pool: Arc<ProjectPool>, disk: Arc<DiskCapacityState>) -> Self {
+        Self::with_config_and_disk(pool, FlushConfig::from_env(), disk)
+    }
+
+    pub fn with_config_and_disk(
+        pool: Arc<ProjectPool>,
+        flush_config: FlushConfig,
+        disk: Arc<DiskCapacityState>,
+    ) -> Self {
         Self {
             pool,
             flush_config,
             project_senders: DashMap::new(),
             drop_count: AtomicUsize::new(0),
+            disk,
         }
+    }
+
+    /// Shared handle to the disk-capacity gate, so the storage-maintenance task
+    /// can sample and trip/clear the same state the ingest gate reads.
+    pub fn disk_state(&self) -> Arc<DiskCapacityState> {
+        Arc::clone(&self.disk)
     }
 
     /// Explicit lifecycle start. Logs activation and ensures the router is ready.
@@ -211,6 +313,13 @@ impl MsgRouter {
     /// Creates the flusher task lazily on first message for a project.
     #[instrument(skip_all, fields(project_id = %msg.project_id()))]
     pub async fn send(&self, msg: IngestMsg) -> Result<(), RouterError> {
+        // Disk-capacity gate: reject at the very top (before any flusher/DuckDB
+        // work) when the box is over its byte cap. All ingest surfaces funnel
+        // through here, so this one check protects every entry point.
+        if self.disk.is_over_cap() {
+            return Err(RouterError::DiskCapacityExceeded);
+        }
+
         let project_id = msg.project_id().to_string();
         let project_id_for_err = project_id.clone();
 
@@ -871,6 +980,55 @@ mod tests {
             interval: Duration::from_secs(3600),
             backpressure: BackpressurePolicy::Block,
         }
+    }
+
+    #[test]
+    fn disk_cap_hysteresis_trips_at_cap_clears_at_90_percent() {
+        let disk = DiskCapacityState::new(1000);
+        assert!(!disk.is_over_cap(), "starts under cap");
+
+        // Below cap: no transition, stays off.
+        assert_eq!(disk.apply_sample(500, true), None);
+        assert!(!disk.is_over_cap());
+
+        // Reaching the cap trips it (OFF->ON).
+        assert_eq!(disk.apply_sample(1000, true), Some(true));
+        assert!(disk.is_over_cap());
+
+        // Still over 90% (900): stays tripped, no transition.
+        assert_eq!(disk.apply_sample(950, true), None);
+        assert_eq!(disk.apply_sample(901, true), None);
+        assert!(disk.is_over_cap());
+
+        // An UNRELIABLE (under-counted) sample must NOT clear, even below 90%.
+        assert_eq!(disk.apply_sample(500, false), None);
+        assert!(disk.is_over_cap(), "unreliable walk never re-opens ingest");
+
+        // Dropping to <=90% on a reliable sample clears it (ON->OFF).
+        assert_eq!(disk.apply_sample(900, true), Some(false));
+        assert!(!disk.is_over_cap());
+
+        // A brief spike below the cap does not re-trip.
+        assert_eq!(disk.apply_sample(999, true), None);
+        assert!(!disk.is_over_cap());
+    }
+
+    #[test]
+    fn disk_cap_small_cap_clear_threshold_is_exact() {
+        // Regression: `cap/10*9` truncated to 0 for cap=9 (could only clear at
+        // 0 bytes → permanent deadlock). u128 math gives the exact 90% floor.
+        let disk = DiskCapacityState::new(9);
+        assert_eq!(disk.apply_sample(9, true), Some(true));
+        // 90% of 9 = 8.1 → floor 8; usage 8 must clear, not require 0.
+        assert_eq!(disk.apply_sample(8, true), Some(false));
+        assert!(!disk.is_over_cap());
+    }
+
+    #[test]
+    fn disk_cap_zero_is_disabled() {
+        let disk = DiskCapacityState::disabled();
+        assert_eq!(disk.apply_sample(u64::MAX, true), None);
+        assert!(!disk.is_over_cap());
     }
 
     fn count_parquet_files(dir: &std::path::Path) -> usize {

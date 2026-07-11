@@ -515,7 +515,9 @@ async fn run_serve() -> Result<()> {
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
-    let router = Arc::new(MsgRouter::new(Arc::clone(&pool)));
+    let disk_cap = sigiro::config::max_disk_bytes()?;
+    let disk_state = sigiro::inserter::DiskCapacityState::new(disk_cap);
+    let router = Arc::new(MsgRouter::new_with_disk(Arc::clone(&pool), disk_state));
     router.start();
 
     // Evict idle connections every 2 minutes

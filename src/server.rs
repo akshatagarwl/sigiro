@@ -26,7 +26,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::admin;
 use crate::auth::{self, AuthContext};
 use crate::ingest::OtlpGrpcService;
-use crate::inserter::MsgRouter;
+use crate::inserter::{DiskCapacityState, MsgRouter};
 use crate::investigate;
 use crate::pool::{ProjectPool, ReaderPool};
 use crate::responses::*;
@@ -845,6 +845,10 @@ pub async fn run_servers(
         ("gRPC", result)
     });
 
+    // Clone before `data_dir` moves into AppState — the storage-maintenance
+    // task samples this same directory for the disk cap.
+    let maintenance_data_dir = data_dir.clone();
+
     let app_state = Arc::new(AppState {
         pool: Arc::clone(&pool),
         admin_conn: Arc::clone(&admin_conn),
@@ -968,8 +972,14 @@ pub async fn run_servers(
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
-    // Data retention background task (only if retention is configured).
-    let retention_handle = spawn_retention_task(Arc::clone(&router));
+    // Storage-maintenance background task: routine retention cleanup plus the
+    // disk-byte cap sampler/gate (runs if either is configured). The disk gate
+    // shares the router's `DiskCapacityState` so `send` rejects when tripped.
+    let retention_handle = spawn_storage_maintenance_task(
+        Arc::clone(&router),
+        maintenance_data_dir,
+        router.disk_state(),
+    );
 
     let server_error = tokio::select! {
         result = servers.join_next() => {
@@ -1109,22 +1119,161 @@ async fn serve_http_app(
     }
 }
 
-/// Spawn a background task that periodically deletes old data based on
-/// SIGIRO_RETENTION_DAYS. Runs once per hour.
-fn spawn_retention_task(router: Arc<MsgRouter>) -> Option<tokio::task::JoinHandle<()>> {
-    let days = match crate::config::RETENTION_DAYS.value() {
-        Ok(d) if d > 0 => d,
-        _ => return None,
+/// Total bytes of regular files under `path` (recursive), plus whether the walk
+/// was COMPLETE. Symlinks are not followed and are not counted (only regular
+/// files). The bool is `false` if any entry/stat failed — the total is then an
+/// UNDER-count, and the caller must not use it to CLEAR the cap (an
+/// under-count must never re-open ingest while real usage may still be over);
+/// an under-count that still exceeds the cap is safe to trip on.
+fn dir_size_bytes(path: &std::path::Path) -> (u64, bool) {
+    let mut total: u64 = 0;
+    let mut reliable = true;
+    for entry in walkdir::WalkDir::new(path).follow_links(false) {
+        match entry {
+            Ok(e) if e.file_type().is_file() => match e.metadata() {
+                Ok(meta) => total += meta.len(),
+                Err(err) => {
+                    reliable = false;
+                    tracing::warn!("disk sampler: stat failed for {:?}: {err}", e.path());
+                }
+            },
+            Ok(_) => {}
+            Err(err) => {
+                reliable = false;
+                tracing::warn!("disk sampler: walk entry failed: {err}");
+            }
+        }
+    }
+    (total, reliable)
+}
+
+/// Resets `DiskCapacityState::cleanup_in_flight` to `false` on drop so the
+/// single-flight self-heal flag is released on every exit of the spawned
+/// cleanup task — normal completion, error, OR panic-unwind — instead of only
+/// on the success path. Without this a panic in `run_retention_cleanup` would
+/// leave the flag stuck `true` and disable immediate self-heal forever.
+struct CleanupInFlightGuard(Arc<DiskCapacityState>);
+
+impl Drop for CleanupInFlightGuard {
+    fn drop(&mut self) {
+        self.0.cleanup_in_flight.store(false, Ordering::Release);
+    }
+}
+
+/// Spawn the storage-maintenance background task. Runs when retention is on
+/// (`SIGIRO_RETENTION_DAYS > 0`) OR the disk cap is armed (`cap > 0`); returns
+/// `None` when neither is configured. Drives two independent timers:
+/// - every `SIGIRO_DISK_SAMPLE_SECONDS`: sample `DATA_DIR` bytes and, if the
+///   cap is armed, trip/clear the gate with hysteresis. On the OFF→ON trip,
+///   single-flight an immediate retention cleanup (self-heal); the next sample
+///   tick re-measures and clears the gate — clearing stays on this one sampler.
+/// - hourly: run the routine retention cleanup (as before).
+fn spawn_storage_maintenance_task(
+    router: Arc<MsgRouter>,
+    data_dir: camino::Utf8PathBuf,
+    disk: Arc<DiskCapacityState>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let retention_days = match crate::config::RETENTION_DAYS.value() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!("invalid SIGIRO_RETENTION_DAYS, disabling retention: {e:#}");
+            0
+        }
+    };
+    let cap = disk.cap;
+    if retention_days == 0 && cap == 0 {
+        return None;
+    }
+
+    let sample_secs = match crate::config::disk_sample_seconds() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("invalid SIGIRO_DISK_SAMPLE_SECONDS, using 30s: {e:#}");
+            30
+        }
     };
 
-    tracing::info!(retention_days = days, "data retention enabled");
+    tracing::info!(
+        retention_days,
+        disk_cap_bytes = cap,
+        sample_secs,
+        "storage maintenance enabled"
+    );
+    if cap > 0
+        && !crate::config::S3_BUCKET
+            .value()
+            .unwrap_or_default()
+            .is_empty()
+    {
+        tracing::warn!(
+            "SIGIRO_MAX_DISK_BYTES caps only the LOCAL catalog/inline/temp footprint in S3 mode — cold Parquet in the bucket is not counted"
+        );
+    }
 
     Some(tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+        let mut sample_interval = tokio::time::interval(Duration::from_secs(sample_secs));
+        let mut retention_interval = tokio::time::interval(Duration::from_secs(3600));
         loop {
-            interval.tick().await;
-            if let Err(e) = router.run_retention_cleanup(days).await {
-                tracing::error!("retention cleanup failed: {e:#}");
+            tokio::select! {
+                _ = sample_interval.tick() => {
+                    let dir = data_dir.clone();
+                    let (bytes, reliable) = match tokio::task::spawn_blocking(move || dir_size_bytes(dir.as_std_path())).await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            tracing::error!("disk sampler task failed to join: {e}");
+                            continue;
+                        }
+                    };
+                    // `apply_sample` is only ever called here (one serialized
+                    // sampler) — no concurrent caller can race the load/store,
+                    // and `over_cap` is re-evaluated on the NEXT tick after any
+                    // self-heal cleanup frees space, so we never resample off-loop.
+                    match disk.apply_sample(bytes, reliable) {
+                        Some(true) => {
+                            tracing::warn!(
+                                sampled_bytes = bytes,
+                                cap,
+                                "disk cap tripped — REJECTING ingest until usage falls below 90% of cap"
+                            );
+                            // Self-heal: kick one retention cleanup, single-flighted.
+                            // The next sample tick re-measures and clears the gate.
+                            if retention_days > 0
+                                && disk
+                                    .cleanup_in_flight
+                                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                                    .is_ok()
+                            {
+                                let r = Arc::clone(&router);
+                                let ds = Arc::clone(&disk);
+                                tokio::spawn(async move {
+                                    // RAII: reset the single-flight flag on EVERY exit —
+                                    // normal, error, or panic — so a panicking cleanup
+                                    // can't wedge self-heal off forever.
+                                    let _reset = CleanupInFlightGuard(ds);
+                                    if let Err(e) = r.run_retention_cleanup(retention_days).await {
+                                        tracing::error!("disk-cap self-heal retention cleanup failed: {e:#}");
+                                    }
+                                });
+                            }
+                        }
+                        Some(false) => {
+                            tracing::info!(
+                                sampled_bytes = bytes,
+                                cap,
+                                "disk usage back under 90% of cap — ingest re-enabled"
+                            );
+                        }
+                        None => {}
+                    }
+                }
+
+                _ = retention_interval.tick() => {
+                    if retention_days > 0
+                        && let Err(e) = router.run_retention_cleanup(retention_days).await
+                    {
+                        tracing::error!("retention cleanup failed: {e:#}");
+                    }
+                }
             }
         }
     }))
