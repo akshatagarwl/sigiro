@@ -210,6 +210,46 @@ fn self_test_authorization_gate(conn: &Connection) -> Result<()> {
          refusing to serve the quack query surface"
     );
 
+    // A syntactically valid, structurally allowlisted `SELECT` (no relation
+    // to reject, no blocked keyword) that leaks process/DuckDB config via a
+    // scalar function call — the exact hole `AllowlistVisitor`'s scalar
+    // allowlist (`server::SCALAR_FUNCTIONS`) closes. Catches a regression
+    // where the gate's function-call check is missing or misregistered
+    // before quack ever binds a port.
+    let getenv_denied: bool = conn
+        .query_row(
+            &format!(
+                "SELECT {AUTH_FUNCTION_NAME}('self-test', 'SELECT getenv(''AWS_SECRET_ACCESS_KEY'')')"
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .context(
+            "authorization gate self-test: failed to invoke the gate on a known-bad getenv query",
+        )?;
+    anyhow::ensure!(
+        !getenv_denied,
+        "authorization gate self-test FAILED: a known-bad SELECT getenv(...) was ALLOWED — \
+         refusing to serve the quack query surface"
+    );
+
+    let current_setting_denied: bool = conn
+        .query_row(
+            &format!(
+                "SELECT {AUTH_FUNCTION_NAME}('self-test', 'SELECT current_setting(''extension_directory'')')"
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .context(
+            "authorization gate self-test: failed to invoke the gate on a known-bad current_setting query",
+        )?;
+    anyhow::ensure!(
+        !current_setting_denied,
+        "authorization gate self-test FAILED: a known-bad SELECT current_setting(...) was \
+         ALLOWED — refusing to serve the quack query surface"
+    );
+
     Ok(())
 }
 

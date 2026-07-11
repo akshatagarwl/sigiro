@@ -466,16 +466,14 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
         Err(e) => report.warn("deep-dive", &format!("check failed: {e:#}")),
     }
 
-    // Check 21: DuckDB health — read memory usage and thread count via
-    // pragma_database_size() + current_setting(). Warn on memory pressure
-    // (usage > 80 % of limit) or single-threaded execution on a box that
-    // clearly has cores to spare.
+    // Check 21: DuckDB health — read memory usage via pragma_database_size().
+    // Warn on memory pressure (usage > 80 % of limit). Thread count is no
+    // longer reported here (see check_duckdb_health's doc comment).
     match check_duckdb_health(client).await {
         Ok(DuckDbReport {
             mem_limit_bytes,
             mem_usage_bytes,
             mem_used_pct,
-            threads,
         }) => {
             let mem_str = format!(
                 "{:.1} / {:.1} MiB ({mem_used_pct:.0}%)",
@@ -484,13 +482,8 @@ pub async fn run(client: &SigiroClient) -> Result<()> {
             );
             if mem_used_pct >= 80.0 {
                 report.warn("duckdb", &format!("memory pressure — {mem_str}"));
-            } else if threads == 1 {
-                report.warn(
-                    "duckdb",
-                    &format!("{mem_str}, threads=1 — consider raising thread_count"),
-                );
             } else {
-                report.pass("duckdb", &format!("{mem_str}, threads={threads}"));
+                report.pass("duckdb", &mem_str);
             }
         }
         Err(e) => report.warn("duckdb", &format!("check failed: {e:#}")),
@@ -1207,12 +1200,18 @@ struct DuckDbReport {
     mem_limit_bytes: u64,
     mem_usage_bytes: u64,
     mem_used_pct: f64,
-    threads: u64,
 }
 
 /// Query DuckDB's runtime state via `pragma_database_size()` (memory limit
-/// and current usage for the project DB) plus `current_setting('threads')`.
-/// Warn on memory pressure or single-threaded execution.
+/// and current usage for the project DB). Warn on memory pressure.
+///
+/// This used to also report thread count via
+/// `SELECT current_setting('threads')`, but `current_setting` reads ANY
+/// DuckDB setting by name (`extension_directory`, `home_directory`, ...)
+/// with no way to restrict it to just `'threads'` at the AST level, so it
+/// is deliberately excluded from `server::SCALAR_FUNCTIONS` — allowing it
+/// back in for this one check would reopen the exact settings-leak hole
+/// that allowlist closes. Thread count is no longer queried at all.
 async fn check_duckdb_health(client: &SigiroClient) -> Result<DuckDbReport> {
     // Note: pragma_database_size() returns human-readable strings like
     // "244.1 MiB". We parse them in Rust (see parse_size_str) since DuckDB
@@ -1239,17 +1238,6 @@ async fn check_duckdb_health(client: &SigiroClient) -> Result<DuckDbReport> {
         .and_then(parse_size_str)
         .context("memory_usage missing or unparseable")?;
 
-    let threads_sql = "SELECT current_setting('threads') AS threads";
-    let threads_rows = query_with_retry(client, threads_sql)
-        .await
-        .context("duckdb threads query failed")?;
-    let threads: u64 = threads_rows
-        .first()
-        .and_then(|r| r.get("threads"))
-        .and_then(serde_json::Value::as_str)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-
     let mem_used_pct = if mem_limit > 0 {
         (mem_usage as f64 / mem_limit as f64) * 100.0
     } else {
@@ -1260,7 +1248,6 @@ async fn check_duckdb_health(client: &SigiroClient) -> Result<DuckDbReport> {
         mem_limit_bytes: mem_limit,
         mem_usage_bytes: mem_usage,
         mem_used_pct,
-        threads,
     })
 }
 

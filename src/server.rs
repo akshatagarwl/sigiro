@@ -245,6 +245,121 @@ const ALLOWED_TABLES: &[&str] = &[
 ///   a pure row generator with no filesystem/network access).
 const SAFE_FUNCTIONS: &[&str] = &["PRAGMA_DATABASE_SIZE", "RANGE"];
 
+/// Case-insensitive SCALAR function names allowed anywhere a plain
+/// `Expr::Function` can appear — SELECT-list, WHERE, HAVING, GROUP BY,
+/// ORDER BY, CASE branches, aggregate/function arguments, subqueries.
+/// This is a DIFFERENT concern from `SAFE_FUNCTIONS`/`is_safe_function`
+/// above (relation-position table-valued functions in a `FROM`) — a
+/// function can need to be on one list, the other, both, or neither.
+///
+/// This closes the scalar-function hole: `AllowlistVisitor` used to
+/// allowlist relations but not scalar calls, so `SELECT getenv('AWS_...')`
+/// or `SELECT current_setting('extension_directory')` parsed as a
+/// harmless-looking `SELECT` with no relation to reject and no blocked
+/// keyword for the tokenizer scan — leaking process env / DuckDB config.
+/// A POSITIVE allowlist (reject anything not explicitly named) because
+/// DuckDB ships dozens of settings/env/introspection scalars and a
+/// denylist is always one function behind.
+///
+/// Sourced from:
+/// - Real `/v1/query` traffic sigiro's own CLI sends today
+///   (`src/diagnose.rs`, via `SigiroClient::query`): `count`, `coalesce`,
+///   `nullif`, `now`, `quantile_cont` — these MUST keep working or
+///   `sigiro diagnose` breaks against its own server.
+/// - The documented `/v1/query` examples (`www/content/docs/hosted-onboarding.md`,
+///   `getting-started.md`, `guides/self-host-edge-federation.md`): `count`,
+///   `approx_quantile`, `now`, `avg`, `sum`, `min`, `max`, `json_extract`.
+/// - Sigiro's own internal analytics SQL (`src/investigate/mod.rs`,
+///   `src/schema.rs`) — never itself routed through this gate (it runs
+///   directly against `ctx.conn`), but real DuckDB usage this system
+///   already relies on and representative of what a legitimate ad-hoc
+///   analytics query needs: `any_value`, `first`, `make_timestamp`,
+///   `time_bucket`, `len`.
+/// - Standard read-only observability/analytics scalars and aggregates
+///   with no filesystem/network/settings access (string/date/math/
+///   conditional helpers).
+///
+/// Deliberately EXCLUDED, even though real: `current_setting` — used
+/// internally by `src/diagnose.rs` `check_duckdb_health` to read the
+/// `threads` setting, but the same function reads `extension_directory`,
+/// `home_directory`, and every other DuckDB setting, with no way to
+/// restrict it to one argument at the AST level. `check_duckdb_health` was
+/// changed to stop calling it (see its doc comment) rather than reopening
+/// this hole. `getenv` is the other half of the vulnerability this
+/// allowlist closes and is never on this list either.
+const SCALAR_FUNCTIONS: &[&str] = &[
+    // Aggregates
+    "COUNT",
+    "SUM",
+    "MIN",
+    "MAX",
+    "AVG",
+    "APPROX_QUANTILE",
+    "QUANTILE_CONT",
+    "STDDEV",
+    "MEDIAN",
+    "ANY_VALUE",
+    "FIRST",
+    // JSON
+    "JSON_EXTRACT",
+    "JSON_EXTRACT_STRING",
+    // Date/time
+    "NOW",
+    "CURRENT_TIMESTAMP",
+    "DATE_TRUNC",
+    "DATE_PART",
+    "DATEPART",
+    "EPOCH",
+    "EPOCH_MS",
+    "STRFTIME",
+    "STRPTIME",
+    "TO_TIMESTAMP",
+    "MAKE_TIMESTAMP",
+    "TIME_BUCKET",
+    // String
+    "LOWER",
+    "UPPER",
+    "SUBSTRING",
+    "SUBSTR",
+    "CONCAT",
+    "CONCAT_WS",
+    "LENGTH",
+    "LEN",
+    "TRIM",
+    "LTRIM",
+    "RTRIM",
+    "REPLACE",
+    "SPLIT_PART",
+    "REGEXP_MATCHES",
+    "REGEXP_EXTRACT",
+    "REGEXP_REPLACE",
+    "STARTS_WITH",
+    "ENDS_WITH",
+    "CONTAINS",
+    "FORMAT",
+    // Math
+    "ABS",
+    "ROUND",
+    "FLOOR",
+    "CEIL",
+    "CEILING",
+    "SQRT",
+    "POW",
+    "POWER",
+    "EXP",
+    "LN",
+    "LOG",
+    "GREATEST",
+    "LEAST",
+    "MOD",
+    "SIGN",
+    // Conditional
+    "COALESCE",
+    "NULLIF",
+    "IFNULL",
+    "NVL",
+];
+
 /// Schema qualifiers accepted ahead of an allowed table name. DuckLake attaches
 /// its catalog `AS lake` (src/storage.rs); the same data reads as schema `main`
 /// under a local-file catalog and `lake` under a PostgreSQL-backed one (see
@@ -276,6 +391,16 @@ fn is_safe_function(name: &ObjectName) -> bool {
     name.0
         .last()
         .is_some_and(|ident| SAFE_FUNCTIONS.contains(&ident.value.to_uppercase().as_str()))
+}
+
+/// A SCALAR function call (`Expr::Function`, appearing anywhere in the
+/// expression tree — not a relation) is safe only if its (possibly
+/// qualified) name is on `SCALAR_FUNCTIONS`, matched on the final
+/// identifier so `main.count(*)` and `count(*)` are treated the same.
+fn is_allowed_scalar_function(name: &ObjectName) -> bool {
+    name.0
+        .last()
+        .is_some_and(|ident| SCALAR_FUNCTIONS.contains(&ident.value.to_uppercase().as_str()))
 }
 
 /// Reject the Postgres/DuckDB `TABLE <name>` query-shorthand (equivalent to
@@ -371,6 +496,26 @@ impl Visitor for AllowlistVisitor {
                 "query rejected: relation kind not allowed: {other}"
             )),
         }
+    }
+
+    /// Every scalar function call anywhere in the expression tree — the
+    /// derived `Visit` for `Expr` fires this for the projection list, WHERE,
+    /// HAVING, GROUP BY, ORDER BY, CASE branches, aggregate/function
+    /// arguments, and subqueries alike (any `Expr` field recurses through
+    /// the same `pre_visit_expr` hook; see `sqlparser::ast::visitor`'s own
+    /// doc example, where a scalar subquery's inner expressions are visited
+    /// too). This is what closes the `getenv`/`current_setting` scalar hole
+    /// `pre_visit_table_factor` never covered — see `SCALAR_FUNCTIONS`.
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<String> {
+        if let Expr::Function(f) = expr {
+            if !is_allowed_scalar_function(&f.name) {
+                return ControlFlow::Break(format!(
+                    "query rejected: function {} not allowed",
+                    f.name
+                ));
+            }
+        }
+        ControlFlow::Continue(())
     }
 
     fn pre_visit_statement(&mut self, _statement: &Statement) -> ControlFlow<String> {

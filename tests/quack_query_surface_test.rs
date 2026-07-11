@@ -321,6 +321,19 @@ fn reader_restriction_assertions(server: &QuackEdgeServer, service_name: &str) {
             "plain WITH banned by policy",
             "WITH x AS (SELECT 1 AS n) SELECT count(*) FROM x",
         ),
+        // Scalar-function leak: `AllowlistVisitor` used to gate relations
+        // only, never a plain scalar `Expr::Function` — this syntactically
+        // valid, structurally-allowlisted-looking SELECT has no relation to
+        // reject and no blocked keyword, but leaks the host process's env /
+        // DuckDB config. See src/server.rs `SCALAR_FUNCTIONS`.
+        (
+            "env-var exfil via getenv",
+            "SELECT getenv('AWS_SECRET_ACCESS_KEY')",
+        ),
+        (
+            "config exfil via current_setting",
+            "SELECT current_setting('extension_directory')",
+        ),
     ];
     for (label, sql) in rejected {
         let result = server.quack_exec(sql);
@@ -364,6 +377,19 @@ fn reader_restriction_assertions(server: &QuackEdgeServer, service_name: &str) {
         ))
         .expect("a subquery-form SELECT over sigiro_spans must still work under the new gate");
     println!("  [SELECT count(*) FROM (subquery) t] allowed, {subquery_count} rows, as expected");
+
+    // An analytic query using allowed scalar functions (date_trunc + count)
+    // must still work over the wire — the scalar allowlist must not have
+    // collaterally broken ordinary analytics reads.
+    server
+        .quack_exec(&format!(
+            "SELECT date_trunc('hour', timestamp) AS bucket, count(*) AS n \
+             FROM lake.sigiro_spans WHERE service_name = '{service_name}' GROUP BY bucket"
+        ))
+        .expect(
+            "an analytic query using allowed scalars (date_trunc, count) must still work under the new gate",
+        );
+    println!("  [SELECT date_trunc(...), count(*) ... GROUP BY] allowed, as expected");
 }
 
 /// One full lifecycle: spawn, ingest, verify read, run every security

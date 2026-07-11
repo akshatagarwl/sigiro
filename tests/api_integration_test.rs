@@ -171,10 +171,23 @@ async fn test_query_midstream_error_never_returns_partial_rows() {
     // The old handler used `while let Ok(Some(row)) = rows.next()`, which
     // swallowed the row-stream Err and returned 200 with the rows accumulated
     // so far. It must now surface the error and never emit partial data.
+    //
+    // Uses an invalid CAST (not the `error()` scalar function this test used
+    // before) so the mid-stream failure comes from `Expr::Cast`, never from a
+    // function call `AllowlistVisitor`'s scalar allowlist would gate —
+    // `error()` is a debug/testing utility, not a real analytics scalar, so
+    // it deliberately isn't on `server::SCALAR_FUNCTIONS`. Empirically
+    // confirmed (`duckdb` CLI + this test) that DuckDB only raises the
+    // Conversion Error when row i=3 is actually reached — `/` integer
+    // division by zero returns `inf`/`NULL` rather than erroring, so that
+    // was tried and rejected first.
     let resp = server
         .post("/v1/query")
         .add_header("Authorization", "Bearer sigiro_dev_test")
-        .text("SELECT CASE WHEN i = 3 THEN error('boom') ELSE i END AS v FROM range(5) t(i)")
+        .text(
+            "SELECT CASE WHEN i = 3 THEN CAST('not_a_number' AS BIGINT) ELSE i END AS v \
+             FROM range(5) t(i)",
+        )
         .await;
 
     assert_ne!(

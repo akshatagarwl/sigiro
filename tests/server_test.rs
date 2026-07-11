@@ -362,6 +362,184 @@ fn validate_allows_subquery_forms_that_replace_ctes() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Scalar-function allowlist: `AllowlistVisitor` used to gate relations only
+// (`is_allowed_table`/`is_safe_function`), never a plain scalar
+// `Expr::Function` — so `SELECT getenv('AWS_SECRET_ACCESS_KEY')` or
+// `SELECT current_setting('extension_directory')` had no relation to reject
+// and no blocked keyword for the tokenizer scan, leaking process env / DuckDB
+// config. See `SCALAR_FUNCTIONS`/`is_allowed_scalar_function` in src/server.rs.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_blocks_getenv_scalar_leak() {
+    assert!(validate_read_only("SELECT getenv('AWS_SECRET_ACCESS_KEY')").is_err());
+}
+
+#[test]
+fn validate_blocks_current_setting_scalar_leak() {
+    assert!(validate_read_only("SELECT current_setting('extension_directory')").is_err());
+}
+
+#[test]
+fn validate_blocks_scalar_leak_schema_qualified() {
+    // A schema/catalog qualifier ahead of the function name must not let the
+    // final-identifier match slip through — mirrors `is_allowed_table`'s own
+    // qualified-name handling.
+    assert!(validate_read_only("SELECT main.getenv('AWS_SECRET_ACCESS_KEY')").is_err());
+    assert!(validate_read_only("SELECT main.current_setting('extension_directory')").is_err());
+}
+
+#[test]
+fn validate_blocks_scalar_leak_in_projection() {
+    assert!(
+        validate_read_only("SELECT getenv('AWS_SECRET_ACCESS_KEY') AS leaked FROM sigiro_spans")
+            .is_err()
+    );
+}
+
+#[test]
+fn validate_blocks_scalar_leak_in_where() {
+    assert!(
+        validate_read_only(
+            "SELECT * FROM sigiro_spans WHERE getenv('AWS_SECRET_ACCESS_KEY') = 'x'"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn validate_blocks_scalar_leak_in_case() {
+    assert!(
+        validate_read_only(
+            "SELECT CASE WHEN service_name = 'x' THEN getenv('AWS_SECRET_ACCESS_KEY') ELSE 'n/a' END FROM sigiro_spans"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn validate_blocks_scalar_leak_in_subquery() {
+    assert!(
+        validate_read_only(
+            "SELECT * FROM (SELECT getenv('AWS_SECRET_ACCESS_KEY') AS leaked FROM sigiro_spans) t"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn validate_blocks_scalar_leak_in_aggregate_arg() {
+    assert!(
+        validate_read_only("SELECT count(getenv('AWS_SECRET_ACCESS_KEY')) FROM sigiro_spans")
+            .is_err()
+    );
+}
+
+#[test]
+fn validate_blocks_scalar_leak_as_nested_function_arg() {
+    // Nested inside an otherwise-allowed scalar function's argument list.
+    assert!(
+        validate_read_only("SELECT upper(getenv('AWS_SECRET_ACCESS_KEY')) FROM sigiro_spans")
+            .is_err()
+    );
+}
+
+#[test]
+fn validate_allows_documented_example_queries() {
+    // www/content/docs/hosted-onboarding.md — "Slowest operations, last hour".
+    assert!(
+        validate_read_only(
+            "SELECT service_name, span_name, \
+                    approx_quantile(duration, 0.95) / 1000.0 AS p95_ms, count(*) AS n \
+             FROM sigiro_spans \
+             WHERE timestamp > now() - INTERVAL '1 hour' \
+             GROUP BY 1, 2 ORDER BY p95_ms DESC LIMIT 10"
+        )
+        .is_ok()
+    );
+    // www/content/docs/hosted-onboarding.md — "Error-log rate per route, last 15 min".
+    assert!(
+        validate_read_only(
+            "SELECT service_name, log_attributes ->> 'http.route' AS route, count(*) AS errors \
+             FROM sigiro_logs \
+             WHERE timestamp > now() - INTERVAL '15 minutes' AND severity_number >= 17 \
+             GROUP BY 1, 2 ORDER BY errors DESC"
+        )
+        .is_ok()
+    );
+    // www/content/docs/getting-started.md — "Recent deployments".
+    assert!(
+        validate_read_only(
+            "SELECT resource_attributes['service.name'], attributes['cicd.pipeline.result'], timestamp \
+             FROM sigiro_spans WHERE span_name LIKE 'cicd.pipeline%' \
+             AND timestamp > now() - interval '24 hours' ORDER BY timestamp DESC"
+        )
+        .is_ok()
+    );
+    // www/content/docs/getting-started.md / guides/self-host-edge-federation.md
+    // — the `sigiro query` fold examples.
+    assert!(
+        validate_read_only(
+            "SELECT service_name, count(*) AS n FROM sigiro_spans \
+             WHERE timestamp > now() - interval 1 hour GROUP BY service_name ORDER BY n DESC"
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_read_only(
+            "SELECT avg(duration) AS avg_duration_us FROM sigiro_spans \
+             WHERE service_name = 'checkout' AND timestamp > now() - interval 1 hour"
+        )
+        .is_ok()
+    );
+    // www/content/docs/hosted-onboarding.md — "json_extract(col, '$.key')".
+    assert!(
+        validate_read_only(
+            "SELECT json_extract(span_attributes, '$.http.route') AS route FROM sigiro_spans"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn validate_allows_analytics_scalars_used_by_sigiro() {
+    // src/diagnose.rs `check_log_errors` — runs over /v1/query via
+    // SigiroClient::query, so these MUST keep working.
+    assert!(
+        validate_read_only(
+            "SELECT COUNT(*) AS total, COALESCE(NULLIF(template_text, ''), body) AS pattern \
+             FROM lake.sigiro_logs \
+             WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes' \
+             GROUP BY pattern ORDER BY total DESC LIMIT 10"
+        )
+        .is_ok()
+    );
+    // src/diagnose.rs `check_slow_spans` — quantile_cont, also over /v1/query.
+    assert!(
+        validate_read_only(
+            "SELECT quantile_cont(duration, 0.99) AS p99, \
+                    COUNT(CASE WHEN duration > 1000000 THEN 1 END) AS slow_count \
+             FROM lake.sigiro_spans \
+             WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'"
+        )
+        .is_ok()
+    );
+    // Representative string/math scalars from the standard analytics set.
+    assert!(
+        validate_read_only(
+            "SELECT lower(service_name), round(avg(duration), 2) FROM sigiro_spans GROUP BY 1"
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_read_only(
+            "SELECT date_trunc('hour', timestamp) AS bucket, count(*) FROM sigiro_spans GROUP BY 1"
+        )
+        .is_ok()
+    );
+}
+
 #[test]
 fn value_ref_mixed_types_from_table() {
     let conn = test_conn();
