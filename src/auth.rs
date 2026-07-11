@@ -61,12 +61,30 @@ impl AuthMode {
         }
     }
 
-    /// Build auth for the current storage mode. Distributed storage always uses
-    /// control-plane tenant keys; local storage keeps the existing static behavior.
+    /// Build auth for the current storage mode.
+    ///
+    /// `query_surface == Quack` is a single-tenant self-host edge: one
+    /// operator's own dataset, reachable only behind a mandatory network
+    /// perimeter (see `SIGIRO_QUACK_BIND` docs). It always uses the same
+    /// static open/key auth as local mode, even when `SIGIRO_CATALOG_URL`
+    /// (and S3) are configured for its DuckLake storage — `TenantKeys` is
+    /// the control-plane, per-tenant auth model for the HOSTED multi-tenant
+    /// product (`query_surface == None`) and does not apply here. Without
+    /// this branch, a quack edge configured against a distributed catalog
+    /// would demand a control-plane Bearer token on ingest that its own
+    /// OTLP senders never carry, so no telemetry would ever land.
+    ///
+    /// Otherwise (hosted/default), distributed storage always uses
+    /// control-plane tenant keys; local storage keeps the existing static
+    /// behavior.
     pub fn from_runtime_config(
         configured_key: String,
         data_dir: &Utf8Path,
+        query_surface: crate::config::QuerySurface,
     ) -> anyhow::Result<Self> {
+        if query_surface == crate::config::QuerySurface::Quack {
+            return Ok(Self::from_config(configured_key));
+        }
         if let Some(storage_config) = crate::storage::load_config()? {
             if !configured_key.is_empty() {
                 tracing::warn!(

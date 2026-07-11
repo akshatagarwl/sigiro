@@ -389,7 +389,15 @@ impl ProjectPool {
     /// re-widened by a query. Gated on the DATA path, not the catalog: a distributed
     /// (PostgreSQL catalog) setup with LOCAL per-tenant data (no S3 bucket) still
     /// locks down, since its data files sit on this same local filesystem. Only
-    /// skipped when data lives in S3 (network access is required for that).
+    /// skipped when data lives in S3 — DuckLake itself needs network access to
+    /// reach it, which this lockdown would prevent entirely (not just for user
+    /// queries). This is NOT a gap for untrusted queries in S3 mode: with
+    /// `enable_external_access` left on, the SQL-level firewall
+    /// (`crate::server::validate_read_only` — SELECT-only, `sigiro_*` table
+    /// allowlist, reader-function denylist, positive scalar-function allowlist,
+    /// WITH-ban) is what the quack query surface's authorization gate runs on
+    /// every query (see `crate::quack::install_authorization_gate`), and does so
+    /// identically regardless of whether this engine-level lockdown ran.
     ///
     /// `LOAD parquet; LOAD json;` runs first, while access is still open:
     /// `init_default` only installs `ducklake`/`sqlite`, so `parquet` (DuckLake's
@@ -516,6 +524,7 @@ mod tests {
             s3_endpoint: "example.r2.cloudflarestorage.com".to_string(),
             s3_key_id: "key".to_string(),
             s3_secret: "secret".to_string(),
+            s3_use_ssl: true,
         }
     }
 

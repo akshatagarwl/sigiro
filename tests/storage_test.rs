@@ -64,6 +64,7 @@ fn r2_config() -> storage::StorageConfig {
         s3_endpoint: "abc123.r2.cloudflarestorage.com".to_string(),
         s3_key_id: "R2_KEY_ID_EXAMPLE".to_string(),
         s3_secret: "R2_SECRET_EXAMPLE".to_string(),
+        s3_use_ssl: true,
     }
 }
 
@@ -104,10 +105,49 @@ fn distributed_attach_sql_scopes_each_tenant_to_distinct_catalog_and_s3_prefix()
     assert!(secret_sql.contains("REGION 'us-east-1'"));
     assert!(secret_sql.contains("ENDPOINT 'abc123.r2.cloudflarestorage.com'"));
     assert!(secret_sql.contains("URL_STYLE 'path'"));
+    assert!(secret_sql.contains("USE_SSL true"));
     assert!(secret_sql.contains("SCOPE 's3://sigiro-tenant-data/alpha/'"));
     assert_eq!(
         alpha.s3_scope.as_deref(),
         Some("s3://sigiro-tenant-data/alpha/")
+    );
+}
+
+#[test]
+fn distributed_attach_sql_use_ssl_true_for_real_s3() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = r2_config();
+    config.s3_use_ssl = true;
+
+    let attach = storage::distributed_attach_sql(
+        &config,
+        camino::Utf8Path::from_path(dir.path()).unwrap(),
+        "alpha",
+    )
+    .unwrap();
+    let secret_sql = attach.secret_sql.as_deref().expect("S3 secret SQL");
+    assert!(
+        secret_sql.contains("USE_SSL true"),
+        "real S3/R2 must default to TLS: {secret_sql}"
+    );
+}
+
+#[test]
+fn distributed_attach_sql_use_ssl_false_for_dev_minio() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = r2_config();
+    config.s3_use_ssl = false;
+
+    let attach = storage::distributed_attach_sql(
+        &config,
+        camino::Utf8Path::from_path(dir.path()).unwrap(),
+        "alpha",
+    )
+    .unwrap();
+    let secret_sql = attach.secret_sql.as_deref().expect("S3 secret SQL");
+    assert!(
+        secret_sql.contains("USE_SSL false"),
+        "SIGIRO_S3_USE_SSL=false must produce USE_SSL false for plain-HTTP dev stores (MinIO): {secret_sql}"
     );
 }
 
@@ -181,12 +221,17 @@ fn tenant_id_sanitization_rejects_injection_and_path_tokens() {
 
 #[test]
 fn sanitize_tenant_id_rejects_reserved_ids() {
-    for reserved in ["default", "extensions", "tenants"] {
+    for reserved in ["extensions", "tenants"] {
         assert!(
             storage::sanitize_tenant_id(reserved).is_err(),
             "{reserved:?} collides with a fixed directory name and must be rejected"
         );
     }
+
+    // "default" is NOT reserved — it names a normal distributed tenant,
+    // independently namespaced from the local-mode "default project" dir
+    // (see sanitize_tenant_id's doc comment).
+    assert_eq!(storage::sanitize_tenant_id("default").unwrap(), "default");
 }
 
 #[test]
@@ -197,10 +242,16 @@ fn tenant_data_dir_nests_under_tenants() {
     let path = storage::tenant_data_dir(data_dir, "tenant_123").unwrap();
     assert_eq!(path, data_dir.join("tenants").join("tenant_123"));
 
-    for reserved in ["default", "extensions", "tenants"] {
+    for reserved in ["extensions", "tenants"] {
         assert!(
             storage::tenant_data_dir(data_dir, reserved).is_err(),
             "{reserved:?} must be rejected via sanitize_tenant_id"
         );
     }
+
+    // "default" is allowed and nests the same as any other tenant id.
+    assert_eq!(
+        storage::tenant_data_dir(data_dir, "default").unwrap(),
+        data_dir.join("tenants").join("default")
+    );
 }

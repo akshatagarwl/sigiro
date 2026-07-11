@@ -27,6 +27,19 @@ run:
     trap 'docker compose -f docker-compose.dev.yml down' EXIT
     cargo run --release --bin sigiro
 
+# S3-backed distributed "default" project quack E2E (needs Docker: Postgres + MinIO).
+check-s3-e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # --wait only on postgres/minio (they have healthchecks); minio-setup is a
+    # one-shot job that exits 0 once it creates the bucket, which --wait treats
+    # as "not running" and fails on if targeted directly. Run it separately,
+    # attached, so this recipe blocks until the bucket actually exists.
+    docker compose -f docker-compose.dev.yml up -d --wait postgres minio
+    docker compose -f docker-compose.dev.yml up minio-setup
+    trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+    cargo test --test quack_s3_query_surface_test -- --ignored --nocapture
+
 # Build multi-arch Docker image. Pass --push to push, or --set flags for cache config.
 image *args:
     docker buildx bake sigiro {{args}}

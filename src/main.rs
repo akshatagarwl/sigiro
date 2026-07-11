@@ -413,9 +413,55 @@ async fn run_serve() -> Result<()> {
     // Extension probe is deferred to first project connection (pool.create_project).
     // Use `sigiro fetch-extensions` to pre-download for offline deployments.
 
-    // Pre-create default project so local queries work without ingest. In
-    // distributed mode tenants are created explicitly through the control plane.
-    if sigiro::storage::load_config()?.is_none() {
+    // Pre-create the "default" project.
+    //
+    // - Quack enabled (SIGIRO_QUERY_SURFACE=quack): ALWAYS pre-create,
+    //   regardless of storage mode. The quack query surface is served over a
+    //   connection *cloned from the "default" project's* pool entry (see
+    //   crate::server::run_servers's `pool.clone_connection("default")`) —
+    //   this holds whether "default" is a local DuckDB-file project or a
+    //   distributed (SIGIRO_CATALOG_URL) project backed by S3 cold storage
+    //   (the single-edge "Option A" quack-over-S3 topology: one distributed
+    //   project literally named "default", reusing the same distributed
+    //   ATTACH path every other tenant uses — see src/storage.rs
+    //   `sanitize_tenant_id`, which no longer reserves "default"). A
+    //   pre-create failure here used to be downgraded to a non-fatal WARN
+    //   unconditionally, which let boot continue into a server that then
+    //   failed minutes later with the misleading "connection not found for
+    //   project default — call create_project() first" instead of this, its
+    //   real cause. Fail loud here instead.
+    // - Quack disabled + local storage: pre-create so ad-hoc local queries
+    //   work without ingest first; non-fatal on failure (existing behavior).
+    // - Quack disabled + distributed storage: skip — tenants (including one
+    //   that might happen to be named "default") are created explicitly
+    //   through the control plane; there is no single edge here that needs
+    //   "default" to exist up front.
+    let storage_config = sigiro::storage::load_config()?;
+    let distributed = storage_config.is_some();
+    let quack_enabled = sigiro::config::query_surface()? == sigiro::config::QuerySurface::Quack;
+
+    if quack_enabled {
+        pool.create_project("default").map_err(|e| {
+            let mut chain = format!("{e}");
+            for cause in e.chain().skip(1) {
+                chain.push_str(&format!("\n  Caused by: {cause}"));
+            }
+            anyhow::anyhow!(
+                "default project init failed and SIGIRO_QUERY_SURFACE=quack requires it (the \
+                 quack query surface serves from the \"default\" project's connection) — \
+                 refusing to boot into a server that would fail later with a misleading \
+                 \"connection not found\" instead:\n{chain}"
+            )
+        })?;
+        let topology = match &storage_config {
+            Some(cfg) if !cfg.s3_bucket.is_empty() => "distributed S3 project default",
+            Some(_) => "distributed local-data project default",
+            None => "local project default",
+        };
+        tracing::info!("serving quack edge — {topology}");
+    } else if distributed {
+        tracing::info!("distributed storage configured — skipping default project pre-create");
+    } else {
         match pool.create_project("default") {
             Ok(_) => tracing::info!("default project initialized"),
             Err(e) => {
@@ -423,28 +469,9 @@ async fn run_serve() -> Result<()> {
                 for cause in e.chain().skip(1) {
                     chain.push_str(&format!("\n  Caused by: {cause}"));
                 }
-                // The quack query surface is served over a connection
-                // *cloned from the "default" project's* pool entry (see
-                // crate::server::run_servers's `pool.clone_connection("default")`).
-                // A pre-create failure here used to be downgraded to a
-                // non-fatal WARN unconditionally, which let boot continue
-                // into a server that then failed minutes later with the
-                // misleading "connection not found for project default —
-                // call create_project() first" instead of this, its real
-                // cause. When quack is required, fail loud here instead.
-                if sigiro::config::query_surface()? == sigiro::config::QuerySurface::Quack {
-                    anyhow::bail!(
-                        "default project init failed and SIGIRO_QUERY_SURFACE=quack requires \
-                         it (the quack query surface serves from the \"default\" project's \
-                         connection) — refusing to boot into a server that would fail later \
-                         with a misleading \"connection not found\" instead:\n{chain}"
-                    );
-                }
                 tracing::warn!("default project init failed (non-fatal): {chain}");
             }
         }
-    } else {
-        tracing::info!("distributed storage configured — skipping default project pre-create");
     }
 
     // eBPF capability probe: read-only "could this host run eBPF

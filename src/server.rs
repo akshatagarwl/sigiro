@@ -186,11 +186,18 @@ impl AppState {
 
 /// DuckDB file-reading table functions blocked even in SELECT queries
 /// (e.g., read_csv('/etc/passwd') is a valid SELECT but reads arbitrary files).
-/// This SQL-layer denylist is defense-in-depth: in local mode the engine-level
-/// filesystem lockdown (pool::lock_filesystem) is the real, name-independent
-/// guard, but distributed mode has no engine lock, and the denylist also shrinks
-/// the in-data_dir cross-project read surface. A denylist can never be complete
-/// against DuckDB's reader family; keep the engine lockdown as the primary guard.
+/// This SQL-layer denylist is defense-in-depth, not the primary guard, in
+/// EITHER storage mode: in local mode the engine-level filesystem lockdown
+/// (pool::lock_filesystem, `enable_external_access = false`) additionally
+/// blocks these at the engine level regardless of function name; in
+/// distributed/S3 mode (where DuckLake needs network access, so the lockdown
+/// is skipped — see `pool::lock_filesystem`'s doc comment) this denylist plus
+/// the positive scalar-function allowlist (`SCALAR_FUNCTIONS`) below and the
+/// table allowlist (`ALLOWED_TABLES`) ARE the real guard: together they are
+/// `validate_read_only`, the SAME fail-closed AST-based firewall in every
+/// mode. A denylist alone can never be complete against DuckDB's reader
+/// family, which is why it is only one layer of `validate_read_only`, not
+/// the whole of it.
 const BLOCKED_TABLE_FUNCTIONS: &[&str] = &[
     "DROP",
     "READ_CSV",
@@ -215,8 +222,35 @@ const BLOCKED_TABLE_FUNCTIONS: &[&str] = &[
 /// parse the `=>` form, so it is stripped before the SELECT-only structural
 /// check. The keyword denylist below still scans the ORIGINAL sql, so this
 /// widens reads without weakening the write/DDL/file-access guards.
+///
+/// Captures the clause BODY (group 1) so `validate_read_only` can check it
+/// against `TIME_TRAVEL_AT_LITERAL` before ever stripping/parsing anything —
+/// see that constant's doc comment for why the body must be validated
+/// separately from the surrounding SELECT.
 static TIME_TRAVEL_AT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?i)\bAT\s*\([^)]*=>[^)]*\)").expect("valid time-travel regex")
+    regex::Regex::new(r"(?i)\bAT\s*\(([^)]*=>[^)]*)\)").expect("valid time-travel regex")
+});
+
+/// The ONLY AT (...) bodies `validate_read_only` accepts: a bare
+/// `VERSION => <integer literal>` or `TIMESTAMP => '<string literal>'`,
+/// anchored start-to-end so nothing can trail a valid-looking prefix.
+///
+/// Why this exists: DuckDB executes the ORIGINAL sql, AT body included —
+/// `validate_read_only` strips the AT clause only so sqlparser (which can't
+/// parse the `=>` syntax) can parse the surrounding SELECT. Before this
+/// check, that meant validated-SQL != executed-SQL for anything hidden
+/// inside `AT (...)`: a function call, a subquery, a column reference, or
+/// any other expression there ran with NONE of the scalar/relation
+/// allowlists in this file ever seeing it — e.g. `AT (TIMESTAMP =>
+/// CURRENT_TIMESTAMP)` or `AT (VERSION => some_column)` used to parse and
+/// validate cleanly despite never having been AST-checked at all. A
+/// positive check (accept only these two literal shapes) closes that gap
+/// outright rather than trying to deny specific dangerous expression shapes
+/// — DuckDB's expression grammar is large and a denylist here would always
+/// be one shape behind, same reasoning as `SCALAR_FUNCTIONS` above.
+static TIME_TRAVEL_AT_LITERAL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?i)^\s*(?:VERSION\s*=>\s*-?[0-9]+|TIMESTAMP\s*=>\s*'(?:[^']|'')*')\s*$")
+        .expect("valid time-travel literal regex")
 });
 
 /// The entire allowed FROM-target surface for user queries: every table
@@ -531,6 +565,21 @@ impl Visitor for AllowlistVisitor {
 
 pub fn validate_read_only(sql: &str) -> Result<(), String> {
     let dialect = GenericDialect {};
+
+    // Every AT (...) clause body must be a literal BEFORE anything else runs:
+    // DuckDB executes the clause verbatim, so a non-literal body (function
+    // call, subquery, column reference, ...) would run unvalidated by every
+    // guard below. See `TIME_TRAVEL_AT_LITERAL`'s doc comment.
+    for caps in TIME_TRAVEL_AT.captures_iter(sql) {
+        let body = &caps[1];
+        if !TIME_TRAVEL_AT_LITERAL.is_match(body) {
+            return Err(format!(
+                "query rejected: AT (...) time-travel clause must be a literal \
+                 `VERSION => <integer>` or `TIMESTAMP => '<string>'`, found: AT ({body})"
+            ));
+        }
+    }
+
     let parseable = TIME_TRAVEL_AT.replace_all(sql, " ");
     let statements = Parser::parse_sql(&dialect, &parseable)
         .map_err(|e| format!("query rejected: parse error: {e}"))?;
@@ -644,37 +693,70 @@ impl ServerPorts {
     }
 }
 
-/// Refuse configurations where the quack query surface would serve without its
-/// read-side backstop.
-///
-/// The quack authorization gate (`crate::quack`) is SELECT-only and does NOT
-/// block file/URL reader functions (`read_csv`, `read_parquet('https://…')`,
-/// `httpfs`, `glob`). The only thing that stops those is the filesystem
-/// lockdown (`enable_external_access=false`), which `pool.rs` SKIPS whenever an
-/// S3 bucket is configured. So serving quack with S3 configured would expose
-/// arbitrary file read + SSRF/exfiltration on the read surface. Refuse it,
-/// keyed on `s3_bucket` directly (the actual lockdown-skip condition) rather
-/// than on `CATALOG_URL`, so the guard stays correct even if the distributed
-/// restriction below is later relaxed. Lifting the S3 refusal requires adding a
-/// reader/table allowlist to the quack gate first (see `crate::quack`).
-pub(crate) fn ensure_quack_config_safe(
-    storage_config: &Option<crate::storage::StorageConfig>,
-) -> Result<()> {
-    let Some(cfg) = storage_config else {
-        return Ok(()); // local file catalog: lockdown always runs — safe.
+/// Reject a public/wildcard bind for the quack edge's mandatory tailnet
+/// perimeter. In edge mode (`query_surface == Quack`), auth is Open and every
+/// listener — quack itself plus, per `run_servers`, HTTP/OTLP-HTTP/gRPC too —
+/// binds this SAME address, so it has to actually be a private/loopback
+/// interface: quack speaks plain HTTP with no working TLS of its own, and an
+/// Open-auth surface on a wildcard bind is reachable from anywhere. Parse the
+/// address and reject any `is_unspecified()` (all-interfaces) form rather than
+/// string-matching the two obvious spellings — the wildcard has many equivalent
+/// textual forms (`0.0.0.0`, `::`, `[::]`, `0::0`, `0:0:0:0:0:0:0:0`,
+/// `::ffff:0.0.0.0`) that all bind every interface, and matching only the
+/// literals would leave exactly the same hole open under a different spelling.
+pub fn validate_quack_bind_address(bind: &str) -> Result<()> {
+    let normalized = bind
+        .strip_prefix('[')
+        .and_then(|b| b.strip_suffix(']'))
+        .unwrap_or(bind);
+    let ip: std::net::IpAddr = normalized
+        .parse()
+        .with_context(|| format!("SIGIRO_QUACK_BIND {bind:?} is not a valid IP address"))?;
+    let wildcard = match ip {
+        std::net::IpAddr::V4(v4) => v4.is_unspecified(),
+        std::net::IpAddr::V6(v6) => {
+            v6.is_unspecified() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_unspecified())
+        }
     };
     anyhow::ensure!(
-        cfg.s3_bucket.is_empty(),
-        "SIGIRO_QUERY_SURFACE=quack refused: an S3-backed catalog disables the \
-         filesystem lockdown that guards the quack read surface against \
-         read_csv/read_parquet(url)/httpfs exfiltration — add a reader/table \
-         allowlist to the quack authorization gate before enabling this"
+        !wildcard,
+        "SIGIRO_QUACK_BIND must not be a wildcard address ({bind:?}) — quack has no working \
+         TLS of its own; bind an explicit loopback/private interface and rely on a network \
+         perimeter (e.g. Tailscale) for anything wider"
     );
-    anyhow::bail!(
-        "SIGIRO_QUERY_SURFACE=quack is not supported in distributed \
-         (SIGIRO_CATALOG_URL) mode yet — it currently serves only the single \
-         non-distributed \"default\" project"
-    )
+    Ok(())
+}
+
+/// Resolve the bind IPs `run_servers` uses for its HTTP/OTLP-HTTP listener and
+/// its gRPC listener, given the already-validated edge bind (`Some`, a quack
+/// edge — see `validate_quack_bind_address`) or `None` (hosted mode). Pure
+/// and unit-testable independent of `run_servers`'s side effects (real
+/// listeners, DB pools, ...).
+///
+/// Hosted mode's pair is BYTE-IDENTICAL to before this fix: `0.0.0.0` for
+/// HTTP/OTLP (kamal-proxy sits on the docker network — a loopback bind would
+/// break proxy access) and `::` for gRPC (that listener's pre-existing,
+/// unrelated default). Edge mode returns the SAME address for both, so
+/// HTTP/OTLP-HTTP/gRPC all end up bound exactly where quack itself is.
+pub fn resolve_listener_bind_ips(
+    edge_bind: Option<&str>,
+) -> Result<(std::net::IpAddr, std::net::IpAddr)> {
+    match edge_bind {
+        Some(bind) => {
+            let normalized = bind
+                .strip_prefix('[')
+                .and_then(|b| b.strip_suffix(']'))
+                .unwrap_or(bind);
+            let ip: std::net::IpAddr = normalized
+                .parse()
+                .with_context(|| format!("SIGIRO_QUACK_BIND {bind:?} is not a valid IP address"))?;
+            Ok((ip, ip))
+        }
+        None => Ok((
+            std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
+        )),
+    }
 }
 
 pub async fn run_servers(
@@ -687,8 +769,30 @@ pub async fn run_servers(
     let ports = ServerPorts::load()?;
     let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?;
 
+    let query_surface = crate::config::query_surface()?;
     let configured_key = crate::config::API_KEY.value().unwrap_or_default();
-    let auth_mode = crate::auth::AuthMode::from_runtime_config(configured_key.clone(), &data_dir)?;
+    let auth_mode = crate::auth::AuthMode::from_runtime_config(
+        configured_key.clone(),
+        &data_dir,
+        query_surface,
+    )?;
+
+    // The bind address enforced for EVERY listener (HTTP, OTLP-HTTP, gRPC, and
+    // quack itself) when this node is a quack edge — resolved once here so
+    // the gRPC spawn below (which happens before the quack section further
+    // down) already has it. `None` in hosted mode: every listener below then
+    // falls back to today's wildcard bind, unchanged. See
+    // `validate_quack_bind_address` for why a wildcard is rejected outright.
+    let edge_bind = if query_surface == crate::config::QuerySurface::Quack {
+        let bind = crate::config::QUACK_BIND
+            .value()
+            .map_err(anyhow::Error::from)?;
+        validate_quack_bind_address(&bind)?;
+        Some(bind)
+    } else {
+        None
+    };
+    let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(edge_bind.as_deref())?;
 
     // TLS configuration
     let tls_config = match (
@@ -723,7 +827,7 @@ pub async fn run_servers(
     let mut servers = JoinSet::new();
     let (grpc_shutdown_tx, grpc_shutdown_rx) = oneshot::channel();
     servers.spawn(async move {
-        let addr = format!("[::]:{grpc_port}").parse().expect("valid addr");
+        let addr = SocketAddr::new(grpc_bind_ip, grpc_port);
         let svc = OtlpGrpcService::new(grpc_router, grpc_auth_mode, max_ingest_body_bytes);
         tracing::info!("gRPC listening on {addr}");
         let result = TonicServer::builder()
@@ -741,7 +845,6 @@ pub async fn run_servers(
         ("gRPC", result)
     });
 
-    let query_surface = crate::config::query_surface()?;
     let app_state = Arc::new(AppState {
         pool: Arc::clone(&pool),
         admin_conn: Arc::clone(&admin_conn),
@@ -758,17 +861,18 @@ pub async fn run_servers(
     // is one-writer-XOR-many-readers, so a separate process cannot share the
     // lock — see crate::quack module docs). `query_surface == None` (the
     // default) changes nothing: no extension load, no server, no new port.
-    let quack_shutdown_tx = if query_surface == crate::config::QuerySurface::Quack {
-        ensure_quack_config_safe(&crate::storage::load_config()?)?;
-        let bind = crate::config::QUACK_BIND
-            .value()
-            .map_err(anyhow::Error::from)?;
-        anyhow::ensure!(
-            bind != "0.0.0.0",
-            "SIGIRO_QUACK_BIND must not be 0.0.0.0 — quack has no working TLS \
-             of its own; bind an explicit loopback/private interface and rely \
-             on a network perimeter (e.g. Tailscale) for anything wider"
-        );
+    //
+    // Serving over an S3-backed distributed "default" project (SIGIRO_CATALOG_URL
+    // set + SIGIRO_S3_BUCKET set) is supported here with NO extra guard: the
+    // filesystem lockdown (`pool::lock_filesystem`) is what's skipped in that
+    // mode, not the security boundary — `validate_read_only` (SELECT-only +
+    // sigiro_* table allowlist + reader-function denylist + positive
+    // scalar-function allowlist + WITH-ban) IS the boundary, in every storage
+    // mode, and does not depend on the filesystem lockdown at all (see
+    // `crate::quack::install_authorization_gate`, which wraps this same
+    // validator). `enable_external_access` staying on in S3 mode is required
+    // for DuckLake itself to reach S3, not a hole left open for user queries.
+    let quack_shutdown_tx = if let Some(bind) = edge_bind.clone() {
         let port = crate::config::QUACK_PORT
             .value()
             .map_err(anyhow::Error::from)?;
@@ -777,9 +881,12 @@ pub async fn run_servers(
             .map_err(anyhow::Error::from)?;
         let token = if token.is_empty() { None } else { Some(token) };
 
-        let quack_conn = pool
-            .clone_connection("default")
-            .context("failed to open the quack query-surface connection")?;
+        let quack_conn = pool.clone_connection("default").context(
+            "failed to open the quack query-surface connection — run_serve should have \
+             pre-created the single-edge \"default\" project before run_servers starts \
+             (see main.rs run_serve's quack pre-create, which fails loud on its own \
+             create_project error rather than deferring the failure to here)",
+        )?;
         crate::quack::load_and_pin(&quack_conn)?;
         crate::quack::install_authorization_gate(&quack_conn)?;
         let listen = crate::quack::start_server(&quack_conn, &bind, port, token.as_deref())?;
@@ -828,6 +935,7 @@ pub async fn run_servers(
     servers.spawn(async move {
         let result = serve_http_app(
             "HTTP",
+            http_bind_ip,
             http_port,
             http_app,
             http_tls_config,
@@ -846,6 +954,7 @@ pub async fn run_servers(
     servers.spawn(async move {
         let result = serve_http_app(
             "OTLP HTTP",
+            http_bind_ip,
             otlp_http_port,
             otlp_http_app,
             otlp_tls_config,
@@ -970,14 +1079,19 @@ fn ensure_rustls_provider() -> Result<()> {
     }
 }
 
+/// `bind_ip`: `run_servers` passes the resolved edge/hosted bind — a quack
+/// edge binds its own private address (`SIGIRO_QUACK_BIND`), hosted mode
+/// keeps the unchanged `0.0.0.0` (it sits behind kamal-proxy on the docker
+/// network, where a loopback bind would break proxy access).
 async fn serve_http_app(
     name: &'static str,
+    bind_ip: std::net::IpAddr,
     port: u16,
     app: Router,
     tls_config: Option<RustlsConfig>,
     handle: Handle<SocketAddr>,
 ) -> Result<()> {
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::new(bind_ip, port);
     if let Some(config) = tls_config {
         tracing::info!(server = name, protocol = "HTTPS", "listening on {addr}");
         axum_server::bind_rustls(addr, config)
@@ -1857,42 +1971,4 @@ async fn revoke_key_handler(
         revoked,
         short_token,
     }))
-}
-
-#[cfg(test)]
-mod quack_config_guard_tests {
-    use super::ensure_quack_config_safe;
-    use crate::storage::StorageConfig;
-
-    fn distributed(s3_bucket: &str) -> StorageConfig {
-        StorageConfig {
-            catalog_url: "postgres://host/db".to_string(),
-            s3_bucket: s3_bucket.to_string(),
-            s3_region: String::new(),
-            s3_endpoint: String::new(),
-            s3_key_id: String::new(),
-            s3_secret: String::new(),
-        }
-    }
-
-    #[test]
-    fn local_mode_is_allowed() {
-        assert!(ensure_quack_config_safe(&None).is_ok());
-    }
-
-    #[test]
-    fn s3_backed_catalog_is_refused_for_exfiltration_reason() {
-        let err = ensure_quack_config_safe(&Some(distributed("my-bucket")))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("exfiltration"),
-            "S3 refusal must cite the read-side exfiltration risk, got: {err}"
-        );
-    }
-
-    #[test]
-    fn distributed_without_s3_is_still_refused() {
-        assert!(ensure_quack_config_safe(&Some(distributed(""))).is_err());
-    }
 }

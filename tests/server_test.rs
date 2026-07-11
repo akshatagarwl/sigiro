@@ -1,5 +1,8 @@
 use duckdb::Connection;
-use sigiro::server::{duckdb_value_to_json, validate_read_only};
+use sigiro::server::{
+    duckdb_value_to_json, resolve_listener_bind_ips, validate_quack_bind_address,
+    validate_read_only,
+};
 
 fn test_conn() -> Connection {
     let conn = Connection::open_in_memory().expect("in-memory db");
@@ -191,6 +194,39 @@ fn validate_time_travel_does_not_bypass_guards() {
     // write/DDL/file-access guards, which still scan the original SQL.
     assert!(validate_read_only("SELECT * FROM read_csv('/etc/passwd') AT (VERSION => 1)").is_err());
     assert!(validate_read_only("DROP TABLE sigiro_logs AT (VERSION => 1)").is_err());
+}
+
+#[test]
+fn validate_rejects_non_literal_time_travel_at_body() {
+    // The firewall bypass: DuckDB executes the ORIGINAL sql including the AT
+    // (...) body, but the body used to be stripped BEFORE any AST/scalar
+    // validation ran, so a function call/subquery/expression hidden inside
+    // AT (...) never went through the scalar/relation allowlist yet still
+    // ran. Only a bare literal VERSION/TIMESTAMP is accepted now — everything
+    // else must be rejected outright, regardless of whether it happens to
+    // also fail to parse for an unrelated reason.
+    assert!(
+        validate_read_only("SELECT * FROM sigiro_spans AT (TIMESTAMP => (SELECT getenv('X')))")
+            .is_err()
+    );
+    assert!(
+        validate_read_only(
+            "SELECT * FROM sigiro_spans AT (VERSION => (SELECT count(*) FROM read_csv('/x')))"
+        )
+        .is_err()
+    );
+    assert!(validate_read_only("SELECT * FROM sigiro_spans AT (TIMESTAMP => now())").is_err());
+    // Confirmed bypasses of the OLD strip-then-parse approach: these bodies
+    // contain no nested parens, so the naive regex captured them whole and
+    // they sailed through untouched by any guard. A bare column reference,
+    // an arithmetic expression, and a paren-free scalar all must be rejected
+    // now that the body is checked against a literal-only allowlist.
+    assert!(validate_read_only("SELECT * FROM sigiro_spans AT (VERSION => some_col)").is_err());
+    assert!(validate_read_only("SELECT * FROM sigiro_spans AT (VERSION => 1+1)").is_err());
+    assert!(
+        validate_read_only("SELECT * FROM sigiro_spans AT (TIMESTAMP => CURRENT_TIMESTAMP)")
+            .is_err()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -560,4 +596,65 @@ fn value_ref_mixed_types_from_table() {
         duckdb_value_to_json(row.get_ref(2).unwrap()),
         serde_json::json!(true)
     );
+}
+
+// ---------------------------------------------------------------------------
+// FIX 2: enforce the edge perimeter — the quack-edge bind address is also
+// what HTTP/OTLP-HTTP/gRPC bind to (see `resolve_listener_bind_ips`), so the
+// wildcard guard and the resolved-address logic both need direct coverage.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_quack_bind_rejects_ipv4_wildcard() {
+    assert!(validate_quack_bind_address("0.0.0.0").is_err());
+}
+
+#[test]
+fn validate_quack_bind_rejects_ipv6_wildcard() {
+    assert!(validate_quack_bind_address("::").is_err());
+    assert!(validate_quack_bind_address("[::]").is_err());
+}
+
+#[test]
+fn validate_quack_bind_rejects_equivalent_wildcard_spellings() {
+    // The unspecified address has many textual forms; all bind every
+    // interface, so a parse-then-is_unspecified check must reject each.
+    for w in ["0::0", "0:0:0:0:0:0:0:0", "::ffff:0.0.0.0", "[0::0]"] {
+        assert!(
+            validate_quack_bind_address(w).is_err(),
+            "wildcard spelling {w:?} must be rejected"
+        );
+    }
+    // A non-IP (hostname) must fail loud, not be silently accepted.
+    assert!(validate_quack_bind_address("localhost").is_err());
+}
+
+#[test]
+fn validate_quack_bind_allows_private_addresses() {
+    assert!(validate_quack_bind_address("127.0.0.1").is_ok());
+    assert!(validate_quack_bind_address("100.64.0.1").is_ok()); // a Tailscale-shaped CGNAT IP
+}
+
+#[test]
+fn resolve_listener_bind_ips_hosted_mode_keeps_wildcards() {
+    // query_surface == None (hosted): byte-identical to before this fix.
+    let (http_ip, grpc_ip) = resolve_listener_bind_ips(None).expect("hosted resolution");
+    assert_eq!(http_ip, "0.0.0.0".parse::<std::net::IpAddr>().unwrap());
+    assert_eq!(grpc_ip, "::".parse::<std::net::IpAddr>().unwrap());
+}
+
+#[test]
+fn resolve_listener_bind_ips_edge_mode_uses_quack_bind_everywhere() {
+    // query_surface == Quack, SIGIRO_QUACK_BIND unset → default 127.0.0.1:
+    // HTTP/OTLP-HTTP and gRPC must resolve to the SAME private address quack
+    // itself binds — never the wildcard.
+    let (http_ip, grpc_ip) = resolve_listener_bind_ips(Some("127.0.0.1")).expect("edge resolution");
+    let loopback = "127.0.0.1".parse::<std::net::IpAddr>().unwrap();
+    assert_eq!(http_ip, loopback);
+    assert_eq!(grpc_ip, loopback);
+}
+
+#[test]
+fn resolve_listener_bind_ips_rejects_unparseable_bind() {
+    assert!(resolve_listener_bind_ips(Some("not-an-ip")).is_err());
 }

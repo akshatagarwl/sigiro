@@ -46,6 +46,13 @@ pub static AWS_ACCESS_KEY_ID: Envar<String> =
     Envar::on_demand("AWS_ACCESS_KEY_ID", || EnvarDef::Default(String::new()));
 pub static AWS_SECRET_ACCESS_KEY: Envar<String> =
     Envar::on_demand("AWS_SECRET_ACCESS_KEY", || EnvarDef::Default(String::new()));
+/// Whether the S3 secret DuckDB attaches with speaks TLS (`USE_SSL` in the
+/// `CREATE SECRET` SQL). Default `true` — real S3 (and R2) require TLS.
+/// Dev/CI S3-compatible stores (MinIO over plain HTTP) set this `false`.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests, matching
+/// the other S3_* config above.
+pub static S3_USE_SSL: Envar<bool> =
+    Envar::on_demand("SIGIRO_S3_USE_SSL", || EnvarDef::Default(true));
 
 /// OTel service name for self-instrumentation.
 pub static OTEL_SERVICE_NAME: Envar<String> = Envar::on_startup("OTEL_SERVICE_NAME", || {

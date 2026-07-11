@@ -97,6 +97,10 @@ pub struct StorageConfig {
     pub s3_endpoint: String,
     pub s3_key_id: String,
     pub s3_secret: String,
+    /// `USE_SSL` for the S3 secret SQL. `true` for real S3/R2; `false` for
+    /// plain-HTTP dev/CI S3-compatible stores (MinIO). See
+    /// `crate::config::S3_USE_SSL`.
+    pub s3_use_ssl: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +113,16 @@ pub struct DistributedAttachSql {
     pub attach_sql: String,
 }
 
+/// `"default"` is a valid tenant id — it is NOT reserved. In distributed mode
+/// every tenant's project dir lives under `data_dir/tenants/<id>` (see
+/// [`tenant_data_dir`]), so a tenant literally named `default` gets
+/// `data_dir/tenants/default`, never `data_dir/default` (the LOCAL-mode
+/// default project dir, a completely different code path/config). Its
+/// metadata schema (`tenant_default`) and S3 data prefix (`default/`) are
+/// likewise namespaced by the same `tenant_` / bucket-prefix scheme every
+/// other tenant gets — nothing about the name `default` collides with
+/// anything. `"extensions"` and `"tenants"` remain reserved because they name
+/// real fixed directories under `data_dir` that a tenant dir would shadow.
 pub fn sanitize_tenant_id(tenant_id: &str) -> Result<String> {
     anyhow::ensure!(!tenant_id.is_empty(), "tenant id must not be empty");
     anyhow::ensure!(
@@ -122,9 +136,9 @@ pub fn sanitize_tenant_id(tenant_id: &str) -> Result<String> {
         "tenant id is too long: metadata schema tenant_<id> must fit PostgreSQL's 63-byte identifier limit"
     );
     anyhow::ensure!(
-        !matches!(tenant_id, "default" | "extensions" | "tenants"),
-        "tenant id {tenant_id:?} is reserved (collides with the default project dir, \
-         the extension dir, or the tenants/ parent dir)"
+        !matches!(tenant_id, "extensions" | "tenants"),
+        "tenant id {tenant_id:?} is reserved (collides with the shared extension dir \
+         or the tenants/ parent dir)"
     );
     Ok(tenant_id.to_string())
 }
@@ -183,11 +197,12 @@ pub fn distributed_attach_sql(
         let scope = data_path.clone();
         let secret_sql = format!(
             "CREATE OR REPLACE SECRET s3_sigiro (TYPE S3, KEY_ID '{}', SECRET '{}', REGION '{}', \
-             ENDPOINT '{}', URL_STYLE 'path', USE_SSL true, SCOPE '{}');",
+             ENDPOINT '{}', URL_STYLE 'path', USE_SSL {}, SCOPE '{}');",
             escape_sql_string(&config.s3_key_id),
             escape_sql_string(&config.s3_secret),
             escape_sql_string(&config.s3_region),
             escape_sql_string(&config.s3_endpoint),
+            config.s3_use_ssl,
             escape_sql_string(&scope)
         );
         (data_path, Some(secret_sql), Some(scope))
@@ -237,6 +252,7 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
     let s3_endpoint = config::S3_ENDPOINT.value().map_err(anyhow::Error::from)?;
     let s3_key_id = resolve_with_aws_fallback(&config::S3_KEY_ID, &config::AWS_ACCESS_KEY_ID)?;
     let s3_secret = resolve_with_aws_fallback(&config::S3_SECRET, &config::AWS_SECRET_ACCESS_KEY)?;
+    let s3_use_ssl = config::S3_USE_SSL.value().map_err(anyhow::Error::from)?;
 
     Ok(Some(StorageConfig {
         catalog_url,
@@ -245,6 +261,7 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         s3_endpoint,
         s3_key_id,
         s3_secret,
+        s3_use_ssl,
     }))
 }
 
