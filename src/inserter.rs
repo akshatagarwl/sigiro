@@ -693,9 +693,19 @@ impl ProjectFlusher {
 
     #[tracing::instrument(skip_all, fields(project_id = %project_id, days))]
     fn retention_cleanup(&self, project_id: &str, days: u32) -> Result<()> {
-        let cutoff = format!("now() - INTERVAL '{days} days'");
+        // Compute the cutoff in RUST and use `make_timestamp` — deliberately NO
+        // DuckDB timezone ops. The locked-down runtime never loads the `icu`
+        // extension, and EVERY TIMESTAMPTZ path autoloads it and fails: `now()
+        // - INTERVAL` ("No function matches -(TIMESTAMPTZ, INTERVAL)"),
+        // `AT TIME ZONE`, and even `epoch(now())` ("Extension Autoloading Error:
+        // ... 'icu'"). `make_timestamp(<micros>)` is a core scalar (no icu) that
+        // builds a naive UTC TIMESTAMP matching the naive-UTC `timestamp`
+        // columns, so the comparison is correct with zero timezone dependency.
+        let cutoff_micros = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000)
+            - i128::from(days) * 86_400 * 1_000_000;
         for table in self.table_names.values() {
-            let sql = format!("DELETE FROM {table} WHERE timestamp < {cutoff}");
+            let sql =
+                format!("DELETE FROM {table} WHERE timestamp < make_timestamp({cutoff_micros})");
             self.conn
                 .execute_batch(&sql)
                 .with_context(|| format!("retention cleanup failed for {table}"))?;
