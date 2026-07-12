@@ -21,7 +21,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 toon = "0.1.2"
 
 # OTLP ingest
-tonic = "0.14"
+tonic = { version = "0.14", features = ["tls-aws-lc"] }
 prost = "0.14"
 arrow = "58"
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }

@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
-use tonic::transport::Server as TonicServer;
+use tonic::transport::{Identity, Server as TonicServer, ServerTlsConfig};
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -811,18 +811,25 @@ pub async fn run_servers(
     let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(edge_bind.as_deref())?;
 
     // TLS configuration
-    let tls_config = match (
+    let (tls_config, grpc_tls_config) = match (
         crate::config::TLS_CERT.value(),
         crate::config::TLS_KEY.value(),
     ) {
         (Ok(cert), Ok(key)) => {
             tracing::info!("TLS enabled — cert={cert}, key={key}");
             ensure_rustls_provider()?;
-            Some(
-                RustlsConfig::from_pem_file(cert, key)
-                    .await
-                    .context("failed to load TLS config")?,
-            )
+            let http_tls_config = RustlsConfig::from_pem_file(&cert, &key)
+                .await
+                .context("failed to load HTTP TLS config")?;
+            let cert_pem = tokio::fs::read(&cert)
+                .await
+                .with_context(|| format!("failed to read TLS certificate {cert}"))?;
+            let key_pem = tokio::fs::read(&key)
+                .await
+                .with_context(|| format!("failed to read TLS key {key}"))?;
+            let grpc_tls_config =
+                ServerTlsConfig::new().identity(Identity::from_pem(cert_pem, key_pem));
+            (Some(http_tls_config), Some(grpc_tls_config))
         }
         (Ok(_), Err(_)) => {
             anyhow::bail!("SIGIRO_TLS_CERT is set but SIGIRO_TLS_KEY is missing");
@@ -832,11 +839,17 @@ pub async fn run_servers(
         }
         (Err(_), Err(_)) => {
             tracing::info!("TLS not configured — serving plain TCP");
-            None
+            (None, None)
         }
     };
 
     // gRPC server — authenticated via Bearer token in metadata
+    let mut grpc_server = match grpc_tls_config {
+        Some(tls_config) => TonicServer::builder()
+            .tls_config(tls_config)
+            .context("failed to configure gRPC TLS")?,
+        None => TonicServer::builder(),
+    };
     let grpc_router = Arc::clone(&router);
     let grpc_auth_mode = auth_mode.clone();
     let grpc_port = ports.grpc;
@@ -846,7 +859,7 @@ pub async fn run_servers(
         let addr = SocketAddr::new(grpc_bind_ip, grpc_port);
         let svc = OtlpGrpcService::new(grpc_router, grpc_auth_mode, max_ingest_body_bytes);
         tracing::info!("gRPC listening on {addr}");
-        let result = TonicServer::builder()
+        let result = grpc_server
             .add_service(svc.trace_service())
             .add_service(svc.logs_service())
             .add_service(svc.metrics_service())
