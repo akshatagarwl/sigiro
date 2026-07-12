@@ -60,6 +60,10 @@ impl TlsServer {
         let child = Command::new(env!("CARGO_BIN_EXE_sigiro"))
             .arg("serve")
             .env("SIGIRO_DATA_DIR", data_dir.path())
+            // Shared extension cache (see retention_runtime_test): avoids a
+            // per-run cold download of every DuckDB extension (incl. icu) that
+            // can push serve boot past the 90s gRPC-bind deadline and flake this.
+            .env("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions")
             .env("SIGIRO_HTTP_PORT", http_port.to_string())
             .env("SIGIRO_OTLP_HTTP_PORT", otlp_http_port.to_string())
             .env("SIGIRO_GRPC_PORT", grpc_port.to_string())

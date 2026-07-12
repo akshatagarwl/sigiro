@@ -20,6 +20,11 @@ fn retention_runs_without_timezone_extension_at_runtime() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_sigiro"))
         .arg("serve")
         .env("SIGIRO_DATA_DIR", data_dir.path())
+        // Shared, stable extension cache across runs (same path api_integration_test
+        // uses). Without it each spawn cold-downloads every DuckDB extension into the
+        // temp data dir — now including icu — which can push serve boot past the 90s
+        // deadline below and flake the test. Read-only after the first download.
+        .env("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions")
         .env("SIGIRO_HTTP_PORT", "42101")
         .env("SIGIRO_OTLP_HTTP_PORT", "42102")
         .env("SIGIRO_GRPC_PORT", "42103")
