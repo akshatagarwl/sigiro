@@ -23,6 +23,9 @@ struct Cli {
     /// is not a TTY (piped to jq, a file, etc.), TOON otherwise.
     #[arg(long, value_enum)]
     output: Option<OutputFormat>,
+    /// Client bearer token for a hosted endpoint (overrides SIGIRO_API_KEY).
+    #[arg(long, global = true)]
+    key: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -155,6 +158,13 @@ async fn main() -> Result<()> {
     };
 
     let cli = Cli::parse();
+
+    // This is client-only configuration. Apply it before any command resolves
+    // endpoint configuration, so `--key` has the same behavior as
+    // SIGIRO_API_KEY without changing server authentication.
+    if let Some(key) = &cli.key {
+        unsafe { std::env::set_var("SIGIRO_API_KEY", key) };
+    }
 
     match cli.command {
         Some(Command::Serve {

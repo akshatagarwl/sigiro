@@ -19,21 +19,20 @@ No configuration required. Data is stored in the platform data directory (`~/.lo
 
 ## Authentication
 
-In development, any bearer token starting with `sigiro_dev_` is accepted:
+Sigiro has two server authentication modes:
+
+* **Open** (default): self-hosted servers and edge/query-surface nodes run with
+  no per-request authentication. Secure the network perimeter with a tailnet,
+  private network, or reverse proxy.
+* **TenantKeys** (hosted): set `SIGIRO_CATALOG_URL` to use the hosted control
+  plane. Requests authenticate with per-tenant bearer keys minted and managed
+  through that control plane.
+
+`SIGIRO_API_KEY` is **client-only** configuration for calling a hosted endpoint:
 
 ```bash
-curl -H "Authorization: Bearer sigiro_dev_test" http://localhost:9999/health
-```
-
-For production, generate an API key (e.g. `openssl rand -hex 32`) and set it on
-both the server and client:
-
-```bash
-# Server
-SIGIRO_API_KEY=<key> sigiro serve
-
-# Client
-sigiro auth <key>
+SIGIRO_API_KEY=<tenant-bearer-key> sigiro status
+# or: sigiro --key <tenant-bearer-key> status
 ```
 
 ## End-to-End Test

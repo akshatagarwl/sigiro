@@ -85,7 +85,10 @@ impl AuthMode {
                 })
             }
             None => {
-                tracing::info!("auth_mode=open — no SIGIRO_CATALOG_URL, no per-request auth");
+                tracing::warn!(
+                    "sigiro running in OPEN auth mode — no per-request authentication; \
+                     protect the network perimeter (tailnet/private network/reverse-proxy)"
+                );
                 Ok(AuthMode::Open)
             }
         }

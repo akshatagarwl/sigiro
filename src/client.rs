@@ -77,7 +77,7 @@ impl SigiroClient {
         match resp.status().as_u16() {
             200 => Ok(resp),
             401 => bail!(
-                "Unauthorized (401): this endpoint requires per-tenant authentication (hosted mode)"
+                "Unauthorized (401): this hosted endpoint requires a bearer token; set SIGIRO_API_KEY"
             ),
             429 => bail!("Rate limited. Try again later."),
             s => {
@@ -121,7 +121,7 @@ impl SigiroClient {
                 .await
                 .context("failed to parse /health response"),
             401 => bail!(
-                "Unauthorized (401): this endpoint requires per-tenant authentication (hosted mode)"
+                "Unauthorized (401): this hosted endpoint requires a bearer token; set SIGIRO_API_KEY"
             ),
             s => {
                 let body = resp.text().await.context("failed to read error body")?;
@@ -199,16 +199,15 @@ impl SigiroClient {
 
 /// Build a client from config.
 ///
-/// The `sigiro` CLI targets self-host / edge servers, which run `Open` auth (no
-/// per-request key — the network perimeter is the boundary), so the client
-/// sends no bearer token. HOSTED (`TenantKeys`) instances are driven by each
-/// tenant's own OTLP senders and apps with their minted keys, not by this
-/// operator CLI; a request against such an endpoint returns 401.
+/// `SIGIRO_API_KEY` is client-only configuration. When present, it is sent as
+/// a bearer token to a hosted (`TenantKeys`) endpoint; it never configures
+/// server-side authentication.
 pub fn try_build_client() -> anyhow::Result<SigiroClient> {
     let base_url = crate::config::ENDPOINT
         .value()
         .map_err(anyhow::Error::from)?;
-    Ok(SigiroClient::new(&base_url, ClientAuth::Open))
+    let auth = ClientAuth::from_key(std::env::var("SIGIRO_API_KEY").unwrap_or_default());
+    Ok(SigiroClient::new(&base_url, auth))
 }
 
 // ---------------------------------------------------------------------------
