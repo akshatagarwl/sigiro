@@ -17,6 +17,7 @@ const BASE_PORT: u16 = 41900;
 const ADMIN_TOKEN: &str = "hosted-isolation-e2e-admin-token";
 const TENANT_A: &str = "acme";
 const TENANT_B: &str = "globex";
+const FIREWALL_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 
 fn test_extension_dir() -> String {
     std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
@@ -380,6 +381,11 @@ fn hosted_tenant_isolation_attacks() {
             .body(*sql)
             .send()
             .unwrap_or_else(|e| panic!("{label}: query request failed: {e}"));
+        assert_ne!(
+            resp.status(),
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "{label}: rate limiter intercepted the request and masked SQL-firewall coverage"
+        );
         if resp.status().is_success() {
             let rows: Vec<serde_json::Value> = resp
                 .json()
@@ -398,6 +404,7 @@ fn hosted_tenant_isolation_attacks() {
                 resp.status()
             );
         }
+        std::thread::sleep(FIREWALL_PROBE_INTERVAL);
     }
 
     // Metadata enumeration via information_schema. In HOSTED mode this is
@@ -424,24 +431,48 @@ fn hosted_tenant_isolation_attacks() {
             "SELECT database_name FROM duckdb_databases()",
         ),
     ] {
-        let body = reqwest::blocking::Client::new()
+        let resp = reqwest::blocking::Client::new()
             .post(format!("{}/v1/query", edge.base_url()))
             .bearer_auth(&acme_key)
             .body(sql)
             .send()
-            .unwrap_or_else(|e| panic!("{label}: request failed: {e}"))
-            .text()
-            .unwrap_or_default();
+            .unwrap_or_else(|e| panic!("{label}: request failed: {e}"));
+        assert_ne!(
+            resp.status(),
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "{label}: rate limiter intercepted the request and masked enumeration-firewall coverage"
+        );
+        let body = resp.text().unwrap_or_default();
         assert!(
             !body.contains("tenant_globex") && !body.contains("sigiro_control"),
             "{label}: enumeration leaked another tenant's schema or the control plane: {body}"
         );
+        std::thread::sleep(FIREWALL_PROBE_INTERVAL);
     }
 
     assert_eq!(
         edge.query_count(&acme_key, &globex_service).unwrap(),
         0,
         "acme must never see globex spans through the allowed lake view"
+    );
+
+    let mut rate_limited = false;
+    for _ in 0..25 {
+        let status = reqwest::blocking::Client::new()
+            .post(format!("{}/v1/query", edge.base_url()))
+            .bearer_auth(&acme_key)
+            .body("SELECT count(*) FROM sigiro_spans")
+            .send()
+            .expect("rate-limit probe request")
+            .status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            rate_limited = true;
+            break;
+        }
+    }
+    assert!(
+        rate_limited,
+        "authenticated query burst did not trigger the per-tenant rate limiter"
     );
     edge.shutdown().expect("hosted edge shutdown");
     reset_control_db();

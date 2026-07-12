@@ -666,13 +666,13 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     let v1 = if rate_limit_v1 {
         let tenant_governor = GovernorConfigBuilder::default()
             .key_extractor(TenantRateLimitKeyExtractor)
-            .per_second(5)
+            .per_millisecond(200)
             .burst_size(20)
             .finish()
             .expect("valid per-tenant governor config");
         let source_governor = GovernorConfigBuilder::default()
             .key_extractor(SourceRateLimitKeyExtractor)
-            .per_second(50)
+            .per_millisecond(20)
             .burst_size(100)
             .finish()
             .expect("valid pre-auth source governor config");

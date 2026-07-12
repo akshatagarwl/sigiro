@@ -681,7 +681,7 @@ pub fn otlp_http_router(
     if rate_limit {
         let governor = GovernorConfigBuilder::default()
             .key_extractor(crate::server::SourceRateLimitKeyExtractor)
-            .per_second(50)
+            .per_millisecond(20)
             .burst_size(100)
             .finish()
             .expect("valid OTLP/HTTP source governor config");
