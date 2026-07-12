@@ -83,5 +83,9 @@ COPY --from=builder /build/sigiro /usr/local/bin/sigiro
 ENV SIGIRO_DATA_DIR=/var/lib/sigiro \
     SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
 RUN sigiro fetch-extensions
+RUN groupadd --system --gid 10001 sigiro && \
+    useradd --system --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent \
+      --shell /usr/sbin/nologin sigiro
+USER 10001:10001
 EXPOSE 4317 4318 9999
 CMD ["sigiro", "serve"]
