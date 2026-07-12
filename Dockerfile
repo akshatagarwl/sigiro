@@ -3,8 +3,32 @@
 FROM --platform=$BUILDPLATFORM lukemathwalker/cargo-chef:latest-rust-slim AS chef
 WORKDIR /build
 
+# libduckdb-sys 1.10503.1 is generated for DuckDB v1.5.3. Build that exact
+# release's official amalgamation into one static core archive. This stage is
+# independent of recipe.json and application sources, so its layer is keyed
+# only by the pinned DuckDB version/toolchain and is reusable from the exported
+# registry cache. Runtime extensions remain separate and are fetched below.
+FROM debian:trixie-slim AS duckdb-static
+ARG DUCKDB_VERSION=1.5.3
+RUN apt-get update && apt-get install -y ca-certificates clang curl unzip binutils && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /opt/duckdb /tmp/duckdb && \
+    curl --fail --location --retry 3 \
+      "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/libduckdb-src.zip" \
+      --output /tmp/libduckdb-src.zip && \
+    unzip -q /tmp/libduckdb-src.zip -d /tmp/duckdb && \
+    test -f /tmp/duckdb/duckdb.cpp && \
+    test -f /tmp/duckdb/duckdb.h && \
+    clang++ -std=c++11 -O3 -DNDEBUG -fPIC \
+      -DDUCKDB_EXTENSION_AUTOINSTALL_DEFAULT=1 \
+      -DDUCKDB_EXTENSION_AUTOLOAD_DEFAULT=1 \
+      -c /tmp/duckdb/duckdb.cpp -o /tmp/duckdb/duckdb.o && \
+    ar rcs /opt/duckdb/libduckdb_static.a /tmp/duckdb/duckdb.o && \
+    cp /tmp/duckdb/duckdb.h /opt/duckdb/duckdb.h && \
+    rm -rf /tmp/duckdb /tmp/libduckdb-src.zip
+
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./
 COPY src/ src/
 COPY benches/ benches/
 RUN cargo chef prepare --recipe-path recipe.json
@@ -13,15 +37,14 @@ FROM lukemathwalker/cargo-chef:latest-rust-slim AS deps
 WORKDIR /build
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y pkg-config libssl-dev g++ git curl clang lld protobuf-compiler ccache && rm -rf /var/lib/apt/lists/*
+COPY --from=duckdb-static /opt/duckdb /opt/duckdb
 COPY --from=planner /build/recipe.json recipe.json
-# `cargo chef cook` compiles the whole dep graph (incl. DuckDB's bundled C++,
-# ~40min cold). Its output MUST land in the image LAYER (a real, cacheable
-# layer keyed on recipe.json), NOT a BuildKit cache mount: mounts are never
-# exported by `cache-to type=registry`, so a cold/remote build (deploy box, CI,
-# post-prune) can't reuse the cooked deps and re-pays the full compile every
-# time. As a layer, `docker buildx bake` (docker-bake.hcl cache-to/from
-# registry,mode=max) persists it → the DuckDB compile becomes a one-time cost.
-# `/build/target` is deliberately NOT a cache mount here (and not in `builder`).
+# libduckdb-sys' non-bundled path honors these variables and requests
+# static=duckdb_static. Keep the cooked Rust dependency graph in an image layer
+# too: registry cache exports layers, not BuildKit cache-mount contents.
+ENV DUCKDB_LIB_DIR=/opt/duckdb \
+    DUCKDB_INCLUDE_DIR=/opt/duckdb \
+    DUCKDB_STATIC=1
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-shared,sharing=shared \
     --mount=type=cache,target=/root/.ccache,id=ccache-${TARGETARCH} \
@@ -32,6 +55,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
 FROM deps AS builder
 ARG TARGETARCH
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./
 COPY src/ src/
 COPY benches/ benches/
 # `builder` is `FROM deps`, so /build/target already holds the cooked dep

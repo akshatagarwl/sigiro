@@ -9,7 +9,6 @@ license = "Apache-2.0"
 members = []
 
 [dependencies]
-duckdb = { version = "1.10503.1", features = ["bundled", "appender-arrow", "vscalar"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
@@ -74,6 +73,13 @@ itertools = "0.14.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 caps = "0.5"
+duckdb = { version = "=1.10503.1", features = ["appender-arrow", "vscalar"] }
+
+# DuckDB does not publish a single self-contained macOS static core archive.
+# Keep local development zero-setup; the production Linux build links the
+# version-pinned static archive prepared in the Dockerfile instead.
+[target.'cfg(target_os = "macos")'.dependencies]
+duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow", "vscalar"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
