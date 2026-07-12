@@ -811,12 +811,12 @@ pub async fn run_servers(
     let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(edge_bind.as_deref())?;
 
     // TLS configuration
-    let (tls_config, grpc_tls_config) = match (
+    let (otlp_http_tls_config, grpc_tls_config) = match (
         crate::config::TLS_CERT.value(),
         crate::config::TLS_KEY.value(),
     ) {
         (Ok(cert), Ok(key)) => {
-            tracing::info!("TLS enabled — cert={cert}, key={key}");
+            tracing::info!("direct-ingest TLS enabled — cert={cert}, key={key}");
             ensure_rustls_provider()?;
             let http_tls_config = RustlsConfig::from_pem_file(&cert, &key)
                 .await
@@ -962,7 +962,6 @@ pub async fn run_servers(
     let http_app = build_http_router(app_state).merge(otlp_ingest_router.clone());
 
     let http_port = ports.http;
-    let http_tls_config = tls_config.clone();
     let http_handle = Handle::new();
     let http_server_handle = http_handle.clone();
     servers.spawn(async move {
@@ -971,7 +970,9 @@ pub async fn run_servers(
             http_bind_ip,
             http_port,
             http_app,
-            http_tls_config,
+            // The main HTTP API stays plaintext inside the deployment network;
+            // kamal-proxy terminates public TLS before forwarding to this port.
+            None,
             http_server_handle,
         )
         .await;
@@ -981,7 +982,7 @@ pub async fn run_servers(
     // OTLP HTTP — authenticated via Authorization header
     let otlp_http_app = otlp_ingest_router;
     let otlp_http_port = ports.otlp_http;
-    let otlp_tls_config = tls_config;
+    let otlp_tls_config = otlp_http_tls_config;
     let otlp_http_handle = Handle::new();
     let otlp_http_server_handle = otlp_http_handle.clone();
     servers.spawn(async move {

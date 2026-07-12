@@ -13,6 +13,8 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 struct TlsServer {
     child: Child,
     _data_dir: tempfile::TempDir,
+    http_port: u16,
+    otlp_http_port: u16,
     grpc_port: u16,
     cert_pem: Vec<u8>,
 }
@@ -79,6 +81,8 @@ impl TlsServer {
         let server = Self {
             child,
             _data_dir: data_dir,
+            http_port,
+            otlp_http_port,
             grpc_port,
             cert_pem: std::fs::read(cert_path).expect("failed to read generated certificate"),
         };
@@ -171,7 +175,7 @@ fn unused_port() -> u16 {
 }
 
 #[tokio::test]
-async fn grpc_tls_accepts_tls_and_rejects_plaintext() {
+async fn direct_ingest_uses_tls_while_proxy_upstream_stays_plaintext() {
     let server = TlsServer::spawn();
 
     let mut tls_client = server.tls_client().await;
@@ -218,6 +222,38 @@ async fn grpc_tls_accepts_tls_and_rejects_plaintext() {
     assert!(
         plaintext_rejected,
         "plaintext OTLP/gRPC export unexpectedly succeeded against TLS listener"
+    );
+
+    let http_health = reqwest::get(format!("http://127.0.0.1:{}/health", server.http_port))
+        .await
+        .expect("main HTTP API should remain plaintext behind the TLS-terminating proxy");
+    assert_eq!(http_health.status(), reqwest::StatusCode::OK);
+
+    let certificate = reqwest::Certificate::from_pem(&server.cert_pem)
+        .expect("generated certificate should be valid PEM");
+    let tls_http_client = reqwest::Client::builder()
+        .add_root_certificate(certificate)
+        .build()
+        .expect("failed to build OTLP/HTTP TLS client");
+    let tls_http_response = tls_http_client
+        .get(format!(
+            "https://localhost:{}/not-found",
+            server.otlp_http_port
+        ))
+        .send()
+        .await
+        .expect("OTLP/HTTP listener should accept TLS");
+    assert_eq!(tls_http_response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let plaintext_http_rejected = reqwest::get(format!(
+        "http://127.0.0.1:{}/not-found",
+        server.otlp_http_port
+    ))
+    .await
+    .is_err();
+    assert!(
+        plaintext_http_rejected,
+        "plaintext HTTP unexpectedly succeeded against the TLS OTLP/HTTP listener"
     );
 
     server.shutdown();

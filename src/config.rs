@@ -268,9 +268,10 @@ pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
     EnvarDef::Default("http://localhost:9999".to_string())
 });
 
-/// Path to TLS certificate PEM file. Unset = no TLS.
+/// Path to the direct-ingest TLS certificate PEM file (ports 4317 and 4318).
+/// The main HTTP API stays plaintext for a TLS-terminating reverse proxy.
 pub static TLS_CERT: Envar<String> = Envar::on_startup("SIGIRO_TLS_CERT", || EnvarDef::Unset);
-/// Path to TLS private key PEM file. Unset = no TLS.
+/// Path to the direct-ingest TLS private key PEM file. Unset = no TLS.
 pub static TLS_KEY: Envar<String> = Envar::on_startup("SIGIRO_TLS_KEY", || EnvarDef::Unset);
 
 /// Data retention days. 0 = disabled (no automatic cleanup). Default 7 —
