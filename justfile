@@ -61,6 +61,16 @@ check-control-plane-e2e:
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
     cargo test --test control_plane_e2e_test -- --ignored --nocapture
 
+# Hosted multi-tenant ISOLATION attack matrix (needs Docker: Postgres catalog).
+# A client with tenant A's key must never read tenant B's data or escape the
+# SQL firewall (cross-schema, ATTACH, file/URL/S3 readers, getenv, CTE, time-travel).
+check-hosted-isolation-e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker compose -f docker-compose.dev.yml up -d --wait postgres
+    trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+    cargo test --test hosted_isolation_attack_test -- --ignored --nocapture
+
 # Build multi-arch Docker image. Pass --push to push, or --set flags for cache config.
 image *args:
     docker buildx bake sigiro {{args}}
