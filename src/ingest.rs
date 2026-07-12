@@ -27,6 +27,7 @@ use opentelemetry_proto::tonic::collector::{
 use prost::Message;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tracing_attributes::instrument;
 
 use crate::inserter::{MsgRouter, RouterError};
@@ -663,8 +664,9 @@ pub fn otlp_http_router(
     auth_mode: crate::auth::AuthMode,
     max_body_bytes: usize,
 ) -> Router {
+    let rate_limit = auth_mode.requires_auth();
     let state = Arc::new(OtlpHttpState { router, auth_mode });
-    Router::new()
+    let app = Router::new()
         .route("/", post(otlp_http_pyroscope)) // Pyroscope RS SDK posts here
         .route("/push.v1.PusherService/Push", post(otlp_http_pyroscope)) // pyroscope-rs SDK push path
         .route("/v1/traces", post(otlp_http_traces))
@@ -674,7 +676,21 @@ pub fn otlp_http_router(
         .route("/ingest", post(otlp_http_pyroscope))
         .route("/ingest/pyroscope", post(otlp_http_pyroscope))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
-        .with_state(state)
+        .with_state(state);
+
+    if rate_limit {
+        let governor = GovernorConfigBuilder::default()
+            .key_extractor(crate::server::SourceRateLimitKeyExtractor)
+            .per_second(50)
+            .burst_size(100)
+            .finish()
+            .expect("valid OTLP/HTTP source governor config");
+        app.layer(
+            GovernorLayer::new(governor).error_handler(crate::server::rate_limit_error_response),
+        )
+    } else {
+        app
+    }
 }
 
 /// Extract project_id from HTTP Authorization header.

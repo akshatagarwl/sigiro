@@ -67,30 +67,19 @@ use tracing_attributes::instrument;
 )]
 pub struct ApiDoc;
 
-/// Rate-limit key: the Bearer token when present, otherwise the peer IP.
-/// Keying unauthenticated requests by peer IP (instead of a single shared
-/// placeholder) stops one anonymous client's burst from throttling every
-/// other anonymous client — the bug that made open-mode queries appear to
-/// intermittently "lose" data. ConnectInfo is populated by the connect-info
-/// make-service in `serve_http_app`.
+/// Pre-auth rate-limit key. This must not key on the unverified Authorization
+/// header: an attacker could rotate bogus tokens to evade the limiter and grow
+/// its key map without bound. ConnectInfo is populated by `serve_http_app`.
 #[derive(Clone)]
-struct RateLimitKeyExtractor;
+pub(crate) struct SourceRateLimitKeyExtractor;
 
-impl KeyExtractor for RateLimitKeyExtractor {
+impl KeyExtractor for SourceRateLimitKeyExtractor {
     type Key = String;
 
     fn extract<T>(
         &self,
         req: &axum::http::Request<T>,
     ) -> Result<Self::Key, tower_governor::GovernorError> {
-        if let Some(token) = req
-            .headers()
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-        {
-            return Ok(format!("tok:{token}"));
-        }
         let ip = req
             .extensions()
             .get::<axum::extract::ConnectInfo<SocketAddr>>()
@@ -102,10 +91,32 @@ impl KeyExtractor for RateLimitKeyExtractor {
     }
 }
 
+/// Post-auth rate-limit key. Auth middleware inserts this trusted tenant
+/// context before the limiter runs, so one tenant cannot consume another's
+/// query allowance and raw API keys never live in the governor key map.
+#[derive(Clone)]
+struct TenantRateLimitKeyExtractor;
+
+impl KeyExtractor for TenantRateLimitKeyExtractor {
+    type Key = String;
+
+    fn extract<T>(
+        &self,
+        req: &axum::http::Request<T>,
+    ) -> Result<Self::Key, tower_governor::GovernorError> {
+        req.extensions()
+            .get::<AuthContext>()
+            .map(|ctx| format!("tenant:{}", ctx.tenant_id))
+            .ok_or(tower_governor::GovernorError::UnableToExtractKey)
+    }
+}
+
 /// Render a `GovernorError` as a JSON body matching the shape of every other
 /// API error (`{status, title, detail}`) so a rate-limited client cannot
 /// mistake the plain-text default ("Too Many Requests!") for query output.
-fn rate_limit_error_response(err: tower_governor::GovernorError) -> axum::response::Response {
+pub(crate) fn rate_limit_error_response(
+    err: tower_governor::GovernorError,
+) -> axum::response::Response {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use tower_governor::GovernorError;
@@ -643,29 +654,39 @@ pub fn validate_read_only_with(sql: &str, allow_information_schema: bool) -> Res
 pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     let rate_limit_v1 = app_state.auth_mode.requires_auth();
 
-    // v1 API routes — authenticated in key mode; open mode injects the default project.
+    // v1 API routes. In hosted mode the source limiter runs before auth to
+    // bound bogus-token work, then auth injects a trusted AuthContext, then the
+    // per-tenant limiter runs before the handler.
     let v1 = Router::new()
         .typed_post(query_handler)
         .typed_post(investigate_handler)
         .typed_get(services_handler)
-        .typed_get(trace_detail_handler)
-        .layer(axum_mw::from_fn_with_state(
-            app_state.clone(),
-            auth::auth_middleware,
-        ));
+        .typed_get(trace_detail_handler);
 
     let v1 = if rate_limit_v1 {
-        // Rate limit (GCRA, in-memory): ~20 req/s sustained, burst 100 — a sane
-        // ceiling when the API is exposed behind an API key.
-        let governor_conf = GovernorConfigBuilder::default()
-            .key_extractor(RateLimitKeyExtractor)
-            .per_second(20)
+        let tenant_governor = GovernorConfigBuilder::default()
+            .key_extractor(TenantRateLimitKeyExtractor)
+            .per_second(5)
+            .burst_size(20)
+            .finish()
+            .expect("valid per-tenant governor config");
+        let source_governor = GovernorConfigBuilder::default()
+            .key_extractor(SourceRateLimitKeyExtractor)
+            .per_second(50)
             .burst_size(100)
             .finish()
-            .expect("valid governor config");
-        v1.layer(GovernorLayer::new(governor_conf).error_handler(rate_limit_error_response))
+            .expect("valid pre-auth source governor config");
+        v1.layer(GovernorLayer::new(tenant_governor).error_handler(rate_limit_error_response))
+            .layer(axum_mw::from_fn_with_state(
+                app_state.clone(),
+                auth::auth_middleware,
+            ))
+            .layer(GovernorLayer::new(source_governor).error_handler(rate_limit_error_response))
     } else {
-        v1
+        v1.layer(axum_mw::from_fn_with_state(
+            app_state.clone(),
+            auth::auth_middleware,
+        ))
     };
 
     // All /admin routes, including status, are admin-token gated by their
@@ -827,8 +848,9 @@ pub async fn run_servers(
             let key_pem = tokio::fs::read(&key)
                 .await
                 .with_context(|| format!("failed to read TLS key {key}"))?;
-            let grpc_tls_config =
-                ServerTlsConfig::new().identity(Identity::from_pem(cert_pem, key_pem));
+            let grpc_tls_config = ServerTlsConfig::new()
+                .identity(Identity::from_pem(cert_pem, key_pem))
+                .timeout(Duration::from_secs(5));
             (Some(http_tls_config), Some(grpc_tls_config))
         }
         (Ok(_), Err(_)) => {
@@ -844,11 +866,15 @@ pub async fn run_servers(
     };
 
     // gRPC server — authenticated via Bearer token in metadata
+    let grpc_server = TonicServer::builder()
+        .concurrency_limit_per_connection(16)
+        .load_shed(true)
+        .timeout(Duration::from_secs(15));
     let mut grpc_server = match grpc_tls_config {
-        Some(tls_config) => TonicServer::builder()
+        Some(tls_config) => grpc_server
             .tls_config(tls_config)
             .context("failed to configure gRPC TLS")?,
-        None => TonicServer::builder(),
+        None => grpc_server,
     };
     let grpc_router = Arc::clone(&router);
     let grpc_auth_mode = auth_mode.clone();
