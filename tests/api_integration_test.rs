@@ -31,6 +31,12 @@ struct TestContext {
 /// extension cache (downloads happen once, not per-test), and creates
 /// an in-memory SQLite admin DB with all required tables.
 fn build_test_context() -> TestContext {
+    // Self-host default: `Open` auth (no per-request key). The auth-rejection
+    // test uses `build_context_with_auth` to exercise `TenantKeys`.
+    build_context_with_auth(sigiro::auth::AuthMode::Open)
+}
+
+fn build_context_with_auth(auth_mode: sigiro::auth::AuthMode) -> TestContext {
     let tmp_dir = TempDir::new().expect("failed to create temp dir");
     let data_dir = camino::Utf8PathBuf::from_path_buf(tmp_dir.path().to_path_buf()).unwrap();
 
@@ -74,9 +80,7 @@ fn build_test_context() -> TestContext {
         admin_conn,
         http_client: reqwest::Client::new(),
         router,
-        auth_mode: sigiro::auth::AuthMode::Key {
-            key: "sigiro_dev_test".to_string(),
-        },
+        auth_mode,
         data_dir: data_dir.clone(),
         init_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         query_surface: sigiro::config::QuerySurface::None,
@@ -156,12 +160,28 @@ async fn test_health_returns_503_when_starting() {
 }
 
 #[tokio::test]
-async fn test_query_without_auth_returns_401() {
-    let ctx = build_test_context();
+async fn test_query_without_valid_tenant_key_returns_401() {
+    // Under `TenantKeys` (hosted) auth, a `/v1/query` with no Authorization
+    // header — or a bearer token that resolves to no active tenant — must be
+    // rejected at the auth middleware with 401. (Self-host `Open` mode, the
+    // default for the other tests here, requires no token; the positive
+    // resolve-a-real-key path is covered end-to-end by control_plane_e2e_test.)
+    let control = Arc::new(sigiro::auth::ControlPlane::open_in_memory_for_tests().unwrap());
+    control.create_tenant("acme").unwrap();
+    let ctx = build_context_with_auth(sigiro::auth::AuthMode::TenantKeys { control });
     let app = build_http_router(ctx.state);
     let server = TestServer::new(app).expect("failed to build test server");
 
+    // Missing Authorization header.
     let resp = server.post("/v1/query").text("SELECT 1").await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+
+    // Bearer token that resolves to no active tenant.
+    let resp = server
+        .post("/v1/query")
+        .add_header("Authorization", "Bearer sk_acme_deadbeef")
+        .text("SELECT 1")
+        .await;
     resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
 }
 

@@ -1,6 +1,4 @@
-use anyhow::{Context, Result};
-use camino::Utf8PathBuf;
-use serde::{Deserialize, Serialize};
+use anyhow::Result;
 use typed_env::{Envar, EnvarDef};
 
 // ---------------------------------------------------------------------------
@@ -354,63 +352,6 @@ pub fn query_row_cap() -> Result<usize> {
     Ok(cap)
 }
 
-/// API key (required — no default). Env takes priority over config.toml.
-/// Uses EnvarDef::Unset so .value() fails if not set (no silent fallback).
-pub static API_KEY: Envar<String> = Envar::on_startup("SIGIRO_API_KEY", || EnvarDef::Unset);
-
 /// Admin bearer token for distributed tenant/key provisioning endpoints.
 /// Unset disables those mutation endpoints.
 pub static ADMIN_TOKEN: Envar<String> = Envar::on_startup("SIGIRO_ADMIN_TOKEN", || EnvarDef::Unset);
-
-#[derive(Deserialize, Serialize)]
-struct ConfigFile {
-    api_key: String,
-}
-
-/// API key (required — no default. Set via $SIGIRO_API_KEY or config.toml).
-/// Returns the path to the sigiro config directory (~/.config/sigiro/).
-fn config_dir() -> Result<Utf8PathBuf> {
-    let base = dirs::config_dir().context("cannot determine config directory")?;
-    let base = Utf8PathBuf::from_path_buf(base)
-        .map_err(|_| anyhow::anyhow!("config directory path is not valid UTF-8"))?;
-    Ok(base.join("sigiro"))
-}
-
-/// Returns the path to config.toml.
-fn config_path() -> Result<Utf8PathBuf> {
-    Ok(config_dir()?.join("config.toml"))
-}
-
-/// Resolve API key: env var takes priority, then config.toml.
-pub fn get_api_key() -> Result<String> {
-    if let Ok(key) = crate::config::API_KEY.value() {
-        return Ok(key);
-    }
-    let path = config_path()?;
-    let content = std::fs::read_to_string(&path).with_context(|| {
-        format!(
-            "No API key found. Run: sigiro auth <key>\n  (looked in {path} and $SIGIRO_API_KEY)",
-        )
-    })?;
-    let config: ConfigFile = toml::from_str(&content).context("invalid config.toml")?;
-    Ok(config.api_key)
-}
-
-/// Save API key to ~/.config/sigiro/config.toml with 0600 permissions on Unix.
-pub fn save_api_key(key: &str) -> Result<Utf8PathBuf> {
-    let dir = config_dir()?;
-    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create config dir: {dir}"))?;
-    let path = dir.join("config.toml");
-    let content = toml::to_string(&ConfigFile {
-        api_key: key.to_string(),
-    })
-    .context("failed to serialize config.toml")?;
-    std::fs::write(&path, content).with_context(|| format!("failed to write {path}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .context("failed to set config.toml permissions to 0600")?;
-    }
-    Ok(path)
-}

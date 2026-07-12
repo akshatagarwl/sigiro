@@ -76,7 +76,9 @@ impl SigiroClient {
     async fn expect_ok(&self, resp: reqwest::Response) -> Result<reqwest::Response> {
         match resp.status().as_u16() {
             200 => Ok(resp),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            401 => bail!(
+                "Unauthorized (401): this endpoint requires per-tenant authentication (hosted mode)"
+            ),
             429 => bail!("Rate limited. Try again later."),
             s => {
                 let body = resp.text().await.context("failed to read error body")?;
@@ -118,7 +120,9 @@ impl SigiroClient {
                 .json::<crate::responses::HealthResponse>()
                 .await
                 .context("failed to parse /health response"),
-            401 => bail!("Invalid API key. Run: sigiro auth <key>"),
+            401 => bail!(
+                "Unauthorized (401): this endpoint requires per-tenant authentication (hosted mode)"
+            ),
             s => {
                 let body = resp.text().await.context("failed to read error body")?;
                 bail!("Server error ({s}): {body}")
@@ -194,20 +198,17 @@ impl SigiroClient {
 }
 
 /// Build a client from config.
-/// If no API key is configured, builds an open-mode client (logs once).
+///
+/// The `sigiro` CLI targets self-host / edge servers, which run `Open` auth (no
+/// per-request key — the network perimeter is the boundary), so the client
+/// sends no bearer token. HOSTED (`TenantKeys`) instances are driven by each
+/// tenant's own OTLP senders and apps with their minted keys, not by this
+/// operator CLI; a request against such an endpoint returns 401.
 pub fn try_build_client() -> anyhow::Result<SigiroClient> {
-    let api_key = crate::config::get_api_key().unwrap_or_default();
-    let auth = ClientAuth::from_key(api_key);
-    if matches!(auth, ClientAuth::Open) {
-        tracing::warn!(
-            "No API key configured. Building open-mode client. \
-             If the server requires auth, requests will fail with 401."
-        );
-    }
     let base_url = crate::config::ENDPOINT
         .value()
         .map_err(anyhow::Error::from)?;
-    Ok(SigiroClient::new(&base_url, auth))
+    Ok(SigiroClient::new(&base_url, ClientAuth::Open))
 }
 
 // ---------------------------------------------------------------------------

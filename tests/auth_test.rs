@@ -28,44 +28,38 @@ fn auth_mode_open_allows_any() {
     assert_eq!(ctx.project_id, "default");
 }
 
+/// No `SIGIRO_CATALOG_URL` (local self-host) ⇒ `Open` (no per-request auth).
 #[test]
-fn auth_mode_key_matching_succeeds() {
-    let mode = AuthMode::Key {
-        key: "my_secret".to_string(),
-    };
-    let ctx = mode.verify("my_secret").unwrap();
-    assert_eq!(ctx.project_id, "default");
-}
-
-#[test]
-fn auth_mode_key_wrong_fails() {
-    let mode = AuthMode::Key {
-        key: "my_secret".to_string(),
-    };
-    assert!(mode.verify("wrong_key").is_err());
-}
-
-#[test]
-fn auth_mode_key_empty_token_fails() {
-    let mode = AuthMode::Key {
-        key: "my_secret".to_string(),
-    };
-    assert!(mode.verify("").is_err());
-}
-
-#[test]
-fn auth_mode_from_config_empty_is_open() {
-    let mode = AuthMode::from_config(String::new());
+fn auth_mode_local_no_catalog_is_open() {
+    let dir = camino::Utf8PathBuf::from("/tmp/sigiro-auth-test");
+    let mode = AuthMode::from_runtime_config(
+        &dir,
+        sigiro::config::QuerySurface::None,
+        &sigiro::storage::StorageMode::LocalFile,
+    )
+    .unwrap();
     assert!(matches!(mode, AuthMode::Open));
     assert!(!mode.requires_auth());
 }
 
+/// A quack edge stays `Open` (perimeter-protected) regardless of storage — it
+/// short-circuits before the distributed control-plane branch.
 #[test]
-fn auth_mode_from_config_non_empty_is_key() {
-    let mode = AuthMode::from_config("secret".to_string());
-    assert!(matches!(mode, AuthMode::Key { .. }));
-    assert!(mode.requires_auth());
+fn auth_mode_quack_edge_is_open() {
+    let dir = camino::Utf8PathBuf::from("/tmp/sigiro-auth-test");
+    let mode = AuthMode::from_runtime_config(
+        &dir,
+        sigiro::config::QuerySurface::Quack,
+        &sigiro::storage::StorageMode::LocalFile,
+    )
+    .unwrap();
+    assert!(matches!(mode, AuthMode::Open));
+    assert!(!mode.requires_auth());
 }
+
+// The hosted `SIGIRO_CATALOG_URL` ⇒ `TenantKeys` selection opens a real
+// PostgreSQL control catalog, so it is exercised end-to-end (against Dockerized
+// Postgres) in `control_plane_e2e_test.rs::control_plane_lifecycle`, not here.
 
 #[test]
 fn tenant_key_auth_resolves_valid_key_and_rejects_revoked_or_unknown_keys() {

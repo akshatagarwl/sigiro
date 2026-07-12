@@ -790,13 +790,8 @@ pub async fn run_servers(
     let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?;
 
     let query_surface = crate::config::query_surface()?;
-    let configured_key = crate::config::API_KEY.value().unwrap_or_default();
-    let auth_mode = crate::auth::AuthMode::from_runtime_config(
-        configured_key.clone(),
-        &data_dir,
-        query_surface,
-        pool.storage_mode(),
-    )?;
+    let auth_mode =
+        crate::auth::AuthMode::from_runtime_config(&data_dir, query_surface, pool.storage_mode())?;
 
     // The bind address enforced for EVERY listener (HTTP, OTLP-HTTP, gRPC, and
     // quack itself) when this node is a quack edge — resolved once here so
@@ -2083,7 +2078,7 @@ async fn create_tenant_handler(
     let control = control_plane_from_state(&state)?;
     control
         .create_tenant(&req.id)
-        .context_internal("Admin", "failed to create tenant")?;
+        .map_err(auth::ControlPlaneError::into_api_error)?;
     Ok(Json(CreateTenantResponse {
         id: req.id,
         status: "active".to_string(),
@@ -2110,7 +2105,7 @@ async fn create_key_handler(
     let control = control_plane_from_state(&state)?;
     let minted = control
         .mint_key(&req.tenant_id)
-        .context_internal("Admin", "failed to mint API key")?;
+        .map_err(auth::ControlPlaneError::into_api_error)?;
     Ok(Json(CreateKeyResponse {
         key: minted.key,
         key_hash: minted.key_hash,
@@ -2139,7 +2134,7 @@ async fn revoke_key_handler(
     let control = control_plane_from_state(&state)?;
     let revoked = control
         .revoke_key_hash_prefix(&short_token)
-        .context_internal("Admin", "failed to revoke API key")?;
+        .map_err(auth::ControlPlaneError::into_api_error)?;
     Ok(Json(RevokeKeyResponse {
         revoked,
         short_token,

@@ -90,11 +90,6 @@ enum Command {
         #[arg(long)]
         grep: Option<String>,
     },
-    /// Save API key for CLI authentication
-    Auth {
-        /// API key (set SIGIRO_API_KEY on the server to the same value)
-        key: String,
-    },
     /// Diagnose sigiro using its own telemetry — no docker logs
     Diagnose,
     /// Pre-download DuckDB extensions into the data dir so the first
@@ -328,10 +323,6 @@ async fn main() -> Result<()> {
                 );
             }
             println!("{}", format_output(&value, cli.output.as_ref())?);
-        }
-        Some(Command::Auth { key }) => {
-            let path = sigiro::config::save_api_key(&key)?;
-            println!("API key saved to {}", path);
         }
         Some(Command::Diagnose) => {
             let client = require_client()?;

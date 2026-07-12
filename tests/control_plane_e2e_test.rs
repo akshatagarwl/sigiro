@@ -208,6 +208,20 @@ impl Edge {
             .status()
     }
 
+    /// `POST /admin/keys` returning the raw HTTP status — for asserting that
+    /// minting against a nonexistent/suspended tenant is a deterministic CLIENT
+    /// error (4xx), not a 500. (A 500 would also be "not success", so the
+    /// success/failure helpers below can't tell the two apart.)
+    fn mint_key_status(&self, tenant_id: &str) -> reqwest::StatusCode {
+        reqwest::blocking::Client::new()
+            .post(format!("{}/admin/keys", self.base_url()))
+            .bearer_auth(ADMIN_TOKEN)
+            .json(&serde_json::json!({ "tenant_id": tenant_id }))
+            .send()
+            .expect("mint_key request")
+            .status()
+    }
+
     /// `POST /admin/keys` — mints a key for an existing tenant; returns
     /// `(raw_key, key_hash)`.
     fn mint_key(&self, tenant_id: &str) -> (String, String) {
@@ -388,10 +402,21 @@ fn control_plane_lifecycle() {
     );
     let default_status = edge.create_tenant("default");
     assert!(
-        !default_status.is_success(),
-        "hosted control plane must REJECT tenant named 'default', got {default_status}"
+        default_status.is_client_error(),
+        "hosted control plane must REJECT tenant named 'default' with a 4xx (deterministic \
+         client error), not a 5xx — got {default_status}"
     );
-    println!("  provisioned {TENANT_A} + {TENANT_B}; 'default' rejected ({default_status})");
+    // Minting a key for a tenant that was never created is a deterministic
+    // client error (404), NOT a 500.
+    let ghost_status = edge.mint_key_status("ghost_tenant");
+    assert!(
+        ghost_status.is_client_error(),
+        "minting a key for a nonexistent tenant must be a 4xx, got {ghost_status}"
+    );
+    println!(
+        "  provisioned {TENANT_A} + {TENANT_B}; 'default' rejected ({default_status}); \
+         nonexistent-tenant mint rejected ({ghost_status})"
+    );
 
     // --- multiple keys per tenant ---
     let (a_key1, a_hash1) = edge.mint_key(TENANT_A);
@@ -445,6 +470,13 @@ fn control_plane_lifecycle() {
         edge.query_count(&b_key1, &svc_b),
         Err(reqwest::StatusCode::UNAUTHORIZED),
         "suspended tenant's key must stop resolving"
+    );
+    // Minting a NEW key for a suspended tenant is a deterministic client error
+    // (404), NOT a 500.
+    let suspended_mint = edge.mint_key_status(TENANT_B);
+    assert!(
+        suspended_mint.is_client_error(),
+        "minting a key for a suspended tenant must be a 4xx, got {suspended_mint}"
     );
     // Reactivate through the create-or-reactivate admin endpoint.
     assert!(edge.create_tenant(TENANT_B).is_success());

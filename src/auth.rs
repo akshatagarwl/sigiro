@@ -4,7 +4,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use axum_anyhow::ApiError;
+use axum_anyhow::{ApiError, IntoApiError};
 use camino::Utf8Path;
 use duckdb::Connection;
 use headers::{Authorization, HeaderMapExt, authorization::Bearer};
@@ -32,13 +32,17 @@ impl AuthContext {
     }
 }
 
-/// Explicit auth mode — never implicit.
+/// Explicit auth mode — never implicit. The dual-mode auth axis:
+/// - `Open`: no per-request auth (self-host / edge / quack, protected by the
+///   network perimeter). Selected when `SIGIRO_CATALOG_URL` is unset, or on any
+///   quack edge regardless of catalog.
+/// - `TenantKeys`: per-tenant bearer keys hashed and resolved through the
+///   HOSTED control plane. Selected when `SIGIRO_CATALOG_URL` is set (and the
+///   node is not a quack edge).
 #[derive(Clone, Debug)]
 pub enum AuthMode {
     /// No auth required. Any request is accepted.
     Open,
-    /// Local/static mode: single shared API key routes to the default project.
-    Key { key: String },
     /// Distributed mode: bearer keys are hashed and resolved through the control plane.
     TenantKeys { control: Arc<ControlPlane> },
 }
@@ -46,53 +50,31 @@ pub enum AuthMode {
 pub const CONTROL_SCHEMA: &str = "sigiro_control";
 
 impl AuthMode {
-    /// Build the local/static auth mode from the configured key string.
-    /// Empty string → Open mode (logged).
-    /// Non-empty → Key mode (logged).
-    pub fn from_config(configured_key: String) -> Self {
-        if configured_key.is_empty() {
-            tracing::warn!("auth_mode=open — SIGIRO_API_KEY not set, no auth required");
-            AuthMode::Open
-        } else {
-            tracing::info!("auth_mode=key — requests require Bearer token");
-            AuthMode::Key {
-                key: configured_key,
-            }
-        }
-    }
-
     /// Build auth for the current storage mode.
     ///
     /// `query_surface == Quack` is a single-tenant self-host edge: one
     /// operator's own dataset, reachable only behind a mandatory network
-    /// perimeter (see `SIGIRO_QUACK_BIND` docs). It always uses the same
-    /// static open/key auth as local mode, even when `SIGIRO_CATALOG_URL`
-    /// (and S3) are configured for its DuckLake storage — `TenantKeys` is
-    /// the control-plane, per-tenant auth model for the HOSTED multi-tenant
-    /// product (`query_surface == None`) and does not apply here. Without
-    /// this branch, a quack edge configured against a distributed catalog
-    /// would demand a control-plane Bearer token on ingest that its own
-    /// OTLP senders never carry, so no telemetry would ever land.
+    /// perimeter (see `SIGIRO_QUACK_BIND` docs). It always uses `Open` auth,
+    /// even when `SIGIRO_CATALOG_URL` (and S3) are configured for its DuckLake
+    /// storage — `TenantKeys` is the control-plane, per-tenant auth model for
+    /// the HOSTED multi-tenant product (`query_surface == None`) and does not
+    /// apply here. Without this branch, a quack edge configured against a
+    /// distributed catalog would demand a control-plane Bearer token on ingest
+    /// that its own OTLP senders never carry, so no telemetry would ever land.
     ///
-    /// Otherwise (hosted/default), distributed storage always uses
-    /// control-plane tenant keys; local storage keeps the existing static
-    /// behavior.
+    /// Otherwise: distributed storage (`SIGIRO_CATALOG_URL`) uses control-plane
+    /// tenant keys; local storage is `Open`.
     pub fn from_runtime_config(
-        configured_key: String,
         data_dir: &Utf8Path,
         query_surface: crate::config::QuerySurface,
         storage_mode: &crate::storage::StorageMode,
     ) -> anyhow::Result<Self> {
         if query_surface == crate::config::QuerySurface::Quack {
-            return Ok(Self::from_config(configured_key));
+            tracing::info!("auth_mode=open — quack edge, protected by the network perimeter");
+            return Ok(AuthMode::Open);
         }
         match storage_mode.distributed_config() {
             Some(storage_config) => {
-                if !configured_key.is_empty() {
-                    tracing::warn!(
-                        "SIGIRO_CATALOG_URL is set; SIGIRO_API_KEY no longer authenticates requests directly. Use /admin/tenants + /admin/keys to mint tenant keys"
-                    );
-                }
                 let ext_dir = crate::storage::resolve_extension_dir(data_dir);
                 let control = ControlPlane::open(&storage_config.catalog_url, &ext_dir)?;
                 tracing::info!(
@@ -102,38 +84,31 @@ impl AuthMode {
                     control: Arc::new(control),
                 })
             }
-            None => Ok(Self::from_config(configured_key)),
+            None => {
+                tracing::info!("auth_mode=open — no SIGIRO_CATALOG_URL, no per-request auth");
+                Ok(AuthMode::Open)
+            }
         }
     }
 
     /// True if this mode requires an Authorization header.
     pub fn requires_auth(&self) -> bool {
-        matches!(self, AuthMode::Key { .. } | AuthMode::TenantKeys { .. })
+        matches!(self, AuthMode::TenantKeys { .. })
     }
 
     pub fn control_plane(&self) -> Option<Arc<ControlPlane>> {
         match self {
             AuthMode::TenantKeys { control } => Some(Arc::clone(control)),
-            AuthMode::Open | AuthMode::Key { .. } => None,
+            AuthMode::Open => None,
         }
     }
 
     /// Verify a raw bearer token against this auth mode.
     /// Open mode: always succeeds.
-    /// Key mode: token must match exactly.
+    /// TenantKeys mode: token must resolve to an active tenant via the control plane.
     pub fn verify(&self, raw_key: &str) -> Result<AuthContext, ApiError> {
         match self {
             AuthMode::Open => Ok(AuthContext::default_project()),
-            AuthMode::Key { key } => {
-                if raw_key == key {
-                    Ok(AuthContext::default_project())
-                } else {
-                    Err(axum_anyhow::unauthorized(
-                        "Invalid API Key",
-                        "The provided API key does not match SIGIRO_API_KEY",
-                    ))
-                }
-            }
             AuthMode::TenantKeys { control } => {
                 let tenant_id = control.resolve_tenant(raw_key).map_err(|e| {
                     tracing::warn!("tenant API key rejected: {e:#}");
@@ -143,6 +118,57 @@ impl AuthMode {
                     )
                 })?;
                 Ok(AuthContext::for_tenant(tenant_id))
+            }
+        }
+    }
+}
+
+/// Errors from the hosted control-plane provisioning surface. The non-`Internal`
+/// variants are DETERMINISTIC CLIENT-INPUT failures — they depend only on what
+/// the admin caller sent, not on server/DB state — so the admin HTTP handlers
+/// map them to 4xx (via [`ControlPlaneError::into_api_error`]) instead of the
+/// blanket 500 a raw `anyhow` error would produce. `Internal` stays a genuine
+/// server error (5xx): it wraps a real control-DB/connection failure.
+///
+/// The mapping is an inherent method, NOT `From<_> for ApiError`, because
+/// `axum_anyhow` already blankets `From<E: Into<anyhow::Error>> for ApiError`
+/// (→ 500); a specific `From` would conflict, and a bare `?` on this error in a
+/// handler would silently take that blanket 500 path. Handlers therefore call
+/// `.map_err(ControlPlaneError::into_api_error)?`.
+#[derive(Debug, thiserror::Error)]
+pub enum ControlPlaneError {
+    /// Malformed admin input — bad tenant id (empty, illegal chars, too long,
+    /// or a reserved system name) or a bad key-hash prefix. Maps to 400.
+    #[error("{0}")]
+    InvalidInput(String),
+    /// Request conflicts with a reserved name or an ambiguous match: the edge
+    /// name `default` on the hosted provisioning path, or a key-hash prefix
+    /// that matches more than one live key. Maps to 409.
+    #[error("{0}")]
+    Conflict(String),
+    /// The target tenant does not exist or is suspended. Maps to 404.
+    #[error("{0}")]
+    TenantNotActive(String),
+    /// A genuine control-plane/database failure. Maps to 500.
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+
+impl ControlPlaneError {
+    /// Map to the HTTP error: deterministic client-input failures → 4xx, a real
+    /// control-plane/DB failure → 500 (with the cause attached, unchanged from
+    /// the previous `context_internal` behavior).
+    pub fn into_api_error(self) -> ApiError {
+        match self {
+            ControlPlaneError::InvalidInput(detail) => {
+                axum_anyhow::bad_request("Invalid request", &detail)
+            }
+            ControlPlaneError::Conflict(detail) => axum_anyhow::conflict("Conflict", &detail),
+            ControlPlaneError::TenantNotActive(detail) => {
+                axum_anyhow::not_found("Tenant not found", &detail)
+            }
+            ControlPlaneError::Internal(e) => {
+                e.context_internal("Admin", "control-plane operation failed")
             }
         }
     }
@@ -239,21 +265,23 @@ impl ControlPlane {
     /// Create or reactivate a HOSTED tenant. Idempotent + concurrency-safe: the
     /// `ON CONFLICT (id)` upsert means a retried or concurrent admin call
     /// converges on exactly one `active` row (never a duplicate/ambiguous one).
-    pub fn create_tenant(&self, tenant_id: &str) -> anyhow::Result<()> {
+    pub fn create_tenant(&self, tenant_id: &str) -> Result<(), ControlPlaneError> {
         let tenant_id = ensure_hosted_tenant_id(tenant_id)?;
         let tenant = quote_sql_literal(&tenant_id);
         self.execute_control_sql(&format!(
             "INSERT INTO {CONTROL_SCHEMA}.tenants (id, status) VALUES ({tenant}, 'active') \
              ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status"
-        ))
+        ))?;
+        Ok(())
     }
 
-    pub fn mint_key(&self, tenant_id: &str) -> anyhow::Result<MintedApiKey> {
+    pub fn mint_key(&self, tenant_id: &str) -> Result<MintedApiKey, ControlPlaneError> {
         let tenant_id = ensure_hosted_tenant_id(tenant_id)?;
-        anyhow::ensure!(
-            self.tenant_is_active(&tenant_id)?,
-            "tenant {tenant_id} does not exist or is not active"
-        );
+        if !self.tenant_is_active(&tenant_id)? {
+            return Err(ControlPlaneError::TenantNotActive(format!(
+                "tenant {tenant_id} does not exist or is not active"
+            )));
+        }
 
         let key = generate_api_key(&tenant_id)?;
         let key_hash = hash_api_key(&key);
@@ -307,12 +335,14 @@ impl ControlPlane {
         }
     }
 
-    pub fn revoke_key_hash_prefix(&self, key_hash_prefix: &str) -> anyhow::Result<bool> {
-        anyhow::ensure!(
-            (8..=64).contains(&key_hash_prefix.len())
-                && key_hash_prefix.bytes().all(|b| b.is_ascii_hexdigit()),
-            "key hash prefix must be 8-64 hexadecimal characters"
-        );
+    pub fn revoke_key_hash_prefix(&self, key_hash_prefix: &str) -> Result<bool, ControlPlaneError> {
+        if !((8..=64).contains(&key_hash_prefix.len())
+            && key_hash_prefix.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err(ControlPlaneError::InvalidInput(
+                "key hash prefix must be 8-64 hexadecimal characters".to_string(),
+            ));
+        }
         let matches = self.matching_unrevoked_hashes(key_hash_prefix)?;
         match matches.as_slice() {
             [] => Ok(false),
@@ -323,10 +353,10 @@ impl ControlPlane {
                 ))?;
                 Ok(true)
             }
-            _ => anyhow::bail!(
+            _ => Err(ControlPlaneError::Conflict(format!(
                 "key hash prefix matched {} active keys; provide a longer prefix",
                 matches.len()
-            ),
+            ))),
         }
     }
 
@@ -443,12 +473,14 @@ impl ControlPlane {
 /// named `default`. `sanitize_tenant_id` deliberately still ACCEPTS `"default"`
 /// (the edge depends on it) — this extra rejection applies only on the hosted
 /// provisioning path.
-fn ensure_hosted_tenant_id(tenant_id: &str) -> anyhow::Result<String> {
-    let tenant_id = crate::storage::sanitize_tenant_id(tenant_id)?;
-    anyhow::ensure!(
-        tenant_id != "default",
-        "tenant id \"default\" is reserved for the local/edge project and cannot be provisioned in the hosted control plane"
-    );
+fn ensure_hosted_tenant_id(tenant_id: &str) -> Result<String, ControlPlaneError> {
+    let tenant_id = crate::storage::sanitize_tenant_id(tenant_id)
+        .map_err(|e| ControlPlaneError::InvalidInput(format!("{e:#}")))?;
+    if tenant_id == "default" {
+        return Err(ControlPlaneError::Conflict(
+            "tenant id \"default\" is reserved for the local/edge project and cannot be provisioned in the hosted control plane".to_string(),
+        ));
+    }
     Ok(tenant_id)
 }
 
@@ -528,7 +560,7 @@ pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
 
 /// axum middleware: verify API key against the configured mode.
 /// Open mode: injects default context without checking headers.
-/// Key mode: requires valid Bearer token.
+/// TenantKeys mode: requires a valid Bearer token.
 pub async fn auth_middleware(
     State(state): State<Arc<crate::server::AppState>>,
     req: Request,
@@ -540,7 +572,7 @@ pub async fn auth_middleware(
             req.extensions_mut().insert(AuthContext::default_project());
             Ok(next.run(req).await)
         }
-        AuthMode::Key { .. } | AuthMode::TenantKeys { .. } => {
+        AuthMode::TenantKeys { .. } => {
             let token = extract_bearer_token(req.headers())?;
             let ctx = state.auth_mode.verify(&token)?;
             let mut req = req;

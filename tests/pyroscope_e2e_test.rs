@@ -385,13 +385,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
     let pool = test_pool(dir.path());
     let router = Arc::new(MsgRouter::new(pool.clone()));
     router.start();
-    let app = sigiro::ingest::otlp_http_router(
-        router,
-        sigiro::auth::AuthMode::Key {
-            key: "sigiro_dev_test".to_string(),
-        },
-        8_388_608,
-    );
+    let app = sigiro::ingest::otlp_http_router(router, sigiro::auth::AuthMode::Open, 8_388_608);
     let server = TestServer::new(app).unwrap();
 
     let now_ns = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;

@@ -108,14 +108,14 @@ impl OtlpGrpcService {
 }
 
 /// Extract project_id from gRPC metadata.
-/// Uses the explicit AuthMode — Open mode skips auth, Key mode validates Bearer token.
+/// Uses the explicit AuthMode — Open mode skips auth, TenantKeys mode validates Bearer token.
 pub fn extract_project_id_grpc(
     auth_mode: &crate::auth::AuthMode,
     metadata: &tonic::metadata::MetadataMap,
 ) -> Result<String, Status> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::Key { .. } | crate::auth::AuthMode::TenantKeys { .. } => {
+        crate::auth::AuthMode::TenantKeys { .. } => {
             let token = metadata
                 .get("authorization")
                 .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
@@ -678,14 +678,14 @@ pub fn otlp_http_router(
 }
 
 /// Extract project_id from HTTP Authorization header.
-/// Uses the explicit AuthMode — Open mode skips auth, Key mode validates Bearer token.
+/// Uses the explicit AuthMode — Open mode skips auth, TenantKeys mode validates Bearer token.
 pub fn extract_project_id_http(
     auth_mode: &crate::auth::AuthMode,
     headers: &axum::http::HeaderMap,
 ) -> Result<String, StatusCode> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::Key { .. } | crate::auth::AuthMode::TenantKeys { .. } => {
+        crate::auth::AuthMode::TenantKeys { .. } => {
             let auth: Authorization<Bearer> = headers.typed_get().ok_or_else(|| {
                 tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
                 StatusCode::UNAUTHORIZED

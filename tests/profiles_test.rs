@@ -344,13 +344,7 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
     let pool = test_pool(dir.path());
     let router = Arc::new(MsgRouter::new(pool.clone()));
     router.start();
-    let app = sigiro::ingest::otlp_http_router(
-        router,
-        sigiro::auth::AuthMode::Key {
-            key: "sigiro_dev_test".to_string(),
-        },
-        8_388_608,
-    );
+    let app = sigiro::ingest::otlp_http_router(router, sigiro::auth::AuthMode::Open, 8_388_608);
     let server = TestServer::new(app).unwrap();
 
     let trace_id = vec![
