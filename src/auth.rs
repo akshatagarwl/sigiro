@@ -190,8 +190,14 @@ impl ControlPlane {
             crate::storage::escape_sql_string(&catalog_path),
             Self::POSTGRES_ALIAS
         );
-        conn.execute_batch(&attach_sql)
-            .map_err(|e| anyhow::anyhow!("failed to attach control-plane Postgres catalog: {e}"))?;
+        conn.execute_batch(&attach_sql).map_err(|_| {
+            // Do NOT include the DuckDB error — a Postgres ATTACH failure can
+            // echo the connection string (with password). Secret-free message.
+            anyhow::anyhow!(
+                "failed to attach control-plane PostgreSQL catalog — verify \
+                 SIGIRO_CATALOG_URL host/port/credentials and PostgreSQL reachability"
+            )
+        })?;
 
         let control = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -219,11 +225,22 @@ impl ControlPlane {
         for sql in control_plane_ddl() {
             self.execute_control_sql(sql)?;
         }
+        // Partial indexes are a PostgreSQL feature the DuckDB in-memory test
+        // control plane cannot parse, so they only run against a real hosted
+        // Postgres catalog (`postgres_alias.is_some()`).
+        if self.postgres_alias.is_some() {
+            for sql in HOSTED_CONTROL_PLANE_DDL {
+                self.execute_control_sql(sql)?;
+            }
+        }
         Ok(())
     }
 
+    /// Create or reactivate a HOSTED tenant. Idempotent + concurrency-safe: the
+    /// `ON CONFLICT (id)` upsert means a retried or concurrent admin call
+    /// converges on exactly one `active` row (never a duplicate/ambiguous one).
     pub fn create_tenant(&self, tenant_id: &str) -> anyhow::Result<()> {
-        let tenant_id = crate::storage::sanitize_tenant_id(tenant_id)?;
+        let tenant_id = ensure_hosted_tenant_id(tenant_id)?;
         let tenant = quote_sql_literal(&tenant_id);
         self.execute_control_sql(&format!(
             "INSERT INTO {CONTROL_SCHEMA}.tenants (id, status) VALUES ({tenant}, 'active') \
@@ -232,7 +249,7 @@ impl ControlPlane {
     }
 
     pub fn mint_key(&self, tenant_id: &str) -> anyhow::Result<MintedApiKey> {
-        let tenant_id = crate::storage::sanitize_tenant_id(tenant_id)?;
+        let tenant_id = ensure_hosted_tenant_id(tenant_id)?;
         anyhow::ensure!(
             self.tenant_is_active(&tenant_id)?,
             "tenant {tenant_id} does not exist or is not active"
@@ -420,13 +437,42 @@ impl ControlPlane {
     }
 }
 
-pub fn control_plane_ddl() -> [&'static str; 3] {
-    [
+/// `"default"` is reserved in the HOSTED control plane: it names the local/edge
+/// project (pre-created by `run_serve`, reachable via Open/legacy-Key auth), so
+/// a hosted operator must never provision a control-plane tenant literally
+/// named `default`. `sanitize_tenant_id` deliberately still ACCEPTS `"default"`
+/// (the edge depends on it) — this extra rejection applies only on the hosted
+/// provisioning path.
+fn ensure_hosted_tenant_id(tenant_id: &str) -> anyhow::Result<String> {
+    let tenant_id = crate::storage::sanitize_tenant_id(tenant_id)?;
+    anyhow::ensure!(
+        tenant_id != "default",
+        "tenant id \"default\" is reserved for the local/edge project and cannot be provisioned in the hosted control plane"
+    );
+    Ok(tenant_id)
+}
+
+/// Portable control-plane DDL — runs against BOTH the real hosted PostgreSQL
+/// catalog and the DuckDB in-memory test control plane, so every statement must
+/// parse under both engines (no PostgreSQL-only features here; those live in
+/// [`HOSTED_CONTROL_PLANE_DDL`]).
+///
+/// Hardening over the original bare PK/FK schema:
+/// - `tenants.status` gets a `CHECK` allowing only `active`/`suspended`, so an
+///   unknown status can never enter the table (the key-resolution join treats
+///   anything other than `active` as unusable).
+/// - `api_keys.key_hash` stays the PRIMARY KEY (uniqueness), with `revoked_at`
+///   as the explicit revocation timestamp — `NULL` = live, non-`NULL` = revoked.
+/// - `api_keys(tenant_id)` is indexed to support the FK join / per-tenant
+///   lookups without a table scan.
+pub fn control_plane_ddl() -> &'static [&'static str] {
+    &[
         "CREATE SCHEMA IF NOT EXISTS sigiro_control",
         "CREATE TABLE IF NOT EXISTS sigiro_control.tenants (
             id TEXT PRIMARY KEY,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-            status TEXT NOT NULL
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active', 'suspended'))
         )",
         "CREATE TABLE IF NOT EXISTS sigiro_control.api_keys (
             key_hash TEXT PRIMARY KEY,
@@ -435,8 +481,19 @@ pub fn control_plane_ddl() -> [&'static str; 3] {
             revoked_at TIMESTAMP WITH TIME ZONE NULL,
             FOREIGN KEY (tenant_id) REFERENCES sigiro_control.tenants(id)
         )",
+        "CREATE INDEX IF NOT EXISTS api_keys_tenant_id_idx \
+         ON sigiro_control.api_keys (tenant_id)",
     ]
 }
+
+/// PostgreSQL-only control-plane DDL — applied only when a real hosted Postgres
+/// catalog is attached (see [`ControlPlane::create_schema`]). The partial index
+/// mirrors the key-resolution predicate (`key_hash = ? AND revoked_at IS NULL`),
+/// keeping the hot auth lookup on live keys only; DuckDB cannot parse the
+/// `WHERE` clause, so it never runs on the in-memory test control plane.
+pub const HOSTED_CONTROL_PLANE_DDL: &[&str] =
+    &["CREATE INDEX IF NOT EXISTS api_keys_live_key_hash_idx \
+     ON sigiro_control.api_keys (key_hash) WHERE revoked_at IS NULL"];
 
 pub fn hash_api_key(raw_key: &str) -> String {
     use prefixed_api_key::sha2::{Digest, Sha256};

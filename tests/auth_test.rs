@@ -90,3 +90,34 @@ fn tenant_key_auth_resolves_valid_key_and_rejects_revoked_or_unknown_keys() {
     assert!(revoked);
     assert!(mode.verify(&minted.key).is_err());
 }
+
+/// Per-mode "default" resolution: the name `"default"` stays valid for the
+/// local/edge project (`sanitize_tenant_id` accepts it — the edge pre-creates
+/// it), but the HOSTED control plane must fail loud when an operator tries to
+/// provision a tenant literally named `default`.
+#[test]
+fn default_is_local_valid_but_rejected_by_hosted_control_plane() {
+    // Local/edge path: still accepts "default" byte-for-byte.
+    assert_eq!(
+        sigiro::storage::sanitize_tenant_id("default").unwrap(),
+        "default"
+    );
+
+    let control = ControlPlane::open_in_memory_for_tests().unwrap();
+
+    // Hosted provisioning rejects "default" on BOTH create and mint.
+    let create_err = control.create_tenant("default").unwrap_err();
+    assert!(
+        format!("{create_err:#}").contains("reserved"),
+        "expected a reserved-name rejection, got: {create_err:#}"
+    );
+    assert!(control.mint_key("default").is_err());
+
+    // A normal hosted tenant is unaffected.
+    control.create_tenant("acme").unwrap();
+    control.mint_key("acme").unwrap();
+
+    // The globally-reserved names stay rejected everywhere.
+    assert!(control.create_tenant("tenants").is_err());
+    assert!(sigiro::storage::sanitize_tenant_id("extensions").is_err());
+}

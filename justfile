@@ -51,6 +51,16 @@ check-storage-matrix-e2e:
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
     cargo test --test storage_mode_matrix_test -- --ignored --nocapture
 
+# Hosted control-plane E2E: multi-tenant provisioning + key/revoke/suspend
+# lifecycle + restart-persistence against the shared PG `sigiro_control` catalog.
+# Needs only Docker Postgres (data files stay local — no MinIO).
+check-control-plane-e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker compose -f docker-compose.dev.yml up -d --wait postgres
+    trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+    cargo test --test control_plane_e2e_test -- --ignored --nocapture
+
 # Build multi-arch Docker image. Pass --push to push, or --set flags for cache config.
 image *args:
     docker buildx bake sigiro {{args}}

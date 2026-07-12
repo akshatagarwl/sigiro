@@ -54,8 +54,13 @@ pub fn init_distributed(
     let attach = distributed_attach_sql(config, project_dir, tenant_id)?;
 
     if let Some(secret_sql) = &attach.secret_sql {
-        conn.execute_batch(secret_sql)
-            .context("failed to configure S3 secret")?;
+        // Generic message: the DuckDB error could echo the CREATE SECRET SQL
+        // (with the S3 access key/secret) — never surface it.
+        conn.execute_batch(secret_sql).map_err(|_| {
+            anyhow::anyhow!(
+                "failed to configure S3 secret — verify SIGIRO_S3_* credentials and endpoint"
+            )
+        })?;
         tracing::info!(
             region = %config.s3_region,
             bucket = %config.s3_bucket,
@@ -64,11 +69,22 @@ pub fn init_distributed(
         );
     }
 
-    conn.execute_batch(&attach.attach_sql)
-        .context("failed to attach DuckLake with PostgreSQL catalog")?;
+    conn.execute_batch(&attach.attach_sql).map_err(|_| {
+        // Deliberately DO NOT include the DuckDB error: a Postgres ATTACH
+        // failure can echo the connection string (with password) verbatim, and
+        // reliably scrubbing an arbitrary secret byte-form out of error text is
+        // not achievable. Fail loud with an actionable, secret-free message.
+        anyhow::anyhow!(
+            "failed to attach DuckLake PostgreSQL catalog for tenant {tenant_id} \
+             (metadata schema {}) — verify SIGIRO_CATALOG_URL host/port/credentials \
+             and that PostgreSQL is reachable",
+            attach.metadata_schema
+        )
+    })?;
+    // NEVER log the connection string — it embeds the PostgreSQL password.
+    // tenant_id + metadata_schema + data_path fully identify the attach.
     if config.s3_bucket.is_empty() {
         tracing::info!(
-            catalog = %attach.catalog_path,
             tenant_id,
             metadata_schema = %attach.metadata_schema,
             data_path = %attach.data_path,
@@ -76,7 +92,6 @@ pub fn init_distributed(
         );
     } else {
         tracing::info!(
-            catalog = %attach.catalog_path,
             tenant_id,
             metadata_schema = %attach.metadata_schema,
             data_path = %attach.data_path,
@@ -92,7 +107,6 @@ pub fn init_distributed(
 /// `catalog_url` can be:
 /// - A libpq connection string: `postgres:dbname=db host=localhost user=u password=p port=5432`
 /// - A PostgreSQL URI: `postgresql://user:***@host:port/dbname` (auto-converted to libpq format)
-#[derive(Debug)]
 pub struct StorageConfig {
     pub catalog_url: String,
     pub s3_bucket: String,
@@ -104,6 +118,26 @@ pub struct StorageConfig {
     /// plain-HTTP dev/CI S3-compatible stores (MinIO). See
     /// `crate::config::S3_USE_SSL`.
     pub s3_use_ssl: bool,
+}
+
+/// Hand-written `Debug` that REDACTS every credential-bearing field so the
+/// storage config (and, transitively, [`StorageMode`], which derives `Debug`
+/// over this) can never leak secrets if logged. The `catalog_url` embeds the
+/// PostgreSQL password, and `s3_key_id`/`s3_secret` are the S3/R2 access
+/// credentials — all three are replaced with `<redacted>`. Non-secret fields
+/// (bucket, region, endpoint, SSL flag) stay visible for debuggability.
+impl std::fmt::Debug for StorageConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageConfig")
+            .field("catalog_url", &"<redacted>")
+            .field("s3_bucket", &self.s3_bucket)
+            .field("s3_region", &self.s3_region)
+            .field("s3_endpoint", &self.s3_endpoint)
+            .field("s3_key_id", &"<redacted>")
+            .field("s3_secret", &"<redacted>")
+            .field("s3_use_ssl", &self.s3_use_ssl)
+            .finish()
+    }
 }
 
 /// The storage backend this process runs against, resolved ONCE from the
@@ -180,7 +214,7 @@ impl StorageMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DistributedAttachSql {
     pub catalog_path: String,
     pub metadata_schema: String,
@@ -188,6 +222,26 @@ pub struct DistributedAttachSql {
     pub secret_sql: Option<String>,
     pub s3_scope: Option<String>,
     pub attach_sql: String,
+}
+
+/// Hand-written so a debug-log of this struct can never leak credentials:
+/// `catalog_path` (libpq string with the PG password), `secret_sql` (the S3
+/// `CREATE SECRET` with the access key/secret), and `attach_sql` (embeds the
+/// catalog_path) are all redacted. Non-secret fields stay visible for ops.
+impl std::fmt::Debug for DistributedAttachSql {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DistributedAttachSql")
+            .field("catalog_path", &"<redacted>")
+            .field("metadata_schema", &self.metadata_schema)
+            .field("data_path", &self.data_path)
+            .field(
+                "secret_sql",
+                &self.secret_sql.as_ref().map(|_| "<redacted>"),
+            )
+            .field("s3_scope", &self.s3_scope)
+            .field("attach_sql", &"<redacted>")
+            .finish()
+    }
 }
 
 /// `"default"` is a valid tenant id — it is NOT reserved. In distributed mode
@@ -503,4 +557,72 @@ pub fn prewarm_extensions(data_dir: &Utf8Path) -> Result<()> {
     crate::quack::load_and_pin(&conn).context("failed to pre-warm the quack extension")?;
     tracing::info!("DuckDB extensions pre-warmed successfully");
     Ok(())
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    /// The redacting `Debug` impl must never emit the PostgreSQL password or
+    /// the S3 key id/secret — neither directly on `StorageConfig` nor through
+    /// `StorageMode`, which derives `Debug` over it.
+    #[test]
+    fn storage_config_debug_redacts_all_credentials() {
+        const PG_PASSWORD: &str = "PgP4ssw0rd_SHOULD_NOT_LEAK";
+        const S3_KEY_ID: &str = "AKIA_KEY_ID_SHOULD_NOT_LEAK";
+        const S3_SECRET: &str = "S3Secret_SHOULD_NOT_LEAK_bytes";
+
+        let config = StorageConfig {
+            catalog_url: format!("postgresql://sigiro:{PG_PASSWORD}@db.internal:5432/ducklake"),
+            s3_bucket: "telemetry-bucket".to_string(),
+            s3_region: "us-east-1".to_string(),
+            s3_endpoint: "s3.example.com".to_string(),
+            s3_key_id: S3_KEY_ID.to_string(),
+            s3_secret: S3_SECRET.to_string(),
+            s3_use_ssl: true,
+        };
+
+        let config_dbg = format!("{config:?}");
+        let mode_dbg = format!("{:?}", StorageMode::Distributed(config));
+
+        for needle in [PG_PASSWORD, S3_KEY_ID, S3_SECRET] {
+            assert!(
+                !config_dbg.contains(needle),
+                "StorageConfig Debug leaked secret {needle:?}: {config_dbg}"
+            );
+            assert!(
+                !mode_dbg.contains(needle),
+                "StorageMode Debug leaked secret {needle:?}: {mode_dbg}"
+            );
+        }
+
+        // Non-secret fields stay visible so the config is still useful in logs.
+        assert!(config_dbg.contains("telemetry-bucket"));
+        assert!(config_dbg.contains("us-east-1"));
+        assert!(config_dbg.contains("<redacted>"));
+    }
+
+    /// A debug-format of `DistributedAttachSql` must never leak the catalog
+    /// password, the S3 secret SQL, or the attach SQL (which embeds the catalog).
+    #[test]
+    fn distributed_attach_sql_debug_redacts_credentials() {
+        const PW: &str = "PgP4ssw0rd_SHOULD_NOT_LEAK";
+        const S3_SECRET: &str = "S3Secret_SHOULD_NOT_LEAK";
+        let attach = DistributedAttachSql {
+            catalog_path: format!("dbname=d host=h user=u password={PW}"),
+            metadata_schema: "tenant_acme".to_string(),
+            data_path: "/data/tenants/acme".to_string(),
+            secret_sql: Some(format!("CREATE SECRET (TYPE s3, SECRET '{S3_SECRET}')")),
+            s3_scope: Some("s3://bucket/acme/".to_string()),
+            attach_sql: format!("ATTACH 'ducklake:dbname=d password={PW}' AS lake"),
+        };
+        let dbg = format!("{attach:?}");
+        assert!(!dbg.contains(PW), "attach debug leaked PG password: {dbg}");
+        assert!(
+            !dbg.contains(S3_SECRET),
+            "attach debug leaked S3 secret: {dbg}"
+        );
+        // Non-secret fields stay visible.
+        assert!(dbg.contains("tenant_acme") && dbg.contains("<redacted>"));
+    }
 }
