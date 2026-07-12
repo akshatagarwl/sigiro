@@ -414,18 +414,24 @@ impl ProjectPool {
     /// every query (see `crate::quack::install_authorization_gate`), and does so
     /// identically regardless of whether this engine-level lockdown ran.
     ///
-    /// `LOAD parquet; LOAD json;` runs first, while access is still open:
+    /// `LOAD parquet; LOAD json; LOAD icu;` runs first, while access is still open:
     /// `init_default` only installs `ducklake`/`sqlite`, so `parquet` (DuckLake's
-    /// storage format) and `json` (used by `resource_attributes::JSON->>...` in
-    /// investigate queries) are normally autoloaded on first use — but autoloading
-    /// IS external access, so once `enable_external_access` is off it can never
-    /// happen and every first use of either fails with "Loading external
-    /// extensions is disabled through configuration".
+    /// storage format), `json` (used by `resource_attributes::JSON->>...` in
+    /// investigate queries), and `icu` (all timezone arithmetic — `TIMESTAMPTZ`,
+    /// `now() - INTERVAL`, `AT TIME ZONE`, `epoch(now())`, the bread-and-butter
+    /// "last N hours" time-bounded observability query) are normally autoloaded on
+    /// first use — but autoloading IS external access, so once
+    /// `enable_external_access` is off it can never happen and every first use fails
+    /// with "Loading external extensions is disabled through configuration". icu is
+    /// a first-party timezone/collation extension with no filesystem or network
+    /// access at query time, so pre-loading it does not widen the lockdown surface.
     fn lock_filesystem(&self, conn: &Connection, ext_dir: &camino::Utf8Path) -> Result<()> {
         let data_dir = self.data_dir.as_str().replace('\'', "''");
         let ext = ext_dir.as_str().replace('\'', "''");
-        conn.execute_batch("INSTALL parquet; LOAD parquet; INSTALL json; LOAD json;")
-            .context("failed to preload DuckDB extensions before locking filesystem access")?;
+        conn.execute_batch(
+            "INSTALL parquet; LOAD parquet; INSTALL json; LOAD json; INSTALL icu; LOAD icu;",
+        )
+        .context("failed to preload DuckDB extensions before locking filesystem access")?;
         conn.execute_batch(&format!(
             "SET allowed_directories = ['{data_dir}', '{ext}']; SET enable_external_access = false;"
         ))

@@ -550,7 +550,7 @@ pub fn prewarm_extensions(data_dir: &Utf8Path) -> Result<()> {
     install_extensions_with_progress(
         &conn,
         &[
-            "ducklake", "sqlite", "json", "parquet", "postgres", "httpfs",
+            "ducklake", "sqlite", "json", "parquet", "postgres", "httpfs", "icu",
         ],
     )?;
     tracing::info!("pre-warming the quack query-surface extension (version-pinned)...");

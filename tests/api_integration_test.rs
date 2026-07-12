@@ -237,6 +237,35 @@ async fn test_query_with_dev_auth_bad_sql_returns_400() {
 }
 
 #[tokio::test]
+// Timezone arithmetic must work on the locked-down query surface. The
+// engine sets `enable_external_access = false`, which blocks autoloading the
+// `icu` extension — where DuckDB's TIMESTAMPTZ / `now() - INTERVAL` /
+// `AT TIME ZONE` / `epoch(now())` all live. `lock_filesystem` therefore
+// pre-loads `icu` before the lockdown; without it, the single most common
+// observability query ("last N hours", the exact pattern the onboarding docs
+// teach) fails at prepare time with a Binder Error. This guards that fix — a
+// unit test can't catch it because a standalone DuckDB autoloads icu freely.
+async fn test_timezone_query_works_under_lockdown() {
+    let ctx = build_test_context();
+    let app = build_http_router(ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    let resp = server
+        .post("/v1/query")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .text("SELECT count(*) AS n FROM sigiro_spans WHERE timestamp > now() - INTERVAL '1 hour'")
+        .await;
+    resp.assert_status_ok();
+
+    let resp = server
+        .post("/v1/query")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .text("SELECT epoch(now()) AS e FROM sigiro_spans LIMIT 1")
+        .await;
+    resp.assert_status_ok();
+}
+
+#[tokio::test]
 async fn test_services_with_dev_auth_returns_200() {
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);
