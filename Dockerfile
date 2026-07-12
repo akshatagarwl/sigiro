@@ -14,9 +14,16 @@ WORKDIR /build
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y pkg-config libssl-dev g++ git curl clang lld protobuf-compiler ccache && rm -rf /var/lib/apt/lists/*
 COPY --from=planner /build/recipe.json recipe.json
+# `cargo chef cook` compiles the whole dep graph (incl. DuckDB's bundled C++,
+# ~40min cold). Its output MUST land in the image LAYER (a real, cacheable
+# layer keyed on recipe.json), NOT a BuildKit cache mount: mounts are never
+# exported by `cache-to type=registry`, so a cold/remote build (deploy box, CI,
+# post-prune) can't reuse the cooked deps and re-pays the full compile every
+# time. As a layer, `docker buildx bake` (docker-bake.hcl cache-to/from
+# registry,mode=max) persists it → the DuckDB compile becomes a one-time cost.
+# `/build/target` is deliberately NOT a cache mount here (and not in `builder`).
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-shared,sharing=shared \
-    --mount=type=cache,target=/build/target,id=cargo-target-${TARGETARCH} \
     --mount=type=cache,target=/root/.ccache,id=ccache-${TARGETARCH} \
     CC="ccache clang" CXX="ccache clang++" \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
@@ -27,9 +34,13 @@ ARG TARGETARCH
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY benches/ benches/
+# `builder` is `FROM deps`, so /build/target already holds the cooked dep
+# artifacts as an inherited layer. No /build/target cache mount here either:
+# cargo reuses the cooked deps from the layer and only (re)compiles the sigiro
+# crate + relinks — the fast, src-only path. A target cache mount would shadow
+# the inherited layer with an empty dir and defeat the deps-layer caching above.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-shared,sharing=shared \
-    --mount=type=cache,target=/build/target,id=cargo-target-${TARGETARCH} \
     --mount=type=cache,target=/root/.ccache,id=ccache-${TARGETARCH} \
     CC="ccache clang" CXX="ccache clang++" \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
