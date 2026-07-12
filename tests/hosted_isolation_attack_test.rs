@@ -400,21 +400,12 @@ fn hosted_tenant_isolation_attacks() {
         }
     }
 
-    // Metadata enumeration the firewall ALLOWS wholesale (information_schema.*).
-    // The security-critical invariant that MUST hold: no OTHER TENANT's data
-    // schema (`tenant_globex`) is ever visible to acme — this proves cross-tenant
-    // catalog isolation. (Verified: information_schema lists only tenant_acme's
-    // own ducklake schema, never tenant_globex.)
-    //
-    // FIXME(hosted-info-disclosure): information_schema DOES currently expose the
-    // NAMES of the shared control plane (`sigiro_control.api_keys`/`tenants`) and
-    // pg_catalog to a tenant, because the ducklake PostgreSQL-catalog attach makes
-    // the whole PG database's information_schema visible. The DATA is protected
-    // (a `SELECT * FROM sigiro_control.api_keys` is firewall-rejected — see the
-    // attack table above), but the control-plane STRUCTURE leaks. Fix = stop
-    // allowing information_schema wholesale in hosted mode (server.rs is_allowed_table)
-    // — pending a product decision (block entirely vs restrict to the tenant's own
-    // schema). Once fixed, extend this to also assert `!contains("sigiro_control")`.
+    // Metadata enumeration via information_schema. In HOSTED mode this is
+    // firewall-rejected (see validate_read_only_with — a shared PG catalog would
+    // otherwise expose the whole DB's information_schema), so the response must
+    // name NEITHER another tenant's data schema (`tenant_globex`) NOR the shared
+    // control plane (`sigiro_control`), whether the query 4xx-rejects or returns
+    // only acme's own schema.
     for (label, sql) in [
         (
             "information_schema.tables",
@@ -423,6 +414,14 @@ fn hosted_tenant_isolation_attacks() {
         (
             "information_schema.schemata",
             "SELECT schema_name FROM information_schema.schemata",
+        ),
+        (
+            "duckdb_tables()",
+            "SELECT schema_name, table_name FROM duckdb_tables()",
+        ),
+        (
+            "duckdb_databases()",
+            "SELECT database_name FROM duckdb_databases()",
         ),
     ] {
         let body = reqwest::blocking::Client::new()
@@ -434,8 +433,8 @@ fn hosted_tenant_isolation_attacks() {
             .text()
             .unwrap_or_default();
         assert!(
-            !body.contains("tenant_globex"),
-            "{label}: enumeration leaked ANOTHER TENANT's data schema: {body}"
+            !body.contains("tenant_globex") && !body.contains("sigiro_control"),
+            "{label}: enumeration leaked another tenant's schema or the control plane: {body}"
         );
     }
 

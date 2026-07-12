@@ -400,7 +400,7 @@ const SCALAR_FUNCTIONS: &[&str] = &[
 /// tests/e2e/docker/run.sh's `PROFILE_SCHEMA` detection). `information_schema`
 /// is DuckDB's static, file-system-free catalog metadata — inherently safe to
 /// expose in full (used by the same e2e script to detect the schema above).
-fn is_allowed_table(name: &ObjectName) -> bool {
+fn is_allowed_table(name: &ObjectName, allow_information_schema: bool) -> bool {
     let idents = &name.0;
     match idents.len() {
         1 => ALLOWED_TABLES.contains(&idents[0].value.to_uppercase().as_str()),
@@ -408,7 +408,7 @@ fn is_allowed_table(name: &ObjectName) -> bool {
             let schema = idents[0].value.to_uppercase();
             let table = idents[1].value.to_uppercase();
             if schema == "INFORMATION_SCHEMA" {
-                return true;
+                return allow_information_schema;
             }
             matches!(schema.as_str(), "LAKE" | "MAIN") && ALLOWED_TABLES.contains(&table.as_str())
         }
@@ -479,7 +479,11 @@ fn reject_table_shorthand(expr: &SetExpr) -> ControlFlow<String> {
 /// `WITH` is rejected outright in `pre_visit_query` below instead of being
 /// analyzed. Subqueries (`SELECT * FROM (SELECT ... ) t`) cover the same
 /// legitimate use cases and remain fully supported.
-struct AllowlistVisitor;
+struct AllowlistVisitor {
+    /// When false (hosted mode), `information_schema` enumeration is rejected —
+    /// see `validate_read_only_with`.
+    allow_information_schema: bool,
+}
 
 impl Visitor for AllowlistVisitor {
     type Break = String;
@@ -499,7 +503,7 @@ impl Visitor for AllowlistVisitor {
                 let allowed = if args.is_some() {
                     is_safe_function(name)
                 } else {
-                    is_allowed_table(name)
+                    is_allowed_table(name, self.allow_information_schema)
                 };
                 if allowed {
                     ControlFlow::Continue(())
@@ -563,7 +567,21 @@ impl Visitor for AllowlistVisitor {
     }
 }
 
+/// Permissive validation (local / self-host / quack edge): `information_schema`
+/// is allowed because the catalog holds only this node's own data. This is the
+/// wrapper the quack edge gate and all firewall unit tests use.
 pub fn validate_read_only(sql: &str) -> Result<(), String> {
+    validate_read_only_with(sql, true)
+}
+
+/// `allow_information_schema = false` (HOSTED mode) additionally rejects
+/// `information_schema` enumeration. With a shared PostgreSQL catalog, the
+/// DuckLake attach exposes the WHOLE database's `information_schema` to a
+/// tenant connection, letting it read the NAMES of the control plane
+/// (`sigiro_control.*`) and sibling tenant schemas. Data reads are already
+/// blocked by the table allowlist; this closes the structure disclosure.
+/// The `/v1/query` handler passes `!hosted`; local/edge callers pass `true`.
+pub fn validate_read_only_with(sql: &str, allow_information_schema: bool) -> Result<(), String> {
     let dialect = GenericDialect {};
 
     // Every AT (...) clause body must be a literal BEFORE anything else runs:
@@ -599,7 +617,9 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
     let Statement::Query(query) = stmt else {
         return Err("query rejected: only SELECT queries are allowed".to_string());
     };
-    if let ControlFlow::Break(msg) = query.visit(&mut AllowlistVisitor) {
+    if let ControlFlow::Break(msg) = query.visit(&mut AllowlistVisitor {
+        allow_information_schema,
+    }) {
         return Err(msg);
     }
 
@@ -1524,7 +1544,11 @@ async fn query_handler(
     // leaves a server-side trace — a silently-throttled or errored query used
     // to leave none, which is what let a false "data loss" RCA take hold.
     let sql_preview: String = body.chars().take(200).collect();
-    if let Err(e) = validate_read_only(&body) {
+    // In hosted mode (shared PostgreSQL catalog) block information_schema
+    // enumeration — it would expose the control plane + sibling tenant schema
+    // names. Local/self-host keeps it (single-catalog, safe).
+    let allow_information_schema = !state.pool.storage_mode().is_distributed();
+    if let Err(e) = validate_read_only_with(&body, allow_information_schema) {
         tracing::warn!(sql = %sql_preview, "query rejected (validation): {e}");
         return Err(bad_request("query rejected", &e));
     }

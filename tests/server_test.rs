@@ -1,7 +1,7 @@
 use duckdb::Connection;
 use sigiro::server::{
     duckdb_value_to_json, resolve_listener_bind_ips, validate_quack_bind_address,
-    validate_read_only,
+    validate_read_only, validate_read_only_with,
 };
 
 fn test_conn() -> Connection {
@@ -129,6 +129,33 @@ fn validate_allows_select() {
     assert!(validate_read_only("SELECT * FROM sigiro_spans").is_ok());
     assert!(validate_read_only("SELECT count(*) FROM sigiro_spans WHERE updated_at > 0").is_ok());
     assert!(validate_read_only("SELECT created_by FROM sigiro_spans").is_ok());
+}
+
+#[test]
+fn validate_information_schema_is_mode_gated() {
+    // HOSTED (allow_information_schema=false): information_schema enumeration is
+    // rejected — a shared PG catalog would otherwise leak the control plane +
+    // sibling tenant schema names to a tenant.
+    let q = "SELECT table_schema, table_name FROM information_schema.tables";
+    assert!(
+        validate_read_only_with(q, false).is_err(),
+        "hosted mode must reject information_schema enumeration"
+    );
+    assert!(
+        validate_read_only_with("SELECT schema_name FROM information_schema.schemata", false)
+            .is_err()
+    );
+
+    // LOCAL / self-host / edge (allow=true, the default wrapper): kept — the
+    // catalog holds only this node's own data, and introspection is benign.
+    assert!(
+        validate_read_only_with(q, true).is_ok(),
+        "local mode keeps information_schema"
+    );
+    assert!(
+        validate_read_only(q).is_ok(),
+        "default wrapper is permissive (local/edge)"
+    );
 }
 
 #[test]
