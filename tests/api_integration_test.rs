@@ -50,7 +50,11 @@ fn build_test_context() -> TestContext {
         std::env::set_var("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions");
     }
 
-    let pool = Arc::new(ProjectPool::new(data_dir.clone(), 4));
+    let pool = Arc::new(ProjectPool::new(
+        data_dir.clone(),
+        4,
+        sigiro::storage::StorageMode::LocalFile,
+    ));
 
     // Explicit DI: initialize the default project connection before handlers access it.
     pool.create_project("default")

@@ -40,6 +40,17 @@ check-s3-e2e:
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
     cargo test --test quack_s3_query_surface_test -- --ignored --nocapture
 
+# Storage-mode matrix E2E: proves ingest->flush->query->restart-persistence in
+# all three modes (local file / PG+local data / PG+S3). Needs Docker (Postgres +
+# MinIO), like check-s3-e2e.
+check-storage-matrix-e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker compose -f docker-compose.dev.yml up -d --wait postgres minio
+    docker compose -f docker-compose.dev.yml up minio-setup
+    trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+    cargo test --test storage_mode_matrix_test -- --ignored --nocapture
+
 # Build multi-arch Docker image. Pass --push to push, or --set flags for cache config.
 image *args:
     docker buildx bake sigiro {{args}}

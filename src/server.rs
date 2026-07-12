@@ -775,6 +775,7 @@ pub async fn run_servers(
         configured_key.clone(),
         &data_dir,
         query_surface,
+        pool.storage_mode(),
     )?;
 
     // The bind address enforced for EVERY listener (HTTP, OTLP-HTTP, gRPC, and
@@ -1945,12 +1946,11 @@ async fn investigate_handler(
     }
 
     let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
-    let project_data_path = match crate::storage::load_config()
-        .context_internal("Investigate", "failed to load storage config")?
-    {
-        Some(_) => crate::storage::tenant_data_dir(&data_dir, &auth.tenant_id)
-            .context_internal("Investigate", "invalid tenant id")?,
-        None => data_dir.join(&auth.tenant_id),
+    let project_data_path = if state.pool.storage_mode().is_distributed() {
+        crate::storage::tenant_data_dir(&data_dir, &auth.tenant_id)
+            .context_internal("Investigate", "invalid tenant id")?
+    } else {
+        data_dir.join(&auth.tenant_id)
     };
     if !project_data_path.exists()
         || project_data_path

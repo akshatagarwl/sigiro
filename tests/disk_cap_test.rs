@@ -42,7 +42,11 @@ const TRACES_JSON: &str = r#"{
 fn tripped_router() -> (Arc<MsgRouter>, Arc<DiskCapacityState>, TempDir) {
     let tmp = TempDir::new().expect("temp dir");
     let data_dir = camino::Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-    let pool = Arc::new(ProjectPool::new(data_dir, 4));
+    let pool = Arc::new(ProjectPool::new(
+        data_dir,
+        4,
+        sigiro::storage::StorageMode::LocalFile,
+    ));
 
     // Arm a tiny cap and trip it (bytes >= cap => over).
     let disk = DiskCapacityState::new(1);
@@ -104,7 +108,11 @@ async fn otlp_http_ingest_ok_when_under_disk_cap() {
     // the trip state, not merely "cap configured").
     let tmp = TempDir::new().expect("temp dir");
     let data_dir = camino::Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-    let pool = Arc::new(ProjectPool::new(data_dir, 4));
+    let pool = Arc::new(ProjectPool::new(
+        data_dir,
+        4,
+        sigiro::storage::StorageMode::LocalFile,
+    ));
     let disk = DiskCapacityState::new(1_000_000_000);
     assert!(!disk.is_over_cap());
     let router = Arc::new(MsgRouter::new_with_disk(Arc::clone(&pool), disk));

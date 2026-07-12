@@ -27,6 +27,7 @@ fn test_pool(dir: &std::path::Path) -> Arc<ProjectPool> {
     Arc::new(ProjectPool::new(
         camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
         10,
+        sigiro::storage::StorageMode::LocalFile,
     ))
 }
 

@@ -56,6 +56,38 @@ fn load_config_returns_none_without_env_vars() {
     );
 }
 
+// --- Storage-mode config-axis validation (StorageMode::from_env) -------------
+//
+// SIGIRO_CATALOG_URL is an `on_startup` (process-cached) var and is never set
+// in this parent test process, so `from_env` reliably sees "no catalog URL".
+// SIGIRO_S3_BUCKET is `on_demand`, so `temp_env` can toggle it per test. Both
+// tests go through `temp_env` (which serializes on a global lock) so the S3
+// bucket state can't leak between concurrently-running tests.
+
+#[test]
+fn from_env_is_local_file_without_catalog_or_bucket() {
+    temp_env::with_var_unset("SIGIRO_S3_BUCKET", || {
+        let mode = storage::StorageMode::from_env().expect("local-file mode must resolve");
+        assert!(matches!(mode, storage::StorageMode::LocalFile));
+        assert!(!mode.is_distributed());
+        assert!(!mode.uses_s3());
+        assert!(mode.distributed_config().is_none());
+    });
+}
+
+#[test]
+fn from_env_fails_loud_when_s3_bucket_set_without_catalog_url() {
+    temp_env::with_var("SIGIRO_S3_BUCKET", Some("sigiro-data"), || {
+        let err = storage::StorageMode::from_env()
+            .expect_err("S3 bucket without a catalog URL must fail the coherence gate");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("SIGIRO_S3_BUCKET") && msg.contains("SIGIRO_CATALOG_URL"),
+            "error must name both incoherent vars, got: {msg}"
+        );
+    });
+}
+
 fn r2_config() -> storage::StorageConfig {
     storage::StorageConfig {
         catalog_url: "postgresql://sigiro:secret@catalog.example.com:5432/sigiro".to_string(),

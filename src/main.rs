@@ -363,8 +363,14 @@ async fn run_serve() -> Result<()> {
     // run_serve, borrowed by AppState via Arc<AtomicBool>.
     let init_complete = Arc::new(AtomicBool::new(false));
 
+    // Resolve the storage mode ONCE, up front, validating the config as a
+    // coherent axis (fail-loud on incoherence, e.g. S3 bucket without a catalog
+    // URL). Threaded into the pool so every per-project attach uses this single
+    // decision instead of re-reading the environment.
+    let storage_mode = sigiro::storage::StorageMode::from_env()?;
+
     // MsgRouter: handlers send directly to per-project flusher tasks.
-    let pool = Arc::new(ProjectPool::new(dir.clone(), 100));
+    let pool = Arc::new(ProjectPool::new(dir.clone(), 100, storage_mode));
     let admin_conn = sigiro::admin::open_admin_db()?;
 
     // Write instance status at startup
@@ -436,8 +442,8 @@ async fn run_serve() -> Result<()> {
     //   that might happen to be named "default") are created explicitly
     //   through the control plane; there is no single edge here that needs
     //   "default" to exist up front.
-    let storage_config = sigiro::storage::load_config()?;
-    let distributed = storage_config.is_some();
+    let storage_mode = pool.storage_mode();
+    let distributed = storage_mode.is_distributed();
     let quack_enabled = sigiro::config::query_surface()? == sigiro::config::QuerySurface::Quack;
 
     if quack_enabled {
@@ -453,10 +459,12 @@ async fn run_serve() -> Result<()> {
                  \"connection not found\" instead:\n{chain}"
             )
         })?;
-        let topology = match &storage_config {
-            Some(cfg) if !cfg.s3_bucket.is_empty() => "distributed S3 project default",
-            Some(_) => "distributed local-data project default",
-            None => "local project default",
+        let topology = if storage_mode.uses_s3() {
+            "distributed S3 project default"
+        } else if storage_mode.is_distributed() {
+            "distributed local-data project default"
+        } else {
+            "local project default"
         };
         tracing::info!("serving quack edge — {topology}");
     } else if distributed {

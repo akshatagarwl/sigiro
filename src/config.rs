@@ -284,7 +284,7 @@ pub static RETENTION_DAYS: Envar<u32> =
     Envar::on_startup("SIGIRO_RETENTION_DAYS", || EnvarDef::Default(7));
 
 /// PostgreSQL catalog URL (required for distributed/multi-tenant mode, optional
-/// otherwise). Unset means local SQLite catalog.
+/// otherwise). Unset means the local DuckDB file catalog (`catalog.ducklake`).
 /// Deployment modes: docs/architecture/deployment-modes.html
 pub static CATALOG_URL: Envar<String> = Envar::on_startup("SIGIRO_CATALOG_URL", || EnvarDef::Unset);
 

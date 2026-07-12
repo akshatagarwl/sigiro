@@ -15,6 +15,10 @@ pub struct ProjectPool {
     pub connections: DashMap<String, PoolEntry>,
     data_dir: Utf8PathBuf,
     max_connections: usize,
+    /// Storage mode, resolved ONCE at boot and threaded in here so the pool's
+    /// per-project dir selection and DuckLake attach never re-derive it from
+    /// `storage::load_config()`.
+    storage_mode: crate::storage::StorageMode,
 }
 
 pub struct PoolEntry {
@@ -121,12 +125,22 @@ struct OpenedProject {
 }
 
 impl ProjectPool {
-    pub fn new(data_dir: Utf8PathBuf, max_connections: usize) -> Self {
+    pub fn new(
+        data_dir: Utf8PathBuf,
+        max_connections: usize,
+        storage_mode: crate::storage::StorageMode,
+    ) -> Self {
         Self {
             connections: DashMap::new(),
             data_dir,
             max_connections,
+            storage_mode,
         }
+    }
+
+    /// The storage mode this pool was built with (resolved once at boot).
+    pub fn storage_mode(&self) -> &crate::storage::StorageMode {
+        &self.storage_mode
     }
 
     /// Always returns "lake." — there is no longer a non-DuckLake path.
@@ -159,9 +173,10 @@ impl ProjectPool {
                     self.evict_oldest();
                 }
 
-                let project_dir = match crate::storage::load_config()? {
-                    Some(_) => crate::storage::tenant_data_dir(&self.data_dir, project_id)?,
-                    None => self.data_dir.join(project_id),
+                let project_dir = if self.storage_mode.is_distributed() {
+                    crate::storage::tenant_data_dir(&self.data_dir, project_id)?
+                } else {
+                    self.data_dir.join(project_id)
                 };
                 let opened = self
                     .open_project_connections(project_id, &project_dir)
@@ -314,10 +329,9 @@ impl ProjectPool {
         ))
         .context("failed to set DuckDB memory/threads")?;
 
-        let storage_config = crate::storage::load_config()?;
         let mut last_err: Option<anyhow::Error> = None;
         for attempt in 1..=ATTACH_ATTEMPTS {
-            let attach_result = match storage_config.as_ref() {
+            let attach_result = match self.storage_mode.distributed_config() {
                 Some(config) => {
                     crate::storage::init_distributed(conn, config, project_dir, project_id)
                 }
@@ -326,9 +340,10 @@ impl ProjectPool {
             match attach_result {
                 Ok(()) => {
                     crate::schema::create_tables(conn, Self::prefix())?;
-                    let lock_local = storage_config
-                        .as_ref()
-                        .is_none_or(|c| c.s3_bucket.is_empty());
+                    // Lock the local filesystem unless data lives in S3 (DuckLake
+                    // itself needs network access to reach S3). Local-file mode
+                    // and distributed-with-local-data mode both lock down.
+                    let lock_local = !self.storage_mode.uses_s3();
                     if lock_local {
                         // `enable_external_access = false` (set inside
                         // lock_filesystem) is instance-global and
@@ -558,7 +573,7 @@ mod tests {
         let ext_dir = data_dir.join("extensions");
         std::fs::create_dir_all(&ext_dir).unwrap();
 
-        let pool = ProjectPool::new(data_dir, 10);
+        let pool = ProjectPool::new(data_dir, 10, crate::storage::StorageMode::LocalFile);
         let conn = Connection::open_in_memory().unwrap();
         pool.lock_filesystem(&conn, &ext_dir).unwrap();
 

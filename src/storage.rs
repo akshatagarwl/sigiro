@@ -4,9 +4,10 @@ use duckdb::Connection;
 use tracing::instrument;
 use url::Url;
 
-/// Initialize DuckLake with SQLite catalog + local Parquet (zero config).
-/// Tables accessible as `lake.sigiro_*`.
-/// Catalog stored in `project_dir/catalog.sqlite`.
+/// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
+/// config). Tables accessible as `lake.sigiro_*`.
+/// Catalog stored in `project_dir/catalog.ducklake` (a DuckDB file catalog, NOT
+/// SQLite — see the ATTACH below for why).
 /// Parquet stored in `project_dir/catalog.ducklake.files/` (auto-created by DuckLake).
 #[instrument(skip(conn), fields(dir = %project_dir))]
 pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
@@ -14,7 +15,9 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     std::fs::create_dir_all(project_dir)
         .with_context(|| format!("failed to create project directory: {project_dir}",))?;
 
-    // Load required extensions (ducklake for storage, sqlite for catalog).
+    // Load required extensions (ducklake for storage; sqlite is kept loaded for
+    // DuckLake compatibility, though the catalog itself is a DuckDB file, not
+    // a SQLite database — see the ATTACH below).
     // Emit a progress line before each step so cold starts don't look like
     // a hang (F-01/F-29). With a fresh extension dir, DuckDB synchronously
     // downloads ~5MB of .duckdb_extension files over HTTP and emits no
@@ -101,6 +104,80 @@ pub struct StorageConfig {
     /// plain-HTTP dev/CI S3-compatible stores (MinIO). See
     /// `crate::config::S3_USE_SSL`.
     pub s3_use_ssl: bool,
+}
+
+/// The storage backend this process runs against, resolved ONCE from the
+/// environment at boot (see [`StorageMode::from_env`]) and threaded through the
+/// startup / pool / auth selection paths — so the mode is decided in a single
+/// place instead of each call site re-deriving it from [`load_config`].
+///
+/// sigiro is a single binary with a dual-mode storage contract along ONE
+/// coherent config axis:
+/// - **local file** (zero-config default): a DuckDB-native `catalog.ducklake`
+///   file catalog + local Parquet, one per project dir. No external services.
+/// - **distributed/hosted**: a shared PostgreSQL catalog (multi-writer safe,
+///   per-tenant metadata schemas) with data files either on local disk or in
+///   S3/R2.
+///
+/// The axis is coherent by construction: S3/R2 data is only meaningful WITH a
+/// PostgreSQL catalog, so a bucket configured without a catalog URL is rejected
+/// at [`from_env`](StorageMode::from_env) rather than silently ignored.
+#[derive(Debug)]
+pub enum StorageMode {
+    /// Zero-config self-host edge: DuckDB file catalog + local Parquet.
+    /// Selected when `SIGIRO_CATALOG_URL` is unset.
+    LocalFile,
+    /// Hosted/distributed: shared PostgreSQL catalog + optional S3/R2 data.
+    /// Selected when `SIGIRO_CATALOG_URL` is set.
+    Distributed(StorageConfig),
+}
+
+impl StorageMode {
+    /// Resolve the storage mode from the environment ONCE, validating the
+    /// config as a coherent axis (fail-loud on incoherence). Call at boot.
+    pub fn from_env() -> Result<Self> {
+        match load_config()? {
+            Some(config) => Ok(Self::Distributed(config)),
+            None => {
+                // Coherence gate: S3/R2 data storage requires the distributed
+                // PostgreSQL catalog. A bucket set without a catalog URL is a
+                // misconfiguration — fail loud instead of silently dropping to
+                // local-file mode and ignoring the operator's clear intent to
+                // put data in S3.
+                let s3_bucket = crate::config::S3_BUCKET
+                    .value()
+                    .map_err(anyhow::Error::from)?;
+                anyhow::ensure!(
+                    s3_bucket.is_empty(),
+                    "SIGIRO_S3_BUCKET is set (={s3_bucket:?}) but SIGIRO_CATALOG_URL is not — \
+                     S3/R2 data storage requires the distributed PostgreSQL catalog. Set \
+                     SIGIRO_CATALOG_URL to enable distributed mode, or unset SIGIRO_S3_BUCKET to \
+                     use the zero-config local file catalog."
+                );
+                Ok(Self::LocalFile)
+            }
+        }
+    }
+
+    /// `true` in distributed (PostgreSQL catalog) mode.
+    pub fn is_distributed(&self) -> bool {
+        matches!(self, Self::Distributed(_))
+    }
+
+    /// The distributed storage config, or `None` in local-file mode.
+    pub fn distributed_config(&self) -> Option<&StorageConfig> {
+        match self {
+            Self::Distributed(config) => Some(config),
+            Self::LocalFile => None,
+        }
+    }
+
+    /// `true` only when data files live in S3/R2 (distributed + bucket set).
+    /// This is the gate for skipping the local-filesystem lockdown, since
+    /// DuckLake needs network access to reach S3.
+    pub fn uses_s3(&self) -> bool {
+        matches!(self, Self::Distributed(config) if !config.s3_bucket.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,15 +302,20 @@ pub fn distributed_attach_sql(
 }
 
 /// Load SIGIRO_* env vars to configure distributed (PostgreSQL catalog) storage.
-/// Returns `Ok(None)` if `SIGIRO_CATALOG_URL` is not set — caller should use local SQLite.
+/// Returns `Ok(None)` if `SIGIRO_CATALOG_URL` is not set — caller should use the
+/// local DuckDB file catalog (see [`init_default`]).
 /// Returns an error if env vars are set but malformed.
+///
+/// This is the low-level env reader. Boot code should call
+/// [`StorageMode::from_env`], which wraps this AND validates the config as a
+/// coherent axis (e.g. S3 bucket without a catalog URL is rejected).
 pub fn load_config() -> Result<Option<StorageConfig>> {
     let catalog_url = match crate::config::CATALOG_URL.value() {
         Ok(v) if !v.is_empty() => v,
         Ok(_) => anyhow::bail!(
             "SIGIRO_CATALOG_URL is set but empty — provide a valid PostgreSQL catalog URL or unset it"
         ),
-        Err(_) => return Ok(None), // not set — use local SQLite
+        Err(_) => return Ok(None), // not set — use the local DuckDB file catalog
     };
 
     // At this point catalog_url is a non-empty string (Ok + !is_empty)

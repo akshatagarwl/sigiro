@@ -26,6 +26,7 @@ fn test_pool_with_max(dir: &std::path::Path, max_connections: usize) -> ProjectP
     ProjectPool::new(
         camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
         max_connections,
+        sigiro::storage::StorageMode::LocalFile,
     )
 }
 

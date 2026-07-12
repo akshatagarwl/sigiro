@@ -81,24 +81,28 @@ impl AuthMode {
         configured_key: String,
         data_dir: &Utf8Path,
         query_surface: crate::config::QuerySurface,
+        storage_mode: &crate::storage::StorageMode,
     ) -> anyhow::Result<Self> {
         if query_surface == crate::config::QuerySurface::Quack {
             return Ok(Self::from_config(configured_key));
         }
-        if let Some(storage_config) = crate::storage::load_config()? {
-            if !configured_key.is_empty() {
-                tracing::warn!(
-                    "SIGIRO_CATALOG_URL is set; SIGIRO_API_KEY no longer authenticates requests directly. Use /admin/tenants + /admin/keys to mint tenant keys"
+        match storage_mode.distributed_config() {
+            Some(storage_config) => {
+                if !configured_key.is_empty() {
+                    tracing::warn!(
+                        "SIGIRO_CATALOG_URL is set; SIGIRO_API_KEY no longer authenticates requests directly. Use /admin/tenants + /admin/keys to mint tenant keys"
+                    );
+                }
+                let ext_dir = crate::storage::resolve_extension_dir(data_dir);
+                let control = ControlPlane::open(&storage_config.catalog_url, &ext_dir)?;
+                tracing::info!(
+                    "auth_mode=tenant_keys — bearer tokens resolve through sigiro_control"
                 );
+                Ok(AuthMode::TenantKeys {
+                    control: Arc::new(control),
+                })
             }
-            let ext_dir = crate::storage::resolve_extension_dir(data_dir);
-            let control = ControlPlane::open(&storage_config.catalog_url, &ext_dir)?;
-            tracing::info!("auth_mode=tenant_keys — bearer tokens resolve through sigiro_control");
-            Ok(AuthMode::TenantKeys {
-                control: Arc::new(control),
-            })
-        } else {
-            Ok(Self::from_config(configured_key))
+            None => Ok(Self::from_config(configured_key)),
         }
     }
 
