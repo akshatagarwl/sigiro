@@ -129,23 +129,27 @@ def newest_bench_result(out_dir: Path) -> dict[str, Any]:
     return json.loads(files[-1].read_text())
 
 
-def query_service_counts(stable_bin: Path, env: dict[str, str]) -> list[dict[str, Any]]:
-    return run_json(
-        [str(stable_bin), "--output", "json", "query", SERVICE_COUNTS_SQL],
-        env,
+def query_service_counts(base_url: str, api_key: str) -> list[dict[str, Any]]:
+    request = urllib.request.Request(
+        f"{base_url}/v1/query",
+        data=SERVICE_COUNTS_SQL.encode(),
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="POST",
     )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read().decode())
 
 
 def wait_for_profiles(
-    stable_bin: Path,
-    env: dict[str, str],
+    base_url: str,
+    api_key: str,
     timeout_sec: int,
     profiles_before: int,
 ) -> list[dict[str, Any]]:
     deadline = time.monotonic() + timeout_sec
     last_counts: list[dict[str, Any]] = []
     while time.monotonic() < deadline:
-        last_counts = query_service_counts(stable_bin, env)
+        last_counts = query_service_counts(base_url, api_key)
         profiles_after = int(
             last_counts[0].get("profiles_all_time", 0) if last_counts else 0
         )
@@ -554,7 +558,8 @@ def main() -> int:
         env = os.environ.copy()
         env["SIGIRO_ENDPOINT"] = f"http://127.0.0.1:{stable_ports.http}"
         env["SIGIRO_API_KEY"] = args.api_key
-        counts_before_result = query_service_counts(args.stable_bin, env)
+        stable_url = f"http://127.0.0.1:{stable_ports.http}"
+        counts_before_result = query_service_counts(stable_url, args.api_key)
         counts_before = counts_before_result[0] if counts_before_result else {}
 
         candidate_proc = start_sigiro(
@@ -593,8 +598,8 @@ def main() -> int:
         bench_result = newest_bench_result(args.out_dir)
 
         wait_for_profiles(
-            args.stable_bin,
-            env,
+            stable_url,
+            args.api_key,
             args.profile_timeout_sec,
             int(counts_before.get("profiles_all_time", 0) or 0),
         )
@@ -604,7 +609,7 @@ def main() -> int:
         time.sleep(2)
         investigate = run_json([str(args.stable_bin), "--output", "json", "investigate", "sigiro-candidate"], env)
         (args.out_dir / "investigate-sigiro-candidate.json").write_text(json.dumps(investigate, indent=2) + "\n")
-        service_counts = query_service_counts(args.stable_bin, env)
+        service_counts = query_service_counts(stable_url, args.api_key)
         counts = service_counts[0] if service_counts else {}
         (args.out_dir / "service-counts.json").write_text(
             json.dumps({"before": counts_before, "after": counts}, indent=2) + "\n"
