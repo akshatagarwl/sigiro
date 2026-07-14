@@ -3,7 +3,13 @@ use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, ListBuilder, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing::post};
+use axum::{
+    Router,
+    body::Bytes,
+    extract::{Query, State},
+    http::StatusCode,
+    routing::post,
+};
 use headers::{Authorization, HeaderMapExt, authorization::Bearer};
 use multer::Multipart;
 use opentelemetry_proto::tonic::collector::{
@@ -25,6 +31,7 @@ use opentelemetry_proto::tonic::collector::{
     },
 };
 use prost::Message;
+use serde::Deserialize;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
@@ -880,9 +887,15 @@ async fn otlp_http_profiles(
 ///
 /// Accepts two formats:
 /// - `application/proto` (gzip-compressed PushRequest) — Pyroscope Rust SDK
-/// - `multipart/form-data` (Pyroscope Go SDK format) — form file "profile" contains gzip-compressed PushRequest
+/// - `multipart/form-data` (Pyroscope Node SDK format) — form file "profile" contains raw pprof
+#[derive(Default, Deserialize)]
+struct PyroscopeIngestQuery {
+    name: Option<String>,
+}
+
 async fn otlp_http_pyroscope(
     State(state): State<Arc<OtlpHttpState>>,
+    Query(query): Query<PyroscopeIngestQuery>,
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
@@ -912,7 +925,7 @@ async fn otlp_http_pyroscope(
         }
     };
 
-    let batch = match transform_pyroscope_profiles(body_bytes).await {
+    let batch = match transform_pyroscope_profiles(body_bytes, query.name.as_deref()).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("transform pyroscope profiles failed: {e}");
@@ -968,9 +981,10 @@ fn extract_service_name(
 
 /// Parse the request body, handling both raw protobuf and Pyroscope SDK multipart/form-data.
 ///
-/// The Pyroscope Go SDK sends `multipart/form-data` with a `profile` form file
-/// containing the gzip-compressed PushRequest protobuf. This function detects the
-/// content type and extracts/wraps the body appropriately.
+/// Pyroscope SDKs send `multipart/form-data` with a `profile` form file. The
+/// profile may be raw pprof (Node SDK, identified by the `name` query parameter)
+/// or a PushRequest protobuf. This function extracts the profile bytes; decoding
+/// is handled by `transform_pyroscope_profiles`.
 async fn parse_pyroscope_multipart(
     headers: &axum::http::HeaderMap,
     body: &[u8],
@@ -1026,15 +1040,18 @@ async fn parse_pyroscope_multipart(
     } else {
         Err(format!(
             "unimplemented: Content-Type '{}' is not supported for Pyroscope ingest; \
-             supported: 'multipart/form-data' (Go/Python SDK), 'application/proto' (gzip-compressed PushRequest)",
+             supported: 'multipart/form-data' (SDK pprof), 'application/proto' (gzip-compressed PushRequest)",
             content_type
         ))
     }
 }
 
-/// Decode a Pyroscope PushRequest (gzip-compressed protobuf) into an Arrow
-/// RecordBatch using the same schema as transform_profiles.
-pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, Status> {
+/// Decode either a Pyroscope PushRequest or an SDK raw pprof profile into an
+/// Arrow RecordBatch using the same schema as transform_profiles.
+pub async fn transform_pyroscope_profiles(
+    body: Vec<u8>,
+    sdk_name: Option<&str>,
+) -> Result<RecordBatch, Status> {
     // Stage 1: gzip decompression. The OTLP HTTP router has a
     // RequestDecompressionLayer that usually already decompressed the body;
     // detect gzip magic bytes (1f 8b) and only decompress if still gzipped.
@@ -1049,12 +1066,33 @@ pub async fn transform_pyroscope_profiles(body: Vec<u8>) -> Result<RecordBatch, 
     };
     tracing::debug!("pyroscope: payload {} bytes", decompressed.len());
 
-    // Stage 2: PushRequest protobuf decode
-    let push_request = pyroscope::encode::r#gen::push::PushRequest::decode(&decompressed[..])
-        .map_err(|e| {
+    // Stage 2: Node sends raw pprof with the application name in the query;
+    // pyroscope-rs sends a PushRequest whose series already carries service_name.
+    let push_request = if let Some(name) = sdk_name {
+        let service_name = name.split_once('{').map_or(name, |(base, _)| base).trim();
+        if service_name.is_empty() {
+            return Err(Status::invalid_argument(
+                "Pyroscope SDK name must contain a non-empty application name",
+            ));
+        }
+        pyroscope::encode::r#gen::push::PushRequest {
+            series: vec![pyroscope::encode::r#gen::push::RawProfileSeries {
+                labels: vec![pyroscope::encode::r#gen::types::LabelPair {
+                    name: "service_name".to_string(),
+                    value: service_name.to_string(),
+                }],
+                samples: vec![pyroscope::encode::r#gen::push::RawSample {
+                    raw_profile: decompressed,
+                    id: String::new(),
+                }],
+            }],
+        }
+    } else {
+        pyroscope::encode::r#gen::push::PushRequest::decode(&decompressed[..]).map_err(|e| {
             tracing::debug!("pyroscope PushRequest decode failed: {:?}", e);
             Status::invalid_argument(format!("push request decode failed: {e}"))
-        })?;
+        })?
+    };
     tracing::debug!("pyroscope: series count={}", push_request.series.len());
 
     let schema = profile_schema();

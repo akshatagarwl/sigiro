@@ -166,7 +166,7 @@ async fn e2e_pyroscope_native_pipeline() {
     );
 
     // Call transform directly (bytes → Arrow RecordBatch)
-    let batch = sigiro::ingest::transform_pyroscope_profiles(bytes)
+    let batch = sigiro::ingest::transform_pyroscope_profiles(bytes, None)
         .await
         .unwrap();
 
@@ -271,7 +271,7 @@ async fn e2e_pyroscope_empty_push_request() {
     encoder.write_all(&encoded).unwrap();
     encoder.finish().unwrap();
 
-    let batch = sigiro::ingest::transform_pyroscope_profiles(gzipped)
+    let batch = sigiro::ingest::transform_pyroscope_profiles(gzipped, None)
         .await
         .unwrap();
     assert_eq!(
@@ -319,10 +319,10 @@ async fn e2e_pyroscope_multi_series() {
     );
 
     // Process each through transform
-    let batch_a = sigiro::ingest::transform_pyroscope_profiles(bytes_a)
+    let batch_a = sigiro::ingest::transform_pyroscope_profiles(bytes_a, None)
         .await
         .unwrap();
-    let batch_b = sigiro::ingest::transform_pyroscope_profiles(bytes_b)
+    let batch_b = sigiro::ingest::transform_pyroscope_profiles(bytes_b, None)
         .await
         .unwrap();
 
