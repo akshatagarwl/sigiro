@@ -316,11 +316,16 @@ impl ProjectPool {
         project_dir: &camino::Utf8Path,
     ) -> Result<()> {
         let ext_dir = crate::storage::resolve_extension_dir(&self.data_dir);
+        let temp_dir = project_dir.join(".tmp");
+        std::fs::create_dir_all(&temp_dir)
+            .with_context(|| format!("failed to create DuckDB temp directory: {temp_dir}"))?;
+        let temp_dir_sql = temp_dir.as_str().replace('\'', "''");
         conn.execute_batch(&format!(
-            "SET extension_directory = '{}';",
-            ext_dir.as_str()
+            "SET extension_directory = '{}'; SET temp_directory = '{temp_dir_sql}';",
+            ext_dir.as_str(),
         ))
-        .context("failed to set DuckDB extension_directory")?;
+        .context("failed to set DuckDB extension and temp directories")?;
+        tracing::info!(%temp_dir, "DuckDB temp directory configured");
         let memory_limit = crate::config::duckdb_memory_limit()?;
         let memory_limit = memory_limit.replace('\'', "''");
         let threads = crate::config::duckdb_threads()?;
@@ -428,16 +433,12 @@ impl ProjectPool {
     fn lock_filesystem(&self, conn: &Connection, ext_dir: &camino::Utf8Path) -> Result<()> {
         let data_dir = self.data_dir.as_str().replace('\'', "''");
         let ext = ext_dir.as_str().replace('\'', "''");
-        let temp_dir = self.data_dir.join(".tmp");
-        std::fs::create_dir_all(&temp_dir)
-            .with_context(|| format!("failed to create DuckDB temp directory: {temp_dir}"))?;
-        let temp_dir = temp_dir.as_str().replace('\'', "''");
         conn.execute_batch(
             "INSTALL parquet; LOAD parquet; INSTALL json; LOAD json; INSTALL icu; LOAD icu;",
         )
         .context("failed to preload DuckDB extensions before locking filesystem access")?;
         conn.execute_batch(&format!(
-            "SET temp_directory = '{temp_dir}'; SET allowed_directories = ['{data_dir}', '{ext}']; SET enable_external_access = false;"
+            "SET allowed_directories = ['{data_dir}', '{ext}']; SET enable_external_access = false;"
         ))
         .context("failed to lock DuckDB filesystem access")?;
         tracing::info!(data_dir = %self.data_dir, "DuckDB filesystem access locked to data + extension dirs");

@@ -41,6 +41,7 @@ use opentelemetry::trace::{Span, Tracer, TracerProvider};
 use opentelemetry_otlp::{SpanExporter, WithExportConfig};
 use opentelemetry_sdk::resource::Resource;
 use opentelemetry_sdk::trace::SdkTracerProvider;
+use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -116,6 +117,7 @@ const MODES: &[Mode] = &[
 /// (so it can be reused across a restart), not by this struct.
 struct MatrixEdge {
     child: Child,
+    _read_only_working_dir: tempfile::TempDir,
     otlp_http_port: u16,
     quack_port: u16,
 }
@@ -126,9 +128,17 @@ impl MatrixEdge {
         let otlp_http_port = BASE_PORT + mode.port_offset + 1;
         let grpc_port = BASE_PORT + mode.port_offset + 2;
         let quack_port = BASE_PORT + mode.port_offset + 3;
+        let read_only_working_dir = tempfile::tempdir().expect("temporary working directory");
+        let mut permissions = std::fs::metadata(read_only_working_dir.path())
+            .expect("temporary working directory metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(read_only_working_dir.path(), permissions)
+            .expect("make temporary working directory read-only");
 
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_sigiro"));
         cmd.arg("serve")
+            .current_dir(read_only_working_dir.path())
             .env("SIGIRO_DATA_DIR", data_dir)
             .env("SIGIRO_HTTP_PORT", http_port.to_string())
             .env("SIGIRO_OTLP_HTTP_PORT", otlp_http_port.to_string())
@@ -158,6 +168,7 @@ impl MatrixEdge {
         let child = cmd.spawn().expect("failed to spawn `sigiro serve`");
         let edge = Self {
             child,
+            _read_only_working_dir: read_only_working_dir,
             otlp_http_port,
             quack_port,
         };
@@ -244,11 +255,31 @@ impl MatrixEdge {
         loop {
             match self.child.try_wait() {
                 Ok(Some(status)) => {
-                    return if status.success() {
-                        Ok(())
-                    } else {
-                        Err(format!("`sigiro serve` exited non-zero: {status}"))
-                    };
+                    let mut output = String::new();
+                    if let Some(mut stdout) = self.child.stdout.take() {
+                        stdout
+                            .read_to_string(&mut output)
+                            .map_err(|e| format!("read `sigiro serve` stdout: {e}"))?;
+                    }
+                    if let Some(mut stderr) = self.child.stderr.take() {
+                        stderr
+                            .read_to_string(&mut output)
+                            .map_err(|e| format!("read `sigiro serve` stderr: {e}"))?;
+                    }
+                    if !status.success() {
+                        return Err(format!(
+                            "`sigiro serve` exited non-zero: {status}\n{output}"
+                        ));
+                    }
+                    if output.contains("CHECKPOINT failed") {
+                        return Err(format!("`sigiro serve` checkpoint failed:\n{output}"));
+                    }
+                    if !output.contains("DuckDB temp directory configured") {
+                        return Err(format!(
+                            "`sigiro serve` did not configure its temp directory:\n{output}"
+                        ));
+                    }
+                    return Ok(());
                 }
                 Ok(None) => {
                     if Instant::now() >= deadline {
