@@ -1,7 +1,8 @@
-target/
-.git/
-.github/
-.worktrees/
-*.md
-.dockerignore
-docker-bake.hcl
+*
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!src/
+!src/**
+!benches/
+!benches/**
