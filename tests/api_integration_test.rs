@@ -186,6 +186,38 @@ async fn test_query_without_valid_tenant_key_returns_401() {
 }
 
 #[tokio::test]
+async fn test_new_hosted_tenant_can_query_before_first_ingest() {
+    // A Machine restart preserves the hosted control plane but loses its
+    // in-memory project pool. Query must therefore initialize the authenticated
+    // tenant locally; provisioning-time initialization on another process is
+    // insufficient, and ingest-then-query masks this lifecycle.
+    let control = Arc::new(sigiro::auth::ControlPlane::open_in_memory_for_tests().unwrap());
+    control.create_tenant("empty_tenant").unwrap();
+    let key = control
+        .mint_key("empty_tenant")
+        .expect("mint key for provisioned tenant")
+        .key;
+    let ctx = build_context_with_auth(sigiro::auth::AuthMode::TenantKeys {
+        control: Arc::clone(&control),
+    });
+    let app = build_http_router(ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    let response = server
+        .post("/v1/query")
+        .add_header("Authorization", format!("Bearer {key}"))
+        .text("SELECT count(*) AS n FROM lake.sigiro_spans")
+        .await;
+    response.assert_status_ok();
+    let rows: serde_json::Value =
+        serde_json::from_str(&response.text()).expect("query response should be JSON");
+    assert_eq!(
+        rows.pointer("/0/n").and_then(serde_json::Value::as_i64),
+        Some(0)
+    );
+}
+
+#[tokio::test]
 async fn test_query_midstream_error_never_returns_partial_rows() {
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);

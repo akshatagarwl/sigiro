@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use axum::{Extension, Json, Router, extract::State, http::HeaderMap, middleware as axum_mw};
-use axum_anyhow::{ApiResult, IntoApiError, ResultExt, bad_request};
+use axum_anyhow::{ApiResult, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use parking_lot::Mutex;
@@ -28,7 +28,7 @@ use crate::auth::{self, AuthContext};
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::{DiskCapacityState, MsgRouter};
 use crate::investigate;
-use crate::pool::{ProjectPool, ReaderPool};
+use crate::pool::ProjectPool;
 use crate::responses::*;
 use crate::types::*;
 use tracing_attributes::instrument;
@@ -1386,16 +1386,6 @@ async fn healthz(
     health(HealthPath, State(state)).await
 }
 
-/// Get the per-project DuckDB reader pool using the AuthContext.
-fn project_reader_pool(state: &AppState, auth: &AuthContext) -> ApiResult<ReaderPool> {
-    // Explicit DI: get_project returns only existing projects.
-    // Callers must call create_project() first to initialize a project.
-    state
-        .pool
-        .get_project(&auth.tenant_id)
-        .map_err(|e| anyhow::anyhow!(e).context_internal("Project DB", "connection not found"))
-}
-
 /// Escape a string for safe use inside a SQL single-quoted string literal.
 fn escape_sql_string(s: &str) -> String {
     s.replace("'", "''")
@@ -1409,14 +1399,24 @@ async fn execute_sql(
     auth: &AuthContext,
     sql: &str,
 ) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
-    let readers = project_reader_pool(state, auth)
-        .map_err(|e: axum_anyhow::ApiError| anyhow::anyhow!("{:?}", e))?;
+    // Explicit DI boundary: the authenticated tenant identity selects the
+    // idempotent project setup operation. The pool itself keeps strict
+    // create/get APIs, while every process can recover its in-memory project
+    // entry after a restart or when a request lands on another Machine.
+    let pool = Arc::clone(&state.pool);
+    let project_id = auth.tenant_id.clone();
     let sql_clone = sql.to_string();
     let timeout_secs = crate::config::query_timeout_secs()?;
     let max_rows = crate::config::max_result_rows()?;
     let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
 
     let mut query_task = tokio::task::spawn_blocking(move || {
+        // DuckLake ATTACH can perform network I/O and cold extension loading;
+        // keep it on the blocking worker with the query, never on Tokio's
+        // async runtime thread.
+        let readers = pool
+            .create_project(&project_id)
+            .with_context(|| format!("failed to initialize project {project_id}"))?;
         let conn = readers.get();
         // Sent before `prepare`/`query` so the timeout branch below can
         // interrupt this exact connection even if it never gets a chance to
@@ -2025,8 +2025,12 @@ async fn investigate_handler(
             ),
         ));
     }
-    let readers = project_reader_pool(&state, &auth)?;
+    let pool = Arc::clone(&state.pool);
+    let project_id = auth.tenant_id.clone();
     let blocks = tokio::task::spawn_blocking(move || {
+        let readers = pool
+            .create_project(&project_id)
+            .with_context(|| format!("failed to initialize project {project_id}"))?;
         let conn = readers.get();
         investigate::investigate(&conn, &req, ProjectPool::prefix())
     })
