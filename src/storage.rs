@@ -69,16 +69,56 @@ pub fn init_distributed(
         );
     }
 
-    conn.execute_batch(&attach.attach_sql).map_err(|_| {
+    conn.execute_batch(&attach.attach_sql).map_err(|error| {
         // Deliberately DO NOT include the DuckDB error: a Postgres ATTACH
         // failure can echo the connection string (with password) verbatim, and
         // reliably scrubbing an arbitrary secret byte-form out of error text is
-        // not achievable. Fail loud with an actionable, secret-free message.
+        // not achievable. Classify it in-process, discard the raw text, and fail
+        // loud with an actionable, secret-free category.
+        let detail = error.to_string().to_ascii_lowercase();
+        let category = if detail.contains("password authentication failed")
+            || detail.contains("authentication failed")
+        {
+            "authentication"
+        } else if detail.contains("could not translate host")
+            || detail.contains("name or service not known")
+            || detail.contains("nodename nor servname")
+            || detail.contains("name resolution")
+        {
+            "dns"
+        } else if detail.contains("ssl") || detail.contains("tls") || detail.contains("certificate")
+        {
+            "tls"
+        } else if detail.contains("permission denied")
+            || detail.contains("insufficient privilege")
+            || detail.contains("must be owner")
+        {
+            "permission"
+        } else if detail.contains("out of memory") || detail.contains("memory limit") {
+            "memory"
+        } else if detail.contains("data_path") || detail.contains("data path") {
+            "data_path"
+        } else if detail.contains("invalid connection option")
+            || detail.contains("invalid configuration")
+            || detail.contains("parser error")
+        {
+            "configuration"
+        } else if detail.contains("connection refused")
+            || detail.contains("could not connect")
+            || detail.contains("unable to connect")
+            || detail.contains("network is unreachable")
+        {
+            "unreachable"
+        } else if detail.contains("already exists") || detail.contains("conflict") {
+            "catalog_conflict"
+        } else {
+            "unknown"
+        };
         anyhow::anyhow!(
             "failed to attach DuckLake PostgreSQL catalog for tenant {tenant_id} \
-             (metadata schema {}) — verify SIGIRO_CATALOG_URL host/port/credentials \
-             and that PostgreSQL is reachable",
-            attach.metadata_schema
+             (metadata schema {}, category {category}) — verify SIGIRO_CATALOG_URL \
+             host/port/credentials and that PostgreSQL is reachable",
+            attach.metadata_schema,
         )
     })?;
     // NEVER log the connection string — it embeds the PostgreSQL password.
