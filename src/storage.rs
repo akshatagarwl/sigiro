@@ -93,7 +93,27 @@ pub fn init_distributed(
             || detail.contains("insufficient privilege")
             || detail.contains("must be owner")
         {
-            "permission"
+            if detail.contains("s3")
+                || detail.contains("http 403")
+                || detail.contains("accessdenied")
+            {
+                "object_store_permission"
+            } else if detail.contains("extension") || detail.contains("/opt/sigiro") {
+                "extension_permission"
+            } else if detail.contains("postgres")
+                || detail.contains("schema")
+                || detail.contains("database")
+            {
+                "catalog_permission"
+            } else if detail.contains("/var/lib/sigiro")
+                || detail.contains("file")
+                || detail.contains("directory")
+                || detail.contains("io error")
+            {
+                "filesystem_permission"
+            } else {
+                "permission"
+            }
         } else if detail.contains("out of memory") || detail.contains("memory limit") {
             "memory"
         } else if detail.contains("data_path") || detail.contains("data path") {
