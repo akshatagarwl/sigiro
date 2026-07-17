@@ -607,10 +607,21 @@ pub fn prewarm_extensions(data_dir: &Utf8Path) -> Result<()> {
         "pre-warming DuckDB extensions into {} (may take 30-90s on first run)...",
         ext_dir
     );
+    // The hand-built DuckDB amalgamation does not statically link the
+    // core_functions extension like the official CLI does. DuckLake autoloads
+    // it during the first ATTACH; bake it here so production can keep the
+    // extension directory read-only at runtime.
     install_extensions_with_progress(
         &conn,
         &[
-            "ducklake", "sqlite", "json", "parquet", "postgres", "httpfs", "icu",
+            "core_functions",
+            "ducklake",
+            "sqlite",
+            "json",
+            "parquet",
+            "postgres",
+            "httpfs",
+            "icu",
         ],
     )?;
     tracing::info!("pre-warming the quack query-surface extension (version-pinned)...");
