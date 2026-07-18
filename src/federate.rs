@@ -278,11 +278,14 @@ pub struct ParsedQuery {
     limit: Option<i64>,
 }
 
+/// True if any projected item is an aggregate (`count(*)`, `sum(x)`, …).
+fn has_aggregate(items: &[SelectItem]) -> bool {
+    items.iter().any(|i| matches!(i, SelectItem::Aggregate(_)))
+}
+
 impl ParsedQuery {
     fn is_aggregate(&self) -> bool {
-        self.select_items
-            .iter()
-            .any(|i| matches!(i, SelectItem::Aggregate(_)))
+        has_aggregate(&self.select_items)
     }
 }
 
@@ -601,9 +604,7 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
             "SELECT * cannot be combined with GROUP BY in a federated query"
         );
     }
-    let is_aggregate_query = select_items
-        .iter()
-        .any(|i| matches!(i, SelectItem::Aggregate(_)));
+    let is_aggregate_query = has_aggregate(&select_items);
     if is_aggregate_query {
         for item in &select_items {
             if let SelectItem::Column(col) = item {

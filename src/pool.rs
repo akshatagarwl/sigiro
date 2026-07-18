@@ -508,11 +508,12 @@ impl ProjectPool {
         }
     }
 
-    /// Number of open connections.
+    /// Number of open connections currently held by the pool.
     pub fn len(&self) -> usize {
         self.connections.len()
     }
 
+    /// Whether the pool holds no open connections.
     pub fn is_empty(&self) -> bool {
         self.connections.is_empty()
     }
