@@ -5,7 +5,7 @@
 # QEMU). Carries both GNU cross toolchains + cargo-chef for dep-layer caching.
 FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev mold \
+      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev \
       gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
       gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*
@@ -42,8 +42,7 @@ FROM chef AS builder
 ARG TARGETARCH
 COPY --from=duckdb-static /opt/duckdb /opt/duckdb
 ENV DUCKDB_LIB_DIR=/opt/duckdb DUCKDB_INCLUDE_DIR=/opt/duckdb DUCKDB_STATIC=1 \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true \
-    RUSTFLAGS="-Clink-arg=-fuse-ld=mold"
+    CARGO_NET_GIT_FETCH_WITH_CLI=true
 COPY --from=planner /build/recipe.json recipe.json
 # Native cross-compile: rustc runs on $BUILDPLATFORM and emits target-arch code,
 # linked by the matching gcc-<arch>-linux-gnu (correct libstdc++ ABI for the
