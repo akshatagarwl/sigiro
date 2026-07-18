@@ -92,10 +92,12 @@ insta = { version = "1.47.2", features = ["yaml", "json"] }
 [[bench]]
 name = "investigate_bench"
 harness = false
+test = false
 
 [[bench]]
 name = "appender_bench"
 harness = false
+test = false
 
 [lints.clippy]
 # Disallowed patterns (configured in clippy.toml)
@@ -121,9 +123,18 @@ unused_imports = "warn"
 split-debuginfo = "unpacked"
 debug = 1
 
+# Dependencies rarely need step-through debugging; dropping their debuginfo
+# shrinks target/ (the bulk of the old 66 GB debug dir was dep debuginfo) and
+# speeds dep compile+link. Our own crate keeps debug = 1 above.
+[profile.dev.package."*"]
+debug = false
+
 [profile.test]
 split-debuginfo = "unpacked"
 debug = 1
+
+[profile.test.package."*"]
+debug = false
 
 [profile.release]
 lto = "thin"

@@ -1,2 +1,11 @@
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
+
+# Route the C/C++ compiler through sccache so the bundled DuckDB amalgamation
+# (libduckdb-sys, macOS dev builds) is cached and not recompiled from scratch
+# after a `cargo clean`. Pairs with rustc-wrapper=sccache in ~/.cargo/config.toml.
+# `.cargo/` is excluded from the Docker context (.dockerignore is an allowlist),
+# so the Linux/image build — which has its own ccache — never sees this.
+[env]
+CC = "sccache cc"
+CXX = "sccache c++"
