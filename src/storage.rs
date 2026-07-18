@@ -15,14 +15,17 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     std::fs::create_dir_all(project_dir)
         .with_context(|| format!("failed to create project directory: {project_dir}",))?;
 
-    // Load required extensions (ducklake for storage; sqlite is kept loaded for
-    // DuckLake compatibility, though the catalog itself is a DuckDB file, not
-    // a SQLite database — see the ATTACH below).
+    // Load the ONLY extension this mode needs: ducklake. The catalog is a
+    // DuckDB file (see the ATTACH below), so the sqlite extension — needed only
+    // for `ducklake:sqlite:` catalog backends — is NOT required here. It used to
+    // be installed "for compatibility" but that pulled a runtime download into
+    // the read-only baked extension dir (/opt/sigiro/extensions), failing with
+    // "Permission denied" and wedging the attach-retry loop in local mode.
     // Emit a progress line before each step so cold starts don't look like
     // a hang (F-01/F-29). With a fresh extension dir, DuckDB synchronously
     // downloads ~5MB of .duckdb_extension files over HTTP and emits no
     // output of its own; users see nothing for 30-90s.
-    install_extensions_with_progress(conn, &["ducklake", "sqlite"])?;
+    install_extensions_with_progress(conn, &["ducklake"])?;
 
     // Attach DuckLake with DuckDB file catalog + local Parquet.
     // Uses catalog.ducklake (DuckDB native catalog) instead of SQLite
