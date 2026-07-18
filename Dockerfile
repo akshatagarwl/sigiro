@@ -70,7 +70,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
     export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
     cargo build --release --target "$T" --bin sigiro && \
     cp "target/${T}/release/sigiro" /build/sigiro && \
-    upx --best --lzma /build/sigiro
+    upx -6 /build/sigiro
 
 # Runtime-prep (has a shell): bake the loadable extensions that aren't static in
 # the binary. Runs the TARGET binary, so pinned to $TARGETPLATFORM.

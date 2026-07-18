@@ -137,8 +137,12 @@ debug = 1
 debug = false
 
 [profile.release]
-lto = "thin"
-codegen-units = 1
+# lto/codegen-units relaxed for build speed: the cross-compile image build must
+# stay under a few minutes, and this workload is DuckDB-bound (the heavy query
+# work is in the -O3 C++ static lib), so cross-crate LTO on the Rust glue buys
+# little at runtime. opt-level stays 3 (release default).
+lto = false
+codegen-units = 16
 strip = true
 
 [profile.profiling]
