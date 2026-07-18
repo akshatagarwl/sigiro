@@ -75,6 +75,16 @@ check-hosted-isolation-e2e:
 image *args:
     docker buildx bake sigiro {{args}}
 
+# Fast LOCAL image build: native arch only (no amd64 QEMU emulation), no remote
+# cache, loaded into docker so you can run it. Use this while iterating; use
+# `just image --push` for the real multi-arch publish. Assumes an arm64 host.
+image-dev *args:
+    docker buildx bake sigiro \
+      --set "*.platform=linux/arm64" \
+      --set "*.cache-to=" \
+      --set "*.cache-from=" \
+      --load {{args}}
+
 # Cross-compile sigiro for Linux ARM64 Lima VMs.
 lima-build:
     #!/usr/bin/env bash

@@ -10,7 +10,13 @@ WORKDIR /build
 # registry cache. Runtime extensions remain separate and are fetched below.
 FROM debian:trixie-slim AS duckdb-static
 ARG DUCKDB_VERSION=1.5.3
-RUN apt-get update && apt-get install -y ca-certificates clang curl unzip binutils && rm -rf /var/lib/apt/lists/* && \
+ARG TARGETARCH
+# ccache (persisted via a BuildKit cache mount) makes the multi-minute DuckDB
+# amalgamation compile a cache hit whenever this layer is invalidated but the
+# mount survives — so re-timing/iterating on the image doesn't pay the full
+# clang++ -O3 on duckdb.cpp again. Produces a byte-identical archive.
+RUN --mount=type=cache,target=/root/.ccache,id=ccache-duckdb-${TARGETARCH} \
+    apt-get update && apt-get install -y ca-certificates clang curl unzip binutils ccache && rm -rf /var/lib/apt/lists/* && \
     mkdir -p /opt/duckdb /tmp/duckdb && \
     curl --fail --location --retry 3 \
       "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/libduckdb-src.zip" \
@@ -18,7 +24,7 @@ RUN apt-get update && apt-get install -y ca-certificates clang curl unzip binuti
     unzip -q /tmp/libduckdb-src.zip -d /tmp/duckdb && \
     test -f /tmp/duckdb/duckdb.cpp && \
     test -f /tmp/duckdb/duckdb.h && \
-    clang++ -std=c++11 -O3 -DNDEBUG -fPIC \
+    ccache clang++ -std=c++11 -O3 -DNDEBUG -fPIC \
       -DDUCKDB_EXTENSION_AUTOINSTALL_DEFAULT=1 \
       -DDUCKDB_EXTENSION_AUTOLOAD_DEFAULT=1 \
       -c /tmp/duckdb/duckdb.cpp -o /tmp/duckdb/duckdb.o && \
@@ -72,6 +78,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
     cp /build/target/release/sigiro /build/sigiro
 
 FROM debian:trixie-slim
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/sigiro /usr/local/bin/sigiro
 # Pre-download DuckDB extensions so the first `sigiro serve` doesn't hang on a
@@ -82,7 +89,16 @@ COPY --from=builder /build/sigiro /usr/local/bin/sigiro
 # deploy sets the same SIGIRO_EXTENSION_DIR so serve reads these baked extensions.
 ENV SIGIRO_DATA_DIR=/var/lib/sigiro \
     SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
-RUN sigiro fetch-extensions
+# Fetch extensions into a PERSISTED cache mount first, then bake them into the
+# image layer. The sigiro binary layer changes every build, so this step reran
+# and re-downloaded ~8 extensions each time; DuckDB's `INSTALL` is a no-op when
+# an extension is already present, so a per-arch cache mount turns the repeat
+# downloads into a fast copy. The mount is never part of the image — only the
+# copied /opt/sigiro/extensions dir is, so the final image is unchanged.
+RUN --mount=type=cache,target=/opt/ext-cache,id=sigiro-ext-${TARGETARCH} \
+    SIGIRO_EXTENSION_DIR=/opt/ext-cache sigiro fetch-extensions && \
+    mkdir -p /opt/sigiro/extensions && \
+    cp -a /opt/ext-cache/. /opt/sigiro/extensions/
 RUN groupadd --system --gid 10001 sigiro && \
     useradd --system --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent \
       --shell /usr/sbin/nologin sigiro
