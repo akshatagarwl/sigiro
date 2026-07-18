@@ -76,9 +76,8 @@ pub static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREA
 });
 
 /// DuckDB memory cap per shared project database. Default: 400 MB — safely
-/// under the smallest hosted VM (fly.toml provisions 512 MB), so DuckDB
-/// errors/spills instead of the OS OOM-killing the whole process. Still
-/// env-overridable for larger boxes.
+/// under a small hosted container's limit, so DuckDB errors/spills instead of
+/// the OS OOM-killing the whole process. Still env-overridable for larger boxes.
 pub static DUCKDB_MEMORY_LIMIT: Envar<String> =
     Envar::on_startup("SIGIRO_DUCKDB_MEMORY_LIMIT", || {
         EnvarDef::Default("400MB".to_string())
