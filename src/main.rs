@@ -99,6 +99,10 @@ enum Command {
     /// `sigiro serve` doesn't hang on a 30-90s blocking download (F-01).
     /// Use this once after installing sigiro, or before an offline deploy.
     FetchExtensions,
+    /// Probe the local /health endpoint and exit 0 if ready, non-zero
+    /// otherwise. This is the container HEALTHCHECK for the distroless image,
+    /// which has no shell or curl for the usual `curl -f /health` probe.
+    Healthcheck,
 }
 
 /// Format output. If the user did not explicitly pass --output, and stdout
@@ -346,6 +350,23 @@ async fn main() -> Result<()> {
                 "DuckDB extensions pre-warmed into {}",
                 sigiro::storage::resolve_extension_dir(&dir)
             );
+        }
+        Some(Command::Healthcheck) => {
+            // Shell-free liveness probe for the distroless container HEALTHCHECK.
+            // /health is public (no auth). Exit 0 only when fully Ready so the
+            // orchestrator doesn't route to a still-initializing instance.
+            let base_url = sigiro::config::ENDPOINT
+                .value()
+                .unwrap_or_else(|_| "http://localhost:9999".to_string());
+            let client =
+                sigiro::client::SigiroClient::new(&base_url, sigiro::client::ClientAuth::Open);
+            match client.health().await {
+                Ok(HealthResponse::Ready) => {}
+                other => {
+                    eprintln!("healthcheck: not ready: {other:?}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
     Ok(())

@@ -5,7 +5,7 @@
 # QEMU). Carries both GNU cross toolchains + cargo-chef for dep-layer caching.
 FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev \
+      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev mold \
       gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
       gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*
@@ -42,7 +42,8 @@ FROM chef AS builder
 ARG TARGETARCH
 COPY --from=duckdb-static /opt/duckdb /opt/duckdb
 ENV DUCKDB_LIB_DIR=/opt/duckdb DUCKDB_INCLUDE_DIR=/opt/duckdb DUCKDB_STATIC=1 \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true
+    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    RUSTFLAGS="-Clink-arg=-fuse-ld=mold"
 COPY --from=planner /build/recipe.json recipe.json
 # Native cross-compile: rustc runs on $BUILDPLATFORM and emits target-arch code,
 # linked by the matching gcc-<arch>-linux-gnu (correct libstdc++ ABI for the
@@ -91,5 +92,11 @@ ENV SIGIRO_DATA_DIR=/var/lib/sigiro \
     SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
 USER nonroot
 EXPOSE 4317 4318 9999
+# Shell-free healthcheck: distroless has no curl/sh, so the usual
+# `curl -f /health` can't run. `sigiro healthcheck` exits 0 only when Ready.
+# Deploy configs (e.g. kamal accessory health-cmd) must use this exec form too,
+# not a curl string, or the container is wrongly reported unhealthy.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=120s --retries=6 \
+  CMD ["/usr/local/bin/sigiro", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/sigiro"]
 CMD ["serve"]
