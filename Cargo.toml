@@ -139,6 +139,7 @@ debug = false
 [profile.release]
 lto = "thin"
 codegen-units = 1
+strip = true
 
 [profile.profiling]
 inherits = "release"

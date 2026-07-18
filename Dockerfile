@@ -91,16 +91,11 @@ COPY --from=builder /build/sigiro /usr/local/bin/sigiro
 # deploy sets the same SIGIRO_EXTENSION_DIR so serve reads these baked extensions.
 ENV SIGIRO_DATA_DIR=/var/lib/sigiro \
     SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
-# Fetch extensions into a PERSISTED cache mount first, then bake them into the
-# image layer. The sigiro binary layer changes every build, so this step reran
-# and re-downloaded ~8 extensions each time; DuckDB's `INSTALL` is a no-op when
-# an extension is already present, so a per-arch cache mount turns the repeat
-# downloads into a fast copy. The mount is never part of the image — only the
-# copied /opt/sigiro/extensions dir is, so the final image is unchanged.
-RUN --mount=type=cache,target=/opt/ext-cache,id=sigiro-ext-${TARGETARCH} \
-    SIGIRO_EXTENSION_DIR=/opt/ext-cache sigiro fetch-extensions && \
-    mkdir -p /opt/sigiro/extensions && \
-    cp -a /opt/ext-cache/. /opt/sigiro/extensions/
+# Bake only the loadable extensions (ducklake/postgres/httpfs + quack); the rest
+# are statically linked into the binary. Fetch straight into the baked dir — no
+# cache mount, which previously leaked stale extensions from earlier builds when
+# the list changed. With only ~4 extensions this download is cheap.
+RUN sigiro fetch-extensions
 RUN groupadd --system --gid 10001 sigiro && \
     useradd --system --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent \
       --shell /usr/sbin/nologin sigiro
