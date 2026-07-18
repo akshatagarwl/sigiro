@@ -1361,9 +1361,9 @@ dependencies = [
 
 [[package]]
 name = "drain3"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8a56df96bddd333550107ff68185b3db2f00347fa2fe36c4ec85ee91db62849"
+checksum = "290098ff499281e70f820fcbcd25d1501b22d67d5571897c90f562fdf4e618c2"
 dependencies = [
  "bon",
  "fastrand",

@@ -30,11 +30,13 @@ fn masking_rules() -> Vec<drain3::MaskingInstruction> {
         rule(r"[0-9a-fA-F:]{3,}:[0-9a-fA-F:.]+", "<IP>"),
         // Hex ids of 8+ chars (trace/span ids, hashes).
         rule(r"\b[0-9a-fA-F]{8,}\b", "<HEX>"),
-        // Int / decimal / scientific. `\b`-anchored so a digit that starts a run
-        // right after a letter or underscore (`user_0`, `test1`) is left alone,
-        // while a run led by punctuation or standing alone (`thread-0`,
-        // `latency=42.5ms`) is masked. A leading `-` is kept as a constant.
-        rule(r"\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", "<NUM>"),
+        // Int / decimal / scientific. The `(^|[^\w])` prefix plus `${1}` in the
+        // mask re-emit the boundary char, so a digit inside an identifier
+        // (`user_0`) is left alone while a punctuation-led or standalone number
+        // is masked. A leading `-` is absorbed when it starts the number
+        // (`code=-1` → `code=<NUM>`) but kept when it joins a word
+        // (`thread-0` → `thread-<NUM>`). Needs drain3 >= 0.3 (mask expansion).
+        rule(r"(^|[^\w])(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)", "${1}<NUM>"),
     ]
 }
 
@@ -73,20 +75,10 @@ impl DrainTree {
             return (String::new(), 0, Vec::new());
         }
 
-        // drain3 applies `masking_rules()` internally on both paths.
-        if let Err(e) = self.matcher.add_log_message(trimmed) {
-            tracing::debug!("drain3 training failed for line: {e}");
-        }
-        let mut args = Vec::new();
-        let (template_id, matched) = self.matcher.match_into(trimmed, &mut args);
-
-        // Reconstruct the template token sequence: constants (already masked by
-        // drain3) verbatim, param positions as `<*>`.
-        let template = match matched
-            .then(|| self.matcher.template_for_id(template_id))
-            .flatten()
-        {
-            Some(t) => {
+        // drain3 masks the line (see `masking_rules()`) and returns the template
+        // of the cluster it trained into — one masking pass, no separate match.
+        let template = match self.matcher.add_log_message(trimmed) {
+            Ok(t) => {
                 let mut dense = t.tokens().iter();
                 (0..t.token_count())
                     .map(|i| {
@@ -101,7 +93,10 @@ impl DrainTree {
                     })
                     .join(" ")
             }
-            None => trimmed.to_string(),
+            Err(e) => {
+                tracing::debug!("drain3 training failed for line: {e}");
+                trimmed.to_string()
+            }
         };
 
         let id = hash_template(&template);
