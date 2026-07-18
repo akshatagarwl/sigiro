@@ -471,7 +471,7 @@ impl ControlPlane {
 }
 
 /// `"default"` is reserved in the HOSTED control plane: it names the local/edge
-/// project (pre-created by `run_serve`, reachable via Open/legacy-Key auth), so
+/// project (pre-created by `run_serve`, reachable via Open auth), so
 /// a hosted operator must never provision a control-plane tenant literally
 /// named `default`. `sanitize_tenant_id` deliberately still ACCEPTS `"default"`
 /// (the edge depends on it) — this extra rejection applies only on the hosted

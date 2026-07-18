@@ -253,13 +253,9 @@ impl MsgRouter {
         Ok(())
     }
 
-    /// Route a message to the appropriate per-project flusher.
-    /// Creates the flusher task on first message for a project.
-    /// Applies backpressure via bounded channel — sender blocks when full
-    /// rather than silently dropping data.
-    /// Explicitly create and register a flusher for a project.
-    /// DEPRECATED: Prefer using send() which lazily creates the flusher.
-    /// Caller (DI container / server setup) can invoke this for eager initialization.
+    /// Eagerly create and register a flusher for a project. `send()` does this
+    /// lazily on first message; call this when you want the flusher (and its
+    /// connection) ready before any data arrives.
     #[instrument(skip_all, fields(project_id = %project_id))]
     pub fn register_flusher(&self, project_id: &str) -> Result<(), RouterError> {
         self.ensure_flusher(project_id)
