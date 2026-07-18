@@ -11,26 +11,28 @@ WORKDIR /build
 FROM debian:trixie-slim AS duckdb-static
 ARG DUCKDB_VERSION=1.5.3
 ARG TARGETARCH
-# ccache (persisted via a BuildKit cache mount) makes the multi-minute DuckDB
-# amalgamation compile a cache hit whenever this layer is invalidated but the
-# mount survives — so re-timing/iterating on the image doesn't pay the full
-# clang++ -O3 on duckdb.cpp again. Produces a byte-identical archive.
-RUN --mount=type=cache,target=/root/.ccache,id=ccache-duckdb-${TARGETARCH} \
-    apt-get update && apt-get install -y ca-certificates clang curl unzip binutils ccache && rm -rf /var/lib/apt/lists/* && \
-    mkdir -p /opt/duckdb /tmp/duckdb && \
+# Link DuckDB's PREBUILT static libs instead of compiling the amalgamation. The
+# old path ran `clang++ -O3` on the ~5MB duckdb.cpp (minutes, and murder under
+# QEMU for the cross-arch image half). DuckDB ships static-libs-linux-<arch>.zip
+# as ~22 fragment archives (core libduckdb_static.a + third-party like re2/fmt/
+# zstd/jemalloc + optional *_extension.a). Merge core + third-party into the one
+# libduckdb_static.a that libduckdb-sys' non-bundled path links; the extension
+# fragments are left out because sigiro loads extensions at runtime (see
+# `sigiro fetch-extensions`). This is a download + `ar` merge — no compilation.
+RUN apt-get update && apt-get install -y ca-certificates curl unzip binutils && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /opt/duckdb /tmp/duckdb && cd /tmp/duckdb && \
     curl --fail --location --retry 3 \
-      "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/libduckdb-src.zip" \
-      --output /tmp/libduckdb-src.zip && \
-    unzip -q /tmp/libduckdb-src.zip -d /tmp/duckdb && \
-    test -f /tmp/duckdb/duckdb.cpp && \
-    test -f /tmp/duckdb/duckdb.h && \
-    ccache clang++ -std=c++11 -O3 -DNDEBUG -fPIC \
-      -DDUCKDB_EXTENSION_AUTOINSTALL_DEFAULT=1 \
-      -DDUCKDB_EXTENSION_AUTOLOAD_DEFAULT=1 \
-      -c /tmp/duckdb/duckdb.cpp -o /tmp/duckdb/duckdb.o && \
-    ar rcs /opt/duckdb/libduckdb_static.a /tmp/duckdb/duckdb.o && \
-    cp /tmp/duckdb/duckdb.h /opt/duckdb/duckdb.h && \
-    rm -rf /tmp/duckdb /tmp/libduckdb-src.zip
+      "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/static-libs-linux-${TARGETARCH}.zip" \
+      --output static-libs.zip && \
+    unzip -q static-libs.zip && \
+    test -f duckdb.h && test -f libduckdb_static.a && \
+    { echo "create libduckdb_merged.a"; \
+      for a in *.a; do echo "addlib $a"; done; \
+      echo "save"; echo "end"; } | ar -M && \
+    ranlib libduckdb_merged.a && \
+    cp libduckdb_merged.a /opt/duckdb/libduckdb_static.a && \
+    cp duckdb.h /opt/duckdb/duckdb.h && \
+    cd / && rm -rf /tmp/duckdb
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
