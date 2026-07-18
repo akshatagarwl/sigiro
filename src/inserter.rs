@@ -253,14 +253,6 @@ impl MsgRouter {
         Ok(())
     }
 
-    /// Eagerly create and register a flusher for a project. `send()` does this
-    /// lazily on first message; call this when you want the flusher (and its
-    /// connection) ready before any data arrives.
-    #[instrument(skip_all, fields(project_id = %project_id))]
-    pub fn register_flusher(&self, project_id: &str) -> Result<(), RouterError> {
-        self.ensure_flusher(project_id)
-    }
-
     /// Ensure a flusher exists for the project (lazy creation on first use).
     /// Creates the connection and spawns the flusher task if not yet registered.
     /// Thread-safe via DashMap entry API. No side effects if already initialized.
@@ -271,7 +263,7 @@ impl MsgRouter {
         match self.project_senders.entry(pid.clone()) {
             Entry::Occupied(_) => {
                 // Already registered — return Ok, caller can send immediately.
-                tracing::debug!(project_id = %pid, "register_flusher: flusher already exists for project");
+                tracing::debug!(project_id = %pid, "ensure_flusher: flusher already exists for project");
                 Ok(())
             }
             Entry::Vacant(e) => {
@@ -290,21 +282,18 @@ impl MsgRouter {
 
                 let (tx, rx) = mpsc::channel::<FlusherCommand>(PROJECT_CHANNEL_CAPACITY);
                 let pid_spawn = pid.clone();
-                tracing::info!(project_id = %pid, "register_flusher: spawning new flusher task");
+                tracing::info!(project_id = %pid, "ensure_flusher: spawning new flusher task");
                 let handle = tokio::spawn(async move {
                     run_flusher(pid_spawn, writer, rx, pool, cfg).await;
                 });
 
                 e.insert((tx, handle));
-                tracing::info!(project_id = %pid, "register_flusher: inserted new sender into project_senders");
+                tracing::info!(project_id = %pid, "ensure_flusher: inserted new sender into project_senders");
                 Ok(())
             }
         }
     }
 
-    /// Route a message to the appropriate per-project flusher.
-    /// Flusher MUST be registered first via register_flusher().
-    /// Returns Err if no flusher is registered for this project.
     /// Route a message to the appropriate per-project flusher.
     /// Creates the flusher task lazily on first message for a project.
     #[instrument(skip_all, fields(project_id = %msg.project_id()))]

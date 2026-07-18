@@ -243,10 +243,6 @@ async fn e2e_profiles_pipeline() {
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
 
-    // Explicit DI: initialize and register flusher before sending
-    let _ = pool.create_project("profile_test").unwrap();
-    router.register_flusher("profile_test").unwrap();
-
     // Send CPU profile samples with known stack traces
     let stacks = vec![
         (
@@ -434,10 +430,6 @@ async fn e2e_profiles_multi_type() {
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
 
-    // Explicit DI: initialize and register flusher before sending
-    let _ = pool.create_project("multi_type").unwrap();
-    router.register_flusher("multi_type").unwrap();
-
     // CPU samples
     let cpu_stacks = vec![(
         &["main", "compute"][..],
@@ -519,10 +511,6 @@ async fn e2e_profiles_empty_batch() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-
-    // Explicit DI: initialize and register flusher before sending
-    let _ = pool.create_project("empty_profiles").unwrap();
-    router.register_flusher("empty_profiles").unwrap();
 
     // Empty profiles batch
     router

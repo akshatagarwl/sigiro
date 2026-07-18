@@ -152,10 +152,6 @@ async fn e2e_pyroscope_native_pipeline() {
         odt.unix_timestamp() * 1_000_000_000 + (odt.microsecond() as i64) * 1_000
     };
 
-    // Explicit DI: initialize project and register flusher
-    let _ = pool.create_project("pyro_test").unwrap();
-    router.register_flusher("pyro_test").unwrap();
-
     // Build gzip-compressed PushRequest with known stack trace
     let bytes = build_pyroscope_push_request(
         "pyro-svc",
@@ -296,9 +292,6 @@ async fn e2e_pyroscope_multi_series() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000_000 + (odt.microsecond() as i64) * 1_000
     };
-
-    let _ = pool.create_project("pyro_multi").unwrap();
-    router.register_flusher("pyro_multi").unwrap();
 
     // Series 1: service_a with one sample
     let bytes_a = build_pyroscope_push_request(

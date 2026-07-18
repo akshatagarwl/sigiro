@@ -338,10 +338,6 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
 
-    // Explicit DI: initialize project connection and register flusher before sending
-    let _ = pool.create_project("proj_e2e").unwrap();
-    router.register_flusher("proj_e2e").unwrap();
-
     // Send 5 batches of 20 spans for "checkout" service
     for i in 0..5 {
         let batch = make_spans_batch(20, "checkout", "POST /checkout", now_us + i * 100);
@@ -407,12 +403,6 @@ async fn e2e_multi_project_isolation() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-
-    // Explicit DI: initialize and register flushers for both projects before sending
-    let _ = pool.create_project("proj_alpha").unwrap();
-    router.register_flusher("proj_alpha").unwrap();
-    let _ = pool.create_project("proj_beta").unwrap();
-    router.register_flusher("proj_beta").unwrap();
 
     // Project A: "alpha-svc" with 30 spans
     router
@@ -494,10 +484,6 @@ async fn e2e_services_endpoint_simulation() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-
-    // Explicit DI: initialize and register flusher for the shared project
-    let _ = pool.create_project("proj_services").unwrap();
-    router.register_flusher("proj_services").unwrap();
 
     // Ingest spans for 3 different services into the same project
     router
@@ -655,10 +641,6 @@ async fn e2e_investigation_all_signals() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-
-    // Explicit DI: initialize and register flusher for the project
-    let _ = pool.create_project("proj_all_signals").unwrap();
-    router.register_flusher("proj_all_signals").unwrap();
 
     // Ingest spans
     router
@@ -862,10 +844,6 @@ async fn e2e_drain_log_template_dedup() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-
-    // Explicit DI: initialize and register flusher for the project
-    let _ = pool.create_project("drain_test").unwrap();
-    router.register_flusher("drain_test").unwrap();
 
     // Send 20 logs that should collapse into 2 templates:
     // Template 1: "Request <*> failed with code 500" (10 logs)

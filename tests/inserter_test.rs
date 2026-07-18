@@ -117,10 +117,6 @@ async fn inserter_processes_spans_for_single_project() {
     let router = MsgRouter::new(pool.clone());
     router.start();
 
-    // Explicit DI: initialize and register flusher before sending
-    let _ = pool.create_project("test_project").unwrap();
-    router.register_flusher("test_project").unwrap();
-
     // Send 10 batches of 100 spans
     for _ in 0..10 {
         let batch = make_spans_batch(100);
@@ -153,12 +149,6 @@ async fn inserter_isolates_projects() {
     let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
-
-    // Explicit DI: initialize and register flushers for both projects before sending
-    let _ = pool.create_project("project_a").unwrap();
-    router.register_flusher("project_a").unwrap();
-    let _ = pool.create_project("project_b").unwrap();
-    router.register_flusher("project_b").unwrap();
 
     // Send to two different projects
     for _ in 0..5 {
@@ -216,12 +206,6 @@ async fn inserter_handles_backpressure() {
     let router = MsgRouter::new(pool.clone());
     router.start();
 
-    // Explicit DI: initialize and register flushers for both projects before sending
-    let _ = pool.create_project("fast_project").unwrap();
-    router.register_flusher("fast_project").unwrap();
-    let _ = pool.create_project("slow_project").unwrap();
-    router.register_flusher("slow_project").unwrap();
-
     // Send many messages quickly — with backpressure, none are dropped
     for i in 0..100 {
         router
@@ -274,10 +258,6 @@ async fn inserter_throughput_single_project() {
     let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
     router.start();
-
-    // Explicit DI: initialize and register flusher before sending
-    let _ = pool.create_project("throughput_test").unwrap();
-    router.register_flusher("throughput_test").unwrap();
 
     let start = Instant::now();
     let batch_size = 500;
