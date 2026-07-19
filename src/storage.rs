@@ -39,6 +39,43 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     Ok(())
 }
 
+/// A classified DuckLake attach failure. Carries enough for the connection
+/// pool's retry loop to decide whether trying again can ever help: transient
+/// causes (the catalog Postgres still booting, a sibling container's DNS not yet
+/// resolvable) clear on their own; permanent ones (the catalog pinned to a
+/// different storage backend, wrong credentials, a misconfiguration) never will,
+/// and retrying them only wedges the runtime behind the blocking retry loop.
+///
+/// The raw DuckDB error text is deliberately discarded before this is built: a
+/// Postgres ATTACH failure can echo the connection string (with its password),
+/// and scrubbing an arbitrary secret byte-form out of error text is not reliable
+/// — so we classify in-process and surface only a secret-free category + hint.
+#[derive(Debug, Clone)]
+pub struct AttachError {
+    pub category: &'static str,
+    pub retryable: bool,
+    message: String,
+}
+
+impl AttachError {
+    /// Categories whose cause is transient and clears without operator action.
+    /// Everything else is permanent — fail fast rather than retry.
+    fn is_retryable(category: &str) -> bool {
+        matches!(
+            category,
+            "dns" | "unreachable" | "unknown" | "catalog_conflict"
+        )
+    }
+}
+
+impl std::fmt::Display for AttachError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for AttachError {}
+
 /// Initialize DuckLake with PostgreSQL catalog + optional S3 data files.
 /// Multi-writer safe — multiple sigiro instances can attach to the same catalog.
 #[instrument(skip(conn), fields(dir = %project_dir))]
@@ -137,12 +174,30 @@ pub fn init_distributed(
         } else {
             "unknown"
         };
-        anyhow::anyhow!(
-            "failed to attach DuckLake PostgreSQL catalog for tenant {tenant_id} \
-             (metadata schema {}, category {category}) — verify SIGIRO_CATALOG_URL \
-             host/port/credentials and that PostgreSQL is reachable",
-            attach.metadata_schema,
-        )
+        let retryable = AttachError::is_retryable(category);
+        // `data_path` is the signature of a backend swap: DuckLake pins DATA_PATH
+        // into the catalog at creation, so a config that later points elsewhere
+        // (e.g. an S3-created catalog now configured for local Parquet) can never
+        // attach. Say that plainly instead of sending the operator to chase
+        // connectivity that is fine.
+        let hint = if category == "data_path" {
+            "the tenant catalog was created against a different DATA_PATH (storage \
+             backend) than the current config — DuckLake pins data_path at creation, \
+             so it cannot be swapped. Restore the original backend (e.g. set \
+             SIGIRO_S3_BUCKET) or reset/migrate the tenant catalog"
+        } else {
+            "verify SIGIRO_CATALOG_URL host/port/credentials and that PostgreSQL is \
+             reachable"
+        };
+        anyhow::Error::from(AttachError {
+            category,
+            retryable,
+            message: format!(
+                "failed to attach DuckLake PostgreSQL catalog for tenant {tenant_id} \
+                 (metadata schema {}, category {category}) — {hint}",
+                attach.metadata_schema,
+            ),
+        })
     })?;
     // NEVER log the connection string — it embeds the PostgreSQL password.
     // tenant_id + metadata_schema + data_path fully identify the attach.

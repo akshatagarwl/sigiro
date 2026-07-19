@@ -383,10 +383,25 @@ impl ProjectPool {
                     return Ok(());
                 }
                 Err(e) => {
+                    // Permanent failures (backend/data_path mismatch, bad
+                    // credentials, misconfiguration) never clear — retrying only
+                    // wedges the pool behind ATTACH_ATTEMPTS blocking sleeps while
+                    // every incoming request piles up. Fail fast and loud; only
+                    // genuinely transient causes earn the retry loop.
+                    let fatal = e
+                        .downcast_ref::<crate::storage::AttachError>()
+                        .filter(|a| !a.retryable)
+                        .map(|a| a.category);
+                    if let Some(category) = fatal {
+                        return Err(e.context(format!(
+                            "DuckLake attach failed with a permanent error \
+                             (category {category}); not retrying"
+                        )));
+                    }
                     tracing::warn!(
                         attempt,
                         max = ATTACH_ATTEMPTS,
-                        "DuckLake attach failed: {e:#}"
+                        "DuckLake attach failed (transient): {e:#}"
                     );
                     last_err = Some(e);
                     std::thread::sleep(ATTACH_BACKOFF);
