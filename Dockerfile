@@ -5,7 +5,7 @@
 # QEMU). Carries both GNU cross toolchains + cargo-chef for dep-layer caching.
 FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev \
+      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev mold \
       gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
       gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*
@@ -47,6 +47,13 @@ COPY --from=planner /build/recipe.json recipe.json
 # Native cross-compile: rustc runs on $BUILDPLATFORM and emits target-arch code,
 # linked by the matching gcc-<arch>-linux-gnu (correct libstdc++ ABI for the
 # gcc-built DuckDB static). Cook deps, then build the crate.
+#
+# `mold -run` wraps the build so mold (perf-neutral, only faster linking — no
+# runtime cost) intercepts the linker exec via LD_PRELOAD instead of `-fuse-ld`.
+# The cross gcc can't resolve `-fuse-ld=mold` (collect2 can't find ld.mold), but
+# -run transparently redirects its `<arch>-linux-gnu-ld` call to mold, which
+# cross-links target-arch objects fine. Linking the huge merged DuckDB static lib
+# is the build's bottleneck, so this is what keeps `just image` under 3 minutes.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
     set -eux; \
     case "$TARGETARCH" in \
@@ -56,7 +63,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
     esac; \
     V=$(echo "$T" | tr 'a-z-' 'A-Z_'); Tu=$(echo "$T" | tr '-' '_'); \
     export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
-    cargo chef cook --release --target "$T" --recipe-path recipe.json
+    mold -run cargo chef cook --release --target "$T" --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 COPY benches/ benches/
@@ -68,7 +75,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
     esac; \
     V=$(echo "$T" | tr 'a-z-' 'A-Z_'); Tu=$(echo "$T" | tr '-' '_'); \
     export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
-    cargo build --release --target "$T" --bin sigiro && \
+    mold -run cargo build --release --target "$T" --bin sigiro && \
     cp "target/${T}/release/sigiro" /build/sigiro && \
     upx -6 /build/sigiro
 
