@@ -54,7 +54,13 @@ COPY --from=planner /build/recipe.json recipe.json
 # -run transparently redirects its `<arch>-linux-gnu-ld` call to mold, which
 # cross-links target-arch objects fine. Linking the huge merged DuckDB static lib
 # is the build's bottleneck, so this is what keeps `just image` under 3 minutes.
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
+#
+# Per-arch cache id: amd64 + arm64 build concurrently, so a SHARED cargo registry
+# cache races on .cargo-ok during crate extraction ("File exists (os error 17)",
+# rust-lang/cargo#1700) — latent until a big new dep subtree (augurs →
+# nalgebra/argmin/rv) gave both arches many crates to extract at once. Separate
+# ids per arch keep the builds parallel with zero contention.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGETARCH \
     set -eux; \
     case "$TARGETARCH" in \
       amd64) T=x86_64-unknown-linux-gnu; P=x86_64-linux-gnu ;; \
@@ -67,7 +73,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 COPY benches/ benches/
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGETARCH \
     set -eux; \
     case "$TARGETARCH" in \
       amd64) T=x86_64-unknown-linux-gnu; P=x86_64-linux-gnu ;; \
