@@ -156,43 +156,26 @@ pub fn compute_coverage(
 }
 
 // ---------------------------------------------------------------------------
-// AdaptiveConfig — vary detail level based on window size
+// Metric bucket grain — the one query knob that scales with window size
 // ---------------------------------------------------------------------------
 
-/// | Window    | Metric buckets | Span exemplars | Log limit |
-/// |-----------|----------------|----------------|-----------|
-/// | < 15m     | 1 minute       | 50             | 50        |
-/// | 15m - 2h  | 5 minutes      | 20             | 40        |
-/// | > 2h      | 1 hour         | 0 (summaries)  | 30        |
-pub struct AdaptiveConfig {
-    pub bucket_interval: &'static str,
-    pub span_limit: i64,
-    pub log_limit: i64,
-}
-
-pub fn adaptive_config(from_ts: i64, to_ts: i64) -> AdaptiveConfig {
+/// The metric bucket grain, scaled to the window so a 10-minute look isn't one
+/// bar and a 7-day look isn't 10k rows. This is the only genuinely
+/// window-dependent knob: on real data, span/log payloads stay tiny (≤72KB)
+/// regardless of width, so those use flat caps in the query, not tiers — and
+/// wide windows return exemplar spans like any other (the old `span_limit: 0`
+/// blanked exactly the surveys that most need them).
+pub fn metric_bucket_interval(from_ts: i64, to_ts: i64) -> &'static str {
     let window_us = to_ts - from_ts;
     let fifteen_min = 15 * 60 * 1_000_000_i64;
     let two_hours = 2 * 3600 * 1_000_000_i64;
 
     if window_us <= fifteen_min {
-        AdaptiveConfig {
-            bucket_interval: "1 minute",
-            span_limit: 50,
-            log_limit: 50,
-        }
+        "1 minute"
     } else if window_us <= two_hours {
-        AdaptiveConfig {
-            bucket_interval: "5 minutes",
-            span_limit: 20,
-            log_limit: 40,
-        }
+        "5 minutes"
     } else {
-        AdaptiveConfig {
-            bucket_interval: "1 hour",
-            span_limit: 0,
-            log_limit: 30,
-        }
+        "1 hour"
     }
 }
 

@@ -11,7 +11,7 @@ use crate::types::{StatusCode, TimestampMicros};
 
 // Re-export pure types and functions from analysis submodule.
 pub use analysis::{
-    AdaptiveConfig, Coverage, ServiceDependency, SignalCoverage, Window, adaptive_config,
+    Coverage, ServiceDependency, SignalCoverage, Window, metric_bucket_interval,
     compute_coverage, us_to_iso,
 };
 
@@ -299,12 +299,12 @@ fn investigate_one(
     to_ts: i64,
     prefix: &str,
 ) -> Result<InvestigationBlock> {
-    let config = adaptive_config(from_ts, to_ts);
+    let bucket = metric_bucket_interval(from_ts, to_ts);
     let window_us = to_ts - from_ts;
     // Baseline window: 4x the investigation window, ending where it starts.
     let baseline_from = from_ts.saturating_sub(window_us.saturating_mul(4));
 
-    let sql = build_investigation_sql(prefix, &config);
+    let sql = build_investigation_sql(prefix, bucket);
     let json: String = conn
         .query_row(
             &sql,
@@ -375,11 +375,8 @@ fn investigate_one(
 ///
 /// Every section is a CTE; the final SELECT packs them into one JSON object
 /// via scalar subqueries, so the whole investigation is a single round-trip.
-pub fn build_investigation_sql(prefix: &str, config: &AdaptiveConfig) -> String {
+pub fn build_investigation_sql(prefix: &str, bucket: &str) -> String {
     let err = StatusCode::Error.as_i32();
-    let bucket = config.bucket_interval;
-    let span_limit = config.span_limit;
-    let log_limit = config.log_limit;
 
     format!(
         r#"
@@ -499,7 +496,7 @@ top_spans AS (
            span_attributes, events_json
     FROM win_spans
     ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC
-    LIMIT {span_limit}
+    LIMIT 25
 ),
 raw_logs AS (
     SELECT epoch_us(timestamp) AS ts_us,
@@ -527,7 +524,7 @@ log_patterns AS (
     LEFT JOIN {prefix}sigiro_log_templates t ON l.template_id = t.template_id
     GROUP BY pattern, l.severity_text
     ORDER BY cnt DESC
-    LIMIT {log_limit}
+    LIMIT 50
 ),
 deploy_events AS (
     SELECT min(detected_at) AS detected_at,

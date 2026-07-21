@@ -1,6 +1,6 @@
 use parking_lot::Mutex;
 use sigiro::investigate::{
-    InvestigateRequest, adaptive_config, compute_coverage, investigate, us_to_iso,
+    InvestigateRequest, compute_coverage, investigate, metric_bucket_interval, us_to_iso,
 };
 use std::sync::Arc;
 
@@ -439,33 +439,15 @@ fn log_template_dedup_uuids() {
 }
 
 #[test]
-fn adaptive_config_short_window() {
+fn metric_bucket_scales_with_window() {
     let now = 1_000_000_000_000_i64;
-    let config = adaptive_config(now - 5 * 60 * 1_000_000, now);
-    assert_eq!(config.bucket_interval, "1 minute");
-    assert_eq!(config.span_limit, 50);
-    assert_eq!(config.log_limit, 50);
+    assert_eq!(metric_bucket_interval(now - 5 * 60 * 1_000_000, now), "1 minute");
+    assert_eq!(metric_bucket_interval(now - 30 * 60 * 1_000_000, now), "5 minutes");
+    assert_eq!(metric_bucket_interval(now - 3 * 3600 * 1_000_000, now), "1 hour");
 }
 
 #[test]
-fn adaptive_config_medium_window() {
-    let now = 1_000_000_000_000_i64;
-    let config = adaptive_config(now - 30 * 60 * 1_000_000, now);
-    assert_eq!(config.bucket_interval, "5 minutes");
-    assert_eq!(config.span_limit, 20);
-}
-
-#[test]
-fn adaptive_config_large_window() {
-    let now = 1_000_000_000_000_i64;
-    let config = adaptive_config(now - 3 * 3600 * 1_000_000, now);
-    assert_eq!(config.bucket_interval, "1 hour");
-    assert_eq!(config.span_limit, 0);
-    assert_eq!(config.log_limit, 30);
-}
-
-#[test]
-fn investigate_large_window_no_spans() {
+fn investigate_large_window_still_returns_spans() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -489,8 +471,8 @@ fn investigate_large_window_no_spans() {
     let blocks = investigate(&shared.lock(), &req, "").unwrap();
     let block = &blocks["svc"];
     assert!(
-        block.spans.is_empty(),
-        ">2h window should omit flat spans (operation_summaries suffice)"
+        !block.spans.is_empty(),
+        ">2h window should still return exemplar spans (flat cap, no more span_limit: 0 cliff)"
     );
     assert!(!block.operation_summaries.is_empty());
 }
