@@ -198,10 +198,18 @@ pub struct OperationSummary {
     pub baseline_error_pct: Option<f64>,
     pub baseline_p95_us: Option<f64>,
     pub baseline_count: Option<i64>,
-    /// Whether this operation is anomalous compared to baseline (None when
-    /// there is no baseline data to compare against).
+    /// Statistical judgment vs this operation's own 4x-preceding baseline:
+    /// a one-sided two-proportion z-test on the error rate (z >= 2.576,
+    /// ~p < 0.005, worse-only) and a latency test (current p95 beyond
+    /// baseline mean + 3σ). `Some(true)` = at least one test fired;
+    /// `Some(false)` = at least one test ran and none fired; `None` = no
+    /// test was applicable (insufficient baseline — can't judge). Note a
+    /// chronic-but-stable failure rate is NOT anomalous under this
+    /// definition — it IS the baseline; read `error_pct` for chronic health.
     pub is_anomalous: Option<bool>,
-    /// Reason for anomaly if detected.
+    /// Which statistical test(s) fired and the statistic, e.g.
+    /// "error rate 30.0% vs baseline 2.0% (two-proportion z=7.2, one-sided
+    /// p<0.005)".
     pub anomaly_reason: Option<String>,
     /// Ready-to-run query for the raw spans behind this operation (errors
     /// first, then slowest). Sits next to `anomaly_reason` on purpose: when an
@@ -605,6 +613,31 @@ NULLIF(json_extract_string({q}span_attributes, 'server.address'), '')), '') \
     )
 }
 
+// --- Anomaly-detection statistical parameters -------------------------------
+// These are STATISTICAL conventions, not tuning knobs: the detection itself is
+// entirely baseline-derived (each operation is judged against its own
+// 4x-preceding window), and these only set significance/validity.
+
+/// One-sided critical value for the two-proportion z-test: 2.576 ≈ p < 0.005.
+const Z_CRITICAL: f64 = 2.576;
+/// Normal-approximation validity for the z-test: pooled expected error count
+/// must be at least this on each side (the classic n·p >= 5 rule).
+const MIN_EXPECTED_ERRORS: f64 = 5.0;
+/// The latency test needs a usable baseline distribution: at least this many
+/// baseline spans (mean/σ of fewer are noise).
+const MIN_BASELINE_SPANS_FOR_LATENCY: i64 = 20;
+/// Latency fires when current p95 exceeds baseline mean + this many σ.
+const LATENCY_SIGMA: f64 = 3.0;
+
+/// SQL snippet rendering a µs duration expression as prose ("2.1s" /
+/// "82.3ms") for `anomaly_reason` — µs stays the internal unit everywhere.
+fn fmt_duration_us_expr(expr: &str) -> String {
+    format!(
+        "CASE WHEN ({expr}) >= 1000000 THEN printf('%.1fs', ({expr}) / 1000000.0) \
+         ELSE printf('%.1fms', ({expr}) / 1000.0) END"
+    )
+}
+
 /// Builds the one-shot investigation query. Five bind parameters, in order:
 /// service, from_ts (µs), to_ts (µs), baseline_from (µs), baseline_to (µs).
 ///
@@ -613,6 +646,14 @@ NULLIF(json_extract_string({q}span_attributes, 'server.address'), '')), '') \
 pub(crate) fn build_investigation_sql(prefix: &str, bucket: &str) -> String {
     let err = StatusCode::Error.as_i32();
     let op_key = operation_key_expr("s.");
+    let z_crit = Z_CRITICAL;
+    let min_exp = MIN_EXPECTED_ERRORS;
+    let min_bl_lat = MIN_BASELINE_SPANS_FOR_LATENCY;
+    let lat_sigma = LATENCY_SIGMA;
+    let f_p95 = fmt_duration_us_expr("p95");
+    let f_mean = fmt_duration_us_expr("bl_mean");
+    let f_std = fmt_duration_us_expr("bl_std");
+    let f_thr = fmt_duration_us_expr(&format!("bl_mean + {LATENCY_SIGMA} * bl_std"));
     // The in-window span filter, repeated by the CTEs that need columns
     // win_spans deliberately does not carry (see win_spans comment).
     // Duplication marked for later review: SQL has no way to share a
@@ -711,60 +752,80 @@ ops_current AS (
 ops_baseline AS (
     SELECT {op_key} AS operation,
            count(*) AS bl_cnt,
+           count(CASE WHEN s.status_code = {err} THEN 1 END) AS bl_err_cnt,
            count(CASE WHEN s.status_code = {err} THEN 1 END) * 100.0 / count(*) AS bl_err_pct,
-           approx_quantile(s.duration, 0.95) AS bl_p95
+           approx_quantile(s.duration, 0.95) AS bl_p95,
+           avg(s.duration) AS bl_mean,
+           stddev_samp(s.duration) AS bl_std
     FROM {prefix}sigiro_spans s, args a
     WHERE s.service_name = a.service
       AND s.timestamp BETWEEN a.bl_from AND a.bl_to
       AND s.span_name NOT LIKE '%TraceService/Export%'
     GROUP BY operation
 ),
--- Three anomaly rules, any one of which flags the operation:
---   abs_rule: absolute error-rate floor — chronic failures must flag even
---             when the baseline is equally bad (a 24.6%% error rate is loud
---             regardless of history);
---   rel_rule: error rate doubled vs the 4x-preceding baseline;
---   lat_rule: p95 latency doubled vs baseline AND above 100ms (µs floor
---             keeps micro-operations from tripping it).
--- is_anomalous is NULL only for a brand-new operation with no baseline that
--- trips no absolute rule ("can't judge yet"), never for a judged-healthy one.
+-- STATISTICAL anomaly detection against the operation's OWN 4x-preceding
+-- baseline — significance, not magic thresholds:
+--   err_test: one-sided two-proportion z-test, current error rate vs
+--             baseline error rate; fires at z >= {z_crit} (~p < 0.005) and
+--             only when the current rate is WORSE. Applicable only where the
+--             normal approximation is valid: pooled expected error count
+--             >= {min_exp} on BOTH sides (classic n*p rule).
+--   lat_test: current p95 beyond baseline mean + {lat_sigma} sigma of the
+--             baseline duration distribution. Applicable only with
+--             >= {min_bl_lat} baseline spans and non-zero variance.
+-- Each test is true / false / NULL(not applicable). is_anomalous: true if
+-- either fired; false if at least one ran and none fired; NULL when NEITHER
+-- was applicable (insufficient baseline — "can't judge"). A chronic-but-
+-- stable failure rate is by construction NOT anomalous here: it is the
+-- baseline. Surfacing chronic badness is error_pct/error_traces_total's job.
 operation_summaries AS (
     SELECT operation, span_name, cnt, err_cnt, err_pct, p50, p95, p99,
            exemplar_error_trace_id,
            bl_err_pct, bl_p95, bl_cnt,
-           CASE WHEN abs_rule OR rel_rule OR lat_rule THEN true
-                WHEN bl_err_pct IS NULL THEN NULL
+           CASE WHEN COALESCE(err_test, false) OR COALESCE(lat_test, false) THEN true
+                WHEN err_test IS NULL AND lat_test IS NULL THEN NULL
                 ELSE false
            END AS is_anomalous,
            NULLIF(concat_ws('; ',
-               CASE WHEN abs_rule THEN
-                   printf('error rate %.1f%% exceeds absolute threshold 10%%', err_pct)
-                   || CASE WHEN bl_err_pct IS NOT NULL AND bl_err_pct > 5.0
-                           THEN printf(' (chronic: baseline %.1f%% is also elevated)', bl_err_pct)
-                           ELSE '' END
+               CASE WHEN COALESCE(err_test, false) THEN
+                   printf('error rate %.1f%% vs baseline %.1f%% (two-proportion z=%.1f, one-sided p<0.005)',
+                          err_pct, bl_err_pct, z)
                END,
-               CASE WHEN rel_rule THEN
-                   printf('error rate %.1f%% is %dx higher than baseline %.1f%%',
-                          err_pct,
-                          CAST(round(err_pct / greatest(bl_err_pct, 0.1)) AS INTEGER),
-                          bl_err_pct)
-               END,
-               CASE WHEN lat_rule THEN
-                   printf('p95 latency %.1fms is over 2x baseline %.1fms',
-                          p95 / 1000.0, bl_p95 / 1000.0)
+               CASE WHEN COALESCE(lat_test, false) THEN
+                   printf('p95 %s exceeds baseline mean+{lat_sigma}σ (%s + {lat_sigma}×%s = %s)',
+                          {f_p95}, {f_mean}, {f_std}, {f_thr})
                END
            ), '') AS anomaly_reason
     FROM (
-        SELECT c.operation, c.span_name, c.cnt, c.err_cnt, c.err_pct,
-               c.p50, c.p95, c.p99, c.exemplar_error_trace_id,
-               b.bl_err_pct, b.bl_p95, b.bl_cnt,
-               (c.err_pct >= 10.0 AND c.cnt >= 20) AS abs_rule,
-               (b.bl_err_pct IS NOT NULL AND c.err_pct > b.bl_err_pct * 2.0
-                AND c.err_pct > 5.0) AS rel_rule,
-               (b.bl_p95 IS NOT NULL AND c.p95 > b.bl_p95 * 2.0
-                AND c.p95 > 100000) AS lat_rule
-        FROM ops_current c
-        LEFT JOIN ops_baseline b USING (operation)
+        SELECT *,
+               CASE WHEN pool_p IS NOT NULL
+                     AND cnt * pool_p >= {min_exp} AND bl_cnt * pool_p >= {min_exp}
+                    THEN COALESCE(z >= {z_crit} AND p1 > p2, false)
+                    ELSE NULL
+               END AS err_test,
+               CASE WHEN bl_cnt >= {min_bl_lat} AND bl_std > 0
+                    THEN p95 > bl_mean + {lat_sigma} * bl_std
+                    ELSE NULL
+               END AS lat_test
+        FROM (
+            SELECT *,
+                   -- z of the pooled two-proportion test; NULL when the
+                   -- pooled variance is 0 (p=0 or p=1) or there is no
+                   -- baseline — never a division error.
+                   (p1 - p2) / NULLIF(sqrt(pool_p * (1.0 - pool_p) * (1.0 / cnt + 1.0 / bl_cnt)), 0.0) AS z
+            FROM (
+                SELECT c.operation, c.span_name, c.cnt, c.err_cnt, c.err_pct,
+                       c.p50, c.p95, c.p99, c.exemplar_error_trace_id,
+                       b.bl_err_pct, b.bl_p95, b.bl_cnt, b.bl_err_cnt,
+                       b.bl_mean, b.bl_std,
+                       c.err_cnt * 1.0 / c.cnt AS p1,
+                       b.bl_err_cnt * 1.0 / NULLIF(b.bl_cnt, 0) AS p2,
+                       (c.err_cnt + b.bl_err_cnt) * 1.0
+                           / NULLIF(c.cnt + b.bl_cnt, 0) AS pool_p
+                FROM ops_current c
+                LEFT JOIN ops_baseline b USING (operation)
+            )
+        )
     )
     ORDER BY err_cnt DESC, cnt DESC
     LIMIT 20

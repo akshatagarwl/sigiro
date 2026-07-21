@@ -768,10 +768,11 @@ fn insert_spans(
 }
 
 #[test]
-fn anomaly_absolute_rule_flags_chronic_failures() {
-    // The dogfooded gap: a 24%+ error rate that is ALSO 24% in the baseline
-    // used to yield is_anomalous=false (relative rule only). The absolute
-    // rule must flag it, and say it is chronic.
+fn anomaly_chronic_stable_error_rate_is_not_anomalous() {
+    // INTENDED semantics of baseline-derived detection: a failure rate that
+    // matches the operation's own baseline (25% now, 25% before) is NOT an
+    // anomaly — it IS the baseline (z = 0). Chronic badness stays visible
+    // through error_pct / error_traces_total, not the anomaly flag.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -779,7 +780,7 @@ fn anomaly_absolute_rule_flags_chronic_failures() {
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
     let baseline_ts = now_us - 600 * 1_000_000; // inside the 4x baseline window
-    // Baseline: equally bad (25% errors).
+    // Baseline: 25% errors. Current: same 25% errors.
     insert_spans(
         &conn,
         "worker",
@@ -789,7 +790,6 @@ fn anomaly_absolute_rule_flags_chronic_failures() {
         50_000,
         None,
     );
-    // Current: chronic 25% errors, count >= 20.
     insert_spans(
         &conn,
         "worker",
@@ -805,20 +805,69 @@ fn anomaly_absolute_rule_flags_chronic_failures() {
     assert_eq!(op.operation, "call upstream");
     assert_eq!(
         op.is_anomalous,
+        Some(false),
+        "chronic-but-stable error rate: the z-test RAN (adequate counts) and did not fire"
+    );
+    assert!(op.anomaly_reason.is_none());
+    assert!(
+        !block
+            .findings
+            .iter()
+            .any(|f| f.kind == "anomalous_operation"),
+        "no anomaly finding for a statistically unchanged operation"
+    );
+    // The chronic badness itself is still on the record as evidence.
+    assert!((op.error_pct - 25.0).abs() < 0.01);
+}
+
+#[test]
+fn anomaly_error_rate_shift_flags_via_z_test() {
+    // A real regression: 2% baseline error rate jumps to 30%. Two-proportion
+    // z ≈ 7.2 >> 2.576 → anomalous, with the statistic in the reason.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let baseline_ts = now_us - 600 * 1_000_000;
+    insert_spans(
+        &conn,
+        "worker",
+        "call upstream",
+        baseline_ts,
+        (200, 4),
+        50_000,
+        None,
+    );
+    insert_spans(
+        &conn,
+        "worker",
+        "call upstream",
+        now_us,
+        (100, 30),
+        50_000,
+        None,
+    );
+
+    let block = investigate_service(&conn, "worker", now_us - 300_000_000, now_us + 60_000_000);
+    let op = &block.operation_summaries[0];
+    assert_eq!(
+        op.is_anomalous,
         Some(true),
-        "chronic 25% error rate must flag via the absolute rule even with an equally bad baseline"
+        "2% → 30% error-rate shift must be statistically significant"
     );
     let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
     assert!(
-        reason.contains("absolute threshold"),
-        "reason should name the absolute rule, got: {reason}"
+        reason.contains("two-proportion z="),
+        "reason should state the statistic, got: {reason}"
     );
     assert!(
-        reason.contains("chronic"),
-        "reason should say the failure is chronic when baseline is also elevated, got: {reason}"
+        reason.contains("vs baseline"),
+        "reason should compare against the baseline rate, got: {reason}"
     );
 
-    // The anomaly must surface as a top-level finding carrying the drill.
+    // Statistically significant shift surfaces as a critical finding.
     let finding = block
         .findings
         .iter()
@@ -830,9 +879,8 @@ fn anomaly_absolute_rule_flags_chronic_failures() {
 }
 
 #[test]
-fn anomaly_latency_rule_uses_baseline_p95() {
-    // bl_p95 used to be computed and then IGNORED by the anomaly logic.
-    // A 30x latency regression with zero errors must flag.
+fn anomaly_error_rate_improvement_does_not_flag() {
+    // One-sided test: a large IMPROVEMENT (30% → 2%) is not an anomaly.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -842,58 +890,118 @@ fn anomaly_latency_rule_uses_baseline_p95() {
     let baseline_ts = now_us - 600 * 1_000_000;
     insert_spans(
         &conn,
-        "api",
-        "GET /slow",
+        "worker",
+        "call upstream",
         baseline_ts,
-        (10, 0),
-        10_000,
+        (100, 30),
+        50_000,
         None,
-    ); // 10ms
-    insert_spans(&conn, "api", "GET /slow", now_us, (10, 0), 300_000, None); // 300ms
+    );
+    insert_spans(
+        &conn,
+        "worker",
+        "call upstream",
+        now_us,
+        (200, 4),
+        50_000,
+        None,
+    );
 
-    let block = investigate_service(&conn, "api", now_us - 300_000_000, now_us + 60_000_000);
+    let block = investigate_service(&conn, "worker", now_us - 300_000_000, now_us + 60_000_000);
     let op = &block.operation_summaries[0];
-    assert_eq!(op.is_anomalous, Some(true), "latency regression must flag");
-    let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
-    assert!(
-        reason.contains("p95 latency"),
-        "reason should name the latency rule, got: {reason}"
+    assert_eq!(
+        op.is_anomalous,
+        Some(false),
+        "getting BETTER is never anomalous (one-sided test)"
     );
 }
 
 #[test]
-fn anomaly_no_baseline_cases() {
+fn anomaly_latency_spike_flags_via_three_sigma() {
+    // Latency test: current p95 far beyond baseline mean + 3σ, zero errors.
+    // Baseline needs variance (σ > 0) and >= 20 spans to be usable.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    // Brand-new failing op (no baseline): absolute rule must still fire.
-    insert_spans(&conn, "api", "new-broken", now_us, (25, 15), 1_000, None);
-    // Brand-new healthy op (no baseline): can't judge yet → None.
-    insert_spans(&conn, "api", "new-healthy", now_us, (25, 0), 1_000, None);
+    let baseline_ts = now_us - 600 * 1_000_000;
+    // Baseline: 20 spans around 10-12ms (mean ≈ 11ms, σ ≈ 1ms → 3σ bound ≈ 14ms).
+    insert_spans(
+        &conn,
+        "api",
+        "GET /slow",
+        baseline_ts,
+        (10, 0),
+        10_000,
+        None,
+    );
+    insert_spans(
+        &conn,
+        "api",
+        "GET /slow",
+        baseline_ts + 1_000,
+        (10, 0),
+        12_000,
+        None,
+    );
+    // Current: 300ms — a massive spike.
+    insert_spans(&conn, "api", "GET /slow", now_us, (10, 0), 300_000, None);
 
     let block = investigate_service(&conn, "api", now_us - 300_000_000, now_us + 60_000_000);
-    let broken = block
-        .operation_summaries
-        .iter()
-        .find(|o| o.operation == "new-broken")
-        .unwrap();
+    let op = &block.operation_summaries[0];
     assert_eq!(
-        broken.is_anomalous,
+        op.is_anomalous,
         Some(true),
-        "no-baseline op tripping the absolute rule must flag, not stay NULL"
+        "p95 far beyond baseline mean+3σ must flag"
     );
-    let healthy = block
-        .operation_summaries
-        .iter()
-        .find(|o| o.operation == "new-healthy")
-        .unwrap();
-    assert_eq!(
-        healthy.is_anomalous, None,
-        "healthy op with no baseline is unjudgeable → None"
+    let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
+    assert!(
+        reason.contains("exceeds baseline mean+3σ"),
+        "reason should state the 3σ test, got: {reason}"
     );
+}
+
+#[test]
+fn anomaly_insufficient_baseline_is_unjudged() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let baseline_ts = now_us - 600 * 1_000_000;
+    // Brand-new failing op, NO baseline at all: neither test applicable.
+    insert_spans(&conn, "api", "new-broken", now_us, (25, 15), 1_000, None);
+    // Brand-new healthy op, no baseline: same.
+    insert_spans(&conn, "api", "new-healthy", now_us, (25, 0), 1_000, None);
+    // Tiny baseline (2 spans, 0 errors): z-test invalid (expected errors
+    // < 5 per side), latency invalid (< 20 baseline spans, σ = 0).
+    insert_spans(
+        &conn,
+        "api",
+        "tiny-baseline",
+        baseline_ts,
+        (2, 0),
+        1_000,
+        None,
+    );
+    insert_spans(&conn, "api", "tiny-baseline", now_us, (3, 1), 1_000, None);
+
+    let block = investigate_service(&conn, "api", now_us - 300_000_000, now_us + 60_000_000);
+    for name in ["new-broken", "new-healthy", "tiny-baseline"] {
+        let op = block
+            .operation_summaries
+            .iter()
+            .find(|o| o.operation == name)
+            .unwrap();
+        assert_eq!(
+            op.is_anomalous, None,
+            "{name}: no statistically usable baseline → can't judge → None"
+        );
+        assert!(op.anomaly_reason.is_none());
+    }
 }
 
 // ---------------------------------------------------------------------------
