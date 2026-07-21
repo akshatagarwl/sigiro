@@ -11,8 +11,8 @@ use crate::types::{StatusCode, TimestampMicros};
 
 // Re-export pure types and functions from analysis submodule.
 pub use analysis::{
-    Coverage, ServiceDependency, SignalCoverage, Window, metric_bucket_interval,
-    compute_coverage, us_to_iso,
+    Coverage, ServiceDependency, SignalCoverage, Window, compute_coverage, metric_bucket_interval,
+    us_to_iso,
 };
 
 // ---------------------------------------------------------------------------
@@ -72,8 +72,41 @@ const MAX_SERVICES: usize = 10;
 // Response types — every section maps 1:1 to a CTE in the single query
 // ---------------------------------------------------------------------------
 
+/// One ranked, self-contained "what deserves attention" item — the first
+/// thing an agent reads. Assembled in Rust from data the single query already
+/// returned (zero extra SQL, zero extra memory).
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Finding {
+    /// "critical" | "warning" | "info" — findings are sorted by this.
+    pub severity: String,
+    /// Machine-readable category: "anomalous_operation", "errors_without_logs",
+    /// "coverage_gap", "missing_resource_attributes".
+    pub kind: String,
+    /// Human/agent-readable one-liner with the concrete numbers.
+    pub summary: String,
+    /// Ready-to-run /v1/query SQL for the evidence behind this finding,
+    /// when one exists.
+    pub drill_down_sql: Option<String>,
+}
+
+/// Response envelope for an investigation: per-service blocks plus
+/// per-service failures. Partial results by design — one broken service
+/// must not discard the other nine (fail loud, per service).
+#[derive(Serialize, Deserialize)]
+pub struct InvestigateResponse {
+    /// Successful investigation blocks, keyed by service name.
+    pub results: BTreeMap<String, InvestigationBlock>,
+    /// Services whose investigation query failed, keyed by service name,
+    /// with the error message. Empty when everything succeeded.
+    pub errors: BTreeMap<String, String>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct InvestigationBlock {
+    /// Ranked list (critical first) of what deserves attention in this
+    /// window: anomalous operations, error/log inconsistencies, actionable
+    /// coverage gaps. Read this before the raw sections below.
+    pub findings: Vec<Finding>,
     pub service: String,
     pub window: Window,
     /// Distinct traces with an error span in the window — the headline
@@ -136,6 +169,15 @@ pub struct DerivedEvent {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct OperationSummary {
+    /// The operation identity spans are grouped by. Usually equals
+    /// `span_name`, but generic HTTP spans (span_name is a bare method like
+    /// "POST", per OTel HTTP semconv) are disambiguated with
+    /// `http.route`/`server.address` from span_attributes — e.g.
+    /// "POST api.example.com" — so one giant "POST" bucket doesn't swallow
+    /// every outbound call.
+    pub operation: String,
+    /// The raw OTel span name behind this operation (one representative
+    /// value when the group was derived from attributes).
     pub span_name: String,
     pub count: i64,
     pub error_count: i64,
@@ -180,6 +222,9 @@ pub struct SpanRecord {
     /// OTel span kind as stored (integer enum).
     pub span_kind: Option<i32>,
     pub status_code: i32,
+    /// OTel status message — for spans that fail without emitting any log
+    /// (e.g. HTTP client errors) this is often the only diagnostic string.
+    pub status_message: Option<String>,
     pub is_error: bool,
     pub duration_us: i64,
     pub start_ts: i64,
@@ -259,6 +304,9 @@ struct SqlStats {
     error_traces_total: i64,
     logs_total: i64,
     log_template_count: i64,
+    /// Logs with ERROR-class severity in the window — compared against
+    /// `error_traces_total` to detect failures that emit no logs at all.
+    error_logs_total: i64,
     metric_series_count: i64,
     profile_sample_count: i64,
 }
@@ -271,20 +319,33 @@ pub fn investigate(
     conn: &Connection,
     req: &InvestigateRequest,
     prefix: &str,
-) -> Result<BTreeMap<String, InvestigationBlock>> {
+) -> Result<InvestigateResponse> {
     let services = resolve_services(req)?;
     let mut results = BTreeMap::new();
+    let mut errors = BTreeMap::new();
     for service in &services {
-        let block =
-            investigate_one(conn, service, req.from_ts, req.to_ts, prefix).map_err(|e| {
+        // Partial results: one broken service must not discard the others.
+        // Each failure is still loud — logged here, surfaced per-service in
+        // `errors`, and fatal when NOTHING succeeded.
+        match investigate_one(conn, service, req.from_ts, req.to_ts, prefix) {
+            Ok(block) => {
+                results.insert(service.clone(), block);
+            }
+            Err(e) => {
                 tracing::error!(service = %service, error = %e,
                     "investigation query failed for service"
                 );
-                anyhow::anyhow!("investigation failed for service {service}: {e}")
-            })?;
-        results.insert(service.clone(), block);
+                errors.insert(service.clone(), format!("{e:#}"));
+            }
+        }
     }
-    Ok(results)
+    if results.is_empty() && !errors.is_empty() {
+        anyhow::bail!(
+            "investigation failed for all services: {}",
+            errors.iter().map(|(s, e)| format!("{s}: {e}")).join("; ")
+        );
+    }
+    Ok(InvestigateResponse { results, errors })
 }
 
 fn resolve_services(req: &InvestigateRequest) -> Result<Vec<String>> {
@@ -350,8 +411,9 @@ fn investigate_one(
     let window = format!("timestamp BETWEEN make_timestamp({from_ts}) AND make_timestamp({to_ts})");
     // Reproduce the win_spans filter exactly so a drilled count reconciles with
     // the `total` we reported (win_spans drops OTLP export self-spans).
-    let span_scope =
-        format!("service_name = '{svc}' AND {window} AND span_name NOT LIKE '%TraceService/Export%'");
+    let span_scope = format!(
+        "service_name = '{svc}' AND {window} AND span_name NOT LIKE '%TraceService/Export%'"
+    );
 
     // #1: raw logs behind each pattern.
     let mut log_patterns = payload.log_patterns;
@@ -366,12 +428,21 @@ fn investigate_one(
     }
 
     // #1: raw spans behind each operation (errors first, then slowest).
+    // Bare-HTTP-method groups must filter on the SAME derived expression the
+    // query grouped by — `span_name = 'POST'` would also match POST spans
+    // that were bucketed under "POST some.host" — so the drilled rows
+    // reconcile exactly with this operation's count.
     let mut operation_summaries = payload.operation_summaries;
     for op in &mut operation_summaries {
-        let name = op.span_name.replace('\'', "''");
+        let filter = if HTTP_METHOD_SPAN_NAMES.contains(&op.span_name.as_str()) {
+            let operation = op.operation.replace('\'', "''");
+            format!("{} = '{operation}'", operation_key_expr(""))
+        } else {
+            format!("span_name = '{}'", op.span_name.replace('\'', "''"))
+        };
         op.drill_down_sql = Some(format!(
             "SELECT * FROM {prefix}sigiro_spans \
-             WHERE {span_scope} AND span_name = '{name}' \
+             WHERE {span_scope} AND {filter} \
              ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC"
         ));
     }
@@ -407,7 +478,73 @@ fn investigate_one(
         sample: payload.logs,
     };
 
+    // Top-level findings — ranked judgments assembled from data already in
+    // hand. The one array an agent reads first.
+    let mut findings = Vec::new();
+    for op in &operation_summaries {
+        if op.is_anomalous == Some(true) {
+            findings.push(Finding {
+                severity: "critical".to_string(),
+                kind: "anomalous_operation".to_string(),
+                summary: format!(
+                    "operation '{}': {}",
+                    op.operation,
+                    op.anomaly_reason
+                        .as_deref()
+                        .unwrap_or("flagged anomalous vs baseline")
+                ),
+                drill_down_sql: op.drill_down_sql.clone(),
+            });
+        }
+    }
+    if payload.stats.error_traces_total > 0 && payload.stats.error_logs_total == 0 {
+        findings.push(Finding {
+            severity: "warning".to_string(),
+            kind: "errors_without_logs".to_string(),
+            summary: format!(
+                "{} error trace(s) but zero ERROR-severity logs in this window — these \
+                 failures are only visible via span status/status_message; check that \
+                 exceptions are logged and exported",
+                payload.stats.error_traces_total
+            ),
+            drill_down_sql: Some(format!(
+                "SELECT * FROM {prefix}sigiro_spans \
+                 WHERE {span_scope} AND status_code = {err} ORDER BY timestamp DESC"
+            )),
+        });
+    }
+    if coverage.has_spans && !coverage.has_logs {
+        findings.push(Finding {
+            severity: "warning".to_string(),
+            kind: "coverage_gap".to_string(),
+            summary: "spans present but no logs in this window — export OTLP logs so \
+                      errors can be correlated with their messages"
+                .to_string(),
+            drill_down_sql: None,
+        });
+    }
+    if coverage.has_spans
+        && payload.context.namespace.is_none()
+        && payload.context.deployment.is_none()
+    {
+        findings.push(Finding {
+            severity: "info".to_string(),
+            kind: "missing_resource_attributes".to_string(),
+            summary: "no k8s resource attributes (k8s.namespace.name / k8s.deployment.name) \
+                      on spans — the context section is empty; enable OTel resource \
+                      detectors to fill it"
+                .to_string(),
+            drill_down_sql: None,
+        });
+    }
+    findings.sort_by_key(|f| match f.severity.as_str() {
+        "critical" => 0,
+        "warning" => 1,
+        _ => 2,
+    });
+
     Ok(InvestigationBlock {
+        findings,
         service: service.to_string(),
         window: Window::new(
             TimestampMicros::from_micros(from_ts),
@@ -430,6 +567,31 @@ fn investigate_one(
 // The single query
 // ---------------------------------------------------------------------------
 
+/// Span names that are bare HTTP methods (OTel HTTP semconv names client
+/// spans this way) — their real identity lives in span_attributes.
+const HTTP_METHOD_SPAN_NAMES: &[&str] =
+    &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+
+/// The ONE derived-operation expression, shared verbatim between the
+/// investigation query (grouping) and the per-operation `drill_down_sql`
+/// (filtering) so drilled rows always reconcile with the reported counts.
+/// `q` is the column qualifier ("s." inside the query, "" in drill SQL).
+///
+/// A bare HTTP-method span name gets ` <http.route>` (server spans) or
+/// ` <server.address>` (client spans) appended when present — NOT url.path,
+/// which is unbounded-cardinality (ids in paths). Uses only functions on the
+/// /v1/query scalar allowlist (json_extract_string, nullif, coalesce) so the
+/// drill SQL passes `validate_read_only`.
+fn operation_key_expr(q: &str) -> String {
+    format!(
+        "CASE WHEN {q}span_name IN ('GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS') \
+         THEN {q}span_name || COALESCE(' ' || COALESCE(\
+NULLIF(json_extract_string({q}span_attributes, 'http.route'), ''), \
+NULLIF(json_extract_string({q}span_attributes, 'server.address'), '')), '') \
+         ELSE {q}span_name END"
+    )
+}
+
 /// Builds the one-shot investigation query. Five bind parameters, in order:
 /// service, from_ts (µs), to_ts (µs), baseline_from (µs), baseline_to (µs).
 ///
@@ -437,6 +599,14 @@ fn investigate_one(
 /// via scalar subqueries, so the whole investigation is a single round-trip.
 pub fn build_investigation_sql(prefix: &str, bucket: &str) -> String {
     let err = StatusCode::Error.as_i32();
+    let op_key = operation_key_expr("s.");
+    // The in-window span filter, repeated by the CTEs that need columns
+    // win_spans deliberately does not carry (see win_spans comment).
+    // Duplication marked for later review: SQL has no way to share a
+    // predicate without also sharing a projection.
+    let span_win = "s.service_name = a.service \
+      AND s.timestamp BETWEEN a.from_ts AND a.to_ts \
+      AND s.span_name NOT LIKE '%TraceService/Export%'";
 
     format!(
         r#"
@@ -447,12 +617,16 @@ WITH args AS (
            make_timestamp(?::BIGINT) AS bl_from,
            make_timestamp(?::BIGINT) AS bl_to
 ),
+-- Deliberately NARROW: this CTE is referenced by several sections, so DuckDB
+-- materializes it. The wide VARCHAR columns (span_attributes, events_json,
+-- resource_attributes) would dominate peak memory; sections that need them
+-- (top_spans, deploy_events, svc_meta) hit the base table with the same
+-- window predicate instead.
 win_spans AS (
-    SELECT s.*
+    SELECT s.trace_id, s.span_name, s.span_kind, s.status_code, s.duration,
+           {op_key} AS operation
     FROM {prefix}sigiro_spans s, args a
-    WHERE s.service_name = a.service
-      AND s.timestamp BETWEEN a.from_ts AND a.to_ts
-      AND s.span_name NOT LIKE '%TraceService/Export%'
+    WHERE {span_win}
 ),
 win_logs AS (
     SELECT l.*
@@ -467,7 +641,11 @@ span_stats AS (
 ),
 log_stats AS (
     SELECT count(*) AS logs_total,
-           count(DISTINCT body) AS log_template_count
+           -- template_id when DRAIN classified the log, hash(body) otherwise:
+           -- keeps the count correct for untemplated logs without holding
+           -- every distinct body string in memory.
+           count(DISTINCT COALESCE(template_id, hash(body))) AS log_template_count,
+           count(CASE WHEN severity_text IN ('ERROR', 'ERR', 'FATAL', 'CRITICAL') THEN 1 END) AS error_logs_total
     FROM win_logs
 ),
 profile_stats AS (
@@ -505,7 +683,8 @@ metrics AS (
     GROUP BY bucket, metric_name
 ),
 ops_current AS (
-    SELECT span_name,
+    SELECT operation,
+           any_value(span_name) AS span_name,
            count(*) AS cnt,
            count(CASE WHEN status_code = {err} THEN 1 END) AS err_cnt,
            count(CASE WHEN status_code = {err} THEN 1 END) * 100.0 / count(*) AS err_pct,
@@ -514,48 +693,80 @@ ops_current AS (
            approx_quantile(duration, 0.99) AS p99,
            any_value(CASE WHEN status_code = {err} THEN trace_id END) AS exemplar_error_trace_id
     FROM win_spans
-    GROUP BY span_name
+    GROUP BY operation
 ),
 ops_baseline AS (
-    SELECT span_name,
+    SELECT {op_key} AS operation,
            count(*) AS bl_cnt,
-           count(CASE WHEN status_code = {err} THEN 1 END) * 100.0 / count(*) AS bl_err_pct,
-           approx_quantile(duration, 0.95) AS bl_p95
+           count(CASE WHEN s.status_code = {err} THEN 1 END) * 100.0 / count(*) AS bl_err_pct,
+           approx_quantile(s.duration, 0.95) AS bl_p95
     FROM {prefix}sigiro_spans s, args a
     WHERE s.service_name = a.service
       AND s.timestamp BETWEEN a.bl_from AND a.bl_to
       AND s.span_name NOT LIKE '%TraceService/Export%'
-    GROUP BY span_name
+    GROUP BY operation
 ),
+-- Three anomaly rules, any one of which flags the operation:
+--   abs_rule: absolute error-rate floor — chronic failures must flag even
+--             when the baseline is equally bad (a 24.6%% error rate is loud
+--             regardless of history);
+--   rel_rule: error rate doubled vs the 4x-preceding baseline;
+--   lat_rule: p95 latency doubled vs baseline AND above 100ms (µs floor
+--             keeps micro-operations from tripping it).
+-- is_anomalous is NULL only for a brand-new operation with no baseline that
+-- trips no absolute rule ("can't judge yet"), never for a judged-healthy one.
 operation_summaries AS (
-    SELECT c.span_name, c.cnt, c.err_cnt, c.err_pct, c.p50, c.p95, c.p99,
-           c.exemplar_error_trace_id,
-           b.bl_err_pct, b.bl_p95, b.bl_cnt,
-           CASE WHEN b.bl_err_pct IS NULL THEN NULL
-                ELSE c.err_pct > b.bl_err_pct * 2.0 AND c.err_pct > 5.0
+    SELECT operation, span_name, cnt, err_cnt, err_pct, p50, p95, p99,
+           exemplar_error_trace_id,
+           bl_err_pct, bl_p95, bl_cnt,
+           CASE WHEN abs_rule OR rel_rule OR lat_rule THEN true
+                WHEN bl_err_pct IS NULL THEN NULL
+                ELSE false
            END AS is_anomalous,
-           CASE WHEN b.bl_err_pct IS NOT NULL
-                 AND c.err_pct > b.bl_err_pct * 2.0 AND c.err_pct > 5.0
-                THEN printf('error rate %.1f%% is %dx higher than baseline %.1f%%',
-                            c.err_pct,
-                            CAST(round(c.err_pct / greatest(b.bl_err_pct, 0.1)) AS INTEGER),
-                            b.bl_err_pct)
-           END AS anomaly_reason
-    FROM ops_current c
-    LEFT JOIN ops_baseline b USING (span_name)
-    ORDER BY c.err_cnt DESC, c.cnt DESC
+           NULLIF(concat_ws('; ',
+               CASE WHEN abs_rule THEN
+                   printf('error rate %.1f%% exceeds absolute threshold 10%%', err_pct)
+                   || CASE WHEN bl_err_pct IS NOT NULL AND bl_err_pct > 5.0
+                           THEN printf(' (chronic: baseline %.1f%% is also elevated)', bl_err_pct)
+                           ELSE '' END
+               END,
+               CASE WHEN rel_rule THEN
+                   printf('error rate %.1f%% is %dx higher than baseline %.1f%%',
+                          err_pct,
+                          CAST(round(err_pct / greatest(bl_err_pct, 0.1)) AS INTEGER),
+                          bl_err_pct)
+               END,
+               CASE WHEN lat_rule THEN
+                   printf('p95 latency %.1fms is over 2x baseline %.1fms',
+                          p95 / 1000.0, bl_p95 / 1000.0)
+               END
+           ), '') AS anomaly_reason
+    FROM (
+        SELECT c.operation, c.span_name, c.cnt, c.err_cnt, c.err_pct,
+               c.p50, c.p95, c.p99, c.exemplar_error_trace_id,
+               b.bl_err_pct, b.bl_p95, b.bl_cnt,
+               (c.err_pct >= 10.0 AND c.cnt >= 20) AS abs_rule,
+               (b.bl_err_pct IS NOT NULL AND c.err_pct > b.bl_err_pct * 2.0
+                AND c.err_pct > 5.0) AS rel_rule,
+               (b.bl_p95 IS NOT NULL AND c.p95 > b.bl_p95 * 2.0
+                AND c.p95 > 100000) AS lat_rule
+        FROM ops_current c
+        LEFT JOIN ops_baseline b USING (operation)
+    )
+    ORDER BY err_cnt DESC, cnt DESC
     LIMIT 20
 ),
 top_spans AS (
-    SELECT trace_id, span_id, COALESCE(parent_span_id, '') AS parent_span_id,
-           span_name, span_kind, status_code,
-           duration AS duration_us,
-           epoch_us(timestamp) AS start_ts,
-           end_timestamp AS end_ts,
-           timestamp::VARCHAR AS start_iso,
-           span_attributes, events_json
-    FROM win_spans
-    ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC
+    SELECT s.trace_id, s.span_id, COALESCE(s.parent_span_id, '') AS parent_span_id,
+           s.span_name, s.span_kind, s.status_code, s.status_message,
+           s.duration AS duration_us,
+           epoch_us(s.timestamp) AS start_ts,
+           s.end_timestamp AS end_ts,
+           s.timestamp::VARCHAR AS start_iso,
+           s.span_attributes, s.events_json
+    FROM {prefix}sigiro_spans s, args a
+    WHERE {span_win}
+    ORDER BY CASE WHEN s.status_code = {err} THEN 0 ELSE 1 END, s.duration DESC
     LIMIT 25
 ),
 raw_logs AS (
@@ -587,15 +798,27 @@ log_patterns AS (
     LIMIT 50
 ),
 deploy_events AS (
+    -- Anti-join against the baseline window: a version already running
+    -- before from_ts is steady state, not a deploy — without this, every
+    -- investigation fabricated a "deploy" event at window start, exactly
+    -- the false lead an agent seizes on.
     SELECT min(detected_at) AS detected_at,
            'deploy' AS event_type,
            'version ' || version || ' first seen' AS description
     FROM (
-        SELECT timestamp::VARCHAR AS detected_at,
-               resource_attributes::JSON->>'service.version' AS version
-        FROM win_spans
+        SELECT s.timestamp::VARCHAR AS detected_at,
+               s.resource_attributes::JSON->>'service.version' AS version
+        FROM {prefix}sigiro_spans s, args a
+        WHERE {span_win}
     )
     WHERE version IS NOT NULL
+      AND version NOT IN (
+          SELECT (s.resource_attributes::JSON->>'service.version')
+          FROM {prefix}sigiro_spans s, args a
+          WHERE s.service_name = a.service
+            AND s.timestamp BETWEEN a.bl_from AND a.bl_to
+            AND (s.resource_attributes::JSON->>'service.version') IS NOT NULL
+      )
     GROUP BY version
 ),
 k8s_events AS (
@@ -628,23 +851,35 @@ profiles AS (
     LIMIT 20
 ),
 svc_meta AS (
-    SELECT any_value(NULLIF(resource_attributes::JSON->>'k8s.namespace.name', '')) AS namespace,
-           any_value(NULLIF(resource_attributes::JSON->>'k8s.deployment.name', '')) AS deployment,
-           count(DISTINCT service_instance_id) AS pod_count,
-           count(DISTINCT service_instance_id) > 0 AS has_instance_id,
-           min(timestamp)::VARCHAR AS first_seen,
-           max(timestamp)::VARCHAR AS last_seen
-    FROM win_spans
+    SELECT any_value(NULLIF(s.resource_attributes::JSON->>'k8s.namespace.name', '')) AS namespace,
+           any_value(NULLIF(s.resource_attributes::JSON->>'k8s.deployment.name', '')) AS deployment,
+           count(DISTINCT s.service_instance_id) AS pod_count,
+           count(DISTINCT s.service_instance_id) > 0 AS has_instance_id,
+           min(s.timestamp)::VARCHAR AS first_seen,
+           max(s.timestamp)::VARCHAR AS last_seen
+    FROM {prefix}sigiro_spans s, args a
+    WHERE {span_win}
+),
+-- Dependency CTEs join on pre-DISTINCTed trace ids: (a) each foreign span is
+-- counted exactly once (the old span-to-span join multiplied counts by the
+-- number of our spans in the trace), and (b) the foreign side is bounded to
+-- the window ±1h — traces don't span hours, and the old unbounded join
+-- scanned the FULL span history on every investigation.
+client_traces AS (
+    SELECT DISTINCT trace_id FROM win_spans WHERE span_kind IN (3, 4)
+),
+svc_traces AS (
+    SELECT DISTINCT trace_id FROM win_spans
 ),
 deps AS (
     SELECT s2.service_name,
            count(*) AS span_count,
            count(CASE WHEN s2.status_code = {err} THEN 1 END) AS error_count,
            count(CASE WHEN s2.status_code = {err} THEN 1 END) * 100.0 / count(*) AS error_rate
-    FROM win_spans s1
-    JOIN {prefix}sigiro_spans s2 ON s1.trace_id = s2.trace_id, args a
+    FROM {prefix}sigiro_spans s2
+    JOIN client_traces ct ON s2.trace_id = ct.trace_id, args a
     WHERE s2.service_name != a.service
-      AND s1.span_kind IN (3, 4)
+      AND s2.timestamp BETWEEN a.from_ts - INTERVAL '1 hour' AND a.to_ts + INTERVAL '1 hour'
     GROUP BY s2.service_name
     ORDER BY span_count DESC
     LIMIT 20
@@ -655,12 +890,11 @@ dependents AS (
            count(CASE WHEN s1.status_code = {err} THEN 1 END) AS error_count,
            count(CASE WHEN s1.status_code = {err} THEN 1 END) * 100.0 / count(*) AS error_rate
     FROM {prefix}sigiro_spans s1
-    JOIN {prefix}sigiro_spans s2 ON s1.trace_id = s2.trace_id, args a
-    WHERE s2.service_name = a.service
-      AND s1.service_name != a.service
+    JOIN svc_traces st ON s1.trace_id = st.trace_id, args a
+    WHERE s1.service_name != a.service
       AND s1.span_kind IN (3, 4)
       AND s1.span_name NOT LIKE '%TraceService/Export%'
-      AND s2.timestamp BETWEEN a.from_ts AND a.to_ts
+      AND s1.timestamp BETWEEN a.from_ts - INTERVAL '1 hour' AND a.to_ts + INTERVAL '1 hour'
     GROUP BY s1.service_name
     ORDER BY span_count DESC
     LIMIT 20
@@ -671,6 +905,7 @@ SELECT json_object(
         'error_traces_total', (SELECT error_traces_total FROM span_stats),
         'logs_total', (SELECT logs_total FROM log_stats),
         'log_template_count', (SELECT log_template_count FROM log_stats),
+        'error_logs_total', (SELECT error_logs_total FROM log_stats),
         'metric_series_count', (SELECT count(DISTINCT metric_name) FROM metric_points),
         'profile_sample_count', (SELECT profile_sample_count FROM profile_stats)
     ),
@@ -695,6 +930,7 @@ SELECT json_object(
         'detected_at', detected_at, 'event_type', event_type, 'description', description
     ) ORDER BY detected_at)), '[]'::JSON) FROM events),
     'operation_summaries', (SELECT COALESCE(to_json(list(json_object(
+        'operation', operation,
         'span_name', span_name, 'count', cnt, 'error_count', err_cnt, 'error_pct', err_pct,
         'duration_p50_us', p50, 'duration_p95_us', p95, 'duration_p99_us', p99,
         'exemplar_error_trace_id', exemplar_error_trace_id,
@@ -707,6 +943,7 @@ SELECT json_object(
     'spans', (SELECT COALESCE(to_json(list(json_object(
         'trace_id', trace_id, 'span_id', span_id, 'parent_span_id', parent_span_id,
         'span_name', span_name, 'span_kind', span_kind, 'status_code', status_code,
+        'status_message', status_message,
         'is_error', status_code = {err}, 'duration_us', duration_us,
         'start_ts', start_ts, 'end_ts', end_ts, 'start_iso', start_iso,
         'span_attributes', TRY_CAST(span_attributes AS JSON),

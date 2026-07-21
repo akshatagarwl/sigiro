@@ -38,15 +38,6 @@ pub struct Coverage {
     pub signals: Vec<SignalCoverage>,
 }
 
-impl Coverage {
-    /// Returns true if any high-severity signals are missing.
-    pub fn has_critical_gaps(&self) -> bool {
-        self.signals
-            .iter()
-            .any(|s| s.available && s.severity == "high")
-    }
-}
-
 pub fn compute_coverage(
     spans_total: i64,
     logs_total: i64,

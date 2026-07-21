@@ -104,9 +104,9 @@ impl EdgeServer {
 
     /// Ingest one span per entry in `durations_ms`, each with an EXACT
     /// controlled duration (explicit start/end timestamps, not wall-clock
-    /// timing) so the resulting `duration` column (milliseconds — verified
-    /// directly against `src/otlp.rs`: `dur_ns / 1_000_000`) is exact,
-    /// deterministic ground truth.
+    /// timing) so the resulting `duration` column (MICROSECONDS — verified
+    /// directly against `src/otlp.rs`: `nanos_to_micros(dur)`) is exact,
+    /// deterministic ground truth: N ms ingested → N*1000 µs stored.
     fn ingest_durations(&self, service_name: &str, durations_ms: &[u64]) {
         let exporter = SpanExporter::builder()
             .with_http()
@@ -243,12 +243,14 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
     let edge_a = EdgeServer::spawn("edgeA", base_a, &token);
     let edge_b = EdgeServer::spawn("edgeB", base_b, &token);
 
+    // Durations below are in ms at ingest; the stored `duration` column is
+    // MICROSECONDS, so every ground-truth number is the ms value * 1000.
     // svcA: edge A contributes [10, 20]ms, edge B contributes [30]ms.
-    //   ground truth: count=3, sum=60, avg=20.0, min=10, max=30
-    //   (edge A's own avg for svcA is 15, edge B's is 30 — avg-of-avgs would
-    //    give 22.5, which is WRONG; the correct fold is 20.0)
+    //   ground truth (µs): count=3, sum=60000, avg=20000.0, min=10000, max=30000
+    //   (edge A's own avg for svcA is 15000, edge B's is 30000 — avg-of-avgs
+    //    would give 22500, which is WRONG; the correct fold is 20000.0)
     // svcB: edge A contributes [100]ms, edge B contributes [50, 150]ms.
-    //   ground truth: count=3, sum=300, avg=100.0, min=50, max=150
+    //   ground truth (µs): count=3, sum=300000, avg=100000.0, min=50000, max=150000
     //   (edge A's own avg for svcB is 100, edge B's is 100 too — this pair
     //    is deliberately chosen so avg-of-avgs would ACCIDENTALLY also give
     //    100.0; svcA is the pair that actually distinguishes correct folding
@@ -287,9 +289,11 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
         serde_json::to_string_pretty(&rows).unwrap()
     );
 
-    check_row(&rows, "svcA", 3, 60, 20.0, 10, 30)?;
-    check_row(&rows, "svcB", 3, 300, 100.0, 50, 150)?;
-    println!("  [fold] svcA avg=20.0 svcB avg=100.0 — matches ground truth (NOT avg-of-avgs)");
+    check_row(&rows, "svcA", 3, 60_000, 20_000.0, 10_000, 30_000)?;
+    check_row(&rows, "svcB", 3, 300_000, 100_000.0, 50_000, 150_000)?;
+    println!(
+        "  [fold] svcA avg=20000.0 svcB avg=100000.0 — matches ground truth (NOT avg-of-avgs)"
+    );
 
     // --- count(DISTINCT ...) must be refused, not silently mis-folded. ---
     let distinct_output = run_query(
@@ -361,11 +365,11 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
         .iter()
         .map(duration_of)
         .collect::<Result<Vec<i64>, String>>()?;
-    // 950 and 900 are the true global maxima (one per edge); 245 is the
-    // global 3rd-largest (edge B's 2nd-largest). A per-edge-arbitrary-rows
-    // bug can never produce this exact set, since neither 950 nor 900 would
-    // even leave their edge under the old sortless LIMIT.
-    let expected_topn = vec![950, 900, 245];
+    // 950ms and 900ms are the true global maxima (one per edge); 245ms is
+    // the global 3rd-largest (edge B's 2nd-largest). A per-edge-arbitrary-
+    // rows bug can never produce this exact set, since neither maximum would
+    // even leave its edge under the old sortless LIMIT. Values in µs.
+    let expected_topn = vec![950_000, 900_000, 245_000];
     if topn_durations != expected_topn {
         edge_a.shutdown();
         edge_b.shutdown();
@@ -448,10 +452,11 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
          {got_trace_ids:?} — matches the trace_id+duration top-N, output carries only trace_id"
     );
 
-    // --- Fractional WHERE literal: `duration > 15.5` must be deparsed at the
-    // correct decimal scale (a mis-scaled deparser emits `155`, ten times too
-    // large). Ground truth proves the exact boundary: a duration=15 row must
-    // be EXCLUDED, a duration=16 row must be INCLUDED, on BOTH edges.
+    // --- Fractional WHERE literal: `duration > 15500.5` must be deparsed at
+    // the correct decimal scale (a mis-scaled deparser emits `155005`, ten
+    // times too large). Ground truth proves the exact boundary: the 15ms rows
+    // (15000µs stored) must be EXCLUDED, the 16ms rows (16000µs) INCLUDED,
+    // on BOTH edges.
     edge_a.ingest_durations("svcFrac", &[15, 16]);
     edge_b.ingest_durations("svcFrac", &[15, 16]);
     edge_a.wait_for_ingest("svcFrac", 2, &token);
@@ -459,7 +464,7 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
 
     let frac_output = run_query(
         "SELECT duration FROM sigiro_spans WHERE timestamp > '2000-01-01' \
-         AND service_name = 'svcFrac' AND duration > 15.5",
+         AND service_name = 'svcFrac' AND duration > 15500.5",
         &edges,
         &token,
         &[],
@@ -480,20 +485,20 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
         .map(duration_of)
         .collect::<Result<Vec<i64>, String>>()?;
     frac_durations.sort_unstable();
-    // A 10x-scale bug turns `duration > 15.5` into `duration > 155`, which
-    // matches NEITHER 15 NOR 16 (expect zero rows instead of two). A
-    // sign/off-by-one bug could instead wrongly include the 15s.
-    if frac_durations != vec![16, 16] {
+    // A 10x-scale bug turns `duration > 15500.5` into `duration > 155005`,
+    // which matches NEITHER 15000 NOR 16000 (expect zero rows instead of
+    // two). A sign/off-by-one bug could instead wrongly include the 15000s.
+    if frac_durations != vec![16_000, 16_000] {
         edge_a.shutdown();
         edge_b.shutdown();
         return Err(format!(
-            "fractional predicate `duration > 15.5`: got durations {frac_durations:?} across \
-             both edges, expected exactly two duration=16 rows (one per edge) with both \
-             duration=15 rows excluded"
+            "fractional predicate `duration > 15500.5`: got durations {frac_durations:?} across \
+             both edges, expected exactly two duration=16000 rows (one per edge) with both \
+             duration=15000 rows excluded"
         ));
     }
     println!(
-        "  [fractional predicate] duration > 15.5 excludes 15, includes 16 on both edges: {frac_durations:?}"
+        "  [fractional predicate] duration > 15500.5 excludes 15000, includes 16000 on both edges: {frac_durations:?}"
     );
 
     // --- Alias fold: a plain-column alias (`service_name AS svc`) and an
@@ -598,15 +603,15 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
         .get("a")
         .and_then(serde_json::Value::as_f64)
         .ok_or_else(|| format!("svcOnlyA.a missing/non-numeric in {only_a_row:?}"))?;
-    if (only_a_c, only_a_s, only_a_mn, only_a_mx) != (2, 100, 40, 60)
-        || (only_a_a - 50.0).abs() > 1e-9
+    if (only_a_c, only_a_s, only_a_mn, only_a_mx) != (2, 100_000, 40_000, 60_000)
+        || (only_a_a - 50_000.0).abs() > 1e-9
     {
         edge_a.shutdown();
         edge_b.shutdown();
         return Err(format!(
             "single-edge GROUP BY key: got c={only_a_c} s={only_a_s} a={only_a_a} mn={only_a_mn} \
-             mx={only_a_mx}, expected c=2 s=100 a=50.0 mn=40 mx=60 (edge B's zero-row \
-             contribution must not corrupt the fold)"
+             mx={only_a_mx}, expected c=2 s=100000 a=50000.0 mn=40000 mx=60000 in µs (edge B's \
+             zero-row contribution must not corrupt the fold)"
         ));
     }
     println!(
@@ -671,12 +676,12 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
     };
     let null_group_c = null_group_i64("c")?;
     let null_group_s = null_group_i64("s")?;
-    if (null_group_c, null_group_s) != (3, 21) {
+    if (null_group_c, null_group_s) != (3, 21_000) {
         edge_a.shutdown();
         edge_b.shutdown();
         return Err(format!(
-            "NULL-group-key: got c={null_group_c} s={null_group_s}, expected c=3 s=21 (2 rows on \
-             edge A [5,7] + 1 row on edge B [9])"
+            "NULL-group-key: got c={null_group_c} s={null_group_s}, expected c=3 s=21000µs \
+             (2 rows on edge A [5,7]ms + 1 row on edge B [9]ms)"
         ));
     }
     println!(

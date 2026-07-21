@@ -371,7 +371,7 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
     };
     let reader = conn.get();
     let blocks = investigate(&reader, &req, "lake.").expect("investigate should succeed");
-    let block = &blocks["checkout"];
+    let block = &blocks.results["checkout"];
 
     // Coverage
     assert!(block.coverage.has_spans, "should have spans");
@@ -434,7 +434,7 @@ async fn e2e_multi_project_isolation() {
     };
     let reader_a = conn_a.get();
     let blocks_a = investigate(&reader_a, &req_a, "lake.").expect("investigate failed");
-    let block_a = &blocks_a["alpha-svc"];
+    let block_a = &blocks_a.results["alpha-svc"];
     assert_eq!(block_a.coverage.span_count, 30);
     assert_eq!(block_a.operation_summaries.len(), 1);
     assert_eq!(block_a.operation_summaries[0].span_name, "GET /alpha");
@@ -448,7 +448,7 @@ async fn e2e_multi_project_isolation() {
     };
     let blocks_beta_on_a =
         investigate(&reader_a, &req_beta_on_a, "lake.").expect("investigate failed");
-    let block_beta_on_a = &blocks_beta_on_a["beta-svc"];
+    let block_beta_on_a = &blocks_beta_on_a.results["beta-svc"];
     assert_eq!(
         block_beta_on_a.coverage.span_count, 0,
         "beta-svc should NOT appear in project alpha's DB"
@@ -464,7 +464,7 @@ async fn e2e_multi_project_isolation() {
     };
     let reader_b = conn_b.get();
     let blocks_b = investigate(&reader_b, &req_b, "lake.").expect("investigate failed");
-    let block_b = &blocks_b["beta-svc"];
+    let block_b = &blocks_b.results["beta-svc"];
     assert_eq!(block_b.coverage.span_count, 50);
     assert_eq!(block_b.operation_summaries[0].span_name, "GET /beta");
 }
@@ -730,7 +730,7 @@ async fn e2e_investigation_all_signals() {
     };
     let reader = conn.get();
     let blocks = investigate(&reader, &req, "lake.").expect("investigate with all signals");
-    let block = &blocks["full-svc"];
+    let block = &blocks.results["full-svc"];
 
     assert!(
         block.coverage.has_spans,
@@ -940,7 +940,7 @@ async fn e2e_drain_log_template_dedup() {
         to_ts: now_us + 60_000_000,
     };
     let blocks = investigate(&conn, &req, "lake.").unwrap();
-    let block = &blocks["api-svc"];
+    let block = &blocks.results["api-svc"];
     assert!(
         !block.logs.sample.is_empty(),
         "investigate should return some logs, got empty"

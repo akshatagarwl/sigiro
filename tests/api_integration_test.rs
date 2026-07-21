@@ -506,7 +506,10 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .expect("span row query should succeed");
-    assert_eq!(duration, 1_000_000, "1s span must be 1_000_000 µs, not ms/ns");
+    assert_eq!(
+        duration, 1_000_000,
+        "1s span must be 1_000_000 µs, not ms/ns"
+    );
     assert_eq!(
         end_us - start_us,
         1_000_000,

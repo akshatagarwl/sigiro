@@ -315,7 +315,7 @@ async fn e2e_profiles_pipeline() {
         to_ts: now_us + 60_000_000,
     };
     let blocks = sigiro::investigate::investigate(&conn, &req, "lake.").unwrap();
-    let profiles = &blocks["api-svc"].profiles;
+    let profiles = &blocks.results["api-svc"].profiles;
     assert!(!profiles.is_empty(), "should have profile summaries");
 
     // db_query should have highest total value (15M + 12M = 27M)
@@ -483,7 +483,7 @@ async fn e2e_profiles_multi_type() {
         to_ts: now_us + 60_000_000,
     };
     let blocks = sigiro::investigate::investigate(&conn, &req, "lake.").unwrap();
-    let profiles = &blocks["api-svc"].profiles;
+    let profiles = &blocks.results["api-svc"].profiles;
     assert_eq!(
         profiles.len(),
         2,

@@ -1567,6 +1567,36 @@ type QueryResponse = (
     Json<Vec<serde_json::Value>>,
 );
 
+/// The SQL-subset contract, stated once and surfaced in BOTH places an agent
+/// hits it: the /openapi.json operation description and every guard
+/// rejection. Rejections that don't say what IS allowed force trial-and-error.
+fn query_sql_contract() -> String {
+    format!(
+        "Accepts exactly one read-only SELECT statement (raw SQL as the request body). \
+         Allowed tables (optionally qualified as lake.* or main.*): {}. \
+         WITH/CTE clauses are not supported — rewrite as derived-table subqueries \
+         (SELECT ... FROM (SELECT ...) t). Scalar functions are allowlisted \
+         (aggregates, json_extract/json_extract_string, date/time, string, math, \
+         coalesce/nullif); file/network readers and settings introspection are blocked.",
+        ALLOWED_TABLES
+            .iter()
+            .map(|t| t.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// Run a read-only SQL query against this project's telemetry.
+///
+/// Accepts exactly one SELECT statement as the raw request body. Allowed
+/// tables: sigiro_spans, sigiro_logs, sigiro_log_templates,
+/// sigiro_metrics_gauge, sigiro_metrics_sum, sigiro_metrics_histogram,
+/// sigiro_metrics_exp_histogram, sigiro_profiles, sigiro_anomalies
+/// (optionally qualified as lake.* or main.*). WITH/CTE clauses are not
+/// supported — rewrite as derived-table subqueries. Scalar functions are
+/// allowlisted (aggregates, json extraction, date/time, string, math,
+/// conditional helpers); file/network readers are blocked. Every
+/// `drill_down_sql` returned by /v1/investigate can be pasted here verbatim.
 #[utoipa::path(
     post,
     path = "/v1/query",
@@ -1593,7 +1623,10 @@ async fn query_handler(
     let allow_information_schema = !state.pool.storage_mode().is_distributed();
     if let Err(e) = validate_read_only_with(&body, allow_information_schema) {
         tracing::warn!(sql = %sql_preview, "query rejected (validation): {e}");
-        return Err(bad_request("query rejected", &e));
+        return Err(bad_request(
+            "query rejected",
+            &format!("{e}. {}", query_sql_contract()),
+        ));
     }
     match execute_sql(&state, &auth, &body).await {
         Ok((results, truncated)) => {
@@ -1995,7 +2028,7 @@ async fn investigate_handler(
     // from_ts/to_ts must be plausible MICROSECOND timestamps (fail loud on
     // seconds/millis/nanos), to_ts > from_ts. Invalid input never reaches here.
     Valid(Json(req)): Valid<Json<investigate::InvestigateRequest>>,
-) -> ApiResult<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>> {
+) -> ApiResult<Json<investigate::InvestigateResponse>> {
     let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
     let project_data_path = if state.pool.storage_mode().is_distributed() {
         crate::storage::tenant_data_dir(&data_dir, &auth.tenant_id)

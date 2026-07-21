@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 
-use crate::investigate::{InvestigateRequest, InvestigationBlock};
+use crate::investigate::{InvestigateRequest, InvestigateResponse, InvestigationBlock};
 
 /// Explicit client auth mode — mirrors server-side AuthMode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,13 +64,16 @@ impl SigiroClient {
         from: i64,
         to: i64,
     ) -> Result<InvestigationBlock> {
-        let blocks = self
+        let mut resp = self
             .investigate_multi(Some(service), None, from, to)
             .await?;
-        blocks
-            .into_values()
-            .next()
-            .context("no investigation block returned for service")
+        if let Some(block) = resp.results.remove(service) {
+            return Ok(block);
+        }
+        if let Some(err) = resp.errors.get(service) {
+            bail!("investigation failed for {service}: {err}");
+        }
+        bail!("no investigation block returned for service {service}")
     }
 
     async fn expect_ok(&self, resp: reqwest::Response) -> Result<reqwest::Response> {
@@ -131,13 +134,15 @@ impl SigiroClient {
     }
 
     /// Investigate one or more services. Pass `service` for single, `services` for multi.
+    /// Returns partial results: successful blocks in `results`, per-service
+    /// failures in `errors`.
     pub async fn investigate_multi(
         &self,
         service: Option<&str>,
         services: Option<Vec<String>>,
         from: i64,
         to: i64,
-    ) -> Result<std::collections::BTreeMap<String, InvestigationBlock>> {
+    ) -> Result<InvestigateResponse> {
         let body = InvestigateRequest {
             service: service.map(str::to_string),
             services,

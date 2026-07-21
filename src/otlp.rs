@@ -933,7 +933,8 @@ impl LogBuilders {
         }
 
         self.timestamp.append_value(nanos_to_micros(timestamp));
-        self.observed_timestamp.append_value(nanos_to_micros(observed));
+        self.observed_timestamp
+            .append_value(nanos_to_micros(observed));
 
         let trace_id = hex::encode(&log.trace_id);
         let span_id = hex::encode(&log.span_id);
