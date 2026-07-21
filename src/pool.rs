@@ -527,7 +527,6 @@ impl ProjectPool {
         }
     }
 
-
     /// Remove a project's connection (for account deletion).
     #[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub fn remove(&self, project_id: &str) {

@@ -260,7 +260,8 @@ pub(crate) fn disk_sample_seconds() -> Result<u64> {
 
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
 /// Defaults to the platform data dir (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).
-pub(crate) static DATA_DIR: Envar<String> = Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);
+pub(crate) static DATA_DIR: Envar<String> =
+    Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);
 
 /// Server URL for CLI client and admin commands.
 pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
@@ -269,7 +270,8 @@ pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
 
 /// Path to the direct-ingest TLS certificate PEM file (ports 4317 and 4318).
 /// The main HTTP API stays plaintext for a TLS-terminating reverse proxy.
-pub(crate) static TLS_CERT: Envar<String> = Envar::on_startup("SIGIRO_TLS_CERT", || EnvarDef::Unset);
+pub(crate) static TLS_CERT: Envar<String> =
+    Envar::on_startup("SIGIRO_TLS_CERT", || EnvarDef::Unset);
 /// Path to the direct-ingest TLS private key PEM file. Unset = no TLS.
 pub(crate) static TLS_KEY: Envar<String> = Envar::on_startup("SIGIRO_TLS_KEY", || EnvarDef::Unset);
 
@@ -284,7 +286,8 @@ pub(crate) static RETENTION_DAYS: Envar<u32> =
 /// PostgreSQL catalog URL (required for distributed/multi-tenant mode, optional
 /// otherwise). Unset means the local DuckDB file catalog (`catalog.ducklake`).
 /// Deployment modes: docs/architecture/deployment-modes.html
-pub(crate) static CATALOG_URL: Envar<String> = Envar::on_startup("SIGIRO_CATALOG_URL", || EnvarDef::Unset);
+pub(crate) static CATALOG_URL: Envar<String> =
+    Envar::on_startup("SIGIRO_CATALOG_URL", || EnvarDef::Unset);
 
 /// Which cross-project query surface (if any) this node exposes.
 /// - "none" (default): no cross-project query surface.
@@ -354,4 +357,5 @@ pub(crate) fn query_row_cap() -> Result<usize> {
 
 /// Admin bearer token for distributed tenant/key provisioning endpoints.
 /// Unset disables those mutation endpoints.
-pub(crate) static ADMIN_TOKEN: Envar<String> = Envar::on_startup("SIGIRO_ADMIN_TOKEN", || EnvarDef::Unset);
+pub(crate) static ADMIN_TOKEN: Envar<String> =
+    Envar::on_startup("SIGIRO_ADMIN_TOKEN", || EnvarDef::Unset);

@@ -58,14 +58,53 @@ use tracing_attributes::instrument;
             CreateTenantResponse,
             CreateKeyRequest,
             AdminStatusResponse,
+            investigate::InvestigateRequest,
+            investigate::InvestigateResponse,
+            investigate::InvestigationBlock,
+            investigate::Finding,
+            investigate::OperationSummary,
+            investigate::MetricBucket,
+            investigate::SpanRecord,
+            investigate::LogRecord,
+            investigate::LogPattern,
+            investigate::ProfileSummary,
+            investigate::DerivedEvent,
+            investigate::ServiceContext,
+            investigate::Coverage,
+            investigate::SignalCoverage,
+            investigate::ServiceDependency,
+            investigate::Window,
         )
     ),
+    modifiers(&SecurityAddon),
     tags(
         (name = "query", description = "SQL query endpoints"),
         (name = "admin", description = "Admin endpoints"),
             )
 )]
 pub(crate) struct ApiDoc;
+
+/// Declares the bearer-token security scheme so agents reading /openapi.json
+/// know every /v1 and /admin endpoint expects `Authorization: Bearer <key>`.
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+        let components = openapi
+            .components
+            .get_or_insert_with(utoipa::openapi::Components::new);
+        components.add_security_scheme(
+            "bearer",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .bearer_format("prefixed-api-key")
+                    .build(),
+            ),
+        );
+    }
+}
 
 /// Pre-auth rate-limit key. This must not key on the unverified Authorization
 /// header: an attacker could rotate bogus tokens to evade the limiter and grow
@@ -2013,9 +2052,26 @@ fn compute_service_breakdown(
 #[utoipa::path(
     post,
     path = "/v1/investigate",
+    request_body = investigate::InvestigateRequest,
+    description = "\
+Root-cause an incident for one or more services over a time window. Returns a \
+triage summary — NOT raw telemetry: a ranked `findings` array (read this \
+first), per-operation anomaly flags, and bounded samples of spans/logs. \
+Every lead carries a ready-to-run SQL string (`drill_down_sql` on findings, \
+operations, spans, and log patterns; `drill_all_sql` on the spans/logs \
+sections) that you paste VERBATIM into `POST /v1/query` to fetch the \
+underlying rows and go deeper. \
+Typical agent loop: `GET /v1/services` → `POST /v1/investigate` → for any \
+finding or anomalous operation, run its `drill_down_sql` via `/v1/query`. \
+Timestamps are microseconds since the Unix epoch. The response is a map \
+`{results: {service: block}, errors: {service: message}}` — partial results \
+survive a single failing service.",
     responses(
-        (status = 200, description = "Investigation results")
+        (status = 200, description = "Per-service investigation blocks", body = investigate::InvestigateResponse),
+        (status = 400, description = "Invalid request (e.g. timestamps not in microseconds, or to_ts <= from_ts)"),
+        (status = 401, description = "Missing or invalid bearer token")
     ),
+    security(("bearer" = [])),
     tag = "query"
 )]
 #[instrument(skip_all)]

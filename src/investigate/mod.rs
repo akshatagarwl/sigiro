@@ -19,14 +19,23 @@ pub use analysis::{
 // InvestigateRequest — API input (from_ts/to_ts mandatory)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema, validator::Validate)]
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema, validator::Validate)]
 #[validate(schema(function = "validate_window", skip_on_field_errors = true))]
 pub struct InvestigateRequest {
+    /// Single service to investigate. Provide this OR `services` (call
+    /// `GET /v1/services` first to discover valid names).
+    #[schema(example = "shopfront-pipeline-worker")]
     pub service: Option<String>,
+    /// Multiple services in one call (max 10). Alternative to `service`.
     pub services: Option<Vec<String>>,
+    /// Window start, **microseconds** since the Unix epoch (a 16-digit value,
+    /// e.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.
     #[validate(custom(function = "validate_micros"))]
+    #[schema(example = 1780000000000000i64)]
     pub from_ts: i64,
+    /// Window end, microseconds since the Unix epoch. Must be > `from_ts`.
     #[validate(custom(function = "validate_micros"))]
+    #[schema(example = 1780001800000000i64)]
     pub to_ts: i64,
 }
 
@@ -75,7 +84,7 @@ const MAX_SERVICES: usize = 10;
 /// One ranked, self-contained "what deserves attention" item — the first
 /// thing an agent reads. Assembled in Rust from data the single query already
 /// returned (zero extra SQL, zero extra memory).
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct Finding {
     /// "critical" | "warning" | "info" — findings are sorted by this.
     pub severity: String,
@@ -92,7 +101,7 @@ pub struct Finding {
 /// Response envelope for an investigation: per-service blocks plus
 /// per-service failures. Partial results by design — one broken service
 /// must not discard the other nine (fail loud, per service).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InvestigateResponse {
     /// Successful investigation blocks, keyed by service name.
     pub results: BTreeMap<String, InvestigationBlock>,
@@ -101,7 +110,7 @@ pub struct InvestigateResponse {
     pub errors: BTreeMap<String, String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InvestigationBlock {
     /// Ranked list (critical first) of what deserves attention in this
     /// window: anomalous operations, error/log inconsistencies, actionable
@@ -133,7 +142,7 @@ pub struct InvestigationBlock {
 /// A bounded sample of a larger set that carries its own "there's more, and
 /// here's how to get it" affordance, so an agent can decide to drill without
 /// guessing. When `total > sample.len()`, run `drill_all_sql` via /v1/query.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct SampledSection<T> {
     pub sample: Vec<T>,
     pub total: i64,
@@ -144,7 +153,7 @@ pub struct SampledSection<T> {
     pub drill_all_sql: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct ServiceContext {
     pub service_name: String,
     pub(crate) first_seen: Option<String>,
@@ -160,14 +169,14 @@ pub struct ServiceContext {
     pub dependents: Vec<ServiceDependency>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct DerivedEvent {
     pub(crate) detected_at: String,
     pub event_type: String,
     pub description: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct OperationSummary {
     /// The operation identity spans are grouped by. Usually equals
     /// `span_name`, but generic HTTP spans (span_name is a bare method like
@@ -201,7 +210,7 @@ pub struct OperationSummary {
     pub drill_down_sql: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct MetricBucket {
     pub(crate) bucket: String,
     pub(crate) metric_name: String,
@@ -212,7 +221,7 @@ pub struct MetricBucket {
 
 /// A flat span record. Attributes and events are embedded as real JSON
 /// (not escaped strings) so agents can read them directly.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct SpanRecord {
     pub trace_id: String,
     pub(crate) span_id: String,
@@ -230,14 +239,16 @@ pub struct SpanRecord {
     pub(crate) start_ts: i64,
     pub(crate) end_ts: i64,
     pub(crate) start_iso: String,
+    #[schema(value_type = Object)]
     pub(crate) span_attributes: Option<serde_json::Value>,
+    #[schema(value_type = Object)]
     pub(crate) events: Option<serde_json::Value>,
     /// Ready-to-run query for the full trace this span belongs to (every span
     /// sharing its `trace_id`, chronological). Filled in Rust.
     pub drill_down_sql: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct LogRecord {
     /// Microseconds since the Unix epoch.
     pub(crate) timestamp: i64,
@@ -246,11 +257,12 @@ pub struct LogRecord {
     pub(crate) body: String,
     pub(crate) trace_id: Option<String>,
     pub(crate) span_id: Option<String>,
+    #[schema(value_type = Object)]
     pub(crate) attributes: Option<serde_json::Value>,
 }
 
 /// A log pattern with aggregated statistics.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct LogPattern {
     /// Template or pattern string.
     pub pattern: String,
@@ -264,6 +276,7 @@ pub struct LogPattern {
     pub example_body: Option<String>,
     /// Up to 5 distinct extracted-variable tuples (each a JSON array of the
     /// wildcard values for one log line) — enough to see what varies.
+    #[schema(value_type = Object)]
     pub sample_values: Option<serde_json::Value>,
     pub(crate) severity_text: String,
     pub count: i64,
@@ -272,7 +285,7 @@ pub struct LogPattern {
     pub(crate) last_seen: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct ProfileSummary {
     pub function: String,
     pub profile_type: String,

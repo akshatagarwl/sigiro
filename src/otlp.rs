@@ -297,7 +297,10 @@ impl Default for TraceBuilders {
 // Public decode functions
 // ============================================================================
 
-pub(crate) fn transform_traces(bytes: &[u8], format: InputFormat) -> Result<RecordBatch, DecodeError> {
+pub(crate) fn transform_traces(
+    bytes: &[u8],
+    format: InputFormat,
+) -> Result<RecordBatch, DecodeError> {
     match format {
         InputFormat::Protobuf => decode_traces_protobuf(bytes),
         InputFormat::Json => decode_traces_json(bytes),
@@ -318,7 +321,10 @@ pub(crate) fn transform_logs(
     }
 }
 
-pub(crate) fn transform_metrics(bytes: &[u8], format: InputFormat) -> Result<MetricBatches, DecodeError> {
+pub(crate) fn transform_metrics(
+    bytes: &[u8],
+    format: InputFormat,
+) -> Result<MetricBatches, DecodeError> {
     match format {
         InputFormat::Protobuf => decode_metrics_protobuf(bytes),
         InputFormat::Json => decode_metrics_json(bytes),

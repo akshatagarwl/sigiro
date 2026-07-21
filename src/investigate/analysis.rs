@@ -11,7 +11,7 @@ use crate::types::TimestampMicros;
 // ---------------------------------------------------------------------------
 
 /// Signal availability for a given service/time range.
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, utoipa::ToSchema)]
 pub struct SignalCoverage {
     /// Signal type (spans, logs, metrics, profiles).
     pub(crate) signal_type: String,
@@ -24,7 +24,7 @@ pub struct SignalCoverage {
 }
 
 /// Computed coverage for the investigation window.
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, utoipa::ToSchema)]
 pub struct Coverage {
     pub has_spans: bool,
     pub has_logs: bool,
@@ -186,7 +186,7 @@ pub fn us_to_iso(us: i64) -> Result<String> {
 }
 
 /// Service dependency graph node with aggregated stats.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, utoipa::ToSchema)]
 pub struct ServiceDependency {
     /// Name of the dependent service.
     pub service_name: String,
@@ -202,7 +202,7 @@ pub struct ServiceDependency {
 // Window — time range for investigation
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Window {
     pub from_ts: i64,
     pub to_ts: i64,

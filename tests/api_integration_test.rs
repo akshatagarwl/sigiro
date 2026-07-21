@@ -117,6 +117,44 @@ fn mark_test_context_ready(ctx: &TestContext) {
 }
 
 #[tokio::test]
+async fn test_openapi_documents_investigate_for_agents() {
+    // Cold-start agentic discoverability: /openapi.json is the only public
+    // discovery surface, so the flagship /v1/investigate MUST be fully
+    // documented there — request schema, a description, and the bearer scheme.
+    // This regressed silently once (schemars derive instead of utoipa ToSchema,
+    // empty path macro), which is what made sigiro un-agentic from a cold URL.
+    let ctx = build_test_context();
+    let app = build_http_router(ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    let spec: serde_json::Value =
+        serde_json::from_str(&server.get("/openapi.json").await.text()).expect("openapi is JSON");
+
+    let inv = &spec["paths"]["/v1/investigate"]["post"];
+    assert!(
+        inv["requestBody"].is_object(),
+        "investigate must publish a request body schema so an agent can learn to call it"
+    );
+    assert!(
+        inv["description"]
+            .as_str()
+            .unwrap_or("")
+            .contains("microsecond"),
+        "investigate description must state the microsecond timestamp unit"
+    );
+    // The response body schema graph must resolve (findings/drill fields).
+    assert!(
+        spec["components"]["schemas"]["InvestigateResponse"].is_object()
+            && spec["components"]["schemas"]["Finding"].is_object(),
+        "response schema graph must be published"
+    );
+    assert!(
+        spec["components"]["securitySchemes"]["bearer"].is_object(),
+        "bearer security scheme must be declared so an agent knows auth"
+    );
+}
+
+#[tokio::test]
 async fn test_health_returns_ok_when_ready() {
     let ctx = build_test_context();
     mark_test_context_ready(&ctx);

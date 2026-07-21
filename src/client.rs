@@ -23,7 +23,6 @@ impl ClientAuth {
         }
     }
 
-
     /// Apply auth to a reqwest request builder if needed.
     pub(crate) fn apply(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match self {
@@ -180,7 +179,6 @@ impl SigiroClient {
             .await
             .context("failed to parse admin/status response")
     }
-
 }
 
 /// Build a client from config.
@@ -195,4 +193,3 @@ pub fn try_build_client() -> anyhow::Result<SigiroClient> {
     let auth = ClientAuth::from_key(std::env::var("SIGIRO_API_KEY").unwrap_or_default());
     Ok(SigiroClient::new(&base_url, auth))
 }
-
