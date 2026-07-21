@@ -205,36 +205,35 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_profiles")?;
 
-    // Anomaly detection view — always in the default catalog (reads from prefixed tables)
+    // Anomalies — written by the scheduled anomaly pass (src/anomaly.rs,
+    // driven from the per-project inserter timer), read by /v1/investigate
+    // and /v1/anomalies. Detection is BOCPD changepoints (augurs) over
+    // continuous per-operation series — NO arbitrary thresholds anywhere
+    // (docs/plans/01-continuous-anomaly-subsystem.md). Lives in the DuckLake
+    // catalog alongside the telemetry it derives from, so it gets the same
+    // per-tenant isolation for free.
     conn.execute_batch(&format!(
-        "CREATE OR REPLACE VIEW sigiro_anomalies AS
-        WITH error_rates AS (
-            SELECT service_name,
-                   count(CASE WHEN status_code = 2 THEN 1 END) * 100.0 / NULLIF(count(*), 0) AS error_pct
-            FROM {prefix}sigiro_spans
-            WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
-            GROUP BY service_name
-        ),
-        latency AS (
-            SELECT service_name,
-                   approx_quantile(duration, 0.95) AS p95_us
-            FROM {prefix}sigiro_spans
-            WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
-            GROUP BY service_name
-        ),
-        silence AS (
-            SELECT DISTINCT service_name FROM {prefix}sigiro_spans
-            EXCEPT
-            SELECT DISTINCT service_name FROM {prefix}sigiro_spans
-            WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
-        )
-        SELECT 'error_rate' AS anomaly_type, service_name, error_pct AS value FROM error_rates WHERE error_pct > 5
-        UNION ALL
-        SELECT 'high_latency', service_name, CAST(p95_us AS DOUBLE) FROM latency WHERE p95_us > 1000000
-        UNION ALL
-        SELECT 'silence', service_name, 0.0 FROM silence"
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_anomalies (
+            detected_at           TIMESTAMP NOT NULL,
+            service_name          VARCHAR NOT NULL,
+            operation             VARCHAR NOT NULL,
+            -- Which health series shifted; the spans slice emits 'error_rate'.
+            signal                VARCHAR NOT NULL,
+            -- Detection kind; BOCPD emits 'changepoint'.
+            kind                  VARCHAR NOT NULL,
+            -- Only 'worsening' shifts are persisted (mean after > mean
+            -- before — a direction comparison, not a threshold).
+            direction             VARCHAR NOT NULL,
+            -- First bucket of the NEW regime.
+            ts_shift              TIMESTAMP NOT NULL,
+            -- Series mean before/after the shift, in raw units (error %).
+            \"before\"            DOUBLE NOT NULL,
+            \"after\"             DOUBLE NOT NULL,
+            -- Ready-to-run /v1/query SQL for the spans behind the shift.
+            drill_down_sql        VARCHAR
+        )"
     ))
-    .context("failed to create sigiro_anomalies view")?;
+    .context("failed to create sigiro_anomalies")?;
     // NOTE: DuckLake (Parquet-backed catalog) does not support CREATE INDEX.
     // Query performance relies on Parquet row group pruning and column statistics.
     // For heavy query workloads, consider partitioning by timestamp or using

@@ -38,6 +38,7 @@ use tracing_attributes::instrument;
     paths(
         query_handler,
         services_handler,
+        anomalies_handler,
         trace_detail_handler,
         investigate_handler,
         admin_status,
@@ -49,6 +50,8 @@ use tracing_attributes::instrument;
         schemas(
             ServicesResponse,
             ServiceEntry,
+            AnomaliesResponse,
+            AnomalyEntry,
             TraceDetailResponse,
             SpanDetail,
             ServiceBreakdownEntry,
@@ -304,10 +307,12 @@ static TIME_TRAVEL_AT_LITERAL: std::sync::LazyLock<regex::Regex> = std::sync::La
 });
 
 /// The entire allowed FROM-target surface for user queries: every table
-/// sigiro itself creates (src/schema.rs CREATE TABLE names) plus the
-/// read-only `sigiro_anomalies` view it also creates there. Matched
-/// case-insensitively against the FINAL identifier — see `is_allowed_table`
-/// for how the schema-qualifier prefix (`lake.` / `main.`) is handled.
+/// sigiro itself creates (src/schema.rs CREATE TABLE names), including
+/// `sigiro_anomalies` — the table the scheduled anomaly pass
+/// (`crate::anomaly`) writes and /v1/investigate + /v1/anomalies read.
+/// Matched case-insensitively against the FINAL identifier — see
+/// `is_allowed_table` for how the schema-qualifier prefix (`lake.` /
+/// `main.`) is handled.
 const ALLOWED_TABLES: &[&str] = &[
     "SIGIRO_SPANS",
     "SIGIRO_LOGS",
@@ -706,6 +711,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_post(query_handler)
         .typed_post(investigate_handler)
         .typed_get(services_handler)
+        .typed_get(anomalies_handler)
         .typed_get(trace_detail_handler);
 
     let v1 = if rate_limit_v1 {
@@ -1752,6 +1758,82 @@ async fn services_handler(
     }
 
     Ok(Json(ServicesResponse { services }))
+}
+
+/// Query parameters for GET /v1/anomalies.
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+pub(crate) struct AnomaliesQuery {
+    /// Filter to one service.
+    service: Option<String>,
+    /// Only shifts at or after this time (microseconds since the Unix epoch).
+    from_ts: Option<i64>,
+    /// Only shifts at or before this time (microseconds since the Unix epoch).
+    to_ts: Option<i64>,
+}
+
+/// GET /v1/anomalies — the precomputed anomalies table, most recent shift
+/// first. Rows are written continuously by the scheduled anomaly pass
+/// (BOCPD changepoints over each operation's persisted error-rate series —
+/// no thresholds), so reading here costs one table scan, never a detection
+/// run. The same rows drive `is_anomalous` in /v1/investigate.
+#[utoipa::path(
+    get,
+    path = "/v1/anomalies",
+    params(AnomaliesQuery),
+    description = "\
+Precomputed anomalies: worsening regime shifts (BOCPD changepoints, \
+threshold-free) detected continuously over each operation's error-rate \
+history and persisted to the `sigiro_anomalies` table. Optionally filter \
+by `service` and a `from_ts`/`to_ts` window (microseconds since the Unix \
+epoch) over the shift time. Each row carries a ready-to-run `drill_down_sql` \
+for POST /v1/query.",
+    responses(
+        (status = 200, description = "Anomaly rows, newest shift first", body = AnomaliesResponse),
+        (status = 401, description = "Missing or invalid bearer token")
+    ),
+    security(("bearer" = [])),
+    tag = "query"
+)]
+#[instrument(skip_all)]
+async fn anomalies_handler(
+    _path: AnomaliesPath,
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    axum::extract::Query(q): axum::extract::Query<AnomaliesQuery>,
+) -> ApiResult<Json<AnomaliesResponse>> {
+    let prefix = ProjectPool::prefix();
+    let mut filters = vec!["1 = 1".to_string()];
+    if let Some(service) = &q.service {
+        filters.push(format!("service_name = '{}'", escape_sql_string(service)));
+    }
+    if let Some(from_ts) = q.from_ts {
+        filters.push(format!("ts_shift >= make_timestamp({from_ts})"));
+    }
+    if let Some(to_ts) = q.to_ts {
+        filters.push(format!("ts_shift <= make_timestamp({to_ts})"));
+    }
+    let sql = format!(
+        "SELECT detected_at::VARCHAR AS detected_at, service_name, operation, signal, kind, \
+                direction, ts_shift::VARCHAR AS ts_shift, \"before\", \"after\", drill_down_sql \
+         FROM {prefix}sigiro_anomalies \
+         WHERE {} \
+         ORDER BY ts_shift DESC",
+        filters.join(" AND ")
+    );
+    let (results, _truncated) = execute_sql(&state, &auth, &sql)
+        .await
+        .map_err(|e| bad_request("anomalies query failed", &format!("{e:#}")))?;
+
+    let mut anomalies = Vec::with_capacity(results.len());
+    for row in results {
+        anomalies.push(serde_json::from_value::<AnomalyEntry>(row).map_err(|e| {
+            bad_request(
+                "anomalies query failed",
+                &format!("unexpected sigiro_anomalies row shape: {e}"),
+            )
+        })?);
+    }
+    Ok(Json(AnomaliesResponse { anomalies }))
 }
 
 /// GET /v1/traces/{trace_id} -- return a single trace with full detail including critical path and service breakdown.

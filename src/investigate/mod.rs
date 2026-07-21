@@ -198,15 +198,19 @@ pub struct OperationSummary {
     pub baseline_error_pct: Option<f64>,
     pub baseline_p95_us: Option<f64>,
     pub baseline_count: Option<i64>,
-    /// Changepoint judgment (augurs BOCPD) over this operation's own
-    /// bucketed error-rate and p95 series across the 4x-preceding baseline
-    /// plus the window: `Some(true)` = a changepoint INSIDE the window marks
-    /// a worsening regime shift (mean after > mean before); `Some(false)` =
-    /// detection ran and found no in-window worsening shift (improvements
-    /// do not flag); `None` = series too short to judge. Note a
-    /// chronic-but-stable failure rate has no changepoint and is NOT
-    /// anomalous — it IS the baseline; read `error_pct` for chronic health.
-    pub is_anomalous: Option<bool>,
+    /// Whether the continuous anomaly pass (augurs BOCPD changepoints over
+    /// this operation's persisted error-rate series — see `crate::anomaly`)
+    /// found a worsening regime shift (mean after > mean before) whose
+    /// `ts_shift` falls inside this investigation window. Read from the
+    /// `sigiro_anomalies` table, never recomputed per request. Improvements
+    /// do not flag, and a chronic-but-stable failure rate has no changepoint
+    /// and is NOT anomalous — it IS the baseline; read `error_pct` for
+    /// chronic health.
+    ///
+    /// Not present in the SQL payload (filled in Rust from the joined
+    /// anomaly rows) — `default` keeps the flattened deserialize working.
+    #[serde(default)]
+    pub is_anomalous: bool,
     /// The detected shift(s) in prose, e.g.
     /// "error rate shifted at 14:32 (5.1% → 23.8%)" /
     /// "p95 shifted at 14:30 (2.1s → 240.0s)".
@@ -320,14 +324,41 @@ struct SqlPayload {
 }
 
 /// One operation row exactly as the SQL emits it: the public summary fields
-/// plus the per-bucket health `series` that only feeds changepoint detection
-/// in Rust and is never returned to the caller.
+/// plus the in-window `sigiro_anomalies` rows the query LEFT JOINed in,
+/// which populate `is_anomalous`/`anomaly_reason` and are never returned raw.
 #[derive(Deserialize)]
 struct SqlOperationRow {
     #[serde(flatten)]
     summary: OperationSummary,
     #[serde(default)]
-    series: Vec<analysis::SeriesBucket>,
+    anomalies: Vec<AnomalyHit>,
+}
+
+/// One in-window row from the `sigiro_anomalies` table (written by the
+/// scheduled pass in `crate::anomaly`), as the investigation query emits it.
+#[derive(Deserialize)]
+struct AnomalyHit {
+    signal: String,
+    /// Bucket where the new regime starts, µs since epoch.
+    ts_shift: i64,
+    before: f64,
+    after: f64,
+}
+
+/// Prose for one detected shift, e.g.
+/// "error rate shifted at 14:32 (5.1% → 23.8%)".
+fn anomaly_reason(hit: &AnomalyHit) -> String {
+    let at = analysis::hhmm_utc(hit.ts_shift);
+    match hit.signal.as_str() {
+        "error_rate" => format!(
+            "error rate shifted at {at} ({:.1}% → {:.1}%)",
+            hit.before, hit.after
+        ),
+        other => format!(
+            "{other} shifted at {at} ({:.2} → {:.2})",
+            hit.before, hit.after
+        ),
+    }
 }
 
 #[derive(Deserialize)]
@@ -459,33 +490,25 @@ fn investigate_one(
         });
     }
 
-    // Anomaly detection: augurs BOCPD changepoints over each operation's
-    // bucketed health series (error rate + p95, full baseline-to-now range).
-    // Pure Rust on data already in hand — see analysis::detect_operation_anomaly.
+    // Anomaly flags come from the persisted `sigiro_anomalies` table (the
+    // continuous pass in `crate::anomaly` writes it) — the query already
+    // LEFT JOINed the in-window rows per operation; nothing is recomputed
+    // here. Prose is assembled from the joined rows.
     let mut operation_summaries: Vec<OperationSummary> = payload
         .operation_summaries
         .into_iter()
         .map(|row| {
-            let verdict = analysis::detect_operation_anomaly(&row.series, from_ts);
             let mut op = row.summary;
-            op.is_anomalous = verdict.is_anomalous;
-            op.anomaly_reason = verdict.reason;
+            op.is_anomalous = !row.anomalies.is_empty();
+            op.anomaly_reason = (!row.anomalies.is_empty())
+                .then(|| row.anomalies.iter().map(anomaly_reason).join("; "));
             op
         })
         .collect();
 
     // #1: raw spans behind each operation (errors first, then slowest).
-    // Bare-HTTP-method groups must filter on the SAME derived expression the
-    // query grouped by — `span_name = 'POST'` would also match POST spans
-    // that were bucketed under "POST some.host" — so the drilled rows
-    // reconcile exactly with this operation's count.
     for op in &mut operation_summaries {
-        let filter = if HTTP_METHOD_SPAN_NAMES.contains(&op.span_name.as_str()) {
-            let operation = op.operation.replace('\'', "''");
-            format!("{} = '{operation}'", operation_key_expr(""))
-        } else {
-            format!("span_name = '{}'", op.span_name.replace('\'', "''"))
-        };
+        let filter = operation_drill_filter(&op.span_name, &op.operation);
         op.drill_down_sql = Some(format!(
             "SELECT * FROM {prefix}sigiro_spans \
              WHERE {span_scope} AND {filter} \
@@ -528,7 +551,7 @@ fn investigate_one(
     // hand. The one array an agent reads first.
     let mut findings = Vec::new();
     for op in &operation_summaries {
-        if op.is_anomalous == Some(true) {
+        if op.is_anomalous {
             findings.push(Finding {
                 severity: "critical".to_string(),
                 kind: "anomalous_operation".to_string(),
@@ -627,8 +650,9 @@ const HTTP_METHOD_SPAN_NAMES: &[&str] =
 /// ` <server.address>` (client spans) appended when present — NOT url.path,
 /// which is unbounded-cardinality (ids in paths). Uses only functions on the
 /// /v1/query scalar allowlist (json_extract_string, nullif, coalesce) so the
-/// drill SQL passes `validate_read_only`.
-fn operation_key_expr(q: &str) -> String {
+/// drill SQL passes `validate_read_only`. Shared with the scheduled anomaly
+/// pass (`crate::anomaly`) so table rows join back on the SAME identity.
+pub(crate) fn operation_key_expr(q: &str) -> String {
     format!(
         "CASE WHEN {q}span_name IN ('GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS') \
          THEN {q}span_name || COALESCE(' ' || COALESCE(\
@@ -636,6 +660,21 @@ NULLIF(json_extract_string({q}span_attributes, 'http.route'), ''), \
 NULLIF(json_extract_string({q}span_attributes, 'server.address'), '')), '') \
          ELSE {q}span_name END"
     )
+}
+
+/// The one WHERE fragment that selects exactly one operation's raw spans.
+/// Bare-HTTP-method groups must filter on the SAME derived expression the
+/// queries grouped by — `span_name = 'POST'` would also match POST spans
+/// that were bucketed under "POST some.host" — so drilled rows reconcile
+/// exactly with the reported counts. Shared by the per-operation
+/// `drill_down_sql` here and by the anomaly pass (`crate::anomaly`).
+pub(crate) fn operation_drill_filter(span_name: &str, operation: &str) -> String {
+    if HTTP_METHOD_SPAN_NAMES.contains(&span_name) {
+        let operation = operation.replace('\'', "''");
+        format!("{} = '{operation}'", operation_key_expr(""))
+    } else {
+        format!("span_name = '{}'", span_name.replace('\'', "''"))
+    }
 }
 
 /// Builds the one-shot investigation query. Five bind parameters, in order:
@@ -752,44 +791,33 @@ ops_baseline AS (
       AND s.span_name NOT LIKE '%TraceService/Export%'
     GROUP BY operation
 ),
--- Per-operation health SERIES over the FULL range [bl_from .. to_ts] at the
--- report's bucket grain — the input to changepoint detection (augurs BOCPD),
--- which runs in Rust (investigate_one), NOT in SQL. The baseline lead-in is
--- 4x the window, so even a narrow window yields enough points.
-op_series AS (
-    SELECT {op_key} AS operation,
-           time_bucket(INTERVAL '{bucket}', s.timestamp) AS b,
-           epoch_us(time_bucket(INTERVAL '{bucket}', s.timestamp)) AS bucket_ts,
-           count(*) AS cnt,
-           count(CASE WHEN s.status_code = {err} THEN 1 END) * 100.0 / count(*) AS err_rate,
-           approx_quantile(s.duration, 0.95) AS p95_us
-    FROM {prefix}sigiro_spans s, args a
-    WHERE s.service_name = a.service
-      AND s.timestamp BETWEEN a.bl_from AND a.to_ts
-      AND s.span_name NOT LIKE '%TraceService/Export%'
-    GROUP BY operation, b
-),
-series_agg AS (
-    SELECT operation,
+-- Precomputed anomalies for this service whose regime shift falls inside
+-- the investigation window, grouped per operation. The `sigiro_anomalies`
+-- table is written by the scheduled pass (src/anomaly.rs) — investigate
+-- only READS it; no changepoint detection runs per request.
+op_anomalies AS (
+    SELECT an.operation,
            to_json(list(json_object(
-               'bucket_ts', bucket_ts, 'err_rate', err_rate,
-               'p95_us', p95_us, 'cnt', cnt
-           ) ORDER BY bucket_ts)) AS series
-    FROM op_series
-    GROUP BY operation
+               'signal', an.signal, 'kind', an.kind,
+               'ts_shift', epoch_us(an.ts_shift),
+               'before', an."before", 'after', an."after"
+           ) ORDER BY an.ts_shift)) AS anomalies
+    FROM {prefix}sigiro_anomalies an, args a
+    WHERE an.service_name = a.service
+      AND an.ts_shift BETWEEN a.from_ts AND a.to_ts
+    GROUP BY an.operation
 ),
--- is_anomalous / anomaly_reason are NOT computed here: changepoint detection
--- (augurs BOCPD on the standardized per-bucket series above) happens in Rust.
--- This CTE only assembles the evidence: current aggregates, baseline
--- aggregates, and the series.
+-- is_anomalous / anomaly_reason are assembled in Rust from the joined
+-- `anomalies` rows. This CTE only gathers the evidence: current aggregates,
+-- baseline aggregates, and the in-window anomaly rows.
 operation_summaries AS (
     SELECT c.operation, c.span_name, c.cnt, c.err_cnt, c.err_pct,
            c.p50, c.p95, c.p99, c.exemplar_error_trace_id,
            b.bl_err_pct, b.bl_p95, b.bl_cnt,
-           COALESCE(sa.series, '[]'::JSON) AS series
+           COALESCE(oa.anomalies, '[]'::JSON) AS anomalies
     FROM ops_current c
     LEFT JOIN ops_baseline b USING (operation)
-    LEFT JOIN series_agg sa USING (operation)
+    LEFT JOIN op_anomalies oa USING (operation)
     ORDER BY c.err_cnt DESC, c.cnt DESC
     LIMIT 20
 ),
@@ -972,7 +1000,7 @@ SELECT json_object(
         'duration_p50_us', p50, 'duration_p95_us', p95, 'duration_p99_us', p99,
         'exemplar_error_trace_id', exemplar_error_trace_id,
         'baseline_error_pct', bl_err_pct, 'baseline_p95_us', bl_p95, 'baseline_count', bl_cnt,
-        'series', series
+        'anomalies', anomalies
     ) ORDER BY err_cnt DESC, cnt DESC)), '[]'::JSON) FROM operation_summaries),
     'metrics', (SELECT COALESCE(to_json(list(json_object(
         'bucket', bucket, 'metric_name', metric_name, 'p95', p95, 'avg', avg, 'count', n

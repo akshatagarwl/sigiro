@@ -729,7 +729,10 @@ fn snapshot_query_service_context_shape() {
 }
 
 // ---------------------------------------------------------------------------
-// Anomaly rules (#2): absolute floor, latency-vs-baseline, no-baseline cases
+// Continuous anomaly subsystem: the scheduled pass (sigiro::anomaly) writes
+// the sigiro_anomalies table; investigate READS it (no inline detection).
+// E2E-style: seed spans → run the pass → assert persisted rows → assert
+// investigate surfaces them.
 // ---------------------------------------------------------------------------
 
 /// Bulk-insert spans for `service`/`span_name` at `ts_us`: `counts` is
@@ -767,23 +770,14 @@ fn insert_spans(
     .expect("insert spans");
 }
 
-#[test]
-fn anomaly_in_window_worsening_shift_flags() {
-    // Flat low error rate through the baseline lead-in, then a jump that
-    // STAYS high inside the investigation window: augurs BOCPD must place a
-    // changepoint in-window, the after-mean exceeds the before-mean, and the
-    // operation flags with a "shifted at" reason.
-    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn, "").expect("create tables");
-    let now_us = {
-        let odt = time::OffsetDateTime::now_utc();
-        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-    };
+/// Seed the canonical worsening-shift fixture: flat 0% errors for minutes
+/// -74..-16, then 50% errors for minutes -12..-1 — a regime shift ~12
+/// minutes before `now_us`.
+fn seed_worsening_shift(conn: &duckdb::Connection, now_us: i64) {
     let min = 60_000_000_i64;
-    // Lead-in: minutes -74..-16 before now, 0% errors.
     for i in 16..=74_i64 {
         insert_spans(
-            &conn,
+            conn,
             "worker",
             "call upstream",
             now_us - i * min,
@@ -792,10 +786,9 @@ fn anomaly_in_window_worsening_shift_flags() {
             None,
         );
     }
-    // In-window: minutes -12..-1, 50% errors — the regime shift.
     for i in 1..=12_i64 {
         insert_spans(
-            &conn,
+            conn,
             "worker",
             "call upstream",
             now_us - i * min,
@@ -804,14 +797,80 @@ fn anomaly_in_window_worsening_shift_flags() {
             None,
         );
     }
+}
 
-    // 15-minute window at 1-minute buckets; baseline lead-in is 4x (60 min).
+#[test]
+fn anomaly_pass_persists_worsening_shift_and_investigate_surfaces_it() {
+    // The full spine, end to end: seed a worsening error-rate shift, run the
+    // scheduled pass, assert a row LANDS IN sigiro_anomalies, then assert
+    // /investigate (which only reads the table) flags the operation.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    seed_worsening_shift(&conn, now_us);
+
+    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    assert!(written >= 1, "the shift must persist at least one row");
+
+    // The persisted row carries the full contract.
+    let (service, operation, signal, kind, direction, before, after, drill): (
+        String,
+        String,
+        String,
+        String,
+        String,
+        f64,
+        f64,
+        String,
+    ) = conn
+        .query_row(
+            "SELECT service_name, operation, signal, kind, direction, \
+                    \"before\", \"after\", drill_down_sql \
+             FROM sigiro_anomalies ORDER BY ts_shift DESC LIMIT 1",
+            [],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            },
+        )
+        .expect("anomaly row");
+    assert_eq!(service, "worker");
+    assert_eq!(operation, "call upstream");
+    assert_eq!(signal, "error_rate");
+    assert_eq!(kind, "changepoint");
+    assert_eq!(direction, "worsening");
+    assert!(
+        after > before,
+        "worsening means mean after > before ({before} → {after})"
+    );
+
+    // The row's drill query passes the /v1/query firewall AND executes.
+    sigiro::server::validate_read_only(&drill)
+        .expect("anomaly drill_down_sql must pass the /v1/query guard");
+    let drilled: i64 = conn
+        .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
+            r.get(0)
+        })
+        .expect("drill query must execute");
+    assert!(drilled > 0, "drill query must return the new-regime spans");
+
+    // /investigate over a window containing the shift reads the table.
     let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert_eq!(op.operation, "call upstream");
-    assert_eq!(
+    assert!(
         op.is_anomalous,
-        Some(true),
         "an in-window worsening regime shift must flag"
     );
     let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
@@ -829,6 +888,60 @@ fn anomaly_in_window_worsening_shift_flags() {
     assert_eq!(finding.severity, "critical");
     assert!(finding.summary.contains("call upstream"));
     assert!(finding.drill_down_sql.is_some());
+
+    // A window that ENDS BEFORE the shift must not flag: the anomaly row
+    // exists but its ts_shift is outside [from, to].
+    let early = investigate_service(
+        &conn,
+        "worker",
+        now_us - 3_600_000_000,
+        now_us - 1_800_000_000,
+    );
+    if let Some(op) = early.operation_summaries.first() {
+        assert!(!op.is_anomalous, "shift outside the window must not flag");
+    }
+}
+
+#[test]
+fn anomaly_pass_is_idempotent() {
+    // Repeated passes replace, never accumulate: same telemetry in, same
+    // row count out.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    seed_worsening_shift(&conn, now_us);
+
+    let first = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("first pass");
+    assert!(first >= 1);
+    let second = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("second pass");
+    assert_eq!(first, second, "re-running the pass must not change results");
+
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM sigiro_anomalies", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        count as usize, second,
+        "table holds exactly one pass's rows — no duplicate accumulation"
+    );
+}
+
+#[test]
+fn anomaly_pass_fails_loud_but_is_isolated_by_the_caller() {
+    // A broken schema makes the pass itself error (fail loud)...
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    conn.execute_batch("DROP TABLE sigiro_spans").unwrap();
+    let err = sigiro::anomaly::run_anomaly_pass(&conn, "")
+        .expect_err("pass must surface the failure, never swallow it");
+    assert!(
+        format!("{err:#}").contains("anomaly"),
+        "error names the failing stage: {err:#}"
+    );
+    // ...and the inserter's writer thread catches exactly this Err and logs
+    // it (ProjectFlusher::anomaly_pass), so ingest/flush never see it.
 }
 
 #[test]
@@ -855,13 +968,15 @@ fn anomaly_chronic_stable_error_rate_is_not_anomalous() {
         );
     }
 
+    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    assert_eq!(
+        written, 0,
+        "flat 30% error rate across the whole range: no changepoint, no row"
+    );
+
     let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
-    assert_eq!(
-        op.is_anomalous,
-        Some(false),
-        "flat 30% error rate across the whole range: no changepoint, not anomalous"
-    );
+    assert!(!op.is_anomalous);
     assert!(op.anomaly_reason.is_none());
     assert!(
         !block
@@ -875,9 +990,9 @@ fn anomaly_chronic_stable_error_rate_is_not_anomalous() {
 }
 
 #[test]
-fn anomaly_improvement_shift_does_not_flag() {
-    // A DOWNWARD in-window shift (50% errors drops to 0%) is a changepoint,
-    // but the after-mean is BETTER — improvements are never anomalous.
+fn anomaly_improvement_shift_is_not_persisted() {
+    // A DOWNWARD shift (50% errors drops to 0%) is a changepoint, but the
+    // after-mean is BETTER — improvements never land in the table.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -908,19 +1023,20 @@ fn anomaly_improvement_shift_does_not_flag() {
         );
     }
 
+    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    assert_eq!(written, 0, "getting BETTER is a shift but never an anomaly");
+
     let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
-    assert_eq!(
-        op.is_anomalous,
-        Some(false),
-        "getting BETTER is a shift but never an anomaly"
-    );
+    assert!(!op.is_anomalous);
 }
 
 #[test]
-fn anomaly_latency_shift_flags_via_p95_series() {
-    // Zero errors throughout (flat error series → no changepoint there);
-    // p95 jumps 10ms → 300ms inside the window → the p95 series flags.
+fn anomaly_latency_only_shift_is_out_of_scope_for_the_error_rate_slice() {
+    // Zero errors throughout, p95 jumps 10ms → 300ms: the spans/error-rate
+    // slice detects error-rate shifts ONLY — the latency signal lands in a
+    // later slice (docs/plans/01-continuous-anomaly-subsystem.md P1), so no
+    // row is persisted and nothing flags.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -951,24 +1067,18 @@ fn anomaly_latency_shift_flags_via_p95_series() {
         );
     }
 
+    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    assert_eq!(written, 0, "error-rate series is flat zero — no row");
+
     let block = investigate_service(&conn, "api", now_us - 900_000_000, now_us);
-    let op = &block.operation_summaries[0];
-    assert_eq!(
-        op.is_anomalous,
-        Some(true),
-        "in-window p95 regime shift must flag"
-    );
-    let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
-    assert!(
-        reason.contains("p95 shifted at"),
-        "reason should name the p95 shift, got: {reason}"
-    );
+    assert!(!block.operation_summaries[0].is_anomalous);
 }
 
 #[test]
-fn anomaly_too_short_series_is_unjudged() {
-    // All spans land in ONE bucket: a 1-point series is far below the
-    // minimum needed to establish a regime — abstain (None), don't guess.
+fn anomaly_single_bucket_series_has_no_changepoint() {
+    // All spans land in ONE bucket: BOCPD on a 1-point series emits no
+    // changepoint BY CONSTRUCTION — no minimum-points gate needed, and no
+    // row is persisted.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -985,12 +1095,12 @@ fn anomaly_too_short_series_is_unjudged() {
         None,
     );
 
+    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    assert_eq!(written, 0, "a 1-bucket series has no regime to shift from");
+
     let block = investigate_service(&conn, "api", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
-    assert_eq!(
-        op.is_anomalous, None,
-        "a 1-bucket series cannot be judged → None"
-    );
+    assert!(!op.is_anomalous);
     assert!(op.anomaly_reason.is_none());
 }
 

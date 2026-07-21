@@ -2,161 +2,20 @@
 //! These are testable in isolation and have no side effects.
 
 use anyhow::Result;
-use augurs_changepoint::{Detector, NormalGammaDetector};
 use serde::{Deserialize, Serialize};
 
 use crate::types::TimestampMicros;
 
-// ---------------------------------------------------------------------------
-// Anomaly detection — augurs BOCPD changepoints on per-bucket health series
-// ---------------------------------------------------------------------------
-
-/// One bucket of an operation's health series over the full
-/// [baseline_from .. to_ts] range — the input to changepoint detection.
-/// Produced by the `op_series` CTE.
-#[derive(Deserialize, Debug)]
-pub(crate) struct SeriesBucket {
-    /// Bucket start, µs since epoch.
-    pub(crate) bucket_ts: i64,
-    /// Error percentage within the bucket (0..100).
-    pub(crate) err_rate: f64,
-    /// p95 span duration within the bucket, µs.
-    pub(crate) p95_us: f64,
-}
-
-/// Minimum series length to attempt changepoint detection — BOCPD on fewer
-/// points has no run to establish a regime against, so we abstain
-/// (is_anomalous = None) instead of guessing.
-const MIN_SERIES_POINTS: usize = 8;
-
-/// The verdict for one operation: tri-state flag + prose naming the shift.
-pub(crate) struct AnomalyVerdict {
-    pub(crate) is_anomalous: Option<bool>,
-    pub(crate) reason: Option<String>,
-}
-
-fn mean(y: &[f64]) -> f64 {
-    if y.is_empty() {
-        return f64::NAN;
-    }
-    y.iter().sum::<f64>() / y.len() as f64
-}
-
-/// z-score the series. REQUIRED before handing it to `NormalGammaDetector`:
-/// its default NormalGamma prior assumes standardized data and misbehaves on
-/// raw scales (µs values in the hundreds of thousands). A constant series
-/// (σ = 0) maps to all-zeros — no changepoints, by construction.
-fn standardize(y: &[f64]) -> Vec<f64> {
-    let m = mean(y);
-    let var = y.iter().map(|v| (v - m).powi(2)).sum::<f64>() / y.len() as f64;
-    let sd = var.sqrt();
-    if sd == 0.0 {
-        return vec![0.0; y.len()];
-    }
-    y.iter().map(|v| (v - m) / sd).collect()
-}
-
-/// BOCPD changepoints (augurs `NormalGammaDetector`) on the standardized
-/// series. The detector always reports index 0 (the start of the first
-/// regime) — dropped, it is not a shift.
-fn changepoints(y: &[f64]) -> Vec<usize> {
-    let z = standardize(y);
-    let mut detector = NormalGammaDetector::default();
-    let mut cps = detector.detect_changepoints(&z);
-    cps.retain(|&i| i != 0);
-    cps
-}
-
-/// The LAST regime shift that starts inside the investigation window
-/// (shifts in the baseline lead-in are old news), with the series mean
-/// before and after it. None when the series has no in-window shift.
-///
-/// Index convention (verified empirically against augurs 0.10.2): the
-/// detector reports the LAST index of the OLD regime — a step at index 30
-/// yields cp = 29 — so the new regime starts at `cp + 1`, and that is the
-/// bucket checked against the window and named in the reason.
-fn last_in_window_shift(
-    buckets: &[SeriesBucket],
-    y: &[f64],
-    window_from_us: i64,
-) -> Option<(i64, f64, f64)> {
-    let start = changepoints(y)
-        .into_iter()
-        .filter_map(|cp| {
-            let s = cp + 1;
-            (s < buckets.len() && buckets[s].bucket_ts >= window_from_us).then_some(s)
-        })
-        .next_back()?;
-    Some((
-        buckets[start].bucket_ts,
-        mean(&y[..start]),
-        mean(&y[start..]),
-    ))
-}
+// NOTE: changepoint detection (augurs BOCPD) no longer lives here — it moved
+// to the scheduled anomaly pass in `crate::anomaly`, which persists results
+// into the `sigiro_anomalies` table that investigate now merely reads
+// (docs/plans/01-continuous-anomaly-subsystem.md).
 
 /// µs since epoch → "HH:MM" UTC, for anomaly_reason prose.
-fn hhmm_utc(us: i64) -> String {
+pub(crate) fn hhmm_utc(us: i64) -> String {
     time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(us) * 1000)
         .map(|dt| format!("{:02}:{:02}", dt.hour(), dt.minute()))
         .unwrap_or_else(|_| "?".to_string())
-}
-
-/// µs duration → prose ("2.1s" / "82.3ms") for anomaly_reason.
-fn fmt_duration_us(v: f64) -> String {
-    if v >= 1_000_000.0 {
-        format!("{:.1}s", v / 1_000_000.0)
-    } else {
-        format!("{:.1}ms", v / 1_000.0)
-    }
-}
-
-/// Judge one operation from its bucketed health series (error rate + p95),
-/// entirely baseline-derived: augurs BOCPD finds regime changes; an
-/// in-window changepoint marking a WORSENING shift (mean after > mean
-/// before) flags the operation. Improvements do not flag. A chronic-but-
-/// stable failure rate has no changepoint and is therefore NOT anomalous —
-/// it IS the baseline; chronic health lives in error_pct.
-pub(crate) fn detect_operation_anomaly(
-    buckets: &[SeriesBucket],
-    window_from_us: i64,
-) -> AnomalyVerdict {
-    if buckets.len() < MIN_SERIES_POINTS {
-        // Too few points to establish a regime — abstain, don't guess.
-        return AnomalyVerdict {
-            is_anomalous: None,
-            reason: None,
-        };
-    }
-    let err_series: Vec<f64> = buckets.iter().map(|b| b.err_rate).collect();
-    let p95_series: Vec<f64> = buckets.iter().map(|b| b.p95_us).collect();
-
-    let mut reasons = Vec::new();
-    let mut worsened = false;
-
-    if let Some((ts, before, after)) = last_in_window_shift(buckets, &err_series, window_from_us)
-        && after > before
-    {
-        worsened = true;
-        reasons.push(format!(
-            "error rate shifted at {} ({before:.1}% → {after:.1}%)",
-            hhmm_utc(ts)
-        ));
-    }
-    if let Some((ts, before, after)) = last_in_window_shift(buckets, &p95_series, window_from_us)
-        && after > before
-    {
-        worsened = true;
-        reasons.push(format!(
-            "p95 shifted at {} ({} → {})",
-            hhmm_utc(ts),
-            fmt_duration_us(before),
-            fmt_duration_us(after)
-        ));
-    }
-    AnomalyVerdict {
-        is_anomalous: Some(worsened),
-        reason: (!reasons.is_empty()).then(|| reasons.join("; ")),
-    }
 }
 
 // ---------------------------------------------------------------------------

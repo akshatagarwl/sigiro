@@ -1180,7 +1180,7 @@ async fn check_investigate_deep_dive(client: &SigiroClient) -> Result<DeepDiveRe
     let anomalies = block
         .operation_summaries
         .iter()
-        .filter(|op| op.is_anomalous.unwrap_or(false))
+        .filter(|op| op.is_anomalous)
         .map(|op| {
             let reason = op
                 .anomaly_reason

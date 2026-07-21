@@ -111,6 +111,13 @@ impl DiskCapacityState {
 /// (the OTLP SDK retries). Better to drop one project's data than block all.
 const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
 
+/// Cadence of the continuous anomaly pass (`crate::anomaly`) — how often
+/// each project's persisted error-rate series are re-scanned for regime
+/// shifts. An operational scheduling knob (like the 30s checkpoint and the
+/// hourly retention timers), NOT a detection threshold: detection itself is
+/// BOCPD with no tunables.
+const ANOMALY_PASS_INTERVAL: Duration = Duration::from_secs(300);
+
 /// Flusher configuration derived from env vars at startup.
 #[derive(Debug, Clone)]
 pub struct FlushConfig {
@@ -170,6 +177,9 @@ enum WriterCommand {
         days: u32,
         ack: oneshot::Sender<Result<(), String>>,
     },
+    /// Run the continuous anomaly pass (`crate::anomaly`). Fire-and-forget:
+    /// failures are logged in the writer thread and NEVER affect ingest.
+    AnomalyPass,
     Shutdown,
 }
 
@@ -705,6 +715,27 @@ impl ProjectFlusher {
         Ok(())
     }
 
+    /// One scheduled anomaly pass over this project's spans (see
+    /// `crate::anomaly::run_anomaly_pass`). ISOLATION CONTRACT: this shares
+    /// the writer thread with flush/retention, so every failure mode is
+    /// contained here — query errors surface as `Err` and are logged (warn),
+    /// and augurs itself runs under `catch_unwind` inside the pass — nothing
+    /// can propagate out and take ingest down with it.
+    #[tracing::instrument(skip_all, fields(project_id = %project_id))]
+    fn anomaly_pass(&self, project_id: &str) {
+        match crate::anomaly::run_anomaly_pass(&self.conn, ProjectPool::prefix()) {
+            Ok(anomalies) => {
+                tracing::debug!(project_id, anomalies, "anomaly pass completed");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    project_id,
+                    "anomaly pass failed — ingest/flush/retention unaffected: {e:#}"
+                );
+            }
+        }
+    }
+
     fn into_connection(self) -> Connection {
         self.conn
     }
@@ -799,6 +830,13 @@ async fn run_flusher(
     };
     let mut interval = tokio::time::interval(flush_interval);
     let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(30));
+    // First anomaly pass one full period AFTER startup (interval_at skips the
+    // immediate tick a plain `interval` fires) — a pass at t=0 would scan
+    // before the first flush ever lands and find nothing.
+    let mut anomaly_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + ANOMALY_PASS_INTERVAL,
+        ANOMALY_PASS_INTERVAL,
+    );
 
     loop {
         tokio::select! {
@@ -818,6 +856,14 @@ async fn run_flusher(
                 pool.touch_project(&project_id);
                 if writer_tx.send(WriterCommand::Checkpoint).await.is_err() {
                     tracing::error!(project_id, "writer thread stopped before checkpoint");
+                    break;
+                }
+            }
+
+            _ = anomaly_interval.tick() => {
+                pool.touch_project(&project_id);
+                if writer_tx.send(WriterCommand::AnomalyPass).await.is_err() {
+                    tracing::error!(project_id, "writer thread stopped before anomaly pass");
                     break;
                 }
             }
@@ -893,6 +939,12 @@ fn run_writer_thread(
                 if let Err(e) = flusher.checkpoint(project_id) {
                     tracing::warn!(project_id, "{e:#}");
                 }
+            }
+            WriterCommand::AnomalyPass => {
+                // Isolated by construction: anomaly_pass never returns an
+                // error and never panics (see its doc comment) — the loop,
+                // and therefore ingest, always continues.
+                flusher.anomaly_pass(project_id);
             }
             WriterCommand::RetentionCleanup { days, ack } => {
                 let result = flusher

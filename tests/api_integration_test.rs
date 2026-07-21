@@ -355,6 +355,81 @@ async fn test_services_with_dev_auth_returns_200() {
 }
 
 #[tokio::test]
+async fn test_anomalies_endpoint_returns_persisted_rows() {
+    let ctx = build_test_context();
+
+    // Seed one anomaly row into the default project's table — /v1/anomalies
+    // reads exactly what the scheduled pass (sigiro::anomaly) writes.
+    {
+        let readers = ctx
+            .state
+            .pool
+            .create_project("default")
+            .expect("default project");
+        let conn = readers.get();
+        conn.execute_batch(
+            "INSERT INTO lake.sigiro_anomalies
+                (detected_at, service_name, operation, signal, kind, direction,
+                 ts_shift, \"before\", \"after\", drill_down_sql)
+             VALUES (now()::TIMESTAMP, 'checkout', 'POST /pay', 'error_rate',
+                     'changepoint', 'worsening', now()::TIMESTAMP, 0.0, 42.0,
+                     'SELECT * FROM lake.sigiro_spans')",
+        )
+        .expect("seed anomaly row");
+    }
+
+    let app = build_http_router(Arc::clone(&ctx.state));
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    // Unfiltered: the seeded row comes back with the full typed shape.
+    let resp = server
+        .get("/v1/anomalies")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
+    let rows = body
+        .get("anomalies")
+        .and_then(|v| v.as_array())
+        .expect("'anomalies' array");
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row["service_name"], "checkout");
+    assert_eq!(row["operation"], "POST /pay");
+    assert_eq!(row["signal"], "error_rate");
+    assert_eq!(row["kind"], "changepoint");
+    assert_eq!(row["direction"], "worsening");
+    assert_eq!(row["before"], 0.0);
+    assert_eq!(row["after"], 42.0);
+    assert!(row["drill_down_sql"].is_string());
+    assert!(row["ts_shift"].is_string(), "ISO timestamp string");
+
+    // Service filter: a non-matching service returns an empty list.
+    let resp = server
+        .get("/v1/anomalies?service=unrelated")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
+    assert_eq!(
+        body["anomalies"].as_array().map(Vec::len),
+        Some(0),
+        "service filter must exclude the seeded row"
+    );
+
+    // sigiro_anomalies is a TABLE on the /v1/query allowlist — drill queries
+    // against it work through the firewall like any telemetry table.
+    let resp = server
+        .post("/v1/query")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .text("SELECT service_name, \"before\", \"after\" FROM sigiro_anomalies")
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
+    assert_eq!(body.as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
 async fn test_admin_status_requires_admin_token() {
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);
