@@ -2157,7 +2157,7 @@ async fn create_tenant_handler(
     _path: AdminTenantsPath,
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(req): Json<CreateTenantRequest>,
+    Valid(Json(req)): Valid<Json<CreateTenantRequest>>,
 ) -> ApiResult<Json<CreateTenantResponse>> {
     require_admin_token(&headers)?;
     let control = control_plane_from_state(&state)?;
@@ -2184,7 +2184,7 @@ async fn create_key_handler(
     _path: AdminKeysPath,
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(req): Json<CreateKeyRequest>,
+    Valid(Json(req)): Valid<Json<CreateKeyRequest>>,
 ) -> ApiResult<Json<CreateKeyResponse>> {
     require_admin_token(&headers)?;
     let control = control_plane_from_state(&state)?;

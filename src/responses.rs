@@ -45,14 +45,29 @@ pub struct CreateTenantResponse {
     pub status: String,
 }
 
-#[derive(Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema, validator::Validate)]
 pub struct CreateTenantRequest {
+    #[validate(custom(function = "validate_tenant_id"))]
     pub id: String,
 }
 
-#[derive(Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema, validator::Validate)]
 pub struct CreateKeyRequest {
+    #[validate(custom(function = "validate_tenant_id"))]
     pub tenant_id: String,
+}
+
+/// Validate a tenant id at the API boundary (fail loud early), reusing the
+/// canonical rules from `storage::sanitize_tenant_id` so the API and the
+/// storage layer never disagree on what a valid tenant id is.
+fn validate_tenant_id(id: &str) -> Result<(), validator::ValidationError> {
+    crate::storage::sanitize_tenant_id(id)
+        .map(|_| ())
+        .map_err(|e| {
+            let mut err = validator::ValidationError::new("tenant_id");
+            err.message = Some(e.to_string().into());
+            err
+        })
 }
 
 /// GET /admin/status
