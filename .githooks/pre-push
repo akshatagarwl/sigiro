@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Gate unnecessary public API surface before code leaves the machine.
+# hawk is a full-workspace compile (too slow for pre-commit), so it runs once
+# per push here. Activate with `just install-hooks`. Bypass with `--no-verify`.
+exec just hawk

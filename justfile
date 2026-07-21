@@ -19,6 +19,21 @@ check-release:
     cargo clippy --all-targets --all-features -- -D warnings
     cargo test --release
 
+# Lint for unnecessary `pub` API surface (astral-sh/hawk). Closed-world
+# analysis: anything `pub` the `sigiro` binary can't reach is dead or could be
+# `pub(crate)`. Pinned to hawk's own toolchain (it links rustc_private).
+# Denies the two actionable groups; a full-workspace compile, so it's a
+# pre-push gate (`just install-hooks`), not pre-commit. `--fix` auto-applies
+# the pub→pub(crate) fixes.
+hawk *args:
+    cargo +1.97.1 hawk check --manifest-path Cargo.toml \
+      -D hawk::dead_public -D hawk::unnecessary_public {{ args }}
+
+# Point git at the tracked .githooks/ dir (one-time per clone) so the pre-push
+# hawk gate runs. Teammates run this once after cloning.
+install-hooks:
+    git config core.hooksPath .githooks
+
 # Run sigiro locally with dev dependencies (Postgres, MinIO).
 run:
     #!/usr/bin/env bash
