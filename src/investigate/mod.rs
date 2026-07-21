@@ -348,6 +348,10 @@ fn investigate_one(
     let err = StatusCode::Error.as_i32();
     let svc = service.replace('\'', "''");
     let window = format!("timestamp BETWEEN make_timestamp({from_ts}) AND make_timestamp({to_ts})");
+    // Reproduce the win_spans filter exactly so a drilled count reconciles with
+    // the `total` we reported (win_spans drops OTLP export self-spans).
+    let span_scope =
+        format!("service_name = '{svc}' AND {window} AND span_name NOT LIKE '%TraceService/Export%'");
 
     // #1: raw logs behind each pattern.
     let mut log_patterns = payload.log_patterns;
@@ -367,7 +371,7 @@ fn investigate_one(
         let name = op.span_name.replace('\'', "''");
         op.drill_down_sql = Some(format!(
             "SELECT * FROM {prefix}sigiro_spans \
-             WHERE service_name = '{svc}' AND span_name = '{name}' AND {window} \
+             WHERE {span_scope} AND span_name = '{name}' \
              ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC"
         ));
     }
@@ -388,7 +392,7 @@ fn investigate_one(
         sampled_by: "errors first, then longest duration".to_string(),
         drill_all_sql: format!(
             "SELECT * FROM {prefix}sigiro_spans \
-             WHERE service_name = '{svc}' AND {window} \
+             WHERE {span_scope} \
              ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC"
         ),
         sample: span_rows,
