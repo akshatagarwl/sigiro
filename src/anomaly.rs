@@ -8,12 +8,22 @@
 //! table. `/v1/investigate` and `/v1/anomalies` READ that table; nothing is
 //! recomputed inline per request.
 //!
+//! The pass is split in two so the expensive half never touches the single
+//! DuckLake writer (which it would otherwise block for seconds, stalling
+//! ingest flushes):
+//! - [`detect`] — the multi-day series scan + BOCPD, run on a READER
+//!   connection from the project's `ReaderPool`;
+//! - [`persist`] — the brief DELETE+INSERT of the results, the only part
+//!   that runs on the writer connection (DuckLake single-writer semantics).
+//!
 //! Threshold-free by construction: detection is Bayesian online changepoint
 //! detection (`NormalGammaDetector`) on the z-scored series. The ONLY
 //! structural choice is a direction — a shift is persisted when the series
 //! mean AFTER the changepoint exceeds the mean BEFORE it ("worsening") — a
 //! comparison, not a magic number. Constant or too-short series produce no
 //! changepoints by construction, so there is no minimum-points gate either.
+//! Nothing is filtered by size: readers rank shifts by magnitude
+//! (|after − before|) so the biggest lead, but every detected shift persists.
 //!
 //! This slice covers spans/error-rate only; other signals (latency, log
 //! volume, profiles) and cross-signal correlation land in later phases.
@@ -35,6 +45,7 @@ const SERIES_LOOKBACK_DAYS: i64 = 7;
 const SIGNAL_ERROR_RATE: &str = "error_rate";
 
 /// One worsening regime shift found in a series.
+#[derive(Debug)]
 struct Shift {
     /// First bucket of the NEW regime, µs since epoch.
     ts_shift_us: i64,
@@ -44,8 +55,12 @@ struct Shift {
     after: f64,
 }
 
-/// A fully-resolved anomaly row ready to insert.
-struct AnomalyInsert {
+/// A fully-resolved anomaly row: produced by [`detect`] on a reader
+/// connection, carried across to the writer thread, and written by
+/// [`persist`]. Opaque outside this module — callers only move it between
+/// the two phases.
+#[derive(Debug)]
+pub struct AnomalyInsert {
     service: String,
     operation: String,
     shift: Shift,
@@ -89,8 +104,9 @@ fn changepoints(y: &[f64]) -> Vec<usize> {
 /// reports the LAST index of the OLD regime), and the shift is kept only
 /// when the mean after exceeds the mean before. Improvements never persist.
 ///
-/// augurs runs inside `catch_unwind`: this pass shares a thread with ingest
-/// flushing, and a detector panic must never take the flusher down with it.
+/// augurs runs inside `catch_unwind`: a detector panic on one pathological
+/// series must never abort the whole detection pass — it is logged and that
+/// one series is skipped, the rest still detect.
 fn worsening_shifts(bucket_ts: &[i64], y: &[f64]) -> Vec<Shift> {
     let cps = match std::panic::catch_unwind(|| changepoints(y)) {
         Ok(cps) => cps,
@@ -119,17 +135,13 @@ fn worsening_shifts(bucket_ts: &[i64], y: &[f64]) -> Vec<Shift> {
         .collect()
 }
 
-/// One scheduled anomaly pass over a project's spans: build each
-/// (service, operation)'s per-minute error-rate series over the last
-/// [`SERIES_LOOKBACK_DAYS`], run BOCPD, and replace the project's
-/// `sigiro_anomalies` rows with the worsening shifts found. Returns the
-/// number of anomaly rows persisted.
-///
-/// Idempotent by full replace: the pass recomputes from the same continuous
-/// history every time, so DELETE-then-INSERT inside one transaction keeps
-/// repeated passes from accumulating duplicates (and a mid-pass failure
-/// rolls back, leaving the previous pass's rows intact).
-pub fn run_anomaly_pass(conn: &Connection, prefix: &str) -> Result<usize> {
+/// The detection half of the scheduled pass — the expensive part. Builds
+/// each (service, operation)'s 5-minute error-rate series over the last
+/// [`SERIES_LOOKBACK_DAYS`] and runs BOCPD over every series. Read-only:
+/// run it on a READER connection from the project's `ReaderPool`, never on
+/// the writer — this scan takes seconds and would stall ingest flushes.
+/// Hand the returned rows to [`persist`] on the writer.
+pub fn detect(conn: &Connection, prefix: &str) -> Result<Vec<AnomalyInsert>> {
     let started = std::time::Instant::now();
     let err = StatusCode::Error.as_i32();
     let now_us = {
@@ -141,9 +153,8 @@ pub fn run_anomaly_pass(conn: &Connection, prefix: &str) -> Result<usize> {
 
     // 5-minute error-rate buckets per (service, operation), oldest first.
     // 5min (not 1min) is deliberate: BOCPD should flag SUSTAINED regime shifts,
-    // not 1-minute blips — coarser buckets both denoise (fewer spurious shifts)
-    // and cut the pass cost ~5x (it shares the writer thread with ingest flush,
-    // so its runtime is bounded on purpose). Buckets only exist where spans
+    // not 1-minute blips — coarser buckets denoise (fewer spurious shifts)
+    // and cut the scan cost ~5x. Buckets only exist where spans
     // exist — gaps are simply absent. Same derived operation identity as
     // /v1/investigate (shared `operation_key_expr`), so investigate's LEFT JOIN
     // on (service, operation) always matches.
@@ -194,6 +205,30 @@ pub fn run_anomaly_pass(conn: &Connection, prefix: &str) -> Result<usize> {
         }
     }
 
+    tracing::info!(
+        anomalies = inserts.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "anomaly detection completed"
+    );
+    Ok(inserts)
+}
+
+/// The persistence half of the scheduled pass — the only part that touches
+/// the single DuckLake writer, and it holds it just long enough for one
+/// DELETE+INSERT transaction over [`detect`]'s results (no scan, no BOCPD).
+/// Returns the number of anomaly rows persisted.
+///
+/// Idempotent by full replace: the pass recomputes from the same continuous
+/// history every time, so DELETE-then-INSERT inside one transaction keeps
+/// repeated passes from accumulating duplicates (and a mid-pass failure
+/// rolls back, leaving the previous pass's rows intact).
+pub fn persist(conn: &Connection, prefix: &str, inserts: &[AnomalyInsert]) -> Result<usize> {
+    let started = std::time::Instant::now();
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + i64::from(odt.microsecond())
+    };
+
     // Full replace inside one transaction — see the doc comment above.
     conn.execute_batch("BEGIN TRANSACTION")
         .context("failed to begin anomaly-pass transaction")?;
@@ -209,7 +244,7 @@ pub fn run_anomaly_pass(conn: &Connection, prefix: &str) -> Result<usize> {
                          'worsening', make_timestamp(?), ?, ?, ?)"
             ))
             .context("failed to prepare sigiro_anomalies insert")?;
-        for row in &inserts {
+        for row in inserts {
             ins.execute(duckdb::params![
                 now_us,
                 row.service,
@@ -230,7 +265,7 @@ pub fn run_anomaly_pass(conn: &Connection, prefix: &str) -> Result<usize> {
             tracing::info!(
                 anomalies = n,
                 elapsed_ms = started.elapsed().as_millis() as u64,
-                "anomaly pass completed"
+                "anomaly pass persisted"
             );
             Ok(n)
         }

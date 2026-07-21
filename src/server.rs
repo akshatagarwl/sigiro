@@ -1771,11 +1771,13 @@ pub(crate) struct AnomaliesQuery {
     to_ts: Option<i64>,
 }
 
-/// GET /v1/anomalies — the precomputed anomalies table, most recent shift
-/// first. Rows are written continuously by the scheduled anomaly pass
-/// (BOCPD changepoints over each operation's persisted error-rate series —
-/// no thresholds), so reading here costs one table scan, never a detection
-/// run. The same rows drive `is_anomalous` in /v1/investigate.
+/// GET /v1/anomalies — the precomputed anomalies table, biggest shift
+/// first (magnitude = |after − before|, computed at read; ranking, not a
+/// threshold — every detected shift is returned). Rows are written
+/// continuously by the scheduled anomaly pass (BOCPD changepoints over
+/// each operation's persisted error-rate series — no thresholds), so
+/// reading here costs one table scan, never a detection run. The same rows
+/// drive `is_anomalous` in /v1/investigate.
 #[utoipa::path(
     get,
     path = "/v1/anomalies",
@@ -1783,12 +1785,14 @@ pub(crate) struct AnomaliesQuery {
     description = "\
 Precomputed anomalies: worsening regime shifts (BOCPD changepoints, \
 threshold-free) detected continuously over each operation's error-rate \
-history and persisted to the `sigiro_anomalies` table. Optionally filter \
-by `service` and a `from_ts`/`to_ts` window (microseconds since the Unix \
-epoch) over the shift time. Each row carries a ready-to-run `drill_down_sql` \
-for POST /v1/query.",
+history and persisted to the `sigiro_anomalies` table. Ordered by shift \
+magnitude (|after - before|) descending, so the most significant shifts \
+lead — nothing is filtered out; judge significance from `before`/`after`. \
+Optionally filter by `service` and a `from_ts`/`to_ts` window (microseconds \
+since the Unix epoch) over the shift time. Each row carries a ready-to-run \
+`drill_down_sql` for POST /v1/query.",
     responses(
-        (status = 200, description = "Anomaly rows, newest shift first", body = AnomaliesResponse),
+        (status = 200, description = "Anomaly rows, biggest shift first", body = AnomaliesResponse),
         (status = 401, description = "Missing or invalid bearer token")
     ),
     security(("bearer" = [])),
@@ -1817,7 +1821,7 @@ async fn anomalies_handler(
                 direction, ts_shift::VARCHAR AS ts_shift, \"before\", \"after\", drill_down_sql \
          FROM {prefix}sigiro_anomalies \
          WHERE {} \
-         ORDER BY ts_shift DESC",
+         ORDER BY abs(\"after\" - \"before\") DESC, ts_shift DESC",
         filters.join(" AND ")
     );
     let (results, _truncated) = execute_sql(&state, &auth, &sql)

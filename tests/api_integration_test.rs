@@ -358,8 +358,10 @@ async fn test_services_with_dev_auth_returns_200() {
 async fn test_anomalies_endpoint_returns_persisted_rows() {
     let ctx = build_test_context();
 
-    // Seed one anomaly row into the default project's table — /v1/anomalies
-    // reads exactly what the scheduled pass (sigiro::anomaly) writes.
+    // Seed two anomaly rows into the default project's table — /v1/anomalies
+    // reads exactly what the scheduled pass (sigiro::anomaly) writes. The
+    // BIGGER shift (0→42) is deliberately given the OLDER ts_shift, so the
+    // ordering assertion below can only pass on magnitude, never on recency.
     {
         let readers = ctx
             .state
@@ -372,16 +374,21 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
                 (detected_at, service_name, operation, signal, kind, direction,
                  ts_shift, \"before\", \"after\", drill_down_sql)
              VALUES (now()::TIMESTAMP, 'checkout', 'POST /pay', 'error_rate',
-                     'changepoint', 'worsening', now()::TIMESTAMP, 0.0, 42.0,
+                     'changepoint', 'worsening',
+                     now()::TIMESTAMP - INTERVAL '1 hour', 0.0, 42.0,
+                     'SELECT * FROM lake.sigiro_spans'),
+                    (now()::TIMESTAMP, 'checkout', 'GET /cart', 'error_rate',
+                     'changepoint', 'worsening', now()::TIMESTAMP, 24.9, 25.3,
                      'SELECT * FROM lake.sigiro_spans')",
         )
-        .expect("seed anomaly row");
+        .expect("seed anomaly rows");
     }
 
     let app = build_http_router(Arc::clone(&ctx.state));
     let server = TestServer::new(app).expect("failed to build test server");
 
-    // Unfiltered: the seeded row comes back with the full typed shape.
+    // Unfiltered: BOTH rows come back (rank, don't filter — the trivial
+    // 24.9→25.3 shift is never dropped), biggest |after - before| first.
     let resp = server
         .get("/v1/anomalies")
         .add_header("Authorization", "Bearer sigiro_dev_test")
@@ -392,10 +399,13 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
         .get("anomalies")
         .and_then(|v| v.as_array())
         .expect("'anomalies' array");
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 2, "every detected shift is returned");
     let row = &rows[0];
     assert_eq!(row["service_name"], "checkout");
-    assert_eq!(row["operation"], "POST /pay");
+    assert_eq!(
+        row["operation"], "POST /pay",
+        "the biggest shift leads despite being the older one"
+    );
     assert_eq!(row["signal"], "error_rate");
     assert_eq!(row["kind"], "changepoint");
     assert_eq!(row["direction"], "worsening");
@@ -403,6 +413,10 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
     assert_eq!(row["after"], 42.0);
     assert!(row["drill_down_sql"].is_string());
     assert!(row["ts_shift"].is_string(), "ISO timestamp string");
+    assert_eq!(
+        rows[1]["operation"], "GET /cart",
+        "the smaller shift ranks second, never filtered out"
+    );
 
     // Service filter: a non-matching service returns an empty list.
     let resp = server
@@ -426,7 +440,7 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
         .await;
     resp.assert_status_ok();
     let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
-    assert_eq!(body.as_array().map(Vec::len), Some(1));
+    assert_eq!(body.as_array().map(Vec::len), Some(2));
 }
 
 #[tokio::test]

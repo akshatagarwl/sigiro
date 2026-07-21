@@ -24,7 +24,10 @@ pub struct ServiceEntry {
 }
 
 /// GET /v1/anomalies — precomputed regime shifts from the continuous
-/// anomaly pass (the `sigiro_anomalies` table), newest shift first.
+/// anomaly pass (the `sigiro_anomalies` table), biggest shift first
+/// (|after − before| descending; ties broken newest first). Ranking, not
+/// filtering: every detected shift is returned — the reader judges
+/// significance from `before`/`after`.
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AnomaliesResponse {
     pub(crate) anomalies: Vec<AnomalyEntry>,

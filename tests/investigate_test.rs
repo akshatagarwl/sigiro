@@ -770,6 +770,16 @@ fn insert_spans(
     .expect("insert spans");
 }
 
+/// Run the scheduled pass end to end, exactly as production does: `detect`
+/// (in production: a READER connection — the heavy scan + BOCPD) then
+/// `persist` (in production: the writer — the brief DELETE+INSERT). Tests
+/// use one connection for both phases; the code path is identical. Returns
+/// the number of rows persisted.
+fn run_anomaly_pass(conn: &duckdb::Connection) -> usize {
+    let inserts = sigiro::anomaly::detect(conn, "").expect("anomaly detect");
+    sigiro::anomaly::persist(conn, "", &inserts).expect("anomaly persist")
+}
+
 /// Seed the canonical worsening-shift fixture: flat 0% errors for minutes
 /// -74..-16, then 50% errors for minutes -12..-1 — a regime shift ~12
 /// minutes before `now_us`.
@@ -815,7 +825,7 @@ fn anomaly_pass_persists_worsening_shift_and_investigate_surfaces_it() {
     };
     seed_worsening_shift(&conn, now_us);
 
-    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    let written = run_anomaly_pass(&conn);
     assert!(written >= 1, "the shift must persist at least one row");
 
     // The persisted row carries the full contract.
@@ -918,9 +928,9 @@ fn anomaly_pass_is_idempotent() {
     };
     seed_worsening_shift(&conn, now_us);
 
-    let first = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("first pass");
+    let first = run_anomaly_pass(&conn);
     assert!(first >= 1);
-    let second = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("second pass");
+    let second = run_anomaly_pass(&conn);
     assert_eq!(first, second, "re-running the pass must not change results");
 
     let count: i64 = conn
@@ -934,18 +944,19 @@ fn anomaly_pass_is_idempotent() {
 
 #[test]
 fn anomaly_pass_fails_loud_but_is_isolated_by_the_caller() {
-    // A broken schema makes the pass itself error (fail loud)...
+    // A broken schema makes detection itself error (fail loud)...
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     conn.execute_batch("DROP TABLE sigiro_spans").unwrap();
-    let err = sigiro::anomaly::run_anomaly_pass(&conn, "")
-        .expect_err("pass must surface the failure, never swallow it");
+    let err = sigiro::anomaly::detect(&conn, "")
+        .expect_err("detection must surface the failure, never swallow it");
     assert!(
         format!("{err:#}").contains("anomaly"),
         "error names the failing stage: {err:#}"
     );
-    // ...and the inserter's writer thread catches exactly this Err and logs
-    // it (ProjectFlusher::anomaly_pass), so ingest/flush never see it.
+    // ...and the inserter's detection task catches exactly this Err and logs
+    // it (spawn_anomaly_detection; persist errors are likewise caught in
+    // ProjectFlusher::persist_anomalies), so ingest/flush never see it.
 }
 
 #[test]
@@ -972,7 +983,7 @@ fn anomaly_chronic_stable_error_rate_is_not_anomalous() {
         );
     }
 
-    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    let written = run_anomaly_pass(&conn);
     assert_eq!(
         written, 0,
         "flat 30% error rate across the whole range: no changepoint, no row"
@@ -1027,7 +1038,7 @@ fn anomaly_improvement_shift_is_not_persisted() {
         );
     }
 
-    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    let written = run_anomaly_pass(&conn);
     assert_eq!(written, 0, "getting BETTER is a shift but never an anomaly");
 
     let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
@@ -1071,7 +1082,7 @@ fn anomaly_latency_only_shift_is_out_of_scope_for_the_error_rate_slice() {
         );
     }
 
-    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    let written = run_anomaly_pass(&conn);
     assert_eq!(written, 0, "error-rate series is flat zero — no row");
 
     let block = investigate_service(&conn, "api", now_us - 900_000_000, now_us);
@@ -1099,13 +1110,104 @@ fn anomaly_single_bucket_series_has_no_changepoint() {
         None,
     );
 
-    let written = sigiro::anomaly::run_anomaly_pass(&conn, "").expect("anomaly pass");
+    let written = run_anomaly_pass(&conn);
     assert_eq!(written, 0, "a 1-bucket series has no regime to shift from");
 
     let block = investigate_service(&conn, "api", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert!(!op.is_anomalous);
     assert!(op.anomaly_reason.is_none());
+}
+
+#[test]
+fn anomaly_findings_rank_by_shift_magnitude_without_dropping_any() {
+    // Rank, don't filter: two operations shift in the same window — one big
+    // (0% → ~60%), one small (0% → ~10%). BOTH surface (threshold-free), and
+    // the biggest shift leads the findings so the agent reads it first.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    // Same shape as seed_worsening_shift: ~30 healthy 5-min buckets, then
+    // ~10 worsening ones — per operation, with different shift sizes.
+    let bucket = 5 * 60_000_000_i64;
+    for (span_name, errors_after) in [("op-small", 1), ("op-big", 6)] {
+        for i in 11..=40_i64 {
+            insert_spans(
+                &conn,
+                "worker",
+                span_name,
+                now_us - i * bucket,
+                (10, 0),
+                10_000,
+                None,
+            );
+        }
+        for i in 1..=10_i64 {
+            insert_spans(
+                &conn,
+                "worker",
+                span_name,
+                now_us - i * bucket,
+                (10, errors_after),
+                10_000,
+                None,
+            );
+        }
+    }
+
+    let written = run_anomaly_pass(&conn);
+    assert!(written >= 2, "both shifts must persist, got {written}");
+
+    // /v1/anomalies ordering contract, straight off the table: biggest
+    // |after - before| first (the handler's ORDER BY).
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT operation FROM sigiro_anomalies \
+             ORDER BY abs(\"after\" - \"before\") DESC, ts_shift DESC",
+        )
+        .expect("prepare")
+        .query_map([], |r| r.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(
+        ordered.first().map(String::as_str),
+        Some("op-big"),
+        "the biggest shift must lead, got {ordered:?}"
+    );
+    assert!(
+        ordered.iter().any(|op| op == "op-small"),
+        "the small shift is ranked lower but NEVER dropped, got {ordered:?}"
+    );
+
+    // /investigate: both ops flag, and the anomalous_operation findings are
+    // ordered biggest shift first.
+    let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
+    for op in &block.operation_summaries {
+        assert!(op.is_anomalous, "operation '{}' must flag", op.operation);
+    }
+    let anomaly_findings: Vec<&str> = block
+        .findings
+        .iter()
+        .filter(|f| f.kind == "anomalous_operation")
+        .map(|f| f.summary.as_str())
+        .collect();
+    assert_eq!(
+        anomaly_findings.len(),
+        2,
+        "threshold-free: every detected shift surfaces as a finding"
+    );
+    assert!(
+        anomaly_findings[0].contains("op-big"),
+        "biggest shift leads the findings, got {anomaly_findings:?}"
+    );
+    assert!(
+        anomaly_findings[1].contains("op-small"),
+        "smaller shift follows, got {anomaly_findings:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

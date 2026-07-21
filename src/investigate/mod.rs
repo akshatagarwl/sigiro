@@ -112,9 +112,11 @@ pub struct InvestigateResponse {
 
 #[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InvestigationBlock {
-    /// Ranked list (critical first) of what deserves attention in this
-    /// window: anomalous operations, error/log inconsistencies, actionable
-    /// coverage gaps. Read this before the raw sections below.
+    /// Ranked list (critical first; anomalous operations ordered by shift
+    /// magnitude |after − before| descending, biggest first) of what
+    /// deserves attention in this window: anomalous operations, error/log
+    /// inconsistencies, actionable coverage gaps. Read this before the raw
+    /// sections below.
     pub findings: Vec<Finding>,
     pub service: String,
     pub window: Window,
@@ -211,7 +213,8 @@ pub struct OperationSummary {
     /// anomaly rows) — `default` keeps the flattened deserialize working.
     #[serde(default)]
     pub is_anomalous: bool,
-    /// The detected shift(s) in prose, e.g.
+    /// The detected shift(s) in prose, biggest shift (|after − before|)
+    /// first when there are several, e.g.
     /// "error rate shifted at 14:32 (5.1% → 23.8%)" /
     /// "p95 shifted at 14:30 (2.1s → 240.0s)".
     pub anomaly_reason: Option<String>,
@@ -336,6 +339,9 @@ struct SqlOperationRow {
 
 /// One in-window row from the `sigiro_anomalies` table (written by the
 /// scheduled pass in `crate::anomaly`), as the investigation query emits it.
+/// Per operation the hits arrive biggest shift first (the SQL orders by
+/// |after − before| descending), so `.first()` is the shift that best
+/// represents the operation.
 #[derive(Deserialize)]
 struct AnomalyHit {
     signal: String,
@@ -343,6 +349,12 @@ struct AnomalyHit {
     ts_shift: i64,
     before: f64,
     after: f64,
+}
+
+/// Shift magnitude — |after − before|. Used ONLY to rank (biggest first),
+/// never to filter: the subsystem stays threshold-free.
+fn shift_magnitude(hit: &AnomalyHit) -> f64 {
+    (hit.after - hit.before).abs()
 }
 
 /// Prose for one detected shift, e.g.
@@ -493,18 +505,21 @@ fn investigate_one(
     // Anomaly flags come from the persisted `sigiro_anomalies` table (the
     // continuous pass in `crate::anomaly` writes it) — the query already
     // LEFT JOINed the in-window rows per operation; nothing is recomputed
-    // here. Prose is assembled from the joined rows.
-    let mut operation_summaries: Vec<OperationSummary> = payload
-        .operation_summaries
-        .into_iter()
-        .map(|row| {
-            let mut op = row.summary;
-            op.is_anomalous = !row.anomalies.is_empty();
-            op.anomaly_reason = (!row.anomalies.is_empty())
-                .then(|| row.anomalies.iter().map(anomaly_reason).join("; "));
-            op
-        })
-        .collect();
+    // here. Prose is assembled from the joined rows, biggest shift first
+    // (the SQL ordered them), and each op's largest shift magnitude is kept
+    // (parallel to `operation_summaries`) to rank the findings below.
+    let mut operation_summaries: Vec<OperationSummary> =
+        Vec::with_capacity(payload.operation_summaries.len());
+    let mut op_shift_magnitudes: Vec<Option<f64>> =
+        Vec::with_capacity(payload.operation_summaries.len());
+    for row in payload.operation_summaries {
+        let mut op = row.summary;
+        op.is_anomalous = !row.anomalies.is_empty();
+        op.anomaly_reason = (!row.anomalies.is_empty())
+            .then(|| row.anomalies.iter().map(anomaly_reason).join("; "));
+        op_shift_magnitudes.push(row.anomalies.first().map(shift_magnitude));
+        operation_summaries.push(op);
+    }
 
     // #1: raw spans behind each operation (errors first, then slowest).
     for op in &mut operation_summaries {
@@ -548,23 +563,31 @@ fn investigate_one(
     };
 
     // Top-level findings — ranked judgments assembled from data already in
-    // hand. The one array an agent reads first.
+    // hand. The one array an agent reads first. Anomalous operations are
+    // ordered by their largest shift's magnitude (|after − before|)
+    // descending, so the most significant shift leads — a RANKING, never a
+    // filter: every detected shift surfaces; the agent judges significance
+    // from the before/after in the summary.
     let mut findings = Vec::new();
-    for op in &operation_summaries {
-        if op.is_anomalous {
-            findings.push(Finding {
-                severity: "critical".to_string(),
-                kind: "anomalous_operation".to_string(),
-                summary: format!(
-                    "operation '{}': {}",
-                    op.operation,
-                    op.anomaly_reason
-                        .as_deref()
-                        .unwrap_or("flagged anomalous vs baseline")
-                ),
-                drill_down_sql: op.drill_down_sql.clone(),
-            });
-        }
+    let mut anomalous_ops: Vec<(f64, &OperationSummary)> = operation_summaries
+        .iter()
+        .zip(&op_shift_magnitudes)
+        .filter_map(|(op, magnitude)| magnitude.map(|m| (m, op)))
+        .collect();
+    anomalous_ops.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (_, op) in anomalous_ops {
+        findings.push(Finding {
+            severity: "critical".to_string(),
+            kind: "anomalous_operation".to_string(),
+            summary: format!(
+                "operation '{}': {}",
+                op.operation,
+                op.anomaly_reason
+                    .as_deref()
+                    .unwrap_or("flagged anomalous vs baseline")
+            ),
+            drill_down_sql: op.drill_down_sql.clone(),
+        });
     }
     if payload.stats.error_traces_total > 0 && payload.stats.error_logs_total == 0 {
         findings.push(Finding {
@@ -792,16 +815,18 @@ ops_baseline AS (
     GROUP BY operation
 ),
 -- Precomputed anomalies for this service whose regime shift falls inside
--- the investigation window, grouped per operation. The `sigiro_anomalies`
--- table is written by the scheduled pass (src/anomaly.rs) — investigate
--- only READS it; no changepoint detection runs per request.
+-- the investigation window, grouped per operation, biggest shift first
+-- (|after - before| descending — ranking, not a threshold; nothing is
+-- dropped). The `sigiro_anomalies` table is written by the scheduled pass
+-- (src/anomaly.rs) — investigate only READS it; no changepoint detection
+-- runs per request.
 op_anomalies AS (
     SELECT an.operation,
            to_json(list(json_object(
                'signal', an.signal, 'kind', an.kind,
                'ts_shift', epoch_us(an.ts_shift),
                'before', an."before", 'after', an."after"
-           ) ORDER BY an.ts_shift)) AS anomalies
+           ) ORDER BY abs(an."after" - an."before") DESC)) AS anomalies
     FROM {prefix}sigiro_anomalies an, args a
     WHERE an.service_name = a.service
       AND an.ts_shift BETWEEN a.from_ts AND a.to_ts
