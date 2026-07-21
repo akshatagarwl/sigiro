@@ -27,7 +27,7 @@ pub struct ServiceEntry {
 /// anomaly pass (the `sigiro_anomalies` table), newest shift first.
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AnomaliesResponse {
-    pub anomalies: Vec<AnomalyEntry>,
+    pub(crate) anomalies: Vec<AnomalyEntry>,
 }
 
 /// One row of the `sigiro_anomalies` table: a worsening regime shift found
@@ -38,25 +38,25 @@ pub struct AnomaliesResponse {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AnomalyEntry {
     /// When the scheduled pass wrote this row (ISO timestamp).
-    pub detected_at: String,
-    pub service_name: String,
+    pub(crate) detected_at: String,
+    pub(crate) service_name: String,
     /// Derived operation identity — matches
     /// `operation_summaries[].operation` in /v1/investigate.
-    pub operation: String,
+    pub(crate) operation: String,
     /// Which health series shifted, e.g. "error_rate".
-    pub signal: String,
+    pub(crate) signal: String,
     /// Detection kind, e.g. "changepoint" (BOCPD).
-    pub kind: String,
+    pub(crate) kind: String,
     /// Always "worsening" — improvements are never persisted.
-    pub direction: String,
+    pub(crate) direction: String,
     /// First bucket of the NEW regime (ISO timestamp).
-    pub ts_shift: String,
+    pub(crate) ts_shift: String,
     /// Series mean before the shift, raw units (error %).
-    pub before: f64,
+    pub(crate) before: f64,
     /// Series mean from the shift onward.
-    pub after: f64,
+    pub(crate) after: f64,
     /// Ready-to-run SQL for POST /v1/query: the raw spans behind the shift.
-    pub drill_down_sql: Option<String>,
+    pub(crate) drill_down_sql: Option<String>,
 }
 
 /// POST /admin/keys
