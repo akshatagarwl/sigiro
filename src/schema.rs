@@ -8,9 +8,10 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_spans (
             timestamp             TIMESTAMP NOT NULL,
+            -- end_timestamp and duration are microseconds, matching `timestamp`.
+            -- The ingest path converts OTLP nanoseconds via `nanos_to_micros`
+            -- (one named helper — never a bare divisor; see otlp.rs).
             end_timestamp         BIGINT NOT NULL,
-            -- duration is stored in microseconds (not nanoseconds).
-            -- The ingest path divides OTLP nanoseconds by 1_000_000 before writing.
             duration              BIGINT NOT NULL,
             trace_id              VARCHAR,
             span_id               VARCHAR,
@@ -216,7 +217,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
         ),
         latency AS (
             SELECT service_name,
-                   approx_quantile(duration, 0.95) AS p95_ns
+                   approx_quantile(duration, 0.95) AS p95_us
             FROM {prefix}sigiro_spans
             WHERE timestamp > now()::TIMESTAMP - INTERVAL '5 minutes'
             GROUP BY service_name
@@ -229,7 +230,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
         )
         SELECT 'error_rate' AS anomaly_type, service_name, error_pct AS value FROM error_rates WHERE error_pct > 5
         UNION ALL
-        SELECT 'high_latency', service_name, CAST(p95_ns AS DOUBLE) FROM latency WHERE p95_ns > 1000000000
+        SELECT 'high_latency', service_name, CAST(p95_us AS DOUBLE) FROM latency WHERE p95_us > 1000000
         UNION ALL
         SELECT 'silence', service_name, 0.0 FROM silence"
     ))

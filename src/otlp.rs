@@ -13,6 +13,18 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use serde_json::Value as JsonValue;
 
+/// Convert a nanosecond count — every OTLP `*_unix_nano` timestamp and any
+/// span duration — to microseconds, the unit every sigiro table stores.
+///
+/// Routed through `time::Duration` so the conversion is a named domain
+/// operation, never a bare divisor: a stray `/1_000_000` (instead of `/1_000`)
+/// on the span path is exactly what silently made every latency 1000x too
+/// small. There is now one obvious way to do this, and it cannot be wrong.
+#[inline]
+fn nanos_to_micros(nanos: i64) -> i64 {
+    time::Duration::nanoseconds(nanos).whole_microseconds() as i64
+}
+
 // ============================================================================
 // Public types
 // ============================================================================
@@ -139,8 +151,8 @@ impl TraceBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(start / 1000);
-        self.end_timestamp.append_value(end / 1_000_000);
+        self.timestamp.append_value(nanos_to_micros(start));
+        self.end_timestamp.append_value(nanos_to_micros(end));
 
         let dur = end.saturating_sub(start);
         if dur < 0 {
@@ -148,7 +160,7 @@ impl TraceBuilders {
                 "span end_time must be >= start_time (negative duration detected)".into(),
             ));
         }
-        self.duration.append_value(dur / 1_000_000);
+        self.duration.append_value(nanos_to_micros(dur));
 
         let trace_id = hex::encode(&span.trace_id);
         let span_id = hex::encode(&span.span_id);
@@ -920,8 +932,8 @@ impl LogBuilders {
             ));
         }
 
-        self.timestamp.append_value(timestamp / 1000);
-        self.observed_timestamp.append_value(observed / 1000);
+        self.timestamp.append_value(nanos_to_micros(timestamp));
+        self.observed_timestamp.append_value(nanos_to_micros(observed));
 
         let trace_id = hex::encode(&log.trace_id);
         let span_id = hex::encode(&log.span_id);
@@ -1101,8 +1113,8 @@ impl GaugeBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(time / 1000);
-        self.start_timestamp.append_value(start / 1000);
+        self.timestamp.append_value(nanos_to_micros(time));
+        self.start_timestamp.append_value(nanos_to_micros(start));
         self.metric_name.append_value(ctx.name);
         self.metric_description.append_value(ctx.description);
         self.metric_unit.append_value(ctx.unit);
@@ -1242,8 +1254,8 @@ impl SumBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(time / 1000);
-        self.start_timestamp.append_value(start / 1000);
+        self.timestamp.append_value(nanos_to_micros(time));
+        self.start_timestamp.append_value(nanos_to_micros(start));
         self.metric_name.append_value(ctx.name);
         self.metric_description.append_value(ctx.description);
         self.metric_unit.append_value(ctx.unit);
@@ -1379,8 +1391,8 @@ impl HistogramBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(time / 1000);
-        self.start_timestamp.append_value(start / 1000);
+        self.timestamp.append_value(nanos_to_micros(time));
+        self.start_timestamp.append_value(nanos_to_micros(start));
         self.metric_name.append_value(ctx.name);
         self.metric_description.append_value(ctx.description);
         self.metric_unit.append_value(ctx.unit);
@@ -1552,8 +1564,8 @@ impl ExpHistogramBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(time / 1000);
-        self.start_timestamp.append_value(start / 1000);
+        self.timestamp.append_value(nanos_to_micros(time));
+        self.start_timestamp.append_value(nanos_to_micros(start));
         self.metric_name.append_value(ctx.name);
         self.metric_description.append_value(ctx.description);
         self.metric_unit.append_value(ctx.unit);

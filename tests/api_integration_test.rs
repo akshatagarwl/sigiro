@@ -494,6 +494,24 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
     assert_eq!(spans, 1);
     assert_eq!(logs, 1);
     assert_eq!(gauges, 1);
+
+    // Duration/timestamp units: the span spans exactly 1s (end - start = 1e9 ns).
+    // Every stored column must be MICROSECONDS — this guards the 1000x bug where
+    // the span path divided ns by 1_000_000 (→ ms) instead of 1_000.
+    let (duration, start_us, end_us): (i64, i64, i64) = guard
+        .query_row(
+            "SELECT duration, epoch_us(timestamp), end_timestamp FROM lake.sigiro_spans \
+             WHERE trace_id = '11111111111111111111111111111111'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("span row query should succeed");
+    assert_eq!(duration, 1_000_000, "1s span must be 1_000_000 µs, not ms/ns");
+    assert_eq!(
+        end_us - start_us,
+        1_000_000,
+        "end_timestamp and timestamp must share the µs unit"
+    );
 }
 
 #[tokio::test]

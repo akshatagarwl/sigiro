@@ -166,7 +166,7 @@ fn test_toon_performance_comparison() {
             "span_name": format!("operation_{}", i),
             "count": i * 100,
             "error_pct": i as f64 * 0.5,
-            "duration_p95_ns": i as f64 * 1000000.0
+            "duration_p95_us": i as f64 * 1000000.0
         }));
     }
 
@@ -228,7 +228,7 @@ fn snapshot_toon_performance_comparison() {
             "span_name": format!("operation_{}", i),
             "count": i * 100,
             "error_pct": i as f64 * 0.5,
-            "duration_p95_ns": i as f64 * 1000000.0
+            "duration_p95_us": i as f64 * 1000000.0
         }));
     }
 

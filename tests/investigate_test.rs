@@ -174,7 +174,7 @@ fn investigate_with_real_span_data() {
     assert!((checkout_op.error_pct - 66.66).abs() < 1.0);
     assert!(checkout_op.exemplar_error_trace_id.is_some());
     assert!(checkout_op.baseline_error_pct.is_none());
-    assert!(checkout_op.baseline_p95_ns.is_none());
+    assert!(checkout_op.baseline_p95_us.is_none());
     assert!(checkout_op.baseline_count.is_none());
 
     let health_op = &block.operation_summaries[1];
@@ -678,8 +678,8 @@ fn operation_summary_baselines() {
     assert!((op.baseline_error_pct.unwrap() - 0.0).abs() < 0.01);
     assert!(op.baseline_count.is_some());
     assert_eq!(op.baseline_count.unwrap(), 2);
-    assert!(op.baseline_p95_ns.is_some());
-    assert!(op.baseline_p95_ns.unwrap() < 100_000_000.0);
+    assert!(op.baseline_p95_us.is_some());
+    assert!(op.baseline_p95_us.unwrap() < 100_000_000.0);
 }
 
 #[test]

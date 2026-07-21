@@ -140,12 +140,12 @@ pub struct OperationSummary {
     pub count: i64,
     pub error_count: i64,
     pub error_pct: f64,
-    pub duration_p50_ns: f64,
-    pub duration_p95_ns: f64,
-    pub duration_p99_ns: f64,
+    pub duration_p50_us: f64,
+    pub duration_p95_us: f64,
+    pub duration_p99_us: f64,
     pub exemplar_error_trace_id: Option<String>,
     pub baseline_error_pct: Option<f64>,
-    pub baseline_p95_ns: Option<f64>,
+    pub baseline_p95_us: Option<f64>,
     pub baseline_count: Option<i64>,
     /// Whether this operation is anomalous compared to baseline (None when
     /// there is no baseline data to compare against).
@@ -696,9 +696,9 @@ SELECT json_object(
     ) ORDER BY detected_at)), '[]'::JSON) FROM events),
     'operation_summaries', (SELECT COALESCE(to_json(list(json_object(
         'span_name', span_name, 'count', cnt, 'error_count', err_cnt, 'error_pct', err_pct,
-        'duration_p50_ns', p50, 'duration_p95_ns', p95, 'duration_p99_ns', p99,
+        'duration_p50_us', p50, 'duration_p95_us', p95, 'duration_p99_us', p99,
         'exemplar_error_trace_id', exemplar_error_trace_id,
-        'baseline_error_pct', bl_err_pct, 'baseline_p95_ns', bl_p95, 'baseline_count', bl_cnt,
+        'baseline_error_pct', bl_err_pct, 'baseline_p95_us', bl_p95, 'baseline_count', bl_cnt,
         'is_anomalous', is_anomalous, 'anomaly_reason', anomaly_reason
     ) ORDER BY err_cnt DESC, cnt DESC)), '[]'::JSON) FROM operation_summaries),
     'metrics', (SELECT COALESCE(to_json(list(json_object(
