@@ -302,7 +302,7 @@ async fn main() -> Result<()> {
             let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
             let mut block = client.investigate(&service, from_ts, to_ts).await?;
             // F-23: client-side --grep filter. Filter operation summaries,
-            // log patterns, and traces by case-insensitive substring.
+            // log patterns, and spans by case-insensitive substring.
             if let Some(pattern) = grep {
                 let pat = pattern.to_lowercase();
                 block
@@ -311,13 +311,9 @@ async fn main() -> Result<()> {
                 block
                     .log_patterns
                     .retain(|lp| lp.pattern.to_lowercase().contains(&pat));
-                block.traces.retain(|t| {
-                    t.trace_id.to_lowercase().contains(&pat)
-                        || t.root_span.span_name.to_lowercase().contains(&pat)
-                });
-                block.linked_traces.retain(|t| {
-                    t.trace_id.to_lowercase().contains(&pat)
-                        || t.root_span.span_name.to_lowercase().contains(&pat)
+                block.spans.retain(|s| {
+                    s.trace_id.to_lowercase().contains(&pat)
+                        || s.span_name.to_lowercase().contains(&pat)
                 });
             }
             let mut value = serde_json::to_value(&block)?;

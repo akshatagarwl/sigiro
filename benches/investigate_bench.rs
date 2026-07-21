@@ -1,8 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use parking_lot::Mutex;
-use sigiro::investigate::{
-    InvestigateRequest, QueryCtx, compute_coverage, investigate, query_service_context,
-};
+use sigiro::investigate::{InvestigateRequest, compute_coverage, investigate};
 use std::sync::Arc;
 
 /// Setup a DuckLake-backed DB matching production config.
@@ -105,36 +103,5 @@ fn bench_compute_coverage(c: &mut Criterion) {
     });
 }
 
-fn bench_service_context(c: &mut Criterion) {
-    let (shared, _dir) = setup_populated_db();
-    let now_us = {
-        let odt = time::OffsetDateTime::now_utc();
-        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-    };
-    let conn = shared.lock();
-
-    let ctx = QueryCtx {
-        conn: &conn,
-        service: "bench-svc",
-        from_ts: now_us - 15 * 60 * 1_000_000,
-        to_ts: now_us + 60 * 1_000_000,
-        prefix: "lake.",
-    };
-
-    let mut group = c.benchmark_group("investigate");
-    group.sample_size(10);
-
-    group.bench_function("query_service_context", |b| {
-        b.iter(|| query_service_context(&ctx).expect("context"));
-    });
-
-    group.finish();
-}
-
-criterion_group!(
-    benches,
-    bench_investigate,
-    bench_compute_coverage,
-    bench_service_context,
-);
+criterion_group!(benches, bench_investigate, bench_compute_coverage);
 criterion_main!(benches);

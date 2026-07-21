@@ -931,26 +931,28 @@ async fn e2e_drain_log_template_dedup() {
         "at least one template should have placeholder wildcards"
     );
 
-    // Verify via investigate query: should get ≤4 grouped templates, not 20 raw lines
-    let qctx = sigiro::investigate::QueryCtx {
-        conn: &conn,
-        service: "api-svc",
+    // Verify via investigate: raw logs come back, and templates dedup to a
+    // handful of patterns (not 20 raw lines).
+    let req = InvestigateRequest {
+        service: Some("api-svc".to_string()),
+        services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
-        prefix: "lake.",
     };
-    let logs = sigiro::investigate::query_raw_logs(&qctx, 30).unwrap();
+    let blocks = investigate(&conn, &req, "lake.").unwrap();
+    let block = &blocks["api-svc"];
     assert!(
-        !logs.is_empty(),
+        !block.logs.is_empty(),
         "investigate should return some logs, got empty"
     );
 
-    // NEW: Verify structured template variables in log patterns
-    use sigiro::investigate::{enrich_pattern_unique_values, query_log_patterns};
-    let mut patterns = query_log_patterns(&qctx, 10).unwrap();
-    enrich_pattern_unique_values(&qctx, &mut patterns).unwrap();
-
+    let patterns = &block.log_patterns;
     assert!(!patterns.is_empty(), "should have log patterns");
+    assert!(
+        patterns.len() <= 4,
+        "20 logs should dedup to ≤4 patterns, got {}",
+        patterns.len()
+    );
     let login_pattern = patterns
         .iter()
         .find(|p| p.pattern.contains("logged in"))
@@ -964,62 +966,47 @@ async fn e2e_drain_log_template_dedup() {
         login_pattern.drill_down_sql.is_some(),
         "login pattern should have drill_down_sql"
     );
-    assert_eq!(
-        login_pattern.variables.len(),
-        2,
-        "login pattern should have 2 variable slots: User <*> logged in from <*>"
-    );
-
-    // Verify first variable (username) has correct context
-    let user_var = &login_pattern.variables[0];
-    assert_eq!(user_var.wildcard_index, 0, "first wildcard index");
-    assert_eq!(user_var.context_before, "User", "context before username");
-    assert_eq!(user_var.context_after, "logged", "context after username");
     assert!(
-        !user_var.values.is_empty(),
-        "should have extracted username values"
+        login_pattern.count >= 1,
+        "login pattern should group at least one log"
+    );
+    let grouped_total: i64 = patterns.iter().map(|p| p.count).sum();
+    assert_eq!(grouped_total, 20, "patterns should account for all 20 logs");
+    assert!(
+        login_pattern.example_body.is_some(),
+        "login pattern should carry an example body"
+    );
+    // Extracted-variable samples: each is a JSON array of wildcard values
+    // ("user_3", "10.0.0.3", ...) — up to 5 distinct tuples.
+    let samples = login_pattern
+        .sample_values
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .expect("login pattern should have sample_values");
+    assert!(
+        !samples.is_empty() && samples.len() <= 5,
+        "sample_values should hold 1..=5 tuples, got {}",
+        samples.len()
+    );
+    assert!(
+        samples.iter().all(serde_json::Value::is_array),
+        "each sample is a JSON array of wildcard values"
     );
 
-    // Verify second variable (IP) has correct context
-    let ip_var = &login_pattern.variables[1];
-    assert_eq!(ip_var.wildcard_index, 1, "second wildcard index");
-    assert_eq!(ip_var.context_before, "from", "context before IP");
-    assert_eq!(ip_var.context_after, "", "context after IP (end of line)");
-    assert!(!ip_var.values.is_empty(), "should have extracted IP values");
-
-    // Find the request pattern and verify
+    // Find the request pattern and verify grouping
     let req_pattern = patterns
         .iter()
         .find(|p| p.pattern.contains("Request"))
         .expect("should have request pattern");
-    assert_eq!(
-        req_pattern.variables.len(),
-        2,
-        "request pattern should have 2 variable slots: Request <*> failed with code <NUM>"
-    );
-    assert_eq!(
-        req_pattern.variables[0].context_before, "Request",
-        "context before request id"
-    );
-    assert_eq!(
-        req_pattern.variables[0].context_after, "failed",
-        "context after request id"
-    );
-    assert_eq!(
-        req_pattern.variables[1].context_before, "code",
-        "context before status code"
-    );
-    assert_eq!(
-        req_pattern.variables[1].context_after, "",
-        "context after status code"
+    assert!(
+        req_pattern.count >= 1,
+        "request pattern should group at least one log"
     );
 
-    // With the new API, we get raw log entries, not aggregated templates
-    // The count is limited by the query limit (30), not by deduplication
-    let log_count: i64 = logs.len() as i64;
+    // Raw logs are limited (50), not deduplicated
     assert!(
-        log_count <= 30,
-        "log count should be ≤30 limit, got {}",
-        log_count
+        block.logs.len() <= 50,
+        "log count should be ≤50 limit, got {}",
+        block.logs.len()
     );
 }

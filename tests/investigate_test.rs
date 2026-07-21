@@ -1,10 +1,25 @@
 use parking_lot::Mutex;
 use sigiro::investigate::{
-    InvestigateRequest, QueryCtx, adaptive_config, compute_coverage, investigate,
-    query_derived_events, query_service_context, us_to_iso,
+    InvestigateRequest, adaptive_config, compute_coverage, investigate, us_to_iso,
 };
-use sigiro::types::StatusCode;
 use std::sync::Arc;
+
+/// Helper: run investigate for one service and return its block.
+fn investigate_service(
+    conn: &duckdb::Connection,
+    service: &str,
+    from_ts: i64,
+    to_ts: i64,
+) -> sigiro::investigate::InvestigationBlock {
+    let req = InvestigateRequest {
+        service: Some(service.to_string()),
+        services: None,
+        from_ts,
+        to_ts,
+    };
+    let mut blocks = investigate(conn, &req, "").expect("investigate");
+    blocks.remove(service).expect("block for service")
+}
 
 /// Helper: set up in-memory DB with DRAIN-classified logs and deduplicated templates.
 /// Returns (shared_conn, now_us).
@@ -81,9 +96,8 @@ fn investigate_with_in_memory_db() {
     assert_eq!(block.service, "nonexistent");
     assert!(block.operation_summaries.is_empty());
     assert!(block.metrics.is_empty());
-    assert!(block.traces.is_empty());
+    assert!(block.spans.is_empty());
     assert!(block.logs.is_empty());
-    assert!(block.linked_traces.is_empty());
     assert_eq!(block.truncation.spans_total, 0);
     assert_eq!(block.truncation.logs_total, 0);
     assert_eq!(block.truncation.error_traces_total, 0);
@@ -169,8 +183,8 @@ fn investigate_with_real_span_data() {
     assert_eq!(health_op.error_count, 0);
     assert!(health_op.exemplar_error_trace_id.is_none());
 
-    assert_eq!(block.traces.len(), 5);
-    assert_eq!(block.traces[0].root_span.status_code, StatusCode::Error);
+    assert_eq!(block.spans.len(), 5);
+    assert!(block.spans[0].is_error, "errors sort first in flat spans");
     assert_eq!(block.truncation.spans_total, 5);
     assert_eq!(block.truncation.spans_returned, 5);
     assert_eq!(block.truncation.error_traces_total, 2);
@@ -248,14 +262,7 @@ fn service_context_empty_db() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "nonexistent",
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us,
-        prefix: "",
-    };
-    let ctx = query_service_context(&qctx).unwrap();
+    let ctx = investigate_service(&conn, "nonexistent", now_us - 60_000_000, now_us).context;
     assert_eq!(ctx.service_name, "nonexistent");
     assert_eq!(ctx.pod_count, 0);
     assert!(ctx.dependencies.is_empty());
@@ -282,14 +289,8 @@ fn service_context_with_k8s_attrs() {
              'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}')"
     ))
     .expect("insert");
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "checkout",
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
-        prefix: "",
-    };
-    let ctx = query_service_context(&qctx).unwrap();
+    let ctx =
+        investigate_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
     assert_eq!(ctx.namespace, Some("prod".to_string()));
     assert_eq!(ctx.deployment, Some("checkout-v2".to_string()));
     assert_eq!(ctx.pod_count, 2);
@@ -311,28 +312,16 @@ fn service_context_dependencies() {
             (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments')"
     ))
     .expect("insert");
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "checkout",
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
-        prefix: "",
-    };
-    let ctx = query_service_context(&qctx).unwrap();
+    let ctx =
+        investigate_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
     assert!(
         ctx.dependencies
             .iter()
             .any(|d| d.service_name == "payments"),
         "checkout should depend on payments"
     );
-    let qctx2 = QueryCtx {
-        conn: &conn,
-        service: "payments",
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
-        prefix: "",
-    };
-    let ctx2 = query_service_context(&qctx2).unwrap();
+    let ctx2 =
+        investigate_service(&conn, "payments", now_us - 60_000_000, now_us + 60_000_000).context;
     assert!(
         ctx2.dependents.iter().any(|d| d.service_name == "checkout"),
         "payments should have checkout as dependent"
@@ -357,14 +346,8 @@ fn derived_events_deploy_detection() {
              '{{\"service.version\":\"v1.1.0\"}}')"
     ))
     .expect("insert");
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "api",
-        from_ts: now_us - 120_000_000,
-        to_ts: now_us + 60_000_000,
-        prefix: "",
-    };
-    let events = query_derived_events(&qctx).unwrap();
+    let events =
+        investigate_service(&conn, "api", now_us - 120_000_000, now_us + 60_000_000).events;
     let deploys: Vec<_> = events.iter().filter(|e| e.event_type == "deploy").collect();
     assert_eq!(
         deploys.len(),
@@ -391,14 +374,7 @@ fn derived_events_k8s_oomkilled() {
              'Container killed due to OOMKilled')"
     ))
     .expect("insert");
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "api",
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
-        prefix: "",
-    };
-    let events = query_derived_events(&qctx).unwrap();
+    let events = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000).events;
     let k8s: Vec<_> = events
         .iter()
         .filter(|e| e.event_type == "k8s_event")
@@ -426,18 +402,13 @@ fn log_template_dedup_ips() {
     );
 
     let conn = shared.lock();
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "api",
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
-        prefix: "",
-    };
-    let logs = sigiro::query_raw_logs(&qctx, 30).unwrap();
-    // With the new API, we get raw logs not aggregated templates
-    // So we get 3 logs back, not 1
-    assert_eq!(logs.len(), 3, "3 raw logs returned");
-    assert!(!logs.is_empty());
+    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    assert_eq!(block.logs.len(), 3, "3 raw logs returned");
+    assert_eq!(
+        block.log_patterns.len(),
+        1,
+        "3 logs with different IPs collapse to one template pattern"
+    );
 }
 
 #[test]
@@ -458,18 +429,13 @@ fn log_template_dedup_uuids() {
     );
 
     let conn = shared.lock();
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "api",
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
-        prefix: "",
-    };
-    let logs = sigiro::query_raw_logs(&qctx, 30).unwrap();
-    // With the new API, we get raw logs not aggregated templates
-    // So we get 2 logs back, not 1
-    assert_eq!(logs.len(), 2, "2 raw logs returned");
-    assert!(!logs.is_empty());
+    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    assert_eq!(block.logs.len(), 2, "2 raw logs returned");
+    assert_eq!(
+        block.log_patterns.len(),
+        1,
+        "2 logs with different UUIDs collapse to one template pattern"
+    );
 }
 
 #[test]
@@ -523,7 +489,7 @@ fn investigate_large_window_no_spans() {
     let blocks = investigate(&shared.lock(), &req, "").unwrap();
     let block = &blocks["svc"];
     assert!(
-        block.traces.is_empty(),
+        block.spans.is_empty(),
         ">2h window should omit flat spans (operation_summaries suffice)"
     );
     assert!(!block.operation_summaries.is_empty());
@@ -598,14 +564,7 @@ fn derived_events_no_events() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "api",
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us,
-        prefix: "",
-    };
-    let events = query_derived_events(&qctx).unwrap();
+    let events = investigate_service(&conn, "api", now_us - 60_000_000, now_us).events;
     assert!(events.is_empty());
 }
 
@@ -746,13 +705,7 @@ fn snapshot_query_service_context_shape() {
              'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"payments-v1\"}}')"
     ))
     .expect("insert");
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "checkout",
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
-        prefix: "",
-    };
-    let ctx = query_service_context(&qctx).unwrap();
+    let ctx =
+        investigate_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
     insta::assert_json_snapshot!(ctx);
 }

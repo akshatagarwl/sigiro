@@ -6,7 +6,7 @@ use arrow::record_batch::RecordBatch;
 use prost::Message;
 use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
-use sigiro::investigate::QueryCtx;
+use sigiro::investigate::InvestigateRequest;
 use sigiro::pool::ProjectPool;
 use std::sync::{Arc, Once};
 
@@ -308,14 +308,14 @@ async fn e2e_profiles_pipeline() {
     assert_eq!(cpu_count, 4, "all 4 samples should be cpu type");
 
     // Verify via investigate query: top functions
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "api-svc",
+    let req = InvestigateRequest {
+        service: Some("api-svc".to_string()),
+        services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
-        prefix: "lake.",
     };
-    let profiles = sigiro::investigate::query_profiles(&qctx, 20).unwrap();
+    let blocks = sigiro::investigate::investigate(&conn, &req, "lake.").unwrap();
+    let profiles = &blocks["api-svc"].profiles;
     assert!(!profiles.is_empty(), "should have profile summaries");
 
     // db_query should have highest total value (15M + 12M = 27M)
@@ -476,14 +476,14 @@ async fn e2e_profiles_multi_type() {
     assert_eq!(type_count, 2, "should have 2 distinct profile types");
 
     // Query profiles — should see both types
-    let qctx = QueryCtx {
-        conn: &conn,
-        service: "api-svc",
+    let req = InvestigateRequest {
+        service: Some("api-svc".to_string()),
+        services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
-        prefix: "lake.",
     };
-    let profiles = sigiro::investigate::query_profiles(&qctx, 20).unwrap();
+    let blocks = sigiro::investigate::investigate(&conn, &req, "lake.").unwrap();
+    let profiles = &blocks["api-svc"].profiles;
     assert_eq!(
         profiles.len(),
         2,

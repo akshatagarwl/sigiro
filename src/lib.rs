@@ -31,7 +31,7 @@ use camino::Utf8PathBuf;
 // `sigiro::ingest` or `sigiro::inserter`.
 
 pub use ingest::OtlpGrpcService;
-pub use investigate::{InvestigationBlock, Window, query_raw_logs};
+pub use investigate::{InvestigationBlock, Window};
 pub use types::{IngestMsg, SignalTable, StatusCode, TimestampMicros};
 // Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
 pub use inserter::MsgRouter;
