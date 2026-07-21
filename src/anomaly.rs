@@ -3,7 +3,7 @@
 //! This is the scheduled half of the anomaly subsystem
 //! (docs/plans/01-continuous-anomaly-subsystem.md): a periodic pass — driven
 //! from the per-project inserter timer (src/inserter.rs) — that runs augurs
-//! BOCPD changepoint detection over each operation's continuous per-minute
+//! BOCPD changepoint detection over each operation's continuous 5-minute
 //! error-rate series and persists the results into the `sigiro_anomalies`
 //! table. `/v1/investigate` and `/v1/anomalies` READ that table; nothing is
 //! recomputed inline per request.
@@ -139,16 +139,19 @@ pub fn run_anomaly_pass(conn: &Connection, prefix: &str) -> Result<usize> {
     let cutoff_us = now_us - SERIES_LOOKBACK_DAYS * 86_400 * 1_000_000;
     let op_key = operation_key_expr("s.");
 
-    // Per-minute error-rate buckets per (service, operation), oldest first.
-    // Buckets only exist where spans exist — gaps are simply absent, the
-    // same sparse-series convention the inline detector used. Same derived
-    // operation identity as /v1/investigate (shared `operation_key_expr`),
-    // so investigate's LEFT JOIN on (service, operation) always matches.
+    // 5-minute error-rate buckets per (service, operation), oldest first.
+    // 5min (not 1min) is deliberate: BOCPD should flag SUSTAINED regime shifts,
+    // not 1-minute blips — coarser buckets both denoise (fewer spurious shifts)
+    // and cut the pass cost ~5x (it shares the writer thread with ingest flush,
+    // so its runtime is bounded on purpose). Buckets only exist where spans
+    // exist — gaps are simply absent. Same derived operation identity as
+    // /v1/investigate (shared `operation_key_expr`), so investigate's LEFT JOIN
+    // on (service, operation) always matches.
     let series_sql = format!(
         "SELECT s.service_name,
                 {op_key} AS operation,
                 any_value(s.span_name) AS span_name,
-                epoch_us(time_bucket(INTERVAL '1 minute', s.timestamp)) AS bucket_ts,
+                epoch_us(time_bucket(INTERVAL '5 minutes', s.timestamp)) AS bucket_ts,
                 count(CASE WHEN s.status_code = {err} THEN 1 END) * 100.0 / count(*) AS err_rate
          FROM {prefix}sigiro_spans s
          WHERE s.timestamp >= make_timestamp({cutoff_us})

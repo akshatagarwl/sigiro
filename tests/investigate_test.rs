@@ -774,24 +774,27 @@ fn insert_spans(
 /// -74..-16, then 50% errors for minutes -12..-1 — a regime shift ~12
 /// minutes before `now_us`.
 fn seed_worsening_shift(conn: &duckdb::Connection, now_us: i64) {
-    let min = 60_000_000_i64;
-    for i in 16..=74_i64 {
+    // One batch per distinct 5-minute bucket (the pass buckets at 5min): ~30
+    // healthy buckets (0% errors) then ~10 worsening buckets (50%) → a clear
+    // sustained regime shift ~50 min ago, inside a 60-min investigate window.
+    let bucket = 5 * 60_000_000_i64;
+    for i in 11..=40_i64 {
         insert_spans(
             conn,
             "worker",
             "call upstream",
-            now_us - i * min,
+            now_us - i * bucket,
             (10, 0),
             10_000,
             None,
         );
     }
-    for i in 1..=12_i64 {
+    for i in 1..=10_i64 {
         insert_spans(
             conn,
             "worker",
             "call upstream",
-            now_us - i * min,
+            now_us - i * bucket,
             (10, 5),
             10_000,
             None,
@@ -865,8 +868,8 @@ fn anomaly_pass_persists_worsening_shift_and_investigate_surfaces_it() {
         .expect("drill query must execute");
     assert!(drilled > 0, "drill query must return the new-regime spans");
 
-    // /investigate over a window containing the shift reads the table.
-    let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
+    // /investigate over a window containing the shift (~50 min ago) reads the table.
+    let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert_eq!(op.operation, "call upstream");
     assert!(
@@ -889,13 +892,14 @@ fn anomaly_pass_persists_worsening_shift_and_investigate_surfaces_it() {
     assert!(finding.summary.contains("call upstream"));
     assert!(finding.drill_down_sql.is_some());
 
-    // A window that ENDS BEFORE the shift must not flag: the anomaly row
-    // exists but its ts_shift is outside [from, to].
+    // A window that ENDS BEFORE the shift (~50 min ago) must not flag: the
+    // anomaly row exists but its ts_shift is outside [from, to]. This window
+    // sits entirely in the healthy region (180..65 min ago).
     let early = investigate_service(
         &conn,
         "worker",
-        now_us - 3_600_000_000,
-        now_us - 1_800_000_000,
+        now_us - 10_800_000_000,
+        now_us - 3_900_000_000,
     );
     if let Some(op) = early.operation_summaries.first() {
         assert!(!op.is_anomalous, "shift outside the window must not flag");
