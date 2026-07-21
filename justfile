@@ -27,6 +27,7 @@ check-release:
 # the pub→pub(crate) fixes.
 hawk *args:
     cargo +1.97.1 hawk check --manifest-path Cargo.toml \
+      -A hawk::unnecessary_restricted_visibility \
       -D hawk::dead_public -D hawk::unnecessary_public {{ args }}
 
 # Point git at the tracked .githooks/ dir (one-time per clone) so the pre-push
