@@ -7,8 +7,8 @@ use tracing_subscriber::prelude::*;
 /// OTel configuration — read once at startup, passed to init_telemetry()
 #[derive(Debug, Clone)]
 pub struct TelemetryConfig {
-    pub endpoint: String,
-    pub service_name: String,
+    pub(crate) endpoint: String,
+    pub(crate) service_name: String,
     pub auth_key: Option<String>,
 }
 

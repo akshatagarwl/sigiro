@@ -14,7 +14,7 @@ pub enum ClientAuth {
 impl ClientAuth {
     /// Build from a raw API key string.
     /// Empty string → Open (logged once at build time).
-    pub fn from_key(api_key: String) -> Self {
+    pub(crate) fn from_key(api_key: String) -> Self {
         if api_key.is_empty() {
             tracing::debug!("client_auth=open — no API key configured");
             ClientAuth::Open
@@ -23,13 +23,9 @@ impl ClientAuth {
         }
     }
 
-    /// True if this client will send an Authorization header.
-    pub fn sends_auth(&self) -> bool {
-        matches!(self, ClientAuth::Bearer { .. })
-    }
 
     /// Apply auth to a reqwest request builder if needed.
-    pub fn apply(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub(crate) fn apply(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match self {
             ClientAuth::Open => req,
             ClientAuth::Bearer { token } => req.bearer_auth(token),
@@ -136,7 +132,7 @@ impl SigiroClient {
     /// Investigate one or more services. Pass `service` for single, `services` for multi.
     /// Returns partial results: successful blocks in `results`, per-service
     /// failures in `errors`.
-    pub async fn investigate_multi(
+    pub(crate) async fn investigate_multi(
         &self,
         service: Option<&str>,
         services: Option<Vec<String>>,
@@ -172,7 +168,7 @@ impl SigiroClient {
     /// route (M-4); this client sends no Bearer token, so callers in
     /// distributed/hosted mode should expect a 401 here (e.g. `sigiro diagnose`'s
     /// eBPF check degrades to a warning, it does not have the admin token).
-    pub async fn admin_status(&self) -> Result<crate::responses::AdminStatusResponse> {
+    pub(crate) async fn admin_status(&self) -> Result<crate::responses::AdminStatusResponse> {
         let resp = self
             .http
             .get(format!("{}/admin/status", self.base_url))
@@ -185,21 +181,6 @@ impl SigiroClient {
             .context("failed to parse admin/status response")
     }
 
-    /// List services with first/last seen and span counts.
-    pub async fn services(&self) -> Result<crate::responses::ServicesResponse> {
-        let req = self.http.get(format!("{}/v1/services", self.base_url));
-        let resp = self
-            .auth
-            .apply(req)
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
-
-        let resp = self.expect_ok(resp).await?;
-        resp.json()
-            .await
-            .context("failed to parse services response")
-    }
 }
 
 /// Build a client from config.
@@ -215,23 +196,3 @@ pub fn try_build_client() -> anyhow::Result<SigiroClient> {
     Ok(SigiroClient::new(&base_url, auth))
 }
 
-// ---------------------------------------------------------------------------
-// GET /v1/traces/{trace_id}
-// ---------------------------------------------------------------------------
-
-impl SigiroClient {
-    pub async fn trace(&self, trace_id: &str) -> Result<crate::responses::TraceDetailResponse> {
-        let req = self
-            .http
-            .get(format!("{}/v1/traces/{}", self.base_url, trace_id));
-        let resp = self
-            .auth
-            .apply(req)
-            .send()
-            .await
-            .context("failed to connect to sigiro server")?;
-
-        let resp = self.expect_ok(resp).await?;
-        resp.json().await.context("failed to parse trace response")
-    }
-}

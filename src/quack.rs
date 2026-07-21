@@ -40,7 +40,7 @@ use duckdb::vtab::arrow::WritableVector;
 /// serving this exact version, that is exactly the drift this pin exists to
 /// catch — re-verify the authorization gate against the new build and bump
 /// this constant deliberately, rather than widening the install source.
-pub const EXPECTED_QUACK_VERSION: &str = "1693647";
+pub(crate) const EXPECTED_QUACK_VERSION: &str = "1693647";
 
 /// Scalar UDF name installed as the quack authorization gate. Re-registered
 /// from this Rust source on every server boot (see
@@ -55,7 +55,7 @@ const AUTH_FUNCTION_NAME: &str = "sigiro_quack_authorize";
 /// Also called by [`crate::storage::prewarm_extensions`] so `sigiro
 /// fetch-extensions` and the quack E2E test warm (and version-verify) this
 /// exact same pinned build ahead of time, not just at serve-time.
-pub fn load_and_pin(conn: &Connection) -> Result<()> {
+pub(crate) fn load_and_pin(conn: &Connection) -> Result<()> {
     if let Err(bare_load_error) = conn.execute_batch("LOAD quack;") {
         // `FROM core` is required, not merely the default: see
         // [`EXPECTED_QUACK_VERSION`]'s doc comment for why `core_nightly`
@@ -258,7 +258,7 @@ fn self_test_authorization_gate(conn: &Connection) -> Result<()> {
 /// (Re)registered on every server boot from this Rust source — never trusted
 /// from anything a previous run may have left behind, so a stale/tampered
 /// definition can never survive a restart.
-pub fn install_authorization_gate(conn: &Connection) -> Result<()> {
+pub(crate) fn install_authorization_gate(conn: &Connection) -> Result<()> {
     conn.register_scalar_function::<QuackAuthorizeScalar>(AUTH_FUNCTION_NAME)
         .context("failed to register the quack authorization scalar UDF")?;
 
@@ -290,9 +290,8 @@ pub fn install_authorization_gate(conn: &Connection) -> Result<()> {
 }
 
 /// Result of starting the quack server: what it reports listening on.
-pub struct QuackListen {
-    pub listen_uri: String,
-    pub listen_url: String,
+pub(crate) struct QuackListen {
+    pub(crate) listen_uri: String,
 }
 
 /// Start the quack server on `conn`, bound to `bind_addr:port`. `conn` must
@@ -308,7 +307,7 @@ pub struct QuackListen {
 /// `SIGIRO_QUACK_BIND` to anything other than loopback (never `0.0.0.0`,
 /// enforced by the caller), so there is no additional guard this flag would
 /// add beyond what the bind-address check already provides.
-pub fn start_server(
+pub(crate) fn start_server(
     conn: &Connection,
     bind_addr: &str,
     port: u16,
@@ -323,7 +322,7 @@ pub fn start_server(
 
     let uri = format!("quack://{bind_addr}:{port}");
     let mut sql = format!(
-        "SELECT listen_uri, listen_url FROM quack_serve('{}'",
+        "SELECT listen_uri FROM quack_serve('{}'",
         crate::storage::escape_sql_string(&uri)
     );
     if let Some(t) = token {
@@ -334,23 +333,18 @@ pub fn start_server(
     }
     sql.push_str(", allow_other_hostname := true, disable_ssl := true);");
 
-    let (listen_uri, listen_url) = conn
-        .query_row(&sql, [], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
+    let listen_uri = conn
+        .query_row(&sql, [], |row| row.get::<_, String>(0))
         .context("failed to start quack_serve")?;
 
-    Ok(QuackListen {
-        listen_uri,
-        listen_url,
-    })
+    Ok(QuackListen { listen_uri })
 }
 
 /// Stop the quack server started by [`start_server`] for the same
 /// `bind_addr:port`. Called before dropping `conn` on shutdown — dropping a
 /// live quack-served connection without stopping the server first aborts
 /// the process (observed directly: `libc++abi: terminating`).
-pub fn stop_server(conn: &Connection, bind_addr: &str, port: u16) -> Result<()> {
+pub(crate) fn stop_server(conn: &Connection, bind_addr: &str, port: u16) -> Result<()> {
     let uri = format!("quack://{bind_addr}:{port}");
     conn.execute_batch(&format!(
         "CALL quack_stop('{}');",

@@ -36,7 +36,7 @@ fn create_project_opens_connection() {
     let pool = test_pool(dir.path());
 
     let readers = pool.create_project("proj_a").unwrap();
-    assert_eq!(pool.len(), 1);
+    assert_eq!(pool.connections.len(), 1);
 
     // Verify tables were created (now in lake.* schema)
     let conn = readers.get();
@@ -55,7 +55,7 @@ fn get_returns_same_connection() {
     let conn1 = pool.create_project("proj_a").unwrap();
     let conn2 = pool.create_project("proj_a").unwrap();
     assert!(conn1.same_pool(&conn2));
-    assert_eq!(pool.len(), 1);
+    assert_eq!(pool.connections.len(), 1);
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn different_projects_different_connections() {
     let conn_a = pool.create_project("proj_a").unwrap();
     let conn_b = pool.create_project("proj_b").unwrap();
     assert!(!conn_a.same_pool(&conn_b));
-    assert_eq!(pool.len(), 2);
+    assert_eq!(pool.connections.len(), 2);
 }
 
 #[test]
@@ -160,11 +160,11 @@ fn evict_idle_removes_old_connections() {
 
     pool.create_project("proj_a").unwrap();
     pool.create_project("proj_b").unwrap();
-    assert_eq!(pool.len(), 2);
+    assert_eq!(pool.connections.len(), 2);
 
     // Evict with zero duration — everything is "idle"
     pool.evict_idle(std::time::Duration::ZERO);
-    assert_eq!(pool.len(), 0);
+    assert_eq!(pool.connections.len(), 0);
 }
 
 #[test]
@@ -175,11 +175,11 @@ fn evict_oldest_at_capacity() {
     pool.create_project("proj_a").unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));
     pool.create_project("proj_b").unwrap();
-    assert_eq!(pool.len(), 2);
+    assert_eq!(pool.connections.len(), 2);
 
     // Opening a third should evict the oldest (proj_a)
     pool.create_project("proj_c").unwrap();
-    assert_eq!(pool.len(), 2);
+    assert_eq!(pool.connections.len(), 2);
     assert!(pool.connections.contains_key("proj_b"));
     assert!(pool.connections.contains_key("proj_c"));
 }
@@ -219,8 +219,8 @@ fn remove_project() {
     let pool = test_pool(dir.path());
 
     pool.create_project("proj_a").unwrap();
-    assert_eq!(pool.len(), 1);
+    assert_eq!(pool.connections.len(), 1);
 
     pool.remove("proj_a");
-    assert_eq!(pool.len(), 0);
+    assert_eq!(pool.connections.len(), 0);
 }

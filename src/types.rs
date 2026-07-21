@@ -31,7 +31,7 @@ pub enum IngestMsg {
 }
 
 impl IngestMsg {
-    pub fn project_id(&self) -> &str {
+    pub(crate) fn project_id(&self) -> &str {
         match self {
             IngestMsg::Traces { project_id, .. }
             | IngestMsg::Logs { project_id, .. }
@@ -85,7 +85,7 @@ impl SignalTable {
     }
 
     /// DuckDB table name (with lake. prefix).
-    pub fn table_name(self, prefix: &str) -> String {
+    pub(crate) fn table_name(self, prefix: &str) -> String {
         format!("{}{}", prefix, self.table_suffix())
     }
 }
@@ -106,25 +106,9 @@ pub enum StatusCode {
 }
 
 impl StatusCode {
-    /// Parse from the i32 value stored in DuckDB.
-    /// Unknown values are mapped to Unset (the OTel default).
-    pub fn from_i32(v: i32) -> Self {
-        match v {
-            0 => Self::Unset,
-            1 => Self::Ok,
-            2 => Self::Error,
-            _ => Self::Unset,
-        }
-    }
-
     /// Convert back to i32 for SQL queries.
-    pub fn as_i32(self) -> i32 {
+    pub(crate) fn as_i32(self) -> i32 {
         self as i32
-    }
-
-    /// True if this status represents an error.
-    pub fn is_error(self) -> bool {
-        self == Self::Error
     }
 }
 
@@ -133,35 +117,18 @@ impl StatusCode {
 // ---------------------------------------------------------------------------
 
 /// Microsecond-precision timestamp. All internal timestamps are in microseconds.
-/// CLI accepts seconds and converts via `from_seconds()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimestampMicros(pub i64);
 
 impl TimestampMicros {
-    /// From epoch seconds (CLI input boundary).
-    pub fn from_seconds(sec: i64) -> Self {
-        Self(sec * 1_000_000)
-    }
-
     /// From epoch microseconds (internal storage).
-    pub fn from_micros(us: i64) -> Self {
+    pub(crate) fn from_micros(us: i64) -> Self {
         Self(us)
     }
 
-    /// Current time in microseconds.
-    pub fn now() -> Self {
-        let odt = time::OffsetDateTime::now_utc();
-        Self(odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64)
-    }
-
     /// Raw microseconds value (for SQL parameters).
-    pub fn as_micros(self) -> i64 {
+    pub(crate) fn as_micros(self) -> i64 {
         self.0
-    }
-
-    /// Duration between two timestamps in microseconds.
-    pub fn duration_since(self, earlier: Self) -> i64 {
-        self.0.saturating_sub(earlier.0)
     }
 }
 
@@ -208,7 +175,7 @@ pub struct AdminTenantsPath;
 #[derive(Debug, Clone, Deserialize, TypedPath)]
 #[typed_path("/keys/{short_token}")]
 pub struct AdminKeyPath {
-    pub short_token: String,
+    pub(crate) short_token: String,
 }
 
 /// Route: GET /status
@@ -238,5 +205,5 @@ pub struct HealthzPath;
 #[derive(Debug, Clone, Deserialize, TypedPath)]
 #[typed_path("/traces/{trace_id}")]
 pub struct TraceDetailPath {
-    pub trace_id: String,
+    pub(crate) trace_id: String,
 }

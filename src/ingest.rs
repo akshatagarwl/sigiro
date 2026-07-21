@@ -61,7 +61,7 @@ pub struct OtlpGrpcService {
 }
 
 impl OtlpGrpcService {
-    pub fn new(
+    pub(crate) fn new(
         router: Arc<MsgRouter>,
         auth_mode: crate::auth::AuthMode,
         max_body_bytes: usize,
@@ -97,19 +97,19 @@ impl OtlpGrpcService {
         }
     }
 
-    pub fn trace_service(&self) -> TraceServiceServer<Self> {
+    pub(crate) fn trace_service(&self) -> TraceServiceServer<Self> {
         TraceServiceServer::new(self.clone_inner()).max_decoding_message_size(self.max_body_bytes)
     }
 
-    pub fn logs_service(&self) -> LogsServiceServer<Self> {
+    pub(crate) fn logs_service(&self) -> LogsServiceServer<Self> {
         LogsServiceServer::new(self.clone_inner()).max_decoding_message_size(self.max_body_bytes)
     }
 
-    pub fn metrics_service(&self) -> MetricsServiceServer<Self> {
+    pub(crate) fn metrics_service(&self) -> MetricsServiceServer<Self> {
         MetricsServiceServer::new(self.clone_inner()).max_decoding_message_size(self.max_body_bytes)
     }
 
-    pub fn profiles_service(&self) -> ProfilesServiceServer<Self> {
+    pub(crate) fn profiles_service(&self) -> ProfilesServiceServer<Self> {
         ProfilesServiceServer::new(self.clone_inner())
             .max_decoding_message_size(self.max_body_bytes)
     }

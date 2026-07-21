@@ -47,7 +47,7 @@ pub enum AuthMode {
     TenantKeys { control: Arc<ControlPlane> },
 }
 
-pub const CONTROL_SCHEMA: &str = "sigiro_control";
+pub(crate) const CONTROL_SCHEMA: &str = "sigiro_control";
 
 impl AuthMode {
     /// Build auth for the current storage mode.
@@ -99,7 +99,7 @@ impl AuthMode {
         matches!(self, AuthMode::TenantKeys { .. })
     }
 
-    pub fn control_plane(&self) -> Option<Arc<ControlPlane>> {
+    pub(crate) fn control_plane(&self) -> Option<Arc<ControlPlane>> {
         match self {
             AuthMode::TenantKeys { control } => Some(Arc::clone(control)),
             AuthMode::Open => None,
@@ -161,7 +161,7 @@ impl ControlPlaneError {
     /// Map to the HTTP error: deterministic client-input failures → 4xx, a real
     /// control-plane/DB failure → 500 (with the cause attached, unchanged from
     /// the previous `context_internal` behavior).
-    pub fn into_api_error(self) -> ApiError {
+    pub(crate) fn into_api_error(self) -> ApiError {
         match self {
             ControlPlaneError::InvalidInput(detail) => {
                 axum_anyhow::bad_request("Invalid request", &detail)
@@ -197,13 +197,13 @@ impl std::fmt::Debug for ControlPlane {
 pub struct MintedApiKey {
     pub key: String,
     pub key_hash: String,
-    pub tenant_id: String,
+    pub(crate) tenant_id: String,
 }
 
 impl ControlPlane {
     const POSTGRES_ALIAS: &'static str = "sigiro_control_pg";
 
-    pub fn open(catalog_url: &str, ext_dir: &Utf8Path) -> anyhow::Result<Self> {
+    pub(crate) fn open(catalog_url: &str, ext_dir: &Utf8Path) -> anyhow::Result<Self> {
         let conn = Connection::open_in_memory()
             .map_err(|e| anyhow::anyhow!("failed to open in-memory DuckDB for auth: {e}"))?;
         conn.execute_batch(&format!(
@@ -250,7 +250,7 @@ impl ControlPlane {
         Ok(control)
     }
 
-    pub fn create_schema(&self) -> anyhow::Result<()> {
+    pub(crate) fn create_schema(&self) -> anyhow::Result<()> {
         for sql in control_plane_ddl() {
             self.execute_control_sql(sql)?;
         }
@@ -301,7 +301,7 @@ impl ControlPlane {
         })
     }
 
-    pub fn resolve_tenant(&self, raw_key: &str) -> anyhow::Result<String> {
+    pub(crate) fn resolve_tenant(&self, raw_key: &str) -> anyhow::Result<String> {
         anyhow::ensure!(
             raw_key.starts_with("sk_"),
             "tenant API key must use the sk_<tenant>_<random> format"
@@ -500,7 +500,7 @@ fn ensure_hosted_tenant_id(tenant_id: &str) -> Result<String, ControlPlaneError>
 ///   as the explicit revocation timestamp — `NULL` = live, non-`NULL` = revoked.
 /// - `api_keys(tenant_id)` is indexed to support the FK join / per-tenant
 ///   lookups without a table scan.
-pub fn control_plane_ddl() -> &'static [&'static str] {
+pub(crate) fn control_plane_ddl() -> &'static [&'static str] {
     &[
         "CREATE SCHEMA IF NOT EXISTS sigiro_control",
         "CREATE TABLE IF NOT EXISTS sigiro_control.tenants (
@@ -526,7 +526,7 @@ pub fn control_plane_ddl() -> &'static [&'static str] {
 /// mirrors the key-resolution predicate (`key_hash = ? AND revoked_at IS NULL`),
 /// keeping the hot auth lookup on live keys only; DuckDB cannot parse the
 /// `WHERE` clause, so it never runs on the in-memory test control plane.
-pub const HOSTED_CONTROL_PLANE_DDL: &[&str] =
+pub(crate) const HOSTED_CONTROL_PLANE_DDL: &[&str] =
     &["CREATE INDEX IF NOT EXISTS api_keys_live_key_hash_idx \
      ON sigiro_control.api_keys (key_hash) WHERE revoked_at IS NULL"];
 
@@ -537,7 +537,7 @@ pub fn hash_api_key(raw_key: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-pub fn generate_api_key(tenant_id: &str) -> anyhow::Result<String> {
+pub(crate) fn generate_api_key(tenant_id: &str) -> anyhow::Result<String> {
     let tenant_id = crate::storage::sanitize_tenant_id(tenant_id)?;
     let mut bytes = [0_u8; 32];
     let mut rng = prefixed_api_key::rand::rngs::OsRng;
@@ -564,7 +564,7 @@ pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
 /// axum middleware: verify API key against the configured mode.
 /// Open mode: injects default context without checking headers.
 /// TenantKeys mode: requires a valid Bearer token.
-pub async fn auth_middleware(
+pub(crate) async fn auth_middleware(
     State(state): State<Arc<crate::server::AppState>>,
     req: Request,
     next: Next,

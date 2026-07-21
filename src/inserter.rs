@@ -40,14 +40,14 @@ pub enum RouterError {
 #[derive(Debug)]
 pub struct DiskCapacityState {
     /// `SIGIRO_MAX_DISK_BYTES`. 0 disables the gate.
-    pub cap: u64,
+    pub(crate) cap: u64,
     /// Most recent sampled on-disk byte size of `SIGIRO_DATA_DIR`.
-    pub sampled_bytes: AtomicU64,
+    pub(crate) sampled_bytes: AtomicU64,
     /// Whether ingest is currently rejected (cap breached, not yet recovered).
-    pub over_cap: AtomicBool,
+    pub(crate) over_cap: AtomicBool,
     /// Single-flight guard for the self-heal retention cleanup kicked on the
     /// OFF→ON transition.
-    pub cleanup_in_flight: AtomicBool,
+    pub(crate) cleanup_in_flight: AtomicBool,
 }
 
 impl DiskCapacityState {
@@ -61,7 +61,7 @@ impl DiskCapacityState {
     }
 
     /// A disabled (`cap == 0`) gate — the no-op default for constructors/tests.
-    pub fn disabled() -> Arc<Self> {
+    pub(crate) fn disabled() -> Arc<Self> {
         Self::new(0)
     }
 
@@ -114,14 +114,14 @@ const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
 /// Flusher configuration derived from env vars at startup.
 #[derive(Debug, Clone)]
 pub struct FlushConfig {
-    pub row_threshold: usize,
-    pub byte_threshold: usize,
-    pub interval: Duration,
-    pub backpressure: BackpressurePolicy,
+    pub(crate) row_threshold: usize,
+    pub(crate) byte_threshold: usize,
+    pub(crate) interval: Duration,
+    pub(crate) backpressure: BackpressurePolicy,
 }
 
 impl FlushConfig {
-    pub fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         let row_threshold = crate::config::FLUSH_ROW_THRESHOLD
             .value()
             .expect("FLUSH_ROW_THRESHOLD config must be valid");
@@ -178,7 +178,7 @@ impl MsgRouter {
         Self::with_config(pool, FlushConfig::from_env())
     }
 
-    pub fn with_config(pool: Arc<ProjectPool>, flush_config: FlushConfig) -> Self {
+    pub(crate) fn with_config(pool: Arc<ProjectPool>, flush_config: FlushConfig) -> Self {
         Self::with_config_and_disk(pool, flush_config, DiskCapacityState::disabled())
     }
 
@@ -189,7 +189,7 @@ impl MsgRouter {
         Self::with_config_and_disk(pool, FlushConfig::from_env(), disk)
     }
 
-    pub fn with_config_and_disk(
+    pub(crate) fn with_config_and_disk(
         pool: Arc<ProjectPool>,
         flush_config: FlushConfig,
         disk: Arc<DiskCapacityState>,
@@ -205,7 +205,7 @@ impl MsgRouter {
 
     /// Shared handle to the disk-capacity gate, so the storage-maintenance task
     /// can sample and trip/clear the same state the ingest gate reads.
-    pub fn disk_state(&self) -> Arc<DiskCapacityState> {
+    pub(crate) fn disk_state(&self) -> Arc<DiskCapacityState> {
         Arc::clone(&self.disk)
     }
 
@@ -216,17 +216,17 @@ impl MsgRouter {
     }
 
     /// Return true if any flusher task has panicked or exited unexpectedly.
-    pub fn has_dead_flushers(&self) -> bool {
+    pub(crate) fn has_dead_flushers(&self) -> bool {
         self.project_senders
             .iter()
             .any(|entry| entry.value().1.is_finished())
     }
 
-    pub fn dropped_messages(&self) -> usize {
+    pub(crate) fn dropped_messages(&self) -> usize {
         self.drop_count.load(Ordering::Relaxed)
     }
 
-    pub async fn run_retention_cleanup(&self, days: u32) -> Result<()> {
+    pub(crate) async fn run_retention_cleanup(&self, days: u32) -> Result<()> {
         for project_id in self.pool.project_ids() {
             self.ensure_flusher(&project_id)
                 .map_err(|e| anyhow::anyhow!("failed to ensure retention flusher: {e}"))?;

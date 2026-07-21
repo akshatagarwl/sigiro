@@ -1399,7 +1399,7 @@ use caps::{CapSet, Capability};
 pub struct EbpfStatus {
     pub status: String,
     pub reason: String,
-    pub suggestions: Vec<String>,
+    pub(crate) suggestions: Vec<String>,
 }
 
 pub fn check_obi_available(obi_path: &str) -> bool {

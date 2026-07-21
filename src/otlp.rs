@@ -62,10 +62,10 @@ pub struct MetricBatches {
 /// Metrics that were skipped during processing.
 #[derive(Debug, Default)]
 pub struct SkippedMetrics {
-    pub summaries: usize,
-    pub nan_values: usize,
-    pub infinity_values: usize,
-    pub missing_values: usize,
+    pub(crate) summaries: usize,
+    pub(crate) nan_values: usize,
+    pub(crate) infinity_values: usize,
+    pub(crate) missing_values: usize,
 }
 
 // ============================================================================
@@ -102,7 +102,7 @@ pub struct TraceBuilders {
 }
 
 impl TraceBuilders {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             timestamp: TimestampMicrosecondBuilder::new(),
             end_timestamp: Int64Builder::new(),
@@ -132,7 +132,7 @@ impl TraceBuilders {
         }
     }
 
-    pub fn append_span(
+    pub(crate) fn append_span(
         &mut self,
         span: &opentelemetry_proto::tonic::trace::v1::Span,
         resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,
@@ -254,7 +254,7 @@ impl TraceBuilders {
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<RecordBatch, ArrowError> {
+    pub(crate) fn finish(mut self) -> Result<RecordBatch, ArrowError> {
         let schema = traces_schema();
         let arrays: Vec<arrow::array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
@@ -297,7 +297,7 @@ impl Default for TraceBuilders {
 // Public decode functions
 // ============================================================================
 
-pub fn transform_traces(bytes: &[u8], format: InputFormat) -> Result<RecordBatch, DecodeError> {
+pub(crate) fn transform_traces(bytes: &[u8], format: InputFormat) -> Result<RecordBatch, DecodeError> {
     match format {
         InputFormat::Protobuf => decode_traces_protobuf(bytes),
         InputFormat::Json => decode_traces_json(bytes),
@@ -308,7 +308,7 @@ pub fn transform_traces(bytes: &[u8], format: InputFormat) -> Result<RecordBatch
 /// count of records skipped for an unusable `service.name` (or other per-record
 /// decode error) so the caller can report OTLP `partialSuccess` instead of
 /// failing the whole batch on one bad sibling record.
-pub fn transform_logs(
+pub(crate) fn transform_logs(
     bytes: &[u8],
     format: InputFormat,
 ) -> Result<(RecordBatch, u64), DecodeError> {
@@ -318,7 +318,7 @@ pub fn transform_logs(
     }
 }
 
-pub fn transform_metrics(bytes: &[u8], format: InputFormat) -> Result<MetricBatches, DecodeError> {
+pub(crate) fn transform_metrics(bytes: &[u8], format: InputFormat) -> Result<MetricBatches, DecodeError> {
     match format {
         InputFormat::Protobuf => decode_metrics_protobuf(bytes),
         InputFormat::Json => decode_metrics_json(bytes),
@@ -873,7 +873,7 @@ pub struct LogBuilders {
 }
 
 impl LogBuilders {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             timestamp: TimestampMicrosecondBuilder::new(),
             observed_timestamp: Int64Builder::new(),
@@ -893,7 +893,7 @@ impl LogBuilders {
         }
     }
 
-    pub fn append_log(
+    pub(crate) fn append_log(
         &mut self,
         log: &opentelemetry_proto::tonic::logs::v1::LogRecord,
         resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,
@@ -984,7 +984,7 @@ impl LogBuilders {
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<RecordBatch, ArrowError> {
+    pub(crate) fn finish(mut self) -> Result<RecordBatch, ArrowError> {
         let schema = logs_schema();
         let arrays: Vec<arrow::array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),

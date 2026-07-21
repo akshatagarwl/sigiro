@@ -11,50 +11,50 @@ use utoipa::ToSchema;
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServicesResponse {
-    pub services: Vec<ServiceEntry>,
+    pub(crate) services: Vec<ServiceEntry>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceEntry {
-    pub name: String,
-    pub first_seen: Option<String>,
-    pub last_seen: Option<String>,
-    pub span_count: i64,
+    pub(crate) name: String,
+    pub(crate) first_seen: Option<String>,
+    pub(crate) last_seen: Option<String>,
+    pub(crate) span_count: i64,
 }
 
 /// POST /admin/keys
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct CreateKeyResponse {
-    pub key: String,
-    pub key_hash: String,
-    pub tenant_id: String,
+    pub(crate) key: String,
+    pub(crate) key_hash: String,
+    pub(crate) tenant_id: String,
 }
 
 /// DELETE /admin/keys/{short_token}
 #[derive(Serialize, ToSchema)]
 pub struct RevokeKeyResponse {
-    pub revoked: bool,
-    pub short_token: String,
+    pub(crate) revoked: bool,
+    pub(crate) short_token: String,
 }
 
 /// POST /admin/tenants
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct CreateTenantResponse {
-    pub id: String,
-    pub status: String,
+    pub(crate) id: String,
+    pub(crate) status: String,
 }
 
 #[derive(Deserialize, ToSchema, validator::Validate)]
 pub struct CreateTenantRequest {
     #[validate(custom(function = "validate_tenant_id"))]
-    pub id: String,
+    pub(crate) id: String,
 }
 
 #[derive(Deserialize, ToSchema, validator::Validate)]
 pub struct CreateKeyRequest {
     #[validate(custom(function = "validate_tenant_id"))]
-    pub tenant_id: String,
+    pub(crate) tenant_id: String,
 }
 
 /// Validate a tenant id at the API boundary (fail loud early), reusing the
@@ -74,7 +74,7 @@ fn validate_tenant_id(id: &str) -> Result<(), validator::ValidationError> {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AdminStatusResponse {
     #[schema(value_type = HashMap<String, String>)]
-    pub status: HashMap<String, String>,
+    pub(crate) status: HashMap<String, String>,
 }
 
 /// GET /health — server liveness/readiness with the *reason* if not ready.
@@ -101,42 +101,42 @@ pub enum HealthResponse {
 /// Complete trace detail response with critical path and service breakdown.
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct TraceDetailResponse {
-    pub trace_id: String,
-    pub total_duration_us: i64,
-    pub root_span: SpanDetail,
-    pub span_count: i64,
-    pub error_count: i64,
-    pub services: Vec<String>,
-    pub spans: Vec<SpanDetail>,
-    pub critical_path: Vec<String>,
-    pub service_breakdown: Vec<ServiceBreakdownEntry>,
+    pub(crate) trace_id: String,
+    pub(crate) total_duration_us: i64,
+    pub(crate) root_span: SpanDetail,
+    pub(crate) span_count: i64,
+    pub(crate) error_count: i64,
+    pub(crate) services: Vec<String>,
+    pub(crate) spans: Vec<SpanDetail>,
+    pub(crate) critical_path: Vec<String>,
+    pub(crate) service_breakdown: Vec<ServiceBreakdownEntry>,
 }
 
 /// Individual span detail in trace detail response.
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
 pub struct SpanDetail {
-    pub trace_id: String,
-    pub span_id: String,
-    pub parent_span_id: Option<String>,
-    pub span_name: String,
-    pub duration_us: i64,
-    pub status_code: i32,
-    pub service_name: String,
-    pub timestamp: String,
-    pub span_kind: Option<i32>,
-    pub span_attributes: Option<String>,
-    pub resource_attributes: Option<String>,
-    pub events_json: Option<String>,
-    pub links_json: Option<String>,
-    pub scope_name: Option<String>,
-    pub scope_version: Option<String>,
-    pub trace_state: Option<String>,
+    pub(crate) trace_id: String,
+    pub(crate) span_id: String,
+    pub(crate) parent_span_id: Option<String>,
+    pub(crate) span_name: String,
+    pub(crate) duration_us: i64,
+    pub(crate) status_code: i32,
+    pub(crate) service_name: String,
+    pub(crate) timestamp: String,
+    pub(crate) span_kind: Option<i32>,
+    pub(crate) span_attributes: Option<String>,
+    pub(crate) resource_attributes: Option<String>,
+    pub(crate) events_json: Option<String>,
+    pub(crate) links_json: Option<String>,
+    pub(crate) scope_name: Option<String>,
+    pub(crate) scope_version: Option<String>,
+    pub(crate) trace_state: Option<String>,
 }
 
 /// Service duration breakdown with percentages.
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct ServiceBreakdownEntry {
-    pub service: String,
-    pub duration_us: i64,
-    pub percentage: f64,
+    pub(crate) service: String,
+    pub(crate) duration_us: i64,
+    pub(crate) percentage: f64,
 }

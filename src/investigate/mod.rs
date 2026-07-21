@@ -147,22 +147,22 @@ pub struct SampledSection<T> {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ServiceContext {
     pub service_name: String,
-    pub first_seen: Option<String>,
-    pub last_seen: Option<String>,
+    pub(crate) first_seen: Option<String>,
+    pub(crate) last_seen: Option<String>,
     pub namespace: Option<String>,
     pub deployment: Option<String>,
     /// F-26: distinct pod count when `service.instance.id` is present in
     /// resource attributes, else 0. Use `has_instance_id` to distinguish
     /// "no pods identified" from "service not seen".
     pub pod_count: i64,
-    pub has_instance_id: bool,
+    pub(crate) has_instance_id: bool,
     pub dependencies: Vec<ServiceDependency>,
     pub dependents: Vec<ServiceDependency>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DerivedEvent {
-    pub detected_at: String,
+    pub(crate) detected_at: String,
     pub event_type: String,
     pub description: String,
 }
@@ -182,9 +182,9 @@ pub struct OperationSummary {
     pub count: i64,
     pub error_count: i64,
     pub error_pct: f64,
-    pub duration_p50_us: f64,
-    pub duration_p95_us: f64,
-    pub duration_p99_us: f64,
+    pub(crate) duration_p50_us: f64,
+    pub(crate) duration_p95_us: f64,
+    pub(crate) duration_p99_us: f64,
     pub exemplar_error_trace_id: Option<String>,
     pub baseline_error_pct: Option<f64>,
     pub baseline_p95_us: Option<f64>,
@@ -203,11 +203,11 @@ pub struct OperationSummary {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetricBucket {
-    pub bucket: String,
-    pub metric_name: String,
-    pub p95: f64,
-    pub avg: f64,
-    pub count: i64,
+    pub(crate) bucket: String,
+    pub(crate) metric_name: String,
+    pub(crate) p95: f64,
+    pub(crate) avg: f64,
+    pub(crate) count: i64,
 }
 
 /// A flat span record. Attributes and events are embedded as real JSON
@@ -215,23 +215,23 @@ pub struct MetricBucket {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SpanRecord {
     pub trace_id: String,
-    pub span_id: String,
+    pub(crate) span_id: String,
     /// Empty string for root spans.
-    pub parent_span_id: String,
+    pub(crate) parent_span_id: String,
     pub span_name: String,
     /// OTel span kind as stored (integer enum).
-    pub span_kind: Option<i32>,
-    pub status_code: i32,
+    pub(crate) span_kind: Option<i32>,
+    pub(crate) status_code: i32,
     /// OTel status message — for spans that fail without emitting any log
     /// (e.g. HTTP client errors) this is often the only diagnostic string.
     pub status_message: Option<String>,
     pub is_error: bool,
-    pub duration_us: i64,
-    pub start_ts: i64,
-    pub end_ts: i64,
-    pub start_iso: String,
-    pub span_attributes: Option<serde_json::Value>,
-    pub events: Option<serde_json::Value>,
+    pub(crate) duration_us: i64,
+    pub(crate) start_ts: i64,
+    pub(crate) end_ts: i64,
+    pub(crate) start_iso: String,
+    pub(crate) span_attributes: Option<serde_json::Value>,
+    pub(crate) events: Option<serde_json::Value>,
     /// Ready-to-run query for the full trace this span belongs to (every span
     /// sharing its `trace_id`, chronological). Filled in Rust.
     pub drill_down_sql: Option<String>,
@@ -240,13 +240,13 @@ pub struct SpanRecord {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LogRecord {
     /// Microseconds since the Unix epoch.
-    pub timestamp: i64,
-    pub timestamp_iso: String,
-    pub severity_text: String,
-    pub body: String,
-    pub trace_id: Option<String>,
-    pub span_id: Option<String>,
-    pub attributes: Option<serde_json::Value>,
+    pub(crate) timestamp: i64,
+    pub(crate) timestamp_iso: String,
+    pub(crate) severity_text: String,
+    pub(crate) body: String,
+    pub(crate) trace_id: Option<String>,
+    pub(crate) span_id: Option<String>,
+    pub(crate) attributes: Option<serde_json::Value>,
 }
 
 /// A log pattern with aggregated statistics.
@@ -265,11 +265,11 @@ pub struct LogPattern {
     /// Up to 5 distinct extracted-variable tuples (each a JSON array of the
     /// wildcard values for one log line) — enough to see what varies.
     pub sample_values: Option<serde_json::Value>,
-    pub severity_text: String,
+    pub(crate) severity_text: String,
     pub count: i64,
-    pub error_count: i64,
-    pub first_seen: Option<String>,
-    pub last_seen: Option<String>,
+    pub(crate) error_count: i64,
+    pub(crate) first_seen: Option<String>,
+    pub(crate) last_seen: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -277,8 +277,8 @@ pub struct ProfileSummary {
     pub function: String,
     pub profile_type: String,
     pub total_value: i64,
-    pub unit: String,
-    pub sample_count: i64,
+    pub(crate) unit: String,
+    pub(crate) sample_count: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -597,7 +597,7 @@ NULLIF(json_extract_string({q}span_attributes, 'server.address'), '')), '') \
 ///
 /// Every section is a CTE; the final SELECT packs them into one JSON object
 /// via scalar subqueries, so the whole investigation is a single round-trip.
-pub fn build_investigation_sql(prefix: &str, bucket: &str) -> String {
+pub(crate) fn build_investigation_sql(prefix: &str, bucket: &str) -> String {
     let err = StatusCode::Error.as_i32();
     let op_key = operation_key_expr("s.");
     // The in-window span filter, repeated by the CTEs that need columns

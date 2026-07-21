@@ -14,7 +14,7 @@ use crate::types::TimestampMicros;
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct SignalCoverage {
     /// Signal type (spans, logs, metrics, profiles).
-    pub signal_type: String,
+    pub(crate) signal_type: String,
     /// Whether this signal type has data in the window.
     pub available: bool,
     /// Severity: "high", "medium", "low", "none"
@@ -33,7 +33,7 @@ pub struct Coverage {
     pub span_count: i64,
     pub log_template_count: i64,
     pub metric_series_count: i64,
-    pub profile_sample_count: i64,
+    pub(crate) profile_sample_count: i64,
     /// Signal coverage details instead of flat gap strings.
     pub signals: Vec<SignalCoverage>,
 }
@@ -191,11 +191,11 @@ pub struct ServiceDependency {
     /// Name of the dependent service.
     pub service_name: String,
     /// Number of spans from this service in shared traces.
-    pub span_count: i64,
+    pub(crate) span_count: i64,
     /// Number of error spans in shared traces.
-    pub error_count: i64,
+    pub(crate) error_count: i64,
     /// Error rate as a percentage.
-    pub error_rate: f64,
+    pub(crate) error_rate: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new(from: TimestampMicros, to: TimestampMicros) -> Result<Self> {
+    pub(crate) fn new(from: TimestampMicros, to: TimestampMicros) -> Result<Self> {
         Ok(Self {
             from_ts: from.as_micros(),
             to_ts: to.as_micros(),

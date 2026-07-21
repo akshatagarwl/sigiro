@@ -65,7 +65,7 @@ use tracing_attributes::instrument;
         (name = "admin", description = "Admin endpoints"),
             )
 )]
-pub struct ApiDoc;
+pub(crate) struct ApiDoc;
 
 /// Pre-auth rate-limit key. This must not key on the unverified Authorization
 /// header: an attacker could rotate bogus tokens to evade the limiter and grow
@@ -722,15 +722,15 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
 /// Uses typed-env for fail-fast parsing: malformed values error at startup.
 #[derive(Clone)]
 pub struct ServerPorts {
-    pub http: u16,
-    pub grpc: u16,
-    pub otlp_http: u16,
+    pub(crate) http: u16,
+    pub(crate) grpc: u16,
+    pub(crate) otlp_http: u16,
 }
 
 impl ServerPorts {
     /// Load ports from environment. Fails fast on malformed values.
     /// Unset vars default to well-known OTLP ports.
-    pub fn load() -> anyhow::Result<Self> {
+    pub(crate) fn load() -> anyhow::Result<Self> {
         use crate::config;
         Ok(Self {
             http: config::HTTP_PORT.value().map_err(anyhow::Error::from)?,

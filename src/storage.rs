@@ -52,8 +52,8 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
 /// — so we classify in-process and surface only a secret-free category + hint.
 #[derive(Debug, Clone)]
 pub struct AttachError {
-    pub category: &'static str,
-    pub retryable: bool,
+    pub(crate) category: &'static str,
+    pub(crate) retryable: bool,
     message: String,
 }
 
@@ -79,7 +79,7 @@ impl std::error::Error for AttachError {}
 /// Initialize DuckLake with PostgreSQL catalog + optional S3 data files.
 /// Multi-writer safe — multiple sigiro instances can attach to the same catalog.
 #[instrument(skip(conn), fields(dir = %project_dir))]
-pub fn init_distributed(
+pub(crate) fn init_distributed(
     conn: &Connection,
     config: &StorageConfig,
     project_dir: &Utf8Path,
@@ -334,9 +334,9 @@ impl StorageMode {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DistributedAttachSql {
-    pub catalog_path: String,
+    pub(crate) catalog_path: String,
     pub metadata_schema: String,
-    pub data_path: String,
+    pub(crate) data_path: String,
     pub secret_sql: Option<String>,
     pub s3_scope: Option<String>,
     pub attach_sql: String,
@@ -589,7 +589,7 @@ pub(crate) fn escape_sql_string(s: &str) -> String {
     s.replace('\'', "''")
 }
 
-pub const TABLE_PREFIX: &str = "lake.";
+pub(crate) const TABLE_PREFIX: &str = "lake.";
 
 pub fn table_prefix() -> &'static str {
     TABLE_PREFIX
@@ -611,7 +611,7 @@ pub fn resolve_extension_dir(data_dir: &Utf8Path) -> camino::Utf8PathBuf {
 /// files on first use. The download is synchronous and can take 30-90s
 /// on a fresh data dir, with no progress output. The user sees nothing
 /// and concludes the process has died.
-pub fn install_extensions_with_progress(conn: &Connection, names: &[&str]) -> Result<()> {
+pub(crate) fn install_extensions_with_progress(conn: &Connection, names: &[&str]) -> Result<()> {
     let total = names.len();
     for (i, name) in names.iter().enumerate() {
         tracing::info!(

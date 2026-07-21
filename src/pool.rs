@@ -144,7 +144,7 @@ impl ProjectPool {
     }
 
     /// Always returns "lake." — there is no longer a non-DuckLake path.
-    pub fn prefix() -> &'static str {
+    pub(crate) fn prefix() -> &'static str {
         crate::storage::table_prefix()
     }
 
@@ -270,7 +270,7 @@ impl ProjectPool {
     /// writer/readers. Used by the quack query-surface server, which needs
     /// one long-lived dedicated connection for the life of the process —
     /// not one borrowed from, and competing with, the bounded reader pool.
-    pub fn clone_connection(&self, project_id: &str) -> Result<Connection> {
+    pub(crate) fn clone_connection(&self, project_id: &str) -> Result<Connection> {
         let reader = self.get_project(project_id)?.get();
         let conn = reader
             .try_clone()
@@ -280,7 +280,7 @@ impl ProjectPool {
         Ok(conn)
     }
 
-    pub fn project_ids(&self) -> Vec<String> {
+    pub(crate) fn project_ids(&self) -> Vec<String> {
         self.connections
             .iter()
             .map(|entry| entry.key().clone())
@@ -291,7 +291,7 @@ impl ProjectPool {
     /// Callers (e.g. long-running per-project flusher tasks) should call this periodically
     /// to prevent the idle evictor from removing their connection while they are alive.
     #[tracing::instrument(skip(self), fields(project_id = %project_id))]
-    pub fn touch_project(&self, project_id: &str) {
+    pub(crate) fn touch_project(&self, project_id: &str) {
         if let Some(mut entry) = self.connections.get_mut(project_id) {
             entry.last_access = Instant::now();
         }
@@ -527,15 +527,6 @@ impl ProjectPool {
         }
     }
 
-    /// Number of open connections currently held by the pool.
-    pub fn len(&self) -> usize {
-        self.connections.len()
-    }
-
-    /// Whether the pool holds no open connections.
-    pub fn is_empty(&self) -> bool {
-        self.connections.is_empty()
-    }
 
     /// Remove a project's connection (for account deletion).
     #[tracing::instrument(skip(self), fields(project_id = %project_id))]

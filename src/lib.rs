@@ -13,7 +13,7 @@ pub mod otel;
 pub mod otlp;
 pub mod pool;
 pub mod profiling;
-pub mod quack;
+pub(crate) mod quack;
 pub mod responses;
 pub mod schema;
 pub mod server;
@@ -30,13 +30,10 @@ use camino::Utf8PathBuf;
 // root so consumers can use `sigiro::IngestMsg` instead of digging through
 // `sigiro::ingest` or `sigiro::inserter`.
 
-pub use ingest::OtlpGrpcService;
 pub use investigate::{InvestigationBlock, Window};
-pub use types::{IngestMsg, SignalTable, StatusCode, TimestampMicros};
+pub use types::{IngestMsg, SignalTable, TimestampMicros};
 // Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
 pub use inserter::MsgRouter;
-pub use responses::{ServiceBreakdownEntry, SpanDetail, TraceDetailResponse};
-pub use server::ApiDoc;
 
 pub fn data_dir() -> Result<Utf8PathBuf> {
     if let Ok(path) = crate::config::DATA_DIR.value() {

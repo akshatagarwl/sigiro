@@ -47,9 +47,9 @@ use std::time::Duration;
 /// One query-able edge: a self-hosted sigiro node serving `quack` reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edge {
-    pub name: String,
-    pub host: String,
-    pub port: u16,
+    pub(crate) name: String,
+    pub(crate) host: String,
+    pub(crate) port: u16,
 }
 
 /// Resolve the edge list. `cli_edges` are `--edge name=host:port` flags.
@@ -61,7 +61,7 @@ pub struct Edge {
 ///
 /// Fails loud if zero edges resolve either way — a federated query coordinator
 /// silently running against nothing is a worse failure mode than refusing to run.
-pub fn resolve_edges(cli_edges: &[String]) -> Result<Vec<Edge>> {
+pub(crate) fn resolve_edges(cli_edges: &[String]) -> Result<Vec<Edge>> {
     let env_edges = crate::config::EDGES
         .value()
         .context("failed to read SIGIRO_EDGES")?;
