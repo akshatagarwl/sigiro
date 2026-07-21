@@ -68,6 +68,8 @@ tracing-opentelemetry = "0.32"
 typed-env = "0.3.0"
 utoipa = "5"
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
+validator = { version = "0.20", features = ["derive"] }
+axum-valid = "0.23" # default features = basic (json/form/query) + validator
 camino = "1.2.2"
 itertools = "0.14.0"
 

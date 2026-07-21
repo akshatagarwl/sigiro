@@ -3,6 +3,7 @@ use axum::{Extension, Json, Router, extract::State, http::HeaderMap, middleware 
 use axum_anyhow::{ApiResult, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
+use axum_valid::Valid;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 use sqlparser::ast::{
@@ -648,6 +649,53 @@ pub fn validate_read_only_with(sql: &str, allow_information_schema: bool) -> Res
     Ok(())
 }
 
+/// GET /agents.txt — public, agent-readable API quickstart + the `/v1/query`
+/// allowlist. Complements /openapi.json (machine contract) and /docs (Swagger).
+/// Also the schema-discovery answer for hosted tenants, where `information_schema`
+/// and `DESCRIBE` are blocked — the allowed tables/functions are listed here,
+/// generated from the live allowlists so they never drift.
+async fn agents_txt() -> impl axum::response::IntoResponse {
+    let tables = ALLOWED_TABLES.join(", ");
+    let scalars = SCALAR_FUNCTIONS.join(", ");
+    let table_fns = SAFE_FUNCTIONS.join(", ");
+    let body = format!(
+        "# sigiro — observability API (agent quickstart)\n\
+         # Auth: `Authorization: Bearer <tenant API key>` on all /v1 routes.\n\
+         \n\
+         ## Endpoints\n\
+         POST /v1/query        Body = ONE read-only SQL SELECT (raw text). Returns a JSON array of rows.\n\
+         POST /v1/investigate  Body = {{\"service\":\"<name>\",\"from_ts\":<us>,\"to_ts\":<us>}}. Structured\n\
+         \x20                     evidence for a service+window. Slow but low DB stress. Timestamps are\n\
+         \x20                     MICROSECONDS since the Unix epoch (16 digits, e.g. 1780000000000000).\n\
+         GET  /v1/services     Services seen, with span counts + first/last seen.\n\
+         GET  /openapi.json    Machine-readable OpenAPI spec.   GET /docs  Swagger UI.\n\
+         \n\
+         ## /v1/query rules (POSITIVE allowlist — anything not listed is rejected)\n\
+         - Exactly one SELECT. No DDL/DML, no CTE/WITH, no information_schema, no DESCRIBE.\n\
+         - The `timestamp` column is MICROSECONDS since epoch; `duration` on spans is milliseconds.\n\
+         - Tables: {tables}\n\
+         - Scalar/aggregate functions: {scalars}\n\
+         - Table-valued functions: {table_fns}\n\
+         \n\
+         ## sigiro_spans key columns\n\
+         service_name, span_name, span_kind (2=server,3=client), timestamp (us), duration (ms),\n\
+         status_code, trace_id, span_id, parent_span_id, span_attributes (JSON; extract with\n\
+         span_attributes->>'http.route'). sigiro_logs and sigiro_metrics_* have their own columns.\n\
+         \n\
+         ## Example\n\
+         curl -H 'authorization: Bearer <key>' <base>/v1/query --data-binary \\\n\
+         \x20 \"SELECT span_attributes->>'http.route' AS route, count(*) n, round(avg(duration)) avg_ms \\\n\
+         \x20  FROM sigiro_spans WHERE service_name='my-api' AND span_kind=2 GROUP BY 1 ORDER BY avg_ms DESC LIMIT 10\"\n"
+    );
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        body,
+    )
+}
+
 /// Build the HTTP Router for the main API (port 9999).
 /// Extracted from `run_servers` so integration tests can build the same
 /// router with test state without starting TCP listeners.
@@ -702,7 +750,11 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_get(health)
         .typed_get(v1_health)
         .typed_get(healthz)
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        // Discoverability (public, no auth): agent-readable API guide + OpenAPI
+        // spec + Swagger UI. `/openapi.json` is the machine-readable contract;
+        // `/agents.txt` is the human/agent quickstart incl. the query allowlist.
+        .route("/agents.txt", axum::routing::get(agents_txt))
+        .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
         .nest("/v1", v1)
         .nest("/admin", admin)
         .layer(tower_http::trace::TraceLayer::new_for_http())
@@ -1585,7 +1637,12 @@ async fn query_handler(
     let allow_information_schema = !state.pool.storage_mode().is_distributed();
     if let Err(e) = validate_read_only_with(&body, allow_information_schema) {
         tracing::warn!(sql = %sql_preview, "query rejected (validation): {e}");
-        return Err(bad_request("query rejected", &e));
+        // Point the caller at the discoverable allowlist so a rejection is
+        // actionable instead of opaque (which tables/functions ARE allowed).
+        return Err(bad_request(
+            "query rejected",
+            &format!("{e} — see /agents.txt for the allowed tables & functions"),
+        ));
     }
     match execute_sql(&state, &auth, &body).await {
         Ok((results, truncated)) => {
@@ -1982,28 +2039,12 @@ async fn investigate_handler(
     _path: InvestigatePath,
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
-    Json(req): Json<investigate::InvestigateRequest>,
+    // `Valid<Json<..>>` runs the `validator` derives on InvestigateRequest at
+    // EXTRACTION time (axum's validating-extractor equivalent of middleware) —
+    // from_ts/to_ts must be plausible MICROSECOND timestamps (fail loud on
+    // seconds/millis/nanos), to_ts > from_ts. Invalid input never reaches here.
+    Valid(Json(req)): Valid<Json<investigate::InvestigateRequest>>,
 ) -> ApiResult<Json<std::collections::BTreeMap<String, investigate::InvestigationBlock>>> {
-    // Validate mandatory timestamp parameters.
-    if req.from_ts == 0 {
-        return Err(bad_request(
-            "Invalid Request",
-            "from_ts is required and must be a positive Unix timestamp in microseconds",
-        ));
-    }
-    if req.to_ts == 0 {
-        return Err(bad_request(
-            "Invalid Request",
-            "to_ts is required and must be a positive Unix timestamp in microseconds",
-        ));
-    }
-    if req.to_ts <= req.from_ts {
-        return Err(bad_request(
-            "Invalid Request",
-            "to_ts must be greater than from_ts",
-        ));
-    }
-
     let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
     let project_data_path = if state.pool.storage_mode().is_distributed() {
         crate::storage::tenant_data_dir(&data_dir, &auth.tenant_id)

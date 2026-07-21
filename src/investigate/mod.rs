@@ -281,12 +281,51 @@ pub fn query_derived_events(ctx: &QueryCtx) -> Result<Vec<DerivedEvent>> {
 // InvestigateRequest — API input (from_ts/to_ts now mandatory)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema, validator::Validate)]
+#[validate(schema(function = "validate_window", skip_on_field_errors = true))]
 pub struct InvestigateRequest {
     pub service: Option<String>,
     pub services: Option<Vec<String>>,
+    #[validate(custom(function = "validate_micros"))]
     pub from_ts: i64,
+    #[validate(custom(function = "validate_micros"))]
     pub to_ts: i64,
+}
+
+// Timestamps are MICROSECONDS since the Unix epoch (matching the span/log
+// `timestamp` column). Fail LOUD on the wrong unit: seconds/millis are still
+// "positive" but resolve to ~1970, matching nothing — a false "no telemetry".
+fn validate_micros(ts: i64) -> Result<(), validator::ValidationError> {
+    const MICROS_MIN: i64 = 1_000_000_000_000_000; // ~2001-09 in µs — catches s / ms
+    const MICROS_MAX: i64 = 10_000_000_000_000_000; // ~2286 in µs — catches ns
+    if (MICROS_MIN..MICROS_MAX).contains(&ts) {
+        return Ok(());
+    }
+    let hint = match ts {
+        t if t <= 0 => "must be a positive Unix timestamp",
+        t if t < 100_000_000_000 => "far too small to be a timestamp",
+        t if t < 100_000_000_000_000 => "looks like SECONDS — multiply by 1_000_000 for µs",
+        t if t < MICROS_MIN => "looks like MILLISECONDS — multiply by 1_000 for µs",
+        _ => "looks like NANOSECONDS — divide by 1_000 for µs",
+    };
+    let mut err = validator::ValidationError::new("timestamp_micros");
+    err.message = Some(
+        format!(
+            "not a plausible microsecond timestamp ({hint}); expected a 16-digit µs value since \
+             the Unix epoch, e.g. 1780000000000000"
+        )
+        .into(),
+    );
+    Err(err)
+}
+
+fn validate_window(req: &InvestigateRequest) -> Result<(), validator::ValidationError> {
+    if req.to_ts <= req.from_ts {
+        let mut err = validator::ValidationError::new("window");
+        err.message = Some("to_ts must be greater than from_ts".into());
+        return Err(err);
+    }
+    Ok(())
 }
 
 const MAX_SERVICES: usize = 10;
