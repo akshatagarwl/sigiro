@@ -76,29 +76,39 @@ const MAX_SERVICES: usize = 10;
 pub struct InvestigationBlock {
     pub service: String,
     pub window: Window,
-    pub truncation: Truncation,
+    /// Distinct traces with an error span in the window — the headline
+    /// "something's wrong" signal. Drill via the anomalous `operation_summaries`
+    /// or the `spans` section, each of which carries a ready-to-run query.
+    pub error_traces_total: i64,
     pub coverage: Coverage,
     pub context: ServiceContext,
     pub events: Vec<DerivedEvent>,
     pub operation_summaries: Vec<OperationSummary>,
     pub metrics: Vec<MetricBucket>,
-    /// Flat top-N spans, errors first then by duration. Callers can group by
-    /// `trace_id` if they want trace trees; sigiro no longer pre-groups.
-    pub spans: Vec<SpanRecord>,
-    /// Log patterns (template-deduplicated, ordered by count).
+    /// Top spans (errors first, then slowest), as a self-describing sample:
+    /// `total` vs the returned rows tells you how much was withheld, and
+    /// `drill_all_sql` fetches the rest.
+    pub spans: SampledSection<SpanRecord>,
+    /// Log patterns (template-deduplicated, ordered by count). Each row carries
+    /// a `drill_down_sql` for its raw logs.
     pub log_patterns: Vec<LogPattern>,
-    /// Raw logs, newest first (limited).
-    pub logs: Vec<LogRecord>,
+    /// Raw logs, newest first — a self-describing sample (see `spans`).
+    pub logs: SampledSection<LogRecord>,
     pub profiles: Vec<ProfileSummary>,
 }
 
+/// A bounded sample of a larger set that carries its own "there's more, and
+/// here's how to get it" affordance, so an agent can decide to drill without
+/// guessing. When `total > sample.len()`, run `drill_all_sql` via /v1/query.
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Truncation {
-    pub spans_total: i64,
-    pub spans_returned: i64,
-    pub logs_total: i64,
-    pub logs_returned: i64,
-    pub error_traces_total: i64,
+pub struct SampledSection<T> {
+    pub sample: Vec<T>,
+    pub total: i64,
+    /// How the sample was ordered/selected, e.g. "errors first, then slowest".
+    pub sampled_by: String,
+    /// Query returning the full set for this section, ready to paste into
+    /// /v1/query.
+    pub drill_all_sql: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -142,6 +152,11 @@ pub struct OperationSummary {
     pub is_anomalous: Option<bool>,
     /// Reason for anomaly if detected.
     pub anomaly_reason: Option<String>,
+    /// Ready-to-run query for the raw spans behind this operation (errors
+    /// first, then slowest). Sits next to `anomaly_reason` on purpose: when an
+    /// operation looks wrong, this is exactly how to pull the evidence. Filled
+    /// in Rust.
+    pub drill_down_sql: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -172,6 +187,9 @@ pub struct SpanRecord {
     pub start_iso: String,
     pub span_attributes: Option<serde_json::Value>,
     pub events: Option<serde_json::Value>,
+    /// Ready-to-run query for the full trace this span belongs to (every span
+    /// sharing its `trace_id`, chronological). Filled in Rust.
+    pub drill_down_sql: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -323,29 +341,67 @@ fn investigate_one(
         payload.stats.profile_sample_count,
     );
 
-    let truncation = Truncation {
-        spans_total: payload.stats.spans_total,
-        spans_returned: payload.spans.len() as i64,
-        logs_total: payload.stats.logs_total,
-        logs_returned: payload.logs.len() as i64,
-        error_traces_total: payload.stats.error_traces_total,
-    };
+    // Every drill query is built here in Rust — it needs the caller's service +
+    // window (safely quoted), which the SQL doesn't have handy — so it's pure
+    // string work, no extra DB round-trip. Each targets /v1/query verbatim, so
+    // an agent that spots a lead can execute it directly to go deeper.
+    let err = StatusCode::Error.as_i32();
+    let svc = service.replace('\'', "''");
+    let window = format!("timestamp BETWEEN make_timestamp({from_ts}) AND make_timestamp({to_ts})");
 
-    // Fill drill-down SQL per pattern (needs the caller's service/window,
-    // safely quoted — trivial string work, not a DB round-trip).
+    // #1: raw logs behind each pattern.
     let mut log_patterns = payload.log_patterns;
-    let quoted_service = service.replace('\'', "''");
     for p in &mut log_patterns {
         p.drill_down_sql = p.template_id.map(|tid| {
             format!(
                 "SELECT * FROM {prefix}sigiro_logs \
-                 WHERE service_name = '{quoted_service}' \
-                   AND template_id = {tid} \
-                   AND timestamp BETWEEN make_timestamp({from_ts}) AND make_timestamp({to_ts}) \
+                 WHERE service_name = '{svc}' AND template_id = {tid} AND {window} \
                  ORDER BY timestamp ASC"
             )
         });
     }
+
+    // #1: raw spans behind each operation (errors first, then slowest).
+    let mut operation_summaries = payload.operation_summaries;
+    for op in &mut operation_summaries {
+        let name = op.span_name.replace('\'', "''");
+        op.drill_down_sql = Some(format!(
+            "SELECT * FROM {prefix}sigiro_spans \
+             WHERE service_name = '{svc}' AND span_name = '{name}' AND {window} \
+             ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC"
+        ));
+    }
+
+    // #1: the full trace each exemplar span belongs to.
+    let mut span_rows = payload.spans;
+    for s in &mut span_rows {
+        let tid = s.trace_id.replace('\'', "''");
+        s.drill_down_sql = Some(format!(
+            "SELECT * FROM {prefix}sigiro_spans WHERE trace_id = '{tid}' ORDER BY timestamp ASC"
+        ));
+    }
+
+    // #2: self-describing sampled sections — the returned sample, the true
+    // total, how it was ordered, and the query for the full set.
+    let spans = SampledSection {
+        total: payload.stats.spans_total,
+        sampled_by: "errors first, then longest duration".to_string(),
+        drill_all_sql: format!(
+            "SELECT * FROM {prefix}sigiro_spans \
+             WHERE service_name = '{svc}' AND {window} \
+             ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC"
+        ),
+        sample: span_rows,
+    };
+    let logs = SampledSection {
+        total: payload.stats.logs_total,
+        sampled_by: "most recent first".to_string(),
+        drill_all_sql: format!(
+            "SELECT * FROM {prefix}sigiro_logs \
+             WHERE service_name = '{svc}' AND {window} ORDER BY timestamp DESC"
+        ),
+        sample: payload.logs,
+    };
 
     Ok(InvestigationBlock {
         service: service.to_string(),
@@ -353,15 +409,15 @@ fn investigate_one(
             TimestampMicros::from_micros(from_ts),
             TimestampMicros::from_micros(to_ts),
         )?,
-        truncation,
+        error_traces_total: payload.stats.error_traces_total,
         coverage,
         context: payload.context,
         events: payload.events,
-        operation_summaries: payload.operation_summaries,
+        operation_summaries,
         metrics: payload.metrics,
-        spans: payload.spans,
+        spans,
         log_patterns,
-        logs: payload.logs,
+        logs,
         profiles: payload.profiles,
     })
 }

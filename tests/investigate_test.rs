@@ -96,11 +96,11 @@ fn investigate_with_in_memory_db() {
     assert_eq!(block.service, "nonexistent");
     assert!(block.operation_summaries.is_empty());
     assert!(block.metrics.is_empty());
-    assert!(block.spans.is_empty());
-    assert!(block.logs.is_empty());
-    assert_eq!(block.truncation.spans_total, 0);
-    assert_eq!(block.truncation.logs_total, 0);
-    assert_eq!(block.truncation.error_traces_total, 0);
+    assert!(block.spans.sample.is_empty());
+    assert!(block.logs.sample.is_empty());
+    assert_eq!(block.spans.total, 0);
+    assert_eq!(block.logs.total, 0);
+    assert_eq!(block.error_traces_total, 0);
 
     // Coverage: empty db → all gaps present
     assert!(!block.coverage.has_spans);
@@ -183,11 +183,34 @@ fn investigate_with_real_span_data() {
     assert_eq!(health_op.error_count, 0);
     assert!(health_op.exemplar_error_trace_id.is_none());
 
-    assert_eq!(block.spans.len(), 5);
-    assert!(block.spans[0].is_error, "errors sort first in flat spans");
-    assert_eq!(block.truncation.spans_total, 5);
-    assert_eq!(block.truncation.spans_returned, 5);
-    assert_eq!(block.truncation.error_traces_total, 2);
+    assert_eq!(block.spans.sample.len(), 5);
+    assert!(block.spans.sample[0].is_error, "errors sort first in flat spans");
+    assert_eq!(block.spans.total, 5);
+    assert_eq!((block.spans.sample.len() as i64), 5);
+    assert_eq!(block.error_traces_total, 2);
+
+    // Drill affordances (#1/#2): every lead carries a ready-to-run query.
+    assert!(
+        checkout_op
+            .drill_down_sql
+            .as_ref()
+            .unwrap()
+            .contains("span_name = 'POST /checkout'"),
+        "operation drill query targets that operation's raw spans"
+    );
+    assert!(
+        block.spans.sample[0]
+            .drill_down_sql
+            .as_ref()
+            .unwrap()
+            .contains("trace_id ="),
+        "span drill query fetches the span's full trace"
+    );
+    assert!(
+        block.spans.drill_all_sql.contains("sigiro_spans"),
+        "sampled section carries a full-set query"
+    );
+    assert!(!block.spans.sampled_by.is_empty());
 
     assert!(block.coverage.has_spans);
     assert!(!block.coverage.has_logs);
@@ -403,7 +426,7 @@ fn log_template_dedup_ips() {
 
     let conn = shared.lock();
     let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
-    assert_eq!(block.logs.len(), 3, "3 raw logs returned");
+    assert_eq!(block.logs.sample.len(), 3, "3 raw logs returned");
     assert_eq!(
         block.log_patterns.len(),
         1,
@@ -430,7 +453,7 @@ fn log_template_dedup_uuids() {
 
     let conn = shared.lock();
     let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
-    assert_eq!(block.logs.len(), 2, "2 raw logs returned");
+    assert_eq!(block.logs.sample.len(), 2, "2 raw logs returned");
     assert_eq!(
         block.log_patterns.len(),
         1,
@@ -471,7 +494,7 @@ fn investigate_large_window_still_returns_spans() {
     let blocks = investigate(&shared.lock(), &req, "").unwrap();
     let block = &blocks["svc"];
     assert!(
-        !block.spans.is_empty(),
+        !block.spans.sample.is_empty(),
         ">2h window should still return exemplar spans (flat cap, no more span_limit: 0 cliff)"
     );
     assert!(!block.operation_summaries.is_empty());
@@ -597,7 +620,7 @@ fn investigate_all_three_signals() {
     );
 
     // Truncation present with correct counts
-    assert_eq!(block.truncation.spans_total, 1);
+    assert_eq!(block.spans.total, 1);
 
     // Operation summaries present
     assert!(!block.operation_summaries.is_empty());

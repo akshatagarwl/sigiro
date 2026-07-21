@@ -311,27 +311,15 @@ async fn main() -> Result<()> {
                 block
                     .log_patterns
                     .retain(|lp| lp.pattern.to_lowercase().contains(&pat));
-                block.spans.retain(|s| {
+                block.spans.sample.retain(|s| {
                     s.trace_id.to_lowercase().contains(&pat)
                         || s.span_name.to_lowercase().contains(&pat)
                 });
             }
-            let mut value = serde_json::to_value(&block)?;
-            // F-12: include a hint in the response telling the user how to
-            // follow a trace_id they find. The agent then can run
-            // `sigiro waterfall <trace_id>` or `curl /v1/traces/<id>`.
-            if let serde_json::Value::Object(ref mut map) = value {
-                let base = sigiro::config::ENDPOINT
-                    .value()
-                    .unwrap_or_else(|_| "http://localhost:9999".to_string());
-                map.insert(
-                    "_follow_trace_hint".to_string(),
-                    serde_json::json!(format!(
-                        "for any trace_id above, run: sigiro waterfall <id>  or  curl {}/v1/traces/<id>",
-                        base
-                    )),
-                );
-            }
+            // No ad-hoc trace hint anymore: every span carries its own
+            // `drill_down_sql` (the full trace) and each sampled section its
+            // `drill_all_sql`, so the response is self-describing.
+            let value = serde_json::to_value(&block)?;
             println!("{}", format_output(&value, cli.output.as_ref())?);
         }
         Some(Command::Diagnose) => {

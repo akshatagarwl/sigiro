@@ -765,7 +765,7 @@ async fn e2e_investigation_all_signals() {
     assert_eq!(block.operation_summaries[0].count, 10);
 
     // Logs should be present
-    assert!(!block.logs.is_empty(), "should have log templates");
+    assert!(!block.logs.sample.is_empty(), "should have log templates");
 
     // Metrics should be present
     assert!(!block.metrics.is_empty(), "should have metric buckets");
@@ -942,7 +942,7 @@ async fn e2e_drain_log_template_dedup() {
     let blocks = investigate(&conn, &req, "lake.").unwrap();
     let block = &blocks["api-svc"];
     assert!(
-        !block.logs.is_empty(),
+        !block.logs.sample.is_empty(),
         "investigate should return some logs, got empty"
     );
 
@@ -1005,8 +1005,8 @@ async fn e2e_drain_log_template_dedup() {
 
     // Raw logs are limited (50), not deduplicated
     assert!(
-        block.logs.len() <= 50,
+        block.logs.sample.len() <= 50,
         "log count should be ≤50 limit, got {}",
-        block.logs.len()
+        block.logs.sample.len()
     );
 }
