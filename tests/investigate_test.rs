@@ -768,106 +768,59 @@ fn insert_spans(
 }
 
 #[test]
-fn anomaly_chronic_stable_error_rate_is_not_anomalous() {
-    // INTENDED semantics of baseline-derived detection: a failure rate that
-    // matches the operation's own baseline (25% now, 25% before) is NOT an
-    // anomaly — it IS the baseline (z = 0). Chronic badness stays visible
-    // through error_pct / error_traces_total, not the anomaly flag.
+fn anomaly_in_window_worsening_shift_flags() {
+    // Flat low error rate through the baseline lead-in, then a jump that
+    // STAYS high inside the investigation window: augurs BOCPD must place a
+    // changepoint in-window, the after-mean exceeds the before-mean, and the
+    // operation flags with a "shifted at" reason.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let baseline_ts = now_us - 600 * 1_000_000; // inside the 4x baseline window
-    // Baseline: 25% errors. Current: same 25% errors.
-    insert_spans(
-        &conn,
-        "worker",
-        "call upstream",
-        baseline_ts,
-        (40, 10),
-        50_000,
-        None,
-    );
-    insert_spans(
-        &conn,
-        "worker",
-        "call upstream",
-        now_us,
-        (40, 10),
-        50_000,
-        None,
-    );
+    let min = 60_000_000_i64;
+    // Lead-in: minutes -74..-16 before now, 0% errors.
+    for i in 16..=74_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "call upstream",
+            now_us - i * min,
+            (10, 0),
+            10_000,
+            None,
+        );
+    }
+    // In-window: minutes -12..-1, 50% errors — the regime shift.
+    for i in 1..=12_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "call upstream",
+            now_us - i * min,
+            (10, 5),
+            10_000,
+            None,
+        );
+    }
 
-    let block = investigate_service(&conn, "worker", now_us - 300_000_000, now_us + 60_000_000);
+    // 15-minute window at 1-minute buckets; baseline lead-in is 4x (60 min).
+    let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert_eq!(op.operation, "call upstream");
     assert_eq!(
         op.is_anomalous,
-        Some(false),
-        "chronic-but-stable error rate: the z-test RAN (adequate counts) and did not fire"
-    );
-    assert!(op.anomaly_reason.is_none());
-    assert!(
-        !block
-            .findings
-            .iter()
-            .any(|f| f.kind == "anomalous_operation"),
-        "no anomaly finding for a statistically unchanged operation"
-    );
-    // The chronic badness itself is still on the record as evidence.
-    assert!((op.error_pct - 25.0).abs() < 0.01);
-}
-
-#[test]
-fn anomaly_error_rate_shift_flags_via_z_test() {
-    // A real regression: 2% baseline error rate jumps to 30%. Two-proportion
-    // z ≈ 7.2 >> 2.576 → anomalous, with the statistic in the reason.
-    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn, "").expect("create tables");
-    let now_us = {
-        let odt = time::OffsetDateTime::now_utc();
-        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
-    };
-    let baseline_ts = now_us - 600 * 1_000_000;
-    insert_spans(
-        &conn,
-        "worker",
-        "call upstream",
-        baseline_ts,
-        (200, 4),
-        50_000,
-        None,
-    );
-    insert_spans(
-        &conn,
-        "worker",
-        "call upstream",
-        now_us,
-        (100, 30),
-        50_000,
-        None,
-    );
-
-    let block = investigate_service(&conn, "worker", now_us - 300_000_000, now_us + 60_000_000);
-    let op = &block.operation_summaries[0];
-    assert_eq!(
-        op.is_anomalous,
         Some(true),
-        "2% → 30% error-rate shift must be statistically significant"
+        "an in-window worsening regime shift must flag"
     );
     let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
     assert!(
-        reason.contains("two-proportion z="),
-        "reason should state the statistic, got: {reason}"
-    );
-    assert!(
-        reason.contains("vs baseline"),
-        "reason should compare against the baseline rate, got: {reason}"
+        reason.contains("error rate shifted at"),
+        "reason should name the shift, got: {reason}"
     );
 
-    // Statistically significant shift surfaces as a critical finding.
+    // The detected shift surfaces as a critical finding carrying the drill.
     let finding = block
         .findings
         .iter()
@@ -879,129 +832,166 @@ fn anomaly_error_rate_shift_flags_via_z_test() {
 }
 
 #[test]
-fn anomaly_error_rate_improvement_does_not_flag() {
-    // One-sided test: a large IMPROVEMENT (30% → 2%) is not an anomaly.
+fn anomaly_chronic_stable_error_rate_is_not_anomalous() {
+    // INTENDED semantics: a failure rate that is flat across the whole range
+    // (30% for 74 straight minutes) has NO changepoint — it IS the baseline.
+    // Chronic badness stays visible through error_pct, not the anomaly flag.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let baseline_ts = now_us - 600 * 1_000_000;
-    insert_spans(
-        &conn,
-        "worker",
-        "call upstream",
-        baseline_ts,
-        (100, 30),
-        50_000,
-        None,
-    );
-    insert_spans(
-        &conn,
-        "worker",
-        "call upstream",
-        now_us,
-        (200, 4),
-        50_000,
-        None,
-    );
+    let min = 60_000_000_i64;
+    for i in 1..=74_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "call upstream",
+            now_us - i * min,
+            (10, 3),
+            10_000,
+            None,
+        );
+    }
 
-    let block = investigate_service(&conn, "worker", now_us - 300_000_000, now_us + 60_000_000);
+    let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert_eq!(
         op.is_anomalous,
         Some(false),
-        "getting BETTER is never anomalous (one-sided test)"
+        "flat 30% error rate across the whole range: no changepoint, not anomalous"
     );
+    assert!(op.anomaly_reason.is_none());
+    assert!(
+        !block
+            .findings
+            .iter()
+            .any(|f| f.kind == "anomalous_operation"),
+        "no anomaly finding for a regime that never shifted"
+    );
+    // The chronic badness itself is still on the record as evidence.
+    assert!((op.error_pct - 30.0).abs() < 0.01);
 }
 
 #[test]
-fn anomaly_latency_spike_flags_via_three_sigma() {
-    // Latency test: current p95 far beyond baseline mean + 3σ, zero errors.
-    // Baseline needs variance (σ > 0) and >= 20 spans to be usable.
+fn anomaly_improvement_shift_does_not_flag() {
+    // A DOWNWARD in-window shift (50% errors drops to 0%) is a changepoint,
+    // but the after-mean is BETTER — improvements are never anomalous.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let baseline_ts = now_us - 600 * 1_000_000;
-    // Baseline: 20 spans around 10-12ms (mean ≈ 11ms, σ ≈ 1ms → 3σ bound ≈ 14ms).
-    insert_spans(
-        &conn,
-        "api",
-        "GET /slow",
-        baseline_ts,
-        (10, 0),
-        10_000,
-        None,
-    );
-    insert_spans(
-        &conn,
-        "api",
-        "GET /slow",
-        baseline_ts + 1_000,
-        (10, 0),
-        12_000,
-        None,
-    );
-    // Current: 300ms — a massive spike.
-    insert_spans(&conn, "api", "GET /slow", now_us, (10, 0), 300_000, None);
+    let min = 60_000_000_i64;
+    for i in 16..=74_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "call upstream",
+            now_us - i * min,
+            (10, 5),
+            10_000,
+            None,
+        );
+    }
+    for i in 1..=12_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "call upstream",
+            now_us - i * min,
+            (10, 0),
+            10_000,
+            None,
+        );
+    }
 
-    let block = investigate_service(&conn, "api", now_us - 300_000_000, now_us + 60_000_000);
+    let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
+    let op = &block.operation_summaries[0];
+    assert_eq!(
+        op.is_anomalous,
+        Some(false),
+        "getting BETTER is a shift but never an anomaly"
+    );
+}
+
+#[test]
+fn anomaly_latency_shift_flags_via_p95_series() {
+    // Zero errors throughout (flat error series → no changepoint there);
+    // p95 jumps 10ms → 300ms inside the window → the p95 series flags.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let min = 60_000_000_i64;
+    for i in 16..=74_i64 {
+        insert_spans(
+            &conn,
+            "api",
+            "GET /slow",
+            now_us - i * min,
+            (10, 0),
+            10_000,
+            None,
+        );
+    }
+    for i in 1..=12_i64 {
+        insert_spans(
+            &conn,
+            "api",
+            "GET /slow",
+            now_us - i * min,
+            (10, 0),
+            300_000,
+            None,
+        );
+    }
+
+    let block = investigate_service(&conn, "api", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert_eq!(
         op.is_anomalous,
         Some(true),
-        "p95 far beyond baseline mean+3σ must flag"
+        "in-window p95 regime shift must flag"
     );
     let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
     assert!(
-        reason.contains("exceeds baseline mean+3σ"),
-        "reason should state the 3σ test, got: {reason}"
+        reason.contains("p95 shifted at"),
+        "reason should name the p95 shift, got: {reason}"
     );
 }
 
 #[test]
-fn anomaly_insufficient_baseline_is_unjudged() {
+fn anomaly_too_short_series_is_unjudged() {
+    // All spans land in ONE bucket: a 1-point series is far below the
+    // minimum needed to establish a regime — abstain (None), don't guess.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let baseline_ts = now_us - 600 * 1_000_000;
-    // Brand-new failing op, NO baseline at all: neither test applicable.
-    insert_spans(&conn, "api", "new-broken", now_us, (25, 15), 1_000, None);
-    // Brand-new healthy op, no baseline: same.
-    insert_spans(&conn, "api", "new-healthy", now_us, (25, 0), 1_000, None);
-    // Tiny baseline (2 spans, 0 errors): z-test invalid (expected errors
-    // < 5 per side), latency invalid (< 20 baseline spans, σ = 0).
     insert_spans(
         &conn,
         "api",
-        "tiny-baseline",
-        baseline_ts,
-        (2, 0),
+        "new-broken",
+        now_us - 120_000_000,
+        (25, 15),
         1_000,
         None,
     );
-    insert_spans(&conn, "api", "tiny-baseline", now_us, (3, 1), 1_000, None);
 
-    let block = investigate_service(&conn, "api", now_us - 300_000_000, now_us + 60_000_000);
-    for name in ["new-broken", "new-healthy", "tiny-baseline"] {
-        let op = block
-            .operation_summaries
-            .iter()
-            .find(|o| o.operation == name)
-            .unwrap();
-        assert_eq!(
-            op.is_anomalous, None,
-            "{name}: no statistically usable baseline → can't judge → None"
-        );
-        assert!(op.anomaly_reason.is_none());
-    }
+    let block = investigate_service(&conn, "api", now_us - 900_000_000, now_us);
+    let op = &block.operation_summaries[0];
+    assert_eq!(
+        op.is_anomalous, None,
+        "a 1-bucket series cannot be judged → None"
+    );
+    assert!(op.anomaly_reason.is_none());
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,8 @@ license = "Apache-2.0"
 members = []
 
 [dependencies]
+# BOCPD changepoint detection for /investigate anomaly flags (pure Rust, no Stan)
+augurs-changepoint = "0.10.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
