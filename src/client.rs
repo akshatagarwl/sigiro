@@ -101,6 +101,43 @@ impl SigiroClient {
         resp.json().await.context("failed to parse query response")
     }
 
+    /// GET /v1/anomalies — the precomputed anomaly table (all signals, ranked
+    /// biggest shift first, with cross-signal `incident_id` grouping). The
+    /// entry point for the detect→diagnose loop: poll this, act on new
+    /// incidents. Optional service + µs-window filters.
+    pub async fn anomalies(
+        &self,
+        service: Option<&str>,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<crate::responses::AnomaliesResponse> {
+        let mut params: Vec<(&str, String)> = Vec::new();
+        if let Some(s) = service {
+            params.push(("service", s.to_string()));
+        }
+        if let Some(f) = from {
+            params.push(("from_ts", f.to_string()));
+        }
+        if let Some(t) = to {
+            params.push(("to_ts", t.to_string()));
+        }
+        let req = self
+            .http
+            .get(format!("{}/v1/anomalies", self.base_url))
+            .query(&params);
+        let resp = self
+            .auth
+            .apply(req)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        let resp = self.expect_ok(resp).await?;
+        resp.json()
+            .await
+            .context("failed to parse anomalies response")
+    }
+
     /// GET /health — typed response. Returns the parsed `HealthResponse` for
     /// both 200 (Ready) and 503 (Starting/Degraded) so callers can branch on
     /// the variant. Auth is not required (health is public).

@@ -93,6 +93,21 @@ enum Command {
         #[arg(long)]
         grep: Option<String>,
     },
+    /// List detected anomalies (the precomputed anomaly table, all signals,
+    /// ranked biggest shift first, cross-signal `incident_id` grouping). The
+    /// entry point for a detect→diagnose→fix loop: poll this, act on new
+    /// incidents.
+    Anomalies {
+        /// Filter to one service.
+        #[arg(long)]
+        service: Option<String>,
+        /// Only shifts at or after this time (epoch seconds).
+        #[arg(long)]
+        from: Option<i64>,
+        /// Only shifts at or before this time (epoch seconds).
+        #[arg(long)]
+        to: Option<i64>,
+    },
     /// Diagnose sigiro using its own telemetry — no docker logs
     Diagnose,
     /// Pre-download DuckDB extensions into the data dir so the first
@@ -320,6 +335,15 @@ async fn main() -> Result<()> {
             // `drill_down_sql` (the full trace) and each sampled section its
             // `drill_all_sql`, so the response is self-describing.
             let value = serde_json::to_value(&block)?;
+            println!("{}", format_output(&value, cli.output.as_ref())?);
+        }
+        Some(Command::Anomalies { service, from, to }) => {
+            let client = require_client()?;
+            // Epoch-seconds args → µs, matching the API (Option = no filter).
+            let from_ts = from.map(|s| s * 1_000_000);
+            let to_ts = to.map(|s| s * 1_000_000);
+            let resp = client.anomalies(service.as_deref(), from_ts, to_ts).await?;
+            let value = serde_json::to_value(&resp)?;
             println!("{}", format_output(&value, cli.output.as_ref())?);
         }
         Some(Command::Diagnose) => {
