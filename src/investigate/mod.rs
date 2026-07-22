@@ -118,9 +118,9 @@ pub struct Finding {
 pub struct Incident {
     /// Earliest member `ts_shift` — the first detection bucket of the
     /// incident, µs since the Unix epoch.
-    pub started_at: i64,
+    pub(crate) started_at: i64,
     /// `started_at` as an RFC3339 timestamp.
-    pub started_at_iso: String,
+    pub(crate) started_at_iso: String,
     /// The correlated shifts, biggest first (by the same unit-free magnitude
     /// findings are ranked by).
     pub shifts: Vec<IncidentShift>,
@@ -141,9 +141,9 @@ pub struct IncidentShift {
     /// "function 'hot_fn'".
     pub entity: String,
     /// First bucket of the new regime, µs since the Unix epoch.
-    pub ts_shift: i64,
+    pub(crate) ts_shift: i64,
     /// `ts_shift` as an RFC3339 timestamp.
-    pub ts_shift_iso: String,
+    pub(crate) ts_shift_iso: String,
     /// Series mean before the shift (raw signal units).
     pub before: f64,
     /// Series mean from the shift onward.
