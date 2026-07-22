@@ -137,8 +137,8 @@ pub struct IncidentShift {
     /// "error_rate" | "latency_p95" | "log_volume" | "error_log_rate" |
     /// "profile_cost".
     pub signal: String,
-    /// The shifted entity, e.g. "operation 'POST /pay'", "service 'api'",
-    /// "function 'hot_fn'".
+    /// The shifted entity, e.g. "operation 'POST /pay'" (span signals) or
+    /// "service 'api'" (log/profile signals).
     pub entity: String,
     /// First bucket of the new regime, µs since the Unix epoch.
     pub(crate) ts_shift: i64,
@@ -386,9 +386,8 @@ struct SqlPayload {
     events: Vec<DerivedEvent>,
     operation_summaries: Vec<SqlOperationRow>,
     /// In-window anomalies whose entity is NOT a span operation (log_volume /
-    /// error_log_rate keyed by the service, profile_cost keyed by the
-    /// function) — surfaced as standalone findings, never joined to
-    /// `operation_summaries`.
+    /// error_log_rate / profile_cost — all keyed by the service) — surfaced
+    /// as standalone findings, never joined to `operation_summaries`.
     service_anomalies: Vec<ServiceAnomalyHit>,
     metrics: Vec<MetricBucket>,
     spans: Vec<SpanRecord>,
@@ -430,8 +429,8 @@ struct AnomalyHit {
 /// error_log_rate / profile_cost), as the `service_anomalies` CTE emits it.
 #[derive(Deserialize)]
 struct ServiceAnomalyHit {
-    /// The entity the series was keyed by: the service name for log
-    /// signals, the profiled function for profile_cost.
+    /// The entity the series was keyed by — the service name for all three
+    /// service-level signals (log_volume / error_log_rate / profile_cost).
     operation: String,
     #[serde(flatten)]
     hit: AnomalyHit,
@@ -701,8 +700,8 @@ fn investigate_one(
     // Top-level findings — ranked judgments assembled from data already in
     // hand. The one array an agent reads first. ALL detected anomalies
     // participate — operation-keyed shifts (error_rate / latency_p95, which
-    // also flag their operation summary) and standalone service/function-
-    // keyed shifts (log_volume / error_log_rate / profile_cost).
+    // also flag their operation summary) and standalone service-keyed
+    // shifts (log_volume / error_log_rate / profile_cost).
     //
     // CROSS-SIGNAL CORRELATION (P2): shifts in the same or adjacent
     // detection bucket are ONE incident (see
@@ -736,12 +735,8 @@ fn investigate_one(
         }
     }
     for sa in payload.service_anomalies {
-        let entity = match sa.hit.signal.as_str() {
-            "profile_cost" => format!("function '{}'", sa.operation),
-            _ => format!("service '{}'", sa.operation),
-        };
         members.push(Member {
-            entity,
+            entity: format!("service '{}'", sa.operation),
             lone_kind: format!("anomalous_{}", sa.hit.signal),
             lone_drill: sa.hit.drill_down_sql.clone(),
             hit: sa.hit,
@@ -1111,10 +1106,10 @@ op_anomalies AS (
     GROUP BY an.operation
 ),
 -- The NON-operation-keyed anomalies for this service in the same window:
--- log_volume / error_log_rate (entity = the service) and profile_cost
--- (entity = the function, carried in `operation`). No operation summary to
--- attach to — they surface as standalone top-level findings, ranked in Rust
--- together with the operation anomalies by the same unit-free magnitude.
+-- log_volume / error_log_rate / profile_cost, all keyed by the service
+-- (carried in `operation`). No operation summary to attach to — they
+-- surface as standalone top-level findings, ranked in Rust together with
+-- the operation anomalies by the same unit-free magnitude.
 service_anomalies AS (
     SELECT an.operation, an.signal, epoch_us(an.ts_shift) AS ts_shift,
            an."before", an."after", an.drill_down_sql

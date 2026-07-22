@@ -1791,9 +1791,9 @@ pub(crate) struct AnomaliesQuery {
     description = "\
 Precomputed anomalies: worsening regime shifts (BOCPD changepoints, \
 threshold-free) detected continuously over persisted 5-minute series of \
-every signal — error_rate and latency_p95 per operation, log_volume and \
-error_log_rate per service, profile_cost per profiled function (the \
-`operation` field holds the entity) — and persisted to the \
+every signal — error_rate and latency_p95 per operation, log_volume, \
+error_log_rate and profile_cost (the service's total profiled cost) per \
+service (the `operation` field holds the entity) — and persisted to the \
 `sigiro_anomalies` table. Ordered by the unit-free shift magnitude \
 (after - before) / (after + before) descending (1.0 = appeared from a zero \
 baseline, 1/3 = doubled), so the most significant shifts lead regardless \

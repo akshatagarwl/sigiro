@@ -46,9 +46,8 @@ pub struct AnomalyEntry {
     pub(crate) service_name: String,
     /// The entity the shifted series is keyed by: the derived operation
     /// identity (error_rate / latency_p95 — matches
-    /// `operation_summaries[].operation` in /v1/investigate), the service
-    /// name (log_volume / error_log_rate), or the profiled function
-    /// (profile_cost).
+    /// `operation_summaries[].operation` in /v1/investigate) or the service
+    /// name (log_volume / error_log_rate / profile_cost).
     pub(crate) operation: String,
     /// Which health series shifted: "error_rate", "latency_p95",
     /// "log_volume", "error_log_rate", or "profile_cost".

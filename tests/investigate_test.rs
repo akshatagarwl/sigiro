@@ -1331,11 +1331,14 @@ fn anomaly_error_log_rate_shift_is_detected_at_constant_volume() {
 }
 
 #[test]
-fn anomaly_profile_cost_shift_is_detected_per_function() {
-    // profile_cost is keyed per (service, leaf function): hot_fn's summed
-    // cost jumps 1000 → 9000 per bucket while other_fn stays flat — exactly
-    // one row persists, its entity is the FUNCTION, and the drill returns
-    // only that function's samples.
+fn anomaly_profile_cost_shift_is_detected_per_service() {
+    // profile_cost is keyed per SERVICE — the service's TOTAL profiled cost
+    // across all functions (per-function series proved pathological on real
+    // data: hundreds of noisy series → ~880 anomaly rows drowning every
+    // other signal). hot_fn regressing 1000 → 9000 per bucket moves the
+    // service total 2000 → 10000 — exactly ONE row persists, its entity is
+    // the SERVICE, and the drill returns the service's new-regime samples
+    // costliest-first so the regressing function leads.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -1355,7 +1358,7 @@ fn anomaly_profile_cost_shift_is_detected_per_function() {
     let written = run_anomaly_pass(&conn);
     assert!(written >= 1, "the cost regression must persist");
 
-    let functions: Vec<String> = conn
+    let entities: Vec<String> = conn
         .prepare("SELECT DISTINCT operation FROM sigiro_anomalies WHERE signal = 'profile_cost'")
         .unwrap()
         .query_map([], |r| r.get(0))
@@ -1363,19 +1366,24 @@ fn anomaly_profile_cost_shift_is_detected_per_function() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(
-        functions,
-        vec!["hot_fn".to_string()],
-        "only the regressing function flags; the entity is the function"
+        entities,
+        vec!["svc".to_string()],
+        "ONE row for the service total — never per-function rows"
     );
 
-    let drill: String = conn
+    let (before, after, drill): (f64, f64, String) = conn
         .query_row(
-            "SELECT drill_down_sql FROM sigiro_anomalies WHERE signal = 'profile_cost' \
+            "SELECT \"before\", \"after\", drill_down_sql \
+             FROM sigiro_anomalies WHERE signal = 'profile_cost' \
              ORDER BY ts_shift DESC LIMIT 1",
             [],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .expect("profile_cost anomaly row");
+    assert!(
+        before < after && after > 5_000.0,
+        "service TOTAL cost per bucket ({before} → {after})"
+    );
     sigiro::server::validate_read_only(&drill)
         .expect("profile_cost drill_down_sql must pass the /v1/query guard");
     let drilled: i64 = conn
@@ -1384,9 +1392,16 @@ fn anomaly_profile_cost_shift_is_detected_per_function() {
         })
         .expect("drill query must execute");
     assert_eq!(
-        drilled, 10,
-        "drill returns exactly hot_fn's new-regime samples, not other_fn's"
+        drilled, 20,
+        "drill returns the SERVICE's new-regime samples (both functions)"
     );
+    // Costliest-first: the regressing function's samples lead the drill.
+    let top_value: i64 = conn
+        .query_row(&format!("SELECT value FROM ({drill}) t LIMIT 1"), [], |r| {
+            r.get(0)
+        })
+        .expect("drill top row");
+    assert_eq!(top_value, 9_000, "regressing samples lead the drill");
 
     let block = investigate_service(&conn, "svc", now_us - 3_600_000_000, now_us);
     let finding = block
@@ -1395,9 +1410,9 @@ fn anomaly_profile_cost_shift_is_detected_per_function() {
         .find(|f| f.kind == "anomalous_profile_cost")
         .expect("profile cost regression should be a standalone finding");
     assert!(
-        finding.summary.contains("function 'hot_fn'")
+        finding.summary.contains("service 'svc'")
             && finding.summary.contains("profile cost shifted at"),
-        "summary names the function and the shift: {}",
+        "summary names the service and the shift: {}",
         finding.summary
     );
 }

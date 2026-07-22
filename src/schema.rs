@@ -217,9 +217,8 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             detected_at           TIMESTAMP NOT NULL,
             service_name          VARCHAR NOT NULL,
             -- The entity the shifted series is keyed by: the derived
-            -- operation identity (error_rate / latency_p95), the service
-            -- name (log_volume / error_log_rate), or the profiled leaf
-            -- function (profile_cost).
+            -- operation identity (error_rate / latency_p95) or the service
+            -- name (log_volume / error_log_rate / profile_cost).
             operation             VARCHAR NOT NULL,
             -- Which health series shifted: 'error_rate', 'latency_p95',
             -- 'log_volume', 'error_log_rate', or 'profile_cost'.

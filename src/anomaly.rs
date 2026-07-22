@@ -16,8 +16,12 @@
 //!   series would emit N anomalies for one flood): log count per bucket.
 //!   `operation` holds the service name.
 //! - `error_log_rate` — per service: % of ERROR-class logs per bucket.
-//! - `profile_cost`   — per (service, leaf function): sum of sample values
-//!   per bucket. `operation` holds the function name.
+//! - `profile_cost`   — per service (per-function series proved pathological
+//!   in production: hundreds of noisy per-function series → ~880 anomaly
+//!   rows and a ~10x slower pass, all profile noise; the per-function
+//!   breakdown already lives in investigate's `profiles` section): the
+//!   service's TOTAL profiled cost — sum of sample values across all
+//!   functions — per bucket. `operation` holds the service name.
 //!
 //! The pass is split in two so the expensive half never touches the single
 //! DuckLake writer (which it would otherwise block for seconds, stalling
@@ -125,8 +129,8 @@ struct Shift {
 #[derive(Debug)]
 pub struct AnomalyInsert {
     service: String,
-    /// The entity the series was keyed by: operation name (span signals),
-    /// service name (log signals), or function name (profile_cost).
+    /// The entity the series was keyed by: operation name (span signals)
+    /// or service name (log and profile signals).
     operation: String,
     signal: &'static str,
     shift: Shift,
@@ -389,11 +393,16 @@ fn detect_log_signals(
     Ok(())
 }
 
-/// profile_cost, per (service, leaf function): sum of sample values per
-/// bucket — a sustained rise is a perf regression in that function. The leaf
-/// frame (`stack_trace[len(stack_trace)]`) is the SAME function identity
-/// investigate's `profiles` CTE groups by, so the two views reconcile. The
-/// table's `operation` column holds the function name (the entity).
+/// profile_cost, per SERVICE: the service's total profiled cost — sum of
+/// sample values across ALL functions — per bucket. A sustained rise means
+/// "this service's profiled cost regressed"; the drill (and investigate's
+/// `profiles` section) breaks it down per function. Deliberately NOT
+/// per-function: on real data hundreds of functions each carry a noisy cost
+/// series, and per-function BOCPD produced ~880 anomaly rows (drowning
+/// every other signal and the cross-signal correlation) at ~10x the scan
+/// cost — one low-cardinality series per service is the meaningful entity,
+/// same as the log signals. The table's `operation` column holds the
+/// service name.
 fn detect_profile_cost(
     conn: &Connection,
     prefix: &str,
@@ -402,40 +411,38 @@ fn detect_profile_cost(
 ) -> Result<()> {
     let series_sql = format!(
         "SELECT p.service_name,
-                p.stack_trace[len(p.stack_trace)] AS function,
                 epoch_us(time_bucket(INTERVAL '{DETECTION_BUCKET_MINUTES} minutes', p.timestamp)) AS bucket_ts,
                 COALESCE(sum(p.value), 0)::DOUBLE AS cost
          FROM {prefix}sigiro_profiles p
          WHERE p.timestamp >= make_timestamp({cutoff_us})
-           AND len(p.stack_trace) > 0
-         GROUP BY p.service_name, function, bucket_ts
-         ORDER BY p.service_name, function, bucket_ts"
+         GROUP BY p.service_name, bucket_ts
+         ORDER BY p.service_name, bucket_ts"
     );
 
     let mut stmt = conn
         .prepare(&series_sql)
         .context("failed to prepare anomaly profile-series query")?;
-    let rows: Vec<(String, String, i64, f64)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+    let rows: Vec<(String, i64, f64)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .context("anomaly profile-series query failed")?
         .collect::<std::result::Result<_, _>>()
         .context("anomaly profile-series row read failed")?;
 
     let mut i = 0;
     while i < rows.len() {
-        let (service, function) = (&rows[i].0, &rows[i].1);
+        let service = &rows[i].0;
         let mut bucket_ts = Vec::new();
         let mut cost = Vec::new();
-        while i < rows.len() && rows[i].0 == *service && rows[i].1 == *function {
-            bucket_ts.push(rows[i].2);
-            cost.push(rows[i].3);
+        while i < rows.len() && rows[i].0 == *service {
+            bucket_ts.push(rows[i].1);
+            cost.push(rows[i].2);
             i += 1;
         }
         for shift in worsening_shifts(&bucket_ts, &cost) {
-            let drill_down_sql = profile_drill_sql(prefix, service, function, &shift);
+            let drill_down_sql = profile_drill_sql(prefix, service, &shift);
             inserts.push(AnomalyInsert {
                 service: service.clone(),
-                operation: function.clone(),
+                operation: service.clone(),
                 signal: SIGNAL_PROFILE_COST,
                 shift,
                 drill_down_sql,
@@ -559,17 +566,16 @@ fn log_drill_sql(prefix: &str, service: &str, shift: &Shift, errors_only: bool) 
 }
 
 /// Ready-to-run /v1/query SQL for the profile samples behind a profile_cost
-/// anomaly: this function's samples (leaf-frame identity, matching the
-/// series) from the shift onward, costliest first. `len` is on the /v1/query
-/// scalar allowlist, so the leaf-frame subscript passes `validate_read_only`.
-fn profile_drill_sql(prefix: &str, service: &str, function: &str, shift: &Shift) -> String {
+/// anomaly: the service's samples (all functions — the series is the
+/// service's total cost) from the shift onward, costliest first, so the
+/// regressing functions lead. Uses only allowlisted scalar functions so it
+/// passes `validate_read_only` verbatim.
+fn profile_drill_sql(prefix: &str, service: &str, shift: &Shift) -> String {
     let svc = service.replace('\'', "''");
-    let func = function.replace('\'', "''");
     let ts = shift.ts_shift_us;
     format!(
         "SELECT * FROM {prefix}sigiro_profiles \
-         WHERE service_name = '{svc}' AND stack_trace[len(stack_trace)] = '{func}' \
-         AND timestamp >= make_timestamp({ts}) \
+         WHERE service_name = '{svc}' AND timestamp >= make_timestamp({ts}) \
          ORDER BY value DESC"
     )
 }
