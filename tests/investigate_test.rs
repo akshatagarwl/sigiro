@@ -1403,6 +1403,227 @@ fn anomaly_profile_cost_shift_is_detected_per_function() {
 }
 
 #[test]
+fn incident_correlates_multi_signal_shifts_and_names_the_deploy() {
+    // P2 cross-signal correlation, the whole point: one bad deploy makes
+    // error_rate, latency_p95, log_volume AND error_log_rate all shift in
+    // the same detection bucket — that is ONE incident finding bundling
+    // every member shift (with its own drill), with the deploy named as the
+    // prime suspect. NOT four separate alerts, and nothing dropped.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let bucket = 5 * 60_000_000_i64;
+    // Healthy regime: fast, error-free spans; quiet, clean logs.
+    for i in 11..=40_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "call upstream",
+            now_us - i * bucket,
+            (10, 0),
+            10_000,
+            None,
+        );
+        insert_logs(&conn, "worker", now_us - i * bucket, (5, 0));
+    }
+    // Bad regime, all at once: 50% errors, 30x slower, log flood, half ERROR.
+    for i in 1..=10_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "call upstream",
+            now_us - i * bucket,
+            (10, 5),
+            300_000,
+            None,
+        );
+        insert_logs(&conn, "worker", now_us - i * bucket, (50, 25));
+    }
+    // The deploy: v2 first appears exactly where the bad regime starts
+    // (healthy spans carry no version, so only v2 is "first seen").
+    let shift_us = now_us - 10 * bucket;
+    conn.execute_batch(&format!(
+        "UPDATE sigiro_spans \
+         SET resource_attributes = '{{\"service.version\":\"v2\"}}' \
+         WHERE service_name = 'worker' AND timestamp >= make_timestamp({shift_us})"
+    ))
+    .expect("mark deployed version");
+
+    let written = run_anomaly_pass(&conn);
+    let signals: Vec<String> = conn
+        .prepare("SELECT DISTINCT signal FROM sigiro_anomalies ORDER BY signal")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        signals,
+        vec!["error_log_rate", "error_rate", "latency_p95", "log_volume"],
+        "all four series shifted"
+    );
+
+    let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
+
+    // Exactly ONE incident finding, and no leftover single-signal anomaly
+    // findings — every shift was correlated into it.
+    let incidents: Vec<_> = block
+        .findings
+        .iter()
+        .filter(|f| f.kind == "incident")
+        .collect();
+    assert_eq!(incidents.len(), 1, "one incident, not N alerts");
+    assert!(
+        !block
+            .findings
+            .iter()
+            .any(|f| f.kind.starts_with("anomalous_")),
+        "no shift may ALSO surface as a lone finding: {:?}",
+        block.findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+    );
+    // The incident ranks first — a multi-signal incident outranks everything.
+    assert_eq!(block.findings[0].kind, "incident");
+
+    let finding = incidents[0];
+    let incident = finding.incident.as_ref().expect("incident payload");
+    assert_eq!(
+        incident.shifts.len(),
+        written,
+        "every persisted shift is a member — nothing dropped"
+    );
+    let member_signals: std::collections::BTreeSet<&str> =
+        incident.shifts.iter().map(|s| s.signal.as_str()).collect();
+    assert_eq!(
+        member_signals,
+        ["error_log_rate", "error_rate", "latency_p95", "log_volume"]
+            .into_iter()
+            .collect()
+    );
+    // Every member keeps its own numbers and a drill that passes the
+    // /v1/query firewall and executes.
+    for shift in &incident.shifts {
+        assert!(
+            shift.after > shift.before,
+            "worsening member: {}",
+            shift.summary
+        );
+        let drill = shift
+            .drill_down_sql
+            .as_deref()
+            .expect("member shifts carry their persisted drill");
+        sigiro::server::validate_read_only(drill)
+            .expect("member drill must pass the /v1/query guard");
+        let drilled: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
+                r.get(0)
+            })
+            .expect("member drill must execute");
+        assert!(drilled > 0, "member drill returns evidence: {drill}");
+    }
+    // The deploy is attached as the prime suspect and named in the summary.
+    let deploy = incident.deploy.as_ref().expect("suspect deploy attached");
+    assert_eq!(deploy.event_type, "deploy");
+    assert!(
+        deploy.description.contains("v2"),
+        "deploy names the version: {}",
+        deploy.description
+    );
+    assert!(
+        finding.summary.contains("incident")
+            && finding.summary.contains("worker")
+            && finding.summary.contains("v2"),
+        "summary tells the whole story: {}",
+        finding.summary
+    );
+    // Operation summaries still flag independently — correlation changes
+    // findings, never the evidence sections.
+    assert!(block.operation_summaries[0].is_anomalous);
+}
+
+#[test]
+fn shifts_in_distant_buckets_stay_separate_findings() {
+    // The negative case: two operations shift ~2.5 HOURS apart — far beyond
+    // adjacent detection buckets — so they must NOT merge. Each stays its
+    // own single-signal finding, and no incident is fabricated.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let bucket = 5 * 60_000_000_i64;
+    // op-early: healthy 350..205 min ago, bad 200..105 min ago → shift ~200
+    // min ago.
+    for i in 41..=70_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "op-early",
+            now_us - i * bucket,
+            (10, 0),
+            10_000,
+            None,
+        );
+    }
+    for i in 21..=40_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "op-early",
+            now_us - i * bucket,
+            (10, 5),
+            10_000,
+            None,
+        );
+    }
+    // op-late: healthy 350..205 and 200..55 min ago, bad last 50 min →
+    // shift ~50 min ago, 30 buckets after op-early's.
+    for i in 11..=70_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "op-late",
+            now_us - i * bucket,
+            (10, 0),
+            10_000,
+            None,
+        );
+    }
+    for i in 1..=10_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "op-late",
+            now_us - i * bucket,
+            (10, 5),
+            10_000,
+            None,
+        );
+    }
+
+    let written = run_anomaly_pass(&conn);
+    assert_eq!(written, 2, "one error-rate shift per operation");
+
+    let block = investigate_service(&conn, "worker", now_us - 6 * 3_600_000_000, now_us);
+    assert!(
+        !block.findings.iter().any(|f| f.kind == "incident"),
+        "distant shifts must not be welded into an incident"
+    );
+    let lone: Vec<&str> = block
+        .findings
+        .iter()
+        .filter(|f| f.kind == "anomalous_operation")
+        .map(|f| f.summary.as_str())
+        .collect();
+    assert_eq!(lone.len(), 2, "nothing dropped: {lone:?}");
+    assert!(lone.iter().any(|s| s.contains("op-early")));
+    assert!(lone.iter().any(|s| s.contains("op-late")));
+}
+
+#[test]
 fn cross_signal_ranking_is_unit_free() {
     // The hard case raw |after − before| gets WRONG: op-lat's p95 shift
     // (100ms → 150ms, Δ = 50_000µs) dwarfs op-err's error-rate shift
@@ -1485,27 +1706,27 @@ fn cross_signal_ranking_is_unit_free() {
         "the latency shift is ranked lower but NEVER dropped, got {ordered:?}"
     );
 
-    // investigate's findings rank the same way: op-err's anomaly first,
-    // op-lat's second, both present.
+    // investigate: both ops shifted in the SAME detection bucket on one
+    // service, so they correlate into ONE incident finding whose member
+    // shifts rank the same unit-free way — op-err's error shift first,
+    // op-lat's latency shift second, nothing dropped.
     let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
-    let anomaly_findings: Vec<&str> = block
+    let incident = block
         .findings
         .iter()
-        .filter(|f| f.kind == "anomalous_operation")
-        .map(|f| f.summary.as_str())
-        .collect();
-    assert_eq!(
-        anomaly_findings.len(),
-        2,
-        "nothing dropped: {anomaly_findings:?}"
+        .find(|f| f.kind == "incident")
+        .and_then(|f| f.incident.as_ref())
+        .expect("same-bucket shifts must merge into an incident");
+    assert_eq!(incident.shifts.len(), 2, "nothing dropped");
+    assert!(
+        incident.shifts[0].entity.contains("op-err") && incident.shifts[0].signal == "error_rate",
+        "error shift leads: {:?}",
+        incident.shifts[0].summary
     );
     assert!(
-        anomaly_findings[0].contains("op-err") && anomaly_findings[0].contains("error rate"),
-        "error shift leads: {anomaly_findings:?}"
-    );
-    assert!(
-        anomaly_findings[1].contains("op-lat") && anomaly_findings[1].contains("p95 latency"),
-        "latency shift follows: {anomaly_findings:?}"
+        incident.shifts[1].entity.contains("op-lat") && incident.shifts[1].signal == "latency_p95",
+        "latency shift follows: {:?}",
+        incident.shifts[1].summary
     );
     // Both operations flag on their summaries too.
     for op in &block.operation_summaries {
@@ -1610,30 +1831,34 @@ fn anomaly_findings_rank_by_shift_magnitude_without_dropping_any() {
         "the small shift is ranked lower but NEVER dropped, got {ordered:?}"
     );
 
-    // /investigate: both ops flag, and the anomalous_operation findings are
-    // ordered biggest shift first.
+    // /investigate: both ops flag, and — shifting in the SAME bucket on one
+    // service — they correlate into ONE incident whose member shifts are
+    // ordered biggest first (both score magnitude 1.0 off a zero baseline;
+    // the raw |after − before| tie-break puts op-big first).
     let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
     for op in &block.operation_summaries {
         assert!(op.is_anomalous, "operation '{}' must flag", op.operation);
     }
-    let anomaly_findings: Vec<&str> = block
+    let incident = block
         .findings
         .iter()
-        .filter(|f| f.kind == "anomalous_operation")
-        .map(|f| f.summary.as_str())
-        .collect();
+        .find(|f| f.kind == "incident")
+        .and_then(|f| f.incident.as_ref())
+        .expect("same-bucket shifts must merge into an incident");
     assert_eq!(
-        anomaly_findings.len(),
+        incident.shifts.len(),
         2,
-        "threshold-free: every detected shift surfaces as a finding"
+        "threshold-free: every detected shift surfaces inside the incident"
     );
     assert!(
-        anomaly_findings[0].contains("op-big"),
-        "biggest shift leads the findings, got {anomaly_findings:?}"
+        incident.shifts[0].entity.contains("op-big"),
+        "biggest shift leads the incident, got {:?}",
+        incident.shifts
     );
     assert!(
-        anomaly_findings[1].contains("op-small"),
-        "smaller shift follows, got {anomaly_findings:?}"
+        incident.shifts[1].entity.contains("op-small"),
+        "smaller shift follows, got {:?}",
+        incident.shifts
     );
 }
 

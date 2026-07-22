@@ -446,6 +446,84 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
 }
 
 #[tokio::test]
+async fn test_anomalies_incident_id_groups_same_bucket_shifts_per_service() {
+    let ctx = build_test_context();
+
+    // Four rows: error_rate + log_volume on 'checkout' shifting in the SAME
+    // 5-minute detection bucket (one incident), one 'checkout' shift 3 hours
+    // earlier (uncorrelated), and one 'other' service shifting at the same
+    // moment as the incident (same time, different service — must NOT join).
+    {
+        let readers = ctx
+            .state
+            .pool
+            .create_project("default")
+            .expect("default project");
+        let conn = readers.get();
+        conn.execute_batch(
+            "INSERT INTO lake.sigiro_anomalies
+                (detected_at, service_name, operation, signal, kind, direction,
+                 ts_shift, \"before\", \"after\", drill_down_sql)
+             VALUES (now()::TIMESTAMP, 'checkout', 'POST /pay', 'error_rate',
+                     'changepoint', 'worsening',
+                     now()::TIMESTAMP - INTERVAL '1 hour', 5.0, 50.0, NULL),
+                    (now()::TIMESTAMP, 'checkout', 'checkout', 'log_volume',
+                     'changepoint', 'worsening',
+                     now()::TIMESTAMP - INTERVAL '1 hour', 3.0, 40.0, NULL),
+                    (now()::TIMESTAMP, 'checkout', 'GET /cart', 'error_rate',
+                     'changepoint', 'worsening',
+                     now()::TIMESTAMP - INTERVAL '4 hours', 0.0, 20.0, NULL),
+                    (now()::TIMESTAMP, 'other', 'other', 'log_volume',
+                     'changepoint', 'worsening',
+                     now()::TIMESTAMP - INTERVAL '1 hour', 2.0, 30.0, NULL)",
+        )
+        .expect("seed anomaly rows");
+    }
+
+    let app = build_http_router(Arc::clone(&ctx.state));
+    let server = TestServer::new(app).expect("failed to build test server");
+    let resp = server
+        .get("/v1/anomalies")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
+    let rows = body["anomalies"].as_array().expect("'anomalies' array");
+    assert_eq!(rows.len(), 4, "raw rows are all still returned");
+
+    let row_for = |operation: &str, service: &str| -> &serde_json::Value {
+        rows.iter()
+            .find(|r| r["operation"] == operation && r["service_name"] == service)
+            .unwrap_or_else(|| panic!("row for {service}/{operation}"))
+    };
+    let pay = row_for("POST /pay", "checkout");
+    assert!(
+        pay["ts_shift_us"].is_i64(),
+        "µs shift time rides along for correlation-aware clients"
+    );
+    // The two same-bucket 'checkout' shifts share one non-null id...
+    let incident_id = pay["incident_id"].clone();
+    assert!(
+        incident_id.is_string(),
+        "correlated rows carry an incident_id"
+    );
+    assert_eq!(
+        row_for("checkout", "checkout")["incident_id"],
+        incident_id,
+        "same service + same bucket = same incident"
+    );
+    // ...the 3-hours-earlier shift and the other service's do not.
+    assert!(
+        row_for("GET /cart", "checkout")["incident_id"].is_null(),
+        "a shift hours away is not part of the incident"
+    );
+    assert!(
+        row_for("other", "other")["incident_id"].is_null(),
+        "same moment on a DIFFERENT service never joins the incident"
+    );
+}
+
+#[tokio::test]
 async fn test_admin_status_requires_admin_token() {
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);

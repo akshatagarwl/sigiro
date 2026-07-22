@@ -52,6 +52,49 @@ use crate::types::StatusCode;
 /// BOCPD prior.
 const SERIES_LOOKBACK_DAYS: i64 = 7;
 
+/// The detection resolution: every series this pass detects on is bucketed
+/// at this grain (the `INTERVAL '{DETECTION_BUCKET_MINUTES} minutes'` in the
+/// three series scans below). 5-minute buckets are deliberate — BOCPD should
+/// flag SUSTAINED regime shifts, not 1-minute blips — and this constant is
+/// the single place that grain is defined.
+pub(crate) const DETECTION_BUCKET_MINUTES: i64 = 5;
+/// [`DETECTION_BUCKET_MINUTES`] in µs — the unit `ts_shift` is stored in.
+pub(crate) const DETECTION_BUCKET_US: i64 = DETECTION_BUCKET_MINUTES * 60 * 1_000_000;
+
+/// Cross-signal correlation: group shift timestamps into incidents.
+///
+/// Two shifts belong to the same incident when their `ts_shift` fall in the
+/// SAME or ADJACENT detection bucket, transitively (a chain of shifts each
+/// ≤ 1 bucket apart is one evolving incident). Returns groups of input
+/// indices; every input lands in exactly one group — correlation never
+/// drops a shift, it only decides which ones travel together.
+///
+/// Threshold-free by construction: `ts_shift` is only known to the pass's
+/// own bucket resolution ([`DETECTION_BUCKET_US`]) — BOCPD places every
+/// changepoint on a bucket boundary, so two series shifting at the same
+/// wall-clock moment can legitimately land in adjacent buckets (the moment
+/// falls differently within each series' buckets, and per-series noise can
+/// lag the changepoint by one point). Same-or-adjacent bucket is therefore
+/// the FINEST alignment the detector's own resolution supports — a window
+/// derived from the system's structure, not a picked constant. Callers
+/// correlate within one service (shifts of unrelated services are never
+/// merged).
+pub(crate) fn correlate_shifts(ts_shift_us: &[i64]) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..ts_shift_us.len()).collect();
+    order.sort_by_key(|&i| ts_shift_us[i]);
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut last_bucket: Option<i64> = None;
+    for i in order {
+        let bucket = ts_shift_us[i].div_euclid(DETECTION_BUCKET_US);
+        match (last_bucket, groups.last_mut()) {
+            (Some(prev), Some(group)) if bucket - prev <= 1 => group.push(i),
+            _ => groups.push(vec![i]),
+        }
+        last_bucket = Some(bucket);
+    }
+    groups
+}
+
 // The signals this pass detects (the `signal` column of `sigiro_anomalies`).
 const SIGNAL_ERROR_RATE: &str = "error_rate";
 const SIGNAL_LATENCY_P95: &str = "latency_p95";
@@ -209,7 +252,7 @@ fn detect_span_signals(
         "SELECT s.service_name,
                 {op_key} AS operation,
                 any_value(s.span_name) AS span_name,
-                epoch_us(time_bucket(INTERVAL '5 minutes', s.timestamp)) AS bucket_ts,
+                epoch_us(time_bucket(INTERVAL '{DETECTION_BUCKET_MINUTES} minutes', s.timestamp)) AS bucket_ts,
                 count(CASE WHEN s.status_code = {err} THEN 1 END) * 100.0 / count(*) AS err_rate,
                 approx_quantile(s.duration, 0.95)::DOUBLE AS p95_us
          FROM {prefix}sigiro_spans s
@@ -291,7 +334,7 @@ fn detect_log_signals(
 ) -> Result<()> {
     let series_sql = format!(
         "SELECT l.service_name,
-                epoch_us(time_bucket(INTERVAL '5 minutes', l.timestamp)) AS bucket_ts,
+                epoch_us(time_bucket(INTERVAL '{DETECTION_BUCKET_MINUTES} minutes', l.timestamp)) AS bucket_ts,
                 count(*)::DOUBLE AS volume,
                 count(CASE WHEN l.severity_text IN {ERROR_SEVERITIES_SQL} THEN 1 END)
                     * 100.0 / count(*) AS err_log_rate
@@ -360,7 +403,7 @@ fn detect_profile_cost(
     let series_sql = format!(
         "SELECT p.service_name,
                 p.stack_trace[len(p.stack_trace)] AS function,
-                epoch_us(time_bucket(INTERVAL '5 minutes', p.timestamp)) AS bucket_ts,
+                epoch_us(time_bucket(INTERVAL '{DETECTION_BUCKET_MINUTES} minutes', p.timestamp)) AS bucket_ts,
                 COALESCE(sum(p.value), 0)::DOUBLE AS cost
          FROM {prefix}sigiro_profiles p
          WHERE p.timestamp >= make_timestamp({cutoff_us})

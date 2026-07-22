@@ -59,6 +59,17 @@ pub struct AnomalyEntry {
     pub(crate) direction: String,
     /// First bucket of the NEW regime (ISO timestamp).
     pub(crate) ts_shift: String,
+    /// `ts_shift` as µs since the Unix epoch — the value incident
+    /// correlation buckets on.
+    pub(crate) ts_shift_us: i64,
+    /// Cross-signal correlation id. Rows sharing an id shifted in the same
+    /// or adjacent 5-minute detection bucket on the same service — one
+    /// incident, not N independent anomalies (the window is the detection
+    /// pass's own bucket resolution, not a threshold). `null` when the row
+    /// correlates with no other returned row. Computed over the rows this
+    /// request returns, so `service`/window filters scope the grouping.
+    #[serde(default)]
+    pub(crate) incident_id: Option<String>,
     /// Series mean before the shift, raw signal units (error %, p95 µs,
     /// logs per bucket, summed profile cost per bucket).
     pub(crate) before: f64,

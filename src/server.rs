@@ -65,6 +65,8 @@ use tracing_attributes::instrument;
             investigate::InvestigateResponse,
             investigate::InvestigationBlock,
             investigate::Finding,
+            investigate::Incident,
+            investigate::IncidentShift,
             investigate::OperationSummary,
             investigate::MetricBucket,
             investigate::SpanRecord,
@@ -1799,7 +1801,11 @@ of the signal's units — nothing is filtered out; judge significance from \
 `before`/`after` (raw signal units: %, µs, logs, profile cost). Optionally \
 filter by `service` and a `from_ts`/`to_ts` window (microseconds since the \
 Unix epoch) over the shift time. Each row carries a ready-to-run \
-`drill_down_sql` for POST /v1/query.",
+`drill_down_sql` for POST /v1/query. Rows whose shifts fall in the same or \
+adjacent 5-minute detection bucket on the same service share an \
+`incident_id` — one incident across signals, not N independent anomalies \
+(the correlation window is the detection pass's own bucket resolution, \
+never a tuned threshold); `incident_id` is null for uncorrelated rows.",
     responses(
         (status = 200, description = "Anomaly rows, biggest shift first", body = AnomaliesResponse),
         (status = 401, description = "Missing or invalid bearer token")
@@ -1827,7 +1833,8 @@ async fn anomalies_handler(
     }
     let sql = format!(
         "SELECT detected_at::VARCHAR AS detected_at, service_name, operation, signal, kind, \
-                direction, ts_shift::VARCHAR AS ts_shift, \"before\", \"after\", drill_down_sql \
+                direction, ts_shift::VARCHAR AS ts_shift, epoch_us(ts_shift) AS ts_shift_us, \
+                \"before\", \"after\", drill_down_sql \
          FROM {prefix}sigiro_anomalies \
          WHERE {} \
          ORDER BY abs(\"after\" - \"before\") / nullif(abs(\"before\") + abs(\"after\"), 0) DESC, \
@@ -1846,6 +1853,37 @@ async fn anomalies_handler(
                 &format!("unexpected sigiro_anomalies row shape: {e}"),
             )
         })?);
+    }
+
+    // Cross-signal correlation over the returned rows: per service, shifts
+    // in the same or adjacent detection bucket share an incident_id (see
+    // crate::anomaly::correlate_shifts — the window is the detection pass's
+    // own bucket resolution, not a threshold). Lone rows keep incident_id
+    // null. Raw rows are always ALL returned; the id only says which of
+    // them travel together.
+    let mut by_service: std::collections::BTreeMap<String, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (i, a) in anomalies.iter().enumerate() {
+        by_service
+            .entry(a.service_name.clone())
+            .or_default()
+            .push(i);
+    }
+    for (service, idxs) in by_service {
+        let ts: Vec<i64> = idxs.iter().map(|&i| anomalies[i].ts_shift_us).collect();
+        for group in crate::anomaly::correlate_shifts(&ts) {
+            if group.len() < 2 {
+                continue;
+            }
+            let started_at = group.iter().map(|&g| ts[g]).min().expect("non-empty group");
+            let started_iso = crate::investigate::us_to_iso(started_at).map_err(|e| {
+                bad_request("anomalies query failed", &format!("bad ts_shift: {e:#}"))
+            })?;
+            let id = format!("{service}@{started_iso}");
+            for &g in &group {
+                anomalies[idxs[g]].incident_id = Some(id.clone());
+            }
+        }
     }
     Ok(Json(AnomaliesResponse { anomalies }))
 }

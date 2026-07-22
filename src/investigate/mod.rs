@@ -88,16 +88,70 @@ const MAX_SERVICES: usize = 10;
 pub struct Finding {
     /// "critical" | "warning" | "info" — findings are sorted by this.
     pub severity: String,
-    /// Machine-readable category: "anomalous_operation" (error_rate /
-    /// latency_p95 shifts, which also flag their operation summary),
-    /// "anomalous_log_volume" / "anomalous_error_log_rate" /
-    /// "anomalous_profile_cost" (standalone — no operation to attach to),
+    /// Machine-readable category: "incident" (two or more shifts correlated
+    /// in time — read `incident` for the members), "anomalous_operation"
+    /// (a lone error_rate / latency_p95 shift, which also flags its
+    /// operation summary), "anomalous_log_volume" /
+    /// "anomalous_error_log_rate" / "anomalous_profile_cost" (lone
+    /// standalone shifts — no operation to attach to),
     /// "errors_without_logs", "coverage_gap", "missing_resource_attributes".
     pub kind: String,
     /// Human/agent-readable one-liner with the concrete numbers.
     pub summary: String,
     /// Ready-to-run /v1/query SQL for the evidence behind this finding,
-    /// when one exists.
+    /// when one exists. Incident findings carry the drills on their member
+    /// shifts instead.
+    pub drill_down_sql: Option<String>,
+    /// Present only when `kind` is "incident": the correlated member shifts
+    /// (each with its own drill) and the suspect deploy, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incident: Option<Incident>,
+}
+
+/// Cross-signal correlation of the anomaly subsystem: N regime shifts whose
+/// `ts_shift` fall in the same or adjacent detection bucket (the scheduled
+/// pass's own 5-minute resolution — see `crate::anomaly::correlate_shifts`
+/// for why that window is structural, not a threshold) on one service are
+/// ONE incident, not N alerts. Nothing is dropped: every member shift is
+/// listed with its own before → after and drill query.
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
+pub struct Incident {
+    /// Earliest member `ts_shift` — the first detection bucket of the
+    /// incident, µs since the Unix epoch.
+    pub started_at: i64,
+    /// `started_at` as an RFC3339 timestamp.
+    pub started_at_iso: String,
+    /// The correlated shifts, biggest first (by the same unit-free magnitude
+    /// findings are ranked by).
+    pub shifts: Vec<IncidentShift>,
+    /// The deploy that landed inside the incident's bucket span or in the
+    /// bucket immediately before its first shift — the prime suspect. None
+    /// when no deploy correlates.
+    pub deploy: Option<DerivedEvent>,
+}
+
+/// One member shift of an [`Incident`] — the same row the anomaly pass
+/// persisted, with its entity, numbers, and drill kept intact.
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
+pub struct IncidentShift {
+    /// "error_rate" | "latency_p95" | "log_volume" | "error_log_rate" |
+    /// "profile_cost".
+    pub signal: String,
+    /// The shifted entity, e.g. "operation 'POST /pay'", "service 'api'",
+    /// "function 'hot_fn'".
+    pub entity: String,
+    /// First bucket of the new regime, µs since the Unix epoch.
+    pub ts_shift: i64,
+    /// `ts_shift` as an RFC3339 timestamp.
+    pub ts_shift_iso: String,
+    /// Series mean before the shift (raw signal units).
+    pub before: f64,
+    /// Series mean from the shift onward.
+    pub after: f64,
+    /// The shift in prose, e.g. "error rate shifted at 14:30 (5.1% → 50.0%)".
+    pub summary: String,
+    /// Ready-to-run /v1/query SQL for the raw telemetry behind this shift
+    /// (persisted by the anomaly pass: the new regime's spans/logs/samples).
     pub drill_down_sql: Option<String>,
 }
 
@@ -115,13 +169,17 @@ pub struct InvestigateResponse {
 
 #[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InvestigationBlock {
-    /// Ranked list (critical first; anomalies of ALL signals ordered by the
-    /// unit-free shift magnitude (after − before) / (after + before)
-    /// descending, biggest first — comparable across error-rate, latency,
-    /// log and profile shifts) of what deserves attention in this window:
-    /// anomalous operations, log floods, error-log-rate and profile-cost
-    /// shifts, error/log inconsistencies, actionable coverage gaps. Read
-    /// this before the raw sections below.
+    /// Ranked list (critical first) of what deserves attention in this
+    /// window. Anomalies are CORRELATED across signals first: shifts in the
+    /// same or adjacent 5-minute detection bucket merge into one "incident"
+    /// finding bundling the member shifts and the suspect deploy; lone
+    /// shifts stay single-signal findings. Anomaly findings then rank by
+    /// (correlated signal count, unit-free shift magnitude
+    /// (after − before) / (after + before), raw |Δ|) descending — a
+    /// multi-signal incident outranks a lone shift; the magnitude is
+    /// comparable across error-rate, latency, log and profile shifts.
+    /// Non-anomaly findings (error/log inconsistencies, actionable coverage
+    /// gaps) follow. Read this before the raw sections below.
     pub findings: Vec<Finding>,
     pub service: String,
     pub window: Window,
@@ -176,9 +234,12 @@ pub struct ServiceContext {
     pub dependents: Vec<ServiceDependency>,
 }
 
-#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, utoipa::ToSchema)]
 pub struct DerivedEvent {
     pub(crate) detected_at: String,
+    /// `detected_at` as µs since the Unix epoch — what incident correlation
+    /// aligns deploys against.
+    pub(crate) detected_at_us: i64,
     pub event_type: String,
     pub description: String,
 }
@@ -359,6 +420,10 @@ struct AnomalyHit {
     ts_shift: i64,
     before: f64,
     after: f64,
+    /// The drill the scheduled pass persisted next to the shift (the new
+    /// regime's raw telemetry) — carried into incident member shifts.
+    #[serde(default)]
+    drill_down_sql: Option<String>,
 }
 
 /// One in-window anomaly whose entity is not a span operation (log_volume /
@@ -370,10 +435,6 @@ struct ServiceAnomalyHit {
     operation: String,
     #[serde(flatten)]
     hit: AnomalyHit,
-    /// Persisted by the scheduled pass alongside the shift — unlike the
-    /// operation drills, no window/service context is needed to build it,
-    /// so it is passed through verbatim.
-    drill_down_sql: Option<String>,
 }
 
 /// UNIT-FREE shift magnitude — the symmetric relative change
@@ -581,19 +642,18 @@ fn investigate_one(
     // LEFT JOINed the in-window operation-keyed rows (error_rate /
     // latency_p95) per operation; nothing is recomputed here. Prose is
     // assembled from the joined rows, biggest shift first (the SQL ordered
-    // them by the unit-free magnitude), and each op's largest shift's rank
-    // key is kept (parallel to `operation_summaries`) to rank the findings
+    // them by the unit-free magnitude), and each op's raw hits are kept
+    // (parallel to `operation_summaries`) for the cross-signal correlation
     // below.
     let mut operation_summaries: Vec<OperationSummary> =
         Vec::with_capacity(payload.operation_summaries.len());
-    let mut op_shift_ranks: Vec<Option<(f64, f64)>> =
-        Vec::with_capacity(payload.operation_summaries.len());
+    let mut op_hits: Vec<Vec<AnomalyHit>> = Vec::with_capacity(payload.operation_summaries.len());
     for row in payload.operation_summaries {
         let mut op = row.summary;
         op.is_anomalous = !row.anomalies.is_empty();
         op.anomaly_reason = (!row.anomalies.is_empty())
             .then(|| row.anomalies.iter().map(anomaly_reason).join("; "));
-        op_shift_ranks.push(row.anomalies.first().map(shift_rank));
+        op_hits.push(row.anomalies);
         operation_summaries.push(op);
     }
 
@@ -639,56 +699,165 @@ fn investigate_one(
     };
 
     // Top-level findings — ranked judgments assembled from data already in
-    // hand. The one array an agent reads first. ALL detected anomalies rank
-    // together — operation-keyed shifts (error_rate / latency_p95, which
+    // hand. The one array an agent reads first. ALL detected anomalies
+    // participate — operation-keyed shifts (error_rate / latency_p95, which
     // also flag their operation summary) and standalone service/function-
-    // keyed shifts (log_volume / error_log_rate / profile_cost, whose kind
-    // names the signal) — by the unit-free magnitude (see
+    // keyed shifts (log_volume / error_log_rate / profile_cost).
+    //
+    // CROSS-SIGNAL CORRELATION (P2): shifts in the same or adjacent
+    // detection bucket are ONE incident (see
+    // `crate::anomaly::correlate_shifts` for why that window is the
+    // detector's own resolution, not a threshold), with the member shifts —
+    // each keeping its signal, before → after, and drill — nested under one
+    // "incident" finding, plus the deploy that landed in/just before the
+    // incident (the prime suspect). Shifts that correlate with nothing stay
+    // as their single-signal findings. Ranking: incidents and lone shifts
+    // sort together by (member count, unit-free magnitude, raw |Δ|) — a
+    // shift confirmed by more signals outranks a lone one; magnitude (see
     // `shift_magnitude`; raw |after − before| would be meaningless across
-    // signals), biggest first. A RANKING, never a filter: every detected
-    // shift surfaces; the agent judges significance from the before/after
-    // in the summary.
-    let mut findings = Vec::new();
-    let mut ranked_anomalies: Vec<((f64, f64), Finding)> = operation_summaries
-        .iter()
-        .zip(&op_shift_ranks)
-        .filter_map(|(op, rank)| {
-            rank.map(|r| {
-                (
-                    r,
-                    Finding {
-                        severity: "critical".to_string(),
-                        kind: "anomalous_operation".to_string(),
-                        summary: format!(
-                            "operation '{}': {}",
-                            op.operation,
-                            op.anomaly_reason
-                                .as_deref()
-                                .unwrap_or("flagged anomalous vs baseline")
-                        ),
-                        drill_down_sql: op.drill_down_sql.clone(),
-                    },
-                )
-            })
-        })
-        .collect();
+    // signals) breaks ties. A RANKING, never a filter: every detected shift
+    // surfaces exactly once; the agent judges significance from the
+    // before/after in the summary.
+    struct Member {
+        entity: String,
+        lone_kind: String,
+        lone_drill: Option<String>,
+        hit: AnomalyHit,
+    }
+    let mut members: Vec<Member> = Vec::new();
+    for (op, hits) in operation_summaries.iter().zip(op_hits) {
+        for hit in hits {
+            members.push(Member {
+                entity: format!("operation '{}'", op.operation),
+                lone_kind: "anomalous_operation".to_string(),
+                lone_drill: op.drill_down_sql.clone(),
+                hit,
+            });
+        }
+    }
     for sa in payload.service_anomalies {
         let entity = match sa.hit.signal.as_str() {
             "profile_cost" => format!("function '{}'", sa.operation),
             _ => format!("service '{}'", sa.operation),
         };
-        ranked_anomalies.push((
-            shift_rank(&sa.hit),
+        members.push(Member {
+            entity,
+            lone_kind: format!("anomalous_{}", sa.hit.signal),
+            lone_drill: sa.hit.drill_down_sql.clone(),
+            hit: sa.hit,
+        });
+    }
+
+    let mut findings = Vec::new();
+    let shift_ts: Vec<i64> = members.iter().map(|m| m.hit.ts_shift).collect();
+    let mut ranked: Vec<((usize, f64, f64), Finding)> = Vec::new();
+    for group in crate::anomaly::correlate_shifts(&shift_ts) {
+        if let [lone] = group[..] {
+            let m = &members[lone];
+            let (magnitude, delta) = shift_rank(&m.hit);
+            ranked.push((
+                (1, magnitude, delta),
+                Finding {
+                    severity: "critical".to_string(),
+                    kind: m.lone_kind.clone(),
+                    summary: format!("{}: {}", m.entity, anomaly_reason(&m.hit)),
+                    drill_down_sql: m.lone_drill.clone(),
+                    incident: None,
+                },
+            ));
+            continue;
+        }
+        // Members inside the incident go biggest first, matching how
+        // everything else ranks.
+        let mut by_rank = group.clone();
+        by_rank.sort_by(|&a, &b| {
+            let (ra, rb) = (shift_rank(&members[a].hit), shift_rank(&members[b].hit));
+            rb.0.total_cmp(&ra.0).then(rb.1.total_cmp(&ra.1))
+        });
+        let started_at = group
+            .iter()
+            .map(|&i| members[i].hit.ts_shift)
+            .min()
+            .expect("non-empty");
+        let last_shift = group
+            .iter()
+            .map(|&i| members[i].hit.ts_shift)
+            .max()
+            .expect("non-empty");
+        let mut shifts = Vec::with_capacity(by_rank.len());
+        for &i in &by_rank {
+            let m = &members[i];
+            shifts.push(IncidentShift {
+                signal: m.hit.signal.clone(),
+                entity: m.entity.clone(),
+                ts_shift: m.hit.ts_shift,
+                ts_shift_iso: us_to_iso(m.hit.ts_shift)?,
+                before: m.hit.before,
+                after: m.hit.after,
+                summary: anomaly_reason(&m.hit),
+                drill_down_sql: m.hit.drill_down_sql.clone(),
+            });
+        }
+        // The suspect deploy: same resolution argument as the member
+        // grouping — a deploy is correlated when its bucket falls inside
+        // the incident's bucket span or the bucket immediately before the
+        // first shift (a deploy at 14:29 causing a shift detected in the
+        // 14:30 bucket is one bucket earlier by construction). Closest to
+        // the incident start wins when several qualify.
+        let bucket_us = crate::anomaly::DETECTION_BUCKET_US;
+        let (first_bucket, last_bucket) = (
+            started_at.div_euclid(bucket_us),
+            last_shift.div_euclid(bucket_us),
+        );
+        let deploy = payload
+            .events
+            .iter()
+            .filter(|e| e.event_type == "deploy")
+            .filter(|e| {
+                let b = e.detected_at_us.div_euclid(bucket_us);
+                b >= first_bucket - 1 && b <= last_bucket
+            })
+            .min_by_key(|e| (e.detected_at_us - started_at).abs())
+            .cloned();
+        let mut summary = format!(
+            "incident ~{} on service '{service}': {}",
+            analysis::hhmm_utc(started_at),
+            shifts
+                .iter()
+                .map(|s| format!("{}: {}", s.entity, s.summary))
+                .join("; ")
+        );
+        if let Some(d) = &deploy {
+            summary.push_str(&format!(
+                "; suspect deploy: {} at {}",
+                d.description,
+                analysis::hhmm_utc(d.detected_at_us)
+            ));
+        }
+        let (magnitude, delta) = shift_rank(&members[by_rank[0]].hit);
+        ranked.push((
+            (group.len(), magnitude, delta),
             Finding {
                 severity: "critical".to_string(),
-                kind: format!("anomalous_{}", sa.hit.signal),
-                summary: format!("{entity}: {}", anomaly_reason(&sa.hit)),
-                drill_down_sql: sa.drill_down_sql,
+                kind: "incident".to_string(),
+                summary,
+                drill_down_sql: None,
+                incident: Some(Incident {
+                    started_at,
+                    started_at_iso: us_to_iso(started_at)?,
+                    shifts,
+                    deploy,
+                }),
             },
         ));
     }
-    ranked_anomalies.sort_by(|a, b| b.0.0.total_cmp(&a.0.0).then(b.0.1.total_cmp(&a.0.1)));
-    findings.extend(ranked_anomalies.into_iter().map(|(_, f)| f));
+    ranked.sort_by(|a, b| {
+        b.0.0
+            .cmp(&a.0.0)
+            .then(b.0.1.total_cmp(&a.0.1))
+            .then(b.0.2.total_cmp(&a.0.2))
+    });
+    findings.extend(ranked.into_iter().map(|(_, f)| f));
     if payload.stats.error_traces_total > 0 && payload.stats.error_logs_total == 0 {
         findings.push(Finding {
             severity: "warning".to_string(),
@@ -703,6 +872,7 @@ fn investigate_one(
                 "SELECT * FROM {prefix}sigiro_spans \
                  WHERE {span_scope} AND status_code = {err} ORDER BY timestamp DESC"
             )),
+            incident: None,
         });
     }
     if coverage.has_spans && !coverage.has_logs {
@@ -713,6 +883,7 @@ fn investigate_one(
                       errors can be correlated with their messages"
                 .to_string(),
             drill_down_sql: None,
+            incident: None,
         });
     }
     if coverage.has_spans
@@ -727,6 +898,7 @@ fn investigate_one(
                       detectors to fill it"
                 .to_string(),
             drill_down_sql: None,
+            incident: None,
         });
     }
     findings.sort_by_key(|f| match f.severity.as_str() {
@@ -927,7 +1099,8 @@ op_anomalies AS (
            to_json(list(json_object(
                'signal', an.signal, 'kind', an.kind,
                'ts_shift', epoch_us(an.ts_shift),
-               'before', an."before", 'after', an."after"
+               'before', an."before", 'after', an."after",
+               'drill_down_sql', an.drill_down_sql
            ) ORDER BY abs(an."after" - an."before")
                           / nullif(abs(an."before") + abs(an."after"), 0) DESC,
                       abs(an."after" - an."before") DESC)) AS anomalies
@@ -1011,10 +1184,12 @@ deploy_events AS (
     -- investigation fabricated a "deploy" event at window start, exactly
     -- the false lead an agent seizes on.
     SELECT min(detected_at) AS detected_at,
+           min(detected_at_us) AS detected_at_us,
            'deploy' AS event_type,
            'version ' || version || ' first seen' AS description
     FROM (
         SELECT s.timestamp::VARCHAR AS detected_at,
+               epoch_us(s.timestamp) AS detected_at_us,
                s.resource_attributes::JSON->>'service.version' AS version
         FROM {prefix}sigiro_spans s, args a
         WHERE {span_win}
@@ -1031,6 +1206,7 @@ deploy_events AS (
 ),
 k8s_events AS (
     SELECT timestamp::VARCHAR AS detected_at,
+           epoch_us(timestamp) AS detected_at_us,
            'k8s_event' AS event_type,
            body AS description
     FROM win_logs
@@ -1135,7 +1311,8 @@ SELECT json_object(
         ) ORDER BY span_count DESC)), '[]'::JSON) FROM dependents)
     ),
     'events', (SELECT COALESCE(to_json(list(json_object(
-        'detected_at', detected_at, 'event_type', event_type, 'description', description
+        'detected_at', detected_at, 'detected_at_us', detected_at_us,
+        'event_type', event_type, 'description', description
     ) ORDER BY detected_at)), '[]'::JSON) FROM events),
     'operation_summaries', (SELECT COALESCE(to_json(list(json_object(
         'operation', operation,
