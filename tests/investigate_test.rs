@@ -747,6 +747,31 @@ fn insert_spans(
     duration_us: i64,
     attrs: Option<&str>,
 ) {
+    insert_spans_full(
+        conn,
+        service,
+        span_name,
+        ts_us,
+        counts,
+        duration_us,
+        attrs,
+        None,
+    );
+}
+
+/// [`insert_spans`] plus a `status_message` applied to the ERROR spans of
+/// the batch — for tests exercising the derived `error.type` failure mode.
+#[allow(clippy::too_many_arguments)]
+fn insert_spans_full(
+    conn: &duckdb::Connection,
+    service: &str,
+    span_name: &str,
+    ts_us: i64,
+    counts: (usize, usize),
+    duration_us: i64,
+    attrs: Option<&str>,
+    error_status_message: Option<&str>,
+) {
     let (n, errors) = counts;
     let mut values = Vec::with_capacity(n);
     for i in 0..n {
@@ -755,15 +780,20 @@ fn insert_spans(
             Some(a) => format!("'{a}'"),
             None => "NULL".to_string(),
         };
+        let msg_sql = match error_status_message.filter(|_| i < errors) {
+            Some(m) => format!("'{m}'"),
+            None => "NULL".to_string(),
+        };
         values.push(format!(
             "(make_timestamp({ts_us}), {ts_us} + {duration_us}, {duration_us}, \
              'tr-{span_name}-{ts_us}-{i}', 'sp-{ts_us}-{i}', '', '{span_name}', 2, {status}, \
-             '{service}', {attrs_sql})"
+             '{service}', {attrs_sql}, {msg_sql})"
         ));
     }
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
-            parent_span_id, span_name, span_kind, status_code, service_name, span_attributes)
+            parent_span_id, span_name, span_kind, status_code, service_name, span_attributes,
+            status_message)
          VALUES {}",
         values.join(",\n")
     ))
@@ -2097,6 +2127,238 @@ fn errors_with_error_logs_do_not_emit_inconsistency_finding() {
             .iter()
             .any(|f| f.kind == "errors_without_logs"),
         "errors WITH error logs are consistent — no finding"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Failure-mode dimension: OTel error.type breakdown (derive-fallback rule)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn error_breakdown_groups_failure_modes_by_derive_priority() {
+    // One operation failing FOUR different ways. The derive priority per
+    // error span: real error.type attr > http.response.status_code >
+    // 'timeout' from status_message > '_OTHER'. Non-error spans never enter
+    // the breakdown, and the breakdown orders biggest mode first.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    // 4 errors with only a free-text status_message naming a timeout.
+    insert_spans_full(
+        &conn,
+        "worker",
+        "call llm",
+        now_us,
+        (4, 4),
+        1_000,
+        None,
+        Some("connection timeout to api.nvidia.com"),
+    );
+    // 2 errors with http.response.status_code → the code string is the mode.
+    insert_spans_full(
+        &conn,
+        "worker",
+        "call llm",
+        now_us + 1_000,
+        (2, 2),
+        1_000,
+        Some(r#"{"http.response.status_code":"429"}"#),
+        None,
+    );
+    // 1 error with a REAL error.type attribute — it must win over BOTH the
+    // status-code attr and the timeout-looking status_message.
+    insert_spans_full(
+        &conn,
+        "worker",
+        "call llm",
+        now_us + 2_000,
+        (1, 1),
+        1_000,
+        Some(
+            r#"{"error.type":"java.net.SocketTimeoutException","http.response.status_code":"500"}"#,
+        ),
+        Some("read timeout"),
+    );
+    // 1 error with no diagnostics at all → the semconv catch-all.
+    insert_spans_full(
+        &conn,
+        "worker",
+        "call llm",
+        now_us + 3_000,
+        (1, 1),
+        1_000,
+        None,
+        None,
+    );
+    // 3 OK spans carrying a status-code attr: never part of the breakdown.
+    insert_spans_full(
+        &conn,
+        "worker",
+        "call llm",
+        now_us + 4_000,
+        (3, 0),
+        1_000,
+        Some(r#"{"http.response.status_code":"200"}"#),
+        None,
+    );
+    // A healthy operation has an EMPTY breakdown.
+    insert_spans(
+        &conn,
+        "worker",
+        "GET /health",
+        now_us + 5_000,
+        (2, 0),
+        500,
+        None,
+    );
+
+    let block = investigate_service(&conn, "worker", now_us - 60_000_000, now_us + 60_000_000);
+    let op = block
+        .operation_summaries
+        .iter()
+        .find(|o| o.operation == "call llm")
+        .expect("call llm summary");
+    assert_eq!(op.count, 11);
+    assert_eq!(op.error_count, 8);
+    let breakdown: Vec<(&str, i64)> = op
+        .error_breakdown
+        .iter()
+        .map(|e| (e.error_type.as_str(), e.count))
+        .collect();
+    assert_eq!(
+        breakdown,
+        vec![
+            ("timeout", 4),
+            ("429", 2),
+            // count ties order by name — deterministic output.
+            ("_OTHER", 1),
+            ("java.net.SocketTimeoutException", 1),
+        ],
+        "failure modes must group by the derive priority, biggest first"
+    );
+    let health = block
+        .operation_summaries
+        .iter()
+        .find(|o| o.operation == "GET /health")
+        .expect("healthy op summary");
+    assert!(
+        health.error_breakdown.is_empty(),
+        "no errors → no failure modes"
+    );
+
+    // errors_without_logs (no logs seeded) names the dominant mode, and its
+    // drill carries the derived error.type per span — it must pass the
+    // /v1/query firewall verbatim AND execute.
+    let f = block
+        .findings
+        .iter()
+        .find(|f| f.kind == "errors_without_logs")
+        .expect("errors_without_logs finding");
+    assert!(
+        f.summary.contains("mostly 'timeout'"),
+        "finding names the dominant failure mode: {}",
+        f.summary
+    );
+    let drill = f.drill_down_sql.as_deref().expect("drill sql");
+    sigiro::server::validate_read_only(drill)
+        .expect("error.type drill_down_sql must pass the /v1/query guard");
+    let modes: Vec<String> = conn
+        .prepare(&format!(
+            "SELECT DISTINCT error_type FROM ({drill}) t ORDER BY error_type"
+        ))
+        .expect("prepare drill")
+        .query_map([], |r| r.get(0))
+        .expect("run drill")
+        .collect::<Result<_, _>>()
+        .expect("drill rows");
+    assert_eq!(
+        modes,
+        vec![
+            "429",
+            "_OTHER",
+            "java.net.SocketTimeoutException",
+            "timeout"
+        ],
+        "the drill exposes each error span's derived mode"
+    );
+}
+
+#[test]
+fn error_rate_anomaly_names_the_new_regimes_dominant_failure_mode() {
+    // Old regime: 30% errors, all HTTP 429 (chronic rate-limit noise). New
+    // regime: 50% errors, all timeouts. Over a 3h window the WINDOW-wide
+    // breakdown is still 429-dominated (78 vs 50), but the anomaly prose
+    // must name the NEW REGIME's dominant mode — 'timeout' — because that
+    // is what changed at the shift.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let bucket = 5 * 60_000_000_i64;
+    for i in 11..=40_i64 {
+        insert_spans_full(
+            &conn,
+            "worker",
+            "call upstream",
+            now_us - i * bucket,
+            (10, 3),
+            10_000,
+            Some(r#"{"http.response.status_code":"429"}"#),
+            None,
+        );
+    }
+    for i in 1..=10_i64 {
+        insert_spans_full(
+            &conn,
+            "worker",
+            "call upstream",
+            now_us - i * bucket,
+            (10, 5),
+            10_000,
+            None,
+            Some("upstream request timeout after 30s"),
+        );
+    }
+
+    let written = run_anomaly_pass(&conn);
+    assert!(written >= 1, "the 30% → 50% shift must persist");
+
+    let block = investigate_service(&conn, "worker", now_us - 3 * 3_600_000_000, now_us);
+    let op = &block.operation_summaries[0];
+    assert!(op.is_anomalous);
+    let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
+    assert!(
+        reason.contains("error rate shifted at") && reason.contains("mostly 'timeout'"),
+        "the shift names the new regime's failure mode, got: {reason}"
+    );
+    // The finding built from the same hit carries the mode too.
+    let finding = block
+        .findings
+        .iter()
+        .find(|f| f.kind == "anomalous_operation")
+        .expect("anomalous operation finding");
+    assert!(
+        finding.summary.contains("mostly 'timeout'"),
+        "finding summary: {}",
+        finding.summary
+    );
+    // ...while the window-wide breakdown still leads with the chronic 429s:
+    // the two answers are different BY DESIGN (window composition vs what
+    // the shift's new regime is made of).
+    let breakdown: Vec<(&str, i64)> = op
+        .error_breakdown
+        .iter()
+        .map(|e| (e.error_type.as_str(), e.count))
+        .collect();
+    assert_eq!(
+        breakdown,
+        vec![("429", 78), ("timeout", 50)],
+        "window-wide composition keeps the chronic mode first"
     );
 }
 

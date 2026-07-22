@@ -244,6 +244,20 @@ pub struct DerivedEvent {
     pub description: String,
 }
 
+/// One failure mode of an operation's error spans: the OTel `error.type`
+/// dimension (stable semconv) with the number of error spans carrying it.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, utoipa::ToSchema)]
+pub struct ErrorTypeCount {
+    /// The `error.type` value, derived per span (see `error_type_expr`):
+    /// the span's real `error.type` attribute when emitted; else the HTTP
+    /// response status code (OTel's own rule for HTTP errors — "429",
+    /// "500"); else "timeout" when `status_message` mentions one; else
+    /// "_OTHER" (the semconv catch-all). Low-cardinality by construction.
+    pub error_type: String,
+    /// Error spans of this operation carrying this failure mode.
+    pub count: i64,
+}
+
 #[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct OperationSummary {
     /// The operation identity spans are grouped by. Usually equals
@@ -259,6 +273,13 @@ pub struct OperationSummary {
     pub count: i64,
     pub error_count: i64,
     pub error_pct: f64,
+    /// Failure-mode composition of this operation's error spans — the OTel
+    /// `error.type` dimension, biggest first (count desc, then name).
+    /// Answers HOW the operation fails (timeout vs 429 vs 500), not just
+    /// that it does — `error_pct` alone collapses 246 timeouts and 6 HTTP
+    /// 500s into one number. Empty when the operation has no error spans.
+    #[serde(default)]
+    pub error_breakdown: Vec<ErrorTypeCount>,
     pub(crate) duration_p50_us: f64,
     pub(crate) duration_p95_us: f64,
     pub(crate) duration_p99_us: f64,
@@ -419,6 +440,14 @@ struct AnomalyHit {
     ts_shift: i64,
     before: f64,
     after: f64,
+    /// Dominant derived `error.type` of the shift's NEW regime — the most
+    /// common failure mode among the operation's in-window error spans from
+    /// `ts_shift` onward. error_rate shifts only; None for other signals or
+    /// when the new regime has no error spans in the window. Joined at read
+    /// time by the `shift_dominant` CTE — the scheduled pass never computes
+    /// it (reader/writer decouple intact).
+    #[serde(default)]
+    dominant_error_type: Option<String>,
     /// The drill the scheduled pass persisted next to the shift (the new
     /// regime's raw telemetry) — carried into incident member shifts.
     #[serde(default)]
@@ -474,15 +503,22 @@ fn fmt_duration_us(us: f64) -> String {
 }
 
 /// Prose for one detected shift, e.g.
-/// "error rate shifted at 14:32 (5.1% → 23.8%)" /
+/// "error rate shifted at 14:32 (5.1% → 23.8%), mostly 'timeout'" /
 /// "p95 latency shifted at 14:30 (2.1s → 240.0s)".
 fn anomaly_reason(hit: &AnomalyHit) -> String {
     let at = analysis::hhmm_utc(hit.ts_shift);
     match hit.signal.as_str() {
-        "error_rate" => format!(
-            "error rate shifted at {at} ({:.1}% → {:.1}%)",
-            hit.before, hit.after
-        ),
+        "error_rate" => {
+            let mostly = hit
+                .dominant_error_type
+                .as_deref()
+                .map(|t| format!(", mostly '{t}'"))
+                .unwrap_or_default();
+            format!(
+                "error rate shifted at {at} ({:.1}% → {:.1}%){mostly}",
+                hit.before, hit.after
+            )
+        }
         "latency_p95" => format!(
             "p95 latency shifted at {at} ({} → {})",
             fmt_duration_us(hit.before),
@@ -516,6 +552,11 @@ struct SqlStats {
     /// Logs with ERROR-class severity in the window — compared against
     /// `error_traces_total` to detect failures that emit no logs at all.
     error_logs_total: i64,
+    /// Dominant derived `error.type` across ALL of the service's in-window
+    /// error spans — names the failure mode in the `errors_without_logs`
+    /// finding. None when the window has no error spans.
+    #[serde(default)]
+    dominant_error_type: Option<String>,
     metric_series_count: i64,
     profile_sample_count: i64,
 }
@@ -854,18 +895,29 @@ fn investigate_one(
     });
     findings.extend(ranked.into_iter().map(|(_, f)| f));
     if payload.stats.error_traces_total > 0 && payload.stats.error_logs_total == 0 {
+        // Name the dominant failure mode, and let the drill carry the
+        // per-span derived error.type — for log-less failures the span is
+        // the ONLY evidence, so the drill should already answer "which
+        // failure mode is each of these?".
+        let mostly = payload
+            .stats
+            .dominant_error_type
+            .as_deref()
+            .map(|t| format!(" (mostly '{t}')"))
+            .unwrap_or_default();
         findings.push(Finding {
             severity: "warning".to_string(),
             kind: "errors_without_logs".to_string(),
             summary: format!(
-                "{} error trace(s) but zero ERROR-severity logs in this window — these \
-                 failures are only visible via span status/status_message; check that \
-                 exceptions are logged and exported",
+                "{} error trace(s){mostly} but zero ERROR-severity logs in this window — \
+                 these failures are only visible via span status/status_message; check \
+                 that exceptions are logged and exported",
                 payload.stats.error_traces_total
             ),
             drill_down_sql: Some(format!(
-                "SELECT * FROM {prefix}sigiro_spans \
-                 WHERE {span_scope} AND status_code = {err} ORDER BY timestamp DESC"
+                "SELECT {error_type} AS error_type, * FROM {prefix}sigiro_spans \
+                 WHERE {span_scope} AND status_code = {err} ORDER BY timestamp DESC",
+                error_type = error_type_expr("")
             )),
             incident: None,
         });
@@ -952,6 +1004,33 @@ NULLIF(json_extract_string({q}span_attributes, 'server.address'), '')), '') \
     )
 }
 
+/// The ONE derived OTel `error.type` expression (semconv "recording
+/// errors", STABLE) — the failure-mode dimension of an error span. Only
+/// meaningful for error spans: callers gate on `status_code = 2` themselves
+/// (a CASE in `win_spans`, a WHERE in drill SQL). Priority per span:
+/// 1. the span's real `error.type` attribute — the standard, wins outright;
+/// 2. `http.response.status_code` — OTel's own rule for HTTP status errors:
+///    `error.type` IS the code string ("429", "500");
+/// 3. 'timeout' when `status_message` mentions one — most SDKs today (e.g.
+///    shopfront's) emit only free-text status;
+/// 4. '_OTHER' — the semconv catch-all bucket.
+///
+/// Low-cardinality by construction (attr value | status code | timeout |
+/// _OTHER) — a clean grouping key, no thresholds. Uses only /v1/query
+/// allowlisted scalars (json_extract_string, nullif, coalesce, lower,
+/// contains; CASE is an expression, not a function) so drill SQL embedding
+/// it passes `validate_read_only` verbatim. `q` is the column qualifier,
+/// exactly as in `operation_key_expr`.
+fn error_type_expr(q: &str) -> String {
+    format!(
+        "COALESCE(\
+NULLIF(json_extract_string({q}span_attributes, 'error.type'), ''), \
+NULLIF(json_extract_string({q}span_attributes, 'http.response.status_code'), ''), \
+CASE WHEN contains(lower(COALESCE({q}status_message, '')), 'timeout') THEN 'timeout' END, \
+'_OTHER')"
+    )
+}
+
 /// The one WHERE fragment that selects exactly one operation's raw spans.
 /// Bare-HTTP-method groups must filter on the SAME derived expression the
 /// queries grouped by — `span_name = 'POST'` would also match POST spans
@@ -975,6 +1054,7 @@ pub(crate) fn operation_drill_filter(span_name: &str, operation: &str) -> String
 pub(crate) fn build_investigation_sql(prefix: &str, bucket: &str) -> String {
     let err = StatusCode::Error.as_i32();
     let op_key = operation_key_expr("s.");
+    let error_type = error_type_expr("s.");
     // The in-window span filter, repeated by the CTEs that need columns
     // win_spans deliberately does not carry (see win_spans comment).
     // Duplication marked for later review: SQL has no way to share a
@@ -996,10 +1076,15 @@ WITH args AS (
 -- materializes it. The wide VARCHAR columns (span_attributes, events_json,
 -- resource_attributes) would dominate peak memory; sections that need them
 -- (top_spans, deploy_events, svc_meta) hit the base table with the same
--- window predicate instead.
+-- window predicate instead. `error_type` is DERIVED here at scan time for
+-- the same reason: the failure-mode CTEs below get a short low-cardinality
+-- string per ERROR span (NULL otherwise) without span_attributes /
+-- status_message ever materializing.
 win_spans AS (
     SELECT s.trace_id, s.span_name, s.span_kind, s.status_code, s.duration,
-           {op_key} AS operation
+           s.timestamp AS ts,
+           {op_key} AS operation,
+           CASE WHEN s.status_code = {err} THEN {error_type} END AS error_type
     FROM {prefix}sigiro_spans s, args a
     WHERE {span_win}
 ),
@@ -1081,6 +1166,42 @@ ops_baseline AS (
       AND s.span_name NOT LIKE '%TraceService/Export%'
     GROUP BY operation
 ),
+-- Failure-mode composition (OTel `error.type`, derived per span in
+-- win_spans) of each operation's ERROR spans. Threshold-free: a breakdown
+-- ordered by count, never a cutoff.
+op_error_types AS (
+    SELECT operation, error_type, count(*) AS cnt
+    FROM win_spans
+    WHERE error_type IS NOT NULL
+    GROUP BY operation, error_type
+),
+op_error_breakdown AS (
+    SELECT operation,
+           to_json(list(json_object('error_type', error_type, 'count', cnt)
+                        ORDER BY cnt DESC, error_type)) AS error_breakdown
+    FROM op_error_types
+    GROUP BY operation
+),
+-- Dominant failure mode of each in-window error_rate shift's NEW regime:
+-- the most common derived error.type among that operation's error spans
+-- from ts_shift onward. Computed at READ time from spans win_spans already
+-- scanned — the scheduled pass (src/anomaly.rs) never computes or persists
+-- it, so the reader/writer decouple stays intact.
+shift_dominant AS (
+    SELECT operation, ts_shift,
+           first(error_type ORDER BY cnt DESC, error_type) AS dominant_error_type
+    FROM (
+        SELECT an.operation, an.ts_shift, w.error_type, count(*) AS cnt
+        FROM {prefix}sigiro_anomalies an
+        JOIN args a ON an.service_name = a.service
+        JOIN win_spans w ON w.operation = an.operation AND w.ts >= an.ts_shift
+        WHERE an.signal = 'error_rate'
+          AND an.ts_shift BETWEEN a.from_ts AND a.to_ts
+          AND w.error_type IS NOT NULL
+        GROUP BY an.operation, an.ts_shift, w.error_type
+    )
+    GROUP BY operation, ts_shift
+),
 -- Precomputed OPERATION-KEYED anomalies (error_rate / latency_p95 — the
 -- signals whose entity is a span operation) for this service whose regime
 -- shift falls inside the investigation window, grouped per operation,
@@ -1095,11 +1216,14 @@ op_anomalies AS (
                'signal', an.signal, 'kind', an.kind,
                'ts_shift', epoch_us(an.ts_shift),
                'before', an."before", 'after', an."after",
+               'dominant_error_type', sd.dominant_error_type,
                'drill_down_sql', an.drill_down_sql
            ) ORDER BY abs(an."after" - an."before")
                           / nullif(abs(an."before") + abs(an."after"), 0) DESC,
                       abs(an."after" - an."before") DESC)) AS anomalies
-    FROM {prefix}sigiro_anomalies an, args a
+    FROM {prefix}sigiro_anomalies an
+    LEFT JOIN shift_dominant sd
+        ON sd.operation = an.operation AND sd.ts_shift = an.ts_shift, args a
     WHERE an.service_name = a.service
       AND an.signal IN ('error_rate', 'latency_p95')
       AND an.ts_shift BETWEEN a.from_ts AND a.to_ts
@@ -1125,9 +1249,11 @@ operation_summaries AS (
     SELECT c.operation, c.span_name, c.cnt, c.err_cnt, c.err_pct,
            c.p50, c.p95, c.p99, c.exemplar_error_trace_id,
            b.bl_err_pct, b.bl_p95, b.bl_cnt,
+           COALESCE(eb.error_breakdown, '[]'::JSON) AS error_breakdown,
            COALESCE(oa.anomalies, '[]'::JSON) AS anomalies
     FROM ops_current c
     LEFT JOIN ops_baseline b USING (operation)
+    LEFT JOIN op_error_breakdown eb USING (operation)
     LEFT JOIN op_anomalies oa USING (operation)
     ORDER BY c.err_cnt DESC, c.cnt DESC
     LIMIT 20
@@ -1285,6 +1411,8 @@ SELECT json_object(
         'logs_total', (SELECT logs_total FROM log_stats),
         'log_template_count', (SELECT log_template_count FROM log_stats),
         'error_logs_total', (SELECT error_logs_total FROM log_stats),
+        'dominant_error_type', (SELECT first(error_type ORDER BY cnt DESC, error_type)
+            FROM (SELECT error_type, sum(cnt) AS cnt FROM op_error_types GROUP BY error_type)),
         'metric_series_count', (SELECT count(DISTINCT metric_name) FROM metric_points),
         'profile_sample_count', (SELECT profile_sample_count FROM profile_stats)
     ),
@@ -1312,6 +1440,7 @@ SELECT json_object(
     'operation_summaries', (SELECT COALESCE(to_json(list(json_object(
         'operation', operation,
         'span_name', span_name, 'count', cnt, 'error_count', err_cnt, 'error_pct', err_pct,
+        'error_breakdown', error_breakdown,
         'duration_p50_us', p50, 'duration_p95_us', p95, 'duration_p99_us', p99,
         'exemplar_error_trace_id', exemplar_error_trace_id,
         'baseline_error_pct', bl_err_pct, 'baseline_p95_us', bl_p95, 'baseline_count', bl_cnt,

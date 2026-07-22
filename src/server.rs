@@ -68,6 +68,7 @@ use tracing_attributes::instrument;
             investigate::Incident,
             investigate::IncidentShift,
             investigate::OperationSummary,
+            investigate::ErrorTypeCount,
             investigate::MetricBucket,
             investigate::SpanRecord,
             investigate::LogRecord,
