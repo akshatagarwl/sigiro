@@ -770,6 +770,49 @@ fn insert_spans(
     .expect("insert spans");
 }
 
+/// Bulk-insert logs for `service` at `ts_us`: `counts` is (total, errors) —
+/// the first `errors` logs get ERROR severity, the rest INFO.
+fn insert_logs(conn: &duckdb::Connection, service: &str, ts_us: i64, counts: (usize, usize)) {
+    let (n, errors) = counts;
+    let mut values = Vec::with_capacity(n);
+    for i in 0..n {
+        let (sev_num, sev_text) = if i < errors {
+            (17, "ERROR")
+        } else {
+            (9, "INFO")
+        };
+        values.push(format!(
+            "(make_timestamp({ts_us}), {ts_us}, '{service}', {sev_num}, '{sev_text}', \
+             'log line {i} at {ts_us}')"
+        ));
+    }
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
+            severity_text, body)
+         VALUES {}",
+        values.join(",\n")
+    ))
+    .expect("insert logs");
+}
+
+/// Insert one profile sample for `service` at `ts_us` whose stack leaf is
+/// `function`, with the given total value.
+fn insert_profile_sample(
+    conn: &duckdb::Connection,
+    service: &str,
+    function: &str,
+    ts_us: i64,
+    value: i64,
+) {
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_profiles (profile_id, service_name, timestamp, profile_type,
+            stack_trace, value, unit)
+         VALUES ('p-{function}-{ts_us}', '{service}', make_timestamp({ts_us}), 'cpu',
+                 ['main', '{function}'], {value}, 'samples')"
+    ))
+    .expect("insert profile sample");
+}
+
 /// Run the scheduled pass end to end, exactly as production does: `detect`
 /// (in production: a READER connection — the heavy scan + BOCPD) then
 /// `persist` (in production: the writer — the brief DELETE+INSERT). Tests
@@ -1047,35 +1090,35 @@ fn anomaly_improvement_shift_is_not_persisted() {
 }
 
 #[test]
-fn anomaly_latency_only_shift_is_out_of_scope_for_the_error_rate_slice() {
-    // Zero errors throughout, p95 jumps 10ms → 300ms: the spans/error-rate
-    // slice detects error-rate shifts ONLY — the latency signal lands in a
-    // later slice (docs/plans/01-continuous-anomaly-subsystem.md P1), so no
-    // row is persisted and nothing flags.
+fn anomaly_latency_p95_shift_is_detected_and_surfaces() {
+    // p95 latency is a first-class signal: zero errors throughout, p95 jumps
+    // 10ms → 300ms → a latency_p95 row persists (and NO error_rate row — that
+    // series is flat zero), the operation flags in /investigate, and the
+    // drill (this op's slowest spans from the shift) passes the firewall.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let min = 60_000_000_i64;
-    for i in 16..=74_i64 {
+    let bucket = 5 * 60_000_000_i64;
+    for i in 11..=40_i64 {
         insert_spans(
             &conn,
             "api",
             "GET /slow",
-            now_us - i * min,
+            now_us - i * bucket,
             (10, 0),
             10_000,
             None,
         );
     }
-    for i in 1..=12_i64 {
+    for i in 1..=10_i64 {
         insert_spans(
             &conn,
             "api",
             "GET /slow",
-            now_us - i * min,
+            now_us - i * bucket,
             (10, 0),
             300_000,
             None,
@@ -1083,10 +1126,391 @@ fn anomaly_latency_only_shift_is_out_of_scope_for_the_error_rate_slice() {
     }
 
     let written = run_anomaly_pass(&conn);
-    assert_eq!(written, 0, "error-rate series is flat zero — no row");
+    assert!(written >= 1, "the p95 shift must persist at least one row");
 
-    let block = investigate_service(&conn, "api", now_us - 900_000_000, now_us);
-    assert!(!block.operation_summaries[0].is_anomalous);
+    let error_rate_rows: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sigiro_anomalies WHERE signal = 'error_rate'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        error_rate_rows, 0,
+        "error-rate series is flat zero — no row"
+    );
+
+    let (operation, before, after, drill): (String, f64, f64, String) = conn
+        .query_row(
+            "SELECT operation, \"before\", \"after\", drill_down_sql \
+             FROM sigiro_anomalies WHERE signal = 'latency_p95' \
+             ORDER BY ts_shift DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .expect("latency_p95 anomaly row");
+    assert_eq!(operation, "GET /slow");
+    assert!(
+        before < after && after > 100_000.0,
+        "worsening p95 in µs ({before} → {after})"
+    );
+
+    // The drill passes the /v1/query firewall, executes, and pulls the
+    // slowest spans of the new regime first.
+    sigiro::server::validate_read_only(&drill)
+        .expect("latency drill_down_sql must pass the /v1/query guard");
+    assert!(
+        drill.contains("ORDER BY duration DESC"),
+        "slowest first: {drill}"
+    );
+    let drilled: i64 = conn
+        .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
+            r.get(0)
+        })
+        .expect("drill query must execute");
+    assert!(drilled > 0, "drill query must return the new-regime spans");
+
+    // /investigate flags the operation and surfaces the finding.
+    let block = investigate_service(&conn, "api", now_us - 3_600_000_000, now_us);
+    let op = &block.operation_summaries[0];
+    assert!(op.is_anomalous, "an in-window p95 regime shift must flag");
+    let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
+    assert!(
+        reason.contains("p95 latency shifted at"),
+        "reason should name the latency shift, got: {reason}"
+    );
+    let finding = block
+        .findings
+        .iter()
+        .find(|f| f.kind == "anomalous_operation")
+        .expect("latency shift should be a top-level finding");
+    assert_eq!(finding.severity, "critical");
+    assert!(finding.summary.contains("GET /slow"));
+}
+
+#[test]
+fn anomaly_log_volume_flood_is_detected_and_surfaces_standalone() {
+    // Logs are not op-keyed: a volume flood (5 → 50 logs per bucket)
+    // persists a log_volume row whose entity (operation column) is the
+    // SERVICE, and surfaces as a standalone top-level finding — there is no
+    // operation summary to attach it to.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let bucket = 5 * 60_000_000_i64;
+    for i in 11..=40_i64 {
+        insert_logs(&conn, "svc", now_us - i * bucket, (5, 0));
+    }
+    for i in 1..=10_i64 {
+        insert_logs(&conn, "svc", now_us - i * bucket, (50, 0));
+    }
+
+    let written = run_anomaly_pass(&conn);
+    assert!(written >= 1, "the flood must persist at least one row");
+
+    // Every log is INFO → the error-log-rate series is flat zero: no row.
+    let err_rate_rows: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sigiro_anomalies WHERE signal = 'error_log_rate'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(err_rate_rows, 0, "flat-zero error-log rate must not flag");
+
+    let (operation, before, after, drill): (String, f64, f64, String) = conn
+        .query_row(
+            "SELECT operation, \"before\", \"after\", drill_down_sql \
+             FROM sigiro_anomalies WHERE signal = 'log_volume' \
+             ORDER BY ts_shift DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .expect("log_volume anomaly row");
+    assert_eq!(
+        operation, "svc",
+        "the entity of a log signal is the service"
+    );
+    assert!(before < after && after > 20.0, "flood: {before} → {after}");
+
+    sigiro::server::validate_read_only(&drill)
+        .expect("log_volume drill_down_sql must pass the /v1/query guard");
+    let drilled: i64 = conn
+        .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
+            r.get(0)
+        })
+        .expect("drill query must execute");
+    assert!(drilled > 0, "drill query must return the new-regime logs");
+
+    // Standalone finding: kind names the signal, drill rides along.
+    let block = investigate_service(&conn, "svc", now_us - 3_600_000_000, now_us);
+    let finding = block
+        .findings
+        .iter()
+        .find(|f| f.kind == "anomalous_log_volume")
+        .expect("log flood should be a standalone top-level finding");
+    assert_eq!(finding.severity, "critical");
+    assert!(
+        finding.summary.contains("log volume shifted at"),
+        "summary names the shift: {}",
+        finding.summary
+    );
+    assert!(finding.drill_down_sql.is_some());
+}
+
+#[test]
+fn anomaly_error_log_rate_shift_is_detected_at_constant_volume() {
+    // Volume stays flat (10 logs per bucket) while the ERROR share jumps
+    // 0% → 50%: only error_log_rate persists (log_volume has no shift), and
+    // its drill targets the ERROR-class logs of the new regime.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let bucket = 5 * 60_000_000_i64;
+    for i in 11..=40_i64 {
+        insert_logs(&conn, "svc", now_us - i * bucket, (10, 0));
+    }
+    for i in 1..=10_i64 {
+        insert_logs(&conn, "svc", now_us - i * bucket, (10, 5));
+    }
+
+    let written = run_anomaly_pass(&conn);
+    assert!(written >= 1);
+
+    let volume_rows: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sigiro_anomalies WHERE signal = 'log_volume'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(volume_rows, 0, "constant volume must not flag");
+
+    let (operation, before, after, drill): (String, f64, f64, String) = conn
+        .query_row(
+            "SELECT operation, \"before\", \"after\", drill_down_sql \
+             FROM sigiro_anomalies WHERE signal = 'error_log_rate' \
+             ORDER BY ts_shift DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .expect("error_log_rate anomaly row");
+    assert_eq!(operation, "svc");
+    assert!(before < after && after > 10.0, "{before}% → {after}%");
+
+    sigiro::server::validate_read_only(&drill)
+        .expect("error_log_rate drill_down_sql must pass the /v1/query guard");
+    assert!(
+        drill.contains("severity_text IN"),
+        "drill targets ERROR-class logs: {drill}"
+    );
+    let drilled: i64 = conn
+        .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
+            r.get(0)
+        })
+        .expect("drill query must execute");
+    assert_eq!(drilled, 50, "10 buckets × 5 error logs of the new regime");
+
+    let block = investigate_service(&conn, "svc", now_us - 3_600_000_000, now_us);
+    let finding = block
+        .findings
+        .iter()
+        .find(|f| f.kind == "anomalous_error_log_rate")
+        .expect("error-log-rate shift should be a standalone finding");
+    assert!(
+        finding.summary.contains("error-log rate shifted at"),
+        "summary names the shift: {}",
+        finding.summary
+    );
+}
+
+#[test]
+fn anomaly_profile_cost_shift_is_detected_per_function() {
+    // profile_cost is keyed per (service, leaf function): hot_fn's summed
+    // cost jumps 1000 → 9000 per bucket while other_fn stays flat — exactly
+    // one row persists, its entity is the FUNCTION, and the drill returns
+    // only that function's samples.
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let bucket = 5 * 60_000_000_i64;
+    for i in 11..=40_i64 {
+        insert_profile_sample(&conn, "svc", "hot_fn", now_us - i * bucket, 1_000);
+        insert_profile_sample(&conn, "svc", "other_fn", now_us - i * bucket, 1_000);
+    }
+    for i in 1..=10_i64 {
+        insert_profile_sample(&conn, "svc", "hot_fn", now_us - i * bucket, 9_000);
+        insert_profile_sample(&conn, "svc", "other_fn", now_us - i * bucket, 1_000);
+    }
+
+    let written = run_anomaly_pass(&conn);
+    assert!(written >= 1, "the cost regression must persist");
+
+    let functions: Vec<String> = conn
+        .prepare("SELECT DISTINCT operation FROM sigiro_anomalies WHERE signal = 'profile_cost'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        functions,
+        vec!["hot_fn".to_string()],
+        "only the regressing function flags; the entity is the function"
+    );
+
+    let drill: String = conn
+        .query_row(
+            "SELECT drill_down_sql FROM sigiro_anomalies WHERE signal = 'profile_cost' \
+             ORDER BY ts_shift DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .expect("profile_cost anomaly row");
+    sigiro::server::validate_read_only(&drill)
+        .expect("profile_cost drill_down_sql must pass the /v1/query guard");
+    let drilled: i64 = conn
+        .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
+            r.get(0)
+        })
+        .expect("drill query must execute");
+    assert_eq!(
+        drilled, 10,
+        "drill returns exactly hot_fn's new-regime samples, not other_fn's"
+    );
+
+    let block = investigate_service(&conn, "svc", now_us - 3_600_000_000, now_us);
+    let finding = block
+        .findings
+        .iter()
+        .find(|f| f.kind == "anomalous_profile_cost")
+        .expect("profile cost regression should be a standalone finding");
+    assert!(
+        finding.summary.contains("function 'hot_fn'")
+            && finding.summary.contains("profile cost shifted at"),
+        "summary names the function and the shift: {}",
+        finding.summary
+    );
+}
+
+#[test]
+fn cross_signal_ranking_is_unit_free() {
+    // The hard case raw |after − before| gets WRONG: op-lat's p95 shift
+    // (100ms → 150ms, Δ = 50_000µs) dwarfs op-err's error-rate shift
+    // (5% → 50%, Δ = 45 points) in raw units, but relatively it is the
+    // smaller event (0.2 vs ≈0.82 symmetric relative change). The unit-free
+    // ranking must put the error shift first — in /v1/anomalies order AND
+    // in investigate's findings — while BOTH still surface (rank, never
+    // filter).
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    let bucket = 5 * 60_000_000_i64;
+    for i in 11..=40_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "op-err",
+            now_us - i * bucket,
+            (20, 1),
+            10_000,
+            None,
+        );
+        insert_spans(
+            &conn,
+            "worker",
+            "op-lat",
+            now_us - i * bucket,
+            (10, 0),
+            100_000,
+            None,
+        );
+    }
+    for i in 1..=10_i64 {
+        insert_spans(
+            &conn,
+            "worker",
+            "op-err",
+            now_us - i * bucket,
+            (20, 10),
+            10_000,
+            None,
+        );
+        insert_spans(
+            &conn,
+            "worker",
+            "op-lat",
+            now_us - i * bucket,
+            (10, 0),
+            150_000,
+            None,
+        );
+    }
+
+    let written = run_anomaly_pass(&conn);
+    assert!(written >= 2, "both signals must persist, got {written}");
+
+    // /v1/anomalies ordering contract (the handler's ORDER BY): the
+    // error-rate shift leads DESPITE its tiny raw delta.
+    let ordered: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT signal, operation FROM sigiro_anomalies \
+             ORDER BY abs(\"after\" - \"before\") / nullif(abs(\"before\") + abs(\"after\"), 0) DESC, \
+                      abs(\"after\" - \"before\") DESC, ts_shift DESC",
+        )
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(
+        ordered.first().map(|(s, o)| (s.as_str(), o.as_str())),
+        Some(("error_rate", "op-err")),
+        "unit-free measure must lead with the error shift, got {ordered:?}"
+    );
+    assert!(
+        ordered.iter().any(|(s, _)| s == "latency_p95"),
+        "the latency shift is ranked lower but NEVER dropped, got {ordered:?}"
+    );
+
+    // investigate's findings rank the same way: op-err's anomaly first,
+    // op-lat's second, both present.
+    let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
+    let anomaly_findings: Vec<&str> = block
+        .findings
+        .iter()
+        .filter(|f| f.kind == "anomalous_operation")
+        .map(|f| f.summary.as_str())
+        .collect();
+    assert_eq!(
+        anomaly_findings.len(),
+        2,
+        "nothing dropped: {anomaly_findings:?}"
+    );
+    assert!(
+        anomaly_findings[0].contains("op-err") && anomaly_findings[0].contains("error rate"),
+        "error shift leads: {anomaly_findings:?}"
+    );
+    assert!(
+        anomaly_findings[1].contains("op-lat") && anomaly_findings[1].contains("p95 latency"),
+        "latency shift follows: {anomaly_findings:?}"
+    );
+    // Both operations flag on their summaries too.
+    for op in &block.operation_summaries {
+        assert!(op.is_anomalous, "operation '{}' must flag", op.operation);
+    }
 }
 
 #[test]
@@ -1161,12 +1585,15 @@ fn anomaly_findings_rank_by_shift_magnitude_without_dropping_any() {
     let written = run_anomaly_pass(&conn);
     assert!(written >= 2, "both shifts must persist, got {written}");
 
-    // /v1/anomalies ordering contract, straight off the table: biggest
-    // |after - before| first (the handler's ORDER BY).
+    // /v1/anomalies ordering contract, straight off the table (the
+    // handler's ORDER BY): unit-free magnitude first — both these shifts
+    // rise from a ZERO baseline, so both score 1.0 and the raw
+    // |after - before| tie-break puts the bigger jump first.
     let ordered: Vec<String> = conn
         .prepare(
             "SELECT operation FROM sigiro_anomalies \
-             ORDER BY abs(\"after\" - \"before\") DESC, ts_shift DESC",
+             ORDER BY abs(\"after\" - \"before\") / nullif(abs(\"before\") + abs(\"after\"), 0) DESC, \
+                      abs(\"after\" - \"before\") DESC, ts_shift DESC",
         )
         .expect("prepare")
         .query_map([], |r| r.get(0))

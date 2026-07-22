@@ -360,8 +360,9 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
 
     // Seed two anomaly rows into the default project's table — /v1/anomalies
     // reads exactly what the scheduled pass (sigiro::anomaly) writes. The
-    // BIGGER shift (0→42) is deliberately given the OLDER ts_shift, so the
-    // ordering assertion below can only pass on magnitude, never on recency.
+    // BIGGER shift (0→42, unit-free magnitude 1.0 vs ≈0.008 for 24.9→25.3)
+    // is deliberately given the OLDER ts_shift, so the ordering assertion
+    // below can only pass on magnitude, never on recency.
     {
         let readers = ctx
             .state
@@ -388,7 +389,8 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
     let server = TestServer::new(app).expect("failed to build test server");
 
     // Unfiltered: BOTH rows come back (rank, don't filter — the trivial
-    // 24.9→25.3 shift is never dropped), biggest |after - before| first.
+    // 24.9→25.3 shift is never dropped), biggest unit-free relative shift
+    // ((after - before) / (after + before)) first.
     let resp = server
         .get("/v1/anomalies")
         .add_header("Authorization", "Bearer sigiro_dev_test")

@@ -208,16 +208,21 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     // Anomalies — written by the scheduled anomaly pass (src/anomaly.rs,
     // driven from the per-project inserter timer), read by /v1/investigate
     // and /v1/anomalies. Detection is BOCPD changepoints (augurs) over
-    // continuous per-operation series — NO arbitrary thresholds anywhere
-    // (docs/plans/01-continuous-anomaly-subsystem.md). Lives in the DuckLake
-    // catalog alongside the telemetry it derives from, so it gets the same
-    // per-tenant isolation for free.
+    // continuous 5-minute series of every signal — NO arbitrary thresholds
+    // anywhere (docs/plans/01-continuous-anomaly-subsystem.md). Lives in the
+    // DuckLake catalog alongside the telemetry it derives from, so it gets
+    // the same per-tenant isolation for free.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_anomalies (
             detected_at           TIMESTAMP NOT NULL,
             service_name          VARCHAR NOT NULL,
+            -- The entity the shifted series is keyed by: the derived
+            -- operation identity (error_rate / latency_p95), the service
+            -- name (log_volume / error_log_rate), or the profiled leaf
+            -- function (profile_cost).
             operation             VARCHAR NOT NULL,
-            -- Which health series shifted; the spans slice emits 'error_rate'.
+            -- Which health series shifted: 'error_rate', 'latency_p95',
+            -- 'log_volume', 'error_log_rate', or 'profile_cost'.
             signal                VARCHAR NOT NULL,
             -- Detection kind; BOCPD emits 'changepoint'.
             kind                  VARCHAR NOT NULL,
@@ -226,10 +231,12 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             direction             VARCHAR NOT NULL,
             -- First bucket of the NEW regime.
             ts_shift              TIMESTAMP NOT NULL,
-            -- Series mean before/after the shift, in raw units (error %).
+            -- Series mean before/after the shift, in raw signal units
+            -- (error %, p95 µs, logs per bucket, profile cost per bucket).
             \"before\"            DOUBLE NOT NULL,
             \"after\"             DOUBLE NOT NULL,
-            -- Ready-to-run /v1/query SQL for the spans behind the shift.
+            -- Ready-to-run /v1/query SQL for the raw telemetry behind the
+            -- shift (spans, logs, or profile samples, per the signal).
             drill_down_sql        VARCHAR
         )"
     ))

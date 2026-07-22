@@ -23,30 +23,35 @@ pub struct ServiceEntry {
     pub(crate) span_count: i64,
 }
 
-/// GET /v1/anomalies — precomputed regime shifts from the continuous
-/// anomaly pass (the `sigiro_anomalies` table), biggest shift first
-/// (|after − before| descending; ties broken newest first). Ranking, not
-/// filtering: every detected shift is returned — the reader judges
-/// significance from `before`/`after`.
+/// GET /v1/anomalies — precomputed regime shifts of every signal from the
+/// continuous anomaly pass (the `sigiro_anomalies` table), biggest shift
+/// first by the unit-free magnitude (after − before) / (after + before)
+/// (comparable across signals; raw |after − before| breaks zero-baseline
+/// ties, then newest first). Ranking, not filtering: every detected shift
+/// is returned — the reader judges significance from `before`/`after`.
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AnomaliesResponse {
     pub(crate) anomalies: Vec<AnomalyEntry>,
 }
 
 /// One row of the `sigiro_anomalies` table: a worsening regime shift found
-/// by BOCPD changepoint detection over an operation's continuous
-/// per-minute error-rate series. No thresholds are involved anywhere —
-/// `direction` is always "worsening" because only shifts whose mean after
-/// exceeds the mean before are persisted.
+/// by BOCPD changepoint detection over an entity's continuous 5-minute
+/// series. No thresholds are involved anywhere — `direction` is always
+/// "worsening" because only shifts whose mean after exceeds the mean
+/// before are persisted.
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AnomalyEntry {
     /// When the scheduled pass wrote this row (ISO timestamp).
     pub(crate) detected_at: String,
     pub(crate) service_name: String,
-    /// Derived operation identity — matches
-    /// `operation_summaries[].operation` in /v1/investigate.
+    /// The entity the shifted series is keyed by: the derived operation
+    /// identity (error_rate / latency_p95 — matches
+    /// `operation_summaries[].operation` in /v1/investigate), the service
+    /// name (log_volume / error_log_rate), or the profiled function
+    /// (profile_cost).
     pub(crate) operation: String,
-    /// Which health series shifted, e.g. "error_rate".
+    /// Which health series shifted: "error_rate", "latency_p95",
+    /// "log_volume", "error_log_rate", or "profile_cost".
     pub(crate) signal: String,
     /// Detection kind, e.g. "changepoint" (BOCPD).
     pub(crate) kind: String,
@@ -54,11 +59,13 @@ pub struct AnomalyEntry {
     pub(crate) direction: String,
     /// First bucket of the NEW regime (ISO timestamp).
     pub(crate) ts_shift: String,
-    /// Series mean before the shift, raw units (error %).
+    /// Series mean before the shift, raw signal units (error %, p95 µs,
+    /// logs per bucket, summed profile cost per bucket).
     pub(crate) before: f64,
     /// Series mean from the shift onward.
     pub(crate) after: f64,
-    /// Ready-to-run SQL for POST /v1/query: the raw spans behind the shift.
+    /// Ready-to-run SQL for POST /v1/query: the raw telemetry behind the
+    /// shift (spans, logs, or profile samples, per the signal).
     pub(crate) drill_down_sql: Option<String>,
 }
 
