@@ -1,25 +1,16 @@
-import { source } from '@/app/source';
+import { DOCS } from '@/lib/docs';
 import { SITE } from '@/lib/site';
 
 /**
- * Every doc as markdown in one request. This is the surface an agent evaluating
- * sigiro actually wants: the source, not scraped HTML, and not one fetch per
- * page. `getText('processed')` works because source.config.ts enables
- * `includeProcessedMarkdown`.
+ * Every doc as markdown in one request \u2014 the source, not scraped HTML, and not
+ * one fetch per page. This is the surface an agent evaluating sigiro wants.
  */
 export const dynamic = 'force-static';
 
-export async function GET() {
-  const pages = source.getPages();
+export function GET() {
+  const sections = DOCS.map((doc) => `<!-- ${SITE.url}${doc.url} -->\n\n${doc.markdown}`);
 
-  const sections = await Promise.all(
-    pages.map(async (page) => {
-      const markdown = await page.data.getText('processed');
-      return `<!-- ${SITE.url}${page.url} -->\n\n${markdown}`;
-    }),
-  );
-
-  const body = `# ${SITE.name} — full documentation
+  const body = `# ${SITE.name} \u2014 full documentation
 
 > ${SITE.description}
 

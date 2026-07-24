@@ -1,6 +1,7 @@
 @import 'tailwindcss';
+@plugin '@tailwindcss/typography';
 
-/* Stock Base UI + stock Tailwind tokens: no theme, no brand palette. */
+/* Stock Tailwind tokens: no theme, no brand palette. */
 @layer base {
   html {
     scroll-behavior: smooth;

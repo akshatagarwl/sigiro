@@ -1,12 +1,12 @@
 import type { MetadataRoute } from 'next';
-import { source } from '@/app/source';
+import { DOCS } from '@/lib/docs';
 import { SITE } from '@/lib/site';
 
 export default function sitemap(): MetadataRoute.Sitemap {
   return [
     { url: SITE.url, changeFrequency: 'weekly', priority: 1 },
-    ...source.getPages().map((page) => ({
-      url: `${SITE.url}${page.url}`,
+    ...DOCS.map((doc) => ({
+      url: `${SITE.url}${doc.url}`,
       changeFrequency: 'monthly' as const,
       priority: 0.7,
     })),

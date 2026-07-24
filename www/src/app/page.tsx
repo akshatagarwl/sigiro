@@ -40,14 +40,14 @@ const INVESTIGATE = `$ curl -XPOST localhost:9999/v1/investigate -d '{"service":
     "incident": {
       "shifts": [
         { "signal": "error_rate",  "summary": "0.4% -> 17.1% at 18:35",
-          "drill_down_sql": "SELECT * FROM spans WHERE ..." },
+          "drill_down_sql": "SELECT * FROM sigiro_spans WHERE ..." },
         { "signal": "latency_p95", "summary": "412ms -> 3.18s at 18:35" }],
       "deploy": { "summary": "version 9f2c1ab at 18:33" } }}],
   "operation_summaries": [{
     "operation": "POST /api/orders", "error_pct": 17.1, "baseline_error_pct": 0.4,
     "error_breakdown": [{ "error_type": "timeout", "count": 246 },
                         { "error_type": "500", "count": 6 }],
-    "drill_down_sql": "SELECT * FROM spans WHERE ..." }],
+    "drill_down_sql": "SELECT * FROM sigiro_spans WHERE ..." }],
   "gen_ai": [{ "model": "minimax-m2.7", "calls": 118, "p95_ms": 154000 }],
   "spans": { "total": 1284, "sampled_by": "errors first, then slowest",
              "drill_all_sql": "SELECT ..." }}`;

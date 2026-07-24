@@ -1,5 +1,0 @@
-/* fumadocs' stylesheet is scoped to /docs — the landing page must not pay for a
-   docs framework's CSS. (fumadocs-ui/css/style.css imports tailwindcss itself.) */
-@import 'fumadocs-ui/css/style.css';
-
-@source '../../../node_modules/fumadocs-ui/dist/**/*.js';

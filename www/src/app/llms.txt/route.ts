@@ -1,4 +1,4 @@
-import { source } from '@/app/source';
+import { DOCS } from '@/lib/docs';
 import { FAQ, SITE } from '@/lib/site';
 
 /**
@@ -10,16 +10,15 @@ import { FAQ, SITE } from '@/lib/site';
 export const dynamic = 'force-static';
 
 export function GET() {
-  const docs = source
-    .getPages()
-    .map((page) => `- [${page.data.title}](${SITE.url}${page.url}): ${page.data.description ?? ''}`)
-    .join('\n');
+  const docs = DOCS.map((doc) => `- [${doc.title}](${SITE.url}${doc.url}): ${doc.description}`).join(
+    '\n',
+  );
 
   const body = `# ${SITE.name}
 
 > ${SITE.description}
 
-sigiro covers detect and diagnose in a detect → diagnose → fix → verify → learn
+sigiro covers detect and diagnose in a detect \u2192 diagnose \u2192 fix \u2192 verify \u2192 learn
 loop. It is not a coding agent and not a CI system.
 
 ## Run it
@@ -32,12 +31,12 @@ Ports: 4317 OTLP/gRPC, 4318 OTLP/HTTP, 9999 query + investigate API.
 
 ## API
 
-- POST /v1/traces, /v1/logs, /v1/metrics, /v1/profiles — OTLP ingest
-- GET  /v1/anomalies — ranked baseline shifts, grouped by incident_id
-- POST /v1/investigate — one structured evidence block per service
-- POST /v1/query — SQL over your telemetry (DuckDB + Parquet)
+- POST /v1/traces, /v1/logs, /v1/metrics, /v1/profiles \u2014 OTLP ingest
+- GET  /v1/anomalies \u2014 ranked baseline shifts, grouped by incident_id
+- POST /v1/investigate \u2014 one structured evidence block per service
+- POST /v1/query \u2014 SQL over your telemetry (DuckDB + Parquet)
 - GET  /v1/services, /v1/traces/{trace_id}, /v1/health
-- GET  /openapi.json — full machine-readable API surface, no auth
+- GET  /openapi.json \u2014 full machine-readable API surface, no auth
 
 ## Docs
 

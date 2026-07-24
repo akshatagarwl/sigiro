@@ -5,31 +5,26 @@
   "type": "module",
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build",
-    "deploy": "vinext-cloudflare deploy",
-    "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
-    "build:next": "next build",
-    "postinstall": "fumadocs-mdx",
-    "start": "vinext start",
+    "build": "rm -rf dist && vinext build",
+    "preview": "wrangler dev --config dist/server/wrangler.json",
+    "deploy": "vinext-cloudflare deploy --config dist/server/wrangler.json",
     "lint": "vp lint",
-    "fmt": "vp fmt"
+    "fmt": "vp fmt",
+    "types:check": "next typegen && tsc --noEmit",
+    "build:next": "next build"
   },
   "dependencies": {
-    "@base-ui-components/react": "1.0.0-rc.0",
-    "fumadocs-core": "16.12.1",
-    "fumadocs-mdx": "15.2.0",
-    "fumadocs-ui": "16.12.1",
-    "lucide-react": "1.26.0",
+    "gray-matter": "4.0.3",
+    "marked": "18.0.7",
     "next": "16.3.0-preview.9",
     "react": "19.3.0-canary-28cd4bb0-20260723",
-    "react-dom": "19.3.0-canary-28cd4bb0-20260723",
-    "tailwind-merge": "3.6.0"
+    "react-dom": "19.3.0-canary-28cd4bb0-20260723"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.47.0",
     "@tailwindcss/postcss": "4.3.3",
+    "@tailwindcss/typography": "0.5.20",
     "@tailwindcss/vite": "4.3.3",
-    "@types/mdx": "2.0.14",
     "@types/node": "26.1.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",

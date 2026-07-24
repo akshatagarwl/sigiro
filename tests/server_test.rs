@@ -510,6 +510,18 @@ fn validate_blocks_scalar_leak_as_nested_function_arg() {
 
 #[test]
 fn validate_allows_documented_example_queries() {
+    // www/content/docs/quickstart.md — "Drill with SQL". status_code is the OTLP
+    // enum (2 = error), and the table is sigiro_spans, not spans — both were
+    // wrong in the docs once, which is why this is pinned here.
+    assert!(
+        validate_read_only(
+            "SELECT service_name, count(*) AS errors \
+             FROM sigiro_spans \
+             WHERE status_code = 2 AND timestamp > now() - INTERVAL '1 hour' \
+             GROUP BY 1 ORDER BY errors DESC"
+        )
+        .is_ok()
+    );
     // www/content/docs/hosted-onboarding.md — "Slowest operations, last hour".
     assert!(
         validate_read_only(
