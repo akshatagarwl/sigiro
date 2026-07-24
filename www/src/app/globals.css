@@ -1,4 +1,28 @@
-@import "tailwindcss";
-@import "fumadocs-ui/css/style.css";
+@import 'tailwindcss';
 
-@source '../node_modules/fumadocs-ui/dist/**/*.js';
+/* Stock Base UI + stock Tailwind tokens: no theme, no brand palette. */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    /* No web fonts — zero font bytes is the cheapest LCP there is. */
+    font-family:
+      ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  :focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
