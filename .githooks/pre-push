@@ -1,5 +1,10 @@
 #!/usr/bin/env sh
-# Gate unnecessary public API surface before code leaves the machine.
-# hawk is a full-workspace compile (too slow for pre-commit), so it runs once
-# per push here. Activate with `just install-hooks`. Bypass with `--no-verify`.
-exec just hawk
+# Gate what shouldn't leave the machine. Both are whole-tree analyses (too slow
+# for pre-commit), so they run once per push. Activate with `just install-hooks`.
+# Bypass with `--no-verify`.
+#
+#   hawk -- unnecessary public API surface
+#   slop -- structural erosion + clone density (SlopCodeBench metrics)
+set -e
+just hawk
+just slop

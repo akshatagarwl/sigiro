@@ -30,8 +30,15 @@ hawk *args:
       -A hawk::unnecessary_restricted_visibility \
       -D hawk::dead_public -D hawk::unnecessary_public {{ args }}
 
+# Gate structural erosion + clone density (SlopCodeBench metrics). Catches the
+# way agent-extended code rots: features patched into god functions instead of
+# extracted, and per-variant copy-paste. Pre-push, like hawk. Ceilings live in
+# the script; ratchet them down after every refactor that beats them.
+slop:
+    python3 scripts/slop_audit.py
+
 # Point git at the tracked .githooks/ dir (one-time per clone) so the pre-push
-# hawk gate runs. Teammates run this once after cloning.
+# hawk + slop gates run. Teammates run this once after cloning.
 install-hooks:
     git config core.hooksPath .githooks
 
