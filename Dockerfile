@@ -92,12 +92,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=builder /build/sigiro /usr/local/bin/sigiro
 ENV SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
 RUN /usr/local/bin/sigiro fetch-extensions
+# An empty data dir to COPY --chown into distroless, which has no shell to mkdir
+# with. Without this, `docker run <image>` dies on "failed to create data
+# directory /var/lib/sigiro: Permission denied" because nonroot can't write /var/lib.
+RUN mkdir -p /var/lib/sigiro
 
 # Final image: distroless/cc (glibc 2.36 + libstdc++ + ca-certificates), no shell,
 # runs as the built-in nonroot user.
 FROM gcr.io/distroless/cc-debian12
 COPY --from=builder /build/sigiro /usr/local/bin/sigiro
 COPY --from=runtime-prep /opt/sigiro/extensions /opt/sigiro/extensions
+COPY --from=runtime-prep --chown=nonroot:nonroot /var/lib/sigiro /var/lib/sigiro
 # Keep the extension dir OUTSIDE the data dir: a hosted volume mounts over
 # SIGIRO_DATA_DIR and would mask baked extensions, forcing a cold re-download.
 ENV SIGIRO_DATA_DIR=/var/lib/sigiro \

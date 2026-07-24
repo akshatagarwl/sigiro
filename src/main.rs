@@ -352,7 +352,8 @@ async fn main() -> Result<()> {
         }
         Some(Command::FetchExtensions) => {
             let dir = data_dir()?;
-            std::fs::create_dir_all(&dir)?;
+            std::fs::create_dir_all(&dir)
+                .with_context(|| format!("failed to create data directory {dir}"))?;
             sigiro::storage::prewarm_extensions(&dir)?;
             println!(
                 "DuckDB extensions pre-warmed into {}",
@@ -382,7 +383,8 @@ async fn main() -> Result<()> {
 
 async fn run_serve() -> Result<()> {
     let dir = data_dir()?;
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create data directory {dir}"))?;
     tracing::info!(
         "sigiro starting — data_dir={}, first-run extension download may take 30-90s",
         dir
