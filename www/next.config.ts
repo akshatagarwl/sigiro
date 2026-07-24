@@ -7,6 +7,9 @@ import type { NextConfig } from 'next';
  */
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // 17 KB of CSS was the only render-blocking request left; inlining it removes
+  // a round trip on first paint.
+  experimental: { inlineCss: true },
   async redirects() {
     return [
       { source: '/x', destination: 'https://x.com/SigiroAI', permanent: false },

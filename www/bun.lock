@@ -10,7 +10,6 @@
         "fumadocs-mdx": "15.2.0",
         "fumadocs-ui": "16.12.1",
         "lucide-react": "1.26.0",
-        "motion": "12.42.2",
         "next": "16.3.0-preview.9",
         "react": "19.3.0-canary-28cd4bb0-20260723",
         "react-dom": "19.3.0-canary-28cd4bb0-20260723",

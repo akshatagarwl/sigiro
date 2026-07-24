@@ -14,6 +14,29 @@
     outline-offset: 2px;
   }
 
+  /* Scroll-driven entrance, natively. motion/react cost 118 KB of JS for this
+     12px slide; `animation-timeline: view()` costs nothing and degrades to
+     "already visible" where it is unsupported. Transform only — never opacity —
+     so the text is readable even when nothing animates. */
+  @media (prefers-reduced-motion: no-preference) {
+    @supports (animation-timeline: view()) {
+      .reveal {
+        animation: reveal-up linear both;
+        animation-timeline: view();
+        animation-range: entry 0% entry 60%;
+      }
+    }
+  }
+
+  @keyframes reveal-up {
+    from {
+      transform: translateY(12px);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     html {
       scroll-behavior: auto;

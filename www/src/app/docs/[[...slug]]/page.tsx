@@ -25,6 +25,8 @@ export default async function Page({
   );
 }
 
+export const dynamic = 'force-static';
+
 export async function generateStaticParams() {
   return source.generateParams().map((item) => ({
     slug: item.slug,
@@ -38,5 +40,6 @@ export async function generateMetadata({ params }: { params: Promise<{ slug?: st
   return {
     title: page.data.title,
     description: page.data.description,
+    alternates: { canonical: page.url },
   };
 }

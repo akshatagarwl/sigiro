@@ -2,12 +2,14 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Faq } from '@/components/faq';
 import { Install } from '@/components/install';
-import { Reveal } from '@/components/reveal';
-import { FAQ, LOOP, NAV, SITE, SOCIAL } from '@/lib/site';
+import { FACTS, FAQ, LOOP, NAV, SITE, SOCIAL } from '@/lib/site';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/' },
 };
+
+// Nothing on this page is request-dependent — prerender it.
+export const dynamic = 'force-static';
 
 /** FAQPage generated from the same array the page renders. */
 const faqSchema = {
@@ -28,183 +30,116 @@ const ANOMALIES = `$ sigiro anomalies
   1,checkout,POST /api/orders,latency_p95,2026-07-24T18:35:00Z,412.0,3180.0
   2,worker,worker,error_log_rate,2026-07-24T19:05:00Z,0.011,0.204`;
 
-const INVESTIGATE = `POST /v1/investigate  {"service": "checkout"}
+const INVESTIGATE = `$ curl -XPOST localhost:9999/v1/investigate -d '{"service":"checkout"}'
 
-{
-  "error_traces_total": 1284,
-  "findings": [
-    {
-      "severity": "critical",
-      "kind": "incident",
-      "summary": "2 correlated shifts on checkout at 18:35",
-      "incident": {
-        "started_at_iso": "2026-07-24T18:35:00Z",
-        "shifts": [
-          { "signal": "error_rate",  "entity": "operation 'POST /api/orders'",
-            "summary": "error rate shifted at 18:35 (0.4% -> 17.1%)",
-            "drill_down_sql": "SELECT * FROM spans WHERE ..." },
-          { "signal": "latency_p95", "entity": "operation 'POST /api/orders'",
-            "summary": "p95 shifted at 18:35 (412ms -> 3.18s)" }
-        ],
-        "deploy": { "kind": "deploy", "summary": "version 9f2c1ab at 18:33" }
-      }
-    }
-  ],
-  "operation_summaries": [
-    { "operation": "POST /api/orders", "count": 7421, "error_pct": 17.1,
-      "baseline_error_pct": 0.4, "is_anomalous": true,
-      "error_breakdown": [ { "error_type": "timeout", "count": 246 },
-                           { "error_type": "500", "count": 6 } ],
-      "drill_down_sql": "SELECT * FROM spans WHERE ..." }
-  ],
-  "gen_ai": [
-    { "system": "nvidia", "model": "minimax-m2.7", "calls": 118,
-      "error_pct": 9.3, "p95_ms": 154000, "output_tokens": 389412 }
-  ],
+{ "error_traces_total": 1284,
+  "findings": [{
+    "severity": "critical",
+    "kind": "incident",
+    "summary": "2 correlated shifts on checkout at 18:35",
+    "incident": {
+      "shifts": [
+        { "signal": "error_rate",  "summary": "0.4% -> 17.1% at 18:35",
+          "drill_down_sql": "SELECT * FROM spans WHERE ..." },
+        { "signal": "latency_p95", "summary": "412ms -> 3.18s at 18:35" }],
+      "deploy": { "summary": "version 9f2c1ab at 18:33" } }}],
+  "operation_summaries": [{
+    "operation": "POST /api/orders", "error_pct": 17.1, "baseline_error_pct": 0.4,
+    "error_breakdown": [{ "error_type": "timeout", "count": 246 },
+                        { "error_type": "500", "count": 6 }],
+    "drill_down_sql": "SELECT * FROM spans WHERE ..." }],
+  "gen_ai": [{ "model": "minimax-m2.7", "calls": 118, "p95_ms": 154000 }],
   "spans": { "total": 1284, "sampled_by": "errors first, then slowest",
-             "sample": [ /* 25 rows */ ], "drill_all_sql": "SELECT ..." }
-}`;
+             "drill_all_sql": "SELECT ..." }}`;
 
-function Terminal({ children, label }: { children: string; label: string }) {
+const STEPS = [
+  ['Run it', 'One container. Nothing else to install.'],
+  ['Point OTLP at it', 'Any OpenTelemetry SDK you already have.'],
+  ['Ask what changed', '`sigiro anomalies`, then `investigate`.'],
+] as const;
+
+function Code({ children, label }: { children: string; label: string }) {
   return (
-    <figure className="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800">
-      <figcaption className="border-b border-neutral-200 bg-neutral-100 px-4 py-2 font-mono text-xs text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
+    <figure className="overflow-hidden rounded-xl border border-neutral-200 dark:border-neutral-800">
+      <figcaption className="border-b border-neutral-200 bg-neutral-50 px-4 py-2 font-mono text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
         {label}
       </figcaption>
-      <pre className="overflow-x-auto bg-neutral-50 p-4 text-xs leading-relaxed dark:bg-neutral-950">
+      <pre className="overflow-x-auto bg-white p-4 text-xs leading-relaxed dark:bg-neutral-950">
         <code className="font-mono">{children}</code>
       </pre>
     </figure>
   );
 }
 
-const FIT = [
-  [
-    'OpenTelemetry, natively',
-    'OTLP on 4317 (gRPC) and 4318 (HTTP) for traces, logs, metrics and profiles, plus Pyroscope-format profiles. Point OTEL_EXPORTER_OTLP_ENDPOINT at it and nothing else changes.',
-  ],
-  [
-    'One process, no sidecars',
-    'A single container with DuckDB embedded. Data is Parquet on local disk or S3-compatible storage. No collector, no agent, no external database to operate.',
-  ],
-  [
-    'SQL, not a DSL',
-    'Your telemetry is tables. POST /v1/query takes SQL, the CLI takes SQL, and every finding hands you SQL. There is nothing new to learn and nothing to escape from.',
-  ],
-  [
-    'Discoverable by machines',
-    'GET /openapi.json describes the whole surface with no auth, so an agent can learn the API without a tool description written by hand.',
-  ],
-] as const;
-
 export default function Home() {
   return (
     <>
-      <header className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
+      <header className="mx-auto flex max-w-4xl items-center justify-between px-6 py-6">
         <span className="font-mono text-lg font-semibold tracking-tight">{SITE.name}</span>
         <nav aria-label="Main" className="flex gap-5 text-sm">
           {NAV.map((item) => (
-            <Link key={item.href} href={item.href} className="hover:underline">
+            <Link key={item.href} href={item.href} prefetch={false} className="hover:underline">
               {item.label}
             </Link>
           ))}
         </nav>
       </header>
 
-      <main id="main" className="mx-auto max-w-5xl px-6 pb-24">
+      <main id="main" className="mx-auto max-w-4xl px-6 pb-32">
         {/* Hero: text LCP — no image, no motion, no web font. */}
-        <section className="py-16 sm:py-24">
-          <p className="mb-4 font-mono text-sm text-neutral-500 dark:text-neutral-400">
-            detect → diagnose → fix → verify → learn
-          </p>
-          <h1 className="max-w-3xl text-4xl font-semibold tracking-tight sm:text-6xl">
+        <section className="py-20 sm:py-28">
+          <h1 className="max-w-2xl text-4xl font-semibold tracking-tight sm:text-6xl">
             {SITE.tagline}
           </h1>
-          <p className="mt-6 max-w-2xl text-lg text-neutral-700 dark:text-neutral-300">
-            You do not have a software factory until every step of the loop is covered. sigiro is
-            the first two: it watches your OpenTelemetry for things that changed, then hands your
-            agent one structured block of evidence explaining why — with the SQL to dig further
-            attached to every row.
+          <p className="mt-6 max-w-xl text-lg text-neutral-600 dark:text-neutral-400">
+            Observability your agent can act on. OpenTelemetry in, ranked findings out — each one
+            carrying the SQL to dig deeper.
           </p>
-          <div className="mt-10 max-w-2xl">
+          <div className="mt-10 max-w-xl">
             <Install />
           </div>
-          <p className="mt-4 text-sm text-neutral-600 dark:text-neutral-400">
-            Three ports: OTLP gRPC on 4317, OTLP HTTP on 4318, the query and investigate API on
-            9999. No collector to deploy, no configuration file.{' '}
-            <Link href="/docs/quickstart" className="underline">
-              Quickstart
+          <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
+            Or skip hosting it —{' '}
+            <Link href="/docs/hosted-onboarding" prefetch={false} className="underline">
+              hosted beta
             </Link>
             .
           </p>
         </section>
 
         <section
-          aria-labelledby="loop"
+          aria-labelledby="start"
           className="border-t border-neutral-200 py-16 dark:border-neutral-800"
         >
-          <Reveal>
-            <h2 id="loop" className="text-3xl font-semibold tracking-tight">
-              A software factory is five steps, and you need all five
-            </h2>
-            <p className="mt-4 max-w-2xl text-neutral-700 dark:text-neutral-300">
-              Every step has to hand off to the next without a person in between. Cover four and the
-              loop still stops at a human — you have made paging someone faster, not made the
-              software self-operating. Here is the whole loop, and who owns each part.
-            </p>
-          </Reveal>
-          <ol className="mt-10 space-y-6">
-            {LOOP.map((item, i) => (
-              <Reveal key={item.step} delay={i * 0.04}>
-                <li className="grid gap-2 border-l-2 border-neutral-200 pl-5 sm:grid-cols-[10rem_1fr] sm:gap-6 dark:border-neutral-800">
-                  <div>
-                    <h3 className="text-lg font-medium">{item.step}</h3>
-                    <p
-                      className={
-                        item.ours
-                          ? 'font-mono text-xs text-neutral-900 dark:text-neutral-100'
-                          : 'font-mono text-xs text-neutral-500 dark:text-neutral-400'
-                      }
-                    >
-                      {item.owner}
-                    </p>
-                  </div>
-                  <p className="text-neutral-700 dark:text-neutral-300">{item.body}</p>
-                </li>
-              </Reveal>
+          <h2 id="start" className="text-sm font-mono text-neutral-500 dark:text-neutral-400">
+            Start in 30 seconds
+          </h2>
+          <ol className="mt-6 grid gap-8 sm:grid-cols-3">
+            {STEPS.map(([title, body], i) => (
+              <li key={title}>
+                <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">{i + 1}</span>
+                <h3 className="mt-1 font-medium">{title}</h3>
+                <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">{body}</p>
+              </li>
             ))}
           </ol>
-          <p className="mt-8 max-w-2xl text-neutral-700 dark:text-neutral-300">
-            sigiro deliberately does two of them. Anything claiming to do all five is selling you a
-            coding agent it did not write and a pipeline it does not run.
-          </p>
         </section>
 
         <section
           aria-labelledby="detect"
           className="border-t border-neutral-200 py-16 dark:border-neutral-800"
         >
-          <Reveal>
-            <h2 id="detect" className="text-3xl font-semibold tracking-tight">
-              Detection you did not have to configure
+          <div className="reveal">
+            <h2 id="detect" className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              Detection with nothing to configure
             </h2>
-            <p className="mt-4 max-w-2xl text-neutral-700 dark:text-neutral-300">
-              An agent cannot poll an alert rule nobody wrote yet. sigiro runs Bayesian changepoint
-              detection over each service&apos;s own recent history — error rate, p95 latency, log
-              volume, error log rate, profile cost — and keeps only the shifts that made things
-              worse. No thresholds, no baselines to seed. A service that is chronically slow but
-              stable is not an anomaly, because nothing changed.
+            <p className="mt-4 max-w-xl text-neutral-600 dark:text-neutral-400">
+              No thresholds. sigiro watches each service against its own history and reports only
+              what got worse. Shifts that move together become one incident.
             </p>
-            <p className="mt-4 max-w-2xl text-neutral-700 dark:text-neutral-300">
-              Shifts landing in the same detection bucket on one service share an{' '}
-              <code className="font-mono text-sm">incident_id</code>, so a latency spike and an
-              error spike from one bad deploy arrive as one incident instead of two pages.
-            </p>
-          </Reveal>
+          </div>
           <div className="mt-8">
-            <Terminal label="sigiro anomalies — TOON output, ~40% fewer tokens than JSON">
-              {ANOMALIES}
-            </Terminal>
+            <Code label="TOON output — ~40% fewer tokens than JSON">{ANOMALIES}</Code>
           </div>
         </section>
 
@@ -212,70 +147,65 @@ export default function Home() {
           aria-labelledby="diagnose"
           className="border-t border-neutral-200 py-16 dark:border-neutral-800"
         >
-          <Reveal>
-            <h2 id="diagnose" className="text-3xl font-semibold tracking-tight">
-              Diagnosis as one block of evidence, not a pile of spans
+          <div className="reveal">
+            <h2 id="diagnose" className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              One block of evidence, not a pile of spans
             </h2>
-            <p className="mt-4 max-w-2xl text-neutral-700 dark:text-neutral-300">
-              An incident does not fit in a context window, so sigiro does not try to send you one.
-              One call to <code className="font-mono text-sm">/v1/investigate</code> returns tens of
-              kilobytes of ranked evidence for a service and window: what correlated, which deploy is
-              the suspect, how each operation is failing broken down by error type, per-model LLM
-              latency and token counts, deduplicated log patterns, and a sample of spans that states
-              how it was sampled and how much it withheld.
+            <p className="mt-4 max-w-xl text-neutral-600 dark:text-neutral-400">
+              An incident does not fit in a context window. One call returns what correlated, the
+              suspect deploy, how each operation fails, and the query behind every row.
             </p>
-            <p className="mt-4 max-w-2xl text-neutral-700 dark:text-neutral-300">
-              Every row carries the SQL that produced it. That is the part that matters for an agent:
-              it can widen, narrow or pivot any answer by editing a query it was handed, instead of
-              guessing at a schema it has never seen.
-            </p>
-          </Reveal>
+          </div>
           <div className="mt-8">
-            <Terminal label="POST /v1/investigate — trimmed">{INVESTIGATE}</Terminal>
+            <Code label="one call, trimmed">{INVESTIGATE}</Code>
           </div>
         </section>
 
         <section
-          aria-labelledby="why"
+          aria-labelledby="loop"
           className="border-t border-neutral-200 py-16 dark:border-neutral-800"
         >
-          <Reveal>
-            <h2 id="why" className="text-3xl font-semibold tracking-tight">
-              Why not point an agent at the dashboards you already have
+          <div className="reveal">
+            <h2 id="loop" className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              You need all five steps
             </h2>
-            <p className="mt-4 max-w-2xl text-neutral-700 dark:text-neutral-300">
-              Because a dashboard is a human interface, and the API bolted to its side returns
-              whatever the chart needed. An agent asking what is wrong with checkout gets back time
-              series it has to interpret, in a query language it has to learn, with no ranking and no
-              way to go deeper except guessing the next query.
+            <p className="mt-4 max-w-xl text-neutral-600 dark:text-neutral-400">
+              sigiro is two of them, and says so. Anything claiming all five is selling you a coding
+              agent it did not write.
             </p>
-            <p className="mt-4 max-w-2xl text-neutral-700 dark:text-neutral-300">
-              sigiro inverts the priority. The primary interface returns ranked findings plus the
-              exact SQL behind them, and the storage underneath is DuckDB over Parquet you can query
-              directly — no proprietary layer between an agent and its own telemetry. If a person is
-              reading, keep your dashboard. If an agent is reading, the shape of the answer matters
-              more than the shape of the chart.
-            </p>
-          </Reveal>
+          </div>
+          <ol className="mt-8 divide-y divide-neutral-200 dark:divide-neutral-800">
+            {LOOP.map((item) => (
+              <li key={item.step} className="grid grid-cols-[7rem_1fr] items-baseline gap-4 py-3">
+                <h3
+                  className={
+                    item.ours ? 'font-medium' : 'font-medium text-neutral-500 dark:text-neutral-400'
+                  }
+                >
+                  {item.step}
+                </h3>
+                <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                  {item.body}{' '}
+                  <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">— {item.owner}</span>
+                </p>
+              </li>
+            ))}
+          </ol>
         </section>
 
         <section
-          aria-labelledby="fit"
+          aria-labelledby="facts"
           className="border-t border-neutral-200 py-16 dark:border-neutral-800"
         >
-          <Reveal>
-            <h2 id="fit" className="text-3xl font-semibold tracking-tight">
-              It drops into what you already run
-            </h2>
-          </Reveal>
-          <dl className="mt-8 grid gap-6 sm:grid-cols-2">
-            {FIT.map(([term, def]) => (
-              <Reveal key={term}>
-                <div>
-                  <dt className="font-medium">{term}</dt>
-                  <dd className="mt-2 text-neutral-700 dark:text-neutral-300">{def}</dd>
-                </div>
-              </Reveal>
+          <h2 id="facts" className="sr-only">
+            How it fits
+          </h2>
+          <dl className="grid gap-8 sm:grid-cols-2">
+            {FACTS.map(([term, def]) => (
+              <div key={term}>
+                <dt className="font-medium">{term}</dt>
+                <dd className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">{def}</dd>
+              </div>
             ))}
           </dl>
         </section>
@@ -284,39 +214,19 @@ export default function Home() {
           aria-labelledby="faq"
           className="border-t border-neutral-200 py-16 dark:border-neutral-800"
         >
-          <h2 id="faq" className="mb-8 text-3xl font-semibold tracking-tight">
+          <h2 id="faq" className="mb-6 text-2xl font-semibold tracking-tight sm:text-3xl">
             Questions
           </h2>
           <Faq />
         </section>
-
-        <section
-          aria-labelledby="start"
-          className="border-t border-neutral-200 py-16 dark:border-neutral-800"
-        >
-          <h2 id="start" className="text-3xl font-semibold tracking-tight">
-            Start with one container
-          </h2>
-          <p className="mt-4 max-w-2xl text-neutral-700 dark:text-neutral-300">
-            Run it, point a service at it, and ask it what changed. If you would rather not run
-            anything, the hosted service is an invited beta — the{' '}
-            <Link href="/docs/hosted-onboarding" className="underline">
-              onboarding guide
-            </Link>{' '}
-            explains how access works.
-          </p>
-          <div className="mt-8 max-w-2xl">
-            <Install />
-          </div>
-        </section>
       </main>
 
       <footer className="border-t border-neutral-200 dark:border-neutral-800">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-8 text-sm text-neutral-600 dark:text-neutral-400">
+        <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-4 px-6 py-8 text-sm text-neutral-500 dark:text-neutral-400">
           <span className="font-mono">{SITE.name}</span>
           <nav aria-label="Footer" className="flex flex-wrap gap-5">
             {NAV.map((item) => (
-              <Link key={item.href} href={item.href} className="hover:underline">
+              <Link key={item.href} href={item.href} prefetch={false} className="hover:underline">
                 {item.label}
               </Link>
             ))}

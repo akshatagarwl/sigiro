@@ -11,7 +11,9 @@ export const metadata: Metadata = {
   },
   description: SITE.description,
   applicationName: SITE.name,
-  alternates: { canonical: '/' },
+  // No `alternates.canonical` here on purpose: root-layout metadata is inherited,
+  // so a canonical set here makes every /docs page claim the homepage as its
+  // canonical and drops them out of the index. Each page sets its own.
   openGraph: {
     type: 'website',
     url: SITE.url,

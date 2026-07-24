@@ -7,6 +7,8 @@ import { FAQ, SITE } from '@/lib/site';
  * ~0.1% of AI bot traffic — but Anthropic's crawler does fetch it, and this is
  * two dozen lines generated from the same data as the site.
  */
+export const dynamic = 'force-static';
+
 export function GET() {
   const docs = source
     .getPages()

@@ -7,6 +7,8 @@ import { SITE } from '@/lib/site';
  * page. `getText('processed')` works because source.config.ts enables
  * `includeProcessedMarkdown`.
  */
+export const dynamic = 'force-static';
+
 export async function GET() {
   const pages = source.getPages();
 

@@ -16,38 +16,21 @@ export const SITE = {
   install: 'docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro',
 } as const;
 
-/** The thesis: five steps, and who owns each one. */
+/** The thesis: five steps, and who owns each one. One line each. */
 export const LOOP = [
-  {
-    step: 'Detect',
-    owner: 'sigiro',
-    ours: true,
-    body: 'Something changed and nobody was watching. A loop needs a signal it can poll — not an alert rule somebody has to write first. `sigiro anomalies` returns regime shifts found in each service’s own history, ranked, grouped into incidents across signals.',
-  },
-  {
-    step: 'Diagnose',
-    owner: 'sigiro',
-    ours: true,
-    body: 'Knowing a thing broke is not knowing why. `POST /v1/investigate` returns one structured evidence block per service — ranked findings, failure modes by error type, the slow and failing operations, log patterns, sampled spans — with a runnable SQL query on every row.',
-  },
-  {
-    step: 'Fix',
-    owner: 'your coding agent',
-    ours: false,
-    body: 'Claude Code, Codex, or whatever writes your patches. It is already good at this — as long as something hands it evidence instead of a dashboard screenshot.',
-  },
-  {
-    step: 'Verify',
-    owner: 'your pipeline, plus sigiro',
-    ours: false,
-    body: 'A fix is a hypothesis until the signal recovers. Deploys show up as derived events in the same timeline as the shift, so “did it actually get better after that deploy” is a query, not a vibe.',
-  },
-  {
-    step: 'Learn',
-    owner: 'your agent’s memory',
-    ours: false,
-    body: 'The same incident twice is a process bug. Whatever you use for agent memory — playbooks, a notes directory, a skill — is what turns one resolved incident into the next one being resolved faster.',
-  },
+  { step: 'Detect', owner: 'sigiro', ours: true, body: 'What changed, without an alert rule.' },
+  { step: 'Diagnose', owner: 'sigiro', ours: true, body: 'Why, as one block of evidence.' },
+  { step: 'Fix', owner: 'your coding agent', ours: false, body: 'Claude Code, Codex, whatever writes your patches.' },
+  { step: 'Verify', owner: 'your pipeline', ours: false, body: 'Did the signal recover after the deploy.' },
+  { step: 'Learn', owner: 'your agent’s memory', ours: false, body: 'So the same incident is faster next time.' },
+] as const;
+
+/** Short facts, rendered as a plain row. */
+export const FACTS = [
+  ['OTLP native', 'gRPC 4317, HTTP 4318. Traces, logs, metrics, profiles.'],
+  ['One container', 'DuckDB embedded, Parquet on disk or S3. No collector.'],
+  ['SQL, not a DSL', 'Your telemetry is tables. Every finding hands you a query.'],
+  ['Machine-readable', '/openapi.json, no auth. Agents read the API themselves.'],
 ] as const;
 
 /**
@@ -58,43 +41,43 @@ export const LOOP = [
 export const FAQ = [
   {
     q: 'What is a software factory?',
-    a: 'A software factory is a development loop where agents, not people, carry the work from symptom to shipped fix: detect what changed, diagnose why, fix it, verify the fix, and learn from it. Each step has to be automated and connected to the next. Automate four of the five and you still have a human in the loop, which means you do not have a factory — you have a faster way to page someone.',
+    a: 'A loop where agents carry work from symptom to shipped fix: detect what changed, diagnose why, fix it, verify the fix, learn from it. Automate four of the five and a human is still in the loop — that is a faster way to page someone, not a factory.',
   },
   {
     q: 'What does sigiro do?',
-    a: 'sigiro covers the first two steps: detect and diagnose. It ingests OpenTelemetry over OTLP, finds shifts against each service’s own baseline, and returns one structured evidence block per service — ranked findings, error breakdowns, slow operations, log patterns and sampled spans — with a ready-to-run SQL query attached to every row. It does not write your patches and it does not run your pipeline.',
+    a: 'Detect and diagnose. It ingests OpenTelemetry, finds shifts against each service’s own baseline, and returns one structured evidence block per service with runnable SQL on every row. It does not write your patches and does not run your pipeline.',
   },
   {
     q: 'How does an AI agent debug a production incident?',
-    a: 'It needs evidence in one call, not a dashboard to look at. An agent asks sigiro for the current anomalies, picks the incident with the largest shift, calls investigate on that service and window, reads the ranked findings, and runs the SQL that came attached to whichever row looked suspicious. Every one of those steps is an HTTP request returning structured data, so the agent can act on it without a human interpreting a chart.',
+    a: 'It asks for the current anomalies, picks the largest shift, calls investigate on that service and window, then runs the SQL that came attached to the suspicious row. Every step is an HTTP request returning structured data, so no human has to read a chart.',
   },
   {
     q: 'Is sigiro OpenTelemetry compatible?',
-    a: 'Yes. sigiro speaks OTLP natively on port 4317 (gRPC) and 4318 (HTTP) for traces, logs, metrics and profiles, and also accepts Pyroscope-format profiles. Any OpenTelemetry SDK or collector you already run works unchanged — point OTEL_EXPORTER_OTLP_ENDPOINT at sigiro and you are done.',
+    a: 'Yes — OTLP on 4317 (gRPC) and 4318 (HTTP) for traces, logs, metrics and profiles, plus Pyroscope-format profiles. Point OTEL_EXPORTER_OTLP_ENDPOINT at sigiro and any existing SDK or collector works unchanged.',
   },
   {
     q: 'Do I still need an OpenTelemetry Collector?',
-    a: 'Not for a handful of services — SDKs export straight to sigiro, which is the collector. For a fleet, keep a collector gateway in front: it batches, scrubs, retries, and holds your key as one secret, then forwards OTLP onward. sigiro does not care which of the two you choose.',
+    a: 'Not for a few services — SDKs export straight to sigiro, which is the collector. For a fleet, keep a collector gateway in front to batch, scrub, retry, and hold your key as one secret.',
   },
   {
     q: 'How is sigiro different from a traditional observability platform?',
-    a: 'Those products are excellent human interfaces: dashboards, charts, and a query language you learn. Their agent story is a dashboard with an API bolted on. sigiro inverts it — the primary interface is an endpoint that returns ranked findings plus the SQL to go deeper, and the storage underneath is DuckDB and Parquet you can query directly. If a person is the one reading, use a dashboard. If an agent is reading, the shape of the answer matters more than the shape of the chart.',
+    a: 'They are excellent human interfaces with an API bolted on. sigiro inverts it: the primary interface returns ranked findings plus the SQL behind them, over DuckDB and Parquet you can query directly. If a person is reading, keep your dashboard.',
   },
   {
-    q: 'How does sigiro detect anomalies without me configuring thresholds?',
-    a: 'There are no thresholds to configure. sigiro runs Bayesian changepoint detection over each service’s own recent series — error rate, p95 latency, log volume, error log rate and profile cost — and records only shifts that made things worse. A service that is chronically slow but stable produces no anomaly, because nothing changed. Shifts landing in the same or adjacent detection bucket are grouped under one incident instead of arriving as five separate pages.',
+    q: 'How does sigiro detect anomalies without thresholds?',
+    a: 'Bayesian changepoint detection over each service’s own recent series — error rate, p95 latency, log volume, error log rate, profile cost — keeping only shifts that made things worse. Chronically slow but stable is not an anomaly, because nothing changed.',
   },
   {
     q: 'Can sigiro tell me which deploy caused an incident?',
-    a: 'It names the suspect. Deploys are derived from your telemetry as events on the same timeline as the shift, so when several signals move together sigiro groups them into one incident and attaches the deploy that lines up. That is a correlation, not a confession — but it is the correlation you would have gone looking for by hand.',
+    a: 'It names the suspect. Deploys are derived from your telemetry onto the same timeline as the shift, so correlated shifts arrive as one incident with the deploy that lines up attached. A correlation, not a confession.',
   },
   {
     q: 'What query language does sigiro use?',
-    a: 'SQL. Your telemetry is DuckDB tables backed by Parquet, so there is no DSL to learn and no proprietary query layer between you and your data. Every finding sigiro returns carries the exact SQL that produced it, which means an agent can widen, narrow, or pivot any answer by editing a query it was handed.',
+    a: 'SQL. Your telemetry is DuckDB tables backed by Parquet, and every finding carries the exact query that produced it, so an agent can widen or pivot any answer by editing SQL it was handed.',
   },
   {
     q: 'Can I self-host sigiro?',
-    a: 'Yes — that is the default. One container, no sidecars and no external dependencies, storing data as Parquet on local disk or S3-compatible object storage. A self-hosted server runs in open mode with no per-request auth, so put it on a private network or behind a proxy. A hosted multi-tenant service exists as an invited beta if you would rather not run anything.',
+    a: 'Yes, that is the default: one container, no sidecars, Parquet on local disk or S3. Self-hosted runs in open mode with no per-request auth, so keep it on a private network. Hosted is an invited beta.',
   },
 ] as const;
 
