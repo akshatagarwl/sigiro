@@ -203,6 +203,15 @@ pub struct InvestigationBlock {
     /// Log patterns (template-deduplicated, ordered by count). Each row carries
     /// a `drill_down_sql` for its raw logs.
     pub log_patterns: Vec<LogPattern>,
+    /// Numbers the service logs about itself, promoted to statistics — the
+    /// counters already embedded in log lines like
+    /// `enqueued=1024 responses=24 translations=0`, one row per number.
+    /// `pinned_zero` rows come first: a counter that never left zero while
+    /// another number on the SAME line did move. That is the signature of a
+    /// stage doing no work, which no baseline detector can find (a flat-zero
+    /// series has nothing to deviate from) and which looks identical to
+    /// "nothing to do".
+    pub log_counters: Vec<LogCounter>,
     /// Raw logs, newest first — a self-describing sample (see `spans`).
     pub logs: SampledSection<LogRecord>,
     pub profiles: Vec<ProfileSummary>,
@@ -391,6 +400,31 @@ pub struct LogPattern {
     pub(crate) last_seen: Option<String>,
 }
 
+/// One number a service logs about itself, aggregated over the window.
+///
+/// Free metrics: DRAIN already masks numbers out of every log body to build the
+/// template and keeps the original token in `template_values`, so each numeric
+/// variable position is a time series nobody had to instrument. The label is the
+/// masked template token itself (`translations=<NUM>`), which is why this needs
+/// no naming heuristic.
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
+pub struct LogCounter {
+    /// The log template this number appears in.
+    pub pattern: String,
+    /// The masked template token, e.g. `translations=<NUM>` — its own label.
+    pub label: String,
+    pub samples: i64,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub avg_value: f64,
+    /// Never left zero in the whole window, while another number on the same
+    /// log line did. Not ranked as an anomaly (a chronically-flat series is by
+    /// definition not a deviation) — it is stated so the question "should this
+    /// be zero?" gets asked. That question is the only thing that finds work
+    /// which was switched off before the retention window opened.
+    pub pinned_zero: bool,
+}
+
 /// One finish-reason bucket of a model's LLM calls — the OTel
 /// `gen_ai.response.finish_reasons` dimension ("stop", "length",
 /// "tool_calls", "content_filter", "error").
@@ -460,6 +494,7 @@ struct SqlPayload {
     metrics: Vec<MetricBucket>,
     spans: Vec<SpanRecord>,
     log_patterns: Vec<LogPattern>,
+    log_counters: Vec<LogCounter>,
     logs: Vec<LogRecord>,
     profiles: Vec<ProfileSummary>,
 }
@@ -1017,6 +1052,7 @@ fn investigate_one(
         metrics: payload.metrics,
         spans,
         log_patterns,
+        log_counters: payload.log_counters,
         logs,
         profiles: payload.profiles,
     })
@@ -1407,6 +1443,49 @@ log_patterns AS (
     ORDER BY cnt DESC
     LIMIT 50
 ),
+-- Every number the service logs about itself, promoted to a statistic.
+-- `template_values` holds the ORIGINAL token at each variable position of the
+-- template, in order, so zipping the template's variable tokens against it
+-- pairs each value with its own label. Two `unnest`es in one projection expand
+-- row-wise in DuckDB, which is the zip.
+log_counter_pairs AS (
+    SELECT COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
+           unnest(list_filter(
+               str_split(COALESCE(NULLIF(t.template_text, ''), l.body), ' '),
+               x -> x = '<*>' OR x LIKE '%<NUM>%' OR x LIKE '%<IP>%'
+                    OR x LIKE '%<UUID>%' OR x LIKE '%<HEX>%'
+           )) AS label,
+           unnest(from_json(l.template_values, '["VARCHAR"]')) AS raw_value
+    FROM win_logs l
+    LEFT JOIN {prefix}sigiro_log_templates t ON l.template_id = t.template_id
+    WHERE l.template_values IS NOT NULL AND l.template_values != '[]'
+),
+log_counters AS (
+    SELECT pattern, label, samples, min_value, max_value, avg_value,
+           -- A zero that stayed zero while a SIBLING number on the same line
+           -- moved. Self-inclusion is harmless: when max_value = 0 any
+           -- partition max above zero can only have come from a sibling.
+           (max_value = 0 AND max(max_value) OVER (PARTITION BY pattern) > 0) AS pinned_zero
+    FROM (
+        SELECT pattern, label,
+               count(*) AS samples,
+               min(v) AS min_value,
+               max(v) AS max_value,
+               round(avg(v), 3) AS avg_value
+        FROM (
+            -- Only <NUM> positions are counters, and the value token carries its
+            -- label too (`translations=0`), so pull the number back out of it.
+            SELECT pattern, label,
+                   TRY_CAST(regexp_extract(raw_value, '-?\d+(\.\d+)?') AS DOUBLE) AS v
+            FROM log_counter_pairs
+            WHERE label LIKE '%<NUM>%'
+        )
+        WHERE v IS NOT NULL
+        GROUP BY pattern, label
+    )
+    ORDER BY pinned_zero DESC, samples DESC
+    LIMIT 40
+),
 deploy_events AS (
     -- Anti-join against the baseline window: a version already running
     -- before from_ts is steady state, not a deploy — without this, every
@@ -1588,6 +1667,11 @@ SELECT json_object(
         'first_seen', first_seen, 'last_seen', last_seen,
         'sample_values', TRY_CAST(sample_values AS JSON[])
     ) ORDER BY cnt DESC)), '[]'::JSON) FROM log_patterns),
+    'log_counters', (SELECT COALESCE(to_json(list(json_object(
+        'pattern', pattern, 'label', label, 'samples', samples,
+        'min_value', min_value, 'max_value', max_value, 'avg_value', avg_value,
+        'pinned_zero', pinned_zero
+    ) ORDER BY pinned_zero DESC, samples DESC)), '[]'::JSON) FROM log_counters),
     'logs', (SELECT COALESCE(to_json(list(json_object(
         'timestamp', ts_us, 'timestamp_iso', timestamp_iso, 'severity_text', severity_text,
         'body', body, 'trace_id', trace_id, 'span_id', span_id,

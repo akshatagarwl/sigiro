@@ -43,14 +43,17 @@ fn setup_drain_logs(
 
     let mut seen_templates: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for body in bodies {
-        let (template, id, _) = drain.classify(body);
+        let (template, id, values) = drain.classify(body);
+        // Mirror the real ingest path: inserter.rs stores the recovered variable
+        // tokens as a JSON array, which is what log_counters reads.
+        let values_json = serde_json::to_string(&values).expect("values serialize");
         conn.execute(
             &format!(
                 "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
-                    severity_text, body, template_id)
-                 VALUES (make_timestamp({now_us}), {now_us}, 'api', {severity_number}, '{severity_text}', ?, ?)"
+                    severity_text, body, template_id, template_values)
+                 VALUES (make_timestamp({now_us}), {now_us}, 'api', {severity_number}, '{severity_text}', ?, ?, ?)"
             ),
-            duckdb::params![body, id],
+            duckdb::params![body, id, values_json],
         )
         .expect("insert log");
         if seen_templates.insert(id) {
@@ -434,6 +437,95 @@ fn log_template_dedup_ips() {
         block.log_patterns.len(),
         1,
         "3 logs with different IPs collapse to one template pattern"
+    );
+}
+
+#[test]
+fn log_counters_flag_a_counter_pinned_at_zero() {
+    // The real incident this section exists for: shopfront's reconciler logged
+    // `translations=0` every cycle for eight days while `responses`/`judgments`
+    // moved. Nothing errored and nothing slowed, so no baseline detector could
+    // see it — and the series was ALREADY flat zero when retention began, so
+    // there was nothing to deviate from either. The only detectable signature is
+    // within the line: one number that never moves while its siblings do.
+    let bodies = [
+        "[reconcile] phase=first+panel total_gaps=16070 enqueued=1023 responses=23 judgments=1000 translations=0",
+        "[reconcile] phase=first+panel total_gaps=4964 enqueued=1024 responses=24 judgments=1000 translations=0",
+        "[reconcile] phase=first+panel total_gaps=16070 enqueued=1025 responses=25 judgments=1000 translations=0",
+    ];
+    let (shared, now_us) = setup_drain_logs(&[], &bodies, 9, "INFO");
+
+    let conn = shared.lock();
+    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+
+    let counter = |label: &str| {
+        block
+            .log_counters
+            .iter()
+            .find(|c| c.label == label)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no counter labelled {label}; got {:?}",
+                    block
+                        .log_counters
+                        .iter()
+                        .map(|c| &c.label)
+                        .collect::<Vec<_>>()
+                )
+            })
+    };
+
+    let translations = counter("translations=<NUM>");
+    assert!(
+        translations.pinned_zero,
+        "translations never left zero while siblings moved — must be flagged"
+    );
+    assert_eq!(translations.max_value, 0.0);
+    assert_eq!(translations.samples, 3);
+    // Attributed to the template it came from, so the agent can find the line.
+    assert!(
+        translations.pattern.contains("[reconcile]")
+            && translations.pattern.contains("translations=<NUM>"),
+        "counter carries its own log template: {}",
+        translations.pattern
+    );
+
+    // A sibling that does move is a plain free metric, NOT flagged.
+    let responses = counter("responses=<NUM>");
+    assert!(!responses.pinned_zero, "a moving counter is not pinned");
+    assert_eq!(responses.min_value, 23.0);
+    assert_eq!(responses.max_value, 25.0);
+    assert_eq!(responses.avg_value, 24.0);
+
+    // Flagged rows sort first so an agent reads them without scanning.
+    assert!(
+        block.log_counters[0].pinned_zero,
+        "pinned_zero counters rank first"
+    );
+}
+
+#[test]
+fn log_counters_ignore_a_lone_zero_with_no_moving_sibling() {
+    // Guard against the obvious false positive: a line whose ONLY number is
+    // zero says nothing about a stage being dead. Without a sibling that moves
+    // there is no invariant to violate, so this must stay unflagged.
+    let bodies = [
+        "cache warm entries=0",
+        "cache warm entries=0",
+        "cache warm entries=0",
+    ];
+    let (shared, now_us) = setup_drain_logs(&[], &bodies, 9, "INFO");
+
+    let conn = shared.lock();
+    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let entries = block
+        .log_counters
+        .iter()
+        .find(|c| c.label == "entries=<NUM>")
+        .expect("entries counter");
+    assert!(
+        !entries.pinned_zero,
+        "a zero with no moving sibling on the same line is not evidence of dead work"
     );
 }
 
