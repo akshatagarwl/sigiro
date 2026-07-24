@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Faq } from '@/components/faq';
 import { Install } from '@/components/install';
+import { AnimatedSpan, Terminal, TypingAnimation } from '@/components/magicui/terminal';
 import { FACTS, FAQ, LOOP, NAV, SITE, SOCIAL } from '@/lib/site';
 
 export const metadata: Metadata = {
@@ -28,7 +29,7 @@ const ANOMALIES = `$ sigiro anomalies
 [3]{incident_id,service_name,operation,signal,ts_shift,before,after}:
   1,checkout,POST /api/orders,error_rate,2026-07-24T18:35:00Z,0.004,0.171
   1,checkout,POST /api/orders,latency_p95,2026-07-24T18:35:00Z,412.0,3180.0
-  2,worker,worker,error_log_rate,2026-07-24T19:05:00Z,0.011,0.204`;
+  2,worker,worker,error_log_rate,2026-07-24T19:05:00Z,0.011,0.204`.split('\n');
 
 const INVESTIGATE = `$ curl -XPOST localhost:9999/v1/investigate -d '{"service":"checkout"}'
 
@@ -50,26 +51,13 @@ const INVESTIGATE = `$ curl -XPOST localhost:9999/v1/investigate -d '{"service":
     "drill_down_sql": "SELECT * FROM sigiro_spans WHERE ..." }],
   "gen_ai": [{ "model": "minimax-m2.7", "calls": 118, "p95_ms": 154000 }],
   "spans": { "total": 1284, "sampled_by": "errors first, then slowest",
-             "drill_all_sql": "SELECT ..." }}`;
+             "drill_all_sql": "SELECT ..." }}`.split('\n');
 
 const STEPS = [
   ['Run it', 'One container. Nothing else to install.'],
   ['Point OTLP at it', 'Any OpenTelemetry SDK you already have.'],
   ['Ask what changed', '`sigiro anomalies`, then `investigate`.'],
 ] as const;
-
-function Code({ children, label }: { children: string; label: string }) {
-  return (
-    <figure className="overflow-hidden rounded-xl border border-neutral-200 dark:border-neutral-800">
-      <figcaption className="border-b border-neutral-200 bg-neutral-50 px-4 py-2 font-mono text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
-        {label}
-      </figcaption>
-      <pre className="overflow-x-auto bg-white p-4 text-xs leading-relaxed dark:bg-neutral-950">
-        <code className="font-mono">{children}</code>
-      </pre>
-    </figure>
-  );
-}
 
 export default function Home() {
   return (
@@ -98,13 +86,6 @@ export default function Home() {
           <div className="mt-10 max-w-xl">
             <Install />
           </div>
-          <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
-            Or skip hosting it —{' '}
-            <Link href="/docs/hosted-onboarding" prefetch={false} className="underline">
-              hosted beta
-            </Link>
-            .
-          </p>
         </section>
 
         <section
@@ -139,7 +120,20 @@ export default function Home() {
             </p>
           </div>
           <div className="mt-8">
-            <Code label="TOON output — ~40% fewer tokens than JSON">{ANOMALIES}</Code>
+            <Terminal className="terminal max-h-none max-w-none">
+              <TypingAnimation>{ANOMALIES[0]}</TypingAnimation>
+              {ANOMALIES.slice(1).map((line, i) => (
+                <AnimatedSpan
+                  key={`${i}-${line}`}
+                  className="whitespace-pre text-neutral-600 dark:text-neutral-400"
+                >
+                  {line}
+                </AnimatedSpan>
+              ))}
+            </Terminal>
+            <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
+              TOON output — around 40% fewer tokens than JSON for this shape of data.
+            </p>
           </div>
         </section>
 
@@ -157,7 +151,20 @@ export default function Home() {
             </p>
           </div>
           <div className="mt-8">
-            <Code label="one call, trimmed">{INVESTIGATE}</Code>
+            <Terminal className="terminal max-h-none max-w-none">
+              <TypingAnimation>{INVESTIGATE[0]}</TypingAnimation>
+              {INVESTIGATE.slice(1).map((line, i) => (
+                <AnimatedSpan
+                  key={`${i}-${line}`}
+                  className="whitespace-pre text-neutral-600 dark:text-neutral-400"
+                >
+                  {line}
+                </AnimatedSpan>
+              ))}
+            </Terminal>
+            <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
+              One call, trimmed. Every row carries the SQL that produced it.
+            </p>
           </div>
         </section>
 

@@ -1,6 +1,22 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
+/* Tokens the MagicUI registry components expect (they are written against
+   shadcn's variable names). Mapped onto stock Tailwind neutrals, not a brand
+   palette. */
+@theme {
+  --color-background: #ffffff;
+  --color-border: #e5e5e5;
+}
+
+/* @theme must stay top-level; override the variables it generated instead. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background: #0a0a0a;
+    --color-border: #262626;
+  }
+}
+
 /* Stock Tailwind tokens: no theme, no brand palette. */
 @layer base {
   html {
@@ -26,6 +42,16 @@
         animation-timeline: view();
         animation-range: entry 0% entry 60%;
       }
+    }
+  }
+
+  /* The registry Terminal animates from opacity:0, and motion server-renders
+     that initial style — so with scripting off the terminals render as empty
+     frames. Force them visible instead of editing the vendored component. */
+  @media (scripting: none) {
+    .terminal * {
+      opacity: 1 !important;
+      transform: none !important;
     }
   }
 

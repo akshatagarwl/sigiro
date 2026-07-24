@@ -1,8 +1,10 @@
 import tailwindcss from '@tailwindcss/vite';
 import vinext from 'vinext';
-import { defineConfig } from 'vite-plus';
+import { defineConfig } from 'vite';
 import { cloudflare } from '@cloudflare/vite-plugin';
 
+// defineConfig from 'vite', not 'vite-plus': the plugins are typed against
+// vite's own types, and mixing the two makes tsc fail on the plugins array.
 export default defineConfig({
   plugins: [
     tailwindcss(),
