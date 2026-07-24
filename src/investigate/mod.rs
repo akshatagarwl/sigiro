@@ -191,6 +191,10 @@ pub struct InvestigationBlock {
     pub context: ServiceContext,
     pub events: Vec<DerivedEvent>,
     pub operation_summaries: Vec<OperationSummary>,
+    /// Per-(provider, model) LLM stats from OTel GenAI (`gen_ai.*`) span
+    /// attributes, most-called first. Empty when the window has no LLM
+    /// spans — services that never call a model simply don't have this.
+    pub gen_ai: Vec<GenAiModelSummary>,
     pub metrics: Vec<MetricBucket>,
     /// Top spans (errors first, then slowest), as a self-describing sample:
     /// `total` vs the returned rows tells you how much was withheld, and
@@ -387,6 +391,48 @@ pub struct LogPattern {
     pub(crate) last_seen: Option<String>,
 }
 
+/// One finish-reason bucket of a model's LLM calls — the OTel
+/// `gen_ai.response.finish_reasons` dimension ("stop", "length",
+/// "tool_calls", "content_filter", "error").
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, utoipa::ToSchema)]
+pub struct FinishReasonCount {
+    pub reason: String,
+    /// LLM calls of this (system, model) that finished with this reason.
+    pub count: i64,
+}
+
+/// Per-(provider, model) LLM call stats, read from the OTel GenAI semconv
+/// (`gen_ai.*`, STABLE) span attributes. One row per (system, model) seen
+/// in the window; a service that makes no LLM calls has none — the section
+/// is simply empty. Threshold-free: ranked by call_count, nothing dropped.
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
+pub struct GenAiModelSummary {
+    /// The GenAI provider (`gen_ai.system`, e.g. "openai", "anthropic");
+    /// "unknown" when the SDK didn't emit it.
+    pub system: String,
+    /// The model (`gen_ai.request.model`, falling back to
+    /// `gen_ai.response.model`).
+    pub model: String,
+    /// Distinct `gen_ai.operation.name` values seen for this model
+    /// (e.g. "chat", "embeddings"), sorted. Empty when never emitted.
+    pub operations: Vec<String>,
+    /// LLM spans for this (system, model) in the window.
+    pub call_count: i64,
+    /// Percentage of those spans with OTel status ERROR.
+    pub error_pct: f64,
+    /// p95 span duration in microseconds.
+    pub duration_p95_us: f64,
+    /// Sum of `gen_ai.usage.input_tokens` across calls that reported it;
+    /// None when no call did (distinct from a real 0).
+    pub input_tokens: Option<i64>,
+    /// Sum of `gen_ai.usage.output_tokens` (see `input_tokens`).
+    pub output_tokens: Option<i64>,
+    /// Finish-reason composition of this model's calls, biggest first —
+    /// a rising "length"/"content_filter" share is a failure mode
+    /// `error_pct` alone never shows. Empty when never emitted.
+    pub finish_reasons: Vec<FinishReasonCount>,
+}
+
 #[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct ProfileSummary {
     pub function: String,
@@ -410,6 +456,7 @@ struct SqlPayload {
     /// error_log_rate / profile_cost — all keyed by the service) — surfaced
     /// as standalone findings, never joined to `operation_summaries`.
     service_anomalies: Vec<ServiceAnomalyHit>,
+    gen_ai: Vec<GenAiModelSummary>,
     metrics: Vec<MetricBucket>,
     spans: Vec<SpanRecord>,
     log_patterns: Vec<LogPattern>,
@@ -966,6 +1013,7 @@ fn investigate_one(
         context: payload.context,
         events: payload.events,
         operation_summaries,
+        gen_ai: payload.gen_ai,
         metrics: payload.metrics,
         spans,
         log_patterns,
@@ -1181,6 +1229,66 @@ op_error_breakdown AS (
                         ORDER BY cnt DESC, error_type)) AS error_breakdown
     FROM op_error_types
     GROUP BY operation
+),
+-- LLM calls per the OTel GenAI semconv (`gen_ai.*` span attributes,
+-- STABLE): one row per span carrying a model. Derived at scan time for the
+-- same reason win_spans derives error_type — the downstream CTEs get a few
+-- short columns per LLM span and span_attributes never materializes.
+-- Spans without a model (the non-LLM overwhelming majority) are dropped
+-- here, so the whole section costs nothing and is empty for non-LLM
+-- services. Extraction uses only /v1/query-allowlisted scalars
+-- (json_extract_string, json_extract, coalesce, nullif) plus TRY_CAST —
+-- token counts arrive as JSON strings, TRY_CAST turns garbage into NULL
+-- instead of failing the whole investigation.
+gen_ai_spans AS (
+    SELECT COALESCE(NULLIF(json_extract_string(s.span_attributes, 'gen_ai.system'), ''),
+                    'unknown') AS system,
+           COALESCE(
+               NULLIF(json_extract_string(s.span_attributes, 'gen_ai.request.model'), ''),
+               NULLIF(json_extract_string(s.span_attributes, 'gen_ai.response.model'), '')
+           ) AS model,
+           NULLIF(json_extract_string(s.span_attributes, 'gen_ai.operation.name'), '') AS operation,
+           s.status_code, s.duration,
+           TRY_CAST(json_extract_string(s.span_attributes, 'gen_ai.usage.input_tokens') AS BIGINT) AS input_tokens,
+           TRY_CAST(json_extract_string(s.span_attributes, 'gen_ai.usage.output_tokens') AS BIGINT) AS output_tokens,
+           -- Semconv says finish_reasons is a string ARRAY; tolerate SDKs
+           -- that emit a plain string (the TRY_CAST is NULL then, and the
+           -- fallback wraps the scalar). Missing → [NULL], filtered below.
+           COALESCE(
+               TRY_CAST(json_extract(s.span_attributes, 'gen_ai.response.finish_reasons') AS VARCHAR[]),
+               [NULLIF(json_extract_string(s.span_attributes, 'gen_ai.response.finish_reasons'), '')]
+           ) AS finish_reasons
+    FROM {prefix}sigiro_spans s, args a
+    WHERE {span_win} AND model IS NOT NULL
+),
+gen_ai_models AS (
+    SELECT system, model,
+           count(*) AS call_count,
+           count(CASE WHEN status_code = {err} THEN 1 END) * 100.0 / count(*) AS error_pct,
+           approx_quantile(duration, 0.95) AS p95,
+           -- sum skips NULLs and is NULL when every call lacked the attr —
+           -- "not reported" stays distinct from a real 0.
+           sum(input_tokens) AS input_tokens,
+           sum(output_tokens) AS output_tokens
+    FROM gen_ai_spans
+    GROUP BY system, model
+),
+gen_ai_operations AS (
+    SELECT system, model, list(operation ORDER BY operation) AS operations
+    FROM (SELECT DISTINCT system, model, operation FROM gen_ai_spans WHERE operation IS NOT NULL)
+    GROUP BY system, model
+),
+gen_ai_finish AS (
+    SELECT system, model,
+           to_json(list(json_object('reason', reason, 'count', cnt)
+                        ORDER BY cnt DESC, reason)) AS finish_reasons
+    FROM (
+        SELECT system, model, reason, count(*) AS cnt
+        FROM (SELECT system, model, unnest(finish_reasons) AS reason FROM gen_ai_spans)
+        WHERE reason IS NOT NULL
+        GROUP BY system, model, reason
+    )
+    GROUP BY system, model
 ),
 -- Dominant failure mode of each in-window error_rate shift's NEW regime:
 -- the most common derived error.type among that operation's error spans
@@ -1450,6 +1558,17 @@ SELECT json_object(
         'operation', operation, 'signal', signal, 'ts_shift', ts_shift,
         'before', "before", 'after', "after", 'drill_down_sql', drill_down_sql
     ))), '[]'::JSON) FROM service_anomalies),
+    'gen_ai', (SELECT COALESCE(to_json(list(json_object(
+        'system', m.system, 'model', m.model,
+        'operations', COALESCE(o.operations, []::VARCHAR[]),
+        'call_count', m.call_count, 'error_pct', m.error_pct,
+        'duration_p95_us', m.p95,
+        'input_tokens', m.input_tokens, 'output_tokens', m.output_tokens,
+        'finish_reasons', COALESCE(f.finish_reasons, '[]'::JSON)
+    ) ORDER BY m.call_count DESC, m.system, m.model)), '[]'::JSON)
+        FROM gen_ai_models m
+        LEFT JOIN gen_ai_operations o USING (system, model)
+        LEFT JOIN gen_ai_finish f USING (system, model)),
     'metrics', (SELECT COALESCE(to_json(list(json_object(
         'bucket', bucket, 'metric_name', metric_name, 'p95', p95, 'avg', avg, 'count', n
     ) ORDER BY bucket, metric_name)), '[]'::JSON) FROM metrics),

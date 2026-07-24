@@ -2387,3 +2387,138 @@ fn investigate_fails_loud_when_all_services_fail() {
         "error should name the failing service: {msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// GenAI section: per-(system, model) LLM stats from OTel gen_ai.* attributes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn investigate_gen_ai_section_aggregates_per_model() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+
+    // gpt-4o via openai: two healthy calls carrying token counts and an
+    // array-form finish_reasons attribute.
+    insert_spans(
+        &conn,
+        "llm-api",
+        "chat gpt-4o",
+        now_us,
+        (2, 0),
+        50_000,
+        Some(
+            r#"{"gen_ai.system":"openai","gen_ai.request.model":"gpt-4o","gen_ai.operation.name":"chat","gen_ai.usage.input_tokens":"100","gen_ai.usage.output_tokens":"20","gen_ai.response.finish_reasons":["stop"]}"#,
+        ),
+    );
+    // One ERRORED gpt-4o call: no request.model (exercises the
+    // gen_ai.response.model fallback), NO token attrs (sum must skip NULLs,
+    // not zero them), and a plain-string finish reason (scalar tolerance).
+    insert_spans(
+        &conn,
+        "llm-api",
+        "chat gpt-4o",
+        now_us + 1_000_000,
+        (1, 1),
+        900_000,
+        Some(
+            r#"{"gen_ai.system":"openai","gen_ai.response.model":"gpt-4o","gen_ai.operation.name":"chat","gen_ai.response.finish_reasons":"length"}"#,
+        ),
+    );
+    // A second model on the same service — must be its own row.
+    insert_spans(
+        &conn,
+        "llm-api",
+        "chat claude",
+        now_us,
+        (1, 0),
+        30_000,
+        Some(
+            r#"{"gen_ai.system":"anthropic","gen_ai.request.model":"claude-sonnet-4-5","gen_ai.operation.name":"chat","gen_ai.usage.input_tokens":"10","gen_ai.usage.output_tokens":"5","gen_ai.response.finish_reasons":["stop"]}"#,
+        ),
+    );
+    // Non-LLM spans on the same service must not leak into the section.
+    insert_spans(&conn, "llm-api", "GET /health", now_us, (5, 0), 1_000, None);
+
+    let block = investigate_service(&conn, "llm-api", now_us - 60_000_000, now_us + 60_000_000);
+
+    assert_eq!(
+        block.gen_ai.len(),
+        2,
+        "one row per (system, model): {:?}",
+        block.gen_ai
+    );
+
+    // Ranked by call_count desc: gpt-4o (3 calls) before claude (1).
+    let gpt = &block.gen_ai[0];
+    assert_eq!(gpt.system, "openai");
+    assert_eq!(gpt.model, "gpt-4o");
+    assert_eq!(gpt.operations, vec!["chat".to_string()]);
+    assert_eq!(gpt.call_count, 3);
+    assert!(
+        (gpt.error_pct - 100.0 / 3.0).abs() < 0.01,
+        "1 error of 3 calls, got {}",
+        gpt.error_pct
+    );
+    assert!(
+        gpt.duration_p95_us >= 50_000.0,
+        "p95 over [50ms, 50ms, 900ms] cannot be below 50ms, got {}",
+        gpt.duration_p95_us
+    );
+    // Token sums cover only the calls that REPORTED tokens (2 of 3) — the
+    // attr-less error call must not zero or null the aggregate.
+    assert_eq!(gpt.input_tokens, Some(200));
+    assert_eq!(gpt.output_tokens, Some(40));
+    let reasons: Vec<(&str, i64)> = gpt
+        .finish_reasons
+        .iter()
+        .map(|f| (f.reason.as_str(), f.count))
+        .collect();
+    assert_eq!(
+        reasons,
+        vec![("stop", 2), ("length", 1)],
+        "array and plain-string finish_reasons both aggregate, biggest first"
+    );
+
+    let claude = &block.gen_ai[1];
+    assert_eq!(claude.system, "anthropic");
+    assert_eq!(claude.model, "claude-sonnet-4-5");
+    assert_eq!(claude.call_count, 1);
+    assert_eq!(claude.error_pct, 0.0);
+    assert_eq!(claude.input_tokens, Some(10));
+    assert_eq!(claude.output_tokens, Some(5));
+    assert_eq!(claude.finish_reasons.len(), 1);
+    assert_eq!(claude.finish_reasons[0].reason, "stop");
+    assert_eq!(claude.finish_reasons[0].count, 1);
+}
+
+#[test]
+fn investigate_gen_ai_section_empty_without_llm_spans() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    // A busy service with attribute-carrying spans — just not gen_ai ones.
+    insert_spans(
+        &conn,
+        "plain-api",
+        "GET /orders",
+        now_us,
+        (10, 2),
+        5_000,
+        Some(r#"{"http.route":"/orders"}"#),
+    );
+
+    let block = investigate_service(&conn, "plain-api", now_us - 60_000_000, now_us + 60_000_000);
+    assert!(
+        block.gen_ai.is_empty(),
+        "no gen_ai.* attributes → empty section, no error: {:?}",
+        block.gen_ai
+    );
+    assert!(!block.operation_summaries.is_empty(), "sanity: spans seen");
+}
