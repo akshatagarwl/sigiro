@@ -505,6 +505,44 @@ fn log_counters_flag_a_counter_pinned_at_zero() {
 }
 
 #[test]
+fn log_counters_reject_version_like_identifiers() {
+    // Caught by running this against prod: `cohere:command-a-03-2025` masks to
+    // `command-a-<NUM>-<NUM>`, and reading the first number out of it reported a
+    // counter sitting at -3. A model name is not a counter — two masked numbers
+    // in one token means there is no single value to take.
+    let bodies = [
+        "translator 'cohere:command-a-03-2025' has no key, backlog=5",
+        "translator 'cohere:command-a-03-2025' has no key, backlog=7",
+        "translator 'cohere:command-a-03-2025' has no key, backlog=9",
+    ];
+    let (shared, now_us) = setup_drain_logs(&[], &bodies, 13, "WARN");
+
+    let conn = shared.lock();
+    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+
+    assert!(
+        block
+            .log_counters
+            .iter()
+            .all(|c| !c.label.contains("command-a")),
+        "a version-like identifier is not a counter: {:?}",
+        block
+            .log_counters
+            .iter()
+            .map(|c| &c.label)
+            .collect::<Vec<_>>()
+    );
+    // The real counter on the same line still comes through.
+    let backlog = block
+        .log_counters
+        .iter()
+        .find(|c| c.label == "backlog=<NUM>")
+        .expect("backlog counter survives");
+    assert_eq!(backlog.min_value, 5.0);
+    assert_eq!(backlog.max_value, 9.0);
+}
+
+#[test]
 fn log_counters_ignore_a_lone_zero_with_no_moving_sibling() {
     // Guard against the obvious false positive: a line whose ONLY number is
     // zero says nothing about a stage being dead. Without a sibling that moves

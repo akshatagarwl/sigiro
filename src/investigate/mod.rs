@@ -1475,10 +1475,17 @@ log_counters AS (
         FROM (
             -- Only <NUM> positions are counters, and the value token carries its
             -- label too (`translations=0`), so pull the number back out of it.
+            --
+            -- Exactly ONE <NUM> per token, or the extraction is guessing: a
+            -- version-like identifier masks to `command-a-<NUM>-<NUM>` and the
+            -- first-number rule reads `-03` out of `cohere:command-a-03-2025` as
+            -- the counter value -3. A model name is not a counter. Two or more
+            -- masked numbers in one token means there is no single value to
+            -- take, so drop it rather than invent one.
             SELECT pattern, label,
                    TRY_CAST(regexp_extract(raw_value, '-?\d+(\.\d+)?') AS DOUBLE) AS v
             FROM log_counter_pairs
-            WHERE label LIKE '%<NUM>%'
+            WHERE len(str_split(label, '<NUM>')) = 2
         )
         WHERE v IS NOT NULL
         GROUP BY pattern, label
