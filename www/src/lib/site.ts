@@ -1,75 +1,184 @@
 /**
  * One source of truth for everything the site says about itself.
  *
- * Metadata, JSON-LD, the sitemap, /llms.txt and the visible copy all read from
- * here — so the structured data can never drift from what a human sees, which
- * is exactly what search and answer engines check for.
+ * Copy rule, from docs/notes/company/taglines.md: never mention Parquet, DuckDB,
+ * S3 or eBPF in customer-facing text. Users care about outcomes; the storage
+ * engine is an implementation detail. The hero line is the one that file already
+ * chose. The thesis is docs/notes/company/pitch.md: the consumer of observability
+ * data changed, and it is no longer a person staring at a dashboard.
  */
 
 export const SITE = {
   name: 'sigiro',
   url: 'https://sigiro.com',
-  title: 'sigiro — the detect and diagnose layer for software factory agents',
-  tagline: 'The detect and diagnose layer for self-operating software',
+  title: 'sigiro — stop staring at dashboards',
+  tagline: 'Stop staring at dashboards.',
   description:
-    'sigiro is observability for agents, not dashboards. OpenTelemetry in; ranked anomalies and one structured evidence block out, each row carrying the SQL to go deeper. The detect and diagnose half of a detect → diagnose → fix → verify → learn loop.',
-  install: 'docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro',
+    'The thing reading your telemetry at 3am is not a person any more. sigiro takes OpenTelemetry in and answers questions out — a diagnosis with the query that proves it attached, not a chart to interpret.',
 } as const;
 
-/** The thesis: five steps, and who owns each one. One line each. */
-export const LOOP = [
-  { step: 'Detect', owner: 'sigiro', ours: true, body: 'What changed, without an alert rule.' },
-  { step: 'Diagnose', owner: 'sigiro', ours: true, body: 'Why, as one block of evidence.' },
-  { step: 'Fix', owner: 'your coding agent', ours: false, body: 'Claude Code, Codex, whatever writes your patches.' },
-  { step: 'Verify', owner: 'your pipeline', ours: false, body: 'Did the signal recover after the deploy.' },
-  { step: 'Learn', owner: 'your agent’s memory', ours: false, body: 'So the same incident is faster next time.' },
+export const INSTALL = [
+  {
+    id: 'self-host',
+    label: 'Self-host',
+    code: 'docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro',
+  },
+  {
+    id: 'point-at-it',
+    label: 'Point your app at it',
+    code: 'OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_SERVICE_NAME=checkout npm start',
+  },
+] as const;
+
+/** The 01–05 spine: one capability, one plain sentence, one artifact. */
+export const SECTIONS = [
+  {
+    n: '01',
+    lead: 'Connect.',
+    rest: 'Point OpenTelemetry at it and nothing else changes.',
+    say: 'Standard OTLP on the standard ports. Whatever SDK or collector you already run keeps working — no agent to install, no code to touch, no migration.',
+    artifact: {
+      title: 'your shell',
+      meta: 'under five minutes, two variables',
+      lang: 'bash' as const,
+      code: `docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
+
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \\
+OTEL_SERVICE_NAME=checkout npm start`,
+    },
+  },
+  {
+    n: '02',
+    lead: 'Ask.',
+    rest: 'One question, one answer, already ranked.',
+    say: 'Not a panel to interpret and not a firehose to wade through. What moved together, which deploy is the suspect, and how the thing actually fails — in one response something else can act on.',
+    artifact: {
+      title: 'POST /v1/investigate',
+      meta: '{"service":"checkout"}',
+      lang: 'json' as const,
+      code: `{
+  "summary": "two signals moved together on checkout at 18:35",
+  "suspect": "deploy 9f2c1ab, landed 18:33",
+  "failing": "POST /api/orders",
+  "how": { "timeout": 246, "server_error": 6 },
+  "errors_total": 1284,
+  "query": "SELECT * FROM spans WHERE service = 'checkout' AND ..."
+}`,
+    },
+  },
+  {
+    n: '03',
+    lead: 'Correlate.',
+    rest: 'Your services and your agents in the same question.',
+    say: 'An agent is a service that calls a model instead of a database. Its reasoning and your request path land in the same place, joined by the same trace — so “which model call stalled the checkout” is one query rather than two products.',
+    artifact: {
+      title: 'POST /v1/query',
+      meta: 'no query language to learn',
+      lang: 'sql' as const,
+      code: `SELECT model, count(*) AS calls, max(duration) AS slowest
+FROM spans JOIN logs USING (trace_id)
+WHERE service = 'checkout' AND status = 'error'
+GROUP BY model ORDER BY slowest DESC`,
+    },
+  },
+  {
+    n: '04',
+    lead: 'Prove.',
+    rest: 'Every answer carries the query behind it.',
+    say: 'Nothing has to be taken on faith. The agent widens, narrows or pivots any finding by editing a query it was handed, never by guessing at a shape it has not seen.',
+    artifact: null,
+  },
+  {
+    n: '05',
+    lead: 'Discover.',
+    rest: 'Your agent learns the whole surface by reading it.',
+    say: 'No tool description to hand-write and no onboarding for a machine. One unauthenticated document describes every endpoint, and that is the integration.',
+    artifact: {
+      title: 'GET /openapi.json',
+      meta: 'public, no key',
+      lang: 'json' as const,
+      code: `[
+  "/v1/investigate",
+  "/v1/query",
+  "/v1/services",
+  "/v1/traces/{trace_id}",
+  "/v1/health"
+]`,
+    },
+  },
+] as const;
+
+/** The three promises under 04 — each one a thing we deliberately do not do. */
+export const PROMISES = [
+  {
+    title: 'Nothing to configure',
+    body: 'No thresholds, no rules, no panels to keep in sync. Each service is judged against its own history, which is a property of the data rather than a thing you set up.',
+  },
+  {
+    title: 'Nothing sampled away',
+    body: 'The request you need is kept, not one in a hundred. Sampling was a bargain struck because nobody was ever going to read them all — something will.',
+  },
+  {
+    title: 'Nothing locked in',
+    body: 'Your telemetry stays in storage you already own, in a format anything can read. Leaving costs you nothing, so staying is a choice.',
+  },
+] as const;
+
+export const RUNS_ON = [
+  'OpenTelemetry SDKs',
+  'OTel Collector',
+  'Kubernetes',
+  'Docker',
+  'Vercel',
+  'Cloudflare Workers',
+  'Fly.io',
+  'Railway',
+  'Claude Code',
+  'Codex',
+  'Cursor',
+  'Pyroscope profiles',
 ] as const;
 
 /**
  * Visible FAQ *and* FAQPage JSON-LD. Every answer here is rendered in the HTML;
- * schema whose text does not appear on the page is the fastest way to get
- * structured data ignored.
+ * schema whose text does not appear on the page gets ignored.
  */
 export const FAQ = [
   {
-    q: 'What is a software factory?',
-    a: 'A loop where agents carry work from symptom to shipped fix: detect what changed, diagnose why, fix it, verify the fix, learn from it. Automate four of the five and a human is still in the loop — that is a faster way to page someone, not a factory.',
+    q: 'What is sigiro, in one sentence?',
+    a: 'An observability backend whose primary reader is an agent: send it OpenTelemetry, ask in SQL or in one investigate call, and get back a diagnosis rather than a dashboard.',
   },
   {
-    q: 'What does sigiro do?',
-    a: 'Detect and diagnose. It ingests OpenTelemetry, finds shifts against each service’s own baseline, and returns one structured evidence block per service with runnable SQL on every row. It does not write your patches and does not run your pipeline.',
+    q: 'Does it replace my current observability stack?',
+    a: 'It replaces what you were using them for when the reader is a machine. If a person needs to look at a chart, keep the dashboard — this is for everything downstream of that.',
   },
   {
-    q: 'How does an AI agent debug a production incident?',
-    a: 'It asks for the current anomalies, picks the largest shift, calls investigate on that service and window, then runs the SQL that came attached to the suspicious row. Every step is an HTTP request returning structured data, so no human has to read a chart.',
+    q: 'Do I have to change my code?',
+    a: 'No. It speaks standard OTLP on ports 4317 and 4318, so any OpenTelemetry SDK or collector you already run points at it unchanged.',
   },
   {
-    q: 'Is sigiro OpenTelemetry compatible?',
-    a: 'Yes — OTLP on 4317 (gRPC) and 4318 (HTTP) for traces, logs, metrics and profiles, plus Pyroscope-format profiles. Point OTEL_EXPORTER_OTLP_ENDPOINT at sigiro and any existing SDK or collector works unchanged.',
+    q: 'Does it page me?',
+    a: 'No, and that is deliberate. Paging exists to interrupt someone who cannot watch continuously. What sigiro returns is a table something else reads on a loop, so the interruption is the part we deleted.',
   },
   {
-    q: 'Do I still need an OpenTelemetry Collector?',
-    a: 'Not for a few services — SDKs export straight to sigiro, which is the collector. For a fleet, keep a collector gateway in front to batch, scrub, retry, and hold your key as one secret.',
+    q: 'How does it know what is worth reporting without thresholds?',
+    a: 'Each service is compared against its own recent history rather than against a number you picked. A service that is chronically slow but steady reports nothing, because nothing changed — and a service that quietly doubled reports even though no rule existed for it.',
   },
   {
-    q: 'How is sigiro different from a traditional observability platform?',
-    a: 'They are excellent human interfaces with an API bolted on. sigiro inverts it: the primary interface returns ranked findings plus the SQL behind them, over DuckDB and Parquet you can query directly. If a person is reading, keep your dashboard.',
+    q: 'What query language do I need to learn?',
+    a: 'None. Questions are plain SQL, which your agent already writes fluently. There is no proprietary query language between you and your telemetry, and every answer hands you the query that produced it.',
   },
   {
-    q: 'How does sigiro detect anomalies without thresholds?',
-    a: 'Bayesian changepoint detection over each service’s own recent series — error rate, p95 latency, log volume, error log rate, profile cost — keeping only shifts that made things worse. Chronically slow but stable is not an anomaly, because nothing changed.',
+    q: 'Can my coding agent use it without me?',
+    a: 'Yes — that is the design. It reads the API description itself at /openapi.json, with no key and no hand-written tool definition, then queries in SQL it already knows.',
   },
   {
-    q: 'Can sigiro tell me which deploy caused an incident?',
-    a: 'It names the suspect. Deploys are derived from your telemetry onto the same timeline as the shift, so correlated shifts arrive as one incident with the deploy that lines up attached. A correlation, not a confession.',
+    q: 'What does it cost?',
+    a: 'Self-hosting is free and the storage is yours, so there is no per-host fee, no per-seat fee and no ingest bill. A hosted service exists as an invited beta if you would rather not run anything.',
   },
   {
-    q: 'What query language does sigiro use?',
-    a: 'SQL. Your telemetry is DuckDB tables backed by Parquet, and every finding carries the exact query that produced it, so an agent can widen or pivot any answer by editing SQL it was handed.',
-  },
-  {
-    q: 'Can I self-host sigiro?',
-    a: 'Yes, that is the default: one container, no sidecars, Parquet on local disk or S3. Self-hosted runs in open mode with no per-request auth, so keep it on a private network. Hosted is an invited beta.',
+    q: 'What does it not do?',
+    a: 'It does not write your patches, run your pipeline, or evaluate alert rules. It also has no dashboard builder and no full-text log index — questions are structured, which is how an agent asks them.',
   },
 ] as const;
 

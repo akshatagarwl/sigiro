@@ -1,21 +1,25 @@
 import type { Metadata } from 'next';
-import { JetBrains_Mono } from 'next/font/google';
+import { Instrument_Sans, JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { SITE } from '@/lib/site';
 import './globals.css';
 
 /**
- * The only web font on the site. The body stays on the system sans stack — a
- * product whose surface is a terminal and a SQL string earns one real mono, and
- * nothing else. One static 400 cut (22 KB) rather than the
- * variable font (40 KB, every weight axis, and nothing here needs a second
- * weight). vinext self-hosts it — no request to Google.
+ * The pairing polylane uses: Instrument Sans for everything read, JetBrains Mono
+ * for everything executed. Both self-hosted by vinext — no request to Google.
  *
- * Do NOT set `preload: false` to buy back mobile performance: under vinext that
+ * Do NOT set `preload: false` to buy back a performance point: under vinext that
  * silently stops self-hosting and loads the woff2 from fonts.gstatic.com, which
  * sends every visitor's IP to Google. The score it appears to win is just the
  * third party dropping off the measured critical path.
  */
+const sans = Instrument_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  display: 'swap',
+  variable: '--font-instrument-sans',
+});
+
 const mono = JetBrains_Mono({
   subsets: ['latin'],
   weight: '400',
@@ -25,15 +29,12 @@ const mono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE.url),
-  title: {
-    default: SITE.title,
-    template: `%s — ${SITE.name}`,
-  },
+  title: { default: SITE.title, template: `%s — ${SITE.name}` },
   description: SITE.description,
   applicationName: SITE.name,
-  // No `alternates.canonical` here on purpose: root-layout metadata is inherited,
-  // so a canonical set here makes every /docs page claim the homepage as its
-  // canonical and drops them out of the index. Each page sets its own.
+  // No canonical here: root-layout metadata is inherited, so a canonical set at
+  // this level makes every /docs page claim the homepage as its canonical and
+  // drop out of the index. Each page sets its own.
   openGraph: {
     type: 'website',
     url: SITE.url,
@@ -52,11 +53,7 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
 };
 
-/**
- * Sitewide entity graph. One @graph with cross-references beats three loose
- * blobs: it tells an answer engine that the organisation, the site and the
- * software are one entity.
- */
+/** One @graph, cross-referenced, so an answer engine reads one entity not three. */
 const graph = {
   '@context': 'https://schema.org',
   '@graph': [
@@ -88,9 +85,9 @@ const graph = {
       description: SITE.description,
       featureList: [
         'OpenTelemetry OTLP ingest for traces, logs, metrics and profiles',
-        'Threshold-free anomaly detection against each service’s own baseline',
-        'Structured investigation blocks for AI agents',
-        'SQL over DuckDB and Parquet',
+        'Structured investigation responses for AI agents',
+        'SQL questions with no proprietary query language',
+        'Machine-readable API description at /openapi.json',
       ],
       publisher: { '@id': `${SITE.url}/#organization` },
     },
@@ -99,11 +96,11 @@ const graph = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`h-full ${mono.variable}`}>
-      <body className="min-h-full bg-white text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100">
+    <html lang="en" className={`h-full ${sans.variable} ${mono.variable}`}>
+      <body className="min-h-full bg-bg font-sans text-body antialiased">
         <a
           href="#main"
-          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:bg-neutral-900 focus:px-3 focus:py-2 focus:text-white dark:focus:bg-white dark:focus:text-neutral-900"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:bg-strong focus:px-3 focus:py-2 focus:text-on-accent"
         >
           Skip to content
         </a>

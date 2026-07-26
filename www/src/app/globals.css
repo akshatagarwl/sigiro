@@ -1,110 +1,67 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
-/* Tokens the MagicUI registry components expect (they are written against
-   shadcn's variable names). Mapped onto stock Tailwind neutrals, not a brand
-   palette. */
-/* Semantic tokens the registry components (shadcn / MagicUI / kibo-ui / reui)
-   are written against, mapped onto stock Tailwind neutrals. Still no brand
-   palette — this is the neutral base color, named the way the ecosystem expects. */
+/* Palette taken from polylane.com. Achromatic on purpose: the accent is
+   near-black, every border is an alpha-black hairline, and the only visual
+   interest on the page comes from the artifacts sigiro returns. */
 @theme {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-border: var(--border);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
+  --color-bg: #fafafa;
+  --color-surface: #00000008;
+  --color-surface-2: #0000000f;
+  --color-line: #0000001f;
+  --color-line-strong: #0000003d;
+  --color-strong: #0a0a0a;
+  --color-body: #404040;
+  --color-muted-ink: #525252;
+  --color-faint: #737373;
+  --color-ghost: #a3a3a3;
+  --color-accent: #171717;
+  --color-on-accent: #ffffff;
+  --color-code-bg: #f4f4f3;
+
+  /* Aliases the registry components (shadcn / kibo-ui / reui) are written
+     against. Add new ones here, never by editing a vendored component. */
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-strong);
+  --color-card: #ffffff;
+  --color-card-foreground: var(--color-strong);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: var(--color-on-accent);
+  --color-secondary: var(--color-surface-2);
+  --color-secondary-foreground: var(--color-strong);
+  --color-muted: var(--color-surface-2);
+  --color-muted-foreground: var(--color-faint);
+  --color-accent-foreground: var(--color-on-accent);
+  --color-destructive: #b4231b;
+  --color-border: var(--color-line);
+  --color-input: var(--color-line-strong);
+  --color-ring: var(--color-line-strong);
+
+  --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-  --card: #ffffff;
-  --card-foreground: #171717;
-  --primary: #171717;
-  --primary-foreground: #fafafa;
-  --muted: #f5f5f5;
-  --muted-foreground: #737373;
-  --border: #e5e5e5;
-  --ring: #a3a3a3;
-  --chart-1: #171717;
-  --chart-2: #737373;
-  --chart-3: #d4d4d4;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #fafafa;
-    --card: #0a0a0a;
-    --card-foreground: #fafafa;
-    --primary: #fafafa;
-    --primary-foreground: #171717;
-    --muted: #262626;
-    --muted-foreground: #a3a3a3;
-    --border: #262626;
-    --ring: #525252;
-    --chart-1: #fafafa;
-    --chart-2: #a3a3a3;
-    --chart-3: #404040;
-  }
-}
-
-/* Stock Tailwind tokens: no theme, no brand palette. */
 @layer base {
   html {
     scroll-behavior: smooth;
-    /* No web fonts — zero font bytes is the cheapest LCP there is. */
-    font-family:
-      ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   }
-
+  body {
+    font-size: 0.9375rem;
+    line-height: 1.6;
+  }
   :focus-visible {
-    outline: 2px solid currentColor;
+    outline: 2px solid var(--color-strong);
     outline-offset: 2px;
   }
-
-  /* Scroll-driven entrance, natively. motion/react cost 118 KB of JS for this
-     12px slide; `animation-timeline: view()` costs nothing and degrades to
-     "already visible" where it is unsupported. Transform only — never opacity —
-     so the text is readable even when nothing animates. */
-  @media (prefers-reduced-motion: no-preference) {
-    @supports (animation-timeline: view()) {
-      .reveal {
-        animation: reveal-up linear both;
-        animation-timeline: view();
-        animation-range: entry 0% entry 60%;
-      }
-    }
+  /* Shiki emits a colour per token inline; this styles only the block. */
+  .shiki {
+    background: transparent !important;
+    font-size: 0.75rem;
+    line-height: 1.75;
   }
-
-  /* The registry Terminal animates from opacity:0, and motion server-renders
-     that initial style — so with scripting off the terminals render as empty
-     frames. Force them visible instead of editing the vendored component. */
-  @media (scripting: none) {
-    .terminal * {
-      opacity: 1 !important;
-      transform: none !important;
-    }
+  .shiki code {
+    font-family: var(--font-mono);
   }
-
-  @keyframes reveal-up {
-    from {
-      transform: translateY(12px);
-    }
-    to {
-      transform: translateY(0);
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     html {
       scroll-behavior: auto;

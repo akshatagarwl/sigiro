@@ -1,5 +1,5 @@
 import { DOCS } from '@/lib/docs';
-import { FAQ, SITE } from '@/lib/site';
+import { FAQ, INSTALL, SITE } from '@/lib/site';
 
 /**
  * The index an agent reads before deciding whether we are worth its tokens.
@@ -24,7 +24,7 @@ loop. It is not a coding agent and not a CI system.
 ## Run it
 
 \`\`\`
-${SITE.install}
+${INSTALL[0].code}
 \`\`\`
 
 Ports: 4317 OTLP/gRPC, 4318 OTLP/HTTP, 9999 query + investigate API.
