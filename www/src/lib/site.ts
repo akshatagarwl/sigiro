@@ -17,9 +17,6 @@ export const SITE = {
   title: 'sigiro — observability data layer for self-improving software',
   /** The h1: the category claim. */
   tagline: 'The data layer for self-improving software and agents.',
-  /** The eyebrow and the footer sign-off — the line taglines.md chose. It lands
-      in half a second, which the category claim deliberately does not. */
-  hook: 'Stop staring at dashboards.',
   description:
     'Dashboards are a presentation layer. sigiro is the data layer underneath: OpenTelemetry in, ranked findings out, each one carrying the query that proves it. Built for agents reading at 3am, not people reading charts.',
 } as const;

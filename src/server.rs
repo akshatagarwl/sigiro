@@ -1650,6 +1650,7 @@ fn query_sql_contract() -> String {
 #[utoipa::path(
     post,
     path = "/v1/query",
+    summary = "Run SQL over your telemetry",
     request_body = String,
     responses(
         (status = 200, description = "Query results", body = Vec<serde_json::Value>)
@@ -1706,6 +1707,7 @@ async fn query_handler(
 #[utoipa::path(
     get,
     path = "/v1/services",
+    summary = "List services seen, with time bounds",
     responses(
         (status = 200, description = "List of services", body = ServicesResponse)
     ),
@@ -1790,6 +1792,7 @@ pub(crate) struct AnomaliesQuery {
 #[utoipa::path(
     get,
     path = "/v1/anomalies",
+    summary = "Ranked shifts against each service's own baseline",
     params(AnomaliesQuery),
     description = "\
 Precomputed anomalies: worsening regime shifts (BOCPD changepoints, \
@@ -1895,6 +1898,7 @@ async fn anomalies_handler(
 #[utoipa::path(
      get,
      path = "/v1/traces/{trace_id}",
+     summary = "Fetch one whole trace",
      params(
          ("trace_id" = String, Path, description = "Trace ID")
      ),
@@ -2189,6 +2193,7 @@ fn compute_service_breakdown(
 #[utoipa::path(
     post,
     path = "/v1/investigate",
+    summary = "Diagnose a service: ranked findings with runnable SQL",
     request_body = investigate::InvestigateRequest,
     description = "\
 Root-cause an incident for one or more services over a time window. Returns a \

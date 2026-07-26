@@ -61,57 +61,6 @@
   .shiki code {
     font-family: var(--font-mono);
   }
-  /* Inline code, scoped so it never reaches a Shiki block. Tailwind
-     typography's `prose-code:` variant matches code inside `pre` too, and it
-     tinted the block background and re-applied an em size on top of the block's
-     — which compounded to 11px on a darker ground and put two token colours
-     under AA. */
-  .prose :not(pre) > code {
-    font-family: var(--font-mono);
-    font-size: 0.8125em;
-    color: var(--color-strong);
-    background: var(--color-surface-2);
-    border-radius: 0.25rem;
-    padding: 0.1em 0.3em;
-  }
-  .prose :not(pre) > code::before,
-  .prose :not(pre) > code::after {
-    content: none;
-  }
-  .prose pre {
-    font-size: 0.8125rem;
-    background: var(--color-code-bg);
-    padding: 0.875rem;
-    /* typography colours `pre` text gray-200 for its own dark background. On a
-       light ground that is 1.2:1 — invisible — and it shows on any fence with no
-       language, where Shiki emits no per-token colours to override it. */
-    color: var(--color-strong);
-  }
-  .prose pre code {
-    font: inherit;
-    /* typography sets pre>code's colour separately from pre's, so the gray-200
-       has to be cleared on both or an unlanguaged fence stays invisible. */
-    color: inherit;
-    background: transparent;
-    padding: 0;
-  }
-  /* A bright segment travelling the whole mark. Only stroke-dashoffset moves, so
-     there is no layout or paint of anything else; the pause is built into the
-     keyframes so the logo is still most of the time. */
-  @keyframes mark-trace {
-    0% {
-      stroke-dashoffset: 100;
-    }
-    55%,
-    100% {
-      stroke-dashoffset: -22;
-    }
-  }
-  .mark-trace {
-    stroke-dasharray: 22 100;
-    animation: mark-trace 3.4s ease-in-out infinite;
-  }
-
   @media (prefers-reduced-motion: reduce) {
     html {
       scroll-behavior: auto;
@@ -123,4 +72,58 @@
       transition-duration: 0.01ms !important;
     }
   }
+}
+
+/* Unlayered on purpose: these were in @layer base, and @tailwindcss/typography
+   emits `.prose` in a later layer, so its `content: "`"` on inline code won
+   no matter the specificity. Unlayered CSS beats layered CSS in Tailwind v4. */
+/* Inline code, scoped so it never reaches a Shiki block. Tailwind
+   typography's `prose-code:` variant matches code inside `pre` too, and it
+   tinted the block background and re-applied an em size on top of the block's
+   — which compounded to 11px on a darker ground and put two token colours
+   under AA. */
+.prose :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.8125em;
+  color: var(--color-strong);
+  background: var(--color-surface-2);
+  border-radius: 0.25rem;
+  padding: 0.1em 0.3em;
+}
+.prose :not(pre) > code::before,
+.prose :not(pre) > code::after {
+  content: none;
+}
+.prose pre {
+  font-size: 0.8125rem;
+  background: var(--color-code-bg);
+  padding: 0.875rem;
+  /* typography colours `pre` text gray-200 for its own dark background. On a
+     light ground that is 1.2:1 — invisible — and it shows on any fence with no
+     language, where Shiki emits no per-token colours to override it. */
+  color: var(--color-strong);
+}
+.prose pre code {
+  font: inherit;
+  /* typography sets pre>code's colour separately from pre's, so the gray-200
+     has to be cleared on both or an unlanguaged fence stays invisible. */
+  color: inherit;
+  background: transparent;
+  padding: 0;
+}
+/* A bright segment travelling the whole mark. Only stroke-dashoffset moves, so
+   there is no layout or paint of anything else; the pause is built into the
+   keyframes so the logo is still most of the time. */
+@keyframes mark-trace {
+  0% {
+    stroke-dashoffset: 100;
+  }
+  55%,
+  100% {
+    stroke-dashoffset: -22;
+  }
+}
+.mark-trace {
+  stroke-dasharray: 22 100;
+  animation: mark-trace 3.4s ease-in-out infinite;
 }

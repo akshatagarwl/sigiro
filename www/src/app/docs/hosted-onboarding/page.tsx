@@ -1,16 +1,16 @@
-import { DocPage } from '@/components/doc-page';
-import { getDoc } from '@/lib/docs';
+import { DocRoute } from '@/components/doc-route';
+import { source } from '@/lib/source';
 
-const doc = getDoc('hosted-onboarding')!;
+const page = source.getPage(['hosted-onboarding'])!;
 
 export const dynamic = 'force-static';
 
 export const metadata = {
-  title: doc.title,
-  description: doc.description,
-  alternates: { canonical: doc.url },
+  title: page.data.title,
+  description: page.data.description,
+  alternates: { canonical: page.url },
 };
 
 export default function Page() {
-  return <DocPage doc={doc} />;
+  return <DocRoute page={page} />;
 }

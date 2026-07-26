@@ -1,0 +1,41 @@
+/* fumadocs' stylesheet, then its palette mapped onto ours. fumadocs exposes its
+   colours as CSS variables, so the docs inherit the landing page's tokens instead
+   of shipping a second design system. Scoped to /docs — the landing page never
+   loads this. */
+@import 'fumadocs-ui/css/style.css';
+
+@source '../../../node_modules/fumadocs-ui/dist/**/*.js';
+@source '../../../node_modules/fumadocs-openapi/dist/**/*.js';
+
+:root,
+.dark {
+  --color-fd-background: #fafafa;
+  --color-fd-foreground: #0a0a0a;
+  --color-fd-muted: #00000008;
+  /* #737373 passes on the page ground but is 3.97:1 on fd-secondary (#ebebeb),
+     which is what inactive tabs in the API playground sit on. */
+  --color-fd-muted-foreground: #5c5c5c;
+  --color-fd-popover: #ffffff;
+  --color-fd-popover-foreground: #0a0a0a;
+  --color-fd-card: #ffffff;
+  --color-fd-card-foreground: #0a0a0a;
+  --color-fd-border: #0000001f;
+  --color-fd-primary: #171717;
+  --color-fd-primary-foreground: #ffffff;
+  --color-fd-secondary: #0000000f;
+  --color-fd-secondary-foreground: #0a0a0a;
+  --color-fd-accent: #0000000f;
+  --color-fd-accent-foreground: #0a0a0a;
+  --color-fd-ring: #0000003d;
+}
+
+/* Our type, not fumadocs' defaults. */
+#nd-docs-layout,
+#nd-page {
+  font-family: var(--font-sans);
+}
+#nd-docs-layout code,
+#nd-page code,
+#nd-page pre {
+  font-family: var(--font-mono);
+}

@@ -1,0 +1,1827 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "sigiro",
+    "description": "The surface an agent reads. Admin endpoints for minting tenant keys are deliberately not published here.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/anomalies": {
+      "get": {
+        "tags": [
+          "query"
+        ],
+        "summary": "Ranked shifts against each service's own baseline",
+        "description": "Precomputed anomalies: worsening regime shifts (BOCPD changepoints, threshold-free) detected continuously over persisted 5-minute series of every signal \u2014 error_rate and latency_p95 per operation, log_volume, error_log_rate and profile_cost (the service's total profiled cost) per service (the `operation` field holds the entity) \u2014 and persisted to the `sigiro_anomalies` table. Ordered by the unit-free shift magnitude (after - before) / (after + before) descending (1.0 = appeared from a zero baseline, 1/3 = doubled), so the most significant shifts lead regardless of the signal's units \u2014 nothing is filtered out; judge significance from `before`/`after` (raw signal units: %, \u00b5s, logs, profile cost). Optionally filter by `service` and a `from_ts`/`to_ts` window (microseconds since the Unix epoch) over the shift time. Each row carries a ready-to-run `drill_down_sql` for POST /v1/query. Rows whose shifts fall in the same or adjacent 5-minute detection bucket on the same service share an `incident_id` \u2014 one incident across signals, not N independent anomalies (the correlation window is the detection pass's own bucket resolution, never a tuned threshold); `incident_id` is null for uncorrelated rows.",
+        "operationId": "anomalies_handler",
+        "parameters": [
+          {
+            "name": "service",
+            "in": "path",
+            "description": "Filter to one service.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from_ts",
+            "in": "path",
+            "description": "Only shifts at or after this time (microseconds since the Unix epoch).",
+            "required": true,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to_ts",
+            "in": "path",
+            "description": "Only shifts at or before this time (microseconds since the Unix epoch).",
+            "required": true,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Anomaly rows, biggest shift first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnomaliesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/investigate": {
+      "post": {
+        "tags": [
+          "query"
+        ],
+        "summary": "Diagnose a service: ranked findings with runnable SQL",
+        "description": "Root-cause an incident for one or more services over a time window. Returns a triage summary \u2014 NOT raw telemetry: a ranked `findings` array (read this first), per-operation anomaly flags, and bounded samples of spans/logs. Every lead carries a ready-to-run SQL string (`drill_down_sql` on findings, operations, spans, and log patterns; `drill_all_sql` on the spans/logs sections) that you paste VERBATIM into `POST /v1/query` to fetch the underlying rows and go deeper. Typical agent loop: `GET /v1/services` \u2192 `POST /v1/investigate` \u2192 for any finding or anomalous operation, run its `drill_down_sql` via `/v1/query`. Timestamps are microseconds since the Unix epoch. The response is a map `{results: {service: block}, errors: {service: message}}` \u2014 partial results survive a single failing service.",
+        "operationId": "investigate_handler",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvestigateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per-service investigation blocks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (e.g. timestamps not in microseconds, or to_ts <= from_ts)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/query": {
+      "post": {
+        "tags": [
+          "query"
+        ],
+        "summary": "Run SQL over your telemetry",
+        "description": "Accepts exactly one SELECT statement as the raw request body. Allowed\ntables: sigiro_spans, sigiro_logs, sigiro_log_templates,\nsigiro_metrics_gauge, sigiro_metrics_sum, sigiro_metrics_histogram,\nsigiro_metrics_exp_histogram, sigiro_profiles, sigiro_anomalies\n(optionally qualified as lake.* or main.*). WITH/CTE clauses are not\nsupported \u2014 rewrite as derived-table subqueries. Scalar functions are\nallowlisted (aggregates, json extraction, date/time, string, math,\nconditional helpers); file/network readers are blocked. Every\n`drill_down_sql` returned by /v1/investigate can be pasted here verbatim.",
+        "operationId": "query_handler",
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Query results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/services": {
+      "get": {
+        "tags": [
+          "query"
+        ],
+        "summary": "List services seen, with time bounds",
+        "operationId": "services_handler",
+        "responses": {
+          "200": {
+            "description": "List of services",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServicesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/traces/{trace_id}": {
+      "get": {
+        "tags": [
+          "query"
+        ],
+        "summary": "Fetch one whole trace",
+        "operationId": "trace_detail_handler",
+        "parameters": [
+          {
+            "name": "trace_id",
+            "in": "path",
+            "description": "Trace ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trace detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceDetailResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdminStatusResponse": {
+        "type": "object",
+        "description": "GET /admin/status",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AnomaliesResponse": {
+        "type": "object",
+        "description": "GET /v1/anomalies \u2014 precomputed regime shifts of every signal from the\ncontinuous anomaly pass (the `sigiro_anomalies` table), biggest shift\nfirst by the unit-free magnitude (after \u2212 before) / (after + before)\n(comparable across signals; raw |after \u2212 before| breaks zero-baseline\nties, then newest first). Ranking, not filtering: every detected shift\nis returned \u2014 the reader judges significance from `before`/`after`.",
+        "required": [
+          "anomalies"
+        ],
+        "properties": {
+          "anomalies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnomalyEntry"
+            }
+          }
+        }
+      },
+      "AnomalyEntry": {
+        "type": "object",
+        "description": "One row of the `sigiro_anomalies` table: a worsening regime shift found\nby BOCPD changepoint detection over an entity's continuous 5-minute\nseries. No thresholds are involved anywhere \u2014 `direction` is always\n\"worsening\" because only shifts whose mean after exceeds the mean\nbefore are persisted.",
+        "required": [
+          "detected_at",
+          "service_name",
+          "operation",
+          "signal",
+          "kind",
+          "direction",
+          "ts_shift",
+          "ts_shift_us",
+          "before",
+          "after"
+        ],
+        "properties": {
+          "after": {
+            "type": "number",
+            "format": "double",
+            "description": "Series mean from the shift onward."
+          },
+          "before": {
+            "type": "number",
+            "format": "double",
+            "description": "Series mean before the shift, raw signal units (error %, p95 \u00b5s,\nlogs per bucket, summed profile cost per bucket)."
+          },
+          "detected_at": {
+            "type": "string",
+            "description": "When the scheduled pass wrote this row (ISO timestamp)."
+          },
+          "direction": {
+            "type": "string",
+            "description": "Always \"worsening\" \u2014 improvements are never persisted."
+          },
+          "drill_down_sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ready-to-run SQL for POST /v1/query: the raw telemetry behind the\nshift (spans, logs, or profile samples, per the signal)."
+          },
+          "incident_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cross-signal correlation id. Rows sharing an id shifted in the same\nor adjacent 5-minute detection bucket on the same service \u2014 one\nincident, not N independent anomalies (the window is the detection\npass's own bucket resolution, not a threshold). `null` when the row\ncorrelates with no other returned row. Computed over the rows this\nrequest returns, so `service`/window filters scope the grouping."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Detection kind, e.g. \"changepoint\" (BOCPD)."
+          },
+          "operation": {
+            "type": "string",
+            "description": "The entity the shifted series is keyed by: the derived operation\nidentity (error_rate / latency_p95 \u2014 matches\n`operation_summaries[].operation` in /v1/investigate) or the service\nname (log_volume / error_log_rate / profile_cost)."
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "signal": {
+            "type": "string",
+            "description": "Which health series shifted: \"error_rate\", \"latency_p95\",\n\"log_volume\", \"error_log_rate\", or \"profile_cost\"."
+          },
+          "ts_shift": {
+            "type": "string",
+            "description": "First bucket of the NEW regime (ISO timestamp)."
+          },
+          "ts_shift_us": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`ts_shift` as \u00b5s since the Unix epoch \u2014 the value incident\ncorrelation buckets on."
+          }
+        }
+      },
+      "Coverage": {
+        "type": "object",
+        "description": "Computed coverage for the investigation window.",
+        "required": [
+          "has_spans",
+          "has_logs",
+          "has_metrics",
+          "has_profiles",
+          "span_count",
+          "log_template_count",
+          "metric_series_count",
+          "profile_sample_count",
+          "signals"
+        ],
+        "properties": {
+          "has_logs": {
+            "type": "boolean"
+          },
+          "has_metrics": {
+            "type": "boolean"
+          },
+          "has_profiles": {
+            "type": "boolean"
+          },
+          "has_spans": {
+            "type": "boolean"
+          },
+          "log_template_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "metric_series_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "profile_sample_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "signals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignalCoverage"
+            },
+            "description": "Signal coverage details instead of flat gap strings."
+          },
+          "span_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CreateKeyRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateKeyResponse": {
+        "type": "object",
+        "description": "POST /admin/keys",
+        "required": [
+          "key",
+          "key_hash",
+          "tenant_id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "key_hash": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateTenantRequest": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateTenantResponse": {
+        "type": "object",
+        "description": "POST /admin/tenants",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "DerivedEvent": {
+        "type": "object",
+        "required": [
+          "detected_at",
+          "detected_at_us",
+          "event_type",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "detected_at": {
+            "type": "string"
+          },
+          "detected_at_us": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`detected_at` as \u00b5s since the Unix epoch \u2014 what incident correlation\naligns deploys against."
+          },
+          "event_type": {
+            "type": "string"
+          }
+        }
+      },
+      "ErrorTypeCount": {
+        "type": "object",
+        "description": "One failure mode of an operation's error spans: the OTel `error.type`\ndimension (stable semconv) with the number of error spans carrying it.",
+        "required": [
+          "error_type",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Error spans of this operation carrying this failure mode."
+          },
+          "error_type": {
+            "type": "string",
+            "description": "The `error.type` value, derived per span (see `error_type_expr`):\nthe span's real `error.type` attribute when emitted; else the HTTP\nresponse status code (OTel's own rule for HTTP errors \u2014 \"429\",\n\"500\"); else \"timeout\" when `status_message` mentions one; else\n\"_OTHER\" (the semconv catch-all). Low-cardinality by construction."
+          }
+        }
+      },
+      "Finding": {
+        "type": "object",
+        "description": "One ranked, self-contained \"what deserves attention\" item \u2014 the first\nthing an agent reads. Assembled in Rust from data the single query already\nreturned (zero extra SQL, zero extra memory).",
+        "required": [
+          "severity",
+          "kind",
+          "summary"
+        ],
+        "properties": {
+          "drill_down_sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ready-to-run /v1/query SQL for the evidence behind this finding,\nwhen one exists. Incident findings carry the drills on their member\nshifts instead."
+          },
+          "incident": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Incident",
+                "description": "Present only when `kind` is \"incident\": the correlated member shifts\n(each with its own drill) and the suspect deploy, if any."
+              }
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "description": "Machine-readable category: \"incident\" (two or more shifts correlated\nin time \u2014 read `incident` for the members), \"anomalous_operation\"\n(a lone error_rate / latency_p95 shift, which also flags its\noperation summary), \"anomalous_log_volume\" /\n\"anomalous_error_log_rate\" / \"anomalous_profile_cost\" (lone\nstandalone shifts \u2014 no operation to attach to),\n\"errors_without_logs\", \"coverage_gap\", \"missing_resource_attributes\"."
+          },
+          "severity": {
+            "type": "string",
+            "description": "\"critical\" | \"warning\" | \"info\" \u2014 findings are sorted by this."
+          },
+          "summary": {
+            "type": "string",
+            "description": "Human/agent-readable one-liner with the concrete numbers."
+          }
+        }
+      },
+      "FinishReasonCount": {
+        "type": "object",
+        "description": "One finish-reason bucket of a model's LLM calls \u2014 the OTel\n`gen_ai.response.finish_reasons` dimension (\"stop\", \"length\",\n\"tool_calls\", \"content_filter\", \"error\").",
+        "required": [
+          "reason",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "LLM calls of this (system, model) that finished with this reason."
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "GenAiModelSummary": {
+        "type": "object",
+        "description": "Per-(provider, model) LLM call stats, read from the OTel GenAI semconv\n(`gen_ai.*`, STABLE) span attributes. One row per (system, model) seen\nin the window; a service that makes no LLM calls has none \u2014 the section\nis simply empty. Threshold-free: ranked by call_count, nothing dropped.",
+        "required": [
+          "system",
+          "model",
+          "operations",
+          "call_count",
+          "error_pct",
+          "duration_p95_us",
+          "finish_reasons"
+        ],
+        "properties": {
+          "call_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "LLM spans for this (system, model) in the window."
+          },
+          "duration_p95_us": {
+            "type": "number",
+            "format": "double",
+            "description": "p95 span duration in microseconds."
+          },
+          "error_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Percentage of those spans with OTel status ERROR."
+          },
+          "finish_reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FinishReasonCount"
+            },
+            "description": "Finish-reason composition of this model's calls, biggest first \u2014\na rising \"length\"/\"content_filter\" share is a failure mode\n`error_pct` alone never shows. Empty when never emitted."
+          },
+          "input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of `gen_ai.usage.input_tokens` across calls that reported it;\nNone when no call did (distinct from a real 0)."
+          },
+          "model": {
+            "type": "string",
+            "description": "The model (`gen_ai.request.model`, falling back to\n`gen_ai.response.model`)."
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Distinct `gen_ai.operation.name` values seen for this model\n(e.g. \"chat\", \"embeddings\"), sorted. Empty when never emitted."
+          },
+          "output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of `gen_ai.usage.output_tokens` (see `input_tokens`)."
+          },
+          "system": {
+            "type": "string",
+            "description": "The GenAI provider (`gen_ai.system`, e.g. \"openai\", \"anthropic\");\n\"unknown\" when the SDK didn't emit it."
+          }
+        }
+      },
+      "Incident": {
+        "type": "object",
+        "description": "Cross-signal correlation of the anomaly subsystem: N regime shifts whose\n`ts_shift` fall in the same or adjacent detection bucket (the scheduled\npass's own 5-minute resolution \u2014 see `crate::anomaly::correlate_shifts`\nfor why that window is structural, not a threshold) on one service are\nONE incident, not N alerts. Nothing is dropped: every member shift is\nlisted with its own before \u2192 after and drill query.",
+        "required": [
+          "started_at",
+          "started_at_iso",
+          "shifts"
+        ],
+        "properties": {
+          "deploy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DerivedEvent",
+                "description": "The deploy that landed inside the incident's bucket span or in the\nbucket immediately before its first shift \u2014 the prime suspect. None\nwhen no deploy correlates."
+              }
+            ]
+          },
+          "shifts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentShift"
+            },
+            "description": "The correlated shifts, biggest first (by the same unit-free magnitude\nfindings are ranked by)."
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Earliest member `ts_shift` \u2014 the first detection bucket of the\nincident, \u00b5s since the Unix epoch."
+          },
+          "started_at_iso": {
+            "type": "string",
+            "description": "`started_at` as an RFC3339 timestamp."
+          }
+        }
+      },
+      "IncidentShift": {
+        "type": "object",
+        "description": "One member shift of an [`Incident`] \u2014 the same row the anomaly pass\npersisted, with its entity, numbers, and drill kept intact.",
+        "required": [
+          "signal",
+          "entity",
+          "ts_shift",
+          "ts_shift_iso",
+          "before",
+          "after",
+          "summary"
+        ],
+        "properties": {
+          "after": {
+            "type": "number",
+            "format": "double",
+            "description": "Series mean from the shift onward."
+          },
+          "before": {
+            "type": "number",
+            "format": "double",
+            "description": "Series mean before the shift (raw signal units)."
+          },
+          "drill_down_sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ready-to-run /v1/query SQL for the raw telemetry behind this shift\n(persisted by the anomaly pass: the new regime's spans/logs/samples)."
+          },
+          "entity": {
+            "type": "string",
+            "description": "The shifted entity, e.g. \"operation 'POST /pay'\" (span signals) or\n\"service 'api'\" (log/profile signals)."
+          },
+          "signal": {
+            "type": "string",
+            "description": "\"error_rate\" | \"latency_p95\" | \"log_volume\" | \"error_log_rate\" |\n\"profile_cost\"."
+          },
+          "summary": {
+            "type": "string",
+            "description": "The shift in prose, e.g. \"error rate shifted at 14:30 (5.1% \u2192 50.0%)\"."
+          },
+          "ts_shift": {
+            "type": "integer",
+            "format": "int64",
+            "description": "First bucket of the new regime, \u00b5s since the Unix epoch."
+          },
+          "ts_shift_iso": {
+            "type": "string",
+            "description": "`ts_shift` as an RFC3339 timestamp."
+          }
+        }
+      },
+      "InvestigateRequest": {
+        "type": "object",
+        "required": [
+          "from_ts",
+          "to_ts"
+        ],
+        "properties": {
+          "from_ts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Window start, **microseconds** since the Unix epoch (a 16-digit value,\ne.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.",
+            "example": 1780000000000000
+          },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Single service to investigate. Provide this OR `services` (call\n`GET /v1/services` first to discover valid names).",
+            "example": "shopfront-pipeline-worker"
+          },
+          "services": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Multiple services in one call (max 10). Alternative to `service`."
+          },
+          "to_ts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Window end, microseconds since the Unix epoch. Must be > `from_ts`.",
+            "example": 1780001800000000
+          }
+        }
+      },
+      "InvestigateResponse": {
+        "type": "object",
+        "description": "Response envelope for an investigation: per-service blocks plus\nper-service failures. Partial results by design \u2014 one broken service\nmust not discard the other nine (fail loud, per service).",
+        "required": [
+          "results",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "object",
+            "description": "Services whose investigation query failed, keyed by service name,\nwith the error message. Empty when everything succeeded.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "results": {
+            "type": "object",
+            "description": "Successful investigation blocks, keyed by service name.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/InvestigationBlock"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "InvestigationBlock": {
+        "type": "object",
+        "required": [
+          "findings",
+          "service",
+          "window",
+          "error_traces_total",
+          "coverage",
+          "context",
+          "events",
+          "operation_summaries",
+          "gen_ai",
+          "metrics",
+          "spans",
+          "log_patterns",
+          "log_counters",
+          "logs",
+          "profiles"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ServiceContext"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "error_traces_total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Distinct traces with an error span in the window \u2014 the headline\n\"something's wrong\" signal. Drill via the anomalous `operation_summaries`\nor the `spans` section, each of which carries a ready-to-run query."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DerivedEvent"
+            }
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "description": "Ranked list (critical first) of what deserves attention in this\nwindow. Anomalies are CORRELATED across signals first: shifts in the\nsame or adjacent 5-minute detection bucket merge into one \"incident\"\nfinding bundling the member shifts and the suspect deploy; lone\nshifts stay single-signal findings. Anomaly findings then rank by\n(correlated signal count, unit-free shift magnitude\n(after \u2212 before) / (after + before), raw |\u0394|) descending \u2014 a\nmulti-signal incident outranks a lone shift; the magnitude is\ncomparable across error-rate, latency, log and profile shifts.\nNon-anomaly findings (error/log inconsistencies, actionable coverage\ngaps) follow. Read this before the raw sections below."
+          },
+          "gen_ai": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenAiModelSummary"
+            },
+            "description": "Per-(provider, model) LLM stats from OTel GenAI (`gen_ai.*`) span\nattributes, most-called first. Empty when the window has no LLM\nspans \u2014 services that never call a model simply don't have this."
+          },
+          "log_counters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogCounter"
+            },
+            "description": "Numbers the service logs about itself, promoted to statistics \u2014 the\ncounters already embedded in log lines like\n`enqueued=1024 responses=24 translations=0`, one row per number.\n`pinned_zero` rows come first: a counter that never left zero while\nanother number on the SAME line did move. That is the signature of a\nstage doing no work, which no baseline detector can find (a flat-zero\nseries has nothing to deviate from) and which looks identical to\n\"nothing to do\"."
+          },
+          "log_patterns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogPattern"
+            },
+            "description": "Log patterns (template-deduplicated, ordered by count). Each row carries\na `drill_down_sql` for its raw logs."
+          },
+          "logs": {
+            "$ref": "#/components/schemas/SampledSection_LogRecord",
+            "description": "Raw logs, newest first \u2014 a self-describing sample (see `spans`)."
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricBucket"
+            }
+          },
+          "operation_summaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationSummary"
+            }
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileSummary"
+            }
+          },
+          "service": {
+            "type": "string"
+          },
+          "spans": {
+            "$ref": "#/components/schemas/SampledSection_SpanRecord",
+            "description": "Top spans (errors first, then slowest), as a self-describing sample:\n`total` vs the returned rows tells you how much was withheld, and\n`drill_all_sql` fetches the rest."
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          }
+        }
+      },
+      "LogCounter": {
+        "type": "object",
+        "description": "One number a service logs about itself, aggregated over the window.\n\nFree metrics: DRAIN already masks numbers out of every log body to build the\ntemplate and keeps the original token in `template_values`, so each numeric\nvariable position is a time series nobody had to instrument. The label is the\nmasked template token itself (`translations=<NUM>`), which is why this needs\nno naming heuristic.",
+        "required": [
+          "pattern",
+          "label",
+          "samples",
+          "min_value",
+          "max_value",
+          "avg_value",
+          "pinned_zero"
+        ],
+        "properties": {
+          "avg_value": {
+            "type": "number",
+            "format": "double"
+          },
+          "label": {
+            "type": "string",
+            "description": "The masked template token, e.g. `translations=<NUM>` \u2014 its own label."
+          },
+          "max_value": {
+            "type": "number",
+            "format": "double"
+          },
+          "min_value": {
+            "type": "number",
+            "format": "double"
+          },
+          "pattern": {
+            "type": "string",
+            "description": "The log template this number appears in."
+          },
+          "pinned_zero": {
+            "type": "boolean",
+            "description": "Never left zero in the whole window, while another number on the same\nlog line did. Not ranked as an anomaly (a chronically-flat series is by\ndefinition not a deviation) \u2014 it is stated so the question \"should this\nbe zero?\" gets asked. That question is the only thing that finds work\nwhich was switched off before the retention window opened."
+          },
+          "samples": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "LogPattern": {
+        "type": "object",
+        "description": "A log pattern with aggregated statistics.",
+        "required": [
+          "pattern",
+          "sample_values",
+          "severity_text",
+          "count",
+          "error_count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "drill_down_sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pre-built SQL query the agent can run to fetch all raw logs matching\nthis pattern in chronological order. Uses `template_id` for precise\nfiltering. Filled in Rust (needs the caller's window + service)."
+          },
+          "error_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "example_body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Example log body."
+          },
+          "first_seen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pattern": {
+            "type": "string",
+            "description": "Template or pattern string."
+          },
+          "sample_values": {
+            "type": "object",
+            "description": "Up to 5 distinct extracted-variable tuples (each a JSON array of the\nwildcard values for one log line) \u2014 enough to see what varies."
+          },
+          "severity_text": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Template ID (hash) for filtering raw logs. None if no template was extracted.",
+            "minimum": 0
+          }
+        }
+      },
+      "LogRecord": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "timestamp_iso",
+          "severity_text",
+          "body",
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object"
+          },
+          "body": {
+            "type": "string"
+          },
+          "severity_text": {
+            "type": "string"
+          },
+          "span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Microseconds since the Unix epoch."
+          },
+          "timestamp_iso": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MetricBucket": {
+        "type": "object",
+        "required": [
+          "bucket",
+          "metric_name",
+          "p95",
+          "avg",
+          "count"
+        ],
+        "properties": {
+          "avg": {
+            "type": "number",
+            "format": "double"
+          },
+          "bucket": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "metric_name": {
+            "type": "string"
+          },
+          "p95": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "OperationSummary": {
+        "type": "object",
+        "required": [
+          "operation",
+          "span_name",
+          "count",
+          "error_count",
+          "error_pct",
+          "duration_p50_us",
+          "duration_p95_us",
+          "duration_p99_us"
+        ],
+        "properties": {
+          "anomaly_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The detected shift(s) in prose, biggest shift (|after \u2212 before|)\nfirst when there are several, e.g.\n\"error rate shifted at 14:32 (5.1% \u2192 23.8%)\" /\n\"p95 shifted at 14:30 (2.1s \u2192 240.0s)\"."
+          },
+          "baseline_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "baseline_error_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "baseline_p95_us": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "drill_down_sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ready-to-run query for the raw spans behind this operation (errors\nfirst, then slowest). Sits next to `anomaly_reason` on purpose: when an\noperation looks wrong, this is exactly how to pull the evidence. Filled\nin Rust."
+          },
+          "duration_p50_us": {
+            "type": "number",
+            "format": "double"
+          },
+          "duration_p95_us": {
+            "type": "number",
+            "format": "double"
+          },
+          "duration_p99_us": {
+            "type": "number",
+            "format": "double"
+          },
+          "error_breakdown": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorTypeCount"
+            },
+            "description": "Failure-mode composition of this operation's error spans \u2014 the OTel\n`error.type` dimension, biggest first (count desc, then name).\nAnswers HOW the operation fails (timeout vs 429 vs 500), not just\nthat it does \u2014 `error_pct` alone collapses 246 timeouts and 6 HTTP\n500s into one number. Empty when the operation has no error spans."
+          },
+          "error_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error_pct": {
+            "type": "number",
+            "format": "double"
+          },
+          "exemplar_error_trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_anomalous": {
+            "type": "boolean",
+            "description": "Whether the continuous anomaly pass (augurs BOCPD changepoints over\nthis operation's persisted error-rate and p95-latency series \u2014 see\n`crate::anomaly`) found a worsening regime shift (mean after > mean\nbefore) whose `ts_shift` falls inside this investigation window. Read from the\n`sigiro_anomalies` table, never recomputed per request. Improvements\ndo not flag, and a chronic-but-stable failure rate has no changepoint\nand is NOT anomalous \u2014 it IS the baseline; read `error_pct` for\nchronic health.\n\nNot present in the SQL payload (filled in Rust from the joined\nanomaly rows) \u2014 `default` keeps the flattened deserialize working."
+          },
+          "operation": {
+            "type": "string",
+            "description": "The operation identity spans are grouped by. Usually equals\n`span_name`, but generic HTTP spans (span_name is a bare method like\n\"POST\", per OTel HTTP semconv) are disambiguated with\n`http.route`/`server.address` from span_attributes \u2014 e.g.\n\"POST api.example.com\" \u2014 so one giant \"POST\" bucket doesn't swallow\nevery outbound call."
+          },
+          "span_name": {
+            "type": "string",
+            "description": "The raw OTel span name behind this operation (one representative\nvalue when the group was derived from attributes)."
+          }
+        }
+      },
+      "ProfileSummary": {
+        "type": "object",
+        "required": [
+          "function",
+          "profile_type",
+          "total_value",
+          "unit",
+          "sample_count"
+        ],
+        "properties": {
+          "function": {
+            "type": "string"
+          },
+          "profile_type": {
+            "type": "string"
+          },
+          "sample_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_value": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
+      "RevokeKeyResponse": {
+        "type": "object",
+        "description": "DELETE /admin/keys/{short_token}",
+        "required": [
+          "revoked",
+          "short_token"
+        ],
+        "properties": {
+          "revoked": {
+            "type": "boolean"
+          },
+          "short_token": {
+            "type": "string"
+          }
+        }
+      },
+      "SampledSection_LogRecord": {
+        "type": "object",
+        "description": "A bounded sample of a larger set that carries its own \"there's more, and\nhere's how to get it\" affordance, so an agent can decide to drill without\nguessing. When `total > sample.len()`, run `drill_all_sql` via /v1/query.",
+        "required": [
+          "sample",
+          "total",
+          "sampled_by",
+          "drill_all_sql"
+        ],
+        "properties": {
+          "drill_all_sql": {
+            "type": "string",
+            "description": "Query returning the full set for this section, ready to paste into\n/v1/query."
+          },
+          "sample": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "timestamp",
+                "timestamp_iso",
+                "severity_text",
+                "body",
+                "attributes"
+              ],
+              "properties": {
+                "attributes": {
+                  "type": "object"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "severity_text": {
+                  "type": "string"
+                },
+                "span_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "timestamp": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Microseconds since the Unix epoch."
+                },
+                "timestamp_iso": {
+                  "type": "string"
+                },
+                "trace_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "sampled_by": {
+            "type": "string",
+            "description": "How the sample was ordered/selected, e.g. \"errors first, then slowest\"."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SampledSection_SpanRecord": {
+        "type": "object",
+        "description": "A bounded sample of a larger set that carries its own \"there's more, and\nhere's how to get it\" affordance, so an agent can decide to drill without\nguessing. When `total > sample.len()`, run `drill_all_sql` via /v1/query.",
+        "required": [
+          "sample",
+          "total",
+          "sampled_by",
+          "drill_all_sql"
+        ],
+        "properties": {
+          "drill_all_sql": {
+            "type": "string",
+            "description": "Query returning the full set for this section, ready to paste into\n/v1/query."
+          },
+          "sample": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A flat span record. Attributes and events are embedded as real JSON\n(not escaped strings) so agents can read them directly.",
+              "required": [
+                "trace_id",
+                "span_id",
+                "parent_span_id",
+                "span_name",
+                "status_code",
+                "is_error",
+                "duration_us",
+                "start_ts",
+                "end_ts",
+                "start_iso",
+                "span_attributes",
+                "events"
+              ],
+              "properties": {
+                "drill_down_sql": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Ready-to-run query for the full trace this span belongs to (every span\nsharing its `trace_id`, chronological). Filled in Rust."
+                },
+                "duration_us": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "end_ts": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "events": {
+                  "type": "object"
+                },
+                "is_error": {
+                  "type": "boolean"
+                },
+                "parent_span_id": {
+                  "type": "string",
+                  "description": "Empty string for root spans."
+                },
+                "span_attributes": {
+                  "type": "object"
+                },
+                "span_id": {
+                  "type": "string"
+                },
+                "span_kind": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "OTel span kind as stored (integer enum)."
+                },
+                "span_name": {
+                  "type": "string"
+                },
+                "start_iso": {
+                  "type": "string"
+                },
+                "start_ts": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "status_code": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "status_message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "OTel status message \u2014 for spans that fail without emitting any log\n(e.g. HTTP client errors) this is often the only diagnostic string."
+                },
+                "trace_id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "sampled_by": {
+            "type": "string",
+            "description": "How the sample was ordered/selected, e.g. \"errors first, then slowest\"."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ServiceBreakdownEntry": {
+        "type": "object",
+        "description": "Service duration breakdown with percentages.",
+        "required": [
+          "service",
+          "duration_us",
+          "percentage"
+        ],
+        "properties": {
+          "duration_us": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "percentage": {
+            "type": "number",
+            "format": "double"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
+      "ServiceContext": {
+        "type": "object",
+        "required": [
+          "service_name",
+          "pod_count",
+          "has_instance_id",
+          "dependencies",
+          "dependents"
+        ],
+        "properties": {
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceDependency"
+            }
+          },
+          "dependents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceDependency"
+            }
+          },
+          "deployment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first_seen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_instance_id": {
+            "type": "boolean"
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "namespace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pod_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "F-26: distinct pod count when `service.instance.id` is present in\nresource attributes, else 0. Use `has_instance_id` to distinguish\n\"no pods identified\" from \"service not seen\"."
+          },
+          "service_name": {
+            "type": "string"
+          }
+        }
+      },
+      "ServiceDependency": {
+        "type": "object",
+        "description": "Service dependency graph node with aggregated stats.",
+        "required": [
+          "service_name",
+          "span_count",
+          "error_count",
+          "error_rate"
+        ],
+        "properties": {
+          "error_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of error spans in shared traces."
+          },
+          "error_rate": {
+            "type": "number",
+            "format": "double",
+            "description": "Error rate as a percentage."
+          },
+          "service_name": {
+            "type": "string",
+            "description": "Name of the dependent service."
+          },
+          "span_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of spans from this service in shared traces."
+          }
+        }
+      },
+      "ServiceEntry": {
+        "type": "object",
+        "required": [
+          "name",
+          "spanCount"
+        ],
+        "properties": {
+          "firstSeen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastSeen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "spanCount": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ServicesResponse": {
+        "type": "object",
+        "description": "GET /v1/services",
+        "required": [
+          "services"
+        ],
+        "properties": {
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceEntry"
+            }
+          }
+        }
+      },
+      "SignalCoverage": {
+        "type": "object",
+        "description": "Signal availability for a given service/time range.",
+        "required": [
+          "signal_type",
+          "available",
+          "severity",
+          "reason"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "Whether this signal type has data in the window."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason if not available, or summary if available."
+          },
+          "severity": {
+            "type": "string",
+            "description": "Severity: \"high\", \"medium\", \"low\", \"none\""
+          },
+          "signal_type": {
+            "type": "string",
+            "description": "Signal type (spans, logs, metrics, profiles)."
+          }
+        }
+      },
+      "SpanDetail": {
+        "type": "object",
+        "description": "Individual span detail in trace detail response.",
+        "required": [
+          "trace_id",
+          "span_id",
+          "span_name",
+          "duration_us",
+          "status_code",
+          "service_name",
+          "timestamp"
+        ],
+        "properties": {
+          "duration_us": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "events_json": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "links_json": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_attributes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "span_attributes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "span_id": {
+            "type": "string"
+          },
+          "span_kind": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "span_name": {
+            "type": "string"
+          },
+          "status_code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "trace_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SpanRecord": {
+        "type": "object",
+        "description": "A flat span record. Attributes and events are embedded as real JSON\n(not escaped strings) so agents can read them directly.",
+        "required": [
+          "trace_id",
+          "span_id",
+          "parent_span_id",
+          "span_name",
+          "status_code",
+          "is_error",
+          "duration_us",
+          "start_ts",
+          "end_ts",
+          "start_iso",
+          "span_attributes",
+          "events"
+        ],
+        "properties": {
+          "drill_down_sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ready-to-run query for the full trace this span belongs to (every span\nsharing its `trace_id`, chronological). Filled in Rust."
+          },
+          "duration_us": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "end_ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "events": {
+            "type": "object"
+          },
+          "is_error": {
+            "type": "boolean"
+          },
+          "parent_span_id": {
+            "type": "string",
+            "description": "Empty string for root spans."
+          },
+          "span_attributes": {
+            "type": "object"
+          },
+          "span_id": {
+            "type": "string"
+          },
+          "span_kind": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "OTel span kind as stored (integer enum)."
+          },
+          "span_name": {
+            "type": "string"
+          },
+          "start_iso": {
+            "type": "string"
+          },
+          "start_ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status_code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "OTel status message \u2014 for spans that fail without emitting any log\n(e.g. HTTP client errors) this is often the only diagnostic string."
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TraceDetailResponse": {
+        "type": "object",
+        "description": "Complete trace detail response with critical path and service breakdown.",
+        "required": [
+          "trace_id",
+          "total_duration_us",
+          "root_span",
+          "span_count",
+          "error_count",
+          "services",
+          "spans",
+          "critical_path",
+          "service_breakdown"
+        ],
+        "properties": {
+          "critical_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "root_span": {
+            "$ref": "#/components/schemas/SpanDetail"
+          },
+          "service_breakdown": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceBreakdownEntry"
+            }
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "span_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "spans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpanDetail"
+            }
+          },
+          "total_duration_us": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Window": {
+        "type": "object",
+        "required": [
+          "from_ts",
+          "to_ts",
+          "from_iso",
+          "to_iso"
+        ],
+        "properties": {
+          "from_iso": {
+            "type": "string"
+          },
+          "from_ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "to_iso": {
+            "type": "string"
+          },
+          "to_ts": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "prefixed-api-key"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "query",
+      "description": "SQL query endpoints"
+    },
+    {
+      "name": "admin",
+      "description": "Admin endpoints"
+    }
+  ]
+}

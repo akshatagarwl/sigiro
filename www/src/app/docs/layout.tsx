@@ -1,39 +1,46 @@
-import Link from 'next/link';
+import { DocsLayout } from 'fumadocs-ui/layouts/docs';
+import { RootProvider } from 'fumadocs-ui/provider/next';
 import type { ReactNode } from 'react';
 import { SiteFooter, SiteHeader } from '@/components/site-chrome';
-import { DOCS } from '@/lib/docs';
+import type { Metadata } from 'next';
+import { SITE } from '@/lib/site';
+import { source } from '@/lib/source';
+import './docs.css';
 
 /**
- * Same width, same chrome, same hairlines as the landing page — the header and
- * footer are literally the same components, so the two cannot drift apart. The
- * only thing docs add is the sidebar.
+ * A static description for every docs route. The per-page one from
+ * `generateMetadata` is more specific but lands in <body> under vinext, so
+ * without this there is no head-level description at all.
  */
-export default function DocsLayout({ children }: { children: ReactNode }) {
+export const metadata: Metadata = {
+  description: `Docs for ${SITE.name}: quickstart, agent instrumentation, hosted onboarding, and the full API reference generated from the spec sigiro serves.`,
+};
+
+/**
+ * fumadocs' shell, wrapped in our own header and footer so the docs stay part of
+ * the site rather than looking like a bolted-on framework. Theming is in
+ * docs.css: fumadocs exposes its palette as CSS variables, which are mapped onto
+ * the same tokens the landing page uses.
+ */
+export default function Layout({ children }: { children: ReactNode }) {
   return (
-    <div className="mx-auto max-w-[60rem] px-6">
-      <SiteHeader />
-      <div className="gap-10 border-t border-line pt-10 pb-16 sm:flex">
-        <nav aria-label="Docs" className="mb-8 shrink-0 sm:mb-0 sm:w-44">
-          <p className="mb-3 font-mono text-[0.6875rem] tracking-[0.2em] text-faint">DOCS</p>
-          <ul className="flex flex-col gap-0.5 text-[0.8125rem]">
-            {DOCS.map((doc) => (
-              <li key={doc.url}>
-                <Link
-                  href={doc.url}
-                  prefetch={false}
-                  className="block rounded-md px-2 py-1.5 text-muted-ink hover:bg-surface hover:text-strong"
-                >
-                  {doc.title}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
-        <main id="main" className="min-w-0 flex-1">
-          {children}
-        </main>
+    /* RootProvider lives here, not in the root layout: it carries the search
+       dialog and theme context, and the landing page must not pay for either. */
+    <RootProvider theme={{ enabled: false }}>
+      <div className="mx-auto max-w-[72rem] px-6">
+        <SiteHeader />
+        <DocsLayout
+          tree={source.pageTree}
+          nav={{ enabled: false }}
+          sidebar={{ collapsible: false }}
+          containerProps={{ className: 'border-t border-line pt-6' }}
+        >
+          {/* fumadocs' DocsLayout renders no <main>, so the page had no landmark
+              and the root layout's skip link pointed at nothing. */}
+          <main id="main">{children}</main>
+        </DocsLayout>
+        <SiteFooter />
       </div>
-      <SiteFooter />
-    </div>
+    </RootProvider>
   );
 }
