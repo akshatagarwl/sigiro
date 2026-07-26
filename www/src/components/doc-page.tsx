@@ -57,17 +57,35 @@ export async function DocPage({ doc }: { doc: Doc }) {
               // A fence whose language we have no grammar for stays plain text
               // rather than failing the whole render.
               fallbackLanguage: 'text',
+              // Off by default, and without it the language does not survive the
+              // transform — there is nothing left on the node to label the block.
+              addLanguageClass: true,
             },
           ],
         ]}
         components={{
           pre({ node, children, ...props }) {
-            // `node` is the hast <pre>; its text is what the clipboard needs.
+            // `node` is the hast <pre>; its text is what the clipboard needs, and
+            // its <code> child carries the `language-*` class rehype-shiki adds.
             const value = node ? toString(node as Element) : '';
+            const code = node?.children?.find(
+              (c): c is Element => c.type === 'element' && c.tagName === 'code',
+            );
+            // rehype-shiki writes the raw attribute name `class`, not hast's
+            // normalised `className` — read both, and accept either the string or
+            // the array form.
+            const props_ = (code?.properties ?? {}) as Record<string, unknown>;
+            const raw = props_.class ?? props_.className;
+            const classes = (Array.isArray(raw) ? raw : String(raw ?? '').split(/\s+/)).filter(
+              (c): c is string => typeof c === 'string',
+            );
+            const lang = classes
+              .find((c) => c.startsWith('language-'))
+              ?.slice('language-'.length);
             // Wrap the original <pre>, never replace it — dropping it collapses
             // the whitespace and loses Shiki's class and inline theme colours.
             return (
-              <CodeBlock value={value}>
+              <CodeBlock lang={lang === 'text' ? undefined : lang} value={value}>
                 <pre {...props}>{children}</pre>
               </CodeBlock>
             );

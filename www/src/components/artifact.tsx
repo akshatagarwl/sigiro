@@ -21,7 +21,7 @@ export async function Artifact({
   const html = await highlight(code, lang);
 
   return (
-    <CodeBlock title={title} meta={meta} value={code}>
+    <CodeBlock lang={lang} title={title} meta={meta} value={code}>
       {/* Shiki output, generated from literals in this repo. */}
       <div dangerouslySetInnerHTML={{ __html: html }} />
     </CodeBlock>
