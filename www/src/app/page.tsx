@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { Artifact } from '@/components/artifact';
 import { Faq } from '@/components/faq';
-import { Install } from '@/components/install';
+import { Button } from '@/components/ui/button';
 import { SiteFooter, SiteHeader } from '@/components/site-chrome';
 import { FAQ, PROMISES, RUNS_ON, SECTIONS, SITE } from '@/lib/site';
 
@@ -43,8 +44,19 @@ export default function Home() {
               {SITE.tagline}
             </h1>
             <p className="mt-4 max-w-[38rem] text-[1.0625rem] text-muted-ink">{SITE.description}</p>
-            <Install />
-            <p className="mt-4 font-mono text-[0.6875rem] text-faint">
+            {/* Buttons, not a snippet. `@kibo-ui/snippet` renders
+                `<pre className="truncate">`, so a long command is cut off — and the
+                install command belongs in 01 Connect, where the code block already
+                scrolls and carries its own copy button. */}
+            <div className="mt-8 flex flex-wrap items-center gap-2.5">
+              <Button size="lg" render={<Link href="/docs/quickstart" prefetch={false} />}>
+                Get started
+              </Button>
+              <Button size="lg" variant="outline" render={<Link href="/docs" prefetch={false} />}>
+                Read the docs
+              </Button>
+            </div>
+            <p className="mt-5 font-mono text-[0.6875rem] text-faint">
               <span className="mr-1.5 inline-block size-[5px] rounded-full bg-strong align-[1px]" />
               Self-hosted and free. Hosted beta rolling out.
             </p>

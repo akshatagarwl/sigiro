@@ -95,6 +95,25 @@
     background: transparent;
     padding: 0;
   }
+  /* The mark's changepoint marker. Opacity and scale only, so it composites and
+     never triggers layout. */
+  @keyframes mark-pulse {
+    0%,
+    100% {
+      opacity: 0.15;
+      transform: scale(0.7);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.15);
+    }
+  }
+  .mark-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: mark-pulse 2.6s ease-in-out infinite;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     html {
       scroll-behavior: auto;

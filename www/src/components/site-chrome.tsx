@@ -7,8 +7,12 @@ import { NAV, SITE, SOCIAL } from '@/lib/site';
  * stay cohesive as either one changes.
  */
 
-/** The changepoint glyph: a flat baseline that steps up. */
-export function Mark({ size = 18 }: { size?: number }) {
+/**
+ * The changepoint glyph: a flat baseline that steps up, with the shift itself
+ * pulsing. It is the one moving thing on the page, and it animates the product's
+ * own subject — something changed, here.
+ */
+export function Mark({ size = 18, pulse = false }: { size?: number; pulse?: boolean }) {
   return (
     <svg
       width={size}
@@ -22,6 +26,9 @@ export function Mark({ size = 18 }: { size?: number }) {
       aria-hidden
     >
       <path d="M5 24h7V10h15" />
+      {pulse ? (
+        <circle className="mark-pulse" cx="12" cy="10" r="3.5" stroke="none" fill="currentColor" />
+      ) : null}
     </svg>
   );
 }
@@ -33,7 +40,7 @@ export function SiteHeader() {
         href="/"
         className="flex items-center gap-2 font-semibold tracking-tight text-strong"
       >
-        <Mark />
+        <Mark pulse />
         {SITE.name}
       </Link>
       <nav aria-label="Main" className="flex items-center gap-5 text-[0.8125rem]">
