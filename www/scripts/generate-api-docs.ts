@@ -57,6 +57,24 @@ await generateFiles({
     url: (file) => `/docs/api/${basename(file, '.mdx')}`,
   },
   beforeWrite(files) {
+    // Descriptions in the spec are markdown, which is right for the document an
+    // agent reads. But frontmatter `description` is rendered as plain text — under
+    // the page title and inside <meta name="description"> — so the backticks show
+    // up literally in both. Strip them from the frontmatter only; the spec and the
+    // rendered body keep theirs.
+    for (const file of files) {
+      if (!file.path.endsWith('.mdx')) continue;
+      // Only the frontmatter `description` — the rest of the frontmatter carries the
+      // operation content that renders the page body, and that is markdown by
+      // design.
+      const desc = /^description: (\|-?\n(?:[ \t]+.*\n)+|.*\n)/m.exec(file.content);
+      if (!desc) throw new Error(`no frontmatter description in ${file.path}`);
+      file.content =
+        file.content.slice(0, desc.index) +
+        desc[0].replaceAll('`', '') +
+        file.content.slice(desc.index + desc[0].length);
+    }
+
     const index = files.find((f) => f.path.endsWith('index.mdx'));
     if (!index) throw new Error('index.mdx was not generated — check the index config');
 
