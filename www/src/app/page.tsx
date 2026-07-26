@@ -6,6 +6,7 @@ import { Integrations } from '@/components/integrations';
 import { Button } from '@/components/ui/button';
 import { SiteFooter, SiteHeader } from '@/components/site-chrome';
 import { FAQ, PROMISES, SECTIONS, SITE } from '@/lib/site';
+import { jsonLd } from '@/lib/json-ld';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/' },
@@ -133,7 +134,7 @@ export default function Home() {
 
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }}
+        dangerouslySetInnerHTML={{ __html: jsonLd(faqSchema) }}
       />
     </>
   );

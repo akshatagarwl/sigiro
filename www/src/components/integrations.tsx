@@ -1,48 +1,66 @@
 import {
-  SiAnthropic,
-  SiClaude,
-  SiCloudflare,
-  SiCursor,
-  SiDocker,
-  SiDotnet,
-  SiFlydotio,
-  SiGo,
-  SiKubernetes,
-  SiNodedotjs,
-  SiOpenjdk,
-  SiOpentelemetry,
-  SiPython,
-  SiRailway,
-  SiRender,
-  SiRuby,
-  SiRust,
-} from '@icons-pack/react-simple-icons';
+  siClaude,
+  siCloudflare,
+  siCursor,
+  siDocker,
+  siDotnet,
+  siFlydotio,
+  siGo,
+  siKubernetes,
+  siNodedotjs,
+  siOpenjdk,
+  siOpentelemetry,
+  siPython,
+  siRailway,
+  siRender,
+  siRuby,
+  siRust,
+} from 'simple-icons';
 import { INTEGRATIONS } from '@/lib/site';
 
 /**
- * Brand marks from simple-icons, rendered in `currentColor` rather than each
- * brand's own hue — the palette is achromatic and a row of coloured logos would
- * be the loudest thing on the page. Server-rendered SVG, no client JavaScript.
+ * Brand marks straight from `simple-icons` — the upstream data package, path
+ * strings only. The React wrapper (@icons-pack/react-simple-icons) scored 31/100
+ * on Socket's supply-chain axis, and all it was doing was turning these same paths
+ * into components.
+ *
+ * Rendered in `currentColor` rather than each brand's own hue: the palette is
+ * achromatic, and a row of coloured logos would be the loudest thing on the page.
  */
 const ICONS = {
-  SiAnthropic,
-  SiClaude,
-  SiCloudflare,
-  SiCursor,
-  SiDocker,
-  SiDotnet,
-  SiFlydotio,
-  SiGo,
-  SiKubernetes,
-  SiNodedotjs,
-  SiOpenjdk,
-  SiOpentelemetry,
-  SiPython,
-  SiRailway,
-  SiRender,
-  SiRuby,
-  SiRust,
+  SiClaude: siClaude,
+  SiCloudflare: siCloudflare,
+  SiCursor: siCursor,
+  SiDocker: siDocker,
+  SiDotnet: siDotnet,
+  SiFlydotio: siFlydotio,
+  SiGo: siGo,
+  SiKubernetes: siKubernetes,
+  SiNodedotjs: siNodedotjs,
+  SiOpenjdk: siOpenjdk,
+  SiOpentelemetry: siOpentelemetry,
+  SiPython: siPython,
+  SiRailway: siRailway,
+  SiRender: siRender,
+  SiRuby: siRuby,
+  SiRust: siRust,
 } as const;
+
+function Mark({ icon }: { icon: { title: string; path: string } }) {
+  return (
+    <svg
+      role="img"
+      aria-label={icon.title}
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="currentColor"
+      className="shrink-0 text-faint"
+    >
+      <path d={icon.path} />
+    </svg>
+  );
+}
 
 export function Integrations() {
   return (
@@ -54,15 +72,13 @@ export function Integrations() {
           </p>
           <ul className="flex flex-wrap gap-1.5">
             {group.items.map((item) => {
-              const Icon = item.icon ? ICONS[item.icon as keyof typeof ICONS] : undefined;
+              const icon = item.icon ? ICONS[item.icon as keyof typeof ICONS] : undefined;
               return (
                 <li
                   key={item.name}
                   className="flex items-center gap-2 rounded-lg border border-line bg-card px-2.5 py-1.5 text-[0.8125rem] text-muted-ink"
                 >
-                  {Icon ? (
-                    <Icon size={14} className="shrink-0 text-faint" color="currentColor" />
-                  ) : null}
+                  {icon ? <Mark icon={icon} /> : null}
                   {item.name}
                 </li>
               );

@@ -1,13 +1,11 @@
-import { SnippetCopyButton } from '@/components/kibo-ui/snippet';
+import { CopyButton } from '@/components/copy-button';
 
 /**
  * The one code-block shell for the whole site: the landing page artifacts and
  * every fence in the docs render through this, so they are the same object.
  *
- * The copy button is `@kibo-ui/snippet`'s — it owns the clipboard call and the
- * copied/idle state. `opacity-100` overrides the registry default of
- * `opacity-0 group-hover:opacity-100`, which is invisible to the eye until you
- * mouse over it and does not exist at all on a touch screen.
+ * The copy button is always visible — see components/copy-button.tsx for why the
+ * registry's version was replaced.
  */
 export function CodeBlock({
   lang,
@@ -20,8 +18,9 @@ export function CodeBlock({
   lang?: string;
   title?: string;
   meta?: string;
-  /** The plain text the copy button puts on the clipboard. */
-  value: string;
+  /** The plain text the copy button puts on the clipboard. Omit in MDX — the
+   *  button reads the rendered <pre> instead. */
+  value?: string;
   /** Pre-highlighted markup — Shiki output, generated server-side. */
   children: React.ReactNode;
 }) {
@@ -38,13 +37,14 @@ export function CodeBlock({
           {title && meta ? ' · ' : null}
           {meta}
         </span>
-        <SnippetCopyButton
-          value={value}
-          aria-label={title ? `Copy ${title}` : `Copy ${lang ?? 'code'}`}
-          className="shrink-0 opacity-100"
-        />
+        <CopyButton value={value} label={title ?? lang} />
       </figcaption>
-      <div className="overflow-x-auto p-3.5">{children}</div>
+      {/* The type is set here and nowhere else: a fence in the docs sits inside a
+          `.prose` region and one on the landing page does not, so leaving the
+          size to inherit is what made the two diverge. */}
+      <div className="overflow-x-auto p-3.5 font-mono text-[0.8125rem] leading-[1.7]">
+        {children}
+      </div>
     </figure>
   );
 }

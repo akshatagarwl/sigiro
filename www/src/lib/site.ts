@@ -215,7 +215,7 @@ export const FAQ = [
 
 export const NAV = [
   { href: '/docs', label: 'Docs' },
-  { href: '/docs/quickstart', label: 'Quickstart' },
+  { href: '/docs/api', label: 'API' },
 ] as const;
 
 export const SOCIAL = [

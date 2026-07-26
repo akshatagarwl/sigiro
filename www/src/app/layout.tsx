@@ -3,6 +3,7 @@ import { Instrument_Sans, JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { SITE } from '@/lib/site';
 import './globals.css';
+import { jsonLd } from '@/lib/json-ld';
 
 /**
  * The pairing polylane uses: Instrument Sans for everything read, JetBrains Mono
@@ -107,7 +108,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {children}
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(graph) }}
+          dangerouslySetInnerHTML={{ __html: jsonLd(graph) }}
         />
       </body>
     </html>

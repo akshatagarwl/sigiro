@@ -16,7 +16,7 @@ import { NAV, SITE, SOCIAL } from '@/lib/site';
  * animates. `pathLength="100"` normalises the geometry so the dash lengths are
  * percentages and stay correct if the path ever changes.
  */
-export function Mark({ size = 18, pulse = false }: { size?: number; pulse?: boolean }) {
+function Mark({ size = 18, pulse = false }: { size?: number; pulse?: boolean }) {
   const d = 'M5 24h7V10h15';
   return (
     <svg
@@ -38,10 +38,13 @@ export function Mark({ size = 18, pulse = false }: { size?: number; pulse?: bool
 
 export function SiteHeader() {
   return (
-    <header className="flex items-center justify-between py-5">
+    /* `gap-6` and not `justify-between` alone: with only the latter, a narrow
+       viewport shrinks the free space to zero and the wordmark ends up touching
+       the first nav link. */
+    <header className="flex items-center justify-between gap-6 py-5">
       <Link
         href="/"
-        className="flex items-center gap-2 font-semibold tracking-tight text-strong"
+        className="flex shrink-0 items-center gap-2 font-semibold tracking-tight text-strong"
       >
         <Mark pulse />
         {SITE.name}
@@ -103,6 +106,8 @@ export function SiteFooter() {
             {item.label.toLowerCase()}
           </a>
         ))}
+        {/* Plain anchor on purpose: /llms.txt is a text/plain route handler, and a
+            client-side navigation would try to render it as a React page. */}
         <a href="/llms.txt" className="text-faint hover:text-strong">
           llms.txt
         </a>

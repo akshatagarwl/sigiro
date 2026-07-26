@@ -12,7 +12,10 @@ export async function GET() {
   const sections = await Promise.all(
     source.getPages().map(async (page) => {
       const markdown = await page.data.getText('processed');
-      return `<!-- ${SITE.url}${page.url} -->\n\n${markdown}`;
+      // The title comes from frontmatter — the bodies deliberately have no `# `
+      // heading, since fumadocs renders the frontmatter title on the page and a
+      // second one would be the same heading twice.
+      return `<!-- ${SITE.url}${page.url} -->\n\n# ${page.data.title}\n\n${markdown}`;
     }),
   );
 

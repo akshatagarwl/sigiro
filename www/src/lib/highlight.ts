@@ -29,39 +29,14 @@ const highlighter = createHighlighterCore({
   engine: createJavaScriptRegexEngine(),
 });
 
-const LANGS = new Set<string>(['json', 'sql', 'bash', 'typescript', 'yaml']);
-
-/** The aliases the docs actually use in fenced blocks. */
-const ALIAS: Record<string, Lang> = {
-  sh: 'bash',
-  shell: 'bash',
-  console: 'bash',
-  js: 'typescript',
-  ts: 'typescript',
-  tsx: 'typescript',
-  yml: 'yaml',
-};
-
-/** Null for a fence we have no grammar for — render it plain rather than throw. */
-export function resolveLang(lang: string | undefined): Lang | null {
-  if (!lang) return null;
-  const l = lang.toLowerCase();
-  if (LANGS.has(l)) return l as Lang;
-  return ALIAS[l] ?? null;
-}
-
 /**
  * Two of the theme's token colours land just under AA at our code size — the
  * comment grey at 4.0:1 and the keyword red at 4.49:1 against 4.5 required.
  * `colorReplacements` is Shiki's own hook for this, so the theme is adjusted
- * rather than the output patched afterwards.
+ * rather than the output patched afterwards. Also used by the docs, via
+ * source.config.ts.
  */
 export const COLOR_REPLACEMENTS = { '#6e7781': '#5a6169', '#cf222e': '#b3121f' };
-
-/** The same instance @shikijs/rehype uses for the docs. */
-export function getHighlighter() {
-  return highlighter;
-}
 
 export async function highlight(code: string, lang: Lang): Promise<string> {
   const shiki = await highlighter;

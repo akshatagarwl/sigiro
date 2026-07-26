@@ -13,7 +13,9 @@
   --color-strong: #0a0a0a;
   --color-body: #404040;
   --color-muted-ink: #525252;
-  --color-faint: #737373;
+  /* #737373 was 4.54:1 on the page ground and 3.98:1 on surface-2 — passing by
+     0.04 and failing on any tint. This clears 5:1 everywhere it is used. */
+  --color-faint: #6b6b6b;
   --color-ghost: #a3a3a3;
   --color-accent: #171717;
   --color-on-accent: #ffffff;
@@ -76,13 +78,18 @@
 
 /* Unlayered on purpose: these were in @layer base, and @tailwindcss/typography
    emits `.prose` in a later layer, so its `content: "`"` on inline code won
-   no matter the specificity. Unlayered CSS beats layered CSS in Tailwind v4. */
+   no matter the specificity. Unlayered CSS beats layered CSS in Tailwind v4.
+
+   Every rule here carries `:not(.not-prose *)`, which is how the typography
+   plugin scopes its own rules. Without it these leak into `not-prose` regions —
+   which is what our code block is — and the padding, size and background land
+   twice, once from the component and once from here. */
 /* Inline code, scoped so it never reaches a Shiki block. Tailwind
    typography's `prose-code:` variant matches code inside `pre` too, and it
    tinted the block background and re-applied an em size on top of the block's
    — which compounded to 11px on a darker ground and put two token colours
    under AA. */
-.prose :not(pre) > code {
+.prose :not(pre) > code:not(.not-prose *) {
   font-family: var(--font-mono);
   font-size: 0.8125em;
   color: var(--color-strong);
@@ -90,11 +97,11 @@
   border-radius: 0.25rem;
   padding: 0.1em 0.3em;
 }
-.prose :not(pre) > code::before,
-.prose :not(pre) > code::after {
+.prose :not(pre) > code:not(.not-prose *)::before,
+.prose :not(pre) > code:not(.not-prose *)::after {
   content: none;
 }
-.prose pre {
+.prose pre:not(.not-prose *) {
   font-size: 0.8125rem;
   background: var(--color-code-bg);
   padding: 0.875rem;
@@ -103,7 +110,7 @@
      language, where Shiki emits no per-token colours to override it. */
   color: var(--color-strong);
 }
-.prose pre code {
+.prose pre:not(.not-prose *) code {
   font: inherit;
   /* typography sets pre>code's colour separately from pre's, so the gray-200
      has to be cleared on both or an unlanguaged fence stays invisible. */

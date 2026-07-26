@@ -12,6 +12,10 @@ export const docs = defineDocs({
 export default defineConfig({
   mdxOptions: {
     rehypeCodeOptions: {
+      // Puts `language-<lang>` on the <code> element. Off by default, and the
+      // only way the fence's language survives highlighting — our code block
+      // reads it back to label the fence, the same as on the landing page.
+      addLanguageClass: true,
       // Same theme as the landing page artifacts, so a fence looks identical on
       // both sides of the site. The two replaced colours are the theme's comment
       // grey and keyword red, which are 4.37:1 and 4.49:1 on our code background

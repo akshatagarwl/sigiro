@@ -29,13 +29,33 @@
   --color-fd-ring: #0000003d;
 }
 
-/* Our type, not fumadocs' defaults. */
-#nd-docs-layout,
-#nd-page {
-  font-family: var(--font-sans);
+/* fumadocs' stylesheet imports Tailwind itself, which re-emits Tailwind's own
+   `--font-sans` / `--font-mono` (and the two `--default-*` families its preflight
+   applies to `html` and `code`). Since this file is imported after globals.css,
+   those defaults won on every /docs route — the whole docs section was rendering
+   in system fonts while the landing page used Instrument Sans and JetBrains Mono.
+   That is the font mismatch between the two halves of the site; the colour tokens
+   all survive the import, only these four do not. */
+:root {
+  --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --default-font-family: var(--font-sans);
+  --default-mono-font-family: var(--font-mono);
 }
-#nd-docs-layout code,
-#nd-page code,
-#nd-page pre {
-  font-family: var(--font-mono);
+
+/* Our code block owns the fence's box; whatever <pre> lands inside it is just
+   Shiki's coloured spans. Without this the padding is applied twice — once by
+   the component, once by the prose styles this page is wrapped in. */
+#nd-page figure pre {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+/* fumadocs puts the self-link inside the heading, so prose underlines the
+   heading text itself. */
+#nd-page :is(h1, h2, h3, h4, h5, h6) a {
+  color: inherit;
+  text-decoration: none;
+  font-weight: inherit;
 }
