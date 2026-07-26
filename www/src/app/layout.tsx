@@ -7,14 +7,20 @@ import './globals.css';
 /**
  * The only web font on the site. The body stays on the system sans stack — a
  * product whose surface is a terminal and a SQL string earns one real mono, and
- * nothing else. One static 400 cut, 15 KB: the variable font
- * carries every weight axis and costs 40 KB preloaded on the critical path, and
- * nothing here needs a second weight. vinext self-hosts it and preloads it.
+ * nothing else. One static 400 cut (22 KB) rather than the
+ * variable font (40 KB, every weight axis, and nothing here needs a second
+ * weight). vinext self-hosts it — no request to Google.
  */
 const mono = JetBrains_Mono({
   subsets: ['latin'],
   weight: '400',
   display: 'swap',
+  // Not preloaded. The LCP element is the h1 in system sans; the mono is only
+  // the wordmark, the terminal and code. Preloading put 22 KB on the critical
+  // path and cost 14 points of mobile performance (LCP 1.1s -> 3.2s) for text
+  // that is not above the fold. next/font's fallback metrics hold CLS at 0
+  // through the swap.
+  preload: false,
   variable: '--font-jetbrains-mono',
 });
 
