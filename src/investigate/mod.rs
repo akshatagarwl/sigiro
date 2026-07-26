@@ -1474,16 +1474,31 @@ log_counters AS (
                round(avg(v), 3) AS avg_value
         FROM (
             -- Only <NUM> positions are counters, and the value token carries its
-            -- label too (`translations=0`), so pull the number back out of it.
+            -- label too (`translations=0`), so the number has to come back out.
             --
-            -- Exactly ONE <NUM> per token, or the extraction is guessing: a
-            -- version-like identifier masks to `command-a-<NUM>-<NUM>` and the
-            -- first-number rule reads `-03` out of `cohere:command-a-03-2025` as
-            -- the counter value -3. A model name is not a counter. Two or more
-            -- masked numbers in one token means there is no single value to
-            -- take, so drop it rather than invent one.
+            -- The TEMPLATE is the authority on where the number starts and ends,
+            -- never a rescan of the raw token. Masking already decided whether a
+            -- leading `-` belongs to the number or to the identifier, and only
+            -- the template records that verdict: `code=-1` masks to `code=<NUM>`
+            -- (minus inside the mask → negative) while `shard-1` masks to
+            -- `shard-<NUM>` (minus survives as a constant → positive). A
+            -- `-?\d+` rescan cannot tell those apart and read shard-5 as -5.
+            -- Slicing off the template's own literal prefix/suffix cannot:
+            -- `latency=<NUM>ms` over `latency=42.5ms` yields exactly `42.5`.
+            --
+            -- Exactly ONE <NUM> per token, which is also what makes the slice
+            -- well-defined: a version-like identifier masks to
+            -- `command-a-<NUM>-<NUM>`, where there is no single number to take,
+            -- so drop it rather than invent one. A model name is not a counter.
+            -- A length mismatch slices to '' and TRY_CAST drops the row — the
+            -- surprising case yields no counter instead of a wrong one.
             SELECT pattern, label,
-                   TRY_CAST(regexp_extract(raw_value, '-?\d+(\.\d+)?') AS DOUBLE) AS v
+                   TRY_CAST(substring(
+                       raw_value,
+                       len(split_part(label, '<NUM>', 1)) + 1,
+                       len(raw_value) - len(split_part(label, '<NUM>', 1))
+                                      - len(split_part(label, '<NUM>', 2))
+                   ) AS DOUBLE) AS v
             FROM log_counter_pairs
             WHERE len(str_split(label, '<NUM>')) = 2
         )

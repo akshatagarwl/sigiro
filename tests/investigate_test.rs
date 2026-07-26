@@ -543,6 +543,51 @@ fn log_counters_reject_version_like_identifiers() {
 }
 
 #[test]
+fn log_counters_take_the_sign_from_the_template_not_the_value() {
+    // Whether a leading `-` belongs to the NUMBER or to the IDENTIFIER is decided
+    // by the masking, and only the template records that decision: `code=-1`
+    // masks to `code=<NUM>` (the minus is inside the mask, so the value is
+    // negative), while `shard-1` masks to `shard-<NUM>` (the minus survives as a
+    // constant, so the value is positive). Re-scanning the raw token for
+    // `-?\d+` cannot tell these apart and reports shard-5 as -5.
+    let bodies = [
+        "worker shard-5 exit code=-1 lag=12",
+        "worker shard-6 exit code=-2 lag=13",
+        "worker shard-7 exit code=-3 lag=14",
+    ];
+    let (shared, now_us) = setup_drain_logs(&[], &bodies, 13, "WARN");
+
+    let conn = shared.lock();
+    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let counter = |label: &str| {
+        block
+            .log_counters
+            .iter()
+            .find(|c| c.label == label)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no counter {label}; got {:?}",
+                    block
+                        .log_counters
+                        .iter()
+                        .map(|c| &c.label)
+                        .collect::<Vec<_>>()
+                )
+            })
+    };
+
+    // Hyphen is a constant in the template → the number is positive.
+    let shard = counter("shard-<NUM>");
+    assert_eq!(shard.min_value, 5.0, "shard-5 is shard 5, not -5");
+    assert_eq!(shard.max_value, 7.0);
+
+    // Minus absorbed into the mask → the number really is negative.
+    let code = counter("code=<NUM>");
+    assert_eq!(code.min_value, -3.0);
+    assert_eq!(code.max_value, -1.0);
+}
+
+#[test]
 fn log_counters_ignore_a_lone_zero_with_no_moving_sibling() {
     // Guard against the obvious false positive: a line whose ONLY number is
     // zero says nothing about a stage being dead. Without a sibling that moves
