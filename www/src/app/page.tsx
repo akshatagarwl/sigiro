@@ -2,9 +2,10 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Artifact } from '@/components/artifact';
 import { Faq } from '@/components/faq';
+import { Integrations } from '@/components/integrations';
 import { Button } from '@/components/ui/button';
 import { SiteFooter, SiteHeader } from '@/components/site-chrome';
-import { FAQ, PROMISES, RUNS_ON, SECTIONS, SITE } from '@/lib/site';
+import { FAQ, PROMISES, SECTIONS, SITE } from '@/lib/site';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/' },
@@ -100,16 +101,7 @@ export default function Home() {
                 sigiro plugs into what you already run.
               </span>
             </h2>
-            <ul className="mt-6 flex flex-wrap gap-1.5">
-              {RUNS_ON.map((item) => (
-                <li
-                  key={item}
-                  className="rounded-md border border-line bg-card px-2.5 py-1.5 font-mono text-[0.6875rem] text-muted-ink"
-                >
-                  {item}
-                </li>
-              ))}
-            </ul>
+            <Integrations />
           </section>
 
           <section aria-labelledby="itself" className="border-t border-line py-12">

@@ -124,19 +124,46 @@ export const PROMISES = [
   },
 ] as const;
 
-export const RUNS_ON = [
-  'OpenTelemetry SDKs',
-  'OTel Collector',
-  'Kubernetes',
-  'Docker',
-  'Vercel',
-  'Cloudflare Workers',
-  'Fly.io',
-  'Railway',
-  'Claude Code',
-  'Codex',
-  'Cursor',
-  'Pyroscope profiles',
+/**
+ * Three honest groups: what emits the telemetry, where sigiro runs, and what
+ * reads the answers. Icon names are simple-icons slugs from
+ * @icons-pack/react-simple-icons — `icon: null` means the brand has no mark in
+ * that set, so the tile is the label alone rather than a wrong logo.
+ */
+export const INTEGRATIONS = [
+  {
+    label: 'Send telemetry from',
+    items: [
+      { name: 'OpenTelemetry', icon: 'SiOpentelemetry' },
+      { name: 'Node.js', icon: 'SiNodedotjs' },
+      { name: 'Python', icon: 'SiPython' },
+      { name: 'Go', icon: 'SiGo' },
+      { name: 'Java', icon: 'SiOpenjdk' },
+      { name: '.NET', icon: 'SiDotnet' },
+      { name: 'Ruby', icon: 'SiRuby' },
+      { name: 'Rust', icon: 'SiRust' },
+    ],
+  },
+  {
+    label: 'Run it on',
+    items: [
+      { name: 'Docker', icon: 'SiDocker' },
+      { name: 'Kubernetes', icon: 'SiKubernetes' },
+      { name: 'Fly.io', icon: 'SiFlydotio' },
+      { name: 'Railway', icon: 'SiRailway' },
+      { name: 'Render', icon: 'SiRender' },
+      { name: 'Cloudflare', icon: 'SiCloudflare' },
+    ],
+  },
+  {
+    label: 'Read by',
+    items: [
+      { name: 'Claude Code', icon: 'SiClaude' },
+      { name: 'Cursor', icon: 'SiCursor' },
+      { name: 'Codex', icon: null },
+      { name: 'Anything that speaks SQL', icon: null },
+    ],
+  },
 ] as const;
 
 /**
