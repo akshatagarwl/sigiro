@@ -41,6 +41,9 @@ export default function Home() {
         <main id="main">
           {/* Hero: text LCP, no image. */}
           <section className="max-w-[46rem] py-20">
+            <p className="mb-4 font-mono text-[0.6875rem] tracking-[0.16em] text-faint uppercase">
+              {SITE.hook}
+            </p>
             <h1 className="text-[clamp(2.1rem,5.2vw,3.25rem)] leading-[1.05] font-semibold tracking-[-0.035em] text-balance text-strong">
               {SITE.tagline}
             </h1>

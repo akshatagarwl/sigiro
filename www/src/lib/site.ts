@@ -11,10 +11,17 @@
 export const SITE = {
   name: 'sigiro',
   url: 'https://sigiro.com',
-  title: 'sigiro — stop staring at dashboards',
-  tagline: 'Stop staring at dashboards.',
+  /** Keeps "observability" in the title: the h1 is a category bet with no search
+      intent behind it, and this is the one place the category word still earns
+      its keep for search and for citation. */
+  title: 'sigiro — observability data layer for self-improving software',
+  /** The h1: the category claim. */
+  tagline: 'The data layer for self-improving software and agents.',
+  /** The eyebrow and the footer sign-off — the line taglines.md chose. It lands
+      in half a second, which the category claim deliberately does not. */
+  hook: 'Stop staring at dashboards.',
   description:
-    'The thing reading your telemetry at 3am is not a person any more. sigiro takes OpenTelemetry in and answers questions out — a diagnosis with the query that proves it attached, not a chart to interpret.',
+    'Dashboards are a presentation layer. sigiro is the data layer underneath: OpenTelemetry in, ranked findings out, each one carrying the query that proves it. Built for agents reading at 3am, not people reading charts.',
 } as const;
 
 export const INSTALL = [

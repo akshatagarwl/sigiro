@@ -73,7 +73,7 @@ export function SiteFooter() {
   return (
     <footer className="flex flex-wrap items-end justify-between gap-6 border-t border-line py-10">
       <div>
-        <p className="font-semibold tracking-tight text-strong">{SITE.tagline}</p>
+        <p className="font-semibold tracking-tight text-strong">{SITE.hook}</p>
         <Link
           href="/docs/quickstart"
           prefetch={false}
