@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, builder::styling};
 use parking_lot::Mutex;
-use std::io::IsTerminal;
-use std::sync::Arc; // for stdout().is_terminal()
+use std::sync::Arc;
 
 use sigiro::responses::HealthResponse;
 use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
@@ -19,21 +18,9 @@ const STYLES: styling::Styles = styling::Styles::styled()
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
-    /// Output format (toon or json). When unset, auto-detects: JSON if stdout
-    /// is not a TTY (piped to jq, a file, etc.), TOON otherwise.
-    #[arg(long, value_enum)]
-    output: Option<OutputFormat>,
     /// Client bearer token for a hosted endpoint (overrides SIGIRO_API_KEY).
     #[arg(long, global = true)]
     key: Option<String>,
-}
-
-#[derive(clap::ValueEnum, Clone, Debug)]
-enum OutputFormat {
-    /// Token-Oriented Object Notation (default, ~40% fewer tokens)
-    Toon,
-    /// Standard JSON format
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -120,20 +107,10 @@ enum Command {
     Healthcheck,
 }
 
-/// Format output. If the user did not explicitly pass --output, and stdout
-/// is not a TTY (we are being piped to jq, a file, another process, etc.),
-/// default to JSON. TOON is great for humans at a terminal but unfriendly
-/// to jq / grep / any text pipeline.
-fn format_output(
-    value: &serde_json::Value,
-    output_format: Option<&OutputFormat>,
-) -> Result<String> {
-    let use_json = output_format.is_none() && !std::io::stdout().is_terminal();
-    let fmt = output_format.unwrap_or(&OutputFormat::Toon);
-    match (use_json, fmt) {
-        (true, _) | (false, OutputFormat::Json) => Ok(serde_json::to_string_pretty(value)?),
-        (false, OutputFormat::Toon) => Ok(toon::encode(value, None)),
-    }
+/// Every command prints pretty JSON. One format, so a pipeline and a human read
+/// the same bytes and nothing has to detect a TTY to decide.
+fn format_output(value: &serde_json::Value) -> Result<String> {
+    Ok(serde_json::to_string_pretty(value)?)
 }
 
 #[tokio::main]
@@ -238,7 +215,7 @@ async fn main() -> Result<()> {
             };
             let result = sigiro::federate::run_federated_query(&sql, &edge, full_scan).await?;
             let value = serde_json::to_value(&result)?;
-            println!("{}", format_output(&value, cli.output.as_ref())?);
+            println!("{}", format_output(&value)?);
         }
         Some(Command::Status) => {
             // Health is public — no auth needed. The /health endpoint is the
@@ -297,7 +274,7 @@ async fn main() -> Result<()> {
                 "detail": detail,
                 "recent_ingest": recent_ingest,
             });
-            println!("{}", format_output(&value, cli.output.as_ref())?);
+            println!("{}", format_output(&value)?);
         }
         Some(Command::Investigate {
             service,
@@ -335,7 +312,7 @@ async fn main() -> Result<()> {
             // `drill_down_sql` (the full trace) and each sampled section its
             // `drill_all_sql`, so the response is self-describing.
             let value = serde_json::to_value(&block)?;
-            println!("{}", format_output(&value, cli.output.as_ref())?);
+            println!("{}", format_output(&value)?);
         }
         Some(Command::Anomalies { service, from, to }) => {
             let client = require_client()?;
@@ -344,7 +321,7 @@ async fn main() -> Result<()> {
             let to_ts = to.map(|s| s * 1_000_000);
             let resp = client.anomalies(service.as_deref(), from_ts, to_ts).await?;
             let value = serde_json::to_value(&resp)?;
-            println!("{}", format_output(&value, cli.output.as_ref())?);
+            println!("{}", format_output(&value)?);
         }
         Some(Command::Diagnose) => {
             let client = require_client()?;

@@ -26,10 +26,18 @@ const faqSchema = {
 };
 
 const SESSION = `$ sigiro anomalies
-[3]{incident_id,service_name,operation,signal,ts_shift,before,after}:
-  1,checkout,POST /api/orders,error_rate,2026-07-24T18:35:00Z,0.004,0.171
-  1,checkout,POST /api/orders,latency_p95,2026-07-24T18:35:00Z,412.0,3180.0
-  2,worker,worker,error_log_rate,2026-07-24T19:05:00Z,0.011,0.204
+{ "anomalies": [
+    { "service_name": "checkout", "operation": "POST /api/orders",
+      "signal": "error_rate", "kind": "changepoint", "direction": "worsening",
+      "ts_shift": "2026-07-24T18:35:00Z", "incident_id": "1",
+      "before": 0.4, "after": 17.1,
+      "drill_down_sql": "SELECT * FROM sigiro_spans WHERE ..." },
+    { "service_name": "checkout", "operation": "POST /api/orders",
+      "signal": "latency_p95", "incident_id": "1",
+      "before": 412000, "after": 3180000 },
+    { "service_name": "worker", "operation": "worker",
+      "signal": "error_log_rate", "incident_id": null,
+      "before": 1.1, "after": 20.4 }]}
 
 $ sigiro investigate checkout
 { "error_traces_total": 1284,
@@ -99,8 +107,10 @@ export default function Home() {
             </h2>
             <p className="mt-4 max-w-xl text-neutral-600 dark:text-neutral-400">
               No thresholds to configure: each service is watched against its own history, and
-              shifts that move together become one incident. One more call returns the evidence —
-              the suspect deploy, how the operation fails, the query behind every row.
+              shifts that move together share an incident id. One more call returns the evidence —
+              the suspect deploy, how the operation fails, the query behind every row. Every
+              command answers in JSON, so the reader can be a person or a process. Values are raw
+              signal units — error rate in percent, p95 in microseconds.
             </p>
           </div>
           <div className="mt-8">

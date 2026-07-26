@@ -1,7 +1,0 @@
----
-source: tests/toon_tests.rs
-expression: toon
----
-[2]{name,spans}:
-  checkout,1500
-  payments,800

@@ -209,7 +209,7 @@ fn run_query_env(
     extra_env: &[(&str, &str)],
 ) -> std::process::Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sigiro"));
-    cmd.arg("--output").arg("json").arg("query").arg(sql);
+    cmd.arg("query").arg(sql);
     for e in edges {
         cmd.arg("--edge").arg(e);
     }
