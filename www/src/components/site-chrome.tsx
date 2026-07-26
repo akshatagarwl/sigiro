@@ -8,11 +8,16 @@ import { NAV, SITE, SOCIAL } from '@/lib/site';
  */
 
 /**
- * The changepoint glyph: a flat baseline that steps up, with the shift itself
- * pulsing. It is the one moving thing on the page, and it animates the product's
- * own subject — something changed, here.
+ * The changepoint glyph: a flat baseline that steps up. With `pulse`, a bright
+ * segment travels the whole path — a signal passing through the mark, which is
+ * the product's subject rather than decoration.
+ *
+ * Two copies of the same path: a faint base, and a dashed overlay whose offset
+ * animates. `pathLength="100"` normalises the geometry so the dash lengths are
+ * percentages and stay correct if the path ever changes.
  */
 export function Mark({ size = 18, pulse = false }: { size?: number; pulse?: boolean }) {
+  const d = 'M5 24h7V10h15';
   return (
     <svg
       width={size}
@@ -25,10 +30,8 @@ export function Mark({ size = 18, pulse = false }: { size?: number; pulse?: bool
       strokeLinejoin="round"
       aria-hidden
     >
-      <path d="M5 24h7V10h15" />
-      {pulse ? (
-        <circle className="mark-pulse" cx="12" cy="10" r="3.5" stroke="none" fill="currentColor" />
-      ) : null}
+      <path d={d} className={pulse ? 'opacity-25' : undefined} />
+      {pulse ? <path d={d} pathLength="100" className="mark-trace" /> : null}
     </svg>
   );
 }

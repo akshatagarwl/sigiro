@@ -95,23 +95,21 @@
     background: transparent;
     padding: 0;
   }
-  /* The mark's changepoint marker. Opacity and scale only, so it composites and
-     never triggers layout. */
-  @keyframes mark-pulse {
-    0%,
-    100% {
-      opacity: 0.15;
-      transform: scale(0.7);
+  /* A bright segment travelling the whole mark. Only stroke-dashoffset moves, so
+     there is no layout or paint of anything else; the pause is built into the
+     keyframes so the logo is still most of the time. */
+  @keyframes mark-trace {
+    0% {
+      stroke-dashoffset: 100;
     }
-    50% {
-      opacity: 1;
-      transform: scale(1.15);
+    55%,
+    100% {
+      stroke-dashoffset: -22;
     }
   }
-  .mark-pulse {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: mark-pulse 2.6s ease-in-out infinite;
+  .mark-trace {
+    stroke-dasharray: 22 100;
+    animation: mark-trace 3.4s ease-in-out infinite;
   }
 
   @media (prefers-reduced-motion: reduce) {
