@@ -25,14 +25,6 @@ export const LOOP = [
   { step: 'Learn', owner: 'your agent’s memory', ours: false, body: 'So the same incident is faster next time.' },
 ] as const;
 
-/** Short facts, rendered as a plain row. */
-export const FACTS = [
-  ['OTLP native', 'gRPC 4317, HTTP 4318. Traces, logs, metrics, profiles.'],
-  ['One container', 'DuckDB embedded, Parquet on disk or S3. No collector.'],
-  ['SQL, not a DSL', 'Your telemetry is tables. Every finding hands you a query.'],
-  ['Machine-readable', '/openapi.json, no auth. Agents read the API themselves.'],
-] as const;
-
 /**
  * Visible FAQ *and* FAQPage JSON-LD. Every answer here is rendered in the HTML;
  * schema whose text does not appear on the page is the fastest way to get

@@ -7,7 +7,23 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
   return (
     <div className="mx-auto max-w-5xl px-6">
       <header className="flex items-center justify-between py-6">
-        <Link href="/" className="font-mono text-lg font-semibold tracking-tight">
+        <Link
+          href="/"
+          className="flex items-center gap-2 font-mono text-lg tracking-tight"
+        >
+          <svg
+            viewBox="0 0 32 32"
+            aria-hidden
+            className="size-6 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M5 24h7V10h15" />
+            <circle cx="12" cy="10" r="3.25" fill="var(--color-background)" />
+          </svg>
           {SITE.name}
         </Link>
         <span className="text-sm text-neutral-500 dark:text-neutral-400">Docs</span>

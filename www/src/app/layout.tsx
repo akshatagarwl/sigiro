@@ -1,7 +1,22 @@
 import type { Metadata } from 'next';
+import { JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { SITE } from '@/lib/site';
 import './globals.css';
+
+/**
+ * The only web font on the site. The body stays on the system sans stack — a
+ * product whose surface is a terminal and a SQL string earns one real mono, and
+ * nothing else. One static 400 cut, 15 KB: the variable font
+ * carries every weight axis and costs 40 KB preloaded on the critical path, and
+ * nothing here needs a second weight. vinext self-hosts it and preloads it.
+ */
+const mono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: '400',
+  display: 'swap',
+  variable: '--font-jetbrains-mono',
+});
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE.url),
@@ -79,7 +94,7 @@ const graph = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className="h-full">
+    <html lang="en" className={`h-full ${mono.variable}`}>
       <body className="min-h-full bg-white text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100">
         <a
           href="#main"
