@@ -1,4 +1,11 @@
-import { type Doc, renderDoc } from '@/lib/docs';
+import rehypeShikiFromHighlighter from '@shikijs/rehype/core';
+import type { Element } from 'hast';
+import { toString } from 'hast-util-to-string';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { CodeBlock } from '@/components/code-block';
+import type { Doc } from '@/lib/docs';
+import { COLOR_REPLACEMENTS, getHighlighter } from '@/lib/highlight';
 import { SITE } from '@/lib/site';
 
 /**
@@ -8,8 +15,10 @@ import { SITE } from '@/lib/site';
  * instead of <head>, which reads as a missing meta description to anything that
  * does not run JavaScript.
  *
- * The prose classes map typography onto the same tokens the landing page uses, so
- * a heading, a rule and a code block look identical on both sides of the site.
+ * Fences go through @shikijs/rehype with the same Workers-safe highlighter the
+ * landing page uses, and react-markdown maps `pre` onto the same CodeBlock — so a
+ * bash block in the quickstart is the same component, copy button and all, as the
+ * one in the hero.
  */
 const PROSE = [
   'prose max-w-none',
@@ -18,14 +27,11 @@ const PROSE = [
   'prose-p:text-body prose-li:text-body prose-strong:text-strong prose-strong:font-semibold',
   'prose-a:text-strong prose-a:decoration-line-strong prose-a:underline-offset-2',
   'prose-hr:border-line prose-blockquote:border-l-line prose-blockquote:text-muted-ink',
-  // inline code and fenced blocks are styled in globals.css — `prose-code:`
-  // matches code inside `pre` as well, and its specificity wins there.
-  'prose-pre:rounded-xl prose-pre:border prose-pre:border-line',
   'prose-table:text-[0.875rem] prose-th:text-strong prose-th:font-medium',
 ].join(' ');
 
 export async function DocPage({ doc }: { doc: Doc }) {
-  const html = await renderDoc(doc);
+  const highlighter = await getHighlighter();
 
   const schema = {
     '@context': 'https://schema.org',
@@ -39,8 +45,37 @@ export async function DocPage({ doc }: { doc: Doc }) {
 
   return (
     <article className={PROSE}>
-      {/* Markdown authored in this repo, not user input. */}
-      <div dangerouslySetInnerHTML={{ __html: html }} />
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[
+          [
+            rehypeShikiFromHighlighter,
+            highlighter,
+            {
+              theme: 'github-light-default',
+              colorReplacements: COLOR_REPLACEMENTS,
+              // A fence whose language we have no grammar for stays plain text
+              // rather than failing the whole render.
+              fallbackLanguage: 'text',
+            },
+          ],
+        ]}
+        components={{
+          pre({ node, children, ...props }) {
+            // `node` is the hast <pre>; its text is what the clipboard needs.
+            const value = node ? toString(node as Element) : '';
+            // Wrap the original <pre>, never replace it — dropping it collapses
+            // the whitespace and loses Shiki's class and inline theme colours.
+            return (
+              <CodeBlock value={value}>
+                <pre {...props}>{children}</pre>
+              </CodeBlock>
+            );
+          },
+        }}
+      >
+        {doc.markdown}
+      </Markdown>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}

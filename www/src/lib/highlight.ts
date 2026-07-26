@@ -56,7 +56,12 @@ export function resolveLang(lang: string | undefined): Lang | null {
  * `colorReplacements` is Shiki's own hook for this, so the theme is adjusted
  * rather than the output patched afterwards.
  */
-const COLOR_REPLACEMENTS = { '#6e7781': '#5a6169', '#cf222e': '#b3121f' };
+export const COLOR_REPLACEMENTS = { '#6e7781': '#5a6169', '#cf222e': '#b3121f' };
+
+/** The same instance @shikijs/rehype uses for the docs. */
+export function getHighlighter() {
+  return highlighter;
+}
 
 export async function highlight(code: string, lang: Lang): Promise<string> {
   const shiki = await highlighter;

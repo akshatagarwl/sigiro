@@ -15,14 +15,16 @@
   },
   "dependencies": {
     "@base-ui/react": "1.6.0",
+    "@shikijs/rehype": "4.3.1",
     "clsx": "2.1.1",
     "gray-matter": "4.0.3",
+    "hast-util-to-string": "3.0.1",
     "lucide-react": "1.27.0",
-    "marked": "18.0.7",
-    "marked-shiki": "1.2.1",
     "next": "16.3.0-preview.9",
     "react": "19.3.0-canary-28cd4bb0-20260723",
     "react-dom": "19.3.0-canary-28cd4bb0-20260723",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
     "shiki": "4.3.1",
     "tailwind-merge": "3.6.0"
   },
