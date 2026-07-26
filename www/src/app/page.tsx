@@ -1,9 +1,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Faq } from '@/components/faq';
+import { AgentLoop } from '@/components/agent-loop';
+import { Changepoint } from '@/components/changepoint';
+import { DashboardVsEvidence } from '@/components/dashboard-vs-evidence';
 import { Install } from '@/components/install';
+import { LoopDiagram } from '@/components/loop-diagram';
 import { AnimatedSpan, Terminal, TypingAnimation } from '@/components/magicui/terminal';
-import { FAQ, LOOP, NAV, SITE, SOCIAL } from '@/lib/site';
+import { FAQ, NAV, SITE, SOCIAL } from '@/lib/site';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/' },
@@ -114,6 +118,9 @@ export default function Home() {
             </p>
           </div>
           <div className="mt-8">
+            <Changepoint />
+          </div>
+          <div className="mt-8">
             <Terminal sequence={false} className="terminal max-h-none max-w-none">
               <TypingAnimation>{SESSION[0]}</TypingAnimation>
               {SESSION.slice(1).map((line, i) => (
@@ -141,23 +148,39 @@ export default function Home() {
               agent it did not write.
             </p>
           </div>
-          <ol className="mt-8 divide-y divide-neutral-200 dark:divide-neutral-800">
-            {LOOP.map((item) => (
-              <li key={item.step} className="grid grid-cols-[7rem_1fr] items-baseline gap-4 py-3">
-                <h3
-                  className={
-                    item.ours ? 'font-medium' : 'font-medium text-neutral-500 dark:text-neutral-400'
-                  }
-                >
-                  {item.step}
-                </h3>
-                <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                  {item.body}{' '}
-                  <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">— {item.owner}</span>
-                </p>
-              </li>
-            ))}
-          </ol>
+          <LoopDiagram />
+        </section>
+
+        <section
+          aria-labelledby="contrast"
+          className="border-t border-neutral-200 py-12 dark:border-neutral-800"
+        >
+          <div className="reveal">
+            <h2 id="contrast" className="text-xl font-semibold tracking-tight sm:text-2xl">
+              A chart is for you. This is for the agent.
+            </h2>
+          </div>
+          <div className="mt-8">
+            <DashboardVsEvidence />
+          </div>
+        </section>
+
+        <section
+          aria-labelledby="agent"
+          className="border-t border-neutral-200 py-12 dark:border-neutral-800"
+        >
+          <div className="reveal">
+            <h2 id="agent" className="text-xl font-semibold tracking-tight sm:text-2xl">
+              Six calls, symptom to pull request
+            </h2>
+            <p className="mt-4 max-w-xl text-neutral-600 dark:text-neutral-400">
+              Nothing here is a person reading a dashboard. sigiro answers the first five; the sixth
+              is your coding agent, which is the point.
+            </p>
+          </div>
+          <div className="mt-8 max-w-2xl">
+            <AgentLoop />
+          </div>
         </section>
 
         <section

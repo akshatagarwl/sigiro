@@ -4,17 +4,57 @@
 /* Tokens the MagicUI registry components expect (they are written against
    shadcn's variable names). Mapped onto stock Tailwind neutrals, not a brand
    palette. */
+/* Semantic tokens the registry components (shadcn / MagicUI / kibo-ui / reui)
+   are written against, mapped onto stock Tailwind neutrals. Still no brand
+   palette — this is the neutral base color, named the way the ecosystem expects. */
 @theme {
-  --color-background: #ffffff;
-  --color-border: #e5e5e5;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
   --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
 }
 
-/* @theme must stay top-level; override the variables it generated instead. */
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --primary: #171717;
+  --primary-foreground: #fafafa;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --border: #e5e5e5;
+  --ring: #a3a3a3;
+  --chart-1: #171717;
+  --chart-2: #737373;
+  --chart-3: #d4d4d4;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-background: #0a0a0a;
-    --color-border: #262626;
+    --background: #0a0a0a;
+    --foreground: #fafafa;
+    --card: #0a0a0a;
+    --card-foreground: #fafafa;
+    --primary: #fafafa;
+    --primary-foreground: #171717;
+    --muted: #262626;
+    --muted-foreground: #a3a3a3;
+    --border: #262626;
+    --ring: #525252;
+    --chart-1: #fafafa;
+    --chart-2: #a3a3a3;
+    --chart-3: #404040;
   }
 }
 

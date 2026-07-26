@@ -14,14 +14,16 @@
     "build:next": "next build"
   },
   "dependencies": {
-    "@base-ui-components/react": "1.0.0-rc.0",
+    "@base-ui/react": "1.6.0",
     "clsx": "2.1.1",
     "gray-matter": "4.0.3",
+    "lucide-react": "1.27.0",
     "marked": "18.0.7",
     "motion": "12.42.2",
     "next": "16.3.0-preview.9",
     "react": "19.3.0-canary-28cd4bb0-20260723",
     "react-dom": "19.3.0-canary-28cd4bb0-20260723",
+    "recharts": "3.8.0",
     "tailwind-merge": "3.6.0"
   },
   "devDependencies": {

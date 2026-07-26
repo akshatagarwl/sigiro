@@ -1,7 +1,7 @@
 'use client';
 
-import { Button } from '@base-ui-components/react/button';
-import { Tabs } from '@base-ui-components/react/tabs';
+import { Button } from '@base-ui/react/button';
+import { Tabs } from '@base-ui/react/tabs';
 import { useState } from 'react';
 import { SITE } from '@/lib/site';
 
