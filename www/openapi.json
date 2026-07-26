@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "sigiro",
-    "description": "The surface an agent reads. Admin endpoints for minting tenant keys are deliberately not published here.",
+    "description": "",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -17,7 +17,7 @@
         ],
         "summary": "Ranked shifts against each service's own baseline",
         "description": "Precomputed anomalies: worsening regime shifts (BOCPD changepoints, threshold-free) detected continuously over persisted 5-minute series of every signal \u2014 error_rate and latency_p95 per operation, log_volume, error_log_rate and profile_cost (the service's total profiled cost) per service (the `operation` field holds the entity) \u2014 and persisted to the `sigiro_anomalies` table. Ordered by the unit-free shift magnitude (after - before) / (after + before) descending (1.0 = appeared from a zero baseline, 1/3 = doubled), so the most significant shifts lead regardless of the signal's units \u2014 nothing is filtered out; judge significance from `before`/`after` (raw signal units: %, \u00b5s, logs, profile cost). Optionally filter by `service` and a `from_ts`/`to_ts` window (microseconds since the Unix epoch) over the shift time. Each row carries a ready-to-run `drill_down_sql` for POST /v1/query. Rows whose shifts fall in the same or adjacent 5-minute detection bucket on the same service share an `incident_id` \u2014 one incident across signals, not N independent anomalies (the correlation window is the detection pass's own bucket resolution, never a tuned threshold); `incident_id` is null for uncorrelated rows.",
-        "operationId": "anomalies_handler",
+        "operationId": "list-anomalies",
         "parameters": [
           {
             "name": "service",
@@ -87,7 +87,7 @@
         ],
         "summary": "Diagnose a service: ranked findings with runnable SQL",
         "description": "Root-cause an incident for one or more services over a time window. Returns a triage summary \u2014 NOT raw telemetry: a ranked `findings` array (read this first), per-operation anomaly flags, and bounded samples of spans/logs. Every lead carries a ready-to-run SQL string (`drill_down_sql` on findings, operations, spans, and log patterns; `drill_all_sql` on the spans/logs sections) that you paste VERBATIM into `POST /v1/query` to fetch the underlying rows and go deeper. Typical agent loop: `GET /v1/services` \u2192 `POST /v1/investigate` \u2192 for any finding or anomalous operation, run its `drill_down_sql` via `/v1/query`. Timestamps are microseconds since the Unix epoch. The response is a map `{results: {service: block}, errors: {service: message}}` \u2014 partial results survive a single failing service.",
-        "operationId": "investigate_handler",
+        "operationId": "investigate-services",
         "requestBody": {
           "content": {
             "application/json": {
@@ -130,7 +130,7 @@
         ],
         "summary": "Run SQL over your telemetry",
         "description": "Accepts exactly one SELECT statement as the raw request body. Allowed\ntables: sigiro_spans, sigiro_logs, sigiro_log_templates,\nsigiro_metrics_gauge, sigiro_metrics_sum, sigiro_metrics_histogram,\nsigiro_metrics_exp_histogram, sigiro_profiles, sigiro_anomalies\n(optionally qualified as lake.* or main.*). WITH/CTE clauses are not\nsupported \u2014 rewrite as derived-table subqueries. Scalar functions are\nallowlisted (aggregates, json extraction, date/time, string, math,\nconditional helpers); file/network readers are blocked. Every\n`drill_down_sql` returned by /v1/investigate can be pasted here verbatim.",
-        "operationId": "query_handler",
+        "operationId": "run-query",
         "requestBody": {
           "content": {
             "text/plain": {
@@ -162,7 +162,8 @@
           "query"
         ],
         "summary": "List services seen, with time bounds",
-        "operationId": "services_handler",
+        "description": "Every service that has reported telemetry, with the first and last timestamp seen for each (microseconds since the Unix epoch). The entry point of an agent loop: pick a service here, then investigate it.",
+        "operationId": "list-services",
         "responses": {
           "200": {
             "description": "List of services",
@@ -183,7 +184,8 @@
           "query"
         ],
         "summary": "Fetch one whole trace",
-        "operationId": "trace_detail_handler",
+        "description": "Every span of one trace, parent links included, so a caller can rebuild the tree. Trace IDs come from the sampled spans in an investigation, or from any SQL query over `sigiro_spans`.",
+        "operationId": "get-trace",
         "parameters": [
           {
             "name": "trace_id",

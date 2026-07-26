@@ -12,9 +12,10 @@
   --color-fd-background: #fafafa;
   --color-fd-foreground: #0a0a0a;
   --color-fd-muted: #00000008;
-  /* #737373 passes on the page ground but is 3.97:1 on fd-secondary (#ebebeb),
-     which is what inactive tabs in the API playground sit on. */
-  --color-fd-muted-foreground: #5c5c5c;
+  /* Our own muted ink, not fumadocs' grey and not a third one of mine: #737373
+     is 3.97:1 on fd-secondary (#ebebeb), which is what inactive tabs in the API
+     playground sit on, and #525252 clears it. */
+  --color-fd-muted-foreground: var(--color-muted-ink);
   --color-fd-popover: #ffffff;
   --color-fd-popover-foreground: #0a0a0a;
   --color-fd-card: #ffffff;
@@ -52,10 +53,90 @@
   background: transparent;
 }
 
-/* fumadocs puts the self-link inside the heading, so prose underlines the
-   heading text itself. */
-#nd-page :is(h1, h2, h3, h4, h5, h6) a {
+/* Prose underlines every anchor. Two kinds here are not prose links: the
+   self-link fumadocs puts inside each heading, and the cards on the reference
+   index — a whole card underlined reads as broken, not clickable. */
+#nd-page :is(h1, h2, h3, h4, h5, h6) a,
+#nd-page a[data-card],
+#nd-page a[data-card] * {
   color: inherit;
   text-decoration: none;
   font-weight: inherit;
+}
+
+/* One type ramp for the whole site.
+
+   The prose plugin sizes headings and inline code in `em`, so the docs came out
+   on their own scale — 26.25 / 24 / 18 / 16 against the landing page's
+   52 / 22 / 17 / 15 — with no letter-spacing on any heading, where every heading
+   on the landing page is tightened. Two ramps and two tracking rules read as two
+   products. These are the landing page's values, in rem so they do not drift with
+   whatever element they sit in. */
+/* `.prose` is the div *inside* the article, so a rule on `#nd-page` alone loses
+   to it for anything it sets — size, leading and colour all have to be claimed
+   here or the body copy stays on the plugin's defaults. */
+#nd-page .prose {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  /* The prose plugin's body colour is an oklab with 0.9 alpha; ours is a token. */
+  color: var(--color-body);
+}
+#nd-page :is(h1, h2, h3, h4) {
+  color: var(--color-strong);
+  letter-spacing: -0.025em;
+}
+#nd-page h1 {
+  font-size: 1.875rem;
+  line-height: 1.2;
+}
+#nd-page h2 {
+  font-size: 1.375rem;
+  line-height: 1.35;
+}
+#nd-page h3 {
+  font-size: 1.0625rem;
+  line-height: 1.45;
+}
+#nd-page :is(h4, h5, h6) {
+  font-size: 0.9375rem;
+}
+
+/* Whatever the prose leading is, the fence's own caption sets its own — inherited
+   1.75 made the language chip's row a third taller in the docs than on the
+   landing page. */
+#nd-page figcaption {
+  line-height: 1.2;
+}
+
+/* fumadocs' sidebar links are 20px tall; 24px is the minimum hit area. */
+#nd-sidebar a,
+#nd-sidebar-mobile a {
+  min-height: 24px;
+}
+
+/* fumadocs-openapi colour-codes the HTTP method (green GET, blue POST, ...) with
+   Tailwind's 600 shades, which are 3.9:1 on our page ground and the only chromatic
+   thing on an achromatic site. The uppercase mono word already carries the
+   meaning. */
+/* Scoped to the whole layout, not just the sidebar: the same badge appears in the
+   page's prev/next footer cards, which is where it kept failing the contrast
+   check after the sidebar was fixed. */
+#nd-docs-layout [class*='text-green-'],
+#nd-docs-layout [class*='text-blue-'],
+#nd-docs-layout [class*='text-orange-'],
+#nd-docs-layout [class*='text-yellow-'],
+#nd-docs-layout [class*='text-red-'] {
+  color: var(--color-faint);
+}
+
+/* With no nav title configured, fumadocs' sidebar still renders its nav-title
+   slot — an empty <a href="/">, which is a link with no accessible name. It has to
+   go from the accessibility tree, not just the layout, so `display: none` rather
+   than a visual hide. (The obvious fix, passing `slots={{navTitle: () => null}}`,
+   cannot work: the layout is a server component and DocsLayout is a client one,
+   so the function is not serialisable across that boundary and every docs route
+   500s.) */
+#nd-sidebar a:empty,
+#nd-sidebar-mobile a:empty {
+  display: none;
 }

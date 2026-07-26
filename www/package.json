@@ -57,5 +57,8 @@
   "trustedDependencies": [
     "sharp",
     "unrs-resolver"
-  ]
+  ],
+  "patchedDependencies": {
+    "@fumadocs/api-docs@0.2.1": "patches/@fumadocs%2Fapi-docs@0.2.1.patch"
+  }
 }

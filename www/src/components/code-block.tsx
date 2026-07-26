@@ -25,15 +25,15 @@ export function CodeBlock({
   children: React.ReactNode;
 }) {
   return (
-    <figure className="not-prose group my-6 overflow-hidden rounded-xl border border-line bg-code-bg">
-      <figcaption className="flex items-center gap-2.5 border-b border-line bg-surface py-1.5 pr-1.5 pl-3.5 font-mono text-[0.6875rem] text-muted-ink">
+    <figure className="not-prose group border-line bg-code-bg my-6 overflow-hidden rounded-xl border">
+      <figcaption className="border-line bg-surface text-muted-ink flex items-center gap-2.5 border-b py-1.5 pr-1.5 pl-3.5 font-mono text-[0.6875rem]">
         {lang ? (
-          <span className="shrink-0 rounded border border-line bg-card px-1.5 py-0.5 text-[0.625rem] tracking-[0.08em] text-faint uppercase">
+          <span className="border-line bg-card text-faint shrink-0 rounded border px-1.5 py-0.5 text-[0.625rem] tracking-[0.08em] uppercase">
             {lang}
           </span>
         ) : null}
         <span className="min-w-0 flex-1 truncate">
-          {title ? <span className="font-medium text-strong">{title}</span> : null}
+          {title ? <span className="text-strong font-medium">{title}</span> : null}
           {title && meta ? ' · ' : null}
           {meta}
         </span>

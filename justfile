@@ -129,3 +129,26 @@ lima-build:
 clean:
     cargo clean
     docker compose -f docker-compose.dev.yml down -v --remove-orphans
+
+# Refresh www/openapi.json — the snapshot the API reference is generated from.
+# Boots the binary, reads its own /openapi.json, and drops the /admin paths: key
+# minting and tenant creation are deliberately not part of the published surface.
+# Run this whenever a #[utoipa::path] changes, then `cd www && bun run api:docs`.
+api-spec:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --quiet --bin sigiro
+    dir=$(mktemp -d)
+    trap 'kill %1 2>/dev/null || true; rm -rf "$dir"' EXIT
+    SIGIRO_DATA_DIR="$dir/db" ./target/debug/sigiro serve >/dev/null 2>&1 &
+    for _ in $(seq 1 40); do
+      curl -sf http://localhost:9999/openapi.json -o "$dir/spec.json" && break
+      sleep 2
+    done
+    python3 -c "
+    import json
+    spec = json.load(open('$dir/spec.json'))
+    spec['paths'] = {p: v for p, v in spec['paths'].items() if not p.startswith('/admin')}
+    json.dump(spec, open('www/openapi.json', 'w'), indent=2)
+    print('wrote www/openapi.json -', len(spec['paths']), 'paths')
+    "

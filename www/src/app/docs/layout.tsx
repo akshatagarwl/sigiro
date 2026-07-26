@@ -59,8 +59,8 @@ export default function Layout({ children }: { children: ReactNode }) {
           style: { '--fd-layout-width': '78rem' } as React.CSSProperties,
         }}
       >
-        <div className="flex items-center [grid-area:header] px-4 py-2.5 md:hidden">
-          <SidebarTrigger className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-1.5 text-[0.8125rem] text-muted-ink">
+        <div className="flex items-center px-4 py-2.5 [grid-area:header] md:hidden">
+          <SidebarTrigger className="border-line text-muted-ink flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[0.8125rem]">
             <PanelLeft className="size-4" aria-hidden />
             Docs menu
           </SidebarTrigger>

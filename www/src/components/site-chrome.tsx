@@ -44,7 +44,7 @@ export function SiteHeader() {
     <header className="flex items-center justify-between gap-6 py-5">
       <Link
         href="/"
-        className="flex shrink-0 items-center gap-2 font-semibold tracking-tight text-strong"
+        className="text-strong flex shrink-0 items-center gap-2 font-semibold tracking-tight"
       >
         <Mark pulse />
         {SITE.name}
@@ -55,7 +55,9 @@ export function SiteHeader() {
             key={item.href}
             href={item.href}
             prefetch={false}
-            className="text-muted-ink hover:text-strong"
+            /* Padded, not taller: the hit area reaches the 24px minimum while the
+               text stays on the same baseline. `x` in the footer measured 7x18. */
+            className="text-muted-ink hover:text-strong -my-1 inline-flex min-w-6 justify-center py-1"
           >
             {item.label}
           </Link>
@@ -63,7 +65,7 @@ export function SiteHeader() {
         <Link
           href="/docs/quickstart"
           prefetch={false}
-          className="rounded-lg border border-line-strong px-3 py-1.5 font-medium text-strong"
+          className="border-line-strong text-strong rounded-lg border px-3 py-1.5 font-medium"
         >
           Get started
         </Link>
@@ -74,18 +76,23 @@ export function SiteHeader() {
 
 export function SiteFooter() {
   return (
-    <footer className="flex flex-wrap items-end justify-between gap-6 border-t border-line py-10">
+    <footer className="border-line flex flex-wrap items-end justify-between gap-6 border-t py-10">
       <div>
-        <p className="font-semibold tracking-tight text-strong">{SITE.tagline}</p>
+        <p className="text-strong font-semibold tracking-tight">{SITE.tagline}</p>
         <Link
           href="/docs/quickstart"
           prefetch={false}
-          className="mt-3.5 inline-block rounded-lg bg-accent px-3.5 py-2 text-[0.8125rem] font-medium text-on-accent"
+          className="bg-accent text-on-accent mt-3.5 inline-block rounded-lg px-3.5 py-2 text-[0.8125rem] font-medium"
         >
           Get started
         </Link>
       </div>
-      <nav aria-label="Footer" className="flex flex-wrap gap-4 font-mono text-[0.6875rem]">
+      <nav
+        aria-label="Footer"
+        /* `*:` so every link in here gets the 24px hit area, including the one-
+           character ones, without repeating the class three times. */
+        className="flex flex-wrap gap-4 font-mono text-[0.6875rem] *:-my-1 *:inline-flex *:min-w-6 *:items-center *:py-1"
+      >
         {NAV.map((item) => (
           <Link
             key={item.href}

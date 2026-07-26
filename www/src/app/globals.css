@@ -91,7 +91,9 @@
    under AA. */
 .prose :not(pre) > code:not(.not-prose *) {
   font-family: var(--font-mono);
-  font-size: 0.8125em;
+  /* rem, not em: em resolves against the parent, so the same inline code came
+     out 13px in a paragraph and 11.38px in a table cell. */
+  font-size: 0.8125rem;
   color: var(--color-strong);
   background: var(--color-surface-2);
   border-radius: 0.25rem;

@@ -1650,6 +1650,7 @@ fn query_sql_contract() -> String {
 #[utoipa::path(
     post,
     path = "/v1/query",
+    operation_id = "run-query",
     summary = "Run SQL over your telemetry",
     request_body = String,
     responses(
@@ -1707,7 +1708,11 @@ async fn query_handler(
 #[utoipa::path(
     get,
     path = "/v1/services",
+    operation_id = "list-services",
     summary = "List services seen, with time bounds",
+    description = "Every service that has reported telemetry, with the first and \
+last timestamp seen for each (microseconds since the Unix epoch). The entry point \
+of an agent loop: pick a service here, then investigate it.",
     responses(
         (status = 200, description = "List of services", body = ServicesResponse)
     ),
@@ -1792,6 +1797,7 @@ pub(crate) struct AnomaliesQuery {
 #[utoipa::path(
     get,
     path = "/v1/anomalies",
+    operation_id = "list-anomalies",
     summary = "Ranked shifts against each service's own baseline",
     params(AnomaliesQuery),
     description = "\
@@ -1898,7 +1904,11 @@ async fn anomalies_handler(
 #[utoipa::path(
      get,
      path = "/v1/traces/{trace_id}",
+     operation_id = "get-trace",
      summary = "Fetch one whole trace",
+     description = "Every span of one trace, parent links included, so a caller \
+can rebuild the tree. Trace IDs come from the sampled spans in an investigation, \
+or from any SQL query over `sigiro_spans`.",
      params(
          ("trace_id" = String, Path, description = "Trace ID")
      ),
@@ -2193,6 +2203,7 @@ fn compute_service_breakdown(
 #[utoipa::path(
     post,
     path = "/v1/investigate",
+    operation_id = "investigate-services",
     summary = "Diagnose a service: ranked findings with runnable SQL",
     request_body = investigate::InvestigateRequest,
     description = "\

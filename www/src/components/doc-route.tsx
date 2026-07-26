@@ -43,12 +43,12 @@ function MdxPre({
 }
 
 /**
- * One body for every docs route, whether it arrived from a static route file or
- * the catch-all. The four hand-written docs get static routes purely so their
- * description reaches `<head>`: under vinext an async `generateMetadata` streams
- * its tags into `<body>`, where a crawler that does not run JavaScript never sees
- * them. The generated API pages stay on the catch-all, where that is the lesser
- * evil against writing a route file per operation.
+ * One body for every docs route. Every doc has its own route file — the four
+ * hand-written ones by hand, the API reference generated alongside its MDX — and
+ * that is not a stylistic choice: under vinext `generateMetadata` has its tags
+ * streamed into `<body>`, where a crawler that does not run JavaScript never sees
+ * them, so a static `metadata` export per route is the only way the title,
+ * description and canonical reach `<head>`.
  */
 export async function DocRoute({ page }: { page: DocPage }) {
   const MDX = page.data.body;
@@ -69,12 +69,28 @@ export async function DocRoute({ page }: { page: DocPage }) {
   return (
     <DocsPage toc={page.data.toc} full={page.data.full}>
       <DocsTitle>{page.data.title}</DocsTitle>
-      <DocsDescription>{page.data.description}</DocsDescription>
+      {/* fumadocs sizes this at 18px with a 32px bottom margin, which on top of
+          the prose paragraph's own top margin left a ~52px hole under every doc
+          title. 17px is the landing page's lede size. */}
+      <DocsDescription className="text-muted-ink mb-1 text-[1.0625rem]">
+        {page.data.description}
+      </DocsDescription>
       <DocsBody>
         <MDX
           components={{
             ...defaultMdxComponents,
             pre: MdxPre,
+            // The layout container is `overflow-x-clip`, so a table wider than
+            // the column does not make the page scrollable — it pushes the whole
+            // document wider and the right-hand side is cut off, header included.
+            // Every markdown table did this on a phone. The scroll box has to be
+            // a wrapper: `display: block` on the table itself gives it one, but
+            // then the rows shrink-wrap inside a full-width border.
+            table: (props: ComponentProps<'table'>) => (
+              <div className="my-6 overflow-x-auto">
+                <table {...props} />
+              </div>
+            ),
             // The MDX supplies `document` and `operations`; `preloaded` carries
             // the resolved schema. Merged and cast once, because the prop type is
             // a union and neither half satisfies it alone.
@@ -84,10 +100,7 @@ export async function DocRoute({ page }: { page: DocPage }) {
           }}
         />
       </DocsBody>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: jsonLd(schema) }}
-      />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(schema) }} />
     </DocsPage>
   );
 }
