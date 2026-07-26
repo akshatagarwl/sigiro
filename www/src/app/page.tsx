@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { Artifact } from '@/components/artifact';
 import { Faq } from '@/components/faq';
 import { Install } from '@/components/install';
-import { FAQ, NAV, PROMISES, RUNS_ON, SECTIONS, SITE, SOCIAL } from '@/lib/site';
+import { SiteFooter, SiteHeader } from '@/components/site-chrome';
+import { FAQ, PROMISES, RUNS_ON, SECTIONS, SITE } from '@/lib/site';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/' },
@@ -30,54 +30,11 @@ const H2 =
   'mt-2.5 max-w-[34rem] text-[1.375rem] leading-[1.35] font-semibold tracking-[-0.025em] text-strong';
 const SAY = 'mt-2.5 max-w-[36rem] text-muted-ink';
 
-/** The changepoint glyph: a flat baseline that steps up. */
-function Mark() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 32 32"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M5 24h7V10h15" />
-    </svg>
-  );
-}
-
 export default function Home() {
   return (
     <>
       <div className="mx-auto max-w-[60rem] px-6">
-        <header className="flex items-center justify-between py-5">
-          <span className="flex items-center gap-2 font-semibold tracking-tight text-strong">
-            <Mark />
-            {SITE.name}
-          </span>
-          <nav aria-label="Main" className="flex items-center gap-5 text-[0.8125rem]">
-            {NAV.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                prefetch={false}
-                className="text-muted-ink hover:text-strong"
-              >
-                {item.label}
-              </Link>
-            ))}
-            <Link
-              href="/docs/quickstart"
-              prefetch={false}
-              className="rounded-lg border border-line-strong px-3 py-1.5 font-medium text-strong"
-            >
-              Get started
-            </Link>
-          </nav>
-        </header>
+        <SiteHeader />
 
         <main id="main">
           {/* Hero: text LCP, no image. */}
@@ -167,43 +124,7 @@ export default function Home() {
           </section>
         </main>
 
-        <footer className="flex flex-wrap items-end justify-between gap-6 border-t border-line py-10">
-          <div>
-            <p className="font-semibold tracking-tight text-strong">{SITE.tagline}</p>
-            <Link
-              href="/docs/quickstart"
-              prefetch={false}
-              className="mt-3.5 inline-block rounded-lg bg-accent px-3.5 py-2 text-[0.8125rem] font-medium text-on-accent"
-            >
-              Get started
-            </Link>
-          </div>
-          <nav aria-label="Footer" className="flex flex-wrap gap-4 font-mono text-[0.6875rem]">
-            {NAV.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                prefetch={false}
-                className="text-faint hover:text-strong"
-              >
-                {item.label.toLowerCase()}
-              </Link>
-            ))}
-            {SOCIAL.map((item) => (
-              <a
-                key={item.href}
-                href={item.href}
-                rel="me noopener"
-                className="text-faint hover:text-strong"
-              >
-                {item.label.toLowerCase()}
-              </a>
-            ))}
-            <a href="/llms.txt" className="text-faint hover:text-strong">
-              llms.txt
-            </a>
-          </nav>
-        </footer>
+        <SiteFooter />
       </div>
 
       <script

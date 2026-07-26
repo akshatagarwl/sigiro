@@ -1,4 +1,4 @@
-import type { Doc } from '@/lib/docs';
+import { type Doc, renderDoc } from '@/lib/docs';
 import { SITE } from '@/lib/site';
 
 /**
@@ -7,8 +7,26 @@ import { SITE } from '@/lib/site';
  * under vinext, async generateMetadata streams its <title>/<meta> into <body>
  * instead of <head>, which reads as a missing meta description to anything that
  * does not run JavaScript.
+ *
+ * The prose classes map typography onto the same tokens the landing page uses, so
+ * a heading, a rule and a code block look identical on both sides of the site.
  */
-export function DocPage({ doc }: { doc: Doc }) {
+const PROSE = [
+  'prose max-w-none',
+  'prose-headings:font-semibold prose-headings:tracking-[-0.025em] prose-headings:text-strong',
+  'prose-h1:text-[1.75rem] prose-h1:leading-[1.15] prose-h2:text-[1.375rem] prose-h3:text-[1.0625rem]',
+  'prose-p:text-body prose-li:text-body prose-strong:text-strong prose-strong:font-semibold',
+  'prose-a:text-strong prose-a:decoration-line-strong prose-a:underline-offset-2',
+  'prose-hr:border-line prose-blockquote:border-l-line prose-blockquote:text-muted-ink',
+  // inline code and fenced blocks are styled in globals.css — `prose-code:`
+  // matches code inside `pre` as well, and its specificity wins there.
+  'prose-pre:rounded-xl prose-pre:border prose-pre:border-line',
+  'prose-table:text-[0.875rem] prose-th:text-strong prose-th:font-medium',
+].join(' ');
+
+export async function DocPage({ doc }: { doc: Doc }) {
+  const html = await renderDoc(doc);
+
   const schema = {
     '@context': 'https://schema.org',
     '@type': 'TechArticle',
@@ -20,9 +38,9 @@ export function DocPage({ doc }: { doc: Doc }) {
   };
 
   return (
-    <article className="prose prose-neutral max-w-none dark:prose-invert prose-headings:font-semibold prose-headings:tracking-tight prose-pre:border prose-pre:border-neutral-200 prose-pre:bg-neutral-50 prose-pre:text-neutral-900 dark:prose-pre:border-neutral-800 dark:prose-pre:bg-neutral-900 dark:prose-pre:text-neutral-100">
-      {/* Markdown is authored in this repo, not user input. */}
-      <div dangerouslySetInnerHTML={{ __html: doc.html }} />
+    <article className={PROSE}>
+      {/* Markdown authored in this repo, not user input. */}
+      <div dangerouslySetInnerHTML={{ __html: html }} />
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
