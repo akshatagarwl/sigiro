@@ -10,17 +10,16 @@ import './globals.css';
  * nothing else. One static 400 cut (22 KB) rather than the
  * variable font (40 KB, every weight axis, and nothing here needs a second
  * weight). vinext self-hosts it — no request to Google.
+ *
+ * Do NOT set `preload: false` to buy back mobile performance: under vinext that
+ * silently stops self-hosting and loads the woff2 from fonts.gstatic.com, which
+ * sends every visitor's IP to Google. The score it appears to win is just the
+ * third party dropping off the measured critical path.
  */
 const mono = JetBrains_Mono({
   subsets: ['latin'],
   weight: '400',
   display: 'swap',
-  // Not preloaded. The LCP element is the h1 in system sans; the mono is only
-  // the wordmark, the terminal and code. Preloading put 22 KB on the critical
-  // path and cost 14 points of mobile performance (LCP 1.1s -> 3.2s) for text
-  // that is not above the fold. next/font's fallback metrics hold CLS at 0
-  // through the swap.
-  preload: false,
   variable: '--font-jetbrains-mono',
 });
 
