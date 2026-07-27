@@ -71,8 +71,9 @@ export async function DocRoute({ page }: { page: DocPage }) {
       <DocsTitle>{page.data.title}</DocsTitle>
       {/* fumadocs sizes this at 18px with a 32px bottom margin, which on top of
           the prose paragraph's own top margin left a ~52px hole under every doc
-          title. 17px is the landing page's lede size. */}
-      <DocsDescription className="text-muted-ink mb-1 text-[1.0625rem]">
+          title. Body size, not a lede size: on a generated reference page this is
+          the operation's whole description and can run to a full paragraph. */}
+      <DocsDescription className="text-muted-ink mb-1 text-[0.9375rem]">
         {page.data.description}
       </DocsDescription>
       <DocsBody>

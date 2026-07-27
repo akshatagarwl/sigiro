@@ -67,7 +67,11 @@ await generateFiles({
       // Only the frontmatter `description` — the rest of the frontmatter carries the
       // operation content that renders the page body, and that is markdown by
       // design.
-      const desc = /^description: (\|-?\n(?:[ \t]+.*\n)+|.*\n)/m.exec(file.content);
+      // Up to the next line that starts at column 0 — a top-level key, or the
+      // closing `---`. YAML has several ways to write a long scalar and the
+      // generator uses more than one: matching `description:` plus one line left
+      // the backticks on every continuation line of a quoted block.
+      const desc = /^description: [\s\S]*?(?=^\S)/m.exec(file.content);
       if (!desc) throw new Error(`no frontmatter description in ${file.path}`);
       file.content =
         file.content.slice(0, desc.index) +

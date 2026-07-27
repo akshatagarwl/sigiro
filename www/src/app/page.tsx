@@ -122,7 +122,10 @@ export default function Home() {
 
           <section aria-labelledby="faq" className="border-t border-line py-12">
             <p className={NUM}>FAQ</p>
-            <h2 id="faq" className="mt-2.5 text-[1.375rem] font-semibold tracking-[-0.025em] text-strong">
+            <h2
+              id="faq"
+              className="mt-2.5 text-[1.375rem] font-semibold tracking-[-0.025em] text-strong"
+            >
               Questions.
             </h2>
             <Faq />
@@ -132,10 +135,7 @@ export default function Home() {
         <SiteFooter />
       </div>
 
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: jsonLd(faqSchema) }}
-      />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(faqSchema) }} />
     </>
   );
 }

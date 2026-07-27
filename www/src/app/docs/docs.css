@@ -64,17 +64,18 @@
   font-weight: inherit;
 }
 
-/* One type ramp for the whole site.
+/* One type ramp for the whole site — but a reference page is not a landing page.
 
-   The prose plugin sizes headings and inline code in `em`, so the docs came out
-   on their own scale — 26.25 / 24 / 18 / 16 against the landing page's
-   52 / 22 / 17 / 15 — with no letter-spacing on any heading, where every heading
-   on the landing page is tightened. Two ramps and two tracking rules read as two
-   products. These are the landing page's values, in rem so they do not drift with
-   whatever element they sit in. */
-/* `.prose` is the div *inside* the article, so a rule on `#nd-page` alone loses
-   to it for anything it sets — size, leading and colour all have to be claimed
-   here or the body copy stays on the plugin's defaults. */
+   The prose plugin sizes headings and inline code in `em`, so the docs ran on
+   their own scale (26.25 / 24 / 18 / 16, no tracking) against the landing page's
+   (52 / 22 / 17 / 15, tightened), and the same inline code came out 13px in a
+   paragraph and 11.38px in a table cell. These are in rem so they do not drift
+   with whatever element they sit in.
+
+   The sizes themselves are a step down from the marketing page's. Docs are
+   scanned and returned to, not read once: the reference renderer emits an <h2>
+   for labels as small as "Path Parameters", and at the landing page's 22px those
+   read as chapter titles. */
 #nd-page .prose {
   font-size: 0.9375rem;
   line-height: 1.7;
@@ -83,18 +84,19 @@
 }
 #nd-page :is(h1, h2, h3, h4) {
   color: var(--color-strong);
-  letter-spacing: -0.025em;
+  letter-spacing: -0.02em;
 }
 #nd-page h1 {
-  font-size: 1.875rem;
-  line-height: 1.2;
+  font-size: 1.625rem;
+  line-height: 1.25;
+  letter-spacing: -0.03em;
 }
 #nd-page h2 {
-  font-size: 1.375rem;
-  line-height: 1.35;
+  font-size: 1.125rem;
+  line-height: 1.4;
 }
 #nd-page h3 {
-  font-size: 1.0625rem;
+  font-size: 1rem;
   line-height: 1.45;
 }
 #nd-page :is(h4, h5, h6) {
@@ -139,4 +141,11 @@
 #nd-sidebar a:empty,
 #nd-sidebar-mobile a:empty {
   display: none;
+}
+
+/* The scroll wrapper owns the block spacing. Prose also gives the table its own
+   2em margins, and the two compounded into ~90px of dead space above and below
+   every table. */
+#nd-page table {
+  margin: 0;
 }
