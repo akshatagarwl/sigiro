@@ -150,3 +150,80 @@
 #nd-page table {
   margin: 0;
 }
+
+/* ---------------------------------------------------------------------------
+   The generated API reference.
+
+   These pages are drawn almost entirely by fumadocs-openapi's own components, and
+   `renderCodeblock` is explicitly omitted from its public render context — so the
+   site's code block cannot be threaded through it. The answer is to style what it
+   renders, not to rebuild it: the panels already inherit our border, radius and
+   palette through the fd-* tokens, and these are the four places where the result
+   still read as a different product.
+   --------------------------------------------------------------------------- */
+
+/* Reading measure. A reference page is full-width because the two-column layout
+   needs it, which left the operation description running to 132 characters a line
+   — about twice a readable measure. Text gets a measure; code, tables and panels
+   keep the full column.
+
+   53ch is ~70 characters at this size, and it lands on 492px — the width of the
+   layout's left column. So the description stops exactly where the playground
+   panel below it stops, instead of overhanging it by 400px. */
+#nd-page :is(p, li, blockquote) {
+  max-width: 53ch;
+}
+
+/* One code background for the whole site. Their sample panels are white
+   (`bg-fd-card`) or a grey tint, ours is `--color-code-bg`; border and radius
+   already match, so this was the last thing making a curl sample here look
+   unrelated to a fence in the quickstart. */
+#nd-page .rounded-xl:has(pre) {
+  background: var(--color-code-bg);
+}
+
+/* The prev/next cards put the neighbouring page's description on one nowrap line.
+   Our generated descriptions are paragraphs — 4900px of text in a 416px box — so
+   what showed was a meaningless fragment with no clipping cue, and the "next" card
+   right-aligns, which makes wrapped body text read as ragged. The title and its
+   direction arrow are the whole affordance; the description was never legible
+   there. */
+#nd-page a p.truncate {
+  display: none;
+}
+
+/* Long lines pass under the copy button, which floats over the top-right of the
+   scroll area — so reserving space at the end of the scrollable content is not
+   enough on its own. Wrapping is: a curl command with `\` continuations reads
+   fine wrapped, and then nothing needs horizontal scrolling at all. */
+/* Long lines ran under the copy button that sits at the top-right of the sample
+   panels. fumadocs already reserves room for it, so the fix is only to let the
+   code wrap: the <pre> carries `w-max` (width: max-content) and `min-w-full`,
+   which pin it to the longest line no matter what white-space says. Those are
+   utility classes on their markup, hence !important — the alternative is to
+   duplicate their component. */
+#nd-page .fd-scroll-container pre,
+#nd-page .fd-scroll-container pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+/* The sidebar's fill is one viewport tall (`100dvh`), so on any page longer than
+   that its white ran out mid-scroll and left a horizontal seam across the page.
+   Nothing in this palette needs the sidebar to be a different surface from the
+   page — the hairline border is the separation. */
+#nd-sidebar {
+  background: transparent;
+}
+
+/* The type names next to each parameter (`string | null`) are buttons that expand
+   the definition, but a solid underline on every one reads as a link — and as a
+   broken one, since they do not navigate. Dotted is the conventional mark for a
+   term you can expand, and it takes the noise out of a dense parameter list. */
+#nd-page button.underline {
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
