@@ -73,7 +73,7 @@ export async function DocRoute({ page }: { page: DocPage }) {
           the prose paragraph's own top margin left a ~52px hole under every doc
           title. Body size, not a lede size: on a generated reference page this is
           the operation's whole description and can run to a full paragraph. */}
-      <DocsDescription className="text-muted-ink mb-1 text-[0.9375rem]">
+      <DocsDescription className="text-muted-ink mb-1 text-[0.875rem]">
         {page.data.description}
       </DocsDescription>
       <DocsBody>

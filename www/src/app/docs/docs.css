@@ -66,18 +66,19 @@
 
 /* One type ramp for the whole site — but a reference page is not a landing page.
 
-   The prose plugin sizes headings and inline code in `em`, so the docs ran on
-   their own scale (26.25 / 24 / 18 / 16, no tracking) against the landing page's
-   (52 / 22 / 17 / 15, tightened), and the same inline code came out 13px in a
-   paragraph and 11.38px in a table cell. These are in rem so they do not drift
-   with whatever element they sit in.
+   Two reasons the docs need their own scale rather than the marketing page's.
+   First, the prose plugin sizes headings and inline code in `em`, so left alone
+   the docs run on 26.25 / 24 / 18 / 16 with no tracking, and the same inline code
+   comes out 13px in a paragraph and 11.38px in a table cell. Second, and the
+   reason for the sizes below: the generated reference renders its own UI at 14px
+   — parameter names, descriptions, tabs, the lot — and it emits an <h2> for labels
+   as small as "Path Parameters". A 15px body with 22px headings sat above that
+   14px baseline and read a size too large on every reference page.
 
-   The sizes themselves are a step down from the marketing page's. Docs are
-   scanned and returned to, not read once: the reference renderer emits an <h2>
-   for labels as small as "Path Parameters", and at the landing page's 22px those
-   read as chapter titles. */
+   So the base is the renderer's 14px and everything steps off it. rem, not em, so
+   nothing drifts with whatever element it sits in. */
 #nd-page .prose {
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
   line-height: 1.7;
   /* The prose plugin's body colour is an oklab with 0.9 alpha; ours is a token. */
   color: var(--color-body);
@@ -87,20 +88,20 @@
   letter-spacing: -0.02em;
 }
 #nd-page h1 {
-  font-size: 1.625rem;
+  font-size: 1.5rem;
   line-height: 1.25;
   letter-spacing: -0.03em;
 }
 #nd-page h2 {
-  font-size: 1.125rem;
+  font-size: 1.0625rem;
   line-height: 1.4;
 }
 #nd-page h3 {
-  font-size: 1rem;
+  font-size: 0.9375rem;
   line-height: 1.45;
 }
 #nd-page :is(h4, h5, h6) {
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
 }
 
 /* Whatever the prose leading is, the fence's own caption sets its own — inherited
