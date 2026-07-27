@@ -117,21 +117,6 @@
   min-height: 24px;
 }
 
-/* fumadocs-openapi colour-codes the HTTP method (green GET, blue POST, ...) with
-   Tailwind's 600 shades, which are 3.9:1 on our page ground and the only chromatic
-   thing on an achromatic site. The uppercase mono word already carries the
-   meaning. */
-/* Scoped to the whole layout, not just the sidebar: the same badge appears in the
-   page's prev/next footer cards, which is where it kept failing the contrast
-   check after the sidebar was fixed. */
-#nd-docs-layout [class*='text-green-'],
-#nd-docs-layout [class*='text-blue-'],
-#nd-docs-layout [class*='text-orange-'],
-#nd-docs-layout [class*='text-yellow-'],
-#nd-docs-layout [class*='text-red-'] {
-  color: var(--color-faint);
-}
-
 /* With no nav title configured, fumadocs' sidebar still renders its nav-title
    slot — an empty <a href="/">, which is a link with no accessible name. It has to
    go from the accessibility tree, not just the layout, so `display: none` rather
@@ -174,14 +159,6 @@
   max-width: 53ch;
 }
 
-/* One code background for the whole site. Their sample panels are white
-   (`bg-fd-card`) or a grey tint, ours is `--color-code-bg`; border and radius
-   already match, so this was the last thing making a curl sample here look
-   unrelated to a fence in the quickstart. */
-#nd-page .rounded-xl:has(pre) {
-  background: var(--color-code-bg);
-}
-
 /* The prev/next cards put the neighbouring page's description on one nowrap line.
    Our generated descriptions are paragraphs — 4900px of text in a 416px box — so
    what showed was a meaningless fragment with no clipping cue, and the "next" card
@@ -196,19 +173,6 @@
    scroll area — so reserving space at the end of the scrollable content is not
    enough on its own. Wrapping is: a curl command with `\` continuations reads
    fine wrapped, and then nothing needs horizontal scrolling at all. */
-/* Long lines ran under the copy button that sits at the top-right of the sample
-   panels. fumadocs already reserves room for it, so the fix is only to let the
-   code wrap: the <pre> carries `w-max` (width: max-content) and `min-w-full`,
-   which pin it to the longest line no matter what white-space says. Those are
-   utility classes on their markup, hence !important — the alternative is to
-   duplicate their component. */
-#nd-page .fd-scroll-container pre,
-#nd-page .fd-scroll-container pre code {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  width: 100% !important;
-  min-width: 0 !important;
-}
 
 /* The sidebar's fill is one viewport tall (`100dvh`), so on any page longer than
    that its white ran out mid-scroll and left a horizontal seam across the page.
@@ -216,14 +180,4 @@
    page — the hairline border is the separation. */
 #nd-sidebar {
   background: transparent;
-}
-
-/* The type names next to each parameter (`string | null`) are buttons that expand
-   the definition, but a solid underline on every one reads as a link — and as a
-   broken one, since they do not navigate. Dotted is the conventional mark for a
-   term you can expand, and it takes the noise out of a dense parameter list. */
-#nd-page button.underline {
-  text-decoration-style: dotted;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
 }

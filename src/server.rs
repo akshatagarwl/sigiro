@@ -1654,7 +1654,15 @@ fn query_sql_contract() -> String {
     summary = "Run SQL over your telemetry",
     request_body = String,
     responses(
-        (status = 200, description = "Query results", body = Vec<serde_json::Value>)
+        // An example, because the body type is untyped JSON: without one, any
+        // schema-driven renderer samples `Vec<Value>` to `[null]`, which reads as
+        // a broken endpoint rather than "rows, shaped by your SELECT".
+        (status = 200, description = "Query results — one object per row, keyed by \
+your SELECT's column names", body = Vec<serde_json::Value>,
+            example = json!([
+                { "service_name": "checkout", "errors": 128 },
+                { "service_name": "cart", "errors": 4 }
+            ]))
     ),
     tag = "query"
 )]
@@ -1773,7 +1781,12 @@ async fn services_handler(
 }
 
 /// Query parameters for GET /v1/anomalies.
+///
+/// `parameter_in = Query` is not the default: without it utoipa documents these as
+/// PATH parameters, which made the published spec claim `/v1/anomalies` takes three
+/// required path segments. They are optional filters on the query string.
 #[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct AnomaliesQuery {
     /// Filter to one service.
     service: Option<String>,

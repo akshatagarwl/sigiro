@@ -19,10 +19,10 @@
     "clsx": "2.1.1",
     "fumadocs-core": "16.12.1",
     "fumadocs-mdx": "15.2.0",
-    "fumadocs-openapi": "11.2.2",
     "fumadocs-ui": "16.12.1",
     "lucide-react": "1.27.0",
     "next": "16.3.0-preview.9",
+    "openapi-sampler": "1.7.4",
     "react": "19.3.0-canary-28cd4bb0-20260723",
     "react-dom": "19.3.0-canary-28cd4bb0-20260723",
     "shiki": "4.3.1",
@@ -57,8 +57,5 @@
   "trustedDependencies": [
     "sharp",
     "unrs-resolver"
-  ],
-  "patchedDependencies": {
-    "@fumadocs/api-docs@0.2.1": "patches/@fumadocs%2Fapi-docs@0.2.1.patch"
-  }
+  ]
 }

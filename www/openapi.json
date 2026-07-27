@@ -21,39 +21,30 @@
         "parameters": [
           {
             "name": "service",
-            "in": "path",
+            "in": "query",
             "description": "Filter to one service.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "from_ts",
-            "in": "path",
+            "in": "query",
             "description": "Only shifts at or after this time (microseconds since the Unix epoch).",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": "integer",
               "format": "int64"
             }
           },
           {
             "name": "to_ts",
-            "in": "path",
+            "in": "query",
             "description": "Only shifts at or before this time (microseconds since the Unix epoch).",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": "integer",
               "format": "int64"
             }
           }
@@ -143,13 +134,23 @@
         },
         "responses": {
           "200": {
-            "description": "Query results",
+            "description": "Query results \u2014 one object per row, keyed by your SELECT's column names",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {}
-                }
+                },
+                "example": [
+                  {
+                    "errors": 128,
+                    "service_name": "checkout"
+                  },
+                  {
+                    "errors": 4,
+                    "service_name": "cart"
+                  }
+                ]
               }
             }
           }
@@ -712,7 +713,7 @@
               "null"
             ],
             "description": "Single service to investigate. Provide this OR `services` (call\n`GET /v1/services` first to discover valid names).",
-            "example": "shopfront-pipeline-worker"
+            "example": "checkout"
           },
           "services": {
             "type": [
@@ -722,7 +723,11 @@
             "items": {
               "type": "string"
             },
-            "description": "Multiple services in one call (max 10). Alternative to `service`."
+            "description": "Multiple services in one call (max 10). Alternative to `service`.",
+            "example": [
+              "checkout",
+              "cart"
+            ]
           },
           "to_ts": {
             "type": "integer",

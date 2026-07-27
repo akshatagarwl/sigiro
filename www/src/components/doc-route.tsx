@@ -1,10 +1,8 @@
-import type { OpenAPIPageProps } from 'fumadocs-openapi/ui';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import { isValidElement, type ComponentProps, type ReactNode } from 'react';
 import { CodeBlock } from '@/components/code-block';
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/page';
-import { OpenAPIPage } from '@/components/openapi-page';
-import { openapi } from '@/lib/openapi';
+import { ApiOperation } from '@/components/api-operation';
 import { SITE } from '@/lib/site';
 import type { source } from '@/lib/source';
 import { jsonLd } from '@/lib/json-ld';
@@ -50,11 +48,8 @@ function MdxPre({
  * them, so a static `metadata` export per route is the only way the title,
  * description and canonical reach `<head>`.
  */
-export async function DocRoute({ page }: { page: DocPage }) {
+export function DocRoute({ page }: { page: DocPage }) {
   const MDX = page.data.body;
-  // Generated reference pages declare `_openapi.preload`; the schema has to be
-  // resolved on the server and handed to the client component.
-  const preloaded = page.data._openapi ? await openapi.preloadOpenAPIPage(page) : undefined;
 
   const schema = {
     '@context': 'https://schema.org',
@@ -92,12 +87,9 @@ export async function DocRoute({ page }: { page: DocPage }) {
                 <table {...props} />
               </div>
             ),
-            // The MDX supplies `document` and `operations`; `preloaded` carries
-            // the resolved schema. Merged and cast once, because the prop type is
-            // a union and neither half satisfies it alone.
-            APIPage: (props: object) => (
-              <OpenAPIPage {...({ ...props, ...preloaded } as OpenAPIPageProps)} />
-            ),
+            // The generated reference pages call this for the mechanical part of
+            // an operation; the prose above it is ordinary markdown.
+            ApiOperation,
           }}
         />
       </DocsBody>

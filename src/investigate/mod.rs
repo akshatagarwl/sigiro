@@ -24,9 +24,13 @@ pub use analysis::{
 pub struct InvestigateRequest {
     /// Single service to investigate. Provide this OR `services` (call
     /// `GET /v1/services` first to discover valid names).
-    #[schema(example = "shopfront-pipeline-worker")]
+    // The example is published in /openapi.json and on the docs page. "checkout"
+    // is the service every other example on the site uses; the previous value named
+    // an unrelated internal deployment.
+    #[schema(example = "checkout")]
     pub service: Option<String>,
     /// Multiple services in one call (max 10). Alternative to `service`.
+    #[schema(example = json!(["checkout", "cart"]))]
     pub services: Option<Vec<String>>,
     /// Window start, **microseconds** since the Unix epoch (a 16-digit value,
     /// e.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.

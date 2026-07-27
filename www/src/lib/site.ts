@@ -11,6 +11,9 @@
 export const SITE = {
   name: 'sigiro',
   url: 'https://sigiro.com',
+  /** Where the hosted API answers. The reference builds its curl examples against
+      this, so a reader can paste one and have it reach something real. */
+  apiUrl: 'https://api.sigiro.com',
   /** Keeps "observability" in the title: the h1 is a category bet with no search
       intent behind it, and this is the one place the category word still earns
       its keep for search and for citation. */

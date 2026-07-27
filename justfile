@@ -138,13 +138,17 @@ api-spec:
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build --quiet --bin sigiro
-    dir=$(mktemp -d)
-    trap 'kill %1 2>/dev/null || true; rm -rf "$dir"' EXIT
-    SIGIRO_DATA_DIR="$dir/db" ./target/debug/sigiro serve >/dev/null 2>&1 &
-    for _ in $(seq 1 40); do
+    # A warm data dir under target/: with a fresh one DuckDB re-downloads its
+    # extensions on every run and the wait below times out.
+    dir=target/spec-db
+    mkdir -p "$dir"
+    SIGIRO_DATA_DIR="$dir" ./target/debug/sigiro serve >/dev/null 2>&1 &
+    trap 'kill %1 2>/dev/null || true' EXIT
+    for _ in $(seq 1 60); do
       curl -sf http://localhost:9999/openapi.json -o "$dir/spec.json" && break
       sleep 2
     done
+    test -s "$dir/spec.json" || { echo "sigiro never served /openapi.json" >&2; exit 1; }
     python3 -c "
     import json
     spec = json.load(open('$dir/spec.json'))
