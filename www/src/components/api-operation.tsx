@@ -14,20 +14,29 @@ import { SITE } from '@/lib/site';
  */
 export async function ApiOperation({ id }: { id: string }) {
   const op = operation(id);
-  const request = await highlight(curl(op, SITE.apiUrl), 'bash');
+  const request = curl(op, SITE.apiUrl);
 
-  const responses = await Promise.all(
-    op.responses.map(async (r) => ({
-      ...r,
-      html: r.example ? await highlight(r.example, 'json') : undefined,
-    })),
-  );
+  // One await, not two in series: the request sample and the response samples do
+  // not depend on each other, and highlighting them one after the other made the
+  // page wait for both round trips instead of the slower one.
+  const [requestHtml, responses] = await Promise.all([
+    highlight(request, 'bash'),
+    Promise.all(
+      op.responses.map(async (r) => ({
+        ...r,
+        html: r.example ? await highlight(r.example, 'json') : undefined,
+      })),
+    ),
+  ]);
 
   return (
     <div className="not-prose mt-8 flex flex-col gap-9 text-[0.875rem]">
       <Section title="Request">
-        <CodeBlock lang="bash" title={`${op.method} ${op.path}`} value={curl(op, SITE.apiUrl)}>
-          <div dangerouslySetInnerHTML={{ __html: request }} />
+        <CodeBlock lang="bash" title={`${op.method} ${op.path}`} value={request}>
+          {/* Shiki output. The input is openapi.json — a committed snapshot of our
+              own spec — run through a highlighter, so there is no user-controlled
+              string anywhere in this markup. */}
+          <div dangerouslySetInnerHTML={{ __html: requestHtml }} />
         </CodeBlock>
         <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5">
           <Row term="Auth">

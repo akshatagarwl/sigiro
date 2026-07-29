@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Artifact } from '@/components/artifact';
 import { Faq } from '@/components/faq';
+import { FactoryLoop } from '@/components/factory-loop';
 import { Integrations } from '@/components/integrations';
 import { Button } from '@/components/ui/button';
 import { SiteFooter, SiteHeader } from '@/components/site-chrome';
@@ -62,6 +63,26 @@ export default function Home() {
               <span className="mr-1.5 inline-block size-[5px] rounded-full bg-strong align-[1px]" />
               Self-hosted and free. Hosted beta rolling out.
             </p>
+          </section>
+
+          {/* Where this fits, before how to use it. A reader who has an agent
+              writing code already knows the fix stage is solved; the question worth
+              answering first is which stage is still missing. */}
+          <section aria-labelledby="loop" className="border-t border-line py-12">
+            <p className={NUM}>the loop</p>
+            <h2 id="loop" className={H2}>
+              Five stages.{' '}
+              <span className="font-normal text-faint">
+                You do not have a factory until every one is covered.
+              </span>
+            </h2>
+            <p className="mt-4 max-w-[38rem] text-[0.9375rem] text-body">
+              Detect, diagnose, fix, verify, learn. The fix stage got solved first and loudest,
+              which is why the loop still breaks upstream of it: an agent that can write the patch
+              has no way to be told what broke, or to find out whether its patch worked. sigiro is
+              two of these five, and the evidence for a third.
+            </p>
+            <FactoryLoop />
           </section>
 
           {SECTIONS.map((s) => (

@@ -20,6 +20,11 @@
   --color-accent: #171717;
   --color-on-accent: #ffffff;
   --color-code-bg: #f4f4f3;
+  /* The one chromatic token, and it earns it: it marks the flow through the
+     factory loop and nothing else. 5.1:1 on the page ground, so it can carry the
+     small mono labels as well as the lines. */
+  --color-flow: #b45309;
+  --color-flow-tint: #b453090f;
 
   /* Aliases the registry components (shadcn / kibo-ui / reui) are written
      against. Add new ones here, never by editing a vendored component. */
@@ -135,4 +140,12 @@
 .mark-trace {
   stroke-dasharray: 22 100;
   animation: mark-trace 3.4s ease-in-out infinite;
+}
+
+/* The dotted ground the loop diagram sits on. Two properties rather than an image:
+   a background-image gradient costs one paint and no request. */
+.dot-grid {
+  background-image: radial-gradient(var(--color-line) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: -1px -1px;
 }

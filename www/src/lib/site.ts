@@ -116,6 +116,61 @@ GROUP BY model ORDER BY slowest DESC`,
 ] as const;
 
 /** The three promises under 04 — each one a thing we deliberately do not do. */
+/**
+ * The factory loop, and which stage belongs to whom.
+ *
+ * The positioning in one object: a software factory is not a factory until every
+ * stage is covered, and sigiro covers two of them plus the evidence for a third.
+ * Saying which stages are *not* ours is the point — a claim to the whole loop is
+ * the claim every dashboard vendor already makes, and it is why an agent driving
+ * one gets a screenshot instead of an answer.
+ *
+ * `owner` is rendered verbatim under each stage, so it has to name a real thing a
+ * reader already runs.
+ */
+export const LOOP = [
+  {
+    n: '01',
+    title: 'Detect',
+    owner: 'sigiro',
+    ours: true,
+    say: 'Something moved. Not against a threshold somebody tuned last quarter — against the service\u2019s own history, which is a property of the data rather than a thing you maintain.',
+    detail: 'sigiro anomalies',
+  },
+  {
+    n: '02',
+    title: 'Diagnose',
+    owner: 'sigiro',
+    ours: true,
+    say: 'One call comes back with ranked findings, the deploy that is the suspect, how the thing actually fails \u2014 and on every row the query that proves it. An agent can act on that. It cannot act on a chart.',
+    detail: 'POST /v1/investigate',
+  },
+  {
+    n: '03',
+    title: 'Fix',
+    owner: 'your coding agent',
+    ours: false,
+    say: 'Claude Code, Codex, Cursor \u2014 whichever one already has commit rights. This stage was solved before the others were, which is why the gap is upstream of it.',
+    detail: 'writes, tests, reviews',
+  },
+  {
+    n: '04',
+    title: 'Verify',
+    owner: 'your pipeline, on our evidence',
+    ours: 'partly',
+    say: 'Tests passing is not the same as the incident being over. The shift that opened the loop either closed after the deploy or it did not, and the same baseline that detected it answers that.',
+    detail: 'the shift recovered, or it did not',
+  },
+  {
+    n: '05',
+    title: 'Learn',
+    owner: 'your memory',
+    ours: false,
+    say: 'What the fix was, next to what the evidence looked like, kept for the next time the same shape appears. Then the loop starts again on a service that now has a new baseline.',
+    detail: 'playbooks, expertise, notes',
+  },
+] as const;
+
 export const PROMISES = [
   {
     title: 'Nothing to configure',
