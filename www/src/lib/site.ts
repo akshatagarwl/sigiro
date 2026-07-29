@@ -127,6 +127,12 @@ GROUP BY model ORDER BY slowest DESC`,
  *
  * `owner` is rendered verbatim under each stage, so it has to name a real thing a
  * reader already runs.
+ *
+ * `detail` names the HTTP endpoint for both of our stages, not the CLI. Every
+ * operation has both surfaces — `sigiro anomalies` and `GET /v1/anomalies` are the
+ * same call — so which one to name is a question about the reader, and this
+ * section's reader is an agent in a loop. The quickstart names the CLI for both,
+ * for the same reason in reverse. Do not mix the two within one page.
  */
 export const LOOP = [
   {
@@ -135,7 +141,7 @@ export const LOOP = [
     owner: 'sigiro',
     ours: true,
     say: 'Something moved. Not against a threshold somebody tuned last quarter — against the service\u2019s own history, which is a property of the data rather than a thing you maintain.',
-    detail: 'sigiro anomalies',
+    detail: 'GET /v1/anomalies',
   },
   {
     n: '02',
