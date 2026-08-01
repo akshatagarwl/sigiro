@@ -24,6 +24,40 @@ const nextConfig: NextConfig = {
    * forever, and every one of these points at a third-party account that can move.
    * A social handle is not a canonical URL change.
    */
+  /**
+   * Documents revalidate; fingerprinted assets do not.
+   *
+   * Static routes were going out as `s-maxage=31536000, stale-while-revalidate`,
+   * which tells every shared cache — Cloudflare's edge, and whatever proxy sits
+   * in front of a link-preview crawler — that this HTML is good for a year. It
+   * is a marketing page whose whole job is to describe a product that changes,
+   * and it carries the og:title, og:description and og:image every scraper
+   * reads. A year-old copy of that is a year-old preview.
+   *
+   * Five minutes at the edge, then revalidate, with a day of
+   * stale-while-revalidate so a reader never waits on the origin. `max-age=0`
+   * keeps browsers honest without touching the shared cache.
+   *
+   * `/_next/static/*` is content-hashed, so a new build is a new URL and there
+   * is nothing to go stale. It keeps the year, immutably.
+   */
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=0, s-maxage=300, stale-while-revalidate=86400',
+          },
+        ],
+      },
+      {
+        source: '/_next/static/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
+    ];
+  },
   async redirects() {
     return [
       { source: '/github', destination: 'https://github.com/sigiroai', permanent: false },
