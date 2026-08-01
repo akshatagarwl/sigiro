@@ -1,11 +1,19 @@
 /**
  * One source of truth for everything the site says about itself.
  *
- * Copy rule, from docs/notes/company/taglines.md: never mention Parquet, DuckDB,
- * S3 or eBPF in customer-facing text. Users care about outcomes; the storage
- * engine is an implementation detail. The hero line is the one that file already
- * chose. The thesis is docs/notes/company/pitch.md: the consumer of observability
- * data changed, and it is no longer a person staring at a dashboard.
+ * Positioning, voice and the five claims live in .agents/product-marketing.md —
+ * read that before editing copy here. Three rules from it that bite hardest:
+ *
+ * 1. Say "you". Prose with nobody in it reads as machine-generated no matter how
+ *    accurate it is, and that was the diagnosis on the previous draft of this file.
+ * 2. Vary the rhythm. The old copy hinged eleven sentences on an em-dash, which is
+ *    what made every line sound like the same line. Budget for the page is two.
+ * 3. Never mention Parquet, DuckDB, S3 or eBPF. Users care about outcomes; the
+ *    storage engine is an implementation detail.
+ *
+ * Cost claims name no competitor and quote no multiplier: "free if you run it,
+ * ~$14/mo if we do". The reader does their own arithmetic against a bill they
+ * already know. Internal cost work stays in docs/notes/company/cost.md.
  */
 
 export const SITE = {
@@ -20,8 +28,10 @@ export const SITE = {
   title: 'sigiro — observability data layer for self-improving software',
   /** The h1: the category claim. */
   tagline: 'The data layer for self-improving software and agents.',
+  /** Also the meta description, the OG description and the Twitter card, so it
+      has to stay under ~155 characters or search results cut it mid-sentence. */
   description:
-    'Dashboards are a presentation layer. sigiro is the data layer underneath: OpenTelemetry in, ranked findings out, each one carrying the query that proves it. Built for agents reading at 3am, not people reading charts.',
+    'Point OpenTelemetry at it. When something breaks, you get an answer with the query that proves it, not a chart to read.',
 } as const;
 
 export const INSTALL = [
@@ -43,10 +53,10 @@ export const SECTIONS = [
     n: '01',
     lead: 'Connect.',
     rest: 'Point OpenTelemetry at it and nothing else changes.',
-    say: 'Standard OTLP on the standard ports. Whatever SDK or collector you already run keeps working — no agent to install, no code to touch, no migration.',
+    say: 'Standard OTLP, standard ports. Whatever SDK or collector you already run keeps working. Nothing to install in your app, no code to touch, no migration to plan.',
     artifact: {
       title: 'your shell',
-      meta: 'under five minutes, two variables',
+      meta: 'two variables, five minutes',
       lang: 'bash' as const,
       code: `docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
 
@@ -58,7 +68,7 @@ OTEL_SERVICE_NAME=checkout npm start`,
     n: '02',
     lead: 'Ask.',
     rest: 'One question, one answer, already ranked.',
-    say: 'Not a panel to interpret and not a firehose to wade through. What moved together, which deploy is the suspect, and how the thing actually fails — in one response something else can act on.',
+    say: 'You don’t get a panel to interpret or a firehose to wade through. You get what moved together, which deploy looks guilty, and how the thing actually fails. One response, and your agent can act on it.',
     artifact: {
       title: 'POST /v1/investigate',
       meta: '{"service":"checkout"}',
@@ -76,8 +86,8 @@ OTEL_SERVICE_NAME=checkout npm start`,
   {
     n: '03',
     lead: 'Correlate.',
-    rest: 'Your services and your agents in the same question.',
-    say: 'An agent is a service that calls a model instead of a database. Its reasoning and your request path land in the same place, joined by the same trace — so “which model call stalled the checkout” is one query rather than two products.',
+    rest: 'Your services and your agents in one question.',
+    say: 'An agent is just a service that calls a model instead of a database. Its reasoning and your request path land in the same place, joined by the same trace. So “which model call stalled the checkout” is one query instead of two products.',
     artifact: {
       title: 'POST /v1/query',
       meta: 'no query language to learn',
@@ -92,14 +102,24 @@ GROUP BY model ORDER BY slowest DESC`,
     n: '04',
     lead: 'Prove.',
     rest: 'Every answer carries the query behind it.',
-    say: 'Nothing has to be taken on faith. The agent widens, narrows or pivots any finding by editing a query it was handed, never by guessing at a shape it has not seen.',
-    artifact: null,
+    say: 'You never have to take a finding on faith. Run the query it came with, widen it, or try to disprove it. Your agent does the same thing, by editing SQL it was handed instead of guessing at a shape it has never seen.',
+    artifact: {
+      title: 'inside every finding',
+      meta: 'paste it, run it, widen it',
+      lang: 'json' as const,
+      code: `{
+  "operation": "POST /api/orders",
+  "errors": 246,
+  "error_rate": 0.19,
+  "drill_down_sql": "SELECT * FROM spans WHERE service = 'checkout' AND name = 'POST /api/orders' AND status = 'error'"
+}`,
+    },
   },
   {
     n: '05',
     lead: 'Discover.',
     rest: 'Your agent learns the whole surface by reading it.',
-    say: 'No tool description to hand-write and no onboarding for a machine. One unauthenticated document describes every endpoint, and that is the integration.',
+    say: 'There’s no tool description to hand-write and no onboarding for a machine. One public document describes every endpoint. That’s the integration.',
     artifact: {
       title: 'GET /openapi.json',
       meta: 'public, no key',
@@ -115,13 +135,12 @@ GROUP BY model ORDER BY slowest DESC`,
   },
 ] as const;
 
-/** The three promises under 04 — each one a thing we deliberately do not do. */
 /**
  * The factory loop, and which stage belongs to whom.
  *
  * The positioning in one object: a software factory is not a factory until every
  * stage is covered, and sigiro covers two of them plus the evidence for a third.
- * Saying which stages are *not* ours is the point — a claim to the whole loop is
+ * Saying which stages are *not* ours is the point. A claim to the whole loop is
  * the claim every dashboard vendor already makes, and it is why an agent driving
  * one gets a screenshot instead of an answer.
  *
@@ -129,8 +148,8 @@ GROUP BY model ORDER BY slowest DESC`,
  * reader already runs.
  *
  * `detail` names the HTTP endpoint for both of our stages, not the CLI. Every
- * operation has both surfaces — `sigiro anomalies` and `GET /v1/anomalies` are the
- * same call — so which one to name is a question about the reader, and this
+ * operation has both surfaces (`sigiro anomalies` and `GET /v1/anomalies` are the
+ * same call), so which one to name is a question about the reader, and this
  * section's reader is an agent in a loop. The quickstart names the CLI for both,
  * for the same reason in reverse. Do not mix the two within one page.
  */
@@ -140,7 +159,7 @@ export const LOOP = [
     title: 'Detect',
     owner: 'sigiro',
     ours: true,
-    say: 'Something moved. Not against a threshold somebody tuned last quarter — against the service\u2019s own history, which is a property of the data rather than a thing you maintain.',
+    say: 'Something moved. Not against a threshold you tuned last quarter, but against the service’s own history. Normal is something your data decides, not something you maintain.',
     detail: 'GET /v1/anomalies',
   },
   {
@@ -148,7 +167,7 @@ export const LOOP = [
     title: 'Diagnose',
     owner: 'sigiro',
     ours: true,
-    say: 'One call comes back with ranked findings, the deploy that is the suspect, how the thing actually fails \u2014 and on every row the query that proves it. An agent can act on that. It cannot act on a chart.',
+    say: 'One call comes back with ranked findings, the deploy that looks guilty, and how the thing actually fails. Every row carries the query that proves it. Your agent can act on that. It can’t act on a chart.',
     detail: 'POST /v1/investigate',
   },
   {
@@ -156,7 +175,7 @@ export const LOOP = [
     title: 'Fix',
     owner: 'your coding agent',
     ours: false,
-    say: 'Claude Code, Codex, Cursor \u2014 whichever one already has commit rights. This stage was solved before the others were, which is why the gap is upstream of it.',
+    say: 'Claude Code, Codex, Cursor, whichever one already has commit rights. This stage got solved first, which is why the gap sits upstream of it.',
     detail: 'writes, tests, reviews',
   },
   {
@@ -164,7 +183,7 @@ export const LOOP = [
     title: 'Verify',
     owner: 'your pipeline, on our evidence',
     ours: 'partly',
-    say: 'Tests passing is not the same as the incident being over. The shift that opened the loop either closed after the deploy or it did not, and the same baseline that detected it answers that.',
+    say: 'Tests passing isn’t the same as the incident being over. The shift that opened the loop either closed after your deploy or it didn’t, and the baseline that caught it answers that.',
     detail: 'the shift recovered, or it did not',
   },
   {
@@ -172,23 +191,43 @@ export const LOOP = [
     title: 'Learn',
     owner: 'your memory',
     ours: false,
-    say: 'What the fix was, next to what the evidence looked like, kept for the next time the same shape appears. Then the loop starts again on a service that now has a new baseline.',
+    say: 'What the fix was, next to what the evidence looked like, kept for the next time the same shape shows up. Then the loop starts again, on a service with a new baseline.',
     detail: 'playbooks, expertise, notes',
   },
 ] as const;
 
+/**
+ * The five things users actually care about, plus the one that proves we mean it.
+ *
+ * Order is deliberate: proof first (it is the differentiator), then the three
+ * cheap-easy-quiet promises, then privacy, then dogfooding as evidence. Six tiles
+ * rather than five because the grid is three columns wide and a hanging cell reads
+ * as a rendering bug.
+ */
 export const PROMISES = [
   {
-    title: 'Nothing to configure',
-    body: 'No thresholds, no rules, no panels to keep in sync. Each service is judged against its own history, which is a property of the data rather than a thing you set up.',
+    title: 'It proves itself',
+    body: 'Every finding hands you the query that produced it. Run it, widen it, try to disprove it. A claim you can check is a different kind of claim.',
   },
   {
-    title: 'Nothing sampled away',
-    body: 'The request you need is kept, not one in a hundred. Sampling was a bargain struck because nobody was ever going to read them all — something will.',
+    title: 'Nothing to maintain',
+    body: 'No thresholds, no alert rules, no panels to keep in sync. Each service is judged against its own history, so normal is something your data decides.',
   },
   {
-    title: 'Nothing locked in',
-    body: 'Your telemetry stays in storage you already own, in a format anything can read. Leaving costs you nothing, so staying is a choice.',
+    title: 'Five minutes, once',
+    body: 'One container, two environment variables, no code changes. Whatever OpenTelemetry you already emit works unchanged.',
+  },
+  {
+    title: 'Free if you run it',
+    body: 'No per-host fee, no per-seat fee, no ingest bill. Running it yourself costs you the storage you already pay for. Hosted is about $14 a month if you’d rather not.',
+  },
+  {
+    title: 'It never phones home',
+    body: 'You run it, so your telemetry stays on your infrastructure, in a format anything can read. Leaving costs you nothing, which makes staying a choice.',
+  },
+  {
+    title: 'It watches itself',
+    body: 'sigiro sends its own telemetry to sigiro. That’s how a stalled writer, a leaked connection and a dropped channel each got caught, instead of turning up days later as data that had quietly stopped arriving.',
   },
 ] as const;
 
@@ -237,43 +276,55 @@ export const INTEGRATIONS = [
 /**
  * Visible FAQ *and* FAQPage JSON-LD. Every answer here is rendered in the HTML;
  * schema whose text does not appear on the page gets ignored.
+ *
+ * "Where does my data go?" says plainly that hosted holds your telemetry. Privacy
+ * is one of the five claims, so a reader who goes looking for the seam between
+ * self-hosted and hosted has to find an honest sentence rather than a dodge.
  */
 export const FAQ = [
   {
     q: 'What is sigiro, in one sentence?',
-    a: 'An observability backend whose primary reader is an agent: send it OpenTelemetry, ask in SQL or in one investigate call, and get back a diagnosis rather than a dashboard.',
+    a: 'An observability backend built to be read by an agent. You send it OpenTelemetry, ask in SQL or in one investigate call, and get back a diagnosis instead of a dashboard.',
   },
   {
     q: 'Does it replace my current observability stack?',
-    a: 'It replaces what you were using them for when the reader is a machine. If a person needs to look at a chart, keep the dashboard — this is for everything downstream of that.',
+    a: 'It replaces what you were using them for when the reader is a machine. If a person needs to look at a chart, keep the dashboard. This is for everything downstream of that.',
   },
   {
     q: 'Do I have to change my code?',
     a: 'No. It speaks standard OTLP on ports 4317 and 4318, so any OpenTelemetry SDK or collector you already run points at it unchanged.',
   },
   {
+    q: 'Where does my data go?',
+    a: 'Nowhere you did not put it. You run sigiro on your own infrastructure and it writes to your own storage. It does not phone home and there is no account to create. Hosted exists if you would rather not run anything, and that one does hold your telemetry for you.',
+  },
+  {
     q: 'Does it page me?',
-    a: 'No, and that is deliberate. Paging exists to interrupt someone who cannot watch continuously. What sigiro returns is a table something else reads on a loop, so the interruption is the part we deleted.',
+    a: 'No, deliberately. Paging exists to interrupt someone who cannot watch continuously. What you get back is a table something else reads on a loop, so the interruption is the part we deleted.',
   },
   {
     q: 'How does it know what is worth reporting without thresholds?',
-    a: 'Each service is compared against its own recent history rather than against a number you picked. A service that is chronically slow but steady reports nothing, because nothing changed — and a service that quietly doubled reports even though no rule existed for it.',
+    a: 'Each service is compared against its own recent history instead of against a number you picked. A service that is chronically slow but steady reports nothing, because nothing changed. A service that quietly doubled reports, even though no rule existed for it.',
+  },
+  {
+    q: 'What about sampling?',
+    a: 'There is none. The request you need is kept, not one in a hundred. Sampling was a bargain struck because nobody was ever going to read them all. Something will.',
   },
   {
     q: 'What query language do I need to learn?',
-    a: 'None. Questions are plain SQL, which your agent already writes fluently. There is no proprietary query language between you and your telemetry, and every answer hands you the query that produced it.',
+    a: 'None. You ask in plain SQL, which your agent already writes fluently. There is no proprietary query language between you and your own telemetry, and every answer hands you the query that produced it.',
   },
   {
     q: 'Can my coding agent use it without me?',
-    a: 'Yes — that is the design. It reads the API description itself at /openapi.json, with no key and no hand-written tool definition, then queries in SQL it already knows.',
+    a: 'Yes, that is the design. It reads the API description itself at /openapi.json, with no key and no hand-written tool definition, then queries in SQL it already knows.',
   },
   {
     q: 'What does it cost?',
-    a: 'Self-hosting is free and the storage is yours, so there is no per-host fee, no per-seat fee and no ingest bill. A hosted service exists as an invited beta if you would rather not run anything.',
+    a: 'Running it yourself is free and the storage is yours, so there is no per-host fee, no per-seat fee and no ingest bill. Hosted is about $14 a month and currently invite-only.',
   },
   {
     q: 'What does it not do?',
-    a: 'It does not write your patches, run your pipeline, or evaluate alert rules. It also has no dashboard builder and no full-text log index — questions are structured, which is how an agent asks them.',
+    a: 'It does not write your patches, run your pipeline, or evaluate alert rules. There is no dashboard builder and no full-text log index. Questions are structured, which is how an agent asks them.',
   },
 ] as const;
 

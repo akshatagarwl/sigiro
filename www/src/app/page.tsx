@@ -68,7 +68,7 @@ export default function Home() {
                 a 1.5px radius is the language's own unit. */}
             <p className="meta mt-6 flex items-center gap-2 text-ink-3">
               <span aria-hidden className="size-[5px] rounded-[1.5px] bg-accent" />
-              Self-hosted and free. Hosted beta rolling out.
+              Free, self-hosted, and it never phones home.
             </p>
           </section>
 
@@ -85,9 +85,9 @@ export default function Home() {
             </h2>
             <p className={LEDE}>
               Detect, diagnose, fix, verify, learn. The fix stage got solved first and loudest,
-              which is why the loop still breaks upstream of it: an agent that can write the patch
-              has no way to be told what broke, or to find out whether its patch worked. sigiro is
-              two of these five, and the evidence for a third.
+              which is why the loop breaks upstream of it: your agent can write the patch, but
+              nothing tells it what broke or whether the patch worked. sigiro is two of these five
+              stages, and the evidence the third one needs.
             </p>
             <FactoryLoop />
           </section>
@@ -100,28 +100,12 @@ export default function Home() {
               </h2>
               <p className={LEDE}>{s.say}</p>
 
-              {s.artifact ? (
-                <Artifact
-                  title={s.artifact.title}
-                  meta={s.artifact.meta}
-                  code={s.artifact.code}
-                  lang={s.artifact.lang}
-                />
-              ) : (
-                /* Three rows cut into the panel. `gap-px` on a tinted parent is a
-                   border faking a compartment; three wells with a real gap
-                   between them is the material saying it. */
-                <dl className="mt-6 grid gap-2.5 sm:grid-cols-3">
-                  {PROMISES.map((p) => (
-                    <div key={p.title} className="mat-well rounded-[11px] p-3.5">
-                      <dt className="text-[13px] font-medium tracking-[-0.01em] text-ink">
-                        {p.title}
-                      </dt>
-                      <dd className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">{p.body}</dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
+              <Artifact
+                title={s.artifact.title}
+                meta={s.artifact.meta}
+                code={s.artifact.code}
+                lang={s.artifact.lang}
+              />
             </section>
           ))}
 
@@ -134,19 +118,27 @@ export default function Home() {
             <Integrations />
           </section>
 
-          <section aria-labelledby="itself" className={SECTION}>
+          {/* The five things users say they care about, plus dogfooding as the
+              evidence we mean them. This absorbed the old standalone "it watches
+              itself" section: it was making one claim at the length of six. */}
+          <section aria-labelledby="promises" className={SECTION}>
             <p className="meta text-ink-3">07</p>
-            <h2 id="itself" className={H2}>
-              It watches itself.{' '}
+            <h2 id="promises" className={H2}>
+              The short version.{' '}
               <span className="text-ink-3">
-                A pipeline blind to its own failures is not observability.
+                Free to run, nothing to maintain, and it stays on your infrastructure.
               </span>
             </h2>
-            <p className={LEDE}>
-              sigiro emits telemetry for every ingest and every flush it performs, into itself. That
-              is how a stalled writer, a leaked connection and a dropped channel were each caught —
-              rather than surfacing days later as data that had quietly stopped arriving.
-            </p>
+            {/* Six wells with a real gap between them. `gap-px` on a tinted parent
+                is a border faking a compartment; this is the material saying it. */}
+            <dl className="mt-6 grid gap-2.5 sm:grid-cols-3">
+              {PROMISES.map((p) => (
+                <div key={p.title} className="mat-well rounded-[11px] p-3.5">
+                  <dt className="text-[13px] font-medium tracking-[-0.01em] text-ink">{p.title}</dt>
+                  <dd className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">{p.body}</dd>
+                </div>
+              ))}
+            </dl>
           </section>
 
           <section aria-labelledby="faq" className={SECTION}>
