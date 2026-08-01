@@ -1,17 +1,19 @@
 /**
- * The wordmark. There is no logotype, no symbol, no icon — the brackets are the
- * mark. `sigiro` in ink semibold, `[.]` in accent, the TLD in ink-3 medium.
+ * The wordmark. There is no logotype and no symbol — the name, set once,
+ * lowercase, is the mark.
  *
- * The bracketed dot gets positive tracking so the brackets can breathe against
- * the negative tracking around them. This is the one place the accent appears
- * without an interaction behind it, and that is deliberate.
+ * It used to be `sigiro[.]com`, with the bracketed dot in accent. That was
+ * interior.dev's mark with our name in it, down to the bracket pair and the
+ * greyed TLD, so it identified the design language rather than us. It also
+ * spent the accent on decoration, which is the one thing the accent is not for.
  */
 export function Logo({ size = 14 }: { size?: number }) {
   return (
-    <span className="inline-block whitespace-nowrap tracking-[-0.02em]" style={{ fontSize: size }}>
-      <span className="font-semibold text-ink">sigiro</span>
-      <span className="mx-[2.5px] font-semibold tracking-[0.04em] text-accent">[.]</span>
-      <span className="font-medium text-ink-3">com</span>
+    <span
+      className="inline-block whitespace-nowrap font-semibold text-ink tracking-[-0.02em]"
+      style={{ fontSize: size }}
+    >
+      sigiro
     </span>
   );
 }
