@@ -16,19 +16,36 @@ export type Lang = 'json' | 'sql' | 'bash' | 'typescript' | 'yaml' | 'shellsessi
  * The highlighter could not be built. This is the failure this file's whole
  * shape exists to avoid — see the note on `started` — so it is worth a name of
  * its own rather than being folded into "highlighting failed".
+ *
+ * Recoverable: `degrade` turns it into plain text. Colour is the only thing the
+ * reader loses.
  */
-export class ShikiUnavailable extends Data.TaggedError('ShikiUnavailable')<{
+class ShikiUnavailable extends Data.TaggedError('ShikiUnavailable')<{
   readonly cause: unknown;
 }> {}
 
-/** One string, in one grammar, that Shiki refused. */
-export class HighlightFailed extends Data.TaggedError('HighlightFailed')<{
+/** One string, in one grammar, that Shiki refused. Recoverable, as above. */
+class HighlightFailed extends Data.TaggedError('HighlightFailed')<{
   readonly lang: Lang;
   readonly cause: unknown;
 }> {}
 
-/** A transcript came back with a different number of lines than it went in with. */
-export class TranscriptMismatch extends Data.TaggedError('TranscriptMismatch')<{
+/**
+ * A transcript came back with a different number of lines than it went in with.
+ *
+ * The one failure here that is NOT recovered, deliberately. The other two are
+ * conditions — a runtime that will not run the WASM, a grammar that chokes on a
+ * string — and the honest response to a condition is to do less and keep going.
+ * This one is a broken invariant: `SteppedTerminal` pairs `text` with `html`
+ * positionally and sizes its frame from the count, so a transcript one line
+ * short does not look broken, it looks like a different transcript. There is no
+ * degraded version of "the output is silently wrong". It stays in
+ * `highlightSession`'s error channel, `Effect.runPromise` rethrows it, and the
+ * page 500s — which is the loud failure the project rule asks for and, since
+ * every transcript is a literal in `lib/site.ts`, it is a failure that can only
+ * be caused by a commit rather than by a visitor.
+ */
+class TranscriptMismatch extends Data.TaggedError('TranscriptMismatch')<{
   readonly reason: string;
 }> {}
 
@@ -84,19 +101,95 @@ export const COLOR_REPLACEMENTS = { '#6e7781': '#5a6169', '#cf222e': '#b3121f' }
  */
 const THEMES = { light: 'github-light-default', dark: 'github-dark-default' } as const;
 
+const ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
 /**
- * One block of code, highlighted.
+ * HTML-escape a string bound for `dangerouslySetInnerHTML`.
+ *
+ * Everything this file highlights today is a literal committed to this repo —
+ * `lib/site.ts`, `openapi.json`, an assembled curl line — so nothing here is
+ * attacker-controlled and this function has no work to do. It escapes anyway,
+ * because the fallback below takes the exact same route into the DOM that
+ * Shiki's output does, and Shiki escapes its own token text. Highlighting is
+ * what makes the highlighted path safe; without this, the *unhighlighted* path
+ * would be the one that renders a `<` as markup. The day someone renders a
+ * `code` prop that came off a request, the difference between the two paths is
+ * a stored XSS, and "the inputs happen to be literals" is not a property the
+ * compiler is checking for us.
+ */
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
+}
+
+/**
+ * Shiki's `pre` carries `--shiki-light` / `--shiki-dark` for the theme's default
+ * foreground, and globals.css resolves `color: var(--shiki-light)` off it. A
+ * shell without them computes an invalid colour, so the plain shells declare the
+ * pair too — pointed at our own ink, which is what code with no syntax in it
+ * should be in either material. Nested `var()` is fine; `OUTPUT_INK` already
+ * relies on it.
+ */
+const PLAIN_INK = '--shiki-light:var(--ink);--shiki-dark:var(--ink)';
+
+/**
+ * `highlight`'s output, minus the colour: the same `pre.shiki > code > span.line`
+ * Shiki emits, so `CodeBlock`, the docs' fence styling and the copy cap all keep
+ * working on it and the block does not move on the page.
+ */
+function plainBlock(code: string): string {
+  const lines = code
+    .split('\n')
+    .map((line) => `<span class="line">${escapeHtml(line)}</span>`)
+    .join('\n');
+  return `<pre class="shiki shiki-themes" style="${PLAIN_INK}" tabindex="0"><code>${lines}</code></pre>`;
+}
+
+/** `inlineLines`' output, minus the colour: one escaped span per line. */
+function plainInline(code: string): string[] {
+  return code.split('\n').map((line) => `<span style="${PLAIN_INK}">${escapeHtml(line)}</span>`);
+}
+
+/**
+ * Recovery, in one place.
+ *
+ * Both producers below run through this, so no server component repeats a catch
+ * and — more to the point — none can forget one: after this, `ShikiUnavailable`
+ * and `HighlightFailed` are not in any exported signature, so there is nothing
+ * left at the five boundaries to handle. A highlighter that will not start is a
+ * page rendered in one colour, not a 500.
+ *
+ * It is not silent. `Effect.logError` puts the tagged error, cause and all, on
+ * the Worker's stderr, so a degraded render is something you find in the logs
+ * rather than something you notice months later because the site looks flat.
+ */
+function degrade<A>(
+  effect: Effect.Effect<A, ShikiUnavailable | HighlightFailed>,
+  plain: () => A,
+  what: string,
+): Effect.Effect<A> {
+  return Effect.catch(effect, (error) =>
+    Effect.as(Effect.logError(`highlight: falling back to plain text for ${what}`, error), plain()),
+  );
+}
+
+/**
+ * One block of code, highlighted — or, if Shiki cannot, the same block in plain
+ * escaped text inside the same shell.
  *
  * This returns a description rather than a promise: nothing runs until a server
- * component hands it to `Effect.runPromise`. The point is the error channel —
- * `ShikiUnavailable | HighlightFailed` is in the type, so a caller that forgets
- * to run it is a compile error rather than a page that renders blank.
+ * component hands it to `Effect.runPromise`. The error channel is now empty by
+ * construction, which is the point of `degrade` — the two things that can go
+ * wrong are named, caught and logged here, once, instead of at five call sites
+ * or, as before, nowhere.
  */
-export function highlight(
-  code: string,
-  lang: Lang,
-): Effect.Effect<string, ShikiUnavailable | HighlightFailed> {
-  return Effect.flatMap(core, (shiki) =>
+export function highlight(code: string, lang: Lang): Effect.Effect<string> {
+  const shiki = Effect.flatMap(core, (shiki) =>
     Effect.try({
       try: () =>
         shiki.codeToHtml(code, {
@@ -108,6 +201,7 @@ export function highlight(
       catch: (cause) => new HighlightFailed({ lang, cause }),
     }),
   );
+  return degrade(shiki, () => plainBlock(code), `a ${lang} block`);
 }
 
 /** One line of a shell session: its plain text, and its highlighted markup. */
@@ -117,13 +211,19 @@ export type SessionLine = { text: string; html: string };
  * `structure: 'inline'` drops the `pre`/`code`/`.line` wrappers and separates
  * lines with `<br>`, which is the one Shiki structure a component can hand out
  * one line at a time. The caller puts each line in its own box.
+ *
+ * Degrades here rather than in `highlightSession`, and that placement is what
+ * keeps the two kinds of failure apart: `plainInline` splits the same string on
+ * the same newline, so a fallback returns exactly the line count the caller
+ * counted. A `TranscriptMismatch` therefore still means what it says — the
+ * transcript really is a different shape — and never just "Shiki was down".
  */
 function inlineLines(
   code: string,
   lang: Lang,
   colorReplacements: Record<string, string>,
-): Effect.Effect<string[], ShikiUnavailable | HighlightFailed> {
-  return Effect.flatMap(core, (shiki) =>
+): Effect.Effect<string[]> {
+  const shiki = Effect.flatMap(core, (shiki) =>
     Effect.try({
       try: () =>
         shiki
@@ -138,6 +238,7 @@ function inlineLines(
       catch: (cause) => new HighlightFailed({ lang, cause }),
     }),
   );
+  return degrade(shiki, () => plainInline(code), `a ${lang} transcript line`);
 }
 
 /**
@@ -165,11 +266,15 @@ const PROMPT = '<span style="--shiki-light:var(--ink-3);--shiki-dark:var(--ink-3
  * name, its options and its arguments, and only the output goes through
  * shellsession, which is the thing shellsession does get right: every line is
  * output, whatever it happens to look like.
+ *
+ * The only fallible thing left on the site. `TranscriptMismatch` stays in the
+ * channel on purpose — see the note on the class for why this one failure is not
+ * degraded — so a caller still has to run it somewhere that can reject.
  */
 export function highlightSession(
   cmd: string,
   out: string,
-): Effect.Effect<SessionLine[], ShikiUnavailable | HighlightFailed | TranscriptMismatch> {
+): Effect.Effect<SessionLine[], TranscriptMismatch> {
   return Effect.gen(function* () {
     const texts = out.split('\n');
     const [cmdHtml, outHtml] = yield* Effect.all(

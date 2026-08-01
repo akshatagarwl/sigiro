@@ -9,8 +9,9 @@ import { highlight, type Lang } from '@/lib/highlight';
  * CodeBlock every fence in the docs uses.
  *
  * `highlight` returns an effect, so this is where it runs: the server component
- * is the boundary. A failure surfaces as a rejected render, which is what a
- * highlighter that cannot start should do.
+ * is the boundary. It cannot fail — a highlighter that will not start is caught
+ * inside `highlight`, logged, and answered with the same block in plain escaped
+ * text — so `runPromise` here only ever resolves.
  */
 export async function Artifact({
   title,
