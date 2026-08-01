@@ -25,13 +25,13 @@ export const SITE = {
   /** Keeps "observability" in the title: the h1 is a category bet with no search
       intent behind it, and this is the one place the category word still earns
       its keep for search and for citation. */
-  title: 'sigiro — observability data layer for self-improving software',
+  title: 'sigiro — observability data layer for software that repairs itself',
   /** The h1: the category claim. */
-  tagline: 'The data layer for self-improving software and agents.',
+  tagline: 'The data layer for software that repairs itself.',
   /** Also the meta description, the OG description and the Twitter card, so it
       has to stay under ~155 characters or search results cut it mid-sentence. */
   description:
-    'Point OpenTelemetry at it. When something breaks, you get an answer with the query that proves it, not a chart to read.',
+    'Send OpenTelemetry to sigiro. When a service fails, you get the cause and the query that proves it.',
 } as const;
 
 export const INSTALL = [
@@ -52,8 +52,8 @@ export const SECTIONS = [
   {
     n: '01',
     lead: 'Connect.',
-    rest: 'Point OpenTelemetry at it and nothing else changes.',
-    say: 'Standard OTLP, standard ports. Nothing in your app changes.',
+    rest: 'Send OpenTelemetry to sigiro. Do not change your code.',
+    say: 'sigiro uses standard OTLP on the standard ports.',
     artifact: {
       title: 'your shell',
       meta: 'two variables, five minutes',
@@ -67,8 +67,8 @@ OTEL_SERVICE_NAME=checkout npm start`,
   {
     n: '02',
     lead: 'Ask.',
-    rest: 'One question, one answer, already ranked.',
-    say: 'What moved together, which deploy looks guilty, how it fails.',
+    rest: 'Ask one question. Get one answer.',
+    say: 'sigiro ranks the results and names the deploy that caused the failure.',
     artifact: {
       title: 'POST /v1/investigate',
       meta: '{"service":"checkout"}',
@@ -86,8 +86,8 @@ OTEL_SERVICE_NAME=checkout npm start`,
   {
     n: '03',
     lead: 'Correlate.',
-    rest: 'Your services and your agents in one question.',
-    say: 'An agent is a service that calls a model. Same trace, one query.',
+    rest: 'See your services and your agents together.',
+    say: 'An agent is a service that calls a model. One trace holds both.',
     artifact: {
       title: 'POST /v1/query',
       meta: 'no query language to learn',
@@ -101,11 +101,11 @@ GROUP BY model ORDER BY slowest DESC`,
   {
     n: '04',
     lead: 'Prove.',
-    rest: 'Every answer carries the query behind it.',
-    say: 'Run the query it came with. Widen it. Try to disprove it.',
+    rest: 'Each answer contains the query behind it.',
+    say: 'Run the query again. Make the query wider. Show that the result is wrong.',
     artifact: {
       title: 'POST /v1/investigate',
-      meta: 'one finding, abridged',
+      meta: 'one result, abridged',
       lang: 'json' as const,
       code: `{
   "operation": "POST /api/orders",
@@ -118,8 +118,8 @@ GROUP BY model ORDER BY slowest DESC`,
   {
     n: '05',
     lead: 'Discover.',
-    rest: 'Your agent learns the whole surface by reading it.',
-    say: 'One public document describes every endpoint. That’s the integration.',
+    rest: 'Your agent reads the API description without help.',
+    say: 'One public document describes all of the endpoints.',
     artifact: {
       title: 'GET /openapi.json',
       meta: 'public, no key',
@@ -196,7 +196,7 @@ export const LOOP = [
     title: 'Detect',
     owner: 'sigiro',
     ours: true,
-    say: 'Measured against the service’s own history, not a threshold you set.',
+    say: 'sigiro compares each service with its own history. You set no thresholds.',
     cmd: 'sigiro anomalies',
     out: `SERVICE   SIGNAL       BASELINE   NOW      SHIFT    INCIDENT
 checkout  error_rate   0.4%       19.2%    +48σ     inc_4a1c
@@ -208,7 +208,7 @@ checkout  latency_p95  180ms      30.0s    +166×    inc_4a1c
     title: 'Diagnose',
     owner: 'sigiro',
     ours: true,
-    say: 'Ranked findings, the suspect deploy, and the query proving each one.',
+    say: 'One call gives ranked results, the suspect deploy, and the query for each result.',
     cmd: 'sigiro investigate checkout',
     out: `suspect        deploy 9f2c1ab, landed 18:33
 failing        POST /api/orders
@@ -219,9 +219,9 @@ drill_down_sql SELECT trace_id, duration, status_message
   },
   {
     title: 'Fix',
-    owner: 'your coding agent',
+    owner: 'your agent',
     ours: false,
-    say: 'Whichever agent already has commit rights. This stage was solved first.',
+    say: 'Your agent writes the patch. sigiro does not do this step.',
     cmd: 'claude "checkout times out since 9f2c1ab"',
     out: `read   src/orders/upstream.ts
 edit   src/orders/upstream.ts   +4 −1
@@ -232,7 +232,7 @@ push   fix: bound the orders upstream call at 5s`,
     title: 'Verify',
     owner: 'your pipeline, on our evidence',
     ours: 'partly',
-    say: 'Tests passing is not the incident closing. The baseline says which.',
+    say: 'A test that passes does not close the incident. The baseline shows the recovery.',
     cmd: 'sigiro anomalies --service checkout',
     out: `no open shifts
 
@@ -245,7 +245,7 @@ inc_4a1c closed · 34 min open`,
     title: 'Learn',
     owner: 'your memory',
     ours: false,
-    say: 'The fix, kept beside the evidence, for the next time this shape appears.',
+    say: 'Keep the fix with the evidence. Use it when the same failure occurs again.',
     cmd: 'cat playbooks/checkout-upstream-timeout.md',
     out: `## checkout · upstream timeout
 
@@ -266,28 +266,28 @@ watch      the same shape on any service calling orders`,
  */
 export const PROMISES = [
   {
-    title: 'It proves itself',
-    body: 'Every finding carries the query that produced it.',
+    title: 'Proof with each result',
+    body: 'Each result contains the query that made it.',
   },
   {
     title: 'Nothing to maintain',
-    body: 'No thresholds, no rules, no panels to keep in sync.',
+    body: 'You set no thresholds and no rules. sigiro uses the history of each service.',
   },
   {
-    title: 'Five minutes, once',
-    body: 'One container, two environment variables, no code changes.',
+    title: 'Installation in five minutes',
+    body: 'One container and two environment variables. You change no code.',
   },
   {
-    title: 'Free if you run it',
-    body: 'No per-host, per-seat or ingest fees. Hosted is ~$14 a month.',
+    title: 'Free when you install it',
+    body: 'No fees for hosts, seats or data. The hosted service costs approximately $14 each month.',
   },
   {
-    title: 'It never phones home',
-    body: 'You run it. Your telemetry never leaves your infrastructure.',
+    title: 'Your data stays with you',
+    body: 'You install sigiro on your servers. sigiro sends no data to us.',
   },
   {
-    title: 'It watches itself',
-    body: 'sigiro sends its own telemetry to sigiro. That is how we find our own bugs.',
+    title: 'sigiro monitors sigiro',
+    body: 'sigiro sends its telemetry to sigiro. This is how we find our own failures.',
   },
 ] as const;
 
@@ -355,48 +355,48 @@ export const INTEGRATIONS = [
  */
 export const FAQ = [
   {
-    q: 'What is sigiro, in one sentence?',
-    a: 'An observability backend built to be read by an agent. You send it OpenTelemetry, ask in SQL or in one investigate call, and get back a diagnosis instead of a dashboard.',
+    q: 'What is sigiro?',
+    a: 'sigiro is an observability backend for agents. You send OpenTelemetry to sigiro. You ask a question in SQL or with one investigate call. sigiro gives you a diagnosis, not a dashboard.',
   },
   {
-    q: 'Does it replace my current observability stack?',
-    a: 'It replaces what you were using them for when the reader is a machine. If a person needs to look at a chart, keep the dashboard. This is for everything downstream of that.',
+    q: 'Does sigiro replace my current observability stack?',
+    a: 'sigiro replaces them when a machine reads the data. If a person must look at a chart, keep the dashboard. sigiro is for the steps after that.',
   },
   {
-    q: 'Do I have to change my code?',
-    a: 'No. It speaks standard OTLP on ports 4317 and 4318, so any OpenTelemetry SDK or collector you already run points at it unchanged.',
+    q: 'Must I change my code?',
+    a: 'No. sigiro uses standard OTLP on ports 4317 and 4318. Your OpenTelemetry SDK or collector sends to sigiro without a change.',
   },
   {
     q: 'Where does my data go?',
-    a: 'Nowhere you did not put it. You run sigiro on your own infrastructure and it writes to your own storage. It does not phone home and there is no account to create. Hosted exists if you would rather not run anything, and that one does hold your telemetry for you.',
+    a: 'You install sigiro on your servers. sigiro writes to your storage and sends no data to us. You do not make an account. The hosted service is different: it keeps your telemetry for you.',
   },
   {
-    q: 'Does it page me?',
-    a: 'No, deliberately. Paging exists to interrupt someone who cannot watch continuously. What you get back is a table something else reads on a loop, so the interruption is the part we deleted.',
+    q: 'Does sigiro page me?',
+    a: 'No. A page interrupts a person who cannot watch continuously. sigiro gives a table that a program reads in a loop.',
   },
   {
-    q: 'How does it know what is worth reporting without thresholds?',
-    a: 'Each service is compared against its own recent history instead of against a number you picked. A service that is chronically slow but steady reports nothing, because nothing changed. A service that quietly doubled reports, even though no rule existed for it.',
+    q: 'How does sigiro know what to report without thresholds?',
+    a: 'sigiro compares each service with its own recent history. A service that is always slow but steady reports nothing, because nothing changed. A service that becomes two times slower reports, because no rule was necessary.',
   },
   {
-    q: 'What about sampling?',
-    a: 'There is none. The request you need is kept, not one in a hundred. Sampling was a bargain struck because nobody was ever going to read them all. Something will.',
+    q: 'Does sigiro sample the data?',
+    a: 'No. sigiro keeps each request. Sample rates were necessary when no one could read all of the data. A machine can read all of the data.',
   },
   {
-    q: 'What query language do I need to learn?',
-    a: 'None. You ask in plain SQL, which your agent already writes fluently. There is no proprietary query language between you and your own telemetry, and every answer hands you the query that produced it.',
+    q: 'Which query language must I learn?',
+    a: 'None. You ask in SQL. Your agent writes SQL correctly. Each answer gives you the query that made it.',
   },
   {
-    q: 'Can my coding agent use it without me?',
-    a: 'Yes, that is the design. It reads the API description itself at /openapi.json, with no key and no hand-written tool definition, then queries in SQL it already knows.',
+    q: 'Can my agent use sigiro without me?',
+    a: 'Yes. The agent reads the API description at /openapi.json. It needs no key and no tool definition. Then it asks in SQL.',
   },
   {
-    q: 'What does it cost?',
-    a: 'Running it yourself is free and the storage is yours, so there is no per-host fee, no per-seat fee and no ingest bill. Hosted is about $14 a month and currently invite-only.',
+    q: 'What does sigiro cost?',
+    a: 'sigiro is free when you install it, and the storage is yours. There are no fees for hosts, seats or data. The hosted service costs approximately $14 each month. Access is by invitation.',
   },
   {
-    q: 'What does it not do?',
-    a: 'It does not write your patches, run your pipeline, or evaluate alert rules. There is no dashboard builder and no full-text log index. Questions are structured, which is how an agent asks them.',
+    q: 'What does sigiro not do?',
+    a: 'sigiro does not write your patches, run your pipeline, or evaluate alert rules. sigiro has no dashboard builder and no full-text log index. Questions are structured, because that is how an agent asks.',
   },
 ] as const;
 

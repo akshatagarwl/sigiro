@@ -69,7 +69,7 @@ export default function Home() {
                 a 1.5px radius is the language's own unit. */}
             <p className="meta mt-6 flex items-center gap-2 text-ink-3">
               <span aria-hidden className="size-[5px] rounded-[1.5px] bg-accent" />
-              Free, self-hosted, and it never phones home.
+              Free when you install it. sigiro sends no data to us.
             </p>
           </section>
 
@@ -81,12 +81,12 @@ export default function Home() {
             <h2 id="loop" className={H2}>
               Five stages.{' '}
               <span className="text-ink-3">
-                You do not have a factory until every one is covered.
+                A repair loop is not complete until all five operate.
               </span>
             </h2>
             <p className={LEDE}>
-              Your agent can write the patch. Nothing tells it what broke, or whether the patch
-              worked. sigiro is two of these five.
+              Your agent writes the patch. Nothing tells the agent what failed, or if the patch
+              worked. sigiro does two of these five stages.
             </p>
             <FactoryLoop />
           </section>
@@ -124,10 +124,10 @@ export default function Home() {
               The promise tiles also absorbed the old standalone "it watches
               itself" section, which was making one claim at the length of six. */}
           <section aria-labelledby="signing-up" className={SECTION}>
-            <p className="label">what you are signing up for</p>
+            <p className="label">what you get</p>
             <h2 id="signing-up" className={H2}>
               No migration.{' '}
-              <span className="text-ink-3">sigiro plugs into what you already run.</span>
+              <span className="text-ink-3">sigiro connects to the tools you use.</span>
             </h2>
             <Integrations />
 

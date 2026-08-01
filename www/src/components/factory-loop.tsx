@@ -20,7 +20,7 @@ import { LOOP } from '@/lib/site';
  */
 const SHORT_OWNER: Record<string, string> = {
   sigiro: 'sigiro',
-  'your coding agent': 'agent',
+  'your agent': 'agent',
   'your pipeline, on our evidence': 'pipeline',
   'your memory': 'memory',
 };
