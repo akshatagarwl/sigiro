@@ -299,6 +299,13 @@ export const PROMISES = [
  */
 export const INTEGRATIONS = [
   {
+    /**
+     * Services and agents together, deliberately. An agent is a service that
+     * calls a model instead of a database — section 03's whole point — so
+     * splitting them into two rows would argue against the page. Claude Code
+     * appears here and under "Read by" because it genuinely does both: it emits
+     * its own OpenTelemetry (docs/install-with-ai) and it reads the answers.
+     */
     label: 'Send telemetry from',
     items: [
       { name: 'OpenTelemetry', icon: 'SiOpentelemetry' },
@@ -309,6 +316,11 @@ export const INTEGRATIONS = [
       { name: '.NET', icon: 'SiDotnet' },
       { name: 'Ruby', icon: 'SiRuby' },
       { name: 'Rust', icon: 'SiRust' },
+      { name: 'Claude Code', icon: 'SiClaude' },
+      { name: 'Codex', icon: null },
+      { name: 'Vercel AI SDK', icon: 'SiVercel' },
+      { name: 'LangChain', icon: 'SiLangchain' },
+      { name: 'Ollama', icon: 'SiOllama' },
     ],
   },
   {

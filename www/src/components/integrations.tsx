@@ -7,7 +7,9 @@ import {
   siFlydotio,
   siGo,
   siKubernetes,
+  siLangchain,
   siNodedotjs,
+  siOllama,
   siOpenjdk,
   siOpentelemetry,
   siPython,
@@ -15,6 +17,7 @@ import {
   siRender,
   siRuby,
   siRust,
+  siVercel,
 } from 'simple-icons';
 import { LogoMarquee } from '@/components/interior/logo-marquee';
 import { INTEGRATIONS } from '@/lib/site';
@@ -50,11 +53,14 @@ const ICONS = {
   SiFlydotio: siFlydotio,
   SiGo: siGo,
   SiKubernetes: siKubernetes,
+  SiLangchain: siLangchain,
   SiNodedotjs: siNodedotjs,
+  SiOllama: siOllama,
   SiOpenjdk: siOpenjdk,
   SiOpentelemetry: siOpentelemetry,
   SiPython: siPython,
   SiRailway: siRailway,
+  SiVercel: siVercel,
   SiRender: siRender,
   SiRuby: siRuby,
   SiRust: siRust,
