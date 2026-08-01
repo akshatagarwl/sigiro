@@ -1,43 +1,32 @@
 'use client';
 
-import { useMotionValueEvent, useReducedMotion, useScroll, useTransform } from 'motion/react';
+import { useMotionValueEvent, useReducedMotion, useScroll } from 'motion/react';
 import { useMemo, useRef, useState } from 'react';
 
 /**
- * A terminal you scrub instead of one that plays itself.
+ * One terminal per step, stepped by scroll.
  *
- * Every terminal component in the shadcn ecosystem owns its own clock:
- * MagicUI's is `setInterval` typing behind `useInView({once: true})`, shadcn.io
- * republishes the same design, and the typewriter primitives underneath
- * (`react-type-animation`, `typeit-react`) take a sequence of text and delays.
- * They are all built for a hero demo that plays once and cannot reverse. The
- * real terminal emulators — xterm, react-console-emulator — are interactive
- * shells with input handling, which is a different product entirely.
+ * An earlier version typed the transcript out character by character, bound to
+ * scroll position. It was a good demo of scrubbing and a bad terminal: real
+ * shells do not type their own output. You run a command and the output lands.
+ * Only the command is ever typed, and that is a person typing, not the machine.
+ * So nothing here animates text — a frame arrives with its command already run.
  *
- * What none of them expose is the one prop that makes scrubbing possible:
- * "render exactly N characters". So that is the contract here. `Screen` is dumb
- * and controlled; `ScrubbedTerminal` supplies N from scroll position. Splitting
- * them that way is the whole design — a different driver (a timer, a click, a
- * websocket) can render the same screen without touching it.
+ * What scroll still drives is which frame you are looking at, and that part is
+ * genuinely scrubbed: the handoff is a continuous function of scroll position,
+ * so it reverses if you scroll back rather than replaying.
  *
- * One step, one terminal. An earlier version ran all the steps as a single
- * continuous session, which was wrong for the thing this is usually explaining:
- * when consecutive steps have different owners, one shared shell says one actor
- * ran all of them. A coding agent's work does not happen in your sigiro shell.
- * Separate frames make the ownership structural instead of a caption.
- *
- * The handoff between frames is scrubbed too, not timed. Each boundary owns a
- * stretch of scroll (`GAP`, measured in the same character units as the typing):
- * the finished frame leaves over the first half, the next arrives empty over the
- * second, and it all reverses if you scroll back. A timed transition bolted onto
- * a scroll-driven reveal would be the one part of this that could not be undone.
+ * One step, one terminal, because when consecutive steps have different owners
+ * a single shared shell says one actor ran all of them. A coding agent's work
+ * does not happen in your sigiro shell. Separate frames make the ownership
+ * structural instead of a caption.
  *
  * Design constraints, from interior's DESIGN.md:
- * - §5   the displacements are the specified ones — in at `y 10, blur(6px)`, out
- *        at `y 6, blur(3px)` — driven by scroll rather than by a duration.
+ * - §5   the handoff uses the specified displacements — out at `y 6, blur(3px)`,
+ *        in at `y 10, blur(6px)` — driven by scroll rather than by a duration.
  * - §3   no `rounded-full`, so no traffic-light chrome. This is the same
  *        `mat-well` cut into a `mat-panel` as every code block on the site.
- * - §3   no idle loops, so the cursor is a block rather than a blinking caret.
+ * - §3   no idle loops, so the resting cursor is a block that does not blink.
  * - §22  scroll-driven transforms are the accepted exception to the
  *        `useReducedMotion` rule. Reduced motion gets `fallback` instead, which
  *        is why `fallback` is required rather than optional.
@@ -62,46 +51,31 @@ const LINE = 22;
 const PAD = 24;
 
 /**
- * Scroll spent on each handoff, in the same character units as the typing. Big
- * enough that the swap is a moment rather than a jump cut; small enough that it
- * is not a pause. Four boundaries at 50 add ~18% to the track.
+ * Fraction of a step's scroll spent holding still before the handoff begins.
+ * The remainder is the handoff itself: frame out, then frame in.
  */
-const GAP = 50;
+const HOLD = 0.72;
 
 type Line = { text: string; cmd: boolean };
-type Plan = { lines: Line[]; start: number; chars: number; height: number };
 
 function plan(steps: readonly TerminalStep[]) {
-  const plans: Plan[] = [];
-  let at = 0;
-  steps.forEach((s, i) => {
-    if (i > 0) at += GAP;
+  return steps.map((s) => {
     const lines: Line[] = [{ text: `$ ${s.cmd}`, cmd: true }];
     for (const text of s.out.split('\n')) lines.push({ text, cmd: false });
-    const chars = lines.reduce((n, l) => n + l.text.length + 1, 0);
-    plans.push({ lines, start: at, chars, height: lines.length * LINE + PAD });
-    at += chars;
+    // A shell that has finished sits at a fresh prompt. One more row for it.
+    return { lines, height: (lines.length + 1) * LINE + PAD };
   });
-  return { plans, total: at };
 }
 
-/**
- * The controlled screen. Renders the first `revealed` characters of one step's
- * lines and nothing else — no timers, no state, no opinion about why the number
- * changed.
- */
 function Screen({
   lines,
-  revealed,
   height,
   style,
 }: {
   lines: Line[];
-  revealed: number;
   height: number;
   style?: React.CSSProperties;
 }) {
-  let seen = 0;
   return (
     <div className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3" style={{ height }}>
       <div
@@ -109,67 +83,63 @@ function Screen({
         className="font-mono text-[12.5px] leading-[22px] whitespace-pre"
         style={style}
       >
-        {lines.map((line, i) => {
-          const start = seen;
-          seen += line.text.length + 1;
-          const done = revealed >= start + line.text.length;
-          const typing = revealed > start && !done;
-          return (
-            <div
-              // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
-              key={i}
-              className={line.cmd ? 'text-ink' : 'text-ink-2'}
-              style={{ height: LINE }}
-            >
-              {done ? line.text : typing ? line.text.slice(0, revealed - start) : ''}
-              {typing ? <span className="ml-px inline-block h-[13px] w-[7px] bg-ink" /> : null}
-            </div>
-          );
-        })}
+        {lines.map((line, i) => (
+          <div
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
+            key={i}
+            className={line.cmd ? 'text-ink' : 'text-ink-2'}
+            style={{ height: LINE }}
+          >
+            {line.text}
+          </div>
+        ))}
+        {/* The command finished and the shell is waiting. A block, not a caret:
+            §3 bans idle loops, and a caret that blinks on a timer is one. */}
+        <div className="text-ink" style={{ height: LINE }}>
+          {'$ '}
+          <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
+        </div>
       </div>
     </div>
   );
 }
 
-export function ScrubbedTerminal({
+export function SteppedTerminal({
   steps,
   fallback,
-  track = '400vh',
-  settle = 0.9,
+  track,
 }: {
   steps: readonly TerminalStep[];
-  /** Shown to reduced-motion and no-JS readers, who have nothing to scrub with. */
+  /** Shown to reduced-motion and no-JS readers, who have nothing to scroll. */
   fallback: React.ReactNode;
-  /** Scroll distance the session is spread over. More track, slower typing. */
-  track?: string;
   /**
-   * Fraction of the track after which the session is complete. The remainder is
-   * dead on purpose: the last command wants a beat to be read before the pin
-   * releases, rather than flicking away on the frame it finishes.
+   * Scroll distance the whole sequence occupies. Defaults to one viewport for
+   * the pin plus 45vh of travel per step.
+   *
+   * It was 55vh while the transcript typed itself, because the reader was
+   * waiting on the machine. Nothing waits now — a frame arrives complete — so
+   * the only thing the travel has to cover is reading, which the reader paces
+   * themselves by stopping.
    */
-  settle?: number;
+  track?: string;
 }) {
   const reduced = useReducedMotion();
   const ref = useRef<HTMLDivElement>(null);
-  const { plans, total } = useMemo(() => plan(steps), [steps]);
+  const frames = useMemo(() => plan(steps), [steps]);
 
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end end'] });
-  const cursor = useTransform(scrollYProgress, [0, settle], [0, total], { clamp: true });
-
-  const [revealed, setRevealed] = useState(0);
-  useMotionValueEvent(cursor, 'change', (v) => {
-    const next = Math.round(v);
-    setRevealed((prev) => (prev === next ? prev : next));
+  const [progress, setProgress] = useState(0);
+  useMotionValueEvent(scrollYProgress, 'change', (v) => {
+    // Two decimals is finer than a pixel of travel and keeps renders bounded.
+    const next = Math.round(v * 100) / 100;
+    setProgress((prev) => (prev === next ? prev : next));
   });
 
-  // Which frame is on screen, and how far through a handoff we are.
-  let index = 0;
-  for (let i = 0; i < plans.length; i++) if (revealed >= plans[i].start) index = i;
-  const here = plans[index];
-  const past = revealed - (here.start + here.chars);
-  const handoff = past > 0 && index < plans.length - 1 ? Math.min(1, past / GAP) : 0;
+  const scaled = Math.min(progress, 0.9999) * steps.length;
+  const index = Math.floor(scaled);
+  const frac = scaled - index;
 
-  // First half the finished frame leaves, second half the next one arrives.
+  const handoff = frac <= HOLD || index >= steps.length - 1 ? 0 : (frac - HOLD) / (1 - HOLD);
   const leaving = handoff > 0 && handoff < 0.5;
   const arriving = handoff >= 0.5;
   const shown = arriving ? index + 1 : index;
@@ -188,16 +158,10 @@ export function ScrubbedTerminal({
     };
   }
 
-  const local = arriving ? 0 : revealed - here.start;
-
-  /**
-   * The well is sized per step rather than to the tallest, so a short step does
-   * not sit above two dead rows. Resizing is free: it happens across the handoff,
-   * where the content it would jump is already faded out.
-   */
+  /** Resizing is free across the handoff: the content it would jump is faded. */
   const height = handoff
-    ? here.height + (plans[index + 1].height - here.height) * handoff
-    : plans[shown].height;
+    ? frames[index].height + (frames[index + 1].height - frames[index].height) * handoff
+    : frames[shown].height;
 
   if (reduced) return <>{fallback}</>;
 
@@ -205,7 +169,11 @@ export function ScrubbedTerminal({
     <>
       <noscript>{fallback}</noscript>
 
-      <div ref={ref} className="relative" style={{ height: track }}>
+      <div
+        ref={ref}
+        className="relative"
+        style={{ height: track ?? `calc(100vh + ${steps.length * 45}vh)` }}
+      >
         <div className="sticky top-0 flex h-screen items-center">
           <figure className="mat-panel w-full rounded-[14px] p-[5px]">
             <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
@@ -226,12 +194,7 @@ export function ScrubbedTerminal({
               </span>
             </figcaption>
 
-            <Screen
-              lines={plans[shown].lines}
-              revealed={arriving ? 0 : local}
-              height={height}
-              style={style}
-            />
+            <Screen lines={frames[shown].lines} height={height} style={style} />
 
             {step.note ? (
               <p className="mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed text-ink-2">
@@ -242,10 +205,10 @@ export function ScrubbedTerminal({
         </div>
       </div>
 
-      {/* What is on screen depends on scroll position, and a screen reader has no
-          scroll position. This is every session, whole, once. */}
+      {/* Which frame is on screen depends on scroll position, and a screen reader
+          has no scroll position. This is every session, whole, once. */}
       <pre className="sr-only">
-        {plans.map((p) => p.lines.map((l) => l.text).join('\n')).join('\n\n')}
+        {frames.map((f) => f.lines.map((l) => l.text).join('\n')).join('\n\n')}
       </pre>
     </>
   );

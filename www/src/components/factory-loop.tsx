@@ -1,8 +1,8 @@
-import { ScrubbedTerminal, type TerminalStep } from '@/components/terminal';
+import { SteppedTerminal, type TerminalStep } from '@/components/terminal';
 import { LOOP } from '@/lib/site';
 
 /**
- * Where sigiro sits in a software factory, as one terminal session you scrub.
+ * Where sigiro sits in a software factory, as five terminals you step through.
  *
  * The five commands are one incident in order: a +48σ shift on checkout, the
  * suspect deploy, the agent's patch, the recovery, the playbook. Two of them
@@ -10,8 +10,8 @@ import { LOOP } from '@/lib/site';
  * exists to make — it is watched rather than asserted.
  *
  * All this file does now is map `LOOP` onto the terminal's shape and supply the
- * fallback. The scrubbing lives in `components/terminal.tsx`, where a second
- * section can reach it.
+ * fallback. The scroll behaviour lives in `components/terminal.tsx`, where a
+ * second section can reach it.
  */
 
 const STEPS: TerminalStep[] = LOOP.map((s) => ({
@@ -70,7 +70,7 @@ function Stacked() {
 export function FactoryLoop() {
   return (
     <div className="mt-8">
-      <ScrubbedTerminal steps={STEPS} fallback={<Stacked />} />
+      <SteppedTerminal steps={STEPS} fallback={<Stacked />} />
     </div>
   );
 }
