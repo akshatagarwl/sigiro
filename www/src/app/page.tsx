@@ -117,29 +117,25 @@ export default function Home() {
             </section>
           ))}
 
-          <section aria-labelledby="runs-on" className={SECTION}>
-            <p className="meta text-ink-3">06</p>
-            <h2 id="runs-on" className={H2}>
+          {/* What it runs on and what it promises, folded into one section.
+              They were 06 and 07, two headings and two full section paddings for
+              what is really one answer to "what am I signing up for". Neither was
+              a step in the 01–05 spine, so numbering them implied a sequence that
+              had already ended. This one is unnumbered for the same reason.
+
+              The promise tiles also absorbed the old standalone "it watches
+              itself" section, which was making one claim at the length of six. */}
+          <section aria-labelledby="signing-up" className={SECTION}>
+            <p className="label">what you are signing up for</p>
+            <h2 id="signing-up" className={H2}>
               No migration.{' '}
               <span className="text-ink-3">sigiro plugs into what you already run.</span>
             </h2>
             <Integrations />
-          </section>
 
-          {/* The five things users say they care about, plus dogfooding as the
-              evidence we mean them. This absorbed the old standalone "it watches
-              itself" section: it was making one claim at the length of six. */}
-          <section aria-labelledby="promises" className={SECTION}>
-            <p className="meta text-ink-3">07</p>
-            <h2 id="promises" className={H2}>
-              The short version.{' '}
-              <span className="text-ink-3">
-                Free to run, nothing to maintain, and it stays on your infrastructure.
-              </span>
-            </h2>
             {/* Six wells with a real gap between them. `gap-px` on a tinted parent
                 is a border faking a compartment; this is the material saying it. */}
-            <dl className="mt-6 grid gap-2.5 sm:grid-cols-3">
+            <dl className="mt-10 grid gap-2.5 sm:grid-cols-3">
               {PROMISES.map((p) => (
                 <div key={p.title} className="mat-well rounded-[11px] p-3.5">
                   <dt className="text-[13px] font-medium tracking-[-0.01em] text-ink">{p.title}</dt>

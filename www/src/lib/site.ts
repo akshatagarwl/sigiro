@@ -174,52 +174,85 @@ LIMIT 3`,
  * `owner` is rendered verbatim under each stage, so it has to name a real thing a
  * reader already runs.
  *
- * `detail` names the HTTP endpoint for both of our stages, not the CLI. Every
- * operation has both surfaces (`sigiro anomalies` and `GET /v1/anomalies` are the
- * same call), so which one to name is a question about the reader, and this
- * section's reader is an agent in a loop. The quickstart names the CLI for both,
- * for the same reason in reverse. Do not mix the two within one page.
+ * `cmd` and `out` are one continuous terminal session, read top to bottom: the
+ * same checkout incident that sections 02 and 04 already report, carried from
+ * detection to recovery. Stages three and five deliberately run something that
+ * is not sigiro, so "we are two of these five" is a thing you watch rather than
+ * a thing you are told.
+ *
+ * The register here is the CLI, not HTTP. Every operation has both surfaces
+ * (`sigiro anomalies` and `GET /v1/anomalies` are the same call) and this section
+ * used to name the HTTP one, on the grounds that its reader is an agent. A
+ * terminal session settles it the other way: you cannot show a shell and label it
+ * with a verb-and-path. The endpoints are named in 01–05 and in the reference —
+ * still do not mix the two within one page.
+ *
+ * Numbers were dropped from these stages when the 01–05 spine below kept its own.
+ * Two `01–05` sequences ran back to back with identical numerals, and a reader
+ * going "…05 Learn" → "01 Connect" had no way to see a new sequence had started.
  */
 export const LOOP = [
   {
-    n: '01',
     title: 'Detect',
     owner: 'sigiro',
     ours: true,
     say: 'Something moved. Not against a threshold you tuned last quarter, but against the service’s own history. Normal is something your data decides, not something you maintain.',
-    detail: 'GET /v1/anomalies',
+    cmd: 'sigiro anomalies',
+    out: `SERVICE   SIGNAL       BASELINE   NOW      SHIFT    INCIDENT
+checkout  error_rate   0.4%       19.2%    +48σ     inc_4a1c
+checkout  latency_p95  180ms      30.0s    +166×    inc_4a1c
+
+2 shifts · 1 incident · since 18:35`,
   },
   {
-    n: '02',
     title: 'Diagnose',
     owner: 'sigiro',
     ours: true,
     say: 'One call comes back with ranked findings, the deploy that looks guilty, and how the thing actually fails. Every row carries the query that proves it. Your agent can act on that. It can’t act on a chart.',
-    detail: 'POST /v1/investigate',
+    cmd: 'sigiro investigate checkout',
+    out: `suspect        deploy 9f2c1ab, landed 18:33
+failing        POST /api/orders
+failure mode   timeout 246 · server_error 6
+errors_total   1284
+drill_down_sql SELECT trace_id, duration, status_message
+               FROM sigiro_spans WHERE service_name = 'checkout' …`,
   },
   {
-    n: '03',
     title: 'Fix',
     owner: 'your coding agent',
     ours: false,
     say: 'Claude Code, Codex, Cursor, whichever one already has commit rights. This stage got solved first, which is why the gap sits upstream of it.',
-    detail: 'writes, tests, reviews',
+    cmd: 'claude "checkout times out since 9f2c1ab — here is the evidence"',
+    out: `read   src/orders/upstream.ts
+edit   src/orders/upstream.ts   +4 −1
+test   42 passed
+push   fix: bound the orders upstream call at 5s`,
   },
   {
-    n: '04',
     title: 'Verify',
     owner: 'your pipeline, on our evidence',
     ours: 'partly',
     say: 'Tests passing isn’t the same as the incident being over. The shift that opened the loop either closed after your deploy or it didn’t, and the baseline that caught it answers that.',
-    detail: 'the shift recovered, or it did not',
+    cmd: 'sigiro anomalies --service checkout',
+    out: `no open shifts
+
+error_rate    19.2%  →  0.5%    recovered 19:07
+latency_p95   30.0s  →  210ms   recovered 19:07
+
+inc_4a1c closed · 34 min open`,
   },
   {
-    n: '05',
     title: 'Learn',
     owner: 'your memory',
     ours: false,
     say: 'What the fix was, next to what the evidence looked like, kept for the next time the same shape shows up. Then the loop starts again, on a service with a new baseline.',
-    detail: 'playbooks, expertise, notes',
+    cmd: 'cat playbooks/checkout-upstream-timeout.md',
+    out: `## checkout · upstream timeout
+
+detected   error_rate +48σ, latency_p95 +166×
+cause      unbounded upstream call, shipped in 9f2c1ab
+fix        5s deadline on the orders client
+watch      the same shape on any service calling orders`,
   },
 ] as const;
 
