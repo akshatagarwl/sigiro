@@ -41,6 +41,7 @@
     "@vinext/cloudflare": "1.0.0-beta.4",
     "@vitejs/plugin-react": "6.0.4",
     "@vitejs/plugin-rsc": "0.5.30",
+    "geist": "1.7.2",
     "postcss": "8.5.23",
     "react-doctor": "0.9.1",
     "react-server-dom-webpack": "19.3.0-canary-28cd4bb0-20260723",

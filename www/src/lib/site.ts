@@ -39,7 +39,7 @@ export const SITE = {
    * version lives in the filename rather than in a query string, which some
    * scrapers strip.
    */
-  ogImage: '/og-2.png',
+  ogImage: '/og-3.png',
   /** Also the meta description, the OG description and the Twitter card, so it
       has to stay under ~155 characters or search results cut it mid-sentence. */
   description:

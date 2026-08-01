@@ -11,21 +11,22 @@
  * the wrong shape: a card is an asset with one input, not a page, and "open a
  * browser and photograph it" is not a build step anyone will repeat correctly.
  *
- * Everything needed is already in the tree — `next/og` wraps `@vercel/og`, which
- * bundles satori, `resvg.wasm`, `yoga.wasm` and, usefully, `Geist-Regular.ttf`.
- * No new dependency.
+ * The renderer is `next/og`, which wraps `@vercel/og` and already bundles satori,
+ * `resvg.wasm` and `yoga.wasm`. The fonts come from `geist`, Vercel's own
+ * package, which ships the family as TTF — the format satori reads.
  *
- * One deviation from the design language, on purpose: §8 sets headings in medium
- * and never bold, but only the regular weight ships with @vercel/og. Satori will
- * not synthesise a weight, and pulling a whole font package for one step is a
- * poor trade at 68px, where the -0.04em tracking is doing most of the work.
- * Registering the regular file under `weight: 500` would render the same pixels
- * while claiming otherwise, so the weight is declared honestly as 400.
+ * That font package is the whole reason this card is on-spec. An earlier version
+ * used the single `Geist-Regular.ttf` that @vercel/og bundles and set the
+ * headline at weight 400, with a comment explaining that §8 wanted medium and
+ * satori would not synthesise a weight. The premise was wrong: satori did not
+ * need to synthesise anything, the medium file simply was not in the tree. It is
+ * a missing asset, not a missing capability — worth remembering the next time a
+ * renderer looks like it cannot do something.
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { ImageResponse } from 'next/og';
 import { SITE } from '../src/lib/site';
 
@@ -41,12 +42,14 @@ const ACCENT = '#4568ff';
 
 const require = createRequire(import.meta.url);
 
-async function geist() {
-  // Resolved through `next`, so it follows the installed version rather than a
-  // path that quietly rots the next time next is upgraded.
-  const og = require.resolve('next/dist/compiled/@vercel/og/index.node.js');
-  return readFile(join(og, '..', 'Geist-Regular.ttf'));
-}
+/**
+ * Resolved through the package rather than by a hand-written node_modules path,
+ * so a hoist or a version bump cannot silently point this at nothing.
+ */
+const FONTS = join(dirname(require.resolve('geist/package.json')), 'dist', 'fonts');
+
+const font = (family: 'geist-sans' | 'geist-mono', file: string) =>
+  readFile(join(FONTS, family, file));
 
 const card = (
   <div
@@ -65,25 +68,38 @@ const card = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
       {/* §6: a cell, not a dot. There are no pills in this palette. */}
       <div style={{ width: 14, height: 14, borderRadius: 1.5, background: ACCENT }} />
-      <div style={{ fontSize: 30, letterSpacing: '-0.03em' }}>sigiro</div>
+      <div style={{ fontSize: 30, fontWeight: 500, letterSpacing: '-0.03em' }}>sigiro</div>
     </div>
 
-    {/* No `letterSpacing` here, though §8 asks for -0.04em on a headline and the
-        wordmark above keeps its -0.03em happily.
+    {/* -0.04em, per §8, and it renders cleanly.
 
-        At this size satori's tracking implementation distributes the negative
-        space unevenly across word boundaries: the render came out with a visible
-        gap between "software" and "that", wide enough to read as a double space
-        in the source. It is not — the string is single-spaced ASCII, checked.
-        Dropping the tracking removed the gap and, as a side effect, let the line
-        break where the sentence's sense breaks.
+        It did not always. With the regular weight this same tracking opened a
+        gap between "software" and "that" wide enough to look like a double space
+        in the source — it was not, the string is single-spaced ASCII, checked. I
+        blamed satori's tracking implementation and dropped the tracking. Wrong
+        diagnosis: the medium file shapes it correctly, so the fault was the font,
+        the same font that was missing in the first place.
 
-        Satori also implements no `text-balance`, so the measure does that job
-        instead: 880 gives two lines, where 940 orphaned "repairs itself." and 760
+        Satori does implement no `text-balance`, though, so the measure does that
+        job: 880 gives two lines, where 940 orphaned "repairs itself." and 760
         pushed it to three. */}
-    <div style={{ fontSize: 68, lineHeight: 1.08, maxWidth: 880 }}>{SITE.tagline}</div>
+    <div
+      style={{
+        fontSize: 68,
+        fontWeight: 500,
+        lineHeight: 1.08,
+        letterSpacing: '-0.04em',
+        maxWidth: 880,
+      }}
+    >
+      {SITE.tagline}
+    </div>
 
-    <div style={{ fontSize: 22, color: INK_3 }}>sigiro.com · free when you install it</div>
+    {/* Mono, matching every `.meta` line on the site: metadata and numbers, never
+        prose (§8). It was sans while only the sans regular was in the tree. */}
+    <div style={{ fontFamily: 'Geist Mono', fontSize: 22, color: INK_3 }}>
+      sigiro.com · free when you install it
+    </div>
   </div>
 );
 
@@ -91,7 +107,10 @@ const png = Buffer.from(
   await new ImageResponse(card, {
     width: WIDTH,
     height: HEIGHT,
-    fonts: [{ name: 'Geist', data: await geist(), weight: 400, style: 'normal' }],
+    fonts: [
+      { name: 'Geist', data: await font('geist-sans', 'Geist-Medium.ttf'), weight: 500 },
+      { name: 'Geist Mono', data: await font('geist-mono', 'GeistMono-Regular.ttf'), weight: 400 },
+    ],
   }).arrayBuffer(),
 );
 
