@@ -1,7 +1,18 @@
+import { Effect } from 'effect';
 import { CodeBlock } from '@/components/code-block';
-import { curl, operation } from '@/lib/api-spec';
+import { curl, operation, type ResponseEntry } from '@/lib/api-spec';
 import { highlight } from '@/lib/highlight';
 import { SITE } from '@/lib/site';
+
+/** A response entry with its example highlighted, where it has one. */
+function withExample(r: ResponseEntry) {
+  return r.example
+    ? Effect.map(highlight(r.example, 'json'), (html) => ({
+        ...r,
+        html: html as string | undefined,
+      }))
+    : Effect.succeed({ ...r, html: undefined as string | undefined });
+}
 
 /**
  * One operation of the API reference, rendered from openapi.json with the site's
@@ -16,18 +27,18 @@ export async function ApiOperation({ id }: { id: string }) {
   const op = operation(id);
   const request = curl(op, SITE.apiUrl);
 
-  // One await, not two in series: the request sample and the response samples do
+  // One run, not two in series: the request sample and the response samples do
   // not depend on each other, and highlighting them one after the other made the
   // page wait for both round trips instead of the slower one.
-  const [requestHtml, responses] = await Promise.all([
-    highlight(request, 'bash'),
-    Promise.all(
-      op.responses.map(async (r) => ({
-        ...r,
-        html: r.example ? await highlight(r.example, 'json') : undefined,
-      })),
+  const [requestHtml, responses] = await Effect.runPromise(
+    Effect.all(
+      [
+        highlight(request, 'bash'),
+        Effect.all(op.responses.map(withExample), { concurrency: 'unbounded' }),
+      ],
+      { concurrency: 'unbounded' },
     ),
-  ]);
+  );
 
   return (
     <div className="not-prose mt-8 flex flex-col gap-9 text-[13.5px] text-ink-2">

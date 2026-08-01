@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { SteppedTerminal, type TerminalStep } from '@/components/terminal';
 import { highlightSession, type SessionLine } from '@/lib/highlight';
 import { LOOP } from '@/lib/site';
@@ -77,7 +78,12 @@ function Stacked({ sessions }: { sessions: readonly (readonly SessionLine[])[] }
 }
 
 export async function FactoryLoop() {
-  const sessions = await Promise.all(LOOP.map((s) => highlightSession(s.cmd, s.out)));
+  const sessions = await Effect.runPromise(
+    Effect.all(
+      LOOP.map((s) => highlightSession(s.cmd, s.out)),
+      { concurrency: 'unbounded' },
+    ),
+  );
 
   const steps: TerminalStep[] = LOOP.map((s, i) => ({
     lines: sessions[i],

@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { ProofStage } from '@/components/proof-stage';
 import { highlight } from '@/lib/highlight';
 import { PROOF } from '@/lib/site';
@@ -8,11 +9,16 @@ import { PROOF } from '@/lib/site';
  * it was handed. Same division as `Artifact`.
  */
 export async function ProofDemo({ finding, lang }: { finding: string; lang: 'json' }) {
-  const [findingHtml, sqlHtml, ...rowsHtml] = await Promise.all([
-    highlight(finding, lang),
-    highlight(PROOF.sql, 'sql'),
-    ...PROOF.rows.map((row) => highlight(row, 'json')),
-  ]);
+  const [findingHtml, sqlHtml, ...rowsHtml] = await Effect.runPromise(
+    Effect.all(
+      [
+        highlight(finding, lang),
+        highlight(PROOF.sql, 'sql'),
+        ...PROOF.rows.map((row) => highlight(row, 'json')),
+      ],
+      { concurrency: 'unbounded' },
+    ),
+  );
 
   const frag = (html: string) => <div dangerouslySetInnerHTML={{ __html: html }} />;
 

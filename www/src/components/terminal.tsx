@@ -1,5 +1,6 @@
 'use client';
 
+import { useMachine } from '@xstate/react';
 import {
   motion,
   useMotionTemplate,
@@ -7,7 +8,8 @@ import {
   useScroll,
   useTransform,
 } from 'motion/react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef } from 'react';
+import { createMachine, types } from 'xstate';
 import { SkeletonSwap } from '@/components/interior/skeleton-swap';
 import { TaskSteps } from '@/components/interior/task-steps';
 import type { SessionLine } from '@/lib/highlight';
@@ -35,12 +37,17 @@ import type { SessionLine } from '@/lib/highlight';
  * copied component must not depend on the host's palette.
  *
  * Design constraints, from DESIGN.md (now vendored at www/DESIGN.md):
- * - §5h  React does not re-render at 60fps. The step index is React state; the
- *        handoff is MotionValues off `scrollYProgress` and never touches React.
- *        A previous version quantised progress to two decimals and drove the
- *        fade from state, leaving the handoff ~6 frames long — §6a: "quantising
- *        the sweep would make the fill look like it was stuttering".
- * - §6a  `setStep(prev => prev === s ? prev : s)` on the discrete half.
+ * - §5h  React does not re-render at 60fps. The step index is machine context;
+ *        the handoff is MotionValues off `scrollYProgress` and never touches
+ *        React or the machine. A previous version quantised progress to two
+ *        decimals and drove the fade from state, leaving the handoff ~6 frames
+ *        long — §6a: "quantising the sweep would make the fill look like it was
+ *        stuttering".
+ * - §6a  the machine's `STEP` transition returns nothing when the index has not
+ *        changed. XState treats that as no transition and hands back the same
+ *        snapshot object, so the scroll listener can fire every frame and React
+ *        still renders once per step — the machine's version of
+ *        `setStep(prev => prev === s ? prev : s)`.
  * - §5   the handoff uses the specified displacements — out at `y 6, blur(3px)`,
  *        in at `y 10, blur(6px)`.
  * - §3   no `rounded-full`, so no traffic-light chrome. This is the same
@@ -115,6 +122,55 @@ function locate(v: number, count: number) {
   return { index, handoff };
 }
 
+/**
+ * Stepping to the frame already shown is not a step. Returning nothing is how
+ * XState says "this event changes nothing" — the actor keeps the snapshot it
+ * had, so React never sees a new one.
+ */
+function step({
+  context,
+  event,
+}: {
+  context: { shown: number };
+  event: { type: 'STEP'; index: number };
+}) {
+  if (event.index === context.shown) return;
+  return { target: 'running', context: { shown: event.index }, reenter: true };
+}
+
+/**
+ * The discrete half of the component: which frame is mounted, and whether its
+ * command has finished running.
+ *
+ * Two states rather than a boolean beside an index, because "arriving at a frame
+ * runs its command" is a transition, not a value. `STEP` re-enters `running`
+ * whichever state it lands in, which cancels the in-flight delay and starts a
+ * new one — scrubbing quickly cannot stack up timers because a state can only be
+ * in one of them.
+ *
+ * Nothing continuous lives here. `context.shown` changes once per step; the
+ * opacity, y, blur and height are MotionValues (§5h).
+ */
+const sequence = createMachine({
+  // `types` is XState's own type-only schema: the machine's shape reaches
+  // TypeScript without a validation library coming with it.
+  schemas: {
+    context: types<{ shown: number }>(),
+    events: { STEP: types<{ index: number }>() },
+  },
+  initial: 'running',
+  context: { shown: 0 },
+  states: {
+    running: {
+      after: { [RUN_MS]: { target: 'ready' } },
+      on: { STEP: step },
+    },
+    ready: {
+      on: { STEP: step },
+    },
+  },
+});
+
 export function SteppedTerminal({
   steps,
   fallback,
@@ -146,22 +202,17 @@ export function SteppedTerminal({
   const frames = useMemo(() => plan(steps), [steps]);
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end end'] });
 
-  // The discrete half: which frame's text is mounted. One render per step.
-  const [shown, setShown] = useState(0);
+  // The discrete half: which frame's text is mounted, and whether its command
+  // has finished running. One render per step — the machine drops a `STEP` that
+  // names the frame already shown.
+  const [state, send] = useMachine(sequence);
+  const shown = state.context.shown;
+  const ran = state.matches('ready');
+
   useMotionValueEvent(scrollYProgress, 'change', (v) => {
     const { index, handoff } = locate(v, steps.length);
-    const next = handoff >= 0.5 ? index + 1 : index;
-    setShown((prev) => (prev === next ? prev : next));
+    send({ type: 'STEP', index: handoff >= 0.5 ? index + 1 : index });
   });
-
-  // Arriving at a frame runs its command. One timer, reset whenever the frame
-  // changes, so scrubbing quickly does not stack them up.
-  const [ran, setRan] = useState(false);
-  useEffect(() => {
-    setRan(false);
-    const t = setTimeout(() => setRan(true), RUN_MS);
-    return () => clearTimeout(t);
-  }, [shown]);
 
   // The continuous half: never React state, so it runs at frame rate.
   const opacity = useTransform(scrollYProgress, (v) => {

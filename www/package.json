@@ -15,6 +15,8 @@
     "api:docs": "bun run scripts/generate-api-docs.ts"
   },
   "dependencies": {
+    "@xstate/react": "7.0.0-alpha.1",
+    "effect": "4.0.0-beta.102",
     "fumadocs-core": "16.12.1",
     "fumadocs-mdx": "15.2.0",
     "fumadocs-ui": "16.12.1",
@@ -24,7 +26,8 @@
     "react": "19.3.0-canary-28cd4bb0-20260723",
     "react-dom": "19.3.0-canary-28cd4bb0-20260723",
     "shiki": "4.3.1",
-    "simple-icons": "16.27.1"
+    "simple-icons": "16.27.1",
+    "xstate": "6.0.0-alpha.26"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.47.0",

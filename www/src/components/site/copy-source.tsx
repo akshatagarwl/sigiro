@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useMachine } from '@xstate/react';
+import { createMachine } from 'xstate';
 
 /**
  * The copy affordance a code fence gets: a 22px cap in the caption row, labelled
@@ -9,27 +10,46 @@ import { useEffect, useRef, useState } from 'react';
  * Both faces sit in the same grid cell and only opacity moves, so the cap keeps
  * its width when the state changes. The check is drawn inline on the Phosphor
  * grid rather than imported — one glyph is not worth a dependency.
+ *
+ * The check is a state, not a flag with a timer beside it. `copied` owns its own
+ * 2s exit, and copying again while the check is up re-enters `copied`, which
+ * cancels and restarts that exit — the same thing the hand-rolled version did by
+ * clearing a ref'd timeout, minus the ref, the unmount cleanup and the chance of
+ * forgetting either.
  */
-export function CopySource({ code, label }: { code: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
+/** How long the check stays up. */
+const HELD_MS = 2000;
+
+const clipboard = createMachine({
+  initial: 'idle',
+  states: {
+    idle: {
+      on: { COPIED: { target: 'copied' } },
     },
-    [],
-  );
+    copied: {
+      // Re-entering restarts the delayed exit below, so a second copy holds the
+      // check for a fresh 2s rather than inheriting the first one's remainder.
+      on: { COPIED: { target: 'copied', reenter: true } },
+      after: { [HELD_MS]: { target: 'idle' } },
+    },
+  },
+});
 
+export function CopySource({ code, label }: { code: string; label?: string }) {
+  const [state, send] = useMachine(clipboard);
+  const copied = state.matches('copied');
+
+  // The write itself stays here rather than becoming an invoked actor: it is one
+  // await with one failure mode, and the failure is "nothing happens", which is
+  // the machine staying where it already is.
   async function copy() {
     try {
       await navigator.clipboard.writeText(code);
     } catch {
       return;
     }
-    setCopied(true);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), 2000);
+    send({ type: 'COPIED' });
   }
 
   return (

@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { SteppedTerminal, type TerminalStep } from '@/components/terminal';
 import { highlightSession, type SessionLine } from '@/lib/highlight';
 import { HOW } from '@/lib/site';
@@ -27,14 +28,18 @@ const BLANK: SessionLine = { text: '', html: '' };
  * that prints nothing keeps only its prompt line, and a blank line goes in
  * wherever output was printed before the next prompt.
  */
-async function transcript(
-  blocks: readonly { readonly cmd: string; readonly out: string }[],
-): Promise<SessionLine[]> {
-  const sessions = await Promise.all(blocks.map((b) => highlightSession(b.cmd, b.out)));
-  return sessions.flatMap((lines, i) => {
-    const kept = blocks[i].out ? lines : lines.slice(0, 1);
-    return i > 0 && blocks[i - 1].out ? [BLANK, ...kept] : kept;
-  });
+function transcript(blocks: readonly { readonly cmd: string; readonly out: string }[]) {
+  return Effect.map(
+    Effect.all(
+      blocks.map((b) => highlightSession(b.cmd, b.out)),
+      { concurrency: 'unbounded' },
+    ),
+    (sessions): SessionLine[] =>
+      sessions.flatMap((lines, i) => {
+        const kept = blocks[i].out ? lines : lines.slice(0, 1);
+        return i > 0 && blocks[i - 1].out ? [BLANK, ...kept] : kept;
+      }),
+  );
 }
 
 /**
@@ -73,7 +78,12 @@ function Stacked({ sessions }: { sessions: readonly (readonly SessionLine[])[] }
 }
 
 export async function HowItWorks() {
-  const sessions = await Promise.all(HOW.map((s) => transcript(s.run)));
+  const sessions = await Effect.runPromise(
+    Effect.all(
+      HOW.map((s) => transcript(s.run)),
+      { concurrency: 'unbounded' },
+    ),
+  );
 
   // No badge: every one of these is your own shell, and a chip that reads the
   // same on all three steps is furniture rather than information. The caption

@@ -1,7 +1,9 @@
 'use client';
 
+import { useMachine } from '@xstate/react';
 import { motion, useInView, useReducedMotion } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
+import { createMachine } from 'xstate';
 import { CopySource } from '@/components/site/copy-source';
 
 /**
@@ -20,11 +22,11 @@ import { CopySource } from '@/components/site/copy-source';
  *
  * The one thing not in the spec is the 50ms row cadence, which is picked.
  *
- * SSR and no-JS get the finished artifact, because `armed` starts false and only
- * the mount effect turns it on. That ordering is deliberate rather than
- * incidental: it means the complete evidence is in the HTML for anyone whose
- * JavaScript never runs, and the hide-then-play flip happens while section 04 is
- * still far below the fold, so nobody watches it blink.
+ * SSR and no-JS get the finished artifact, because `still` is the machine's
+ * initial state and only the mount effect leaves it. That ordering is deliberate
+ * rather than incidental: it means the complete evidence is in the HTML for
+ * anyone whose JavaScript never runs, and the hide-then-play flip happens while
+ * section 04 is still far below the fold, so nobody watches it blink.
  */
 
 const EASE = [0.23, 1, 0.32, 1] as const;
@@ -44,6 +46,36 @@ const ROW_CADENCE = 0.05;
 const AT_SQL = 260;
 const AT_ROWS = 700;
 
+const REPLAY = { REPLAY: { target: 'finding', reenter: true } } as const;
+
+/**
+ * The staging, as five states rather than an `armed` flag, a `step` number, a
+ * `replay` counter and two effects reading all three.
+ *
+ * `still` is the one that carries the SSR promise in the docblock above: it is
+ * the initial state, it renders the finished artifact, and only the mount effect
+ * leaves it. Reduced motion never sends `ARM`, so it stays there — which is §22,
+ * expressed as an unreachable subtree rather than as a branch in every animate
+ * prop.
+ *
+ * `waiting` is armed but below the fold: collapsed, and going nowhere until
+ * `SEEN`. Replay is only reachable from the three playing states, which is where
+ * the button is.
+ */
+const staging = createMachine({
+  initial: 'still',
+  states: {
+    still: { on: { ARM: { target: 'waiting' } } },
+    waiting: { on: { SEEN: { target: 'finding' } } },
+    finding: { after: { [AT_SQL]: { target: 'sql' } }, on: REPLAY },
+    sql: { after: { [AT_ROWS - AT_SQL]: { target: 'rows' } }, on: REPLAY },
+    rows: { on: REPLAY },
+  },
+});
+
+/** How many of the three panels are open. `still` opens all of them. */
+const OPENED = { still: 2, waiting: 0, finding: 0, sql: 1, rows: 2 } as const;
+
 export function ProofStage({
   finding,
   sql,
@@ -60,28 +92,23 @@ export function ProofStage({
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true, amount: 0.35 });
 
-  const [armed, setArmed] = useState(false);
-  const [step, setStep] = useState(2);
-  const [replay, setReplay] = useState(0);
+  const [state, send] = useMachine(staging);
 
+  // Declared before the one below it, so on a mount that is already in view the
+  // machine arms before it is told what it can see. Swapping them would leave it
+  // in `still` forever.
   useEffect(() => {
     if (reduced) return;
-    setArmed(true);
-    setStep(0);
-  }, [reduced]);
+    send({ type: 'ARM' });
+  }, [reduced, send]);
 
   useEffect(() => {
-    if (!armed || !inView) return;
-    setStep(0);
-    const sqlAt = setTimeout(() => setStep(1), AT_SQL);
-    const rowsAt = setTimeout(() => setStep(2), AT_ROWS);
-    return () => {
-      clearTimeout(sqlAt);
-      clearTimeout(rowsAt);
-    };
-  }, [armed, inView, replay]);
+    if (inView) send({ type: 'SEEN' });
+  }, [inView, send]);
 
-  const still = !armed;
+  const still = state.matches('still');
+  const step = OPENED[state.value];
+  const armed = !still;
 
   return (
     <figure ref={ref} className="not-prose mat-panel my-6 rounded-[14px] p-[5px]">
@@ -92,7 +119,7 @@ export function ProofStage({
         {armed ? (
           <button
             type="button"
-            onClick={() => setReplay((n) => n + 1)}
+            onClick={() => send({ type: 'REPLAY' })}
             className="mat-cap h-[22px] shrink-0 rounded-[6px] px-2 text-[11px] text-ink-3 transition-colors duration-150 hover:text-accent focus-visible:text-accent"
           >
             Replay

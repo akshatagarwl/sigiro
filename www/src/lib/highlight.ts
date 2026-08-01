@@ -1,4 +1,5 @@
-import { createHighlighterCore } from 'shiki/core';
+import { Data, Effect } from 'effect';
+import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 import bash from 'shiki/langs/bash.mjs';
 import shellsession from 'shiki/langs/shellsession.mjs';
@@ -10,6 +11,26 @@ import githubDark from 'shiki/themes/github-dark-default.mjs';
 import githubLight from 'shiki/themes/github-light-default.mjs';
 
 export type Lang = 'json' | 'sql' | 'bash' | 'typescript' | 'yaml' | 'shellsession';
+
+/**
+ * The highlighter could not be built. This is the failure this file's whole
+ * shape exists to avoid — see the note on `started` — so it is worth a name of
+ * its own rather than being folded into "highlighting failed".
+ */
+export class ShikiUnavailable extends Data.TaggedError('ShikiUnavailable')<{
+  readonly cause: unknown;
+}> {}
+
+/** One string, in one grammar, that Shiki refused. */
+export class HighlightFailed extends Data.TaggedError('HighlightFailed')<{
+  readonly lang: Lang;
+  readonly cause: unknown;
+}> {}
+
+/** A transcript came back with a different number of lines than it went in with. */
+export class TranscriptMismatch extends Data.TaggedError('TranscriptMismatch')<{
+  readonly reason: string;
+}> {}
 
 /**
  * Shiki, built for the Workers runtime.
@@ -25,10 +46,20 @@ export type Lang = 'json' | 'sql' | 'bash' | 'typescript' | 'yaml' | 'shellsessi
  * module-level singleton — the highlighter is built once per isolate, not once
  * per request.
  */
-const highlighter = createHighlighterCore({
+const started: Promise<HighlighterCore> = createHighlighterCore({
   themes: [githubLight, githubDark],
   langs: [json, sql, bash, ts, yaml, shellsession],
   engine: createJavaScriptRegexEngine(),
+});
+
+/**
+ * The singleton, as an effect. Awaiting a settled promise repeatedly is free, so
+ * this stays one build per isolate while giving every highlight below a typed
+ * `ShikiUnavailable` channel instead of a rejection nobody named.
+ */
+const core: Effect.Effect<HighlighterCore, ShikiUnavailable> = Effect.tryPromise({
+  try: () => started,
+  catch: (cause) => new ShikiUnavailable({ cause }),
 });
 
 /**
@@ -53,14 +84,30 @@ export const COLOR_REPLACEMENTS = { '#6e7781': '#5a6169', '#cf222e': '#b3121f' }
  */
 const THEMES = { light: 'github-light-default', dark: 'github-dark-default' } as const;
 
-export async function highlight(code: string, lang: Lang): Promise<string> {
-  const shiki = await highlighter;
-  return shiki.codeToHtml(code, {
-    lang,
-    themes: THEMES,
-    defaultColor: false,
-    colorReplacements: COLOR_REPLACEMENTS,
-  });
+/**
+ * One block of code, highlighted.
+ *
+ * This returns a description rather than a promise: nothing runs until a server
+ * component hands it to `Effect.runPromise`. The point is the error channel —
+ * `ShikiUnavailable | HighlightFailed` is in the type, so a caller that forgets
+ * to run it is a compile error rather than a page that renders blank.
+ */
+export function highlight(
+  code: string,
+  lang: Lang,
+): Effect.Effect<string, ShikiUnavailable | HighlightFailed> {
+  return Effect.flatMap(core, (shiki) =>
+    Effect.try({
+      try: () =>
+        shiki.codeToHtml(code, {
+          lang,
+          themes: THEMES,
+          defaultColor: false,
+          colorReplacements: COLOR_REPLACEMENTS,
+        }),
+      catch: (cause) => new HighlightFailed({ lang, cause }),
+    }),
+  );
 }
 
 /** One line of a shell session: its plain text, and its highlighted markup. */
@@ -71,20 +118,26 @@ export type SessionLine = { text: string; html: string };
  * lines with `<br>`, which is the one Shiki structure a component can hand out
  * one line at a time. The caller puts each line in its own box.
  */
-async function inlineLines(
+function inlineLines(
   code: string,
   lang: Lang,
   colorReplacements: Record<string, string>,
-): Promise<string[]> {
-  const shiki = await highlighter;
-  const html = shiki.codeToHtml(code, {
-    lang,
-    themes: THEMES,
-    defaultColor: false,
-    structure: 'inline',
-    colorReplacements,
-  });
-  return html.split('<br>');
+): Effect.Effect<string[], ShikiUnavailable | HighlightFailed> {
+  return Effect.flatMap(core, (shiki) =>
+    Effect.try({
+      try: () =>
+        shiki
+          .codeToHtml(code, {
+            lang,
+            themes: THEMES,
+            defaultColor: false,
+            structure: 'inline',
+            colorReplacements,
+          })
+          .split('<br>'),
+      catch: (cause) => new HighlightFailed({ lang, cause }),
+    }),
+  );
 }
 
 /**
@@ -113,22 +166,38 @@ const PROMPT = '<span style="--shiki-light:var(--ink-3);--shiki-dark:var(--ink-3
  * shellsession, which is the thing shellsession does get right: every line is
  * output, whatever it happens to look like.
  */
-export async function highlightSession(cmd: string, out: string): Promise<SessionLine[]> {
-  const texts = out.split('\n');
-  const [cmdHtml, outHtml] = await Promise.all([
-    inlineLines(cmd, 'bash', COLOR_REPLACEMENTS),
-    inlineLines(out, 'shellsession', { ...COLOR_REPLACEMENTS, ...OUTPUT_INK }),
-  ]);
+export function highlightSession(
+  cmd: string,
+  out: string,
+): Effect.Effect<SessionLine[], ShikiUnavailable | HighlightFailed | TranscriptMismatch> {
+  return Effect.gen(function* () {
+    const texts = out.split('\n');
+    const [cmdHtml, outHtml] = yield* Effect.all(
+      [
+        inlineLines(cmd, 'bash', COLOR_REPLACEMENTS),
+        inlineLines(out, 'shellsession', { ...COLOR_REPLACEMENTS, ...OUTPUT_INK }),
+      ],
+      { concurrency: 'unbounded' },
+    );
 
-  // The terminal pairs `text` with `html` positionally and sizes its frame from
-  // the count, so a line that went missing would silently shift the transcript.
-  if (cmdHtml.length !== 1) throw new Error(`transcript command is not one line: ${cmd}`);
-  if (outHtml.length !== texts.length) {
-    throw new Error(`highlighted ${outHtml.length} of ${texts.length} output lines`);
-  }
+    // The terminal pairs `text` with `html` positionally and sizes its frame from
+    // the count, so a line that went missing would silently shift the transcript.
+    // A typed failure rather than a `throw`: it still takes the render down, which
+    // is the point, but the shape of the mistake is now in the function's type.
+    if (cmdHtml.length !== 1) {
+      return yield* new TranscriptMismatch({
+        reason: `transcript command is not one line: ${cmd}`,
+      });
+    }
+    if (outHtml.length !== texts.length) {
+      return yield* new TranscriptMismatch({
+        reason: `highlighted ${outHtml.length} of ${texts.length} output lines`,
+      });
+    }
 
-  return [
-    { text: `$ ${cmd}`, html: PROMPT + cmdHtml[0] },
-    ...texts.map((text, i) => ({ text, html: outHtml[i] })),
-  ];
+    return [
+      { text: `$ ${cmd}`, html: PROMPT + cmdHtml[0] },
+      ...texts.map((text, i) => ({ text, html: outHtml[i] })),
+    ];
+  });
 }
