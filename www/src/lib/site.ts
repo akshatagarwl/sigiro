@@ -460,3 +460,24 @@ export const SOCIAL = [
   { href: 'https://x.com/SigiroAI', label: 'X' },
   { href: 'https://www.linkedin.com/company/sigiro', label: 'LinkedIn' },
 ] as const;
+
+/**
+ * The question the footer hands to whichever assistant the reader already
+ * trusts. It is copy, so it lives here and follows the same register as the
+ * rest of the file.
+ *
+ * Three URLs, in the order an assistant should read them: the page for the
+ * claim, `/llms-full.txt` for every doc as one markdown file, `/openapi.json`
+ * for the surface that either matches the claim or does not. All three are
+ * public and need no key, which is the whole reason this works — the reader
+ * gets an answer we did not write and cannot edit.
+ *
+ * Do not ask for a summary of the marketing page. An assistant that only reads
+ * the landing page repeats the landing page, and the reader already read it.
+ */
+export const ASK_AI_PROMPT = [
+  'Explain sigiro.',
+  `Read ${SITE.url}, the documentation at ${SITE.url}/llms-full.txt, and the API description at ${SITE.url}/openapi.json.`,
+  'Then tell me what sigiro does and how an AI agent uses it to debug a production failure.',
+  'Also tell me what it costs and how it differs from a traditional observability tool.',
+].join(' ');

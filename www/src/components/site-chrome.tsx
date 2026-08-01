@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { COMPACT } from '@/components/site/action';
+import { AskAI } from '@/components/site/ask-ai';
 import { Logo } from '@/components/site/logo';
 import { ThemeToggle } from '@/components/site/theme-toggle';
 import { NAV, SITE, SOCIAL } from '@/lib/site';
@@ -62,7 +63,13 @@ export function SiteHeader() {
 export function SiteFooter() {
   return (
     <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t border-hairline px-4 py-4 sm:px-5">
-      <Logo size={13} />
+      {/* The mark and the ask-AI row are one group, so the row stays bottom-left
+          beside the wordmark instead of drifting to the middle when the footer
+          wraps. `gap-y-3` is what separates them once it does. */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+        <Logo size={13} />
+        <AskAI />
+      </div>
       <nav
         aria-label="Footer"
         /* `*:` so every link gets the 24px hit area, including the one-character
