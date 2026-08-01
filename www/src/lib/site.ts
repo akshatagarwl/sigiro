@@ -222,7 +222,7 @@ drill_down_sql SELECT trace_id, duration, status_message
     owner: 'your coding agent',
     ours: false,
     say: 'Claude Code, Codex, Cursor, whichever one already has commit rights. This stage got solved first, which is why the gap sits upstream of it.',
-    cmd: 'claude "checkout times out since 9f2c1ab — here is the evidence"',
+    cmd: 'claude "checkout times out since 9f2c1ab"',
     out: `read   src/orders/upstream.ts
 edit   src/orders/upstream.ts   +4 −1
 test   42 passed
