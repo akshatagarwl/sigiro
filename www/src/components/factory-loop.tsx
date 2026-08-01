@@ -15,8 +15,8 @@ import { LOOP } from '@/lib/site';
  * session, and supplies the fallback. It is a server component for that middle
  * job: the terminal animates and so must be a client component, and Shiki must
  * not follow it into the browser. The same division as `Artifact` and
- * `ProofDemo` — highlight here, hand over markup. The scroll behaviour lives in
- * `components/terminal.tsx`, where a second section can reach it.
+ * `HowItWorks` — highlight here, hand over markup. The scroll behaviour lives in
+ * `components/terminal.tsx`, which both stepped sections share.
  */
 
 /**

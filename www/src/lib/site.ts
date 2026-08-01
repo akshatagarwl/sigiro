@@ -48,12 +48,20 @@ export const INSTALL = [
 ] as const;
 
 /**
- * Connect, ask, correlate — three shell sessions you step through.
+ * Connect, ask, correlate, prove — four shell sessions you step through.
  *
- * These were three numbered sections with one static code block each. A block
+ * These were four numbered sections with one static code block each. A block
  * shows the input and never the answer, so a reader had to take the answer on
  * trust. One stepped terminal shows both, in the register the loop section above
  * it already set: a shell you watch, not a picture of a payload.
+ *
+ * Prove replaced a bespoke staged demo that expanded a panel to reveal the query
+ * and then its rows. The session is a stronger proof for the same claim: you
+ * watch `jq` lift `drill_down_sql` out of the answer, redirect it to a file, and
+ * run that file. The query is not merely printed next to the answer — it is
+ * visibly taken from it. `operation_summaries[]` and `--sql-file` are both real
+ * (src/responses.rs, src/main.rs); an earlier draft of this step said
+ * `.operations[0]`, which does not exist.
  *
  * `run` is a list because a step is not always one command. Connect starts a
  * container, sets two variables, starts your app, and asks sigiro what it sees.
@@ -126,35 +134,49 @@ claude-haiku-4.6   31     2.1s`,
       },
     ],
   },
+  {
+    title: 'Prove',
+    say: 'Run the query again. Make the query wider. Show that the result is wrong.',
+    run: [
+      {
+        cmd: `curl -s localhost:9999/v1/investigate -d '{"service":"checkout"}' > answer.json`,
+        out: '',
+      },
+      {
+        cmd: 'jq .operation_summaries[0] answer.json',
+        out: `{
+  "operation": "POST /api/orders",
+  "errors": 246,
+  "error_rate": 0.19,
+  "drill_down_sql": "SELECT trace_id, duration, status_message FROM …"
+}`,
+      },
+      {
+        cmd: 'jq -r .operation_summaries[0].drill_down_sql answer.json > drill.sql',
+        out: '',
+      },
+      {
+        cmd: 'sigiro query --sql-file drill.sql',
+        out: `TRACE_ID       DURATION  STATUS_MESSAGE
+9f2c1ab4e77d      30012  context deadline exceeded
+3b81fe0a2c56      30004  context deadline exceeded
+c40d9e73aa18      29997  context deadline exceeded`,
+      },
+    ],
+  },
 ] as const;
 
 /**
- * The rest of the spine: one capability, one plain sentence, one artifact.
+ * What is left of the spine: one capability, one plain sentence, one artifact.
  *
- * It was 01–05. Connect, Ask and Correlate left for the stepped terminal above,
- * so what remains renumbered to 01–02 rather than starting at 04 — a numeral
- * that counts from four in a list of two is a numeral that lies.
+ * It was 01–05. Connect, Ask, Correlate and then Prove all left for the stepped
+ * terminal above, so Discover is the only one that stayed. It keeps a numeral
+ * because it is still the last beat of a sequence the reader has been walking,
+ * and dropping to a bare heading would read as a different kind of section.
  */
 export const SECTIONS = [
   {
     n: '01',
-    lead: 'Prove.',
-    rest: 'Each answer contains the query behind it.',
-    say: 'Run the query again. Make the query wider. Show that the result is wrong.',
-    artifact: {
-      title: 'POST /v1/investigate',
-      meta: 'one result, abridged',
-      lang: 'json' as const,
-      code: `{
-  "operation": "POST /api/orders",
-  "errors": 246,
-  "error_rate": 0.19,
-  "drill_down_sql": "SELECT trace_id, duration, status_message FROM sigiro_spans WHERE service_name = 'checkout' AND span_name = 'POST /api/orders' AND status_code = 2 ORDER BY duration DESC LIMIT 3"
-}`,
-    },
-  },
-  {
-    n: '02',
     lead: 'Discover.',
     rest: 'Your agent reads the API description without help.',
     say: 'One public document describes all of the endpoints.',
@@ -176,34 +198,6 @@ export const SECTIONS = [
     },
   },
 ] as const;
-
-/**
- * Stages two and three of the 01 Prove demo. Stage one is that section's own
- * `artifact` above — the finding — so the finding lives with every other artifact
- * on the page rather than being duplicated here.
- *
- * `sql` must stay character-identical to the finding's `drill_down_sql`, modulo
- * line breaks. The entire claim is that the query you are handed is the query you
- * run; if these two drift, the demo quietly disproves the section it illustrates.
- *
- * `rows` are the timeouts the Ask step in `HOW` already reported
- * (`"timeout": 246`), so a reader who scrolls down meets the same incident twice
- * and the numbers line up.
- */
-export const PROOF = {
-  sql: `SELECT trace_id, duration, status_message
-FROM sigiro_spans
-WHERE service_name = 'checkout'
-  AND span_name = 'POST /api/orders'
-  AND status_code = 2
-ORDER BY duration DESC
-LIMIT 3`,
-  rows: [
-    `{ "trace_id": "9f2c1ab4e77d", "duration": 30012, "status_message": "context deadline exceeded" }`,
-    `{ "trace_id": "3b81fe0a2c56", "duration": 30004, "status_message": "context deadline exceeded" }`,
-    `{ "trace_id": "c40d9e73aa18", "duration": 29997, "status_message": "context deadline exceeded" }`,
-  ],
-} as const;
 
 /**
  * The factory loop, and which stage belongs to whom.

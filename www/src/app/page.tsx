@@ -5,7 +5,6 @@ import { Faq } from '@/components/faq';
 import { FactoryLoop } from '@/components/factory-loop';
 import { HowItWorks } from '@/components/how-it-works';
 import { Integrations } from '@/components/integrations';
-import { ProofDemo } from '@/components/proof-demo';
 import { PRIMARY, SECONDARY } from '@/components/site/action';
 import { PageShell, SiteFooter, SiteHeader } from '@/components/site-chrome';
 import { FAQ, PROMISES, SECTIONS, SITE } from '@/lib/site';
@@ -98,13 +97,13 @@ export default function Home() {
               heading instead of three.
 
               Unnumbered, like the loop above it and for the same reason: the
-              frame already counts "2 of 3" in its caption, and a numeral outside
+              frame already counts "2 of 4" in its caption, and a numeral outside
               the frame would be a second sequence arguing with the first. */}
           <section aria-labelledby="how" className={SECTION}>
             <p className="label">how you use it</p>
             <h2 id="how" className={H2}>
-              Three steps.{' '}
-              <span className="text-ink-3">You connect, you ask, and you correlate.</span>
+              Four steps.{' '}
+              <span className="text-ink-3">You connect, ask, correlate, and prove.</span>
             </h2>
             <p className={LEDE}>
               You send OpenTelemetry to sigiro. You ask one question. Each step below is one shell
@@ -121,19 +120,12 @@ export default function Home() {
               </h2>
               <p className={LEDE}>{s.say}</p>
 
-              {/* Prove is the one section whose claim is a demonstration rather
-                  than a picture: "every answer carries the query behind it" is
-                  proved by running it, not by printing it. Same finding, staged. */}
-              {s.n === '01' ? (
-                <ProofDemo finding={s.artifact.code} lang={s.artifact.lang} />
-              ) : (
-                <Artifact
-                  title={s.artifact.title}
-                  meta={s.artifact.meta}
-                  code={s.artifact.code}
-                  lang={s.artifact.lang}
-                />
-              )}
+              <Artifact
+                title={s.artifact.title}
+                meta={s.artifact.meta}
+                code={s.artifact.code}
+                lang={s.artifact.lang}
+              />
             </section>
           ))}
 

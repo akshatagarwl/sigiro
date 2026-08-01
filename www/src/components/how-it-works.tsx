@@ -86,8 +86,8 @@ export async function HowItWorks() {
   );
 
   // No badge: every one of these is your own shell, and a chip that reads the
-  // same on all three steps is furniture rather than information. The caption
-  // already carries the step name and "N of 3".
+  // same on every step is furniture rather than information. The caption already
+  // carries the step name and the count.
   const steps: TerminalStep[] = HOW.map((s, i) => ({
     lines: sessions[i],
     label: s.title,
@@ -103,7 +103,7 @@ export async function HowItWorks() {
           longer than what it replaced — that is inherent to a pinned sequence. */}
       <SteppedTerminal
         steps={steps}
-        label="The three steps"
+        label="The four steps"
         track={`calc(100vh + ${steps.length * 30}vh)`}
         fallback={<Stacked sessions={sessions} />}
       />
