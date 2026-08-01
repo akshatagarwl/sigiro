@@ -6,6 +6,27 @@
     "nodejs_compat"
   ],
   "main": "vinext/server/fetch-handler",
+  // The apex. Until 2026-08-01 sigiro.com was a Cloudflare Pages project of the
+  // same name, still serving the pre-Next Vite SPA from four months earlier, and
+  // `bun run deploy` shipped a Worker that nothing pointed at.
+  //
+  // Zone routes, not `custom_domain: true`. A custom domain makes Cloudflare own
+  // the DNS record, so it refuses any hostname that already has one —
+  // `Hostname 'sigiro.com' already has externally managed DNS records`. Detaching
+  // the Pages project does NOT remove the records it created; they stay as
+  // proxied A records, and deleting them needs a DNS-edit credential this
+  // deploy path does not have. A route needs no such thing: it intercepts the
+  // hostname at the edge ahead of whatever those records point at, which is why
+  // the apex could come back without touching DNS at all.
+  //
+  // Both hostnames are listed because a route pattern matches one host.
+  // `workers_dev` stays on: adding routes silently disables it, and the
+  // workers.dev URL is the only way to reach a deploy whose routes are wrong.
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "sigiro.com/*", "zone_name": "sigiro.com" },
+    { "pattern": "www.sigiro.com/*", "zone_name": "sigiro.com" }
+  ],
   "assets": {
     "directory": "dist/client",
     "not_found_handling": "none",
