@@ -99,6 +99,7 @@ export async function FactoryLoop() {
       <SteppedTerminal
         steps={steps}
         label="The five stages"
+        heading={{ label: 'the loop', title: 'Five stages' }}
         fallback={<Stacked sessions={sessions} />}
       />
     </div>

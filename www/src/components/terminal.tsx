@@ -175,6 +175,7 @@ export function SteppedTerminal({
   steps,
   fallback,
   label,
+  heading,
   track,
 }: {
   steps: readonly TerminalStep[];
@@ -187,6 +188,20 @@ export function SteppedTerminal({
    * who could not see it. A caller cannot forget a required prop.
    */
   label: string;
+  /**
+   * The section's own label and headline, condensed to one line and pinned above
+   * the frame.
+   *
+   * The section `h2` scrolls away the moment this thing pins, which left the
+   * reader looking at a terminal with nothing on screen naming what it was for.
+   * The task list says which step; this says which section. It rides inside the
+   * sticky box, so it pins and unpins with the frame and no page-level bar is
+   * needed.
+   *
+   * `aria-hidden`, because it repeats the real `h2` that is still in the section
+   * above — a screen reader should meet that heading once, not twice.
+   */
+  heading?: { label: string; title: string };
   /**
    * Scroll distance the whole sequence occupies. Defaults to one viewport for
    * the pin plus 45vh of travel per step.
@@ -257,31 +272,46 @@ export function SteppedTerminal({
         className="relative"
         style={{ height: track ?? `calc(100vh + ${steps.length * 45}vh)` }}
       >
-        <div className="sticky top-0 flex h-screen flex-col justify-center gap-5 lg:grid lg:grid-cols-[190px_1fr] lg:items-center">
-          {/* The task list is the only thing on screen carrying the shape of the
-              argument once the section heading has scrolled away. */}
-          <TaskSteps steps={tasks} current={shown} label={label} />
-
-          <figure className="mat-panel w-full min-w-0 rounded-[14px] p-[5px]">
-            <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
-              {step.badge ? (
-                <span
-                  className={`mat-cap inline-flex h-[22px] shrink-0 items-center rounded-[6px] px-2 text-[11.5px] font-medium ${
-                    step.badgeStrong ? 'text-ink' : 'text-ink-3'
-                  }`}
-                >
-                  {step.badge}
-                </span>
-              ) : null}
+        <div className="sticky top-0 flex h-screen flex-col justify-center gap-5">
+          {/* The section's name, kept on screen for as long as the frame is
+              pinned. One line, so it reads as a bar rather than a block: the
+              terminal is already 477px of a 720px viewport and cannot spare a
+              heading's worth of height. */}
+          {heading ? (
+            <p aria-hidden className="flex items-center gap-2 px-1">
+              <span className="label">{heading.label}</span>
+              <span className="text-ink-3">·</span>
               <span className="text-[13px] font-medium tracking-[-0.01em] text-ink">
-                {step.label}
+                {heading.title}
               </span>
-              <span className="meta ml-auto shrink-0 text-ink-3">
-                {shown + 1} of {steps.length}
-              </span>
-            </figcaption>
+            </p>
+          ) : null}
 
-            {/* Clips both axes, and that is correct: `height` animates across the
+          <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[190px_1fr] lg:items-center">
+            {/* The task list says which step you are on; the heading above says
+                which section it belongs to. */}
+            <TaskSteps steps={tasks} current={shown} label={label} />
+
+            <figure className="mat-panel w-full min-w-0 rounded-[14px] p-[5px]">
+              <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
+                {step.badge ? (
+                  <span
+                    className={`mat-cap inline-flex h-[22px] shrink-0 items-center rounded-[6px] px-2 text-[11.5px] font-medium ${
+                      step.badgeStrong ? 'text-ink' : 'text-ink-3'
+                    }`}
+                  >
+                    {step.badge}
+                  </span>
+                ) : null}
+                <span className="text-[13px] font-medium tracking-[-0.01em] text-ink">
+                  {step.label}
+                </span>
+                <span className="meta ml-auto shrink-0 text-ink-3">
+                  {shown + 1} of {steps.length}
+                </span>
+              </figcaption>
+
+              {/* Clips both axes, and that is correct: `height` animates across the
                 handoff so the y axis must clip, and the x axis never overflows
                 here because `SkeletonSwap` inside is itself the scroll container.
                 At a 390px viewport this well is 324px while the widest transcript
@@ -295,46 +325,47 @@ export function SteppedTerminal({
                 case — so a keyboard user cannot reach the clipped end of a line.
                 The component is vendored verbatim under §1b, so the fix belongs
                 upstream or in the transcript width, not in a local patch. */}
-            <motion.div
-              className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3"
-              style={{ height }}
-            >
-              <motion.div style={{ opacity, y, filter }}>
-                <SkeletonSwap
-                  ready={ran}
-                  lines={frame.lines.length + 1}
-                  lineHeight={LINE}
-                  reserve={(frame.lines.length + 1) * LINE}
-                  className="font-mono text-[12.5px] leading-[22px] whitespace-pre"
-                >
-                  {/* One box per line, so the frame height stays integer. The
+              <motion.div
+                className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3"
+                style={{ height }}
+              >
+                <motion.div style={{ opacity, y, filter }}>
+                  <SkeletonSwap
+                    ready={ran}
+                    lines={frame.lines.length + 1}
+                    lineHeight={LINE}
+                    reserve={(frame.lines.length + 1) * LINE}
+                    className="font-mono text-[12.5px] leading-[22px] whitespace-pre"
+                  >
+                    {/* One box per line, so the frame height stays integer. The
                       `shiki` class is on the line rather than on the well: its
                       `span` rule forces a transparent background, which would
                       erase the block cursor below. */}
-                  {frame.lines.map((line, i) => (
-                    <div
-                      // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
-                      key={i}
-                      className="shiki"
-                      style={{ height: LINE }}
-                      // Shiki output, generated from literals in this repo.
-                      dangerouslySetInnerHTML={{ __html: line.html }}
-                    />
-                  ))}
-                  <div className="text-ink-3" style={{ height: LINE }}>
-                    {'$ '}
-                    <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
-                  </div>
-                </SkeletonSwap>
+                    {frame.lines.map((line, i) => (
+                      <div
+                        // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
+                        key={i}
+                        className="shiki"
+                        style={{ height: LINE }}
+                        // Shiki output, generated from literals in this repo.
+                        dangerouslySetInnerHTML={{ __html: line.html }}
+                      />
+                    ))}
+                    <div className="text-ink-3" style={{ height: LINE }}>
+                      {'$ '}
+                      <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
+                    </div>
+                  </SkeletonSwap>
+                </motion.div>
               </motion.div>
-            </motion.div>
 
-            {step.note ? (
-              <p className="mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed text-ink-2">
-                {step.note}
-              </p>
-            ) : null}
-          </figure>
+              {step.note ? (
+                <p className="mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed text-ink-2">
+                  {step.note}
+                </p>
+              ) : null}
+            </figure>
+          </div>
         </div>
       </div>
 

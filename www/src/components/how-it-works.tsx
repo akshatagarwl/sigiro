@@ -104,6 +104,7 @@ export async function HowItWorks() {
       <SteppedTerminal
         steps={steps}
         label="The four steps"
+        heading={{ label: 'how you use it', title: 'Four steps' }}
         track={`calc(100vh + ${steps.length * 30}vh)`}
         fallback={<Stacked sessions={sessions} />}
       />
