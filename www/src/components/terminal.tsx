@@ -10,6 +10,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SkeletonSwap } from '@/components/interior/skeleton-swap';
 import { TaskSteps } from '@/components/interior/task-steps';
+import type { SessionLine } from '@/lib/highlight';
 
 /**
  * One terminal per step, stepped by scroll, with a task list beside it.
@@ -43,15 +44,22 @@ import { TaskSteps } from '@/components/interior/task-steps';
  * - §5   the handoff uses the specified displacements — out at `y 6, blur(3px)`,
  *        in at `y 10, blur(6px)`.
  * - §3   no `rounded-full`, so no traffic-light chrome. This is the same
- *        `mat-well` cut into a `mat-panel` as every code block on the site.
+ *        `mat-well` cut into a `mat-panel` as every code block on the site —
+ *        and, since `highlightSession`, wearing the same Shiki colours. The
+ *        markup arrives already highlighted: this component is a client
+ *        component and Shiki is a server-side dependency, so what crosses is
+ *        one string of HTML per line, never a highlighter.
  * - §5h  a scroll-driven component needs no reduced-motion branch — every value
  *        resolves on the frame it is scrolled to. `fallback` covers no-JS only,
  *        and that is deliberate rather than an oversight.
  */
 
 export type TerminalStep = {
-  cmd: string;
-  out: string;
+  /**
+   * The session, one line per line, highlighted on the server by
+   * `highlightSession` — the `$ command` row first, then its output.
+   */
+  lines: readonly SessionLine[];
   /** Names the step in the task list and the caption — "Diagnose", "Connect". */
   label: string;
   /** Whose shell this is. Shown against the step once it is done. */
@@ -90,15 +98,12 @@ const HOLD = 0.72;
  */
 const RUN_MS = 300;
 
-type Line = { text: string; cmd: boolean };
-
 function plan(steps: readonly TerminalStep[]) {
-  return steps.map((s) => {
-    const lines: Line[] = [{ text: `$ ${s.cmd}`, cmd: true }];
-    for (const text of s.out.split('\n')) lines.push({ text, cmd: false });
+  return steps.map(({ lines }) => ({
+    lines,
     // A shell that has finished sits at a fresh prompt. One more row for it.
-    return { lines, height: (lines.length + 1) * LINE + PAD };
-  });
+    height: (lines.length + 1) * LINE + PAD,
+  }));
 }
 
 /** Where a scroll position falls: which step, and how far into its handoff. */
@@ -229,17 +234,21 @@ export function SteppedTerminal({
                   reserve={(frame.lines.length + 1) * LINE}
                   className="font-mono text-[12.5px] leading-[22px] whitespace-pre"
                 >
+                  {/* One box per line, so the frame height stays integer. The
+                      `shiki` class is on the line rather than on the well: its
+                      `span` rule forces a transparent background, which would
+                      erase the block cursor below. */}
                   {frame.lines.map((line, i) => (
                     <div
                       // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
                       key={i}
-                      className={line.cmd ? 'text-ink' : 'text-ink-2'}
+                      className="shiki"
                       style={{ height: LINE }}
-                    >
-                      {line.text}
-                    </div>
+                      // Shiki output, generated from literals in this repo.
+                      dangerouslySetInnerHTML={{ __html: line.html }}
+                    />
                   ))}
-                  <div className="text-ink" style={{ height: LINE }}>
+                  <div className="text-ink-3" style={{ height: LINE }}>
                     {'$ '}
                     <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
                   </div>

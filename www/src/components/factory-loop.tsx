@@ -1,4 +1,5 @@
 import { SteppedTerminal, type TerminalStep } from '@/components/terminal';
+import { highlightSession, type SessionLine } from '@/lib/highlight';
 import { LOOP } from '@/lib/site';
 
 /**
@@ -9,9 +10,12 @@ import { LOOP } from '@/lib/site';
  * visibly run something that is not sigiro, which is the argument the section
  * exists to make — it is watched rather than asserted.
  *
- * All this file does now is map `LOOP` onto the terminal's shape and supply the
- * fallback. The scroll behaviour lives in `components/terminal.tsx`, where a
- * second section can reach it.
+ * This file maps `LOOP` onto the terminal's shape, runs Shiki over each
+ * session, and supplies the fallback. It is a server component for that middle
+ * job: the terminal animates and so must be a client component, and Shiki must
+ * not follow it into the browser. The same division as `Artifact` and
+ * `ProofDemo` — highlight here, hand over markup. The scroll behaviour lives in
+ * `components/terminal.tsx`, where a second section can reach it.
  */
 
 /**
@@ -25,25 +29,18 @@ const SHORT_OWNER: Record<string, string> = {
   'your memory': 'memory',
 };
 
-const STEPS: TerminalStep[] = LOOP.map((s) => ({
-  cmd: s.cmd,
-  out: s.out,
-  label: s.title,
-  badge: s.owner,
-  badgeStrong: Boolean(s.ours),
-  badgeShort: SHORT_OWNER[s.owner] ?? s.owner,
-  note: s.say,
-}));
-
 /**
  * What reduced-motion and no-JS readers get: the same five sessions, printed in
  * full, with the prose each one belongs to. Nothing is behind an interaction
  * they cannot perform.
+ *
+ * The transcript is one `pre` rather than a row per line — a `pre` keeps the
+ * blank lines inside the output, which a stack of empty boxes would collapse.
  */
-function Stacked() {
+function Stacked({ sessions }: { sessions: readonly (readonly SessionLine[])[] }) {
   return (
     <ol className="mt-8">
-      {LOOP.map((s) => (
+      {LOOP.map((s, i) => (
         <li key={s.title} className="border-t border-hairline py-9 first:border-t-0">
           <p className="flex items-center gap-2.5">
             {/* Ink and depth, not accent: "this stage is ours" is a persistent
@@ -64,13 +61,13 @@ function Stacked() {
               your shell
             </figcaption>
             <div className="mat-well scroll-inset overflow-x-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px]">
-              <p className="flex gap-2 whitespace-pre text-ink">
-                <span aria-hidden className="shrink-0 text-ink-3">
-                  $
-                </span>
-                <span>{s.cmd}</span>
-              </p>
-              <pre className="whitespace-pre text-ink-2">{s.out}</pre>
+              <pre
+                className="shiki whitespace-pre"
+                // Shiki output, generated from literals in this repo.
+                dangerouslySetInnerHTML={{
+                  __html: sessions[i].map((line) => line.html).join('\n'),
+                }}
+              />
             </div>
           </figure>
         </li>
@@ -79,10 +76,21 @@ function Stacked() {
   );
 }
 
-export function FactoryLoop() {
+export async function FactoryLoop() {
+  const sessions = await Promise.all(LOOP.map((s) => highlightSession(s.cmd, s.out)));
+
+  const steps: TerminalStep[] = LOOP.map((s, i) => ({
+    lines: sessions[i],
+    label: s.title,
+    badge: s.owner,
+    badgeStrong: Boolean(s.ours),
+    badgeShort: SHORT_OWNER[s.owner] ?? s.owner,
+    note: s.say,
+  }));
+
   return (
     <div className="mt-8">
-      <SteppedTerminal steps={STEPS} fallback={<Stacked />} />
+      <SteppedTerminal steps={steps} fallback={<Stacked sessions={sessions} />} />
     </div>
   );
 }

@@ -124,12 +124,16 @@ GROUP BY model ORDER BY slowest DESC`,
       title: 'GET /openapi.json',
       meta: 'public, no key',
       lang: 'json' as const,
+      /* The real path set, checked against www/openapi.json. This used to list
+         /v1/health, which the spec does not publish, and omitted /v1/anomalies,
+         which it does — a section whose whole claim is "the document describes
+         every endpoint" was printing a document that did neither. */
       code: `[
+  "/v1/anomalies",
   "/v1/investigate",
   "/v1/query",
   "/v1/services",
-  "/v1/traces/{trace_id}",
-  "/v1/health"
+  "/v1/traces/{trace_id}"
 ]`,
     },
   },
