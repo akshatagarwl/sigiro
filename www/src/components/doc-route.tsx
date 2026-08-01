@@ -10,16 +10,31 @@ import { jsonLd } from '@/lib/json-ld';
 type DocPage = NonNullable<ReturnType<typeof source.getPage>>;
 
 /**
+ * The text of a fence, read back off the element tree Shiki produced.
+ *
+ * By the time MDX renders a fence the code is a tree of coloured spans, not a
+ * string — and the copy cap needs a string. Walking the tree gets the exact text
+ * the reader sees, and it does it on the server, so nothing has to read the DOM
+ * back out of the rendered page afterwards.
+ */
+function textOf(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children);
+  return '';
+}
+
+/**
  * Every fence in the docs, rendered in the same shell as the landing page's
  * artifacts — one code block for the whole site, so a `docker run` line looks the
  * same whichever page it is on. Replaces fumadocs' own block, which has its own
  * chrome, its own copy affordance and no language label.
  *
- * The <pre> is wrapped, never replaced: it carries Shiki's inline theme colours,
- * and re-emitting the children as text collapses the whitespace. The language
- * comes off the <code> class that `addLanguageClass` puts there (see
- * source.config.ts); the clipboard text comes off the rendered <pre>, because by
- * this point the code is a tree of coloured spans and not a string.
+ * The <pre> is wrapped, never replaced: it carries Shiki's per-token theme
+ * variables, and re-emitting the children as text collapses the whitespace. The
+ * language comes off the <code> class that `addLanguageClass` puts there (see
+ * source.config.ts).
  */
 function MdxPre({
   children,
@@ -34,7 +49,7 @@ function MdxPre({
   const lang = /language-([\w-]+)/.exec(code?.props.className ?? '')?.[1];
 
   return (
-    <CodeBlock lang={lang} title={title}>
+    <CodeBlock lang={lang} title={title} value={textOf(children)}>
       <pre {...props}>{children as ReactNode}</pre>
     </CodeBlock>
   );
@@ -68,7 +83,7 @@ export function DocRoute({ page }: { page: DocPage }) {
           the prose paragraph's own top margin left a ~52px hole under every doc
           title. Body size, not a lede size: on a generated reference page this is
           the operation's whole description and can run to a full paragraph. */}
-      <DocsDescription className="text-muted-ink mb-1 text-[0.875rem]">
+      <DocsDescription className="mb-1 text-[13.5px] text-ink-2">
         {page.data.description}
       </DocsDescription>
       <DocsBody>

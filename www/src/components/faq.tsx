@@ -1,32 +1,27 @@
-'use client';
-
-import { Accordion } from '@base-ui/react/accordion';
+import { Accordion } from '@/components/interior/accordion';
 import { FAQ } from '@/lib/site';
 
 /**
- * Base UI Accordion. `hiddenUntilFound` renders collapsed panels with
- * `hidden="until-found"`, so every answer stays in the served HTML — findable by
- * Ctrl+F and by a crawler, which is what the FAQPage JSON-LD needs to be
- * honoured. Accordion.Header renders the heading; never nest another inside it.
+ * `interior/accordion`, one panel open at a time.
+ *
+ * Every answer is in the served HTML whatever its panel is doing — a closed panel
+ * is a box animated to height 0 and marked `inert`, not a branch that was never
+ * rendered. That is what the FAQPage JSON-LD on the page needs to be honoured:
+ * schema whose text does not appear in the document gets ignored.
+ *
+ * `headingLevel` is 3 because the section above this renders the `h2`.
  */
 export function Faq() {
   return (
-    <Accordion.Root hiddenUntilFound className="mt-6 border-t border-line">
-      {FAQ.map((item, i) => (
-        <Accordion.Item key={item.q} value={i} className="border-b border-line">
-          <Accordion.Header>
-            <Accordion.Trigger className="flex w-full cursor-pointer items-start justify-between gap-4 py-3.5 text-left font-medium text-strong">
-              {item.q}
-              <span aria-hidden className="mt-0.5 shrink-0 font-mono text-faint">
-                +
-              </span>
-            </Accordion.Trigger>
-          </Accordion.Header>
-          <Accordion.Panel>
-            <p className="max-w-[40rem] pb-4 text-sm text-muted-ink">{item.a}</p>
-          </Accordion.Panel>
-        </Accordion.Item>
-      ))}
-    </Accordion.Root>
+    <Accordion
+      className="mt-6"
+      headingLevel={3}
+      maxPanelHeight={320}
+      items={FAQ.map((item, i) => ({
+        id: `faq-${i}`,
+        title: item.q,
+        content: item.a,
+      }))}
+    />
   );
 }

@@ -1,104 +1,80 @@
 import Link from 'next/link';
+import { COMPACT } from '@/components/site/action';
+import { Logo } from '@/components/site/logo';
+import { ThemeToggle } from '@/components/site/theme-toggle';
 import { NAV, SITE, SOCIAL } from '@/lib/site';
 
 /**
  * One header and one footer for the whole site. The landing page and the docs
  * import these rather than each styling their own — that is the only way they
  * stay cohesive as either one changes.
- */
-
-/**
- * The changepoint glyph: a flat baseline that steps up. With `pulse`, a bright
- * segment travels the whole path — a signal passing through the mark, which is
- * the product's subject rather than decoration.
  *
- * Two copies of the same path: a faint base, and a dashed overlay whose offset
- * animates. `pathLength="100"` normalises the geometry so the dash lengths are
- * percentages and stay correct if the path ever changes.
+ * Both are compartments of the page panel, so they are divided from the content
+ * with a hairline and never with a material: a border divides, a material lifts,
+ * and these are neither above nor below what they sit beside.
+ *
+ * The header is `h-12`. That is not a spacing choice — it is the height the docs
+ * sidebar's own header matches, which is what makes the two top edges line up.
  */
-function Mark({ size = 18, pulse = false }: { size?: number; pulse?: boolean }) {
-  const d = 'M5 24h7V10h15';
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 32 32"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d={d} className={pulse ? 'opacity-25' : undefined} />
-      {pulse ? <path d={d} pathLength="100" className="mark-trace" /> : null}
-    </svg>
-  );
-}
-
 export function SiteHeader() {
   return (
-    /* `gap-6` and not `justify-between` alone: with only the latter, a narrow
-       viewport shrinks the free space to zero and the wordmark ends up touching
-       the first nav link. */
-    <header className="flex items-center justify-between gap-6 py-5">
-      <Link
-        href="/"
-        className="text-strong flex shrink-0 items-center gap-2 font-semibold tracking-tight"
-      >
-        <Mark pulse />
-        {SITE.name}
+    <header className="flex h-12 shrink-0 items-center gap-4 border-b border-hairline px-4 sm:px-5">
+      <Link href="/" aria-label={`${SITE.name} home`} className="shrink-0 rounded-[6px]">
+        <Logo />
       </Link>
-      <nav aria-label="Main" className="flex items-center gap-5 text-[0.8125rem]">
+
+      <nav aria-label="Main" className="flex shrink-0 items-center gap-1">
         {NAV.map((item) => (
           <Link
             key={item.href}
             href={item.href}
             prefetch={false}
-            /* Padded, not taller: the hit area reaches the 24px minimum while the
-               text stays on the same baseline. `x` in the footer measured 7x18. */
-            className="text-muted-ink hover:text-strong -my-1 inline-flex min-w-6 justify-center py-1"
+            /* Padded rather than taller, so the 24px hit area is reached without
+               moving the text off the header's baseline. */
+            className="press inline-flex h-7 items-center rounded-[6px] px-2 text-[12.5px] text-ink-3 hover:text-ink"
           >
             {item.label}
           </Link>
         ))}
-        <Link
-          href="/docs/quickstart"
-          prefetch={false}
-          className="border-line-strong text-strong rounded-lg border px-3 py-1.5 font-medium"
-        >
+      </nav>
+
+      <span className="flex-1" />
+
+      <ThemeToggle />
+
+      {/* Below sm the hero's own action is one screen away at most, and this row
+          has no width to spare for a second copy of it.
+
+          The wrapper carries the breakpoint, not the link: COMPACT already sets
+          `inline-flex`, and two unprefixed display utilities on one element are
+          decided by their order in the generated stylesheet rather than by which
+          one you wrote last — so `hidden` lost and the button showed on a phone
+          anyway. */}
+      <div className="hidden sm:block">
+        <Link href="/docs/quickstart" prefetch={false} className={COMPACT}>
           Get started
         </Link>
-      </nav>
+      </div>
     </header>
   );
 }
 
 export function SiteFooter() {
   return (
-    <footer className="border-line flex flex-wrap items-end justify-between gap-6 border-t py-10">
-      <div>
-        <p className="text-strong font-semibold tracking-tight">{SITE.tagline}</p>
-        <Link
-          href="/docs/quickstart"
-          prefetch={false}
-          className="bg-accent text-on-accent mt-3.5 inline-block rounded-lg px-3.5 py-2 text-[0.8125rem] font-medium"
-        >
-          Get started
-        </Link>
-      </div>
+    <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t border-hairline px-4 py-4 sm:px-5">
+      <Logo size={13} />
       <nav
         aria-label="Footer"
-        /* `*:` so every link in here gets the 24px hit area, including the one-
-           character ones, without repeating the class three times. */
-        className="flex flex-wrap gap-4 font-mono text-[0.6875rem] *:-my-1 *:inline-flex *:min-w-6 *:items-center *:py-1"
+        /* `*:` so every link gets the 24px hit area, including the one-character
+           ones, without repeating the class five times. */
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 *:inline-flex *:min-w-6 *:items-center *:rounded-[5px]"
       >
         {NAV.map((item) => (
           <Link
             key={item.href}
             href={item.href}
             prefetch={false}
-            className="text-faint hover:text-strong"
+            className="meta text-ink-3 hover:text-ink"
           >
             {item.label.toLowerCase()}
           </Link>
@@ -108,17 +84,38 @@ export function SiteFooter() {
             key={item.href}
             href={item.href}
             rel="me noopener"
-            className="text-faint hover:text-strong"
+            className="meta text-ink-3 hover:text-ink"
           >
             {item.label.toLowerCase()}
           </a>
         ))}
         {/* Plain anchor on purpose: /llms.txt is a text/plain route handler, and a
             client-side navigation would try to render it as a React page. */}
-        <a href="/llms.txt" className="text-faint hover:text-strong">
+        <a href="/llms.txt" className="meta text-ink-3 hover:text-ink">
           llms.txt
         </a>
       </nav>
     </footer>
+  );
+}
+
+/**
+ * Every page is a panel floating on the bezel with a gutter around it. The gutter
+ * is not spacing — it is the frame, and it is what tells you the panel is an
+ * object rather than the page itself.
+ *
+ * `overflow-clip` and not `overflow-hidden`: both clip to the 20px radius, but
+ * `hidden` makes this box a scroll container, and then every `position: sticky`
+ * inside it resolves against a box that cannot scroll and silently stops
+ * sticking. `clip` is not a scroll container, so the viewport stays the
+ * scrollport.
+ */
+export function PageShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex flex-1 p-3 sm:p-5">
+      <div className="mat-panel flex min-w-0 flex-1 flex-col overflow-clip rounded-[20px]">
+        {children}
+      </div>
+    </div>
   );
 }

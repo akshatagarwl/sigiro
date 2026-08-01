@@ -1,31 +1,32 @@
-import type { Metadata } from 'next';
-import { Instrument_Sans, JetBrains_Mono } from 'next/font/google';
+import type { Metadata, Viewport } from 'next';
+import { Geist, Geist_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { SITE } from '@/lib/site';
 import './globals.css';
 import { jsonLd } from '@/lib/json-ld';
 
 /**
- * The pairing polylane uses: Instrument Sans for everything read, JetBrains Mono
- * for everything executed. Both self-hosted by vinext — no request to Google.
+ * The pairing the design language is written for: Geist for everything read,
+ * Geist Mono for everything executed. Both self-hosted by vinext — no request to
+ * Google.
  *
  * Do NOT set `preload: false` to buy back a performance point: under vinext that
  * silently stops self-hosting and loads the woff2 from fonts.gstatic.com, which
  * sends every visitor's IP to Google. The score it appears to win is just the
  * third party dropping off the measured critical path.
  */
-const sans = Instrument_Sans({
+const sans = Geist({
   subsets: ['latin'],
   weight: ['400', '500', '600'],
   display: 'swap',
-  variable: '--font-instrument-sans',
+  variable: '--font-geist-sans',
 });
 
-const mono = JetBrains_Mono({
+const mono = Geist_Mono({
   subsets: ['latin'],
   weight: '400',
   display: 'swap',
-  variable: '--font-jetbrains-mono',
+  variable: '--font-geist-mono',
 });
 
 export const metadata: Metadata = {
@@ -53,6 +54,17 @@ export const metadata: Metadata = {
   },
   robots: { index: true, follow: true },
 };
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#efeeea' },
+    { media: '(prefers-color-scheme: dark)', color: '#141312' },
+  ],
+};
+
+/** Sets the theme class before first paint, so there is no flash of the wrong
+ *  material. Inline and blocking on purpose — anything async is a flash. */
+const themeScript = `(function(){try{var s=localStorage.getItem("sigiro-theme");var d=s?s==="dark":matchMedia("(prefers-color-scheme:dark)").matches;if(d)document.documentElement.classList.add("dark")}catch(e){}})()`;
 
 /** One @graph, cross-referenced, so an answer engine reads one entity not three. */
 const graph = {
@@ -97,11 +109,14 @@ const graph = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`h-full ${sans.variable} ${mono.variable}`}>
-      <body className="min-h-full bg-bg font-sans text-body antialiased">
+    <html lang="en" suppressHydrationWarning className={`h-full ${sans.variable} ${mono.variable}`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="flex min-h-full flex-col font-sans text-ink-2 antialiased">
         <a
           href="#main"
-          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:bg-strong focus:px-3 focus:py-2 focus:text-on-accent"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-[9px] focus:bg-ink focus:px-3 focus:py-2 focus:text-panel"
         >
           Skip to content
         </a>

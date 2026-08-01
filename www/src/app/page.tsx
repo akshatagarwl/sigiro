@@ -4,8 +4,8 @@ import { Artifact } from '@/components/artifact';
 import { Faq } from '@/components/faq';
 import { FactoryLoop } from '@/components/factory-loop';
 import { Integrations } from '@/components/integrations';
-import { Button } from '@/components/ui/button';
-import { SiteFooter, SiteHeader } from '@/components/site-chrome';
+import { PRIMARY, SECONDARY } from '@/components/site/action';
+import { PageShell, SiteFooter, SiteHeader } from '@/components/site-chrome';
 import { FAQ, PROMISES, SECTIONS, SITE } from '@/lib/site';
 import { jsonLd } from '@/lib/json-ld';
 
@@ -29,54 +29,61 @@ const faqSchema = {
   })),
 };
 
-const NUM = 'font-mono text-[0.6875rem] tracking-[0.2em] text-faint';
-const H2 =
-  'mt-2.5 max-w-[34rem] text-[1.375rem] leading-[1.35] font-semibold tracking-[-0.025em] text-strong';
-const SAY = 'mt-2.5 max-w-[36rem] text-muted-ink';
+/* The type ramp, from the design language and not invented here: 27px medium at
+   -0.03em for a page or section title, 15px for a lede, 13.5px for body.
+   Headings are medium, never bold — the negative tracking does the work that
+   weight would do badly. */
+const H2 = 'mt-3 max-w-[34ch] text-[27px] leading-[1.2] font-medium tracking-[-0.03em] text-ink';
+const LEDE = 'mt-3 max-w-[62ch] text-[15px] leading-relaxed text-ink-2';
+const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
 
 export default function Home() {
   return (
     <>
-      <div className="mx-auto max-w-[60rem] px-6">
+      <PageShell>
         <SiteHeader />
 
-        <main id="main">
+        {/* The measure. The panel is as wide as the window, and a 1400px column
+            of 13.5px prose is not a reading measure — so the document inside it
+            is centred and capped, and the section hairlines span the document
+            rather than the panel. */}
+        <main id="main" className="mx-auto w-full min-w-0 max-w-[996px]">
           {/* Hero: text LCP, no image. */}
-          <section className="max-w-[46rem] py-20">
-            <h1 className="text-[clamp(2.1rem,5.2vw,3.25rem)] leading-[1.05] font-semibold tracking-[-0.035em] text-balance text-strong">
+          <section className="px-4 py-16 sm:px-8 sm:py-24 lg:px-12">
+            <h1 className="max-w-[24ch] text-[clamp(30px,7.2vw,32px)] leading-[1.08] font-medium tracking-[-0.04em] text-balance text-ink sm:text-[clamp(32px,5.6vw,52px)]">
               {SITE.tagline}
             </h1>
-            <p className="mt-4 max-w-[38rem] text-[1.0625rem] text-muted-ink">{SITE.description}</p>
-            {/* Buttons, not a snippet. `@kibo-ui/snippet` renders
-                `<pre className="truncate">`, so a long command is cut off — and the
-                install command belongs in 01 Connect, where the code block already
-                scrolls and carries its own copy button. */}
-            <div className="mt-8 flex flex-wrap items-center gap-2.5">
-              <Button size="lg" render={<Link href="/docs/quickstart" prefetch={false} />}>
+            <p className="mt-6 max-w-[52ch] text-[13.5px] leading-[1.7] text-ink-2 sm:mt-8 sm:text-[15px]">
+              {SITE.description}
+            </p>
+            <div className="mt-8 flex flex-wrap items-center gap-3 sm:mt-10">
+              <Link href="/docs/quickstart" prefetch={false} className={PRIMARY}>
                 Get started
-              </Button>
-              <Button size="lg" variant="outline" render={<Link href="/docs" prefetch={false} />}>
+              </Link>
+              <Link href="/docs" prefetch={false} className={SECONDARY}>
                 Read the docs
-              </Button>
+              </Link>
             </div>
-            <p className="mt-5 font-mono text-[0.6875rem] text-faint">
-              <span className="mr-1.5 inline-block size-[5px] rounded-full bg-strong align-[1px]" />
+            {/* A cell, not a dot: there are no pills in this palette, and 5px at
+                a 1.5px radius is the language's own unit. */}
+            <p className="meta mt-6 flex items-center gap-2 text-ink-3">
+              <span aria-hidden className="size-[5px] rounded-[1.5px] bg-accent" />
               Self-hosted and free. Hosted beta rolling out.
             </p>
           </section>
 
-          {/* Where this fits, before how to use it. A reader who has an agent
-              writing code already knows the fix stage is solved; the question worth
+          {/* Where this fits, before how to use it. A reader whose agent already
+              writes code knows the fix stage is solved; the question worth
               answering first is which stage is still missing. */}
-          <section aria-labelledby="loop" className="border-t border-line py-12">
-            <p className={NUM}>the loop</p>
+          <section aria-labelledby="loop" className={SECTION}>
+            <p className="label">the loop</p>
             <h2 id="loop" className={H2}>
               Five stages.{' '}
-              <span className="font-normal text-faint">
+              <span className="text-ink-3">
                 You do not have a factory until every one is covered.
               </span>
             </h2>
-            <p className="mt-4 max-w-[38rem] text-[0.9375rem] text-body">
+            <p className={LEDE}>
               Detect, diagnose, fix, verify, learn. The fix stage got solved first and loudest,
               which is why the loop still breaks upstream of it: an agent that can write the patch
               has no way to be told what broke, or to find out whether its patch worked. sigiro is
@@ -86,12 +93,12 @@ export default function Home() {
           </section>
 
           {SECTIONS.map((s) => (
-            <section key={s.n} aria-labelledby={`s-${s.n}`} className="border-t border-line py-12">
-              <p className={NUM}>{s.n}</p>
+            <section key={s.n} aria-labelledby={`s-${s.n}`} className={SECTION}>
+              <p className="meta text-ink-3">{s.n}</p>
               <h2 id={`s-${s.n}`} className={H2}>
-                {s.lead} <span className="font-normal text-faint">{s.rest}</span>
+                {s.lead} <span className="text-ink-3">{s.rest}</span>
               </h2>
-              <p className={SAY}>{s.say}</p>
+              <p className={LEDE}>{s.say}</p>
 
               {s.artifact ? (
                 <Artifact
@@ -101,13 +108,16 @@ export default function Home() {
                   lang={s.artifact.lang}
                 />
               ) : (
-                <dl className="mt-6 grid gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-3">
+                /* Three rows cut into the panel. `gap-px` on a tinted parent is a
+                   border faking a compartment; three wells with a real gap
+                   between them is the material saying it. */
+                <dl className="mt-6 grid gap-2.5 sm:grid-cols-3">
                   {PROMISES.map((p) => (
-                    <div key={p.title} className="bg-card p-4">
-                      <dt className="text-[0.8125rem] font-semibold tracking-tight text-strong">
+                    <div key={p.title} className="mat-well rounded-[11px] p-3.5">
+                      <dt className="text-[13px] font-medium tracking-[-0.01em] text-ink">
                         {p.title}
                       </dt>
-                      <dd className="mt-1.5 text-[0.8125rem] text-muted-ink">{p.body}</dd>
+                      <dd className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">{p.body}</dd>
                     </div>
                   ))}
                 </dl>
@@ -115,38 +125,33 @@ export default function Home() {
             </section>
           ))}
 
-          <section aria-labelledby="runs-on" className="border-t border-line py-12">
-            <p className={NUM}>06</p>
+          <section aria-labelledby="runs-on" className={SECTION}>
+            <p className="meta text-ink-3">06</p>
             <h2 id="runs-on" className={H2}>
               No migration.{' '}
-              <span className="font-normal text-faint">
-                sigiro plugs into what you already run.
-              </span>
+              <span className="text-ink-3">sigiro plugs into what you already run.</span>
             </h2>
             <Integrations />
           </section>
 
-          <section aria-labelledby="itself" className="border-t border-line py-12">
-            <p className={NUM}>07</p>
+          <section aria-labelledby="itself" className={SECTION}>
+            <p className="meta text-ink-3">07</p>
             <h2 id="itself" className={H2}>
               It watches itself.{' '}
-              <span className="font-normal text-faint">
+              <span className="text-ink-3">
                 A pipeline blind to its own failures is not observability.
               </span>
             </h2>
-            <p className={SAY}>
+            <p className={LEDE}>
               sigiro emits telemetry for every ingest and every flush it performs, into itself. That
               is how a stalled writer, a leaked connection and a dropped channel were each caught —
               rather than surfacing days later as data that had quietly stopped arriving.
             </p>
           </section>
 
-          <section aria-labelledby="faq" className="border-t border-line py-12">
-            <p className={NUM}>FAQ</p>
-            <h2
-              id="faq"
-              className="mt-2.5 text-[1.375rem] font-semibold tracking-[-0.025em] text-strong"
-            >
+          <section aria-labelledby="faq" className={SECTION}>
+            <p className="label">faq</p>
+            <h2 id="faq" className={H2}>
               Questions.
             </h2>
             <Faq />
@@ -154,7 +159,7 @@ export default function Home() {
         </main>
 
         <SiteFooter />
-      </div>
+      </PageShell>
 
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(faqSchema) }} />
     </>

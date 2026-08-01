@@ -5,6 +5,7 @@ import ts from 'shiki/langs/typescript.mjs';
 import yaml from 'shiki/langs/yaml.mjs';
 import json from 'shiki/langs/json.mjs';
 import sql from 'shiki/langs/sql.mjs';
+import githubDark from 'shiki/themes/github-dark-default.mjs';
 import githubLight from 'shiki/themes/github-light-default.mjs';
 
 export type Lang = 'json' | 'sql' | 'bash' | 'typescript' | 'yaml';
@@ -24,25 +25,33 @@ export type Lang = 'json' | 'sql' | 'bash' | 'typescript' | 'yaml';
  * per request.
  */
 const highlighter = createHighlighterCore({
-  themes: [githubLight],
+  themes: [githubLight, githubDark],
   langs: [json, sql, bash, ts, yaml],
   engine: createJavaScriptRegexEngine(),
 });
 
 /**
- * Two of the theme's token colours land just under AA at our code size — the
- * comment grey at 4.0:1 and the keyword red at 4.49:1 against 4.5 required.
+ * Two of the light theme's token colours land just under AA at our code size —
+ * the comment grey at 4.0:1 and the keyword red at 4.49:1 against 4.5 required.
  * `colorReplacements` is Shiki's own hook for this, so the theme is adjusted
  * rather than the output patched afterwards. Also used by the docs, via
  * source.config.ts.
  */
 export const COLOR_REPLACEMENTS = { '#6e7781': '#5a6169', '#cf222e': '#b3121f' };
 
+/**
+ * Two themes and `defaultColor: false`, so Shiki writes each token's colour as a
+ * `--shiki-light` / `--shiki-dark` pair instead of an inline `color`. globals.css
+ * reads whichever side matches the material the block is cut into — with a single
+ * theme the colour is inline, wins over any stylesheet, and a dark well ends up
+ * wearing light-mode syntax.
+ */
 export async function highlight(code: string, lang: Lang): Promise<string> {
   const shiki = await highlighter;
   return shiki.codeToHtml(code, {
     lang,
-    theme: 'github-light-default',
+    themes: { light: 'github-light-default', dark: 'github-dark-default' },
+    defaultColor: false,
     colorReplacements: COLOR_REPLACEMENTS,
   });
 }

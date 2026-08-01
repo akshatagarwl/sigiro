@@ -1,107 +1,325 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
-/* Palette taken from polylane.com. Achromatic on purpose: the accent is
-   near-black, every border is an alpha-black hairline, and the only visual
-   interest on the page comes from the artifacts sigiro returns. */
-@theme {
-  --color-bg: #fafafa;
-  --color-surface: #00000008;
-  --color-surface-2: #0000000f;
-  --color-line: #0000001f;
-  --color-line-strong: #0000003d;
-  --color-strong: #0a0a0a;
-  --color-body: #404040;
-  --color-muted-ink: #525252;
-  /* #737373 was 4.54:1 on the page ground and 3.98:1 on surface-2 — passing by
-     0.04 and failing on any tint. This clears 5:1 everywhere it is used. */
-  --color-faint: #6b6b6b;
-  --color-ghost: #a3a3a3;
-  --color-accent: #171717;
-  --color-on-accent: #ffffff;
-  --color-code-bg: #f4f4f3;
-  /* The one chromatic token, and it earns it: it marks the flow through the
-     factory loop and nothing else. 5.1:1 on the page ground, so it can carry the
-     small mono labels as well as the lines. */
-  --color-flow: #b45309;
-  --color-flow-tint: #b453090f;
+@custom-variant dark (&:where(.dark, .dark *));
 
-  /* Aliases the registry components (shadcn / kibo-ui / reui) are written
-     against. Add new ones here, never by editing a vendored component. */
-  --color-background: var(--color-bg);
-  --color-foreground: var(--color-strong);
-  --color-card: #ffffff;
-  --color-card-foreground: var(--color-strong);
-  --color-primary: var(--color-accent);
-  --color-primary-foreground: var(--color-on-accent);
-  --color-secondary: var(--color-surface-2);
-  --color-secondary-foreground: var(--color-strong);
-  --color-muted: var(--color-surface-2);
-  --color-muted-foreground: var(--color-faint);
-  --color-accent-foreground: var(--color-on-accent);
-  --color-destructive: #b4231b;
-  --color-border: var(--color-line);
-  --color-input: var(--color-line-strong);
-  --color-ring: var(--color-line-strong);
+/* ─────────────────────────────────────────────────────────────
+   The interior.dev design language, adopted whole.
+   https://github.com/ddoemonn/interior/blob/main/DESIGN.md
 
-  --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+   Everything on screen is one of three materials:
+     bezel  — the frame things sit in      (the page)
+     panel  — the lifted card              (where content lives)
+     well   — the recessed slot            (inputs, code, previews)
+
+   Depth is real: a well is cut into the surface, a panel is lifted
+   out of it, a cap has a bottom lip you could press. A plain border
+   never carries elevation — use `border-hairline` when you are
+   dividing one compartment from another, and a material when you
+   mean one thing is above or below another.
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  --bezel: #efeeea;
+  --panel: #ffffff;
+  --well: #f6f6f4;
+  --sub: #fafafa;
+
+  --hairline: rgba(27, 27, 25, 0.17);
+  --hairline-strong: rgba(27, 27, 25, 0.3);
+
+  --ink: #1b1b19;
+  --ink-2: #46463f;
+  --ink-3: #6e6e66;
+
+  --accent: #4568ff;
+  --accent-soft: #edf1ff;
+  --moss: #3d7a4e;
+  --flag: #c0442f;
+
+  /* rgba(28,25,23,·) is the ink shadow, never a neutral black: a black shadow
+     on a warm surface reads as dirt. */
+  --shadow-float: 0 28px 56px -24px rgba(24, 22, 20, 0.45), 0 0 0 1px rgba(28, 25, 23, 0.06);
+  --shadow-lift:
+    0 1px 2px rgba(28, 25, 23, 0.06), 0 4px 10px -8px rgba(28, 25, 23, 0.45),
+    0 0 0 1px rgba(28, 25, 23, 0.08);
+  --shadow-well: inset 0 1px 2px rgba(28, 25, 23, 0.07), inset 0 0 0 1px rgba(28, 25, 23, 0.06);
+  --shadow-cap: 0 1.5px 0 rgba(28, 25, 23, 0.08), inset 0 0 0 1px rgba(28, 25, 23, 0.12);
+  --shadow-row: inset 0 0 0 1px rgba(28, 25, 23, 0.07), 0 1px 2px rgba(28, 25, 23, 0.05);
 }
 
+.dark {
+  --bezel: #141312;
+  --panel: #1d1d1a;
+  --well: #252522;
+  --sub: #1a1a17;
+
+  --hairline: rgba(255, 255, 255, 0.16);
+  --hairline-strong: rgba(255, 255, 255, 0.28);
+
+  --ink: #f3f3ef;
+  --ink-2: #c2c2ba;
+  --ink-3: #93938b;
+
+  --accent: #93b0ff;
+  --accent-soft: rgba(147, 176, 255, 0.14);
+  --moss: #5bd79c;
+  --flag: #f5897f;
+
+  /* Dark mode uses plain black: there a shadow is an absence of light rather
+     than a tint. `mat-panel` and `mat-cap` also carry a white top-edge
+     highlight — that top light is what makes a dark surface read as lifted
+     rather than as a hole. */
+  --shadow-float: 0 28px 56px -22px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-lift:
+    0 1px 6px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-well: inset 0 1px 2px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-cap:
+    0 1.5px 0 rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  --shadow-row: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+@theme inline {
+  --color-bezel: var(--bezel);
+  --color-panel: var(--panel);
+  --color-well: var(--well);
+  --color-sub: var(--sub);
+  --color-hairline: var(--hairline);
+  --color-hairline-strong: var(--hairline-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-moss: var(--moss);
+  --color-flag: var(--flag);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--bezel);
+  color: var(--ink);
+  /* 13.5px regular, relaxed leading, is the body of this language. */
+  font-size: 13.5px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* ── the three materials ───────────────────────────────────── */
+
+/* lifted out of the bezel */
+.mat-panel {
+  background: var(--panel);
+  box-shadow: var(--shadow-lift);
+}
+
+/* lifted far out — floating over everything */
+.mat-float {
+  background: var(--panel);
+  box-shadow: var(--shadow-float);
+}
+
+/* cut into the panel */
+.mat-well {
+  background: var(--well);
+  box-shadow: var(--shadow-well);
+}
+
+/* a key you could press: bottom lip, hairline all round */
+.mat-cap {
+  background: var(--panel);
+  box-shadow: var(--shadow-cap);
+}
+
+/* a row that has been picked out of a list */
+.mat-row {
+  background: var(--well);
+  box-shadow: var(--shadow-row);
+}
+
+/* ── typography ────────────────────────────────────────────── */
+
+/* the instrument voice. metadata and numbers only, never prose. */
+.meta {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10.5px;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Section labels and column headers. Uppercase is never at default tracking —
+   at default it is a wall. */
+.label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+}
+
+/* ── scroll containers fade at both ends, never hard-cut ───── */
+
+.fade-y {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black 14px,
+    black calc(100% - 22px),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black 14px,
+    black calc(100% - 22px),
+    transparent
+  );
+}
+
+.no-bar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.no-bar {
+  scrollbar-width: none;
+}
+
+/* ── scrollbar: a 4px mark in a gutter, nothing else ───────── */
+
+/*
+ * Only one of these two standards can be in charge. Chromium 121+ implements
+ * `scrollbar-width`, and the moment it is set the whole ::-webkit-scrollbar
+ * family is ignored. Webkit gets the pseudo-elements; Firefox, which has none,
+ * gets the standard properties and only there.
+ */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  /* Faint at rest, readable when you reach for it: a scrollbar is a position
+     readout first and a control second. */
+  background-color: color-mix(in oklab, var(--ink) 16%, transparent);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--ink) 28%, transparent);
+}
+
+/*
+ * A scrollbar is painted in the padding box and border-radius does not clip it,
+ * so on a heavily rounded container the mark runs into the curve. Opt in on the
+ * containers that are actually round.
+ */
+.scroll-inset::-webkit-scrollbar-track {
+  margin-block: 20px;
+}
+
+/*
+ * Firefox 153+ parses ::-webkit-scrollbar without implementing it, so a
+ * `not selector(...)` gate is false there and the fallback never fires. Only
+ * Gecko parses -moz-appearance, so this reaches Firefox and nothing else.
+ */
+@supports (-moz-appearance: none) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--ink) 16%, transparent) transparent;
+  }
+}
+
+/* ── press: 0.12s, translateY(1px) ─────────────────────────── */
+
+.press {
+  transition:
+    transform 0.12s cubic-bezier(0.23, 1, 0.32, 1),
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease;
+}
+.press:active {
+  transform: translateY(1px);
+}
+
+/* ── shiki ─────────────────────────────────────────────────── */
+
+/* Shiki emits a colour per token inline; this styles only the block. */
+.shiki,
+.shiki span {
+  color: var(--shiki-light);
+  background-color: transparent !important;
+}
+
+html.dark .shiki,
+html.dark .shiki span {
+  color: var(--shiki-dark);
+}
+
+.shiki code {
+  display: block;
+  width: fit-content;
+  min-width: 100%;
+  font-family: var(--font-mono);
+}
+
+/* ── focus ─────────────────────────────────────────────────── */
+
+/* In @layer base so a component that draws its own focus can opt out with a
+   plain `focus-visible:outline-none`. Unlayered rules beat every layered
+   utility whatever the specificity, so this must not leave its layer — if it
+   does, every component's own focus styling silently dies. */
 @layer base {
-  html {
-    scroll-behavior: smooth;
-  }
-  body {
-    font-size: 0.9375rem;
-    line-height: 1.6;
-  }
-  :focus-visible {
-    outline: 2px solid var(--color-strong);
-    outline-offset: 2px;
-  }
-  /* Shiki emits a colour per token inline; this styles only the block. */
-  .shiki {
-    background: transparent !important;
-    line-height: 1.75;
-  }
-  .shiki code {
-    font-family: var(--font-mono);
-  }
-  @media (prefers-reduced-motion: reduce) {
-    html {
-      scroll-behavior: auto;
-    }
-    *,
-    *::before,
-    *::after {
-      animation-duration: 0.01ms !important;
-      transition-duration: 0.01ms !important;
-    }
+  :where(a, button, input, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 }
 
-/* Unlayered on purpose: these were in @layer base, and @tailwindcss/typography
-   emits `.prose` in a later layer, so its `content: "`"` on inline code won
-   no matter the specificity. Unlayered CSS beats layered CSS in Tailwind v4.
-
-   Every rule here carries `:not(.not-prose *)`, which is how the typography
-   plugin scopes its own rules. Without it these leak into `not-prose` regions —
-   which is what our code block is — and the padding, size and background land
-   twice, once from the component and once from here. */
-/* Inline code, scoped so it never reaches a Shiki block. Tailwind
-   typography's `prose-code:` variant matches code inside `pre` too, and it
-   tinted the block background and re-applied an em size on top of the block's
-   — which compounded to 11px on a darker ground and put two token colours
-   under AA. */
+/* Inline code, scoped so it never reaches a Shiki block. Unlayered on purpose:
+   @tailwindcss/typography emits `.prose` in a later layer, so from @layer base
+   its `content: "`"` on inline code wins no matter the specificity.
+   `:not(.not-prose *)` is how the plugin scopes its own rules; without it these
+   leak into `not-prose` regions — which is what our code block is — and the
+   padding, size and background land twice. */
 .prose :not(pre) > code:not(.not-prose *) {
   font-family: var(--font-mono);
   /* rem, not em: em resolves against the parent, so the same inline code came
      out 13px in a paragraph and 11.38px in a table cell. */
   font-size: 0.8125rem;
-  color: var(--color-strong);
-  background: var(--color-surface-2);
-  border-radius: 0.25rem;
+  color: var(--ink);
+  background: var(--well);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  border-radius: 5px;
   padding: 0.1em 0.3em;
 }
 .prose :not(pre) > code:not(.not-prose *)::before,
@@ -110,12 +328,12 @@
 }
 .prose pre:not(.not-prose *) {
   font-size: 0.8125rem;
-  background: var(--color-code-bg);
+  background: var(--well);
   padding: 0.875rem;
   /* typography colours `pre` text gray-200 for its own dark background. On a
      light ground that is 1.2:1 — invisible — and it shows on any fence with no
      language, where Shiki emits no per-token colours to override it. */
-  color: var(--color-strong);
+  color: var(--ink);
 }
 .prose pre:not(.not-prose *) code {
   font: inherit;
@@ -123,29 +341,21 @@
      has to be cleared on both or an unlanguaged fence stays invisible. */
   color: inherit;
   background: transparent;
+  box-shadow: none;
   padding: 0;
 }
-/* A bright segment travelling the whole mark. Only stroke-dashoffset moves, so
-   there is no layout or paint of anything else; the pause is built into the
-   keyframes so the logo is still most of the time. */
-@keyframes mark-trace {
-  0% {
-    stroke-dashoffset: 100;
-  }
-  55%,
-  100% {
-    stroke-dashoffset: -22;
-  }
-}
-.mark-trace {
-  stroke-dasharray: 22 100;
-  animation: mark-trace 3.4s ease-in-out infinite;
-}
 
-/* The dotted ground the loop diagram sits on. Two properties rather than an image:
-   a background-image gradient costs one paint and no request. */
-.dot-grid {
-  background-image: radial-gradient(var(--color-line) 1px, transparent 1px);
-  background-size: 22px 22px;
-  background-position: -1px -1px;
+/* ── reduced motion ────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

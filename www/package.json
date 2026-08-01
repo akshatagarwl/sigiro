@@ -9,25 +9,22 @@
     "preview": "wrangler dev --config dist/server/wrangler.json",
     "deploy": "vinext-cloudflare deploy --config dist/server/wrangler.json",
     "lint": "vp lint",
-    "fmt": "vp fmt",
+    "fmt": "oxfmt .",
     "types:check": "next typegen && tsc --noEmit",
     "build:next": "next build",
     "api:docs": "bun run scripts/generate-api-docs.ts"
   },
   "dependencies": {
-    "@base-ui/react": "1.6.0",
-    "clsx": "2.1.1",
     "fumadocs-core": "16.12.1",
     "fumadocs-mdx": "15.2.0",
     "fumadocs-ui": "16.12.1",
-    "lucide-react": "1.27.0",
+    "motion": "12.43.0",
     "next": "16.3.0-preview.9",
     "openapi-sampler": "1.7.4",
     "react": "19.3.0-canary-28cd4bb0-20260723",
     "react-dom": "19.3.0-canary-28cd4bb0-20260723",
     "shiki": "4.3.1",
-    "simple-icons": "16.27.1",
-    "tailwind-merge": "3.6.0"
+    "simple-icons": "16.27.1"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.47.0",

@@ -1,6 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="7" fill="#0a0a0a"/>
-  <path d="M5 24h7V10h15" fill="none" stroke="#fff" stroke-width="2.75"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="12" cy="10" r="3.25" fill="#0a0a0a" stroke="#fff" stroke-width="2.75"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Nine cells and one of them lit, in accent. A fixed mark rather than a
+       readout: the changepoint glyph it replaces animated on a loop, which is the
+       one thing this design language will not spend on decoration. -->
+  <rect width="64" height="64" rx="14" fill="#1D1D1A"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="13.5" fill="none" stroke="rgba(255,255,255,0.08)"/>
+  <rect x="9" y="9" width="14" height="14" rx="3.5" fill="rgba(243,243,239,0.1)"/>
+  <rect x="25" y="9" width="14" height="14" rx="3.5" fill="rgba(243,243,239,0.1)"/>
+  <rect x="41" y="9" width="14" height="14" rx="3.5" fill="rgba(243,243,239,0.1)"/>
+  <rect x="9" y="25" width="14" height="14" rx="3.5" fill="rgba(243,243,239,0.1)"/>
+  <rect x="25" y="25" width="14" height="14" rx="3.5" fill="#93B0FF"/>
+  <rect x="41" y="25" width="14" height="14" rx="3.5" fill="rgba(243,243,239,0.1)"/>
+  <rect x="9" y="41" width="14" height="14" rx="3.5" fill="rgba(243,243,239,0.1)"/>
+  <rect x="25" y="41" width="14" height="14" rx="3.5" fill="rgba(243,243,239,0.1)"/>
+  <rect x="41" y="41" width="14" height="14" rx="3.5" fill="rgba(243,243,239,0.1)"/>
 </svg>

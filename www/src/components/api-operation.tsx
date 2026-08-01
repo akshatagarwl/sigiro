@@ -30,7 +30,7 @@ export async function ApiOperation({ id }: { id: string }) {
   ]);
 
   return (
-    <div className="not-prose mt-8 flex flex-col gap-9 text-[0.875rem]">
+    <div className="not-prose mt-8 flex flex-col gap-9 text-[13.5px] text-ink-2">
       <Section title="Request">
         <CodeBlock lang="bash" title={`${op.method} ${op.path}`} value={request}>
           {/* Shiki output. The input is openapi.json — a committed snapshot of our
@@ -62,7 +62,7 @@ export async function ApiOperation({ id }: { id: string }) {
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left">
               <thead>
-                <tr className="border-b border-line text-[0.6875rem] tracking-[0.08em] text-faint uppercase">
+                <tr className="border-b border-hairline">
                   <Th>Name</Th>
                   <Th>Type</Th>
                   <Th>Description</Th>
@@ -70,15 +70,18 @@ export async function ApiOperation({ id }: { id: string }) {
               </thead>
               <tbody>
                 {op.parameters.map((p) => (
-                  <tr key={p.name} className="border-b border-line align-baseline last:border-0">
+                  <tr
+                    key={p.name}
+                    className="border-b border-hairline align-baseline last:border-0"
+                  >
                     <Td>
                       <Mono>{p.name}</Mono>
                       {p.required ? (
-                        <span className="ml-1.5 text-[0.6875rem] text-faint">required</span>
+                        <span className="ml-1.5 text-[11.5px] text-ink-3">required</span>
                       ) : null}
                     </Td>
                     <Td>
-                      <span className="font-mono text-[0.8125rem] text-muted-ink">{p.type}</span>
+                      <span className="font-mono text-[12.5px] text-ink-2">{p.type}</span>
                     </Td>
                     <Td>{p.description}</Td>
                   </tr>
@@ -94,13 +97,9 @@ export async function ApiOperation({ id }: { id: string }) {
           {responses.map((r) => (
             <div key={r.status}>
               <p className="flex flex-wrap items-baseline gap-2.5">
-                <span className="font-mono text-[0.8125rem] font-medium text-strong">
-                  {r.status}
-                </span>
-                <span className="text-muted-ink">{r.description}</span>
-                {r.mediaType ? (
-                  <span className="font-mono text-[0.6875rem] text-faint">{r.mediaType}</span>
-                ) : null}
+                <span className="font-mono text-[12.5px] font-medium text-ink">{r.status}</span>
+                <span className="text-ink-2">{r.description}</span>
+                {r.mediaType ? <span className="meta text-ink-3">{r.mediaType}</span> : null}
               </p>
               {r.html && r.example ? (
                 <CodeBlock lang="json" meta="example" value={r.example}>
@@ -112,9 +111,12 @@ export async function ApiOperation({ id }: { id: string }) {
         </div>
       </Section>
 
-      <p className="text-[0.8125rem] text-faint">
+      <p className="text-[12.5px] text-ink-3">
         Every field and constraint is in{' '}
-        <a href={`${SITE.apiUrl}/openapi.json`} className="text-muted-ink underline">
+        <a
+          href={`${SITE.apiUrl}/openapi.json`}
+          className="text-accent underline decoration-accent/40 underline-offset-2"
+        >
           /openapi.json
         </a>
         , which is the document this page is generated from.
@@ -123,13 +125,16 @@ export async function ApiOperation({ id }: { id: string }) {
   );
 }
 
-/** Section heading at the same size as an `h3` in the prose above it. */
+/**
+ * A section heading here is a column header, not a voice in the prose: "Request",
+ * "Parameters", "Responses" label the mechanical part of the page. That is one of
+ * the three places this language allows uppercase, and `.label` carries the
+ * tracking that keeps it from reading as a wall.
+ */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section>
-      <h2 className="mb-3 text-[0.9375rem] font-semibold tracking-[-0.02em] text-strong">
-        {title}
-      </h2>
+      <h2 className="label mb-3">{title}</h2>
       {children}
     </section>
   );
@@ -138,22 +143,22 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Row({ term, children }: { term: string; children: React.ReactNode }) {
   return (
     <>
-      <dt className="font-mono text-[0.6875rem] tracking-[0.08em] text-faint uppercase">{term}</dt>
-      <dd className="text-muted-ink">{children}</dd>
+      <dt className="label">{term}</dt>
+      <dd className="text-ink-2">{children}</dd>
     </>
   );
 }
 
 function Mono({ children }: { children: React.ReactNode }) {
   return (
-    <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.8125rem] text-strong">
+    <span className="mat-well rounded-[5px] px-1.5 py-0.5 font-mono text-[12.5px] text-ink">
       {children}
     </span>
   );
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="py-2 pr-5 font-normal last:pr-0">{children}</th>;
+  return <th className="label py-2 pr-5 text-left last:pr-0">{children}</th>;
 }
 
 function Td({ children }: { children: React.ReactNode }) {
