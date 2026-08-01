@@ -4,6 +4,7 @@ import { Artifact } from '@/components/artifact';
 import { Faq } from '@/components/faq';
 import { FactoryLoop } from '@/components/factory-loop';
 import { Integrations } from '@/components/integrations';
+import { ProofDemo } from '@/components/proof-demo';
 import { PRIMARY, SECONDARY } from '@/components/site/action';
 import { PageShell, SiteFooter, SiteHeader } from '@/components/site-chrome';
 import { FAQ, PROMISES, SECTIONS, SITE } from '@/lib/site';
@@ -100,12 +101,19 @@ export default function Home() {
               </h2>
               <p className={LEDE}>{s.say}</p>
 
-              <Artifact
-                title={s.artifact.title}
-                meta={s.artifact.meta}
-                code={s.artifact.code}
-                lang={s.artifact.lang}
-              />
+              {/* 04 is the one section whose claim is a demonstration rather
+                  than a picture: "every answer carries the query behind it" is
+                  proved by running it, not by printing it. Same finding, staged. */}
+              {s.n === '04' ? (
+                <ProofDemo finding={s.artifact.code} lang={s.artifact.lang} />
+              ) : (
+                <Artifact
+                  title={s.artifact.title}
+                  meta={s.artifact.meta}
+                  code={s.artifact.code}
+                  lang={s.artifact.lang}
+                />
+              )}
             </section>
           ))}
 

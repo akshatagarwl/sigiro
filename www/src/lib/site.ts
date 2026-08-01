@@ -104,14 +104,14 @@ GROUP BY model ORDER BY slowest DESC`,
     rest: 'Every answer carries the query behind it.',
     say: 'You never have to take a finding on faith. Run the query it came with, widen it, or try to disprove it. Your agent does the same thing, by editing SQL it was handed instead of guessing at a shape it has never seen.',
     artifact: {
-      title: 'inside every finding',
-      meta: 'paste it, run it, widen it',
+      title: 'POST /v1/investigate',
+      meta: 'one finding, abridged',
       lang: 'json' as const,
       code: `{
   "operation": "POST /api/orders",
   "errors": 246,
   "error_rate": 0.19,
-  "drill_down_sql": "SELECT * FROM spans WHERE service = 'checkout' AND name = 'POST /api/orders' AND status = 'error'"
+  "drill_down_sql": "SELECT trace_id, duration, status_message FROM sigiro_spans WHERE service_name = 'checkout' AND span_name = 'POST /api/orders' AND status_code = 2 ORDER BY duration DESC LIMIT 3"
 }`,
     },
   },
@@ -134,6 +134,33 @@ GROUP BY model ORDER BY slowest DESC`,
     },
   },
 ] as const;
+
+/**
+ * Stages two and three of the 04 Prove demo. Stage one is that section's own
+ * `artifact` above — the finding — so the finding lives with every other artifact
+ * on the page rather than being duplicated here.
+ *
+ * `sql` must stay character-identical to the finding's `drill_down_sql`, modulo
+ * line breaks. The entire claim is that the query you are handed is the query you
+ * run; if these two drift, the demo quietly disproves the section it illustrates.
+ *
+ * `rows` are the timeouts that section 02 already reported (`"timeout": 246`), so
+ * a reader scrolling down meets the same incident twice and the numbers line up.
+ */
+export const PROOF = {
+  sql: `SELECT trace_id, duration, status_message
+FROM sigiro_spans
+WHERE service_name = 'checkout'
+  AND span_name = 'POST /api/orders'
+  AND status_code = 2
+ORDER BY duration DESC
+LIMIT 3`,
+  rows: [
+    `{ "trace_id": "9f2c1ab4e77d", "duration": 30012, "status_message": "context deadline exceeded" }`,
+    `{ "trace_id": "3b81fe0a2c56", "duration": 30004, "status_message": "context deadline exceeded" }`,
+    `{ "trace_id": "c40d9e73aa18", "duration": 29997, "status_message": "context deadline exceeded" }`,
+  ],
+} as const;
 
 /**
  * The factory loop, and which stage belongs to whom.
