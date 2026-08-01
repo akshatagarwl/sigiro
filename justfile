@@ -25,12 +25,14 @@ check-release:
 # Denies the two actionable groups; a full-workspace compile, so it's a
 # pre-push gate (`just install-hooks`), not pre-commit. `--fix` auto-applies
 # the pub→pub(crate) fixes.
-# CARGO_TARGET_DIR is pinned into target/: hawk defaults to one under $TMPDIR,
-# which macOS prunes on its own schedule and leaves behind fingerprints pointing at
-# build-script output that is gone — the pre-push gate then fails on a missing
-# libsqlite3-sys bindgen.rs and has to be cleared by hand.
+# The target dir is pinned into target/ via hawk's own `--target-dir` flag. Hawk
+# defaults to $TMPDIR/cargo-hawk-target, which macOS prunes on its own schedule,
+# leaving fingerprints that point at build-script output that is gone — the gate
+# then fails on a missing libsqlite3-sys bindgen.rs and has to be cleared by hand.
+# Setting CARGO_TARGET_DIR does NOT fix this: hawk overrides it with its own temp
+# dir, so the env var looked right and changed nothing. Use the flag.
 hawk *args:
-    CARGO_TARGET_DIR=target/hawk cargo +1.97.1 hawk check --manifest-path Cargo.toml \
+    cargo +1.97.1 hawk check --manifest-path Cargo.toml --target-dir target/hawk \
       -A hawk::unnecessary_restricted_visibility \
       -D hawk::dead_public -D hawk::unnecessary_public {{ args }}
 
