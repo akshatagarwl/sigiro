@@ -7,57 +7,66 @@ import {
   useScroll,
   useTransform,
 } from 'motion/react';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { SkeletonSwap } from '@/components/interior/skeleton-swap';
+import { TaskSteps } from '@/components/interior/task-steps';
 
 /**
- * One terminal per step, stepped by scroll.
+ * One terminal per step, stepped by scroll, with a task list beside it.
  *
  * An earlier version typed the transcript out character by character, bound to
  * scroll position. It was a good demo of scrubbing and a bad terminal: real
  * shells do not type their own output. You run a command and the output lands.
- * So nothing here animates text — a frame arrives with its command already run,
- * and sits at a fresh prompt, which is where a shell waits when it has finished.
+ * So nothing types — but a command does take a beat to run, which is what
+ * `SkeletonSwap` is for: arrive at a frame, the shell is busy, then the output
+ * appears. Its 120ms delay and 380ms floor are the reason this reads as a
+ * command running rather than as a flicker (§19).
  *
- * What scroll drives is which frame you are looking at, and the handoff between
- * frames. Both come off `scrollYProgress`, so both reverse on the way back.
+ * `TaskSteps` carries the argument the section exists to make. Five stages, the
+ * ones you have passed ticked off, the one you are on running, the rest waiting
+ * — and `meta` naming the owner of each, so "two of these five are ours" is
+ * something you watch accumulate rather than a claim in a caption. It also
+ * brings `aria-current="step"` and a debounced live region, which the rail I
+ * hand-rolled did not have.
  *
- * One step, one terminal, because when consecutive steps have different owners a
- * single shared shell says one actor ran all of them. A coding agent's work does
- * not happen in your sigiro shell.
+ * Both are vendored verbatim into components/interior/, so they write literal
+ * stone and emerald values rather than our tokens. That is §1b, on purpose: a
+ * copied component must not depend on the host's palette.
  *
- * The rail is not decoration. Once the panel pins, the section heading has
- * scrolled away, so without it there is nothing on screen saying what the five
- * things are, which are ours, or how far through you are. §6: "a strip of cells
- * … with the accent marking where you are."
- *
- * Design constraints, from interior's DESIGN.md:
+ * Design constraints, from DESIGN.md (now vendored at www/DESIGN.md):
  * - §5h  React does not re-render at 60fps. The step index is React state; the
  *        handoff is MotionValues off `scrollYProgress` and never touches React.
  *        A previous version quantised progress to two decimals and drove the
- *        fade from state, which left the handoff about six frames long — §6a
- *        calls this exactly: "quantising the sweep would make the fill look
- *        like it was stuttering". Cells are the information, the sweep is the
- *        material, and only the cells are allowed to be discrete.
+ *        fade from state, leaving the handoff ~6 frames long — §6a: "quantising
+ *        the sweep would make the fill look like it was stuttering".
  * - §6a  `setStep(prev => prev === s ? prev : s)` on the discrete half.
  * - §5   the handoff uses the specified displacements — out at `y 6, blur(3px)`,
  *        in at `y 10, blur(6px)`.
  * - §3   no `rounded-full`, so no traffic-light chrome. This is the same
  *        `mat-well` cut into a `mat-panel` as every code block on the site.
- * - §3   no idle loops, so the resting cursor is a block that does not blink.
  * - §5h  a scroll-driven component needs no reduced-motion branch — every value
- *        resolves on the frame it is scrolled to. `fallback` exists for no-JS,
- *        not for reduced motion, and that is not an oversight.
+ *        resolves on the frame it is scrolled to. `fallback` covers no-JS only,
+ *        and that is deliberate rather than an oversight.
  */
 
 export type TerminalStep = {
   cmd: string;
   out: string;
-  /** Names the step on the rail and in the caption — "Diagnose", "Connect". */
+  /** Names the step in the task list and the caption — "Diagnose", "Connect". */
   label: string;
-  /** A chip beside the label: whose shell this is. */
+  /** Whose shell this is. Shown against the step once it is done. */
   badge?: string;
-  /** Ink rather than muted ink, on the rail and the chip, for steps that are ours. */
+  /** Ink rather than muted ink on the chip, for steps that are ours. */
   badgeStrong?: boolean;
+  /**
+   * Short form of `badge`, for the task list's `meta` column.
+   *
+   * That column is `shrink-0` against a `flex-1 truncate` label, so a long owner
+   * squeezes the label to zero width and the step loses its name — invisibly,
+   * because meta is `opacity-0` until the step is done. "your pipeline, on our
+   * evidence" did exactly that to "Verify". Falls back to `badge`.
+   */
+  badgeShort?: string;
   /** Prose under the well, swapped as the step changes. */
   note?: string;
 };
@@ -73,6 +82,13 @@ const PAD = 24;
  * second.
  */
 const HOLD = 0.72;
+
+/**
+ * How long a command "runs" on arrival. Short, because it is a beat rather than
+ * a claim about latency — `SkeletonSwap` stretches it to its own 380ms floor so
+ * the skeleton never strobes.
+ */
+const RUN_MS = 300;
 
 type Line = { text: string; cmd: boolean };
 
@@ -107,9 +123,9 @@ export function SteppedTerminal({
    * the pin plus 45vh of travel per step.
    *
    * It was 55vh while the transcript typed itself, because the reader was
-   * waiting on the machine. Nothing waits now — a frame arrives complete — so
-   * the only thing the travel has to cover is reading, which the reader paces
-   * themselves by stopping.
+   * waiting on the machine. Nothing waits now beyond the run beat, so the only
+   * thing the travel has to cover is reading, which the reader paces by
+   * stopping.
    */
   track?: string;
 }) {
@@ -124,6 +140,15 @@ export function SteppedTerminal({
     const next = handoff >= 0.5 ? index + 1 : index;
     setShown((prev) => (prev === next ? prev : next));
   });
+
+  // Arriving at a frame runs its command. One timer, reset whenever the frame
+  // changes, so scrubbing quickly does not stack them up.
+  const [ran, setRan] = useState(false);
+  useEffect(() => {
+    setRan(false);
+    const t = setTimeout(() => setRan(true), RUN_MS);
+    return () => clearTimeout(t);
+  }, [shown]);
 
   // The continuous half: never React state, so it runs at frame rate.
   const opacity = useTransform(scrollYProgress, (v) => {
@@ -152,6 +177,12 @@ export function SteppedTerminal({
   });
 
   const step = steps[shown];
+  const frame = frames[shown];
+
+  const tasks = useMemo(
+    () => steps.map((s) => ({ id: s.label, label: s.label, meta: s.badgeShort ?? s.badge })),
+    [steps],
+  );
 
   return (
     <>
@@ -162,31 +193,12 @@ export function SteppedTerminal({
         className="relative"
         style={{ height: track ?? `calc(100vh + ${steps.length * 45}vh)` }}
       >
-        <div className="sticky top-0 flex h-screen flex-col justify-center gap-3.5">
-          {/* The rail: five named cells, ours in ink, the current one accented.
-              This is the only thing on screen once the heading has scrolled off
-              that says what the sequence is. */}
-          <ol className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1">
-            {steps.map((s, i) => (
-              <li key={s.label} className="flex items-center gap-1.5">
-                <span
-                  aria-hidden
-                  className={`size-[5px] rounded-[1.5px] ${
-                    i === shown ? 'bg-accent' : s.badgeStrong ? 'bg-ink' : 'bg-ink-3'
-                  }`}
-                />
-                <span
-                  className={`text-[11.5px] font-medium tracking-[-0.01em] ${
-                    i === shown ? 'text-ink' : 'text-ink-3'
-                  }`}
-                >
-                  {s.label}
-                </span>
-              </li>
-            ))}
-          </ol>
+        <div className="sticky top-0 flex h-screen flex-col justify-center gap-5 lg:grid lg:grid-cols-[190px_1fr] lg:items-center">
+          {/* The task list is the only thing on screen carrying the shape of the
+              argument once the section heading has scrolled away. */}
+          <TaskSteps steps={tasks} current={shown} label="The five stages" />
 
-          <figure className="mat-panel w-full rounded-[14px] p-[5px]">
+          <figure className="mat-panel w-full min-w-0 rounded-[14px] p-[5px]">
             <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
               {step.badge ? (
                 <span
@@ -209,25 +221,29 @@ export function SteppedTerminal({
               className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3"
               style={{ height }}
             >
-              <motion.div
-                aria-hidden
-                className="font-mono text-[12.5px] leading-[22px] whitespace-pre"
-                style={{ opacity, y, filter }}
-              >
-                {frames[shown].lines.map((line, i) => (
-                  <div
-                    // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
-                    key={i}
-                    className={line.cmd ? 'text-ink' : 'text-ink-2'}
-                    style={{ height: LINE }}
-                  >
-                    {line.text}
+              <motion.div style={{ opacity, y, filter }}>
+                <SkeletonSwap
+                  ready={ran}
+                  lines={frame.lines.length + 1}
+                  lineHeight={LINE}
+                  reserve={(frame.lines.length + 1) * LINE}
+                  className="font-mono text-[12.5px] leading-[22px] whitespace-pre"
+                >
+                  {frame.lines.map((line, i) => (
+                    <div
+                      // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
+                      key={i}
+                      className={line.cmd ? 'text-ink' : 'text-ink-2'}
+                      style={{ height: LINE }}
+                    >
+                      {line.text}
+                    </div>
+                  ))}
+                  <div className="text-ink" style={{ height: LINE }}>
+                    {'$ '}
+                    <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
                   </div>
-                ))}
-                <div className="text-ink" style={{ height: LINE }}>
-                  {'$ '}
-                  <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
-                </div>
+                </SkeletonSwap>
               </motion.div>
             </motion.div>
 

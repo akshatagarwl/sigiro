@@ -14,12 +14,24 @@ import { LOOP } from '@/lib/site';
  * second section can reach it.
  */
 
+/**
+ * One word per owner, for the task list's narrow meta column. The full phrasing
+ * still runs in the caption chip, where there is room for it.
+ */
+const SHORT_OWNER: Record<string, string> = {
+  sigiro: 'sigiro',
+  'your coding agent': 'agent',
+  'your pipeline, on our evidence': 'pipeline',
+  'your memory': 'memory',
+};
+
 const STEPS: TerminalStep[] = LOOP.map((s) => ({
   cmd: s.cmd,
   out: s.out,
   label: s.title,
   badge: s.owner,
   badgeStrong: Boolean(s.ours),
+  badgeShort: SHORT_OWNER[s.owner] ?? s.owner,
   note: s.say,
 }));
 
