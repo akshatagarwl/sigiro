@@ -12,7 +12,8 @@
     "fmt": "oxfmt .",
     "types:check": "next typegen && tsc --noEmit",
     "build:next": "next build",
-    "api:docs": "bun run scripts/generate-api-docs.ts"
+    "api:docs": "bun run scripts/generate-api-docs.ts",
+    "og": "bun run scripts/generate-og.tsx"
   },
   "dependencies": {
     "@xstate/react": "7.0.0-alpha.1",
