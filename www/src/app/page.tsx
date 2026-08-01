@@ -85,10 +85,8 @@ export default function Home() {
               </span>
             </h2>
             <p className={LEDE}>
-              Detect, diagnose, fix, verify, learn. The fix stage got solved first and loudest,
-              which is why the loop breaks upstream of it: your agent can write the patch, but
-              nothing tells it what broke or whether the patch worked. sigiro is two of these five
-              stages, and the evidence the third one needs.
+              Your agent can write the patch. Nothing tells it what broke, or whether the patch
+              worked. sigiro is two of these five.
             </p>
             <FactoryLoop />
           </section>

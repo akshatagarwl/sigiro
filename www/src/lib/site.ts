@@ -53,7 +53,7 @@ export const SECTIONS = [
     n: '01',
     lead: 'Connect.',
     rest: 'Point OpenTelemetry at it and nothing else changes.',
-    say: 'Standard OTLP, standard ports. Whatever SDK or collector you already run keeps working. Nothing to install in your app, no code to touch, no migration to plan.',
+    say: 'Standard OTLP, standard ports. Nothing in your app changes.',
     artifact: {
       title: 'your shell',
       meta: 'two variables, five minutes',
@@ -68,7 +68,7 @@ OTEL_SERVICE_NAME=checkout npm start`,
     n: '02',
     lead: 'Ask.',
     rest: 'One question, one answer, already ranked.',
-    say: 'You don’t get a panel to interpret or a firehose to wade through. You get what moved together, which deploy looks guilty, and how the thing actually fails. One response, and your agent can act on it.',
+    say: 'What moved together, which deploy looks guilty, how it fails.',
     artifact: {
       title: 'POST /v1/investigate',
       meta: '{"service":"checkout"}',
@@ -87,7 +87,7 @@ OTEL_SERVICE_NAME=checkout npm start`,
     n: '03',
     lead: 'Correlate.',
     rest: 'Your services and your agents in one question.',
-    say: 'An agent is just a service that calls a model instead of a database. Its reasoning and your request path land in the same place, joined by the same trace. So “which model call stalled the checkout” is one query instead of two products.',
+    say: 'An agent is a service that calls a model. Same trace, one query.',
     artifact: {
       title: 'POST /v1/query',
       meta: 'no query language to learn',
@@ -102,7 +102,7 @@ GROUP BY model ORDER BY slowest DESC`,
     n: '04',
     lead: 'Prove.',
     rest: 'Every answer carries the query behind it.',
-    say: 'You never have to take a finding on faith. Run the query it came with, widen it, or try to disprove it. Your agent does the same thing, by editing SQL it was handed instead of guessing at a shape it has never seen.',
+    say: 'Run the query it came with. Widen it. Try to disprove it.',
     artifact: {
       title: 'POST /v1/investigate',
       meta: 'one finding, abridged',
@@ -119,7 +119,7 @@ GROUP BY model ORDER BY slowest DESC`,
     n: '05',
     lead: 'Discover.',
     rest: 'Your agent learns the whole surface by reading it.',
-    say: 'There’s no tool description to hand-write and no onboarding for a machine. One public document describes every endpoint. That’s the integration.',
+    say: 'One public document describes every endpoint. That’s the integration.',
     artifact: {
       title: 'GET /openapi.json',
       meta: 'public, no key',
@@ -196,7 +196,7 @@ export const LOOP = [
     title: 'Detect',
     owner: 'sigiro',
     ours: true,
-    say: 'Something moved. Not against a threshold you tuned last quarter, but against the service’s own history. Normal is something your data decides, not something you maintain.',
+    say: 'Measured against the service’s own history, not a threshold you set.',
     cmd: 'sigiro anomalies',
     out: `SERVICE   SIGNAL       BASELINE   NOW      SHIFT    INCIDENT
 checkout  error_rate   0.4%       19.2%    +48σ     inc_4a1c
@@ -208,7 +208,7 @@ checkout  latency_p95  180ms      30.0s    +166×    inc_4a1c
     title: 'Diagnose',
     owner: 'sigiro',
     ours: true,
-    say: 'One call comes back with ranked findings, the deploy that looks guilty, and how the thing actually fails. Every row carries the query that proves it. Your agent can act on that. It can’t act on a chart.',
+    say: 'Ranked findings, the suspect deploy, and the query proving each one.',
     cmd: 'sigiro investigate checkout',
     out: `suspect        deploy 9f2c1ab, landed 18:33
 failing        POST /api/orders
@@ -221,7 +221,7 @@ drill_down_sql SELECT trace_id, duration, status_message
     title: 'Fix',
     owner: 'your coding agent',
     ours: false,
-    say: 'Claude Code, Codex, Cursor, whichever one already has commit rights. This stage got solved first, which is why the gap sits upstream of it.',
+    say: 'Whichever agent already has commit rights. This stage was solved first.',
     cmd: 'claude "checkout times out since 9f2c1ab"',
     out: `read   src/orders/upstream.ts
 edit   src/orders/upstream.ts   +4 −1
@@ -232,7 +232,7 @@ push   fix: bound the orders upstream call at 5s`,
     title: 'Verify',
     owner: 'your pipeline, on our evidence',
     ours: 'partly',
-    say: 'Tests passing isn’t the same as the incident being over. The shift that opened the loop either closed after your deploy or it didn’t, and the baseline that caught it answers that.',
+    say: 'Tests passing is not the incident closing. The baseline says which.',
     cmd: 'sigiro anomalies --service checkout',
     out: `no open shifts
 
@@ -245,7 +245,7 @@ inc_4a1c closed · 34 min open`,
     title: 'Learn',
     owner: 'your memory',
     ours: false,
-    say: 'What the fix was, next to what the evidence looked like, kept for the next time the same shape shows up. Then the loop starts again, on a service with a new baseline.',
+    say: 'The fix, kept beside the evidence, for the next time this shape appears.',
     cmd: 'cat playbooks/checkout-upstream-timeout.md',
     out: `## checkout · upstream timeout
 
@@ -267,27 +267,27 @@ watch      the same shape on any service calling orders`,
 export const PROMISES = [
   {
     title: 'It proves itself',
-    body: 'Every finding hands you the query that produced it. Run it, widen it, try to disprove it. A claim you can check is a different kind of claim.',
+    body: 'Every finding carries the query that produced it.',
   },
   {
     title: 'Nothing to maintain',
-    body: 'No thresholds, no alert rules, no panels to keep in sync. Each service is judged against its own history, so normal is something your data decides.',
+    body: 'No thresholds, no rules, no panels to keep in sync.',
   },
   {
     title: 'Five minutes, once',
-    body: 'One container, two environment variables, no code changes. Whatever OpenTelemetry you already emit works unchanged.',
+    body: 'One container, two environment variables, no code changes.',
   },
   {
     title: 'Free if you run it',
-    body: 'No per-host fee, no per-seat fee, no ingest bill. Running it yourself costs you the storage you already pay for. Hosted is about $14 a month if you’d rather not.',
+    body: 'No per-host, per-seat or ingest fees. Hosted is ~$14 a month.',
   },
   {
     title: 'It never phones home',
-    body: 'You run it, so your telemetry stays on your infrastructure, in a format anything can read. Leaving costs you nothing, which makes staying a choice.',
+    body: 'You run it. Your telemetry never leaves your infrastructure.',
   },
   {
     title: 'It watches itself',
-    body: 'sigiro sends its own telemetry to sigiro. That’s how a stalled writer, a leaked connection and a dropped channel each got caught, instead of turning up days later as data that had quietly stopped arriving.',
+    body: 'sigiro sends its own telemetry to sigiro. That is how we find our own bugs.',
   },
 ] as const;
 
