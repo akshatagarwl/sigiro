@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { Artifact } from '@/components/artifact';
 import { Faq } from '@/components/faq';
 import { FactoryLoop } from '@/components/factory-loop';
+import { HowItWorks } from '@/components/how-it-works';
 import { Integrations } from '@/components/integrations';
 import { ProofDemo } from '@/components/proof-demo';
 import { PRIMARY, SECONDARY } from '@/components/site/action';
@@ -91,6 +92,27 @@ export default function Home() {
             <FactoryLoop />
           </section>
 
+          {/* Connect, ask, correlate. These were sections 01, 02 and 03, each a
+              heading over a static code block that showed the input and never
+              the answer. One stepped terminal shows both, and it costs one
+              heading instead of three.
+
+              Unnumbered, like the loop above it and for the same reason: the
+              frame already counts "2 of 3" in its caption, and a numeral outside
+              the frame would be a second sequence arguing with the first. */}
+          <section aria-labelledby="how" className={SECTION}>
+            <p className="label">how you use it</p>
+            <h2 id="how" className={H2}>
+              Three steps.{' '}
+              <span className="text-ink-3">You connect, you ask, and you correlate.</span>
+            </h2>
+            <p className={LEDE}>
+              You send OpenTelemetry to sigiro. You ask one question. Each step below is one shell
+              session.
+            </p>
+            <HowItWorks />
+          </section>
+
           {SECTIONS.map((s) => (
             <section key={s.n} aria-labelledby={`s-${s.n}`} className={SECTION}>
               <p className="meta text-ink-3">{s.n}</p>
@@ -99,10 +121,10 @@ export default function Home() {
               </h2>
               <p className={LEDE}>{s.say}</p>
 
-              {/* 04 is the one section whose claim is a demonstration rather
+              {/* Prove is the one section whose claim is a demonstration rather
                   than a picture: "every answer carries the query behind it" is
                   proved by running it, not by printing it. Same finding, staged. */}
-              {s.n === '04' ? (
+              {s.n === '01' ? (
                 <ProofDemo finding={s.artifact.code} lang={s.artifact.lang} />
               ) : (
                 <Artifact
@@ -118,8 +140,8 @@ export default function Home() {
           {/* What it runs on and what it promises, folded into one section.
               They were 06 and 07, two headings and two full section paddings for
               what is really one answer to "what am I signing up for". Neither was
-              a step in the 01–05 spine, so numbering them implied a sequence that
-              had already ended. This one is unnumbered for the same reason.
+              a step in the numbered spine, so numbering them implied a sequence
+              that had already ended. This one is unnumbered for the same reason.
 
               The promise tiles also absorbed the old standalone "it watches
               itself" section, which was making one claim at the length of six. */}

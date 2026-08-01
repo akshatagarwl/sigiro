@@ -47,33 +47,56 @@ export const INSTALL = [
   },
 ] as const;
 
-/** The 01–05 spine: one capability, one plain sentence, one artifact. */
-export const SECTIONS = [
+/**
+ * Connect, ask, correlate — three shell sessions you step through.
+ *
+ * These were three numbered sections with one static code block each. A block
+ * shows the input and never the answer, so a reader had to take the answer on
+ * trust. One stepped terminal shows both, in the register the loop section above
+ * it already set: a shell you watch, not a picture of a payload.
+ *
+ * `run` is a list because a step is not always one command. Connect starts a
+ * container, sets two variables, starts your app, and asks sigiro what it sees.
+ * A block whose `out` is empty prints nothing, and the terminal draws its prompt
+ * line alone.
+ *
+ * The incident is the one the rest of the page reports: service `checkout`,
+ * deploy 9f2c1ab, 246 timeouts on POST /api/orders. The investigate payload and
+ * the correlation SQL are the artifacts the old sections printed, carried over
+ * rather than rewritten. The 246 in the Correlate result is the same 246: one
+ * model call per failed order.
+ *
+ * Every line has to fit the well, which holds about 86 characters at 12.5px and
+ * clips the rest. That is why the two environment variables are two `export`
+ * lines, and why the query is read from a file: neither fits beside a prompt on
+ * one line. The docker line is INSTALL[0] with `-d` added — one duplicated
+ * string, marked here for review if a third copy appears.
+ */
+export const HOW = [
   {
-    n: '01',
-    lead: 'Connect.',
-    rest: 'Send OpenTelemetry to sigiro. Do not change your code.',
+    title: 'Connect',
     say: 'sigiro uses standard OTLP on the standard ports.',
-    artifact: {
-      title: 'your shell',
-      meta: 'two variables, five minutes',
-      lang: 'bash' as const,
-      code: `docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
-
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \\
-OTEL_SERVICE_NAME=checkout npm start`,
-    },
+    run: [
+      {
+        cmd: 'docker run -d -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro',
+        out: 'a3f1c9e2d7b4',
+      },
+      { cmd: 'export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318', out: '' },
+      { cmd: 'export OTEL_SERVICE_NAME=checkout', out: '' },
+      { cmd: 'npm start &', out: '[1] 41823\ncheckout listening on :3000' },
+      {
+        cmd: 'sigiro status',
+        out: 'ready · OTLP 4317 and 4318 · service checkout · 18,402 spans in 5 min',
+      },
+    ],
   },
   {
-    n: '02',
-    lead: 'Ask.',
-    rest: 'Ask one question. Get one answer.',
+    title: 'Ask',
     say: 'sigiro ranks the results and names the deploy that caused the failure.',
-    artifact: {
-      title: 'POST /v1/investigate',
-      meta: '{"service":"checkout"}',
-      lang: 'json' as const,
-      code: `{
+    run: [
+      {
+        cmd: `curl -sX POST localhost:9999/v1/investigate -d '{"service":"checkout"}'`,
+        out: `{
   "summary": "two signals moved together on checkout at 18:35",
   "suspect": "deploy 9f2c1ab, landed 18:33",
   "failing": "POST /api/orders",
@@ -81,25 +104,40 @@ OTEL_SERVICE_NAME=checkout npm start`,
   "errors_total": 1284,
   "query": "SELECT * FROM spans WHERE service = 'checkout' AND ..."
 }`,
-    },
+      },
+    ],
   },
   {
-    n: '03',
-    lead: 'Correlate.',
-    rest: 'See your services and your agents together.',
+    title: 'Correlate',
     say: 'An agent is a service that calls a model. One trace holds both.',
-    artifact: {
-      title: 'POST /v1/query',
-      meta: 'no query language to learn',
-      lang: 'sql' as const,
-      code: `SELECT model, count(*) AS calls, max(duration) AS slowest
+    run: [
+      {
+        cmd: 'cat models.sql',
+        out: `SELECT model, count(*) AS calls, max(duration) AS slowest
 FROM spans JOIN logs USING (trace_id)
 WHERE service = 'checkout' AND status = 'error'
 GROUP BY model ORDER BY slowest DESC`,
-    },
+      },
+      {
+        cmd: 'sigiro query --sql-file models.sql',
+        out: `MODEL           CALLS  SLOWEST
+gpt-5.2-mini      246    30.0s
+claude-haiku-4.6   31     2.1s`,
+      },
+    ],
   },
+] as const;
+
+/**
+ * The rest of the spine: one capability, one plain sentence, one artifact.
+ *
+ * It was 01–05. Connect, Ask and Correlate left for the stepped terminal above,
+ * so what remains renumbered to 01–02 rather than starting at 04 — a numeral
+ * that counts from four in a list of two is a numeral that lies.
+ */
+export const SECTIONS = [
   {
-    n: '04',
+    n: '01',
     lead: 'Prove.',
     rest: 'Each answer contains the query behind it.',
     say: 'Run the query again. Make the query wider. Show that the result is wrong.',
@@ -116,7 +154,7 @@ GROUP BY model ORDER BY slowest DESC`,
     },
   },
   {
-    n: '05',
+    n: '02',
     lead: 'Discover.',
     rest: 'Your agent reads the API description without help.',
     say: 'One public document describes all of the endpoints.',
@@ -140,7 +178,7 @@ GROUP BY model ORDER BY slowest DESC`,
 ] as const;
 
 /**
- * Stages two and three of the 04 Prove demo. Stage one is that section's own
+ * Stages two and three of the 01 Prove demo. Stage one is that section's own
  * `artifact` above — the finding — so the finding lives with every other artifact
  * on the page rather than being duplicated here.
  *
@@ -148,8 +186,9 @@ GROUP BY model ORDER BY slowest DESC`,
  * line breaks. The entire claim is that the query you are handed is the query you
  * run; if these two drift, the demo quietly disproves the section it illustrates.
  *
- * `rows` are the timeouts that section 02 already reported (`"timeout": 246`), so
- * a reader scrolling down meets the same incident twice and the numbers line up.
+ * `rows` are the timeouts the Ask step in `HOW` already reported
+ * (`"timeout": 246`), so a reader who scrolls down meets the same incident twice
+ * and the numbers line up.
  */
 export const PROOF = {
   sql: `SELECT trace_id, duration, status_message
@@ -179,7 +218,7 @@ LIMIT 3`,
  * reader already runs.
  *
  * `cmd` and `out` are one continuous terminal session, read top to bottom: the
- * same checkout incident that sections 02 and 04 already report, carried from
+ * same checkout incident that `HOW` and the Prove section report, carried from
  * detection to recovery. Stages three and five deliberately run something that
  * is not sigiro, so "we are two of these five" is a thing you watch rather than
  * a thing you are told.
@@ -191,9 +230,11 @@ LIMIT 3`,
  * with a verb-and-path. The endpoints are named in 01–05 and in the reference —
  * still do not mix the two within one page.
  *
- * Numbers were dropped from these stages when the 01–05 spine below kept its own.
- * Two `01–05` sequences ran back to back with identical numerals, and a reader
- * going "…05 Learn" → "01 Connect" had no way to see a new sequence had started.
+ * Numbers were dropped from these stages when the numbered spine below kept its
+ * own. Two `01–05` sequences ran back to back with identical numerals, and a
+ * reader going "…05 Learn" → "01 Connect" had no way to see a new sequence had
+ * started. `HOW` drops them for the same reason: a stepped terminal counts its
+ * own steps in the caption, and a second numeral outside the frame competes.
  */
 export const LOOP = [
   {

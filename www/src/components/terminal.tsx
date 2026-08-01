@@ -118,11 +118,19 @@ function locate(v: number, count: number) {
 export function SteppedTerminal({
   steps,
   fallback,
+  label,
   track,
 }: {
   steps: readonly TerminalStep[];
   /** Shown where JavaScript never runs. */
   fallback: React.ReactNode;
+  /**
+   * Names the task list for a screen reader. Required, because it was hardcoded
+   * to "The five stages" while this component had one caller, and the second
+   * caller — a three-step sequence — then announced the wrong count to anyone
+   * who could not see it. A caller cannot forget a required prop.
+   */
+  label: string;
   /**
    * Scroll distance the whole sequence occupies. Defaults to one viewport for
    * the pin plus 45vh of travel per step.
@@ -201,7 +209,7 @@ export function SteppedTerminal({
         <div className="sticky top-0 flex h-screen flex-col justify-center gap-5 lg:grid lg:grid-cols-[190px_1fr] lg:items-center">
           {/* The task list is the only thing on screen carrying the shape of the
               argument once the section heading has scrolled away. */}
-          <TaskSteps steps={tasks} current={shown} label="The five stages" />
+          <TaskSteps steps={tasks} current={shown} label={label} />
 
           <figure className="mat-panel w-full min-w-0 rounded-[14px] p-[5px]">
             <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
@@ -222,6 +230,20 @@ export function SteppedTerminal({
               </span>
             </figcaption>
 
+            {/* Clips both axes, and that is correct: `height` animates across the
+                handoff so the y axis must clip, and the x axis never overflows
+                here because `SkeletonSwap` inside is itself the scroll container.
+                At a 390px viewport this well is 324px while the widest transcript
+                row is 495px — the sideways scroll that reaches it belongs to
+                SkeletonSwap's shell, not to this element. Putting `overflow-x-auto`
+                here as well was tried and is dead config: scrollWidth equals
+                clientWidth, so it can never scroll.
+
+                Known gap, not fixed here: that shell only takes a tab stop when it
+                detects itself scrollable, and it does not detect the horizontal
+                case — so a keyboard user cannot reach the clipped end of a line.
+                The component is vendored verbatim under §1b, so the fix belongs
+                upstream or in the transcript width, not in a local patch. */}
             <motion.div
               className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3"
               style={{ height }}

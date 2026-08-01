@@ -90,7 +90,11 @@ export async function FactoryLoop() {
 
   return (
     <div className="mt-8">
-      <SteppedTerminal steps={steps} fallback={<Stacked sessions={sessions} />} />
+      <SteppedTerminal
+        steps={steps}
+        label="The five stages"
+        fallback={<Stacked sessions={sessions} />}
+      />
     </div>
   );
 }
