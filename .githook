@@ -1,3 +1,0 @@
-[hook "pre-commit"]
-	event = pre-commit
-	command = just check

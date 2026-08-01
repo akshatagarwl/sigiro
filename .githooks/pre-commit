@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+# `just check` -- fmt, clippy, the test suite. Only when the commit touches Rust.
+#
+# This used to run on every commit via a `hook.just-check.command` entry in
+# .git/config, which meant a www-only or docs-only commit paid ninety seconds to
+# be told the Rust it did not touch still compiles. Now it is a normal hook file
+# under core.hooksPath, so it is tracked, reviewable, and the same for everyone.
+#
+# Bypass with `--no-verify`.
+set -e
+
+here=$(dirname "$0")
+
+if git diff --cached --name-only --diff-filter=ACMR | "$here/_rust-touched"; then
+    just check
+else
+    echo "pre-commit: no Rust in this commit, skipping \`just check\`"
+fi

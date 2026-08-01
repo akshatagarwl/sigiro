@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+# Filter: reads a list of paths on stdin, exits 0 if any of them can change what
+# `cargo fmt`, `cargo clippy`, `cargo test`, `hawk` or `slop` would say.
+#
+# Used by pre-commit and pre-push so a www-only or docs-only change does not pay
+# for a full workspace compile. The list is deliberately generous — a false
+# positive costs a minute, a false negative pushes a broken tree.
+#
+#   justfile      the recipes themselves
+#   hawk.toml     which crate hawk treats as production
+#   scripts/      slop_audit.py lives here
+exec grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$|^rust-toolchain|^\.cargo/|^hawk\.toml$|^justfile$|^scripts/'

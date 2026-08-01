@@ -5,6 +5,39 @@
 #
 #   hawk -- unnecessary public API surface
 #   slop -- structural erosion + clone density (SlopCodeBench metrics)
+#
+# Skipped when the push carries no Rust, since neither has anything to say about
+# a docs or www change. Git hands us one line per ref on stdin:
+#
+#   <local ref> <local sha> <remote ref> <remote sha>
+#
+# Fail-safe: if the range cannot be worked out — a brand-new branch with no
+# remote counterpart, a shallow clone — run the gates rather than skip them.
 set -e
-just hawk
-just slop
+
+here=$(dirname "$0")
+zero=0000000000000000000000000000000000000000
+
+files=$(
+    while read -r _local_ref local_sha _remote_ref remote_sha; do
+        [ "$local_sha" = "$zero" ] && continue          # branch deletion
+        if [ "$remote_sha" = "$zero" ]; then
+            echo "__unknown_range__"                    # new branch: do not guess
+        else
+            git diff --name-only "$remote_sha" "$local_sha" 2>/dev/null || echo "__unknown_range__"
+        fi
+    done
+)
+
+if [ -z "$files" ]; then
+    echo "pre-push: nothing to push"
+    exit 0
+fi
+
+if printf '%s\n' "$files" | grep -q '__unknown_range__' ||
+    printf '%s\n' "$files" | "$here/_rust-touched"; then
+    just hawk
+    just slop
+else
+    echo "pre-push: no Rust in this push, skipping hawk + slop"
+fi
