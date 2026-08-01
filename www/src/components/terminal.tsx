@@ -1,6 +1,12 @@
 'use client';
 
-import { useMotionValueEvent, useReducedMotion, useScroll } from 'motion/react';
+import {
+  motion,
+  useMotionTemplate,
+  useMotionValueEvent,
+  useScroll,
+  useTransform,
+} from 'motion/react';
 import { useMemo, useRef, useState } from 'react';
 
 /**
@@ -9,37 +15,48 @@ import { useMemo, useRef, useState } from 'react';
  * An earlier version typed the transcript out character by character, bound to
  * scroll position. It was a good demo of scrubbing and a bad terminal: real
  * shells do not type their own output. You run a command and the output lands.
- * Only the command is ever typed, and that is a person typing, not the machine.
- * So nothing here animates text — a frame arrives with its command already run.
+ * So nothing here animates text — a frame arrives with its command already run,
+ * and sits at a fresh prompt, which is where a shell waits when it has finished.
  *
- * What scroll still drives is which frame you are looking at, and that part is
- * genuinely scrubbed: the handoff is a continuous function of scroll position,
- * so it reverses if you scroll back rather than replaying.
+ * What scroll drives is which frame you are looking at, and the handoff between
+ * frames. Both come off `scrollYProgress`, so both reverse on the way back.
  *
- * One step, one terminal, because when consecutive steps have different owners
- * a single shared shell says one actor ran all of them. A coding agent's work
- * does not happen in your sigiro shell. Separate frames make the ownership
- * structural instead of a caption.
+ * One step, one terminal, because when consecutive steps have different owners a
+ * single shared shell says one actor ran all of them. A coding agent's work does
+ * not happen in your sigiro shell.
+ *
+ * The rail is not decoration. Once the panel pins, the section heading has
+ * scrolled away, so without it there is nothing on screen saying what the five
+ * things are, which are ours, or how far through you are. §6: "a strip of cells
+ * … with the accent marking where you are."
  *
  * Design constraints, from interior's DESIGN.md:
+ * - §5h  React does not re-render at 60fps. The step index is React state; the
+ *        handoff is MotionValues off `scrollYProgress` and never touches React.
+ *        A previous version quantised progress to two decimals and drove the
+ *        fade from state, which left the handoff about six frames long — §6a
+ *        calls this exactly: "quantising the sweep would make the fill look
+ *        like it was stuttering". Cells are the information, the sweep is the
+ *        material, and only the cells are allowed to be discrete.
+ * - §6a  `setStep(prev => prev === s ? prev : s)` on the discrete half.
  * - §5   the handoff uses the specified displacements — out at `y 6, blur(3px)`,
- *        in at `y 10, blur(6px)` — driven by scroll rather than by a duration.
+ *        in at `y 10, blur(6px)`.
  * - §3   no `rounded-full`, so no traffic-light chrome. This is the same
  *        `mat-well` cut into a `mat-panel` as every code block on the site.
  * - §3   no idle loops, so the resting cursor is a block that does not blink.
- * - §22  scroll-driven transforms are the accepted exception to the
- *        `useReducedMotion` rule. Reduced motion gets `fallback` instead, which
- *        is why `fallback` is required rather than optional.
+ * - §5h  a scroll-driven component needs no reduced-motion branch — every value
+ *        resolves on the frame it is scrolled to. `fallback` exists for no-JS,
+ *        not for reduced motion, and that is not an oversight.
  */
 
 export type TerminalStep = {
   cmd: string;
   out: string;
-  /** Names the step in the caption — "Diagnose", "Connect". */
+  /** Names the step on the rail and in the caption — "Diagnose", "Connect". */
   label: string;
   /** A chip beside the label: whose shell this is. */
   badge?: string;
-  /** Ink rather than muted ink on the chip, for steps that are ours. */
+  /** Ink rather than muted ink, on the rail and the chip, for steps that are ours. */
   badgeStrong?: boolean;
   /** Prose under the well, swapped as the step changes. */
   note?: string;
@@ -52,7 +69,8 @@ const PAD = 24;
 
 /**
  * Fraction of a step's scroll spent holding still before the handoff begins.
- * The remainder is the handoff itself: frame out, then frame in.
+ * The remainder is the handoff: frame out over the first half, in over the
+ * second.
  */
 const HOLD = 0.72;
 
@@ -67,41 +85,13 @@ function plan(steps: readonly TerminalStep[]) {
   });
 }
 
-function Screen({
-  lines,
-  height,
-  style,
-}: {
-  lines: Line[];
-  height: number;
-  style?: React.CSSProperties;
-}) {
-  return (
-    <div className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3" style={{ height }}>
-      <div
-        aria-hidden
-        className="font-mono text-[12.5px] leading-[22px] whitespace-pre"
-        style={style}
-      >
-        {lines.map((line, i) => (
-          <div
-            // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
-            key={i}
-            className={line.cmd ? 'text-ink' : 'text-ink-2'}
-            style={{ height: LINE }}
-          >
-            {line.text}
-          </div>
-        ))}
-        {/* The command finished and the shell is waiting. A block, not a caret:
-            §3 bans idle loops, and a caret that blinks on a timer is one. */}
-        <div className="text-ink" style={{ height: LINE }}>
-          {'$ '}
-          <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
-        </div>
-      </div>
-    </div>
-  );
+/** Where a scroll position falls: which step, and how far into its handoff. */
+function locate(v: number, count: number) {
+  const scaled = Math.min(Math.max(v, 0), 0.9999) * count;
+  const index = Math.floor(scaled);
+  const frac = scaled - index;
+  const handoff = index >= count - 1 || frac <= HOLD ? 0 : (frac - HOLD) / (1 - HOLD);
+  return { index, handoff };
 }
 
 export function SteppedTerminal({
@@ -110,7 +100,7 @@ export function SteppedTerminal({
   track,
 }: {
   steps: readonly TerminalStep[];
-  /** Shown to reduced-motion and no-JS readers, who have nothing to scroll. */
+  /** Shown where JavaScript never runs. */
   fallback: React.ReactNode;
   /**
    * Scroll distance the whole sequence occupies. Defaults to one viewport for
@@ -123,47 +113,45 @@ export function SteppedTerminal({
    */
   track?: string;
 }) {
-  const reduced = useReducedMotion();
   const ref = useRef<HTMLDivElement>(null);
   const frames = useMemo(() => plan(steps), [steps]);
-
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end end'] });
-  const [progress, setProgress] = useState(0);
+
+  // The discrete half: which frame's text is mounted. One render per step.
+  const [shown, setShown] = useState(0);
   useMotionValueEvent(scrollYProgress, 'change', (v) => {
-    // Two decimals is finer than a pixel of travel and keeps renders bounded.
-    const next = Math.round(v * 100) / 100;
-    setProgress((prev) => (prev === next ? prev : next));
+    const { index, handoff } = locate(v, steps.length);
+    const next = handoff >= 0.5 ? index + 1 : index;
+    setShown((prev) => (prev === next ? prev : next));
   });
 
-  const scaled = Math.min(progress, 0.9999) * steps.length;
-  const index = Math.floor(scaled);
-  const frac = scaled - index;
+  // The continuous half: never React state, so it runs at frame rate.
+  const opacity = useTransform(scrollYProgress, (v) => {
+    const { handoff: h } = locate(v, steps.length);
+    if (!h) return 1;
+    return h < 0.5 ? 1 - h / 0.5 : (h - 0.5) / 0.5;
+  });
+  const y = useTransform(scrollYProgress, (v) => {
+    const { handoff: h } = locate(v, steps.length);
+    if (!h) return 0;
+    return h < 0.5 ? -6 * (h / 0.5) : 10 * (1 - (h - 0.5) / 0.5);
+  });
+  const blur = useTransform(scrollYProgress, (v) => {
+    const { handoff: h } = locate(v, steps.length);
+    if (!h) return 0;
+    return h < 0.5 ? 3 * (h / 0.5) : 6 * (1 - (h - 0.5) / 0.5);
+  });
+  const filter = useMotionTemplate`blur(${blur}px)`;
 
-  const handoff = frac <= HOLD || index >= steps.length - 1 ? 0 : (frac - HOLD) / (1 - HOLD);
-  const leaving = handoff > 0 && handoff < 0.5;
-  const arriving = handoff >= 0.5;
-  const shown = arriving ? index + 1 : index;
+  // Resizing rides the handoff too, where the content it would jump is faded.
+  const height = useTransform(scrollYProgress, (v) => {
+    const { index, handoff: h } = locate(v, steps.length);
+    const a = frames[index].height;
+    const b = frames[Math.min(index + 1, frames.length - 1)].height;
+    return a + (b - a) * h;
+  });
+
   const step = steps[shown];
-
-  let style: React.CSSProperties | undefined;
-  if (leaving) {
-    const t = handoff / 0.5;
-    style = { opacity: 1 - t, transform: `translateY(${-6 * t}px)`, filter: `blur(${3 * t}px)` };
-  } else if (arriving) {
-    const t = (handoff - 0.5) / 0.5;
-    style = {
-      opacity: t,
-      transform: `translateY(${10 * (1 - t)}px)`,
-      filter: `blur(${6 * (1 - t)}px)`,
-    };
-  }
-
-  /** Resizing is free across the handoff: the content it would jump is faded. */
-  const height = handoff
-    ? frames[index].height + (frames[index + 1].height - frames[index].height) * handoff
-    : frames[shown].height;
-
-  if (reduced) return <>{fallback}</>;
 
   return (
     <>
@@ -174,7 +162,30 @@ export function SteppedTerminal({
         className="relative"
         style={{ height: track ?? `calc(100vh + ${steps.length * 45}vh)` }}
       >
-        <div className="sticky top-0 flex h-screen items-center">
+        <div className="sticky top-0 flex h-screen flex-col justify-center gap-3.5">
+          {/* The rail: five named cells, ours in ink, the current one accented.
+              This is the only thing on screen once the heading has scrolled off
+              that says what the sequence is. */}
+          <ol className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1">
+            {steps.map((s, i) => (
+              <li key={s.label} className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className={`size-[5px] rounded-[1.5px] ${
+                    i === shown ? 'bg-accent' : s.badgeStrong ? 'bg-ink' : 'bg-ink-3'
+                  }`}
+                />
+                <span
+                  className={`text-[11.5px] font-medium tracking-[-0.01em] ${
+                    i === shown ? 'text-ink' : 'text-ink-3'
+                  }`}
+                >
+                  {s.label}
+                </span>
+              </li>
+            ))}
+          </ol>
+
           <figure className="mat-panel w-full rounded-[14px] p-[5px]">
             <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
               {step.badge ? (
@@ -194,7 +205,31 @@ export function SteppedTerminal({
               </span>
             </figcaption>
 
-            <Screen lines={frames[shown].lines} height={height} style={style} />
+            <motion.div
+              className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3"
+              style={{ height }}
+            >
+              <motion.div
+                aria-hidden
+                className="font-mono text-[12.5px] leading-[22px] whitespace-pre"
+                style={{ opacity, y, filter }}
+              >
+                {frames[shown].lines.map((line, i) => (
+                  <div
+                    // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
+                    key={i}
+                    className={line.cmd ? 'text-ink' : 'text-ink-2'}
+                    style={{ height: LINE }}
+                  >
+                    {line.text}
+                  </div>
+                ))}
+                <div className="text-ink" style={{ height: LINE }}>
+                  {'$ '}
+                  <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
+                </div>
+              </motion.div>
+            </motion.div>
 
             {step.note ? (
               <p className="mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed text-ink-2">
