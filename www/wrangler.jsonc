@@ -20,9 +20,14 @@
   // the apex could come back without touching DNS at all.
   //
   // Both hostnames are listed because a route pattern matches one host.
-  // `workers_dev` stays on: adding routes silently disables it, and the
-  // workers.dev URL is the only way to reach a deploy whose routes are wrong.
-  "workers_dev": true,
+  //
+  // `workers_dev` is off. It was on as an escape hatch — the workers.dev URL is
+  // the only way to reach a deploy whose routes are wrong — but the cost of
+  // keeping it was a second public origin serving the identical site, with our
+  // canonical tags, our sitemap and our OG tags on it. That is a duplicate of
+  // sigiro.com that we published and never linked, and the escape hatch is one
+  // line away whenever a route actually breaks.
+  "workers_dev": false,
   "routes": [
     { "pattern": "sigiro.com/*", "zone_name": "sigiro.com" },
     { "pattern": "www.sigiro.com/*", "zone_name": "sigiro.com" }
