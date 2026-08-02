@@ -1,3 +1,4 @@
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import { isValidElement, type ComponentProps, type ReactNode } from 'react';
 import { CodeBlock } from '@/components/code-block';
@@ -105,6 +106,20 @@ export function DocRoute({ page }: { page: DocPage }) {
             // The generated reference pages call this for the mechanical part of
             // an operation; the prose above it is ordinary markdown.
             ApiOperation,
+            /**
+             * Binary or container, and the reader's answer is remembered.
+             *
+             * `groupId="sigiro-install"` with `persist` writes the choice to
+             * `localStorage['sigiro-install']`. The landing page's terminal reads
+             * that same key, so picking one here is still picked there — one
+             * preference across the site, and no synchronising code, because
+             * fumadocs already stores it under a key we choose.
+             *
+             * A doc that uses these has to be `.mdx`. `.md` is compiled with JSX
+             * off, so the tags would render as literal text.
+             */
+            Tab,
+            Tabs,
           }}
         />
       </DocsBody>

@@ -99,24 +99,68 @@ export const INSTALL = [
  * Every line has to fit the well, which holds about 86 characters at 12.5px and
  * clips the rest. That is why the two environment variables are two `export`
  * lines, and why the query is read from a file: neither fits beside a prompt on
- * one line. The docker line is INSTALL[0] with `-d` added — one duplicated
- * string, marked here for review if a third copy appears.
+ * one line.
+ *
+ * Connect has `variants` where the others have `run`: how you start sigiro is
+ * the one thing on this page a reader has an opinion about, and the terminal
+ * offers the pair as a choice. The docker line is INSTALL[1] with `-d` added —
+ * one duplicated string, marked here for review if a third copy appears.
  */
+
+/**
+ * Everything after "start it" is the same whichever way you started it, so the
+ * two variants differ only in their first command or two. Written once and
+ * spread into both, because a reader who toggles between them must see one line
+ * change and not a different demo.
+ */
+const CONNECT_REST = [
+  { cmd: 'export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318', out: '' },
+  { cmd: 'export OTEL_SERVICE_NAME=checkout', out: '' },
+  { cmd: 'npm start &', out: '[1] 41823\ncheckout listening on :3000' },
+  {
+    cmd: 'sigiro status',
+    out: 'ready · OTLP 4317 and 4318 · service checkout · 18,402 spans in 5 min',
+  },
+] as const;
+
 export const HOW = [
   {
     title: 'Connect',
     say: 'sigiro uses standard OTLP on the standard ports.',
-    run: [
+    /**
+     * The reader picks, and the pick is remembered.
+     *
+     * The ids match the tab values in `content/docs/quickstart.mdx`, and both
+     * read `localStorage['sigiro-install']`, so choosing here shows the same
+     * choice in the docs and the other way round.
+     *
+     * `binary` is first because it is the default for a reader whose next
+     * command is `npm start` on a laptop. `docker` stays because it is the one
+     * path that works on every platform, including the ones with no build.
+     */
+    variants: [
       {
-        cmd: 'docker run -d -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro',
-        out: 'a3f1c9e2d7b4',
+        id: 'binary',
+        label: 'binary',
+        run: [
+          {
+            cmd: 'curl -fsSL https://sigiro.com/install | sh',
+            out: 'installed ~/.local/bin/sigiro',
+          },
+          { cmd: 'sigiro serve &', out: '[1] 41802\nlistening on 4317, 4318, 9999' },
+          ...CONNECT_REST,
+        ],
       },
-      { cmd: 'export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318', out: '' },
-      { cmd: 'export OTEL_SERVICE_NAME=checkout', out: '' },
-      { cmd: 'npm start &', out: '[1] 41823\ncheckout listening on :3000' },
       {
-        cmd: 'sigiro status',
-        out: 'ready · OTLP 4317 and 4318 · service checkout · 18,402 spans in 5 min',
+        id: 'docker',
+        label: 'docker',
+        run: [
+          {
+            cmd: 'docker run -d -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro',
+            out: 'a3f1c9e2d7b4',
+          },
+          ...CONNECT_REST,
+        ],
       },
     ],
   },

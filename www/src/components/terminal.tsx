@@ -8,7 +8,7 @@ import {
   useScroll,
   useTransform,
 } from 'motion/react';
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useSyncExternalStore } from 'react';
 import { createMachine, types } from 'xstate';
 import { SkeletonSwap } from '@/components/interior/skeleton-swap';
 import { TaskSteps } from '@/components/interior/task-steps';
@@ -84,7 +84,88 @@ export type TerminalStep = {
   badgeShort?: string;
   /** Prose under the well, swapped as the step changes. */
   note?: string;
+  /**
+   * Two ways to do this step, for the reader to choose between.
+   *
+   * Both are highlighted on the server and both cross to the client, because the
+   * highlighter must not. When present, `lines` is whichever the reader picked
+   * and this is the pair the picker offers.
+   */
+  choices?: readonly { id: string; label: string; lines: readonly SessionLine[] }[];
 };
+
+/**
+ * Where the install preference lives: the `groupId` of the `<Tabs>` in
+ * `content/docs/quickstart.mdx`, so the docs and this control are one
+ * preference rather than two that happen to look alike.
+ *
+ * Both stores, in fumadocs' order, because fumadocs is the other reader and
+ * writer. It reads `sessionStorage` first and only falls back to
+ * `localStorage`, and it writes both. Writing only `localStorage` here made the
+ * sharing one-way and looked like it worked: the docs still had this tab's
+ * value in `sessionStorage` from earlier in the visit, so a choice made on the
+ * landing page reached the docs only in a fresh tab.
+ *
+ * Both accessors can throw — Safari in private mode, a browser with storage
+ * blocked. A missing preference is just the default, so failing soft is right;
+ * the theme script in layout.tsx swallows the same exception for the same
+ * reason.
+ */
+const PREF = 'sigiro-install';
+
+function readPref(): string | null {
+  try {
+    return sessionStorage.getItem(PREF) ?? localStorage.getItem(PREF);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Same-document writes do not raise `storage` — that event is for *other* tabs
+ * — so a subscriber in this document has to be told directly.
+ */
+const watchers = new Set<() => void>();
+
+function writePref(id: string) {
+  try {
+    sessionStorage.setItem(PREF, id);
+    localStorage.setItem(PREF, id);
+  } catch {
+    // A reader who cannot store a preference still gets to change the view.
+  }
+  for (const notify of watchers) notify();
+}
+
+function subscribe(notify: () => void) {
+  watchers.add(notify);
+  // Another tab changing the preference. Free, and correct: the reader set it
+  // once and means it everywhere.
+  window.addEventListener('storage', notify);
+  return () => {
+    watchers.delete(notify);
+    window.removeEventListener('storage', notify);
+  };
+}
+
+/**
+ * The reader's install preference, as a subscription rather than a copy.
+ *
+ * `useSyncExternalStore` is React's own hook for reading a store it does not
+ * own, and storage is exactly that. It replaced a `useState` seeded by a
+ * `useEffect`, which worked and was three wrong things: it kept a second copy
+ * of a value that already had a home, it re-implemented the hydration rule the
+ * hook enforces by taking a separate server snapshot, and it could not hear a
+ * change it did not make. The third one is not hypothetical — the docs tabs
+ * write this key too.
+ *
+ * The server snapshot is `null`, which renders the first choice. It has to be a
+ * constant: returning `readPref()` there would read storage during render and
+ * make the server and the first client render disagree.
+ */
+function useInstallPref() {
+  return useSyncExternalStore(subscribe, readPref, () => null);
+}
 
 /** 12.5px type on a 22px rhythm, explicit so the frame maths stays integer. */
 const LINE = 22;
@@ -105,12 +186,27 @@ const HOLD = 0.72;
  */
 const RUN_MS = 300;
 
-function plan(steps: readonly TerminalStep[]) {
-  return steps.map(({ lines }) => ({
-    lines,
-    // A shell that has finished sits at a fresh prompt. One more row for it.
-    height: (lines.length + 1) * LINE + PAD,
-  }));
+/**
+ * The transcript a step shows, given what the reader picked.
+ *
+ * `pick` is read from storage and so can be anything at all — a stale id, a
+ * value another page wrote. An unknown id falls back to the first choice rather
+ * than rendering an empty terminal.
+ */
+function chosen(step: TerminalStep, pick: string | null) {
+  if (!step.choices?.length) return step.lines;
+  return (step.choices.find((c) => c.id === pick) ?? step.choices[0]).lines;
+}
+
+function plan(steps: readonly TerminalStep[], pick: string | null) {
+  return steps.map((step) => {
+    const lines = chosen(step, pick);
+    return {
+      lines,
+      // A shell that has finished sits at a fresh prompt. One more row for it.
+      height: (lines.length + 1) * LINE + PAD,
+    };
+  });
 }
 
 /** Where a scroll position falls: which step, and how far into its handoff. */
@@ -214,7 +310,9 @@ export function SteppedTerminal({
   track?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const frames = useMemo(() => plan(steps), [steps]);
+
+  const pick = useInstallPref();
+  const frames = useMemo(() => plan(steps, pick), [steps, pick]);
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end end'] });
 
   // The discrete half: which frame's text is mounted, and whether its command
@@ -306,7 +404,46 @@ export function SteppedTerminal({
                 <span className="text-[13px] font-medium tracking-[-0.01em] text-ink">
                   {step.label}
                 </span>
-                <span className="meta ml-auto shrink-0 text-ink-3">
+
+                {/* The picker sits in the chrome rather than above the section,
+                    because what it changes is inside this well and nowhere else.
+                    §3 rules out a pill, so it is two cells in a tray; radii nest,
+                    5 inside 7.
+
+                    Ink for the selected cell, not accent. §7c lists "segmented
+                    thumb" among the controls that mark selection with ink and
+                    depth, and says why: accent means "the system is responding
+                    to you right now", and if every selected thing were blue,
+                    focus would stop meaning anything. This was `bg-accent` until
+                    that section was re-read. It also matches the docs tabs, which
+                    fumadocs draws in ink — one preference, two controls, one
+                    idiom. */}
+                {step.choices ? (
+                  <span
+                    role="group"
+                    aria-label={`How to run ${step.label.toLowerCase()}`}
+                    className="mat-cap ml-auto flex shrink-0 items-center gap-px rounded-[7px] p-px"
+                  >
+                    {step.choices.map((choice) => {
+                      const on = chosen(step, pick) === choice.lines;
+                      return (
+                        <button
+                          key={choice.id}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => writePref(choice.id)}
+                          className={`press meta rounded-[5px] px-2 py-[5px] ${
+                            on ? 'bg-ink text-panel' : 'text-ink-3 hover:text-ink'
+                          }`}
+                        >
+                          {choice.label}
+                        </button>
+                      );
+                    })}
+                  </span>
+                ) : null}
+
+                <span className={`meta shrink-0 text-ink-3 ${step.choices ? 'pl-2.5' : 'ml-auto'}`}>
                   {shown + 1} of {steps.length}
                 </span>
               </figcaption>

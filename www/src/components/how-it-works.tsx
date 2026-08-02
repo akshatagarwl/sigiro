@@ -77,21 +77,47 @@ function Stacked({ sessions }: { sessions: readonly (readonly SessionLine[])[] }
   );
 }
 
+/**
+ * A step is either one session or a choice between two, and both shapes reduce
+ * to the same thing here: a list of named transcripts, the first of which is the
+ * default. The terminal shows a picker when there is more than one.
+ *
+ * Every variant is highlighted, not only the selected one — the reader switches
+ * in the browser and Shiki is not there.
+ */
+function variantsOf(step: (typeof HOW)[number]) {
+  return 'variants' in step
+    ? step.variants.map((v) => ({ id: v.id, label: v.label, run: v.run }))
+    : [{ id: step.title.toLowerCase(), label: step.title, run: step.run }];
+}
+
 export async function HowItWorks() {
-  const sessions = await Effect.runPromise(
+  const highlighted = await Effect.runPromise(
     Effect.all(
-      HOW.map((s) => transcript(s.run)),
+      HOW.map((step) =>
+        Effect.all(
+          variantsOf(step).map((v) =>
+            Effect.map(transcript(v.run), (lines) => ({ id: v.id, label: v.label, lines })),
+          ),
+          { concurrency: 'unbounded' },
+        ),
+      ),
       { concurrency: 'unbounded' },
     ),
   );
+
+  /** What the no-JS fallback and the screen-reader transcript print: the default. */
+  const sessions = highlighted.map((variants) => variants[0].lines);
 
   // No badge: every one of these is your own shell, and a chip that reads the
   // same on every step is furniture rather than information. The caption already
   // carries the step name and the count.
   const steps: TerminalStep[] = HOW.map((s, i) => ({
-    lines: sessions[i],
+    lines: highlighted[i][0].lines,
     label: s.title,
     note: s.say,
+    // One transcript is not a choice, so no picker is offered for it.
+    choices: highlighted[i].length > 1 ? highlighted[i] : undefined,
   }));
 
   return (
