@@ -1,0 +1,146 @@
+name: Release
+
+# Tags only. `just check` on every push already gates main; this is the
+# publishing step, and publishing is deliberate.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04, not -latest. A gnu binary will not start against a
+          # glibc older than the one it linked against, so the runner's glibc is
+          # the oldest distro we support: 22.04 is 2.35, and -latest (24.04) is
+          # 2.39, which would silently drop Debian 12 and Ubuntu 22.04 users.
+          # Lower the floor further with musl, not with a newer runner.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            cross: true
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-apple-darwin
+            os: macos-15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Cross-compilation toolchain
+        if: matrix.cross
+        uses: eclipse-score/apt-install@v1.0.0
+        with:
+          packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          apt_update: true
+
+      # DuckDB's own prebuilt static archive, the same source and the same
+      # pinned version the Dockerfile uses. Compiling the amalgamation here
+      # instead would add roughly half an hour per Linux target for a byte-
+      # identical result.
+      #
+      # macOS is not here on purpose: Cargo.toml selects the `bundled` feature on
+      # macOS so that a clone builds with no setup, and changing that to suit CI
+      # would cost every developer that property. macOS pays the compile.
+      - name: DuckDB static libs
+        if: runner.os == 'Linux'
+        env:
+          DUCKDB_VERSION: 1.5.3
+          ARCH: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'arm64' || 'amd64' }}
+        run: |
+          set -euo pipefail
+          mkdir -p /opt/duckdb && cd /tmp
+          curl -fSL --retry 3 \
+            "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/static-libs-linux-${ARCH}.zip" \
+            -o s.zip
+          unzip -q s.zip
+          # The release ships several archives; the link needs one. `ar` cannot
+          # merge archives directly, so unpack all of them and repack.
+          mkdir merge && cd merge
+          for a in ../*.a; do ar x "$a"; done
+          ar qc libduckdb_static.a ./*.o
+          ranlib libduckdb_static.a
+          cp libduckdb_static.a /opt/duckdb/
+          cp ../duckdb.h /opt/duckdb/
+          echo "DUCKDB_LIB_DIR=/opt/duckdb" >> "$GITHUB_ENV"
+          echo "DUCKDB_INCLUDE_DIR=/opt/duckdb" >> "$GITHUB_ENV"
+          echo "DUCKDB_STATIC=1" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --locked --bin sigiro --target ${{ matrix.target }}
+
+      # No UPX here, unlike the image. Compression buys nothing on a download
+      # the reader does once, costs a decompression stub on every start, and is
+      # a standing false-positive trigger for endpoint scanners — a bad trade
+      # for a binary a human puts on their laptop.
+      - name: Package
+        id: package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          name="sigiro-${version}-${TARGET}.tar.gz"
+          # -C so the archive holds a bare `sigiro`, not a path. The installer
+          # looks for exactly that.
+          tar -czf "$name" -C "target/${TARGET}/release" sigiro
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.name }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One file, every archive, written the way `sha256sum -c` and the
+      # installer's `grep` both read it.
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS
+          cat SHA256SUMS
+
+      # Upload versioned artifacts BEFORE LATEST. LATEST is what the installer
+      # reads first, so if it names a version whose archives are not up yet,
+      # every install in that window fails. Write the pointer last and this
+      # cannot happen.
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          aws s3 cp dist "s3://sigiro-dl/${version}/" \
+            --endpoint-url "$ENDPOINT" --recursive --no-progress
+          printf '%s' "$version" > LATEST
+          aws s3 cp LATEST s3://sigiro-dl/LATEST \
+            --endpoint-url "$ENDPOINT" --content-type text/plain --no-progress

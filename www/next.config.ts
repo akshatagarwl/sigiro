@@ -69,11 +69,14 @@ const nextConfig: NextConfig = {
         permanent: false,
       },
       { source: '/discord', destination: 'https://discord.gg/sigiro', permanent: false },
-      {
-        source: '/install',
-        destination: 'https://github.com/sigiroai/sigiro/releases/latest/download/install.sh',
-        permanent: false,
-      },
+      /**
+       * `/install` is no longer here. It was a 307 to
+       * `sigiroai/sigiro/releases/latest/download/install.sh`, and that release
+       * — and that repository — do not exist, so the one short link that is
+       * printed in the README and on the socials answered 404 to everyone who
+       * ran it. It is now a real script at `public/install`, served as a static
+       * asset. A redirect would also have broken `curl -fsS` without `-L`.
+       */
     ];
   },
 };

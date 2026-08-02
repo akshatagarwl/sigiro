@@ -1,0 +1,110 @@
+#!/bin/sh
+# sigiro installer.
+#
+#   curl -fsSL https://sigiro.com/install | sh
+#
+# Served from www/public/install, so the path is a static asset and not a
+# redirect. It used to be a 307 to a GitHub release that did not exist, which
+# means the published short link answered 404 to everyone who tried it.
+#
+# Environment:
+#   SIGIRO_VERSION      version to install. Default: whatever /dl/LATEST names.
+#   SIGIRO_INSTALL_DIR  where to put the binary. Default: ~/.local/bin.
+#
+# POSIX sh, no bashisms: this runs under dash on Debian and Ubuntu images.
+
+set -eu
+
+BASE="${SIGIRO_BASE_URL:-https://sigiro.com/dl}"
+DIR="${SIGIRO_INSTALL_DIR:-$HOME/.local/bin}"
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'install: %s\n' "$*" >&2; exit 1; }
+
+need() { command -v "$1" >/dev/null 2>&1 || die "this script needs $1"; }
+
+need uname
+need tar
+need mkdir
+
+# curl or wget, whichever the machine has.
+if command -v curl >/dev/null 2>&1; then
+  fetch() { curl -fsSL "$1" -o "$2"; }
+  read_url() { curl -fsSL "$1"; }
+elif command -v wget >/dev/null 2>&1; then
+  fetch() { wget -qO "$2" "$1"; }
+  read_url() { wget -qO- "$1"; }
+else
+  die 'this script needs curl or wget'
+fi
+
+# sha256sum on Linux, shasum on macOS. The download is verified or it is not
+# installed — a corrupt or substituted archive must never reach $DIR.
+if command -v sha256sum >/dev/null 2>&1; then
+  sum() { sha256sum "$1" | cut -d' ' -f1; }
+elif command -v shasum >/dev/null 2>&1; then
+  sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
+else
+  die 'this script needs sha256sum or shasum'
+fi
+
+case "$(uname -s)" in
+  Linux)  os='unknown-linux-gnu' ;;
+  Darwin) os='apple-darwin' ;;
+  *) die "no build for $(uname -s). Run the container instead: ghcr.io/sigiroai/sigiro" ;;
+esac
+
+case "$(uname -m)" in
+  x86_64 | amd64)  arch='x86_64' ;;
+  aarch64 | arm64) arch='aarch64' ;;
+  *) die "no build for $(uname -m). Run the container instead: ghcr.io/sigiroai/sigiro" ;;
+esac
+
+target="${arch}-${os}"
+
+version="${SIGIRO_VERSION:-}"
+if [ -z "$version" ]; then
+  version="$(read_url "$BASE/LATEST")" || die "cannot reach $BASE/LATEST"
+  [ -n "$version" ] || die "$BASE/LATEST is empty"
+fi
+
+archive="sigiro-${version}-${target}.tar.gz"
+url="$BASE/${version}/${archive}"
+
+tmp="$(mktemp -d)"
+# Runs on error and on success, so a failed download leaves nothing behind.
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+say "sigiro ${version} for ${target}"
+
+fetch "$url" "$tmp/$archive" || die "cannot download $url"
+fetch "$BASE/${version}/SHA256SUMS" "$tmp/SHA256SUMS" || die 'cannot download SHA256SUMS'
+
+want="$(grep " ${archive}\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)"
+[ -n "$want" ] || die "SHA256SUMS names no ${archive}"
+
+got="$(sum "$tmp/$archive")"
+[ "$want" = "$got" ] || die "checksum mismatch for ${archive}: expected ${want}, got ${got}"
+
+tar -xzf "$tmp/$archive" -C "$tmp"
+[ -f "$tmp/sigiro" ] || die "the archive contains no sigiro binary"
+
+mkdir -p "$DIR"
+# Move into place through a temporary name in the same directory, so a running
+# sigiro is replaced atomically and never read half-written.
+chmod 755 "$tmp/sigiro"
+mv "$tmp/sigiro" "$DIR/sigiro.new"
+mv "$DIR/sigiro.new" "$DIR/sigiro"
+
+say "installed $DIR/sigiro"
+
+case ":${PATH}:" in
+  *":${DIR}:"*) say 'run: sigiro serve' ;;
+  *)
+    say ''
+    say "$DIR is not on your PATH. Add it:"
+    say "  export PATH=\"$DIR:\$PATH\""
+    say ''
+    say "Or run it directly: $DIR/sigiro serve"
+    ;;
+esac

@@ -36,5 +36,16 @@
     "directory": "dist/client",
     "not_found_handling": "none",
     "binding": "ASSETS"
-  }
+  },
+  // Release artifacts, served by /dl/[...key].
+  //
+  // A bucket of its own, not `sigiro-prod`. That bucket holds tenant telemetry,
+  // and /dl is an unauthenticated public route: putting both behind one binding
+  // means one key-handling mistake in that route is a data leak rather than a
+  // 404. Two buckets make that class of bug impossible instead of unlikely.
+  //
+  // The bucket itself stays private. Reads go through the Worker, so there is no
+  // public bucket URL and no second hostname to add — which matters here,
+  // because this deploy path has no DNS scope (see the routes note above).
+  "r2_buckets": [{ "binding": "DOWNLOADS", "bucket_name": "sigiro-dl" }]
 }
