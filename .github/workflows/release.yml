@@ -5,6 +5,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,7 +14,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Fails in seconds if the R2 credentials are missing, before the matrix spends
+  # an hour of macOS minutes compiling DuckDB from source for a release that
+  # cannot be uploaded. v0.1.0 was cut by hand precisely because these secrets
+  # were not set; tagging without them should cost nothing, not an hour.
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: R2 credentials present
+        env:
+          KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+          SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ACCOUNT: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          missing=''
+          [ -n "$KEY" ]     || missing="$missing R2_ACCESS_KEY_ID"
+          [ -n "$SECRET" ]  || missing="$missing R2_SECRET_ACCESS_KEY"
+          [ -n "$ACCOUNT" ] || missing="$missing R2_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::missing repo secrets:$missing — set them, or publish by hand (see docs/notes/roadmap.md item 30)"
+            exit 1
+          fi
+
   build:
+    needs: preflight
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
