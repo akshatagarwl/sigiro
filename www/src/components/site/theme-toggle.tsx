@@ -1,51 +1,32 @@
 'use client';
 
-import { useMachine } from '@xstate/react';
-import { useEffect } from 'react';
-import { createMachine, types } from 'xstate';
+import { useTheme } from 'next-themes';
+import { useSyncExternalStore } from 'react';
+
+/** Nothing to subscribe to: this value changes once, when React hydrates. */
+const never = () => () => {};
 
 /**
- * Which key is down — and the honest third answer, which is that nobody here
- * knows yet.
+ * False through the server render and the hydrating render, true afterwards.
  *
- * `unknown` is not a spinner state and it is not "light". The theme class is
- * already on `<html>` before first paint, put there by the blocking script in
- * the root layout; what cannot see it is this component's first render, which
- * happens on the server. So the truth on that render is genuinely "unresolved",
- * and it stays a state rather than collapsing into a boolean because the two
- * things that read it want different answers: the cap draws at zero opacity
- * (its cell is reserved from the start, so nothing moves when it appears), and
- * *neither* button is `aria-pressed`. A boolean would have to guess, and a
- * wrong guess is exactly the flash of the wrong theme the script exists to
- * prevent.
+ * `next-themes` reads storage in a lazy `useState` initializer, so by its own
+ * first client render it already knows the theme — while the server render
+ * could not have. Deriving "do we know yet" from `resolvedTheme` therefore
+ * answers *yes* one render too early, and the server's `aria-pressed="false"`
+ * meets a client that wants `true`. React logged exactly that and threw the
+ * hydrated tree away.
  *
- * Two events rather than one, because they are two different sentences.
- * `OBSERVED` reads what the pre-paint script already decided and is only
- * accepted in `unknown` — resolving the unknown is a thing that happens once,
- * and the machine is where that is stated. `CHOSE` is a click, accepted
- * anywhere, and is the only one that writes anything down.
- *
- * The writes themselves — the class on `<html>`, the localStorage key — stay in
- * the handler rather than becoming entry actions. As an entry action on
- * `dark`/`light` they would also fire for `OBSERVED`, which would persist a
- * preference the reader never expressed and quietly freeze whatever
- * `prefers-color-scheme` happened to say on their first visit.
+ * `useSyncExternalStore` is the fix rather than a `useState` in a `useEffect`,
+ * because React feeds the server snapshot to the hydrating render as well —
+ * which is the property being relied on here, not a side effect of one.
  */
-function pick({ event }: { event: { dark: boolean } }) {
-  return { target: event.dark ? ('dark' as const) : ('light' as const) };
+function useHydrated() {
+  return useSyncExternalStore(
+    never,
+    () => true,
+    () => false,
+  );
 }
-
-const theme = createMachine({
-  schemas: {
-    events: { OBSERVED: types<{ dark: boolean }>(), CHOSE: types<{ dark: boolean }>() },
-  },
-  initial: 'unknown',
-  states: {
-    unknown: { on: { OBSERVED: pick, CHOSE: pick } },
-    light: { on: { CHOSE: pick } },
-    dark: { on: { CHOSE: pick } },
-  },
-});
 
 /**
  * Light and dark, as two keys in a well with one cap sliding between them.
@@ -53,25 +34,31 @@ const theme = createMachine({
  * The icons are drawn inline on the Phosphor grid (viewBox 256, strokeWidth 16 —
  * 1.5px at this render size) rather than imported, because an icon package would
  * be a whole dependency for two glyphs.
+ *
+ * The state was a three-state XState machine here: `unknown` / `light` / `dark`,
+ * with an `OBSERVED` event that read the class the pre-paint script had written
+ * and a `CHOSE` event that wrote the preference. It is now `useTheme`, which
+ * owns the same three answers and also hears the two changes the machine could
+ * not: the operating system switching theme while the page is open, and another
+ * tab making the choice. See the note in `app/layout.tsx`.
+ *
+ * `resolvedTheme` is `undefined` until the provider has mounted, and that is the
+ * old `unknown` state exactly — not a spinner and not "light". Two things read
+ * it and want different answers: the sliding cap draws at zero opacity, its cell
+ * reserved from the start so nothing moves when it appears, and *neither* button
+ * is `aria-pressed`. Guessing would show the wrong key for a frame, which is the
+ * same class of bug as a flash of the wrong theme.
  */
 export function ThemeToggle() {
-  const [state, send] = useMachine(theme);
-  const known = !state.matches('unknown');
-  const dark = state.matches('dark');
+  const { resolvedTheme, setTheme } = useTheme();
+  const known = useHydrated() && resolvedTheme !== undefined;
+  const dark = known && resolvedTheme === 'dark';
 
-  useEffect(() => {
-    send({ type: 'OBSERVED', dark: document.documentElement.classList.contains('dark') });
-  }, [send]);
-
-  function set(next: boolean) {
-    document.documentElement.classList.toggle('dark', next);
-    try {
-      localStorage.setItem('sigiro-theme', next ? 'dark' : 'light');
-    } catch {
-      // A blocked localStorage costs the preference, not the toggle.
-    }
-    send({ type: 'CHOSE', dark: next });
-  }
+  // Writes a concrete choice rather than "system", which is what clicking one of
+  // two keys means. A reader who wants to follow the OS again clears the site's
+  // storage; there is no third key, and adding one would be a new control rather
+  // than a refactor.
+  const set = (next: boolean) => setTheme(next ? 'dark' : 'light');
 
   return (
     <div
@@ -91,9 +78,9 @@ export function ThemeToggle() {
         type="button"
         onClick={() => set(false)}
         aria-label="Light"
-        aria-pressed={state.matches('light')}
+        aria-pressed={known && !dark}
         className="relative z-10 grid h-5 w-6 place-items-center rounded-[5px]"
-        style={{ color: state.matches('light') ? 'var(--ink)' : 'var(--ink-3)' }}
+        style={{ color: known && !dark ? 'var(--ink)' : 'var(--ink-3)' }}
       >
         <Sun />
       </button>

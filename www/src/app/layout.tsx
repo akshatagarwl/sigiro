@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
+import { ThemeProvider } from 'next-themes';
 import type { ReactNode } from 'react';
 import { SITE } from '@/lib/site';
 import './globals.css';
@@ -62,9 +63,29 @@ export const viewport: Viewport = {
   ],
 };
 
-/** Sets the theme class before first paint, so there is no flash of the wrong
- *  material. Inline and blocking on purpose — anything async is a flash. */
-const themeScript = `(function(){try{var s=localStorage.getItem("sigiro-theme");var d=s?s==="dark":matchMedia("(prefers-color-scheme:dark)").matches;if(d)document.documentElement.classList.add("dark")}catch(e){}})()`;
+/**
+ * Theme lives in `next-themes`, which was already in the tree — fumadocs-ui
+ * depends on it — and is now a direct dependency because we import it.
+ *
+ * It replaced a hand-written blocking script here and a small state machine in
+ * `theme-toggle.tsx`. Both were correct. Neither did the two things this does
+ * for nothing: follow the operating system when it changes theme *while the
+ * page is open* (a `matchMedia` listener, which the old script could not have —
+ * it ran once before paint and never again), and follow the same choice made in
+ * another tab (a `storage` listener).
+ *
+ * `storageKey` keeps the key readers already have, so nobody's saved preference
+ * is dropped by this change. `attribute="class"` writes the same `.dark` on
+ * `<html>` that globals.css already keys off, and it injects its own pre-paint
+ * script, so there is still no flash of the wrong material.
+ *
+ * `defaultTheme="system"` with `enableSystem` reproduces the old rule exactly:
+ * a stored choice wins, and with no stored choice `prefers-color-scheme`
+ * decides.
+ *
+ * The docs layout's `RootProvider` keeps `theme={{ enabled: false }}`. fumadocs
+ * would otherwise mount a second provider for the same class.
+ */
 
 /** One @graph, cross-referenced, so an answer engine reads one entity not three. */
 const graph = {
@@ -110,17 +131,22 @@ const graph = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning className={`h-full ${sans.variable} ${mono.variable}`}>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
       <body className="flex min-h-full flex-col font-sans text-ink-2 antialiased">
-        <a
-          href="#main"
-          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-[9px] focus:bg-ink focus:px-3 focus:py-2 focus:text-panel"
+        <ThemeProvider
+          attribute="class"
+          storageKey="sigiro-theme"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
         >
-          Skip to content
-        </a>
-        {children}
+          <a
+            href="#main"
+            className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-[9px] focus:bg-ink focus:px-3 focus:py-2 focus:text-panel"
+          >
+            Skip to content
+          </a>
+          {children}
+        </ThemeProvider>
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(graph) }} />
       </body>
     </html>

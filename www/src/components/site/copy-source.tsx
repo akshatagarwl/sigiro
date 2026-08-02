@@ -1,7 +1,6 @@
 'use client';
 
-import { useMachine } from '@xstate/react';
-import { createMachine } from 'xstate';
+import { useCopyButton } from 'fumadocs-ui/utils/use-copy-button';
 
 /**
  * The copy affordance a code fence gets: a 22px cap in the caption row, labelled
@@ -11,46 +10,33 @@ import { createMachine } from 'xstate';
  * its width when the state changes. The check is drawn inline on the Phosphor
  * grid rather than imported — one glyph is not worth a dependency.
  *
- * The check is a state, not a flag with a timer beside it. `copied` owns its own
- * 2s exit, and copying again while the check is up re-enters `copied`, which
- * cancels and restarts that exit — the same thing the hand-rolled version did by
- * clearing a ref'd timeout, minus the ref, the unmount cleanup and the chance of
- * forgetting either.
+ * The held check used to be an XState machine here: an `idle`/`copied` pair with
+ * a delayed exit that re-entering restarted. It was correct and it was a
+ * re-implementation. `useCopyButton` ships with fumadocs, which this site
+ * already depends on for the whole docs surface, and it does the same three
+ * things — hold the flag, restart the timer when you copy again, clear it on
+ * unmount. A machine is the right shape for the scroll sequence in terminal.tsx,
+ * where states mean something; here it was two states and a timeout.
+ *
+ * Its hold is 1500ms where ours was 2000ms. Not worth a fork.
  */
-
-/** How long the check stays up. */
-const HELD_MS = 2000;
-
-const clipboard = createMachine({
-  initial: 'idle',
-  states: {
-    idle: {
-      on: { COPIED: { target: 'copied' } },
-    },
-    copied: {
-      // Re-entering restarts the delayed exit below, so a second copy holds the
-      // check for a fresh 2s rather than inheriting the first one's remainder.
-      on: { COPIED: { target: 'copied', reenter: true } },
-      after: { [HELD_MS]: { target: 'idle' } },
-    },
-  },
-});
-
 export function CopySource({ code, label }: { code: string; label?: string }) {
-  const [state, send] = useMachine(clipboard);
-  const copied = state.matches('copied');
-
-  // The write itself stays here rather than becoming an invoked actor: it is one
-  // await with one failure mode, and the failure is "nothing happens", which is
-  // the machine staying where it already is.
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(code);
-    } catch {
-      return;
-    }
-    send({ type: 'COPIED' });
-  }
+  /**
+   * The rejection is deliberately not swallowed.
+   *
+   * `useCopyButton` raises its flag in a `.then`, so a rejected write skips it
+   * and the cap correctly stays on `copy` — a check that appeared when nothing
+   * reached the clipboard would be a lie. The old version returned early and
+   * said nothing at all, which is the silent-failure this repo's rules forbid.
+   * Logging and rethrowing keeps both properties: no false check, and a reason
+   * in the console when a reader reports that copy does nothing.
+   */
+  const [copied, copy] = useCopyButton(() =>
+    navigator.clipboard.writeText(code).catch((error: unknown) => {
+      console.error('sigiro: could not write to the clipboard', error);
+      throw error;
+    }),
+  );
 
   return (
     <button

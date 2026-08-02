@@ -12,6 +12,7 @@
         "fumadocs-ui": "16.12.1",
         "motion": "12.43.0",
         "next": "16.3.0-preview.9",
+        "next-themes": "0.4.6",
         "openapi-sampler": "1.7.4",
         "react": "19.3.0-canary-28cd4bb0-20260723",
         "react-dom": "19.3.0-canary-28cd4bb0-20260723",
