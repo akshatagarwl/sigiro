@@ -77,7 +77,10 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 
 say "sigiro ${version} for ${target}"
 
-fetch "$url" "$tmp/$archive" || die "cannot download $url"
+# A missing archive is the normal way a reader finds out their platform has no
+# build yet, so it must not read like a network fault. Not every target is
+# published for every version.
+fetch "$url" "$tmp/$archive" || die "no ${version} build for ${target}. Run the container instead: ghcr.io/sigiroai/sigiro"
 fetch "$BASE/${version}/SHA256SUMS" "$tmp/SHA256SUMS" || die 'cannot download SHA256SUMS'
 
 want="$(grep " ${archive}\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)"
@@ -86,6 +89,12 @@ want="$(grep " ${archive}\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)"
 got="$(sum "$tmp/$archive")"
 [ "$want" = "$got" ] || die "checksum mismatch for ${archive}: expected ${want}, got ${got}"
 
+# GNU tar warns on the xattr headers macOS tar writes:
+#   Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+# Harmless, and 0.1.0's archives carry it because they were packaged by hand on
+# a Mac. Pack with `COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata` if you
+# ever build a release outside CI again; the workflow tars on Linux and is clean.
+# Not worth suppressing here — hiding tar's stderr would hide real errors too.
 tar -xzf "$tmp/$archive" -C "$tmp"
 [ -f "$tmp/sigiro" ] || die "the archive contains no sigiro binary"
 

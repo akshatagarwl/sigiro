@@ -82,8 +82,23 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
     V=$(echo "$T" | tr 'a-z-' 'A-Z_'); Tu=$(echo "$T" | tr '-' '_'); \
     export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
     mold -run cargo build --release --target "$T" --bin sigiro && \
-    cp "target/${T}/release/sigiro" /build/sigiro && \
+    cp "target/${T}/release/sigiro" /build/sigiro.raw && \
+    cp /build/sigiro.raw /build/sigiro && \
     upx -6 /build/sigiro
+
+# The Linux binaries we publish for download, uncompressed.
+#
+# Same build as the image — same pinned DuckDB static archive, same cross-gcc,
+# same mold link — so a downloaded binary and the one in the container are the
+# same artifact. The only difference is UPX, which the image keeps and this does
+# not: compression pays for itself across image layers and pulls, and costs a
+# decompression stub on every start plus the odd endpoint-scanner false positive
+# for a binary a person puts on their laptop.
+#
+# `scratch`, so `--output type=local` writes exactly one file per platform and
+# nothing else.
+FROM scratch AS dist
+COPY --from=builder /build/sigiro.raw /sigiro
 
 # Runtime-prep (has a shell): bake the loadable extensions that aren't static in
 # the binary. Runs the TARGET binary, so pinned to $TARGETPLATFORM.

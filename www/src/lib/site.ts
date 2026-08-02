@@ -50,6 +50,16 @@ export const INSTALL = [
   {
     id: 'self-host',
     label: 'Self-host',
+    /* The binary leads and the container follows, because the reader whose next
+       command is `npm start` has a laptop and not always a container runtime.
+       Both are real: /install is a script served from this site and the image is
+       on ghcr. Neither line goes here before its artifact exists — the previous
+       /install was published for months and answered 404. */
+    code: 'curl -fsSL https://sigiro.com/install | sh',
+  },
+  {
+    id: 'container',
+    label: 'Or run the container',
     code: 'docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro',
   },
   {

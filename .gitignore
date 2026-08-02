@@ -21,3 +21,6 @@ car
 out.something
 trace-waterfall.html
 AGENTS.md
+
+# Downloadable binaries produced by `docker buildx bake dist`.
+dist-bin/

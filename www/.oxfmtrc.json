@@ -2,5 +2,13 @@
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "singleQuote": true,
   "printWidth": 100,
-  "ignorePatterns": ["content/**", "dist/**", "openapi.json", "DESIGN.md"]
+  "ignorePatterns": [
+    "content/**",
+    "dist/**",
+    "openapi.json",
+    "DESIGN.md",
+    "tsconfig.json",
+    "postcss.config.mjs",
+    "wrangler.jsonc"
+  ]
 }
