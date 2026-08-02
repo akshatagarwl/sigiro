@@ -24,3 +24,8 @@ AGENTS.md
 
 # Downloadable binaries produced by `docker buildx bake dist`.
 dist-bin/
+
+# Blume's generated Astro project and build output.
+docs-site/.blume/
+docs-site/dist/
+www/.source/

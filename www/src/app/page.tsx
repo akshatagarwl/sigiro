@@ -58,10 +58,10 @@ export default function Home() {
               {SITE.description}
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3 sm:mt-10">
-              <Link href="/docs/quickstart" prefetch={false} className={PRIMARY}>
+              <Link href="https://docs.sigiro.com/quickstart" prefetch={false} className={PRIMARY}>
                 Get started
               </Link>
-              <Link href="/docs" prefetch={false} className={SECONDARY}>
+              <Link href="https://docs.sigiro.com" prefetch={false} className={SECONDARY}>
                 Read the docs
               </Link>
             </div>

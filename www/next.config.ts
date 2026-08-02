@@ -1,9 +1,9 @@
 import type { NextConfig } from 'next';
 
 /**
- * MDX comes from fumadocs-mdx/vite in vite.config.ts, not from createMDX here —
- * this file only carries config that is genuinely framework-level. It is still
- * read by the `build:next` fallback.
+ * There is no MDX in this app any more — the docs are Blume at docs.sigiro.com.
+ * This file carries headers and the published redirects, and nothing else. It is
+ * still read by the `build:next` fallback.
  */
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -69,6 +69,32 @@ const nextConfig: NextConfig = {
         permanent: false,
       },
       { source: '/discord', destination: 'https://discord.gg/sigiro', permanent: false },
+      /**
+       * The docs moved to Blume at docs.sigiro.com, where they sit at the root
+       * rather than under `/docs`. Every one of these paths was published — in
+       * the README, in the nav, in the landing copy, and in the docs' own
+       * cross-links — so they redirect rather than 404.
+       *
+       * `permanent: false` like the rest of this list. A 301 is cached by the
+       * browser more or less forever, and the docs have just moved once already.
+       *
+       * `/docs/api/*` has no per-operation equivalent: the reference is now one
+       * generated page from the live spec, so every operation lands on it.
+       */
+      { source: '/docs', destination: 'https://docs.sigiro.com', permanent: false },
+      { source: '/docs/api/:path*', destination: 'https://docs.sigiro.com/api', permanent: false },
+      { source: '/docs/:path*', destination: 'https://docs.sigiro.com/:path*', permanent: false },
+      /**
+       * Blume generates these from the same content, so they live beside it.
+       * The paths stay reachable here because the footer, the README and the
+       * llms.txt convention itself all point at the site root.
+       */
+      { source: '/llms.txt', destination: 'https://docs.sigiro.com/llms.txt', permanent: false },
+      {
+        source: '/llms-full.txt',
+        destination: 'https://docs.sigiro.com/llms-full.txt',
+        permanent: false,
+      },
       /**
        * `/install` is no longer here. It was a 307 to
        * `sigiroai/sigiro/releases/latest/download/install.sh`, and that release

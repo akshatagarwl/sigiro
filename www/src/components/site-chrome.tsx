@@ -52,7 +52,7 @@ export function SiteHeader() {
           one you wrote last — so `hidden` lost and the button showed on a phone
           anyway. */}
       <div className="hidden sm:block">
-        <Link href="/docs/quickstart" prefetch={false} className={COMPACT}>
+        <Link href="https://docs.sigiro.com/quickstart" prefetch={false} className={COMPACT}>
           Get started
         </Link>
       </div>

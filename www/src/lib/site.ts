@@ -506,8 +506,13 @@ export const FAQ = [
 ] as const;
 
 export const NAV = [
-  { href: '/docs', label: 'Docs' },
-  { href: '/docs/api', label: 'API' },
+  /**
+   * Absolute, because the docs are a different site now — Blume at
+   * docs.sigiro.com. The `/docs/*` redirects in next.config.ts keep every
+   * published link working, but the nav should not take a reader through one.
+   */
+  { href: 'https://docs.sigiro.com', label: 'Docs' },
+  { href: 'https://docs.sigiro.com/api', label: 'API' },
 ] as const;
 
 export const SOCIAL = [

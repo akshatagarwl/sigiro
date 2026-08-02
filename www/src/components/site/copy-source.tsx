@@ -1,6 +1,42 @@
 'use client';
 
-import { useCopyButton } from 'fumadocs-ui/utils/use-copy-button';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+/** How long the check stays up. */
+const HELD_MS = 1500;
+
+/**
+ * Copy, then hold a check; copying again restarts the hold; the timer is cleared
+ * on unmount.
+ *
+ * This was `useCopyButton` from fumadocs, which was the right answer while
+ * fumadocs was a dependency. The docs moved to Blume on their own origin and
+ * fumadocs is gone, and keeping an entire docs framework installed for one
+ * fifteen-line hook is not a trade worth making. Nothing else in the tree ships
+ * it — usehooks-ts's `useCopyToClipboard` has no timed reset, which is the only
+ * part with any subtlety.
+ */
+function useCopyButton(onCopy: () => Promise<void>): [boolean, () => void] {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<number | null>(null);
+  // A ref, so the callback identity below stays stable while `code` changes.
+  const latest = useRef(onCopy);
+  latest.current = onCopy;
+
+  useEffect(() => () => window.clearTimeout(timer.current ?? undefined), []);
+
+  const click = useCallback(() => {
+    if (timer.current) window.clearTimeout(timer.current);
+    // No `catch`: a rejected write must not raise the check, and this repo's
+    // rules say a failure is reported rather than swallowed.
+    latest.current().then(() => {
+      setCopied(true);
+      timer.current = window.setTimeout(() => setCopied(false), HELD_MS);
+    });
+  }, []);
+
+  return [copied, click];
+}
 
 /**
  * The copy affordance a code fence gets: a 22px cap in the caption row, labelled
@@ -10,15 +46,11 @@ import { useCopyButton } from 'fumadocs-ui/utils/use-copy-button';
  * its width when the state changes. The check is drawn inline on the Phosphor
  * grid rather than imported — one glyph is not worth a dependency.
  *
- * The held check used to be an XState machine here: an `idle`/`copied` pair with
- * a delayed exit that re-entering restarted. It was correct and it was a
- * re-implementation. `useCopyButton` ships with fumadocs, which this site
- * already depends on for the whole docs surface, and it does the same three
- * things — hold the flag, restart the timer when you copy again, clear it on
- * unmount. A machine is the right shape for the scroll sequence in terminal.tsx,
- * where states mean something; here it was two states and a timeout.
- *
- * Its hold is 1500ms where ours was 2000ms. Not worth a fork.
+ * The held check has been three things. First an XState machine — an
+ * `idle`/`copied` pair with a delayed exit that re-entering restarted. Then
+ * fumadocs' `useCopyButton`, once it turned out an installed dependency already
+ * shipped exactly that. Now the small hook above, because the docs left for
+ * Blume and fumadocs went with them.
  */
 export function CopySource({ code, label }: { code: string; label?: string }) {
   /**

@@ -95,27 +95,23 @@ export type TerminalStep = {
 };
 
 /**
- * Where the install preference lives: the `groupId` of the `<Tabs>` in
- * `content/docs/quickstart.mdx`, so the docs and this control are one
- * preference rather than two that happen to look alike.
+ * Where this terminal's install preference lives.
  *
- * Both stores, in fumadocs' order, because fumadocs is the other reader and
- * writer. It reads `sessionStorage` first and only falls back to
- * `localStorage`, and it writes both. Writing only `localStorage` here made the
- * sharing one-way and looked like it worked: the docs still had this tab's
- * value in `sessionStorage` from earlier in the visit, so a choice made on the
- * landing page reached the docs only in a fresh tab.
+ * It used to mirror fumadocs' storage convention — sessionStorage first, then
+ * localStorage, both written — so that picking binary or docker here was also
+ * picked in the docs. That is gone, and not because the code was wrong: the
+ * docs moved to docs.sigiro.com, which is a different origin, and storage is
+ * per-origin. No amount of convention-matching crosses that line. The docs tabs
+ * now keep their own choice, deep-linkable as `?install=docker`.
  *
- * Both accessors can throw — Safari in private mode, a browser with storage
- * blocked. A missing preference is just the default, so failing soft is right;
- * the theme script in layout.tsx swallows the same exception for the same
- * reason.
+ * `localStorage` can throw — Safari in private mode, storage blocked. A missing
+ * preference is just the default, so failing soft is right.
  */
 const PREF = 'sigiro-install';
 
 function readPref(): string | null {
   try {
-    return sessionStorage.getItem(PREF) ?? localStorage.getItem(PREF);
+    return localStorage.getItem(PREF);
   } catch {
     return null;
   }
@@ -129,7 +125,6 @@ const watchers = new Set<() => void>();
 
 function writePref(id: string) {
   try {
-    sessionStorage.setItem(PREF, id);
     localStorage.setItem(PREF, id);
   } catch {
     // A reader who cannot store a preference still gets to change the view.

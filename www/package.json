@@ -12,15 +12,11 @@
     "fmt": "oxfmt .",
     "types:check": "next typegen && tsc --noEmit",
     "build:next": "next build",
-    "api:docs": "bun run scripts/generate-api-docs.ts",
     "og": "bun run scripts/generate-og.tsx"
   },
   "dependencies": {
     "@xstate/react": "7.0.0-alpha.1",
     "effect": "4.0.0-beta.102",
-    "fumadocs-core": "16.12.1",
-    "fumadocs-mdx": "15.2.0",
-    "fumadocs-ui": "16.12.1",
     "motion": "12.43.0",
     "next": "16.3.0-preview.9",
     "next-themes": "0.4.6",
