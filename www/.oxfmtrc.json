@@ -3,12 +3,11 @@
   "singleQuote": true,
   "printWidth": 100,
   "ignorePatterns": [
-    "content/**",
+    ".astro/**",
     "dist/**",
     "openapi.json",
     "DESIGN.md",
     "tsconfig.json",
-    "postcss.config.mjs",
     "wrangler.jsonc"
   ]
 }

@@ -1,0 +1,157 @@
+---
+import Artifact from '@/components/Artifact.astro';
+import FactoryLoop from '@/components/FactoryLoop.astro';
+import HowItWorks from '@/components/HowItWorks.astro';
+import { Faq } from '@/components/faq';
+import { Integrations } from '@/components/integrations';
+import { PRIMARY, SECONDARY } from '@/components/site/action';
+import Base from '@/layouts/Base.astro';
+import { jsonLd } from '@/lib/json-ld';
+import { FAQ, PROMISES, SECTIONS, SITE } from '@/lib/site';
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  '@id': `${SITE.url}/#faq`,
+  isPartOf: { '@id': `${SITE.url}/#website` },
+  mainEntity: FAQ.map((item) => ({
+    '@type': 'Question',
+    name: item.q,
+    acceptedAnswer: { '@type': 'Answer', text: item.a },
+  })),
+};
+
+/* The type ramp, from the design language and not invented here: 27px medium at
+   -0.03em for a page or section title, 15px for a lede, 13.5px for body.
+   Headings are medium, never bold — the negative tracking does the work that
+   weight would do badly. */
+const H2 = 'mt-3 max-w-[34ch] text-[27px] leading-[1.2] font-medium tracking-[-0.03em] text-ink';
+const LEDE = 'mt-3 max-w-[62ch] text-[15px] leading-relaxed text-ink-2';
+const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
+---
+
+<Base canonical={SITE.url}>
+  {/* Hero: text LCP, no image. */}
+  <section class="px-4 py-16 sm:px-8 sm:py-24 lg:px-12">
+    <h1
+      class="max-w-[24ch] text-[clamp(30px,7.2vw,32px)] leading-[1.08] font-medium tracking-[-0.04em] text-balance text-ink sm:text-[clamp(32px,5.6vw,52px)]"
+    >
+      {SITE.tagline}
+    </h1>
+    <p
+      class="mt-6 max-w-[52ch] text-[13.5px] leading-[1.7] text-ink-2 sm:mt-8 sm:text-[15px]"
+    >
+      {SITE.description}
+    </p>
+    <div class="mt-8 flex flex-wrap items-center gap-3 sm:mt-10">
+      <a href="https://docs.sigiro.com/quickstart" class={PRIMARY}>Get started</a>
+      <a href="https://docs.sigiro.com" class={SECONDARY}>Read the docs</a>
+    </div>
+    {/*
+      A cell, not a dot: there are no pills in this palette, and 5px at a 1.5px
+      radius is the language's own unit.
+    */}
+    <p class="meta mt-6 flex items-center gap-2 text-ink-3">
+      <span aria-hidden="true" class="size-[5px] rounded-[1.5px] bg-accent"></span>
+      Free when you install it. sigiro sends no data to us.
+    </p>
+  </section>
+
+  {/*
+    Where this fits, before how to use it. A reader whose agent already writes code
+    knows the fix stage is solved; the question worth answering first is which stage
+    is still missing.
+  */}
+  <section aria-labelledby="loop" class={SECTION}>
+    <p class="label">the loop</p>
+    <h2 id="loop" class={H2}>
+      Five stages.
+      <span class="text-ink-3">A repair loop is not complete until all five operate.</span>
+    </h2>
+    <p class={LEDE}>
+      Your agent writes the patch. Nothing tells the agent what failed, or if the patch worked.
+      sigiro does two of these five stages.
+    </p>
+    <FactoryLoop />
+  </section>
+
+  {/*
+    Connect, ask, correlate. These were sections 01, 02 and 03, each a heading over
+    a static code block that showed the input and never the answer. One stepped
+    terminal shows both, and it costs one heading instead of three.
+
+    Unnumbered, like the loop above it and for the same reason: the frame already
+    counts "2 of 4" in its caption, and a numeral outside the frame would be a
+    second sequence arguing with the first.
+  */}
+  <section aria-labelledby="how" class={SECTION}>
+    <p class="label">how you use it</p>
+    <h2 id="how" class={H2}>
+      Four steps. <span class="text-ink-3">You connect, ask, correlate, and prove.</span>
+    </h2>
+    <p class={LEDE}>
+      You send OpenTelemetry to sigiro. You ask one question. Each step below is one shell session.
+    </p>
+    <HowItWorks />
+  </section>
+
+  {
+    SECTIONS.map((s) => (
+      <section aria-labelledby={`s-${s.n}`} class={SECTION}>
+        <p class="meta text-ink-3">{s.n}</p>
+        <h2 id={`s-${s.n}`} class={H2}>
+          {s.lead} <span class="text-ink-3">{s.rest}</span>
+        </h2>
+        <p class={LEDE}>{s.say}</p>
+
+        <Artifact
+          title={s.artifact.title}
+          meta={s.artifact.meta}
+          code={s.artifact.code}
+          lang={s.artifact.lang}
+        />
+      </section>
+    ))
+  }
+
+  {/*
+    What it runs on and what it promises, folded into one section. They were 06 and
+    07, two headings and two full section paddings for what is really one answer to
+    "what am I signing up for". Neither was a step in the numbered spine, so
+    numbering them implied a sequence that had already ended. This one is unnumbered
+    for the same reason.
+
+    The promise tiles also absorbed the old standalone "it watches itself" section,
+    which was making one claim at the length of six.
+  */}
+  <section aria-labelledby="signing-up" class={SECTION}>
+    <p class="label">what you get</p>
+    <h2 id="signing-up" class={H2}>
+      No migration. <span class="text-ink-3">sigiro connects to the tools you use.</span>
+    </h2>
+    <Integrations client:visible />
+
+    {/*
+      Six wells with a real gap between them. `gap-px` on a tinted parent is a
+      border faking a compartment; this is the material saying it.
+    */}
+    <dl class="mt-10 grid gap-2.5 sm:grid-cols-3">
+      {
+        PROMISES.map((p) => (
+          <div class="mat-well rounded-[11px] p-3.5">
+            <dt class="text-[13px] font-medium tracking-[-0.01em] text-ink">{p.title}</dt>
+            <dd class="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">{p.body}</dd>
+          </div>
+        ))
+      }
+    </dl>
+  </section>
+
+  <section aria-labelledby="faq" class={SECTION}>
+    <p class="label">faq</p>
+    <h2 id="faq" class={H2}>Questions.</h2>
+    <Faq client:visible />
+  </section>
+
+  <script type="application/ld+json" is:inline set:html={jsonLd(faqSchema)} />
+</Base>

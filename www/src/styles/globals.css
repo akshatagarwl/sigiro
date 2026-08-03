@@ -1,5 +1,4 @@
 @import 'tailwindcss';
-@plugin '@tailwindcss/typography';
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -305,45 +304,10 @@ html.dark .shiki span {
   }
 }
 
-/* Inline code, scoped so it never reaches a Shiki block. Unlayered on purpose:
-   @tailwindcss/typography emits `.prose` in a later layer, so from @layer base
-   its `content: "`"` on inline code wins no matter the specificity.
-   `:not(.not-prose *)` is how the plugin scopes its own rules; without it these
-   leak into `not-prose` regions — which is what our code block is — and the
-   padding, size and background land twice. */
-.prose :not(pre) > code:not(.not-prose *) {
-  font-family: var(--font-mono);
-  /* rem, not em: em resolves against the parent, so the same inline code came
-     out 13px in a paragraph and 11.38px in a table cell. */
-  font-size: 0.8125rem;
-  color: var(--ink);
-  background: var(--well);
-  box-shadow: inset 0 0 0 1px var(--hairline);
-  border-radius: 5px;
-  padding: 0.1em 0.3em;
-}
-.prose :not(pre) > code:not(.not-prose *)::before,
-.prose :not(pre) > code:not(.not-prose *)::after {
-  content: none;
-}
-.prose pre:not(.not-prose *) {
-  font-size: 0.8125rem;
-  background: var(--well);
-  padding: 0.875rem;
-  /* typography colours `pre` text gray-200 for its own dark background. On a
-     light ground that is 1.2:1 — invisible — and it shows on any fence with no
-     language, where Shiki emits no per-token colours to override it. */
-  color: var(--ink);
-}
-.prose pre:not(.not-prose *) code {
-  font: inherit;
-  /* typography sets pre>code's colour separately from pre's, so the gray-200
-     has to be cleared on both or an unlanguaged fence stays invisible. */
-  color: inherit;
-  background: transparent;
-  box-shadow: none;
-  padding: 0;
-}
+/* There was a block of `.prose` overrides here — inline-code and `pre` rules that
+   fought @tailwindcss/typography's own defaults inside the docs. Both the plugin
+   and the overrides are gone: this site has no `.prose` region left. The docs
+   moved to Blume at docs.sigiro.com, and Blume styles its own prose. */
 
 /* ── reduced motion ────────────────────────────────────────── */
 

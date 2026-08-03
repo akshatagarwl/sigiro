@@ -1,0 +1,40 @@
+# The brand short links and the docs move, as a Cloudflare assets redirect list.
+#
+# These were `next.config.ts` `redirects()`, and before that a `_redirects` on the
+# Cloudflare Pages site that used to serve the apex. They are back in the file
+# Cloudflare reads directly: every one of them is a published URL — in the README,
+# in the install instructions, on the socials, in the docs' own cross-links — so
+# they are part of the deployed contract and not a convenience. A plain file is
+# also the one form where "what does /x do in production" is answerable by reading
+# rather than by building.
+#
+# 302 throughout, never 301. A 301 is cached by the browser more or less forever,
+# every one of the social links points at a third-party account that can move, and
+# the docs have just moved origin once already. A social handle is not a canonical
+# URL change.
+#
+# `/install` is deliberately absent: it is a real script at `public/install`,
+# served as a static asset. A redirect would break `curl -fsS` without `-L`.
+
+/github         https://github.com/sigiroai              302
+/x              https://x.com/SigiroAI                   302
+/twitter        https://x.com/SigiroAI                   302
+/linkedin       https://www.linkedin.com/company/sigiro  302
+/discord        https://discord.gg/sigiro                302
+
+# Blume generates these from the same content, so they live beside it. The paths
+# stay reachable here because the footer, the README and the llms.txt convention
+# itself all point at the site root.
+#
+# Above the splats below on purpose: Cloudflare matches this list in order and warns
+# at build time that a static rule sitting under a splat rule is slower to serve.
+/llms.txt       https://docs.sigiro.com/llms.txt         302
+/llms-full.txt  https://docs.sigiro.com/llms-full.txt    302
+
+# The docs are Blume at docs.sigiro.com, where they sit at the root rather than
+# under /docs. `/docs/api/*` has no per-operation equivalent — the reference is one
+# generated page from the live spec — so every operation lands on it. That rule must
+# come before the general `/docs/*`, because these are matched in order.
+/docs                   https://docs.sigiro.com          302
+/docs/api/*             https://docs.sigiro.com/api      302
+/docs/*                 https://docs.sigiro.com/:splat   302

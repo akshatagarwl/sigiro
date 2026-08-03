@@ -1,0 +1,130 @@
+---
+import { Effect } from 'effect';
+import { SteppedTerminal, type TerminalStep } from '@/components/terminal';
+import { highlightSession, type SessionLine } from '@/lib/highlight';
+import { HOW } from '@/lib/site';
+
+/**
+ * Connect, ask, correlate, prove — as four terminals you step through.
+ *
+ * The same job `FactoryLoop.astro` does for `LOOP`: map the data onto the
+ * terminal's shape, run Shiki over each session at build time, and supply the
+ * no-JS fallback.
+ *
+ * The one thing this section needs that the loop does not is several commands per
+ * step, which is what `transcript` is for.
+ */
+
+/** A line with nothing on it, where the shell left a gap. */
+const BLANK: SessionLine = { text: '', html: '' };
+
+/**
+ * One step's commands, highlighted into a single continuous transcript.
+ *
+ * `highlightSession` covers one command and its output, which is all the loop
+ * section ever needs. A step here is often four commands, so the sessions are
+ * concatenated. Two rules keep the result reading like a real shell: a command
+ * that prints nothing keeps only its prompt line, and a blank line goes in
+ * wherever output was printed before the next prompt.
+ */
+function transcript(blocks: readonly { readonly cmd: string; readonly out: string }[]) {
+  return Effect.map(
+    Effect.all(
+      blocks.map((b) => highlightSession(b.cmd, b.out)),
+      { concurrency: 'unbounded' },
+    ),
+    (sessions): SessionLine[] =>
+      sessions.flatMap((lines, i) => {
+        const kept = blocks[i].out ? lines : lines.slice(0, 1);
+        return i > 0 && blocks[i - 1].out ? [BLANK, ...kept] : kept;
+      }),
+  );
+}
+
+/**
+ * A step is either one session or a choice between two, and both shapes reduce to
+ * the same thing here: a list of named transcripts, the first of which is the
+ * default. The terminal shows a picker when there is more than one.
+ *
+ * Every variant is highlighted, not only the selected one — the reader switches in
+ * the browser and Shiki is not there.
+ */
+function variantsOf(step: (typeof HOW)[number]) {
+  return 'variants' in step
+    ? step.variants.map((v) => ({ id: v.id, label: v.label, run: v.run }))
+    : [{ id: step.title.toLowerCase(), label: step.title, run: step.run }];
+}
+
+const highlighted = await Effect.runPromise(
+  Effect.all(
+    HOW.map((step) =>
+      Effect.all(
+        variantsOf(step).map((v) =>
+          Effect.map(transcript(v.run), (lines) => ({ id: v.id, label: v.label, lines })),
+        ),
+        { concurrency: 'unbounded' },
+      ),
+    ),
+    { concurrency: 'unbounded' },
+  ),
+);
+
+/** What the no-JS fallback and the screen-reader transcript print: the default. */
+const sessions = highlighted.map((variants) => variants[0].lines);
+
+// No badge: every one of these is your own shell, and a chip that reads the same
+// on every step is furniture rather than information. The caption already carries
+// the step name and the count.
+const steps: TerminalStep[] = HOW.map((s, i) => ({
+  lines: highlighted[i][0].lines,
+  label: s.title,
+  note: s.say,
+  // One transcript is not a choice, so no picker is offered for it.
+  choices: highlighted[i].length > 1 ? highlighted[i] : undefined,
+}));
+---
+
+<div class="mt-8">
+  {/*
+    What no-JS readers get: the same four sessions, printed in full, with the prose
+    each one belongs to. Nothing is behind an interaction they cannot perform.
+  */}
+  <noscript>
+    <ol class="mt-8">
+      {
+        HOW.map((s, i) => (
+          <li class="border-t border-hairline py-9 first:border-t-0">
+            <h3 class="text-[20px] font-medium tracking-[-0.03em] text-ink">{s.title}</h3>
+            <p class="mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed text-ink-2">{s.say}</p>
+            <figure class="mat-panel mt-5 rounded-[14px] p-[5px]">
+              <figcaption class="meta flex h-8 items-center pl-2.5 text-ink-3">your shell</figcaption>
+              <div
+                class="mat-well scroll-inset overflow-x-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px]"
+              >
+                <pre
+                  class="shiki whitespace-pre"
+                  set:html={sessions[i].map((line) => line.html).join('\n')}
+                />
+              </div>
+            </figure>
+          </li>
+        ))
+      }
+    </ol>
+  </noscript>
+
+  {/*
+    30vh per step, not the component's 45vh default. The loop section earns the
+    longer travel because each of its stages is an argument; these four are one
+    shell session each, and they replaced four static code blocks that cost 436px
+    apiece. The track is still the reason this section is longer than what it
+    replaced — that is inherent to a pinned sequence.
+  */}
+  <SteppedTerminal
+    steps={steps}
+    label="The four steps"
+    heading={{ label: 'how you use it', title: 'Four steps' }}
+    track={`calc(100vh + ${steps.length * 30}vh)`}
+    client:visible
+  />
+</div>

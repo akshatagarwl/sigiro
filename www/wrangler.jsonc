@@ -5,7 +5,16 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
-  "main": "vinext/server/fetch-handler",
+  // No `main` and no `assets` here. `@astrojs/cloudflare` writes both into
+  // `dist/server/wrangler.json` at build time — the entrypoint it generated and the
+  // client directory it chose — and that generated file is what `bun run deploy`
+  // ships. Naming an entrypoint here does not override it, it breaks the build:
+  // this file still said `vinext/server/fetch-handler` on the first Astro build and
+  // the Cloudflare Vite plugin failed trying to resolve it.
+  //
+  // What stays here is everything the adapter cannot know: the name, the routes,
+  // and the bindings.
+  //
   // The apex. Until 2026-08-01 sigiro.com was a Cloudflare Pages project of the
   // same name, still serving the pre-Next Vite SPA from four months earlier, and
   // `bun run deploy` shipped a Worker that nothing pointed at.
@@ -32,11 +41,6 @@
     { "pattern": "sigiro.com/*", "zone_name": "sigiro.com" },
     { "pattern": "www.sigiro.com/*", "zone_name": "sigiro.com" }
   ],
-  "assets": {
-    "directory": "dist/client",
-    "not_found_handling": "none",
-    "binding": "ASSETS"
-  },
   // Release artifacts, served by /dl/[...key].
   //
   // A bucket of its own, not `sigiro-prod`. That bucket holds tenant telemetry,

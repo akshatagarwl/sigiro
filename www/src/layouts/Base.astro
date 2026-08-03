@@ -1,0 +1,172 @@
+---
+import { Font } from 'astro:assets';
+import SiteFooter from '@/components/site/Footer.astro';
+import SiteHeader from '@/components/site/Header.astro';
+import { jsonLd } from '@/lib/json-ld';
+import { SITE } from '@/lib/site';
+import '@/styles/globals.css';
+
+/**
+ * The document, and the panel every page sits in.
+ *
+ * This was `app/layout.tsx` plus `site-chrome.tsx`. Those were separate because
+ * Next's root layout could not contain the page measure and the docs needed a
+ * second one; there are no docs here now and there is one page, so the shell,
+ * the header, the measure and the footer are the layout.
+ */
+
+interface Props {
+  /** Absolute or root-relative URL this page claims as canonical. */
+  canonical?: string;
+}
+
+const { canonical = new URL(Astro.url.pathname, SITE.url).href } = Astro.props;
+
+/** One @graph, cross-referenced, so an answer engine reads one entity not three. */
+const graph = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'Organization',
+      '@id': `${SITE.url}/#organization`,
+      name: SITE.name,
+      url: SITE.url,
+      description: SITE.description,
+      sameAs: ['https://x.com/SigiroAI', 'https://www.linkedin.com/company/sigiro'],
+    },
+    {
+      '@type': 'WebSite',
+      '@id': `${SITE.url}/#website`,
+      url: SITE.url,
+      name: SITE.name,
+      description: SITE.description,
+      publisher: { '@id': `${SITE.url}/#organization` },
+      inLanguage: 'en',
+    },
+    {
+      '@type': 'SoftwareApplication',
+      '@id': `${SITE.url}/#software`,
+      name: SITE.name,
+      applicationCategory: 'DeveloperApplication',
+      applicationSubCategory: 'Observability',
+      operatingSystem: 'Linux, macOS',
+      url: SITE.url,
+      description: SITE.description,
+      featureList: [
+        'OpenTelemetry OTLP ingest for traces, logs, metrics and profiles',
+        'Structured investigation responses for AI agents',
+        'SQL questions with no proprietary query language',
+        'Machine-readable API description at /openapi.json',
+      ],
+      publisher: { '@id': `${SITE.url}/#organization` },
+    },
+  ],
+};
+
+const og = new URL(SITE.ogImage, SITE.url).href;
+---
+
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <link rel="canonical" href={canonical} />
+
+    <title>{SITE.title}</title>
+    <meta name="description" content={SITE.description} />
+    <meta name="application-name" content={SITE.name} />
+    <meta name="robots" content="index, follow" />
+
+    <meta name="theme-color" content="#efeeea" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141312" media="(prefers-color-scheme: dark)" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={SITE.url} />
+    <meta property="og:site_name" content={SITE.name} />
+    <meta property="og:title" content={SITE.title} />
+    <meta property="og:description" content={SITE.description} />
+    <meta property="og:image" content={og} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={SITE.tagline} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@SigiroAI" />
+    <meta name="twitter:title" content={SITE.title} />
+    <meta name="twitter:description" content={SITE.description} />
+    <meta name="twitter:image" content={og} />
+
+    <Font cssVariable="--font-geist-sans" preload />
+    <Font cssVariable="--font-geist-mono" preload />
+
+    {/*
+      The theme, before first paint.
+
+      `is:inline` because it has to run where it is written. A bundled Astro
+      script is deferred, and a deferred theme script is a flash of the wrong
+      material on every load.
+
+      It shares three lines with `components/site/theme.ts` — the key, the
+      fallback to `prefers-color-scheme`, and the class it writes — and that
+      duplication is unavoidable rather than untidy: an inline script cannot
+      import a module, and a module cannot run before paint. `next-themes` solved
+      the same problem the same way, by rendering a script with the same three
+      lines in it; the difference is that this one is visible.
+    */}
+    <script is:inline>
+      try {
+        const saved = localStorage.getItem('sigiro-theme');
+        document.documentElement.classList.toggle(
+          'dark',
+          saved === 'dark' ||
+            (saved !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches),
+        );
+      } catch {
+        // A reader with storage blocked gets the light default, which is fine.
+      }
+    </script>
+  </head>
+
+  <body class="flex min-h-full flex-col font-sans text-ink-2 antialiased">
+    <a
+      href="#main"
+      class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-[9px] focus:bg-ink focus:px-3 focus:py-2 focus:text-panel"
+    >
+      Skip to content
+    </a>
+
+    {/*
+      Every page is a panel floating on the bezel with a gutter around it. The
+      gutter is not spacing — it is the frame, and it is what tells you the panel
+      is an object rather than the page itself.
+
+      `overflow-clip` and not `overflow-hidden`: both clip to the 20px radius, but
+      `hidden` makes this box a scroll container, and then every `position: sticky`
+      inside it resolves against a box that cannot scroll and silently stops
+      sticking. `clip` is not a scroll container, so the viewport stays the
+      scrollport.
+    */}
+    <div class="flex flex-1 p-3 sm:p-5">
+      <div class="mat-panel flex min-w-0 flex-1 flex-col overflow-clip rounded-[20px]">
+        <SiteHeader />
+
+        {/*
+          The measure. The panel is as wide as the window, and a 1400px column of
+          13.5px prose is not a reading measure — so the document inside it is
+          centred and capped, and the section hairlines span the document rather
+          than the panel.
+        */}
+        <main id="main" class="mx-auto w-full min-w-0 max-w-[996px]">
+          <slot />
+        </main>
+
+        <SiteFooter />
+      </div>
+    </div>
+
+    <script type="application/ld+json" is:inline set:html={jsonLd(graph)} />
+  </body>
+</html>

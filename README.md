@@ -59,7 +59,7 @@ sigiro query --sql-file ./report.sql > report.json
 
 ## Documentation
 
-Full documentation is available at [sigiro.com/docs](https://sigiro.com/docs) (or in `www/content/docs/`).
+Full documentation is available at [docs.sigiro.com](https://docs.sigiro.com) (or in `docs-site/docs/`).
 
 ## Development
 

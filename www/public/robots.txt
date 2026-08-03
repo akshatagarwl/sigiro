@@ -1,0 +1,27 @@
+# Everything is allowed — the AI crawlers are listed explicitly rather than relying
+# on the implicit default, so "are we opted in?" is answerable by reading the file
+# instead of reasoning about the absence of a rule.
+
+User-agent: *
+Allow: /
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+Host: https://sigiro.com
+Sitemap: https://sigiro.com/sitemap-index.xml

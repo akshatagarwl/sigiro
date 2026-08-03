@@ -1,0 +1,62 @@
+---
+import { Logo } from '@/components/site/logo';
+import { ThemeToggle } from '@/components/site/theme-toggle';
+import { COMPACT } from '@/components/site/action';
+import { NAV, SITE } from '@/lib/site';
+
+/**
+ * Both compartments of the page panel are divided from the content with a
+ * hairline and never with a material: a border divides, a material lifts, and
+ * these are neither above nor below what they sit beside.
+ *
+ * `h-12` was the height the docs sidebar's header matched, which is what made the
+ * two top edges line up. The docs are on their own origin now, so it is just the
+ * header height — kept because the whole page's rhythm is measured off it.
+ *
+ * `Logo` is a React component rendered here with no `client:*` directive, so it
+ * ships no JavaScript. `ThemeToggle` is the only thing in this header that runs
+ * in the browser, and it says so.
+ */
+---
+
+<header
+  class="flex h-12 shrink-0 items-center gap-4 border-b border-hairline px-4 sm:px-5"
+>
+  <a href="/" aria-label={`${SITE.name} home`} class="shrink-0 rounded-[6px]">
+    <Logo />
+  </a>
+
+  {/*
+    Padded rather than taller, so the 24px hit area is reached without moving the
+    text off the header's baseline.
+  */}
+  <nav aria-label="Main" class="flex shrink-0 items-center gap-1">
+    {
+      NAV.map((item) => (
+        <a
+          href={item.href}
+          class="press inline-flex h-7 items-center rounded-[6px] px-2 text-[12.5px] text-ink-3 hover:text-ink"
+        >
+          {item.label}
+        </a>
+      ))
+    }
+  </nav>
+
+  <span class="flex-1"></span>
+
+  <ThemeToggle client:load />
+
+  {/*
+    Below sm the hero's own action is one screen away at most, and this row has no
+    width to spare for a second copy of it.
+
+    The wrapper carries the breakpoint, not the link: COMPACT already sets
+    `inline-flex`, and two unprefixed display utilities on one element are decided
+    by their order in the generated stylesheet rather than by which one you wrote
+    last — so `hidden` lost and the button showed on a phone anyway.
+  */}
+  <div class="hidden sm:block">
+    <a href="https://docs.sigiro.com/quickstart" class={COMPACT}>Get started</a>
+  </div>
+</header>

@@ -11,7 +11,7 @@
  * the wrong shape: a card is an asset with one input, not a page, and "open a
  * browser and photograph it" is not a build step anyone will repeat correctly.
  *
- * The renderer is `next/og`, which wraps `@vercel/og` and already bundles satori,
+ * The renderer is `@vercel/og`, which already bundles satori,
  * `resvg.wasm` and `yoga.wasm`. The fonts come from `geist`, Vercel's own
  * package, which ships the family as TTF — the format satori reads.
  *
@@ -27,7 +27,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { ImageResponse } from 'next/og';
+import { ImageResponse } from '@vercel/og';
 import { SITE } from '../src/lib/site';
 
 /** The card, per the OG spec and what every scraper crops to. */

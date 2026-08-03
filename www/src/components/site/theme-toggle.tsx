@@ -1,32 +1,5 @@
-'use client';
-
-import { useTheme } from 'next-themes';
 import { useSyncExternalStore } from 'react';
-
-/** Nothing to subscribe to: this value changes once, when React hydrates. */
-const never = () => () => {};
-
-/**
- * False through the server render and the hydrating render, true afterwards.
- *
- * `next-themes` reads storage in a lazy `useState` initializer, so by its own
- * first client render it already knows the theme — while the server render
- * could not have. Deriving "do we know yet" from `resolvedTheme` therefore
- * answers *yes* one render too early, and the server's `aria-pressed="false"`
- * meets a client that wants `true`. React logged exactly that and threw the
- * hydrated tree away.
- *
- * `useSyncExternalStore` is the fix rather than a `useState` in a `useEffect`,
- * because React feeds the server snapshot to the hydrating render as well —
- * which is the property being relied on here, not a side effect of one.
- */
-function useHydrated() {
-  return useSyncExternalStore(
-    never,
-    () => true,
-    () => false,
-  );
-}
+import { resolved, set as setTheme, subscribe } from '@/components/site/theme';
 
 /**
  * Light and dark, as two keys in a well with one cap sliding between them.
@@ -35,24 +8,30 @@ function useHydrated() {
  * 1.5px at this render size) rather than imported, because an icon package would
  * be a whole dependency for two glyphs.
  *
- * The state was a three-state XState machine here: `unknown` / `light` / `dark`,
- * with an `OBSERVED` event that read the class the pre-paint script had written
- * and a `CHOSE` event that wrote the preference. It is now `useTheme`, which
- * owns the same three answers and also hears the two changes the machine could
- * not: the operating system switching theme while the page is open, and another
- * tab making the choice. See the note in `app/layout.tsx`.
+ * The state has been three things: a three-state XState machine, then
+ * `next-themes`, and now `components/site/theme.ts` — see the note there for why
+ * next-themes could not follow us to Astro. All three answer the same three
+ * questions, and the store keeps the two behaviours the machine never had: the
+ * operating system switching theme while the page is open, and another tab making
+ * the choice.
  *
- * `resolvedTheme` is `undefined` until the provider has mounted, and that is the
- * old `unknown` state exactly — not a spinner and not "light". Two things read
- * it and want different answers: the sliding cap draws at zero opacity, its cell
- * reserved from the start so nothing moves when it appears, and *neither* button
- * is `aria-pressed`. Guessing would show the wrong key for a frame, which is the
- * same class of bug as a flash of the wrong theme.
+ * `null` is the third answer and it is load-bearing — not a spinner and not
+ * "light", but *we do not know yet*. `useSyncExternalStore` produces it exactly
+ * where it is true: the server snapshot is a constant `null`, and React feeds
+ * that same snapshot to the hydrating render, so the markup Astro built and the
+ * markup React first renders agree by construction rather than by luck. Reading
+ * storage during render instead would make the two disagree, which is what makes
+ * React throw the hydrated tree away.
+ *
+ * Two things read it and want different answers: the sliding cap draws at zero
+ * opacity, its cell reserved from the start so nothing moves when it appears, and
+ * *neither* button is `aria-pressed`. Guessing would show the wrong key for a
+ * frame, which is the same class of bug as a flash of the wrong theme.
  */
 export function ThemeToggle() {
-  const { resolvedTheme, setTheme } = useTheme();
-  const known = useHydrated() && resolvedTheme !== undefined;
-  const dark = known && resolvedTheme === 'dark';
+  const theme = useSyncExternalStore(subscribe, resolved, () => null);
+  const known = theme !== null;
+  const dark = theme === 'dark';
 
   // Writes a concrete choice rather than "system", which is what clicking one of
   // two keys means. A reader who wants to follow the OS again clears the site's

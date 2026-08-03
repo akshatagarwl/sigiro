@@ -57,8 +57,11 @@ import type { SessionLine } from '@/lib/highlight';
  *        component and Shiki is a server-side dependency, so what crosses is
  *        one string of HTML per line, never a highlighter.
  * - §5h  a scroll-driven component needs no reduced-motion branch — every value
- *        resolves on the frame it is scrolled to. `fallback` covers no-JS only,
- *        and that is deliberate rather than an oversight.
+ *        resolves on the frame it is scrolled to. The no-JS fallback is a
+ *        `<noscript>` in the calling `.astro` file, deliberately outside this
+ *        component: it used to be a `fallback` prop, which meant the whole stacked
+ *        transcript was serialised into the island's props to be shown to readers
+ *        who by definition never load the island.
  */
 
 export type TerminalStep = {
@@ -264,14 +267,11 @@ const sequence = createMachine({
 
 export function SteppedTerminal({
   steps,
-  fallback,
   label,
   heading,
   track,
 }: {
   steps: readonly TerminalStep[];
-  /** Shown where JavaScript never runs. */
-  fallback: React.ReactNode;
   /**
    * Names the task list for a screen reader. Required, because it was hardcoded
    * to "The five stages" while this component had one caller, and the second
@@ -358,8 +358,6 @@ export function SteppedTerminal({
 
   return (
     <>
-      <noscript>{fallback}</noscript>
-
       <div
         ref={ref}
         className="relative"
