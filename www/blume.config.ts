@@ -93,31 +93,93 @@ export default defineConfig({
    * Blume's own customization guide reaches for — `integrations` is documented
    * with `@astrojs/sitemap` as its example.
    *
-   * The defect: Blume writes `sitemap.xml`, `robots.txt`, `llms.txt`,
-   * `llms-full.txt` and `agent-readability.json` to `deployStaticDir()`, which
-   * returns `dist/client` for `adapter: 'node'` and plain `dist` for
-   * `cloudflare`. But `@astrojs/cloudflare` in server mode serves `dist/client`
-   * — its generated wrangler config sets `assets.directory: "../client"` — so on
-   * Cloudflare every one of those files lands one directory above everything the
-   * Worker can see, and 404s. The Cloudflare case belongs in the same branch as
-   * node; that is a one-line upstream fix and it is filed rather than patched
-   * here.
+   * The defect, re-confirmed on 1.3.1: Blume writes its build artifacts to
+   * `deployStaticDir()`, and that function reasons "Netlify publishes `dist/`
+   * itself and Cloudflare serves the `outDir` root, so every other build serves
+   * `dist/`". True for a Cloudflare *static* build. False for a Cloudflare
+   * *server* build, where `@astrojs/cloudflare` writes `assets.directory:
+   * "../client"` and serves `dist/client` — so every artifact lands one directory
+   * above anything the Worker can reach. The fix is one clause: `cloudflare`
+   * belongs in the same `output === 'server'` branch as `node`.
    *
    * What is native rather than a workaround: an Astro *integration* writes into
-   * Astro's own client output, so its file is served. `@astrojs/sitemap` is a
-   * real sitemap generator that happens to put the file in the right place, and
-   * `public/robots.txt` is a real static asset. Both beat the copy-after-build
-   * they replace, and neither reaches into Blume's output.
+   * Astro's own client output, so its file is served. `@astrojs/sitemap` is a real
+   * sitemap generator that happens to put the file in the right place, and
+   * `public/robots.txt` is a real static asset — and `seo.robots` is now off, so
+   * Blume no longer writes a robots copy nobody could read.
    *
-   * Blume still writes its own unreachable copies into `dist/`. They are inert —
-   * ours are the ones served — and they disappear when the upstream fix lands.
+   * `seo.sitemap` stays on, and the note on it below says why that is not
+   * inconsistent.
    *
-   * NOT fixed by this: `llms.txt`, `llms-full.txt` and `agent-readability.json`.
-   * Those have no Astro-native generator to substitute — they are Blume's own
-   * content pipeline, and `buildLlmsFiles` needs a build-time `BlumeProject` that
-   * an Astro route cannot get hold of. They wait on upstream.
+   * NOT fixable this way: `llms.txt`, `llms-full.txt`, `agent-readability.json`
+   * and `.well-known/api-catalog`. There is no Astro-native generator to
+   * substitute — they are Blume's own content pipeline, `buildLlmsFiles` needs a
+   * build-time `BlumeProject` an Astro route cannot reach, and Blume writes them
+   * after `astro build` returns, so no integration hook fires late enough to
+   * catch them. `scripts/serve-agent-files.mjs` moves those four and says so.
    */
   integrations: [sigiro(), sitemap()],
+
+  /**
+   * The API reference's old per-operation URLs.
+   *
+   * These were `public/_redirects` rules. Blume expresses them itself, and on a
+   * `server` build it handles them at request time through Astro's own
+   * `redirects` — so they are config rather than a platform file, and there is one
+   * fewer place to look for "what does this URL do".
+   *
+   * Written WITHOUT the `/docs` prefix on purpose. Blume bases both sides against
+   * `basePath`, so `/api/get-trace` is matched at `/docs/api/get-trace` and lands
+   * at `/docs/api`. Writing the prefix here would double it.
+   *
+   * The gain over `_redirects` is not tidiness: `blume audit`'s link checker reads
+   * this list, so a page linking to a retired operation URL is a known redirect
+   * rather than a broken link. A `_redirects` rule is invisible to it.
+   *
+   * Closed set, and enumerated because it has to be — these came from two
+   * generations of `fumadocs-openapi`, both deleted, so nothing can add an
+   * eleventh. Recovered with `git log --all --name-only -- 'www/content/docs/api/**'
+   * 'www/src/app/docs/api/**'`.
+   *
+   * 302 throughout, never 301: the docs have moved origin twice in three days, and
+   * a 301 is cached by the browser more or less forever.
+   *
+   * The four `/admin/*` operations are absent deliberately. They are filtered out
+   * of the public `/openapi.json`, so there is no page to send anyone to, and a
+   * redirect would be the one place still advertising that they exist.
+   */
+  redirects: [
+    { from: '/api/get-trace', to: '/api', status: 302 },
+    { from: '/api/investigate-services', to: '/api', status: 302 },
+    { from: '/api/list-anomalies', to: '/api', status: 302 },
+    { from: '/api/list-services', to: '/api', status: 302 },
+    { from: '/api/run-query', to: '/api', status: 302 },
+    { from: '/api/v1/anomalies/get', to: '/api', status: 302 },
+    { from: '/api/v1/investigate/post', to: '/api', status: 302 },
+    { from: '/api/v1/query/post', to: '/api', status: 302 },
+    { from: '/api/v1/services/get', to: '/api', status: 302 },
+    { from: '/api/v1/traces/trace_id/get', to: '/api', status: 302 },
+  ],
+
+  /**
+   * `robots: false` because ours is a real static asset at `public/robots.txt`.
+   *
+   * Blume's generator writes to `deployStaticDir()`, which on a Cloudflare server
+   * build is `dist/` — one level above `dist/client`, the only directory the Worker
+   * serves. So its copy was never reachable, and turning the generator off is the
+   * native way to say "this file is ours" instead of letting it write a file that
+   * nothing can read. Ours also declares the AI crawlers explicitly, which is a
+   * statement worth keeping in a file a human edits.
+   *
+   * `sitemap` deliberately stays ON even though `@astrojs/sitemap` writes the one
+   * actually served and Blume's copy is equally unreachable. It is not symmetric
+   * with robots: `buildAgentReadability` gates the manifest's sitemap entry on this
+   * flag (`if (site && config.seo.sitemap)`), so turning it off would drop
+   * `sitemap` from `agent-readability.json` — the file agents read to find
+   * everything else — while we do in fact serve one. An inert duplicate in `dist/`
+   * costs nothing; a missing advertisement costs a crawler its map.
+   */
+  seo: { robots: false },
 
   deployment: {
     site: 'https://sigiro.com',
