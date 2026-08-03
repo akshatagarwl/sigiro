@@ -1,18 +1,41 @@
 ---
-import { Font } from 'astro:assets';
+import 'blume:theme';
+import Fonts from 'blume/components/layout/Fonts.astro';
+import data from 'blume:data';
 import SiteFooter from '@/components/site/Footer.astro';
 import SiteHeader from '@/components/site/Header.astro';
 import { jsonLd } from '@/lib/json-ld';
 import { SITE } from '@/lib/site';
-import '@/styles/globals.css';
 
 /**
- * The document, and the panel every page sits in.
+ * The landing page's document, and the panel it sits in.
  *
- * This was `app/layout.tsx` plus `site-chrome.tsx`. Those were separate because
- * Next's root layout could not contain the page measure and the docs needed a
- * second one; there are no docs here now and there is one page, so the shell,
- * the header, the measure and the footer are the layout.
+ * This is deliberately NOT Blume's `PageLayout`. That layout exists for exactly
+ * this job and would give us its chrome for free — but the chrome it gives is the
+ * docs header, and the landing page keeps its own: the wordmark, the two nav
+ * links, our theme toggle and the action, all set to DESIGN.md. So the docs pages
+ * get Blume's shell and this page gets ours, and the two share the origin, the
+ * fonts, the tokens and the theme rather than the markup.
+ *
+ * What this no longer carries, because Blume does it:
+ *
+ * - **Fonts.** `<Fonts>` below is Blume's own component, rendering the same
+ *   `@font-face` and preload set the docs pages use, off the same two families.
+ *   Our `astro:assets` `<Font>` calls and the `geist`-package Fonts config are
+ *   gone: two pipelines for Geist would be two downloads of Geist.
+ * - **The stylesheet.** `blume:theme` is the alias Blume declares for its generated
+ *   Tailwind entry — the same sheet its own layouts pull in, with our `theme.css`
+ *   inlined at the end of it. Importing it is not optional and was the one thing
+ *   missing on the first build: writing our own shell instead of `PageLayout` opts
+ *   out of everything the layout brings, so the landing page rendered in Times on a
+ *   transparent background with no materials at all, while the docs beside it were
+ *   fine. If this page ever loses its styling, look here first.
+ * - **The theme.** `data-theme` is set pre-paint by the script below, using
+ *   Blume's storage key, so the toggle needs no state of its own.
+ *
+ * `data-home` on `<html>` is what scopes the element-level rules in `theme.css`
+ * to this page. Without it the landing page's body background and 13.5px type
+ * would land on every docs page too.
  */
 
 interface Props {
@@ -66,7 +89,7 @@ const graph = {
 const og = new URL(SITE.ogImage, SITE.url).href;
 ---
 
-<html lang="en" class="h-full">
+<html lang="en" class="h-full" data-home>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -99,33 +122,31 @@ const og = new URL(SITE.ogImage, SITE.url).href;
     <meta name="twitter:description" content={SITE.description} />
     <meta name="twitter:image" content={og} />
 
-    <Font cssVariable="--font-geist-sans" preload />
-    <Font cssVariable="--font-geist-mono" preload />
+    <Fonts cssVars={data.fontCssVars} />
 
     {/*
       The theme, before first paint.
 
-      `is:inline` because it has to run where it is written. A bundled Astro
-      script is deferred, and a deferred theme script is a flash of the wrong
-      material on every load.
+      `is:inline` because it has to run where it is written. A bundled Astro script
+      is deferred, and a deferred theme script is a flash of the wrong material on
+      every load. Blume's own layouts carry the same script for the same reason.
 
-      It shares three lines with `components/site/theme.ts` — the key, the
-      fallback to `prefers-color-scheme`, and the class it writes — and that
-      duplication is unavoidable rather than untidy: an inline script cannot
-      import a module, and a module cannot run before paint. `next-themes` solved
-      the same problem the same way, by rendering a script with the same three
-      lines in it; the difference is that this one is visible.
+      Key and attribute are Blume's — `blume-theme`, `data-theme` — so this page
+      and a docs page read and write one preference. Under the old two-origin
+      split they could not: storage is per-origin, and `terminal.tsx` documented
+      that as the one thing genuinely lost when the docs moved out. It is back.
+
+      This duplicates Blume's `THEME_INIT_SCRIPT` rather than importing it, and
+      that is the nature of a pre-paint script: it cannot import a module, and a
+      module cannot run before paint. The contract it has to match is two names.
     */}
     <script is:inline>
       try {
-        const saved = localStorage.getItem('sigiro-theme');
-        document.documentElement.classList.toggle(
-          'dark',
-          saved === 'dark' ||
-            (saved !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches),
-        );
+        const saved = localStorage.getItem('blume-theme');
+        document.documentElement.dataset.theme =
+          saved ?? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       } catch {
-        // A reader with storage blocked gets the light default, which is fine.
+        document.documentElement.dataset.theme = 'light';
       }
     </script>
   </head>

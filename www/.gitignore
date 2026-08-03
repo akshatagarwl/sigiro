@@ -29,8 +29,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 
-# astro — `.astro/` holds the generated types `astro sync` writes, `dist/` the build
-/.astro/
+# blume — `.blume/` is the Astro app Blume generates and rebuilds on every run,
+# including its own `node_modules`. `dist/` is the build output. Both must stay
+# ignored for `vp lint` too: oxlint reads this file, and without `.blume/` it walks
+# Blume's pre-bundled Vite deps and reports lint warnings from mermaid's internals.
+/.blume/
 /dist/
 
 # cloudflare — local state for `wrangler dev`

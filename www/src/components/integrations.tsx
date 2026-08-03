@@ -18,7 +18,9 @@ import {
   siRuby,
   siRust,
   siVercel,
-} from 'simple-icons';
+  // `simple-icons` under an alias — see the note in `site/ask-ai.tsx` for why the
+  // bare specifier has to stay Blume's.
+} from 'sigiro-icons';
 import { LogoMarquee } from '@/components/interior/logo-marquee';
 import { INTEGRATIONS } from '@/lib/site';
 

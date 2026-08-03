@@ -5,43 +5,49 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
-  // No `main` and no `assets` here. `@astrojs/cloudflare` writes both into
-  // `dist/server/wrangler.json` at build time — the entrypoint it generated and the
-  // client directory it chose — and that generated file is what `bun run deploy`
-  // ships. Naming an entrypoint here does not override it, it breaks the build:
-  // this file still said `vinext/server/fetch-handler` on the first Astro build and
-  // the Cloudflare Vite plugin failed trying to resolve it.
+  // No `main` and no `assets`. Blume finds this file at the project root and hands
+  // it to `@astrojs/cloudflare` as `configPath`; the adapter then writes both keys
+  // into `dist/server/wrangler.json`, and that generated file is what `bun run
+  // deploy` ships. Naming an entrypoint here does not override it, it breaks the
+  // build — the Cloudflare Vite plugin fails to resolve it.
   //
-  // What stays here is everything the adapter cannot know: the name, the routes,
+  // What belongs here is everything the adapter cannot know: the name, the routes,
   // and the bindings.
   //
-  // The apex. Until 2026-08-01 sigiro.com was a Cloudflare Pages project of the
-  // same name, still serving the pre-Next Vite SPA from four months earlier, and
-  // `bun run deploy` shipped a Worker that nothing pointed at.
+  // The whole site, on one Worker. `sigiro.com/` is the landing page and
+  // `sigiro.com/docs/*` is the docs, from one Blume app — so the `sigiro-docs`
+  // Worker that served docs.sigiro.com for two days is gone, along with its custom
+  // domain.
   //
   // Zone routes, not `custom_domain: true`. A custom domain makes Cloudflare own
   // the DNS record, so it refuses any hostname that already has one —
-  // `Hostname 'sigiro.com' already has externally managed DNS records`. Detaching
-  // the Pages project does NOT remove the records it created; they stay as
-  // proxied A records, and deleting them needs a DNS-edit credential this
-  // deploy path does not have. A route needs no such thing: it intercepts the
-  // hostname at the edge ahead of whatever those records point at, which is why
-  // the apex could come back without touching DNS at all.
+  // `Hostname 'sigiro.com' already has externally managed DNS records`. The
+  // leftover proxied A records from the old Pages project are still there and
+  // deleting them needs a DNS-edit credential this deploy path does not have. A
+  // route needs no such thing: it intercepts the hostname at the edge ahead of
+  // whatever those records point at.
   //
-  // Both hostnames are listed because a route pattern matches one host.
+  // docs.sigiro.com is NOT here yet, and `src/middleware.ts` that redirects it is
+  // therefore not reachable. Cloudflare's assets router answers before the Worker
+  // runs, so a request to `docs.sigiro.com/quickstart` is a 404 from the asset
+  // layer and the middleware never fires — verified against `wrangler dev`. The
+  // knob for that is `assets.run_worker_first`, and this file cannot set it: the
+  // adapter writes only `binding` and `directory` into the generated config and
+  // drops everything else. It would also put every image and script through the
+  // Worker, which is a poor trade for one redirect.
   //
-  // `workers_dev` is off. It was on as an escape hatch — the workers.dev URL is
-  // the only way to reach a deploy whose routes are wrong — but the cost of
-  // keeping it was a second public origin serving the identical site, with our
-  // canonical tags, our sitemap and our OG tags on it. That is a duplicate of
-  // sigiro.com that we published and never linked, and the escape hatch is one
-  // line away whenever a route actually breaks.
+  // So the subdomain stays on the old `sigiro-docs` Worker for now and is retired
+  // separately.
+  //
+  // `workers_dev` is off: it published a second origin serving the identical site,
+  // with our canonical tags, our sitemap and our OG tags on it.
   "workers_dev": false,
   "routes": [
     { "pattern": "sigiro.com/*", "zone_name": "sigiro.com" },
     { "pattern": "www.sigiro.com/*", "zone_name": "sigiro.com" }
   ],
-  // Release artifacts, served by /dl/[...key].
+  // Release artifacts, served by the `/dl/[...key]` route that
+  // `blume.config.ts` injects.
   //
   // A bucket of its own, not `sigiro-prod`. That bucket holds tenant telemetry,
   // and /dl is an unauthenticated public route: putting both behind one binding
@@ -49,7 +55,6 @@
   // 404. Two buckets make that class of bug impossible instead of unlikely.
   //
   // The bucket itself stays private. Reads go through the Worker, so there is no
-  // public bucket URL and no second hostname to add — which matters here,
-  // because this deploy path has no DNS scope (see the routes note above).
+  // public bucket URL and no second hostname to add.
   "r2_buckets": [{ "binding": "DOWNLOADS", "bucket_name": "sigiro-dl" }]
 }

@@ -1,17 +1,14 @@
-# The brand short links and the docs move, as a Cloudflare assets redirect list.
+# The published short links, and the two URL moves this site has made.
 #
 # These were `next.config.ts` `redirects()`, and before that a `_redirects` on the
-# Cloudflare Pages site that used to serve the apex. They are back in the file
-# Cloudflare reads directly: every one of them is a published URL — in the README,
-# in the install instructions, on the socials, in the docs' own cross-links — so
-# they are part of the deployed contract and not a convenience. A plain file is
-# also the one form where "what does /x do in production" is answerable by reading
-# rather than by building.
+# Cloudflare Pages site. They are back in the file Cloudflare reads directly:
+# every one is a published URL — in the README, in the install instructions, on the
+# socials — so they are part of the deployed contract, and a plain file is the one
+# form where "what does /x do in production" is answerable by reading.
 #
 # 302 throughout, never 301. A 301 is cached by the browser more or less forever,
-# every one of the social links points at a third-party account that can move, and
-# the docs have just moved origin once already. A social handle is not a canonical
-# URL change.
+# every social link points at a third-party account that can move, and the docs
+# have now moved origin twice in three days.
 #
 # `/install` is deliberately absent: it is a real script at `public/install`,
 # served as a static asset. A redirect would break `curl -fsS` without `-L`.
@@ -22,55 +19,34 @@
 /linkedin       https://www.linkedin.com/company/sigiro  302
 /discord        https://discord.gg/sigiro                302
 
-# `@astrojs/sitemap` writes `sitemap-index.xml` and `sitemap-0.xml`, and its
-# `filenameBase` option cannot collapse them into one `sitemap.xml`. Under Next the
-# published path was `/sitemap.xml` — `robots.ts` declared it and Search Console has
-# it — so it 404'd the moment this site moved. `robots.txt` now advertises the index
-# directly; this is for the crawlers holding the old URL.
+# `@astrojs/sitemap` writes `sitemap-index.xml` and has no option to collapse it
+# into one file, but `/sitemap.xml` is the path the old `robots.ts` declared and the
+# one Search Console holds.
 /sitemap.xml    /sitemap-index.xml                       302
 
-# Blume generates these from the same content, so they live beside it. The paths
-# stay reachable here because the footer, the README and the llms.txt convention
-# itself all point at the site root.
+# The docs are pages of this site again, at `/docs/*`, so almost the whole
+# `/docs/*` block that used to live here is gone — those are native routes now and
+# need no rule at all. What remains is the API reference, which was a page per
+# operation under fumadocs and is one generated page now.
 #
-# Above the splats below on purpose: Cloudflare matches this list in order and warns
-# at build time that a static rule sitting under a splat rule is slower to serve.
-/llms.txt       https://docs.sigiro.com/llms.txt         302
-/llms-full.txt  https://docs.sigiro.com/llms-full.txt    302
-
-# The docs are Blume at docs.sigiro.com, where they sit at the root rather than
-# under /docs.
-#
-# The destinations carry a trailing slash. `docs.sigiro.com/api` answers 307 to
-# `/api/`, so omitting it makes every one of these a two-hop redirect.
-/docs                   https://docs.sigiro.com/         302
-
-# Every API reference URL this site ever published, enumerated, all landing on the
-# one generated reference page.
-#
-# A pattern was tried twice and does not work. `/docs/api/*` sends the unmatched
-# remainder along — Cloudflare appends it when the destination does not name
-# `:splat` — so `/docs/api/run-query` arrived at `docs.sigiro.com/api/run-query`,
-# which 404s. `/docs/api/:op` was the second attempt on the theory that a
-# placeholder is consumed rather than appended; it is not matched at all, and
-# `/docs/*` below caught the request and appended it just the same. Both were
-# deployed and both produced a 404 in production.
-#
-# So the list is literal. That is affordable because it is closed: these eleven URLs
-# came from two generations of `fumadocs-openapi`, both now deleted, and no process
-# can add a twelfth. Recovered with
+# Enumerated rather than matched, and that is not a style choice: with
+# `/docs/api/*` Cloudflare appends the unmatched remainder to a destination that
+# does not name `:splat`, and `/docs/api/:op` is not matched at all. Both were
+# deployed, and both 404'd in production. The list is affordable because it is
+# closed — these came from two generations of `fumadocs-openapi`, both deleted, and
+# nothing can add a twelfth. Recovered with
 # `git log --all --name-only -- 'www/content/docs/api/**' 'www/src/app/docs/api/**'`.
-/docs/api                             https://docs.sigiro.com/api/   302
-/docs/api/get-trace                   https://docs.sigiro.com/api/   302
-/docs/api/investigate-services        https://docs.sigiro.com/api/   302
-/docs/api/list-anomalies              https://docs.sigiro.com/api/   302
-/docs/api/list-services               https://docs.sigiro.com/api/   302
-/docs/api/run-query                   https://docs.sigiro.com/api/   302
-/docs/api/v1/anomalies/get            https://docs.sigiro.com/api/   302
-/docs/api/v1/investigate/post         https://docs.sigiro.com/api/   302
-/docs/api/v1/query/post               https://docs.sigiro.com/api/   302
-/docs/api/v1/services/get             https://docs.sigiro.com/api/   302
-/docs/api/v1/traces/trace_id/get      https://docs.sigiro.com/api/   302
-
-# Everything else under /docs keeps its path, because Blume kept the filenames.
-/docs/*                 https://docs.sigiro.com/:splat   302
+#
+# The four `/admin/*` operations are absent on purpose. They no longer exist in the
+# public spec — `/openapi.json` filters them — so there is no page to send anyone
+# to, and a redirect would be the one place still advertising that they are there.
+/docs/api/get-trace              /docs/api/     302
+/docs/api/investigate-services   /docs/api/     302
+/docs/api/list-anomalies         /docs/api/     302
+/docs/api/list-services          /docs/api/     302
+/docs/api/run-query              /docs/api/     302
+/docs/api/v1/anomalies/get       /docs/api/     302
+/docs/api/v1/investigate/post    /docs/api/     302
+/docs/api/v1/query/post          /docs/api/     302
+/docs/api/v1/services/get        /docs/api/     302
+/docs/api/v1/traces/trace_id/get /docs/api/     302

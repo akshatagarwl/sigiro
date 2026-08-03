@@ -1,0 +1,152 @@
+---
+/**
+ * Light and dark, as two keys in a well with one cap sliding between them.
+ *
+ * This has now been four things: a three-state XState machine, `next-themes`, a
+ * `useSyncExternalStore` island over our own store, and — here — no JavaScript
+ * component at all.
+ *
+ * Blume owns the theme now: it writes `data-theme` on `<html>` from a pre-paint
+ * script and stores the choice under `blume-theme`. Two consequences, and both
+ * delete code:
+ *
+ * 1. The attribute is always set before anything paints, so there is no longer a
+ *    render where the theme is unknown. The whole reason the React version
+ *    existed — a constant `getServerSnapshot` returning "not known yet", so that
+ *    the server's markup and the hydrating render agreed — is gone. The state it
+ *    was guarding no longer exists.
+ * 2. Because the state lives in an attribute on the root, the appearance is
+ *    plain CSS. The sliding cap and the lit key are `[data-theme='dark']`
+ *    selectors, so nothing has to re-render to move them.
+ *
+ * What is left for script is `aria-pressed`, which CSS cannot set, and the click
+ * itself. Blume's own header carries a delegated handler for
+ * `[data-blume-theme-toggle]`, but that header is not on this page — the landing
+ * page keeps its own — so the handler is here. It writes Blume's attribute and
+ * Blume's storage key, which is what makes a choice made here already made in the
+ * docs. That only works because both are now one origin.
+ */
+---
+
+<div
+  class="mat-well relative flex h-[26px] w-[54px] items-center rounded-[8px] p-[3px]"
+  role="group"
+  aria-label="Theme"
+  data-theme-toggle
+>
+  {/* The cap. Reserved from the start, so nothing moves on first paint. */}
+  <span
+    aria-hidden="true"
+    class="mat-cap absolute top-[3px] left-[3px] h-5 w-6 rounded-[5px] transition-transform duration-[220ms] ease-[cubic-bezier(0.23,1,0.32,1)]"
+    data-cap
+  ></span>
+
+  <button
+    type="button"
+    aria-label="Light"
+    data-set="light"
+    class="relative z-10 grid h-5 w-6 place-items-center rounded-[5px]"
+  >
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 256 256"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="16"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="128" cy="128" r="52"></circle>
+      <path
+        d="M128 28V16M128 240v-12M60 60l-8-8M204 204l-8-8M28 128H16M240 128h-12M60 196l-8 8M204 52l-8 8"
+      ></path>
+    </svg>
+  </button>
+
+  <button
+    type="button"
+    aria-label="Dark"
+    data-set="dark"
+    class="relative z-10 grid h-5 w-6 place-items-center rounded-[5px]"
+  >
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 256 256"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="16"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M216 152A96 96 0 0 1 104 40a96 96 0 1 0 112 112Z"></path>
+    </svg>
+  </button>
+</div>
+
+<style>
+  /* The cap sits over the light key, and slides one cell for dark. */
+  [data-cap] {
+    transform: translateX(0);
+  }
+  :root[data-theme='dark'] [data-cap] {
+    transform: translateX(24px);
+  }
+
+  /* The active key is ink, the other is muted ink. */
+  [data-theme-toggle] button {
+    color: var(--ink-3);
+  }
+  [data-theme-toggle] button[data-set='light'] {
+    color: var(--ink);
+  }
+  :root[data-theme='dark'] [data-theme-toggle] button[data-set='light'] {
+    color: var(--ink-3);
+  }
+  :root[data-theme='dark'] [data-theme-toggle] button[data-set='dark'] {
+    color: var(--ink);
+  }
+</style>
+
+<script is:inline>
+  (() => {
+    const root = document.documentElement;
+    const group = document.querySelector('[data-theme-toggle]');
+    if (!group) return;
+
+    const keys = [...group.querySelectorAll('button[data-set]')];
+
+    /** `aria-pressed` is the one piece of this the CSS above cannot express. */
+    const mark = () => {
+      for (const key of keys) {
+        key.setAttribute('aria-pressed', String(key.dataset.set === root.dataset.theme));
+      }
+    };
+
+    for (const key of keys) {
+      key.addEventListener('click', () => {
+        // Blume's attribute and Blume's key, so the docs agree with this page.
+        root.dataset.theme = key.dataset.set;
+        try {
+          localStorage.setItem('blume-theme', key.dataset.set);
+        } catch {
+          // A reader who cannot store a preference still gets to change the view.
+        }
+        mark();
+      });
+    }
+
+    // Another tab's choice. The landing page and a docs page are the same origin
+    // now, so this fires for both.
+    addEventListener('storage', (event) => {
+      if (event.key !== 'blume-theme' || !event.newValue) return;
+      root.dataset.theme = event.newValue;
+      mark();
+    });
+
+    mark();
+  })();
+</script>

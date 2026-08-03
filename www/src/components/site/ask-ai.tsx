@@ -1,4 +1,17 @@
-import { siClaude, siGooglegemini, siPerplexity } from 'simple-icons';
+/**
+ * `sigiro-icons` is `simple-icons` under an alias, and the alias is load-bearing.
+ *
+ * Blume depends on `simple-icons@^13` for the language marks on its code fences,
+ * and this page needs 16 — `siClaude`, `siGooglegemini` and `siPerplexity` are
+ * brands that did not exist in 13. Two majors of one package in one project.
+ *
+ * Bun installs both correctly (16 at the root, 13 nested under `blume/`), but
+ * Vite resolves Blume's own `simple-icons` import to the hoisted root copy
+ * regardless, and 16 renamed `siCss3` to `siCss` — so Blume's fences failed to
+ * build. Aliasing our side means the bare specifier belongs to Blume alone and
+ * each gets the major it was written against.
+ */
+import { siClaude, siGooglegemini, siPerplexity } from 'sigiro-icons';
 import { ASK_AI_PROMPT, SITE } from '@/lib/site';
 
 /**

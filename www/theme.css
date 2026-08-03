@@ -1,8 +1,24 @@
-@import 'tailwindcss';
-
-@custom-variant dark (&:where(.dark, .dark *));
-
 /* ─────────────────────────────────────────────────────────────
+   Blume reads this file as `theme.css` and inlines it at the end of its
+   generated Tailwind entry, which is the last layer in its cascade. So there is
+   no `@import "tailwindcss"` and no `@custom-variant dark` here — Blume declares
+   both, and a second copy of either would fight the first.
+
+   Blume's dark variant is `[data-theme="dark"]` on `<html>`, not the `.dark`
+   class this file used under Next. Every selector below was converted, and the
+   theme toggle writes Blume's attribute and Blume's storage key. That is the
+   thing one origin buys: a reader who picks dark on the landing page has picked
+   it in the docs, because there is one attribute and one key rather than two of
+   each on two hostnames.
+
+   IMPORTANT: this file is global, so it reaches the docs as well as the landing
+   page. Tokens and class-based utilities are safe that way — a `.mat-panel` rule
+   only styles an element that asks for it. Element and pseudo-element rules are
+   not: a bare `body { font-size: 13.5px }` would resize every docs page. Those
+   are scoped under `:root[data-home]`, which only our own document shell sets.
+   Anything added here has to pick a side deliberately.
+   ─────────────────────────────────────────────────────────────
+
    The interior.dev design language, adopted whole.
    https://github.com/ddoemonn/interior/blob/main/DESIGN.md
 
@@ -47,7 +63,7 @@
   --shadow-row: inset 0 0 0 1px rgba(28, 25, 23, 0.07), 0 1px 2px rgba(28, 25, 23, 0.05);
 }
 
-.dark {
+:root[data-theme='dark'] {
   --bezel: #141312;
   --panel: #1d1d1a;
   --well: #252522;
@@ -95,19 +111,33 @@
   --color-moss: var(--moss);
   --color-flag: var(--flag);
 
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* No `--font-sans`/`--font-mono` remap here, and that is deliberate.
+
+     This file used to point both at `--font-geist-sans`/`--font-geist-mono`,
+     loaded by Astro's Fonts API from the `geist` package. Blume already loads
+     Geist and Geist Mono and maps Tailwind's `--font-sans`/`--font-mono` onto
+     them — the same two typefaces. Remapping here would win (this is the last
+     layer) and would point every docs page at variables nothing defines, so the
+     docs would fall back to the system stack.
+
+     So the font pipeline is Blume's, and `var(--font-mono)` in `.meta` and
+     `.shiki code` below resolves to its Geist Mono. One pipeline, one download. */
 }
 
-html {
+/* ── the landing page's own document rules ─────────────────────
+   Scoped, because this file is global. `[data-home]` is set by our document
+   shell and by nothing else, so none of this reaches a docs page — where Blume
+   owns the background, the type scale and the selection colour. */
+
+:root[data-home] {
   color-scheme: light;
 }
 
-html.dark {
+:root[data-home][data-theme='dark'] {
   color-scheme: dark;
 }
 
-body {
+:root[data-home] body {
   background-color: var(--bezel);
   color: var(--ink);
   /* 13.5px regular, relaxed leading, is the body of this language. */
@@ -117,7 +147,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-::selection {
+:root[data-home] ::selection {
   background: var(--accent-soft);
   color: var(--ink);
 }
@@ -215,24 +245,24 @@ body {
  * family is ignored. Webkit gets the pseudo-elements; Firefox, which has none,
  * gets the standard properties and only there.
  */
-::-webkit-scrollbar {
+:root[data-home] ::-webkit-scrollbar {
   width: 4px;
   height: 4px;
 }
 
-::-webkit-scrollbar-track,
-::-webkit-scrollbar-corner {
+:root[data-home] ::-webkit-scrollbar-track,
+:root[data-home] ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb {
+:root[data-home] ::-webkit-scrollbar-thumb {
   /* Faint at rest, readable when you reach for it: a scrollbar is a position
      readout first and a control second. */
   background-color: color-mix(in oklab, var(--ink) 16%, transparent);
   border-radius: 2px;
 }
 
-::-webkit-scrollbar-thumb:hover {
+:root[data-home] ::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--ink) 28%, transparent);
 }
 
@@ -251,7 +281,7 @@ body {
  * Gecko parses -moz-appearance, so this reaches Firefox and nothing else.
  */
 @supports (-moz-appearance: none) {
-  * {
+  :root[data-home] * {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklab, var(--ink) 16%, transparent) transparent;
   }
@@ -272,19 +302,24 @@ body {
 
 /* ── shiki ─────────────────────────────────────────────────── */
 
-/* Shiki emits a colour per token inline; this styles only the block. */
-.shiki,
-.shiki span {
+/* Shiki emits a colour per token inline; this styles only the block.
+
+   Scoped to the landing page. Blume renders its own fences with its own Shiki
+   themes and `defaultColor: false`, so it already switches `--shiki-light` and
+   `--shiki-dark` itself. Left global, the `background-color: transparent
+   !important` below would win against Blume's code surface on every docs page. */
+:root[data-home] .shiki,
+:root[data-home] .shiki span {
   color: var(--shiki-light);
   background-color: transparent !important;
 }
 
-html.dark .shiki,
-html.dark .shiki span {
+:root[data-home][data-theme='dark'] .shiki,
+:root[data-home][data-theme='dark'] .shiki span {
   color: var(--shiki-dark);
 }
 
-.shiki code {
+:root[data-home] .shiki code {
   display: block;
   width: fit-content;
   min-width: 100%;
@@ -298,7 +333,7 @@ html.dark .shiki span {
    utility whatever the specificity, so this must not leave its layer — if it
    does, every component's own focus styling silently dies. */
 @layer base {
-  :where(a, button, input, [tabindex]):focus-visible {
+  :root[data-home] :where(a, button, input, [tabindex]):focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
   }
@@ -312,12 +347,12 @@ html.dark .shiki span {
 /* ── reduced motion ────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
-  html {
+  :root[data-home] {
     scroll-behavior: auto;
   }
-  *,
-  *::before,
-  *::after {
+  :root[data-home] *,
+  :root[data-home] *::before,
+  :root[data-home] *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

@@ -507,12 +507,12 @@ export const FAQ = [
 
 export const NAV = [
   /**
-   * Absolute, because the docs are a different site now — Blume at
-   * docs.sigiro.com. The `/docs/*` redirects in next.config.ts keep every
-   * published link working, but the nav should not take a reader through one.
+   * Root-relative again. The docs are pages of this same Astro app, mounted at
+   * `/docs` by `basePath` in blume.config.ts — so these are ordinary links, not
+   * a hop to another origin, and not through a redirect.
    */
-  { href: 'https://docs.sigiro.com', label: 'Docs' },
-  { href: 'https://docs.sigiro.com/api', label: 'API' },
+  { href: '/docs', label: 'Docs' },
+  { href: '/docs/api', label: 'API' },
 ] as const;
 
 export const SOCIAL = [

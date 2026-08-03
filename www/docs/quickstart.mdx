@@ -1,0 +1,165 @@
+---
+title: Quickstart
+description: Run sigiro with one docker command. Point OpenTelemetry at it. Then ask it what changed and why. This takes five minutes. You need no collector and no configuration file.
+sidebar:
+  order: 2
+---
+
+sigiro is one process. Start it. Send OTLP to it. Then query it. You deploy no
+collector and you write no configuration file.
+
+## 1. Run it
+
+{/* `param` makes the choice shareable — /docs/quickstart?install=docker opens on
+    that tab — and `sync` is Blume's default, so every install tab group on the
+    site follows the same pick. Nothing is imported: Blume provides these in
+    situ. */}
+
+<Tabs param="install">
+
+<Tab title="binary">
+
+```bash
+curl -fsSL https://sigiro.com/install | sh
+sigiro serve
+```
+
+The script reads your operating system and processor. Then it checks the SHA-256
+of the download against the published checksum. It writes the binary to
+`~/.local/bin`. Set `SIGIRO_INSTALL_DIR` for a different directory.
+
+Builds exist for Linux and macOS on arm64, and for Linux on x86-64. On another
+platform, use the container.
+
+</Tab>
+
+<Tab title="docker">
+
+```bash
+docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
+```
+
+Add `-v sigiro-data:/var/lib/sigiro` to keep the data across container restarts.
+
+</Tab>
+
+</Tabs>
+
+Each of the three ports has one function:
+
+| Port | Protocol |
+| --- | --- |
+| `4317` | OTLP over gRPC |
+| `4318` | OTLP over HTTP |
+| `9999` | the query and investigate API |
+
+At the first start, sigiro downloads its query extensions. This can take 30–90
+seconds. Each later start is immediate. sigiro writes the data to
+`SIGIRO_DATA_DIR`. That directory is `~/.local/share/sigiro` for the binary, and
+`/var/lib/sigiro` in the image.
+
+A self-hosted server runs in **open mode**. It authenticates no request. Put the
+server behind a tailnet, a private network, or a reverse proxy. The network is
+the security boundary. Tenant keys apply only to the hosted service.
+
+## 2. Send it telemetry
+
+Any OpenTelemetry SDK or collector in your stack works without a change. Point
+the standard environment variables at sigiro:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+OTEL_SERVICE_NAME=checkout \
+  <your-app-start-command>
+```
+
+If your code has no instrumentation yet, do not add it by hand.
+[Give an agent the prompt in the AI instrumentation guide](/install-with-ai).
+
+Confirm that the telemetry arrived:
+
+```bash
+curl http://localhost:9999/v1/services
+```
+
+## 3. Ask what changed
+
+`anomalies` is the entry point of the loop. It returns the shifts that deviate
+from the recent baseline of each service. It does not return threshold breaches.
+sigiro ranks the largest shift first. sigiro groups the shifts across signals
+under one `incident_id`.
+
+```bash
+sigiro anomalies
+sigiro anomalies --service checkout
+```
+
+You configure nothing. There are no thresholds to choose. A service that is
+always slow but *stable* is not an anomaly.
+
+## 4. Ask why
+
+`investigate` returns one structured evidence block for a service and a time
+window. The block holds ranked findings, error counts, error breakdowns for each
+operation by `error.type`, LLM statistics for each model, sampled spans, and
+deduplicated log patterns. Every row also carries a ready-to-run SQL query, so
+you copy the next question and paste it.
+
+```bash
+sigiro investigate checkout
+sigiro investigate checkout --from $(date -v-1H +%s) --grep POST
+```
+
+An agent asks the same question over HTTP:
+
+```bash
+curl -X POST http://localhost:9999/v1/investigate \
+  -H 'content-type: application/json' \
+  -d '{"service":"checkout"}'
+```
+
+## 5. Drill down with SQL
+
+When the evidence block does not answer your question, use the SQL that each row
+gives you. Your telemetry is a set of tables:
+
+```bash
+sigiro query "
+  SELECT service_name, count(*) AS errors
+  FROM sigiro_spans
+  WHERE status_code = 2 AND timestamp > now() - INTERVAL '1 hour'
+  GROUP BY 1 ORDER BY errors DESC"
+```
+
+The tables are `sigiro_spans`, `sigiro_logs`, `sigiro_log_templates`,
+`sigiro_metrics_gauge` / `_sum` / `_histogram` / `_exp_histogram`,
+`sigiro_profiles` and `sigiro_anomalies`. `status_code` is the OTLP enum, so `2`
+is an error. Bound `timestamp` in every query. `sigiro query` refuses an
+unbounded scan across edges unless you pass `--full-scan`. A bounded query reads
+one file on disk. An unbounded query reads every file.
+
+The body is the raw SQL, not JSON:
+
+```bash
+curl -X POST http://localhost:9999/v1/query \
+  --data "SELECT count(*) FROM sigiro_spans WHERE timestamp > now() - INTERVAL '1 hour'"
+```
+
+Every command prints indented JSON. The bytes are the same for a human reader
+and for `jq`. You choose no format, and you reason about no TTY detection.
+
+## Other commands
+
+```bash
+sigiro status             # server health
+sigiro diagnose          # debug sigiro using sigiro's own telemetry
+sigiro fetch-extensions  # pre-download query extensions before an offline deploy
+sigiro healthcheck       # exit 0 only when ready (the container's HEALTHCHECK)
+```
+
+## Next
+
+- [Instrument your code with an AI agent](/install-with-ai)
+- [Hosted beta](/hosted-onboarding) — use this if you do not want to run the
+  server yourself
+- `GET /openapi.json` — the full API, machine-readable, and no key is necessary

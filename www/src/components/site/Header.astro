@@ -1,6 +1,6 @@
 ---
 import { Logo } from '@/components/site/logo';
-import { ThemeToggle } from '@/components/site/theme-toggle';
+import ThemeToggle from '@/components/site/ThemeToggle.astro';
 import { COMPACT } from '@/components/site/action';
 import { NAV, SITE } from '@/lib/site';
 
@@ -13,9 +13,10 @@ import { NAV, SITE } from '@/lib/site';
  * two top edges line up. The docs are on their own origin now, so it is just the
  * header height — kept because the whole page's rhythm is measured off it.
  *
- * `Logo` is a React component rendered here with no `client:*` directive, so it
- * ships no JavaScript. `ThemeToggle` is the only thing in this header that runs
- * in the browser, and it says so.
+ * Nothing in this header is an island any more. `Logo` is a React component
+ * rendered with no `client:*` directive, so it ships no JavaScript, and
+ * `ThemeToggle` became a plain `.astro` component once Blume took over the theme
+ * — see the note in that file.
  */
 ---
 
@@ -45,7 +46,7 @@ import { NAV, SITE } from '@/lib/site';
 
   <span class="flex-1"></span>
 
-  <ThemeToggle client:load />
+  <ThemeToggle />
 
   {/*
     Below sm the hero's own action is one screen away at most, and this row has no
@@ -57,6 +58,6 @@ import { NAV, SITE } from '@/lib/site';
     last — so `hidden` lost and the button showed on a phone anyway.
   */}
   <div class="hidden sm:block">
-    <a href="https://docs.sigiro.com/quickstart" class={COMPACT}>Get started</a>
+    <a href="/docs/quickstart" class={COMPACT}>Get started</a>
   </div>
 </header>
