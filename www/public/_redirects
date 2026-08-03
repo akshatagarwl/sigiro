@@ -22,6 +22,13 @@
 /linkedin       https://www.linkedin.com/company/sigiro  302
 /discord        https://discord.gg/sigiro                302
 
+# `@astrojs/sitemap` writes `sitemap-index.xml` and `sitemap-0.xml`, and its
+# `filenameBase` option cannot collapse them into one `sitemap.xml`. Under Next the
+# published path was `/sitemap.xml` — `robots.ts` declared it and Search Console has
+# it — so it 404'd the moment this site moved. `robots.txt` now advertises the index
+# directly; this is for the crawlers holding the old URL.
+/sitemap.xml    /sitemap-index.xml                       302
+
 # Blume generates these from the same content, so they live beside it. The paths
 # stay reachable here because the footer, the README and the llms.txt convention
 # itself all point at the site root.
