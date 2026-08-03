@@ -1698,45 +1698,40 @@ fn query_sql_contract() -> String {
 /// Every `drill_down_sql` that `/v1/investigate` returns can be pasted here
 /// verbatim.
 ///
-/// The rules the statement has to satisfy are on the request body, not here —
-/// that is the field an OpenAPI reader shows next to the input, and where a
-/// generated client puts them.
+/// Readable tables, optionally qualified `lake.*` or `main.*`:
+///
+/// - `sigiro_spans`
+/// - `sigiro_logs`
+/// - `sigiro_log_templates`
+/// - `sigiro_metrics_gauge`
+/// - `sigiro_metrics_sum`
+/// - `sigiro_metrics_histogram`
+/// - `sigiro_metrics_exp_histogram`
+/// - `sigiro_profiles`
+/// - `sigiro_anomalies`
 #[utoipa::path(
     post,
     path = "/v1/query",
     operation_id = "run-query",
     summary = "Run SQL over your telemetry",
-    /* The body contract, as the body's own `description` rather than prose in the
-     * operation's.
+    /* `request_body(...)` rather than `request_body = String`, for the two fields
+     * that form carries: the wire format, and an example.
      *
-     * All of this used to sit in the doc comment above, which made the first thing
-     * on the reference page a single paragraph carrying nine table names, three
-     * separate restrictions and a cross-reference. It reads fine in the source and
-     * badly on a page. OpenAPI has a field for "what to send" — this one — and a
-     * renderer puts it beside the input box, which is where a reader is looking
-     * when they need it.
+     * `content_type` earns its place — `String` alone said nothing about whether to
+     * send JSON or text, and it is text.
      *
-     * Markdown, because both utoipa and every renderer pass it through: the table
-     * list is a list. */
+     * The `description` here is deliberately ONE plain sentence. Markdown was tried
+     * and reverted: Blume renders an operation's `description` as markdown but a
+     * request body's as plain text, so a list here reached the page as literal
+     * hyphens and backticks — worse than the prose it replaced. The table list and
+     * the SQL restrictions therefore live in the operation description above, which
+     * does render, and this field says only what the body is. */
     request_body(
         content = String,
         content_type = "text/plain",
-        description = "Exactly one `SELECT` statement, as the raw body.\n\n\
-Readable tables — optionally qualified `lake.*` or `main.*`:\n\
-- `sigiro_spans`\n\
-- `sigiro_logs`\n\
-- `sigiro_log_templates`\n\
-- `sigiro_metrics_gauge`\n\
-- `sigiro_metrics_sum`\n\
-- `sigiro_metrics_histogram`\n\
-- `sigiro_metrics_exp_histogram`\n\
-- `sigiro_profiles`\n\
-- `sigiro_anomalies`\n\n\
-Restrictions:\n\
-- One statement. `SELECT` only.\n\
-- No `WITH`/CTE clauses — rewrite them as derived-table subqueries.\n\
-- Scalar functions are allowlisted (aggregates, JSON extraction, date/time, \
-string, math, conditional helpers). File and network readers are blocked.",
+        description = "One SELECT statement. No WITH/CTE clauses — rewrite them as \
+derived-table subqueries. Scalar functions are allowlisted; file and network \
+readers are blocked.",
         example = json!(
             "SELECT service_name, count(*) AS errors FROM sigiro_spans \
 WHERE status_code = 'STATUS_CODE_ERROR' GROUP BY 1 ORDER BY 2 DESC"
