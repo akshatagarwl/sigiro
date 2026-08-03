@@ -12,11 +12,23 @@
    each on two hostnames.
 
    IMPORTANT: this file is global, so it reaches the docs as well as the landing
-   page. Tokens and class-based utilities are safe that way — a `.mat-panel` rule
-   only styles an element that asks for it. Element and pseudo-element rules are
-   not: a bare `body { font-size: 13.5px }` would resize every docs page. Those
-   are scoped under `:root[data-home]`, which only our own document shell sets.
-   Anything added here has to pick a side deliberately.
+   page, and every rule in it has to say which surface it is for.
+
+   Global is the default now, and most of the file is: the tokens, the `--blume-*`
+   aliases below them, the materials, the prose scale, selection, scrollbars,
+   reduced motion. That is what makes the docs and the landing page read as one
+   site rather than as two properties that happen to share a domain.
+
+   `:root[data-home]` is the exception, and it is narrow: it is set by our own
+   document shell and by nothing else, so it is where a rule goes that would be
+   wrong on a docs page. Three things are still scoped that way — the body
+   background and its 13.5px type (Blume's prose sets its own size, and a bare
+   `body { font-size }` would fight it), `color-scheme`, and the Shiki block
+   rules (Blume renders its own fences with its own dual-theme variables, and the
+   `background-color: transparent !important` here would win against them).
+
+   Anything added has to pick a side deliberately. The question to ask is not
+   "does this belong to the landing page" but "would this be wrong in the docs".
    ─────────────────────────────────────────────────────────────
 
    The interior.dev design language, adopted whole.
@@ -96,6 +108,54 @@
   --shadow-row: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
+/* ── Blume's tokens, pointed at ours ────────────────────────────
+   Blume's chrome — the docs header, the sidebar, prose, code frames, tables —
+   is written against `--blume-*`. This is the whole reason the two surfaces can
+   look like one site without a second stylesheet: the docs keep Blume's markup
+   and take our materials, and a token added to the ink ramp above reaches both.
+
+   The selector list is not decoration. Blume declares each of these twice — once
+   in `:root` and again in `:root[data-theme="dark"]` — and that second block is
+   specificity 0,2,0. A plain `:root` alias here wins in light and silently loses
+   in dark, which reads as "the docs are nearly right until you flip the theme".
+   Listing both selectors matches that specificity, and this file is inlined last,
+   so order decides.
+
+   Two tokens are deliberately absent: `--blume-accent` and `--blume-background`.
+   Those are set from `theme` in `blume.config.ts`, already to the accent and the
+   bezel, and declaring them again here would be a second place to change one
+   colour. Blume's "accent" is our accent in the DESIGN.md sense — interaction
+   only: the active tab, a card's hover edge, the focus ring. */
+
+:root,
+:root[data-theme='dark'] {
+  --blume-foreground: var(--ink);
+  /* Prose is the panel copy of the docs, so it takes the same ink as the landing
+     page's body — one step down from a heading, not two. */
+  --blume-muted-foreground: var(--ink-2);
+  /* Blume reaches for `muted` as a surface: a hovered nav row, the current page.
+     That is a row picked out of a list, which is the well. */
+  --blume-muted: var(--well);
+  --blume-border: var(--hairline);
+  --blume-code-background: var(--well);
+
+  /* §4: 14 is the card/section radius, and a code block or a table in prose is a
+     section of one. Blume's own scale only offers sm/md/lg, hence the token. */
+  --blume-radius: 14px;
+
+  /* Shiki's notation transformers. `moss` and `flag` are the two status colours
+     this language has, so a diff in the docs is the same green and red as a
+     passing or failing row on the landing page. */
+  --blume-code-add: color-mix(in oklab, var(--moss) 18%, transparent);
+  --blume-code-add-border: var(--moss);
+  --blume-code-remove: color-mix(in oklab, var(--flag) 18%, transparent);
+  --blume-code-remove-border: var(--flag);
+  --blume-code-highlight: var(--accent-soft);
+  --blume-code-highlight-border: var(--accent);
+  --blume-code-word: var(--accent-soft);
+  --blume-code-word-border: var(--accent);
+}
+
 @theme inline {
   --color-bezel: var(--bezel);
   --color-panel: var(--panel);
@@ -147,7 +207,10 @@
   text-rendering: optimizeLegibility;
 }
 
-:root[data-home] ::selection {
+/* Global, unlike the rules above it: selecting text is the same gesture on both
+   surfaces, and two selection colours on one origin is the kind of seam a reader
+   notices without being able to name. */
+::selection {
   background: var(--accent-soft);
   color: var(--ink);
 }
@@ -182,6 +245,77 @@
 .mat-row {
   background: var(--well);
   box-shadow: var(--shadow-row);
+}
+
+/* ── the docs page shell ───────────────────────────────────────
+   §2 does not describe the landing page, it describes this site: "the bezel
+   gutter, on both the landing and the docs", and "the sidebar sits directly on
+   the bezel, unlifted — it is furniture, not content". Blume's docs arrived
+   full-bleed, which is why the tokens alone still left them reading as a
+   different property: the colours matched and the shape did not.
+
+   So the middle column becomes the panel and the two rails stay on the bezel.
+   Content is lifted, navigation is not — which is the same sentence the landing
+   page's header and footer are already an instance of.
+
+   `[data-blume-doc-grid]` and `#blume-content` are Blume's own hooks, and this is
+   the whole of the reach into its markup: no layout is replaced, so the search
+   modal, the nav drawer and the TOC scrollspy all keep working. §2's other half —
+   a sidebar with its own `h-12` header lining up with the panel's — is NOT built
+   here. That needs two headers, and this site now has one on purpose.
+
+   Not clipped to the radius. `overflow-clip` would be the obvious way to keep a
+   wide child inside the curve, and it would also clip every Twoslash popup, which
+   is documented as needing to escape its container. Blume already wraps a wide
+   table in its own scroller, so there is nothing left to contain. */
+
+[data-blume-doc-grid] {
+  gap: 12px;
+  padding-inline: 12px;
+  padding-bottom: 12px;
+}
+
+#blume-content {
+  background: var(--panel);
+  border-radius: 20px;
+  box-shadow: var(--shadow-lift);
+  /* Not grid padding-top: the rails are `sticky top-16` against a `h-16` header,
+     so padding above them would drop them 12px and then jump back on first
+     scroll. A margin on the panel alone leaves them flush where they belong. */
+  margin-top: 12px;
+}
+
+@media (min-width: 640px) {
+  [data-blume-doc-grid] {
+    gap: 16px;
+    padding-inline: 20px;
+    padding-bottom: 20px;
+  }
+
+  #blume-content {
+    margin-top: 20px;
+  }
+}
+
+/* The two rails are furniture, and §8 puts a sidebar row at 12.5px — the same
+   size as the landing page's own nav links. Blume writes them at `text-sm`, which
+   is the one place the docs chrome was still a step louder than the page it sits
+   beside.
+
+   Scoped to the two containers rather than to Blume's utility classes: the class
+   strings on those rows are Blume's internals and change between releases, but
+   `data-blume-nav-drawer` and `data-blume-toc` are the hooks its own layout and
+   scripts are written against.
+
+   The group labels ("Operations") are left alone. §8 would draw them as 11px
+   uppercase, and doing that here would also make the sidebar's "Api" read as
+   "API" — which is the bug reported on that entry, and dodging it with
+   `text-transform` would leave the breadcrumb and the page title still wrong. It
+   has a real fix, noted in `blume.config.ts`: rename `openapi.route` so the
+   segment humanizes correctly. */
+[data-blume-nav-drawer] :is(a, button, summary),
+[data-blume-toc] a {
+  font-size: 12.5px;
 }
 
 /* ── typography ────────────────────────────────────────────── */
@@ -245,24 +379,29 @@
  * family is ignored. Webkit gets the pseudo-elements; Firefox, which has none,
  * gets the standard properties and only there.
  */
-:root[data-home] ::-webkit-scrollbar {
+/*
+ * Global. The docs have three scroll panes of their own — the sidebar, the table
+ * of contents, and every code fence — and a default 15px scrollbar on any of them
+ * is the single most obvious place the docs stopped looking like the landing page.
+ */
+::-webkit-scrollbar {
   width: 4px;
   height: 4px;
 }
 
-:root[data-home] ::-webkit-scrollbar-track,
-:root[data-home] ::-webkit-scrollbar-corner {
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-:root[data-home] ::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   /* Faint at rest, readable when you reach for it: a scrollbar is a position
      readout first and a control second. */
   background-color: color-mix(in oklab, var(--ink) 16%, transparent);
   border-radius: 2px;
 }
 
-:root[data-home] ::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--ink) 28%, transparent);
 }
 
@@ -281,7 +420,7 @@
  * Gecko parses -moz-appearance, so this reaches Firefox and nothing else.
  */
 @supports (-moz-appearance: none) {
-  :root[data-home] * {
+  * {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklab, var(--ink) 16%, transparent) transparent;
   }
@@ -339,20 +478,92 @@
   }
 }
 
-/* There was a block of `.prose` overrides here — inline-code and `pre` rules that
-   fought @tailwindcss/typography's own defaults inside the docs. Both the plugin
-   and the overrides are gone: this site has no `.prose` region left. The docs
-   moved to Blume at docs.sigiro.com, and Blume styles its own prose. */
+/* ── the docs prose, on this language's type scale ──────────────
+   §8 is a scale, not a set of suggestions, and Blume's prose is on a different
+   one: a 48px h1 over 14px body, where this language has a 27px page title over
+   13.5px. Colour alone would not have made the two surfaces read as one site —
+   the headings were the loudest thing telling you that you had left it.
+
+   `:where()` keeps every selector at 0,1,0, the same weight Blume writes its
+   prose rules at, so these win on order rather than by escalating. Cheap to
+   check: nothing here needs `!important`, and if a rule stops applying it is
+   because Blume moved its own out of `:where()`.
+
+   Headings stay medium — the negative tracking does the work weight would do
+   badly — and font-weight is Blume's already, so only size and tracking are set.
+
+   Deliberately not repeated: Blume's `max-width: 640px` block, which drops its
+   h1 to 36px and h2 to 26px. Both of those are larger than what this scale uses
+   at any width, so there is nothing to shrink, and these unmediated rules are
+   later in the sheet and win there too. */
+
+.prose {
+  font-size: 13.5px;
+  --tw-prose-body: var(--ink-2);
+}
+
+/* 27px medium tracking-[-0.03em] — the page title. */
+.prose :where(h1) {
+  font-size: 27px;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+}
+
+.prose :where(h2) {
+  font-size: 20px;
+  letter-spacing: -0.03em;
+  line-height: 1.3;
+}
+
+.prose :where(h3) {
+  font-size: 15px;
+  letter-spacing: -0.02em;
+  line-height: 1.4;
+}
+
+/* 13px medium, the card-title size. Blume already draws h4 in muted ink, which
+   is what makes it read as a label rather than as another heading. */
+.prose :where(h4) {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* The lede — a page's `description`, which Blume's page template emits as
+   `<p class="text-lg">`. 18px next to a 27px title inverts the scale: §8 puts the
+   lede at 15px, below the title and above the body.
+
+   Targeted as a direct child of `.prose` because `text-lg` is also on the
+   request-body and response headings of an API page, which are headings and
+   should not be re-sized as if they were prose. Unlayered, so it beats the
+   utility whatever the specificity — a layered utility always loses to an
+   unlayered rule. */
+.prose > p.text-lg {
+  font-size: 15px;
+}
+
+/* Code sits one step below prose, as it does on the landing page: a fence is
+   scanned, not read, and at body size it crowds the paragraph above it. */
+.prose :where(pre) {
+  font-size: 12.5px;
+}
+
+/* 11.5px is the caption size, and a table is columns of metadata. */
+.prose :where(table) {
+  font-size: 12.5px;
+}
 
 /* ── reduced motion ────────────────────────────────────────── */
 
+/* Global. A reader who asks for less motion is asking the site, not a page of it —
+   and Blume's chrome has its own transitions (the nav drawer, the theme toggle,
+   every hover) that this is the only thing turning off. */
 @media (prefers-reduced-motion: reduce) {
-  :root[data-home] {
+  :root {
     scroll-behavior: auto;
   }
-  :root[data-home] *,
-  :root[data-home] *::before,
-  :root[data-home] *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
