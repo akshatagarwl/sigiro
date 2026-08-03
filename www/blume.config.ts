@@ -27,7 +27,7 @@ import type { AstroIntegration } from 'astro';
 const sigiro = (): AstroIntegration => ({
   name: 'sigiro',
   hooks: {
-    'astro:config:setup': ({ addMiddleware, injectRoute, updateConfig }) => {
+    'astro:config:setup': ({ injectRoute, updateConfig }) => {
       updateConfig({
         vite: {
           resolve: {
@@ -39,34 +39,30 @@ const sigiro = (): AstroIntegration => ({
         pattern: '/dl/[...key]',
         entrypoint: fileURLToPath(new URL('./src/dl.ts', import.meta.url)),
       });
-      /**
-       * docs.sigiro.com → sigiro.com/docs. Blume owns `srcDir`, so a
-       * `src/middleware.ts` here is never picked up on its own — and a
-       * `_redirects` rule cannot do it, because Cloudflare matches those on the
-       * path with no hostname to test. See the file for the rest.
-       */
-      addMiddleware({
-        order: 'pre',
-        entrypoint: fileURLToPath(new URL('./src/middleware.ts', import.meta.url)),
-      });
     },
   },
 });
 
 /**
- * docs.sigiro.com.
+ * sigiro.com — the landing page at `/` and the docs at `/docs/*`.
  *
- * This replaced a fumadocs install inside the Next app at sigiro.com/docs. The
- * rule for this file is that everything here is configuration: no custom MDX
- * components, no hand-written page shell, no bespoke API reference. The parts
- * that were custom before — a 177-line operation renderer, a generator script
- * that turned our OpenAPI spec into MDX, two llms.txt route handlers, a 182-line
- * stylesheet mapping fumadocs' variables onto our tokens — are all options
- * below.
+ * This replaced a fumadocs install inside a Next app at sigiro.com/docs, went to
+ * docs.sigiro.com for two days, and came back. The rule for this file is that
+ * everything here is configuration: no custom MDX components, no bespoke API
+ * reference. The parts that were custom before — a 177-line operation renderer, a
+ * generator that turned our OpenAPI spec into MDX, two llms.txt route handlers, a
+ * 182-line stylesheet mapping fumadocs' variables onto our tokens — are all
+ * options below.
  *
- * The one thing genuinely lost in the move is that docs are now a different
- * origin from the landing page, so the two cannot share a `localStorage`
- * preference. That is a browser rule, not a Blume limitation.
+ * The landing page is `pages/index.astro` with its own shell in
+ * `src/layouts/Base.astro`, because it keeps its own header rather than the docs
+ * one. Everything else about it is Blume's: the fonts, the Tailwind entry, the
+ * theme attribute and its storage key.
+ *
+ * Being one origin is what lets the landing page and a docs page share a
+ * `localStorage` preference, which the two-hostname split could not — storage is
+ * per-origin, and that was the one thing genuinely lost while the docs lived on
+ * their own subdomain.
  */
 export default defineConfig({
   title: 'sigiro',
@@ -85,7 +81,8 @@ export default defineConfig({
    * not in play.
    *
    * This returns the docs to the URLs they had under fumadocs. They spent two
-   * days at docs.sigiro.com; that hostname now redirects here.
+   * days at docs.sigiro.com; that Worker, its routes and its custom domain are
+   * deleted, so the hostname no longer resolves at all.
    */
   basePath: '/docs',
 
@@ -133,22 +130,11 @@ export default defineConfig({
     output: 'server',
 
     /**
-     * KNOWN DEFECT, unfixed on purpose — raise it before working around it.
+     * `server` because the injected `/dl/[...key]` route and the MCP endpoint are
+     * both request-time. Every HTML route still prerenders.
      *
-     * With this combination, `llms.txt`, `llms-full.txt`, `sitemap.xml`,
-     * `robots.txt` and `agent-readability.json` are generated but never served.
-     * They 404 in production. (`/robots.txt` answers 200, which is Cloudflare's
-     * own managed file, not ours — worth knowing, because it hides the failure.)
-     *
-     * Blume writes them to `deployStaticDir()`, whose comment states the
-     * assumption plainly: "Netlify publishes `dist/` itself and Cloudflare serves
-     * the `outDir` root". That is not true of `@astrojs/cloudflare` v14 in server
-     * mode, which serves `dist/client` — its generated wrangler.json sets
-     * `assets.directory: "../client"`. So the files land one directory above
-     * everything the Worker can see.
-     *
-     * The obvious fix is a `cp` in the build script. It would work and it would
-     * be a makeshift patch over an upstream bug, so it is not here.
+     * On the artifact-location defect this combination has, and what is and is not
+     * done about it, see the `integrations` note above.
      */
   },
 
