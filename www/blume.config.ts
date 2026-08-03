@@ -171,6 +171,15 @@ export default defineConfig({
    * nothing can read. Ours also declares the AI crawlers explicitly, which is a
    * statement worth keeping in a file a human edits.
    *
+   * CARRIES A DEBT, and it shipped broken once: this flag also gates the
+   * `Content-Signal:` line, which `seo.contentSignals` (default: all-yes) puts in
+   * Blume's robots.txt and nowhere else. Turning `robots` off dropped it while
+   * `agent-readability.json` went on declaring the same policy in `contentUsage`,
+   * so the manifest and the file a crawler reads for that disagreed. The line is
+   * now written by hand in `public/robots.txt`. Nothing checks that the two agree —
+   * if `contentSignals` is ever configured away from its default, that file has to
+   * be edited in the same commit.
+   *
    * `sitemap` deliberately stays ON even though `@astrojs/sitemap` writes the one
    * actually served and Blume's copy is equally unreachable. It is not symmetric
    * with robots: `buildAgentReadability` gates the manifest's sitemap entry on this

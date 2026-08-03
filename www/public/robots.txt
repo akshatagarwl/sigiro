@@ -1,8 +1,21 @@
 # Everything is allowed — the AI crawlers are listed explicitly rather than relying
 # on the implicit default, so "are we opted in?" is answerable by reading the file
 # instead of reasoning about the absence of a rule.
+#
+# This file is served instead of Blume's generated one, because `seo.robots` is off
+# in blume.config.ts: on a Cloudflare server build Blume writes robots.txt one
+# directory above anything the Worker can reach, so its copy was never readable.
+#
+# The `Content-Signal` line is here because turning that generator off also
+# dropped it, and `agent-readability.json` still declares the same policy in its
+# `contentUsage` block. Without this line the two disagreed: the manifest said
+# search/ai-input/ai-train were all permitted while the file a crawler actually
+# reads for that said nothing. Values and token order match what
+# `seo.contentSignals` emits (it defaults to all-yes), so if that config ever
+# changes, change this line with it — nothing checks that they agree.
 
 User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
 Allow: /
 
 User-agent: GPTBot
