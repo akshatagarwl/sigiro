@@ -170,6 +170,21 @@ export default defineConfig({
     enabled: true,
     route: '/api',
     spec: 'https://api.sigiro.com/openapi.json',
+    /**
+     * OPEN: the sidebar and breadcrumb read "Api", not "API".
+     *
+     * Blume humanizes the route segment when it has nothing better, and it cannot
+     * know `api` is an initialism — the same code renders `sql` as `Sql`. Tried
+     * `openapi.sources[].label`, which is documented as "Nav/section label for this
+     * source": it does not change either the sidebar entry or the breadcrumb, so
+     * that form was reverted rather than left here doing nothing.
+     *
+     * The fix that does work is renaming `route` to a word that humanizes cleanly
+     * — `/reference` → "Reference". It is one line here and then churn everywhere
+     * that names the path: `NAV` in `lib/site.ts`, the `navigation.featured` entry
+     * below, and the ten legacy per-operation rules in `public/_redirects`. Not
+     * done in the same pass as the tag removal, so that one stays reviewable.
+     */
     codeSamples: ['curl', 'javascript', 'python'],
   },
 
