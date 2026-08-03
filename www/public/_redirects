@@ -32,9 +32,38 @@
 /llms-full.txt  https://docs.sigiro.com/llms-full.txt    302
 
 # The docs are Blume at docs.sigiro.com, where they sit at the root rather than
-# under /docs. `/docs/api/*` has no per-operation equivalent — the reference is one
-# generated page from the live spec — so every operation lands on it. That rule must
-# come before the general `/docs/*`, because these are matched in order.
-/docs                   https://docs.sigiro.com          302
-/docs/api/*             https://docs.sigiro.com/api      302
+# under /docs.
+#
+# The destinations carry a trailing slash. `docs.sigiro.com/api` answers 307 to
+# `/api/`, so omitting it makes every one of these a two-hop redirect.
+/docs                   https://docs.sigiro.com/         302
+
+# Every API reference URL this site ever published, enumerated, all landing on the
+# one generated reference page.
+#
+# A pattern was tried twice and does not work. `/docs/api/*` sends the unmatched
+# remainder along — Cloudflare appends it when the destination does not name
+# `:splat` — so `/docs/api/run-query` arrived at `docs.sigiro.com/api/run-query`,
+# which 404s. `/docs/api/:op` was the second attempt on the theory that a
+# placeholder is consumed rather than appended; it is not matched at all, and
+# `/docs/*` below caught the request and appended it just the same. Both were
+# deployed and both produced a 404 in production.
+#
+# So the list is literal. That is affordable because it is closed: these eleven URLs
+# came from two generations of `fumadocs-openapi`, both now deleted, and no process
+# can add a twelfth. Recovered with
+# `git log --all --name-only -- 'www/content/docs/api/**' 'www/src/app/docs/api/**'`.
+/docs/api                             https://docs.sigiro.com/api/   302
+/docs/api/get-trace                   https://docs.sigiro.com/api/   302
+/docs/api/investigate-services        https://docs.sigiro.com/api/   302
+/docs/api/list-anomalies              https://docs.sigiro.com/api/   302
+/docs/api/list-services               https://docs.sigiro.com/api/   302
+/docs/api/run-query                   https://docs.sigiro.com/api/   302
+/docs/api/v1/anomalies/get            https://docs.sigiro.com/api/   302
+/docs/api/v1/investigate/post         https://docs.sigiro.com/api/   302
+/docs/api/v1/query/post               https://docs.sigiro.com/api/   302
+/docs/api/v1/services/get             https://docs.sigiro.com/api/   302
+/docs/api/v1/traces/trace_id/get      https://docs.sigiro.com/api/   302
+
+# Everything else under /docs keeps its path, because Blume kept the filenames.
 /docs/*                 https://docs.sigiro.com/:splat   302
