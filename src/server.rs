@@ -697,10 +697,65 @@ pub fn validate_read_only_with(sql: &str, allow_information_schema: bool) -> Res
     Ok(())
 }
 
+/// The public spec: everything `ApiDoc` describes, minus `/admin`.
+///
+/// `ApiDoc` stays complete on purpose — the admin handlers keep their
+/// `#[utoipa::path]` attributes, so their request and response types are still
+/// checked against the code and still documented for us. What changes is what a
+/// stranger is handed.
+///
+/// `/openapi.json` is unauthenticated by design: it is the entire discoverability
+/// surface, and an agent has to be able to read it before it has a key. That is
+/// the right call for the query endpoints and the wrong one for
+/// `/admin/tenants`, `/admin/keys` and `/admin/status` — those mint and revoke
+/// credentials and enumerate tenants. Publishing their exact shape to anyone who
+/// asks is free reconnaissance: it does not grant access, since every one of them
+/// still requires the admin token, but it removes the need to guess.
+///
+/// It also fixes three things at once rather than one at a time. The docs site
+/// generates its API reference from this document, so the admin pages disappear
+/// from the sidebar; the sitemap is built from those routes, so they leave the
+/// submitted sitemap too; and the spec itself stops advertising them. Filtering
+/// downstream in the docs would have fixed only the first, and only there.
+///
+/// The admin schemas go with the paths. Left behind they would be unreferenced
+/// entries that still spell out the request and response bodies, which is most of
+/// what the paths were telling anyone.
+///
+/// Built once. The spec is static, and this is a public endpoint.
+static PUBLIC_SPEC: std::sync::LazyLock<utoipa::openapi::OpenApi> =
+    std::sync::LazyLock::new(|| {
+        let mut spec = ApiDoc::openapi();
+
+        spec.paths
+            .paths
+            .retain(|path, _| !path.starts_with("/admin"));
+
+        if let Some(components) = spec.components.as_mut() {
+            for schema in [
+                "AdminStatusResponse",
+                "CreateKeyRequest",
+                "CreateKeyResponse",
+                "CreateTenantRequest",
+                "CreateTenantResponse",
+                "RevokeKeyResponse",
+            ] {
+                components.schemas.remove(schema);
+            }
+        }
+
+        // The tag described a group that no longer has any operations in it.
+        if let Some(tags) = spec.tags.as_mut() {
+            tags.retain(|tag| tag.name != "admin");
+        }
+
+        spec
+    });
+
 /// GET /openapi.json — the single public discoverability surface: the
 /// machine-readable OpenAPI contract. No Swagger UI or extra doc endpoints.
-async fn openapi_json() -> axum::Json<utoipa::openapi::OpenApi> {
-    axum::Json(ApiDoc::openapi())
+async fn openapi_json() -> axum::Json<&'static utoipa::openapi::OpenApi> {
+    axum::Json(&*PUBLIC_SPEC)
 }
 
 /// Build the HTTP Router for the main API (port 9999).
