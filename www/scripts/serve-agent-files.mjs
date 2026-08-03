@@ -22,15 +22,31 @@
  * write into Astro's own client output and are the ones actually served. Moving
  * Blume's copies over them would clobber ours with the unreachable versions.
  *
+ * Still present in Blume 1.3.1, re-checked on upgrade from 1.2.1: every file in
+ * FILES below had to be moved, so nothing here is dead yet. `robots.txt` and
+ * `sitemap.xml` are still written to the unreachable level too.
+ *
  * When the upstream fix lands, Blume will write these straight into `dist/client`
  * and this script becomes a no-op that says so — then delete it.
  */
 import { existsSync } from 'node:fs';
-import { rename, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, rename, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
-/** The three artifacts with no Astro-native generator to substitute. */
-const FILES = ['llms.txt', 'llms-full.txt', 'agent-readability.json'];
+/**
+ * The artifacts with no Astro-native generator to substitute.
+ *
+ * Paths, not names: `.well-known/api-catalog` is nested, so a target directory
+ * may not exist yet. It does today only because the MCP endpoint happens to write
+ * `.well-known/mcp.json` beside it — turning MCP off would leave nothing to
+ * create it, which is the kind of coupling that fails a build months later.
+ *
+ * `api-catalog` (RFC 9727) arrived with Blume 1.3.0 and is not optional to move:
+ * `agent-readability.json` — which this script puts where it IS served —
+ * advertises `apiCatalog: https://sigiro.com/.well-known/api-catalog`. Left
+ * behind, the one file agents read to find everything else points at a 404.
+ */
+const FILES = ['llms.txt', 'llms-full.txt', 'agent-readability.json', '.well-known/api-catalog'];
 
 const dist = join(process.cwd(), 'dist');
 const client = join(dist, 'client');
@@ -61,6 +77,7 @@ for (const name of FILES) {
     missing.push(name);
     continue;
   }
+  await mkdir(dirname(to), { recursive: true });
   await rename(from, to);
   const { size } = await stat(to);
   moved.push(`${name} (${size} bytes)`);
