@@ -85,10 +85,17 @@ use tracing_attributes::instrument;
         )
     ),
     modifiers(&SecurityAddon),
-    tags(
-        (name = "query", description = "SQL query endpoints"),
-        (name = "admin", description = "Admin endpoints"),
-            )
+    /* No `tags`, and no `tag` on any operation.
+     *
+     * There were two — `query` and `admin` — and a renderer groups operations by
+     * tag, so the reference gained a level of nesting for them. Once `/admin` left
+     * the public spec, `query` was one group holding every operation: a heading
+     * that grouped nothing, showing up in the docs sidebar and again as an eyebrow
+     * over each operation's title. Five operations read better as five operations.
+     *
+     * Worth tagging again if this API grows a second genuine area. Tagging by
+     * transport ("query") was never that — it described how you reach the endpoint,
+     * not what it is for. */
 )]
 pub(crate) struct ApiDoc;
 
@@ -742,11 +749,6 @@ static PUBLIC_SPEC: std::sync::LazyLock<utoipa::openapi::OpenApi> =
             ] {
                 components.schemas.remove(schema);
             }
-        }
-
-        // The tag described a group that no longer has any operations in it.
-        if let Some(tags) = spec.tags.as_mut() {
-            tags.retain(|tag| tag.name != "admin");
         }
 
         spec
@@ -1691,23 +1693,55 @@ fn query_sql_contract() -> String {
     )
 }
 
-/// Run a read-only SQL query against this project's telemetry.
+/// Ask a question of your telemetry in SQL. Read-only.
 ///
-/// Accepts exactly one SELECT statement as the raw request body. Allowed
-/// tables: sigiro_spans, sigiro_logs, sigiro_log_templates,
-/// sigiro_metrics_gauge, sigiro_metrics_sum, sigiro_metrics_histogram,
-/// sigiro_metrics_exp_histogram, sigiro_profiles, sigiro_anomalies
-/// (optionally qualified as lake.* or main.*). WITH/CTE clauses are not
-/// supported — rewrite as derived-table subqueries. Scalar functions are
-/// allowlisted (aggregates, json extraction, date/time, string, math,
-/// conditional helpers); file/network readers are blocked. Every
-/// `drill_down_sql` returned by /v1/investigate can be pasted here verbatim.
+/// Every `drill_down_sql` that `/v1/investigate` returns can be pasted here
+/// verbatim.
+///
+/// The rules the statement has to satisfy are on the request body, not here —
+/// that is the field an OpenAPI reader shows next to the input, and where a
+/// generated client puts them.
 #[utoipa::path(
     post,
     path = "/v1/query",
     operation_id = "run-query",
     summary = "Run SQL over your telemetry",
-    request_body = String,
+    /* The body contract, as the body's own `description` rather than prose in the
+     * operation's.
+     *
+     * All of this used to sit in the doc comment above, which made the first thing
+     * on the reference page a single paragraph carrying nine table names, three
+     * separate restrictions and a cross-reference. It reads fine in the source and
+     * badly on a page. OpenAPI has a field for "what to send" — this one — and a
+     * renderer puts it beside the input box, which is where a reader is looking
+     * when they need it.
+     *
+     * Markdown, because both utoipa and every renderer pass it through: the table
+     * list is a list. */
+    request_body(
+        content = String,
+        content_type = "text/plain",
+        description = "Exactly one `SELECT` statement, as the raw body.\n\n\
+Readable tables — optionally qualified `lake.*` or `main.*`:\n\
+- `sigiro_spans`\n\
+- `sigiro_logs`\n\
+- `sigiro_log_templates`\n\
+- `sigiro_metrics_gauge`\n\
+- `sigiro_metrics_sum`\n\
+- `sigiro_metrics_histogram`\n\
+- `sigiro_metrics_exp_histogram`\n\
+- `sigiro_profiles`\n\
+- `sigiro_anomalies`\n\n\
+Restrictions:\n\
+- One statement. `SELECT` only.\n\
+- No `WITH`/CTE clauses — rewrite them as derived-table subqueries.\n\
+- Scalar functions are allowlisted (aggregates, JSON extraction, date/time, \
+string, math, conditional helpers). File and network readers are blocked.",
+        example = json!(
+            "SELECT service_name, count(*) AS errors FROM sigiro_spans \
+WHERE status_code = 'STATUS_CODE_ERROR' GROUP BY 1 ORDER BY 2 DESC"
+        ),
+    ),
     responses(
         // An example, because the body type is untyped JSON: without one, any
         // schema-driven renderer samples `Vec<Value>` to `[null]`, which reads as
@@ -1719,7 +1753,6 @@ your SELECT's column names", body = Vec<serde_json::Value>,
                 { "service_name": "cart", "errors": 4 }
             ]))
     ),
-    tag = "query"
 )]
 #[instrument(skip_all, fields(sql_len = body.len()))]
 async fn query_handler(
@@ -1779,7 +1812,6 @@ of an agent loop: pick a service here, then investigate it.",
     responses(
         (status = 200, description = "List of services", body = ServicesResponse)
     ),
-    tag = "query"
 )]
 #[instrument(skip_all)]
 async fn services_handler(
@@ -1891,7 +1923,6 @@ never a tuned threshold); `incident_id` is null for uncorrelated rows.",
         (status = 401, description = "Missing or invalid bearer token")
     ),
     security(("bearer" = [])),
-    tag = "query"
 )]
 #[instrument(skip_all)]
 async fn anomalies_handler(
@@ -1983,7 +2014,6 @@ or from any SQL query over `sigiro_spans`.",
      responses(
          (status = 200, description = "Trace detail", body = TraceDetailResponse)
      ),
-     tag = "query"
  )]
 #[instrument(skip_all)]
 async fn trace_detail_handler(
@@ -2293,7 +2323,6 @@ survive a single failing service.",
         (status = 401, description = "Missing or invalid bearer token")
     ),
     security(("bearer" = [])),
-    tag = "query"
 )]
 #[instrument(skip_all)]
 async fn investigate_handler(
@@ -2353,7 +2382,6 @@ async fn investigate_handler(
     responses(
         (status = 200, description = "Server status", body = AdminStatusResponse)
     ),
-    tag = "admin"
 )]
 async fn admin_status(
     _path: AdminStatusPath,
@@ -2412,7 +2440,6 @@ fn control_plane_from_state(state: &AppState) -> ApiResult<Arc<auth::ControlPlan
     responses(
         (status = 200, description = "Tenant created", body = CreateTenantResponse)
     ),
-    tag = "admin"
 )]
 async fn create_tenant_handler(
     _path: AdminTenantsPath,
@@ -2439,7 +2466,6 @@ async fn create_tenant_handler(
     responses(
         (status = 200, description = "API key created", body = CreateKeyResponse)
     ),
-    tag = "admin"
 )]
 async fn create_key_handler(
     _path: AdminKeysPath,
@@ -2469,7 +2495,6 @@ async fn create_key_handler(
     responses(
         (status = 200, description = "API key revoked", body = RevokeKeyResponse)
     ),
-    tag = "admin"
 )]
 async fn revoke_key_handler(
     AdminKeyPath { short_token }: AdminKeyPath,
