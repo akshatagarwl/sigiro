@@ -1,6 +1,5 @@
 'use client';
 
-import { useMachine } from '@xstate/react';
 import {
   motion,
   useMotionTemplate,
@@ -8,9 +7,7 @@ import {
   useScroll,
   useTransform,
 } from 'motion/react';
-import { useMemo, useRef, useSyncExternalStore } from 'react';
-import { createMachine, types } from 'xstate';
-import { SkeletonSwap } from '@/components/interior/skeleton-swap';
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { TaskSteps } from '@/components/interior/task-steps';
 import type { SessionLine } from '@/lib/highlight';
 
@@ -20,10 +17,23 @@ import type { SessionLine } from '@/lib/highlight';
  * An earlier version typed the transcript out character by character, bound to
  * scroll position. It was a good demo of scrubbing and a bad terminal: real
  * shells do not type their own output. You run a command and the output lands.
- * So nothing types — but a command does take a beat to run, which is what
- * `SkeletonSwap` is for: arrive at a frame, the shell is busy, then the output
- * appears. Its 120ms delay and 380ms floor are the reason this reads as a
- * command running rather than as a flicker (§19).
+ * So nothing types, and nothing waits either: the output is there on the frame
+ * you scroll to.
+ *
+ * There used to be a beat before it. A `SkeletonSwap` held grey bars for a
+ * minimum of 380ms on arrival at every frame, on the argument that a command
+ * takes a moment to run. It is gone. The reader is not waiting on a command here
+ * — the transcript is a literal in this repo, highlighted at build time — so the
+ * bars were animating a wait that did not exist, and scrubbing back through a
+ * frame you had already read replayed it. A transition that shows you less than
+ * the frame you left is a cost with nothing bought.
+ *
+ * Removing it took the machinery with it: the skeleton's `ready` prop was the
+ * only reader of a two-state XState machine and its 300ms delay, and with the
+ * timer gone the machine had one state. What it did beyond the timer — drop a
+ * step that names the frame already shown, so the scroll listener can fire every
+ * frame and React still renders once per step — is `useState`'s own bail-out on
+ * an unchanged value. So `xstate` and `@xstate/react` left with it.
  *
  * `TaskSteps` carries the argument the section exists to make. Five stages, the
  * ones you have passed ticked off, the one you are on running, the rest waiting
@@ -32,22 +42,20 @@ import type { SessionLine } from '@/lib/highlight';
  * brings `aria-current="step"` and a debounced live region, which the rail I
  * hand-rolled did not have.
  *
- * Both are vendored verbatim into components/interior/, so they write literal
+ * `TaskSteps` is vendored verbatim into components/interior/, so it writes literal
  * stone and emerald values rather than our tokens. That is §1b, on purpose: a
  * copied component must not depend on the host's palette.
  *
  * Design constraints, from DESIGN.md (now vendored at www/DESIGN.md):
- * - §5h  React does not re-render at 60fps. The step index is machine context;
- *        the handoff is MotionValues off `scrollYProgress` and never touches
- *        React or the machine. A previous version quantised progress to two
- *        decimals and drove the fade from state, leaving the handoff ~6 frames
- *        long — §6a: "quantising the sweep would make the fill look like it was
- *        stuttering".
- * - §6a  the machine's `STEP` transition returns nothing when the index has not
- *        changed. XState treats that as no transition and hands back the same
- *        snapshot object, so the scroll listener can fire every frame and React
- *        still renders once per step — the machine's version of
- *        `setStep(prev => prev === s ? prev : s)`.
+ * - §5h  React does not re-render at 60fps. The step index is React state; the
+ *        handoff is MotionValues off `scrollYProgress` and never touches React at
+ *        all. A previous version quantised progress to two decimals and drove the
+ *        fade from state, leaving the handoff ~6 frames long — §6a: "quantising
+ *        the sweep would make the fill look like it was stuttering".
+ * - §6a  `setShown` is called on every scroll frame and passed the same index most
+ *        of them. React compares with `Object.is` and bails out, so the listener
+ *        can fire at frame rate and this still renders once per step. No guard is
+ *        written for it because the guard is the hook's own behaviour.
  * - §5   the handoff uses the specified displacements — out at `y 6, blur(3px)`,
  *        in at `y 10, blur(6px)`.
  * - §3   no `rounded-full`, so no traffic-light chrome. This is the same
@@ -178,13 +186,6 @@ const PAD = 24;
 const HOLD = 0.72;
 
 /**
- * How long a command "runs" on arrival. Short, because it is a beat rather than
- * a claim about latency — `SkeletonSwap` stretches it to its own 380ms floor so
- * the skeleton never strobes.
- */
-const RUN_MS = 300;
-
-/**
  * The transcript a step shows, given what the reader picked.
  *
  * `pick` is read from storage and so can be anything at all — a stale id, a
@@ -216,54 +217,16 @@ function locate(v: number, count: number) {
   return { index, handoff };
 }
 
-/**
- * Stepping to the frame already shown is not a step. Returning nothing is how
- * XState says "this event changes nothing" — the actor keeps the snapshot it
- * had, so React never sees a new one.
- */
-function step({
-  context,
-  event,
-}: {
-  context: { shown: number };
-  event: { type: 'STEP'; index: number };
-}) {
-  if (event.index === context.shown) return;
-  return { target: 'running', context: { shown: event.index }, reenter: true };
-}
-
-/**
- * The discrete half of the component: which frame is mounted, and whether its
- * command has finished running.
+/*
+ * An XState machine stood here. It had two states, `running` and `ready`, a 300ms
+ * delayed transition between them, and a `STEP` event that re-entered `running` so
+ * scrubbing could not stack timers. All of it existed to tell the skeleton when a
+ * frame's command had "finished", and the skeleton is gone.
  *
- * Two states rather than a boolean beside an index, because "arriving at a frame
- * runs its command" is a transition, not a value. `STEP` re-enters `running`
- * whichever state it lands in, which cancels the in-flight delay and starts a
- * new one — scrubbing quickly cannot stack up timers because a state can only be
- * in one of them.
- *
- * Nothing continuous lives here. `context.shown` changes once per step; the
- * opacity, y, blur and height are MotionValues (§5h).
+ * What is left of the discrete half is one number: which frame is mounted. That is
+ * `useState` below. Everything continuous — opacity, y, blur, height — is a
+ * MotionValue and never was state (§5h).
  */
-const sequence = createMachine({
-  // `types` is XState's own type-only schema: the machine's shape reaches
-  // TypeScript without a validation library coming with it.
-  schemas: {
-    context: types<{ shown: number }>(),
-    events: { STEP: types<{ index: number }>() },
-  },
-  initial: 'running',
-  context: { shown: 0 },
-  states: {
-    running: {
-      after: { [RUN_MS]: { target: 'ready' } },
-      on: { STEP: step },
-    },
-    ready: {
-      on: { STEP: step },
-    },
-  },
-});
 
 export function SteppedTerminal({
   steps,
@@ -310,16 +273,13 @@ export function SteppedTerminal({
   const frames = useMemo(() => plan(steps, pick), [steps, pick]);
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end end'] });
 
-  // The discrete half: which frame's text is mounted, and whether its command
-  // has finished running. One render per step — the machine drops a `STEP` that
-  // names the frame already shown.
-  const [state, send] = useMachine(sequence);
-  const shown = state.context.shown;
-  const ran = state.matches('ready');
+  // The discrete half: which frame's text is mounted. One render per step —
+  // `setShown` is handed the same index on most scroll frames and React bails out.
+  const [shown, setShown] = useState(0);
 
   useMotionValueEvent(scrollYProgress, 'change', (v) => {
     const { index, handoff } = locate(v, steps.length);
-    send({ type: 'STEP', index: handoff >= 0.5 ? index + 1 : index });
+    setShown(handoff >= 0.5 ? index + 1 : index);
   });
 
   // The continuous half: never React state, so it runs at frame rate.
@@ -443,49 +403,49 @@ export function SteppedTerminal({
 
               {/* Clips both axes, and that is correct: `height` animates across the
                 handoff so the y axis must clip, and the x axis never overflows
-                here because `SkeletonSwap` inside is itself the scroll container.
-                At a 390px viewport this well is 324px while the widest transcript
-                row is 495px — the sideways scroll that reaches it belongs to
-                SkeletonSwap's shell, not to this element. Putting `overflow-x-auto`
-                here as well was tried and is dead config: scrollWidth equals
-                clientWidth, so it can never scroll.
-
-                Known gap, not fixed here: that shell only takes a tab stop when it
-                detects itself scrollable, and it does not detect the horizontal
-                case — so a keyboard user cannot reach the clipped end of a line.
-                The component is vendored verbatim under §1b, so the fix belongs
-                upstream or in the transcript width, not in a local patch. */}
+                here because the div inside is itself the scroll container. Putting
+                `overflow-x-auto` here as well was tried and is dead config —
+                scrollWidth equals clientWidth, so it can never scroll. */}
               <motion.div
                 className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3"
                 style={{ height }}
               >
-                <motion.div style={{ opacity, y, filter }}>
-                  <SkeletonSwap
-                    ready={ran}
-                    lines={frame.lines.length + 1}
-                    lineHeight={LINE}
-                    reserve={(frame.lines.length + 1) * LINE}
-                    className="font-mono text-[12.5px] leading-[22px] whitespace-pre"
-                  >
-                    {/* One box per line, so the frame height stays integer. The
-                      `shiki` class is on the line rather than on the well: its
-                      `span` rule forces a transparent background, which would
-                      erase the block cursor below. */}
-                    {frame.lines.map((line, i) => (
-                      <div
-                        // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
-                        key={i}
-                        className="shiki"
-                        style={{ height: LINE }}
-                        // Shiki output, generated from literals in this repo.
-                        dangerouslySetInnerHTML={{ __html: line.html }}
-                      />
-                    ))}
-                    <div className="text-ink-3" style={{ height: LINE }}>
-                      {'$ '}
-                      <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
-                    </div>
-                  </SkeletonSwap>
+                {/* The x scroller. At a 390px viewport this well is 324px while
+                  the widest transcript row is 495px, so something has to scroll
+                  sideways — it used to be SkeletonSwap's shell, which was the one
+                  load-bearing thing that component did beyond the skeleton itself.
+                  Dropping it without moving the scroll here would have clipped the
+                  end of every long line on a phone with no way to reach it.
+
+                  `tabIndex` unconditionally, not measured: this is a scroll
+                  container on every viewport narrow enough to need one, and the
+                  vendored shell's own `ResizeObserver` only ever detected the
+                  vertical case — so the clipped end of a line was unreachable by
+                  keyboard. A tab stop on a scrollable region is what makes it
+                  reachable, and it is cheaper than measuring. */}
+                <motion.div
+                  tabIndex={0}
+                  className="overflow-x-auto overscroll-contain font-mono text-[12.5px] leading-[22px] whitespace-pre"
+                  style={{ opacity, y, filter }}
+                >
+                  {/* One box per line, so the frame height stays integer. The
+                    `shiki` class is on the line rather than on the well: its
+                    `span` rule forces a transparent background, which would
+                    erase the block cursor below. */}
+                  {frame.lines.map((line, i) => (
+                    <div
+                      // biome-ignore lint/suspicious/noArrayIndexKey: fixed literal transcript
+                      key={i}
+                      className="shiki"
+                      style={{ height: LINE }}
+                      // Shiki output, generated from literals in this repo.
+                      dangerouslySetInnerHTML={{ __html: line.html }}
+                    />
+                  ))}
+                  <div className="text-ink-3" style={{ height: LINE }}>
+                    {'$ '}
+                    <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
+                  </div>
                 </motion.div>
               </motion.div>
 

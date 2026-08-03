@@ -16,15 +16,13 @@
   "dependencies": {
     "@astrojs/cloudflare": "14.1.7",
     "@astrojs/sitemap": "3.7.3",
-    "@xstate/react": "7.0.0-alpha.1",
     "blume": "1.2.1",
     "effect": "4.0.0-beta.102",
     "motion": "12.43.0",
     "react": "19.3.0-canary-28cd4bb0-20260723",
     "react-dom": "19.3.0-canary-28cd4bb0-20260723",
     "shiki": "4.4.1",
-    "sigiro-icons": "npm:simple-icons@16.28.0",
-    "xstate": "6.0.0-alpha.26"
+    "sigiro-icons": "npm:simple-icons@16.28.0"
   },
   "devDependencies": {
     "@types/node": "26.1.2",
