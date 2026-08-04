@@ -523,10 +523,54 @@ export const CALL = {
  *
  * Do not ask for a summary of the marketing page. An assistant that only reads
  * the landing page repeats the landing page, and the reader already read it.
+ *
+ * The cost clause asks about the self-host and hosted split, and names no price.
+ * The landing page stopped quoting one when hosted became a call rather than a
+ * signup, so a prompt that asks "what does it cost" invites a number from
+ * training data instead of from our documents.
  */
-export const ASK_AI_PROMPT = [
-  'Explain sigiro.',
-  `Read ${SITE.url}, the documentation at ${SITE.url}/llms-full.txt, and the API description at ${SITE.apiUrl}/openapi.json.`,
-  'Then tell me what sigiro does and how an AI agent uses it to debug a production failure.',
-  'Also tell me what it costs and how it differs from a traditional observability tool.',
-].join(' ');
+const READ_ALL_THREE = `Read ${SITE.url}, the documentation at ${SITE.url}/llms-full.txt, and the API description at ${SITE.apiUrl}/openapi.json.`;
+
+
+
+/**
+ * The pool of questions. One is drawn at random per link, per page load.
+ *
+ * **One use case each, one line each.** A reader who opens two of these gets two
+ * different facets rather than the same paragraph twice, and a reader who
+ * refreshes gets a different set. That is the coverage this feature is for: the
+ * assistants are asked about installing, about cost, about the agent loop, about
+ * data ownership, about what it does not do — instead of all being asked the same
+ * four-clause sentence forever.
+ *
+ * Every line is one sentence plus `READ_ALL_THREE`. Short on purpose: a prompt a
+ * reader can read in the composer before they press send is one they trust.
+ *
+ * Two rules bind every entry, and a variant that breaks either one quietly
+ * breaks the feature:
+ *
+ * 1. Name all three public URLs, via `READ_ALL_THREE`. An assistant that reads
+ *    the landing page alone repeats the landing page.
+ * 2. Claim nothing the product does not do. `.agents/product-marketing.md`
+ *    binds these strings, and N variants are N chances to break it — including
+ *    naming no competitor, which is why none of these ask for a comparison
+ *    against a named rival. Ask questions; do not assert features.
+ *
+ * There is deliberately no question about price. Hosted is a call rather than a
+ * signup, so asking "what does it cost" invites a number from training data;
+ * the cost line below asks how the two options differ instead.
+ */
+export const ASK_AI_PROMPTS: readonly string[] = [
+  `${READ_ALL_THREE} What does sigiro do, in two sentences?`,
+  `${READ_ALL_THREE} How does an AI agent use sigiro to find the cause of a production failure?`,
+  `${READ_ALL_THREE} What do I run to get sigiro receiving telemetry from my app?`,
+  `${READ_ALL_THREE} Do I run sigiro myself or does someone host it, and how do those two options differ?`,
+  `${READ_ALL_THREE} Where does my telemetry go, and who can read it?`,
+  `${READ_ALL_THREE} What does sigiro not do?`,
+  `${READ_ALL_THREE} What category of tool is sigiro, and who is it for?`,
+  `${READ_ALL_THREE} How do I send OpenTelemetry from a service I already instrumented?`,
+  `${READ_ALL_THREE} What does sigiro return when I ask it what changed?`,
+  `${READ_ALL_THREE} Which of sigiro's claims do those documents actually support?`,
+  `${READ_ALL_THREE} How does sigiro decide something is an anomaly?`,
+  `${READ_ALL_THREE} Can I query my telemetry with SQL, and what does that look like?`,
+];

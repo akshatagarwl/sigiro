@@ -12,7 +12,7 @@
  * each gets the major it was written against.
  */
 import { siClaude, siDuckduckgo, siGooglegemini, siMistralai, siPerplexity } from 'sigiro-icons';
-import { ASK_AI_PROMPT, SITE } from '@/lib/site';
+import { ASK_AI_PROMPTS, SITE } from '@/lib/site';
 
 /**
  * Seven links that open the reader's own assistant with one question already
@@ -24,7 +24,9 @@ import { ASK_AI_PROMPT, SITE } from '@/lib/site';
  * nothing and are worth more: the answer arrives from a party with no stake in
  * it, in a thread the reader can keep interrogating after they leave.
  *
- * The question is `ASK_AI_PROMPT` in site.ts, since it is copy.
+ * The questions are `ASK_AI_PROMPTS` in site.ts, since they are copy. One is
+ * drawn at random per link on every page load — see the note on the shuffle
+ * below for why that needs a script here.
  *
  * Every provider takes the prompt in the query string. The parameter name is the
  * only thing that differs, so the whole integration is one `encodeURIComponent`
@@ -104,10 +106,46 @@ const PROVIDERS = [
 ] as const;
 
 /**
- * Encoded once, at module scope. The prompt is a constant, and encoding it once
- * per provider per render to get seven identical strings is work with no result.
+ * Every question, encoded once at module scope, handed to the browser as data.
+ *
+ * The markup ships a distinct prompt per link, taken in order, so the row works
+ * with JavaScript off and never renders seven identical URLs. The inline script
+ * below then draws a fresh random set on load. That ordering matters: the
+ * server-rendered set is the floor, not a placeholder.
  */
-const QUERY = encodeURIComponent(ASK_AI_PROMPT);
+const ENCODED = ASK_AI_PROMPTS.map((prompt) => encodeURIComponent(prompt));
+
+/**
+ * The shuffle, inlined rather than bundled.
+ *
+ * This footer shipped no JavaScript, and the choice to add ~15 bytes of inline
+ * script is deliberate: the page is a cached static asset at the edge, so "random
+ * on every refresh" cannot come from the server without turning the cache off for
+ * every visitor, and it cannot come from a hydrated island without shipping React
+ * to render seven anchors. An inline script that rewrites `href` is the smallest
+ * thing that works.
+ *
+ * It runs `defer`, so it fires after the anchors exist and before a reader is
+ * likely to have clicked. If it never runs — JS off, CSP, a slow parse and a fast
+ * click — the server-rendered prompt is already a real question, so the link
+ * degrades to the previous behaviour rather than to nothing.
+ *
+ * Fisher-Yates over the indices, then one prompt per anchor. Sampling without
+ * replacement, because two links carrying the same question on the same page is
+ * the outcome this feature exists to avoid.
+ */
+const SHUFFLE_SCRIPT = `
+(function(){
+  var a=document.querySelectorAll('[data-ask-ai]');
+  if(!a.length)return;
+  var p=JSON.parse(document.getElementById('ask-ai-prompts').textContent);
+  for(var i=p.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=p[i];p[i]=p[j];p[j]=t;}
+  for(var k=0;k<a.length;k++){
+    var tpl=a[k].getAttribute('data-ask-ai');
+    a[k].setAttribute('href',tpl.replace('__Q__',p[k%p.length]));
+  }
+})();
+`.trim();
 
 export function AskAI() {
   return (
@@ -117,10 +155,15 @@ export function AskAI() {
           would announce itself louder than the nav it stands next to. */}
       <span className="meta text-ink-3">ask ai</span>
       <ul className="flex items-center gap-0.5">
-        {PROVIDERS.map((provider) => (
+        {PROVIDERS.map((provider, index) => (
           <li key={provider.name}>
             <a
-              href={provider.url(QUERY)}
+              /* Distinct per link even before the script runs: index into the
+                 pool rather than giving all seven the same question. */
+              href={provider.url(ENCODED[index % ENCODED.length])}
+              /* The template the shuffle fills. Keeping the provider's own URL
+                 shape here means the script does not need to know any of them. */
+              data-ask-ai={provider.url('__Q__')}
               target="_blank"
               rel="noopener"
               /* The accessible name says what the link does, not who it goes to:
@@ -148,6 +191,28 @@ export function AskAI() {
           </li>
         ))}
       </ul>
+      {/*
+        The pool as data, not as a string baked into the script, so the prompts
+        stay copy in site.ts and the script stays logic. `application/json` in a
+        script tag is inert — the browser does not execute it, and the script
+        above reads it with `JSON.parse`.
+
+        `dangerouslySetInnerHTML` on both: React escapes text children, which
+        would turn the JSON's quotes into entities and the script's `<` into
+        `&lt;`. Neither payload comes from user input — one is an encoded
+        constant, the other is a literal in this file.
+      */}
+      <script
+        id="ask-ai-prompts"
+        type="application/json"
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: inert JSON, built from a module constant
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(ENCODED) }}
+      />
+      <script
+        defer
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: a literal in this file, no user input
+        dangerouslySetInnerHTML={{ __html: SHUFFLE_SCRIPT }}
+      />
     </div>
   );
 }
