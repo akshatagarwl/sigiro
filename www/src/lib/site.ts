@@ -536,12 +536,24 @@ const READ_ALL_THREE = `Read ${SITE.url}, the documentation at ${SITE.url}/llms-
 /**
  * The pool of questions. One is drawn at random per link, per page load.
  *
- * **One use case each, one line each.** A reader who opens two of these gets two
- * different facets rather than the same paragraph twice, and a reader who
- * refreshes gets a different set. That is the coverage this feature is for: the
- * assistants are asked about installing, about cost, about the agent loop, about
- * data ownership, about what it does not do — instead of all being asked the same
- * four-clause sentence forever.
+ * **One use case each, one line each, and each in the reader's voice.** These are
+ * not questions about sigiro — they are the situation the reader arrived with:
+ * "I have a Go service with no instrumentation", "my LLM app stalls and I cannot
+ * tell which model call did it", "I ship alone and cannot justify a per-seat
+ * bill". A reader who opens two gets two facets rather than the same paragraph
+ * twice, and a reader who refreshes gets a different set.
+ *
+ * The situations are not invented here. They are the use cases and personas in
+ * `.agents/product-marketing.md`: the agent loop that cannot see production, the
+ * 3am incident where the on-call is a scheduled agent, LLM app debugging, cost
+ * escape, and the four personas (solo founder, AI-native builder, small platform
+ * team, privacy-conscious builder). Adding a line means finding the persona it
+ * serves, not thinking of a new question.
+ *
+ * Do not write "software factory". That frame was considered and **rejected** on
+ * 2026-08-01 because it describes our process and not the reader's outcome; the
+ * frame is "software that repairs itself". A prompt phrased as the reader's goal
+ * — close my agent's loop — says the same thing from the side that matters.
  *
  * Every line is one sentence plus `READ_ALL_THREE`. Short on purpose: a prompt a
  * reader can read in the composer before they press send is one they trust.
@@ -561,16 +573,32 @@ const READ_ALL_THREE = `Read ${SITE.url}, the documentation at ${SITE.url}/llms-
  * the cost line below asks how the two options differ instead.
  */
 export const ASK_AI_PROMPTS: readonly string[] = [
-  `${READ_ALL_THREE} What does sigiro do, in two sentences?`,
-  `${READ_ALL_THREE} How does an AI agent use sigiro to find the cause of a production failure?`,
-  `${READ_ALL_THREE} What do I run to get sigiro receiving telemetry from my app?`,
-  `${READ_ALL_THREE} Do I run sigiro myself or does someone host it, and how do those two options differ?`,
-  `${READ_ALL_THREE} Where does my telemetry go, and who can read it?`,
-  `${READ_ALL_THREE} What does sigiro not do?`,
-  `${READ_ALL_THREE} What category of tool is sigiro, and who is it for?`,
-  `${READ_ALL_THREE} How do I send OpenTelemetry from a service I already instrumented?`,
-  `${READ_ALL_THREE} What does sigiro return when I ask it what changed?`,
-  `${READ_ALL_THREE} Which of sigiro's claims do those documents actually support?`,
-  `${READ_ALL_THREE} How does sigiro decide something is an anomaly?`,
-  `${READ_ALL_THREE} Can I query my telemetry with SQL, and what does that look like?`,
+  // Coding agent in a loop — the primary use case in .agents/product-marketing.md.
+  `${READ_ALL_THREE} My coding agent writes patches blind because it cannot see production. Can sigiro close that loop?`,
+  `${READ_ALL_THREE} I want my agent to detect a fault, patch it, and confirm the fix worked. How does sigiro fit that loop?`,
+  `${READ_ALL_THREE} What evidence does sigiro hand an agent that a dashboard cannot?`,
+
+  // Language and stack entry points — the "I have an X app" shape.
+  `${READ_ALL_THREE} I have a Go service with no instrumentation. What do I do to debug it with sigiro?`,
+  `${READ_ALL_THREE} I have a Node app that already sends OpenTelemetry somewhere else. What changes if I point it at sigiro?`,
+  `${READ_ALL_THREE} I run a few services on one box. Is sigiro too much or about right?`,
+
+  // LLM app debugging — a named use case.
+  `${READ_ALL_THREE} My LLM app stalls and I cannot tell which model call did it. Does sigiro show that?`,
+
+  // 3am incident with an agent on call.
+  `${READ_ALL_THREE} Production broke at 3am and nobody was awake. What would sigiro have told a scheduled agent?`,
+
+  // Solo founder persona: price and setup time.
+  `${READ_ALL_THREE} I ship alone and cannot justify a per-seat observability bill. What does sigiro cost me?`,
+  `${READ_ALL_THREE} How long does sigiro take to set up, and what do I have to maintain afterwards?`,
+
+  // Privacy-conscious persona: data ownership.
+  `${READ_ALL_THREE} I do not want customer telemetry leaving my own infrastructure. Where does sigiro store it?`,
+
+  // Small platform team: dashboard rot.
+  `${READ_ALL_THREE} I spend hours a week on dashboards nobody reads. What does sigiro replace?`,
+
+  // The honest one. A reader who asks this and gets a straight answer trusts the rest.
+  `${READ_ALL_THREE} Where is sigiro the wrong choice, and what does it not do yet?`,
 ];
