@@ -47,12 +47,20 @@ const navItems = surface === 'docs' ? NAV.filter((item) => item.href !== '/docs'
   </div>
 
   {/*
-    `*:` so every link gets the 24px hit area, including the one-character ones,
-    without repeating the class five times.
+    `*:` so every link gets the 24px hit area without repeating the class five
+    times.
+
+    The hit area is a `min-h` plus `px-1`, not the `min-w-6` this used to carry.
+    A 24px floor on *width* is invisible on `linkedin` and `llms.txt`, but `x` is
+    one character about 7px wide, so it was padded to 24 and centred — adding
+    ~8px of dead space on each side on top of the 12px `gap-x-3`, which read as a
+    gap roughly three times wider beside the one-character label than anywhere
+    else in the row. Sizing to the text keeps the rhythm even; the touch target
+    stays 24px tall and gains a little horizontal padding.
   */}
   <nav
     aria-label="Footer"
-    class="flex flex-wrap items-center gap-x-3 gap-y-1 *:inline-flex *:min-w-6 *:items-center *:rounded-[5px]"
+    class="flex flex-wrap items-center gap-x-3 gap-y-1 *:inline-flex *:min-h-6 *:items-center *:rounded-[5px] *:px-1"
   >
     {
       navItems.map((item) => (
