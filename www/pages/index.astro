@@ -5,7 +5,7 @@ import HowItWorks from '@/components/HowItWorks.astro';
 import { Integrations } from '@/components/integrations';
 import { PRIMARY, SECONDARY } from '@/components/site/action';
 import Base from '@/layouts/Base.astro';
-import { PROMISES, SECTIONS, SITE } from '@/lib/site';
+import { CALL, PROMISES, SECTIONS, SITE } from '@/lib/site';
 
 /* The type ramp, from the design language and not invented here: 27px medium at
    -0.03em for a page or section title, 15px for a lede, 13.5px for body.
@@ -71,7 +71,7 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
     </p>
     <div class="mt-8 flex flex-wrap items-center gap-3 sm:mt-10">
       <a href="/docs/quickstart" class={PRIMARY}>Get started</a>
-      <a href="/docs" class={SECONDARY}>Read the docs</a>
+      <a href={CALL.href} class={SECONDARY}>{CALL.label}</a>
     </div>
     {/*
       A cell, not a dot: there are no pills in this palette, and 5px at a 1.5px

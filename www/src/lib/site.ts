@@ -11,9 +11,12 @@
  * 3. Never mention Parquet, DuckDB, S3 or eBPF. Users care about outcomes; the
  *    storage engine is an implementation detail.
  *
- * Cost claims name no competitor and quote no multiplier: "free if you run it,
- * ~$14/mo if we do". The reader does their own arithmetic against a bill they
- * already know. Internal cost work stays in docs/notes/company/cost.md.
+ * Cost claims name no competitor and quote no multiplier. The page sells the
+ * self-hosted product — free, and running in five minutes — and quotes **no
+ * hosted price at all**: hosted is an invited beta that an operator sets up by
+ * hand, so a number there promises a self-serve signup that does not exist. The
+ * reader does their own arithmetic against a bill they already know. Internal
+ * cost work stays in docs/notes/company/cost.md.
  */
 
 export const SITE = {
@@ -379,12 +382,25 @@ export const PROMISES = [
     body: 'You set no thresholds and no rules. sigiro uses the history of each service.',
   },
   {
+    /**
+     * "One command", not "one container": the binary is the lead install path now
+     * that `/install` works, and INSTALL puts it first for the reader whose next
+     * command is `npm start` and who has no container runtime. Naming the
+     * container here argued against that order.
+     */
     title: 'Installation in five minutes',
-    body: 'One container and two environment variables. You change no code.',
+    body: 'One command and two environment variables. You change no code.',
   },
   {
+    /**
+     * The site sells the self-hosted product, which is the one a reader can have
+     * working in five minutes without talking to anybody. Hosted is a hand-built
+     * beta (see docs/hosted-onboarding.md), so it gets a conversation rather than
+     * a price: quoting ~$14/mo invited a reader to sign up for something with no
+     * signup, and the operator sets up each tenant by hand.
+     */
     title: 'Free when you install it',
-    body: 'No fees for hosts, seats or data. The hosted service costs approximately $14 each month.',
+    body: 'No fees for hosts, seats or data. Talk to us if you want us to run it for you.',
   },
   {
     title: 'Your data stays with you',
@@ -464,6 +480,28 @@ export const SOCIAL = [
   { href: 'https://x.com/SigiroAI', label: 'X' },
   { href: 'https://www.linkedin.com/company/sigiro', label: 'LinkedIn' },
 ] as const;
+
+/**
+ * A call with the people building it — the route to the hosted service.
+ *
+ * The division of labour on this page: **the site sells self-hosted and local
+ * development**, which a reader can have running in five minutes with no
+ * account and no conversation. Hosted is an invited beta that an operator sets
+ * up by hand (docs/hosted-onboarding.md), so it has no signup to link to and a
+ * call is the honest route rather than a placeholder form.
+ *
+ * This is the hero's second action, in the slot that used to hold "Read the
+ * docs" — a link the header and footer both already carry, so it was spending
+ * the hero's one remaining action on a duplicate.
+ *
+ * "Talk to us", not "book a demo": there is no demo, since the product is a
+ * binary you run in one command, and "demo" promises a sales call that nobody
+ * here is staffed to give.
+ */
+export const CALL = {
+  href: 'https://cal.com/akshatagarwal/30-minutes',
+  label: 'Talk to us',
+} as const;
 
 /**
  * The question the footer hands to whichever assistant the reader already
