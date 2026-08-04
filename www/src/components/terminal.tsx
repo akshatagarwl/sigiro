@@ -7,8 +7,8 @@ import {
   useScroll,
   useTransform,
 } from 'motion/react';
-import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { TaskSteps } from '@/components/interior/task-steps';
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { StageList } from '@/components/stage-list';
 import type { SessionLine } from '@/lib/highlight';
 
 /**
@@ -35,16 +35,17 @@ import type { SessionLine } from '@/lib/highlight';
  * frame and React still renders once per step — is `useState`'s own bail-out on
  * an unchanged value. So `xstate` and `@xstate/react` left with it.
  *
- * `TaskSteps` carries the argument the section exists to make. Five stages, the
+ * `StageList` carries the argument the section exists to make. Five stages, the
  * ones you have passed ticked off, the one you are on running, the rest waiting
  * — and `meta` naming the owner of each, so "two of these five are ours" is
- * something you watch accumulate rather than a claim in a caption. It also
- * brings `aria-current="step"` and a debounced live region, which the rail I
- * hand-rolled did not have.
+ * something you watch accumulate rather than a claim in a caption. Every row is
+ * a button: `goToStage` below turns a click into a scroll position, so the rail
+ * navigates the sequence instead of only reporting on it.
  *
- * `TaskSteps` is vendored verbatim into components/interior/, so it writes literal
- * stone and emerald values rather than our tokens. That is §1b, on purpose: a
- * copied component must not depend on the host's palette.
+ * It renders the vendored `useTaskSteps` hook's rows with our own markup. The
+ * vendored `TaskSteps` view could not take a click handler and is kept verbatim
+ * under §1b, so the hook/view split is where this parts company from it — see the
+ * note in `stage-list.tsx`.
  *
  * Design constraints, from DESIGN.md (now vendored at www/DESIGN.md):
  * - §5h  React does not re-render at 60fps. The step index is React state; the
@@ -325,6 +326,39 @@ export function SteppedTerminal({
     [steps],
   );
 
+  /**
+   * Jump to a stage, by scrolling to where that stage is at rest.
+   *
+   * The rail cannot set the step directly, and that is not a limitation to work
+   * around — scroll position IS the state here (§5h). Setting `shown` would put the
+   * frame out of agreement with the scrollbar, and the next scroll event would
+   * snap it back. So the click moves the page and the existing listener does the
+   * rest, which means clicking and scrolling can never disagree.
+   *
+   * The arithmetic inverts `locate()`. `useScroll` with `offset: ['start start',
+   * 'end end']` runs progress 0 → 1 as the track's top reaches the viewport top
+   * and its bottom reaches the viewport bottom, so the scrollable span is
+   * `trackHeight - viewportHeight`. Step `i` holds still while its fraction is
+   * below HOLD, so `HOLD / 2` lands mid-hold — clear of the handoff at either end,
+   * where the frame is mid-fade.
+   */
+  const goToStage = useCallback(
+    (index: number) => {
+      const track = ref.current;
+      if (!track) return;
+      const top = track.getBoundingClientRect().top + window.scrollY;
+      const span = Math.max(0, track.offsetHeight - window.innerHeight);
+      const progress = (index + HOLD / 2) / steps.length;
+      window.scrollTo({
+        top: top + span * progress,
+        // A jump this long is disorienting without the sweep, but "smooth" is
+        // exactly what a reduced-motion preference is asking us not to do.
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      });
+    },
+    [steps.length],
+  );
+
   return (
     <>
       <div
@@ -376,9 +410,9 @@ export function SteppedTerminal({
           ) : null}
 
           <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[190px_1fr] lg:items-center">
-            {/* The task list says which step you are on; the heading above says
-                which section it belongs to. */}
-            <TaskSteps steps={tasks} current={shown} label={label} />
+            {/* The rail says which stage you are on, and now moves you to any
+                other one. The heading above says which section they belong to. */}
+            <StageList stages={tasks} current={shown} label={label} onSelect={goToStage} />
 
             <figure className="mat-panel w-full min-w-0 rounded-[14px] p-[5px]">
               <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
