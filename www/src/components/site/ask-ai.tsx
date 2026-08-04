@@ -11,11 +11,11 @@
  * build. Aliasing our side means the bare specifier belongs to Blume alone and
  * each gets the major it was written against.
  */
-import { siClaude, siGooglegemini, siPerplexity } from 'sigiro-icons';
+import { siClaude, siDuckduckgo, siGooglegemini, siPerplexity } from 'sigiro-icons';
 import { ASK_AI_PROMPT, SITE } from '@/lib/site';
 
 /**
- * Five links that open the reader's own assistant with one question already
+ * Six links that open the reader's own assistant with one question already
  * typed, pointed at our docs.
  *
  * This is not a chat widget. A chat widget is a model we host, a bill we pay, a
@@ -32,6 +32,12 @@ import { ASK_AI_PROMPT, SITE } from '@/lib/site';
  *
  * Gemini has no first-party prefill endpoint. `google.com/search?udm=50` is
  * Google's own AI Mode, which is where a prefilled Gemini query actually lands.
+ *
+ * A provider earns a place here only if the prefilled URL answers for a reader
+ * who is not signed in. That test excludes the research APIs: `exa.ai/search`
+ * and `platform.parallel.ai/play/search` both redirect to a sign-in page, and a
+ * link that spends the reader's click on a signup form costs us the trust this
+ * row exists to earn.
  */
 const MARKS = {
   /**
@@ -58,6 +64,7 @@ const MARKS = {
     ],
   },
   claude: { viewBox: '0 0 24 24', d: [siClaude.path] },
+  duckai: { viewBox: '0 0 24 24', d: [siDuckduckgo.path] },
   gemini: { viewBox: '0 0 24 24', d: [siGooglegemini.path] },
   perplexity: { viewBox: '0 0 24 24', d: [siPerplexity.path] },
 } as const;
@@ -65,6 +72,9 @@ const MARKS = {
 const PROVIDERS = [
   { name: 'ChatGPT', mark: MARKS.chatgpt, url: (q: string) => `https://chatgpt.com/?prompt=${q}` },
   { name: 'Claude', mark: MARKS.claude, url: (q: string) => `https://claude.ai/new?q=${q}` },
+  /* DuckDuckGo's own mark, because Duck.ai has none of its own. It is the one
+     provider here that answers without an account. */
+  { name: 'Duck.ai', mark: MARKS.duckai, url: (q: string) => `https://duck.ai/?q=${q}` },
   {
     name: 'Gemini',
     mark: MARKS.gemini,
