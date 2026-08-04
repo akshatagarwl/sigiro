@@ -408,12 +408,15 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
         field_str(node, "type")?
     );
 
-    let cte_count = node
-        .get("cte_map")
-        .and_then(|m| m.get("map"))
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
+    // Required, not defaulted: `cte_map.map` absent would make every CTE
+    // invisible and let a WITH clause through the check below. See the
+    // strictness note on the TABLE_FUNCTION arm — a guard that reads a
+    // missing field as "nothing to reject" turns a parser change into a
+    // disabled guard instead of a loud failure.
+    let cte_count = field(field(node, "cte_map")?, "map")?
+        .as_array()
+        .context("cte_map.map is not an array")?
+        .len();
     anyhow::ensure!(
         cte_count == 0,
         "CTEs (WITH ...) are not supported in a federated query"
@@ -448,18 +451,15 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                 is_null_field(from_table, "at_clause"),
                 "DuckLake time-travel (AT (...)) is not supported in a federated query"
             );
-            let catalog_name = from_table
-                .get("catalog_name")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            // Required, not defaulted: an absent catalog_name/schema_name read
+            // as "" would pass these qualifier checks silently.
+            let catalog_name = field_str(from_table, "catalog_name")?;
             anyhow::ensure!(
                 catalog_name.is_empty(),
-                "cross-catalog table references are not supported in a federated query"
+                "cross-catalog table references are not supported in a federated query; \
+                 got catalog {catalog_name:?}"
             );
-            let schema_name = from_table
-                .get("schema_name")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let schema_name = field_str(from_table, "schema_name")?;
             anyhow::ensure!(
                 schema_name.is_empty()
                     || schema_name.eq_ignore_ascii_case("lake")
@@ -547,27 +547,26 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
         .to_string();
 
     // GROUP BY: plain grouping only (reject GROUPING SETS/ROLLUP/CUBE).
-    let group_expressions = node
-        .get("group_expressions")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let group_sets = node
-        .get("group_sets")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    // Required, not defaulted: `group_sets` read as empty skips the
+    // GROUPING SETS/ROLLUP/CUBE rejection below entirely, and a defaulted
+    // `group_expressions` would then compare against the wrong arity.
+    let group_expressions = field(node, "group_expressions")?
+        .as_array()
+        .context("group_expressions is not an array")?
+        .clone();
+    let group_sets = field(node, "group_sets")?
+        .as_array()
+        .context("group_sets is not an array")?
+        .clone();
     if !group_sets.is_empty() {
         let plain: Vec<i64> = (0..group_expressions.len() as i64).collect();
         let is_plain = group_sets.len() == 1
             && group_sets[0]
                 .as_array()
-                .map(|set| {
-                    set.iter()
-                        .filter_map(Value::as_i64)
-                        .eq(plain.iter().copied())
-                })
-                .unwrap_or(false);
+                .context("group_sets entry is not an array")?
+                .iter()
+                .filter_map(Value::as_i64)
+                .eq(plain.iter().copied());
         anyhow::ensure!(
             is_plain,
             "GROUPING SETS / ROLLUP / CUBE are not federatable — only a plain GROUP BY is supported"
@@ -667,11 +666,14 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                 select_items.push(SelectItem::Column(ColumnItem { name, output }));
             }
             "FUNCTION" => {
+                // Required, not defaulted: a DISTINCT aggregate read as
+                // non-DISTINCT would be folded as if it were additive, which
+                // is exactly the silent-wrong-number case this module's
+                // partial/fold split exists to prevent.
                 anyhow::ensure!(
-                    !item
-                        .get("distinct")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
+                    !field(item, "distinct")?
+                        .as_bool()
+                        .context("aggregate distinct is not a boolean")?,
                     "DISTINCT aggregates (e.g. count(DISTINCT ...)) are not federatable across \
                      edges; run per-edge or narrow the query"
                 );
@@ -686,11 +688,14 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                     .is_some_and(|o| !o.is_empty());
                 anyhow::ensure!(!has_order_bys, "ordered aggregates are not federatable");
                 let function_name = field_str(item, "function_name")?.to_lowercase();
-                let children = item
-                    .get("children")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
+                // Required, not defaulted: `single_column_arg` enforces
+                // "exactly one plain column" against this list, so an absent
+                // `children` read as empty would turn a real argument list
+                // into a length-0 check and mis-push the aggregate.
+                let children = field(item, "children")?
+                    .as_array()
+                    .context("aggregate children is not an array")?
+                    .clone();
                 let (kind, arg) = match function_name.as_str() {
                     "count_star" => (AggKind::Count, None),
                     "count" => (
@@ -866,8 +871,18 @@ fn field_str<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
         .with_context(|| format!("AST field {key:?} is not a string"))
 }
 
+/// True when `key` is present AND JSON-null.
+///
+/// Every caller uses this as a GUARD ("this clause must be absent"), so a
+/// MISSING key must not read as null: the fields it is used on (`having`,
+/// `qualify`, `sample`, `at_clause`) are always emitted by
+/// `json_serialize_sql`, explicitly `null` when unused (verified against this
+/// crate's pinned DuckDB build). Treating absent as null would let a renamed
+/// field silently disable the guard instead of failing loud — so absence is
+/// reported as NOT-null and the caller's `ensure!` rejects the query with its
+/// own message.
 fn is_null_field(v: &Value, key: &str) -> bool {
-    v.get(key).is_none_or(Value::is_null)
+    v.get(key).is_some_and(Value::is_null)
 }
 
 /// A DELIBERATELY narrow WHERE-clause deparser: only column references,
@@ -922,30 +937,37 @@ fn comparison_op(t: &str) -> Result<&'static str> {
 }
 
 fn deparse_constant(value: &Value) -> Result<String> {
-    if value
-        .get("is_null")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    // `is_null` is checked FIRST and is required: a NULL constant carries no
+    // `value` key at all (verified against this crate's pinned DuckDB build),
+    // so the read below would fail on it. Order matters here.
+    if field(value, "is_null")?
+        .as_bool()
+        .context("CONSTANT is_null is not a boolean")?
     {
         return Ok("NULL".to_string());
     }
     let type_obj = value.get("type").context("CONSTANT missing type")?;
-    let type_id = type_obj
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("<missing type id>");
+    // Required, not defaulted: a placeholder id would fall through this match
+    // to the "unsupported constant type" bail, reporting a fabricated type
+    // name instead of the real "the AST has no id field" cause.
+    let type_id = field_str(type_obj, "id")?;
     let raw = value.get("value").context("CONSTANT missing value")?;
     match type_id {
         "VARCHAR" => {
             let s = raw.as_str().context("VARCHAR constant is not a string")?;
             Ok(format!("'{}'", crate::storage::escape_sql_string(s)))
         }
-        "BOOLEAN" => Ok(if raw.as_bool().unwrap_or(false) {
-            "TRUE"
-        } else {
-            "FALSE"
-        }
-        .to_string()),
+        // Required, not defaulted: a non-boolean here silently deparsed to
+        // FALSE, pushing a WHERE clause that means something the user never
+        // wrote.
+        "BOOLEAN" => Ok(
+            if raw.as_bool().context("BOOLEAN constant is not a boolean")? {
+                "TRUE"
+            } else {
+                "FALSE"
+            }
+            .to_string(),
+        ),
         "TINYINT" | "SMALLINT" | "INTEGER" | "BIGINT" | "UTINYINT" | "USMALLINT" | "UINTEGER"
         | "UBIGINT" | "DOUBLE" | "FLOAT" => Ok(raw.to_string()),
         // DECIMAL is serialized as an unscaled mantissa (`value`) + a separate
