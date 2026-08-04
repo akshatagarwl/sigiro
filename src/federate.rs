@@ -275,12 +275,13 @@ impl NullOrder {
 /// answers "what does each node look like right now"; it has no history and
 /// no time bound, so `require_time_bound` never applies to it.
 ///
-/// Matched case-insensitively against the function name. This list is the
-/// coordinator-side twin of `server::SAFE_FUNCTIONS` (the edge-side
-/// authorization gate): a name must be on BOTH to be federatable, and
-/// neither list may be widened without the other, or a query passes the
-/// coordinator and is then denied at every edge.
-const SYS_STATS_FUNCTIONS: &[&str] = &[
+/// Matched case-insensitively against the function name. This is the SINGLE
+/// definition of the `sys_*` surface: the edge-side authorization gate reads it
+/// directly (`server::is_safe_function` / `is_no_arg_function`) instead of
+/// keeping its own copy, so the coordinator's push list and the gate's
+/// allowlist cannot drift apart and let a query pass one but be denied by the
+/// other.
+pub(crate) const SYS_STATS_FUNCTIONS: &[&str] = &[
     "SYS_CPU_INFO",
     "SYS_DISK_INFO",
     "SYS_MEMORY_INFO",

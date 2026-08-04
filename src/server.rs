@@ -344,36 +344,28 @@ const ALLOWED_TABLES: &[&str] = &[
 /// - `RANGE` — tests/api_integration_test.rs
 ///   `test_query_midstream_error_never_returns_partial_rows` (`FROM range(5) t(i)`,
 ///   a pure row generator with no filesystem/network access).
-/// - `SYS_*` — the `system_stats` community extension's host-statistics table
-///   functions, reached by federated fleet queries (`crate::federate`'s
-///   `SYS_STATS_FUNCTIONS`, the coordinator-side twin of this list — a name
-///   must be on BOTH or a query passes the coordinator and is denied at every
-///   edge).
 ///
-///   These are a DELIBERATE widening of this gate, and the only entries here
-///   that expose host state rather than DuckDB state: they report the disk,
-///   memory, CPU, network interfaces, and OS of the machine the edge runs on,
-///   to any caller the quack surface accepts. quack has no working TLS of its
-///   own (see `crate::quack`'s module docs), so the network perimeter — e.g.
-///   a tailnet — is what keeps that readable only by the operator. Accepted
-///   for the self-hosted fleet-monitoring case; revisit before exposing the
-///   quack surface to an untrusted network.
+/// The `sys_*` host-statistics functions are ALSO accepted in a FROM position
+/// (see `is_safe_function`), but are defined once in
+/// `crate::federate::SYS_STATS_FUNCTIONS` rather than duplicated here, so the
+/// coordinator's push list and this gate cannot drift apart.
 ///
-///   These read host state but take no arguments and touch NO
-///   caller-controlled path: unlike the `BLOCKED_TABLE_FUNCTIONS` reader
-///   family (`read_csv('/etc/passwd')`), there is no argument through which a
-///   caller can choose what gets read. That is why they can be allowlisted
-///   without reopening the arbitrary-file-read hole, and why
-///   `federate::plan_query` rejects any `sys_*` call that carries arguments.
-const SAFE_FUNCTIONS: &[&str] = &[
-    "PRAGMA_DATABASE_SIZE",
-    "RANGE",
-    "SYS_CPU_INFO",
-    "SYS_DISK_INFO",
-    "SYS_MEMORY_INFO",
-    "SYS_NETWORK_INFO",
-    "SYS_OS_INFO",
-];
+/// Those are a DELIBERATE widening of this gate, and the only allowed relation
+/// functions that expose host state rather than DuckDB state: they report the
+/// disk, memory, CPU, network interfaces, and OS of the machine the edge runs
+/// on, to any caller the quack surface accepts. quack has no working TLS of its
+/// own (see `crate::quack`'s module docs), so the network perimeter — e.g. a
+/// tailnet — is what keeps that readable only by the operator. Accepted for the
+/// self-hosted fleet-monitoring case; revisit before exposing the quack surface
+/// to an untrusted network.
+///
+/// They read host state but take no arguments and touch NO caller-controlled
+/// path: unlike the `BLOCKED_TABLE_FUNCTIONS` reader family
+/// (`read_csv('/etc/passwd')`), there is no argument through which a caller can
+/// choose what gets read. That is why they can be allowlisted without
+/// reopening the arbitrary-file-read hole, and why `is_no_arg_function`
+/// rejects any `sys_*` call that carries arguments.
+const SAFE_FUNCTIONS: &[&str] = &["PRAGMA_DATABASE_SIZE", "RANGE"];
 
 /// Case-insensitive SCALAR function names allowed anywhere a plain
 /// `Expr::Function` can appear — SELECT-list, WHERE, HAVING, GROUP BY,
@@ -518,9 +510,11 @@ fn is_allowed_table(name: &ObjectName, allow_information_schema: bool) -> bool {
 /// identifier so `main.pragma_database_size()` and `pragma_database_size()`
 /// are treated the same.
 fn is_safe_function(name: &ObjectName) -> bool {
-    name.0
-        .last()
-        .is_some_and(|ident| SAFE_FUNCTIONS.contains(&ident.value.to_uppercase().as_str()))
+    name.0.last().is_some_and(|ident| {
+        let upper = ident.value.to_uppercase();
+        SAFE_FUNCTIONS.contains(&upper.as_str())
+            || crate::federate::SYS_STATS_FUNCTIONS.contains(&upper.as_str())
+    })
 }
 
 /// Allowlisted relation functions that accept NO arguments, so any argument
@@ -529,25 +523,19 @@ fn is_safe_function(name: &ObjectName) -> bool {
 /// name match from carrying an argument along with it (e.g.
 /// `sys_disk_info('/etc/passwd')`).
 ///
-/// `PRAGMA_DATABASE_SIZE` is also argument-free, but is deliberately NOT
-/// listed: it is reached through sigiro's own `/v1/query` call site only, and
-/// adding it here would change an existing, working path for no security gain.
-/// `RANGE` is argument-taking by nature and must never be listed.
-const NO_ARG_FUNCTIONS: &[&str] = &[
-    "SYS_CPU_INFO",
-    "SYS_DISK_INFO",
-    "SYS_MEMORY_INFO",
-    "SYS_NETWORK_INFO",
-    "SYS_OS_INFO",
-];
-
-/// True if `name` is an allowlisted relation function that takes no arguments
-/// (see `NO_ARG_FUNCTIONS`), matched on the final identifier like
-/// `is_safe_function`.
+/// True if `name` is an allowlisted relation function that takes no arguments,
+/// matched on the final identifier like `is_safe_function`.
+///
+/// Sourced from `crate::federate::SYS_STATS_FUNCTIONS` — the single definition
+/// of the `sys_*` surface — so the coordinator's push list and this gate can
+/// never drift apart. `PRAGMA_DATABASE_SIZE` is also argument-free but is
+/// deliberately excluded: it is reached only through sigiro's own `/v1/query`
+/// call site, and constraining it would change an existing working path for no
+/// security gain. `RANGE` is argument-taking by nature.
 fn is_no_arg_function(name: &ObjectName) -> bool {
-    name.0
-        .last()
-        .is_some_and(|ident| NO_ARG_FUNCTIONS.contains(&ident.value.to_uppercase().as_str()))
+    name.0.last().is_some_and(|ident| {
+        crate::federate::SYS_STATS_FUNCTIONS.contains(&ident.value.to_uppercase().as_str())
+    })
 }
 
 /// True if a parsed function call carries any argument. `TableFactor::
