@@ -11,11 +11,11 @@
  * build. Aliasing our side means the bare specifier belongs to Blume alone and
  * each gets the major it was written against.
  */
-import { siClaude, siDuckduckgo, siGooglegemini, siPerplexity } from 'sigiro-icons';
+import { siClaude, siDuckduckgo, siGooglegemini, siMistralai, siPerplexity } from 'sigiro-icons';
 import { ASK_AI_PROMPT, SITE } from '@/lib/site';
 
 /**
- * Six links that open the reader's own assistant with one question already
+ * Seven links that open the reader's own assistant with one question already
  * typed, pointed at our docs.
  *
  * This is not a chat widget. A chat widget is a model we host, a bill we pay, a
@@ -34,10 +34,17 @@ import { ASK_AI_PROMPT, SITE } from '@/lib/site';
  * Google's own AI Mode, which is where a prefilled Gemini query actually lands.
  *
  * A provider earns a place here only if the prefilled URL answers for a reader
- * who is not signed in. That test excludes the research APIs: `exa.ai/search`
- * and `platform.parallel.ai/play/search` both redirect to a sign-in page, and a
- * link that spends the reader's click on a signup form costs us the trust this
- * row exists to earn.
+ * who is not signed in. A link that spends the reader's click on a signup form,
+ * or that opens an empty composer, costs us the trust this row exists to earn.
+ * Two groups fail that test and were measured failing it, so read this before
+ * adding either back:
+ *
+ * - No prefill at any parameter name. `chat.z.ai` (GLM) drops the query string
+ *   on redirect; `kimi.com`, `chat.qwen.ai` and `agent.minimax.io` keep it and
+ *   ignore it. `q`, `prompt` and `query` were each tried against all four.
+ * - A sign-in wall. `exa.ai/search` and `platform.parallel.ai/play/search` both
+ *   redirect to one. `meta.ai/?prompt=` is the near miss — it does fill the
+ *   composer, then asks for an account the moment you send.
  */
 const MARKS = {
   /**
@@ -66,6 +73,7 @@ const MARKS = {
   claude: { viewBox: '0 0 24 24', d: [siClaude.path] },
   duckai: { viewBox: '0 0 24 24', d: [siDuckduckgo.path] },
   gemini: { viewBox: '0 0 24 24', d: [siGooglegemini.path] },
+  mistral: { viewBox: '0 0 24 24', d: [siMistralai.path] },
   perplexity: { viewBox: '0 0 24 24', d: [siPerplexity.path] },
 } as const;
 
@@ -81,6 +89,13 @@ const PROVIDERS = [
     url: (q: string) => `https://www.google.com/search?udm=50&q=${q}`,
   },
   { name: 'Grok', mark: MARKS.grok, url: (q: string) => `https://grok.com/?q=${q}` },
+  /* Le Chat, named for the company: the mark is Mistral's and the product name
+     means nothing to a reader who has only heard of the model. */
+  {
+    name: 'Mistral',
+    mark: MARKS.mistral,
+    url: (q: string) => `https://chat.mistral.ai/chat?q=${q}`,
+  },
   {
     name: 'Perplexity',
     mark: MARKS.perplexity,
@@ -89,8 +104,8 @@ const PROVIDERS = [
 ] as const;
 
 /**
- * Encoded once, at module scope. The prompt is a constant, and encoding it five
- * times per render to get five identical strings is work with no result.
+ * Encoded once, at module scope. The prompt is a constant, and encoding it once
+ * per provider per render to get seven identical strings is work with no result.
  */
 const QUERY = encodeURIComponent(ASK_AI_PROMPT);
 
