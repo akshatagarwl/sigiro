@@ -20,7 +20,9 @@ no key. Only the hosted service needs a key, and that key has the form
 `sk_<tenant>_<random>`.
 
 Auto-instrumentation exists for Python, Node.js, Java, .NET and Ruby. Go has no
-runtime agent. For Go you write a few lines of SDK setup instead.
+runtime agent, but Go has something better: you instrument the build instead of
+the source. Go to [the Go section](#go-instrument-the-build-not-the-source) and
+do not use the agent prompt for a Go service.
 
 ## 1. Give the agent this prompt
 
@@ -54,9 +56,12 @@ Rules:
 If the agent detects the wrong language, tell it directly:
 
 ```
-Language: <python|nodejs|java|dotnet|ruby|go>
+Language: <python|nodejs|java|dotnet|ruby>
 Framework: <fastapi|express|spring-boot|rails|...>
 ```
+
+Go is absent from that list on purpose. For Go, use
+[compile-time instrumentation](#go-instrument-the-build-not-the-source).
 
 ## 2. Coverage for each language
 
@@ -67,42 +72,60 @@ Framework: <fastapi|express|spring-boot|rails|...>
 | Java | `opentelemetry-javaagent.jar` | HTTP (Servlets, Spring), DB (JDBC), JVM metrics |
 | .NET | `OpenTelemetry.AutoInstrumentation` startup hook | HTTP (ASP.NET Core), DB (EF Core) |
 | Ruby | `opentelemetry-instrumentation-all` gem | HTTP (Rails), DB (ActiveRecord), Sidekiq |
-| Go | Manual SDK setup | HTTP spans via middleware, DB spans via OTel hooks |
+| Go | `otelc` compile-time instrumentation | HTTP server spans, Go runtime metrics, third-party libraries |
 
-For Go, you create the tracer by hand and you wrap every handler:
+### Go: instrument the build, not the source
 
-```go
-import (
-    "context"
+Do not give the agent this job for Go. Go has a better option, and the agent is
+the weaker one.
 
-    "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-    sdktrace "go.opentelemetry.io/otel/sdk/trace"
-)
+For Go, you add a prefix to the build command, and the binary ships
+instrumented. You change no source file. The OpenTelemetry project builds this
+tool, and it is called `otelc`. The tool also instruments the third-party
+libraries that you do not control. An agent cannot do that, because an agent
+edits only your own code.
 
-func initTracer(ctx context.Context) (func(context.Context) error, error) {
-    exporter, err := otlptracehttp.New(ctx,
-        otlptracehttp.WithEndpoint("localhost:4318"),
-        otlptracehttp.WithInsecure(),
-    )
-    if err != nil {
-        return nil, err
-    }
-    tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
-    otel.SetTracerProvider(tp)
-    return tp.Shutdown, nil
-}
+Download the binary for your platform from the
+[v1.0.1 release](https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation/releases/tag/v1.0.1).
+The release publishes `otelc` for macOS and Linux on arm64 and x86-64, and for
+Windows on x86-64:
 
-// Wrap each handler so its spans carry the route name:
-http.Handle("/checkout", otelhttp.NewHandler(
-    http.HandlerFunc(checkoutHandler), "checkout",
-))
+```bash
+curl -fsSL -o otelc https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation/releases/download/v1.0.1/otelc-darwin-arm64
+chmod +x otelc
+./otelc version
 ```
 
-`WithInsecure()` makes the exporter use plain HTTP with a local server. Delete
-`WithInsecure()` for the hosted service, which uses TLS. Then add the bearer token
-with `otlptracehttp.WithHeaders(map[string]string{"Authorization": "Bearer " + key})`.
+`go install` does not work for this tool. The module publishes no command path.
+On a platform without an asset, clone the repository and run `make build`.
+
+Then add `otelc` in front of your normal build command:
+
+```bash
+./otelc go build -o checkout .
+```
+
+The first build downloads the OpenTelemetry packages, so it takes longer than a
+normal build. Your `go.mod` file stays unchanged.
+
+Start the binary with the same two variables that the
+[quickstart](/docs/quickstart) uses:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+OTEL_SERVICE_NAME=checkout \
+  ./checkout
+```
+
+The binary creates the trace provider, the meter provider, and the logger
+provider at startup. It needs no SDK code from you. The service reports HTTP
+server spans and Go runtime metrics.
+
+Two limits apply. The tool needs Go 1.25 or later. Version 1.0.1 is recent,
+because the project tagged it on 14 July 2026. Read the
+[upstream documentation](https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation)
+for the libraries that it covers. If a library gets no spans, add the spans by
+hand for that library only.
 
 ## 3. Confirm that it works
 
