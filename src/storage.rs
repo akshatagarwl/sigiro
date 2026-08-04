@@ -612,15 +612,50 @@ pub fn resolve_extension_dir(data_dir: &Utf8Path) -> camino::Utf8PathBuf {
 /// on a fresh data dir, with no progress output. The user sees nothing
 /// and concludes the process has died.
 pub(crate) fn install_extensions_with_progress(conn: &Connection, names: &[&str]) -> Result<()> {
+    install_extensions_from(conn, names, ExtensionRepo::Core)
+}
+
+/// Which DuckDB extension repository an extension is published to. A core
+/// extension resolves from `extensions.duckdb.org`; a community extension is
+/// NOT there and must be installed `FROM community`, or the download fails
+/// with an HTTP 404 that names only the core candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExtensionRepo {
+    Core,
+    Community,
+}
+
+impl ExtensionRepo {
+    /// The `FROM <repo>` suffix for an `INSTALL` statement.
+    fn install_suffix(self) -> &'static str {
+        match self {
+            Self::Core => "",
+            Self::Community => " FROM community",
+        }
+    }
+}
+
+/// Install + load each extension in `names` from `repo`, logging progress.
+pub(crate) fn install_extensions_from(
+    conn: &Connection,
+    names: &[&str],
+    repo: ExtensionRepo,
+) -> Result<()> {
     let total = names.len();
     for (i, name) in names.iter().enumerate() {
         tracing::info!(
-            "installing DuckDB extension {name} ({}/{}) — first run may download ~5MB, please wait",
+            "installing DuckDB extension {name} ({}/{}, {repo:?} repo) — first run may download \
+             ~5MB, please wait",
             i + 1,
             total
         );
-        conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
-            .with_context(|| format!("failed to install/load extension {name}"))?;
+        conn.execute_batch(&format!(
+            "INSTALL {name}{}; LOAD {name};",
+            repo.install_suffix()
+        ))
+        .with_context(|| {
+            format!("failed to install/load extension {name} from the {repo:?} repo")
+        })?;
         tracing::info!("loaded DuckDB extension: {name}");
     }
     Ok(())
@@ -671,6 +706,13 @@ pub fn prewarm_extensions(data_dir: &Utf8Path) -> Result<()> {
     // that bundle are baked here. sqlite is local-catalog-only (hosted uses a
     // postgres catalog) and downloads on demand for local dev.
     install_extensions_with_progress(&conn, &["ducklake", "postgres", "httpfs"])?;
+    // system_stats backs the `sys_*` host-statistics functions federated fleet
+    // queries reach (`crate::federate`). `attach_ducklake` installs it right
+    // before the irreversible filesystem lockdown, so pre-warming it here is
+    // what keeps that path off the network at serve time — same reasoning as
+    // httpfs/quack above. Published to the COMMUNITY repo, not core.
+    install_extensions_from(&conn, &["system_stats"], ExtensionRepo::Community)
+        .context("failed to pre-warm the system_stats extension")?;
     tracing::info!("pre-warming the quack query-surface extension (version-pinned)...");
     crate::quack::load_and_pin(&conn).context("failed to pre-warm the quack extension")?;
     tracing::info!("DuckDB extensions pre-warmed successfully");

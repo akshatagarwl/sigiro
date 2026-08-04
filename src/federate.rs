@@ -267,9 +267,82 @@ impl NullOrder {
     }
 }
 
+/// System-statistics table functions federatable in a FROM position.
+///
+/// These are the `system_stats` community extension's table functions, read
+/// from the HOST THE EDGE RUNS ON — a live point-in-time reading of that
+/// machine, NOT stored telemetry. A federated query over one of these
+/// answers "what does each node look like right now"; it has no history and
+/// no time bound, so `require_time_bound` never applies to it.
+///
+/// Matched case-insensitively against the function name. This list is the
+/// coordinator-side twin of `server::SAFE_FUNCTIONS` (the edge-side
+/// authorization gate): a name must be on BOTH to be federatable, and
+/// neither list may be widened without the other, or a query passes the
+/// coordinator and is then denied at every edge.
+const SYS_STATS_FUNCTIONS: &[&str] = &[
+    "SYS_CPU_INFO",
+    "SYS_DISK_INFO",
+    "SYS_MEMORY_INFO",
+    "SYS_NETWORK_INFO",
+    "SYS_OS_INFO",
+];
+
+/// The FROM relation of a federatable query.
+///
+/// The two variants differ in exactly one way that matters downstream: how
+/// the relation is rendered into the SQL pushed to each edge (see
+/// [`FromRelation::render`]). Everything else in the pipeline — projection,
+/// WHERE, GROUP BY, aggregate partial/fold — is relation-agnostic and works
+/// off column names alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FromRelation {
+    /// A `sigiro_*` DuckLake table, e.g. `sigiro_spans`.
+    Table(String),
+    /// A `sys_*` host-statistics table function, e.g. `sys_disk_info`.
+    SysStats(String),
+}
+
+impl FromRelation {
+    /// Render this relation for the per-edge pushed-down SQL.
+    ///
+    /// DuckLake tables MUST be catalog-qualified (`lake.<table>`): the edge's
+    /// quack server runs each request in a fresh connection with no `USE lake`
+    /// default catalog, so an unqualified name fails there ("Table
+    /// sigiro_spans does not exist! Did you mean lake.sigiro_spans?").
+    ///
+    /// A `sys_*` table function is NOT in the `lake` catalog — it is not in
+    /// any catalog — so qualifying it that way fails at the edge for the
+    /// mirror-image reason. It renders as a bare call instead.
+    fn render(&self) -> String {
+        match self {
+            Self::Table(table) => format!("{}.{}", quote_ident("lake"), quote_ident(table)),
+            Self::SysStats(func) => format!("{}()", quote_ident(func)),
+        }
+    }
+
+    /// The name a column qualifier may legitimately use for this relation
+    /// (`sigiro_spans.service` / `sys_disk_info.mount_point`). Used by
+    /// `column_ref_name` to tell a real table qualifier apart from struct
+    /// field access.
+    fn qualifier_name(&self) -> &str {
+        match self {
+            Self::Table(table) => table,
+            Self::SysStats(func) => func,
+        }
+    }
+
+    /// True when this relation is stored telemetry with a `timestamp` column,
+    /// and therefore subject to the time-bound requirement. Host statistics
+    /// are instantaneous and have no timestamp to bound.
+    fn is_time_series(&self) -> bool {
+        matches!(self, Self::Table(_))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedQuery {
-    table: String,
+    from: FromRelation,
     where_sql: Option<String>,
     has_time_bound: bool,
     group_keys: Vec<String>,
@@ -359,43 +432,110 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
     );
 
     let from_table = field(node, "from_table")?;
+    let from_type = field_str(from_table, "type")?;
     anyhow::ensure!(
-        field_str(from_table, "type")? == "BASE_TABLE",
-        "federated queries support exactly one base table in FROM (no JOIN, subquery, \
-         CTE reference, or table function); got a {} relation",
-        field_str(from_table, "type")?
-    );
-    anyhow::ensure!(
-        is_null_field(from_table, "at_clause"),
-        "DuckLake time-travel (AT (...)) is not supported in a federated query"
+        matches!(from_type, "BASE_TABLE" | "TABLE_FUNCTION"),
+        "federated queries support exactly one base table or sys_* table function in FROM \
+         (no JOIN, subquery, or CTE reference); got a {from_type} relation"
     );
     anyhow::ensure!(
         is_null_field(from_table, "sample"),
         "SAMPLE/TABLESAMPLE is not supported in a federated query"
     );
-    let catalog_name = from_table
-        .get("catalog_name")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    anyhow::ensure!(
-        catalog_name.is_empty(),
-        "cross-catalog table references are not supported in a federated query"
-    );
-    let schema_name = from_table
-        .get("schema_name")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    anyhow::ensure!(
-        schema_name.is_empty()
-            || schema_name.eq_ignore_ascii_case("lake")
-            || schema_name.eq_ignore_ascii_case("main"),
-        "unexpected schema qualifier {schema_name:?} on the FROM table — expected unqualified, lake., or main."
-    );
-    let table = field_str(from_table, "table_name")?.to_string();
-    anyhow::ensure!(
-        table.to_lowercase().starts_with("sigiro_"),
-        "federated queries may only target sigiro_* tables; got {table:?}"
-    );
+    let from = match from_type {
+        "BASE_TABLE" => {
+            anyhow::ensure!(
+                is_null_field(from_table, "at_clause"),
+                "DuckLake time-travel (AT (...)) is not supported in a federated query"
+            );
+            let catalog_name = from_table
+                .get("catalog_name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            anyhow::ensure!(
+                catalog_name.is_empty(),
+                "cross-catalog table references are not supported in a federated query"
+            );
+            let schema_name = from_table
+                .get("schema_name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            anyhow::ensure!(
+                schema_name.is_empty()
+                    || schema_name.eq_ignore_ascii_case("lake")
+                    || schema_name.eq_ignore_ascii_case("main"),
+                "unexpected schema qualifier {schema_name:?} on the FROM table — expected unqualified, lake., or main."
+            );
+            let table = field_str(from_table, "table_name")?.to_string();
+            anyhow::ensure!(
+                table.to_lowercase().starts_with("sigiro_"),
+                "federated queries may only target sigiro_* tables; got {table:?}"
+            );
+            FromRelation::Table(table)
+        }
+        // A table function's name lives at `from_table.function.function_name`
+        // — NOT at `table_name`, which does not exist on this node shape (AST
+        // shape verified directly against this crate's pinned DuckDB build via
+        // `json_serialize_sql`, same as the rest of this module).
+        _ => {
+            let function = field(from_table, "function")?;
+            let catalog = function
+                .get("catalog")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            anyhow::ensure!(
+                catalog.is_empty(),
+                "cross-catalog function references are not supported in a federated query"
+            );
+            let schema = function.get("schema").and_then(Value::as_str).unwrap_or("");
+            anyhow::ensure!(
+                schema.is_empty() || schema.eq_ignore_ascii_case("main"),
+                "unexpected schema qualifier {schema:?} on the FROM function — expected unqualified or main."
+            );
+            let func = field_str(function, "function_name")?.to_string();
+            anyhow::ensure!(
+                SYS_STATS_FUNCTIONS.contains(&func.to_uppercase().as_str()),
+                "federated queries may only target sigiro_* tables or the sys_* host-statistics \
+                 functions ({}); got {func:?}",
+                SYS_STATS_FUNCTIONS.join(", ").to_lowercase()
+            );
+            // These functions take no arguments. Accepting arguments here
+            // would push an unvalidated expression to every edge, so a call
+            // that has any is rejected outright rather than silently ignored.
+            let arg_count = function
+                .get("children")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0);
+            anyhow::ensure!(
+                arg_count == 0,
+                "{func}() takes no arguments in a federated query; got {arg_count}"
+            );
+            anyhow::ensure!(
+                function.get("filter").is_none_or(Value::is_null),
+                "FILTER is not supported on a federated {func}() call"
+            );
+            anyhow::ensure!(
+                !function
+                    .get("distinct")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "DISTINCT is not supported on a federated {func}() call"
+            );
+            // `WITH ORDINALITY` adds a synthetic column the coordinator's
+            // fold has never seen; reject rather than mis-project it.
+            let ordinality = from_table
+                .get("with_ordinality")
+                .and_then(Value::as_str)
+                .unwrap_or("WITHOUT_ORDINALITY");
+            anyhow::ensure!(
+                ordinality.eq_ignore_ascii_case("WITHOUT_ORDINALITY"),
+                "WITH ORDINALITY is not supported in a federated query"
+            );
+            FromRelation::SysStats(func)
+        }
+    };
+    let table = from.qualifier_name().to_string();
     let table_alias = from_table
         .get("alias")
         .and_then(Value::as_str)
@@ -651,7 +791,7 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
     }
 
     Ok(ParsedQuery {
-        table,
+        from,
         where_sql,
         has_time_bound,
         group_keys,
@@ -1066,17 +1206,15 @@ fn build_partial_sql(parsed: &ParsedQuery, row_cap: usize) -> String {
     for col in passthrough_extra_order_cols(parsed) {
         select_parts.push(quote_ident(&col));
     }
-    // Qualify the table with the DuckLake catalog (`lake`). The edge's quack
-    // server runs each request in a fresh connection with NO `USE lake`
-    // default catalog, so an unqualified name fails at the edge ("Table
-    // sigiro_spans does not exist! Did you mean lake.sigiro_spans?"). The
+    // The FROM relation renders itself — a DuckLake table catalog-qualified
+    // as `lake.<table>`, a `sys_*` function as a bare call (see
+    // `FromRelation::render` for why each form is required at the edge). The
     // final fold (build_final_sql) runs on local materialized tables, so it
-    // is not qualified.
+    // is never qualified.
     let mut inner = format!(
-        "SELECT {} FROM {}.{}",
+        "SELECT {} FROM {}",
         select_parts.join(", "),
-        quote_ident("lake"),
-        quote_ident(&parsed.table)
+        parsed.from.render()
     );
     if let Some(where_sql) = &parsed.where_sql {
         inner.push_str(&format!(" WHERE {where_sql}"));
@@ -1277,8 +1415,13 @@ pub async fn run_federated_query(
         .context("failed to load the json extension needed to plan the federated query")?;
 
     let parsed = plan_query(&coord, sql)?;
+    // The time-bound requirement exists to stop an un-prunable scan of stored
+    // telemetry across every edge. A `sys_*` host-statistics call is a live
+    // point-in-time reading with no timestamp column and a handful of rows per
+    // edge, so there is nothing to bound and nothing to blow up — requiring
+    // `--full-scan` there would be a demand the user cannot satisfy.
     anyhow::ensure!(
-        parsed.has_time_bound || allow_full_scan,
+        !parsed.from.is_time_series() || parsed.has_time_bound || allow_full_scan,
         "federated query has no bound on the timestamp column in its WHERE clause — this is the \
          un-prunable cross-edge blowup case. Add a WHERE timestamp filter, or pass --full-scan \
          to run anyway."

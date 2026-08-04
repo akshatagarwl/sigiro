@@ -250,6 +250,53 @@ fn self_test_authorization_gate(conn: &Connection) -> Result<()> {
          ALLOWED — refusing to serve the quack query surface"
     );
 
+    // The `sys_*` host-statistics functions are a DELIBERATE, NAMED exception
+    // to the config-leak denials asserted immediately above: federated fleet
+    // queries (crate::federate) reach them through this surface, so they must
+    // be permitted here — while `getenv`/`current_setting` stay denied. Both
+    // halves are asserted so the pairing can never drift: widening the gate
+    // far enough to leak process env or DuckDB config still refuses to bind a
+    // port, and narrowing it far enough to break fleet queries fails at boot
+    // instead of at the first query.
+    let sys_stats_allowed: bool = conn
+        .query_row(
+            &format!("SELECT {AUTH_FUNCTION_NAME}('self-test', 'SELECT * FROM sys_disk_info()')"),
+            [],
+            |row| row.get(0),
+        )
+        .context(
+            "authorization gate self-test: failed to invoke the gate on a known-good \
+             sys_disk_info() query",
+        )?;
+    anyhow::ensure!(
+        sys_stats_allowed,
+        "authorization gate self-test FAILED: SELECT * FROM sys_disk_info() was DENIED — \
+         federated fleet queries would fail at every edge. server::SAFE_FUNCTIONS and \
+         federate::SYS_STATS_FUNCTIONS must agree; refusing to serve the quack query surface"
+    );
+
+    // A `sys_*` call carrying arguments is NOT part of that exception. The
+    // allowlist matches on function NAME, so this asserts the surrounding
+    // structural checks still reject a call shape the coordinator never
+    // produces, rather than trusting the name alone.
+    let sys_stats_args_denied: bool = conn
+        .query_row(
+            &format!(
+                "SELECT {AUTH_FUNCTION_NAME}('self-test', 'SELECT * FROM sys_disk_info(''/etc/passwd'')')"
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .context(
+            "authorization gate self-test: failed to invoke the gate on a known-bad \
+             argument-carrying sys_disk_info() query",
+        )?;
+    anyhow::ensure!(
+        !sys_stats_args_denied,
+        "authorization gate self-test FAILED: sys_disk_info() WITH AN ARGUMENT was ALLOWED — \
+         refusing to serve the quack query surface"
+    );
+
     Ok(())
 }
 

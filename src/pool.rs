@@ -378,6 +378,25 @@ impl ProjectPool {
                                  filesystem access",
                             )?;
                         }
+                        // Same irreversible-lockdown rule: the system_stats
+                        // community extension backs the `sys_*` host-statistics
+                        // functions that federated fleet queries reach through
+                        // the quack surface (server::SAFE_FUNCTIONS,
+                        // federate::SYS_STATS_FUNCTIONS). It is NOT statically
+                        // linked into the binary the way parquet/json/icu are,
+                        // so it needs INSTALL (a repo download) while external
+                        // access is still open — after lockdown it can never
+                        // load, and every sys_* query would fail with
+                        // "Loading external extensions is disabled".
+                        crate::storage::install_extensions_from(
+                            conn,
+                            &["system_stats"],
+                            crate::storage::ExtensionRepo::Community,
+                        )
+                        .context(
+                            "failed to install/load system_stats before locking down \
+                             filesystem access",
+                        )?;
                         self.lock_filesystem(conn, &ext_dir)?;
                     }
                     return Ok(());

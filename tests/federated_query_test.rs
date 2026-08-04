@@ -907,3 +907,159 @@ fn federated_query_stability_loop() {
         failures.len()
     );
 }
+
+/// Fleet-wide host statistics across TWO real edges in ONE federated query —
+/// the `sys_*` table-function FROM path (`federate::FromRelation::SysStats`).
+///
+/// This is the scenario the feature exists for: "what is the disk situation
+/// across every node", answered by one `sigiro query` with no per-node
+/// round trips. It exercises the parts a `sigiro_*` table query never
+/// reaches:
+///
+/// - the coordinator plans a `TABLE_FUNCTION` FROM node (name at
+///   `from_table.function.function_name`, not `table_name`);
+/// - it pushes a BARE `sys_disk_info()` call, NOT `lake.sys_disk_info()` —
+///   the function is in no catalog, so the DuckLake qualifier every table
+///   query needs would fail at the edge;
+/// - no `--full-scan` is needed despite there being no WHERE timestamp
+///   bound, because host statistics are instantaneous and have no timestamp
+///   column to bound;
+/// - the edge's quack authorization gate permits the call
+///   (`server::SAFE_FUNCTIONS`).
+///
+/// No ingest: host statistics come from the machine, not from telemetry, so
+/// both edges answer immediately on empty DuckLake catalogs.
+#[test]
+fn federated_sys_disk_info_across_two_edges() {
+    let token = "e2e-fed-sysstats-token";
+    let (base_a, base_b) = (43500, 43510);
+
+    let edge_a = EdgeServer::spawn("sys-a", base_a, token);
+    let edge_b = EdgeServer::spawn("sys-b", base_b, token);
+    let edges = vec![
+        format!("sys-a=127.0.0.1:{}", edge_a.quack_port),
+        format!("sys-b=127.0.0.1:{}", edge_b.quack_port),
+    ];
+
+    // Deliberately NO `--full-scan` and NO WHERE clause: proving the
+    // time-bound gate does not apply to a non-time-series relation is half
+    // the point of this test.
+    let output = run_query(
+        "SELECT count(*) AS mounts, min(free_space) AS tightest_free \
+         FROM sys_disk_info()",
+        &edges,
+        token,
+        &[],
+    );
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        edge_a.shutdown();
+        edge_b.shutdown();
+        panic!("federated sys_disk_info() query failed: {stderr}");
+    }
+
+    let rows: Vec<serde_json::Value> = match serde_json::from_slice(&output.stdout) {
+        Ok(rows) => rows,
+        Err(e) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            edge_a.shutdown();
+            edge_b.shutdown();
+            panic!("failed to parse federated output as JSON: {e}\nstdout={stdout}");
+        }
+    };
+
+    edge_a.shutdown();
+    edge_b.shutdown();
+
+    assert_eq!(
+        rows.len(),
+        1,
+        "an ungrouped aggregate must fold to exactly one row, got {rows:?}"
+    );
+    let mounts = rows[0]
+        .get("mounts")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_else(|| panic!("missing integer `mounts` in {rows:?}"));
+    let tightest_free = rows[0]
+        .get("tightest_free")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_else(|| panic!("missing integer `tightest_free` in {rows:?}"));
+
+    // Both edges run on THIS host, so each reports the same mount table:
+    // the folded count must be the per-host mount count summed across both
+    // edges, i.e. strictly greater than one edge alone could report, and
+    // even.
+    assert!(
+        mounts >= 2,
+        "count(*) folded across 2 edges must be at least 2, got {mounts}"
+    );
+    assert_eq!(
+        mounts % 2,
+        0,
+        "both edges report the same host's mounts, so the folded count must be even, got {mounts}"
+    );
+    assert!(
+        tightest_free > 0,
+        "min(free_space) across the fleet must be positive, got {tightest_free}"
+    );
+    println!("fleet disk: {mounts} mounts across 2 edges, tightest free={tightest_free} bytes");
+}
+
+/// The per-node label: a fleet query is useless if you cannot tell which node
+/// a row came from. `sys_os_info()` carries `host_name`, so a GROUP BY over it
+/// proves the edge-reported identity survives the fan-out and fold.
+#[test]
+fn federated_sys_os_info_reports_host_name_per_edge() {
+    let token = "e2e-fed-hostname-token";
+    let (base_a, base_b) = (43530, 43540);
+
+    let edge_a = EdgeServer::spawn("host-a", base_a, token);
+    let edge_b = EdgeServer::spawn("host-b", base_b, token);
+    let edges = vec![
+        format!("host-a=127.0.0.1:{}", edge_a.quack_port),
+        format!("host-b=127.0.0.1:{}", edge_b.quack_port),
+    ];
+
+    let output = run_query(
+        "SELECT host_name, count(*) AS reports FROM sys_os_info() \
+         GROUP BY host_name ORDER BY host_name",
+        &edges,
+        token,
+        &[],
+    );
+
+    let ok = output.status.success();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    edge_a.shutdown();
+    edge_b.shutdown();
+
+    assert!(ok, "federated sys_os_info() query failed: {stderr}");
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("failed to parse output as JSON: {e}\nstdout={stdout}"));
+
+    // Both edges run on this one host, so GROUP BY host_name folds to a
+    // single group whose count is the number of edges that answered.
+    assert_eq!(
+        rows.len(),
+        1,
+        "both edges share one host_name, so expected exactly one group, got {rows:?}"
+    );
+    let host_name = rows[0]
+        .get("host_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("missing `host_name` in {rows:?}"));
+    let reports = rows[0]
+        .get("reports")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_else(|| panic!("missing integer `reports` in {rows:?}"));
+
+    assert!(!host_name.is_empty(), "host_name must not be empty");
+    assert_eq!(
+        reports, 2,
+        "each of the 2 edges contributes one sys_os_info() row, got {reports}"
+    );
+    println!("fleet identity: host_name={host_name} reported by {reports} edges");
+}
