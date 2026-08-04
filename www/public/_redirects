@@ -28,3 +28,9 @@
 # `agent-readability.json` advertises, since Blume derives that from `seo.sitemap`
 # rather than from whatever generator actually ran.
 /sitemap.xml    /sitemap-index.xml                       302
+
+# The API description lives on the API, which is the only thing that can keep it
+# honest. This site has never held a copy and should not start — but `/openapi.json`
+# is the path a reader guesses, and it answered 404 to every one of them, including
+# the assistants the footer sends here. A 302 costs nothing and cannot drift.
+/openapi.json   https://api.sigiro.com/openapi.json      302

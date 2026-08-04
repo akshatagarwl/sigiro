@@ -526,17 +526,24 @@ export const SOCIAL = [
  * rest of the file.
  *
  * Three URLs, in the order an assistant should read them: the page for the
- * claim, `/llms-full.txt` for every doc as one markdown file, `/openapi.json`
- * for the surface that either matches the claim or does not. All three are
- * public and need no key, which is the whole reason this works — the reader
- * gets an answer we did not write and cannot edit.
+ * claim, `/llms-full.txt` for every doc as one markdown file, and the OpenAPI
+ * description for the surface that either matches the claim or does not. All
+ * three are public and need no key, which is the whole reason this works — the
+ * reader gets an answer we did not write and cannot edit.
+ *
+ * The third one is on `apiUrl`, not on this site. The hosted API serves its own
+ * description and the website has never had a copy; `sigiro.com/openapi.json`
+ * answered 404 for as long as this prompt named it, so every assistant that
+ * followed it read two of the three documents and said nothing about the third.
+ * `public/_redirects` now sends that path to the real one as well, because it is
+ * the URL a reader guesses.
  *
  * Do not ask for a summary of the marketing page. An assistant that only reads
  * the landing page repeats the landing page, and the reader already read it.
  */
 export const ASK_AI_PROMPT = [
   'Explain sigiro.',
-  `Read ${SITE.url}, the documentation at ${SITE.url}/llms-full.txt, and the API description at ${SITE.url}/openapi.json.`,
+  `Read ${SITE.url}, the documentation at ${SITE.url}/llms-full.txt, and the API description at ${SITE.apiUrl}/openapi.json.`,
   'Then tell me what sigiro does and how an AI agent uses it to debug a production failure.',
   'Also tell me what it costs and how it differs from a traditional observability tool.',
 ].join(' ');
