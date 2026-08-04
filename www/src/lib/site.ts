@@ -450,61 +450,6 @@ export const INTEGRATIONS = [
   },
 ] as const;
 
-/**
- * Visible FAQ *and* FAQPage JSON-LD. Every answer here is rendered in the HTML;
- * schema whose text does not appear on the page gets ignored.
- *
- * "Where does my data go?" says plainly that hosted holds your telemetry. Privacy
- * is one of the five claims, so a reader who goes looking for the seam between
- * self-hosted and hosted has to find an honest sentence rather than a dodge.
- */
-export const FAQ = [
-  {
-    q: 'What is sigiro?',
-    a: 'sigiro is an observability backend for agents. You send OpenTelemetry to sigiro. You ask a question in SQL or with one investigate call. sigiro gives you a diagnosis, not a dashboard.',
-  },
-  {
-    q: 'Does sigiro replace my current observability stack?',
-    a: 'sigiro replaces them when a machine reads the data. If a person must look at a chart, keep the dashboard. sigiro is for the steps after that.',
-  },
-  {
-    q: 'Must I change my code?',
-    a: 'No. sigiro uses standard OTLP on ports 4317 and 4318. Your OpenTelemetry SDK or collector sends to sigiro without a change.',
-  },
-  {
-    q: 'Where does my data go?',
-    a: 'You install sigiro on your servers. sigiro writes to your storage and sends no data to us. You do not make an account. The hosted service is different: it keeps your telemetry for you.',
-  },
-  {
-    q: 'Does sigiro page me?',
-    a: 'No. A page interrupts a person who cannot watch continuously. sigiro gives a table that a program reads in a loop.',
-  },
-  {
-    q: 'How does sigiro know what to report without thresholds?',
-    a: 'sigiro compares each service with its own recent history. A service that is always slow but steady reports nothing, because nothing changed. A service that becomes two times slower reports, because no rule was necessary.',
-  },
-  {
-    q: 'Does sigiro sample the data?',
-    a: 'No. sigiro keeps each request. Sample rates were necessary when no one could read all of the data. A machine can read all of the data.',
-  },
-  {
-    q: 'Which query language must I learn?',
-    a: 'None. You ask in SQL. Your agent writes SQL correctly. Each answer gives you the query that made it.',
-  },
-  {
-    q: 'Can my agent use sigiro without me?',
-    a: 'Yes. The agent reads the API description at /openapi.json. It needs no key and no tool definition. Then it asks in SQL.',
-  },
-  {
-    q: 'What does sigiro cost?',
-    a: 'sigiro is free when you install it, and the storage is yours. There are no fees for hosts, seats or data. The hosted service costs approximately $14 each month. Access is by invitation.',
-  },
-  {
-    q: 'What does sigiro not do?',
-    a: 'sigiro does not write your patches, run your pipeline, or evaluate alert rules. sigiro has no dashboard builder and no full-text log index. Questions are structured, because that is how an agent asks.',
-  },
-] as const;
-
 export const NAV = [
   /**
    * Root-relative again. The docs are pages of this same Astro app, mounted at

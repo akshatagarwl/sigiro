@@ -2,24 +2,10 @@
 import Artifact from '@/components/Artifact.astro';
 import FactoryLoop from '@/components/FactoryLoop.astro';
 import HowItWorks from '@/components/HowItWorks.astro';
-import { Faq } from '@/components/faq';
 import { Integrations } from '@/components/integrations';
 import { PRIMARY, SECONDARY } from '@/components/site/action';
 import Base from '@/layouts/Base.astro';
-import { jsonLd } from '@/lib/json-ld';
-import { FAQ, PROMISES, SECTIONS, SITE } from '@/lib/site';
-
-const faqSchema = {
-  '@context': 'https://schema.org',
-  '@type': 'FAQPage',
-  '@id': `${SITE.url}/#faq`,
-  isPartOf: { '@id': `${SITE.url}/#website` },
-  mainEntity: FAQ.map((item) => ({
-    '@type': 'Question',
-    name: item.q,
-    acceptedAnswer: { '@type': 'Answer', text: item.a },
-  })),
-};
+import { PROMISES, SECTIONS, SITE } from '@/lib/site';
 
 /* The type ramp, from the design language and not invented here: 27px medium at
    -0.03em for a page or section title, 15px for a lede, 13.5px for body.
@@ -182,11 +168,4 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
     </dl>
   </section>
 
-  <section aria-labelledby="faq" class={SECTION}>
-    <p class="label">faq</p>
-    <h2 id="faq" class={H2}>Questions.</h2>
-    <Faq client:visible />
-  </section>
-
-  <script type="application/ld+json" is:inline set:html={jsonLd(faqSchema)} />
 </Base>
