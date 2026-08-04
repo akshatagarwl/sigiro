@@ -149,16 +149,20 @@ export default defineConfig({
    * redirect would be the one place still advertising that they exist.
    */
   redirects: [
-    { from: '/api/get-trace', to: '/api', status: 302 },
-    { from: '/api/investigate-services', to: '/api', status: 302 },
-    { from: '/api/list-anomalies', to: '/api', status: 302 },
-    { from: '/api/list-services', to: '/api', status: 302 },
-    { from: '/api/run-query', to: '/api', status: 302 },
-    { from: '/api/v1/anomalies/get', to: '/api', status: 302 },
-    { from: '/api/v1/investigate/post', to: '/api', status: 302 },
-    { from: '/api/v1/query/post', to: '/api', status: 302 },
-    { from: '/api/v1/services/get', to: '/api', status: 302 },
-    { from: '/api/v1/traces/trace_id/get', to: '/api', status: 302 },
+    /* The section root moved from `/api` to `/reference` — see `openapi.route`.
+       This rule carries every inbound link to `/docs/api`, including the one in
+       the footer of every page this site has served. */
+    { from: '/api', to: '/reference', status: 302 },
+    { from: '/api/get-trace', to: '/reference', status: 302 },
+    { from: '/api/investigate-services', to: '/reference', status: 302 },
+    { from: '/api/list-anomalies', to: '/reference', status: 302 },
+    { from: '/api/list-services', to: '/reference', status: 302 },
+    { from: '/api/run-query', to: '/reference', status: 302 },
+    { from: '/api/v1/anomalies/get', to: '/reference', status: 302 },
+    { from: '/api/v1/investigate/post', to: '/reference', status: 302 },
+    { from: '/api/v1/query/post', to: '/reference', status: 302 },
+    { from: '/api/v1/services/get', to: '/reference', status: 302 },
+    { from: '/api/v1/traces/trace_id/get', to: '/reference', status: 302 },
   ],
 
   /**
@@ -239,23 +243,28 @@ export default defineConfig({
    */
   openapi: {
     enabled: true,
-    route: '/api',
-    spec: 'https://api.sigiro.com/openapi.json',
     /**
-     * OPEN: the sidebar and breadcrumb read "Api", not "API".
+     * `/reference`, not `/api`, and the reason is the label rather than the URL.
      *
      * Blume humanizes the route segment when it has nothing better, and it cannot
-     * know `api` is an initialism — the same code renders `sql` as `Sql`. Tried
-     * `openapi.sources[].label`, which is documented as "Nav/section label for this
-     * source": it does not change either the sidebar entry or the breadcrumb, so
-     * that form was reverted rather than left here doing nothing.
+     * know `api` is an initialism — the same code renders `sql` as `Sql`, so the
+     * sidebar and breadcrumb both read "Api". `openapi.sources[].label` is
+     * documented as the nav label for a source and changes neither, so it was
+     * tried and reverted. Renaming the segment is the fix that works: `reference`
+     * humanizes to "Reference" with nothing to special-case.
      *
-     * The fix that does work is renaming `route` to a word that humanizes cleanly
-     * — `/reference` → "Reference". It is one line here and then churn everywhere
-     * that names the path: `NAV` in `lib/site.ts`, the `navigation.featured` entry
-     * below, and the ten legacy per-operation rules in `public/_redirects`. Not
-     * done in the same pass as the tag removal, so that one stays reviewable.
+     * Checked against what mature references do before picking it. Stripe and
+     * Resend both label this section "API Reference"; Resend's slug is literally
+     * `api-reference`. Neither exposes the word "OpenAPI" in navigation — that
+     * names the file format, which is the publisher's concern and not the
+     * reader's.
+     *
+     * `/docs/api` and every operation path under it keep working: see the
+     * `redirects` block above, which now sends the old section root and the ten
+     * legacy per-operation URLs here.
      */
+    route: '/reference',
+    spec: 'https://api.sigiro.com/openapi.json',
     codeSamples: ['curl', 'javascript', 'python'],
   },
 
@@ -287,9 +296,16 @@ export default defineConfig({
   github: { owner: 'sigiroai', repo: 'sigiro' },
 
   navigation: {
+    /**
+     * Two external links, and the second one names the file rather than a
+     * section. That is deliberate here: it leaves the docs for the raw spec on
+     * `api.sigiro.com`, so "OpenAPI" is what a reader actually lands on. The
+     * generated reference is a docs page and lives in the sidebar as
+     * "Reference" — see `openapi.route`.
+     */
     featured: [
       { href: 'https://sigiro.com', label: 'Home' },
-      { href: 'https://api.sigiro.com/openapi.json', label: 'OpenAPI' },
+      { href: 'https://api.sigiro.com/openapi.json', label: 'openapi.json' },
     ],
     /**
      * No explicit `sidebar` here on purpose. Listing the four pages did fix the

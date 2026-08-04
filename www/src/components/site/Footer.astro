@@ -27,7 +27,7 @@ const { surface = 'docs' } = Astro.props;
 
 /**
  * A docs reader is already in the docs, so the `/docs` link is dead weight
- * there. `/docs/api` still earns its place: it is a different page, not the one
+ * there. `/docs/reference` still earns its place: it is a different page, not the one
  * they are on.
  */
 const navItems = surface === 'docs' ? NAV.filter((item) => item.href !== '/docs') : NAV;

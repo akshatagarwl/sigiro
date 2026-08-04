@@ -473,7 +473,17 @@ export const NAV = [
    * a hop to another origin, and not through a redirect.
    */
   { href: '/docs', label: 'Docs' },
-  { href: '/docs/api', label: 'API' },
+  /**
+   * `/docs/reference`, not `/docs/api`: Blume humanizes the route segment for the
+   * sidebar and breadcrumb, and `api` came out as "Api". See `openapi.route` in
+   * blume.config.ts. `/docs/api` still redirects here.
+   *
+   * The label stays "API" rather than the "API Reference" that Stripe and Resend
+   * use in their sidebars. This nav is five lowercase `.meta` links in a footer
+   * row, so it takes the shortest honest word — the section's own heading is
+   * where the full name belongs.
+   */
+  { href: '/docs/reference', label: 'API' },
 ] as const;
 
 export const SOCIAL = [
