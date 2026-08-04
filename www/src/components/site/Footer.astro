@@ -7,7 +7,30 @@ import { CALL, NAV, SOCIAL } from '@/lib/site';
  * `AskAI` and `Logo` are React components rendered here with no `client:*`
  * directive, so nothing in this footer ships JavaScript. `AskAI` is seven links
  * built from a constant — there was never anything for the browser to do.
+ *
+ * Two call sites, and they need slightly different link sets. The landing page
+ * mounts this in `src/layouts/Base.astro` and passes `surface="site"`; Blume
+ * mounts it through the `Footer` layout slot in `components.ts` for `/docs/*`
+ * and passes only its own props, so the default covers the docs.
+ *
+ * `surface` is an explicit prop rather than a check on the current path because
+ * the slot receives no route (it gets `site`, `navigation` and `ui`), and
+ * sniffing `Astro.url` here would put the same decision in a place where the
+ * two mount points are not visible.
  */
+
+type Props = {
+  surface?: 'site' | 'docs';
+};
+
+const { surface = 'docs' } = Astro.props;
+
+/**
+ * A docs reader is already in the docs, so the `/docs` link is dead weight
+ * there. `/docs/api` still earns its place: it is a different page, not the one
+ * they are on.
+ */
+const navItems = surface === 'docs' ? NAV.filter((item) => item.href !== '/docs') : NAV;
 ---
 
 <footer
@@ -32,7 +55,7 @@ import { CALL, NAV, SOCIAL } from '@/lib/site';
     class="flex flex-wrap items-center gap-x-3 gap-y-1 *:inline-flex *:min-w-6 *:items-center *:rounded-[5px]"
   >
     {
-      NAV.map((item) => (
+      navItems.map((item) => (
         <a href={item.href} class="meta text-ink-3 hover:text-ink">
           {item.label.toLowerCase()}
         </a>
