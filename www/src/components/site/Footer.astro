@@ -1,7 +1,7 @@
 ---
 import { AskAI } from '@/components/site/ask-ai';
 import { Logo } from '@/components/site/logo';
-import { NAV, SOCIAL } from '@/lib/site';
+import { CALL, NAV, SOCIAL } from '@/lib/site';
 
 /**
  * `AskAI` and `Logo` are React components rendered here with no `client:*`
@@ -45,6 +45,15 @@ import { NAV, SOCIAL } from '@/lib/site';
         </a>
       ))
     }
+    {/*
+      This footer renders on the docs too, via the `Footer` layout slot in
+      `components.ts`. That is the only route to a person from a docs page: the
+      landing page has the hero action, but a reader who installed sigiro and
+      formed an opinion is in `/docs/*`, where Blume's shell has no such link.
+    */}
+    <a href={CALL.href} class="meta text-ink-3 hover:text-ink">
+      {CALL.label.toLowerCase()}
+    </a>
     {/*
       Blume generates `/llms.txt` from the same content it renders, and it is at
       the site root now rather than behind a redirect to another hostname — which
