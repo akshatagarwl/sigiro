@@ -82,6 +82,58 @@ Confirm that the telemetry arrived:
 curl http://localhost:9999/v1/services
 ```
 
+### Go: instrument the build, not the source
+
+For Go, prefer compile-time instrumentation. You add a prefix to the build
+command, and the binary ships instrumented. You change no source file. The
+OpenTelemetry project builds this tool, and it is called `otelc`. The tool also
+instruments the third-party libraries that you do not control. An agent cannot
+do that. An agent edits only your own code.
+
+Use the AI guide for every other language. Only Go has this tool today.
+
+Download the binary for your platform from the
+[v1.0.1 release](https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation/releases/tag/v1.0.1).
+The release publishes `otelc` for macOS and Linux on arm64 and x86-64, and for
+Windows on x86-64:
+
+```bash
+curl -fsSL -o otelc https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation/releases/download/v1.0.1/otelc-darwin-arm64
+chmod +x otelc
+./otelc version
+```
+
+`go install` does not work for this tool. The module publishes no command path.
+On a platform without an asset, clone the repository and run `make build`.
+
+Then add `otelc` in front of your normal build command:
+
+```bash
+./otelc go build -o checkout .
+```
+
+The first build downloads the OpenTelemetry packages, so it takes longer than a
+normal build. Your `go.mod` file stays unchanged.
+
+Start the binary with the same two variables as above:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+OTEL_SERVICE_NAME=checkout \
+  ./checkout
+```
+
+The binary creates the trace provider, the meter provider, and the logger
+provider at startup. It needs no SDK code from you. Confirm the result with the
+same `/v1/services` request as above. The service reports HTTP server spans and
+Go runtime metrics.
+
+Two limits apply. The tool needs Go 1.25 or later. Version 1.0.1 is recent,
+because the project tagged it on 14 July 2026. Read the
+[upstream documentation](https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation)
+for the libraries that it covers. If a library gets no spans, add the spans by
+hand for that library only.
+
 ## 3. Ask what changed
 
 `anomalies` is the entry point of the loop. It returns the shifts that deviate
