@@ -28,11 +28,51 @@ const faqSchema = {
 const H2 = 'mt-3 max-w-[34ch] text-[27px] leading-[1.2] font-medium tracking-[-0.03em] text-ink';
 const LEDE = 'mt-3 max-w-[62ch] text-[15px] leading-relaxed text-ink-2';
 const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
+
+/**
+ * The two stepped sections, which own their own vertical space.
+ *
+ * Same as SECTION without `py-14`. Those sections are a scroll track whose sticky
+ * child is a full screen, so the padding was not spacing — it was a delay. It sat
+ * between the section's hairline and the point where the frame pins, and for those
+ * 56px you saw the hairline, then a band of empty bezel, then the header arriving
+ * from below. That band was the "weird gap": the frame centres itself in a box that
+ * has not reached the top of the viewport yet.
+ *
+ * With it gone the hairline and the pin coincide, so the boundary is a line and not
+ * a void. The breathing room these sections need is already inside the pinned
+ * screen, which centres its own content.
+ */
+const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
 ---
 
 <Base canonical={SITE.url}>
-  {/* Hero: text LCP, no image. */}
-  <section class="px-4 py-16 sm:px-8 sm:py-24 lg:px-12">
+  {/*
+    Hero: text LCP, no image.
+
+    A screen of its own, because the two sections after it are. Those pin a frame
+    to the viewport and hold it, so the page's rhythm past the fold is one screen
+    per idea — and a hero that ended at its own content height put a band of dead
+    bezel between itself and the first pinned screen, which read as a gap rather
+    than as a boundary.
+
+    The subtraction is the chrome above it: the bezel gutter (12px, 20px from `sm`)
+    and the header's `h-12`. Without it, "one viewport" measured from the panel's
+    top would end 60px below the fold and the hero would ask to be scrolled before
+    anything else did.
+
+    `svh` and not `vh`: on iOS `100vh` is the viewport with the browser chrome
+    *retracted*, so a `vh`-sized first screen is always taller than what you can
+    actually see on load. `svh` is the smallest state, which is the one that has to
+    fit.
+
+    `min-h` rather than `h`, so a short viewport or large text grows the section
+    instead of clipping the action out of it. Padding stays as the floor for that
+    case; `border-box` keeps it inside the min-height rather than adding to it.
+  */}
+  <section
+    class="flex min-h-[calc(100svh-60px)] flex-col justify-center px-4 py-16 sm:min-h-[calc(100svh-68px)] sm:px-8 sm:py-24 lg:px-12"
+  >
     <h1
       class="max-w-[24ch] text-[clamp(30px,7.2vw,32px)] leading-[1.08] font-medium tracking-[-0.04em] text-balance text-ink sm:text-[clamp(32px,5.6vw,52px)]"
     >
@@ -71,7 +111,7 @@ const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
     thing making it. `aria-labelledby` still resolves: the real `h2` carries this
     id, it just lives in the island now.
   */}
-  <section aria-labelledby="loop" class={SECTION}>
+  <section aria-labelledby="loop" class={SECTION_PINNED}>
     <FactoryLoop />
   </section>
 
@@ -86,7 +126,7 @@ const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
   */}
   {/* Header in the island, as above — the two stepped sections share the
       component and so share the arrangement. */}
-  <section aria-labelledby="how" class={SECTION}>
+  <section aria-labelledby="how" class={SECTION_PINNED}>
     <HowItWorks />
   </section>
 

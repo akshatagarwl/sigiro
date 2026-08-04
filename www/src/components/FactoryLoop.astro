@@ -50,7 +50,13 @@ const steps: TerminalStep[] = LOOP.map((s, i) => ({
 }));
 ---
 
-<div class="mt-8">
+{/*
+  No top margin. It used to separate this from the section header above it; that
+  header is inside the pinned screen now, and any margin here just delays the pin
+  and reopens the band of empty bezel at the section boundary. The `<noscript>`
+  list below keeps its own spacing, because there nothing pins.
+*/}
+<div>
   {/*
     What no-JS readers get: the same five sessions, printed in full, with the prose
     each one belongs to. Nothing is behind an interaction they cannot perform.
