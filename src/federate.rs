@@ -479,15 +479,13 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
         // `json_serialize_sql`, same as the rest of this module).
         _ => {
             let function = field(from_table, "function")?;
-            let catalog = function
-                .get("catalog")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let catalog = field_str(function, "catalog")?;
             anyhow::ensure!(
                 catalog.is_empty(),
-                "cross-catalog function references are not supported in a federated query"
+                "cross-catalog function references are not supported in a federated query; \
+                 got catalog {catalog:?}"
             );
-            let schema = function.get("schema").and_then(Value::as_str).unwrap_or("");
+            let schema = field_str(function, "schema")?;
             anyhow::ensure!(
                 schema.is_empty() || schema.eq_ignore_ascii_case("main"),
                 "unexpected schema qualifier {schema:?} on the FROM function — expected unqualified or main."
@@ -502,34 +500,40 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
             // These functions take no arguments. Accepting arguments here
             // would push an unvalidated expression to every edge, so a call
             // that has any is rejected outright rather than silently ignored.
-            let arg_count = function
-                .get("children")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                .unwrap_or(0);
+            //
+            // Every field read below is REQUIRED, never defaulted: each one is
+            // a guard on what gets pushed to every edge, so a missing or
+            // wrong-typed field means this build's AST is not the shape these
+            // checks were written against. Defaulting to the permitted value
+            // (`children` absent => 0 args, `distinct` absent => false,
+            // `with_ordinality` absent => WITHOUT_ORDINALITY) would turn a
+            // DuckDB parser change into a SILENTLY WEAKENED guard rather than
+            // a loud failure — the same name-only-allowlist hole this arm
+            // exists to close. Fail loud instead; `field`/`field_str` already
+            // name the missing key.
+            let arg_count = field(function, "children")?
+                .as_array()
+                .context("TABLE_FUNCTION children is not an array")?
+                .len();
             anyhow::ensure!(
                 arg_count == 0,
                 "{func}() takes no arguments in a federated query; got {arg_count}"
             );
             anyhow::ensure!(
-                function.get("filter").is_none_or(Value::is_null),
+                field(function, "filter")?.is_null(),
                 "FILTER is not supported on a federated {func}() call"
             );
             anyhow::ensure!(
-                !function
-                    .get("distinct")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
+                !field(function, "distinct")?
+                    .as_bool()
+                    .context("TABLE_FUNCTION distinct is not a boolean")?,
                 "DISTINCT is not supported on a federated {func}() call"
             );
             // `WITH ORDINALITY` adds a synthetic column the coordinator's
             // fold has never seen; reject rather than mis-project it.
-            let ordinality = from_table
-                .get("with_ordinality")
-                .and_then(Value::as_str)
-                .unwrap_or("WITHOUT_ORDINALITY");
             anyhow::ensure!(
-                ordinality.eq_ignore_ascii_case("WITHOUT_ORDINALITY"),
+                field_str(from_table, "with_ordinality")?
+                    .eq_ignore_ascii_case("WITHOUT_ORDINALITY"),
                 "WITH ORDINALITY is not supported in a federated query"
             );
             FromRelation::SysStats(func)
