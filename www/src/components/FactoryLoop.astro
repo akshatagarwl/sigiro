@@ -104,7 +104,15 @@ const steps: TerminalStep[] = LOOP.map((s, i) => ({
   <SteppedTerminal
     steps={steps}
     label="The five stages"
-    heading={{ label: 'the loop', title: 'Five stages' }}
+    heading={{
+      id: 'loop',
+      label: 'the loop',
+      title: 'Five stages.',
+      tail: 'A repair loop is not complete until all five operate.',
+      lede:
+        'Your agent writes the patch. Nothing tells the agent what failed, or if the patch worked. '
+        + 'sigiro does two of these five stages.',
+    }}
     client:visible
   />
 </div>

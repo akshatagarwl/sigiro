@@ -62,16 +62,16 @@ const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
     knows the fix stage is solved; the question worth answering first is which stage
     is still missing.
   */}
+  {/*
+    No header markup here, unlike every other section: this one's label, headline
+    and lede are props on the stepped terminal, which renders them inside its own
+    pinned screen. The terminal owns a scroll track and pins a frame to the
+    viewport, so a header in normal flow above it scrolls away the moment the
+    frame arrives — the argument was never on screen at the same time as the
+    thing making it. `aria-labelledby` still resolves: the real `h2` carries this
+    id, it just lives in the island now.
+  */}
   <section aria-labelledby="loop" class={SECTION}>
-    <p class="label">the loop</p>
-    <h2 id="loop" class={H2}>
-      Five stages.
-      <span class="text-ink-3">A repair loop is not complete until all five operate.</span>
-    </h2>
-    <p class={LEDE}>
-      Your agent writes the patch. Nothing tells the agent what failed, or if the patch worked.
-      sigiro does two of these five stages.
-    </p>
     <FactoryLoop />
   </section>
 
@@ -84,14 +84,9 @@ const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
     counts "2 of 4" in its caption, and a numeral outside the frame would be a
     second sequence arguing with the first.
   */}
+  {/* Header in the island, as above — the two stepped sections share the
+      component and so share the arrangement. */}
   <section aria-labelledby="how" class={SECTION}>
-    <p class="label">how you use it</p>
-    <h2 id="how" class={H2}>
-      Four steps. <span class="text-ink-3">You connect, ask, correlate, and prove.</span>
-    </h2>
-    <p class={LEDE}>
-      You send OpenTelemetry to sigiro. You ask one question. Each step below is one shell session.
-    </p>
     <HowItWorks />
   </section>
 

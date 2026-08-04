@@ -243,19 +243,28 @@ export function SteppedTerminal({
    */
   label: string;
   /**
-   * The section's own label and headline, condensed to one line and pinned above
-   * the frame.
+   * The section's whole header — label, headline, lede — pinned with the frame.
    *
-   * The section `h2` scrolls away the moment this thing pins, which left the
-   * reader looking at a terminal with nothing on screen naming what it was for.
-   * The task list says which step; this says which section. It rides inside the
-   * sticky box, so it pins and unpins with the frame and no page-level bar is
-   * needed.
+   * This is the section's only header now. It used to be duplicated: the real one
+   * in the page's `<section>`, plus a condensed one-line copy in here, marked
+   * `aria-hidden` so a screen reader met the heading once. That was a workaround
+   * for the header scrolling away the moment the frame pinned, and it meant the
+   * argument the section exists to make was never on screen at the same time as
+   * the thing making it.
    *
-   * `aria-hidden`, because it repeats the real `h2` that is still in the section
-   * above — a screen reader should meet that heading once, not twice.
+   * So it moved in whole, and the page keeps none of it. The duplicate is gone,
+   * the `aria-hidden` with it, and `id` puts the real `h2` here for the section's
+   * `aria-labelledby` to point at.
+   *
+   * `tail` is the muted half of the headline — "Five stages." in ink, then the
+   * rest in `ink-3`. It is a separate field rather than markup in a string
+   * because the copy has to stay copy.
+   *
+   * Height is the constraint this has to respect. The terminal is already ~477px
+   * of a 720px viewport; the header adds roughly 130px more. See the note at the
+   * sticky container for what gives way, and where it stops fitting.
    */
-  heading?: { label: string; title: string };
+  heading?: { id: string; label: string; title: string; tail?: string; lede?: string };
   /**
    * Scroll distance the whole sequence occupies. Defaults to one viewport for
    * the pin plus 45vh of travel per step.
@@ -323,19 +332,47 @@ export function SteppedTerminal({
         className="relative"
         style={{ height: track ?? `calc(100vh + ${steps.length * 45}vh)` }}
       >
-        <div className="sticky top-0 flex h-screen flex-col justify-center gap-5">
-          {/* The section's name, kept on screen for as long as the frame is
-              pinned. One line, so it reads as a bar rather than a block: the
-              terminal is already 477px of a 720px viewport and cannot spare a
-              heading's worth of height. */}
+        {/* `min-h-screen`, not `h-screen`. The header and the frame together are
+            close to a short viewport's whole height, and a fixed `h-screen` box
+            whose content exceeds it centres the overflow out of both ends — the
+            lede clipped at the top, the note at the bottom, with no way to scroll
+            to either because the scrollport is the page. `min-h-screen` lets the
+            box grow instead; past that point the section scrolls as a tall block
+            rather than pinning, which degrades honestly.
+
+            The gap tightens from 5 to 4 below `sm` for the same reason: on a phone
+            every 4px is a line of the transcript. */}
+        <div className="sticky top-0 flex min-h-screen flex-col justify-center gap-4 sm:gap-5">
+          {/* The section's header, on screen for as long as the frame is pinned —
+              which is the point. A reader arriving mid-scroll can see what the
+              five stages are FOR while watching them run, instead of having read
+              it two screens ago. */}
           {heading ? (
-            <p aria-hidden className="flex items-center gap-2 px-1">
-              <span className="label">{heading.label}</span>
-              <span className="text-ink-3">·</span>
-              <span className="text-[13px] font-medium tracking-[-0.01em] text-ink">
+            <div className="px-1">
+              <p className="label">{heading.label}</p>
+              <h2
+                id={heading.id}
+                className="mt-2.5 max-w-[34ch] text-[22px] leading-[1.2] font-medium tracking-[-0.03em] text-ink sm:text-[27px]"
+              >
                 {heading.title}
-              </span>
-            </p>
+                {/* `{' '}` and not a space inside the span or a newline between
+                    them. A newline between JSX text and an element collapses to
+                    nothing, which is exactly how the page's own markup shipped
+                    "Five stages.A repair loop is not complete…" to production. An
+                    explicit expression cannot be reformatted away. */}
+                {heading.tail ? (
+                  <>
+                    {' '}
+                    <span className="text-ink-3">{heading.tail}</span>
+                  </>
+                ) : null}
+              </h2>
+              {heading.lede ? (
+                <p className="mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed text-ink-2 sm:text-[15px]">
+                  {heading.lede}
+                </p>
+              ) : null}
+            </div>
           ) : null}
 
           <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[190px_1fr] lg:items-center">

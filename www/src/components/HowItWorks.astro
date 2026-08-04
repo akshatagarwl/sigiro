@@ -123,7 +123,15 @@ const steps: TerminalStep[] = HOW.map((s, i) => ({
   <SteppedTerminal
     steps={steps}
     label="The four steps"
-    heading={{ label: 'how you use it', title: 'Four steps' }}
+    heading={{
+      id: 'how',
+      label: 'how you use it',
+      title: 'Four steps.',
+      tail: 'You connect, ask, correlate, and prove.',
+      lede:
+        'You send OpenTelemetry to sigiro. You ask one question. Each step below is one shell '
+        + 'session.',
+    }}
     track={`calc(100vh + ${steps.length * 30}vh)`}
     client:visible
   />
