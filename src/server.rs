@@ -35,6 +35,19 @@ use tracing_attributes::instrument;
 
 #[derive(OpenApi)]
 #[openapi(
+    /* Without this, utoipa defaults `info.title` to the crate name, "sigiro".
+     * A renderer uses `info.title` for the reference's own heading and page
+     * title, so the docs page came out as "sigiro - sigiro" — the product name
+     * twice and the section name nowhere.
+     *
+     * "sigiro API Reference" is what Stripe and Resend call the same section.
+     * Note this is the *document* title, not a per-operation summary: those stay
+     * short verb-object phrases ("List services"), which is the same convention
+     * and what a sidebar entry can hold. */
+    info(
+        title = "sigiro API Reference",
+        description = "Send OpenTelemetry to sigiro. Ask what changed. Get ranked findings and the SQL that proves them."
+    ),
     paths(
         query_handler,
         services_handler,
@@ -1795,7 +1808,7 @@ fn query_sql_contract() -> String {
     post,
     path = "/v1/query",
     operation_id = "run-query",
-    summary = "Run SQL over your telemetry",
+    summary = "Run a SQL query",
     /* `request_body(...)` rather than `request_body = String`, for the two fields
      * that form carries: the wire format, and an example.
      *
@@ -1882,7 +1895,7 @@ async fn query_handler(
     get,
     path = "/v1/services",
     operation_id = "list-services",
-    summary = "List services seen, with time bounds",
+    summary = "List services",
     description = "Every service that has reported telemetry, with the first and \
 last timestamp seen for each (microseconds since the Unix epoch). The entry point \
 of an agent loop: pick a service here, then investigate it.",
@@ -1975,7 +1988,7 @@ pub(crate) struct AnomaliesQuery {
     get,
     path = "/v1/anomalies",
     operation_id = "list-anomalies",
-    summary = "Ranked shifts against each service's own baseline",
+    summary = "List anomalies",
     params(AnomaliesQuery),
     description = "\
 Precomputed anomalies: worsening regime shifts (BOCPD changepoints, \
@@ -2379,7 +2392,7 @@ fn compute_service_breakdown(
     post,
     path = "/v1/investigate",
     operation_id = "investigate-services",
-    summary = "Diagnose a service: ranked findings with runnable SQL",
+    summary = "Diagnose a service",
     request_body = investigate::InvestigateRequest,
     description = "\
 Root-cause an incident for one or more services over a time window. Returns a \
