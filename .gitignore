@@ -9,6 +9,12 @@ fuzz/corpus/otlp_traces_fuzz/*
 mutants.out/
 mutants.out.old/
 vendor/
+# Except the vendored blume build: www depends on an unreleased upstream commit
+# (both of our fixes are merged on main but not published), so the tarball has to
+# be in the repo for a fresh clone and CI to resolve it. Delete this negation and
+# the file when blume publishes > 1.3.1. See www/package.json.
+!www/vendor/
+!www/vendor/*.tgz
 .cargo-home/
 TASKS.md
 .DS_Store
