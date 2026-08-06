@@ -1,23 +1,23 @@
 use parking_lot::Mutex;
-use sigiro::investigate::{
-    InvestigateRequest, compute_coverage, investigate, metric_bucket_interval, us_to_iso,
+use sigiro::diagnose::{
+    DiagnoseRequest, compute_coverage, diagnose, metric_bucket_interval, us_to_iso,
 };
 use std::sync::Arc;
 
-/// Helper: run investigate for one service and return its block.
-fn investigate_service(
+/// Helper: run diagnose for one service and return its block.
+fn diagnose_service(
     conn: &duckdb::Connection,
     service: &str,
     from_ts: i64,
     to_ts: i64,
-) -> sigiro::investigate::InvestigationBlock {
-    let req = InvestigateRequest {
+) -> sigiro::diagnose::DiagnosisBlock {
+    let req = DiagnoseRequest {
         service: Some(service.to_string()),
         services: None,
         from_ts,
         to_ts,
     };
-    let mut blocks = investigate(conn, &req, "").expect("investigate");
+    let mut blocks = diagnose(conn, &req, "").expect("diagnose");
     blocks.results.remove(service).expect("block for service")
 }
 
@@ -83,18 +83,17 @@ fn us_to_iso_zero() {
 }
 
 #[test]
-fn investigate_with_in_memory_db() {
+fn diagnose_with_in_memory_db() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: Some("nonexistent".to_string()),
         services: None,
         from_ts: 0,
         to_ts: 0,
     };
-    let blocks =
-        investigate(&shared.lock(), &req, "").expect("investigate should succeed on empty db");
+    let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose should succeed on empty db");
     let block = &blocks.results["nonexistent"];
     assert_eq!(block.service, "nonexistent");
     assert!(block.operation_summaries.is_empty());
@@ -140,7 +139,7 @@ fn investigate_with_in_memory_db() {
 }
 
 #[test]
-fn investigate_with_real_span_data() {
+fn diagnose_with_real_span_data() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
 
@@ -160,13 +159,13 @@ fn investigate_with_real_span_data() {
     )).expect("insert spans");
 
     let shared = Arc::new(Mutex::new(conn));
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: Some("checkout".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared.lock(), &req, "").expect("investigate");
+    let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose");
     let block = &blocks.results["checkout"];
 
     assert_eq!(block.operation_summaries.len(), 2);
@@ -291,7 +290,7 @@ fn service_context_empty_db() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let ctx = investigate_service(&conn, "nonexistent", now_us - 60_000_000, now_us).context;
+    let ctx = diagnose_service(&conn, "nonexistent", now_us - 60_000_000, now_us).context;
     assert_eq!(ctx.service_name, "nonexistent");
     assert_eq!(ctx.pod_count, 0);
     assert!(ctx.dependencies.is_empty());
@@ -318,8 +317,7 @@ fn service_context_with_k8s_attrs() {
              'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}')"
     ))
     .expect("insert");
-    let ctx =
-        investigate_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
+    let ctx = diagnose_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
     assert_eq!(ctx.namespace, Some("prod".to_string()));
     assert_eq!(ctx.deployment, Some("checkout-v2".to_string()));
     assert_eq!(ctx.pod_count, 2);
@@ -341,8 +339,7 @@ fn service_context_dependencies() {
             (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments')"
     ))
     .expect("insert");
-    let ctx =
-        investigate_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
+    let ctx = diagnose_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
     assert!(
         ctx.dependencies
             .iter()
@@ -350,7 +347,7 @@ fn service_context_dependencies() {
         "checkout should depend on payments"
     );
     let ctx2 =
-        investigate_service(&conn, "payments", now_us - 60_000_000, now_us + 60_000_000).context;
+        diagnose_service(&conn, "payments", now_us - 60_000_000, now_us + 60_000_000).context;
     assert!(
         ctx2.dependents.iter().any(|d| d.service_name == "checkout"),
         "payments should have checkout as dependent"
@@ -375,8 +372,7 @@ fn derived_events_deploy_detection() {
              '{{\"service.version\":\"v1.1.0\"}}')"
     ))
     .expect("insert");
-    let events =
-        investigate_service(&conn, "api", now_us - 120_000_000, now_us + 60_000_000).events;
+    let events = diagnose_service(&conn, "api", now_us - 120_000_000, now_us + 60_000_000).events;
     let deploys: Vec<_> = events.iter().filter(|e| e.event_type == "deploy").collect();
     assert_eq!(
         deploys.len(),
@@ -403,7 +399,7 @@ fn derived_events_k8s_oomkilled() {
              'Container killed due to OOMKilled')"
     ))
     .expect("insert");
-    let events = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000).events;
+    let events = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000).events;
     let k8s: Vec<_> = events
         .iter()
         .filter(|e| e.event_type == "k8s_event")
@@ -431,7 +427,7 @@ fn log_template_dedup_ips() {
     );
 
     let conn = shared.lock();
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
     assert_eq!(block.logs.sample.len(), 3, "3 raw logs returned");
     assert_eq!(
         block.log_patterns.len(),
@@ -456,7 +452,7 @@ fn log_counters_flag_a_counter_pinned_at_zero() {
     let (shared, now_us) = setup_drain_logs(&[], &bodies, 9, "INFO");
 
     let conn = shared.lock();
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
 
     let counter = |label: &str| {
         block
@@ -518,7 +514,7 @@ fn log_counters_reject_version_like_identifiers() {
     let (shared, now_us) = setup_drain_logs(&[], &bodies, 13, "WARN");
 
     let conn = shared.lock();
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
 
     assert!(
         block
@@ -558,7 +554,7 @@ fn log_counters_take_the_sign_from_the_template_not_the_value() {
     let (shared, now_us) = setup_drain_logs(&[], &bodies, 13, "WARN");
 
     let conn = shared.lock();
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
     let counter = |label: &str| {
         block
             .log_counters
@@ -600,7 +596,7 @@ fn log_counters_ignore_a_lone_zero_with_no_moving_sibling() {
     let (shared, now_us) = setup_drain_logs(&[], &bodies, 9, "INFO");
 
     let conn = shared.lock();
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
     let entries = block
         .log_counters
         .iter()
@@ -630,7 +626,7 @@ fn log_template_dedup_uuids() {
     );
 
     let conn = shared.lock();
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
     assert_eq!(block.logs.sample.len(), 2, "2 raw logs returned");
     assert_eq!(
         block.log_patterns.len(),
@@ -657,7 +653,7 @@ fn metric_bucket_scales_with_window() {
 }
 
 #[test]
-fn investigate_large_window_still_returns_spans() {
+fn diagnose_large_window_still_returns_spans() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -672,13 +668,13 @@ fn investigate_large_window_still_returns_spans() {
     ))
     .expect("insert");
     let shared = Arc::new(Mutex::new(conn));
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: Some("svc".to_string()),
         services: None,
         from_ts: now_us - 3 * 3600 * 1_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared.lock(), &req, "").unwrap();
+    let blocks = diagnose(&shared.lock(), &req, "").unwrap();
     let block = &blocks.results["svc"];
     assert!(
         !block.spans.sample.is_empty(),
@@ -688,7 +684,7 @@ fn investigate_large_window_still_returns_spans() {
 }
 
 #[test]
-fn investigate_multi_basic() {
+fn diagnose_multi_basic() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -705,13 +701,13 @@ fn investigate_multi_basic() {
     ))
     .expect("insert");
     let shared = Arc::new(Mutex::new(conn));
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: None,
         services: Some(vec!["svc-a".into(), "svc-b".into(), "svc-c".into()]),
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared.lock(), &req, "").unwrap();
+    let blocks = diagnose(&shared.lock(), &req, "").unwrap();
     assert_eq!(blocks.results.len(), 3);
     assert!(blocks.errors.is_empty());
     assert!(blocks.results.contains_key("svc-a"));
@@ -720,33 +716,33 @@ fn investigate_multi_basic() {
 }
 
 #[test]
-fn investigate_multi_cap_enforced() {
+fn diagnose_multi_cap_enforced() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
     let services: Vec<String> = (0..11).map(|i| format!("svc-{i}")).collect();
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: None,
         services: Some(services),
         from_ts: 0,
         to_ts: 0,
     };
-    let result = investigate(&shared.lock(), &req, "");
+    let result = diagnose(&shared.lock(), &req, "");
     assert!(result.is_err(), "should reject >10 services");
 }
 
 #[test]
-fn investigate_multi_empty_rejected() {
+fn diagnose_multi_empty_rejected() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: None,
         services: Some(vec![]),
         from_ts: 0,
         to_ts: 0,
     };
-    assert!(investigate(&shared.lock(), &req, "").is_err());
+    assert!(diagnose(&shared.lock(), &req, "").is_err());
 }
 
 #[test]
@@ -757,12 +753,12 @@ fn derived_events_no_events() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    let events = investigate_service(&conn, "api", now_us - 60_000_000, now_us).events;
+    let events = diagnose_service(&conn, "api", now_us - 60_000_000, now_us).events;
     assert!(events.is_empty());
 }
 
 #[test]
-fn investigate_all_three_signals() {
+fn diagnose_all_three_signals() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
 
@@ -785,13 +781,13 @@ fn investigate_all_three_signals() {
     .expect("insert all signals");
 
     let shared = Arc::new(Mutex::new(conn));
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: Some("svc".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared.lock(), &req, "").expect("investigate");
+    let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose");
     let block = &blocks.results["svc"];
 
     // Coverage: all 3 signal types present, no gaps
@@ -848,13 +844,13 @@ fn operation_summary_baselines() {
     )).expect("insert spans");
 
     let shared = Arc::new(Mutex::new(conn));
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: Some("checkout".to_string()),
         services: None,
         from_ts: now_us - 5 * 60 * 1_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&shared.lock(), &req, "").expect("investigate");
+    let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose");
     let block = &blocks.results["checkout"];
 
     let op = &block.operation_summaries[0];
@@ -898,16 +894,15 @@ fn snapshot_query_service_context_shape() {
              'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"payments-v1\"}}')"
     ))
     .expect("insert");
-    let ctx =
-        investigate_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
+    let ctx = diagnose_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
     insta::assert_json_snapshot!(ctx);
 }
 
 // ---------------------------------------------------------------------------
 // Continuous anomaly subsystem: the scheduled pass (sigiro::anomaly) writes
-// the sigiro_anomalies table; investigate READS it (no inline detection).
+// the sigiro_anomalies table; diagnose READS it (no inline detection).
 // E2E-style: seed spans → run the pass → assert persisted rows → assert
-// investigate surfaces them.
+// diagnose surfaces them.
 // ---------------------------------------------------------------------------
 
 /// Bulk-insert spans for `service`/`span_name` at `ts_us`: `counts` is
@@ -1034,7 +1029,7 @@ fn run_anomaly_pass(conn: &duckdb::Connection) -> usize {
 fn seed_worsening_shift(conn: &duckdb::Connection, now_us: i64) {
     // One batch per distinct 5-minute bucket (the pass buckets at 5min): ~30
     // healthy buckets (0% errors) then ~10 worsening buckets (50%) → a clear
-    // sustained regime shift ~50 min ago, inside a 60-min investigate window.
+    // sustained regime shift ~50 min ago, inside a 60-min diagnose window.
     let bucket = 5 * 60_000_000_i64;
     for i in 11..=40_i64 {
         insert_spans(
@@ -1061,10 +1056,10 @@ fn seed_worsening_shift(conn: &duckdb::Connection, now_us: i64) {
 }
 
 #[test]
-fn anomaly_pass_persists_worsening_shift_and_investigate_surfaces_it() {
+fn anomaly_pass_persists_worsening_shift_and_diagnose_surfaces_it() {
     // The full spine, end to end: seed a worsening error-rate shift, run the
     // scheduled pass, assert a row LANDS IN sigiro_anomalies, then assert
-    // /investigate (which only reads the table) flags the operation.
+    // /diagnose (which only reads the table) flags the operation.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -1126,8 +1121,8 @@ fn anomaly_pass_persists_worsening_shift_and_investigate_surfaces_it() {
         .expect("drill query must execute");
     assert!(drilled > 0, "drill query must return the new-regime spans");
 
-    // /investigate over a window containing the shift (~50 min ago) reads the table.
-    let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
+    // /diagnose over a window containing the shift (~50 min ago) reads the table.
+    let block = diagnose_service(&conn, "worker", now_us - 3_600_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert_eq!(op.operation, "call upstream");
     assert!(
@@ -1153,7 +1148,7 @@ fn anomaly_pass_persists_worsening_shift_and_investigate_surfaces_it() {
     // A window that ENDS BEFORE the shift (~50 min ago) must not flag: the
     // anomaly row exists but its ts_shift is outside [from, to]. This window
     // sits entirely in the healthy region (180..65 min ago).
-    let early = investigate_service(
+    let early = diagnose_service(
         &conn,
         "worker",
         now_us - 10_800_000_000,
@@ -1237,7 +1232,7 @@ fn anomaly_chronic_stable_error_rate_is_not_anomalous() {
         "flat 30% error rate across the whole range: no changepoint, no row"
     );
 
-    let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
+    let block = diagnose_service(&conn, "worker", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert!(!op.is_anomalous);
     assert!(op.anomaly_reason.is_none());
@@ -1289,7 +1284,7 @@ fn anomaly_improvement_shift_is_not_persisted() {
     let written = run_anomaly_pass(&conn);
     assert_eq!(written, 0, "getting BETTER is a shift but never an anomaly");
 
-    let block = investigate_service(&conn, "worker", now_us - 900_000_000, now_us);
+    let block = diagnose_service(&conn, "worker", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert!(!op.is_anomalous);
 }
@@ -1298,7 +1293,7 @@ fn anomaly_improvement_shift_is_not_persisted() {
 fn anomaly_latency_p95_shift_is_detected_and_surfaces() {
     // p95 latency is a first-class signal: zero errors throughout, p95 jumps
     // 10ms → 300ms → a latency_p95 row persists (and NO error_rate row — that
-    // series is flat zero), the operation flags in /investigate, and the
+    // series is flat zero), the operation flags in /diagnose, and the
     // drill (this op's slowest spans from the shift) passes the firewall.
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
@@ -1375,8 +1370,8 @@ fn anomaly_latency_p95_shift_is_detected_and_surfaces() {
         .expect("drill query must execute");
     assert!(drilled > 0, "drill query must return the new-regime spans");
 
-    // /investigate flags the operation and surfaces the finding.
-    let block = investigate_service(&conn, "api", now_us - 3_600_000_000, now_us);
+    // /diagnose flags the operation and surfaces the finding.
+    let block = diagnose_service(&conn, "api", now_us - 3_600_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert!(op.is_anomalous, "an in-window p95 regime shift must flag");
     let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
@@ -1451,7 +1446,7 @@ fn anomaly_log_volume_flood_is_detected_and_surfaces_standalone() {
     assert!(drilled > 0, "drill query must return the new-regime logs");
 
     // Standalone finding: kind names the signal, drill rides along.
-    let block = investigate_service(&conn, "svc", now_us - 3_600_000_000, now_us);
+    let block = diagnose_service(&conn, "svc", now_us - 3_600_000_000, now_us);
     let finding = block
         .findings
         .iter()
@@ -1522,7 +1517,7 @@ fn anomaly_error_log_rate_shift_is_detected_at_constant_volume() {
         .expect("drill query must execute");
     assert_eq!(drilled, 50, "10 buckets × 5 error logs of the new regime");
 
-    let block = investigate_service(&conn, "svc", now_us - 3_600_000_000, now_us);
+    let block = diagnose_service(&conn, "svc", now_us - 3_600_000_000, now_us);
     let finding = block
         .findings
         .iter()
@@ -1608,7 +1603,7 @@ fn anomaly_profile_cost_shift_is_detected_per_service() {
         .expect("drill top row");
     assert_eq!(top_value, 9_000, "regressing samples lead the drill");
 
-    let block = investigate_service(&conn, "svc", now_us - 3_600_000_000, now_us);
+    let block = diagnose_service(&conn, "svc", now_us - 3_600_000_000, now_us);
     let finding = block
         .findings
         .iter()
@@ -1686,7 +1681,7 @@ fn incident_correlates_multi_signal_shifts_and_names_the_deploy() {
         "all four series shifted"
     );
 
-    let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
+    let block = diagnose_service(&conn, "worker", now_us - 3_600_000_000, now_us);
 
     // Exactly ONE incident finding, and no leftover single-signal anomaly
     // findings — every shift was correlated into it.
@@ -1827,7 +1822,7 @@ fn shifts_in_distant_buckets_stay_separate_findings() {
     let written = run_anomaly_pass(&conn);
     assert_eq!(written, 2, "one error-rate shift per operation");
 
-    let block = investigate_service(&conn, "worker", now_us - 6 * 3_600_000_000, now_us);
+    let block = diagnose_service(&conn, "worker", now_us - 6 * 3_600_000_000, now_us);
     assert!(
         !block.findings.iter().any(|f| f.kind == "incident"),
         "distant shifts must not be welded into an incident"
@@ -1850,7 +1845,7 @@ fn cross_signal_ranking_is_unit_free() {
     // (5% → 50%, Δ = 45 points) in raw units, but relatively it is the
     // smaller event (0.2 vs ≈0.82 symmetric relative change). The unit-free
     // ranking must put the error shift first — in /v1/anomalies order AND
-    // in investigate's findings — while BOTH still surface (rank, never
+    // in diagnose's findings — while BOTH still surface (rank, never
     // filter).
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
@@ -1926,11 +1921,11 @@ fn cross_signal_ranking_is_unit_free() {
         "the latency shift is ranked lower but NEVER dropped, got {ordered:?}"
     );
 
-    // investigate: both ops shifted in the SAME detection bucket on one
+    // diagnose: both ops shifted in the SAME detection bucket on one
     // service, so they correlate into ONE incident finding whose member
     // shifts rank the same unit-free way — op-err's error shift first,
     // op-lat's latency shift second, nothing dropped.
-    let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
+    let block = diagnose_service(&conn, "worker", now_us - 3_600_000_000, now_us);
     let incident = block
         .findings
         .iter()
@@ -1978,7 +1973,7 @@ fn anomaly_single_bucket_series_has_no_changepoint() {
     let written = run_anomaly_pass(&conn);
     assert_eq!(written, 0, "a 1-bucket series has no regime to shift from");
 
-    let block = investigate_service(&conn, "api", now_us - 900_000_000, now_us);
+    let block = diagnose_service(&conn, "api", now_us - 900_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert!(!op.is_anomalous);
     assert!(op.anomaly_reason.is_none());
@@ -2051,11 +2046,11 @@ fn anomaly_findings_rank_by_shift_magnitude_without_dropping_any() {
         "the small shift is ranked lower but NEVER dropped, got {ordered:?}"
     );
 
-    // /investigate: both ops flag, and — shifting in the SAME bucket on one
+    // /diagnose: both ops flag, and — shifting in the SAME bucket on one
     // service — they correlate into ONE incident whose member shifts are
     // ordered biggest first (both score magnitude 1.0 off a zero baseline;
     // the raw |after − before| tie-break puts op-big first).
-    let block = investigate_service(&conn, "worker", now_us - 3_600_000_000, now_us);
+    let block = diagnose_service(&conn, "worker", now_us - 3_600_000_000, now_us);
     for op in &block.operation_summaries {
         assert!(op.is_anomalous, "operation '{}' must flag", op.operation);
     }
@@ -2127,7 +2122,7 @@ fn generic_http_span_names_derive_operation_from_attributes() {
     // Bare method with no attributes stays as-is.
     insert_spans(&conn, "worker", "PUT", now_us + 3_000, (2, 0), 1_000, None);
 
-    let block = investigate_service(&conn, "worker", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "worker", now_us - 60_000_000, now_us + 60_000_000);
     let ops: Vec<&str> = block
         .operation_summaries
         .iter()
@@ -2199,8 +2194,7 @@ fn deploy_events_suppressed_for_steady_version() {
              '{{\"service.version\":\"v2\"}}')"
     ))
     .expect("insert");
-    let events =
-        investigate_service(&conn, "api", now_us - 300_000_000, now_us + 60_000_000).events;
+    let events = diagnose_service(&conn, "api", now_us - 300_000_000, now_us + 60_000_000).events;
     let deploys: Vec<_> = events.iter().filter(|e| e.event_type == "deploy").collect();
     assert_eq!(
         deploys.len(),
@@ -2231,7 +2225,7 @@ fn status_message_and_errors_without_logs_finding() {
     ))
     .expect("insert");
 
-    let block = investigate_service(&conn, "worker", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "worker", now_us - 60_000_000, now_us + 60_000_000);
 
     // status_message is often the ONLY diagnostic for log-less failures.
     assert_eq!(
@@ -2295,7 +2289,7 @@ fn errors_with_error_logs_do_not_emit_inconsistency_finding() {
          VALUES (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'it broke')"
     ))
     .expect("insert");
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
     assert!(
         !block
             .findings
@@ -2390,7 +2384,7 @@ fn error_breakdown_groups_failure_modes_by_derive_priority() {
         None,
     );
 
-    let block = investigate_service(&conn, "worker", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "worker", now_us - 60_000_000, now_us + 60_000_000);
     let op = block
         .operation_summaries
         .iter()
@@ -2503,7 +2497,7 @@ fn error_rate_anomaly_names_the_new_regimes_dominant_failure_mode() {
     let written = run_anomaly_pass(&conn);
     assert!(written >= 1, "the 30% → 50% shift must persist");
 
-    let block = investigate_service(&conn, "worker", now_us - 3 * 3_600_000_000, now_us);
+    let block = diagnose_service(&conn, "worker", now_us - 3 * 3_600_000_000, now_us);
     let op = &block.operation_summaries[0];
     assert!(op.is_anomalous);
     let reason = op.anomaly_reason.as_deref().expect("anomaly_reason");
@@ -2542,18 +2536,18 @@ fn error_rate_anomaly_names_the_new_regimes_dominant_failure_mode() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn investigate_fails_loud_when_all_services_fail() {
+fn diagnose_fails_loud_when_all_services_fail() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     // Break the schema out from under the query — every service now fails.
     conn.execute_batch("DROP TABLE sigiro_profiles").unwrap();
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: Some("svc".to_string()),
         services: None,
         from_ts: 0,
         to_ts: 1,
     };
-    let err = investigate(&conn, &req, "")
+    let err = diagnose(&conn, &req, "")
         .err()
         .expect("when EVERY service fails there is nothing partial to return — fail loud");
     let msg = format!("{err:#}");
@@ -2568,7 +2562,7 @@ fn investigate_fails_loud_when_all_services_fail() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn investigate_gen_ai_section_aggregates_per_model() {
+fn diagnose_gen_ai_section_aggregates_per_model() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -2618,7 +2612,7 @@ fn investigate_gen_ai_section_aggregates_per_model() {
     // Non-LLM spans on the same service must not leak into the section.
     insert_spans(&conn, "llm-api", "GET /health", now_us, (5, 0), 1_000, None);
 
-    let block = investigate_service(&conn, "llm-api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "llm-api", now_us - 60_000_000, now_us + 60_000_000);
 
     assert_eq!(
         block.gen_ai.len(),
@@ -2671,7 +2665,7 @@ fn investigate_gen_ai_section_aggregates_per_model() {
 }
 
 #[test]
-fn investigate_gen_ai_section_empty_without_llm_spans() {
+fn diagnose_gen_ai_section_empty_without_llm_spans() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -2689,7 +2683,7 @@ fn investigate_gen_ai_section_empty_without_llm_spans() {
         Some(r#"{"http.route":"/orders"}"#),
     );
 
-    let block = investigate_service(&conn, "plain-api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "plain-api", now_us - 60_000_000, now_us + 60_000_000);
     assert!(
         block.gen_ai.is_empty(),
         "no gen_ai.* attributes → empty section, no error: {:?}",
@@ -2734,7 +2728,7 @@ fn duplicate_spans_surface_as_a_finding_with_a_runnable_drill() {
     ))
     .expect("insert");
 
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
     let f = block
         .findings
         .iter()
@@ -2763,7 +2757,7 @@ fn clean_spans_emit_no_install_health_findings() {
     ))
     .expect("insert");
 
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
     let install_health = ["duplicate_spans", "orphan_spans", "missing_client_spans"];
     assert!(
         !block
@@ -2796,7 +2790,7 @@ fn orphan_spans_surface_as_a_finding_and_cross_service_parents_do_not() {
     ))
     .expect("insert");
 
-    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
     let f = block
         .findings
         .iter()
@@ -2828,7 +2822,7 @@ fn server_spans_without_client_spans_surface_as_a_finding() {
     ))
     .expect("insert");
 
-    let block = investigate_service(&conn, "ingress", now_us - 60_000_000, now_us + 60_000_000);
+    let block = diagnose_service(&conn, "ingress", now_us - 60_000_000, now_us + 60_000_000);
     let f = block
         .findings
         .iter()

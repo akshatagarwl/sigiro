@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use parking_lot::Mutex;
-use sigiro::investigate::{InvestigateRequest, compute_coverage, investigate};
+use sigiro::diagnose::{DiagnoseRequest, compute_coverage, diagnose};
 use std::sync::Arc;
 
 /// Setup a DuckLake-backed DB matching production config.
@@ -72,25 +72,25 @@ fn setup_populated_db() -> (Arc<Mutex<duckdb::Connection>>, tempfile::TempDir) {
     (Arc::new(Mutex::new(conn)), dir)
 }
 
-fn bench_investigate(c: &mut Criterion) {
+fn bench_diagnose(c: &mut Criterion) {
     let (shared, _dir) = setup_populated_db();
     let now_us = {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
 
-    let mut group = c.benchmark_group("investigate");
+    let mut group = c.benchmark_group("diagnose");
     group.sample_size(10);
 
-    group.bench_function("investigate_full", |b| {
+    group.bench_function("diagnose_full", |b| {
         b.iter(|| {
-            let req = InvestigateRequest {
+            let req = DiagnoseRequest {
                 service: Some("bench-svc".to_string()),
                 services: None,
                 from_ts: now_us - 15 * 60 * 1_000_000,
                 to_ts: now_us + 60 * 1_000_000,
             };
-            investigate(&shared.lock(), &req, "lake.").expect("investigate");
+            diagnose(&shared.lock(), &req, "lake.").expect("diagnose");
         });
     });
 
@@ -103,5 +103,5 @@ fn bench_compute_coverage(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_investigate, bench_compute_coverage);
+criterion_group!(benches, bench_diagnose, bench_compute_coverage);
 criterion_main!(benches);

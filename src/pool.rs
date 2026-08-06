@@ -462,7 +462,7 @@ impl ProjectPool {
     ///
     /// `LOAD parquet; LOAD json; LOAD icu;` runs first, while access is still open:
     /// `parquet` (DuckLake's storage format), `json` (used by
-    /// `resource_attributes::JSON->>...` in investigate queries), and `icu` (all
+    /// `resource_attributes::JSON->>...` in diagnose queries), and `icu` (all
     /// timezone arithmetic — `TIMESTAMPTZ`, `now() - INTERVAL`, `AT TIME ZONE`,
     /// `epoch(now())`, the bread-and-butter "last N hours" time-bounded
     /// observability query) are normally autoloaded on first use — but autoloading

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sigiro E2E test — runs inside a Lima VM
-# Tests the full pipeline: start server → send OTLP data → query → investigate
+# Tests the full pipeline: start server → send OTLP data → query → diagnose
 #
 # Usage:
 #   MODE=local  limactl shell <vm> bash /path/to/lima-e2e-test.sh
@@ -303,17 +303,17 @@ else
     fail "Query did not return expected data"
 fi
 
-# ─── Step 10: Investigate service ─────────────────────────────────
-log "Investigating checkout service..."
+# ─── Step 10: Diagnose service ─────────────────────────────────
+log "Diagnosing checkout service..."
 NOW=$(date +%s)
-INVESTIGATE_RESULT=$($SIGIRO_BIN investigate checkout --from $((NOW - 3600)) --to "$NOW" 2>&1) || true
-log "Investigate result:"
-echo "$INVESTIGATE_RESULT"
+DIAGNOSE_RESULT=$($SIGIRO_BIN diagnose checkout --from $((NOW - 3600)) --to "$NOW" 2>&1) || true
+log "Diagnose result:"
+echo "$DIAGNOSE_RESULT"
 
-if echo "$INVESTIGATE_RESULT" | grep -qi "checkout\|GET\|POST\|payment\|OOM\|memory"; then
-    pass "Investigate returned relevant data"
+if echo "$DIAGNOSE_RESULT" | grep -qi "checkout\|GET\|POST\|payment\|OOM\|memory"; then
+    pass "Diagnose returned relevant data"
 else
-    warn "Investigate may not have returned expected data"
+    warn "Diagnose may not have returned expected data"
 fi
 
 # ─── Step 11: Verify services endpoint ────────────────────────────

@@ -7,9 +7,9 @@ pub mod drain;
 pub mod ebpf;
 pub mod federate;
 
+pub mod diagnose;
 pub mod ingest;
 pub mod inserter;
-pub mod investigate;
 pub mod otel;
 pub mod otlp;
 pub mod pool;
@@ -31,7 +31,7 @@ use camino::Utf8PathBuf;
 // root so consumers can use `sigiro::IngestMsg` instead of digging through
 // `sigiro::ingest` or `sigiro::inserter`.
 
-pub use investigate::{InvestigationBlock, Window};
+pub use diagnose::{DiagnosisBlock, Window};
 pub use types::{IngestMsg, SignalTable, TimestampMicros};
 // Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
 pub use inserter::MsgRouter;

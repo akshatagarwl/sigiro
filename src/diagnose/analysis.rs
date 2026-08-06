@@ -1,4 +1,4 @@
-//! Pure functions for investigation analysis — no DB access, no I/O.
+//! Pure functions for diagnosis analysis — no DB access, no I/O.
 //! These are testable in isolation and have no side effects.
 
 use anyhow::Result;
@@ -8,7 +8,7 @@ use crate::types::TimestampMicros;
 
 // NOTE: changepoint detection (augurs BOCPD) no longer lives here — it moved
 // to the scheduled anomaly pass in `crate::anomaly`, which persists results
-// into the `sigiro_anomalies` table that investigate now merely reads
+// into the `sigiro_anomalies` table that diagnose now merely reads
 // (docs/plans/01-continuous-anomaly-subsystem.md).
 
 /// µs since epoch → "HH:MM" UTC, for anomaly_reason prose.
@@ -35,7 +35,7 @@ pub struct SignalCoverage {
     pub reason: String,
 }
 
-/// Computed coverage for the investigation window.
+/// Computed coverage for the diagnosis window.
 #[derive(Serialize, Deserialize, Debug, PartialEq, utoipa::ToSchema)]
 pub struct Coverage {
     pub has_spans: bool,
@@ -211,7 +211,7 @@ pub struct ServiceDependency {
 }
 
 // ---------------------------------------------------------------------------
-// Window — time range for investigation
+// Window — time range for diagnosis
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, utoipa::ToSchema)]

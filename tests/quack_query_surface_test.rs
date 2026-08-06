@@ -11,7 +11,7 @@
 //! which exists on the in-process `AppState` test path.
 //!
 //! Client side: connects via `quack_query(...)` (a direct remote-exec RPC),
-//! not `ATTACH ... (TYPE quack)`. Investigated directly: `ATTACH` completes
+//! not `ATTACH ... (TYPE quack)`. Diagnosed directly: `ATTACH` completes
 //! the full quack wire handshake successfully server-side (confirmed via
 //! `duckdb_logs()` — both handshake `PREPARE_REQUEST`s return
 //! `PREPARE_RESPONSE` with no error) but this specific duckdb/quack build

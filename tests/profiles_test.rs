@@ -1,12 +1,12 @@
-//! Tests for OTLP Profiles: dictionary resolution, inserter pipeline, investigate queries.
+//! Tests for OTLP Profiles: dictionary resolution, inserter pipeline, diagnose queries.
 
 use arrow::array::{Int64Array, ListBuilder, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use prost::Message;
 use sigiro::IngestMsg;
+use sigiro::diagnose::DiagnoseRequest;
 use sigiro::inserter::MsgRouter;
-use sigiro::investigate::InvestigateRequest;
 use sigiro::pool::ProjectPool;
 use std::sync::{Arc, Once};
 
@@ -228,7 +228,7 @@ fn build_linked_otlp_profile_request(
 }
 
 // ---------------------------------------------------------------------------
-// E2E: profiles through inserter → DuckDB → investigate
+// E2E: profiles through inserter → DuckDB → diagnose
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -307,14 +307,14 @@ async fn e2e_profiles_pipeline() {
         .unwrap();
     assert_eq!(cpu_count, 4, "all 4 samples should be cpu type");
 
-    // Verify via investigate query: top functions
-    let req = InvestigateRequest {
+    // Verify via diagnose query: top functions
+    let req = DiagnoseRequest {
         service: Some("api-svc".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = sigiro::investigate::investigate(&conn, &req, "lake.").unwrap();
+    let blocks = sigiro::diagnose::diagnose(&conn, &req, "lake.").unwrap();
     let profiles = &blocks.results["api-svc"].profiles;
     assert!(!profiles.is_empty(), "should have profile summaries");
 
@@ -476,13 +476,13 @@ async fn e2e_profiles_multi_type() {
     assert_eq!(type_count, 2, "should have 2 distinct profile types");
 
     // Query profiles — should see both types
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: Some("api-svc".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = sigiro::investigate::investigate(&conn, &req, "lake.").unwrap();
+    let blocks = sigiro::diagnose::diagnose(&conn, &req, "lake.").unwrap();
     let profiles = &blocks.results["api-svc"].profiles;
     assert_eq!(
         profiles.len(),

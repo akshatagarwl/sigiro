@@ -16,13 +16,13 @@ pub use analysis::{
 };
 
 // ---------------------------------------------------------------------------
-// InvestigateRequest — API input (from_ts/to_ts mandatory)
+// DiagnoseRequest — API input (from_ts/to_ts mandatory)
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Serialize, Deserialize, utoipa::ToSchema, validator::Validate)]
 #[validate(schema(function = "validate_window", skip_on_field_errors = true))]
-pub struct InvestigateRequest {
-    /// Single service to investigate. Provide this OR `services` (call
+pub struct DiagnoseRequest {
+    /// Single service to diagnose. Provide this OR `services` (call
     /// `GET /v1/services` first to discover valid names).
     // The example is published in /openapi.json and on the docs page. "checkout"
     // is the service every other example on the site uses; the previous value named
@@ -70,7 +70,7 @@ fn validate_micros(ts: i64) -> Result<(), validator::ValidationError> {
     Err(err)
 }
 
-fn validate_window(req: &InvestigateRequest) -> Result<(), validator::ValidationError> {
+fn validate_window(req: &DiagnoseRequest) -> Result<(), validator::ValidationError> {
     if req.to_ts <= req.from_ts {
         let mut err = validator::ValidationError::new("window");
         err.message = Some("to_ts must be greater than from_ts".into());
@@ -162,20 +162,20 @@ pub struct IncidentShift {
     pub drill_down_sql: Option<String>,
 }
 
-/// Response envelope for an investigation: per-service blocks plus
+/// Response envelope for a diagnosis: per-service blocks plus
 /// per-service failures. Partial results by design — one broken service
 /// must not discard the other nine (fail loud, per service).
 #[derive(Serialize, Deserialize, utoipa::ToSchema)]
-pub struct InvestigateResponse {
-    /// Successful investigation blocks, keyed by service name.
-    pub results: BTreeMap<String, InvestigationBlock>,
-    /// Services whose investigation query failed, keyed by service name,
+pub struct DiagnoseResponse {
+    /// Successful diagnosis blocks, keyed by service name.
+    pub results: BTreeMap<String, DiagnosisBlock>,
+    /// Services whose diagnosis query failed, keyed by service name,
     /// with the error message. Empty when everything succeeded.
     pub errors: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, utoipa::ToSchema)]
-pub struct InvestigationBlock {
+pub struct DiagnosisBlock {
     /// Ranked list (critical first) of what deserves attention in this
     /// window. Anomalies are CORRELATED across signals first: shifts in the
     /// same or adjacent 5-minute detection bucket merge into one "incident"
@@ -310,7 +310,7 @@ pub struct OperationSummary {
     /// Whether the continuous anomaly pass (augurs BOCPD changepoints over
     /// this operation's persisted error-rate and p95-latency series — see
     /// `crate::anomaly`) found a worsening regime shift (mean after > mean
-    /// before) whose `ts_shift` falls inside this investigation window. Read from the
+    /// before) whose `ts_shift` falls inside this diagnosis window. Read from the
     /// `sigiro_anomalies` table, never recomputed per request. Improvements
     /// do not flag, and a chronic-but-stable failure rate has no changepoint
     /// and is NOT anomalous — it IS the baseline; read `error_pct` for
@@ -518,7 +518,7 @@ struct SqlOperationRow {
 }
 
 /// One in-window row from the `sigiro_anomalies` table (written by the
-/// scheduled pass in `crate::anomaly`), as the investigation query emits it.
+/// scheduled pass in `crate::anomaly`), as the diagnosis query emits it.
 /// Per operation the hits arrive biggest shift first (the SQL orders by the
 /// unit-free magnitude — see [`shift_magnitude`]), so `.first()` is the
 /// shift that best represents the operation.
@@ -660,14 +660,14 @@ struct SqlStats {
 }
 
 // ---------------------------------------------------------------------------
-// Top-level investigate orchestration
+// Top-level diagnose orchestration
 // ---------------------------------------------------------------------------
 
-pub fn investigate(
+pub fn diagnose(
     conn: &Connection,
-    req: &InvestigateRequest,
+    req: &DiagnoseRequest,
     prefix: &str,
-) -> Result<InvestigateResponse> {
+) -> Result<DiagnoseResponse> {
     let services = resolve_services(req)?;
     let mut results = BTreeMap::new();
     let mut errors = BTreeMap::new();
@@ -675,13 +675,13 @@ pub fn investigate(
         // Partial results: one broken service must not discard the others.
         // Each failure is still loud — logged here, surfaced per-service in
         // `errors`, and fatal when NOTHING succeeded.
-        match investigate_one(conn, service, req.from_ts, req.to_ts, prefix) {
+        match diagnose_one(conn, service, req.from_ts, req.to_ts, prefix) {
             Ok(block) => {
                 results.insert(service.clone(), block);
             }
             Err(e) => {
                 tracing::error!(service = %service, error = %e,
-                    "investigation query failed for service"
+                    "diagnosis query failed for service"
                 );
                 errors.insert(service.clone(), format!("{e:#}"));
             }
@@ -689,14 +689,14 @@ pub fn investigate(
     }
     if results.is_empty() && !errors.is_empty() {
         anyhow::bail!(
-            "investigation failed for all services: {}",
+            "diagnosis failed for all services: {}",
             errors.iter().map(|(s, e)| format!("{s}: {e}")).join("; ")
         );
     }
-    Ok(InvestigateResponse { results, errors })
+    Ok(DiagnoseResponse { results, errors })
 }
 
-fn resolve_services(req: &InvestigateRequest) -> Result<Vec<String>> {
+fn resolve_services(req: &DiagnoseRequest) -> Result<Vec<String>> {
     let services = match (&req.service, &req.services) {
         (Some(s), None) => vec![s.clone()],
         (None, Some(list)) => list.clone(),
@@ -709,7 +709,7 @@ fn resolve_services(req: &InvestigateRequest) -> Result<Vec<String>> {
     anyhow::ensure!(!services.is_empty(), "services list must not be empty");
     anyhow::ensure!(
         services.len() <= MAX_SERVICES,
-        "max {MAX_SERVICES} services per investigation, got {}",
+        "max {MAX_SERVICES} services per diagnosis, got {}",
         services.len()
     );
     Ok(services)
@@ -717,31 +717,31 @@ fn resolve_services(req: &InvestigateRequest) -> Result<Vec<String>> {
 
 /// ONE DuckDB round-trip per service: a stack of CTEs (one per report
 /// section) collapsed into a single JSON document, deserialized straight
-/// into `InvestigationBlock`.
+/// into `DiagnosisBlock`.
 #[tracing::instrument(skip(conn), fields(service = %service))]
-fn investigate_one(
+fn diagnose_one(
     conn: &Connection,
     service: &str,
     from_ts: i64,
     to_ts: i64,
     prefix: &str,
-) -> Result<InvestigationBlock> {
+) -> Result<DiagnosisBlock> {
     let bucket = metric_bucket_interval(from_ts, to_ts);
     let window_us = to_ts - from_ts;
-    // Baseline window: 4x the investigation window, ending where it starts.
+    // Baseline window: 4x the diagnosis window, ending where it starts.
     let baseline_from = from_ts.saturating_sub(window_us.saturating_mul(4));
 
-    let sql = build_investigation_sql(prefix, bucket);
+    let sql = build_diagnosis_sql(prefix, bucket);
     let json: String = conn
         .query_row(
             &sql,
             duckdb::params![service, from_ts, to_ts, baseline_from, from_ts],
             |row| row.get(0),
         )
-        .map_err(|e| anyhow::anyhow!("investigation query failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("diagnosis query failed: {e}"))?;
 
     let payload: SqlPayload =
-        serde_json::from_str(&json).context("failed to deserialize investigation JSON")?;
+        serde_json::from_str(&json).context("failed to deserialize diagnosis JSON")?;
 
     let coverage = compute_coverage(
         payload.stats.spans_total,
@@ -1112,7 +1112,7 @@ fn investigate_one(
         _ => 2,
     });
 
-    Ok(InvestigationBlock {
+    Ok(DiagnosisBlock {
         findings,
         service: service.to_string(),
         window: Window::new(
@@ -1144,7 +1144,7 @@ const HTTP_METHOD_SPAN_NAMES: &[&str] =
     &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
 
 /// The ONE derived-operation expression, shared verbatim between the
-/// investigation query (grouping) and the per-operation `drill_down_sql`
+/// diagnosis query (grouping) and the per-operation `drill_down_sql`
 /// (filtering) so drilled rows always reconcile with the reported counts.
 /// `q` is the column qualifier ("s." inside the query, "" in drill SQL).
 ///
@@ -1206,12 +1206,12 @@ pub(crate) fn operation_drill_filter(span_name: &str, operation: &str) -> String
     }
 }
 
-/// Builds the one-shot investigation query. Five bind parameters, in order:
+/// Builds the one-shot diagnosis query. Five bind parameters, in order:
 /// service, from_ts (µs), to_ts (µs), baseline_from (µs), baseline_to (µs).
 ///
 /// Every section is a CTE; the final SELECT packs them into one JSON object
-/// via scalar subqueries, so the whole investigation is a single round-trip.
-pub(crate) fn build_investigation_sql(prefix: &str, bucket: &str) -> String {
+/// via scalar subqueries, so the whole diagnosis is a single round-trip.
+pub(crate) fn build_diagnosis_sql(prefix: &str, bucket: &str) -> String {
     let err = StatusCode::Error.as_i32();
     let op_key = operation_key_expr("s.");
     let error_type = error_type_expr("s.");
@@ -1390,7 +1390,7 @@ op_error_breakdown AS (
 -- services. Extraction uses only /v1/query-allowlisted scalars
 -- (json_extract_string, json_extract, coalesce, nullif) plus TRY_CAST —
 -- token counts arrive as JSON strings, TRY_CAST turns garbage into NULL
--- instead of failing the whole investigation.
+-- instead of failing the whole diagnosis.
 gen_ai_spans AS (
     SELECT COALESCE(NULLIF(json_extract_string(s.span_attributes, 'gen_ai.system'), ''),
                     'unknown') AS system,
@@ -1463,11 +1463,11 @@ shift_dominant AS (
 ),
 -- Precomputed OPERATION-KEYED anomalies (error_rate / latency_p95 — the
 -- signals whose entity is a span operation) for this service whose regime
--- shift falls inside the investigation window, grouped per operation,
+-- shift falls inside the diagnosis window, grouped per operation,
 -- biggest shift first by the unit-free symmetric relative change
 -- (after − before) / (after + before), |after − before| breaking ties —
 -- ranking, not a threshold; nothing is dropped. The `sigiro_anomalies`
--- table is written by the scheduled pass (src/anomaly.rs) — investigate
+-- table is written by the scheduled pass (src/anomaly.rs) — diagnose
 -- only READS it; no changepoint detection runs per request.
 op_anomalies AS (
     SELECT an.operation,
@@ -1626,7 +1626,7 @@ log_counters AS (
 deploy_events AS (
     -- Anti-join against the baseline window: a version already running
     -- before from_ts is steady state, not a deploy — without this, every
-    -- investigation fabricated a "deploy" event at window start, exactly
+    -- diagnosis fabricated a "deploy" event at window start, exactly
     -- the false lead an agent seizes on.
     SELECT min(detected_at) AS detected_at,
            min(detected_at_us) AS detected_at_us,
@@ -1693,7 +1693,7 @@ svc_meta AS (
 -- counted exactly once (the old span-to-span join multiplied counts by the
 -- number of our spans in the trace), and (b) the foreign side is bounded to
 -- the window ±1h — traces don't span hours, and the old unbounded join
--- scanned the FULL span history on every investigation.
+-- scanned the FULL span history on every diagnosis.
 client_traces AS (
     SELECT DISTINCT trace_id FROM win_spans WHERE span_kind IN (3, 4)
 ),
@@ -1822,7 +1822,7 @@ SELECT json_object(
         'function', function, 'profile_type', profile_type, 'total_value', total_value,
         'unit', unit, 'sample_count', sample_count
     ) ORDER BY total_value DESC)), '[]'::JSON) FROM profiles)
-)::VARCHAR AS investigation
+)::VARCHAR AS diagnosis
 "#
     )
 }
