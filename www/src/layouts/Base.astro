@@ -1,6 +1,18 @@
 ---
 import 'blume:theme';
 import Fonts from 'blume/components/layout/Fonts.astro';
+/**
+ * WebMCP: the in-page tools an agentic browser can call. Blume renders this from
+ * `PageLayout`, `ReferenceLayout` and `RootLayout` — all of which are docs
+ * layouts — so `/docs/*` had it and this landing page did not. Agent-readiness
+ * scanners probe the URL a reader is given, which is the root, so the site read
+ * as having no WebMCP at all.
+ *
+ * The component gates itself on `ai.webmcp` and renders a hidden marker element;
+ * the script is a no-op in every browser with no model context, which is all of
+ * them today.
+ */
+import WebMcp from 'blume/components/layout/WebMcp.astro';
 import data from 'blume:data';
 import SiteFooter from '@/components/site/Footer.astro';
 import SiteHeader from '@/components/site/Header.astro';
@@ -189,5 +201,6 @@ const og = new URL(SITE.ogImage, SITE.url).href;
     </div>
 
     <script type="application/ld+json" is:inline set:html={jsonLd(graph)} />
+    <WebMcp />
   </body>
 </html>
