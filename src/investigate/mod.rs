@@ -98,7 +98,10 @@ pub struct Finding {
     /// operation summary), "anomalous_log_volume" /
     /// "anomalous_error_log_rate" / "anomalous_profile_cost" (lone
     /// standalone shifts — no operation to attach to),
-    /// "errors_without_logs", "coverage_gap", "missing_resource_attributes".
+    /// "errors_without_logs", "coverage_gap", "missing_resource_attributes",
+    /// and the install-health kinds "duplicate_spans", "orphan_spans",
+    /// "missing_client_spans" (telemetry-pipeline faults: is what you are
+    /// reading even trustworthy?).
     pub kind: String,
     /// Human/agent-readable one-liner with the concrete numbers.
     pub summary: String,
@@ -645,6 +648,15 @@ struct SqlStats {
     dominant_error_type: Option<String>,
     metric_series_count: i64,
     profile_sample_count: i64,
+    /// SERVER (2) and CLIENT (3) span counts in the window — a service that
+    /// records what it receives but nothing it calls has no egress exporter,
+    /// which truncates every trace at that hop.
+    server_spans: i64,
+    client_spans: i64,
+    /// (trace_id, span_id) pairs seen more than once in the window.
+    duplicate_span_pairs: i64,
+    /// In-window spans whose named parent is absent from the span table.
+    orphan_span_count: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -1019,6 +1031,66 @@ fn investigate_one(
             incident: None,
         });
     }
+    // Install-health findings — pipeline faults rather than service faults.
+    // They answer "is what I am reading even trustworthy?", which no other
+    // section does: a duplicated span inflates every count derived from it,
+    // an orphaned one severs the tree, and a missing CLIENT span hides a
+    // whole downstream hop. Each is a plain count the query already returned.
+    if payload.stats.duplicate_span_pairs > 0 {
+        findings.push(Finding {
+            severity: "warning".to_string(),
+            kind: "duplicate_spans".to_string(),
+            summary: format!(
+                "{} (trace_id, span_id) pair(s) arrived more than once in this window — an \
+                 OTLP exporter retry storm or colliding span ids; counts derived from these \
+                 traces are inflated",
+                payload.stats.duplicate_span_pairs
+            ),
+            drill_down_sql: Some(format!(
+                "SELECT trace_id, span_id, count(*) AS copies FROM {prefix}sigiro_spans \
+                 WHERE {span_scope} GROUP BY trace_id, span_id HAVING count(*) > 1 \
+                 ORDER BY copies DESC"
+            )),
+            incident: None,
+        });
+    }
+    if payload.stats.orphan_span_count > 0 {
+        findings.push(Finding {
+            severity: "warning".to_string(),
+            kind: "orphan_spans".to_string(),
+            summary: format!(
+                "{} span(s) reference a parent that never arrived — a service in these traces \
+                 stopped exporting (rollout, network policy, broken init); the trace tree is \
+                 severed above them",
+                payload.stats.orphan_span_count
+            ),
+            drill_down_sql: Some(format!(
+                "SELECT trace_id, span_id, parent_span_id, span_name FROM {prefix}sigiro_spans s \
+                 WHERE {span_scope} AND parent_span_id IS NOT NULL AND parent_span_id != '' \
+                 AND NOT EXISTS (SELECT 1 FROM {prefix}sigiro_spans p \
+                 WHERE p.trace_id = s.trace_id AND p.span_id = s.parent_span_id) \
+                 ORDER BY timestamp DESC"
+            )),
+            incident: None,
+        });
+    }
+    if payload.stats.server_spans > 0 && payload.stats.client_spans == 0 {
+        findings.push(Finding {
+            severity: "warning".to_string(),
+            kind: "missing_client_spans".to_string(),
+            summary: format!(
+                "{} SERVER span(s) and zero CLIENT spans — this service records what it \
+                 receives but nothing it calls; every trace is truncated at this hop. Check \
+                 that the outbound HTTP/DB client is instrumented",
+                payload.stats.server_spans
+            ),
+            drill_down_sql: Some(format!(
+                "SELECT span_kind, count(*) AS spans FROM {prefix}sigiro_spans \
+                 WHERE {span_scope} GROUP BY span_kind ORDER BY spans DESC"
+            )),
+            incident: None,
+        });
+    }
     if coverage.has_spans
         && payload.context.namespace.is_none()
         && payload.context.deployment.is_none()
@@ -1184,8 +1256,47 @@ win_logs AS (
 ),
 span_stats AS (
     SELECT count(*) AS spans_total,
-           count(DISTINCT CASE WHEN status_code = {err} THEN trace_id END) AS error_traces_total
+           count(DISTINCT CASE WHEN status_code = {err} THEN trace_id END) AS error_traces_total,
+           -- Span-kind mix, for the missing_client_spans install-health
+           -- finding. Free: win_spans already carries span_kind.
+           count(CASE WHEN span_kind = 2 THEN 1 END) AS server_spans,
+           count(CASE WHEN span_kind = 3 THEN 1 END) AS client_spans
     FROM win_spans
+),
+-- Install health: the same (trace_id, span_id) arriving more than once — an
+-- OTLP exporter retry storm, or an SDK minting colliding ids. Either way the
+-- trace is unreliable and every count derived from it is inflated. Hits the
+-- base table rather than widening win_spans, which several sections
+-- materialize (see its comment).
+dup_spans AS (
+    SELECT count(*) AS duplicate_span_pairs
+    FROM (
+        SELECT s.trace_id, s.span_id
+        FROM {prefix}sigiro_spans s, args a
+        WHERE {span_win}
+        GROUP BY s.trace_id, s.span_id
+        HAVING count(*) > 1
+    )
+),
+-- Install health: in-window spans naming a parent that never arrived — a
+-- service in the trace stopped exporting (rollout, network policy, broken
+-- init), leaving the tree severed. The anti-join is over ALL services (the
+-- parent is usually a DIFFERENT service; scoping it to this one would call
+-- every normal cross-service child an orphan) and bounded to the window ±1h,
+-- for the same reason the dependency CTEs are: traces do not span hours, and
+-- an unbounded probe scans the full span history on every diagnosis.
+orphan_spans AS (
+    SELECT count(*) AS orphan_span_count
+    FROM {prefix}sigiro_spans s, args a
+    WHERE {span_win}
+      AND s.parent_span_id IS NOT NULL AND s.parent_span_id != ''
+      AND NOT EXISTS (
+          SELECT 1 FROM {prefix}sigiro_spans p
+          WHERE p.trace_id = s.trace_id
+            AND p.span_id = s.parent_span_id
+            AND p.timestamp BETWEEN a.from_ts - INTERVAL '1 hour'
+                                AND a.to_ts + INTERVAL '1 hour'
+      )
 ),
 log_stats AS (
     SELECT count(*) AS logs_total,
@@ -1627,7 +1738,11 @@ SELECT json_object(
         'dominant_error_type', (SELECT first(error_type ORDER BY cnt DESC, error_type)
             FROM (SELECT error_type, sum(cnt) AS cnt FROM op_error_types GROUP BY error_type)),
         'metric_series_count', (SELECT count(DISTINCT metric_name) FROM metric_points),
-        'profile_sample_count', (SELECT profile_sample_count FROM profile_stats)
+        'profile_sample_count', (SELECT profile_sample_count FROM profile_stats),
+        'server_spans', (SELECT server_spans FROM span_stats),
+        'client_spans', (SELECT client_spans FROM span_stats),
+        'duplicate_span_pairs', (SELECT duplicate_span_pairs FROM dup_spans),
+        'orphan_span_count', (SELECT orphan_span_count FROM orphan_spans)
     ),
     'context', json_object(
         'service_name', (SELECT service FROM args),
