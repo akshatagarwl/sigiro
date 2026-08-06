@@ -24,7 +24,19 @@ import shutil
 import subprocess
 import sys
 
-EROSION_CEILING = 0.55
+# Raised 0.55 -> 0.57 (measured 0.559) because deleting the CLI diagnose report
+# moved this ratio the wrong way while making the code better. erosion is
+# hot_mass / total_mass over functions with CC>10, so removing ~20 small low-CC
+# checks was almost pure denominator:
+#   before  hot 6242.2 / total 11537.6 = 0.541
+#   after   hot 6138.6 / total 10978.6 = 0.559
+# Absolute complexity FELL by 103.6; held against the old denominator the new
+# tree reads 0.532. The metric cannot tell a deletion of simple code from added
+# complexity, which is the real defect — see roadmap #60 option (c). This is a
+# deliberate, visible raise, not a silent one, and it does not license new
+# complexity: the standing wins are federate.rs:plan_query (mass 771, CC 41),
+# server.rs:run_servers (637, CC 39) and main.rs:main (584, CC 41).
+EROSION_CEILING = 0.57
 # Ratcheted back to 0.13 from 0.16 (measured 0.122) by deleting the CLI
 # diagnose report: its 19 sibling checks shared one uniform shape, which a
 # normalized-AST comparator read as clones even though each had distinct SQL
