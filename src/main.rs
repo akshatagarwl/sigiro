@@ -95,8 +95,6 @@ enum Command {
         #[arg(long)]
         to: Option<i64>,
     },
-    /// Diagnose sigiro using its own telemetry — no docker logs
-    Diagnose,
     /// Pre-download DuckDB extensions into the data dir so the first
     /// `sigiro serve` doesn't hang on a 30-90s blocking download (F-01).
     /// Use this once after installing sigiro, or before an offline deploy.
@@ -322,10 +320,6 @@ async fn main() -> Result<()> {
             let resp = client.anomalies(service.as_deref(), from_ts, to_ts).await?;
             let value = serde_json::to_value(&resp)?;
             println!("{}", format_output(&value)?);
-        }
-        Some(Command::Diagnose) => {
-            let client = require_client()?;
-            sigiro::diagnose::run(&client).await?;
         }
         Some(Command::FetchExtensions) => {
             let dir = data_dir()?;

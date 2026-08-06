@@ -295,7 +295,8 @@ fn validate_allows_allowlisted_tables() {
 
 #[test]
 fn validate_allows_safe_functions_actually_used_by_sigiro() {
-    // src/diagnose.rs `check_duckdb_health` — DuckDB memory self-check.
+    // The DuckDB memory self-check — the one storage-engine headroom read
+    // available over the public query surface.
     assert!(
         validate_read_only(
             "SELECT memory_limit, memory_usage FROM pragma_database_size() WHERE database_name = 'lake'"
@@ -579,8 +580,8 @@ fn validate_allows_documented_example_queries() {
 
 #[test]
 fn validate_allows_analytics_scalars_used_by_sigiro() {
-    // src/diagnose.rs `check_log_errors` — runs over /v1/query via
-    // SigiroClient::query, so these MUST keep working.
+    // Error logs grouped by DRAIN template — the shape a real operator
+    // pastes into /v1/query, so these scalars MUST keep working.
     assert!(
         validate_read_only(
             "SELECT COUNT(*) AS total, COALESCE(NULLIF(template_text, ''), body) AS pattern \
@@ -590,7 +591,7 @@ fn validate_allows_analytics_scalars_used_by_sigiro() {
         )
         .is_ok()
     );
-    // src/diagnose.rs `check_slow_spans` — quantile_cont, also over /v1/query.
+    // Slow-span percentiles — quantile_cont, also over /v1/query.
     assert!(
         validate_read_only(
             "SELECT quantile_cont(duration, 0.99) AS p99, \
