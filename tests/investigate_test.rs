@@ -2697,3 +2697,144 @@ fn investigate_gen_ai_section_empty_without_llm_spans() {
     );
     assert!(!block.operation_summaries.is_empty(), "sanity: spans seen");
 }
+
+// ---------------------------------------------------------------------------
+// Install-health findings, migrated from the deleted CLI diagnose report.
+// These answer "is what I am reading even trustworthy?" — a duplicated span
+// inflates counts, an orphaned one severs the tree, a missing CLIENT span
+// hides a whole downstream hop.
+// ---------------------------------------------------------------------------
+
+/// Every drill an install-health finding hands back must survive the same
+/// /v1/query gate a user would paste it into — a drill that 400s is worse
+/// than no drill.
+fn assert_drill_runs(conn: &duckdb::Connection, sql: &str) {
+    sigiro::server::validate_read_only(sql)
+        .unwrap_or_else(|e| panic!("drill rejected by /v1/query gate: {e}\nSQL: {sql}"));
+    conn.execute_batch(sql)
+        .unwrap_or_else(|e| panic!("drill failed to execute: {e}\nSQL: {sql}"));
+}
+
+#[test]
+fn duplicate_spans_surface_as_a_finding_with_a_runnable_drill() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    // The same span delivered twice (exporter retry storm), plus a clean one.
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+            parent_span_id, span_name, span_kind, status_code, service_name)
+         VALUES
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'GET /a', 2, 0, 'api'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'GET /a', 2, 0, 'api'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'GET /b', 2, 0, 'api')"
+    ))
+    .expect("insert");
+
+    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let f = block
+        .findings
+        .iter()
+        .find(|f| f.kind == "duplicate_spans")
+        .expect("duplicate_spans finding");
+    assert_eq!(f.severity, "warning");
+    assert!(f.summary.contains('1'), "one duped pair: {}", f.summary);
+    assert_drill_runs(&conn, f.drill_down_sql.as_deref().expect("drill"));
+}
+
+#[test]
+fn clean_spans_emit_no_install_health_findings() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    // A well-formed trace: root SERVER span, a CLIENT child that names it.
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+            parent_span_id, span_name, span_kind, status_code, service_name)
+         VALUES
+            (make_timestamp({now_us}), {now_us}+2000, 2000, 't1', 'root', '', 'GET /a', 2, 0, 'api'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 'kid', 'root', 'GET db', 3, 0, 'api')"
+    ))
+    .expect("insert");
+
+    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let install_health = ["duplicate_spans", "orphan_spans", "missing_client_spans"];
+    assert!(
+        !block
+            .findings
+            .iter()
+            .any(|f| install_health.contains(&f.kind.as_str())),
+        "a healthy pipeline reports nothing: {:?}",
+        block.findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn orphan_spans_surface_as_a_finding_and_cross_service_parents_do_not() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    // 'kid' names a parent that exists but belongs to ANOTHER service — the
+    // normal distributed-trace shape, and NOT an orphan. 'lost' names a
+    // parent nobody ever exported.
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+            parent_span_id, span_name, span_kind, status_code, service_name)
+         VALUES
+            (make_timestamp({now_us}), {now_us}+3000, 3000, 't1', 'up', '', 'GET /a', 2, 0, 'gateway'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 'kid', 'up', 'GET /b', 2, 0, 'api'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 'lost', 'gone', 'GET /c', 2, 0, 'api')"
+    ))
+    .expect("insert");
+
+    let block = investigate_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    let f = block
+        .findings
+        .iter()
+        .find(|f| f.kind == "orphan_spans")
+        .expect("orphan_spans finding");
+    assert_eq!(f.severity, "warning");
+    assert!(
+        f.summary.starts_with("1 span(s)"),
+        "only the truly parentless span counts, not the cross-service child: {}",
+        f.summary
+    );
+    assert_drill_runs(&conn, f.drill_down_sql.as_deref().expect("drill"));
+}
+
+#[test]
+fn server_spans_without_client_spans_surface_as_a_finding() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+            parent_span_id, span_name, span_kind, status_code, service_name)
+         VALUES
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'GET /a', 2, 0, 'ingress'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'GET /b', 2, 0, 'ingress')"
+    ))
+    .expect("insert");
+
+    let block = investigate_service(&conn, "ingress", now_us - 60_000_000, now_us + 60_000_000);
+    let f = block
+        .findings
+        .iter()
+        .find(|f| f.kind == "missing_client_spans")
+        .expect("missing_client_spans finding");
+    assert_eq!(f.severity, "warning");
+    assert!(f.summary.contains("2 SERVER span(s)"), "{}", f.summary);
+    assert_drill_runs(&conn, f.drill_down_sql.as_deref().expect("drill"));
+}
