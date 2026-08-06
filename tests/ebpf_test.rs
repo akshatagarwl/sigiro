@@ -1,4 +1,4 @@
-use sigiro::diagnose::{Suggestion, check_obi_available, ebpf_status};
+use sigiro::ebpf::{Suggestion, check_obi_available, ebpf_status};
 
 #[test]
 fn check_obi_available_returns_false_when_not_in_path() {

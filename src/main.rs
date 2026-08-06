@@ -494,8 +494,8 @@ async fn run_serve() -> Result<()> {
     // eBPF capability probe: read-only "could this host run eBPF
     // auto-instrumentation" check, recorded to instance_status. The launcher
     // itself is a future feature — there is nothing to start here yet.
-    let ebpf_status = sigiro::diagnose::ebpf_status("obi");
-    sigiro::diagnose::write_ebpf_status(&admin_conn, &ebpf_status)?;
+    let ebpf_status = sigiro::ebpf::ebpf_status("obi");
+    sigiro::ebpf::write_ebpf_status(&admin_conn, &ebpf_status)?;
     if ebpf_status.status != "ready" {
         tracing::info!(
             "eBPF unavailable: {} — running in OTLP-only mode",
