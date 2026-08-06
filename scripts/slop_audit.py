@@ -25,12 +25,13 @@ import subprocess
 import sys
 
 EROSION_CEILING = 0.55
-# Raised from 0.15 by the diagnose.rs refactor: giving 19 sibling checks one
-# uniform shape makes them read as clones to a normalized-AST comparator, even
-# though each has distinct SQL and thresholds. The genuine remaining offender is
-# otlp.rs (829 cloned lines across six hand-written Arrow builder structs);
-# de-duplicating that is what earns this back down to 0.10.
-CLONE_CEILING = 0.16
+# Ratcheted back to 0.13 from 0.16 (measured 0.122) by deleting the CLI
+# diagnose report: its 19 sibling checks shared one uniform shape, which a
+# normalized-AST comparator read as clones even though each had distinct SQL
+# and thresholds. The 0.16 was raised for exactly those, so it goes when they
+# do. The genuine remaining offender is otlp.rs (cloned lines across six
+# hand-written Arrow builder structs); de-duplicating that earns 0.10.
+CLONE_CEILING = 0.13
 
 # Rust comments and string literals (raw strings included). Stripped before
 # counting decision points: a 500-line SQL literal is full of `||` (DuckDB

@@ -1031,66 +1031,7 @@ fn diagnose_one(
             incident: None,
         });
     }
-    // Install-health findings — pipeline faults rather than service faults.
-    // They answer "is what I am reading even trustworthy?", which no other
-    // section does: a duplicated span inflates every count derived from it,
-    // an orphaned one severs the tree, and a missing CLIENT span hides a
-    // whole downstream hop. Each is a plain count the query already returned.
-    if payload.stats.duplicate_span_pairs > 0 {
-        findings.push(Finding {
-            severity: "warning".to_string(),
-            kind: "duplicate_spans".to_string(),
-            summary: format!(
-                "{} (trace_id, span_id) pair(s) arrived more than once in this window — an \
-                 OTLP exporter retry storm or colliding span ids; counts derived from these \
-                 traces are inflated",
-                payload.stats.duplicate_span_pairs
-            ),
-            drill_down_sql: Some(format!(
-                "SELECT trace_id, span_id, count(*) AS copies FROM {prefix}sigiro_spans \
-                 WHERE {span_scope} GROUP BY trace_id, span_id HAVING count(*) > 1 \
-                 ORDER BY copies DESC"
-            )),
-            incident: None,
-        });
-    }
-    if payload.stats.orphan_span_count > 0 {
-        findings.push(Finding {
-            severity: "warning".to_string(),
-            kind: "orphan_spans".to_string(),
-            summary: format!(
-                "{} span(s) reference a parent that never arrived — a service in these traces \
-                 stopped exporting (rollout, network policy, broken init); the trace tree is \
-                 severed above them",
-                payload.stats.orphan_span_count
-            ),
-            drill_down_sql: Some(format!(
-                "SELECT trace_id, span_id, parent_span_id, span_name FROM {prefix}sigiro_spans s \
-                 WHERE {span_scope} AND parent_span_id IS NOT NULL AND parent_span_id != '' \
-                 AND NOT EXISTS (SELECT 1 FROM {prefix}sigiro_spans p \
-                 WHERE p.trace_id = s.trace_id AND p.span_id = s.parent_span_id) \
-                 ORDER BY timestamp DESC"
-            )),
-            incident: None,
-        });
-    }
-    if payload.stats.server_spans > 0 && payload.stats.client_spans == 0 {
-        findings.push(Finding {
-            severity: "warning".to_string(),
-            kind: "missing_client_spans".to_string(),
-            summary: format!(
-                "{} SERVER span(s) and zero CLIENT spans — this service records what it \
-                 receives but nothing it calls; every trace is truncated at this hop. Check \
-                 that the outbound HTTP/DB client is instrumented",
-                payload.stats.server_spans
-            ),
-            drill_down_sql: Some(format!(
-                "SELECT span_kind, count(*) AS spans FROM {prefix}sigiro_spans \
-                 WHERE {span_scope} GROUP BY span_kind ORDER BY spans DESC"
-            )),
-            incident: None,
-        });
-    }
+    findings.extend(install_health_findings(&payload.stats, prefix, &span_scope));
     if coverage.has_spans
         && payload.context.namespace.is_none()
         && payload.context.deployment.is_none()
@@ -1132,6 +1073,75 @@ fn diagnose_one(
         logs,
         profiles: payload.profiles,
     })
+}
+
+/// Telemetry-pipeline faults, as ranked findings — the question "is what I am
+/// reading even trustworthy?", which no other section of the block answers.
+/// A duplicated span inflates every count derived from it, an orphaned one
+/// severs the trace tree, and a service with SERVER but no CLIENT spans hides
+/// a whole downstream hop. Each is a plain count the single query already
+/// returned; the drills re-derive the evidence through /v1/query.
+///
+/// Migrated from the deleted `sigiro diagnose` CLI report, which was the only
+/// place these were checked.
+fn install_health_findings(stats: &SqlStats, prefix: &str, span_scope: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    if stats.duplicate_span_pairs > 0 {
+        findings.push(Finding {
+            severity: "warning".to_string(),
+            kind: "duplicate_spans".to_string(),
+            summary: format!(
+                "{} (trace_id, span_id) pair(s) arrived more than once in this window — an \
+                 OTLP exporter retry storm or colliding span ids; counts derived from these \
+                 traces are inflated",
+                stats.duplicate_span_pairs
+            ),
+            drill_down_sql: Some(format!(
+                "SELECT trace_id, span_id, count(*) AS copies FROM {prefix}sigiro_spans \
+                 WHERE {span_scope} GROUP BY trace_id, span_id HAVING count(*) > 1 \
+                 ORDER BY copies DESC"
+            )),
+            incident: None,
+        });
+    }
+    if stats.orphan_span_count > 0 {
+        findings.push(Finding {
+            severity: "warning".to_string(),
+            kind: "orphan_spans".to_string(),
+            summary: format!(
+                "{} span(s) reference a parent that never arrived — a service in these traces \
+                 stopped exporting (rollout, network policy, broken init); the trace tree is \
+                 severed above them",
+                stats.orphan_span_count
+            ),
+            drill_down_sql: Some(format!(
+                "SELECT trace_id, span_id, parent_span_id, span_name FROM {prefix}sigiro_spans s \
+                 WHERE {span_scope} AND parent_span_id IS NOT NULL AND parent_span_id != '' \
+                 AND NOT EXISTS (SELECT 1 FROM {prefix}sigiro_spans p \
+                 WHERE p.trace_id = s.trace_id AND p.span_id = s.parent_span_id) \
+                 ORDER BY timestamp DESC"
+            )),
+            incident: None,
+        });
+    }
+    if stats.server_spans > 0 && stats.client_spans == 0 {
+        findings.push(Finding {
+            severity: "warning".to_string(),
+            kind: "missing_client_spans".to_string(),
+            summary: format!(
+                "{} SERVER span(s) and zero CLIENT spans — this service records what it \
+                 receives but nothing it calls; every trace is truncated at this hop. Check \
+                 that the outbound HTTP/DB client is instrumented",
+                stats.server_spans
+            ),
+            drill_down_sql: Some(format!(
+                "SELECT span_kind, count(*) AS spans FROM {prefix}sigiro_spans \
+                 WHERE {span_scope} GROUP BY span_kind ORDER BY spans DESC"
+            )),
+            incident: None,
+        });
+    }
+    findings
 }
 
 // ---------------------------------------------------------------------------
