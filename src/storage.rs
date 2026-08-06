@@ -615,6 +615,64 @@ pub(crate) fn install_extensions_with_progress(conn: &Connection, names: &[&str]
     install_extensions_from(conn, names, ExtensionRepo::Core)
 }
 
+/// The extensions [`crate::pool::Pool::lock_filesystem`] `LOAD`s immediately
+/// before it turns `enable_external_access` off for good.
+///
+/// This list and that `LOAD` batch must agree: anything named there but not
+/// satisfiable at that moment fails the connection, and because the lockdown is
+/// irreversible and instance-global there is no recovery. `prewarm_extensions`
+/// caches whichever of these the running binary does not already carry, and
+/// [`lock_filesystem_loads_are_prewarmed`] asserts the two stay in step.
+pub(crate) const LOCKDOWN_PRELOADED_EXTENSIONS: &[&str] = &["parquet", "json", "icu"];
+
+/// Which of `names` this binary does NOT have statically linked, and therefore
+/// has to cache as a file before the filesystem lockdown.
+///
+/// **Why this is a runtime question and not a constant.** `Cargo.toml` builds a
+/// different DuckDB per platform: Linux links the merged static archive the
+/// Dockerfile prepares (`ar`-merging every fragment, so `json`/`icu`/`parquet`
+/// really are built in), while macOS uses the `bundled` feature — DuckDB core
+/// compiled from the vendored amalgamation, WITHOUT those extension fragments —
+/// because DuckDB publishes no self-contained macOS static archive. The same
+/// split applies to the published binaries: the Linux downloads are the same
+/// artifact as the image, the macOS downloads are `bundled`.
+///
+/// Hardcoding either answer breaks the other platform, which is exactly how this
+/// bug happened: both `prewarm_extensions` and `lock_filesystem` asserted in
+/// comments that these three were static, which was true only of the Docker
+/// build, so on macOS `sigiro serve` came up and then answered every query with
+/// a 400 about a missing `json.duckdb_extension`.
+///
+/// Asking DuckDB is exact and costs one query. **`INSTALL` is not a no-op on a
+/// statically linked extension** — verified: it downloads from the repository,
+/// writes a `.duckdb_extension` file and flips `install_mode` from
+/// `STATICALLY_LINKED` to `REPOSITORY`. On the distroless image that write
+/// targets a read-only `/opt/sigiro/extensions`, so installing unconditionally
+/// would trade a working static load for a needless download at best and a
+/// permission failure at worst.
+fn extensions_needing_install(conn: &Connection, names: &[&str]) -> Result<Vec<String>> {
+    let mut needed = Vec::new();
+    for name in names {
+        // `install_mode` is NULL for an extension that is neither loaded nor
+        // installed, so treat "not statically linked" as the condition rather
+        // than testing for any particular non-static value.
+        let is_static: bool = conn
+            .query_row(
+                "SELECT coalesce(install_mode = 'STATICALLY_LINKED', false)
+                 FROM duckdb_extensions() WHERE extension_name = ?",
+                [name],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if is_static {
+            tracing::debug!("extension {name} is statically linked — no file needed");
+        } else {
+            needed.push((*name).to_string());
+        }
+    }
+    Ok(needed)
+}
+
 /// Which DuckDB extension repository an extension is published to. A core
 /// extension resolves from `extensions.duckdb.org`; a community extension is
 /// NOT there and must be installed `FROM community`, or the download fails
@@ -700,12 +758,35 @@ pub fn prewarm_extensions(data_dir: &Utf8Path) -> Result<()> {
         "pre-warming DuckDB extensions into {} (may take 30-90s on first run)...",
         ext_dir
     );
-    // core_functions/json/parquet/icu (and tpch/tpcds/autocomplete) are
-    // statically linked into the binary via the prebuilt DuckDB static bundle,
-    // so they need no baked file. Only the loadable extensions that are NOT in
-    // that bundle are baked here. sqlite is local-catalog-only (hosted uses a
-    // postgres catalog) and downloads on demand for local dev.
+    // sqlite is local-catalog-only (hosted uses a postgres catalog) and
+    // downloads on demand for local dev.
     install_extensions_with_progress(&conn, &["ducklake", "postgres", "httpfs"])?;
+    // The extensions `lock_filesystem` LOADs, cached only where this binary does
+    // not already carry them.
+    //
+    // This block used to not exist, on the stated premise that
+    // core_functions/json/parquet/icu "are statically linked into the binary via
+    // the prebuilt DuckDB static bundle, so they need no baked file". That is
+    // true of the Linux builds (the Dockerfile ar-merges every fragment, and the
+    // published Linux binaries are the same artifact) and FALSE of macOS, which
+    // uses Cargo's `bundled` feature and gets DuckDB core without them. The
+    // result was that a fresh macOS install served /health 200 and answered
+    // every real query with a 400 naming a missing json.duckdb_extension.
+    //
+    // Deciding per-extension at runtime rather than per-platform at compile time
+    // keeps this correct if either build's fragment set changes. See
+    // `extensions_needing_install` for why an unconditional INSTALL is wrong.
+    let missing = extensions_needing_install(&conn, LOCKDOWN_PRELOADED_EXTENSIONS)?;
+    if missing.is_empty() {
+        tracing::info!("parquet/json/icu are statically linked into this binary — no files needed");
+    } else {
+        tracing::info!(
+            "caching lockdown-preloaded extensions not static in this binary: {}",
+            missing.join(", ")
+        );
+        let refs: Vec<&str> = missing.iter().map(String::as_str).collect();
+        install_extensions_with_progress(&conn, &refs)?;
+    }
     // system_stats backs the `sys_*` host-statistics functions federated fleet
     // queries reach (`crate::federate`). `attach_ducklake` installs it right
     // before the irreversible filesystem lockdown, so pre-warming it here is

@@ -56,6 +56,25 @@ fn build_context_with_auth(auth_mode: sigiro::auth::AuthMode) -> TestContext {
         std::env::set_var("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions");
     }
 
+    // Prewarm exactly as `sigiro fetch-extensions` does, instead of relying on
+    // autoload to populate the cache incidentally.
+    //
+    // Without this the suite depended on an accident: `ducklake` and `httpfs`
+    // pull `parquet` in transitively, but nothing pulls `json` or `icu`, so on a
+    // platform where those are not statically linked (macOS — see
+    // `storage::extensions_needing_install`) every test here failed at
+    // `create_project` with a missing `json.duckdb_extension` as soon as
+    // /tmp/sigiro-test-extensions was cleared. That is the same defect users hit
+    // on a fresh install, and the shared cache is what hid it locally.
+    //
+    // Idempotent and cheap once the cache is warm, and a no-op on a build where
+    // the extensions are static. The argument is ignored in practice because
+    // `resolve_extension_dir` prefers SIGIRO_EXTENSION_DIR, set just above — the
+    // same resolution serve-time uses, so this warms the directory the pool
+    // actually reads.
+    sigiro::storage::prewarm_extensions(&data_dir)
+        .expect("failed to prewarm DuckDB extensions for the test extension cache");
+
     let pool = Arc::new(ProjectPool::new(
         data_dir.clone(),
         4,
