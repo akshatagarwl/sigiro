@@ -82,7 +82,7 @@ The test script:
 3. Builds Docker image and loads into k3s
 4. Deploys k8s manifests: PostgreSQL, MinIO, sigiro-central, sigiro-collector DaemonSet
 5. Deploys OnlineBoutique demo services
-6. Verifies federation via `/v1/federation/workers` and `/v1/investigate`
+6. Verifies federation via `/v1/federation/workers` and `/v1/diagnose`
 
 Manual steps (if not using the script):
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compares two Sigiro self-investigate JSON files to detect regressions.
+# Compares two Sigiro self-diagnose JSON files to detect regressions.
 #
 # Usage:
 #   scripts/ci-compare.sh CURRENT_JSON BASELINE_JSON
@@ -22,8 +22,8 @@ CURRENT="${1:-}"
 BASELINE="${2:-}"
 
 usage() {
-    echo "Usage: $0 <current_investigate.json> <baseline_investigate.json>"
-    echo "Compares two Sigiro self-investigate JSON files for regressions."
+    echo "Usage: $0 <current_diagnose.json> <baseline_diagnose.json>"
+    echo "Compares two Sigiro self-diagnose JSON files for regressions."
     echo "Returns exit 0 (pass) or 1 (regression detected)."
 }
 
@@ -109,8 +109,8 @@ base_p99 = get(baseline, "span_latencies", "p99", default=None)
 
 if curr_p99 is None:
     # Try computing from spans array
-    def compute_p99(investigation):
-        spans = investigation.get("spans", [])
+    def compute_p99(diagnosis):
+        spans = diagnosis.get("spans", [])
         if not spans:
             return None
         durations = []

@@ -130,18 +130,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7 — query investigate endpoint on OLD
+# Step 7 — query diagnose endpoint on OLD
 # ---------------------------------------------------------------------------
-echo "=== Querying /investigate on OLD instance ==="
+echo "=== Querying /diagnose on OLD instance ==="
 NOW=$(date +%s)
 SINCE=$((NOW - 600))
 
-INVESTIGATE_RESP=$(curl -s -X POST "http://${OLD_IP}:9999/investigate" \
+DIAGNOSE_RESP=$(curl -s -X POST "http://${OLD_IP}:9999/diagnose" \
   -H "Authorization: Bearer sigiro_dev_test" \
   -H "Content-Type: application/json" \
   -d "{\"service\":\"sigiro\",\"from\":$SINCE,\"now\":$NOW}")
 
-echo "$INVESTIGATE_RESP" | jq . || echo "Raw response: $INVESTIGATE_RESP"
+echo "$DIAGNOSE_RESP" | jq . || echo "Raw response: $DIAGNOSE_RESP"
 
 # ---------------------------------------------------------------------------
 # Step 8 — collect logs

@@ -1,4 +1,4 @@
-# Sigiro "old" instance — acts as the investigation backend
+# Sigiro "old" instance — acts as the diagnosis backend
 # Runs on default ports: HTTP 9999, gRPC 4317, OTLP HTTP 4318
 #
 # Usage:

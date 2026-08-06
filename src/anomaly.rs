@@ -5,7 +5,7 @@
 //! from the per-project inserter timer (src/inserter.rs) — that runs augurs
 //! BOCPD changepoint detection over continuous 5-minute series of every
 //! detected signal and persists the results into the `sigiro_anomalies`
-//! table. `/v1/investigate` and `/v1/anomalies` READ that table; nothing is
+//! table. `/v1/diagnose` and `/v1/anomalies` READ that table; nothing is
 //! recomputed inline per request.
 //!
 //! Signals detected, and the entity each series is keyed by (stored in the
@@ -19,7 +19,7 @@
 //! - `profile_cost`   — per service (per-function series proved pathological
 //!   in production: hundreds of noisy per-function series → ~880 anomaly
 //!   rows and a ~10x slower pass, all profile noise; the per-function
-//!   breakdown already lives in investigate's `profiles` section): the
+//!   breakdown already lives in diagnose's `profiles` section): the
 //!   service's TOTAL profiled cost — sum of sample values across all
 //!   functions — per bucket. `operation` holds the service name.
 //!
@@ -47,7 +47,7 @@ use anyhow::{Context, Result};
 use augurs_changepoint::{Detector, NormalGammaDetector};
 use duckdb::Connection;
 
-use crate::investigate::{operation_drill_filter, operation_key_expr};
+use crate::diagnose::{operation_drill_filter, operation_key_expr};
 use crate::types::StatusCode;
 
 /// How far back the pass looks when building each entity's series. Matches
@@ -106,8 +106,8 @@ const SIGNAL_LOG_VOLUME: &str = "log_volume";
 const SIGNAL_ERROR_LOG_RATE: &str = "error_log_rate";
 const SIGNAL_PROFILE_COST: &str = "profile_cost";
 
-/// ERROR-class log severities — the SAME set /v1/investigate's `log_stats`
-/// CTE counts (duplication marked for later review: the investigate SQL
+/// ERROR-class log severities — the SAME set /v1/diagnose's `log_stats`
+/// CTE counts (duplication marked for later review: the diagnose SQL
 /// inlines it twice already).
 const ERROR_SEVERITIES_SQL: &str = "('ERROR', 'ERR', 'FATAL', 'CRITICAL')";
 
@@ -242,8 +242,8 @@ pub fn detect(conn: &Connection, prefix: &str) -> Result<Vec<AnomalyInsert>> {
 /// should flag SUSTAINED regime shifts, not 1-minute blips — coarser buckets
 /// denoise (fewer spurious shifts) and cut the scan cost ~5x. Buckets only
 /// exist where telemetry exists — gaps are simply absent. Same derived
-/// operation identity as /v1/investigate (shared `operation_key_expr`), so
-/// investigate's LEFT JOIN on (service, operation) always matches.
+/// operation identity as /v1/diagnose (shared `operation_key_expr`), so
+/// diagnose's LEFT JOIN on (service, operation) always matches.
 fn detect_span_signals(
     conn: &Connection,
     prefix: &str,
@@ -327,7 +327,7 @@ fn detect_span_signals(
 /// log_volume + error_log_rate, per service, from ONE log scan. Logs carry
 /// no operation, and per-template series would emit N anomalies for one
 /// flood (and multiply the scan's group count by template cardinality) —
-/// per-service is the useful, cheap entity; the drill (and investigate's
+/// per-service is the useful, cheap entity; the drill (and diagnose's
 /// log_patterns section) breaks the flood down by template. The table's
 /// `operation` column holds the service name (the entity).
 fn detect_log_signals(
@@ -395,7 +395,7 @@ fn detect_log_signals(
 
 /// profile_cost, per SERVICE: the service's total profiled cost — sum of
 /// sample values across ALL functions — per bucket. A sustained rise means
-/// "this service's profiled cost regressed"; the drill (and investigate's
+/// "this service's profiled cost regressed"; the drill (and diagnose's
 /// `profiles` section) breaks it down per function. Deliberately NOT
 /// per-function: on real data hundreds of functions each carry a noisy cost
 /// series, and per-function BOCPD produced ~880 anomaly rows (drowning

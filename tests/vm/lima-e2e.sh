@@ -135,12 +135,12 @@ log "Query result:"
 echo "$QUERY_OUT"
 echo "$QUERY_OUT" | grep -q "checkout" && pass "Query returned checkout data" || fail "Query missing checkout data"
 
-# ── Investigate ────────────────────────────────────────
-log "Investigating checkout..."
-INV_OUT=$($BIN investigate checkout --from $((NOW - 3600)) --to "$NOW" 2>&1) || true
-log "Investigate:"
+# ── Diagnose ────────────────────────────────────────
+log "Diagnosing checkout..."
+INV_OUT=$($BIN diagnose checkout --from $((NOW - 3600)) --to "$NOW" 2>&1) || true
+log "Diagnose:"
 echo "$INV_OUT"
-(echo "$INV_OUT" | grep -qi "checkout\|GET\|POST\|OOM\|memory\|duration\|error") && pass "Investigate returned data" || warn "Investigate output may be empty"
+(echo "$INV_OUT" | grep -qi "checkout\|GET\|POST\|OOM\|memory\|duration\|error") && pass "Diagnose returned data" || warn "Diagnose output may be empty"
 
 # ── Services endpoint ─────────────────────────────────
 SERVICES=$(curl -sf http://localhost:9999/services -H "Authorization: Bearer ${API_KEY}" 2>/dev/null || echo "{}")

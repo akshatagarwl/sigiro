@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 
-use crate::investigate::{InvestigateRequest, InvestigateResponse, InvestigationBlock};
+use crate::diagnose::{DiagnoseRequest, DiagnoseResponse, DiagnosisBlock};
 
 /// Explicit client auth mode — mirrors server-side AuthMode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,22 +53,15 @@ impl SigiroClient {
         &self.base_url
     }
 
-    pub async fn investigate(
-        &self,
-        service: &str,
-        from: i64,
-        to: i64,
-    ) -> Result<InvestigationBlock> {
-        let mut resp = self
-            .investigate_multi(Some(service), None, from, to)
-            .await?;
+    pub async fn diagnose(&self, service: &str, from: i64, to: i64) -> Result<DiagnosisBlock> {
+        let mut resp = self.diagnose_multi(Some(service), None, from, to).await?;
         if let Some(block) = resp.results.remove(service) {
             return Ok(block);
         }
         if let Some(err) = resp.errors.get(service) {
-            bail!("investigation failed for {service}: {err}");
+            bail!("diagnosis failed for {service}: {err}");
         }
-        bail!("no investigation block returned for service {service}")
+        bail!("no diagnosis block returned for service {service}")
     }
 
     async fn expect_ok(&self, resp: reqwest::Response) -> Result<reqwest::Response> {
@@ -165,17 +158,17 @@ impl SigiroClient {
         }
     }
 
-    /// Investigate one or more services. Pass `service` for single, `services` for multi.
+    /// Diagnose one or more services. Pass `service` for single, `services` for multi.
     /// Returns partial results: successful blocks in `results`, per-service
     /// failures in `errors`.
-    pub(crate) async fn investigate_multi(
+    pub(crate) async fn diagnose_multi(
         &self,
         service: Option<&str>,
         services: Option<Vec<String>>,
         from: i64,
         to: i64,
-    ) -> Result<InvestigateResponse> {
-        let body = InvestigateRequest {
+    ) -> Result<DiagnoseResponse> {
+        let body = DiagnoseRequest {
             service: service.map(str::to_string),
             services,
             from_ts: from,
@@ -183,7 +176,7 @@ impl SigiroClient {
         };
         let req = self
             .http
-            .post(format!("{}/v1/investigate", self.base_url))
+            .post(format!("{}/v1/diagnose", self.base_url))
             .json(&body);
         let resp = self
             .auth
@@ -195,7 +188,7 @@ impl SigiroClient {
         let resp = self.expect_ok(resp).await?;
         resp.json()
             .await
-            .context("failed to parse investigation response")
+            .context("failed to parse diagnosis response")
     }
 }
 

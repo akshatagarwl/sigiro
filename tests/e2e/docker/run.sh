@@ -168,16 +168,16 @@ run_check "Sigiro self-profile has service_name" \
   "true"
 
 echo ""
-echo "=== Check 5: /v1/investigate profiles ==="
-# Investigate requires from_ts and to_ts (Unix microseconds). Use a wide
+echo "=== Check 5: /v1/diagnose profiles ==="
+# Diagnose requires from_ts and to_ts (Unix microseconds). Use a wide
 # window (last 1 hour) so any recent self-profile is included.
 NOW_US=$(($(date +%s) * 1000000))
 HOUR_AGO_US=$((NOW_US - 3600 * 1000000))
-inv=$(curl -sf -X POST "$SIGIRO_URL/v1/investigate" \
+inv=$(curl -sf -X POST "$SIGIRO_URL/v1/diagnose" \
   -H "$DEV_AUTH" \
   -H 'Content-Type: application/json' \
   -d "{\"service\":\"sigiro\",\"from_ts\":${HOUR_AGO_US},\"to_ts\":${NOW_US}}") || true
-assert_contains "$inv" '"profiles"' "investigate: profiles section present"
+assert_contains "$inv" '"profiles"' "diagnose: profiles section present"
 
 echo ""
 echo "=== Check 6: Pyroscope self-send to :4318 ==="
@@ -200,8 +200,8 @@ echo "  DuckLake files dir: $ducklake_files"
 echo "  (Informational only — DuckLake uses in-memory coordinator + Parquet files)"
 
 echo ""
-echo "=== DEBUG: Pyroscope profiles confirmed via /v1/investigate ==="
-profile_check=$(curl -sf -X POST "$SIGIRO_URL/v1/investigate" \
+echo "=== DEBUG: Pyroscope profiles confirmed via /v1/diagnose ==="
+profile_check=$(curl -sf -X POST "$SIGIRO_URL/v1/diagnose" \
   -H "$DEV_AUTH" \
   -H 'Content-Type: application/json' \
   -d "{\"service\":\"sigiro\",\"from_ts\":${HOUR_AGO_US},\"to_ts\":${NOW_US}}" 2>&1 | jq -r '

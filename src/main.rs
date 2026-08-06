@@ -65,9 +65,9 @@ enum Command {
     },
     /// Show server health
     Status,
-    /// Investigate a service — returns structured metrics, spans, logs, linked traces
-    Investigate {
-        /// Service name to investigate
+    /// Diagnose a service — returns structured metrics, spans, logs, linked traces
+    Diagnose {
+        /// Service name to diagnose
         service: String,
         /// Start of range in epoch seconds. Defaults to 15 minutes ago if omitted.
         #[arg(long)]
@@ -76,7 +76,7 @@ enum Command {
         #[arg(long)]
         to: Option<i64>,
         /// F-23: client-side filter for span/operation names (case-insensitive
-        /// substring). Useful for narrowing a busy investigate output.
+        /// substring). Useful for narrowing a busy diagnose output.
         #[arg(long)]
         grep: Option<String>,
     },
@@ -274,7 +274,7 @@ async fn main() -> Result<()> {
             });
             println!("{}", format_output(&value)?);
         }
-        Some(Command::Investigate {
+        Some(Command::Diagnose {
             service,
             from,
             to,
@@ -290,7 +290,7 @@ async fn main() -> Result<()> {
                 (now - 900) * 1_000_000
             });
             let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
-            let mut block = client.investigate(&service, from_ts, to_ts).await?;
+            let mut block = client.diagnose(&service, from_ts, to_ts).await?;
             // F-23: client-side --grep filter. Filter operation summaries,
             // log patterns, and spans by case-insensitive substring.
             if let Some(pattern) = grep {
@@ -499,7 +499,7 @@ async fn run_serve() -> Result<()> {
 
     // Pyroscope continuous profiling: enabled when SIGIRO_PYROSCOPE_ENDPOINT is set.
     // Sends CPU + memory allocation profiles to the Pyroscope server.
-    // The smoke-test script fetches these profiles and includes them in investigate blocks.
+    // The smoke-test script fetches these profiles and includes them in diagnose blocks.
     let _profiling = match start_profiling() {
         Ok(Some(handle)) => {
             sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "active")?;

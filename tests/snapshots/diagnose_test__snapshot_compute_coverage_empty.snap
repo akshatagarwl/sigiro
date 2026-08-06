@@ -1,5 +1,5 @@
 ---
-source: tests/investigate_test.rs
+source: tests/diagnose_test.rs
 assertion_line: 729
 expression: coverage
 ---

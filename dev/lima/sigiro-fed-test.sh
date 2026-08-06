@@ -420,19 +420,19 @@ else
 fi
 echo "$QUERY_RESP" | jq . || echo "Raw: $QUERY_RESP"
 
-# Check /v1/investigate
-echo "--- /v1/investigate ---"
-INVESTIGATE_RESP=$(curl -s -X POST "http://127.0.0.1:${CENTRAL_HTTP_PORT}/v1/investigate" \
+# Check /v1/diagnose
+echo "--- /v1/diagnose ---"
+DIAGNOSE_RESP=$(curl -s -X POST "http://127.0.0.1:${CENTRAL_HTTP_PORT}/v1/diagnose" \
   -H "Authorization: Bearer sigiro_dev_test" \
   -H "Content-Type: application/json" \
   -d '{"sql":"SELECT * FROM lake.sigiro_spans LIMIT 5"}')
-INVESTIGATE_COUNT=$(echo "$INVESTIGATE_RESP" | jq 'length' || echo 0)
-if [[ "$INVESTIGATE_COUNT" -eq 0 ]]; then
-  echo "WARNING: /v1/investigate returned no rows"
+DIAGNOSE_COUNT=$(echo "$DIAGNOSE_RESP" | jq 'length' || echo 0)
+if [[ "$DIAGNOSE_COUNT" -eq 0 ]]; then
+  echo "WARNING: /v1/diagnose returned no rows"
 else
-  echo "OK: /v1/investigate returned $INVESTIGATE_COUNT rows"
+  echo "OK: /v1/diagnose returned $DIAGNOSE_COUNT rows"
 fi
-echo "$INVESTIGATE_RESP" | jq . || echo "Raw: $INVESTIGATE_RESP"
+echo "$DIAGNOSE_RESP" | jq . || echo "Raw: $DIAGNOSE_RESP"
 
 # ---------------------------------------------------------------------------
 # Summary

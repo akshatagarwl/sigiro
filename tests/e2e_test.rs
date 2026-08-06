@@ -1,8 +1,8 @@
 //! End-to-end tests for the sigiro observability pipeline.
 //!
-//! These tests verify the full OTLP ingest → DuckDB → investigate path,
+//! These tests verify the full OTLP ingest → DuckDB → diagnose path,
 //! multi-project isolation, services endpoint simulation, query validation,
-//! and investigation with all signal types.
+//! and diagnosis with all signal types.
 
 use arrow::array::{
     Float64Array, Int32Array, Int64Array, ListBuilder, StringArray, StringBuilder,
@@ -11,8 +11,8 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use sigiro::IngestMsg;
+use sigiro::diagnose::{DiagnoseRequest, diagnose};
 use sigiro::inserter::MsgRouter;
-use sigiro::investigate::{InvestigateRequest, investigate};
 use sigiro::otlp::MetricBatches;
 use sigiro::pool::ProjectPool;
 use sigiro::server::validate_read_only;
@@ -324,10 +324,10 @@ fn make_profiles_batch(
 
 // ===========================================================================
 // TEST 1: Full pipeline — ingest spans via inserter, verify in DuckDB,
-//         then run investigate() and check coverage + operation summaries
+//         then run diagnose() and check coverage + operation summaries
 // ===========================================================================
 #[tokio::test]
-async fn e2e_full_pipeline_ingest_and_investigate() {
+async fn e2e_full_pipeline_ingest_and_diagnose() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
@@ -362,15 +362,15 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
         .unwrap();
     assert_eq!(count, 100, "expected 100 spans ingested, got {count}");
 
-    // Run investigate()
-    let req = InvestigateRequest {
+    // Run diagnose()
+    let req = DiagnoseRequest {
         service: Some("checkout".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
     let reader = conn.get();
-    let blocks = investigate(&reader, &req, "lake.").expect("investigate should succeed");
+    let blocks = diagnose(&reader, &req, "lake.").expect("diagnose should succeed");
     let block = &blocks.results["checkout"];
 
     // Coverage
@@ -390,7 +390,7 @@ async fn e2e_full_pipeline_ingest_and_investigate() {
 
 // ===========================================================================
 // TEST 2: Multi-project isolation — project A and B ingest independently,
-//         investigate on A should not see B's data
+//         diagnose on A should not see B's data
 // ===========================================================================
 #[tokio::test]
 async fn e2e_multi_project_isolation() {
@@ -424,46 +424,45 @@ async fn e2e_multi_project_isolation() {
 
     router.shutdown_and_wait().await.unwrap();
 
-    // Investigate project A — should only see alpha-svc
+    // Diagnose project A — should only see alpha-svc
     let conn_a = pool.create_project("proj_alpha").unwrap();
-    let req_a = InvestigateRequest {
+    let req_a = DiagnoseRequest {
         service: Some("alpha-svc".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
     let reader_a = conn_a.get();
-    let blocks_a = investigate(&reader_a, &req_a, "lake.").expect("investigate failed");
+    let blocks_a = diagnose(&reader_a, &req_a, "lake.").expect("diagnose failed");
     let block_a = &blocks_a.results["alpha-svc"];
     assert_eq!(block_a.coverage.span_count, 30);
     assert_eq!(block_a.operation_summaries.len(), 1);
     assert_eq!(block_a.operation_summaries[0].span_name, "GET /alpha");
 
     // Project A should NOT see beta-svc
-    let req_beta_on_a = InvestigateRequest {
+    let req_beta_on_a = DiagnoseRequest {
         service: Some("beta-svc".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks_beta_on_a =
-        investigate(&reader_a, &req_beta_on_a, "lake.").expect("investigate failed");
+    let blocks_beta_on_a = diagnose(&reader_a, &req_beta_on_a, "lake.").expect("diagnose failed");
     let block_beta_on_a = &blocks_beta_on_a.results["beta-svc"];
     assert_eq!(
         block_beta_on_a.coverage.span_count, 0,
         "beta-svc should NOT appear in project alpha's DB"
     );
 
-    // Investigate project B — should only see beta-svc
+    // Diagnose project B — should only see beta-svc
     let conn_b = pool.create_project("proj_beta").unwrap();
-    let req_b = InvestigateRequest {
+    let req_b = DiagnoseRequest {
         service: Some("beta-svc".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
     let reader_b = conn_b.get();
-    let blocks_b = investigate(&reader_b, &req_b, "lake.").expect("investigate failed");
+    let blocks_b = diagnose(&reader_b, &req_b, "lake.").expect("diagnose failed");
     let block_b = &blocks_b.results["beta-svc"];
     assert_eq!(block_b.coverage.span_count, 50);
     assert_eq!(block_b.operation_summaries[0].span_name, "GET /beta");
@@ -627,11 +626,11 @@ fn e2e_query_validation() {
 }
 
 // ===========================================================================
-// TEST 5: Investigation with all signals — spans + logs + metrics (gauge),
+// TEST 5: Diagnosis with all signals — spans + logs + metrics (gauge),
 //         verify coverage shows all three present with no gaps
 // ===========================================================================
 #[tokio::test]
-async fn e2e_investigation_all_signals() {
+async fn e2e_diagnosis_all_signals() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
     let router = MsgRouter::new(pool.clone());
@@ -721,15 +720,15 @@ async fn e2e_investigation_all_signals() {
         assert_eq!(gauges, 3, "expected 3 gauge metrics");
     }
 
-    // Run investigate and verify coverage
-    let req = InvestigateRequest {
+    // Run diagnose and verify coverage
+    let req = DiagnoseRequest {
         service: Some("full-svc".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
     let reader = conn.get();
-    let blocks = investigate(&reader, &req, "lake.").expect("investigate with all signals");
+    let blocks = diagnose(&reader, &req, "lake.").expect("diagnose with all signals");
     let block = &blocks.results["full-svc"];
 
     assert!(
@@ -833,7 +832,7 @@ fn make_templated_logs_batch(bodies: &[&str], service_name: &str, ts_base: i64) 
 
 #[tokio::test]
 async fn e2e_drain_log_template_dedup() {
-    // Verify the full pipeline: OTLP logs → inserter (DRAIN) → DuckDB → investigate
+    // Verify the full pipeline: OTLP logs → inserter (DRAIN) → DuckDB → diagnose
     // Logs with variable tokens should collapse into a single template.
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
@@ -931,19 +930,19 @@ async fn e2e_drain_log_template_dedup() {
         "at least one template should have placeholder wildcards"
     );
 
-    // Verify via investigate: raw logs come back, and templates dedup to a
+    // Verify via diagnose: raw logs come back, and templates dedup to a
     // handful of patterns (not 20 raw lines).
-    let req = InvestigateRequest {
+    let req = DiagnoseRequest {
         service: Some("api-svc".to_string()),
         services: None,
         from_ts: now_us - 60_000_000,
         to_ts: now_us + 60_000_000,
     };
-    let blocks = investigate(&conn, &req, "lake.").unwrap();
+    let blocks = diagnose(&conn, &req, "lake.").unwrap();
     let block = &blocks.results["api-svc"];
     assert!(
         !block.logs.sample.is_empty(),
-        "investigate should return some logs, got empty"
+        "diagnose should return some logs, got empty"
     );
 
     let patterns = &block.log_patterns;

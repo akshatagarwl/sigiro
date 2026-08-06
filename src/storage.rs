@@ -401,7 +401,7 @@ pub fn tenant_metadata_schema(tenant_id: &str) -> Result<String> {
 /// Nesting under `tenants/` (rather than `<data_dir>/<tenant_id>` directly) keeps
 /// per-tenant dirs from ever colliding with sibling top-level dirs (the default
 /// project's `default/`, the shared `extensions/` dir). Shared by `ProjectPool`
-/// (the actual per-tenant connection) and the investigate handler's data-existence
+/// (the actual per-tenant connection) and the diagnose handler's data-existence
 /// check so the two can never disagree on layout.
 pub fn tenant_data_dir(data_dir: &Utf8Path, tenant_id: &str) -> Result<camino::Utf8PathBuf> {
     Ok(data_dir

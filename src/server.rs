@@ -25,9 +25,9 @@ use utoipa::OpenApi;
 
 use crate::admin;
 use crate::auth::{self, AuthContext};
+use crate::diagnose;
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::{DiskCapacityState, MsgRouter};
-use crate::investigate;
 use crate::pool::ProjectPool;
 use crate::responses::*;
 use crate::types::*;
@@ -53,7 +53,7 @@ use tracing_attributes::instrument;
         services_handler,
         anomalies_handler,
         trace_detail_handler,
-        investigate_handler,
+        diagnose_handler,
         admin_status,
         create_tenant_handler,
         create_key_handler,
@@ -74,27 +74,27 @@ use tracing_attributes::instrument;
             CreateTenantResponse,
             CreateKeyRequest,
             AdminStatusResponse,
-            investigate::InvestigateRequest,
-            investigate::InvestigateResponse,
-            investigate::InvestigationBlock,
-            investigate::Finding,
-            investigate::Incident,
-            investigate::IncidentShift,
-            investigate::OperationSummary,
-            investigate::ErrorTypeCount,
-            investigate::GenAiModelSummary,
-            investigate::FinishReasonCount,
-            investigate::MetricBucket,
-            investigate::SpanRecord,
-            investigate::LogRecord,
-            investigate::LogPattern,
-            investigate::ProfileSummary,
-            investigate::DerivedEvent,
-            investigate::ServiceContext,
-            investigate::Coverage,
-            investigate::SignalCoverage,
-            investigate::ServiceDependency,
-            investigate::Window,
+            diagnose::DiagnoseRequest,
+            diagnose::DiagnoseResponse,
+            diagnose::DiagnosisBlock,
+            diagnose::Finding,
+            diagnose::Incident,
+            diagnose::IncidentShift,
+            diagnose::OperationSummary,
+            diagnose::ErrorTypeCount,
+            diagnose::GenAiModelSummary,
+            diagnose::FinishReasonCount,
+            diagnose::MetricBucket,
+            diagnose::SpanRecord,
+            diagnose::LogRecord,
+            diagnose::LogPattern,
+            diagnose::ProfileSummary,
+            diagnose::DerivedEvent,
+            diagnose::ServiceContext,
+            diagnose::Coverage,
+            diagnose::SignalCoverage,
+            diagnose::ServiceDependency,
+            diagnose::Window,
         )
     ),
     modifiers(&SecurityAddon),
@@ -334,7 +334,7 @@ static TIME_TRAVEL_AT_LITERAL: std::sync::LazyLock<regex::Regex> = std::sync::La
 /// The entire allowed FROM-target surface for user queries: every table
 /// sigiro itself creates (src/schema.rs CREATE TABLE names), including
 /// `sigiro_anomalies` — the table the scheduled anomaly pass
-/// (`crate::anomaly`) writes and /v1/investigate + /v1/anomalies read.
+/// (`crate::anomaly`) writes and /v1/diagnose + /v1/anomalies read.
 /// Matched case-insensitively against the FINAL identifier — see
 /// `is_allowed_table` for how the schema-qualifier prefix (`lake.` /
 /// `main.`) is handled.
@@ -405,7 +405,7 @@ const SAFE_FUNCTIONS: &[&str] = &["PRAGMA_DATABASE_SIZE", "RANGE"];
 /// - The documented `/v1/query` examples (`www/content/docs/hosted-onboarding.md`,
 ///   `getting-started.md`, `guides/self-host-edge-federation.md`): `count`,
 ///   `approx_quantile`, `now`, `avg`, `sum`, `min`, `max`, `json_extract`.
-/// - Sigiro's own internal analytics SQL (`src/investigate/mod.rs`,
+/// - Sigiro's own internal analytics SQL (`src/diagnose/mod.rs`,
 ///   `src/schema.rs`) — never itself routed through this gate (it runs
 ///   directly against `ctx.conn`), but real DuckDB usage this system
 ///   already relies on and representative of what a legitimate ad-hoc
@@ -866,7 +866,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     // per-tenant limiter runs before the handler.
     let v1 = Router::new()
         .typed_post(query_handler)
-        .typed_post(investigate_handler)
+        .typed_post(diagnose_handler)
         .typed_get(services_handler)
         .typed_get(anomalies_handler)
         .typed_get(trace_detail_handler);
@@ -1790,7 +1790,7 @@ fn query_sql_contract() -> String {
 
 /// Ask a question of your telemetry in SQL. Read-only.
 ///
-/// Every `drill_down_sql` that `/v1/investigate` returns can be pasted here
+/// Every `drill_down_sql` that `/v1/diagnose` returns can be pasted here
 /// verbatim.
 ///
 /// Readable tables, optionally qualified `lake.*` or `main.*`:
@@ -1890,7 +1890,7 @@ async fn query_handler(
 }
 
 /// GET /v1/services — discover what services are sending telemetry.
-/// Agents call this before /investigate to know what services exist.
+/// Agents call this before /diagnose to know what services exist.
 #[utoipa::path(
     get,
     path = "/v1/services",
@@ -1898,7 +1898,7 @@ async fn query_handler(
     summary = "List services",
     description = "Every service that has reported telemetry, with the first and \
 last timestamp seen for each (microseconds since the Unix epoch). The entry point \
-of an agent loop: pick a service here, then investigate it.",
+of an agent loop: pick a service here, then diagnose it.",
     responses(
         (status = 200, description = "List of services", body = ServicesResponse)
     ),
@@ -1983,7 +1983,7 @@ pub(crate) struct AnomaliesQuery {
 /// scheduled anomaly pass (BOCPD changepoints over each entity's persisted
 /// series — no thresholds), so reading here costs one table scan, never a
 /// detection run. The same rows drive `is_anomalous` and the anomaly
-/// findings in /v1/investigate.
+/// findings in /v1/diagnose.
 #[utoipa::path(
     get,
     path = "/v1/anomalies",
@@ -2077,7 +2077,7 @@ async fn anomalies_handler(
                 continue;
             }
             let started_at = group.iter().map(|&g| ts[g]).min().expect("non-empty group");
-            let started_iso = crate::investigate::us_to_iso(started_at).map_err(|e| {
+            let started_iso = crate::diagnose::us_to_iso(started_at).map_err(|e| {
                 bad_request("anomalies query failed", &format!("bad ts_shift: {e:#}"))
             })?;
             let id = format!("{service}@{started_iso}");
@@ -2096,7 +2096,7 @@ async fn anomalies_handler(
      operation_id = "get-trace",
      summary = "Fetch one whole trace",
      description = "Every span of one trace, parent links included, so a caller \
-can rebuild the tree. Trace IDs come from the sampled spans in an investigation, \
+can rebuild the tree. Trace IDs come from the sampled spans in a diagnosis, \
 or from any SQL query over `sigiro_spans`.",
      params(
          ("trace_id" = String, Path, description = "Trace ID")
@@ -2390,10 +2390,10 @@ fn compute_service_breakdown(
 
 #[utoipa::path(
     post,
-    path = "/v1/investigate",
-    operation_id = "investigate-services",
+    path = "/v1/diagnose",
+    operation_id = "diagnose-services",
     summary = "Diagnose a service",
-    request_body = investigate::InvestigateRequest,
+    request_body = diagnose::DiagnoseRequest,
     description = "\
 Root-cause an incident for one or more services over a time window. Returns a \
 triage summary — NOT raw telemetry: a ranked `findings` array (read this \
@@ -2402,33 +2402,33 @@ Every lead carries a ready-to-run SQL string (`drill_down_sql` on findings, \
 operations, spans, and log patterns; `drill_all_sql` on the spans/logs \
 sections) that you paste VERBATIM into `POST /v1/query` to fetch the \
 underlying rows and go deeper. \
-Typical agent loop: `GET /v1/services` → `POST /v1/investigate` → for any \
+Typical agent loop: `GET /v1/services` → `POST /v1/diagnose` → for any \
 finding or anomalous operation, run its `drill_down_sql` via `/v1/query`. \
 Timestamps are microseconds since the Unix epoch. The response is a map \
 `{results: {service: block}, errors: {service: message}}` — partial results \
 survive a single failing service.",
     responses(
-        (status = 200, description = "Per-service investigation blocks", body = investigate::InvestigateResponse),
+        (status = 200, description = "Per-service diagnosis blocks", body = diagnose::DiagnoseResponse),
         (status = 400, description = "Invalid request (e.g. timestamps not in microseconds, or to_ts <= from_ts)"),
         (status = 401, description = "Missing or invalid bearer token")
     ),
     security(("bearer" = [])),
 )]
 #[instrument(skip_all)]
-async fn investigate_handler(
-    _path: InvestigatePath,
+async fn diagnose_handler(
+    _path: DiagnosePath,
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
-    // `Valid<Json<..>>` runs the `validator` derives on InvestigateRequest at
+    // `Valid<Json<..>>` runs the `validator` derives on DiagnoseRequest at
     // EXTRACTION time (axum's validating-extractor equivalent of middleware) —
     // from_ts/to_ts must be plausible MICROSECOND timestamps (fail loud on
     // seconds/millis/nanos), to_ts > from_ts. Invalid input never reaches here.
-    Valid(Json(req)): Valid<Json<investigate::InvestigateRequest>>,
-) -> ApiResult<Json<investigate::InvestigateResponse>> {
-    let data_dir = crate::data_dir().context_internal("Investigate", "SIGIRO_DATA_DIR not set")?;
+    Valid(Json(req)): Valid<Json<diagnose::DiagnoseRequest>>,
+) -> ApiResult<Json<diagnose::DiagnoseResponse>> {
+    let data_dir = crate::data_dir().context_internal("Diagnose", "SIGIRO_DATA_DIR not set")?;
     let project_data_path = if state.pool.storage_mode().is_distributed() {
         crate::storage::tenant_data_dir(&data_dir, &auth.tenant_id)
-            .context_internal("Investigate", "invalid tenant id")?
+            .context_internal("Diagnose", "invalid tenant id")?
     } else {
         data_dir.join(&auth.tenant_id)
     };
@@ -2441,7 +2441,7 @@ async fn investigate_handler(
         return Err(axum_anyhow::not_found(
             "No Data Found",
             &format!(
-                "No data found for project {}. Please ingest data before calling investigate.",
+                "No data found for project {}. Please ingest data before calling diagnose.",
                 auth.tenant_id
             ),
         ));
@@ -2453,12 +2453,12 @@ async fn investigate_handler(
             .create_project(&project_id)
             .with_context(|| format!("failed to initialize project {project_id}"))?;
         let conn = readers.get();
-        investigate::investigate(&conn, &req, ProjectPool::prefix())
+        diagnose::diagnose(&conn, &req, ProjectPool::prefix())
     })
     .await
-    .map_err(|e| anyhow::anyhow!("investigation task failed: {e}"))
-    .context_internal("Investigate", "investigation task failed")?
-    .context_internal("Investigate", "investigation failed")?;
+    .map_err(|e| anyhow::anyhow!("diagnosis task failed: {e}"))
+    .context_internal("Diagnose", "diagnosis task failed")?
+    .context_internal("Diagnose", "diagnosis failed")?;
     Ok(Json(blocks))
 }
 

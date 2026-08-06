@@ -3,7 +3,7 @@
 Run one Sigiro self-improvement measurement iteration.
 
 Stable Sigiro receives self-telemetry from candidate Sigiro. The harness then
-benchmarks candidate ingest, asks stable Sigiro to investigate the candidate,
+benchmarks candidate ingest, asks stable Sigiro to diagnose the candidate,
 and writes the evidence Codex should use for the next code change.
 """
 
@@ -437,8 +437,8 @@ The point is not a synthetic score. The point is a repeatable evidence loop:
 1. Start stable Sigiro on isolated ports.
 2. Start candidate Sigiro with `OTEL_EXPORTER_OTLP_ENDPOINT` and `SIGIRO_PYROSCOPE_ENDPOINT` pointing at stable.
 3. Run the existing `scripts/bench_ingest.py` workload against candidate's OTLP HTTP endpoint.
-4. Query stable with `sigiro investigate sigiro-candidate`.
-5. Save the benchmark, investigate output, logs, CSV, SVG plot, animated HTML trajectory, and a Codex next-step prompt.
+4. Query stable with `sigiro diagnose sigiro-candidate`.
+5. Save the benchmark, diagnose output, logs, CSV, SVG plot, animated HTML trajectory, and a Codex next-step prompt.
 6. Codex reads the evidence, makes one small code change, validates it, and reruns the loop.
 7. A candidate is promoted only when it has zero benchmark errors and improves or preserves the chosen guardrail metrics.
 
@@ -607,8 +607,8 @@ def main() -> int:
         stop_process(candidate_proc)
         candidate_proc = None
         time.sleep(2)
-        investigate = run_json([str(args.stable_bin), "--output", "json", "investigate", "sigiro-candidate"], env)
-        (args.out_dir / "investigate-sigiro-candidate.json").write_text(json.dumps(investigate, indent=2) + "\n")
+        diagnose = run_json([str(args.stable_bin), "--output", "json", "diagnose", "sigiro-candidate"], env)
+        (args.out_dir / "diagnose-sigiro-candidate.json").write_text(json.dumps(diagnose, indent=2) + "\n")
         service_counts = query_service_counts(stable_url, args.api_key)
         counts = service_counts[0] if service_counts else {}
         (args.out_dir / "service-counts.json").write_text(
@@ -652,7 +652,7 @@ def main() -> int:
         write_animation(records, args.out_dir / "progress.html")
         write_blog(record, args.out_dir / "blog-post.md")
         (args.out_dir / "codex-next-step.md").write_text(
-            "Use the stable Sigiro evidence in investigate-sigiro-candidate.json and iterations.csv. "
+            "Use the stable Sigiro evidence in diagnose-sigiro-candidate.json and iterations.csv. "
             "Choose one optimization, make the smallest code change, run the same harness again, "
             "and promote only when errors remain zero and guardrail metrics do not regress.\n"
         )

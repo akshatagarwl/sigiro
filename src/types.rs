@@ -151,10 +151,10 @@ use serde::{Deserialize, Serialize};
 #[typed_path("/query")]
 pub struct QueryPath;
 
-/// Route: GET /investigate
+/// Route: GET /diagnose
 #[derive(Debug, Clone, TypedPath)]
-#[typed_path("/investigate")]
-pub struct InvestigatePath;
+#[typed_path("/diagnose")]
+pub struct DiagnosePath;
 
 /// Route: GET /services
 #[derive(Debug, Clone, TypedPath)]

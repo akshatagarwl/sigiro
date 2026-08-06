@@ -27,7 +27,7 @@ fn create_tables_idempotent() {
 #[test]
 fn anomalies_table_exists_and_accepts_rows() {
     // sigiro_anomalies is a real TABLE (written by the scheduled anomaly
-    // pass, read by /v1/investigate and /v1/anomalies) — not the old
+    // pass, read by /v1/diagnose and /v1/anomalies) — not the old
     // threshold-based view.
     let conn = Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create_tables");
