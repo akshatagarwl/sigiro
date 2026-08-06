@@ -271,7 +271,7 @@ SELECT service, metadata FROM $PARQUET WHERE signal='profile' AND metadata IS NO
 " 2>&1 || true
 
 echo ""
-echo "=== Checkout investigation block (cross-service) ==="
+echo "=== Checkout diagnosis block (cross-service) ==="
 duckdb -c "${S3_SETUP}
 SELECT service, signal, count(*) as rows
 FROM $PARQUET
