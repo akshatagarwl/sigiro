@@ -51,7 +51,7 @@ Each of the three ports has one function:
 | --- | --- |
 | `4317` | OTLP over gRPC |
 | `4318` | OTLP over HTTP |
-| `9999` | the query and investigate API |
+| `9999` | the query and diagnose API |
 
 At the first start, sigiro downloads its query extensions. This can take 30–90
 seconds. Each later start is immediate. sigiro writes the data to
@@ -99,21 +99,21 @@ always slow but *stable* is not an anomaly.
 
 ## 4. Ask why
 
-`investigate` returns one structured evidence block for a service and a time
+`diagnose` returns one structured evidence block for a service and a time
 window. The block holds ranked findings, error counts, error breakdowns for each
 operation by `error.type`, LLM statistics for each model, sampled spans, and
 deduplicated log patterns. Every row also carries a ready-to-run SQL query, so
 you copy the next question and paste it.
 
 ```bash
-sigiro investigate checkout
-sigiro investigate checkout --from $(date -v-1H +%s) --grep POST
+sigiro diagnose checkout
+sigiro diagnose checkout --from $(date -v-1H +%s) --grep POST
 ```
 
 An agent asks the same question over HTTP:
 
 ```bash
-curl -X POST http://localhost:9999/v1/investigate \
+curl -X POST http://localhost:9999/v1/diagnose \
   -H 'content-type: application/json' \
   -d '{"service":"checkout"}'
 ```

@@ -94,7 +94,7 @@ export const INSTALL = [
  * line alone.
  *
  * The incident is the one the rest of the page reports: service `checkout`,
- * deploy 9f2c1ab, 246 timeouts on POST /api/orders. The investigate payload and
+ * deploy 9f2c1ab, 246 timeouts on POST /api/orders. The diagnose payload and
  * the correlation SQL are the artifacts the old sections printed, carried over
  * rather than rewritten. The 246 in the Correlate result is the same 246: one
  * model call per failed order.
@@ -172,7 +172,7 @@ export const HOW = [
     say: 'sigiro ranks the results and names the deploy that caused the failure.',
     run: [
       {
-        cmd: `curl -sX POST localhost:9999/v1/investigate -d '{"service":"checkout"}'`,
+        cmd: `curl -sX POST localhost:9999/v1/diagnose -d '{"service":"checkout"}'`,
         out: `{
   "summary": "two signals moved together on checkout at 18:35",
   "suspect": "deploy 9f2c1ab, landed 18:33",
@@ -208,7 +208,7 @@ claude-haiku-4.6   31     2.1s`,
     say: 'Run the query again. Make the query wider. Show that the result is wrong.',
     run: [
       {
-        cmd: `curl -s localhost:9999/v1/investigate -d '{"service":"checkout"}' > answer.json`,
+        cmd: `curl -s localhost:9999/v1/diagnose -d '{"service":"checkout"}' > answer.json`,
         out: '',
       },
       {
@@ -259,7 +259,7 @@ export const SECTIONS = [
          every endpoint" was printing a document that did neither. */
       code: `[
   "/v1/anomalies",
-  "/v1/investigate",
+  "/v1/diagnose",
   "/v1/query",
   "/v1/services",
   "/v1/traces/{trace_id}"
@@ -317,7 +317,7 @@ checkout  latency_p95  180ms      30.0s    +166×    inc_4a1c
     owner: 'sigiro',
     ours: true,
     say: 'One call gives ranked results, the suspect deploy, and the query for each result.',
-    cmd: 'sigiro investigate checkout',
+    cmd: 'sigiro diagnose checkout',
     out: `suspect        deploy 9f2c1ab, landed 18:33
 failing        POST /api/orders
 failure mode   timeout 246 · server_error 6
