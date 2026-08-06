@@ -12,13 +12,13 @@ before the loop repairs a fault:
 1. **What changed?** — `sigiro anomalies` returns the shifts that deviate from
    the statistical baseline of the service. sigiro ranks these shifts. sigiro
    also groups them into incidents across all signals.
-2. **Why?** — `sigiro investigate` returns one structured evidence block for
+2. **Why?** — `sigiro diagnose` returns one structured evidence block for
    each service. The block holds ranked findings, error breakdowns for each
    operation, LLM statistics for each model, sampled spans, log patterns, and a
    ready-to-run SQL query on every row.
 
 Both commands are also endpoints: `GET /v1/anomalies` and
-`POST /v1/investigate`. An agent uses these endpoints to ask the same two
+`POST /v1/diagnose`. An agent uses these endpoints to ask the same two
 questions. Refer to the [API reference](/api).
 
 sigiro is one static binary. You do not run a collector. You learn no query

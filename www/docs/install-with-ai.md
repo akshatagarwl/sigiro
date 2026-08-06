@@ -142,7 +142,7 @@ curl http://localhost:9999/v1/services
 ```
 
 Your service appears within a few seconds of real traffic. After it appears,
-`sigiro investigate my-service` has data to read.
+`sigiro diagnose my-service` has data to read.
 
 If the service does not appear, make these checks. Confirm the port: `:4318` for
 HTTP and `:4317` for gRPC. Run `sigiro status` to confirm that the server is
