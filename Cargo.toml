@@ -57,7 +57,6 @@ sqlparser = { version = "0.53", features = ["visitor"] }
 axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
 multer = "3"
 futures-util = "0.3"
-fs4 = "1.1"
 walkdir = "2"
 
 opentelemetry = "0.31"

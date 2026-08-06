@@ -350,10 +350,12 @@ const ALLOWED_TABLES: &[&str] = &[
     "SIGIRO_ANOMALIES",
 ];
 
-/// Table-valued / pragma functions sigiro's OWN code calls through this same
-/// `/v1/query` guard — allowlist EXACTLY these, sourced from real call sites:
-/// - `PRAGMA_DATABASE_SIZE` — src/diagnose.rs `check_duckdb_health` (DuckDB
-///   memory-limit/usage self-check via `FROM pragma_database_size()`).
+/// Table-valued / pragma functions reachable through this same `/v1/query`
+/// guard — allowlist EXACTLY these, sourced from real call sites:
+/// - `PRAGMA_DATABASE_SIZE` — the DuckDB memory-limit/usage self-check
+///   (`SELECT memory_limit, memory_usage FROM pragma_database_size()`), the
+///   one way an operator can read storage-engine headroom over the public
+///   query surface. Verified by tests/server_test.rs.
 /// - `RANGE` — tests/api_integration_test.rs
 ///   `test_query_midstream_error_never_returns_partial_rows` (`FROM range(5) t(i)`,
 ///   a pure row generator with no filesystem/network access).
@@ -397,10 +399,9 @@ const SAFE_FUNCTIONS: &[&str] = &["PRAGMA_DATABASE_SIZE", "RANGE"];
 /// denylist is always one function behind.
 ///
 /// Sourced from:
-/// - Real `/v1/query` traffic sigiro's own CLI sends today
-///   (`src/diagnose.rs`, via `SigiroClient::query`): `count`, `coalesce`,
-///   `nullif`, `now`, `quantile_cont` — these MUST keep working or
-///   `sigiro diagnose` breaks against its own server.
+/// - Real `/v1/query` traffic sigiro's own CLI sends today (via
+///   `SigiroClient::query`, e.g. `sigiro status`'s recent-ingest block):
+///   `count`, `coalesce`, `nullif`, `now`, `quantile_cont`.
 /// - The documented `/v1/query` examples (`www/content/docs/hosted-onboarding.md`,
 ///   `getting-started.md`, `guides/self-host-edge-federation.md`): `count`,
 ///   `approx_quantile`, `now`, `avg`, `sum`, `min`, `max`, `json_extract`.
@@ -414,14 +415,13 @@ const SAFE_FUNCTIONS: &[&str] = &["PRAGMA_DATABASE_SIZE", "RANGE"];
 ///   with no filesystem/network/settings access (string/date/math/
 ///   conditional helpers).
 ///
-/// Deliberately EXCLUDED, even though real: `current_setting` — used
-/// internally by `src/diagnose.rs` `check_duckdb_health` to read the
-/// `threads` setting, but the same function reads `extension_directory`,
-/// `home_directory`, and every other DuckDB setting, with no way to
-/// restrict it to one argument at the AST level. `check_duckdb_health` was
-/// changed to stop calling it (see its doc comment) rather than reopening
-/// this hole. `getenv` is the other half of the vulnerability this
-/// allowlist closes and is never on this list either.
+/// Deliberately EXCLUDED, even though real: `current_setting` — the obvious
+/// way to read the `threads` setting, but the SAME function reads
+/// `extension_directory`, `home_directory`, and every other DuckDB setting,
+/// with no way to restrict it to one argument at the AST level. Sigiro's own
+/// storage-headroom query was written to use `pragma_database_size()` only,
+/// rather than reopening this hole for one number. `getenv` is the other half
+/// of the vulnerability this allowlist closes and is never on this list either.
 const SCALAR_FUNCTIONS: &[&str] = &[
     // Aggregates
     "COUNT",

@@ -3,7 +3,6 @@ pub mod anomaly;
 pub mod auth;
 pub mod client;
 pub mod config;
-pub mod diagnose;
 pub mod drain;
 pub mod ebpf;
 pub mod federate;
