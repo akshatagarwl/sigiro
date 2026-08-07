@@ -171,8 +171,11 @@ impl SigiroClient {
         let body = DiagnoseRequest {
             service: service.map(str::to_string),
             services,
-            from_ts: from,
-            to_ts: to,
+            // The CLI always sends an explicit window — `--from`/`--to` are
+            // resolved (and defaulted) in `main.rs` before this call, so the
+            // HTTP-side default never applies here.
+            from_ts: Some(from),
+            to_ts: Some(to),
         };
         let req = self
             .http

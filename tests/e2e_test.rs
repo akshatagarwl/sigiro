@@ -366,8 +366,8 @@ async fn e2e_full_pipeline_ingest_and_diagnose() {
     let req = DiagnoseRequest {
         service: Some("checkout".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let reader = conn.get();
     let blocks = diagnose(&reader, &req, "lake.").expect("diagnose should succeed");
@@ -429,8 +429,8 @@ async fn e2e_multi_project_isolation() {
     let req_a = DiagnoseRequest {
         service: Some("alpha-svc".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let reader_a = conn_a.get();
     let blocks_a = diagnose(&reader_a, &req_a, "lake.").expect("diagnose failed");
@@ -443,8 +443,8 @@ async fn e2e_multi_project_isolation() {
     let req_beta_on_a = DiagnoseRequest {
         service: Some("beta-svc".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let blocks_beta_on_a = diagnose(&reader_a, &req_beta_on_a, "lake.").expect("diagnose failed");
     let block_beta_on_a = &blocks_beta_on_a.results["beta-svc"];
@@ -458,8 +458,8 @@ async fn e2e_multi_project_isolation() {
     let req_b = DiagnoseRequest {
         service: Some("beta-svc".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let reader_b = conn_b.get();
     let blocks_b = diagnose(&reader_b, &req_b, "lake.").expect("diagnose failed");
@@ -724,8 +724,8 @@ async fn e2e_diagnosis_all_signals() {
     let req = DiagnoseRequest {
         service: Some("full-svc".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let reader = conn.get();
     let blocks = diagnose(&reader, &req, "lake.").expect("diagnose with all signals");
@@ -935,8 +935,8 @@ async fn e2e_drain_log_template_dedup() {
     let req = DiagnoseRequest {
         service: Some("api-svc".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let blocks = diagnose(&conn, &req, "lake.").unwrap();
     let block = &blocks.results["api-svc"];

@@ -14,8 +14,8 @@ fn diagnose_service(
     let req = DiagnoseRequest {
         service: Some(service.to_string()),
         services: None,
-        from_ts,
-        to_ts,
+        from_ts: Some(from_ts),
+        to_ts: Some(to_ts),
     };
     let mut blocks = diagnose(conn, &req, "").expect("diagnose");
     blocks.results.remove(service).expect("block for service")
@@ -90,8 +90,8 @@ fn diagnose_with_in_memory_db() {
     let req = DiagnoseRequest {
         service: Some("nonexistent".to_string()),
         services: None,
-        from_ts: 0,
-        to_ts: 0,
+        from_ts: Some(0),
+        to_ts: Some(0),
     };
     let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose should succeed on empty db");
     let block = &blocks.results["nonexistent"];
@@ -162,8 +162,8 @@ fn diagnose_with_real_span_data() {
     let req = DiagnoseRequest {
         service: Some("checkout".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose");
     let block = &blocks.results["checkout"];
@@ -671,8 +671,8 @@ fn diagnose_large_window_still_returns_spans() {
     let req = DiagnoseRequest {
         service: Some("svc".to_string()),
         services: None,
-        from_ts: now_us - 3 * 3600 * 1_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 3 * 3600 * 1_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let blocks = diagnose(&shared.lock(), &req, "").unwrap();
     let block = &blocks.results["svc"];
@@ -704,8 +704,8 @@ fn diagnose_multi_basic() {
     let req = DiagnoseRequest {
         service: None,
         services: Some(vec!["svc-a".into(), "svc-b".into(), "svc-c".into()]),
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let blocks = diagnose(&shared.lock(), &req, "").unwrap();
     assert_eq!(blocks.results.len(), 3);
@@ -724,8 +724,8 @@ fn diagnose_multi_cap_enforced() {
     let req = DiagnoseRequest {
         service: None,
         services: Some(services),
-        from_ts: 0,
-        to_ts: 0,
+        from_ts: Some(0),
+        to_ts: Some(0),
     };
     let result = diagnose(&shared.lock(), &req, "");
     assert!(result.is_err(), "should reject >10 services");
@@ -739,8 +739,8 @@ fn diagnose_multi_empty_rejected() {
     let req = DiagnoseRequest {
         service: None,
         services: Some(vec![]),
-        from_ts: 0,
-        to_ts: 0,
+        from_ts: Some(0),
+        to_ts: Some(0),
     };
     assert!(diagnose(&shared.lock(), &req, "").is_err());
 }
@@ -784,8 +784,8 @@ fn diagnose_all_three_signals() {
     let req = DiagnoseRequest {
         service: Some("svc".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose");
     let block = &blocks.results["svc"];
@@ -847,8 +847,8 @@ fn operation_summary_baselines() {
     let req = DiagnoseRequest {
         service: Some("checkout".to_string()),
         services: None,
-        from_ts: now_us - 5 * 60 * 1_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 5 * 60 * 1_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose");
     let block = &blocks.results["checkout"];
@@ -2544,8 +2544,8 @@ fn diagnose_fails_loud_when_all_services_fail() {
     let req = DiagnoseRequest {
         service: Some("svc".to_string()),
         services: None,
-        from_ts: 0,
-        to_ts: 1,
+        from_ts: Some(0),
+        to_ts: Some(1),
     };
     let err = diagnose(&conn, &req, "")
         .err()
@@ -2831,4 +2831,58 @@ fn server_spans_without_client_spans_surface_as_a_finding() {
     assert_eq!(f.severity, "warning");
     assert!(f.summary.contains("2 SERVER span(s)"), "{}", f.summary);
     assert_drill_runs(&conn, f.drill_down_sql.as_deref().expect("drill"));
+}
+
+/// The window is optional, and "optional" has four cases — three legal, one
+/// not. Omitting both bounds is the documented default and must match the CLI;
+/// supplying `to_ts` alone is ambiguous and must be rejected rather than
+/// guessed, because guessing answers about a different slice of time than the
+/// caller named.
+#[test]
+fn diagnose_window_defaults_and_rejects_a_half_open_range() {
+    use sigiro::diagnose::DiagnoseRequest;
+    use validator::Validate;
+
+    let now = 1_780_000_000_000_000_i64;
+    let fifteen_min = 15 * 60 * 1_000_000;
+
+    let mk = |from: Option<i64>, to: Option<i64>| DiagnoseRequest {
+        service: Some("checkout".into()),
+        services: None,
+        from_ts: from,
+        to_ts: to,
+    };
+
+    // Neither bound: the last 15 minutes, matching `sigiro diagnose`.
+    let req = mk(None, None);
+    req.validate().expect("omitting both bounds is legal");
+    assert_eq!(req.window(now), (now - fifteen_min, now));
+
+    // Both bounds: used verbatim.
+    let req = mk(Some(now - 3_600_000_000), Some(now));
+    req.validate().expect("an explicit window is legal");
+    assert_eq!(req.window(now), (now - 3_600_000_000, now));
+
+    // Start only: ends now.
+    let req = mk(Some(now - 3_600_000_000), None);
+    req.validate().expect("from_ts alone is legal");
+    assert_eq!(req.window(now), (now - 3_600_000_000, now));
+
+    // End only: ambiguous, rejected, and the message says which field to add.
+    let err = format!("{:?}", mk(None, Some(now)).validate().unwrap_err());
+    assert!(
+        err.contains("from_ts"),
+        "rejection must name the missing field, got: {err}"
+    );
+
+    // The wrong-unit guard still fires on a supplied value — this is why the
+    // fields were mandatory before, and making them optional must not lose it.
+    let seconds = 1_780_000_000_i64;
+    assert!(
+        mk(Some(seconds), Some(seconds + 900)).validate().is_err(),
+        "a seconds-valued timestamp must still be rejected loudly"
+    );
+
+    // And an inverted explicit window is still refused.
+    assert!(mk(Some(now), Some(now - 1)).validate().is_err());
 }

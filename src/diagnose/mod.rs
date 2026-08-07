@@ -34,18 +34,50 @@ pub struct DiagnoseRequest {
     pub services: Option<Vec<String>>,
     /// Window start, **microseconds** since the Unix epoch (a 16-digit value,
     /// e.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.
-    #[validate(custom(function = "validate_micros"))]
+    /// OPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the
+    /// same default `sigiro diagnose` uses. Providing `to_ts` without `from_ts`
+    /// is rejected — a window that ends somewhere with no start is ambiguous,
+    /// and guessing one silently would answer a question nobody asked.
+    #[validate(custom(function = "validate_micros_opt"))]
     #[schema(example = 1780000000000000i64)]
-    pub from_ts: i64,
+    pub from_ts: Option<i64>,
     /// Window end, microseconds since the Unix epoch. Must be > `from_ts`.
-    #[validate(custom(function = "validate_micros"))]
+    /// Optional: defaults to now when `from_ts` is given alone.
+    #[validate(custom(function = "validate_micros_opt"))]
     #[schema(example = 1780001800000000i64)]
-    pub to_ts: i64,
+    pub to_ts: Option<i64>,
+}
+
+/// The default window when the caller supplies neither bound. Matches the CLI's
+/// `--from` default so `sigiro diagnose svc` and `POST /v1/diagnose
+/// {"service":"svc"}` describe the same slice of time.
+const DEFAULT_WINDOW_MICROS: i64 = 15 * 60 * 1_000_000;
+
+impl DiagnoseRequest {
+    /// Resolve the optional bounds to a concrete window, once, so no downstream
+    /// caller invents its own default. Assumes `validate_window` has run, which
+    /// is what rejects `to_ts` without `from_ts`.
+    pub fn window(&self, now_micros: i64) -> (i64, i64) {
+        match (self.from_ts, self.to_ts) {
+            (Some(from), Some(to)) => (from, to),
+            (Some(from), None) => (from, now_micros),
+            // Both absent: the documented 15-minute default.
+            _ => (now_micros - DEFAULT_WINDOW_MICROS, now_micros),
+        }
+    }
 }
 
 // Timestamps are MICROSECONDS since the Unix epoch (matching the span/log
 // `timestamp` column). Fail LOUD on the wrong unit: seconds/millis are still
 // "positive" but resolve to ~1970, matching nothing — a false "no telemetry".
+/// `validate_micros` for an optional field. `None` is legal (it means "use the
+/// default"); `Some` still gets the full wrong-unit check, which is the whole
+/// reason these fields were mandatory in the first place — a seconds value is
+/// positive, resolves to ~1970, matches nothing, and reads as "no telemetry".
+fn validate_micros_opt(ts: i64) -> Result<(), validator::ValidationError> {
+    validate_micros(ts)
+}
+
 fn validate_micros(ts: i64) -> Result<(), validator::ValidationError> {
     const MICROS_MIN: i64 = 1_000_000_000_000_000; // ~2001-09 in µs — catches s / ms
     const MICROS_MAX: i64 = 10_000_000_000_000_000; // ~2286 in µs — catches ns
@@ -71,12 +103,23 @@ fn validate_micros(ts: i64) -> Result<(), validator::ValidationError> {
 }
 
 fn validate_window(req: &DiagnoseRequest) -> Result<(), validator::ValidationError> {
-    if req.to_ts <= req.from_ts {
-        let mut err = validator::ValidationError::new("window");
-        err.message = Some("to_ts must be greater than from_ts".into());
-        return Err(err);
+    match (req.from_ts, req.to_ts) {
+        // A window that ends somewhere but starts nowhere. Defaulting the start
+        // would silently answer about a different span of time than the caller
+        // named, so reject and say which field is missing.
+        (None, Some(_)) => {
+            let mut err = validator::ValidationError::new("window");
+            err.message =
+                Some("to_ts was provided without from_ts — supply both, or neither for the last 15 minutes".into());
+            Err(err)
+        }
+        (Some(from), Some(to)) if to <= from => {
+            let mut err = validator::ValidationError::new("window");
+            err.message = Some("to_ts must be greater than from_ts".into());
+            Err(err)
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 const MAX_SERVICES: usize = 10;
@@ -669,13 +712,21 @@ pub fn diagnose(
     prefix: &str,
 ) -> Result<DiagnoseResponse> {
     let services = resolve_services(req)?;
+    // Resolve the window ONCE, before the fan-out: every service in a
+    // multi-service diagnosis must describe the same slice of time, and a
+    // per-iteration `now` would give each a slightly different one.
+    let now_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or_default();
+    let (from_ts, to_ts) = req.window(now_micros);
     let mut results = BTreeMap::new();
     let mut errors = BTreeMap::new();
     for service in &services {
         // Partial results: one broken service must not discard the others.
         // Each failure is still loud — logged here, surfaced per-service in
         // `errors`, and fatal when NOTHING succeeded.
-        match diagnose_one(conn, service, req.from_ts, req.to_ts, prefix) {
+        match diagnose_one(conn, service, from_ts, to_ts, prefix) {
             Ok(block) => {
                 results.insert(service.clone(), block);
             }

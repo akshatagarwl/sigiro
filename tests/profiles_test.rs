@@ -311,8 +311,8 @@ async fn e2e_profiles_pipeline() {
     let req = DiagnoseRequest {
         service: Some("api-svc".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let blocks = sigiro::diagnose::diagnose(&conn, &req, "lake.").unwrap();
     let profiles = &blocks.results["api-svc"].profiles;
@@ -479,8 +479,8 @@ async fn e2e_profiles_multi_type() {
     let req = DiagnoseRequest {
         service: Some("api-svc".to_string()),
         services: None,
-        from_ts: now_us - 60_000_000,
-        to_ts: now_us + 60_000_000,
+        from_ts: Some(now_us - 60_000_000),
+        to_ts: Some(now_us + 60_000_000),
     };
     let blocks = sigiro::diagnose::diagnose(&conn, &req, "lake.").unwrap();
     let profiles = &blocks.results["api-svc"].profiles;
