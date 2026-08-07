@@ -36,12 +36,14 @@ download takes 30–90 seconds and blocks the start.
 | --- | --- | --- |
 | `--from <EPOCH_SECONDS>` | integer | 15 minutes before now |
 | `--to <EPOCH_SECONDS>` | integer | now |
-| `--grep <SUBSTRING>` | string | none |
 
 `--from` and `--to` are epoch **seconds**. The equivalent HTTP field names are
-`from_ts` and `to_ts`, and those are epoch **microseconds**. `--grep` filters
-span and operation names on the client, and the match is a case-insensitive
-substring.
+`from_ts` and `to_ts`, and those are epoch **microseconds**. Both HTTP fields
+are optional. If you omit both, the server reads the last 15 minutes, which is
+the same window the CLI uses.
+
+The command prints JSON. To narrow the output, pipe it to `jq`. The CLI applies
+no filter of its own, so the CLI and the API return the same document.
 
 ## anomalies
 

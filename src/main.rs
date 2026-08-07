@@ -75,10 +75,6 @@ enum Command {
         /// End of range in epoch seconds. Defaults to now if omitted.
         #[arg(long)]
         to: Option<i64>,
-        /// F-23: client-side filter for span/operation names (case-insensitive
-        /// substring). Useful for narrowing a busy diagnose output.
-        #[arg(long)]
-        grep: Option<String>,
     },
     /// List detected anomalies (the precomputed anomaly table, all signals,
     /// ranked biggest shift first, cross-signal `incident_id` grouping). The
@@ -274,12 +270,7 @@ async fn main() -> Result<()> {
             });
             println!("{}", format_output(&value)?);
         }
-        Some(Command::Diagnose {
-            service,
-            from,
-            to,
-            grep,
-        }) => {
+        Some(Command::Diagnose { service, from, to }) => {
             let client = require_client()?;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -290,22 +281,7 @@ async fn main() -> Result<()> {
                 (now - 900) * 1_000_000
             });
             let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
-            let mut block = client.diagnose(&service, from_ts, to_ts).await?;
-            // F-23: client-side --grep filter. Filter operation summaries,
-            // log patterns, and spans by case-insensitive substring.
-            if let Some(pattern) = grep {
-                let pat = pattern.to_lowercase();
-                block
-                    .operation_summaries
-                    .retain(|op| op.span_name.to_lowercase().contains(&pat));
-                block
-                    .log_patterns
-                    .retain(|lp| lp.pattern.to_lowercase().contains(&pat));
-                block.spans.sample.retain(|s| {
-                    s.trace_id.to_lowercase().contains(&pat)
-                        || s.span_name.to_lowercase().contains(&pat)
-                });
-            }
+            let block = client.diagnose(&service, from_ts, to_ts).await?;
             // No ad-hoc trace hint anymore: every span carries its own
             // `drill_down_sql` (the full trace) and each sampled section its
             // `drill_all_sql`, so the response is self-describing.

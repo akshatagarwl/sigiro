@@ -125,7 +125,7 @@ carries a ready-to-run SQL query.
 
 ```bash
 sigiro diagnose checkout
-sigiro diagnose checkout --from $(date -v-1H +%s) --grep POST
+sigiro diagnose checkout --from $(date -v-1H +%s)
 ```
 
 The command prints indented JSON. Read the `findings` array first: it is sorted
