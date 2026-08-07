@@ -128,3 +128,42 @@ fn gate_still_rejects_reader_family_and_config_leaks() {
         );
     }
 }
+
+/// `sys_*` describes the machine sigiro runs on. On the hosted service that
+/// machine is the operator's, never the tenant's — so the surface both leaks
+/// our infrastructure and can only ever return an answer about the wrong host.
+/// Gated on the same `is_distributed()` axis `information_schema` already uses,
+/// so the self-hosted fleet case is untouched.
+#[test]
+fn sys_functions_are_rejected_on_hosted_and_allowed_when_self_hosted() {
+    for sql in [
+        "SELECT * FROM sys_disk_info()",
+        "SELECT * FROM sys_memory_info()",
+        "SELECT * FROM sys_cpu_info()",
+        "SELECT * FROM sys_network_info()",
+        "SELECT * FROM sys_os_info()",
+    ] {
+        // Hosted: rejected, and the message must name the alternative rather
+        // than only refusing.
+        let err = sigiro::server::validate_read_only_gated(sql, false, false)
+            .expect_err("hosted must reject sys_* — it describes the operator's host");
+        assert!(
+            err.contains("sigiro_metrics_*"),
+            "rejection should redirect to sigiro_metrics_*, got: {err}"
+        );
+
+        // Self-host / local: allowed. This is the fleet-stats use case and it
+        // must not regress.
+        sigiro::server::validate_read_only_gated(sql, true, true)
+            .unwrap_or_else(|e| panic!("self-host must allow {sql}: {e}"));
+    }
+
+    // The ordinary tables stay reachable on hosted — the gate is scoped to
+    // sys_*, not a blanket tightening.
+    sigiro::server::validate_read_only_gated(
+        "SELECT service_name FROM sigiro_spans WHERE timestamp > now()",
+        false,
+        false,
+    )
+    .expect("hosted must still allow the sigiro_* tables");
+}

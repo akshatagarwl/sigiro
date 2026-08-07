@@ -522,11 +522,31 @@ fn is_allowed_table(name: &ObjectName, allow_information_schema: bool) -> bool {
 /// (possibly qualified) name is on `SAFE_FUNCTIONS` — matched on the final
 /// identifier so `main.pragma_database_size()` and `pragma_database_size()`
 /// are treated the same.
-fn is_safe_function(name: &ObjectName) -> bool {
+/// True when `name` is a `sys_*` host-statistics function that this caller is
+/// not allowed to reach. Used to raise a message that names the alternative
+/// instead of a bare "not allowed", which sends a tenant looking for a typo.
+fn is_gated_sys_function(name: &ObjectName, allow_sys_functions: bool) -> bool {
+    !allow_sys_functions
+        && name.0.last().is_some_and(|i| {
+            crate::federate::SYS_STATS_FUNCTIONS.contains(&i.value.to_uppercase().as_str())
+        })
+}
+
+/// The rejection text for a gated `sys_*` call.
+fn gated_sys_message(name: &ObjectName) -> String {
+    format!(
+        "query rejected: {name} is not available on the hosted service. The sys_* \
+         functions read the machine sigiro runs on, which here is ours and not \
+         yours. Query sigiro_metrics_* for host telemetry your own services sent."
+    )
+}
+
+fn is_safe_function(name: &ObjectName, allow_sys_functions: bool) -> bool {
     name.0.last().is_some_and(|ident| {
         let upper = ident.value.to_uppercase();
         SAFE_FUNCTIONS.contains(&upper.as_str())
-            || crate::federate::SYS_STATS_FUNCTIONS.contains(&upper.as_str())
+            || (allow_sys_functions
+                && crate::federate::SYS_STATS_FUNCTIONS.contains(&upper.as_str()))
     })
 }
 
@@ -618,6 +638,11 @@ struct AllowlistVisitor {
     /// When false (hosted mode), `information_schema` enumeration is rejected —
     /// see `validate_read_only_with`.
     allow_information_schema: bool,
+    /// When false (hosted mode), the `sys_*` host-statistics functions are
+    /// rejected. They describe the machine sigiro itself runs on, which on the
+    /// hosted service is OUR box and never the tenant's — see
+    /// `validate_read_only_with`.
+    allow_sys_functions: bool,
 }
 
 impl Visitor for AllowlistVisitor {
@@ -636,7 +661,10 @@ impl Visitor for AllowlistVisitor {
         match table_factor {
             TableFactor::Table { name, args, .. } => {
                 if let Some(args) = args {
-                    if !is_safe_function(name) {
+                    if is_gated_sys_function(name, self.allow_sys_functions) {
+                        return ControlFlow::Break(gated_sys_message(name));
+                    }
+                    if !is_safe_function(name, self.allow_sys_functions) {
                         return ControlFlow::Break(format!("query rejected: {name} not allowed"));
                     }
                     // A `sys_*` host-statistics function takes NO arguments.
@@ -667,7 +695,10 @@ impl Visitor for AllowlistVisitor {
                 ControlFlow::Continue(())
             }
             TableFactor::Function { name, args, .. } => {
-                if !is_safe_function(name) {
+                if is_gated_sys_function(name, self.allow_sys_functions) {
+                    return ControlFlow::Break(gated_sys_message(name));
+                }
+                if !is_safe_function(name, self.allow_sys_functions) {
                     return ControlFlow::Break(format!(
                         "query rejected: function {name} not allowed"
                     ));
@@ -683,7 +714,7 @@ impl Visitor for AllowlistVisitor {
             }
             TableFactor::TableFunction { expr, .. } => match expr {
                 Expr::Function(f)
-                    if is_safe_function(&f.name)
+                    if is_safe_function(&f.name, self.allow_sys_functions)
                         && !(is_no_arg_function(&f.name) && function_has_args(f)) =>
                 {
                     ControlFlow::Continue(())
@@ -743,7 +774,28 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
 /// (`sigiro_control.*`) and sibling tenant schemas. Data reads are already
 /// blocked by the table allowlist; this closes the structure disclosure.
 /// The `/v1/query` handler passes `!hosted`; local/edge callers pass `true`.
+///
+/// `allow_sys_functions = false` (HOSTED mode) additionally rejects the
+/// `sys_*` host-statistics functions. They read the machine sigiro itself runs
+/// on — disks, memory, CPU, network interfaces, OS. On the hosted service that
+/// machine is OURS and is never the tenant's, so the surface is both an
+/// infrastructure disclosure and, worse, misleading by construction: it can
+/// never answer a question about the caller's own hosts. `sigiro_metrics_*` is
+/// where those questions are answered. Self-host and local keep it, and the
+/// `sigiro query` fleet coordinator is unaffected — there each edge's `sys_*`
+/// genuinely describes that operator's own machines, which is the entire point
+/// of the fleet-stats work.
 pub fn validate_read_only_with(sql: &str, allow_information_schema: bool) -> Result<(), String> {
+    validate_read_only_gated(sql, allow_information_schema, true)
+}
+
+/// `validate_read_only_with` plus the `sys_*` gate. Separate so the existing
+/// two-argument signature keeps working for every local/edge caller.
+pub fn validate_read_only_gated(
+    sql: &str,
+    allow_information_schema: bool,
+    allow_sys_functions: bool,
+) -> Result<(), String> {
     let dialect = GenericDialect {};
 
     // Every AT (...) clause body must be a literal BEFORE anything else runs:
@@ -781,6 +833,7 @@ pub fn validate_read_only_with(sql: &str, allow_information_schema: bool) -> Res
     };
     if let ControlFlow::Break(msg) = query.visit(&mut AllowlistVisitor {
         allow_information_schema,
+        allow_sys_functions,
     }) {
         return Err(msg);
     }
@@ -1859,7 +1912,12 @@ async fn query_handler(
     // enumeration — it would expose the control plane + sibling tenant schema
     // names. Local/self-host keeps it (single-catalog, safe).
     let allow_information_schema = !state.pool.storage_mode().is_distributed();
-    if let Err(e) = validate_read_only_with(&body, allow_information_schema) {
+    // Same axis, second disclosure: `sys_*` reads the host sigiro runs on. In
+    // hosted mode that host is ours, so the answer is never about the tenant's
+    // own machine — it leaks our infrastructure AND is misleading by
+    // construction. `sigiro_metrics_*` carries host telemetry the tenant sent.
+    let allow_sys_functions = !state.pool.storage_mode().is_distributed();
+    if let Err(e) = validate_read_only_gated(&body, allow_information_schema, allow_sys_functions) {
         tracing::warn!(sql = %sql_preview, "query rejected (validation): {e}");
         return Err(bad_request(
             "query rejected",
