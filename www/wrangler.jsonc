@@ -41,20 +41,50 @@
   //
   // `workers_dev` is off: it published a second origin serving the identical site,
   // with our canonical tags, our sitemap and our OG tags on it.
-  // `/docs/api/*` are retired-URL REDIRECTS, not content pages. Blume derives
-  // `run_worker_first` from the first path segment of content routes, so
-  // `/docs/reference` alone forces `/docs/*` — which swallows these redirects and
-  // routes them through the Worker. There, `@astrojs/cloudflare` declares
-  // `redirects: false`, so Astro defaults the status and the configured 302
-  // becomes a **301** at the edge, which browsers cache more or less forever.
+  // Every path in the leading negatives is a retired-URL REDIRECT, not a content
+  // page. Blume derives `run_worker_first` from the first path segment of content
+  // routes, so `/docs/reference` alone forces `/docs/*` — which swallows these
+  // redirects and routes them through the Worker. There, `@astrojs/cloudflare`
+  // declares `redirects: false`, so Astro defaults the status and the configured
+  // 302 becomes a **301** at the edge, which browsers cache more or less forever.
   // The generated `_redirects` is correct (302); it is simply never consulted.
   // Excluding them here restores the asset layer, which honours the status.
   // Verified: every path inside `run_worker_first` served 301, every path
   // outside it (`/sitemap.xml`, `/openapi.json`, `/twitter`) served 302.
+  // Re-verified for the three Diátaxis entries against `wrangler dev` on the real
+  // bundle: with these negatives present all three served 302, and with only them
+  // removed from the generated `dist/server/wrangler.json` all three served 301
+  // while `/docs/api` (whose own negative stayed) held at 302. So the defect and
+  // the fix are both reproducible locally, with no deploy.
   // Blume MERGES this list ahead of its own rules (`mergeRunWorkerFirstRules`),
   // and Cloudflare evaluates in order, so a leading negative wins.
+  // Fixed upstream in blume#170, not yet released — until then this list has to
+  // grow with every retired URL under `/docs`, and `blume.config.ts` says so at
+  // its `redirects` block.
+  //
+  // Two groups, matching the two groups in `blume.config.ts`:
+  //   `/docs/api*`  — the retired fumadocs-openapi operation URLs.
+  //   the three `/docs/<slug>*` — the flat guide URLs retired by the Diátaxis
+  //   sort. The trailing `*` is what covers the `.md` and `.mdx` variants of each
+  //   one in a single rule; `/docs/quickstart` has no children, so the wildcard
+  //   cannot catch anything else.
+  //
+  // NOTHING under the new prefixes is listed. `/docs/tutorials/*`,
+  // `/docs/how-to/*` and `/docs/explanation/*` are real content and MUST stay
+  // inside `run_worker_first`, because `Accept: text/markdown` negotiation on an
+  // extensionless URL happens in the Worker. Excluding them would serve HTML to
+  // an agent that asked for Markdown.
   "assets": {
-    "run_worker_first": ["!/docs/api/*", "!/docs/api", "/", "/docs", "/docs/*"]
+    "run_worker_first": [
+      "!/docs/api/*",
+      "!/docs/api",
+      "!/docs/quickstart*",
+      "!/docs/install-with-ai*",
+      "!/docs/hosted-onboarding*",
+      "/",
+      "/docs",
+      "/docs/*"
+    ]
   },
   "workers_dev": false,
   "routes": [

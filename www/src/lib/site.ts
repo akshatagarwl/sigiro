@@ -133,7 +133,7 @@ export const HOW = [
     /**
      * The reader picks, and the pick is remembered.
      *
-     * The ids match the tab values in `content/docs/quickstart.mdx`, and both
+     * The ids match the tab values in `docs/tutorials/quickstart.mdx`, and both
      * read `localStorage['sigiro-install']`, so choosing here shows the same
      * choice in the docs and the other way round.
      *
@@ -395,7 +395,7 @@ export const PROMISES = [
     /**
      * The site sells the self-hosted product, which is the one a reader can have
      * working in five minutes without talking to anybody. Hosted is a hand-built
-     * beta (see docs/hosted-onboarding.md), so it gets a conversation rather than
+     * beta (see docs/how-to/hosted-onboarding.md), so it gets a conversation rather than
      * a price: quoting ~$14/mo invited a reader to sign up for something with no
      * signup, and the operator sets up each tenant by hand.
      */
@@ -425,7 +425,7 @@ export const INTEGRATIONS = [
      * calls a model instead of a database — section 03's whole point — so
      * splitting them into two rows would argue against the page. Claude Code
      * appears here and under "Read by" because it genuinely does both: it emits
-     * its own OpenTelemetry (docs/install-with-ai) and it reads the answers.
+     * its own OpenTelemetry (docs/how-to/install-with-ai) and it reads the answers.
      */
     label: 'Send telemetry from',
     items: [
@@ -497,7 +497,7 @@ export const SOCIAL = [
  * The division of labour on this page: **the site sells self-hosted and local
  * development**, which a reader can have running in five minutes with no
  * account and no conversation. Hosted is an invited beta that an operator sets
- * up by hand (docs/hosted-onboarding.md), so it has no signup to link to and a
+ * up by hand (docs/how-to/hosted-onboarding.md), so it has no signup to link to and a
  * call is the honest route rather than a placeholder form.
  *
  * This is the hero's second action, in the slot that used to hold "Read the
@@ -540,8 +540,6 @@ export const CALL = {
  * training data instead of from our documents.
  */
 const READ_ALL_THREE = `Read ${SITE.url}, the documentation at ${SITE.url}/llms-full.txt, and the API description at ${SITE.apiUrl}/openapi.json.`;
-
-
 
 /**
  * The pool of questions. One is drawn at random per link, per page load.

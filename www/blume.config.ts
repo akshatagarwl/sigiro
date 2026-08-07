@@ -121,7 +121,8 @@ export default defineConfig({
   integrations: [sigiro(), sitemap()],
 
   /**
-   * The API reference's old per-operation URLs.
+   * Retired URLs. Two groups, two different provenances — see the comment above
+   * each one.
    *
    * These were `public/_redirects` rules. Blume expresses them itself, and on a
    * `server` build it handles them at request time through Astro's own
@@ -133,25 +134,37 @@ export default defineConfig({
    * at `/docs/api`. Writing the prefix here would double it.
    *
    * The gain over `_redirects` is not tidiness: `blume audit`'s link checker reads
-   * this list, so a page linking to a retired operation URL is a known redirect
-   * rather than a broken link. A `_redirects` rule is invisible to it.
-   *
-   * Closed set, and enumerated because it has to be — these came from two
-   * generations of `fumadocs-openapi`, both deleted, so nothing can add an
-   * eleventh. Recovered with `git log --all --name-only -- 'www/content/docs/api/**'
-   * 'www/src/app/docs/api/**'`.
+   * this list, so a page linking to a retired URL is a known redirect rather than
+   * a broken link. A `_redirects` rule is invisible to it. That is also why the
+   * Diátaxis group below belongs here rather than in `public/_redirects`: those
+   * rules are all `/docs`-relative, so they are expressible natively, and the file
+   * exists only for the root-level rules Blume cannot express.
    *
    * 302 throughout, never 301: the docs have moved origin twice in three days, and
-   * a 301 is cached by the browser more or less forever.
-   *
-   * The four `/admin/*` operations are absent deliberately. They are filtered out
-   * of the public `/openapi.json`, so there is no page to send anyone to, and a
-   * redirect would be the one place still advertising that they exist.
+   * a 301 is cached by the browser more or less forever. Every entry below is
+   * ALSO listed as a negative `run_worker_first` rule in `wrangler.jsonc` — that
+   * is what makes the 302 survive to the edge, and the note there says why.
    */
   redirects: [
-    /* The section root moved from `/api` to `/reference` — see `openapi.route`.
-       This rule carries every inbound link to `/docs/api`, including the one in
-       the footer of every page this site has served. */
+    /* GROUP 1 — the API reference's old per-operation URLs.
+     *
+     * Closed set, and enumerated because it has to be: these came from two
+     * generations of `fumadocs-openapi`, both deleted, so nothing can add a
+     * twelfth *of this kind*. Recovered with `git log --all --name-only --
+     * 'www/content/docs/api/**' 'www/src/app/docs/api/**'`.
+     *
+     * "Nothing can add an eleventh" was the original claim and it still holds for
+     * this group. It was never a claim about the array — group 2 is a different
+     * set from a different cause, so it is listed separately rather than appended
+     * here, which would have made this paragraph false.
+     *
+     * The four `/admin/*` operations are absent deliberately. They are filtered
+     * out of the public `/openapi.json`, so there is no page to send anyone to,
+     * and a redirect would be the one place still advertising that they exist.
+     *
+     * The section root moved from `/api` to `/reference` — see `openapi.route`.
+     * That first rule carries every inbound link to `/docs/api`, including the one
+     * in the footer of every page this site has served. */
     { from: '/api', to: '/reference', status: 302 },
     { from: '/api/get-trace', to: '/reference', status: 302 },
     { from: '/api/investigate-services', to: '/reference', status: 302 },
@@ -163,6 +176,31 @@ export default defineConfig({
     { from: '/api/v1/query/post', to: '/reference', status: 302 },
     { from: '/api/v1/services/get', to: '/reference', status: 302 },
     { from: '/api/v1/traces/trace_id/get', to: '/reference', status: 302 },
+
+    /* GROUP 2 — the three flat guide URLs, retired when the docs were sorted into
+     * Diátaxis sections (tutorial / how-to / reference / explanation).
+     *
+     * The pages did not change identity, only mode: the quickstart is the tutorial
+     * and the other two are how-to guides, so each old URL has exactly one new
+     * home and the mapping is 1:1. Slugs are deliberately unchanged, so this list
+     * is a directory rewrite and nothing else.
+     *
+     * `.md` and `.mdx` are listed as well because they are real served URLs, not
+     * an implementation detail. Blume writes a raw-Markdown variant beside every
+     * page, `_headers` gives `/docs/*.md` a `text/markdown` content type, and each
+     * page advertises its own variant in a `Link: rel="alternate"` header. An
+     * agent that kept `/docs/quickstart.md` is exactly the reader this product is
+     * for, so the extensionless form alone would have covered browsers and missed
+     * them. */
+    { from: '/quickstart', to: '/tutorials/quickstart', status: 302 },
+    { from: '/quickstart.md', to: '/tutorials/quickstart.md', status: 302 },
+    { from: '/quickstart.mdx', to: '/tutorials/quickstart.mdx', status: 302 },
+    { from: '/install-with-ai', to: '/how-to/install-with-ai', status: 302 },
+    { from: '/install-with-ai.md', to: '/how-to/install-with-ai.md', status: 302 },
+    { from: '/install-with-ai.mdx', to: '/how-to/install-with-ai.mdx', status: 302 },
+    { from: '/hosted-onboarding', to: '/how-to/hosted-onboarding', status: 302 },
+    { from: '/hosted-onboarding.md', to: '/how-to/hosted-onboarding.md', status: 302 },
+    { from: '/hosted-onboarding.mdx', to: '/how-to/hosted-onboarding.mdx', status: 302 },
   ],
 
   /**

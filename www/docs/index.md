@@ -2,43 +2,59 @@
 title: sigiro docs
 description: sigiro is the detect and diagnose layer for software that repairs itself. OpenTelemetry goes in. Ranked results and runnable SQL come out, for agents and not for dashboards.
 sidebar:
-  order: 1
+  order: 0
 ---
 
 sigiro is an observability backend for agents, not for dashboards. It reads
 OpenTelemetry. It answers the two questions that an automatic loop must answer
-before the loop repairs a fault:
+before the loop repairs a fault: **what changed**, and **why**.
 
-1. **What changed?** — `sigiro anomalies` returns the shifts that deviate from
-   the statistical baseline of the service. sigiro ranks these shifts. sigiro
-   also groups them into incidents across all signals.
-2. **Why?** — `sigiro diagnose` returns one structured evidence block for
-   each service. The block holds ranked findings, error breakdowns for each
-   operation, LLM statistics for each model, sampled spans, log patterns, and a
-   ready-to-run SQL query on every row.
+These docs have four parts. Each part answers a different kind of question, so
+go to the part that matches the question you have now.
 
-Both commands are also endpoints: `GET /v1/anomalies` and
-`POST /v1/diagnose`. An agent uses these endpoints to ask the same two
-questions. Refer to the [API reference](/api).
+## Tutorials
 
-sigiro is one static binary. You do not run a collector. You learn no query
-language other than SQL.
+A lesson. Read this part first, because it assumes no sigiro knowledge. You
+follow each step, and you see a result at each step.
 
-## Start here
+- **[Quickstart](/docs/tutorials/quickstart)** — run the server, send telemetry
+  to it, and ask it what changed and why. This takes five minutes.
 
-- **[Quickstart](/quickstart)** — run the binary, send telemetry to it, and
-  ask it a question. This takes five minutes.
-- **[Instrument your code with an AI agent](/install-with-ai)** — give one
-  prompt to an agent. The agent connects OpenTelemetry to sigiro for you.
-- **[Hosted beta](/hosted-onboarding)** — host nothing yourself. Send OTLP
-  to `api.sigiro.com` with a tenant key.
+## How-to guides
 
-## API reference
+Directions for one task. Read this part when you know what you want, and you
+need the steps to get it.
 
-sigiro serves a document at `/openapi.json`. The reference comes from that same
-document. Therefore the reference always agrees with the API.
+- **[Instrument your code with an agent](/docs/how-to/install-with-ai)** — give
+  one prompt to an agent. The agent connects OpenTelemetry to your service and
+  points it at sigiro.
+- **[Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding)** — run no
+  server yourself. Send OTLP to a host that we operate, with a tenant key.
+- **[Send your agent's own telemetry to sigiro](/docs/how-to/agent-telemetry)** —
+  point Claude Code or Codex at sigiro, then read the sessions back with SQL.
 
-- **[API reference](/api)** — five endpoints. Each endpoint has a request
-  playground.
+## Reference
+
+Facts about the machine. Read this part while you work, to confirm a name, a
+type or a limit.
+
+- **[API reference](/docs/reference)** — five endpoints. Each endpoint has a
+  request playground. sigiro builds these pages from the same `/openapi.json`
+  document that the server publishes, so the pages always agree with the API.
+- **[CLI reference](/docs/reference/cli)** — seven subcommands, every flag, and
+  every environment variable they read.
 
 An agent that reads `/openapi.json` needs no other information from us.
+
+## Explanation
+
+Why sigiro works as it does. Read this part when you want to know the reasons,
+the costs and the alternatives. You do not need a terminal.
+
+- **[About the one-process design](/docs/explanation/one-process)** — why one
+  binary and one embedded query engine, and what that choice costs you.
+- **[About the tables, and which machine they describe](/docs/explanation/tables)**
+  — why `sigiro_metrics_*` and `sys_*` answer questions about different
+  machines, and how to avoid a confident wrong answer.
+- **[About evidence instead of a dashboard](/docs/explanation/evidence)** — why
+  the answer is a ranked list with a runnable query on every row.

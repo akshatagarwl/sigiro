@@ -1,13 +1,16 @@
 ---
-title: Hosted beta
+title: Send telemetry to hosted sigiro
 description: Send OpenTelemetry to hosted sigiro with a tenant key, then query it back with SQL. You run no infrastructure. We set up each tenant by hand during the invited beta.
 sidebar:
-  order: 4
+  order: 2
 ---
 
-sigiro reads OpenTelemetry (traces, logs, metrics, profiles). You query the data back
-with SQL. During the beta, we set up each tenant by hand. Replace
-`<your-sigiro-host>` below with the host that your operator gives you.
+This guide shows you how to send OpenTelemetry to a sigiro host that we operate,
+and how to query the data back. You run no infrastructure.
+
+sigiro reads traces, logs, metrics and profiles. During the invited beta, we set
+up each tenant by hand. Replace `<your-sigiro-host>` below with the host that
+your operator gives you.
 
 ## 1. Get your API key
 
@@ -73,6 +76,9 @@ writes these shifts continuously. `GET /v1/anomalies` serves the same shifts as 
 JSON. Attribute columns (`*_attributes`, `events_json`, and similar) hold JSON text.
 Read a field with `json_extract(col, '$.key')` or `col ->> 'key'`.
 
+For what each family measures, and for the one name collision that produces a
+confident wrong answer, read [About the tables](/docs/explanation/tables).
+
 **Allowed SQL:** `SELECT` only, against the `sigiro_*` tables. sigiro rejects writes
 and DDL. sigiro also blocks the file, URL and S3 readers (`read_csv`,
 `read_parquet`, `glob` and similar). Joins, window functions, aggregates and
@@ -114,10 +120,21 @@ GROUP BY 1, 2 ORDER BY errors DESC;
 | OTLP/HTTP request rate | 50 req/s per source, burst 100 | 429 |
 
 sigiro has no secondary indexes. Therefore **bound every query by `timestamp`**. A
-bound gives you speed. A bound also prevents timeouts and truncation.
+bound gives you speed. A bound also prevents timeouts and truncation. [About the
+one-process design](/docs/explanation/one-process#you-pay-for-this-at-read-time)
+explains why there is no index to help you.
 
 ## 6. Data retention
 
 During the beta, treat sigiro as a live query service, not as a system of record. Ask
 your operator for the current retention window. Export any data that you must keep
 for a long time.
+
+## Next
+
+- [Instrument your code with an agent](/docs/how-to/install-with-ai) — if your
+  service still has no OpenTelemetry
+- [API reference](/docs/reference) — the five endpoints, each with a request
+  playground
+- [About evidence instead of a dashboard](/docs/explanation/evidence) — why
+  `/v1/diagnose` returns a ranked list rather than a chart
