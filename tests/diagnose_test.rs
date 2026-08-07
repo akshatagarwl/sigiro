@@ -2886,3 +2886,50 @@ fn diagnose_window_defaults_and_rejects_a_half_open_range() {
     // And an inverted explicit window is still refused.
     assert!(mk(Some(now), Some(now - 1)).validate().is_err());
 }
+
+/// Roadmap #72: the CLI is a thin layer over the API. `sigiro diagnose svc`
+/// with no `--from`/`--to` must describe exactly the same window as
+/// `POST /v1/diagnose {"service":"svc"}` with no bounds. Both now travel the
+/// same path — the CLI maps its seconds-flavoured flags to `Option` and owns
+/// no default of its own, so `DiagnoseRequest::window()` is the only place the
+/// 15-minute rule exists.
+#[test]
+fn cli_and_api_resolve_the_same_default_window() {
+    use sigiro::diagnose::DiagnoseRequest;
+
+    let now = 1_780_000_000_000_000_i64;
+
+    // What the CLI builds for `sigiro diagnose checkout` (no flags): it maps
+    // `Option<seconds>` to `Option<micros>`, so both stay `None`.
+    let cli_from: Option<i64> = None::<i64>.map(|s: i64| s * 1_000_000);
+    let cli_to: Option<i64> = None::<i64>.map(|s: i64| s * 1_000_000);
+    let from_cli = DiagnoseRequest {
+        service: Some("checkout".into()),
+        services: None,
+        from_ts: cli_from,
+        to_ts: cli_to,
+    };
+
+    // What an agent posts: `{"service":"checkout"}` — no bounds at all.
+    let from_api: DiagnoseRequest =
+        serde_json::from_str(r#"{"service":"checkout"}"#).expect("bare body must deserialize");
+
+    assert_eq!(
+        from_cli.window(now),
+        from_api.window(now),
+        "the CLI and the API must describe the same window when neither is given"
+    );
+
+    // And that shared window is the documented 15 minutes.
+    assert_eq!(from_api.window(now), (now - 15 * 60 * 1_000_000, now));
+
+    // An explicit CLI window still survives the seconds -> micros mapping.
+    let secs = 1_779_999_100_i64;
+    let explicit = DiagnoseRequest {
+        service: Some("checkout".into()),
+        services: None,
+        from_ts: Some(secs).map(|s| s * 1_000_000),
+        to_ts: None,
+    };
+    assert_eq!(explicit.window(now), (secs * 1_000_000, now));
+}

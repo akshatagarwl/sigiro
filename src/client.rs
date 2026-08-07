@@ -53,7 +53,12 @@ impl SigiroClient {
         &self.base_url
     }
 
-    pub async fn diagnose(&self, service: &str, from: i64, to: i64) -> Result<DiagnosisBlock> {
+    pub async fn diagnose(
+        &self,
+        service: &str,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<DiagnosisBlock> {
         let mut resp = self.diagnose_multi(Some(service), None, from, to).await?;
         if let Some(block) = resp.results.remove(service) {
             return Ok(block);
@@ -165,17 +170,18 @@ impl SigiroClient {
         &self,
         service: Option<&str>,
         services: Option<Vec<String>>,
-        from: i64,
-        to: i64,
+        from: Option<i64>,
+        to: Option<i64>,
     ) -> Result<DiagnoseResponse> {
         let body = DiagnoseRequest {
             service: service.map(str::to_string),
             services,
-            // The CLI always sends an explicit window — `--from`/`--to` are
-            // resolved (and defaulted) in `main.rs` before this call, so the
-            // HTTP-side default never applies here.
-            from_ts: Some(from),
-            to_ts: Some(to),
+            // Passed through, NOT defaulted. `None` means the caller gave no
+            // bound, and the server applies the single default in
+            // `DiagnoseRequest::window()`. The CLI must not own a second copy
+            // of that rule — see roadmap #72.
+            from_ts: from,
+            to_ts: to,
         };
         let req = self
             .http

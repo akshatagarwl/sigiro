@@ -272,15 +272,12 @@ async fn main() -> Result<()> {
         }
         Some(Command::Diagnose { service, from, to }) => {
             let client = require_client()?;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
-            let from_ts = from.map(|s| s * 1_000_000).unwrap_or_else(|| {
-                tracing::info!("--from not specified, defaulting to 15 minutes ago");
-                (now - 900) * 1_000_000
-            });
-            let to_ts = to.map(|s| s * 1_000_000).unwrap_or(now * 1_000_000);
+            // Epoch-seconds args → µs, matching the API. `None` stays `None`:
+            // the 15-minute default lives in `DiagnoseRequest::window()` and
+            // nowhere else, so the CLI and the API cannot disagree about what
+            // "no window given" means. See roadmap #72.
+            let from_ts = from.map(|s| s * 1_000_000);
+            let to_ts = to.map(|s| s * 1_000_000);
             let block = client.diagnose(&service, from_ts, to_ts).await?;
             // No ad-hoc trace hint anymore: every span carries its own
             // `drill_down_sql` (the full trace) and each sampled section its
