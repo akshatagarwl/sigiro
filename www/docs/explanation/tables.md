@@ -133,6 +133,5 @@ Ask which machine the question is about.
 ## Read next
 
 - [About evidence instead of a dashboard](/docs/explanation/evidence)
-- [About the one-process design](/docs/explanation/one-process)
 - [Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding#4-query-your-data-sql-api)
   — the full table list with the SQL rules that apply to it

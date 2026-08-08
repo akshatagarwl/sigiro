@@ -160,6 +160,5 @@ is the point, and it is also the thing some readers will miss most.
 ## Read next
 
 - [About the tables, and which machine they describe](/docs/explanation/tables)
-- [About the one-process design](/docs/explanation/one-process)
 - [API reference](/docs/reference) — the `Finding` and `DiagnosisBlock` fields, in
   full

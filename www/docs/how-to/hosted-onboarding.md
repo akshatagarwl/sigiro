@@ -120,9 +120,7 @@ GROUP BY 1, 2 ORDER BY errors DESC;
 | OTLP/HTTP request rate | 50 req/s per source, burst 100 | 429 |
 
 sigiro has no secondary indexes. Therefore **bound every query by `timestamp`**. A
-bound gives you speed. A bound also prevents timeouts and truncation. [About the
-one-process design](/docs/explanation/one-process#you-pay-for-this-at-read-time)
-explains why there is no index to help you.
+bound gives you speed. A bound also prevents timeouts and truncation.
 
 ## 6. Data retention
 

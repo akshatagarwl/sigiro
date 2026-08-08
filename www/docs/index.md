@@ -51,8 +51,6 @@ An agent that reads `/openapi.json` needs no other information from us.
 Why sigiro works as it does. Read this part when you want to know the reasons,
 the costs and the alternatives. You do not need a terminal.
 
-- **[About the one-process design](/docs/explanation/one-process)** — why one
-  binary and one embedded query engine, and what that choice costs you.
 - **[About the tables, and which machine they describe](/docs/explanation/tables)**
   — why `sigiro_metrics_*` and `sys_*` answer questions about different
   machines, and how to avoid a confident wrong answer.

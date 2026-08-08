@@ -66,9 +66,8 @@ is immediate. sigiro writes the data to `SIGIRO_DATA_DIR`. That directory is
 `~/.local/share/sigiro` for the binary, and `/var/lib/sigiro` in the image.
 
 Notice that the server asks you for no key. A self-hosted server authenticates
-no request, so keep it on a private network. To read why the network is the
-boundary, see [About the one-process
-design](/docs/explanation/one-process#the-network-is-the-security-boundary).
+no request, so keep it on a private network. The network is the security
+boundary.
 
 ## 2. Send it telemetry
 
@@ -168,9 +167,7 @@ The response is a JSON array of row objects. `status_code` is the OTLP enum, so
 
 Notice that the query bounds `timestamp`. Bound `timestamp` in every query:
 sigiro keeps no secondary index, so a bounded query reads a small number of
-files and an unbounded query reads every file. [About the one-process
-design](/docs/explanation/one-process#you-pay-for-this-at-read-time) explains
-why.
+files and an unbounded query reads every file.
 
 `sigiro_spans` is one of nine tables. The
 [hosted guide](/docs/how-to/hosted-onboarding#4-query-your-data-sql-api) lists
