@@ -388,11 +388,11 @@ pub struct MetricBucket {
 /// (not escaped strings) so agents can read them directly.
 #[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct SpanRecord {
-    pub trace_id: String,
+    pub(crate) trace_id: String,
     pub(crate) span_id: String,
     /// Empty string for root spans.
     pub(crate) parent_span_id: String,
-    pub span_name: String,
+    pub(crate) span_name: String,
     /// OTel span kind as stored (integer enum).
     pub(crate) span_kind: Option<i32>,
     pub(crate) status_code: i32,
