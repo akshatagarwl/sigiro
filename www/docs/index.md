@@ -56,3 +56,6 @@ the costs and the alternatives. You do not need a terminal.
   machines, and how to avoid a confident wrong answer.
 - **[About evidence instead of a dashboard](/docs/explanation/evidence)** — why
   the answer is a ranked list with a runnable query on every row.
+- **[About deploy detection, and what your spans must
+  carry](/docs/explanation/deploys)** — sigiro reads one attribute to find a
+  deploy, and it says nothing when that attribute is absent.

@@ -160,5 +160,7 @@ is the point, and it is also the thing some readers will miss most.
 ## Read next
 
 - [About the tables, and which machine they describe](/docs/explanation/tables)
+- [About deploy detection, and what your spans must
+  carry](/docs/explanation/deploys) — where the suspect deploy comes from
 - [API reference](/docs/reference) — the `Finding` and `DiagnosisBlock` fields, in
   full
