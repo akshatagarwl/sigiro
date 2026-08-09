@@ -11,7 +11,8 @@
     "lint": "vp lint",
     "fmt": "oxfmt .",
     "doctor": "blume doctor",
-    "og": "bun run scripts/generate-og.tsx"
+    "og": "bun run scripts/generate-og.tsx",
+    "indexnow": "bun run scripts/indexnow.ts"
   },
   "dependencies": {
     "@astrojs/cloudflare": "14.1.7",
