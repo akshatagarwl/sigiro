@@ -331,7 +331,20 @@ export default defineConfig({
   /** Orama, local, no hosted service and no key. */
   search: { provider: 'orama' },
 
-  github: { owner: 'sigiroai', repo: 'sigiro' },
+  /**
+   * No `github` key, deliberately. It drove two surfaces and both were wrong:
+   * an "Edit this page" link on all 15 docs pages pointing at
+   * `github.com/sigiroai/sigiro/edit/main/docs/<path>`, and a `repository`
+   * field in `agent-readability.json`. Verified 2026-08-08: the `sigiroai` org
+   * has zero public repos and `akshatagarwl/sigiro` is private too, so both
+   * targets 404 to every reader. The path was wrong independently of that —
+   * published docs live at `www/docs/`, not repo-root `docs/`, which holds
+   * internal notes and plans.
+   *
+   * A broken affordance on every page is worse than no affordance, and it
+   * advertised a source location we do not publish. Restore this when the repo
+   * is public, with the correct `www/docs` path.
+   */
 
   navigation: {
     /**
