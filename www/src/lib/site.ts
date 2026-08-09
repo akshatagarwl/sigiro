@@ -44,9 +44,16 @@ export const SITE = {
    */
   ogImage: '/og-3.png',
   /** Also the meta description, the OG description and the Twitter card, so it
-      has to stay under ~155 characters or search results cut it mid-sentence. */
+      has to stay under ~155 characters or search results cut it mid-sentence.
+
+      It says "suspect deploy" and not "cause". sigiro correlates a deploy in
+      time with a shift, and correlation in time is not cause — see
+      docs/explanation/evidence.md, "What this design refuses to do". The claim
+      the product can keep is that each result carries the query that made it,
+      so you can check the result or disprove it. Do not put "cause", "proves"
+      or "proven" back in this string. */
   description:
-    'Send OpenTelemetry to sigiro. When a service fails, you get the cause and the query that proves it.',
+    'Send OpenTelemetry to sigiro. When a service fails, you get ranked results, the suspect deploy, and the query for each result.',
 } as const;
 
 export const INSTALL = [
@@ -169,7 +176,11 @@ export const HOW = [
   },
   {
     title: 'Ask',
-    say: 'sigiro ranks the results and names the deploy that caused the failure.',
+    /* "the suspect deploy", not "the deploy that caused the failure". The
+       payload below says `"suspect"`, and the prose has to say what the payload
+       says. sigiro finds a deploy near the shift in time; a person or an agent
+       decides whether that deploy is the cause. */
+    say: 'sigiro ranks the results and names the suspect deploy.',
     run: [
       {
         cmd: `curl -sX POST localhost:9999/v1/diagnose -d '{"service":"checkout"}'`,
@@ -306,9 +317,14 @@ export const LOOP = [
     ours: true,
     say: 'sigiro compares each service with its own history. You set no thresholds.',
     cmd: 'sigiro anomalies',
+    /* `SHIFT` is the unit-free magnitude the API returns, (after − before) /
+       (after + before), bounded at 1.0 — see `src/server.rs`. An earlier draft
+       printed `+48σ`, and no sigma is computed anywhere in the product. Keep
+       these two numbers derivable from the BASELINE and NOW columns beside them,
+       so a reader can check the arithmetic and get the same answer. */
     out: `SERVICE   SIGNAL       BASELINE   NOW      SHIFT    INCIDENT
-checkout  error_rate   0.4%       19.2%    +48σ     inc_4a1c
-checkout  latency_p95  180ms      30.0s    +166×    inc_4a1c
+checkout  error_rate   0.4%       19.2%    +0.96    checkout@18:35
+checkout  latency_p95  180ms      30.0s    +0.99    checkout@18:35
 
 2 shifts · 1 incident · since 18:35`,
   },
@@ -340,24 +356,37 @@ push   fix: bound the orders upstream call at 5s`,
     title: 'Verify',
     owner: 'your pipeline, on our evidence',
     ours: 'partly',
-    say: 'A test that passes does not close the incident. The baseline shows the recovery.',
+    say: 'A test that passes is not the same as a service that recovers. Ask again, and read what is gone.',
+    /* This block prints an empty result on purpose, and the copy above names the
+       absence rather than a closure. The detector reports worsening shifts only
+       (`src/anomaly.rs` discards a shift whose mean improves), and each pass
+       replaces the whole table. So a service that recovers does not get a row
+       marked "closed" or a recovery timestamp — its shift stops being reported.
+       An earlier draft of this block printed `recovered 19:07` and
+       `inc_4a1c closed · 34 min open`. Neither value exists: there is no status
+       column and no duration, so the frame sold a workflow the product cannot
+       perform. Do not reintroduce a lifecycle word here until the detector has
+       one. The open item is #74 in docs/notes/roadmap.md. */
     cmd: 'sigiro anomalies --service checkout',
-    out: `no open shifts
+    out: `SERVICE   SIGNAL       BASELINE   NOW      SHIFT    INCIDENT
 
-error_rate    19.2%  →  0.5%    recovered 19:07
-latency_p95   30.0s  →  210ms   recovered 19:07
-
-inc_4a1c closed · 34 min open`,
+no shifts · checkout · last 7d`,
   },
   {
     title: 'Learn',
     owner: 'your memory',
     ours: false,
     say: 'Keep the fix with the evidence. Use it when the same failure occurs again.',
+    /* The `cause` line in this block stays, and it is the only place on the page
+       that says the word. This stage is not sigiro: the command reads a file you
+       wrote after you read the evidence and fixed the service, so the conclusion
+       is yours. sigiro says `suspect` in every block above, and the two words
+       sitting one screen apart are the distinction the page is making. Do not
+       copy this line into a block that prints sigiro output. */
     cmd: 'cat playbooks/checkout-upstream-timeout.md',
     out: `## checkout · upstream timeout
 
-detected   error_rate +48σ, latency_p95 +166×
+detected   error_rate +0.96, latency_p95 +0.99
 cause      unbounded upstream call, shipped in 9f2c1ab
 fix        5s deadline on the orders client
 watch      the same shape on any service calling orders`,
@@ -374,7 +403,15 @@ watch      the same shape on any service calling orders`,
  */
 export const PROMISES = [
   {
-    title: 'Proof with each result',
+    /**
+     * "Prove it yourself", not "Proof with each result". The old title put the
+     * proof on us, and sigiro proves nothing: it measures a shift and names a
+     * deploy near it in time. What you get is a result you can check, and the
+     * check is yours to run. This also matches the fourth step in `HOW`, which
+     * asks you to run the query, make it wider, and show that the result is
+     * wrong.
+     */
+    title: 'Prove it yourself',
     body: 'Each result contains the query that made it.',
   },
   {

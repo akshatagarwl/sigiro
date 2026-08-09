@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import sitemap from '@astrojs/sitemap';
 import { defineConfig } from 'blume';
 import type { AstroIntegration } from 'astro';
+import { SITE } from './src/lib/site';
 
 /**
  * The two things this project needs from Astro that Blume's config cannot express.
@@ -66,8 +67,16 @@ const sigiro = (): AstroIntegration => ({
  */
 export default defineConfig({
   title: 'sigiro',
-  description:
-    'Send OpenTelemetry to sigiro. When a service fails, you get the cause and the query that proves it.',
+  /**
+   * Imported, not copied. This string reaches `llms.txt`, `llms-full.txt`, every
+   * `/docs/**` page and `agent-readability.json` — the artifacts an agent reads —
+   * while `SITE.description` reaches the landing page. A hand-duplicated copy
+   * drifted: the landing page dropped a causal claim the docs contradict, and
+   * this file kept serving the old sentence to every agent surface. One constant
+   * makes that failure impossible. `site.ts` exports a plain object and runs no
+   * side effects, so it is safe for a config that evaluates twice per run.
+   */
+  description: SITE.description,
 
   logo: { text: 'sigiro', href: '/' },
 
