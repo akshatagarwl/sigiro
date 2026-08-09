@@ -49,10 +49,46 @@ async function assertKeyIsLive(): Promise<void> {
   if (body !== KEY) throw new Error(`key file body is ${JSON.stringify(body)}, expected ${JSON.stringify(KEY)}`);
 }
 
+/**
+ * Drop any URL the origin does not actually serve.
+ *
+ * Cloudflare's own Crawler Hints does this — its docs say a response of 4xx or
+ * worse is never reported to IndexNow — and the reason generalises: announcing a
+ * dead URL spends crawl budget to have a crawler discover a 404, and repeatedly
+ * announcing dead URLs is how a host gets de-prioritised. The sitemap is
+ * generated at build time, so it describes what the build *intended* to publish;
+ * this checks what the origin is serving right now.
+ *
+ * Bad URLs are dropped rather than fatal, so one retired page cannot block the
+ * announcement of fourteen good ones. They are printed, because a non-200 in our
+ * own sitemap is a defect worth seeing rather than swallowing. HEAD, because the
+ * status is the whole question and the bodies here run to 87 KB.
+ */
+async function keepLiveUrls(urls: string[]): Promise<string[]> {
+  const checked = await Promise.all(
+    urls.map(async (url) => {
+      try {
+        const res = await fetch(url, { method: 'HEAD', redirect: 'manual' });
+        return { url, status: res.status, ok: res.status >= 200 && res.status < 400 };
+      } catch (err) {
+        return { url, status: `unreachable (${(err as Error).message})`, ok: false };
+      }
+    }),
+  );
+
+  for (const c of checked) if (!c.ok) console.warn(`  skipped ${c.url} -> ${c.status}`);
+  return checked.filter((c) => c.ok).map((c) => c.url);
+}
+
 async function main(): Promise<void> {
   const cliUrls = process.argv.slice(2);
   await assertKeyIsLive();
-  const urlList = cliUrls.length > 0 ? cliUrls : await readSitemapUrls();
+  const candidates = cliUrls.length > 0 ? cliUrls : await readSitemapUrls();
+
+  const urlList = await keepLiveUrls(candidates);
+  const skipped = candidates.length - urlList.length;
+  if (urlList.length === 0) throw new Error(`no live URLs to submit (all ${candidates.length} failed their status check)`);
+  if (skipped > 0) console.warn(`warning: ${skipped} of ${candidates.length} URLs are not serving and were not submitted`);
 
   const res = await fetch(ENDPOINT, {
     method: 'POST',
