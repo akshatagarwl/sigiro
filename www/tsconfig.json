@@ -3,9 +3,14 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "react",
-    "types": [
-      "bun-types"
-    ],
+    // No `types` entry. It listed `bun-types`, which is not installed and is not
+    // in package.json, so `tsc --noEmit` failed outright with TS2688 ("cannot
+    // find type definition file") — a hard error, not a warning, and nothing ran
+    // tsc so nobody saw it. Nothing in the checked set references `Bun.*`, and
+    // `scripts/` (the only place that would) is excluded below, so the entry had
+    // no job to do. If a checked file ever needs Bun globals, add `@types/bun`
+    // to devDependencies and list `"bun"` here — not `bun-types`, which is the
+    // pre-1.2 spelling.
     "paths": {
       "@/*": [
         "./src/*"

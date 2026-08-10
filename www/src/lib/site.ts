@@ -56,28 +56,13 @@ export const SITE = {
     'Send OpenTelemetry to sigiro. When a service fails, you get ranked results, the suspect deploy, and the query for each result.',
 } as const;
 
-export const INSTALL = [
-  {
-    id: 'self-host',
-    label: 'Self-host',
-    /* The binary leads and the container follows, because the reader whose next
-       command is `npm start` has a laptop and not always a container runtime.
-       Both are real: /install is a script served from this site and the image is
-       on ghcr. Neither line goes here before its artifact exists — the previous
-       /install was published for months and answered 404. */
-    code: 'curl -fsSL https://sigiro.com/install | sh',
-  },
-  {
-    id: 'container',
-    label: 'Or run the container',
-    code: 'docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro',
-  },
-  {
-    id: 'point-at-it',
-    label: 'Point your app at it',
-    code: 'OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_SERVICE_NAME=checkout npm start',
-  },
-] as const;
+/* `INSTALL` was here: a three-entry install/container/point-at-it list, exported
+   and imported by nothing. It predates the stepped terminal below, which shows
+   the same commands inside a session a reader watches rather than a static block
+   they have to trust. Every string it held survives in two live places — the
+   `CONNECT_REST` variants further down and docs/tutorials/quickstart.mdx — so
+   removing it lost no copy. Kept as a note rather than silence because the
+   comment on `CONNECT_REST` used to point at `INSTALL[1]` for the docker line. */
 
 /**
  * Connect, ask, correlate, prove — four shell sessions you step through.
@@ -113,8 +98,10 @@ export const INSTALL = [
  *
  * Connect has `variants` where the others have `run`: how you start sigiro is
  * the one thing on this page a reader has an opinion about, and the terminal
- * offers the pair as a choice. The docker line is INSTALL[1] with `-d` added —
- * one duplicated string, marked here for review if a third copy appears.
+ * offers the pair as a choice. The docker line is the one in
+ * docs/tutorials/quickstart.mdx with `-d` added — one duplicated string, marked
+ * here for review if a third copy appears. It used to be shared with an
+ * `INSTALL` constant in this file, which was dead and has been removed.
  */
 
 /**
@@ -421,9 +408,9 @@ export const PROMISES = [
   {
     /**
      * "One command", not "one container": the binary is the lead install path now
-     * that `/install` works, and INSTALL puts it first for the reader whose next
-     * command is `npm start` and who has no container runtime. Naming the
-     * container here argued against that order.
+     * that `/install` works, and the variants below put it first for the reader
+     * whose next command is `npm start` and who has no container runtime. Naming
+     * the container here argued against that order.
      */
     title: 'Installation in five minutes',
     body: 'One command and two environment variables. You change no code.',

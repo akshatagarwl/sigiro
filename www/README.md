@@ -34,7 +34,7 @@ least one bug has only ever appeared in the second one (see the Shiki note in
 | `src/layouts/Base.astro` | the document, the panel, the header and the footer |
 | `src/lib/site.ts` | every word the site says. Copy lives here, not in markup |
 | `src/lib/highlight.ts` | Shiki, configured for the Workers runtime |
-| `src/components/interior/` | vendored from interior.dev, unmodified — see DESIGN.md §1b |
+| `src/components/interior/` | vendored from interior.dev — see DESIGN.md §1b. `task-steps.tsx` is no longer verbatim: its `TaskSteps` view was replaced by `stage-list.tsx` and the dead half was removed, so re-syncing that one file is a manual merge |
 | `src/pages/dl/[...key].ts` | release downloads out of R2. The one route that is not prerendered |
 | `public/install` | the script `curl -fsSL sigiro.com/install \| sh` fetches |
 | `public/_headers`, `public/_redirects` | caching, and the published short links |
