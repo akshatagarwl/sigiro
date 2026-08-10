@@ -336,16 +336,35 @@ pub(crate) fn install_authorization_gate(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The `quack://host:port` address a server is served on and stopped by.
+///
+/// A newtype rather than a `(&str, u16)` pair because `quack_stop` is addressed
+/// by this exact string: stopping the server means handing quack back the same
+/// URI that started it, and the two used to be derived independently — one
+/// `format!` in `start_server`, an identical one in `stop_server`. Nothing tied
+/// them together, so a change to either spelling would have compiled fine and
+/// silently stopped nothing. The failure that follows is not a warning: the
+/// module docs on `stop_server` record that dropping a live quack-served
+/// connection without stopping it first aborts the process. Deriving the string
+/// once and passing it to both makes that coupling the type system's problem.
+pub(crate) struct QuackUri(String);
+
+impl QuackUri {
+    pub(crate) fn new(bind_addr: &str, port: u16) -> Self {
+        Self(format!("quack://{bind_addr}:{port}"))
+    }
+}
+
 /// Result of starting the quack server: what it reports listening on.
 pub(crate) struct QuackListen {
     pub(crate) listen_uri: String,
 }
 
-/// Start the quack server on `conn`, bound to `bind_addr:port`. `conn` must
-/// stay alive for as long as the server should keep listening — quack's
-/// server lifetime is tied to the DuckDB session/connection, not to this one
-/// SQL call (`quack_serve` streams back its listen info immediately; the
-/// listener itself is owned by the extension state on `conn`).
+/// Start the quack server on `conn`, bound to `uri`. `conn` must stay alive for
+/// as long as the server should keep listening — quack's server lifetime is
+/// tied to the DuckDB session/connection, not to this one SQL call
+/// (`quack_serve` streams back its listen info immediately; the listener itself
+/// is owned by the extension state on `conn`).
 ///
 /// `disable_ssl` is always passed: quack has no working TLS of its own (see
 /// module docs) — a network perimeter (e.g. Tailscale) is the operator's
@@ -356,8 +375,7 @@ pub(crate) struct QuackListen {
 /// add beyond what the bind-address check already provides.
 pub(crate) fn start_server(
     conn: &Connection,
-    bind_addr: &str,
-    port: u16,
+    uri: &QuackUri,
     token: Option<&str>,
 ) -> Result<QuackListen> {
     if let Some(t) = token {
@@ -367,10 +385,9 @@ pub(crate) fn start_server(
         );
     }
 
-    let uri = format!("quack://{bind_addr}:{port}");
     let mut sql = format!(
         "SELECT listen_uri FROM quack_serve('{}'",
-        crate::storage::escape_sql_string(&uri)
+        crate::storage::escape_sql_string(&uri.0)
     );
     if let Some(t) = token {
         sql.push_str(&format!(
@@ -387,15 +404,14 @@ pub(crate) fn start_server(
     Ok(QuackListen { listen_uri })
 }
 
-/// Stop the quack server started by [`start_server`] for the same
-/// `bind_addr:port`. Called before dropping `conn` on shutdown — dropping a
-/// live quack-served connection without stopping the server first aborts
-/// the process (observed directly: `libc++abi: terminating`).
-pub(crate) fn stop_server(conn: &Connection, bind_addr: &str, port: u16) -> Result<()> {
-    let uri = format!("quack://{bind_addr}:{port}");
+/// Stop the quack server [`start_server`] started on the same [`QuackUri`].
+/// Called before dropping `conn` on shutdown — dropping a live quack-served
+/// connection without stopping the server first aborts the process (observed
+/// directly: `libc++abi: terminating`).
+pub(crate) fn stop_server(conn: &Connection, uri: &QuackUri) -> Result<()> {
     conn.execute_batch(&format!(
         "CALL quack_stop('{}');",
-        crate::storage::escape_sql_string(&uri)
+        crate::storage::escape_sql_string(&uri.0)
     ))
     .context("failed to stop the quack server cleanly")?;
     Ok(())

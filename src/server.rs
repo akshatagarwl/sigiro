@@ -1211,7 +1211,10 @@ pub async fn run_servers(
         )?;
         crate::quack::load_and_pin(&quack_conn)?;
         crate::quack::install_authorization_gate(&quack_conn)?;
-        let listen = crate::quack::start_server(&quack_conn, &bind, port, token.as_deref())?;
+        // Derived once and moved into the shutdown task below, so the stop call
+        // cannot address a different URI than the start call — see `QuackUri`.
+        let quack_uri = crate::quack::QuackUri::new(&bind, port);
+        let listen = crate::quack::start_server(&quack_conn, &quack_uri, token.as_deref())?;
         tracing::info!(
             bind,
             port,
@@ -1224,7 +1227,7 @@ pub async fn run_servers(
             if rx.blocking_recv().is_err() {
                 tracing::debug!("quack shutdown sender dropped");
             }
-            let result = crate::quack::stop_server(&quack_conn, &bind, port)
+            let result = crate::quack::stop_server(&quack_conn, &quack_uri)
                 .context("failed to stop the quack query surface cleanly");
             if let Err(ref error) = result {
                 tracing::warn!("{error:#}");
@@ -1250,14 +1253,13 @@ pub async fn run_servers(
 
     let http_app = build_http_router(app_state).merge(otlp_ingest_router.clone());
 
-    let http_port = ports.http;
+    let http_addr = SocketAddr::new(http_bind_ip, ports.http);
     let http_handle = Handle::new();
     let http_server_handle = http_handle.clone();
     servers.spawn(async move {
         let result = serve_http_app(
             "HTTP",
-            http_bind_ip,
-            http_port,
+            http_addr,
             http_app,
             // The main HTTP API stays plaintext inside the deployment network;
             // kamal-proxy terminates public TLS before forwarding to this port.
@@ -1270,15 +1272,14 @@ pub async fn run_servers(
 
     // OTLP HTTP — authenticated via Authorization header
     let otlp_http_app = otlp_ingest_router;
-    let otlp_http_port = ports.otlp_http;
+    let otlp_http_addr = SocketAddr::new(http_bind_ip, ports.otlp_http);
     let otlp_tls_config = otlp_http_tls_config;
     let otlp_http_handle = Handle::new();
     let otlp_http_server_handle = otlp_http_handle.clone();
     servers.spawn(async move {
         let result = serve_http_app(
             "OTLP HTTP",
-            http_bind_ip,
-            otlp_http_port,
+            otlp_http_addr,
             otlp_http_app,
             otlp_tls_config,
             otlp_http_server_handle,
@@ -1408,19 +1409,21 @@ fn ensure_rustls_provider() -> Result<()> {
     }
 }
 
-/// `bind_ip`: `run_servers` passes the resolved edge/hosted bind — a quack
-/// edge binds its own private address (`SIGIRO_QUACK_BIND`), hosted mode
+/// `addr`: `run_servers` composes the resolved edge/hosted bind with the port —
+/// a quack edge binds its own private address (`SIGIRO_QUACK_BIND`), hosted mode
 /// keeps the unchanged `0.0.0.0` (it sits behind kamal-proxy on the docker
 /// network, where a loopback bind would break proxy access).
+///
+/// One `SocketAddr` rather than an `IpAddr` plus a `u16`: this function's only
+/// use for the two halves was to rejoin them on its first line, and each caller
+/// held a port local that existed solely to be passed here.
 async fn serve_http_app(
     name: &'static str,
-    bind_ip: std::net::IpAddr,
-    port: u16,
+    addr: SocketAddr,
     app: Router,
     tls_config: Option<RustlsConfig>,
     handle: Handle<SocketAddr>,
 ) -> Result<()> {
-    let addr = SocketAddr::new(bind_ip, port);
     if let Some(config) = tls_config {
         tracing::info!(server = name, protocol = "HTTPS", "listening on {addr}");
         axum_server::bind_rustls(addr, config)
