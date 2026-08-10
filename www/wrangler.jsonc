@@ -41,33 +41,43 @@
   //
   // `workers_dev` is off: it published a second origin serving the identical site,
   // with our canonical tags, our sitemap and our OG tags on it.
+  // This list carried five leading NEGATIVE rules until blume 1.4.x, one per
   // Every path in the leading negatives is a retired-URL REDIRECT, not a content
-  // page. Blume derives `run_worker_first` from the first path segment of content
-  // routes, so `/docs/reference` alone forces `/docs/*` — which swallows these
-  // redirects and routes them through the Worker. There, `@astrojs/cloudflare`
-  // declares `redirects: false`, so Astro defaults the status and the configured
-  // 302 becomes a **301** at the edge, which browsers cache more or less forever.
-  // The generated `_redirects` is correct (302); it is simply never consulted.
-  // Excluding them here restores the asset layer, which honours the status.
-  // Verified: every path inside `run_worker_first` served 301, every path
-  // outside it (`/sitemap.xml`, `/openapi.json`, `/twitter`) served 302.
-  // Re-verified for the three Diátaxis entries against `wrangler dev` on the real
-  // bundle: with these negatives present all three served 302, and with only them
-  // removed from the generated `dist/server/wrangler.json` all three served 301
-  // while `/docs/api` (whose own negative stayed) held at 302. So the defect and
-  // the fix are both reproducible locally, with no deploy.
-  // Blume MERGES this list ahead of its own rules (`mergeRunWorkerFirstRules`),
-  // and Cloudflare evaluates in order, so a leading negative wins.
-  // Fixed upstream in blume#170, not yet released — until then this list has to
-  // grow with every retired URL under `/docs`, and `blume.config.ts` says so at
-  // its `redirects` block.
+  // page. Blume derives `run_worker_first` from the first path segment of a
+  // content route, so `/docs/reference` alone forces `/docs/*` — which claims
+  // these redirects and routes them through the Worker. Inside a worker-first
+  // route the static layer never runs, so the generated `_redirects` (correct at
+  // 302) is never consulted. Excluding them here restores the asset layer.
+  //
+  // THESE ARE STILL REQUIRED ON BLUME 1.4.2, for a different reason than they
+  // were written for. Upstream fixed the original 301 defect: blume#170 emitted
+  // these negatives itself, then commit 2e231bc replaced them with a redirect
+  // table baked into the generated wrapper Worker. Both shipped in 1.4.0. So the
+  // status is now correct either way.
+  //
+  // But the baked-in table DROPS THE QUERY STRING. `dist/server/blume-worker.mjs`
+  // answers with `headers: { location: redirect[0] }` — the bare configured
+  // destination, with no `url.search` appended — while the very next branch in
+  // the same file passes `url.pathname + url.search` to the Markdown negotiator.
+  // The asset layer preserves the query string. So removing these negatives
+  // silently breaks UTM and ref parameters on every inbound link to a retired
+  // URL.
+  //
+  // Measured on 1.4.2 with `wrangler dev` against the real bundle, one variable
+  // changed between the two runs:
+  //   negatives absent : /docs/api?utm_source=x&ref=y -> /docs/reference
+  //   negatives present: /docs/api?utm_source=x&ref=y -> /docs/reference?utm_source=x&ref=y
+  // Both 302. Production matches the second line today.
+  //
+  // Remove them when upstream appends `url.search` in the worker's redirect
+  // branch, and re-verify with the same two-config comparison.
   //
   // Two groups, matching the two groups in `blume.config.ts`:
   //   `/docs/api*`  — the retired fumadocs-openapi operation URLs.
   //   the three `/docs/<slug>*` — the flat guide URLs retired by the Diátaxis
-  //   sort. The trailing `*` is what covers the `.md` and `.mdx` variants of each
-  //   one in a single rule; `/docs/quickstart` has no children, so the wildcard
-  //   cannot catch anything else.
+  //   sort. The trailing `*` covers the `.md` and `.mdx` variants of each one in
+  //   a single rule; `/docs/quickstart` has no children, so the wildcard cannot
+  //   catch anything else.
   //
   // NOTHING under the new prefixes is listed. `/docs/tutorials/*`,
   // `/docs/how-to/*` and `/docs/explanation/*` are real content and MUST stay
