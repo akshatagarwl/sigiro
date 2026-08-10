@@ -268,6 +268,17 @@ pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
     EnvarDef::Default("http://localhost:9999".to_string())
 });
 
+/// Bearer token for a hosted (`TenantKeys`) endpoint. Client-only: it is sent
+/// as a bearer token by `client::try_build_client` and never configures
+/// server-side authentication.
+///
+/// `on_demand`, not `on_startup`, because `main.rs` writes this variable from
+/// the `--key` flag after startup and a cached read would miss it. Empty string
+/// rather than `Unset` so the caller keeps its "no key means no auth" shape
+/// without an error path.
+pub(crate) static API_KEY: Envar<String> =
+    Envar::on_demand("SIGIRO_API_KEY", || EnvarDef::Default(String::new()));
+
 /// Path to the direct-ingest TLS certificate PEM file (ports 4317 and 4318).
 /// The main HTTP API stays plaintext for a TLS-terminating reverse proxy.
 pub(crate) static TLS_CERT: Envar<String> =

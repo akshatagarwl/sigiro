@@ -2,6 +2,12 @@
 //! tenant cannot read another tenant's PostgreSQL metadata schema or escape the
 //! `/v1/query` read-only firewall. Requires Docker Postgres.
 
+#![allow(clippy::disallowed_methods)]
+// Test harnesses read and write the process environment directly to drive
+// storage/config permutations. `clippy.toml` bans that in production code so
+// every reader goes through typed-env; a test-only knob routed through
+// typed-env would add a production config entry production never reads.
+
 use opentelemetry::trace::{Span, Tracer, TracerProvider};
 use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::resource::Resource;

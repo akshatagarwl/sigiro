@@ -107,6 +107,18 @@ fn format_output(value: &serde_json::Value) -> Result<String> {
     Ok(serde_json::to_string_pretty(value)?)
 }
 
+// The one place allowed to touch the process environment directly, and the
+// reason is ordering rather than convenience. `clippy.toml` bans
+// `std::env::{var,set_var}` so every other reader goes through typed-env
+// (`src/config.rs`); typed-env's `on_startup` variables cache at their first
+// `.value()`, so the CLI flags below MUST be written into the environment
+// before any of them is read. A typed-env setter would be the same write with
+// the same ordering constraint and one more layer to reason about.
+//
+// The panic-hook read is the same story from the other side: it runs during a
+// panic, when the config machinery may itself be the thing that failed, so it
+// reads the raw variable and falls back to `data_dir()`.
+#[allow(clippy::disallowed_methods)]
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install a panic hook that writes a breadcrumb to stderr and to

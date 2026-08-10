@@ -210,6 +210,6 @@ pub fn try_build_client() -> anyhow::Result<SigiroClient> {
     let base_url = crate::config::ENDPOINT
         .value()
         .map_err(anyhow::Error::from)?;
-    let auth = ClientAuth::from_key(std::env::var("SIGIRO_API_KEY").unwrap_or_default());
+    let auth = ClientAuth::from_key(crate::config::API_KEY.value().unwrap_or_default());
     Ok(SigiroClient::new(&base_url, auth))
 }

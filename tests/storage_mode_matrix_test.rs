@@ -37,6 +37,12 @@
 //! docker compose -f docker-compose.dev.yml down -v
 //! ```
 
+#![allow(clippy::disallowed_methods)]
+// Test harnesses read and write the process environment directly to drive
+// storage/config permutations. `clippy.toml` bans that in production code so
+// every reader goes through typed-env; a test-only knob routed through
+// typed-env would add a production config entry production never reads.
+
 use opentelemetry::trace::{Span, Tracer, TracerProvider};
 use opentelemetry_otlp::{SpanExporter, WithExportConfig};
 use opentelemetry_sdk::resource::Resource;

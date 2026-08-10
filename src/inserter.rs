@@ -1053,6 +1053,12 @@ mod tests {
     // Copied from tests/ducklake_appender_test.rs — no attach helper is exposed
     // via crate::storage, and this test needs private ProjectFlusher access
     // so it must live in-module rather than in tests/.
+    //
+    // Reads the environment directly, like every other test harness here: the
+    // integration tests in tests/ carry the same file-level allow. Routing a
+    // test-only DuckDB extension path through typed-env would add a production
+    // config entry that production never reads.
+    #[allow(clippy::disallowed_methods)]
     fn extension_dir() -> String {
         std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
             std::env::var("HOME")

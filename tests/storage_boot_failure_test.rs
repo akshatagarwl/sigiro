@@ -8,6 +8,12 @@
 //! config-resolution time, BEFORE any Postgres/S3 connection is attempted, so
 //! it runs in the normal `cargo test` gate.
 
+#![allow(clippy::disallowed_methods)]
+// Test harnesses read and write the process environment directly to drive
+// storage/config permutations. `clippy.toml` bans that in production code so
+// every reader goes through typed-env; a test-only knob routed through
+// typed-env would add a production config entry production never reads.
+
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

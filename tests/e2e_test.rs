@@ -4,6 +4,12 @@
 //! multi-project isolation, services endpoint simulation, query validation,
 //! and diagnosis with all signal types.
 
+#![allow(clippy::disallowed_methods)]
+// Test harnesses read and write the process environment directly to drive
+// storage/config permutations. `clippy.toml` bans that in production code so
+// every reader goes through typed-env; a test-only knob routed through
+// typed-env would add a production config entry production never reads.
+
 use arrow::array::{
     Float64Array, Int32Array, Int64Array, ListBuilder, StringArray, StringBuilder,
     TimestampMicrosecondArray,

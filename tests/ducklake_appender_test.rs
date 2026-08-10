@@ -1,3 +1,9 @@
+#![allow(clippy::disallowed_methods)]
+// Test harnesses read and write the process environment directly to drive
+// storage/config permutations. `clippy.toml` bans that in production code so
+// every reader goes through typed-env; a test-only knob routed through
+// typed-env would add a production config entry production never reads.
+
 /// Test whether DuckDB's Appender API works on DuckLake-backed tables.
 /// This validates the highest-risk change in the ducklake-default plan (PR #2, Step 4).
 /// Uses DuckDB file catalog (not SQLite) — matches production default configuration.

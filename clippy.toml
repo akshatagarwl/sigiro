@@ -1,0 +1,45 @@
+# Configuration for the clippy lints denied in `Cargo.toml [lints.clippy]`.
+#
+# THIS FILE IS LOAD-BEARING AND ITS ABSENCE IS SILENT. `disallowed-methods` and
+# `disallowed-macros` are `deny` in Cargo.toml, but the deny only has teeth if
+# this file supplies the list. With no clippy.toml the list is empty, the lint
+# matches nothing, and `cargo clippy -- -D warnings` passes on every banned
+# call. That is exactly what happened: this file was deleted in 0ba1ffd
+# ("chore: delete dead files, clean comments, reorganize configs", 2026-05-30)
+# and the Cargo.toml deny lines were left pointing at nothing, so the gate was
+# inert for ten weeks and drift landed in client.rs and inserter.rs. Do not
+# delete it again without also removing those deny lines.
+#
+# Only the DI ban is restored. The original file carried three thresholds and
+# none of them belongs here now:
+#
+#   too-many-lines-threshold, cognitive-complexity-threshold — both lints live
+#   in clippy::pedantic/nursery and neither is enabled in Cargo.toml, so these
+#   lines configured a lint that never runs. A threshold for a disabled lint
+#   reads as an active limit and is not one.
+#
+#   too-many-arguments-threshold = 5 — this lint IS live (default `complexity`
+#   group), and restoring the 5 fails the build: clippy's own default is 7, and
+#   two 6-argument functions have landed since this file was deleted
+#   (`server.rs:531` and `serve_http_app` at `server.rs:1415`). Both take six
+#   distinct, non-redundant parameters; bundling them into a struct to satisfy a
+#   lint would be an abstraction with no reader, which AGENTS.md rules out.
+#   Re-adding the 5 is a deliberate tightening with two refactors attached, not
+#   part of repairing this gate — so it is left out rather than smuggled in.
+#   Tiger Style's ideal is 4: https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md
+
+# --- DI enforcement ---
+# All env var access must go through typed-env (src/config.rs): define the
+# variable there as a typed static, then read it via `.value()`. That keeps the
+# set of environment inputs enumerable in one place instead of discoverable only
+# by grep, which is the DI rule in AGENTS.md.
+#
+# The bootstrap path in main.rs is the one legitimate exception and carries a
+# scoped `#[allow]` with its reason, because it must write the process
+# environment before typed-env performs its first read.
+disallowed-methods = [
+    "std::env::var",
+    "std::env::var_os",
+    "std::env::set_var",
+    "std::env::remove_var",
+]
