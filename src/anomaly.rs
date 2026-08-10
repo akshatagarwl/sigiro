@@ -523,6 +523,17 @@ pub fn persist(conn: &Connection, prefix: &str, inserts: &[AnomalyInsert]) -> Re
 /// `errors_first` orders errors ahead of the rest (error_rate shifts);
 /// latency shifts order purely slowest-first. Uses only allowlisted scalar
 /// functions so it passes `validate_read_only` verbatim.
+///
+/// Six arguments against a ceiling of five (`clippy.toml`), and deliberately not
+/// refactored. The grouping that would fix the count does not exist: `prefix` and
+/// `service` are loop-invariant at both call sites while `shift` is the loop
+/// variable, so a context struct holding the three would be rebuilt on every
+/// iteration to save nothing. Bundling `span_name`+`operation` instead — the pair
+/// `operation_drill_filter` already takes together — would trade one clear pair of
+/// `&str`s for a type with a single call path. Both are abstractions with no
+/// reader. `log_drill_sql` and `profile_drill_sql` below are the same family with
+/// fewer identity arguments, which is why only this one crosses the line.
+#[allow(clippy::too_many_arguments)]
 fn span_drill_sql(
     prefix: &str,
     service: &str,

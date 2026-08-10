@@ -10,23 +10,46 @@
 # inert for ten weeks and drift landed in client.rs and inserter.rs. Do not
 # delete it again without also removing those deny lines.
 #
-# Only the DI ban is restored. The original file carried three thresholds and
-# none of them belongs here now:
+# Two of the three thresholds the original file carried are deliberately NOT
+# restored: `too-many-lines-threshold` and `cognitive-complexity-threshold`
+# configure lints that live in clippy::pedantic/nursery, and Cargo.toml enables
+# neither — so both lines set a limit for a lint that never runs, which reads as
+# enforcement and is not. Add the lint to Cargo.toml first if you want them.
+
+# --- Function argument ceiling ---
+# Tiger Style's ideal is 4; 5 is the pragmatic ceiling this project adopted.
+# Clippy's own default is 7, so this is a real tightening and it is enforced:
+# `too_many_arguments` is in the default `complexity` group, which `-D warnings`
+# escalates to an error.
 #
-#   too-many-lines-threshold, cognitive-complexity-threshold — both lints live
-#   in clippy::pedantic/nursery and neither is enabled in Cargo.toml, so these
-#   lines configured a lint that never runs. A threshold for a disabled lint
-#   reads as an active limit and is not one.
+# Restoring it was staged rather than done in one step, because when clippy.toml
+# came back two 6-argument functions had landed under the default of 7:
 #
-#   too-many-arguments-threshold = 5 — this lint IS live (default `complexity`
-#   group), and restoring the 5 fails the build: clippy's own default is 7, and
-#   two 6-argument functions have landed since this file was deleted
-#   (`server.rs:531` and `serve_http_app` at `server.rs:1415`). Both take six
-#   distinct, non-redundant parameters; bundling them into a struct to satisfy a
-#   lint would be an abstraction with no reader, which AGENTS.md rules out.
-#   Re-adding the 5 is a deliberate tightening with two refactors attached, not
-#   part of repairing this gate — so it is left out rather than smuggled in.
-#   Tiger Style's ideal is 4: https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md
+#   `serve_http_app` (server.rs) — FIXED. It took an `IpAddr` and a `u16` whose
+#   only use was `SocketAddr::new` on its first line, and both callers held a
+#   port local that existed only to be passed in. Now takes the `SocketAddr`:
+#   6 params to 4, two locals removed. Worth doing independently of this lint.
+#
+#   `span_drill_sql` (anomaly.rs) — EXEMPTED, with the reason at the call site.
+#   Its `shift` argument is the caller's loop variable while `prefix`/`service`
+#   are loop-invariant, so the obvious context struct would be rebuilt every
+#   iteration. That is an abstraction with no reader, which AGENTS.md rules out.
+#
+# The ceiling is live for all new code. Every current exception carries its
+# reason at the definition:
+#
+#   src/anomaly.rs   span_drill_sql    (6) — see above
+#   src/server.rs    dfs               (7) — pre-existing, nested recursive walk
+#   tests/diagnose_test.rs             (7,8) insert_spans + insert_spans_full
+#   tests/federated_query_test.rs      (7)  check_row, positional assertions
+#
+# The test helpers are exempt because their arguments ARE the assertion: reading
+# `check_row(&rows, "svcA", 3, 60_000, 20_000.0, 10_000, 30_000)` is the point,
+# and hiding those numbers behind field names on a single-call-path struct makes
+# the test less obvious. Ratchet the number down rather than up, and prefer
+# deleting an exception to adding one.
+# See: https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md
+too-many-arguments-threshold = 5
 
 # --- DI enforcement ---
 # All env var access must go through typed-env (src/config.rs): define the

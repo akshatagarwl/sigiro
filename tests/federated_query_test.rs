@@ -824,6 +824,14 @@ fn duration_of(row: &serde_json::Value) -> Result<i64, String> {
         .ok_or_else(|| format!("duration missing/non-numeric in row {row:?}"))
 }
 
+/// Seven arguments against the ceiling in `clippy.toml`, exempted on purpose:
+/// five of them are the expected aggregates, and spelling them positionally is
+/// what makes the call sites readable as assertions —
+/// `check_row(&rows, "svcA", 3, 60_000, 20_000.0, 10_000, 30_000)`. An
+/// `Expected { count, sum, avg, min, max }` struct would move the same five
+/// numbers behind field names on a type with one call path, which reads as more
+/// ceremony for less obvious tests.
+#[allow(clippy::too_many_arguments)]
 fn check_row(
     rows: &[serde_json::Value],
     service: &str,

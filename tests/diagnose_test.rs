@@ -908,6 +908,13 @@ fn snapshot_query_service_context_shape() {
 /// Bulk-insert spans for `service`/`span_name` at `ts_us`: `counts` is
 /// (total, errors) — the first `errors` spans get status_code=2 — each with
 /// the given duration (µs).
+///
+/// Seven arguments against the ceiling in `clippy.toml`. Exempted for the same
+/// reason `insert_spans_full` below already is: this is the narrower wrapper over
+/// that function, and it exists precisely so most callers can omit its eighth
+/// argument. Grouping these seven would have to happen on both, and the fixture
+/// rows they build are flat by nature.
+#[allow(clippy::too_many_arguments)]
 fn insert_spans(
     conn: &duckdb::Connection,
     service: &str,
