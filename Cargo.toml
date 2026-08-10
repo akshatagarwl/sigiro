@@ -17,7 +17,6 @@ anyhow = "1"
 dirs = "6"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 dashmap = "6"
-moka = { version = "0.12", features = ["sync"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 # OTLP ingest
@@ -45,10 +44,8 @@ hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
 which = "5"
-uuid = "1"
 parking_lot = "0.12"
 thiserror = "2"
-strum = { version = "0.27", features = ["derive"] }
 url = "2"
 tempfile = "3"
 headers = "0.4"
@@ -83,9 +80,7 @@ duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow", "vsc
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-tower = "0.5"
 axum-test = "17"
-tracing-test = "0.2"
 temp-env = "0.3"
 insta = { version = "1.47.2", features = ["yaml", "json"] }
 

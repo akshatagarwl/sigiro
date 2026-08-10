@@ -10,6 +10,15 @@ build:
 # Fast verification gate (debug). Run this before every commit.
 check:
     cargo fmt --check
+    # Unused dependencies, and source files no target compiles. Neither is
+    # reachable by any other gate here: rustc's `dead_code` only sees code it
+    # compiles, and hawk only ranks `pub` items inside that same graph — a crate
+    # nobody imports and a .rs nobody links are both invisible to them. Syn-based,
+    # no build, under a second, exits 1 on a finding. `cargo shear --fix` removes
+    # the dependencies it names. Placed ahead of clippy so it fails before the
+    # slow compile. Needs `cargo install cargo-shear`, same as `just hawk` needs
+    # cargo-hawk.
+    cargo shear
     cargo clippy --all-targets --all-features -- -D warnings
     cargo test
 
