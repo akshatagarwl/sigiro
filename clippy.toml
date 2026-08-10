@@ -14,7 +14,42 @@
 # restored: `too-many-lines-threshold` and `cognitive-complexity-threshold`
 # configure lints that live in clippy::pedantic/nursery, and Cargo.toml enables
 # neither — so both lines set a limit for a lint that never runs, which reads as
-# enforcement and is not. Add the lint to Cargo.toml first if you want them.
+# enforcement and is not.
+#
+# MEASURED 2026-08-10 before deciding, at the original thresholds (100 lines, 25
+# complexity), `--all-targets --all-features`. Both stay off. The numbers are
+# here so the question is settled with evidence rather than re-derived:
+#
+#            too_many_lines  cognitive_complexity
+#   src/           13               11
+#   tests/          8                1
+#   total          21               12
+#
+# Cross-referencing the two lists is what decides it. Only FOUR functions are
+# both long and complex (`server.rs:1066`, `main.rs:340`, `federate.rs:1427`,
+# `storage.rs:82`). Seventeen are long but NOT complex, and eight are complex but
+# not long.
+#
+# `too_many_lines` is the wrong lint for this codebase, not merely expensive.
+# Its worst finding is `diagnose/mod.rs build_diagnosis_sql` at 608/100 — which
+# is ~480 lines of SQL text with 11 control-flow keywords, and which
+# `cognitive_complexity` correctly does not flag at all. Splitting it would
+# fragment one CTE query across several functions. `schema.rs:6` (210) is a table
+# definition; the eight test findings are E2E scenario bodies, which AGENTS.md
+# explicitly asks for. And the low end is noise: `otlp.rs:135` is 101/100.
+# Seventeen of twenty-one findings would need a permanent exception — a gate
+# exempting 80% of what it finds is a list of `#[allow]`s wearing a threshold.
+#
+# `cognitive_complexity` fits far better: 12 findings, 11 in production, and it
+# ignored the SQL builder while flagging genuinely branchy code. It is not on
+# because the four worst (`run_servers` 72/25, `main.rs:340` 67/25) are
+# boot-sequence functions where a refactor carries real risk and no defect has
+# been reported against them. If that changes, the cheap first move is to enable
+# it at a threshold just above today's worst and ratchet down, which holds the
+# line without paying for twelve refactors up front.
+#
+# Either way: add the lint to Cargo.toml first. A threshold here does nothing on
+# its own, which is the mistake this whole file exists to document.
 
 # --- Function argument ceiling ---
 # Tiger Style's ideal is 4; 5 is the pragmatic ceiling this project adopted.
