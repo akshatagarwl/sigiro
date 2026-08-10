@@ -9,4 +9,11 @@
 #   justfile      the recipes themselves
 #   hawk.toml     which crate hawk treats as production
 #   scripts/      slop_audit.py lives here
-exec grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$|^rust-toolchain|^\.cargo/|^hawk\.toml$|^justfile$|^scripts/'
+#   clippy.toml   the disallowed-methods/macros ban lists and the argument
+#                 ceiling. Added after it was found missing: clippy.toml decides
+#                 what two `deny` lints in Cargo.toml actually reject, so a
+#                 clippy.toml-only commit can turn a gate off — or on, breaking
+#                 the build — while this filter said "no Rust in this commit"
+#                 and skipped `just check` entirely. That is precisely the
+#                 false negative the note above warns about.
+exec grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$|^rust-toolchain|^\.cargo/|^hawk\.toml$|^clippy\.toml$|^justfile$|^scripts/'
