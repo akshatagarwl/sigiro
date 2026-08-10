@@ -17,7 +17,7 @@
   "dependencies": {
     "@astrojs/cloudflare": "14.1.7",
     "@astrojs/sitemap": "3.7.3",
-    "blume": "1.4.2",
+    "blume": "file:./vendor/blume-1.4.2-main-156d5ff.tgz",
     "effect": "4.0.0-beta.102",
     "motion": "12.43.0",
     "react": "19.3.0-canary-28cd4bb0-20260723",

@@ -41,56 +41,40 @@
   //
   // `workers_dev` is off: it published a second origin serving the identical site,
   // with our canonical tags, our sitemap and our OG tags on it.
-  // This list carried five leading NEGATIVE rules until blume 1.4.x, one per
-  // Every path in the leading negatives is a retired-URL REDIRECT, not a content
-  // page. Blume derives `run_worker_first` from the first path segment of a
-  // content route, so `/docs/reference` alone forces `/docs/*` — which claims
-  // these redirects and routes them through the Worker. Inside a worker-first
-  // route the static layer never runs, so the generated `_redirects` (correct at
-  // 302) is never consulted. Excluding them here restores the asset layer.
+  // This list carried five leading NEGATIVE rules, one per retired-URL redirect
+  // under `/docs`. They are gone as of the vendored `156d5ff` build. The history
+  // is worth keeping because it took three upstream changes to retire them.
   //
-  // THESE ARE STILL REQUIRED ON BLUME 1.4.2, for a different reason than they
-  // were written for. Upstream fixed the original 301 defect: blume#170 emitted
-  // these negatives itself, then commit 2e231bc replaced them with a redirect
-  // table baked into the generated wrapper Worker. Both shipped in 1.4.0. So the
-  // status is now correct either way.
+  // Blume derives `run_worker_first` from the first path segment of a content
+  // route, so `/docs/reference` alone forces `/docs/*` — which also claims every
+  // redirect under `/docs`. Inside a worker-first route the static layer never
+  // runs, so the generated `_redirects` is never consulted and the Worker answers
+  // instead. Two defects followed from that, fixed one at a time:
   //
-  // But the baked-in table DROPS THE QUERY STRING. `dist/server/blume-worker.mjs`
-  // answers with `headers: { location: redirect[0] }` — the bare configured
-  // destination, with no `url.search` appended — while the very next branch in
-  // the same file passes `url.pathname + url.search` to the Markdown negotiator.
-  // The asset layer preserves the query string. So removing these negatives
-  // silently breaks UTM and ref parameters on every inbound link to a retired
-  // URL.
+  //   1. Astro's SSR handler defaulted a GET to a **301**, which browsers cache
+  //      more or less forever. blume#170 (1.4.0) emitted these negatives itself;
+  //      commit 2e231bc, also in 1.4.0, then replaced them with a redirect table
+  //      baked into the generated wrapper Worker, which honours the configured
+  //      status. A baked-in table costs nothing against Wrangler's caps of 100
+  //      rules and 100 characters, so the list stops growing with every retired
+  //      URL.
+  //   2. That table answered with the bare destination and **dropped the query
+  //      string**, silently breaking UTM and ref parameters on inbound links.
+  //      Found here by measuring the removal rather than assuming it, filed as
+  //      blume#175, fixed in 156d5ff — the wrapper now applies `_redirects`
+  //      semantics: the request query is forwarded unless the destination carries
+  //      its own, and a destination fragment stays last.
   //
-  // Measured on 1.4.2 with `wrangler dev` against the real bundle, one variable
-  // changed between the two runs:
-  //   negatives absent : /docs/api?utm_source=x&ref=y -> /docs/reference
-  //   negatives present: /docs/api?utm_source=x&ref=y -> /docs/reference?utm_source=x&ref=y
-  // Both 302. Production matches the second line today.
+  // Verified on the 156d5ff bundle with `wrangler dev`, then against production:
+  //   /docs/api?utm_source=x&ref=y -> /docs/reference?utm_source=x&ref=y   (302)
+  // which is what the asset layer did when the negatives were present.
   //
-  // Remove them when upstream appends `url.search` in the worker's redirect
-  // branch, and re-verify with the same two-config comparison.
-  //
-  // Two groups, matching the two groups in `blume.config.ts`:
-  //   `/docs/api*`  — the retired fumadocs-openapi operation URLs.
-  //   the three `/docs/<slug>*` — the flat guide URLs retired by the Diátaxis
-  //   sort. The trailing `*` covers the `.md` and `.mdx` variants of each one in
-  //   a single rule; `/docs/quickstart` has no children, so the wildcard cannot
-  //   catch anything else.
-  //
-  // NOTHING under the new prefixes is listed. `/docs/tutorials/*`,
-  // `/docs/how-to/*` and `/docs/explanation/*` are real content and MUST stay
-  // inside `run_worker_first`, because `Accept: text/markdown` negotiation on an
-  // extensionless URL happens in the Worker. Excluding them would serve HTML to
-  // an agent that asked for Markdown.
+  // The positives stay. `/docs/tutorials/*`, `/docs/how-to/*` and
+  // `/docs/explanation/*` are real content and MUST run worker-first, because
+  // `Accept: text/markdown` negotiation on an extensionless URL happens in the
+  // Worker. Excluding them would serve HTML to an agent that asked for Markdown.
   "assets": {
     "run_worker_first": [
-      "!/docs/api/*",
-      "!/docs/api",
-      "!/docs/quickstart*",
-      "!/docs/install-with-ai*",
-      "!/docs/hosted-onboarding*",
       "/",
       "/docs",
       "/docs/*"

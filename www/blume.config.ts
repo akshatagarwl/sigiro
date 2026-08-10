@@ -150,11 +150,13 @@ export default defineConfig({
    * exists only for the root-level rules Blume cannot express.
    *
    * 302 throughout, never 301: the docs have moved origin twice in three days, and
-   * a 301 is cached by the browser more or less forever. Every entry below is
-   * ALSO listed as a negative `run_worker_first` rule in `wrangler.jsonc`. Blume
-   * 1.4.2 now answers the status correctly either way, but its baked-in worker
-   * redirect table drops the query string — so the negatives still have to grow
-   * with every retired URL under `/docs`. The note there measures it.
+   * a 301 is cached by the browser more or less forever. Every entry below used to
+   * need a matching negative `run_worker_first` rule in `wrangler.jsonc` to hold
+   * that status and its query string at the edge. Blume now bakes a redirect table
+   * into the generated wrapper Worker and applies `_redirects` semantics to the
+   * `Location` header, so this list is self-sufficient and no longer has a twin to
+   * keep in sync. The note in `wrangler.jsonc` records the three upstream changes
+   * that took.
    */
   redirects: [
     /* GROUP 1 — the API reference's old per-operation URLs.
