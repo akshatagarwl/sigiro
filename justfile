@@ -20,13 +20,20 @@ check:
     # cargo-hawk.
     cargo shear
     cargo clippy --all-targets --all-features -- -D warnings
-    cargo test
+    # SIGIRO_SHUTDOWN_TIMEOUT_SECS: production keeps the 5s default; the suite
+    # gets 60s. `shutdown_and_wait` waits on a BLOCKING DuckDB drain thread, so
+    # its budget is wall-clock while its work is not — under concurrent builds
+    # on a loaded laptop, 5s produced a failure unrelated to the change being
+    # gated (measured: 2 of 3 runs failed with 3 concurrent cargo builds, 3 of 3
+    # passed idle). A gate that fails for unrelated reasons teaches people to
+    # re-run it until it passes, which is how a real failure gets waved through.
+    SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 cargo test
 
 # Full release-mode gate. Run before building a deploy image / cutting a release.
 check-release:
     cargo fmt --check
     cargo clippy --all-targets --all-features -- -D warnings
-    cargo test --release
+    SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 cargo test --release
 
 # Lint for unnecessary `pub` API surface (astral-sh/hawk). Closed-world
 # analysis: anything `pub` the `sigiro` binary can't reach is dead or could be

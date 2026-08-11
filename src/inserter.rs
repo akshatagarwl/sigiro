@@ -417,9 +417,10 @@ impl MsgRouter {
             }
         }
 
+        let budget_secs = crate::config::shutdown_timeout_secs()?;
         let mut failures = Vec::new();
         for (project_id, mut handle) in flushers {
-            match tokio::time::timeout(Duration::from_secs(5), &mut handle).await {
+            match tokio::time::timeout(Duration::from_secs(budget_secs), &mut handle).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     failures.push(format!("{project_id}: flusher task failed: {error}"));
@@ -432,7 +433,9 @@ impl MsgRouter {
                         failures.push(format!("{project_id}: flusher abort failed: {error}"));
                     }
                     failures.push(format!(
-                        "{project_id}: flusher did not stop within 5 seconds"
+                        "{project_id}: flusher did not stop within {budget_secs} seconds \
+                         (raise SIGIRO_SHUTDOWN_TIMEOUT_SECS if this is a loaded machine \
+                         rather than a stuck drain)"
                     ));
                 }
             }

@@ -115,6 +115,32 @@ pub(crate) static FLUSH_INTERVAL_SECS: Envar<u64> =
 pub(crate) static FLUSH_ROW_THRESHOLD: Envar<usize> =
     Envar::on_startup("SIGIRO_FLUSH_ROW_THRESHOLD", || EnvarDef::Default(10_000));
 
+/// How long `InsertRouter::shutdown_and_wait` gives each project's flusher to
+/// drain before aborting it. Default: 5s.
+///
+/// The budget is wall-clock but the work is not: the flusher hands a Shutdown
+/// command to a BLOCKING writer thread that drains into DuckDB, and that thread
+/// competes for CPU and disk with everything else on the box. Five seconds is a
+/// sound production budget — raising it globally would make a real shutdown hang
+/// slower to detect — but a loaded machine can exceed it for reasons unrelated
+/// to the code under test. The test suite raises it via the environment (see
+/// the `test` recipe in the justfile) so a busy laptop does not produce a
+/// failure that teaches people to re-run the gate until it passes.
+///
+/// Operators draining a large buffer onto slow disk have the same problem and
+/// the same lever.
+pub(crate) static SHUTDOWN_TIMEOUT_SECS: Envar<u64> =
+    Envar::on_startup("SIGIRO_SHUTDOWN_TIMEOUT_SECS", || EnvarDef::Default(5));
+
+pub(crate) fn shutdown_timeout_secs() -> Result<u64> {
+    let secs = SHUTDOWN_TIMEOUT_SECS.value()?;
+    anyhow::ensure!(
+        secs > 0,
+        "SIGIRO_SHUTDOWN_TIMEOUT_SECS must be greater than zero"
+    );
+    Ok(secs)
+}
+
 /// Backpressure policy when the per-project channel is full. Default: "block".
 /// - "block": sender awaits space (preserves data, may slow ingest)
 /// - "drop-newest": drops the incoming message (prevents stalls, loses newest data)
