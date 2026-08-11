@@ -52,7 +52,11 @@ struct EdgeServer {
 }
 
 impl EdgeServer {
-    fn spawn(name: &str, base: u16, token: &str) -> Self {
+    /// Launch the child process and return WITHOUT waiting for readiness.
+    /// `Command::spawn` does not block, so the OS boots this server while the
+    /// caller starts the next one. The caller MUST call `wait_ready` before
+    /// using the returned edge.
+    fn spawn_booting(name: &str, base: u16, token: &str) -> Self {
         let data_dir = tempfile::tempdir().expect("failed to create temp data dir");
         let (http_port, otlp_http_port, grpc_port, quack_port) =
             (base, base + 1, base + 2, base + 3);
@@ -75,15 +79,13 @@ impl EdgeServer {
             .spawn()
             .unwrap_or_else(|e| panic!("failed to spawn edge {name}: {e}"));
 
-        let server = Self {
+        Self {
             child,
             _data_dir: data_dir,
             http_port,
             otlp_http_port,
             quack_port,
-        };
-        server.wait_ready(name);
-        server
+        }
     }
 
     fn wait_ready(&self, name: &str) {
@@ -246,8 +248,13 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
     let base_b = base_a + 10;
     let dead_port = base_a + 999;
 
-    let edge_a = EdgeServer::spawn("edgeA", base_a, &token);
-    let edge_b = EdgeServer::spawn("edgeB", base_b, &token);
+    // Both children are launched before either is awaited, so the two ~6s
+    // boots overlap. Their port blocks (base_a, base_a+10) and temp data dirs
+    // are disjoint, so concurrent boot is safe.
+    let edge_a = EdgeServer::spawn_booting("edgeA", base_a, &token);
+    let edge_b = EdgeServer::spawn_booting("edgeB", base_b, &token);
+    edge_a.wait_ready("edgeA");
+    edge_b.wait_ready("edgeB");
 
     // Durations below are in ms at ingest; the stored `duration` column is
     // MICROSECONDS, so every ground-truth number is the ms value * 1000.
@@ -948,8 +955,10 @@ fn federated_sys_disk_info_across_two_edges() {
     let token = "e2e-fed-sysstats-token";
     let (base_a, base_b) = (43500, 43510);
 
-    let edge_a = EdgeServer::spawn("sys-a", base_a, token);
-    let edge_b = EdgeServer::spawn("sys-b", base_b, token);
+    let edge_a = EdgeServer::spawn_booting("sys-a", base_a, token);
+    let edge_b = EdgeServer::spawn_booting("sys-b", base_b, token);
+    edge_a.wait_ready("sys-a");
+    edge_b.wait_ready("sys-b");
     let edges = vec![
         format!("sys-a=127.0.0.1:{}", edge_a.quack_port),
         format!("sys-b=127.0.0.1:{}", edge_b.quack_port),
@@ -1028,8 +1037,10 @@ fn federated_sys_os_info_reports_host_name_per_edge() {
     let token = "e2e-fed-hostname-token";
     let (base_a, base_b) = (43530, 43540);
 
-    let edge_a = EdgeServer::spawn("host-a", base_a, token);
-    let edge_b = EdgeServer::spawn("host-b", base_b, token);
+    let edge_a = EdgeServer::spawn_booting("host-a", base_a, token);
+    let edge_b = EdgeServer::spawn_booting("host-b", base_b, token);
+    edge_a.wait_ready("host-a");
+    edge_b.wait_ready("host-b");
     let edges = vec![
         format!("host-a=127.0.0.1:{}", edge_a.quack_port),
         format!("host-b=127.0.0.1:{}", edge_b.quack_port),
