@@ -493,6 +493,39 @@ const SCALAR_FUNCTIONS: &[&str] = &[
     "NULLIF",
     "IFNULL",
     "NVL",
+    // List / array.
+    //
+    // `sigiro_profiles.stack_trace` is a VARCHAR[] (src/schema.rs), so WITHOUT
+    // these sigiro can ingest and store profiles it cannot meaningfully query:
+    // no aggregation by frame, no "which function is hot", no flamegraph. That
+    // is the whole point of the profiles signal, and it was unreachable through
+    // the public API. Found by profiling sigiro with a second sigiro and then
+    // being unable to group the result by stack frame.
+    //
+    // These read a value the caller can already SELECT in full. They touch no
+    // filesystem, no network and no settings, so they add no surface the table
+    // allowlist does not already bound. `LEN` was on this list already, for the
+    // same array type.
+    //
+    // `LIST_FILTER`/`LIST_TRANSFORM` take a lambda. A lambda body is an
+    // ordinary expression, so it is walked by the same visitor and every
+    // function call inside it faces this identical allowlist — a lambda cannot
+    // smuggle in `getenv` or `current_setting`.
+    "LIST_FILTER",
+    "LIST_TRANSFORM",
+    "LIST_CONTAINS",
+    "LIST_HAS_ANY",
+    "LIST_POSITION",
+    "LIST_EXTRACT",
+    "LIST_ELEMENT",
+    "LIST_SLICE",
+    "LIST_SORT",
+    "LIST_DISTINCT",
+    "LIST_CONCAT",
+    "LIST_AGGREGATE",
+    "ARRAY_TO_STRING",
+    "ARRAY_LENGTH",
+    "UNNEST",
 ];
 
 /// Schema qualifiers accepted ahead of an allowed table name. DuckLake attaches
@@ -1835,7 +1868,9 @@ fn query_sql_contract() -> String {
          WITH/CTE clauses are not supported — rewrite as derived-table subqueries \
          (SELECT ... FROM (SELECT ...) t). Scalar functions are allowlisted \
          (aggregates, json_extract/json_extract_string, date/time, string, math, \
-         coalesce/nullif); file/network readers and settings introspection are blocked.",
+         coalesce/nullif, and list/array helpers such as unnest, list_filter and \
+         list_extract for VARCHAR[] columns like sigiro_profiles.stack_trace); \
+         file/network readers and settings introspection are blocked.",
         ALLOWED_TABLES
             .iter()
             .map(|t| t.to_lowercase())

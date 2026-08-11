@@ -167,3 +167,45 @@ fn sys_functions_are_rejected_on_hosted_and_allowed_when_self_hosted() {
     )
     .expect("hosted must still allow the sigiro_* tables");
 }
+
+/// `sigiro_profiles.stack_trace` is a `VARCHAR[]`, so without list/array
+/// functions sigiro can INGEST and STORE profiles it cannot meaningfully
+/// QUERY: no aggregation by frame, no "which function is hot", no flamegraph.
+/// The profiles signal was write-only through the public API.
+///
+/// Found by pointing one sigiro's Pyroscope agent at another and then being
+/// unable to group the resulting profile by stack frame.
+#[test]
+fn list_functions_are_allowed_so_stack_traces_can_be_aggregated() {
+    for sql in [
+        // The leaf-frame ranking: which function was on top of the stack.
+        "SELECT list_extract(stack_trace, 1) AS leaf, count(*) FROM sigiro_profiles GROUP BY leaf",
+        // The flamegraph shape: one row per frame per sample.
+        "SELECT f, sum(value) FROM (SELECT unnest(stack_trace) AS f, value FROM sigiro_profiles) t GROUP BY f",
+        // "Which samples touched DuckDB at all", via a lambda predicate.
+        "SELECT count(*) FROM sigiro_profiles WHERE len(list_filter(stack_trace, x -> x LIKE 'duckdb::%')) > 0",
+        "SELECT array_to_string(stack_trace, '|') FROM sigiro_profiles",
+        "SELECT list_contains(stack_trace, 'main') FROM sigiro_profiles",
+    ] {
+        validate_read_only(sql)
+            .unwrap_or_else(|e| panic!("gate must allow stack-trace aggregation {sql:?}: {e}"));
+    }
+}
+
+/// Admitting lambda-taking list functions must not become a smuggling route:
+/// a lambda body is an ordinary expression, so every call inside it has to
+/// face the SAME scalar allowlist. If this regresses, `list_filter` becomes a
+/// wrapper that reads process environment and DuckDB settings.
+#[test]
+fn list_lambdas_cannot_smuggle_blocked_functions() {
+    for sql in [
+        "SELECT len(list_filter(stack_trace, x -> getenv('AWS_SECRET_ACCESS_KEY') IS NOT NULL)) FROM sigiro_profiles",
+        "SELECT list_transform(stack_trace, x -> current_setting('extension_directory')) FROM sigiro_profiles",
+        "SELECT list_filter(stack_trace, x -> x IN (SELECT * FROM read_csv('/etc/passwd'))) FROM sigiro_profiles",
+    ] {
+        assert!(
+            validate_read_only(sql).is_err(),
+            "a lambda body must not bypass the scalar allowlist: {sql:?}"
+        );
+    }
+}
