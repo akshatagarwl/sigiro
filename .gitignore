@@ -9,13 +9,6 @@ fuzz/corpus/otlp_traces_fuzz/*
 mutants.out/
 mutants.out.old/
 vendor/
-# Except the vendored blume build. www depends on an unreleased upstream commit,
-# so the tarball has to be in the repo for a fresh clone and CI to resolve it.
-# The glob is deliberate: the filename carries the upstream SHA and changes on
-# every re-cut. Delete this negation and the file when blume publishes a version
-# above 1.4.2 carrying the #175 query-string fix. See www/package.json.
-!www/vendor/
-!www/vendor/*.tgz
 .cargo-home/
 TASKS.md
 .DS_Store
