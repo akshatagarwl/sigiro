@@ -337,6 +337,42 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Read the running kernel release via `uname(2)`, or "unknown" if it fails.
+fn probe_kernel_release() -> String {
+    unsafe {
+        let mut utsname: libc::utsname = std::mem::zeroed();
+        if libc::uname(&mut utsname) == 0 {
+            std::ffi::CStr::from_ptr(utsname.release.as_ptr())
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            "unknown".to_string()
+        }
+    }
+}
+
+/// Effective (CAP_BPF, CAP_NET_ADMIN). Always (false, false) off Linux, where
+/// the capability model does not exist and the eBPF path cannot run anyway.
+fn probe_capabilities() -> (bool, bool) {
+    #[cfg(target_os = "linux")]
+    {
+        (
+            caps::has_cap(None, caps::CapSet::Effective, caps::Capability::CAP_BPF)
+                .unwrap_or(false),
+            caps::has_cap(
+                None,
+                caps::CapSet::Effective,
+                caps::Capability::CAP_NET_ADMIN,
+            )
+            .unwrap_or(false),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        (false, false)
+    }
+}
+
 async fn run_serve() -> Result<()> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)
@@ -359,7 +395,7 @@ async fn run_serve() -> Result<()> {
 
     // MsgRouter: handlers send directly to per-project flusher tasks.
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100, storage_mode));
-    let admin_conn = sigiro::admin::open_admin_db()?;
+    let admin_conn = sigiro::admin::open_admin_db(&dir)?;
 
     // Pyroscope continuous profiling: enabled when SIGIRO_PYROSCOPE_ENDPOINT is set.
     // Sends CPU + memory allocation profiles to the Pyroscope server.
@@ -376,64 +412,35 @@ async fn run_serve() -> Result<()> {
     // (pyroscope-2.0.0/src/pyroscope.rs:296), so boot samples upload AFTER boot
     // finishes. The delay is in delivery, not collection: the samples carry the
     // boot window as long as the process outlives the first flush.
-    let _profiling = match start_profiling() {
-        Ok(Some(handle)) => {
-            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "active")?;
-            Some(handle)
-        }
-        Ok(None) => {
-            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "disabled")?;
-            None
-        }
+    let (_profiling, pyroscope_status) = match start_profiling() {
+        Ok(Some(handle)) => (Some(handle), "active"),
+        Ok(None) => (None, "disabled"),
         Err(e) => {
             tracing::warn!("Pyroscope profiling failed to start: {e:#}");
-            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "error")?;
-            None
+            (None, "error")
         }
     };
 
-    // Write instance status at startup
-    sigiro::admin::write_instance_status(&admin_conn, "version", env!("CARGO_PKG_VERSION"))?;
-    sigiro::admin::write_instance_status(&admin_conn, "mode", "otlp")?;
-    sigiro::admin::write_instance_status(&admin_conn, "platform_os", std::env::consts::OS)?;
-    sigiro::admin::write_instance_status(&admin_conn, "platform_arch", std::env::consts::ARCH)?;
-    let kernel = unsafe {
-        let mut utsname: libc::utsname = std::mem::zeroed();
-        if libc::uname(&mut utsname) == 0 {
-            std::ffi::CStr::from_ptr(utsname.release.as_ptr())
-                .to_string_lossy()
-                .into_owned()
-        } else {
-            "unknown".to_string()
-        }
-    };
-    sigiro::admin::write_instance_status(&admin_conn, "platform_kernel", &kernel)?;
-    #[cfg(target_os = "linux")]
-    {
-        let has_bpf = caps::has_cap(None, caps::CapSet::Effective, caps::Capability::CAP_BPF)
-            .unwrap_or(false);
-        let has_net_admin = caps::has_cap(
-            None,
-            caps::CapSet::Effective,
-            caps::Capability::CAP_NET_ADMIN,
-        )
-        .unwrap_or(false);
-        sigiro::admin::write_instance_status(
-            &admin_conn,
-            "capability_bpf",
-            if has_bpf { "true" } else { "false" },
-        )?;
-        sigiro::admin::write_instance_status(
-            &admin_conn,
-            "capability_net_admin",
-            if has_net_admin { "true" } else { "false" },
-        )?;
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        sigiro::admin::write_instance_status(&admin_conn, "capability_bpf", "false")?;
-        sigiro::admin::write_instance_status(&admin_conn, "capability_net_admin", "false")?;
-    }
+    let kernel = probe_kernel_release();
+    let (has_bpf, has_net_admin) = probe_capabilities();
+
+    // Write instance status at startup — one transaction, not 13 autocommits.
+    sigiro::admin::write_instance_status_batch(
+        &admin_conn,
+        &[
+            ("pyroscope_status", pyroscope_status),
+            ("version", env!("CARGO_PKG_VERSION")),
+            ("mode", "otlp"),
+            ("platform_os", std::env::consts::OS),
+            ("platform_arch", std::env::consts::ARCH),
+            ("platform_kernel", &kernel),
+            ("capability_bpf", if has_bpf { "true" } else { "false" }),
+            (
+                "capability_net_admin",
+                if has_net_admin { "true" } else { "false" },
+            ),
+        ],
+    )?;
 
     // Extension probe is deferred to first project connection (pool.create_project).
     // Use `sigiro fetch-extensions` to pre-download for offline deployments.
