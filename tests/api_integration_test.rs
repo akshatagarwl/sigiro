@@ -773,3 +773,47 @@ async fn test_otlp_merged_into_http_app_has_no_route_collision() {
         .await;
     traces.assert_status(axum::http::StatusCode::OK);
 }
+
+/// The two tests above construct `AppState` directly and set `init_complete`
+/// by hand, so they pass no matter how production wires it. That is exactly how
+/// this defect survived: `run_serve` flipped the flag at its own tail, BEFORE
+/// `run_servers` bound the HTTP listener, so no external client could ever
+/// observe `Starting` — measured as zero 503s across 18 instrumented boots.
+/// `HealthResponse::Starting` was dead code in production.
+///
+/// This test pins the WIRING rather than the handler: `run_serve` must not
+/// mark init complete itself, because the only correct moment is when the
+/// listener is actually accepting connections. `run_servers` flips it from
+/// `Handle::listening()`.
+///
+/// Guarding this matters because the window is real work that can block or
+/// fail — the quack extension load, and `pool.clone_connection("default")`,
+/// which can perform an S3-backed distributed attach. A probe during it must
+/// get 503, not a `ready` for a server that is listening but cannot serve.
+#[test]
+fn run_serve_does_not_mark_init_complete_before_the_listener_binds() {
+    let main_rs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+        .expect("src/main.rs should be readable");
+
+    let stores: Vec<&str> = main_rs
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with("//"))
+        .filter(|l| l.contains("init_complete") && l.contains(".store("))
+        .collect();
+
+    assert!(
+        stores.is_empty(),
+        "src/main.rs must not flip init_complete — only run_servers may, once \
+         Handle::listening() reports the HTTP socket bound. Otherwise /health \
+         answers \"ready\" before anything can connect and HealthResponse::Starting \
+         becomes unreachable. Found: {stores:?}"
+    );
+
+    let server_rs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/server.rs"))
+        .expect("src/server.rs should be readable");
+    assert!(
+        server_rs.contains("listening().await"),
+        "run_servers must gate init_complete on Handle::listening()"
+    );
+}

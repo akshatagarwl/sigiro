@@ -677,6 +677,28 @@ pub async fn run_servers(
         ("HTTP", result)
     });
 
+    // Flip init-complete only once the HTTP listener is actually bound.
+    //
+    // This used to happen at the tail of `run_serve`, BEFORE this function ran,
+    // which made `HealthResponse::Starting` unreachable: nothing could connect
+    // to report 503 to. `Handle::listening()` resolves when `axum_server` has
+    // bound the socket, which is the first instant a probe can arrive — so
+    // flipping here is both the earliest correct point and the latest safe one.
+    //
+    // Spawned rather than awaited: `listening()` only resolves after the server
+    // future above starts polling, and that cannot happen while this function
+    // is still building the remaining servers. Awaiting it inline deadlocks.
+    let init_complete_on_bind = Arc::clone(&init_complete);
+    let http_listen_handle = http_handle.clone();
+    tokio::spawn(async move {
+        if http_listen_handle.listening().await.is_some() {
+            init_complete_on_bind.store(true, Ordering::Release);
+            tracing::info!("sigiro ready — HTTP listener bound, /health now reports ready");
+        } else {
+            tracing::error!("HTTP listener failed to bind — /health stays 503 Starting");
+        }
+    });
+
     // OTLP HTTP — authenticated via Authorization header
     let otlp_http_app = otlp_ingest_router;
     let otlp_http_addr = SocketAddr::new(http_bind_ip, ports.otlp_http);
@@ -1025,10 +1047,13 @@ async fn health(
         );
     }
 
-    // 2. Init completeness — `AppState::init_complete` is flipped at the
-    //    tail of `run_serve`. While the HTTP listener is up before init
-    //    finishes, the server is not actually serving traffic yet, so
-    //    probes (k8s readiness, docker healthcheck) must see 503.
+    // 2. Init completeness — `AppState::init_complete` is flipped by
+    //    `run_servers` once `axum_server` reports the HTTP listener bound.
+    //    A probe that arrives between the socket accepting connections and
+    //    the rest of startup finishing (quack extension load, the `default`
+    //    project's DuckLake attach — which can be S3-backed) gets 503, so
+    //    k8s readiness and docker healthchecks do not route traffic to a
+    //    server that is listening but not yet serving.
     if !state.init_complete.load(Ordering::Acquire) {
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,

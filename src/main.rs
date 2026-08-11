@@ -520,13 +520,21 @@ async fn run_serve() -> Result<()> {
         );
     }
 
-    tracing::info!("sigiro ready — data_dir={}", dir);
-    // F-03: flip the typed init-complete flag so /health reports Ready.
-    // The previous .ready file approach required a disk write on every
-    // server start (silently dropped on failure) plus a disk read on every
-    // health probe. In-memory state is faster, type-checked, and cannot
-    // be forgotten by `run_serve` (we're already here at the tail).
-    init_complete.store(true, std::sync::atomic::Ordering::Release);
+    tracing::info!("sigiro init complete — data_dir={}", dir);
+    // The init-complete flag is NOT flipped here. It used to be, and that made
+    // `HealthResponse::Starting` unreachable in production: this line runs
+    // before `run_servers` binds the HTTP listener, so no external client could
+    // ever connect while the flag was false. Measured: zero 503s across 18
+    // instrumented boots, every first successful probe already returned
+    // `{"status":"ready"}`.
+    //
+    // `run_servers` now flips it once `axum_server` reports the HTTP listener
+    // actually bound, so the three-state contract the health handler documents
+    // is real. Everything between here and that bind — the MsgRouter start
+    // below, and inside `run_servers` the quack extension load and
+    // `pool.clone_connection("default")`, which can do an S3-backed distributed
+    // attach — is work that can block or fail, and a probe during it must not
+    // be told the server is ready.
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
