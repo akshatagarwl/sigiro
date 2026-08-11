@@ -361,6 +361,37 @@ async fn run_serve() -> Result<()> {
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100, storage_mode));
     let admin_conn = sigiro::admin::open_admin_db()?;
 
+    // Pyroscope continuous profiling: enabled when SIGIRO_PYROSCOPE_ENDPOINT is set.
+    // Sends CPU + memory allocation profiles to the Pyroscope server.
+    // The smoke-test script fetches these profiles and includes them in diagnose blocks.
+    //
+    // Started HERE, at the head of boot, not at the tail. The expensive part of
+    // startup is everything below this line — DuckDB extension load and the
+    // `default` project pre-create — so an agent started after it profiles an
+    // idle server and cannot answer "why does boot take ~6s". `start_profiling`
+    // takes no arguments and depends on nothing boot builds; only the
+    // `write_instance_status` calls need `admin_conn`, which exists above.
+    //
+    // The pyroscope-rs SDK's flush timer is hardcoded to 10s
+    // (pyroscope-2.0.0/src/pyroscope.rs:296), so boot samples upload AFTER boot
+    // finishes. The delay is in delivery, not collection: the samples carry the
+    // boot window as long as the process outlives the first flush.
+    let _profiling = match start_profiling() {
+        Ok(Some(handle)) => {
+            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "active")?;
+            Some(handle)
+        }
+        Ok(None) => {
+            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "disabled")?;
+            None
+        }
+        Err(e) => {
+            tracing::warn!("Pyroscope profiling failed to start: {e:#}");
+            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "error")?;
+            None
+        }
+    };
+
     // Write instance status at startup
     sigiro::admin::write_instance_status(&admin_conn, "version", env!("CARGO_PKG_VERSION"))?;
     sigiro::admin::write_instance_status(&admin_conn, "mode", "otlp")?;
@@ -481,25 +512,6 @@ async fn run_serve() -> Result<()> {
             ebpf_status.reason
         );
     }
-
-    // Pyroscope continuous profiling: enabled when SIGIRO_PYROSCOPE_ENDPOINT is set.
-    // Sends CPU + memory allocation profiles to the Pyroscope server.
-    // The smoke-test script fetches these profiles and includes them in diagnose blocks.
-    let _profiling = match start_profiling() {
-        Ok(Some(handle)) => {
-            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "active")?;
-            Some(handle)
-        }
-        Ok(None) => {
-            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "disabled")?;
-            None
-        }
-        Err(e) => {
-            tracing::warn!("Pyroscope profiling failed to start: {e:#}");
-            sigiro::admin::write_instance_status(&admin_conn, "pyroscope_status", "error")?;
-            None
-        }
-    };
 
     tracing::info!("sigiro ready — data_dir={}", dir);
     // F-03: flip the typed init-complete flag so /health reports Ready.
