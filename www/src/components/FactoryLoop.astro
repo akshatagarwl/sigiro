@@ -1,32 +1,15 @@
 ---
 import { Effect } from 'effect';
-import { SteppedTerminal, type TerminalStep } from '@/components/terminal';
+import { FactoryLoopPlayer, type FactoryStage } from '@/components/factory-loop-player';
 import { highlightSession } from '@/lib/highlight';
 import { LOOP } from '@/lib/site';
 
 /**
- * Where sigiro sits in a software factory, as five terminals you step through.
+ * The complete repair loop in one first-viewport terminal.
  *
- * The five commands are one incident in order: a shift on checkout, the suspect
- * deploy, the agent's patch, the empty result that follows the fix, the
- * playbook. Note the fourth is an absence, not a closure — the detector reports
- * worsening shifts only, so a recovered service stops appearing. Two of them
- * visibly run something that is not sigiro, which is the argument the section
- * exists to make — it is watched rather than asserted.
- *
- * This file maps `LOOP` onto the terminal's shape, runs Shiki over each session,
- * and supplies the fallback. It was a React server component under Next and is
- * `.astro` for the same reason it was one there: the terminal animates and so runs
- * in the browser, and Shiki must not follow it. The boundary is now the
- * `client:visible` below rather than a `'use client'` in another file.
- *
- * The scroll behaviour lives in `components/terminal.tsx`, which both stepped
- * sections share.
- */
-
-/**
- * One word per owner, for the task list's narrow meta column. The full phrasing
- * still runs in the caption chip, where there is room for it.
+ * `LOOP` stays the only transcript source. Shiki runs on the server, then the
+ * player receives one trusted HTML string per line. A browser without JavaScript
+ * gets the same five sessions below as static terminal blocks.
  */
 const SHORT_OWNER: Record<string, string> = {
   sigiro: 'sigiro',
@@ -36,91 +19,41 @@ const SHORT_OWNER: Record<string, string> = {
 };
 
 const sessions = await Effect.runPromise(
-  Effect.all(
-    LOOP.map((s) => highlightSession(s.cmd, s.out)),
-    { concurrency: 'unbounded' },
-  ),
+  Effect.all(LOOP.map((stage) => highlightSession(stage.cmd, stage.out)), {
+    concurrency: 'unbounded',
+  }),
 );
 
-const steps: TerminalStep[] = LOOP.map((s, i) => ({
-  lines: sessions[i],
-  label: s.title,
-  badge: s.owner,
-  badgeStrong: Boolean(s.ours),
-  badgeShort: SHORT_OWNER[s.owner] ?? s.owner,
-  note: s.say,
+const stages: FactoryStage[] = LOOP.map((stage, index) => ({
+  title: stage.title,
+  owner: stage.owner,
+  ownerShort: SHORT_OWNER[stage.owner] ?? stage.owner,
+  lines: sessions[index],
 }));
 ---
 
-{/*
-  No top margin. It used to separate this from the section header above it; that
-  header is inside the pinned screen now, and any margin here just delays the pin
-  and reopens the band of empty bezel at the section boundary. The `<noscript>`
-  list below keeps its own spacing, because there nothing pins.
-*/}
-<div>
-  {/*
-    What no-JS readers get: the same five sessions, printed in full, with the prose
-    each one belongs to. Nothing is behind an interaction they cannot perform.
+<noscript>
+  <ol class="space-y-5">
+    {
+      LOOP.map((stage, index) => (
+        <li>
+          <figure class="mat-panel rounded-[14px] p-[5px]">
+            <figcaption class="meta flex h-8 items-center pl-2.5 text-ink-3">
+              {stage.title} · {stage.owner}
+            </figcaption>
+            <div
+              class="mat-well scroll-inset overflow-x-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px]"
+            >
+              <pre
+                class="shiki whitespace-pre"
+                set:html={sessions[index].map((line) => line.html).join('\n')}
+              />
+            </div>
+          </figure>
+        </li>
+      ))
+    }
+  </ol>
+</noscript>
 
-    It sits outside the island on purpose. As a `fallback` prop it was serialised
-    into the island's props, which means it was paid for by every reader who runs
-    JavaScript and therefore never sees it.
-
-    The transcript is one `pre` rather than a row per line — a `pre` keeps the blank
-    lines inside the output, which a stack of empty boxes would collapse.
-  */}
-  <noscript>
-    <ol class="mt-8">
-      {
-        LOOP.map((s, i) => (
-          <li class="border-t border-hairline py-9 first:border-t-0">
-            <p class="flex items-center gap-2.5">
-              {/*
-                Ink and depth, not accent: "this stage is ours" is a persistent
-                state, and if every marked thing were blue, focus would stop
-                meaning anything.
-              */}
-              <span
-                class:list={[
-                  'mat-cap inline-flex h-[22px] items-center rounded-[6px] px-2 text-[11.5px] font-medium',
-                  s.ours ? 'text-ink' : 'text-ink-3',
-                ]}
-              >
-                {s.owner}
-              </span>
-            </p>
-            <h3 class="mt-3.5 text-[20px] font-medium tracking-[-0.03em] text-ink">{s.title}</h3>
-            <p class="mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed text-ink-2">{s.say}</p>
-            <figure class="mat-panel mt-5 rounded-[14px] p-[5px]">
-              <figcaption class="meta flex h-8 items-center pl-2.5 text-ink-3">your shell</figcaption>
-              <div
-                class="mat-well scroll-inset overflow-x-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px]"
-              >
-                <pre
-                  class="shiki whitespace-pre"
-                  set:html={sessions[i].map((line) => line.html).join('\n')}
-                />
-              </div>
-            </figure>
-          </li>
-        ))
-      }
-    </ol>
-  </noscript>
-
-  <SteppedTerminal
-    steps={steps}
-    label="The five stages"
-    heading={{
-      id: 'loop',
-      label: 'the loop',
-      title: 'Five stages.',
-      tail: 'A repair loop is not complete until all five operate.',
-      lede:
-        'Your agent writes the patch. Nothing tells the agent what failed, or if the patch worked. '
-        + 'sigiro does two of these five stages.',
-    }}
-    client:visible
-  />
-</div>
+<FactoryLoopPlayer stages={stages} client:visible />
