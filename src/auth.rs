@@ -208,7 +208,7 @@ impl ControlPlane {
             .map_err(|e| anyhow::anyhow!("failed to open in-memory DuckDB for auth: {e}"))?;
         conn.execute_batch(&format!(
             "SET extension_directory = '{}';",
-            crate::storage::escape_sql_string(ext_dir.as_str())
+            crate::sql::escape_sql_string(ext_dir.as_str())
         ))
         .map_err(|e| anyhow::anyhow!("failed to set auth DuckDB extension_directory: {e}"))?;
         crate::storage::install_extensions_with_progress(&conn, &["postgres"])?;
@@ -216,7 +216,7 @@ impl ControlPlane {
         let catalog_path = crate::storage::postgres_uri_to_libpq(catalog_url)?;
         let attach_sql = format!(
             "ATTACH '{}' AS {} (TYPE postgres)",
-            crate::storage::escape_sql_string(&catalog_path),
+            crate::sql::escape_sql_string(&catalog_path),
             Self::POSTGRES_ALIAS
         );
         conn.execute_batch(&attach_sql).map_err(|_| {
@@ -427,7 +427,7 @@ impl ControlPlane {
             let sql = format!(
                 "CALL postgres_execute('{}', '{}')",
                 alias,
-                crate::storage::escape_sql_string(postgres_sql)
+                crate::sql::escape_sql_string(postgres_sql)
             );
             conn.execute_batch(&sql)
                 .map_err(|e| anyhow::anyhow!("control-plane Postgres statement failed: {e}"))
@@ -446,7 +446,7 @@ impl ControlPlane {
         let sql = format!(
             "SELECT * FROM postgres_query('{}', '{}')",
             alias,
-            crate::storage::escape_sql_string(postgres_sql)
+            crate::sql::escape_sql_string(postgres_sql)
         );
         let mut stmt = conn
             .prepare(&sql)
@@ -463,7 +463,7 @@ impl ControlPlane {
         let sql = format!(
             "SELECT * FROM postgres_query('{}', '{}')",
             alias,
-            crate::storage::escape_sql_string(postgres_sql)
+            crate::sql::escape_sql_string(postgres_sql)
         );
         conn.query_row(&sql, [], |row| row.get(0))
             .map_err(|e| anyhow::anyhow!("failed to query control-plane Postgres count: {e}"))
@@ -547,7 +547,7 @@ pub(crate) fn generate_api_key(tenant_id: &str) -> anyhow::Result<String> {
 }
 
 fn quote_sql_literal(value: &str) -> String {
-    format!("'{}'", crate::storage::escape_sql_string(value))
+    format!("'{}'", crate::sql::escape_sql_string(value))
 }
 
 /// Extract bearer token from Authorization header.

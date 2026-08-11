@@ -1119,7 +1119,7 @@ fn anomaly_pass_persists_worsening_shift_and_diagnose_surfaces_it() {
     );
 
     // The row's drill query passes the /v1/query firewall AND executes.
-    sigiro::server::validate_read_only(&drill)
+    sigiro::sql::validate_read_only(&drill)
         .expect("anomaly drill_down_sql must pass the /v1/query guard");
     let drilled: i64 = conn
         .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
@@ -1364,7 +1364,7 @@ fn anomaly_latency_p95_shift_is_detected_and_surfaces() {
 
     // The drill passes the /v1/query firewall, executes, and pulls the
     // slowest spans of the new regime first.
-    sigiro::server::validate_read_only(&drill)
+    sigiro::sql::validate_read_only(&drill)
         .expect("latency drill_down_sql must pass the /v1/query guard");
     assert!(
         drill.contains("ORDER BY duration DESC"),
@@ -1443,7 +1443,7 @@ fn anomaly_log_volume_flood_is_detected_and_surfaces_standalone() {
     );
     assert!(before < after && after > 20.0, "flood: {before} → {after}");
 
-    sigiro::server::validate_read_only(&drill)
+    sigiro::sql::validate_read_only(&drill)
         .expect("log_volume drill_down_sql must pass the /v1/query guard");
     let drilled: i64 = conn
         .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
@@ -1511,7 +1511,7 @@ fn anomaly_error_log_rate_shift_is_detected_at_constant_volume() {
     assert_eq!(operation, "svc");
     assert!(before < after && after > 10.0, "{before}% → {after}%");
 
-    sigiro::server::validate_read_only(&drill)
+    sigiro::sql::validate_read_only(&drill)
         .expect("error_log_rate drill_down_sql must pass the /v1/query guard");
     assert!(
         drill.contains("severity_text IN"),
@@ -1591,7 +1591,7 @@ fn anomaly_profile_cost_shift_is_detected_per_service() {
         before < after && after > 5_000.0,
         "service TOTAL cost per bucket ({before} → {after})"
     );
-    sigiro::server::validate_read_only(&drill)
+    sigiro::sql::validate_read_only(&drill)
         .expect("profile_cost drill_down_sql must pass the /v1/query guard");
     let drilled: i64 = conn
         .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
@@ -1736,8 +1736,7 @@ fn incident_correlates_multi_signal_shifts_and_names_the_deploy() {
             .drill_down_sql
             .as_deref()
             .expect("member shifts carry their persisted drill");
-        sigiro::server::validate_read_only(drill)
-            .expect("member drill must pass the /v1/query guard");
+        sigiro::sql::validate_read_only(drill).expect("member drill must pass the /v1/query guard");
         let drilled: i64 = conn
             .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
                 r.get(0)
@@ -2170,7 +2169,7 @@ fn generic_http_span_names_derive_operation_from_attributes() {
         "drilled rows must match the operation's count exactly"
     );
     // And it must pass the /v1/query firewall verbatim.
-    sigiro::server::validate_read_only(drill)
+    sigiro::sql::validate_read_only(drill)
         .expect("operation drill_down_sql must pass the /v1/query guard");
 }
 
@@ -2439,7 +2438,7 @@ fn error_breakdown_groups_failure_modes_by_derive_priority() {
         f.summary
     );
     let drill = f.drill_down_sql.as_deref().expect("drill sql");
-    sigiro::server::validate_read_only(drill)
+    sigiro::sql::validate_read_only(drill)
         .expect("error.type drill_down_sql must pass the /v1/query guard");
     let modes: Vec<String> = conn
         .prepare(&format!(
@@ -2710,7 +2709,7 @@ fn diagnose_gen_ai_section_empty_without_llm_spans() {
 /// /v1/query gate a user would paste it into — a drill that 400s is worse
 /// than no drill.
 fn assert_drill_runs(conn: &duckdb::Connection, sql: &str) {
-    sigiro::server::validate_read_only(sql)
+    sigiro::sql::validate_read_only(sql)
         .unwrap_or_else(|e| panic!("drill rejected by /v1/query gate: {e}\nSQL: {sql}"));
     conn.execute_batch(sql)
         .unwrap_or_else(|e| panic!("drill failed to execute: {e}\nSQL: {sql}"));

@@ -1,3 +1,4 @@
+use crate::sql::escape_sql_string;
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use duckdb::Connection;
@@ -583,10 +584,6 @@ pub(crate) fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
         // Assume it's a path or other format — return as-is
         Ok(uri.to_string())
     }
-}
-
-pub(crate) fn escape_sql_string(s: &str) -> String {
-    s.replace('\'', "''")
 }
 
 pub(crate) const TABLE_PREFIX: &str = "lake.";

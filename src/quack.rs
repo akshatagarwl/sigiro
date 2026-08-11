@@ -7,7 +7,7 @@
 //! Two independent guards, both required:
 //! - [`load_and_pin`]: refuses to serve an unpinned/unexpected quack build.
 //! - [`install_authorization_gate`]: the actual security boundary — a Rust
-//!   scalar UDF that runs the SAME [`crate::server::validate_read_only`]
+//!   scalar UDF that runs the SAME [`crate::sql::validate_read_only`]
 //!   firewall `/v1/query` enforces (SELECT-only + `sigiro_*` table allowlist
 //!   + reader-function denylist), fail-closed.
 
@@ -94,7 +94,7 @@ pub(crate) fn load_and_pin(conn: &Connection) -> Result<()> {
 /// Signature: `sigiro_quack_authorize(connection_id VARCHAR, query VARCHAR) ->
 /// BOOLEAN` — matches quack's authorization-callback contract exactly.
 /// `connection_id` is ignored: sigiro's guard is per-query, not
-/// per-connection. Returns `true` iff [`crate::server::validate_read_only`]
+/// per-connection. Returns `true` iff [`crate::sql::validate_read_only`]
 /// — the SAME firewall `/v1/query` enforces — accepts `query`: SELECT-only,
 /// `sigiro_*` table allowlist, reader-function denylist.
 ///
@@ -144,7 +144,7 @@ impl VScalar for QuackAuthorizeScalar {
                 false
             } else {
                 let query = DuckString::new(&mut { *ptr }).as_str().to_string();
-                std::panic::catch_unwind(|| crate::server::validate_read_only(&query).is_ok())
+                std::panic::catch_unwind(|| crate::sql::validate_read_only(&query).is_ok())
                     .unwrap_or(false)
             };
         }
@@ -387,12 +387,12 @@ pub(crate) fn start_server(
 
     let mut sql = format!(
         "SELECT listen_uri FROM quack_serve('{}'",
-        crate::storage::escape_sql_string(&uri.0)
+        crate::sql::escape_sql_string(&uri.0)
     );
     if let Some(t) = token {
         sql.push_str(&format!(
             ", token := '{}'",
-            crate::storage::escape_sql_string(t)
+            crate::sql::escape_sql_string(t)
         ));
     }
     sql.push_str(", allow_other_hostname := true, disable_ssl := true);");
@@ -411,7 +411,7 @@ pub(crate) fn start_server(
 pub(crate) fn stop_server(conn: &Connection, uri: &QuackUri) -> Result<()> {
     conn.execute_batch(&format!(
         "CALL quack_stop('{}');",
-        crate::storage::escape_sql_string(&uri.0)
+        crate::sql::escape_sql_string(&uri.0)
     ))
     .context("failed to stop the quack server cleanly")?;
     Ok(())

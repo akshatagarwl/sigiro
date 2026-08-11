@@ -21,7 +21,7 @@ use sigiro::diagnose::{DiagnoseRequest, diagnose};
 use sigiro::inserter::MsgRouter;
 use sigiro::otlp::MetricBatches;
 use sigiro::pool::ProjectPool;
-use sigiro::server::validate_read_only;
+use sigiro::sql::validate_read_only;
 use std::sync::{Arc, Once};
 
 static EXTENSION_ENV: Once = Once::new();

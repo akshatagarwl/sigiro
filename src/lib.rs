@@ -18,6 +18,7 @@ pub(crate) mod quack;
 pub mod responses;
 pub mod schema;
 pub mod server;
+pub mod sql;
 pub mod storage;
 pub mod types;
 

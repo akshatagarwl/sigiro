@@ -1,8 +1,6 @@
 use duckdb::Connection;
-use sigiro::server::{
-    duckdb_value_to_json, resolve_listener_bind_ips, validate_quack_bind_address,
-    validate_read_only, validate_read_only_with,
-};
+use sigiro::server::{resolve_listener_bind_ips, validate_quack_bind_address};
+use sigiro::sql::{duckdb_value_to_json, validate_read_only, validate_read_only_with};
 
 fn test_conn() -> Connection {
     let conn = Connection::open_in_memory().expect("in-memory db");

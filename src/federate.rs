@@ -34,6 +34,7 @@
 //!   classes, `group_sets`, modifier types, comparison operator names) was
 //!   verified directly against this crate's pinned DuckDB build, not guessed.
 
+use crate::sql::SYS_STATS_FUNCTIONS;
 use anyhow::{Context, Result};
 use arrow::record_batch::RecordBatch;
 use serde_json::Value;
@@ -267,27 +268,10 @@ impl NullOrder {
     }
 }
 
-/// System-statistics table functions federatable in a FROM position.
-///
-/// These are the `system_stats` community extension's table functions, read
-/// from the HOST THE EDGE RUNS ON — a live point-in-time reading of that
-/// machine, NOT stored telemetry. A federated query over one of these
-/// answers "what does each node look like right now"; it has no history and
-/// no time bound, so `require_time_bound` never applies to it.
-///
-/// Matched case-insensitively against the function name. This is the SINGLE
-/// definition of the `sys_*` surface: the edge-side authorization gate reads it
-/// directly (`server::is_safe_function` / `is_no_arg_function`) instead of
-/// keeping its own copy, so the coordinator's push list and the gate's
-/// allowlist cannot drift apart and let a query pass one but be denied by the
-/// other.
-pub(crate) const SYS_STATS_FUNCTIONS: &[&str] = &[
-    "SYS_CPU_INFO",
-    "SYS_DISK_INFO",
-    "SYS_MEMORY_INFO",
-    "SYS_NETWORK_INFO",
-    "SYS_OS_INFO",
-];
+// The `sys_*` surface this module pushes to each edge is
+// `crate::sql::SYS_STATS_FUNCTIONS`, imported at the top of this file. It is
+// defined next to the firewall that enforces it so the coordinator's push list
+// and the gate's allowlist cannot drift apart.
 
 /// The FROM relation of a federatable query.
 ///
@@ -372,7 +356,7 @@ impl ParsedQuery {
 /// that shape — never silently degrades (e.g. never falls back to
 /// avg-of-avgs for an unsupported case).
 fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
-    let escaped = crate::storage::escape_sql_string(sql);
+    let escaped = crate::sql::escape_sql_string(sql);
     let json_text: String = conn
         .query_row(
             &format!("SELECT json_serialize_sql('{escaped}')"),
@@ -956,7 +940,7 @@ fn deparse_constant(value: &Value) -> Result<String> {
     match type_id {
         "VARCHAR" => {
             let s = raw.as_str().context("VARCHAR constant is not a string")?;
-            Ok(format!("'{}'", crate::storage::escape_sql_string(s)))
+            Ok(format!("'{}'", crate::sql::escape_sql_string(s)))
         }
         // Required, not defaulted: a non-boolean here silently deparsed to
         // FALSE, pushing a WHERE clause that means something the user never
@@ -1323,12 +1307,12 @@ fn wrap_quack_query(edge: &Edge, inner_sql: &str, token: Option<&str>) -> String
         "SELECT * FROM quack_query('quack://{}:{}', '{}'",
         edge.host,
         edge.port,
-        crate::storage::escape_sql_string(inner_sql)
+        crate::sql::escape_sql_string(inner_sql)
     );
     if let Some(t) = token {
         sql.push_str(&format!(
             ", token := '{}'",
-            crate::storage::escape_sql_string(t)
+            crate::sql::escape_sql_string(t)
         ));
     }
     sql.push_str(", disable_ssl := true);");
@@ -1553,7 +1537,7 @@ pub async fn run_federated_query(
             let val = row
                 .get_ref(i)
                 .context("failed to read a coordinator fold result column")?;
-            obj.insert(name.clone(), crate::server::duckdb_value_to_json(val));
+            obj.insert(name.clone(), crate::sql::duckdb_value_to_json(val));
         }
         results.push(Value::Object(obj));
     }

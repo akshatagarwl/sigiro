@@ -14,7 +14,7 @@
 //! A name must be on BOTH lists or a query passes one and is denied by the
 //! other, so both are asserted here together.
 
-use sigiro::server::validate_read_only;
+use sigiro::sql::validate_read_only;
 
 /// The `system_stats` extension actually provides the columns this feature
 /// reports, on this host, through DuckDB itself. Guards against the whole
@@ -145,7 +145,7 @@ fn sys_functions_are_rejected_on_hosted_and_allowed_when_self_hosted() {
     ] {
         // Hosted: rejected, and the message must name the alternative rather
         // than only refusing.
-        let err = sigiro::server::validate_read_only_gated(sql, false, false)
+        let err = sigiro::sql::validate_read_only_gated(sql, false, false)
             .expect_err("hosted must reject sys_* — it describes the operator's host");
         assert!(
             err.contains("sigiro_metrics_*"),
@@ -154,13 +154,13 @@ fn sys_functions_are_rejected_on_hosted_and_allowed_when_self_hosted() {
 
         // Self-host / local: allowed. This is the fleet-stats use case and it
         // must not regress.
-        sigiro::server::validate_read_only_gated(sql, true, true)
+        sigiro::sql::validate_read_only_gated(sql, true, true)
             .unwrap_or_else(|e| panic!("self-host must allow {sql}: {e}"));
     }
 
     // The ordinary tables stay reachable on hosted — the gate is scoped to
     // sys_*, not a blanket tightening.
-    sigiro::server::validate_read_only_gated(
+    sigiro::sql::validate_read_only_gated(
         "SELECT service_name FROM sigiro_spans WHERE timestamp > now()",
         false,
         false,
