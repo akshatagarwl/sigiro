@@ -246,6 +246,52 @@ export default defineConfig({
   seo: { robots: false },
 
   /**
+   * Chinese, Japanese and Korean, and deliberately not the European locales.
+   *
+   * Picked from prior art rather than taste. Of the comparable projects checked
+   * on 2026-08-12, OpenTelemetry ships zh/ja/ko/fr/es/pt and another mature project ships
+   * zh/ja/ko/fr/es — the exact intersection is zh, ja, ko. Neither translates German,
+   * which is the assumption this measurement overturned.
+   *
+   * The three chosen are where translation actually earns its keep: developers in
+   * France, Spain and Germany overwhelmingly search technical queries in English,
+   * so a French page competes for a query few French developers type. Chinese is
+   * the strongest case on its own — Baidu and the Chinese developer web are a
+   * largely separate index that English pages do not reach at all.
+   *
+   * Both mature projects use bare `zh`, not `zh-cn`. Followed here.
+   *
+   * A second reason the European locales lose: Cloudflare Web Analytics on the
+   * free plan excludes visitors served from EU/EEA data centres by default, so
+   * those are precisely the locales whose readership we could not measure. The
+   * three chosen are fully measured.
+   *
+   * NOTE ON EVIDENCE. This choice rests on prior art, not on our own traffic —
+   * analytics went live the same day and had collected nothing when these locales
+   * were picked. Revisit once there is a month of country data: if it contradicts
+   * this, the ledger makes adding or dropping a locale cheap.
+   *
+   * `style` is set on each because a first translation has no existing page to
+   * match register against, so the choice has to be pinned up front. It rides
+   * along in every translation prompt, and it wins over an existing translation
+   * that disagrees — so it also nudges older pages on a retranslation.
+   */
+  i18n: {
+    defaultLocale: 'en',
+    locales: [
+      { code: 'en', label: 'English' },
+      /* Simplified, mainland conventions. Technical register — this reader is
+         installing a binary, not reading marketing. */
+      { code: 'zh', label: '简体中文', style: 'Simplified Chinese, mainland technical register' },
+      /* です/ます rather than plain form: the standard register for Japanese
+         software documentation. */
+      { code: 'ja', label: '日本語', style: 'Polite です/ます form, technical documentation register' },
+      /* 합니다 style, the formal-polite register Korean technical docs use. */
+      { code: 'ko', label: '한국어', style: 'Formal 합니다 style, technical documentation register' },
+    ],
+  },
+
+  /**
    * Cloudflare Web Analytics, as a `scripts` entry rather than the dashboard's
    * automatic injection.
    *
