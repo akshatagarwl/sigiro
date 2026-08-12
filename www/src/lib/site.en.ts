@@ -27,12 +27,38 @@
  */
 
 /**
+ * Widen string literals to `string`, recursively, while preserving the key
+ * structure and every array length.
+ *
+ * Needed because `EN` is `as const`, which makes each value a *literal* type:
+ * `title` is not `string` but `'sigiro — observability data layer …'`. A type
+ * derived directly from it would therefore reject every translation — the only
+ * assignable value would be the English one, byte for byte. The first version of
+ * this contract did exactly that and produced 177 `TS2322` errors the moment a
+ * locale file was translated; the Japanese pass caught it.
+ *
+ * Tuples are mapped elementwise rather than collapsed to `T[]`, so the array
+ * lengths stay part of the contract: a locale that ships 5 promises instead of 6,
+ * or 12 Ask-AI prompts instead of 13, is still a compile error. That is the
+ * property worth keeping — a missing entry would otherwise render as `undefined`
+ * on a page nobody here can proofread.
+ */
+type Widen<T> = T extends string
+  ? string
+  : T extends readonly unknown[]
+    ? { readonly [K in keyof T]: Widen<T[K]> }
+    : T extends object
+      ? { readonly [K in keyof T]: Widen<T[K]> }
+      : T;
+
+/**
  * The shape every locale must satisfy.
  *
  * Derived from this file rather than declared separately, so English stays the
- * definition and the three translations are checked against it by the compiler.
+ * definition and the translations are checked against it by the compiler: add a
+ * field here and all three locale files fail to compile until they carry it too.
  */
-export type LandingCopy = typeof EN;
+export type LandingCopy = Widen<typeof EN>;
 
 export const EN = {
   /** Keeps "observability" in the title: the h1 is a category bet with no search
@@ -69,6 +95,39 @@ export const EN = {
       demo, since the product is a binary you run in one command, and "demo"
       promises a sales call that nobody here is staffed to give. */
   callLabel: 'Talk to us',
+
+  /**
+   * Strings that were hardcoded in the markup before the landing page was
+   * localized.
+   *
+   * They were found by extracting every text node from `pages/index.astro` and
+   * its components after the first split, which is worth recording: a copy
+   * inventory taken from `site.ts` alone missed the hero's primary button and
+   * every section heading — the most visible text on the page. Anything a
+   * reader sees belongs here, not in the markup.
+   */
+  ui: {
+    /** The hero's primary action, and the same label in the header. */
+    getStarted: 'Get started',
+    /** The line under the hero loop. Restates the two claims that decide
+        whether a reader keeps reading: it is free self-hosted, and nothing
+        leaves their infrastructure. */
+    heroNote: 'Free when you install it. sigiro sends no data to us.',
+    /** The stepped-terminal section. `stepsAria` labels the step list for
+        screen readers; `shellAria` names the transcript region. */
+    howLabel: 'how you use it',
+    howTitle: 'Four steps.',
+    howTail: 'You connect, ask, correlate, and prove.',
+    howLede:
+      'You send OpenTelemetry to sigiro. You ask one question. Each step below is one shell session.',
+    stepsAria: 'The four steps',
+    shellAria: 'your shell',
+    /** The integrations section. "No migration" is a claim: sigiro speaks OTLP,
+        so the reader keeps the instrumentation they already have. */
+    integrationsLabel: 'what you get',
+    integrationsTitle: 'No migration.',
+    integrationsTail: 'sigiro connects to the tools you use.',
+  },
 
   /**
    * Connect, ask, correlate, prove — the four steps of the stepped terminal.
