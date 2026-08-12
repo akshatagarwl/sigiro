@@ -99,6 +99,11 @@ enum Command {
     /// otherwise. This is the container HEALTHCHECK for the distroless image,
     /// which has no shell or curl for the usual `curl -f /health` probe.
     Healthcheck,
+    /// Serve the MCP (Model Context Protocol) tool surface over stdio, so any
+    /// MCP client (Claude Desktop, Cursor, a benchmark harness) can drive the
+    /// detect→diagnose→drill loop. Talks to a running `sigiro serve` over
+    /// HTTP, so point SIGIRO_ENDPOINT at it if it is not on localhost.
+    Mcp,
 }
 
 /// Every command prints pretty JSON. One format, so a pipeline and a human read
@@ -332,6 +337,23 @@ async fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
+        }
+        Some(Command::Mcp) => {
+            // stdio transport: the client owns the process lifetime, so this
+            // runs until the peer closes. Logging must NOT go to stdout —
+            // stdout is the JSON-RPC channel and any stray byte corrupts the
+            // stream (see init_basic_subscriber, which writes to stderr).
+            use rmcp::ServiceExt;
+            let client = sigiro::client::try_build_client()?;
+            tracing::info!(endpoint = client.base_url(), "starting sigiro MCP server");
+            let service = sigiro::mcp::SigiroMcp::new(client)
+                .serve((tokio::io::stdin(), tokio::io::stdout()))
+                .await
+                .context("failed to start MCP server on stdio")?;
+            service
+                .waiting()
+                .await
+                .context("MCP server terminated abnormally")?;
         }
     }
     Ok(())

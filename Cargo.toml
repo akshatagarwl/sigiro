@@ -2,7 +2,14 @@
 name = "sigiro"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# The real floor, not an aspiration: `rmcp` and `darling` both require 1.88,
+# so a lower number here does not buy compatibility — it silently costs it.
+# Cargo treats `rust-version` as a RESOLVER input, so when this said 1.85 a
+# plain `cargo add rmcp` resolved to 2.2.0 instead of 3.x with no warning and
+# no error. Keep this equal to the highest MSRV in the dependency tree
+# (`cargo metadata` reports it); raise it deliberately when a dependency
+# forces it, and never leave it below what the tree already demands.
+rust-version = "1.88"
 license = "Apache-2.0"
 
 [workspace]
@@ -67,6 +74,7 @@ validator = { version = "0.20", features = ["derive"] }
 axum-valid = "0.23" # default features = basic (json/form/query) + validator
 camino = "1.2.2"
 itertools = "0.14.0"
+rmcp = { version = "3.1.2", features = ["server", "macros", "transport-streamable-http-server", "transport-io", "schemars"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 caps = "0.5"
