@@ -28,7 +28,16 @@ const copy = getCopy(locale);
 const { site: SITE, sections: SECTIONS, promises: PROMISES, call: CALL } = copy;
 
 /** English is served at `/`; the others at `/<locale>`. */
-const canonical = locale === 'en' ? SITE.url : `${SITE.url}/${locale}`;
+/**
+ * The English root serves 200 directly, so its canonical stays slashless and
+ * unchanged from what production has always published.
+ *
+ * The localized routes are different: Astro prerenders `/zh/index.html`, serves
+ * it at `/zh/`, and 307s `/zh` to it. A slashless canonical there would name a
+ * URL that redirects, so those carry the trailing slash the server actually
+ * serves.
+ */
+const canonical = locale === 'en' ? SITE.url : `${SITE.url}/${locale}/`;
 
 /**
  * The quickstart stays on the docs' own locale path, so a Chinese reader who

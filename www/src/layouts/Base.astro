@@ -80,7 +80,12 @@ const copy = getCopy(locale);
  */
 const alternates = [
   { hreflang: 'en', href: SITE.url },
-  ...LANDING_LOCALES.map((code) => ({ hreflang: code, href: `${SITE.url}/${code}` })),
+  /* Trailing slash on purpose. Astro serves a prerendered `/zh/index.html` at
+     `/zh/` and 307s `/zh` to it, so the slashless form is a redirect rather than
+     a page. Declaring the slashless URL as canonical — which the first version
+     did — hands search engines a canonical target that redirects, and points
+     every `hreflang` at one too. These now name the URL actually served. */
+  ...LANDING_LOCALES.map((code) => ({ hreflang: code, href: `${SITE.url}/${code}/` })),
 ];
 
 /** One @graph, cross-referenced, so an answer engine reads one entity not three. */
