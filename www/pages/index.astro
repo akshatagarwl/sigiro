@@ -1,130 +1,18 @@
 ---
-import Artifact from '@/components/Artifact.astro';
-import FactoryLoop from '@/components/FactoryLoop.astro';
-import HowItWorks from '@/components/HowItWorks.astro';
-import { Integrations } from '@/components/integrations';
-import { PRIMARY, SECONDARY } from '@/components/site/action';
-import Base from '@/layouts/Base.astro';
-import { CALL, PROMISES, SECTIONS, SITE } from '@/lib/site';
+import Landing from '@/components/Landing.astro';
 
-/* The type ramp, from the design language and not invented here: 27px medium at
-   -0.03em for a page or section title, 15px for a lede, 13.5px for body.
-   Headings are medium, never bold — the negative tracking does the work that
-   weight would do badly. */
-const H2 = 'mt-3 max-w-[34ch] text-[27px] leading-[1.2] font-medium tracking-[-0.03em] text-ink';
-const LEDE = 'mt-3 max-w-[62ch] text-[15px] leading-relaxed text-ink-2';
-const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
-
-/** The stepped How section owns its vertical space, so outer padding would delay its pin. */
-const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
+/**
+ * The English landing page, at `/`.
+ *
+ * The page itself lives in `src/components/Landing.astro`, which this and
+ * `pages/[locale]/index.astro` both render. That is the whole point of the
+ * split: one component, four locales, so a change to the page cannot land on
+ * `/` and miss `/zh`.
+ *
+ * English is served here rather than at `/en`, so there is no redirect and the
+ * canonical URL of the site's front door is unchanged. `hreflang="x-default"`
+ * in `src/layouts/Base.astro` points here.
+ */
 ---
 
-<Base canonical={SITE.url}>
-  {/*
-    One screen holds the claim and its proof. The loop replaces the later pinned
-    copy, so the page makes this argument once. Text stays the LCP; the terminal
-    starts only after its client-visible island enters the viewport.
-
-    `svh` fits the smallest iOS viewport. `min-h` lets short viewports and large
-    text grow rather than clip.
-  */}
-  <section
-    class="min-h-[calc(100svh-60px)] px-4 py-4 sm:min-h-[calc(100svh-68px)] sm:px-8 lg:px-12"
-  >
-    <div
-      class="flex min-h-[calc(100svh-92px)] flex-col justify-center py-10 sm:min-h-[calc(100svh-108px)] sm:py-12"
-    >
-      <div>
-        <h1
-          class="max-w-[24ch] text-[clamp(30px,6vw,44px)] leading-[1.08] font-medium tracking-[-0.04em] text-balance text-ink"
-        >
-          {SITE.tagline}
-        </h1>
-        <div class="mt-5 grid gap-6 sm:mt-6 sm:grid-cols-[1fr_auto] sm:items-end sm:gap-10">
-          <p class="max-w-[52ch] text-[13.5px] leading-[1.7] text-ink-2 sm:text-[15px]">
-            {SITE.description}
-          </p>
-          <div class="flex flex-wrap items-center gap-3">
-            <a href="/docs/tutorials/quickstart" class={PRIMARY}>Get started</a>
-            <a href={CALL.href} class={SECONDARY}>{CALL.label}</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="mt-6 min-w-0 sm:mt-8">
-        <FactoryLoop />
-      </div>
-
-      <p class="meta mt-1 flex items-center gap-2 text-ink-3">
-        <span aria-hidden="true" class="size-[5px] rounded-[1.5px] bg-accent"></span>
-        Free when you install it. sigiro sends no data to us.
-      </p>
-    </div>
-  </section>
-
-  {/*
-    Connect, ask, correlate. These were sections 01, 02 and 03, each a heading over
-    a static code block that showed the input and never the answer. One stepped
-    terminal shows both, and it costs one heading instead of three.
-
-    It stays unnumbered because the frame already counts "2 of 4". A numeral
-    outside the frame would create a second sequence.
-  */}
-  {/* The header stays inside the island so it remains beside the pinned frame. */}
-  <section aria-labelledby="how" class={SECTION_PINNED}>
-    <HowItWorks />
-  </section>
-
-  {
-    SECTIONS.map((s) => (
-      <section aria-labelledby={`s-${s.n}`} class={SECTION}>
-        <p class="meta text-ink-3">{s.n}</p>
-        <h2 id={`s-${s.n}`} class={H2}>
-          {s.lead} <span class="text-ink-3">{s.rest}</span>
-        </h2>
-        <p class={LEDE}>{s.say}</p>
-
-        <Artifact
-          title={s.artifact.title}
-          meta={s.artifact.meta}
-          code={s.artifact.code}
-          lang={s.artifact.lang}
-        />
-      </section>
-    ))
-  }
-
-  {/*
-    What it runs on and what it promises, folded into one section. They were 06 and
-    07, two headings and two full section paddings for what is really one answer to
-    "what am I signing up for". Neither was a step in the numbered spine, so
-    numbering them implied a sequence that had already ended. This one is unnumbered
-    for the same reason.
-
-    The promise tiles also absorbed the old standalone "it watches itself" section,
-    which was making one claim at the length of six.
-  */}
-  <section aria-labelledby="signing-up" class={SECTION}>
-    <p class="label">what you get</p>
-    <h2 id="signing-up" class={H2}>
-      No migration. <span class="text-ink-3">sigiro connects to the tools you use.</span>
-    </h2>
-    <Integrations client:visible />
-
-    {/*
-      Six wells with a real gap between them. `gap-px` on a tinted parent is a
-      border faking a compartment; this is the material saying it.
-    */}
-    <dl class="mt-10 grid gap-2.5 sm:grid-cols-3">
-      {
-        PROMISES.map((p) => (
-          <div class="mat-well rounded-[11px] p-3.5">
-            <dt class="text-[13px] font-medium tracking-[-0.01em] text-ink">{p.title}</dt>
-            <dd class="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">{p.body}</dd>
-          </div>
-        ))
-      }
-    </dl>
-  </section>
-
-</Base>
+<Landing locale="en" />

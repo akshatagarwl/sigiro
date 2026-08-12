@@ -69,7 +69,7 @@ export const KO: LandingCopy = {
       made it, so you can check the result or disprove it. Do not put 원인, 증명
       or 입증 back into this string. */
   description:
-    'OpenTelemetry를 sigiro로 보내십시오. 서비스에 장애가 생기면 순위가 매겨진 결과와 의심되는 배포, 각 결과의 쿼리를 받습니다.',
+    'OpenTelemetry를 sigiro로 보내십시오. 서비스에 장애가 발생하면 순위가 매겨진 결과와 의심되는 배포, 각 결과의 쿼리를 받습니다.',
 
   /** Nav labels. The hrefs are in site.shared.ts.
 
@@ -213,7 +213,7 @@ export const KO: LandingCopy = {
     learn: {
       title: '학습',
       owner: '사용자의 메모리',
-      say: '수정 내용을 증거와 함께 보관하십시오. 같은 장애가 다시 생기면 그 기록을 사용하십시오.',
+      say: '수정 내용을 증거와 함께 보관하십시오. 같은 장애가 다시 발생하면 그 기록을 사용하십시오.',
     },
   },
 

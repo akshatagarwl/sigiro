@@ -291,8 +291,22 @@ export const EN = {
    *    which is why none of these ask for a comparison against a named rival.
    *    Ask questions; do not assert features.
    *
-   * There is deliberately no question about price. Hosted is a call rather than
-   * a signup, so asking "what does it cost" invites a number from training data.
+   * On price: this list DOES contain one cost question ("I ship alone and
+   * cannot justify a per-seat observability bill. What does sigiro cost me?").
+   * An earlier version of this comment claimed there was deliberately none,
+   * which the entry directly below it contradicted — caught during the Korean
+   * translation pass, when the translator asked which of the two to follow.
+   *
+   * The entry is kept, and the comment corrected to match, because the question
+   * is safe in the form it takes: it asks what sigiro costs *the reader* rather
+   * than requesting a price list, and the three documents it is sent with answer
+   * it truthfully (self-hosted is free; hosted is a call). What must never
+   * appear is a prompt that asks for a *number* or a comparison against a named
+   * rival, since either invites an answer from training data rather than from
+   * our own documents.
+   *
+   * If this entry is ever removed, remove it from all four locale files in the
+   * same commit — the array length is part of the `LandingCopy` contract.
    */
   askAi: [
     // Coding agent in a loop — the primary use case in product-marketing.md.

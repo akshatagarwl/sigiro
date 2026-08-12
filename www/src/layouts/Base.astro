@@ -17,7 +17,7 @@ import data from 'blume:data';
 import SiteFooter from '@/components/site/Footer.astro';
 import SiteHeader from '@/components/site/Header.astro';
 import { jsonLd } from '@/lib/json-ld';
-import { CF_ANALYTICS_TOKEN, SITE } from '@/lib/site';
+import { CF_ANALYTICS_TOKEN, getCopy, LANDING_LOCALES, type Locale, SITE } from '@/lib/site';
 
 /**
  * The landing page's document, and the panel it sits in.
@@ -53,9 +53,35 @@ import { CF_ANALYTICS_TOKEN, SITE } from '@/lib/site';
 interface Props {
   /** Absolute or root-relative URL this page claims as canonical. */
   canonical?: string;
+  /**
+   * Which locale's document this is. Drives `<html lang>`, the copy handed to
+   * the header and footer, and the `hreflang` alternates below.
+   *
+   * Defaults to `en` so nothing that mounted this layout before the landing page
+   * was localized had to change.
+   */
+  locale?: Locale;
 }
 
-const { canonical = new URL(Astro.url.pathname, SITE.url).href } = Astro.props;
+const { canonical = new URL(Astro.url.pathname, SITE.url).href, locale = 'en' } = Astro.props;
+
+const copy = getCopy(locale);
+
+/**
+ * `hreflang` for the four landing pages.
+ *
+ * Every locale lists every other one plus itself, and `x-default` points at the
+ * English page — the same shape Blume emits for `/docs/*`, so the two halves of
+ * the site tell search engines the same story. Without these, `/zh` and `/` look
+ * like unrelated pages rather than translations, which is the case Google's
+ * duplicate-content handling needs the tag to resolve.
+ *
+ * Absolute URLs, because a relative `hreflang` is ignored.
+ */
+const alternates = [
+  { hreflang: 'en', href: SITE.url },
+  ...LANDING_LOCALES.map((code) => ({ hreflang: code, href: `${SITE.url}/${code}` })),
+];
 
 /** One @graph, cross-referenced, so an answer engine reads one entity not three. */
 const graph = {
@@ -101,16 +127,18 @@ const graph = {
 const og = new URL(SITE.ogImage, SITE.url).href;
 ---
 
-<html lang="en" class="h-full" data-home>
+<html lang={locale} class="h-full" data-home>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="sitemap" href="/sitemap-index.xml" />
     <link rel="canonical" href={canonical} />
+    {alternates.map((alt) => <link rel="alternate" hreflang={alt.hreflang} href={alt.href} />)}
+    <link rel="alternate" hreflang="x-default" href={SITE.url} />
 
-    <title>{SITE.title}</title>
-    <meta name="description" content={SITE.description} />
+    <title>{copy.site.title}</title>
+    <meta name="description" content={copy.site.description} />
     <meta name="application-name" content={SITE.name} />
     <meta name="robots" content="index, follow" />
 
@@ -120,18 +148,18 @@ const og = new URL(SITE.ogImage, SITE.url).href;
     <meta property="og:type" content="website" />
     <meta property="og:url" content={SITE.url} />
     <meta property="og:site_name" content={SITE.name} />
-    <meta property="og:title" content={SITE.title} />
-    <meta property="og:description" content={SITE.description} />
+    <meta property="og:title" content={copy.site.title} />
+    <meta property="og:description" content={copy.site.description} />
     <meta property="og:image" content={og} />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content={SITE.tagline} />
+    <meta property="og:image:alt" content={copy.site.tagline} />
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@SigiroAI" />
-    <meta name="twitter:title" content={SITE.title} />
-    <meta name="twitter:description" content={SITE.description} />
+    <meta name="twitter:title" content={copy.site.title} />
+    <meta name="twitter:description" content={copy.site.description} />
     <meta name="twitter:image" content={og} />
 
     <Fonts cssVars={data.fontCssVars} />
@@ -211,7 +239,7 @@ const og = new URL(SITE.ogImage, SITE.url).href;
     */}
     <div class="flex flex-1 p-3 sm:p-5">
       <div class="mat-panel flex min-w-0 flex-1 flex-col overflow-clip rounded-[20px]">
-        <SiteHeader />
+        <SiteHeader locale={locale} />
 
         {/*
           The measure. The panel is as wide as the window, and a 1400px column of
@@ -223,7 +251,7 @@ const og = new URL(SITE.ogImage, SITE.url).href;
           <slot />
         </main>
 
-        <SiteFooter surface="site" />
+        <SiteFooter surface="site" locale={locale} />
       </div>
     </div>
 

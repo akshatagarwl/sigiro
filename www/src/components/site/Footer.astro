@@ -1,7 +1,7 @@
 ---
 import { AskAI } from '@/components/site/ask-ai';
 import { Logo } from '@/components/site/logo';
-import { CALL, NAV, SOCIAL } from '@/lib/site';
+import { getCopy, type Locale, SOCIAL } from '@/lib/site';
 
 /**
  * `AskAI` and `Logo` are React components rendered here with no `client:*`
@@ -21,9 +21,20 @@ import { CALL, NAV, SOCIAL } from '@/lib/site';
 
 type Props = {
   surface?: 'site' | 'docs';
+  /**
+   * Defaults to `en`. Blume mounts this footer for `/docs/*` through the layout
+   * slot and passes only its own props, so the docs keep the English footer —
+   * Blume already renders its own localized chrome around it, and the two link
+   * sets here (`docs`, `api`) are the same short words in every locale.
+   * `pages/[locale]/index.astro` passes a real locale.
+   */
+  locale?: Locale;
 };
 
-const { surface = 'docs' } = Astro.props;
+const { surface = 'docs', locale = 'en' } = Astro.props;
+const copy = getCopy(locale);
+const NAV = copy.nav;
+const CALL = copy.call;
 
 /**
  * A docs reader is already in the docs, so the `/docs` link is dead weight
@@ -31,6 +42,10 @@ const { surface = 'docs' } = Astro.props;
  * they are on.
  */
 const navItems = surface === 'docs' ? NAV.filter((item) => item.href !== '/docs') : NAV;
+
+/** Keep a localized reader inside their own docs. Same helper as Header.astro. */
+const localize = (href: string) =>
+  locale === 'en' || !href.startsWith('/docs') ? href : href.replace('/docs', `/docs/${locale}`);
 ---
 
 <footer
@@ -64,7 +79,7 @@ const navItems = surface === 'docs' ? NAV.filter((item) => item.href !== '/docs'
   >
     {
       navItems.map((item) => (
-        <a href={item.href} class="meta text-ink-3 hover:text-ink">
+        <a href={localize(item.href)} class="meta text-ink-3 hover:text-ink">
           {item.label.toLowerCase()}
         </a>
       ))

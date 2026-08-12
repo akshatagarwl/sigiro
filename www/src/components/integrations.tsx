@@ -22,7 +22,7 @@ import {
   // bare specifier has to stay Blume's.
 } from 'sigiro-icons';
 import { LogoMarquee } from '@/components/interior/logo-marquee';
-import { INTEGRATIONS } from '@/lib/site';
+import { getCopy, type Locale } from '@/lib/site';
 
 /**
  * Three belts: what emits the telemetry, where sigiro runs, and what reads the
@@ -76,7 +76,8 @@ function Mark({ path }: { path: string }) {
   );
 }
 
-export function Integrations() {
+export function Integrations({ locale = 'en' }: { locale?: Locale }) {
+  const INTEGRATIONS = getCopy(locale).integrations;
   return (
     <div className="mt-6 flex flex-col gap-5">
       {INTEGRATIONS.map((group, i) => (

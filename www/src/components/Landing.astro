@@ -1,0 +1,163 @@
+---
+import Artifact from '@/components/Artifact.astro';
+import FactoryLoop from '@/components/FactoryLoop.astro';
+import HowItWorks from '@/components/HowItWorks.astro';
+import { Integrations } from '@/components/integrations';
+import { PRIMARY, SECONDARY } from '@/components/site/action';
+import Base from '@/layouts/Base.astro';
+import { getCopy, type Locale } from '@/lib/site';
+
+/**
+ * The landing page, for one locale.
+ *
+ * Extracted from `pages/index.astro` when the page was localized, so the English
+ * route and the three localized routes render the SAME component rather than two
+ * copies that drift. `pages/index.astro` is now a four-line wrapper passing
+ * `locale="en"`, and `pages/[locale]/index.astro` maps the rest.
+ *
+ * Every string here comes from `getCopy(locale)`. Nothing is hardcoded — the
+ * first attempt at this split left the hero button and every section heading in
+ * the markup, which a copy inventory taken from `site.ts` alone did not reveal.
+ */
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const copy = getCopy(locale);
+const { site: SITE, sections: SECTIONS, promises: PROMISES, call: CALL } = copy;
+
+/** English is served at `/`; the others at `/<locale>`. */
+const canonical = locale === 'en' ? SITE.url : `${SITE.url}/${locale}`;
+
+/**
+ * The quickstart stays on the docs' own locale path, so a Chinese reader who
+ * presses the hero button lands in Chinese docs rather than English ones. Blume
+ * mounts `/docs/<locale>/...` for every configured locale, and these three are
+ * exactly the locales it was configured with.
+ */
+const quickstart
+  = locale === 'en' ? '/docs/tutorials/quickstart' : `/docs/${locale}/tutorials/quickstart`;
+
+/* The type ramp, from the design language and not invented here: 27px medium at
+   -0.03em for a page or section title, 15px for a lede, 13.5px for body.
+   Headings are medium, never bold — the negative tracking does the work that
+   weight would do badly. */
+const H2 = 'mt-3 max-w-[34ch] text-[27px] leading-[1.2] font-medium tracking-[-0.03em] text-ink';
+const LEDE = 'mt-3 max-w-[62ch] text-[15px] leading-relaxed text-ink-2';
+const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
+
+/** The stepped How section owns its vertical space, so outer padding would delay its pin. */
+const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
+---
+
+
+<Base canonical={canonical} locale={locale}>
+  {/*
+    One screen holds the claim and its proof. The loop replaces the later pinned
+    copy, so the page makes this argument once. Text stays the LCP; the terminal
+    starts only after its client-visible island enters the viewport.
+
+    `svh` fits the smallest iOS viewport. `min-h` lets short viewports and large
+    text grow rather than clip.
+  */}
+  <section
+    class="min-h-[calc(100svh-60px)] px-4 py-4 sm:min-h-[calc(100svh-68px)] sm:px-8 lg:px-12"
+  >
+    <div
+      class="flex min-h-[calc(100svh-92px)] flex-col justify-center py-10 sm:min-h-[calc(100svh-108px)] sm:py-12"
+    >
+      <div>
+        <h1
+          class="max-w-[24ch] text-[clamp(30px,6vw,44px)] leading-[1.08] font-medium tracking-[-0.04em] text-balance text-ink"
+        >
+          {SITE.tagline}
+        </h1>
+        <div class="mt-5 grid gap-6 sm:mt-6 sm:grid-cols-[1fr_auto] sm:items-end sm:gap-10">
+          <p class="max-w-[52ch] text-[13.5px] leading-[1.7] text-ink-2 sm:text-[15px]">
+            {SITE.description}
+          </p>
+          <div class="flex flex-wrap items-center gap-3">
+            <a href={quickstart} class={PRIMARY}>{copy.ui.getStarted}</a>
+            <a href={CALL.href} class={SECONDARY}>{CALL.label}</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-6 min-w-0 sm:mt-8">
+        <FactoryLoop locale={locale} />
+      </div>
+
+      <p class="meta mt-1 flex items-center gap-2 text-ink-3">
+        <span aria-hidden="true" class="size-[5px] rounded-[1.5px] bg-accent"></span>
+        {copy.ui.heroNote}
+      </p>
+    </div>
+  </section>
+
+  {/*
+    Connect, ask, correlate. These were sections 01, 02 and 03, each a heading over
+    a static code block that showed the input and never the answer. One stepped
+    terminal shows both, and it costs one heading instead of three.
+
+    It stays unnumbered because the frame already counts "2 of 4". A numeral
+    outside the frame would create a second sequence.
+  */}
+  {/* The header stays inside the island so it remains beside the pinned frame. */}
+  <section aria-labelledby="how" class={SECTION_PINNED}>
+    <HowItWorks locale={locale} />
+  </section>
+
+  {
+    SECTIONS.map((s) => (
+      <section aria-labelledby={`s-${s.n}`} class={SECTION}>
+        <p class="meta text-ink-3">{s.n}</p>
+        <h2 id={`s-${s.n}`} class={H2}>
+          {s.lead} <span class="text-ink-3">{s.rest}</span>
+        </h2>
+        <p class={LEDE}>{s.say}</p>
+
+        <Artifact
+          title={s.artifact.title}
+          meta={s.artifact.meta}
+          code={s.artifact.code}
+          lang={s.artifact.lang}
+        />
+      </section>
+    ))
+  }
+
+  {/*
+    What it runs on and what it promises, folded into one section. They were 06 and
+    07, two headings and two full section paddings for what is really one answer to
+    "what am I signing up for". Neither was a step in the numbered spine, so
+    numbering them implied a sequence that had already ended. This one is unnumbered
+    for the same reason.
+
+    The promise tiles also absorbed the old standalone "it watches itself" section,
+    which was making one claim at the length of six.
+  */}
+  <section aria-labelledby="signing-up" class={SECTION}>
+    <p class="label">{copy.ui.integrationsLabel}</p>
+    <h2 id="signing-up" class={H2}>
+      {copy.ui.integrationsTitle} <span class="text-ink-3">{copy.ui.integrationsTail}</span>
+    </h2>
+    <Integrations locale={locale} client:visible />
+
+    {/*
+      Six wells with a real gap between them. `gap-px` on a tinted parent is a
+      border faking a compartment; this is the material saying it.
+    */}
+    <dl class="mt-10 grid gap-2.5 sm:grid-cols-3">
+      {
+        PROMISES.map((p) => (
+          <div class="mat-well rounded-[11px] p-3.5">
+            <dt class="text-[13px] font-medium tracking-[-0.01em] text-ink">{p.title}</dt>
+            <dd class="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">{p.body}</dd>
+          </div>
+        ))
+      }
+    </dl>
+  </section>
+
+</Base>

@@ -99,6 +99,10 @@ export const getCopy = (locale: Locale) => {
       { ...c.loop.learn, ...LOOP_SESSIONS.learn },
     ],
     promises: c.promises,
+    /* The strings that used to be hardcoded in the markup: the hero button, the
+       section headings, and the two ARIA labels. Forwarded verbatim — the
+       components read them straight off `copy.ui`. */
+    ui: c.ui,
     integrations: [
       { label: c.integrations.emitLabel, items: INTEGRATION_ITEMS.emit },
       { label: c.integrations.runLabel, items: INTEGRATION_ITEMS.run },

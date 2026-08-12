@@ -1,0 +1,23 @@
+---
+import Landing from '@/components/Landing.astro';
+import { LANDING_LOCALES, type LandingLocale } from '@/lib/site';
+
+/**
+ * The localized landing pages: `/zh`, `/ja`, `/ko`.
+ *
+ * English is NOT in this map — it is served at `/` by `pages/index.astro`, so
+ * the site's front door keeps its URL and needs no redirect. `LANDING_LOCALES`
+ * therefore holds only the three non-default locales, and it mirrors
+ * `i18n.locales` in blume.config.ts: a landing page without matching docs would
+ * send a reader from a Chinese marketing page into English documentation.
+ *
+ * Prerendered, like every other HTML route on this site. The `server` adapter is
+ * here for `/dl/[...key]` and the MCP endpoint, not for these.
+ */
+export const getStaticPaths = () =>
+  LANDING_LOCALES.map((locale) => ({ params: { locale } }));
+
+const { locale } = Astro.params as { locale: LandingLocale };
+---
+
+<Landing locale={locale} />

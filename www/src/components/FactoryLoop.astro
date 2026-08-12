@@ -2,21 +2,53 @@
 import { Effect } from 'effect';
 import { FactoryLoopPlayer, type FactoryStage } from '@/components/factory-loop-player';
 import { highlightSession } from '@/lib/highlight';
-import { LOOP } from '@/lib/site';
+import { getCopy, type Locale } from '@/lib/site';
 
 /**
  * The complete repair loop in one first-viewport terminal.
  *
- * `LOOP` stays the only transcript source. Shiki runs on the server, then the
- * player receives one trusted HTML string per line. A browser without JavaScript
- * gets the same five sessions below as static terminal blocks.
+ * The locale's `loop` stays the only transcript source. Shiki runs on the
+ * server, then the player receives one trusted HTML string per line. A browser
+ * without JavaScript gets the same five sessions below as static terminal
+ * blocks.
+ *
+ * `locale` defaults to `en`, so `pages/index.astro` renders exactly as it did
+ * before the landing page was localized and did not have to change.
  */
-const SHORT_OWNER: Record<string, string> = {
-  sigiro: 'sigiro',
-  'your agent': 'agent',
-  'your pipeline, on our evidence': 'pipeline',
-  'your memory': 'memory',
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = 'en' } = Astro.props;
+const LOOP = getCopy(locale).loop;
+
+/**
+ * The narrow-viewport owner labels, keyed by STAGE INDEX rather than by the
+ * owner string.
+ *
+ * It used to be a `Record<string, string>` keyed on the English owner text
+ * (`'your agent'` → `'agent'`), which silently stopped matching the moment the
+ * owners were translated: every stage fell through to the `??` branch and
+ * rendered its full label in the narrow slot. Indices are locale-independent,
+ * and the array length is checked against the loop below so a stage added in
+ * `site.shared.ts` cannot quietly lose its short form.
+ *
+ * The short forms are single words on purpose — this row is horizontally tight,
+ * and a CJK short form is usually 2–3 glyphs, which fits where the English word
+ * does.
+ */
+const SHORT_OWNER: Record<Locale, readonly string[]> = {
+  en: ['sigiro', 'sigiro', 'agent', 'pipeline', 'memory'],
+  zh: ['sigiro', 'sigiro', '智能体', '流水线', '记忆'],
+  ja: ['sigiro', 'sigiro', 'エージェント', 'パイプライン', 'メモリ'],
+  ko: ['sigiro', 'sigiro', '에이전트', '파이프라인', '메모리'],
 };
+
+if (SHORT_OWNER[locale].length !== LOOP.length) {
+  throw new Error(
+    `FactoryLoop: ${locale} has ${SHORT_OWNER[locale].length} short owners for ${LOOP.length} stages.`,
+  );
+}
 
 const sessions = await Effect.runPromise(
   Effect.all(LOOP.map((stage) => highlightSession(stage.cmd, stage.out)), {
@@ -27,7 +59,7 @@ const sessions = await Effect.runPromise(
 const stages: FactoryStage[] = LOOP.map((stage, index) => ({
   title: stage.title,
   owner: stage.owner,
-  ownerShort: SHORT_OWNER[stage.owner] ?? stage.owner,
+  ownerShort: SHORT_OWNER[locale][index] ?? stage.owner,
   lines: sessions[index],
 }));
 ---
