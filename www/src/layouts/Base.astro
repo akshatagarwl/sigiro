@@ -17,7 +17,7 @@ import data from 'blume:data';
 import SiteFooter from '@/components/site/Footer.astro';
 import SiteHeader from '@/components/site/Header.astro';
 import { jsonLd } from '@/lib/json-ld';
-import { SITE } from '@/lib/site';
+import { CF_ANALYTICS_TOKEN, SITE } from '@/lib/site';
 
 /**
  * The landing page's document, and the panel it sits in.
@@ -161,6 +161,33 @@ const og = new URL(SITE.ogImage, SITE.url).href;
         document.documentElement.dataset.theme = 'light';
       }
     </script>
+
+    {/*
+      Cloudflare Web Analytics, emitted here because this page never renders
+      Blume's `RootLayout`.
+
+      The `analytics` block in blume.config.ts covers `/docs/*` only — Blume
+      renders the tag inside its own layout, and this shell replaces that layout
+      wholesale. The first build with analytics configured proved it: the beacon
+      landed on 16 of 17 built pages, and the page without it was this one, which
+      is the site's highest-traffic URL.
+
+      `import.meta.env.PROD` matches what Blume does for its own copy — analytics
+      is emitted by `blume build` and never by `blume dev` — so laptop traffic
+      never reaches the dashboard and there is no separate dev property to keep.
+      Without this guard the two halves of the site would disagree about that.
+
+      The token is imported, never written here. See `CF_ANALYTICS_TOKEN` in
+      src/lib/site.ts for why it is public rather than secret, and why a second
+      hand-typed copy is the failure this import exists to prevent.
+    */}
+    {import.meta.env.PROD && (
+      <script
+        type="module"
+        src="https://static.cloudflareinsights.com/beacon.min.js"
+        data-cf-beacon={`{"token": "${CF_ANALYTICS_TOKEN}"}`}
+      />
+    )}
   </head>
 
   <body class="flex min-h-full flex-col font-sans text-ink-2 antialiased">

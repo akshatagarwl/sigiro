@@ -56,6 +56,32 @@ export const SITE = {
     'Send OpenTelemetry to sigiro. When a service fails, you get ranked results, the suspect deploy, and the query for each result.',
 } as const;
 
+/**
+ * The Cloudflare Web Analytics site token, imported by the two places that emit
+ * the beacon.
+ *
+ * **Not a secret.** It is a public, write-only site identifier that ships in the
+ * HTML of every page, so it is committed here as a literal. It grants no read
+ * access to the analytics data and reaches nothing else in the account.
+ *
+ * One constant because the beacon has to be emitted twice, from two different
+ * layouts, and a hand-duplicated token is a token that drifts:
+ *
+ * 1. `/docs/*` — `blume.config.ts` passes it to Blume's `analytics.scripts`,
+ *    which renders it inside Blume's own `RootLayout`.
+ * 2. `/` — the landing page uses its own shell (`src/layouts/Base.astro`) rather
+ *    than `RootLayout`, so Blume's analytics block never reaches it. Verified:
+ *    the first build with `analytics` configured put the beacon on 16 of 17
+ *    pages, and the one page without it was `dist/client/index.html`.
+ *
+ * This is the same failure `SITE.description` above exists to prevent — a string
+ * copied into two files drifted, and one copy went on serving the old value.
+ *
+ * If this token ever changes, it changes here and nowhere else. A `grep` for the
+ * literal should return exactly this line.
+ */
+export const CF_ANALYTICS_TOKEN = '6b38e16037e64f8eb96640075f51c32f';
+
 /* `INSTALL` was here: a three-entry install/container/point-at-it list, exported
    and imported by nothing. It predates the stepped terminal below, which shows
    the same commands inside a session a reader watches rather than a static block

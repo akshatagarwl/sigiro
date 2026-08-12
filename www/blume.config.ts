@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import sitemap from '@astrojs/sitemap';
 import { defineConfig } from 'blume';
 import type { AstroIntegration } from 'astro';
-import { SITE } from './src/lib/site';
+import { CF_ANALYTICS_TOKEN, SITE } from './src/lib/site';
 
 /**
  * The two things this project needs from Astro that Blume's config cannot express.
@@ -244,6 +244,60 @@ export default defineConfig({
    * costs nothing; a missing advertisement costs a crawler its map.
    */
   seo: { robots: false },
+
+  /**
+   * Cloudflare Web Analytics, as a `scripts` entry rather than the dashboard's
+   * automatic injection.
+   *
+   * Free on every Cloudflare plan, and the only site-limit that exists applies to
+   * sites *not* proxied through Cloudflare — this one is, so there is no cap. The
+   * free tier's "0 rules" limit means the snippet cannot be scoped to specific
+   * subdomains, which is not a constraint for a single property.
+   *
+   * NOT the dashboard's automatic setup, and the reason is a documented failure
+   * mode rather than a preference. Automatic injection works by having the
+   * Cloudflare proxy rewrite the HTML payload in flight; Cloudflare's own docs
+   * warn it silently does not happen when the proxy cannot modify the payload
+   * (their stated example is `Cache-Control: public, no-transform`). This site
+   * serves `/`, `/docs` and `/docs/*` from a Worker — see `run_worker_first` in
+   * `wrangler.jsonc` — which is exactly the shape where an in-flight rewrite is
+   * fragile, and the failure is indistinguishable from "nobody visited". Emitting
+   * the tag at build time removes that dependency: the beacon is in the HTML
+   * because this config put it there, and `dist/client` can be grepped to prove
+   * it before a deploy.
+   *
+   * The dashboard site must therefore be set to "Enable with JS Snippet
+   * installation". Leaving it on the automatic setting runs both mechanisms and
+   * double-counts every pageview.
+   *
+   * The token is imported rather than written here, because this block covers
+   * `/docs/*` only. The landing page uses its own shell (`src/layouts/Base.astro`)
+   * and never renders Blume's `RootLayout`, so it emits the beacon itself from the
+   * same constant — see `CF_ANALYTICS_TOKEN` in `src/lib/site.ts`, which carries
+   * the reasoning and the note that the token is public rather than secret.
+   *
+   * Blume emits analytics on `blume build` only, never `blume dev`, so laptop
+   * traffic never reaches the dashboard and there is no separate dev property to
+   * keep.
+   *
+   * Why this exists at all: the site shipped with no analytics of any kind, so
+   * questions like "which locales are worth translating into" had no data behind
+   * them. Country and language breakdown is the signal that turns that from a
+   * guess into a measurement. Note for that decision specifically — on the free
+   * plan the RUM beacon excludes visitors served from EU/EEA data centres by
+   * default, so EU locales are the ones this will under-report.
+   */
+  analytics: {
+    scripts: [
+      {
+        src: 'https://static.cloudflareinsights.com/beacon.min.js',
+        strategy: 'defer',
+        attributes: {
+          'data-cf-beacon': `{"token": "${CF_ANALYTICS_TOKEN}"}`,
+        },
+      },
+    ],
+  },
 
   deployment: {
     site: 'https://sigiro.com',
