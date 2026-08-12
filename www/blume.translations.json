@@ -1,0 +1,65 @@
+{
+  "files": {
+    "docs/explanation/deploys.md": {
+      "ja": "f6ec4ada1278509c",
+      "ko": "f6ec4ada1278509c",
+      "zh": "f6ec4ada1278509c"
+    },
+    "docs/explanation/evidence.md": {
+      "ja": "d6fef51be6655b0a",
+      "ko": "d6fef51be6655b0a",
+      "zh": "d6fef51be6655b0a"
+    },
+    "docs/explanation/meta.ts": {
+      "ja": "aa6e0c35d35d08e1",
+      "ko": "aa6e0c35d35d08e1",
+      "zh": "aa6e0c35d35d08e1"
+    },
+    "docs/explanation/tables.md": {
+      "ja": "6454ec7b7af4a40a",
+      "ko": "6454ec7b7af4a40a",
+      "zh": "6454ec7b7af4a40a"
+    },
+    "docs/how-to/agent-telemetry.md": {
+      "ja": "789bfe24e746699c",
+      "ko": "789bfe24e746699c",
+      "zh": "789bfe24e746699c"
+    },
+    "docs/how-to/hosted-onboarding.md": {
+      "ja": "ba50c1fcc830d76a",
+      "ko": "ba50c1fcc830d76a",
+      "zh": "ba50c1fcc830d76a"
+    },
+    "docs/how-to/install-with-ai.md": {
+      "ja": "2c4d1854ada32b74",
+      "ko": "2c4d1854ada32b74",
+      "zh": "2c4d1854ada32b74"
+    },
+    "docs/how-to/meta.ts": {
+      "ja": "750030a15f3b4c0c",
+      "ko": "750030a15f3b4c0c",
+      "zh": "750030a15f3b4c0c"
+    },
+    "docs/index.md": {
+      "ja": "4a11ec396a837951",
+      "ko": "4a11ec396a837951",
+      "zh": "4a11ec396a837951"
+    },
+    "docs/reference/cli.md": {
+      "ja": "f88eca758f9dac96",
+      "ko": "f88eca758f9dac96",
+      "zh": "f88eca758f9dac96"
+    },
+    "docs/tutorials/meta.ts": {
+      "ja": "6f0afc1f1c2596d4",
+      "ko": "6f0afc1f1c2596d4",
+      "zh": "6f0afc1f1c2596d4"
+    },
+    "docs/tutorials/quickstart.mdx": {
+      "ja": "e822202bf56a9bcd",
+      "ko": "e822202bf56a9bcd",
+      "zh": "e822202bf56a9bcd"
+    }
+  },
+  "version": 1
+}

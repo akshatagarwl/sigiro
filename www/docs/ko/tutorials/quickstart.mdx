@@ -1,0 +1,196 @@
+---
+title: 빠른 시작
+description: >-
+  하나의 docker 명령으로 sigiro를 실행하십시오. OpenTelemetry가 이를 가리키도록 설정하십시오. 그런 다음 무엇이 변했고
+  그 이유가 무엇인지 물어보십시오. 5분이 걸립니다. 컬렉터도 설정 파일도 필요하지 않습니다.
+sidebar:
+  order: 1
+---
+이 튜토리얼에서는 sigiro 서버를 시작하고, 사용자 서비스의 텔레메트리를 전송하며,
+두 가지 질문을 던집니다. 마지막에는 진단 결과를 읽고 그 근거가 되는 SQL을
+실행합니다. 5분이 걸립니다.
+
+sigiro는 하나의 프로세스입니다. 컬렉터를 배포하지 않으며 설정 파일도 작성하지
+않습니다.
+
+## 1. 실행하기
+
+{/* `param` makes the choice shareable — /docs/tutorials/quickstart?install=docker
+    opens on that tab — and `sync` is Blume's default, so every install tab group
+    on the site follows the same pick. Nothing is imported: Blume provides these
+    in situ. Keep this comment to ONE paragraph: `oxfmt` formats `.mdx` and
+    escapes the opening `{/*` to `{/\*` when the comment spans a blank line,
+    which fails the MDX parser and the build. On why a tutorial offers a choice
+    at all — Diátaxis says it should not — see `meta.ts` in this directory. */}
+
+<Tabs param="install">
+
+<Tab title="binary">
+
+```bash
+curl -fsSL https://sigiro.com/install | sh
+sigiro serve
+```
+
+이 스크립트는 사용자의 운영체제와 프로세서를 읽습니다. 그런 다음 다운로드한
+파일의 SHA-256을 게시된 체크섬과 비교하여 확인합니다. 바이너리는
+`~/.local/bin`에 기록됩니다. 다른 디렉터리를 사용하려면 `SIGIRO_INSTALL_DIR`을
+설정하십시오.
+
+빌드는 arm64용 Linux와 macOS, 그리고 x86-64용 Linux에 대해 제공됩니다. 다른
+플랫폼에서는 컨테이너를 사용하십시오.
+
+</Tab>
+
+<Tab title="docker">
+
+```bash
+docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
+```
+
+컨테이너를 재시작해도 데이터를 유지하려면 `-v sigiro-data:/var/lib/sigiro`를
+추가하십시오.
+
+</Tab>
+
+</Tabs>
+
+세 개의 포트는 각각 하나의 기능을 담당합니다:
+
+| 포트 | 프로토콜 |
+| --- | --- |
+| `4317` | gRPC를 통한 OTLP |
+| `4318` | HTTP를 통한 OTLP |
+| `9999` | 쿼리 및 진단 API |
+
+최초 시작 시 sigiro는 쿼리 확장 기능을 다운로드합니다. 여기에는 30~90초가
+걸릴 수 있으므로, 서버가 요청을 받아들이기 전에 잠시 대기 시간이 발생합니다.
+이후의 시작은 즉시 이루어집니다. sigiro는 데이터를 `SIGIRO_DATA_DIR`에
+기록합니다. 이 디렉터리는 바이너리의 경우 `~/.local/share/sigiro`이며, 이미지의
+경우 `/var/lib/sigiro`입니다.
+
+서버가 키를 요구하지 않는다는 점에 유의하십시오. 자체 호스팅 서버는 어떤
+요청도 인증하지 않으므로, 사설 네트워크 내에 두십시오. 네트워크가 보안
+경계입니다.
+
+## 2. 텔레메트리 전송하기
+
+스택에 있는 모든 OpenTelemetry SDK 또는 컬렉터는 변경 없이 동작합니다. 표준
+환경 변수가 sigiro를 가리키도록 설정하십시오:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+OTEL_SERVICE_NAME=checkout \
+  <your-app-start-command>
+```
+
+코드에 아직 계측이 적용되지 않았다면, 직접 손으로 추가하지 마십시오. 먼저
+[에이전트로 코드 계측하기](/docs/how-to/install-with-ai)를 따른 후 이곳으로
+돌아오십시오.
+
+이제 서비스로 실제 트래픽을 일부 전송하고, 텔레메트리가 도착했는지 확인하십시오:
+
+```bash
+curl http://localhost:9999/v1/services
+```
+
+응답은 `services` 배열을 포함한 JSON 객체입니다. 첫 요청 이후 몇 초 내에 해당
+배열에 사용자 서비스가 나타납니다. 배열이 비어 있다면, HTTP를 통한 OTLP의
+경우 포트가 `4318`인지, gRPC를 통한 OTLP의 경우 `4317`인지 확인하십시오.
+
+## 3. 무엇이 변했는지 묻기
+
+`anomalies`는 이 루프의 진입점입니다. 각 서비스의 최근 기준선에서 벗어난
+변화를 가장 큰 변화 순으로 반환합니다.
+
+```bash
+sigiro anomalies
+sigiro anomalies --service checkout
+```
+
+여기서는 아무것도 설정하지 않습니다. 선택해야 할 임계값이 없으며, 항상 느리지만
+*안정적인* 서비스는 이상 징후가 아닙니다. sigiro가 이를 어떻게 판단하는지
+읽으려면 [대시보드 대신 증거에
+대하여](/docs/explanation/evidence#a-baseline-not-a-threshold)를 참조하십시오.
+
+시작한 지 얼마 되지 않은 서버에서는 목록이 비어 있을 수 있다는 점에 유의하십시오.
+sigiro는 무엇이든 비교하기 전에 5분 단위 버킷의 이력이 어느 정도 필요하므로,
+서비스를 잠시 실행한 후 다시 질의하십시오.
+
+## 4. 이유를 묻기
+
+`diagnose`는 하나의 서비스와 시간 범위에 대해 구조화된 증거 블록 하나를
+반환합니다. 이 블록은 주의를 기울일 만한 항목의 순위 목록으로 시작합니다. 그
+아래에는 오류 수, 각 작업별 오류 분류, 각 모델별 LLM 통계, 샘플링된 스팬,
+그리고 중복이 제거된 로그 패턴이 담겨 있습니다. 모든 행에는 바로 실행할 수 있는
+SQL 쿼리도 함께 포함됩니다.
+
+```bash
+sigiro diagnose checkout
+sigiro diagnose checkout --from $(date -v-1H +%s)
+```
+
+이 명령은 들여쓰기된 JSON을 출력합니다. 먼저 `findings` 배열을 읽으십시오. 이
+배열은 심각한 항목이 먼저 오도록 정렬되어 있으며, 각 항목에는 읽을 수 있는
+`summary`와 실행할 수 있는 `drill_down_sql`이 담겨 있습니다.
+
+에이전트는 HTTP를 통해 동일한 질문을 던집니다. HTTP 요청에는 명시적인 시간
+범위가 필요하며, 두 타임스탬프 모두 Unix 에포크 이후의 **마이크로초**입니다:
+
+```bash
+curl -X POST http://localhost:9999/v1/diagnose \
+  -H 'content-type: application/json' \
+  -d "{\"service\":\"checkout\",
+       \"from_ts\":$(( $(date +%s) - 900 ))000000,
+       \"to_ts\":$(date +%s)000000}"
+```
+
+CLI의 `--from`/`--to` 플래그는 에포크 **초**를 받으며, CLI는 시간 범위를
+기본적으로 최근 15분으로 설정합니다. HTTP 본문은 마이크로초를 받으며 어떤
+기본값도 적용하지 않습니다. sigiro는 HTTP 경로에서 초 단위 값이 전달되면 단위를
+명시한 메시지와 함께 이를 거부하므로, 잘못된 단위는 빈 범위를 반환하는 대신
+명확하게 실패합니다.
+
+## 5. 행의 근거가 되는 쿼리 실행하기
+
+증거 블록이 질문에 답하지 못한다면, 해당 행이 제공한 SQL을 실행하십시오.
+텔레메트리는 여러 테이블의 집합이며, 쿼리 요청의 본문은 JSON이 아니라 원시
+SQL입니다:
+
+```bash
+curl -X POST http://localhost:9999/v1/query \
+  --data "SELECT service_name, count(*) AS errors
+          FROM sigiro_spans
+          WHERE status_code = 2 AND timestamp > now() - INTERVAL '1 hour'
+          GROUP BY 1 ORDER BY errors DESC"
+```
+
+응답은 행 객체의 JSON 배열입니다. `status_code`는 OTLP 열거형이므로 `2`는
+오류를 의미합니다.
+
+이 쿼리가 `timestamp`의 범위를 한정한다는 점에 유의하십시오. 모든 쿼리에서
+`timestamp`의 범위를 한정하십시오. sigiro는 보조 인덱스를 유지하지 않으므로,
+범위가 한정된 쿼리는 소수의 파일만 읽고 범위가 한정되지 않은 쿼리는 모든 파일을
+읽습니다.
+
+`sigiro_spans`는 아홉 개 테이블 중 하나입니다.
+[호스팅 가이드](/docs/how-to/hosted-onboarding#4-query-your-data-sql-api)는 아홉
+개 테이블 전체와 각 테이블에 적용되는 규칙을 나열하며, [테이블에
+대하여](/docs/explanation/tables)는 각 테이블 계열이 무엇을 측정하는지
+설명합니다.
+
+## 지금까지 한 일
+
+서버를 시작하고, OpenTelemetry를 전송하고, 무엇이 변했는지 묻고, 그 이유를 묻고,
+그 답변 중 하나를 입증하는 쿼리를 실행했습니다. 이것이 에이전트가 스스로
+실행하는 루프 전체입니다.
+
+## 다음 단계
+
+- [에이전트로 코드 계측하기](/docs/how-to/install-with-ai) — 서비스에 아직
+  OpenTelemetry가 적용되지 않은 경우
+- [호스팅 sigiro로 텔레메트리 전송하기](/docs/how-to/hosted-onboarding) — 서버를
+  직접 운영하고 싶지 않은 경우
+- [CLI 참조](/docs/reference/cli) — 나머지 네 개의 서브커맨드, 그리고 모든
+  플래그와 환경 변수
+- `GET /openapi.json` — 기계가 읽을 수 있는 전체 API이며, 키는 필요하지 않습니다

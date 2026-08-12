@@ -1,0 +1,145 @@
+---
+title: 快速开始
+description: >-
+  用一条 docker 命令运行 sigiro。把 OpenTelemetry
+  指向它。然后问它发生了什么变化以及为什么。这需要五分钟。你不需要采集器，也不需要配置文件。
+sidebar:
+  order: 1
+---
+在本教程中，你将启动一个 sigiro 服务端，从你自己的服务向它发送遥测数据，并向它提出两个问题。最后你会读到一份诊断结果，并运行其背后的 SQL。这需要五分钟。
+
+sigiro 是单个进程。你不需要部署采集器，也不需要编写配置文件。
+
+## 1. 运行它
+
+{/* `param` makes the choice shareable — /docs/tutorials/quickstart?install=docker
+    opens on that tab — and `sync` is Blume's default, so every install tab group
+    on the site follows the same pick. Nothing is imported: Blume provides these
+    in situ. Keep this comment to ONE paragraph: `oxfmt` formats `.mdx` and
+    escapes the opening `{/*` to `{/\*` when the comment spans a blank line,
+    which fails the MDX parser and the build. On why a tutorial offers a choice
+    at all — Diátaxis says it should not — see `meta.ts` in this directory. */}
+
+<Tabs param="install">
+
+<Tab title="binary">
+
+```bash
+curl -fsSL https://sigiro.com/install | sh
+sigiro serve
+```
+
+该脚本会读取你的操作系统和处理器，然后用已发布的校验和核对下载文件的 SHA-256。它会把二进制文件写入 `~/.local/bin`。若要使用其他目录，请设置 `SIGIRO_INSTALL_DIR`。
+
+我们为 arm64 架构的 Linux 和 macOS，以及 x86-64 架构的 Linux 提供了构建版本。在其他平台上，请使用容器。
+
+</Tab>
+
+<Tab title="docker">
+
+```bash
+docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
+```
+
+添加 `-v sigiro-data:/var/lib/sigiro` 可以在容器重启后保留数据。
+
+</Tab>
+
+</Tabs>
+
+这三个端口各有一项功能：
+
+| 端口 | 协议 |
+| --- | --- |
+| `4317` | 基于 gRPC 的 OTLP |
+| `4318` | 基于 HTTP 的 OTLP |
+| `9999` | 查询与诊断 API |
+
+首次启动时，sigiro 会下载它的查询扩展。这可能需要 30–90 秒，因此服务端接受请求前会有一段停顿。之后每次启动都是即时的。sigiro 把数据写入 `SIGIRO_DATA_DIR`。对于二进制文件，该目录是 `~/.local/share/sigiro`；在镜像中则是 `/var/lib/sigiro`。
+
+请注意，服务端不会向你索要密钥。自托管的服务端不对任何请求做鉴权，所以请把它放在私有网络中。网络就是安全边界。
+
+## 2. 向它发送遥测数据
+
+你技术栈中的任何 OpenTelemetry SDK 或采集器都无需改动即可工作。把标准环境变量指向 sigiro：
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+OTEL_SERVICE_NAME=checkout \
+  <your-app-start-command>
+```
+
+如果你的代码还没有埋点，不要手工添加。请先按照[用 agent 为你的代码埋点](/docs/how-to/install-with-ai)操作，然后再回到这里。
+
+现在向你的服务发送一些真实流量，并确认遥测数据已经到达：
+
+```bash
+curl http://localhost:9999/v1/services
+```
+
+响应是一个包含 `services` 数组的 JSON 对象。首次请求后的几秒内，你的服务就会出现在该数组中。如果数组为空，请检查端口：基于 HTTP 的 OTLP 是 `4318`，基于 gRPC 的 OTLP 是 `4317`。
+
+## 3. 询问发生了什么变化
+
+`anomalies` 是这个闭环的入口。它返回相对于各服务近期基线出现偏离的变化，偏离最大的排在最前。
+
+```bash
+sigiro anomalies
+sigiro anomalies --service checkout
+```
+
+这里你不需要配置任何东西。没有阈值需要选择，而一个一直很慢但*稳定*的服务并不算异常。要了解 sigiro 如何做出这一判断，请参阅[关于用证据取代仪表盘](/docs/explanation/evidence#a-baseline-not-a-threshold)。
+
+请注意，在刚启动不久的服务端上，这个列表可能为空。sigiro 需要几个 5 分钟的历史分桶才能进行比较，所以让你的服务运行一段时间后再来询问。
+
+## 4. 询问为什么
+
+`diagnose` 针对一个服务和一个时间窗口返回一个结构化的证据块。这个块以一份按重要程度排序的关注项列表开头。在其下，它包含错误计数、各操作的错误细分、各模型的 LLM 统计、抽样的 span，以及去重后的日志模式。每一行还附带一条可直接运行的 SQL 查询。
+
+```bash
+sigiro diagnose checkout
+sigiro diagnose checkout --from $(date -v-1H +%s)
+```
+
+该命令会打印带缩进的 JSON。先读 `findings` 数组：它按严重程度从高到低排序，每一项都带有可供阅读的 `summary` 和可供运行的 `drill_down_sql`。
+
+agent 通过 HTTP 提出同样的问题。HTTP 请求需要显式指定时间窗口，且两个时间戳都是自 Unix 纪元以来的**微秒**数：
+
+```bash
+curl -X POST http://localhost:9999/v1/diagnose \
+  -H 'content-type: application/json' \
+  -d "{\"service\":\"checkout\",
+       \"from_ts\":$(( $(date +%s) - 900 ))000000,
+       \"to_ts\":$(date +%s)000000}"
+```
+
+CLI 上的 `--from`/`--to` 标志接受纪元**秒**数，且 CLI 默认使用最近 15 分钟的窗口。HTTP 请求体接受微秒数，且没有任何默认值。如果在 HTTP 路径上传入秒数值，sigiro 会拒绝该请求并在消息中指明单位，这样单位错误会显式失败，而不是返回一个空窗口。
+
+## 5. 运行某一行背后的查询
+
+当证据块回答不了你的问题时，就运行某一行给出的 SQL。你的遥测数据是一组表，而查询请求的请求体是原始 SQL，而不是 JSON：
+
+```bash
+curl -X POST http://localhost:9999/v1/query \
+  --data "SELECT service_name, count(*) AS errors
+          FROM sigiro_spans
+          WHERE status_code = 2 AND timestamp > now() - INTERVAL '1 hour'
+          GROUP BY 1 ORDER BY errors DESC"
+```
+
+响应是一个由行对象组成的 JSON 数组。`status_code` 是 OTLP 枚举值，所以 `2` 表示错误。
+
+请注意这个查询限定了 `timestamp` 的范围。在每个查询中都要限定 `timestamp`：sigiro 不维护二级索引，因此有范围限定的查询只读取少量文件，而没有限定的查询会读取每一个文件。
+
+`sigiro_spans` 是九张表之一。[托管版指南](/docs/how-to/hosted-onboarding#4-query-your-data-sql-api)列出了全部九张表以及适用于它们的规则，[关于这些表](/docs/explanation/tables)则解释了每一类表所度量的内容。
+
+## 你做了什么
+
+你启动了一个服务端，向它发送了 OpenTelemetry 数据，问它发生了什么变化，问它为什么，并运行了能佐证其中一个答案的查询。这就是 agent 自行运行的完整闭环。
+
+## 下一步
+
+- [用 agent 为你的代码埋点](/docs/how-to/install-with-ai) —— 如果你的服务仍然没有 OpenTelemetry
+- [向托管版 sigiro 发送遥测数据](/docs/how-to/hosted-onboarding) —— 如果你不想自己运行服务端
+- [CLI 参考](/docs/reference/cli) —— 另外四个子命令，以及每一个标志和环境变量
+- `GET /openapi.json` —— 完整的 API，机器可读，且无需密钥
