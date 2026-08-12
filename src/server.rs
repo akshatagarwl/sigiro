@@ -1810,7 +1810,7 @@ fn compute_service_breakdown(
             percentage: (duration_us as f64 / total) * 100.0,
         })
         .collect();
-    breakdown.sort_by(|a, b| b.duration_us.cmp(&a.duration_us));
+    breakdown.sort_by_key(|e| std::cmp::Reverse(e.duration_us));
     breakdown
 }
 

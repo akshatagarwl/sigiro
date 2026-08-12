@@ -733,10 +733,10 @@ fn attrs_to_json(attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue]) -> 
     }
     let mut map = serde_json::Map::new();
     for kv in attrs {
-        if let Some(val) = &kv.value {
-            if let Some(json_val) = any_value_to_json(val) {
-                map.insert(kv.key.clone(), json_val);
-            }
+        if let Some(val) = &kv.value
+            && let Some(json_val) = any_value_to_json(val)
+        {
+            map.insert(kv.key.clone(), json_val);
         }
     }
     serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
@@ -756,10 +756,10 @@ fn any_value_to_json(av: &opentelemetry_proto::tonic::common::v1::AnyValue) -> O
         Some(Value::KvlistValue(kvlist)) => {
             let mut map = serde_json::Map::new();
             for kv in &kvlist.values {
-                if let Some(val) = &kv.value {
-                    if let Some(json_val) = any_value_to_json(val) {
-                        map.insert(kv.key.clone(), json_val);
-                    }
+                if let Some(val) = &kv.value
+                    && let Some(json_val) = any_value_to_json(val)
+                {
+                    map.insert(kv.key.clone(), json_val);
                 }
             }
             Some(JsonValue::Object(map))

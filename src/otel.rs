@@ -43,15 +43,15 @@ pub struct TelemetryGuard {
 impl Drop for TelemetryGuard {
     fn drop(&mut self) {
         tracing::info!("OTel shutdown: flushing pending spans");
-        if let Some(provider) = self.tracer_provider.take() {
-            if let Err(e) = provider.shutdown() {
-                eprintln!("OTel tracer provider shutdown failed: {e}");
-            }
+        if let Some(provider) = self.tracer_provider.take()
+            && let Err(e) = provider.shutdown()
+        {
+            eprintln!("OTel tracer provider shutdown failed: {e}");
         }
-        if let Some(provider) = self.logger_provider.take() {
-            if let Err(e) = provider.shutdown() {
-                eprintln!("OTel logger provider shutdown failed: {e}");
-            }
+        if let Some(provider) = self.logger_provider.take()
+            && let Err(e) = provider.shutdown()
+        {
+            eprintln!("OTel logger provider shutdown failed: {e}");
         }
     }
 }

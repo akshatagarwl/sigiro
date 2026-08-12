@@ -554,13 +554,10 @@ impl Visitor for AllowlistVisitor {
     /// too). This is what closes the `getenv`/`current_setting` scalar hole
     /// `pre_visit_table_factor` never covered — see `SCALAR_FUNCTIONS`.
     fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<String> {
-        if let Expr::Function(f) = expr {
-            if !is_allowed_scalar_function(&f.name) {
-                return ControlFlow::Break(format!(
-                    "query rejected: function {} not allowed",
-                    f.name
-                ));
-            }
+        if let Expr::Function(f) = expr
+            && !is_allowed_scalar_function(&f.name)
+        {
+            return ControlFlow::Break(format!("query rejected: function {} not allowed", f.name));
         }
         ControlFlow::Continue(())
     }

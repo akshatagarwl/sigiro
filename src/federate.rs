@@ -1133,14 +1133,14 @@ fn order_by_sql(order_by: &[(String, bool, NullOrder)]) -> String {
 /// trip. Left unchecked, that silently returns `row_cap` rows instead of the
 /// `n` the user asked for. Fail loud instead, before that pushdown happens.
 fn check_limit_within_cap(parsed: &ParsedQuery, row_cap: usize) -> Result<()> {
-    if parsed.group_keys.is_empty() && !parsed.is_aggregate() {
-        if let Some(n) = parsed.limit {
-            anyhow::ensure!(
-                n <= row_cap as i64,
-                "LIMIT {n} exceeds SIGIRO_QUERY_ROW_CAP = {row_cap}; narrow the query or raise \
-                 the cap"
-            );
-        }
+    if parsed.group_keys.is_empty()
+        && !parsed.is_aggregate()
+        && let Some(n) = parsed.limit
+    {
+        anyhow::ensure!(
+            n <= row_cap as i64,
+            "LIMIT {n} exceeds SIGIRO_QUERY_ROW_CAP = {row_cap}; narrow the query or raise the cap"
+        );
     }
     Ok(())
 }

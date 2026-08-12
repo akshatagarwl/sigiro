@@ -341,18 +341,18 @@ impl MsgRouter {
                         tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
                         drop(entry);
                         // Remove the entry and check if the flusher task panicked.
-                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id) {
-                            if handle.is_finished() {
-                                match handle.await {
-                                    Err(join_err) if join_err.is_panic() => {
-                                        tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
-                                    }
-                                    Err(join_err) => {
-                                        tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
-                                    }
-                                    Ok(()) => {
-                                        tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
-                                    }
+                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id)
+                            && handle.is_finished()
+                        {
+                            match handle.await {
+                                Err(join_err) if join_err.is_panic() => {
+                                    tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
+                                }
+                                Err(join_err) => {
+                                    tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
+                                }
+                                Ok(()) => {
+                                    tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
                                 }
                             }
                         }
@@ -377,18 +377,18 @@ impl MsgRouter {
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         tracing::error!(project_id = %project_id_for_err, "send failed: channel closed");
                         drop(entry);
-                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id) {
-                            if handle.is_finished() {
-                                match handle.await {
-                                    Err(join_err) if join_err.is_panic() => {
-                                        tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
-                                    }
-                                    Err(join_err) => {
-                                        tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
-                                    }
-                                    Ok(()) => {
-                                        tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
-                                    }
+                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id)
+                            && handle.is_finished()
+                        {
+                            match handle.await {
+                                Err(join_err) if join_err.is_panic() => {
+                                    tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
+                                }
+                                Err(join_err) => {
+                                    tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
+                                }
+                                Ok(()) => {
+                                    tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
                                 }
                             }
                         }
