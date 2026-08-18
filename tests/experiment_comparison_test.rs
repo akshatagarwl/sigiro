@@ -21,6 +21,11 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use sigiro::admin;
 use sigiro::auth::{AuthMode, ControlPlane};
+use sigiro::experiment::{
+    AiperfConfidenceMetric, ComparedPeriod, ExperimentComparisonRequest,
+    ExperimentComparisonResponse, ExperimentOutcome, ExperimentPeriod, ExperimentPeriodRole,
+    ExperimentWinner,
+};
 use sigiro::inserter::MsgRouter;
 use sigiro::pool::ProjectPool;
 use sigiro::server::{AppState, build_http_router};
@@ -169,6 +174,114 @@ fn comparison_request(control: (f64, f64, f64), candidate: (f64, f64, f64)) -> V
         ],
         "control_after": period("A2", 5, control.0, control.1, control.2)
     })
+}
+
+#[test]
+fn experiment_wire_types_are_usable_by_client_consumers() {
+    fn inspect_metric(metric: &AiperfConfidenceMetric) {
+        let _ = (
+            metric.mean,
+            metric.std,
+            metric.min,
+            metric.max,
+            metric.cv,
+            metric.se,
+            metric.ci_low,
+            metric.ci_high,
+            metric.t_critical,
+            &metric.unit,
+        );
+    }
+
+    fn inspect_period(period: &ExperimentPeriod) {
+        let _ = (&period.run_id, period.from_ts, period.to_ts);
+        let summary = &period.aiperf;
+        let _ = (&summary.schema_version, &summary.aiperf_version);
+        let metadata = &summary.metadata;
+        let _ = (
+            &metadata.aggregation_type,
+            metadata.num_profile_runs,
+            metadata.num_successful_runs,
+            &metadata.failed_runs,
+        );
+        let metrics = &summary.metrics;
+        inspect_metric(metrics.goodput_avg.as_ref().expect("goodput"));
+        inspect_metric(metrics.request_count_avg.as_ref().expect("request count"));
+        inspect_metric(
+            metrics
+                .good_request_count_avg
+                .as_ref()
+                .expect("good request count"),
+        );
+        let _ = (
+            &metrics.request_error_rate_avg,
+            &metrics.error_request_count_avg,
+            &metrics.additional,
+        );
+    }
+
+    let request: ExperimentComparisonRequest = serde_json::from_value(comparison_request(
+        (100.0, 95.0, 105.0),
+        (130.0, 125.0, 135.0),
+    ))
+    .expect("public experiment request");
+    let _ = (
+        &request.experiment_id,
+        &request.model_fingerprint,
+        &request.hardware_fingerprint,
+        &request.workload_fingerprint,
+        &request.benchmark_fingerprint,
+        &request.control_config_fingerprint,
+        &request.candidate_config_fingerprint,
+    );
+    for period in &request.calibration_control {
+        inspect_period(period);
+    }
+    inspect_period(&request.control_before);
+    for period in &request.candidate {
+        inspect_period(period);
+    }
+    inspect_period(&request.control_after);
+
+    let response = ExperimentComparisonResponse {
+        experiment_id: request.experiment_id.clone(),
+        outcome: ExperimentOutcome::Confirmed,
+        winner: Some(ExperimentWinner::Candidate),
+        reason: "candidate confidence bounds are higher".to_string(),
+        objective: "goodput".to_string(),
+        unit: "requests/sec".to_string(),
+        periods: vec![ComparedPeriod {
+            role: ExperimentPeriodRole::CandidateOne,
+            run_id: request.candidate[0].run_id.clone(),
+            goodput_mean: 130.0,
+            goodput_ci_low: 125.0,
+            goodput_ci_high: 135.0,
+            telemetry_rows: 4,
+            metric_names: vec!["gen_ai.client.operation.duration".to_string()],
+            observed_from_ts: request.candidate[0].from_ts,
+            observed_to_ts: request.candidate[0].to_ts,
+            evidence_sql: "SELECT 1".to_string(),
+        }],
+    };
+    let period = &response.periods[0];
+    let _ = (
+        &response.experiment_id,
+        response.outcome,
+        response.winner,
+        &response.reason,
+        &response.objective,
+        &response.unit,
+        period.role,
+        &period.run_id,
+        period.goodput_mean,
+        period.goodput_ci_low,
+        period.goodput_ci_high,
+        period.telemetry_rows,
+        &period.metric_names,
+        period.observed_from_ts,
+        period.observed_to_ts,
+        &period.evidence_sql,
+    );
 }
 
 fn resource_attributes(run_id: &str, arm: &str, config: &str) -> Vec<KeyValue> {

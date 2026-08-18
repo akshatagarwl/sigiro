@@ -29,7 +29,7 @@ const MICROS_MIN: i64 = 1_000_000_000_000_000;
 const MICROS_MAX: i64 = 10_000_000_000_000_000;
 
 #[derive(Debug, thiserror::Error)]
-pub enum ExperimentError {
+pub(crate) enum ExperimentError {
     #[error("{0}")]
     Invalid(String),
     #[error(transparent)]
@@ -195,7 +195,7 @@ pub struct ComparedPeriod {
 }
 
 #[derive(Clone, Debug)]
-pub struct ExperimentEvidence {
+pub(crate) struct ExperimentEvidence {
     periods: BTreeMap<String, PeriodEvidence>,
 }
 
@@ -525,7 +525,7 @@ fn required_metric(
 
 /// Fetch every required AIPerf histogram for the experiment in one bounded query,
 /// then verify each row's run, arm, fingerprints, and exact period window.
-pub fn load_experiment_evidence(
+pub(crate) fn load_experiment_evidence(
     connection: &Connection,
     request: &ExperimentComparisonRequest,
     prefix: &str,
@@ -677,7 +677,7 @@ fn attribute<'a>(attributes: &'a Value, key: &str) -> Result<&'a str, Experiment
 }
 
 /// Apply the fixed reversal and confidence-interval rule to already-verified evidence.
-pub fn compare_experiment(
+pub(crate) fn compare_experiment(
     request: &ExperimentComparisonRequest,
     evidence: &ExperimentEvidence,
     prefix: &str,
