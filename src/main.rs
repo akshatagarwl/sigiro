@@ -76,6 +76,12 @@ enum Command {
         #[arg(long)]
         to: Option<i64>,
     },
+    /// Validate an A/A + A/B/B/A inference experiment against Sigiro evidence.
+    CompareExperiment {
+        /// AIPerf comparison request JSON file.
+        #[arg(long, value_name = "PATH")]
+        file: String,
+    },
     /// List detected anomalies (the precomputed anomaly table, all signals,
     /// ranked biggest shift first, cross-signal `incident_id` grouping). The
     /// entry point for a detect→diagnose→fix loop: poll this, act on new
@@ -300,6 +306,17 @@ async fn main() -> Result<()> {
             // `drill_down_sql` (the full trace) and each sampled section its
             // `drill_all_sql`, so the response is self-describing.
             let value = serde_json::to_value(&block)?;
+            println!("{}", format_output(&value)?);
+        }
+        Some(Command::CompareExperiment { file }) => {
+            let raw = std::fs::read_to_string(&file)
+                .with_context(|| format!("failed to read experiment request {file}"))?;
+            let request: sigiro::experiment::ExperimentComparisonRequest =
+                serde_json::from_str(&raw)
+                    .with_context(|| format!("failed to parse experiment request {file}"))?;
+            let client = require_client()?;
+            let response = client.compare_experiment(&request).await?;
+            let value = serde_json::to_value(&response)?;
             println!("{}", format_output(&value)?);
         }
         Some(Command::Anomalies { service, from, to }) => {

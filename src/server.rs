@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use axum::{Extension, Json, Router, extract::State, http::HeaderMap, middleware as axum_mw};
-use axum_anyhow::{ApiResult, ResultExt, bad_request};
+use axum_anyhow::{ApiResult, IntoApiError, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use axum_valid::Valid;
@@ -19,6 +19,7 @@ use utoipa::OpenApi;
 use crate::admin;
 use crate::auth::{self, AuthContext};
 use crate::diagnose;
+use crate::experiment;
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::{DiskCapacityState, MsgRouter};
 use crate::pool::ProjectPool;
@@ -50,6 +51,7 @@ use tracing_attributes::instrument;
         anomalies_handler,
         trace_detail_handler,
         diagnose_handler,
+        compare_experiment_handler,
         admin_status,
         create_tenant_handler,
         create_key_handler,
@@ -91,6 +93,17 @@ use tracing_attributes::instrument;
             diagnose::SignalCoverage,
             diagnose::ServiceDependency,
             diagnose::Window,
+            experiment::ExperimentComparisonRequest,
+            experiment::ExperimentPeriod,
+            experiment::AiperfAggregateSummary,
+            experiment::AiperfAggregateMetrics,
+            experiment::AiperfAggregateMetadata,
+            experiment::AiperfConfidenceMetric,
+            experiment::ExperimentComparisonResponse,
+            experiment::ExperimentOutcome,
+            experiment::ExperimentWinner,
+            experiment::ExperimentPeriodRole,
+            experiment::ComparedPeriod,
         )
     ),
     modifiers(&SecurityAddon),
@@ -327,6 +340,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     let v1 = Router::new()
         .typed_post(query_handler)
         .typed_post(diagnose_handler)
+        .typed_post(compare_experiment_handler)
         .typed_get(services_handler)
         .typed_get(anomalies_handler)
         .typed_get(trace_detail_handler);
@@ -1886,6 +1900,61 @@ async fn diagnose_handler(
     .context_internal("Diagnose", "diagnosis task failed")?
     .context_internal("Diagnose", "diagnosis failed")?;
     Ok(Json(blocks))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/experiments/compare",
+    operation_id = "compare-inference-experiment",
+    summary = "Compare inference configurations",
+    request_body = experiment::ExperimentComparisonRequest,
+    description = "\
+Validate one A/A calibration followed by an A/B/B/A inference experiment. \
+The request embeds the unmodified AIPerf 0.12.0 aggregate confidence artifacts \
+for six chronological periods. sigiro verifies every period against tenant-scoped \
+OTLP metrics carrying the matching `optimization.*` resource attributes, then \
+compares AIPerf's goodput confidence intervals. AIPerf remains responsible for \
+workload replay, warm-up, SLO goodput, search, and statistics. Timestamps are \
+microseconds since the Unix epoch. Incomplete artifacts, nonzero request errors, \
+mismatched fingerprints, missing telemetry, or malformed windows return 400.",
+    responses(
+        (status = 200, description = "Validated comparison and evidence queries", body = experiment::ExperimentComparisonResponse),
+        (status = 400, description = "Invalid artifact or incomplete/mismatched Sigiro evidence"),
+        (status = 401, description = "Missing or invalid bearer token")
+    ),
+    security(("bearer" = [])),
+)]
+#[instrument(skip_all)]
+async fn compare_experiment_handler(
+    _path: ExperimentComparisonPath,
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    Valid(Json(request)): Valid<Json<experiment::ExperimentComparisonRequest>>,
+) -> ApiResult<Json<experiment::ExperimentComparisonResponse>> {
+    let pool = Arc::clone(&state.pool);
+    let project_id = auth.tenant_id;
+    let result = tokio::task::spawn_blocking(move || {
+        let readers = pool
+            .create_project(&project_id)
+            .map_err(experiment::ExperimentError::Internal)?;
+        let connection = readers.get();
+        let evidence =
+            experiment::load_experiment_evidence(&connection, &request, ProjectPool::prefix())?;
+        experiment::compare_experiment(&request, &evidence, ProjectPool::prefix())
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!("experiment comparison task failed: {error}"))
+    .context_internal("Compare experiment", "comparison task failed")?;
+
+    match result {
+        Ok(response) => Ok(Json(response)),
+        Err(experiment::ExperimentError::Invalid(detail)) => {
+            Err(bad_request("Invalid experiment comparison", &detail))
+        }
+        Err(experiment::ExperimentError::Internal(error)) => {
+            Err(error.context_internal("Compare experiment", "comparison failed"))
+        }
+    }
 }
 
 // --- Admin endpoints ---

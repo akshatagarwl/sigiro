@@ -110,6 +110,47 @@
         ]
       }
     },
+    "/v1/experiments/compare": {
+      "post": {
+        "tags": [],
+        "summary": "Compare inference configurations",
+        "description": "Validate one A/A calibration followed by an A/B/B/A inference experiment. The request embeds the unmodified AIPerf 0.12.0 aggregate confidence artifacts for six chronological periods. sigiro verifies every period against tenant-scoped OTLP metrics carrying the matching `optimization.*` resource attributes, then compares AIPerf's goodput confidence intervals. AIPerf remains responsible for workload replay, warm-up, SLO goodput, search, and statistics. Timestamps are microseconds since the Unix epoch. Incomplete artifacts, nonzero request errors, mismatched fingerprints, missing telemetry, or malformed windows return 400.",
+        "operationId": "compare-inference-experiment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExperimentComparisonRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Validated comparison and evidence queries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentComparisonResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid artifact or incomplete/mismatched Sigiro evidence"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/query": {
       "post": {
         "tags": [],
@@ -207,6 +248,166 @@
   },
   "components": {
     "schemas": {
+      "AiperfAggregateMetadata": {
+        "type": "object",
+        "required": [
+          "aggregation_type",
+          "num_profile_runs",
+          "num_successful_runs",
+          "failed_runs"
+        ],
+        "properties": {
+          "aggregation_type": {
+            "type": "string"
+          },
+          "failed_runs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Must be empty. Details remain owned by the source AIPerf artifact."
+          },
+          "num_profile_runs": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "num_successful_runs": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "AiperfAggregateMetrics": {
+        "type": "object",
+        "required": [
+          "goodput_avg",
+          "request_count_avg",
+          "good_request_count_avg"
+        ],
+        "properties": {
+          "error_request_count_avg": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AiperfConfidenceMetric",
+                "description": "AIPerf omits this `ERROR_ONLY` metric on clean runs."
+              }
+            ]
+          },
+          "good_request_count_avg": {
+            "$ref": "#/components/schemas/AiperfConfidenceMetric"
+          },
+          "goodput_avg": {
+            "$ref": "#/components/schemas/AiperfConfidenceMetric"
+          },
+          "request_count_avg": {
+            "$ref": "#/components/schemas/AiperfConfidenceMetric"
+          },
+          "request_error_rate_avg": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AiperfConfidenceMetric",
+                "description": "AIPerf omits both error metrics on clean runs."
+              }
+            ]
+          }
+        },
+        "additionalProperties": {
+          "description": "Future AIPerf metrics do not break this pinned comparison contract."
+        }
+      },
+      "AiperfAggregateSummary": {
+        "type": "object",
+        "description": "Supported subset of AIPerf's aggregate confidence export.",
+        "required": [
+          "schema_version",
+          "aiperf_version",
+          "metadata",
+          "metrics"
+        ],
+        "properties": {
+          "aiperf_version": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/AiperfAggregateMetadata"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/AiperfAggregateMetrics",
+            "description": "AIPerf metrics required by this comparison contract. Additive metrics are ignored."
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "AiperfConfidenceMetric": {
+        "type": "object",
+        "description": "One aggregate confidence metric from AIPerf 0.12.0.",
+        "required": [
+          "mean",
+          "std",
+          "min",
+          "max",
+          "se",
+          "ci_low",
+          "ci_high",
+          "t_critical",
+          "unit"
+        ],
+        "properties": {
+          "ci_high": {
+            "type": "number",
+            "format": "double"
+          },
+          "ci_low": {
+            "type": "number",
+            "format": "double"
+          },
+          "cv": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "AIPerf writes `null` when the mean is zero and CV is mathematically infinite."
+          },
+          "max": {
+            "type": "number",
+            "format": "double"
+          },
+          "mean": {
+            "type": "number",
+            "format": "double"
+          },
+          "min": {
+            "type": "number",
+            "format": "double"
+          },
+          "se": {
+            "type": "number",
+            "format": "double"
+          },
+          "std": {
+            "type": "number",
+            "format": "double"
+          },
+          "t_critical": {
+            "type": "number",
+            "format": "double"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
       "AnomaliesResponse": {
         "type": "object",
         "description": "GET /v1/anomalies \u2014 precomputed regime shifts of every signal from the\ncontinuous anomaly pass (the `sigiro_anomalies` table), biggest shift\nfirst by the unit-free magnitude (after \u2212 before) / (after + before)\n(comparable across signals; raw |after \u2212 before| breaks zero-baseline\nties, then newest first). Ranking, not filtering: every detected shift\nis returned \u2014 the reader judges significance from `before`/`after`.",
@@ -296,6 +497,63 @@
           }
         }
       },
+      "ComparedPeriod": {
+        "type": "object",
+        "required": [
+          "role",
+          "run_id",
+          "goodput_mean",
+          "goodput_ci_low",
+          "goodput_ci_high",
+          "telemetry_rows",
+          "metric_names",
+          "observed_from_ts",
+          "observed_to_ts",
+          "evidence_sql"
+        ],
+        "properties": {
+          "evidence_sql": {
+            "type": "string",
+            "description": "A directly runnable `/v1/query` statement for this period's evidence."
+          },
+          "goodput_ci_high": {
+            "type": "number",
+            "format": "double"
+          },
+          "goodput_ci_low": {
+            "type": "number",
+            "format": "double"
+          },
+          "goodput_mean": {
+            "type": "number",
+            "format": "double"
+          },
+          "metric_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "observed_from_ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "observed_to_ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ExperimentPeriodRole"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "telemetry_rows": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "Coverage": {
         "type": "object",
         "description": "Computed coverage for the diagnosis window.",
@@ -375,15 +633,14 @@
       },
       "DiagnoseRequest": {
         "type": "object",
-        "required": [
-          "from_ts",
-          "to_ts"
-        ],
         "properties": {
           "from_ts": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "Window start, **microseconds** since the Unix epoch (a 16-digit value,\ne.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.",
+            "description": "Window start, **microseconds** since the Unix epoch (a 16-digit value,\ne.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.\nOPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the\nsame default `sigiro diagnose` uses. Providing `to_ts` without `from_ts`\nis rejected \u2014 a window that ends somewhere with no start is ambiguous,\nand guessing one silently would answer a question nobody asked.",
             "example": 1780000000000000
           },
           "service": {
@@ -409,9 +666,12 @@
             ]
           },
           "to_ts": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "Window end, microseconds since the Unix epoch. Must be > `from_ts`.",
+            "description": "Window end, microseconds since the Unix epoch. Must be > `from_ts`.\nOptional: defaults to now when `from_ts` is given alone.",
             "example": 1780001800000000
           }
         }
@@ -563,6 +823,180 @@
             "description": "The `error.type` value, derived per span (see `error_type_expr`):\nthe span's real `error.type` attribute when emitted; else the HTTP\nresponse status code (OTel's own rule for HTTP errors \u2014 \"429\",\n\"500\"); else \"timeout\" when `status_message` mentions one; else\n\"_OTHER\" (the semconv catch-all). Low-cardinality by construction."
           }
         }
+      },
+      "ExperimentComparisonRequest": {
+        "type": "object",
+        "description": "One complete A/A calibration followed by an A/B/B/A reversal experiment.",
+        "required": [
+          "experiment_id",
+          "model_fingerprint",
+          "hardware_fingerprint",
+          "workload_fingerprint",
+          "benchmark_fingerprint",
+          "control_config_fingerprint",
+          "candidate_config_fingerprint",
+          "calibration_control",
+          "control_before",
+          "candidate",
+          "control_after"
+        ],
+        "properties": {
+          "benchmark_fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of the pinned AIPerf command and version."
+          },
+          "calibration_control": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExperimentPeriod"
+            },
+            "description": "Two identical control periods that establish the restart noise floor."
+          },
+          "candidate": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExperimentPeriod"
+            },
+            "description": "Two candidate periods; both must agree."
+          },
+          "candidate_config_fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of the candidate runtime configuration."
+          },
+          "control_after": {
+            "$ref": "#/components/schemas/ExperimentPeriod",
+            "description": "Restored control after treatment."
+          },
+          "control_before": {
+            "$ref": "#/components/schemas/ExperimentPeriod",
+            "description": "Control immediately before treatment."
+          },
+          "control_config_fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of the control runtime configuration."
+          },
+          "experiment_id": {
+            "type": "string",
+            "description": "Stable experiment identifier carried on every AIPerf OTLP metric.",
+            "example": "exp-2026-08-16-001"
+          },
+          "hardware_fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of the GPU, driver, topology, and host description."
+          },
+          "model_fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of the exact model and weights."
+          },
+          "workload_fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of AIPerf's replayed `inputs.json`."
+          }
+        }
+      },
+      "ExperimentComparisonResponse": {
+        "type": "object",
+        "required": [
+          "experiment_id",
+          "outcome",
+          "reason",
+          "objective",
+          "unit",
+          "periods"
+        ],
+        "properties": {
+          "experiment_id": {
+            "type": "string"
+          },
+          "objective": {
+            "type": "string",
+            "description": "Fixed in this API version. AIPerf computes it under the declared SLO."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ExperimentOutcome"
+          },
+          "periods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComparedPeriod"
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "winner": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExperimentWinner"
+              }
+            ]
+          }
+        }
+      },
+      "ExperimentOutcome": {
+        "type": "string",
+        "enum": [
+          "confirmed",
+          "rejected",
+          "inconclusive",
+          "drift_detected"
+        ]
+      },
+      "ExperimentPeriod": {
+        "type": "object",
+        "description": "One process lifecycle and its AIPerf aggregate confidence artifact.",
+        "required": [
+          "run_id",
+          "from_ts",
+          "to_ts",
+          "aiperf"
+        ],
+        "properties": {
+          "aiperf": {
+            "$ref": "#/components/schemas/AiperfAggregateSummary",
+            "description": "Unmodified `profile_export_aiperf_aggregate.json` content."
+          },
+          "from_ts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Inclusive window start, in microseconds since the Unix epoch.",
+            "example": 1780000000000000
+          },
+          "run_id": {
+            "type": "string",
+            "description": "Unique run identifier carried on every AIPerf OTLP metric."
+          },
+          "to_ts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Inclusive window end, in microseconds since the Unix epoch.",
+            "example": 1780000300000000
+          }
+        }
+      },
+      "ExperimentPeriodRole": {
+        "type": "string",
+        "enum": [
+          "calibration_control_one",
+          "calibration_control_two",
+          "control_before",
+          "candidate_one",
+          "candidate_two",
+          "control_after"
+        ]
+      },
+      "ExperimentWinner": {
+        "type": "string",
+        "enum": [
+          "control",
+          "candidate"
+        ]
       },
       "Finding": {
         "type": "object",

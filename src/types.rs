@@ -156,6 +156,11 @@ pub struct QueryPath;
 #[typed_path("/diagnose")]
 pub struct DiagnosePath;
 
+/// Route: POST /experiments/compare
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/experiments/compare")]
+pub struct ExperimentComparisonPath;
+
 /// Route: GET /services
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/services")]

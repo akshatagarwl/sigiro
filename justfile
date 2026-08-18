@@ -125,6 +125,16 @@ check-hosted-isolation-e2e:
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
     cargo test --test hosted_isolation_attack_test -- --ignored --nocapture
 
+# Process-level inference experiment E2E. Uses real AIPerf + Sigiro against a
+# local OpenAI-compatible streaming fixture; this is not the target-GPU proof.
+check-inference-optimization-e2e:
+    tests/e2e/inference-optimization/run.sh
+
+# Run the same experiment contract against a real GPU manifest. The manifest
+# owns runtime launch commands and contains no cloud-provider credentials.
+check-inference-optimization-gpu manifest:
+    python3 scripts/inference_experiment.py {{manifest}}
+
 # Build multi-arch Docker image. Pass --push to push, or --set flags for cache config.
 image *args:
     docker buildx bake sigiro {{args}}

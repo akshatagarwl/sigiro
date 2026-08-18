@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 
 use crate::diagnose::{DiagnoseRequest, DiagnoseResponse, DiagnosisBlock};
+use crate::experiment::{ExperimentComparisonRequest, ExperimentComparisonResponse};
 
 /// Explicit client auth mode — mirrors server-side AuthMode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,6 +98,29 @@ impl SigiroClient {
 
         let resp = self.expect_ok(resp).await?;
         resp.json().await.context("failed to parse query response")
+    }
+
+    /// Validate AIPerf confidence artifacts against Sigiro's tenant-scoped
+    /// experiment telemetry, then return the fixed A/A + A/B/B/A decision.
+    pub async fn compare_experiment(
+        &self,
+        request: &ExperimentComparisonRequest,
+    ) -> Result<ExperimentComparisonResponse> {
+        let req = self
+            .http
+            .post(format!("{}/v1/experiments/compare", self.base_url))
+            .json(request);
+        let resp = self
+            .auth
+            .apply(req)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        let resp = self.expect_ok(resp).await?;
+        resp.json()
+            .await
+            .context("failed to parse experiment comparison response")
     }
 
     /// GET /v1/anomalies — the precomputed anomaly table (all signals, ranked
