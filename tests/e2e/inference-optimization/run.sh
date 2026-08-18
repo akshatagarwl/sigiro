@@ -75,12 +75,12 @@ write_manifest() {
     "binary": "$AIPERF",
     "endpoint": "http://host.docker.internal:38080",
     "inputs_file": "$OUT/inputs.json",
-    "num_profile_runs": 2,
+    "num_profile_runs": 3,
     "common_args": [
       "--endpoint-type", "chat",
       "--tokenizer", "Qwen/Qwen3-0.6B",
       "--concurrency", "2",
-      "--request-count", "40",
+      "--request-count", "200",
       "--warmup-request-count", "1",
       "--goodput", "request_latency:500",
       "--random-seed", "42",
@@ -110,26 +110,16 @@ write_manifest local-known-slower 120 0 39999 34318 34317
 start=$(date +%s)
 "$PYTHON" "$RUNNER" "$OUT/local-known-slower.json" > "$OUT/known-slower.stdout"
 
+# Exit 2 from the checker means "host too noisy to judge", not a product
+# failure. Keep going: the error-arm test below is fully deterministic and is
+# the half that proves fail-closed behaviour. Propagate the verdict at the end.
+set +e
 "$PYTHON" - "$OUT/results/local-known-slower" <<'PY'
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 comparison = json.loads((root / "comparison.json").read_text())
-# `drift_detected` / `inconclusive` mean the A/A calibration refused to compare,
-# which is the guard working rather than a regression. On a loaded machine the
-# mock server's goodput varies 20-30% across the six periods and, with
-# num_profile_runs=2, t_critical is 12.706 — so the confidence intervals are wide
-# enough to swallow a real 3x difference. Say which it is instead of dumping the
-# whole comparison object.
-if comparison["outcome"] != "rejected":
-    controls = {p["run_id"]: round(p["goodput_mean"], 2)
-                for p in comparison["periods"] if p["run_id"].startswith("A")}
-    raise SystemExit(
-        f"\nMEASUREMENT ENVIRONMENT, not a product failure.\n"
-        f"  outcome: {comparison['outcome']} - {comparison['reason']}\n"
-        f"  control goodput by period: {controls}\n"
-        f"  The A/A calibration declined to report a comparison. Re-run on an\n"
-        f"  idle machine, or raise num_profile_runs to tighten the intervals.\n")
-assert comparison["winner"] == "control", comparison
+
+# --- Deterministic contract. These hold on any host and are the hard gate. ---
 assert len(comparison["periods"]) == 6
 expected = {
     "gen_ai.client.operation.duration",
@@ -149,8 +139,31 @@ for evidence, period in zip(comparison["periods"], periods):
     assert period["from_ts"] <= evidence["observed_to_ts"] <= period["to_ts"]
     assert f"= '{period['run_id']}'" in evidence["evidence_sql"]
     previous_to = period["to_ts"]
+# The candidate is 8x slower by construction, so the *ranking* is robust to host
+# noise even when the confidence intervals are not.
+means = {p["run_id"]: p["goodput_mean"] for p in comparison["periods"]}
+assert max(means["B1"], means["B2"]) < min(means["A1"], means["A2"]), means
+
+# --- Statistical verdict. Host-sensitive: the A/A guard compares control
+# periods against EACH OTHER, so a laptop whose load wanders during the ~7min
+# run makes `drift_detected` a correct refusal rather than a regression. Exit 2
+# so a caller can tell "unusable measurement environment" from "product broke".
+if comparison["outcome"] != "rejected":
+    controls = {k: round(v, 2) for k, v in means.items() if k.startswith("A")}
+    spread = (max(controls.values()) - min(controls.values())) / min(controls.values())
+    print(
+        f"\nENVIRONMENT, not a product failure. The contract above all passed.\n"
+        f"  outcome: {comparison['outcome']} - {comparison['reason']}\n"
+        f"  control goodput: {controls}  (spread {spread:.0%})\n"
+        f"  The A/A calibration correctly declined to compare. Re-run on an idle\n"
+        f"  host; a spread above ~10% will keep tripping it.\n", file=sys.stderr)
+    raise SystemExit(2)
+assert comparison["winner"] == "control", comparison
 assert json.loads((root / "status.json").read_text())["status"] == "completed"
 PY
+verdict=$?
+set -e
+if [ "$verdict" -ne 0 ] && [ "$verdict" -ne 2 ]; then exit "$verdict"; fi
 
 write_manifest local-faster-with-errors 1 30 40999 35318 35317
 if "$PYTHON" "$RUNNER" "$OUT/local-faster-with-errors.json" > "$OUT/error.stdout" 2> "$OUT/error.stderr"; then
@@ -177,5 +190,9 @@ assert [row["experiment_id"] for row in ledger] == ["local-known-slower"], ledge
 PY
 
 elapsed=$(( $(date +%s) - start ))
+if [ "$verdict" -eq 2 ]; then
+  printf 'local inference optimization E2E: contract PASSED, verdict SKIPPED (noisy host) in %ss\n' "$elapsed"
+  exit 2
+fi
 printf 'local inference optimization E2E passed in %ss\n' "$elapsed"
 printf 'artifacts: %s\n' "$OUT/results"
