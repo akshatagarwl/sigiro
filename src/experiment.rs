@@ -5,6 +5,7 @@
 //! evidence, then applies one fixed confidence-interval comparison rule.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::RangeInclusive;
 
 use anyhow::anyhow;
 use duckdb::{Connection, params};
@@ -325,31 +326,47 @@ fn validate_experiment_request(
     Ok(())
 }
 
-fn validate_identifier(name: &str, value: &str) -> Result<(), validator::ValidationError> {
-    if value.is_empty()
-        || value.len() > 128
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-    {
-        return Err(validation_error(format!(
-            "{name} must be 1-128 ASCII letters, digits, dots, underscores, or hyphens"
-        )));
+/// Reject a text field whose length falls outside `lengths` or whose bytes fall
+/// outside `allowed`. The caller names the requirement so the message stays exact.
+fn validate_text(
+    name: &str,
+    value: &str,
+    lengths: RangeInclusive<usize>,
+    allowed: fn(u8) -> bool,
+    requirement: &str,
+) -> Result<(), validator::ValidationError> {
+    if !lengths.contains(&value.len()) || !value.bytes().all(allowed) {
+        return Err(validation_error(format!("{name} must be {requirement}")));
     }
     Ok(())
 }
 
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+}
+
+fn is_lowercase_hex_byte(byte: u8) -> bool {
+    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+}
+
+fn validate_identifier(name: &str, value: &str) -> Result<(), validator::ValidationError> {
+    validate_text(
+        name,
+        value,
+        1..=128,
+        is_identifier_byte,
+        "1-128 ASCII letters, digits, dots, underscores, or hyphens",
+    )
+}
+
 fn validate_fingerprint(name: &str, value: &str) -> Result<(), validator::ValidationError> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(validation_error(format!(
-            "{name} must be a 64-character lowercase SHA-256 hex digest"
-        )));
-    }
-    Ok(())
+    validate_text(
+        name,
+        value,
+        64..=64,
+        is_lowercase_hex_byte,
+        "a 64-character lowercase SHA-256 hex digest",
+    )
 }
 
 fn validate_window(period: &ExperimentPeriod) -> Result<(), validator::ValidationError> {
@@ -542,9 +559,7 @@ pub(crate) fn load_experiment_evidence(
            AND metric_name IN (?4, ?5, ?6, ?7) \
          ORDER BY timestamp, metric_name"
     );
-    let mut statement = connection
-        .prepare(&sql)
-        .map_err(|error| ExperimentError::Internal(anyhow!(error)))?;
+    let mut statement = connection.prepare(&sql).map_err(internal)?;
     let mut rows = statement
         .query(params![
             global_from,
@@ -555,7 +570,7 @@ pub(crate) fn load_experiment_evidence(
             REQUIRED_METRICS[2],
             REQUIRED_METRICS[3],
         ])
-        .map_err(|error| ExperimentError::Internal(anyhow!(error)))?;
+        .map_err(internal)?;
 
     let spec_by_run: BTreeMap<&str, PeriodSpec<'_>> = specs
         .iter()
@@ -564,86 +579,126 @@ pub(crate) fn load_experiment_evidence(
         .collect();
     let mut evidence: BTreeMap<String, PeriodEvidence> = BTreeMap::new();
 
-    while let Some(row) = rows
-        .next()
-        .map_err(|error| ExperimentError::Internal(anyhow!(error)))?
-    {
-        let metric_name: String = row
-            .get(0)
-            .map_err(|error| ExperimentError::Internal(anyhow!(error)))?;
-        let timestamp: i64 = row
-            .get(1)
-            .map_err(|error| ExperimentError::Internal(anyhow!(error)))?;
-        let raw_attributes: Option<String> = row
-            .get(2)
-            .map_err(|error| ExperimentError::Internal(anyhow!(error)))?;
-        let raw_attributes = raw_attributes.ok_or_else(|| {
-            ExperimentError::invalid(format!(
-                "AIPerf metric {metric_name} at {timestamp} has no resource_attributes"
-            ))
-        })?;
-        let attributes: Value = serde_json::from_str(&raw_attributes).map_err(|error| {
-            ExperimentError::invalid(format!(
-                "AIPerf metric {metric_name} at {timestamp} has invalid resource_attributes: {error}"
-            ))
-        })?;
-        let run_id = attribute(&attributes, "optimization.run.id")?;
-        let spec = spec_by_run.get(run_id).ok_or_else(|| {
+    while let Some(row) = rows.next().map_err(internal)? {
+        let row = read_evidence_row(row)?;
+        let run_id = attribute(&row.attributes, "optimization.run.id")?.to_string();
+        let spec = spec_by_run.get(run_id.as_str()).ok_or_else(|| {
             ExperimentError::invalid(format!(
                 "Sigiro evidence contains unknown run_id {run_id} for experiment {}",
                 request.experiment_id
             ))
         })?;
-        if timestamp < spec.period.from_ts || timestamp > spec.period.to_ts {
-            return Err(ExperimentError::invalid(format!(
-                "Sigiro evidence for run {run_id} at {timestamp} falls outside its declared window {}..{}",
-                spec.period.from_ts, spec.period.to_ts
-            )));
-        }
-        for (key, expected) in [
-            ("optimization.experiment.id", request.experiment_id.as_str()),
-            ("optimization.run.id", run_id),
-            ("optimization.arm", spec.arm),
-            ("optimization.config.sha256", spec.config_fingerprint),
-            (
-                "optimization.model.sha256",
-                request.model_fingerprint.as_str(),
-            ),
-            (
-                "optimization.hardware.sha256",
-                request.hardware_fingerprint.as_str(),
-            ),
-            (
-                "optimization.workload.sha256",
-                request.workload_fingerprint.as_str(),
-            ),
-            (
-                "optimization.benchmark.sha256",
-                request.benchmark_fingerprint.as_str(),
-            ),
-        ] {
-            let observed = attribute(&attributes, key)?;
-            if observed != expected {
-                return Err(ExperimentError::invalid(format!(
-                    "Sigiro evidence for run {run_id} has {key}={observed}; expected {expected}"
-                )));
-            }
-        }
-
-        let entry = evidence
-            .entry(run_id.to_string())
-            .or_insert_with(|| PeriodEvidence {
-                rows: 0,
-                metric_names: BTreeSet::new(),
-                observed_from_ts: timestamp,
-                observed_to_ts: timestamp,
-            });
-        entry.rows += 1;
-        entry.metric_names.insert(metric_name);
-        entry.observed_from_ts = entry.observed_from_ts.min(timestamp);
-        entry.observed_to_ts = entry.observed_to_ts.max(timestamp);
+        verify_evidence_row(request, spec, &run_id, &row)?;
+        record_evidence(&mut evidence, &run_id, row);
     }
 
+    require_complete_periods(&specs, &evidence)?;
+    Ok(ExperimentEvidence { periods: evidence })
+}
+
+fn internal(error: duckdb::Error) -> ExperimentError {
+    ExperimentError::Internal(anyhow!(error))
+}
+
+/// One stored AIPerf histogram row, decoded but not yet checked against its period.
+struct EvidenceRow {
+    metric_name: String,
+    timestamp: i64,
+    attributes: Value,
+}
+
+fn read_evidence_row(row: &duckdb::Row<'_>) -> Result<EvidenceRow, ExperimentError> {
+    let metric_name: String = row.get(0).map_err(internal)?;
+    let timestamp: i64 = row.get(1).map_err(internal)?;
+    let raw_attributes: Option<String> = row.get(2).map_err(internal)?;
+    let raw_attributes = raw_attributes.ok_or_else(|| {
+        ExperimentError::invalid(format!(
+            "AIPerf metric {metric_name} at {timestamp} has no resource_attributes"
+        ))
+    })?;
+    let attributes: Value = serde_json::from_str(&raw_attributes).map_err(|error| {
+        ExperimentError::invalid(format!(
+            "AIPerf metric {metric_name} at {timestamp} has invalid resource_attributes: {error}"
+        ))
+    })?;
+    Ok(EvidenceRow {
+        metric_name,
+        timestamp,
+        attributes,
+    })
+}
+
+/// Confirm one row falls inside its declared window and carries every
+/// `optimization.*` attribute the request claims for that period.
+fn verify_evidence_row(
+    request: &ExperimentComparisonRequest,
+    spec: &PeriodSpec<'_>,
+    run_id: &str,
+    row: &EvidenceRow,
+) -> Result<(), ExperimentError> {
+    if row.timestamp < spec.period.from_ts || row.timestamp > spec.period.to_ts {
+        return Err(ExperimentError::invalid(format!(
+            "Sigiro evidence for run {run_id} at {} falls outside its declared window {}..{}",
+            row.timestamp, spec.period.from_ts, spec.period.to_ts
+        )));
+    }
+    for (key, expected) in [
+        ("optimization.experiment.id", request.experiment_id.as_str()),
+        ("optimization.run.id", run_id),
+        ("optimization.arm", spec.arm),
+        ("optimization.config.sha256", spec.config_fingerprint),
+        (
+            "optimization.model.sha256",
+            request.model_fingerprint.as_str(),
+        ),
+        (
+            "optimization.hardware.sha256",
+            request.hardware_fingerprint.as_str(),
+        ),
+        (
+            "optimization.workload.sha256",
+            request.workload_fingerprint.as_str(),
+        ),
+        (
+            "optimization.benchmark.sha256",
+            request.benchmark_fingerprint.as_str(),
+        ),
+    ] {
+        let observed = attribute(&row.attributes, key)?;
+        if observed != expected {
+            return Err(ExperimentError::invalid(format!(
+                "Sigiro evidence for run {run_id} has {key}={observed}; expected {expected}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn record_evidence(
+    evidence: &mut BTreeMap<String, PeriodEvidence>,
+    run_id: &str,
+    row: EvidenceRow,
+) {
+    let timestamp = row.timestamp;
+    let entry = evidence
+        .entry(run_id.to_string())
+        .or_insert_with(|| PeriodEvidence {
+            rows: 0,
+            metric_names: BTreeSet::new(),
+            observed_from_ts: timestamp,
+            observed_to_ts: timestamp,
+        });
+    entry.rows += 1;
+    entry.metric_names.insert(row.metric_name);
+    entry.observed_from_ts = entry.observed_from_ts.min(timestamp);
+    entry.observed_to_ts = entry.observed_to_ts.max(timestamp);
+}
+
+/// Every period must have produced evidence for all four required metrics.
+fn require_complete_periods(
+    specs: &[PeriodSpec<'_>],
+    evidence: &BTreeMap<String, PeriodEvidence>,
+) -> Result<(), ExperimentError> {
     let required: BTreeSet<String> = REQUIRED_METRICS.iter().map(ToString::to_string).collect();
     for spec in specs {
         let period = evidence.get(&spec.period.run_id).ok_or_else(|| {
@@ -664,8 +719,7 @@ pub(crate) fn load_experiment_evidence(
             )));
         }
     }
-
-    Ok(ExperimentEvidence { periods: evidence })
+    Ok(())
 }
 
 fn attribute<'a>(attributes: &'a Value, key: &str) -> Result<&'a str, ExperimentError> {
