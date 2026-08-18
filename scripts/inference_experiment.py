@@ -33,6 +33,17 @@ PERIODS = (
     ("A2", "control"),
 )
 AGGREGATE_NAME = "profile_export_aiperf_aggregate.json"
+# Collectors whose state must be declared. AIPerf defaults both to ON — its
+# `no_gpu_telemetry` and `no_server_metrics` flags are `= False` — so an
+# undeclared manifest is silently instrumented, and two arms that differ here
+# are not measuring the same machine.
+REQUIRED_COLLECTORS = {"gpu_telemetry", "server_metrics"}
+# Declared state must match the flags actually passed, or the declaration is
+# decoration. Maps a collector to the AIPerf flag that disables it.
+COLLECTOR_DISABLE_FLAGS = {
+    "gpu_telemetry": "--no-gpu-telemetry",
+    "server_metrics": "--no-server-metrics",
+}
 RESERVED_AIPERF_FLAGS = {
     "--artifact-dir",
     "--custom-dataset-type",
@@ -117,6 +128,19 @@ def expect_env(value: Any, name: str) -> dict[str, str]:
     return value
 
 
+def expect_telemetry(value: Any, name: str) -> dict[str, bool]:
+    """Which collectors were active. Enabling one changes the performance being
+    measured, so this belongs in the run identity rather than in tribal memory."""
+    if not isinstance(value, dict) or not all(
+        isinstance(key, str) and key and isinstance(item, bool) for key, item in value.items()
+    ):
+        fail(f"{name} must be a string-to-boolean object")
+    missing = REQUIRED_COLLECTORS - set(value)
+    if missing:
+        fail(f"{name} must declare every known collector; missing: {', '.join(sorted(missing))}")
+    return value
+
+
 def canonical_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -148,6 +172,7 @@ def parse_manifest(path: Path) -> dict[str, Any]:
             "aiperf",
             "control",
             "candidate",
+            "telemetry",
             "telemetry_flush_seconds",
         },
     )
@@ -215,6 +240,16 @@ def parse_manifest(path: Path) -> dict[str, Any]:
         arm = expect_object(root[arm_name], f"manifest.{arm_name}", {"argv", "env"})
         arm["argv"] = expect_argv(arm["argv"], f"manifest.{arm_name}.argv")
         arm["env"] = expect_env(arm["env"], f"manifest.{arm_name}.env")
+
+    root["telemetry"] = expect_telemetry(root["telemetry"], "manifest.telemetry")
+    for collector, disable_flag in COLLECTOR_DISABLE_FLAGS.items():
+        disabled = disable_flag in aiperf["common_args"]
+        if root["telemetry"][collector] == disabled:
+            fail(
+                f"manifest.telemetry.{collector} is {root['telemetry'][collector]} but "
+                f"{disable_flag} is {'present' if disabled else 'absent'} in "
+                "manifest.aiperf.common_args; the declaration must match the command"
+            )
 
     root["telemetry_flush_seconds"] = expect_number(
         root["telemetry_flush_seconds"], "manifest.telemetry_flush_seconds", 0.0
@@ -440,6 +475,10 @@ def run(manifest_path: Path) -> dict[str, Any]:
                             "otel_metrics",
                         ],
                         "common_args": manifest["aiperf"]["common_args"],
+                        # Enabling a collector changes the performance being
+                        # recorded, so two runs instrumented differently are
+                        # different configurations and must not compare equal.
+                        "telemetry": manifest["telemetry"],
                     }
                 )
             ),

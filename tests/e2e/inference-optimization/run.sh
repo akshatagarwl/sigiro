@@ -10,7 +10,12 @@ RUNNER="$ROOT/scripts/inference_experiment.py"
 AIPERF="$ROOT/tests/e2e/inference-optimization/aiperf_docker.sh"
 MOCK_SERVER="$VENV/bin/aiperf-mock-server"
 
-rm -rf "$OUT/results"
+# Clear prior experiments but keep the DuckDB extension cache: it lives under
+# results/, and re-fetching it makes every run depend on the network — which is
+# how this E2E failed on a transient download error.
+if [[ -d "$OUT/results" ]]; then
+  find "$OUT/results" -mindepth 1 -maxdepth 1 ! -name '.sigiro-extensions' -exec rm -rf {} +
+fi
 mkdir -p "$OUT"
 printf '%s\n' 'local process E2E; no GPU' > "$OUT/hardware.txt"
 [[ -n "$PYTHON" ]] || { echo "Python 3.12 is required (or set PYTHON312)" >&2; exit 1; }
@@ -95,6 +100,7 @@ write_manifest() {
     "argv": ["$MOCK_SERVER", "--port", "38080", "--default-model", "$MODEL", "--ttft", "$candidate_delay", "--itl", "2", "--error-rate", "$error_every", "--random-seed", "42"],
     "env": {}
   },
+  "telemetry": {"gpu_telemetry": false, "server_metrics": false},
   "telemetry_flush_seconds": 2
 }
 JSON
@@ -108,7 +114,21 @@ start=$(date +%s)
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 comparison = json.loads((root / "comparison.json").read_text())
-assert comparison["outcome"] == "rejected", comparison
+# `drift_detected` / `inconclusive` mean the A/A calibration refused to compare,
+# which is the guard working rather than a regression. On a loaded machine the
+# mock server's goodput varies 20-30% across the six periods and, with
+# num_profile_runs=2, t_critical is 12.706 — so the confidence intervals are wide
+# enough to swallow a real 3x difference. Say which it is instead of dumping the
+# whole comparison object.
+if comparison["outcome"] != "rejected":
+    controls = {p["run_id"]: round(p["goodput_mean"], 2)
+                for p in comparison["periods"] if p["run_id"].startswith("A")}
+    raise SystemExit(
+        f"\nMEASUREMENT ENVIRONMENT, not a product failure.\n"
+        f"  outcome: {comparison['outcome']} - {comparison['reason']}\n"
+        f"  control goodput by period: {controls}\n"
+        f"  The A/A calibration declined to report a comparison. Re-run on an\n"
+        f"  idle machine, or raise num_profile_runs to tighten the intervals.\n")
 assert comparison["winner"] == "control", comparison
 assert len(comparison["periods"]) == 6
 expected = {
