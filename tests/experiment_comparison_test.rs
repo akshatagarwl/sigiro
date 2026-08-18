@@ -581,6 +581,20 @@ async fn experiment_comparison_validates_real_otlp_evidence_and_all_outcomes() {
         .await
         .assert_status(axum::http::StatusCode::BAD_REQUEST);
 
+    // A digest is a *lowercase* hex string, so an uppercase one is malformed
+    // rather than merely mismatched. `is_ascii_hexdigit` alone would accept it.
+    let mut uppercase_fingerprint = valid.clone();
+    uppercase_fingerprint["candidate_config_fingerprint"] = json!(fingerprint('B'));
+    let response = post_comparison(&server, &context.key_a, &uppercase_fingerprint).await;
+    response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .text()
+            .contains("64-character lowercase SHA-256 hex digest"),
+        "uppercase digest must fail as malformed: {}",
+        response.text()
+    );
+
     let mut missing_run = valid.clone();
     missing_run["candidate"][1]["run_id"] = json!("missing-B2");
     post_comparison(&server, &context.key_a, &missing_run)

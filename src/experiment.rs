@@ -341,20 +341,13 @@ fn validate_text(
     Ok(())
 }
 
-fn is_identifier_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-}
-
-fn is_lowercase_hex_byte(byte: u8) -> bool {
-    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
-}
-
 fn validate_identifier(name: &str, value: &str) -> Result<(), validator::ValidationError> {
     validate_text(
         name,
         value,
         1..=128,
-        is_identifier_byte,
+        // No stdlib ASCII class covers alphanumeric plus these three separators.
+        |byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'),
         "1-128 ASCII letters, digits, dots, underscores, or hyphens",
     )
 }
@@ -364,7 +357,8 @@ fn validate_fingerprint(name: &str, value: &str) -> Result<(), validator::Valida
         name,
         value,
         64..=64,
-        is_lowercase_hex_byte,
+        // `is_ascii_hexdigit` alone also accepts A-F, which this digest forbids.
+        |byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase(),
         "a 64-character lowercase SHA-256 hex digest",
     )
 }
