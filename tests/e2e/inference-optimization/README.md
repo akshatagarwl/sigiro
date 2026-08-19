@@ -44,26 +44,42 @@ Optional, and complete when present. The local E2E omits it: a mock server has n
 memory floor to be near, so a headroom figure computed against one would be
 fiction.
 
-It records only the **inputs** to an analytic decode floor, never a derived
-headroom ratio, because the ratio needs three choices the runner is in no position
-to make — the engine's decode batch (client concurrency is not the same thing),
-the context length, and whether the numerator is tokens or requests. Derive it
-over the ledger instead, where those can vary without re-running the experiment:
+It is deliberately **accelerator-neutral**, which is why it takes a `resources`
+map plus a `weight_residence` rather than one bandwidth number. A single
+`peak_memory_bandwidth_bytes_per_sec` assumed two things that only hold for
+HBM-resident GPUs: that weights live in device memory, and that device memory is
+what binds. On SRAM-resident silicon the weights sit on-chip at orders of magnitude
+more bandwidth and the **interconnect** binds instead, because the model must shard
+across chips.
 
 ```
-batch-1 decode ceiling = peak_bw / (weight_bytes + kv_bytes_per_token * ctx)
-KV-bound ceiling       = peak_bw / (kv_bytes_per_token * ctx)
+weight_residence ceiling = resources[weight_residence]
+                           / (weight_bytes + kv_bytes_per_token * ctx)
+KV-bound ceiling         = resources[weight_residence]
+                           / (kv_bytes_per_token * ctx)
 ```
 
 For Qwen3-4B on one RTX 3090 at ctx 2048 that is **112 tok/s** and **3100 tok/s**.
-Measure 95 and you are at 85% of the hardware limit — stop searching, no config
-knob will find the missing 17. Measure 30 and something is stalling, so the search
-is worth funding.
+Measure 95 and you are at 85% of the limit — stop searching, no config knob finds
+the missing 17. Measure 30 and something is stalling, so the search is worth funding.
+
+**Only the residence ceiling is derivable from these inputs.** Taking the minimum
+over every resource is wrong: it charges the whole weight read to every tier, and a
+single-GPU decode step puts zero bytes on NVLink. An interconnect ceiling needs a
+sharding descriptor this block does not carry yet — TP/EP degree, and bytes crossing
+per step, which for MoE means the expert traffic matrix. The other resources are
+recorded so the supply side is on file for when that arrives; until then they are
+context, not ceilings.
+
+It records only **inputs**, never a derived headroom ratio, because the ratio needs
+three choices the runner cannot make — the engine's decode batch (client concurrency
+is not the same thing), the context length, and tokens-versus-requests. Derive it
+over the ledger, where those can vary without re-running the experiment.
 
 The block is folded into the **hardware fingerprint**: two runs claiming different
-peak bandwidth for the same box are making different claims about the machine and
-must not compare as equal. `source` is mandatory because a stale bandwidth figure
-silently corrupts every number derived from it.
+peaks for the same box are making different claims about the machine and must not
+compare as equal. `source` is mandatory because a stale figure silently corrupts
+every number derived from it.
 
 ## The `telemetry` block
 

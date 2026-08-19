@@ -505,14 +505,6 @@ async fn experiment_comparison_validates_real_otlp_evidence_and_all_outcomes() {
         .expect("clean metrics");
     assert!(!clean_metrics.contains_key("request_error_rate_avg"));
     assert!(!clean_metrics.contains_key("error_request_count_avg"));
-    let mut missing_summary = valid.clone();
-    missing_summary["candidate"][0]["aiperf"]["metrics"]
-        .as_object_mut()
-        .expect("metrics object")
-        .remove("goodput_avg");
-    post_comparison(&server, &context.key_a, &missing_summary)
-        .await
-        .assert_status(axum::http::StatusCode::BAD_REQUEST);
     let mut present_zero_errors = valid.clone();
     present_zero_errors["candidate"][0]["aiperf"]["metrics"]["request_error_rate_avg"] =
         zero_confidence_metric("%");
@@ -521,59 +513,6 @@ async fn experiment_comparison_validates_real_otlp_evidence_and_all_outcomes() {
     post_comparison(&server, &context.key_a, &present_zero_errors)
         .await
         .assert_status_ok();
-
-    let mut impossible_bounds = valid.clone();
-    impossible_bounds["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["min"] = json!(131.0);
-    let mut negative_std = valid.clone();
-    negative_std["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["std"] = json!(-1.0);
-    let mut reversed_ci = valid.clone();
-    reversed_ci["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["ci_low"] = json!(140.0);
-    reversed_ci["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["ci_high"] = json!(120.0);
-    let mut negative_goodput = valid.clone();
-    negative_goodput["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["min"] = json!(-1.0);
-    let mut empty_benchmark = valid.clone();
-    empty_benchmark["candidate"][0]["aiperf"]["metrics"]["request_count_avg"] =
-        zero_confidence_metric("requests");
-    let mut request_error_rate = valid.clone();
-    request_error_rate["candidate"][0]["aiperf"]["metrics"]["request_error_rate_avg"] =
-        constant_confidence_metric(1.0, "%");
-    let mut request_errors = valid.clone();
-    request_errors["candidate"][0]["aiperf"]["metrics"]["error_request_count_avg"] =
-        constant_confidence_metric(1.0, "requests");
-    let mut empty_goodput_unit = valid.clone();
-    empty_goodput_unit["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["unit"] = json!("");
-    let mut empty_request_unit = valid.clone();
-    empty_request_unit["candidate"][0]["aiperf"]["metrics"]["good_request_count_avg"]["unit"] =
-        json!("");
-
-    for (request, expected_detail) in [
-        (impossible_bounds, "min <= mean <= max"),
-        (negative_std, "std >= 0"),
-        (reversed_ci, "ci_low <= ci_high"),
-        (negative_goodput, "cannot be negative"),
-        (
-            empty_benchmark,
-            "request_count_avg.min must be greater than zero",
-        ),
-        (
-            request_error_rate,
-            "request_error_rate_avg distribution must be exactly zero",
-        ),
-        (
-            request_errors,
-            "error_request_count_avg distribution must be exactly zero",
-        ),
-        (empty_goodput_unit, "goodput_avg unit is empty"),
-        (empty_request_unit, "good_request_count_avg unit is empty"),
-    ] {
-        let response = post_comparison(&server, &context.key_a, &request).await;
-        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
-        assert!(
-            response.text().contains(expected_detail),
-            "expected {expected_detail:?} in fail-loud response: {}",
-            response.text()
-        );
-    }
 
     let mut wrong_fingerprint = valid.clone();
     wrong_fingerprint["candidate_config_fingerprint"] = json!(fingerprint('9'));
@@ -641,4 +580,82 @@ async fn experiment_comparison_validates_real_otlp_evidence_and_all_outcomes() {
             .any(|name| name == "error_request_count_avg")
     );
     assert!(operation["security"].is_array());
+}
+
+/// Malformed AIPerf artifacts are rejected before any evidence is consulted.
+///
+/// Split out of the evidence test on purpose. Every case here fails in
+/// `validate_experiment_request`, i.e. before the DB is touched, so this test needs
+/// no OTLP ingest and runs in a fraction of the time. It also keeps both tests
+/// under the per-tenant rate limit: `build_http_router` installs a governor with
+/// `burst_size(20)`, and the two suites had accumulated enough POSTs between them
+/// that the combined test started returning 429 instead of 400 — a real coupling to
+/// a limiter neither test is trying to exercise.
+#[tokio::test]
+async fn experiment_comparison_rejects_malformed_aiperf_artifacts() {
+    let context = build_context();
+    let server =
+        TestServer::new(build_http_router(Arc::clone(&context.state))).expect("build API server");
+    let valid = comparison_request((100.0, 95.0, 105.0), (130.0, 125.0, 135.0));
+
+    let mut missing_summary = valid.clone();
+    missing_summary["candidate"][0]["aiperf"]["metrics"]
+        .as_object_mut()
+        .expect("metrics object")
+        .remove("goodput_avg");
+    post_comparison(&server, &context.key_a, &missing_summary)
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+    let mut impossible_bounds = valid.clone();
+    impossible_bounds["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["min"] = json!(131.0);
+    let mut negative_std = valid.clone();
+    negative_std["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["std"] = json!(-1.0);
+    let mut reversed_ci = valid.clone();
+    reversed_ci["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["ci_low"] = json!(140.0);
+    reversed_ci["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["ci_high"] = json!(120.0);
+    let mut negative_goodput = valid.clone();
+    negative_goodput["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["min"] = json!(-1.0);
+    let mut empty_benchmark = valid.clone();
+    empty_benchmark["candidate"][0]["aiperf"]["metrics"]["request_count_avg"] =
+        zero_confidence_metric("requests");
+    let mut request_error_rate = valid.clone();
+    request_error_rate["candidate"][0]["aiperf"]["metrics"]["request_error_rate_avg"] =
+        constant_confidence_metric(1.0, "%");
+    let mut request_errors = valid.clone();
+    request_errors["candidate"][0]["aiperf"]["metrics"]["error_request_count_avg"] =
+        constant_confidence_metric(1.0, "requests");
+    let mut empty_goodput_unit = valid.clone();
+    empty_goodput_unit["candidate"][0]["aiperf"]["metrics"]["goodput_avg"]["unit"] = json!("");
+    let mut empty_request_unit = valid.clone();
+    empty_request_unit["candidate"][0]["aiperf"]["metrics"]["good_request_count_avg"]["unit"] =
+        json!("");
+
+    for (request, expected_detail) in [
+        (impossible_bounds, "min <= mean <= max"),
+        (negative_std, "std >= 0"),
+        (reversed_ci, "ci_low <= ci_high"),
+        (negative_goodput, "cannot be negative"),
+        (
+            empty_benchmark,
+            "request_count_avg.min must be greater than zero",
+        ),
+        (
+            request_error_rate,
+            "request_error_rate_avg distribution must be exactly zero",
+        ),
+        (
+            request_errors,
+            "error_request_count_avg distribution must be exactly zero",
+        ),
+        (empty_goodput_unit, "goodput_avg unit is empty"),
+        (empty_request_unit, "good_request_count_avg unit is empty"),
+    ] {
+        let response = post_comparison(&server, &context.key_a, &request).await;
+        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            response.text().contains(expected_detail),
+            "expected {expected_detail:?} in fail-loud response: {}",
+            response.text()
+        );
+    }
 }

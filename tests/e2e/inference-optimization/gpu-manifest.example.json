@@ -9,8 +9,13 @@
   "roofline": {
     "weight_bytes": 8040000000,
     "kv_bytes_per_token": 147456,
-    "peak_memory_bandwidth_bytes_per_sec": 936200000000,
-    "source": "weight_bytes = 4.02e9 params x 2 (bf16); kv_bytes_per_token = 2 x 36 layers x 8 kv_heads x 128 head_dim x 2 bytes, all from Qwen/Qwen3-4B config.json at the pinned revision; peak bandwidth = NVIDIA RTX 3090 spec sheet, 936.2 GB/s"
+    "resources": {
+      "gddr6x": 936200000000,
+      "nvlink": 112000000000
+    },
+    "weight_residence": "gddr6x",
+    "peak_flops_per_sec": 71000000000000,
+    "source": "weight_bytes = 4.02e9 params x 2 (bf16); kv_bytes_per_token = 2 x 36 layers x 8 kv_heads x 128 head_dim x 2 bytes, both from Qwen/Qwen3-4B config.json at the pinned revision. resources from the NVIDIA RTX 3090 spec sheet: 936.2 GB/s GDDR6X, ~112 GB/s NVLink bridge. weight_residence=gddr6x because weights live in device memory on this part; an SRAM-resident accelerator would name its on-chip tier instead and the fabric would bind."
   },
   "hardware": {
     "command": [

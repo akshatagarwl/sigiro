@@ -129,28 +129,79 @@ def expect_env(value: Any, name: str) -> dict[str, str]:
 
 
 def expect_roofline(value: Any, name: str) -> dict[str, Any] | None:
-    """The inputs to an analytic decode floor. Optional, because a mock target has
-    no memory floor to be near; required to be complete when present.
+    """Inputs to an analytic decode floor, in an accelerator-neutral shape.
 
-    Only the inputs are recorded, not a derived headroom ratio. The ratio needs
-    three choices this runner is in no position to make — the engine's decode
-    batch (client concurrency is not the same thing), the context length, and
-    whether the numerator is tokens or requests. Those belong in a query over the
-    ledger, where they can be varied without re-running the experiment.
+    Optional, because a mock target has no floor to be near; complete when present.
+
+    The floor is **the minimum over resources**, not a memory-bandwidth figure. An
+    earlier version of this block took a single `peak_memory_bandwidth_bytes_per_sec`
+    and so assumed two things that only hold for HBM-resident GPUs: that weights live
+    in device memory, and that device memory is what binds. On SRAM-resident silicon
+    (Groq, Cerebras) weights sit on-chip at orders of magnitude more bandwidth and the
+    **interconnect** binds instead, because the model must shard across many chips.
+    So `resources` names each supply and `weight_residence` says which one the weight
+    read is served from.
+
+    Only inputs are recorded, never a derived headroom ratio. The ratio needs three
+    choices this runner cannot make — the engine's decode batch (client concurrency is
+    not the same thing), the context length, and tokens-versus-requests — so it belongs
+    in a query over the ledger where those can vary without re-running anything.
+
+    **What is and is not derivable from these inputs alone.** Only the
+    `weight_residence` ceiling is: `resources[weight_residence] / (weight_bytes +
+    kv_bytes_per_token * ctx)`. It is tempting to take the minimum over every resource,
+    but that is wrong — it charges the whole weight read to every tier, and a
+    single-GPU decode step puts zero bytes on NVLink. An interconnect ceiling needs a
+    **sharding descriptor** this block deliberately does not carry yet (TP/EP degree,
+    and bytes crossing per step, which for MoE means the expert traffic matrix). The
+    other resources are recorded anyway so the supply side is on file for when that
+    descriptor arrives; until then, treat them as context, not as ceilings.
     """
     if value is None:
         return None
-    root = expect_object(
-        value,
-        name,
-        {"weight_bytes", "kv_bytes_per_token", "peak_memory_bandwidth_bytes_per_sec", "source"},
-    )
-    for key in ("weight_bytes", "kv_bytes_per_token", "peak_memory_bandwidth_bytes_per_sec"):
+    known = {
+        "weight_bytes",
+        "kv_bytes_per_token",
+        "resources",
+        "weight_residence",
+        "source",
+    }
+    if not isinstance(value, dict):
+        fail(f"{name} must be an object")
+    # peak_flops_per_sec is optional: it only matters where compute binds (prefill,
+    # training), and several accelerators do not publish a comparable figure.
+    root = expect_object(value, name, known | ({"peak_flops_per_sec"} if "peak_flops_per_sec" in value else set()))
+
+    for key in ("weight_bytes", "kv_bytes_per_token"):
         raw = root[key]
         if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
             fail(f"{name}.{key} must be a positive integer count of bytes")
-    # A stale bandwidth figure silently corrupts every number derived from it, so
-    # the provenance is mandatory rather than a nicety.
+
+    resources = root["resources"]
+    if not isinstance(resources, dict) or not resources:
+        fail(f"{name}.resources must be a non-empty object of name -> peak bytes/sec")
+    for rname, peak in resources.items():
+        if not isinstance(rname, str) or not rname:
+            fail(f"{name}.resources keys must be non-empty resource names")
+        if isinstance(peak, bool) or not isinstance(peak, int) or peak <= 0:
+            fail(f"{name}.resources.{rname} must be a positive integer of bytes/sec")
+
+    # The tier the weight read is served from. Without this the floor silently
+    # assumes HBM, which is wrong on any SRAM-resident part.
+    residence = expect_string(root["weight_residence"], f"{name}.weight_residence")
+    if residence not in resources:
+        fail(
+            f"{name}.weight_residence is {residence!r}, which is not a declared "
+            f"resource; known: {', '.join(sorted(resources))}"
+        )
+
+    if "peak_flops_per_sec" in root:
+        raw = root["peak_flops_per_sec"]
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+            fail(f"{name}.peak_flops_per_sec must be a positive integer of FLOP/sec")
+
+    # A stale figure silently corrupts every number derived from it, so provenance
+    # is mandatory rather than a nicety.
     expect_string(root["source"], f"{name}.source")
     return root
 
