@@ -29,3 +29,7 @@ dist-bin/
 docs-site/.blume/
 docs-site/dist/
 www/.source/
+
+# Python bytecode from scripts/
+__pycache__/
+*.py[cod]
