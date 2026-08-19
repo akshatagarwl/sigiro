@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "experiment_id": "gpu-qwen3-4b-example",
+  "output_root": "./gpu-results",
+  "model": {
+    "id": "Qwen/Qwen3-4B",
+    "revision": "1cfa9a7208912126459214e8b04321603b3df60c"
+  },
+  "roofline": {
+    "weight_bytes": 8040000000,
+    "kv_bytes_per_token": 147456,
+    "peak_memory_bandwidth_bytes_per_sec": 936200000000,
+    "source": "weight_bytes = 4.02e9 params x 2 (bf16); kv_bytes_per_token = 2 x 36 layers x 8 kv_heads x 128 head_dim x 2 bytes, all from Qwen/Qwen3-4B config.json at the pinned revision; peak bandwidth = NVIDIA RTX 3090 spec sheet, 936.2 GB/s"
+  },
+  "hardware": {
+    "command": [
+      "nvidia-smi",
+      "--query-gpu=name,uuid,pci.bus_id,memory.total,driver_version",
+      "--format=csv"
+    ]
+  },
+  "sigiro": {
+    "binary": "./sigiro",
+    "http_port": 9999,
+    "otlp_http_port": 4318,
+    "otlp_grpc_port": 4317,
+    "startup_timeout_seconds": 90
+  },
+  "aiperf": {
+    "binary": "aiperf",
+    "endpoint": "http://127.0.0.1:30000",
+    "inputs_file": "./inputs.json",
+    "num_profile_runs": 3,
+    "common_args": [
+      "--endpoint-type",
+      "chat",
+      "--concurrency",
+      "8",
+      "--request-count",
+      "400",
+      "--warmup-request-count",
+      "32",
+      "--goodput",
+      "request_latency:2000",
+      "--random-seed",
+      "42",
+      "--ui-type",
+      "none",
+      "--wait-for-model-timeout",
+      "600"
+    ],
+    "timeout_seconds": 1800
+  },
+  "control": {
+    "argv": [
+      "python",
+      "-m",
+      "sglang.launch_server",
+      "--model-path",
+      "Qwen/Qwen3-4B",
+      "--revision",
+      "1cfa9a7208912126459214e8b04321603b3df60c",
+      "--port",
+      "30000",
+      "--chunked-prefill-size",
+      "2048"
+    ],
+    "env": {}
+  },
+  "candidate": {
+    "argv": [
+      "python",
+      "-m",
+      "sglang.launch_server",
+      "--model-path",
+      "Qwen/Qwen3-4B",
+      "--revision",
+      "1cfa9a7208912126459214e8b04321603b3df60c",
+      "--port",
+      "30000",
+      "--chunked-prefill-size",
+      "8192"
+    ],
+    "env": {}
+  },
+  "telemetry": {
+    "gpu_telemetry": true,
+    "server_metrics": true
+  },
+  "telemetry_flush_seconds": 5
+}

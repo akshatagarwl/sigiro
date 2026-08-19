@@ -128,6 +128,33 @@ def expect_env(value: Any, name: str) -> dict[str, str]:
     return value
 
 
+def expect_roofline(value: Any, name: str) -> dict[str, Any] | None:
+    """The inputs to an analytic decode floor. Optional, because a mock target has
+    no memory floor to be near; required to be complete when present.
+
+    Only the inputs are recorded, not a derived headroom ratio. The ratio needs
+    three choices this runner is in no position to make — the engine's decode
+    batch (client concurrency is not the same thing), the context length, and
+    whether the numerator is tokens or requests. Those belong in a query over the
+    ledger, where they can be varied without re-running the experiment.
+    """
+    if value is None:
+        return None
+    root = expect_object(
+        value,
+        name,
+        {"weight_bytes", "kv_bytes_per_token", "peak_memory_bandwidth_bytes_per_sec", "source"},
+    )
+    for key in ("weight_bytes", "kv_bytes_per_token", "peak_memory_bandwidth_bytes_per_sec"):
+        raw = root[key]
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+            fail(f"{name}.{key} must be a positive integer count of bytes")
+    # A stale bandwidth figure silently corrupts every number derived from it, so
+    # the provenance is mandatory rather than a nicety.
+    expect_string(root["source"], f"{name}.source")
+    return root
+
+
 def expect_telemetry(value: Any, name: str) -> dict[str, bool]:
     """Which collectors were active. Enabling one changes the performance being
     measured, so this belongs in the run identity rather than in tribal memory."""
@@ -174,7 +201,8 @@ def parse_manifest(path: Path) -> dict[str, Any]:
             "candidate",
             "telemetry",
             "telemetry_flush_seconds",
-        },
+        }
+        | ({"roofline"} if "roofline" in raw else set()),
     )
     if root["schema_version"] != 1:
         fail("manifest.schema_version must be 1")
@@ -241,6 +269,7 @@ def parse_manifest(path: Path) -> dict[str, Any]:
         arm["argv"] = expect_argv(arm["argv"], f"manifest.{arm_name}.argv")
         arm["env"] = expect_env(arm["env"], f"manifest.{arm_name}.env")
 
+    root["roofline"] = expect_roofline(root.get("roofline"), "manifest.roofline")
     root["telemetry"] = expect_telemetry(root["telemetry"], "manifest.telemetry")
     for collector, disable_flag in COLLECTOR_DISABLE_FLAGS.items():
         disabled = disable_flag in aiperf["common_args"]
@@ -457,7 +486,14 @@ def run(manifest_path: Path) -> dict[str, Any]:
         version = aiperf_version(manifest["aiperf"]["binary"], cwd)
         fingerprints = {
             "model": sha256_bytes(canonical_bytes(manifest["model"])),
-            "hardware": sha256_bytes(hardware),
+            # The roofline inputs describe this machine, so they belong in its
+            # identity: two runs asserting different peak bandwidth for the same
+            # box are making different claims and must not compare as equal.
+            "hardware": sha256_bytes(
+                hardware
+                if manifest["roofline"] is None
+                else hardware + canonical_bytes(manifest["roofline"])
+            ),
             "workload": sha256_bytes(manifest["aiperf"]["inputs_file"].read_bytes()),
             "benchmark": sha256_bytes(
                 canonical_bytes(
@@ -631,6 +667,7 @@ def run(manifest_path: Path) -> dict[str, Any]:
             "completed_at": time.time_ns() // 1_000,
             "artifact_dir": str(experiment_dir),
             "fingerprints": fingerprints,
+            "roofline": manifest["roofline"],
             "outcome": comparison["outcome"],
             "winner": comparison.get("winner"),
             "comparison": comparison,
