@@ -47,7 +47,7 @@ use anyhow::{Context, Result};
 use augurs_changepoint::{Detector, NormalGammaDetector};
 use duckdb::Connection;
 
-use crate::diagnose::{operation_drill_filter, operation_key_expr};
+use crate::diagnose::{is_error_expr, operation_drill_filter, operation_key_expr};
 use crate::types::StatusCode;
 
 /// How far back the pass looks when building each entity's series. Matches
@@ -250,14 +250,14 @@ fn detect_span_signals(
     cutoff_us: i64,
     inserts: &mut Vec<AnomalyInsert>,
 ) -> Result<()> {
-    let err = StatusCode::Error.as_i32();
+    let is_err = is_error_expr("s.");
     let op_key = operation_key_expr("s.");
     let series_sql = format!(
         "SELECT s.service_name,
                 {op_key} AS operation,
                 any_value(s.span_name) AS span_name,
                 epoch_us(time_bucket(INTERVAL '{DETECTION_BUCKET_MINUTES} minutes', s.timestamp)) AS bucket_ts,
-                count(CASE WHEN s.status_code = {err} THEN 1 END) * 100.0 / count(*) AS err_rate,
+                count(CASE WHEN {is_err} THEN 1 END) * 100.0 / count(*) AS err_rate,
                 approx_quantile(s.duration, 0.95)::DOUBLE AS p95_us
          FROM {prefix}sigiro_spans s
          WHERE s.timestamp >= make_timestamp({cutoff_us})

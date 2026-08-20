@@ -1225,6 +1225,30 @@ NULLIF(json_extract_string({q}span_attributes, 'server.address'), '')), '') \
     )
 }
 
+/// The ONE "this span failed" predicate. `q` is the column qualifier ("s."
+/// inside the query, "" in drill SQL).
+///
+/// Span status is the primary signal but CANNOT be the only one. An SDK that
+/// returns a 5xx as a normal success value produces STATUS_CODE_OK spans for
+/// real server errors — Effect's `HttpMiddleware.tracer` derives span status
+/// from the handler's exit, so a handler returning a 503 response object ends
+/// OK. Keying error_rate on span status alone therefore reads every such 5xx as
+/// a success and no signal ever shifts (a benchapp endpoint 503'd for a
+/// month unnoticed). OTel semconv already treats an `http.response.status_code`
+/// of 500 or above as an error, and the tracer records that attribute even when
+/// it gets span status wrong — so trust it too rather than depending on every
+/// app getting instrumentation right.
+///
+/// Uses only /v1/query-allowlisted scalars (json_extract_string, nullif,
+/// try_cast) so drill SQL still passes `validate_read_only`.
+pub(crate) fn is_error_expr(q: &str) -> String {
+    let err = StatusCode::Error.as_i32();
+    format!(
+        "({q}status_code = {err} OR TRY_CAST(NULLIF(json_extract_string(\
+{q}span_attributes, 'http.response.status_code'), '') AS INTEGER) >= 500)"
+    )
+}
+
 /// The ONE derived OTel `error.type` expression (semconv "recording
 /// errors", STABLE) — the failure-mode dimension of an error span. Only
 /// meaningful for error spans: callers gate on `status_code = 2` themselves
@@ -1274,6 +1298,7 @@ pub(crate) fn operation_drill_filter(span_name: &str, operation: &str) -> String
 /// via scalar subqueries, so the whole diagnosis is a single round-trip.
 pub(crate) fn build_diagnosis_sql(prefix: &str, bucket: &str) -> String {
     let err = StatusCode::Error.as_i32();
+    let is_err_s = is_error_expr("s.");
     let op_key = operation_key_expr("s.");
     let error_type = error_type_expr("s.");
     // The in-window span filter, repeated by the CTEs that need columns
@@ -1305,7 +1330,10 @@ win_spans AS (
     SELECT s.trace_id, s.span_name, s.span_kind, s.status_code, s.duration,
            s.timestamp AS ts,
            {op_key} AS operation,
-           CASE WHEN s.status_code = {err} THEN {error_type} END AS error_type
+           -- span_attributes is NOT projected here, so derive the error flag
+           -- once and let every downstream CTE read `is_error`.
+           {is_err_s} AS is_error,
+           CASE WHEN {is_err_s} THEN {error_type} END AS error_type
     FROM {prefix}sigiro_spans s, args a
     WHERE {span_win}
 ),
@@ -1317,7 +1345,7 @@ win_logs AS (
 ),
 span_stats AS (
     SELECT count(*) AS spans_total,
-           count(DISTINCT CASE WHEN status_code = {err} THEN trace_id END) AS error_traces_total,
+           count(DISTINCT CASE WHEN is_error THEN trace_id END) AS error_traces_total,
            -- Span-kind mix, for the missing_client_spans install-health
            -- finding. Free: win_spans already carries span_kind.
            count(CASE WHEN span_kind = 2 THEN 1 END) AS server_spans,
@@ -1406,19 +1434,19 @@ ops_current AS (
     SELECT operation,
            any_value(span_name) AS span_name,
            count(*) AS cnt,
-           count(CASE WHEN status_code = {err} THEN 1 END) AS err_cnt,
-           count(CASE WHEN status_code = {err} THEN 1 END) * 100.0 / count(*) AS err_pct,
+           count(CASE WHEN is_error THEN 1 END) AS err_cnt,
+           count(CASE WHEN is_error THEN 1 END) * 100.0 / count(*) AS err_pct,
            approx_quantile(duration, 0.50) AS p50,
            approx_quantile(duration, 0.95) AS p95,
            approx_quantile(duration, 0.99) AS p99,
-           any_value(CASE WHEN status_code = {err} THEN trace_id END) AS exemplar_error_trace_id
+           any_value(CASE WHEN is_error THEN trace_id END) AS exemplar_error_trace_id
     FROM win_spans
     GROUP BY operation
 ),
 ops_baseline AS (
     SELECT {op_key} AS operation,
            count(*) AS bl_cnt,
-           count(CASE WHEN s.status_code = {err} THEN 1 END) * 100.0 / count(*) AS bl_err_pct,
+           count(CASE WHEN {is_err_s} THEN 1 END) * 100.0 / count(*) AS bl_err_pct,
            approx_quantile(s.duration, 0.95) AS bl_p95
     FROM {prefix}sigiro_spans s, args a
     WHERE s.service_name = a.service
