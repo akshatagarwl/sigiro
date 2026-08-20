@@ -34,7 +34,6 @@ import {
   DISCOVER_ARTIFACT,
   HOW_SESSIONS,
   INTEGRATION_ITEMS,
-  type LandingLocale,
   type Locale,
   LOOP_SESSIONS,
   NAV_HREFS,
@@ -52,7 +51,7 @@ export {
   SOCIAL,
 } from './site.shared';
 
-const COPY: Record<Locale, LandingCopy> = { en: EN, ja: JA, ko: KO, zh: ZH };
+const COPY = { en: EN, ja: JA, ko: KO, zh: ZH } satisfies Record<Locale, LandingCopy>;
 
 /**
  * Everything the landing page renders, for one locale.

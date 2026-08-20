@@ -37,12 +37,12 @@ const LOOP = getCopy(locale).loop;
  * and a CJK short form is usually 2–3 glyphs, which fits where the English word
  * does.
  */
-const SHORT_OWNER: Record<Locale, readonly string[]> = {
+const SHORT_OWNER = {
   en: ['sigiro', 'sigiro', 'agent', 'pipeline', 'memory'],
   zh: ['sigiro', 'sigiro', '智能体', '流水线', '记忆'],
   ja: ['sigiro', 'sigiro', 'エージェント', 'パイプライン', 'メモリ'],
   ko: ['sigiro', 'sigiro', '에이전트', '파이프라인', '메모리'],
-};
+} satisfies Record<Locale, readonly string[]>;
 
 if (SHORT_OWNER[locale].length !== LOOP.length) {
   throw new Error(

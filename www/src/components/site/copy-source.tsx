@@ -63,12 +63,15 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
    * Logging and rethrowing keeps both properties: no false check, and a reason
    * in the console when a reader reports that copy does nothing.
    */
-  const [copied, copy] = useCopyButton(() =>
-    navigator.clipboard.writeText(code).catch((error: unknown) => {
+  const [copied, copy] = useCopyButton(async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
       console.error('sigiro: could not write to the clipboard', error);
       throw error;
-    }),
-  );
+    }
+  });
 
   return (
     <button

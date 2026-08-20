@@ -86,12 +86,12 @@ export function useLogoMarquee({
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    if (typeof IntersectionObserver === 'undefined') {
+    if (!('IntersectionObserver' in window)) {
       setNear(true);
       return;
     }
 
-    const observer = new IntersectionObserver(
+    const observer = new window.IntersectionObserver(
       (entries) => {
         const entry = entries[entries.length - 1];
         if (entry) setNear(entry.isIntersecting);
@@ -188,9 +188,9 @@ export function useLogoMarquee({
     },
     onPointerCancel: () => setHeld(false),
     onPointerLeave: () => setHeld(false),
-    onFocus: (e: React.FocusEvent) => {
+    onFocus: (e: React.FocusEvent<HTMLElement>) => {
       setHeld(true);
-      reveal(e.target as HTMLElement);
+      reveal(e.currentTarget);
     },
     onBlur: () => setHeld(false),
   };

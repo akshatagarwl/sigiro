@@ -87,7 +87,7 @@ export function Integrations({ locale = 'en' }: { locale?: Locale }) {
             label={group.label}
             direction={i % 2 === 0 ? 'left' : 'right'}
             items={group.items.map((item) => {
-              const icon = item.icon ? ICONS[item.icon as keyof typeof ICONS] : undefined;
+              const icon = item.icon ? ICONS[item.icon] : undefined;
               return {
                 id: item.name,
                 label: item.name,

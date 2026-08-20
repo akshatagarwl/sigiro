@@ -1,6 +1,6 @@
 ---
 import Landing from '@/components/Landing.astro';
-import { LANDING_LOCALES, type LandingLocale } from '@/lib/site';
+import { LANDING_LOCALES } from '@/lib/site';
 
 /**
  * The localized landing pages: `/zh`, `/ja`, `/ko`.
@@ -17,7 +17,10 @@ import { LANDING_LOCALES, type LandingLocale } from '@/lib/site';
 export const getStaticPaths = () =>
   LANDING_LOCALES.map((locale) => ({ params: { locale } }));
 
-const { locale } = Astro.params as { locale: LandingLocale };
+const locale = Astro.params.locale;
+if (locale !== 'zh' && locale !== 'ja' && locale !== 'ko') {
+  throw new Error(`Unknown landing locale: ${locale ?? '(missing)'}`);
+}
 ---
 
 <Landing locale={locale} />

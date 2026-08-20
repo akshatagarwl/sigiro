@@ -422,9 +422,9 @@ export type LandingLocale = (typeof LANDING_LOCALES)[number];
 export type Locale = 'en' | LandingLocale;
 
 /** The `lang` attribute and the language switcher's label, per locale. */
-export const LOCALE_LABELS: Record<Locale, string> = {
+export const LOCALE_LABELS = {
   en: 'English',
   zh: '简体中文',
   ja: '日本語',
   ko: '한국어',
-};
+} satisfies Record<Locale, string>;

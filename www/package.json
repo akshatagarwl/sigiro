@@ -9,6 +9,7 @@
     "preview": "wrangler dev --config dist/server/wrangler.json",
     "deploy": "wrangler deploy --config dist/server/wrangler.json",
     "lint": "vp lint",
+    "check": "vp check",
     "fmt": "oxfmt .",
     "doctor": "blume doctor",
     "og": "bun run scripts/generate-og.tsx",
@@ -26,11 +27,13 @@
     "sigiro-icons": "npm:simple-icons@16.28.0"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vercel/og": "0.11.1",
     "geist": "1.7.2",
+    "oxlint": "1.78.0",
     "typescript": "7.1.0-dev.20260803.1",
     "vite-plus": "0.2.7",
     "wrangler": "4.118.0"

@@ -38,18 +38,24 @@ export type UseTaskStepsOptions = {
   failed?: boolean;
 };
 
+function taskStepStatus(
+  index: number,
+  current: number,
+  failed: boolean,
+  complete: boolean,
+): TaskStepStatus {
+  if (index < current) return 'done';
+  if (index !== current) return 'pending';
+  if (failed) return 'error';
+  return complete ? 'pending' : 'active';
+}
+
 export function useTaskSteps({ steps, current, failed = false }: UseTaskStepsOptions) {
   const complete = !failed && current >= steps.length;
 
   const rows = steps.map((step, i) => ({
     ...step,
-    status: (i < current
-      ? 'done'
-      : i === current && failed
-        ? 'error'
-        : i === current && !complete
-          ? 'active'
-          : 'pending') as TaskStepStatus,
+    status: taskStepStatus(i, current, failed, complete),
   }));
 
   const active = rows.find((r) => r.status === 'active');

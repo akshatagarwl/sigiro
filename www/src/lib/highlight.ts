@@ -101,13 +101,13 @@ export const COLOR_REPLACEMENTS = { '#6e7781': '#5a6169', '#cf222e': '#b3121f' }
  */
 const THEMES = { light: 'github-light-default', dark: 'github-dark-default' } as const;
 
-const ESCAPES: Record<string, string> = {
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;',
-};
+const ESCAPES = new Map([
+  ['&', '&amp;'],
+  ['<', '&lt;'],
+  ['>', '&gt;'],
+  ['"', '&quot;'],
+  ["'", '&#39;'],
+]);
 
 /**
  * HTML-escape a string bound for `dangerouslySetInnerHTML`.
@@ -124,7 +124,7 @@ const ESCAPES: Record<string, string> = {
  * compiler is checking for us.
  */
 function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
+  return text.replace(/[&<>"']/g, (character) => ESCAPES.get(character) ?? character);
 }
 
 /**

@@ -70,8 +70,9 @@ async function keepLiveUrls(urls: string[]): Promise<string[]> {
       try {
         const res = await fetch(url, { method: 'HEAD', redirect: 'manual' });
         return { url, status: res.status, ok: res.status >= 200 && res.status < 400 };
-      } catch (err) {
-        return { url, status: `unreachable (${(err as Error).message})`, ok: false };
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        return { url, status: `unreachable (${message})`, ok: false };
       }
     }),
   );
