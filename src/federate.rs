@@ -561,7 +561,9 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
     for expr in &group_expressions {
         anyhow::ensure!(
             field_str(expr, "class")? == "COLUMN_REF",
-            "GROUP BY keys must be plain columns in a federated query"
+            "GROUP BY keys must be plain columns in a federated query — an expression key \
+             (date_trunc(...), time_bucket(...), epoch(...)/N) is not reconstructed for the \
+             per-edge push. Query a single edge directly (POST the SQL to /v1/query)."
         );
         group_keys.push(column_ref_name(expr, &table, &table_alias)?);
     }
@@ -703,9 +705,20 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                         AggKind::Avg,
                         Some(single_column_arg(&children, &table, &table_alias)?),
                     ),
+                    // Do NOT call this an aggregate: we parse with
+                    // json_serialize_sql, which is parse-only, and aggregate-ness
+                    // is resolved at BIND time — so a scalar call like
+                    // round(...) or json_extract_string(...) arrives as the same
+                    // "FUNCTION" class as sum(...). Claiming "aggregate round(...)"
+                    // sent a real debugging session looking for an aggregate that
+                    // was never there. Name both possibilities and the way out.
                     other => anyhow::bail!(
-                        "aggregate {other}(...) is not federatable across edges; only \
-                         count/sum/min/max/avg are foldable. Run per-edge or narrow the query."
+                        "{other}(...) cannot be federated across edges. Foldable aggregates are \
+                         limited to count/sum/min/max/avg, and scalar functions (round, \
+                         json_extract_string, date_trunc, casts, arithmetic) are not \
+                         reconstructed for the per-edge push at all. Query a single edge \
+                         directly (POST the SQL to /v1/query), or reduce this to a plain \
+                         column/foldable-aggregate SELECT."
                     ),
                 };
                 let alias = item
