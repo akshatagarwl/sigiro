@@ -7,6 +7,7 @@
 #![allow(clippy::disallowed_methods)]
 
 use axum_test::TestServer;
+use serde_json::json;
 
 use parking_lot::Mutex;
 use rusqlite::Connection;
@@ -561,6 +562,94 @@ async fn test_admin_status_requires_admin_token() {
         .add_header("Authorization", "Bearer wrong-token")
         .await;
     resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+/// EVERY /admin route is gated, not just the one with a test.
+///
+/// Admin auth used to be a `require_admin_token(&headers)?` call at the top of
+/// each handler, so coverage was per-handler and a new route was one forgotten
+/// line away from being an unauthenticated tenant-provisioning / key-minting
+/// endpoint. It is now a layer on the /admin router; this asserts the layer
+/// actually covers the whole nest, including the three routes that never had an
+/// auth test of their own.
+#[tokio::test]
+async fn every_admin_route_rejects_a_missing_or_wrong_token() {
+    let ctx = build_test_context();
+    let app = build_http_router(ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    // Unauthorized must win over body validation and over the
+    // "distributed auth required" 400 these handlers return once past the gate —
+    // i.e. the layer runs BEFORE the handler, so a bad body cannot smuggle a
+    // request past auth.
+    let bad = "Bearer definitely-not-the-admin-token";
+
+    for (route, resp) in [
+        ("GET /admin/status", server.get("/admin/status").await),
+        (
+            "GET /admin/status (wrong token)",
+            server
+                .get("/admin/status")
+                .add_header("Authorization", bad)
+                .await,
+        ),
+        (
+            "POST /admin/tenants",
+            server
+                .post("/admin/tenants")
+                .json(&json!({"id": "t"}))
+                .await,
+        ),
+        (
+            "POST /admin/tenants (wrong token)",
+            server
+                .post("/admin/tenants")
+                .add_header("Authorization", bad)
+                .json(&json!({"id": "t"}))
+                .await,
+        ),
+        (
+            "POST /admin/keys",
+            server
+                .post("/admin/keys")
+                .json(&json!({"tenant_id": "t"}))
+                .await,
+        ),
+        (
+            "POST /admin/keys (wrong token)",
+            server
+                .post("/admin/keys")
+                .add_header("Authorization", bad)
+                .json(&json!({"tenant_id": "t"}))
+                .await,
+        ),
+        (
+            "DELETE /admin/keys/{short_token}",
+            server.delete("/admin/keys/abcd1234").await,
+        ),
+        (
+            "DELETE /admin/keys/{short_token} (wrong token)",
+            server
+                .delete("/admin/keys/abcd1234")
+                .add_header("Authorization", bad)
+                .await,
+        ),
+        // Garbage in the header itself must not fall through either.
+        (
+            "GET /admin/status (malformed header)",
+            server
+                .get("/admin/status")
+                .add_header("Authorization", "not-even-bearer")
+                .await,
+        ),
+    ] {
+        assert_eq!(
+            resp.status_code(),
+            axum::http::StatusCode::UNAUTHORIZED,
+            "{route} must be 401 without a valid admin token, got {}",
+            resp.status_code()
+        );
+    }
 }
 
 #[tokio::test]

@@ -564,6 +564,53 @@ pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
 /// axum middleware: verify API key against the configured mode.
 /// Open mode: injects default context without checking headers.
 /// TenantKeys mode: requires a valid Bearer token.
+/// Admin-token gate for `/admin/*`, as a LAYER — the counterpart to
+/// [`auth_middleware`] for `/v1/*`.
+///
+/// Every admin handler used to call a `require_admin_token(&headers)` helper as
+/// its first line, which meant the gate was only as good as the author of the
+/// next handler remembering to write it. A route added without that line is an
+/// unauthenticated admin endpoint — tenant provisioning and key minting live
+/// here, so the failure mode is silent and total. Making it a layer means the
+/// router, not the handler, enforces it: forgetting is no longer expressible.
+///
+/// Admin auth is deliberately a DIFFERENT credential from tenant auth (an admin
+/// token mints tenant keys; it is not one), so this stays a separate middleware
+/// rather than a mode inside `auth_middleware`. What is now shared is the shape:
+/// both are layers applied to a nested router, both use
+/// [`extract_bearer_token`], and neither is a per-handler call.
+pub(crate) async fn admin_auth_middleware(req: Request, next: Next) -> Result<Response, ApiError> {
+    let expected = crate::config::ADMIN_TOKEN.value().map_err(|_| {
+        axum_anyhow::unauthorized(
+            "Missing Admin Token",
+            "SIGIRO_ADMIN_TOKEN is not configured",
+        )
+    })?;
+    if expected.is_empty() {
+        return Err(axum_anyhow::unauthorized(
+            "Missing Admin Token",
+            "SIGIRO_ADMIN_TOKEN is empty",
+        ));
+    }
+    let token = extract_bearer_token(req.headers())?;
+    // Constant-time: a short-circuiting `==` on a fixed secret leaks its prefix
+    // through response timing. Lengths are compared first and non-secret.
+    let matches = token.len() == expected.len()
+        && token
+            .as_bytes()
+            .iter()
+            .zip(expected.as_bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0;
+    if !matches {
+        return Err(axum_anyhow::unauthorized(
+            "Invalid Admin Token",
+            "The provided admin bearer token is invalid",
+        ));
+    }
+    Ok(next.run(req).await)
+}
+
 pub(crate) async fn auth_middleware(
     State(state): State<Arc<crate::server::AppState>>,
     req: Request,

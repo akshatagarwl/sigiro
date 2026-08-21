@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use axum::{Extension, Json, Router, extract::State, http::HeaderMap, middleware as axum_mw};
+use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
 use axum_anyhow::{ApiResult, ResultExt, bad_request};
 use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
@@ -357,13 +357,17 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         ))
     };
 
-    // All /admin routes, including status, are admin-token gated by their
-    // handlers (see require_admin_token).
+    // All /admin routes, including status, are admin-token gated by a LAYER —
+    // the same shape as /v1's auth_middleware above. Previously each handler
+    // called require_admin_token() as its first line, so the gate depended on
+    // whoever wrote the next handler remembering to. Enforcing it here means a
+    // new admin route cannot be added unauthenticated by omission.
     let admin = Router::new()
         .typed_get(admin_status)
         .typed_post(create_tenant_handler)
         .typed_post(create_key_handler)
-        .typed_delete(revoke_key_handler);
+        .typed_delete(revoke_key_handler)
+        .layer(axum_mw::from_fn(auth::admin_auth_middleware));
 
     // Public routes + v1 API + admin. Discoverability is the single
     // machine-readable OpenAPI contract at /openapi.json (public, no auth) —
@@ -1889,7 +1893,8 @@ async fn diagnose_handler(
 }
 
 // --- Admin endpoints ---
-// All endpoints, including status, are admin-token gated (see require_admin_token).
+// All endpoints, including status, are admin-token gated by the
+// admin_auth_middleware LAYER on the /admin router (see build_router).
 
 /// GET /admin/status — returns all instance_status rows as JSON object.
 #[utoipa::path(
@@ -1902,9 +1907,7 @@ async fn diagnose_handler(
 async fn admin_status(
     _path: AdminStatusPath,
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
 ) -> ApiResult<Json<AdminStatusResponse>> {
-    require_admin_token(&headers)?;
     let guard = state.admin_conn.lock();
     let mut map =
         admin::read_all_status(&guard).context_internal("Admin", "failed to read status")?;
@@ -1913,30 +1916,6 @@ async fn admin_status(
         state.router.dropped_messages().to_string(),
     );
     Ok(Json(AdminStatusResponse { status: map }))
-}
-
-fn require_admin_token(headers: &HeaderMap) -> Result<(), axum_anyhow::ApiError> {
-    let expected = crate::config::ADMIN_TOKEN.value().map_err(|_| {
-        axum_anyhow::unauthorized(
-            "Missing Admin Token",
-            "SIGIRO_ADMIN_TOKEN is not configured",
-        )
-    })?;
-    if expected.is_empty() {
-        return Err(axum_anyhow::unauthorized(
-            "Missing Admin Token",
-            "SIGIRO_ADMIN_TOKEN is empty",
-        ));
-    }
-    let token = auth::extract_bearer_token(headers)?;
-    if token == expected {
-        Ok(())
-    } else {
-        Err(axum_anyhow::unauthorized(
-            "Invalid Admin Token",
-            "The provided admin bearer token is invalid",
-        ))
-    }
 }
 
 fn control_plane_from_state(state: &AppState) -> ApiResult<Arc<auth::ControlPlane>> {
@@ -1960,10 +1939,8 @@ fn control_plane_from_state(state: &AppState) -> ApiResult<Arc<auth::ControlPlan
 async fn create_tenant_handler(
     _path: AdminTenantsPath,
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
     Valid(Json(req)): Valid<Json<CreateTenantRequest>>,
 ) -> ApiResult<Json<CreateTenantResponse>> {
-    require_admin_token(&headers)?;
     let control = control_plane_from_state(&state)?;
     control
         .create_tenant(&req.id)
@@ -1986,10 +1963,8 @@ async fn create_tenant_handler(
 async fn create_key_handler(
     _path: AdminKeysPath,
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
     Valid(Json(req)): Valid<Json<CreateKeyRequest>>,
 ) -> ApiResult<Json<CreateKeyResponse>> {
-    require_admin_token(&headers)?;
     let control = control_plane_from_state(&state)?;
     let minted = control
         .mint_key(&req.tenant_id)
@@ -2015,9 +1990,7 @@ async fn create_key_handler(
 async fn revoke_key_handler(
     AdminKeyPath { short_token }: AdminKeyPath,
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
 ) -> ApiResult<Json<RevokeKeyResponse>> {
-    require_admin_token(&headers)?;
     let control = control_plane_from_state(&state)?;
     let revoked = control
         .revoke_key_hash_prefix(&short_token)
