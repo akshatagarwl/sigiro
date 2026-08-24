@@ -72,6 +72,11 @@ impl EdgeServer {
             .env("SIGIRO_QUACK_PORT", quack_port.to_string())
             .env("SIGIRO_QUACK_TOKEN", token)
             .env("SIGIRO_EXTENSION_DIR", test_extension_dir())
+            // Pin the flush cadence: this test waits for ingest to become
+            // visible on a 10s deadline, so it depends on the flusher timer.
+            // The production default is 60s and would time it out. Nothing here
+            // is testing flush cadence, so fix the input rather than the wait.
+            .env("SIGIRO_FLUSH_INTERVAL_SECS", "1")
             .env("OTEL_EXPORTER_OTLP_ENDPOINT", "")
             .env("RUST_LOG", "info")
             .stdout(Stdio::piped())
@@ -144,8 +149,8 @@ impl EdgeServer {
         provider.shutdown().expect("failed to flush OTLP spans");
     }
 
-    /// Poll row count for `service_name` until ingest is visible (flusher
-    /// default-flushes every 1s) or a 10s deadline passes. Uses a direct
+    /// Poll row count for `service_name` until ingest is visible (this test
+    /// pins the flusher to 1s; see `spawn`) or a 10s deadline passes. Uses a direct
     /// quack_query round trip (bypassing the coordinator entirely) purely as
     /// test setup — not part of the thing under test.
     fn wait_for_ingest(&self, service_name: &str, expected: i64, token: &str) {

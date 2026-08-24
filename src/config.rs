@@ -102,12 +102,24 @@ pub(crate) static PYROSCOPE_ENDPOINT: Envar<String> =
         EnvarDef::Default(String::new())
     });
 
-/// Flush interval for per-project flusher tasks (seconds). Default: 1s.
+/// Flush interval for per-project flusher tasks (seconds). Default: 60s.
 /// Controls how often buffered rows are flushed to DuckDB, even if the row
 /// threshold hasn't been reached. Lower values reduce data-loss window on
 /// crashes; higher values reduce I/O overhead.
+///
+/// The default is deliberately coarse. This timer only decides flush cadence
+/// for LOW-traffic projects: under load `FLUSH_ROW_THRESHOLD` (10k rows) or
+/// `FLUSH_BYTE_THRESHOLD` (8 MiB) fires first, so the buffer stays bounded
+/// regardless of this value. At the previous 1s default a quiet project wrote
+/// one Parquet file per second, which is pathological for a lakehouse format:
+/// measured on real catalogs those files averaged 3.8-4.4 KiB, and 7-day
+/// retention implies ~605k files per table. Read planning against an explicit
+/// file list costs ~65us per file, so file count is the scaling term that
+/// matters. 60s cuts file count 60x and raises file size by the same factor.
+/// The cost is visibility lag: a quiet project's spans become queryable up to
+/// 60s after ingest, and a crash loses up to 60s of buffered rows instead of 1s.
 pub(crate) static FLUSH_INTERVAL_SECS: Envar<u64> =
-    Envar::on_startup("SIGIRO_FLUSH_INTERVAL_SECS", || EnvarDef::Default(1));
+    Envar::on_startup("SIGIRO_FLUSH_INTERVAL_SECS", || EnvarDef::Default(60));
 
 /// Row count threshold that triggers an immediate flush. Default: 10_000.
 /// When this many rows are buffered across all signal tables, the flusher

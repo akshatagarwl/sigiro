@@ -158,6 +158,9 @@ impl Edge {
             .env("SIGIRO_OTLP_HTTP_PORT", otlp_http_port.to_string())
             .env("SIGIRO_GRPC_PORT", grpc_port.to_string())
             .env("SIGIRO_EXTENSION_DIR", test_extension_dir())
+            // Pin the flush cadence: this test waits for ingest visibility on a
+            // deadline, so the production 60s default would time it out.
+            .env("SIGIRO_FLUSH_INTERVAL_SECS", "1")
             .env("OTEL_EXPORTER_OTLP_ENDPOINT", "")
             .env("RUST_LOG", "info")
             .stdout(Stdio::piped())

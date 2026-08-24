@@ -75,6 +75,9 @@ impl Edge {
             .env("SIGIRO_OTLP_HTTP_PORT", otlp_http_port.to_string())
             .env("SIGIRO_GRPC_PORT", grpc_port.to_string())
             .env("SIGIRO_EXTENSION_DIR", test_extension_dir())
+            // Pin the flush cadence: `wait_for_count` polls on a deadline, so
+            // the production 60s default would time it out.
+            .env("SIGIRO_FLUSH_INTERVAL_SECS", "1")
             .env("SIGIRO_CATALOG_URL", CATALOG_URL)
             .env("SIGIRO_ADMIN_TOKEN", ADMIN_TOKEN)
             .env("OTEL_EXPORTER_OTLP_ENDPOINT", "")

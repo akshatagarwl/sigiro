@@ -115,6 +115,9 @@ impl S3QuackEdge {
             .env("SIGIRO_QUACK_PORT", quack_port.to_string())
             .env("SIGIRO_QUACK_TOKEN", token)
             .env("SIGIRO_EXTENSION_DIR", test_extension_dir())
+            // Pin the flush cadence: this test waits for ingest visibility on a
+            // deadline, so the production 60s default would time it out.
+            .env("SIGIRO_FLUSH_INTERVAL_SECS", "1")
             // Empty (not unset) so a developer's ambient OTEL_EXPORTER_OTLP_ENDPOINT
             // never redirects this test's self-instrumentation telemetry elsewhere.
             .env("OTEL_EXPORTER_OTLP_ENDPOINT", "")
@@ -208,8 +211,8 @@ impl S3QuackEdge {
     }
 
     /// Poll `count(*)` for `service_name` until it reaches `expected` or a
-    /// 20s deadline passes (the per-project flusher default-flushes every
-    /// 1s; the flush now does an explicit COMMIT, so data should surface
+    /// 20s deadline passes (this test pins the per-project flusher to 1s in
+    /// `spawn`; the flush now does an explicit COMMIT, so data should surface
     /// within a flush cycle plus margin — no need to wait past the 30s
     /// CHECKPOINT timer).
     fn wait_for_span_count(&self, service_name: &str, expected: i64) -> i64 {

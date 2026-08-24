@@ -600,8 +600,8 @@ impl ProjectFlusher {
     fn flush(&mut self, project_id: &str) -> Result<()> {
         if self.total_rows == 0 {
             // F-25: demoted from debug! to trace! — fires every flush interval
-            // per project (default 5s) and was polluting `RUST_LOG=debug` runs
-            // with 12 lines/minute per project of "nothing happened" noise.
+            // per project (default 60s) and was polluting `RUST_LOG=debug` runs
+            // with per-project "nothing happened" noise.
             tracing::trace!(project_id, "flush skipped: no rows");
             return Ok(());
         }

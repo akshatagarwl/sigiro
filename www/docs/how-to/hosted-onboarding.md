@@ -46,7 +46,8 @@ stay well below this limit.
 
 ## 3. Confirm that the data arrives
 
-Send some telemetry. Wait a few seconds, because the flush interval is about 1 s.
+Send some telemetry, then wait up to a minute. A quiet project flushes on the
+60 s timer. A busy one flushes sooner, when it reaches 10,000 rows or 8 MB.
 Then run this query:
 
 ```bash

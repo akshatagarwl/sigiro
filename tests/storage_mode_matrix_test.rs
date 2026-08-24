@@ -154,6 +154,9 @@ impl MatrixEdge {
             .env("SIGIRO_QUACK_PORT", quack_port.to_string())
             .env("SIGIRO_QUACK_TOKEN", QUACK_TOKEN)
             .env("SIGIRO_EXTENSION_DIR", test_extension_dir())
+            // Pin the flush cadence: `wait_for_count` polls on a 20s deadline,
+            // so the production 60s default would time it out.
+            .env("SIGIRO_FLUSH_INTERVAL_SECS", "1")
             .env("OTEL_EXPORTER_OTLP_ENDPOINT", "")
             .env("RUST_LOG", "info")
             .stdout(Stdio::piped())
