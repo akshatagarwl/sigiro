@@ -23,7 +23,8 @@ sidebar:
 ```
 Instrument this codebase for sigiro observability.
 
-SIGIRO ENDPOINT: http://localhost:4318  (replace with your OTLP ingest address)
+SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
+                 https://<your-sigiro-host> with no port)
 HOSTED API KEY: sk_<tenant>_<random>  (omit entirely for a self-hosted server)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
@@ -36,7 +37,9 @@ Rules:
   Java javaagent, Node.js auto-instrumentations-node, etc.)
 - If auto-instrumentation is not available for this language/framework, add
   manual OTel SDK spans for HTTP handlers and database calls
-- Set OTEL_EXPORTER_OTLP_ENDPOINT to the sigiro OTLP HTTP endpoint (:4318)
+- Set OTEL_EXPORTER_OTLP_ENDPOINT to the SIGIRO ENDPOINT above exactly as given.
+  A self-hosted server listens on :4318; a hosted one carries no port. Do not add
+  or remove a port
 - For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
@@ -75,6 +78,12 @@ Framework: <fastapi|express|spring-boot|rails|...>
 | Go | `otelc` 컴파일 타임 계측 | HTTP 서버 스팬, Go 런타임 메트릭, 서드파티 라이브러리 |
 
 특정 라이브러리에서 스팬이 생성되지 않는 경우, 해당 라이브러리에 한해서만 수동으로 스팬을 추가하십시오.
+
+자동 계측의 커버리지는 위 표에서 시사하는 것보다 좁으므로, 다음 두 가지 공백은 미리 예상해 두는 것이 좋습니다.
+
+**로그.** 기본 제공되는 로그 브리지는 이름이 지정된 로거를 대상으로 합니다. Node에서는 pino, winston, bunyan이며, Python에서는 표준 `logging` 모듈입니다. `console.log`나 `print`로 기록하는 서비스는 트레이스와 메트릭은 생성하지만 **로그는 생성하지 않습니다**. 직접 브리지를 작성하기보다 제대로 된 로거로 전환하십시오.
+
+**공식 계측이 인식하지 못하는 데이터베이스.** 위 표의 각 DB 항목은 특정 드라이버를 명시합니다. `instrumentation-pg`는 `node-postgres`를 패치하므로, `postgres.js`를 사용하는 Node 서비스에서는 쿼리 스팬이 생성되지 않으며, ORM도 이 공백을 메우지 못합니다. `drizzle-orm`은 `drizzle-orm/tracing`에 트레이서를 포함하지만, 배포된 패키지에서 해당 트레이서의 `await import('@opentelemetry/api')`가 주석 처리되어 있어 스팬을 생성할 수 없습니다. DB 열의 내용을 신뢰하기 전에 사용 중인 드라이버가 목록에 있는지 확인하고, 수동으로 스팬을 작성하기보다 해당 ORM에 대해 유지 관리되는 래퍼를 사용하십시오.
 
 ## Go: 소스가 아니라 빌드를 계측하십시오
 
@@ -126,7 +135,7 @@ curl http://localhost:9999/v1/services
 
 실제 트래픽이 발생한 후 몇 초 이내에 서비스가 나타납니다. 서비스가 나타난 후에는 `sigiro diagnose my-service`가 읽을 데이터가 확보됩니다.
 
-서비스가 나타나지 않으면 다음 사항을 확인하십시오. 포트를 확인하십시오. HTTP는 `:4318`, gRPC는 `:4317`입니다. `sigiro status`를 실행하여 서버가 정상 상태인지 확인하십시오. 잘못된 익스포터 설정은 부팅 시점에 오류를 보고하므로, 서비스 자체의 로그에서 OTel 시작 오류를 확인하십시오.
+서비스가 나타나지 않으면 다음 사항을 확인하십시오. 자체 호스팅 서버에서는 포트를 확인하십시오. HTTP는 `:4318`, gRPC는 `:4317`입니다. 호스팅 서비스에서는 그 반대로, 엔드포인트에 포트가 **없는지** 확인하고, localhost가 아니라 `https://<your-sigiro-host>/v1/services`를 키와 함께 조회하십시오. `sigiro status`를 실행하여 서버가 정상 상태인지 확인하십시오. 잘못된 익스포터 설정은 부팅 시점에 오류를 보고하므로, 서비스 자체의 로그에서 OTel 시작 오류를 확인하십시오.
 
 호스팅 서비스에서는 헤더가 정확히 `Authorization: Bearer sk_<tenant>_<random>` 형식인지 확인하십시오. 자체 호스팅 서버는 모든 인증 헤더를 무시합니다. 따라서 키가 잘못되어도 메시지나 401 응답 없이 실패합니다.
 

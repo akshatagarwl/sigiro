@@ -18,6 +18,8 @@ sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイ
 
 以下の設定では、どちらのエージェントもポート `4317` の OTLP gRPC 経由でエクスポートします。セルフホストのサーバーではキーは不要です。
 
+ホスティングサービスでは、代わりに **HTTP** 経由の OTLP を使用してください。ホスティング事業者が必ずしも gRPC ポートを公開しているとは限らないため、先に [ホスティング版 sigiro にテレメトリーを送信する](/docs/how-to/hosted-onboarding#2-point-your-opentelemetry-exporter-at-sigiro) をお読みください。以下の各セクションの末尾には、ホスティング版向けの設定を記載しています。
+
 ## Claude Code
 
 Claude Code はテレメトリー設定を環境変数から読み取ります。Claude Code を起動する環境で、次の変数を設定してください。シェルのプロファイル、`.envrc` ファイル、またはラッパースクリプトを使用します。
@@ -32,8 +34,15 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
-ホスティングサービスを利用する場合は、
-`OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"` を追加してください。キーはコミット対象のファイルに一切含めないようにします。
+ホスティングサービスを利用する場合は、キーを追加するだけでなく、プロトコルとエンドポイントも変更してください。`api.sigiro.com` は 443 でのみ応答するため、そこに `:4317` や `:4318` のエンドポイントを指定すると接続に失敗し、エージェントは何も報告しません。
+
+```bash
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.sigiro.com
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"
+```
+
+キーはコミット対象のファイルに一切含めないようにします。使用するエンドポイントとポートはホスティング事業者から案内されるため、そのホストが `api.sigiro.com` でない場合は `https://<your-sigiro-host>` を使用してください。
 
 ## Codex
 
@@ -43,14 +52,45 @@ Codex はテレメトリー設定を環境変数からではなく、独自の�
 [otel]
 environment = "dev"
 log_user_prompt = false
-exporter = "otlp-grpc"
 
-[otel.exporter."otlp-grpc"]
+[otel.trace_exporter.otlp-grpc]
+endpoint = "http://localhost:4317"
+
+[otel.metrics_exporter.otlp-grpc]
+endpoint = "http://localhost:4317"
+
+[otel.exporter.otlp-grpc]
 endpoint = "http://localhost:4317"
 ```
 
-ホスティングサービスを利用する場合は、
-`headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }` を追加してください。`SIGIRO_API_KEY` は Codex を起動する環境で設定します。
+Codex はシグナルごとに 1 つのエクスポーターを指定し、`exporter` は **ログ** 用のエクスポーターのみを指します。`trace_exporter` を設定しないとスパンが得られず、`metrics_exporter` を設定しないとメトリクスが得られません。どちらの誤りも警告なく発生します。
+
+ホスティングサービスを利用する場合は、HTTP エクスポーターを使用し、各エンドポイントに **シグナルごとの完全なパス** を指定してください。Codex は記載された URL にそのまま送信し、何も付加しないため、ベース URL では誤ったルートに届き、sigiro に拒否されます。
+
+```toml
+[otel]
+environment = "dev"
+log_user_prompt = false
+
+[otel.trace_exporter.otlp-http]
+endpoint = "https://api.sigiro.com/v1/traces"
+protocol = "binary"
+headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+
+[otel.metrics_exporter.otlp-http]
+endpoint = "https://api.sigiro.com/v1/metrics"
+protocol = "binary"
+headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+
+[otel.exporter.otlp-http]
+endpoint = "https://api.sigiro.com/v1/logs"
+protocol = "binary"
+headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+```
+
+`otlp-http` では `protocol` が必須で、`binary` または `json` を指定します。`SIGIRO_API_KEY` は Codex を起動する環境で設定します。
+
+Codex は自身を `codex` ではなく `codex_exec` として報告するため、以下の確認手順ではその名前を探してください。
 
 ## 両者に共通する 1 つの制限
 

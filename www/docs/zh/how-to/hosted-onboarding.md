@@ -19,28 +19,30 @@ sigiro 只会展示密钥一次。密钥无法恢复，但可以轮换。该密�
 
 ## 2. 将 OpenTelemetry 导出器指向 sigiro
 
-使用标准的 OTLP over HTTP 或 gRPC。身份认证请使用标准的
+使用标准的 OTLP over HTTP。身份认证请使用标准的
 `Authorization: Bearer` 请求头。
 
-**OTLP/HTTP（端口 4318，推荐）：**
+**OTLP/HTTP：**
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>:4318"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk_<yourtenant>_<random>"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
-**OTLP/gRPC（端口 4317）：**
+**该端点不带端口号。** 托管版 sigiro 在标准 HTTPS 端口上接收 OTLP，
+因此 `https://api.sigiro.com` 就是完整的端点。请不要照搬自托管[快速上手](/docs/tutorials/quickstart#2-send-it-telemetry)中的
+`:4318`：在 `api.sigiro.com` 上，该端口会拒绝连接，而无法建立连接的 SDK
+只会把这一失败记录在你自己服务的日志里，而不会记录在这里。如果你的主机有所不同，请咨询运维方。
 
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>:4317"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk_<yourtenant>_<random>"
-export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"
-```
+**`api.sigiro.com` 上不提供 OTLP/gRPC。** 端口 `4317` 已关闭，gRPC
+服务路径也未做路由。请使用 HTTP；对于其他任何主机，也请先咨询运维方，不要想当然地认为 gRPC 可用。
 
 你的 SDK 会将每类信号发送到其标准 OTLP 路径（`/v1/traces`、`/v1/logs`、
-`/v1/metrics`、`/v1/profiles`）。HTTP 支持 gzip。两个端口均使用 TLS（`https://`）。
-单个请求解压后必须**不超过 8 MB**。SDK 的默认批处理大小远低于此上限。
+`/v1/metrics`、`/v1/profiles`），并将该路径追加到上面的端点之后。如果你的
+导出器要求为每类信号分别配置端点，请填写完整路径。HTTP
+支持 gzip，端点使用 TLS。单个请求解压后必须**不超过 8 MB**。
+SDK 的默认批处理大小远低于此上限。
 
 ## 3. 确认数据已到达
 

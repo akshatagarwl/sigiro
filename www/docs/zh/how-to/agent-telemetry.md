@@ -21,6 +21,11 @@ sidebar:
 在下面的配置中，两个 agent 都通过 OTLP gRPC 从 `4317` 端口导出数据。自托管服务器
 不需要密钥。
 
+在托管服务上，请改用 OTLP over **HTTP**。请先阅读[将遥测数据发送到托管版
+sigiro](/docs/how-to/hosted-onboarding#2-point-your-opentelemetry-exporter-at-sigiro)，
+因为托管服务的运营方并不总会开放 gRPC 端口。下面每一节的末尾都给出了托管服务的
+配置。
+
 ## Claude Code
 
 Claude Code 从环境变量中读取遥测配置。请在启动 Claude Code 的环境中设置这些
@@ -36,9 +41,18 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
-如果使用托管服务，请额外添加
-`OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"`。切勿将密钥
-提交到任何文件中。
+如果使用托管服务，除了添加密钥之外，还要修改协议和端点。`api.sigiro.com` 只在 443
+端口响应，因此在那里使用 `:4317` 或 `:4318` 端点会连接失败，agent 也就不会上报任何
+数据：
+
+```bash
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.sigiro.com
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"
+```
+
+切勿将密钥提交到任何文件中。使用哪个端点和端口由你的运营方告知，因此当主机不是
+`api.sigiro.com` 时，请使用 `https://<your-sigiro-host>`。
 
 ## Codex
 
@@ -49,15 +63,51 @@ Codex 从自己的配置文件读取遥测配置，而不是从环境变量读�
 [otel]
 environment = "dev"
 log_user_prompt = false
-exporter = "otlp-grpc"
 
-[otel.exporter."otlp-grpc"]
+[otel.trace_exporter.otlp-grpc]
+endpoint = "http://localhost:4317"
+
+[otel.metrics_exporter.otlp-grpc]
+endpoint = "http://localhost:4317"
+
+[otel.exporter.otlp-grpc]
 endpoint = "http://localhost:4317"
 ```
 
-如果使用托管服务，请额外添加
-`headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }`。并在启动 Codex 的环境
+Codex 为每种信号各指定一个导出器，而 `exporter` 只是**日志**导出器。不设置
+`trace_exporter` 就拿不到 span，不设置 `metrics_exporter` 就拿不到指标。这两种错误
+都不会有任何提示。
+
+如果使用托管服务，请使用 HTTP 导出器，并为每个端点给出**完整的信号路径**。Codex
+会按写入的 URL 原样发送，不会追加任何内容，因此基础 URL 会到达错误的路由，sigiro
+将拒绝这些请求：
+
+```toml
+[otel]
+environment = "dev"
+log_user_prompt = false
+
+[otel.trace_exporter.otlp-http]
+endpoint = "https://api.sigiro.com/v1/traces"
+protocol = "binary"
+headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+
+[otel.metrics_exporter.otlp-http]
+endpoint = "https://api.sigiro.com/v1/metrics"
+protocol = "binary"
+headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+
+[otel.exporter.otlp-http]
+endpoint = "https://api.sigiro.com/v1/logs"
+protocol = "binary"
+headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+```
+
+`otlp-http` 必须设置 `protocol`，取值为 `binary` 或 `json`。并在启动 Codex 的环境
 中设置 `SIGIRO_API_KEY`。
+
+Codex 上报自身的名称是 `codex_exec` 而不是 `codex`，因此在下面的检查中请查找这个
+名称。
 
 ## 两者共有的一个限制
 

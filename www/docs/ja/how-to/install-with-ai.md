@@ -23,7 +23,8 @@ sidebar:
 ```
 Instrument this codebase for sigiro observability.
 
-SIGIRO ENDPOINT: http://localhost:4318  (replace with your OTLP ingest address)
+SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
+                 https://<your-sigiro-host> with no port)
 HOSTED API KEY: sk_<tenant>_<random>  (omit entirely for a self-hosted server)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
@@ -36,7 +37,9 @@ Rules:
   Java javaagent, Node.js auto-instrumentations-node, etc.)
 - If auto-instrumentation is not available for this language/framework, add
   manual OTel SDK spans for HTTP handlers and database calls
-- Set OTEL_EXPORTER_OTLP_ENDPOINT to the sigiro OTLP HTTP endpoint (:4318)
+- Set OTEL_EXPORTER_OTLP_ENDPOINT to the SIGIRO ENDPOINT above exactly as given.
+  A self-hosted server listens on :4318; a hosted one carries no port. Do not add
+  or remove a port
 - For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
@@ -75,6 +78,12 @@ Framework: <fastapi|express|spring-boot|rails|...>
 | Go | `otelc` コンパイル時計装 | HTTP サーバースパン、Go ランタイムメトリクス、サードパーティライブラリ |
 
 あるライブラリでスパンがまったく取得できない場合は、そのライブラリに限って手動でスパンを追加してください。
+
+自動計装のカバー範囲は上の表が示すよりも狭いため、次の 2 つの欠落はあらかじめ想定しておく価値があります。
+
+**ログ。** 同梱のログブリッジがカバーするのは名前付きロガーです。Node では pino、winston、bunyan、Python では標準の `logging` モジュールです。`console.log` や `print` で書き出しているサービスでは、トレースとメトリクスは生成されますが、**ログは生成されません**。手作業でブリッジするのではなく、本物のロガーへ移行してください。
+
+**公式の計装が知らないデータベース。** 上の各 DB のエントリは、特定のドライバーを名指ししています。`instrumentation-pg` がパッチを当てるのは `node-postgres` であるため、`postgres.js` を使う Node のサービスではクエリスパンが取得できません。ORM を使ってもこの欠落は埋まりません。`drizzle-orm` は `drizzle-orm/tracing` にトレーサーを同梱していますが、公開パッケージではその `await import('@opentelemetry/api')` がコメントアウトされているため、スパンを発行できません。DB の列を信頼する前に、自分が使っているドライバーがリストに載っていることを確認してください。また、手書きのスパンよりも、その ORM 向けにメンテナンスされているラッパーを選んでください。
 
 ## Go: ソースではなくビルドを計装する
 
@@ -126,7 +135,7 @@ curl http://localhost:9999/v1/services
 
 実際のトラフィックが発生してから数秒以内にサービスが表示されます。表示された後は、`sigiro diagnose my-service` が読み取れるデータが揃っています。
 
-サービスが表示されない場合は、次の点を確認してください。ポートを確認します。HTTP は `:4318`、gRPC は `:4317` です。`sigiro status` を実行して、サーバーが正常であることを確認します。自分のサービスのログを読み、OTel の起動時エラーを確認してください。エクスポーターの設定が誤っている場合、起動時に障害がレポートされるためです。
+サービスが表示されない場合は、次の点を確認してください。セルフホストのサーバーでは、ポートを確認します。HTTP は `:4318`、gRPC は `:4317` です。ホステッドサービスでは、その逆に、エンドポイントにポートが**付いていない**ことを確認し、localhost ではなく `https://<your-sigiro-host>/v1/services` に自分のキーを添えて問い合わせてください。`sigiro status` を実行して、サーバーが正常であることを確認します。自分のサービスのログを読み、OTel の起動時エラーを確認してください。エクスポーターの設定が誤っている場合、起動時に障害がレポートされるためです。
 
 ホステッドサービスでは、ヘッダーが正確に `Authorization: Bearer sk_<tenant>_<random>` であることを確認してください。セルフホストのサーバーはすべての認証ヘッダーを無視します。そのため、誤ったキーを指定しても、メッセージも 401 レスポンスもなく失敗します。
 

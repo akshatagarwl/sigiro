@@ -31,7 +31,8 @@ Replace the endpoint. Delete the key line unless you use the hosted service.
 ```
 Instrument this codebase for sigiro observability.
 
-SIGIRO ENDPOINT: http://localhost:4318  (replace with your OTLP ingest address)
+SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
+                 https://<your-sigiro-host> with no port)
 HOSTED API KEY: sk_<tenant>_<random>  (omit entirely for a self-hosted server)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
@@ -44,7 +45,9 @@ Rules:
   Java javaagent, Node.js auto-instrumentations-node, etc.)
 - If auto-instrumentation is not available for this language/framework, add
   manual OTel SDK spans for HTTP handlers and database calls
-- Set OTEL_EXPORTER_OTLP_ENDPOINT to the sigiro OTLP HTTP endpoint (:4318)
+- Set OTEL_EXPORTER_OTLP_ENDPOINT to the SIGIRO ENDPOINT above exactly as given.
+  A self-hosted server listens on :4318; a hosted one carries no port. Do not add
+  or remove a port
 - For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
@@ -84,6 +87,23 @@ it at sigiro.
 | Go | `otelc` compile-time instrumentation | HTTP server spans, Go runtime metrics, third-party libraries |
 
 If a library gets no spans, add the spans by hand for that library only.
+
+Two gaps are worth expecting, because auto-instrumentation covers less than the
+table suggests.
+
+**Logs.** The bundled log bridges cover named loggers: pino, winston and bunyan
+on Node, and the standard `logging` module on Python. A service that writes with
+`console.log` or `print` produces traces and metrics and **no logs**. Move to a
+real logger rather than bridging by hand.
+
+**Databases the official instrumentation does not know.** Each DB entry above
+names specific drivers. `instrumentation-pg` patches `node-postgres`, so a Node
+service on `postgres.js` gets no query spans, and an ORM does not close the gap:
+`drizzle-orm` ships a tracer at `drizzle-orm/tracing` whose
+`await import('@opentelemetry/api')` is commented out in the published package,
+so it cannot emit a span. Check that your own driver is on the list before you
+trust the DB column, and prefer a maintained wrapper for that ORM over
+hand-written spans.
 
 ## Go: instrument the build, not the source
 
@@ -151,10 +171,13 @@ curl http://localhost:9999/v1/services
 Your service appears within a few seconds of real traffic. After it appears,
 `sigiro diagnose my-service` has data to read.
 
-If the service does not appear, make these checks. Confirm the port: `:4318` for
-HTTP and `:4317` for gRPC. Run `sigiro status` to confirm that the server is
-healthy. Read the logs of your own service for OTel startup errors, because a wrong
-exporter configuration reports the fault at boot.
+If the service does not appear, make these checks. On a self-hosted server,
+confirm the port: `:4318` for HTTP and `:4317` for gRPC. On the hosted service,
+confirm the opposite, that the endpoint carries **no** port, and query
+`https://<your-sigiro-host>/v1/services` with your key rather than localhost. Run
+`sigiro status` to confirm that the server is healthy. Read the logs of your own
+service for OTel startup errors, because a wrong exporter configuration reports
+the fault at boot.
 
 On the hosted service, confirm that the header is exactly
 `Authorization: Bearer sk_<tenant>_<random>`. A self-hosted server ignores all

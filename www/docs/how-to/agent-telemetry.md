@@ -22,6 +22,11 @@ command in the [quickstart](/docs/tutorials/quickstart#1-run-it).
 Both agents export over OTLP gRPC on port `4317` in the settings below. A
 self-hosted server needs no key.
 
+On the hosted service, use OTLP over **HTTP** instead. Read [Send telemetry to
+hosted sigiro](/docs/how-to/hosted-onboarding#2-point-your-opentelemetry-exporter-at-sigiro)
+first, because a hosted operator does not always expose the gRPC port. Each
+section below ends with the hosted settings.
+
 ## Claude Code
 
 Claude Code reads its telemetry settings from the environment. Set these
@@ -38,9 +43,19 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
-For the hosted service, add
-`OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"`. Keep the
-key out of every committed file.
+For the hosted service, change the protocol and the endpoint as well as adding
+the key. `api.sigiro.com` answers on 443 only, so a `:4317` or `:4318` endpoint
+there fails to connect and the agent reports nothing:
+
+```bash
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.sigiro.com
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"
+```
+
+Keep the key out of every committed file. Your operator tells you which
+endpoint and port to use, so use `https://<your-sigiro-host>` when that host is
+not `api.sigiro.com`.
 
 ## Codex
 
@@ -51,15 +66,51 @@ environment. Edit `~/.codex/config.toml`:
 [otel]
 environment = "dev"
 log_user_prompt = false
-exporter = "otlp-grpc"
 
-[otel.exporter."otlp-grpc"]
+[otel.trace_exporter.otlp-grpc]
+endpoint = "http://localhost:4317"
+
+[otel.metrics_exporter.otlp-grpc]
+endpoint = "http://localhost:4317"
+
+[otel.exporter.otlp-grpc]
 endpoint = "http://localhost:4317"
 ```
 
-For the hosted service, add
-`headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }`. Set `SIGIRO_API_KEY`
-in the environment that starts Codex.
+Codex names one exporter per signal, and `exporter` is the **log** exporter
+alone. Set `trace_exporter` or you get no spans, and set `metrics_exporter` or
+you get no metrics. Both mistakes are silent.
+
+For the hosted service, use the HTTP exporter and give each endpoint its **full
+signal path**. Codex sends to the URL exactly as written and appends nothing, so
+a base URL arrives at the wrong route and sigiro rejects it:
+
+```toml
+[otel]
+environment = "dev"
+log_user_prompt = false
+
+[otel.trace_exporter.otlp-http]
+endpoint = "https://api.sigiro.com/v1/traces"
+protocol = "binary"
+headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+
+[otel.metrics_exporter.otlp-http]
+endpoint = "https://api.sigiro.com/v1/metrics"
+protocol = "binary"
+headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+
+[otel.exporter.otlp-http]
+endpoint = "https://api.sigiro.com/v1/logs"
+protocol = "binary"
+headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+```
+
+`protocol` is required for `otlp-http`, and takes `binary` or `json`. Set
+`SIGIRO_API_KEY` in the environment that starts Codex.
+
+Codex reports itself as `codex_exec` rather than `codex`, so look for that name
+in the check below.
 
 ## One limit applies to both
 

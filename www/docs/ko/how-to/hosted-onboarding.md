@@ -21,29 +21,33 @@ sigiro는 트레이스, 로그, 메트릭, 프로파일을 읽습니다. 초대 
 
 ## 2. OpenTelemetry 익스포터를 sigiro로 지정하기
 
-HTTP 또는 gRPC 기반의 표준 OTLP를 사용하십시오. 인증에는 표준
+HTTP 기반의 표준 OTLP를 사용하십시오. 인증에는 표준
 `Authorization: Bearer` 헤더를 사용합니다.
 
-**OTLP/HTTP (포트 4318, 권장):**
+**OTLP/HTTP:**
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>:4318"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk_<yourtenant>_<random>"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
-**OTLP/gRPC (포트 4317):**
+**엔드포인트에는 포트를 붙이지 않습니다.** 호스티드 sigiro는 표준 HTTPS 포트에서
+OTLP를 종료하므로 `https://api.sigiro.com` 자체가 전체 엔드포인트입니다. 셀프 호스팅
+[퀵스타트](/docs/tutorials/quickstart#2-send-it-telemetry)의 `:4318`을 복사하지 마십시오.
+`api.sigiro.com`에서는 해당 포트가 연결을 거부하며, 연결에 실패한 SDK는 그 실패를
+여기가 아니라 여러분의 서비스 로그에 기록합니다. 호스트가 다른 경우에는
+운영자에게 문의하십시오.
 
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>:4317"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk_<yourtenant>_<random>"
-export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"
-```
+**`api.sigiro.com`에서는 OTLP/gRPC를 사용할 수 없습니다.** 포트 `4317`은 닫혀 있고
+gRPC 서비스 경로도 라우팅되지 않습니다. HTTP를 사용하시고, 다른 호스트에서 gRPC를
+쓸 수 있다고 가정하기 전에 운영자에게 문의하십시오.
 
 SDK는 각 시그널을 해당 표준 OTLP 경로(`/v1/traces`, `/v1/logs`,
-`/v1/metrics`, `/v1/profiles`)로 전송합니다. HTTP는 gzip을 지원합니다. 두 포트 모두 TLS(`https://`)를 사용합니다.
-하나의 요청은 압축 해제 후 **8 MB 이하**여야 합니다. 기본 SDK 배치 크기는
-이 한도보다 충분히 작습니다.
+`/v1/metrics`, `/v1/profiles`)로 전송하며, 이 경로를 위 엔드포인트 뒤에 덧붙입니다.
+익스포터가 시그널별 엔드포인트를 받는 방식이라면 전체 경로를 지정하십시오. HTTP는
+gzip을 지원하며 엔드포인트는 TLS를 사용합니다. 하나의 요청은 압축 해제 후
+**8 MB 이하**여야 합니다. 기본 SDK 배치 크기는 이 한도보다 충분히 작습니다.
 
 ## 3. 데이터 수신 확인하기
 

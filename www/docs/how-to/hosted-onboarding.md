@@ -20,29 +20,33 @@ you can rotate it. The key authenticates **both** ingest and queries.
 
 ## 2. Point your OpenTelemetry exporter at sigiro
 
-Use standard OTLP over HTTP or gRPC. For authentication, use the standard
+Use standard OTLP over HTTP. For authentication, use the standard
 `Authorization: Bearer` header.
 
-**OTLP/HTTP (port 4318, recommended):**
+**OTLP/HTTP:**
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>:4318"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk_<yourtenant>_<random>"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
-**OTLP/gRPC (port 4317):**
+**The endpoint carries no port.** A hosted sigiro terminates OTLP on the standard
+HTTPS port, so `https://api.sigiro.com` is the whole endpoint. Do not copy the
+`:4318` from the self-hosted [quickstart](/docs/tutorials/quickstart#2-send-it-telemetry):
+on `api.sigiro.com` that port refuses the connection, and an SDK that cannot
+connect reports the failure in your own service log rather than here. Ask your
+operator if your host differs.
 
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>:4317"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk_<yourtenant>_<random>"
-export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"
-```
+**OTLP/gRPC is not available on `api.sigiro.com`.** Port `4317` is closed and the
+gRPC service path is not routed. Use HTTP, and ask your operator before assuming
+gRPC on any other host.
 
 Your SDK posts each signal to its standard OTLP path (`/v1/traces`, `/v1/logs`,
-`/v1/metrics`, `/v1/profiles`). HTTP supports gzip. Both ports use TLS (`https://`).
-One request must be **8 MB or smaller** after decompression. Default SDK batch sizes
-stay well below this limit.
+`/v1/metrics`, `/v1/profiles`), which it appends to the endpoint above. If your
+exporter takes a per-signal endpoint instead, give it the full path. HTTP
+supports gzip and the endpoint uses TLS. One request must be **8 MB or smaller**
+after decompression. Default SDK batch sizes stay well below this limit.
 
 ## 3. Confirm that the data arrives
 

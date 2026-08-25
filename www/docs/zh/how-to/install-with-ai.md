@@ -23,7 +23,8 @@ Python、Node.js、Java、.NET 和 Ruby 均有自动检测方案。如果你的�
 ```
 Instrument this codebase for sigiro observability.
 
-SIGIRO ENDPOINT: http://localhost:4318  (replace with your OTLP ingest address)
+SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
+                 https://<your-sigiro-host> with no port)
 HOSTED API KEY: sk_<tenant>_<random>  (omit entirely for a self-hosted server)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
@@ -36,7 +37,9 @@ Rules:
   Java javaagent, Node.js auto-instrumentations-node, etc.)
 - If auto-instrumentation is not available for this language/framework, add
   manual OTel SDK spans for HTTP handlers and database calls
-- Set OTEL_EXPORTER_OTLP_ENDPOINT to the sigiro OTLP HTTP endpoint (:4318)
+- Set OTEL_EXPORTER_OTLP_ENDPOINT to the SIGIRO ENDPOINT above exactly as given.
+  A self-hosted server listens on :4318; a hosted one carries no port. Do not add
+  or remove a port
 - For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
@@ -75,6 +78,12 @@ Framework: <fastapi|express|spring-boot|rails|...>
 | Go | `otelc` 编译期检测 | HTTP 服务端 span、Go 运行时指标、第三方库 |
 
 如果某个库没有产生 span，只针对该库手写 span 即可。
+
+有两处缺口值得预先留意，因为自动检测的实际覆盖范围比上表看起来要小。
+
+**日志。** 内置的日志桥接只覆盖具名 logger：Node 上的 pino、winston 和 bunyan，以及 Python 上的标准 `logging` 模块。使用 `console.log` 或 `print` 写日志的服务会产生 trace 和指标，但**没有日志**。请改用真正的 logger，而不是手写桥接。
+
+**官方检测不认识的数据库。** 上表中每一条数据库条目都指明了特定的驱动。`instrumentation-pg` 打补丁的对象是 `node-postgres`，因此使用 `postgres.js` 的 Node 服务不会产生查询 span，而 ORM 也无法弥补这个缺口：`drizzle-orm` 在 `drizzle-orm/tracing` 提供了一个 tracer，但其中的 `await import('@opentelemetry/api')` 在已发布的包里是被注释掉的，所以它根本无法产生 span。在信任数据库那一列之前，先确认你自己的驱动在列表之中；并且优先为该 ORM 选用有人维护的封装，而不是手写 span。
 
 ## Go：检测构建过程，而不是源码
 
@@ -126,7 +135,7 @@ curl http://localhost:9999/v1/services
 
 在有真实流量后的几秒钟内，你的服务就会出现。它出现之后，`sigiro diagnose my-service` 就有数据可读了。
 
-如果服务没有出现，请做以下检查。确认端口：HTTP 用 `:4318`，gRPC 用 `:4317`。运行 `sigiro status` 确认服务端健康。查看你自己服务的日志，看是否有 OTel 启动错误，因为导出器配置错误会在启动时报告故障。
+如果服务没有出现，请做以下检查。在自托管服务端上，确认端口：HTTP 用 `:4318`，gRPC 用 `:4317`。在托管服务上则相反，确认 endpoint **不带**端口，并且用你的密钥查询 `https://<your-sigiro-host>/v1/services`，而不是 localhost。运行 `sigiro status` 确认服务端健康。查看你自己服务的日志，看是否有 OTel 启动错误，因为导出器配置错误会在启动时报告故障。
 
 在托管服务上，确认请求头严格为 `Authorization: Bearer sk_<tenant>_<random>`。自托管服务端会忽略所有认证头。因此错误的密钥在自托管环境下不会有任何提示，也不会返回 401。
 
