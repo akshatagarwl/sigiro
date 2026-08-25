@@ -107,19 +107,25 @@ pub(crate) static PYROSCOPE_ENDPOINT: Envar<String> =
 /// threshold hasn't been reached. Lower values reduce data-loss window on
 /// crashes; higher values reduce I/O overhead.
 ///
-/// The default is deliberately coarse. This timer only decides flush cadence
-/// for LOW-traffic projects: under load `FLUSH_ROW_THRESHOLD` (10k rows) or
-/// `FLUSH_BYTE_THRESHOLD` (8 MiB) fires first, so the buffer stays bounded
-/// regardless of this value. At the previous 1s default a quiet project wrote
-/// one Parquet file per second, which is pathological for a lakehouse format:
-/// measured on real catalogs those files averaged 3.8-4.4 KiB, and 7-day
-/// retention implies ~605k files per table. Read planning against an explicit
-/// file list costs ~65us per file, so file count is the scaling term that
-/// matters. 60s cuts file count 60x and raises file size by the same factor.
-/// The cost is visibility lag: a quiet project's spans become queryable up to
-/// 60s after ingest, and a crash loses up to 60s of buffered rows instead of 1s.
+/// This timer only decides flush cadence for LOW-traffic projects: under load
+/// `FLUSH_ROW_THRESHOLD` (10k rows) or `FLUSH_BYTE_THRESHOLD` (8 MiB) fires
+/// first, so the buffer stays bounded regardless of this value.
+///
+/// This was 60 for part of 2026-08-24, on the theory that a 1s timer made quiet
+/// projects emit one tiny Parquet file per second. **Measured on production, it
+/// did not work.** Over a 15-hour window the file rate went from 612-910/day to
+/// 407/day, and average file size moved 11 KiB to 12 KiB. The theory was wrong
+/// about the mechanism: at ~0.5 rows/s telemetry arrives in bursts every few
+/// minutes and the flusher skips entirely when the buffer is empty, so file
+/// count tracks the ARRIVAL PATTERN, not this timer. 60s therefore bought
+/// almost nothing and cost up to 60s before a span became queryable.
+///
+/// Keep this low. The small-file problem is real but this is the wrong lever;
+/// see roadmap #89 for the two that are not (accumulation-triggered
+/// materialization of DuckLake inlined data, and `ducklake_merge_adjacent_files`
+/// compaction). Do not raise it again without measuring file SIZE, not count.
 pub(crate) static FLUSH_INTERVAL_SECS: Envar<u64> =
-    Envar::on_startup("SIGIRO_FLUSH_INTERVAL_SECS", || EnvarDef::Default(60));
+    Envar::on_startup("SIGIRO_FLUSH_INTERVAL_SECS", || EnvarDef::Default(1));
 
 /// Row count threshold that triggers an immediate flush. Default: 10_000.
 /// When this many rows are buffered across all signal tables, the flusher
