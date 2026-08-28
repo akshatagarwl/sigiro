@@ -701,15 +701,140 @@ pub fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Val
         // text, not by comparing floats), else a decimal string so a
         // high-precision DECIMAL never silently loses digits.
         ValueRef::Decimal(d) => decimal_to_json(&d.to_string()),
-        // Timestamp/Date32/Time64 — raw ticks, not a Debug-formatted enum
-        // tuple.
-        ValueRef::Timestamp(_, us) => serde_json::json!(us),
-        ValueRef::Date32(d) => serde_json::json!(d),
-        ValueRef::Time64(_, t) => serde_json::json!(t),
+        // Temporal types render as self-describing strings, never as raw ticks.
+        // A bare integer cannot say which unit it is in, and that ambiguity is
+        // not hypothetical: it produced a wrong-by-1000x reading in our own
+        // notes and an upstream bug report on the same day. The unit carried by
+        // the ValueRef is authoritative and MUST be honoured — DuckDB really
+        // does hand back Second/Millisecond/Microsecond/Nanosecond depending on
+        // the column type, so assuming microseconds is wrong by up to 10^9.
+        //
+        // TIMESTAMPTZ and naive TIMESTAMP are INDISTINGUISHABLE here (both
+        // arrive as Timestamp(Microsecond, ..)), so every timestamp renders as
+        // UTC. That is correct for every sigiro column, which are all
+        // TIMESTAMPTZ, and is documented for the case where a caller
+        // manufactures a naive value in their own SQL.
+        ValueRef::Timestamp(unit, v) => timestamp_to_json(unit, v),
+        ValueRef::Date32(d) => date32_to_json(d),
+        ValueRef::Time64(unit, t) => time64_to_json(unit, t),
+        // INTERVAL had no arm at all and fell through to the Debug catch-all
+        // below, so `SELECT timestamp - timestamp` returned the literal string
+        // "Interval { months: 0, days: 0, nanos: 0 }" to API callers.
+        ValueRef::Interval {
+            months,
+            days,
+            nanos,
+        } => serde_json::Value::String(interval_to_iso8601(months, days, nanos)),
         ValueRef::Text(b) => serde_json::Value::String(String::from_utf8_lossy(b).to_string()),
         ValueRef::Blob(b) => serde_json::Value::String(format!("[blob {} bytes]", b.len())),
-        _ => serde_json::Value::String(format!("{:?}", val)),
+        // Reaching this arm means a DuckDB type nobody has considered is being
+        // rendered as a Rust debug string in a public response. Loud on
+        // purpose: it names the variant so the gap is greppable rather than
+        // silently shipping `Interval { months: 0, .. }` to a caller again.
+        other => serde_json::Value::String(format!("[unsupported duckdb value: {other:?}]")),
     }
+}
+
+/// Nanoseconds represented by one tick of each DuckDB timestamp unit. The whole
+/// point of this table is that the unit is NOT always microseconds: a
+/// `TIMESTAMP_NS` column yields `Nanosecond` and a `TIMESTAMP_S` column yields
+/// `Second`, so a converter that assumes one of them is wrong by 10^9 on the
+/// other.
+fn unit_nanos(unit: duckdb::types::TimeUnit) -> i128 {
+    use duckdb::types::TimeUnit;
+    match unit {
+        TimeUnit::Second => 1_000_000_000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Microsecond => 1_000,
+        TimeUnit::Nanosecond => 1,
+    }
+}
+
+/// A DuckDB timestamp as an RFC 3339 UTC string, e.g.
+/// `2026-08-25T14:28:05.308912Z`.
+fn timestamp_to_json(unit: duckdb::types::TimeUnit, value: i64) -> serde_json::Value {
+    let nanos = i128::from(value) * unit_nanos(unit);
+    match time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .ok()
+        .and_then(|dt| {
+            dt.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        }) {
+        Some(s) => serde_json::Value::String(s),
+        // Out of range for a real instant. Say so rather than emitting a number
+        // that would read as a valid timestamp.
+        None => serde_json::Value::String(format!("[out-of-range timestamp: {value} @ {unit:?}]")),
+    }
+}
+
+/// A DuckDB DATE (days since the epoch) as `YYYY-MM-DD`.
+fn date32_to_json(days: i32) -> serde_json::Value {
+    match time::OffsetDateTime::UNIX_EPOCH
+        .checked_add(time::Duration::days(i64::from(days)))
+        .and_then(|dt| {
+            dt.date()
+                .format(&time::macros::format_description!("[year]-[month]-[day]"))
+                .ok()
+        }) {
+        Some(s) => serde_json::Value::String(s),
+        None => serde_json::Value::String(format!("[out-of-range date: {days}]")),
+    }
+}
+
+/// A DuckDB TIME as `HH:MM:SS.ffffff`, honouring the unit for the same reason
+/// timestamps do.
+fn time64_to_json(unit: duckdb::types::TimeUnit, value: i64) -> serde_json::Value {
+    let nanos = i128::from(value) * unit_nanos(unit);
+    let Ok(nanos_u64) = u64::try_from(nanos) else {
+        return serde_json::Value::String(format!("[out-of-range time: {value} @ {unit:?}]"));
+    };
+    let secs = nanos_u64 / 1_000_000_000;
+    let sub = u32::try_from(nanos_u64 % 1_000_000_000).unwrap_or(0);
+    match time::Time::from_hms_nano(
+        u8::try_from(secs / 3600).unwrap_or(0),
+        u8::try_from((secs % 3600) / 60).unwrap_or(0),
+        u8::try_from(secs % 60).unwrap_or(0),
+        sub,
+    )
+    .ok()
+    .and_then(|t| {
+        t.format(&time::macros::format_description!(
+            "[hour]:[minute]:[second].[subsecond digits:6]"
+        ))
+        .ok()
+    }) {
+        Some(s) => serde_json::Value::String(s),
+        None => serde_json::Value::String(format!("[out-of-range time: {value} @ {unit:?}]")),
+    }
+}
+
+/// A DuckDB INTERVAL as an ISO 8601 duration, e.g. `PT0.362081S`.
+///
+/// Months and days stay separate from the time part because DuckDB keeps them
+/// separate: they are calendar quantities whose length depends on when they are
+/// applied, so collapsing them into seconds would invent precision.
+fn interval_to_iso8601(months: i32, days: i32, nanos: i64) -> String {
+    let mut out = String::from("P");
+    if months != 0 {
+        // Keep years implicit: 14 months is `P14M`, not `P1Y2M`. One obvious
+        // rendering beats a prettier one that has to be parsed back.
+        out.push_str(&format!("{months}M"));
+    }
+    if days != 0 {
+        out.push_str(&format!("{days}D"));
+    }
+    if nanos != 0 || (months == 0 && days == 0) {
+        let secs = nanos / 1_000_000_000;
+        let sub = (nanos % 1_000_000_000).abs();
+        out.push('T');
+        if sub == 0 {
+            out.push_str(&format!("{secs}S"));
+        } else {
+            let frac = format!("{sub:09}");
+            out.push_str(&format!("{secs}.{}S", frac.trim_end_matches('0')));
+        }
+    }
+    out
 }
 
 /// Render a DuckDB DECIMAL's exact text (`d.to_string()`, e.g. `"15.50"`) as a

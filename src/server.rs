@@ -1341,9 +1341,13 @@ async fn services_handler(
 ) -> ApiResult<Json<ServicesResponse>> {
     let prefix = ProjectPool::prefix();
     let sql = format!(
+        // No ::VARCHAR cast: DuckDB's own cast renders a naive, space-separated
+        // "2026-08-25 10:08:58.727", which disagreed with what /v1/query
+        // returned for the same column. Letting the shared converter handle the
+        // TIMESTAMP gives RFC 3339 on both surfaces from one code path.
         "SELECT service_name, \
-                min(timestamp)::VARCHAR AS first_seen, \
-                max(timestamp)::VARCHAR AS last_seen, \
+                min(timestamp) AS first_seen, \
+                max(timestamp) AS last_seen, \
                 count(*) AS span_count \
          FROM {}sigiro_spans \
          GROUP BY service_name \
