@@ -23,9 +23,7 @@ use crate::ingest::OtlpGrpcService;
 use crate::inserter::{DiskCapacityState, MsgRouter};
 use crate::pool::ProjectPool;
 use crate::responses::*;
-use crate::sql::{
-    ALLOWED_TABLES, duckdb_value_to_json, escape_sql_string, validate_read_only_gated,
-};
+use crate::sql::{ALLOWED_TABLES, escape_sql_string, validate_read_only_gated};
 use crate::types::*;
 use tracing_attributes::instrument;
 
@@ -1127,37 +1125,61 @@ async fn execute_sql(
         let mut stmt = conn
             .prepare(&sql_clone)
             .map_err(|e| anyhow::anyhow!("failed to prepare query: {e}"))?;
-        // Execute ONCE. Column names come from the live statement behind the
-        // Rows handle (owned Vec, so the borrow ends before we iterate).
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| anyhow::anyhow!("failed to execute query: {e}"))?;
-        let column_names: Vec<String> = rows
-            .as_ref()
-            .map(duckdb::Statement::column_names)
-            .unwrap_or_default();
-        let mut results = Vec::new();
+        // Arrow owns the DuckDB-to-JSON type mapping. Hand-rolling it per
+        // ValueRef variant is what let INTERVAL, LIST, STRUCT and UUID reach
+        // callers as Rust `{:?}` debug strings: every arm was added after
+        // someone hit a type the previous author had not thought of. Arrow
+        // renders all of them, and renders timestamps as RFC 3339 honouring the
+        // unit rather than as bare ticks.
+        let mut batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
+        let mut rows_kept = 0usize;
         let mut truncated = false;
-        // Propagate a mid-stream error instead of silently truncating the
-        // result and returning partial rows as HTTP 200. Row-cap truncation
-        // (below) is the one deliberate, reported exception.
-        while let Some(row) = rows
-            .next()
-            .map_err(|e| anyhow::anyhow!("row read failed: {e}"))?
+        for batch in stmt
+            .query_arrow([])
+            .map_err(|e| anyhow::anyhow!("failed to execute query: {e}"))?
         {
-            if results.len() >= max_rows {
+            if rows_kept >= max_rows {
                 truncated = true;
                 break;
             }
-            let mut obj = serde_json::Map::new();
-            for (i, name) in column_names.iter().enumerate() {
-                let val = row
-                    .get_ref(i)
-                    .map_err(|e| anyhow::anyhow!("column read failed: {e}"))?;
-                obj.insert(name.clone(), duckdb_value_to_json(val));
-            }
-            results.push(serde_json::Value::Object(obj));
+            // Row-cap truncation is the one deliberate, reported exception to
+            // returning everything the query produced. Slice rather than drop
+            // the whole batch so the cap is exact.
+            let remaining = max_rows - rows_kept;
+            let batch = if batch.num_rows() > remaining {
+                truncated = true;
+                batch.slice(0, remaining)
+            } else {
+                batch
+            };
+            rows_kept += batch.num_rows();
+            batches.push(batch);
         }
+
+        let mut buf = Vec::new();
+        {
+            // explicit_nulls: without it a NULL column is OMITTED from the row
+            // object entirely, so a caller sees the key vanish instead of
+            // reading null. A missing key is worse than an explicit null for an
+            // agent walking the response.
+            let mut writer = arrow::json::WriterBuilder::new()
+                .with_explicit_nulls(true)
+                .build::<_, arrow::json::writer::JsonArray>(&mut buf);
+            for batch in &batches {
+                writer
+                    .write(batch)
+                    .map_err(|e| anyhow::anyhow!("failed to encode result rows: {e}"))?;
+            }
+            writer
+                .finish()
+                .map_err(|e| anyhow::anyhow!("failed to encode result rows: {e}"))?;
+        }
+        let results: Vec<serde_json::Value> = if buf.is_empty() {
+            Vec::new()
+        } else {
+            serde_json::from_slice(&buf)
+                .map_err(|e| anyhow::anyhow!("failed to decode result rows: {e}"))?
+        };
         Ok((results, truncated))
     });
 
