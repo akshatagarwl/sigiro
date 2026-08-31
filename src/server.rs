@@ -1229,6 +1229,39 @@ fn query_sql_contract() -> String {
 /// - `sigiro_metrics_exp_histogram`
 /// - `sigiro_profiles`
 /// - `sigiro_anomalies`
+///
+/// ## Bound `timestamp` with a literal, not `now()`
+///
+/// Statistics pruning only happens when the comparison value is a constant the
+/// planner can fold. `now()` is volatile, so any predicate built from it is
+/// evaluated per row and every file in the table is opened.
+///
+/// ```sql
+/// -- prunes: the planner folds the constant and skips whole files
+/// WHERE timestamp > TIMESTAMP '2026-08-31 08:00:00'
+///
+/// -- does not prune: opens every file, then filters
+/// WHERE timestamp > (now() - INTERVAL 1 HOUR)::TIMESTAMP
+/// ```
+///
+/// Compute the bound in your client and send it as a literal.
+///
+/// ## If you must use `now()`, cast it
+///
+/// The `timestamp` columns are `TIMESTAMP` (no timezone) and `now()` returns
+/// `TIMESTAMPTZ`. Comparing them directly makes DuckDB cast the **column**,
+/// which adds a per-row conversion on top of the missing pruning. Measured
+/// against production on 2026-08-31, same table and window:
+///
+/// | predicate | result |
+/// |---|---|
+/// | `timestamp > TIMESTAMP '2026-08-31 08:00:00'` | 200 in 2.48s |
+/// | `timestamp > (now() - INTERVAL 5 MINUTE)::TIMESTAMP` | 200 in 0.65s |
+/// | `timestamp > now() - INTERVAL 5 MINUTE` | 400 `INTERRUPT` at 10.98s |
+/// | `timestamp > TIMESTAMPTZ '2026-08-31 08:00:00+00'` | 400 `INTERRUPT` at 10.65s |
+///
+/// So the cast is worth having, but it is a mitigation and not the fix: the
+/// literal is.
 #[utoipa::path(
     post,
     path = "/v1/query",
@@ -1251,7 +1284,9 @@ fn query_sql_contract() -> String {
         content_type = "text/plain",
         description = "One SELECT statement. No WITH/CTE clauses — rewrite them as \
 derived-table subqueries. Scalar functions are allowlisted; file and network \
-readers are blocked.",
+readers are blocked. Bound timestamp columns with a literal TIMESTAMP rather \
+than an expression built from now(), or statistics pruning is lost and the \
+query reads every file.",
         example = json!(
             "SELECT service_name, count(*) AS errors FROM sigiro_spans \
 WHERE status_code = 'STATUS_CODE_ERROR' GROUP BY 1 ORDER BY 2 DESC"
