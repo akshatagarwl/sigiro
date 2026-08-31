@@ -486,6 +486,37 @@ fn run() -> Result<(), String> {
     server.shutdown()?;
     println!("  [shutdown] clean exit after SIGTERM; local DATA_DIR deleted");
 
+    // 8b. Assert the codec on the BYTES in S3, not on the set_option call: a
+    //     check that the call was issued would still pass if DuckLake accepted
+    //     the option and ignored it. A v1 data page cannot carry
+    //     DELTA_BINARY_PACKED, so that encoding is positive proof of v2.
+    let conn = duckdb::Connection::open_in_memory().map_err(|e| e.to_string())?;
+    conn.execute_batch(&format!(
+        "SET extension_directory = '{}'; INSTALL httpfs; LOAD httpfs; \
+         CREATE SECRET (TYPE S3, KEY_ID '{S3_KEY_ID}', SECRET '{S3_SECRET}', \
+         REGION '{S3_REGION}', ENDPOINT '{S3_ENDPOINT}', USE_SSL false, URL_STYLE 'path');",
+        test_extension_dir()
+    ))
+    .map_err(|e| e.to_string())?;
+    let (files, codecs, delta): (i64, String, bool) = conn
+        .query_row(
+            "SELECT count(DISTINCT file_name), string_agg(DISTINCT compression, ','), \
+                    bool_or(contains(encodings, 'DELTA_BINARY_PACKED')) \
+             FROM parquet_metadata(?)",
+            [format!(
+                "s3://{S3_BUCKET}/default/main/sigiro_spans/*.parquet"
+            )],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    if files == 0 || codecs != "ZSTD" || !delta {
+        return Err(format!(
+            "expected ZSTD + Parquet v2 on every span file in S3, got {files} file(s), \
+             codec(s) {codecs:?}, DELTA_BINARY_PACKED present: {delta}"
+        ));
+    }
+    println!("  [parquet] {files} file(s), ZSTD, DELTA_BINARY_PACKED present");
+
     // 9. Persistence: restart against the SAME Postgres catalog + S3 bucket
     //    (external Docker services) with a BRAND NEW local DATA_DIR (a fresh
     //    tempdir — the old one is gone). If the data survives, it proves the

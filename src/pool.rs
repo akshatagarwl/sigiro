@@ -344,6 +344,15 @@ impl ProjectPool {
             };
             match attach_result {
                 Ok(()) => {
+                    // zstd + Parquet v2 is the only supported on-disk format:
+                    // half the size of DuckLake's snappy + v1 default and a
+                    // faster scan, measured on production files. No fallback,
+                    // so a catalog that cannot be pinned fails the attach.
+                    conn.execute_batch(
+                        "CALL lake.set_option('parquet_compression', 'zstd'); \
+                         CALL lake.set_option('parquet_version', '2');",
+                    )
+                    .context("failed to pin DuckLake Parquet write options")?;
                     crate::schema::create_tables(conn, Self::prefix())?;
                     // Lock the local filesystem unless data lives in S3 (DuckLake
                     // itself needs network access to reach S3). Local-file mode
