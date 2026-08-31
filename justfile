@@ -39,8 +39,8 @@ check-release:
 # analysis: anything `pub` the `sigiro` binary can't reach is dead or could be
 # `pub(crate)`. Pinned to hawk's own toolchain (it links rustc_private).
 # Denies the two actionable groups; a full-workspace compile, so it's a
-# pre-push gate (`just install-hooks`), not pre-commit. `--fix` auto-applies
-# the pub→pub(crate) fixes.
+# pre-push gate (`just install-hooks`) rather than something run per commit.
+# `--fix` auto-applies the pub→pub(crate) fixes.
 # The target dir is pinned into target/ via hawk's own `--target-dir` flag. Hawk
 # defaults to $TMPDIR/cargo-hawk-target, which macOS prunes on its own schedule,
 # leaving fingerprints that point at build-script output that is gone — the gate

@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 # Gate what shouldn't leave the machine. Both are whole-tree analyses (too slow
-# for pre-commit), so they run once per push. Activate with `just install-hooks`.
+# to run on every commit), so they run once per push. Activate with
+# `just install-hooks`. This is now the only automatic gate: the pre-commit hook
+# that ran `just check` was removed for being too slow, and GitHub Actions is
+# disabled on this repo, so `just check` is a manual step before pushing.
 # Bypass with `--no-verify`.
 #
 #   hawk -- unnecessary public API surface

@@ -2,8 +2,8 @@
 # Filter: reads a list of paths on stdin, exits 0 if any of them can change what
 # `cargo fmt`, `cargo clippy`, `cargo test`, `hawk` or `slop` would say.
 #
-# Used by pre-commit and pre-push so a www-only or docs-only change does not pay
-# for a full workspace compile. The list is deliberately generous — a false
+# Used by pre-push so a www-only or docs-only change does not pay for a full
+# workspace compile. The list is deliberately generous — a false
 # positive costs a minute, a false negative pushes a broken tree.
 #
 #   justfile      the recipes themselves
