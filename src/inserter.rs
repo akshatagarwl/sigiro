@@ -240,7 +240,13 @@ impl MsgRouter {
     }
 
     pub(crate) async fn run_retention_cleanup(&self, days: u32) -> Result<()> {
-        for project_id in self.pool.project_ids() {
+        // `known_project_ids`, NOT `project_ids`. The latter is the live
+        // connection map, and the idle evictor drops anything untouched for
+        // 300s while this runs hourly, so a low-traffic tenant was almost never
+        // pooled at the moment retention fired and was skipped indefinitely.
+        // `ensure_flusher` below opens a connection for any project that does
+        // not have one, so enumerating beyond the pool is safe.
+        for project_id in self.pool.known_project_ids() {
             self.ensure_flusher(&project_id)
                 .map_err(|e| anyhow::anyhow!("failed to ensure retention flusher: {e}"))?;
             let sender = self
@@ -1197,6 +1203,60 @@ mod tests {
     /// not just deletes rows. DELETE alone leaves (or grows) files;
     /// `reclaim_ducklake_disk` (expire_snapshots + cleanup_old_files) is what
     /// drops the file count. Real DuckLake, mirrors ducklake_appender_test.rs.
+    /// Retention must reach a tenant that has been evicted from the connection
+    /// pool, which is the normal state for anything with sporadic traffic.
+    ///
+    /// This exercises `run_retention_cleanup` itself rather than the
+    /// enumeration helper it calls, because the defect was the CALL SITE
+    /// choosing the wrong source. A test against `known_project_ids` alone
+    /// would keep passing if this line were reverted to `project_ids`.
+    ///
+    /// The observable is the pool: `run_retention_cleanup` calls
+    /// `ensure_flusher` for every project it enumerates, so a project it
+    /// covered is back in the connection map afterwards. With the old
+    /// `project_ids` source it enumerated an empty list and the map stayed
+    /// empty.
+    #[tokio::test]
+    async fn retention_covers_projects_evicted_from_the_pool() {
+        let dir = tempfile::tempdir().unwrap();
+        // Shared extension cache, as the pool and API test binaries use. Without
+        // it every pool in a fresh temp dir cold-downloads icu/parquet/json.
+        // SAFETY: single-threaded test setup; the path is read-only afterwards.
+        #[allow(clippy::disallowed_methods)]
+        unsafe {
+            std::env::set_var("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions");
+        }
+        let pool = std::sync::Arc::new(ProjectPool::new(
+            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+            10,
+            crate::storage::StorageMode::LocalFile,
+        ));
+        pool.create_project("busy_tenant").unwrap();
+        pool.create_project("quiet_tenant").unwrap();
+
+        // Exactly what `run_evictor` does after MAX_IDLE_SECS with no traffic.
+        pool.evict_idle(std::time::Duration::ZERO);
+        assert_eq!(
+            pool.project_ids().len(),
+            0,
+            "precondition: the idle evictor emptied the pool"
+        );
+
+        let router = MsgRouter::new(std::sync::Arc::clone(&pool));
+        router
+            .run_retention_cleanup(7)
+            .await
+            .expect("retention must not fail for an unpooled project");
+
+        let covered = pool.project_ids();
+        assert!(
+            covered.iter().any(|id| id == "busy_tenant")
+                && covered.iter().any(|id| id == "quiet_tenant"),
+            "retention must sweep every tenant with data on disk, not only those \
+             holding a pooled connection when it happens to run; covered {covered:?}"
+        );
+    }
+
     #[test]
     fn retention_reclaims_ducklake_disk() {
         let dir = tempfile::tempdir().unwrap();

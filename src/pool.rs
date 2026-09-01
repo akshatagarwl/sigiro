@@ -287,6 +287,70 @@ impl ProjectPool {
             .collect()
     }
 
+    /// Every project that has data and therefore needs periodic maintenance,
+    /// whether or not it currently holds a pooled connection.
+    ///
+    /// [`Self::project_ids`] returns only the live connection map, which is the
+    /// wrong set for anything that must not miss a tenant. `run_evictor` drops
+    /// any project idle for 300s while retention runs hourly, so a low-traffic
+    /// tenant is almost never pooled at the moment retention fires. Measured on
+    /// the hosted box on 2026-08-31: one tenant had accumulated 3,227 snapshots
+    /// and 3,030 data files spanning nine days under a seven-day policy, and the
+    /// container log showed a single retention run, for the one tenant that
+    /// ingests continuously and is therefore always pooled.
+    ///
+    /// The durable source is the per-project directory on disk, which both
+    /// storage modes create and neither removes: `<data_dir>/tenants/<id>` when
+    /// distributed, `<data_dir>/<id>` otherwise. Verified against production,
+    /// where the hosted volume holds a `tenants/` entry per tenant even though
+    /// its Parquet lives in S3.
+    ///
+    /// Unioned with the live map so a project created in this process is covered
+    /// before anything has been flushed to disk for it.
+    ///
+    /// A directory that cannot be read is skipped rather than fatal: retention
+    /// covering fewer projects is bad, and retention failing to start at all is
+    /// worse.
+    pub fn known_project_ids(&self) -> Vec<String> {
+        let mut ids = self.project_ids();
+        let root = if self.storage_mode.is_distributed() {
+            self.data_dir.join("tenants")
+        } else {
+            self.data_dir.clone()
+        };
+        match std::fs::read_dir(&root) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                        continue;
+                    }
+                    let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                        continue;
+                    };
+                    // `sanitize_tenant_id` owns the definition of a legal tenant
+                    // id, including the reserved names (`extensions`, `tenants`)
+                    // that sit beside per-project directories in local mode.
+                    // Reusing it keeps this from drifting into a second, weaker
+                    // copy of that rule.
+                    if crate::storage::sanitize_tenant_id(&name).is_err() {
+                        continue;
+                    }
+                    if !ids.contains(&name) {
+                        ids.push(name);
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    dir = %root,
+                    "could not enumerate project directories; maintenance will \
+                     cover only the projects currently pooled: {error}"
+                );
+            }
+        }
+        ids
+    }
+
     /// Refresh last_access for an existing project entry so it is not evicted as idle.
     /// Callers (e.g. long-running per-project flusher tasks) should call this periodically
     /// to prevent the idle evictor from removing their connection while they are alive.

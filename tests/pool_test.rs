@@ -230,3 +230,65 @@ fn remove_project() {
     pool.remove("proj_a");
     assert_eq!(pool.connections.len(), 0);
 }
+
+/// Retention must sweep every tenant that has data, not only the ones that
+/// happen to hold a pooled connection at the moment it runs.
+///
+/// `MsgRouter::run_retention_cleanup` iterates the pool's live connection map.
+/// `run_evictor` drops any project idle for `MAX_IDLE_SECS` (300) while
+/// retention fires hourly, so a low-traffic tenant is almost never in the map
+/// when the sweep happens and is silently skipped forever.
+///
+/// Measured on the hosted box on 2026-08-31: one tenant carried 3,227 snapshots
+/// and 3,030 data files spanning nine days under a seven-day policy, and the
+/// container log showed a single retention run, for the one tenant that ingests
+/// continuously and is therefore always pooled.
+#[test]
+fn known_project_ids_survives_eviction() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = test_pool(dir.path());
+
+    pool.create_project("proj_a").unwrap();
+    pool.create_project("proj_b").unwrap();
+
+    let while_pooled = pool.known_project_ids();
+    assert!(
+        while_pooled.iter().any(|id| id == "proj_a")
+            && while_pooled.iter().any(|id| id == "proj_b"),
+        "both projects must be known while pooled, got {while_pooled:?}"
+    );
+
+    // Exactly what the idle evictor does to a tenant with no recent traffic.
+    pool.evict_idle(std::time::Duration::ZERO);
+    assert_eq!(pool.connections.len(), 0, "eviction emptied the pool");
+
+    let after_eviction = pool.known_project_ids();
+    assert!(
+        after_eviction.iter().any(|id| id == "proj_a")
+            && after_eviction.iter().any(|id| id == "proj_b"),
+        "a tenant that has been evicted still has data on disk and still needs \
+         retention, but the retention sweep would not see it: {after_eviction:?}"
+    );
+}
+
+/// The enumeration must not hand retention the shared directories that sit
+/// beside the per-project ones. `extensions` and `tenants` are reserved by
+/// `storage::sanitize_tenant_id` for exactly this reason.
+#[test]
+fn known_project_ids_excludes_reserved_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = test_pool(dir.path());
+    pool.create_project("proj_a").unwrap();
+    std::fs::create_dir_all(dir.path().join("extensions")).unwrap();
+    std::fs::create_dir_all(dir.path().join("tenants")).unwrap();
+
+    let ids = pool.known_project_ids();
+    assert!(
+        ids.iter().any(|id| id == "proj_a"),
+        "real project missing: {ids:?}"
+    );
+    assert!(
+        !ids.iter().any(|id| id == "extensions" || id == "tenants"),
+        "reserved directories must not be swept as tenants: {ids:?}"
+    );
+}
