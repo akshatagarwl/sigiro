@@ -717,12 +717,14 @@ impl ProjectFlusher {
                 .execute_batch(&sql)
                 .with_context(|| format!("retention cleanup failed for {table}"))?;
         }
-        // DELETE alone reclaims ZERO disk in DuckLake — it only writes
-        // delete-files, so on-disk Parquet stays (usage can even grow).
-        // Expiring the aged snapshots then removing the now-unreferenced data
-        // files is what frees bytes. Catalog-wide, run ONCE here after ALL the
-        // per-table DELETEs (never inside the loop).
-        reclaim_ducklake_disk(&self.conn)?;
+        // DELETE writes DuckLake delete-files. The periodic `CHECKPOINT lake`
+        // performs DuckLake's own bounded rewrite, compaction, snapshot expiry,
+        // old-file cleanup, and orphan deletion using the catalog policy set in
+        // `pool::set_ducklake_catalog_policy`. Do not run that sequence here:
+        // the old hand-written reclaim blocked this same writer thread for more
+        // than twenty minutes on a tenant with 3,115 files, which stopped its
+        // telemetry flushes and serialized maintenance for every tenant behind
+        // it.
         tracing::info!(project_id, days, "retention cleanup completed");
         Ok(())
     }
@@ -752,22 +754,6 @@ impl ProjectFlusher {
     fn into_connection(self) -> Connection {
         self.conn
     }
-}
-
-/// Reclaim on-disk DuckLake Parquet after retention DELETEs. A DELETE only
-/// writes delete-files, so disk usage does not drop (it can even grow) until
-/// the aged snapshots are expired and the now-unreferenced data files are
-/// removed. Catalog-wide (catalog `lake`), run ONCE after all per-table
-/// DELETEs. Works under sigiro's local lockdown (`allowed_directories` +
-/// `enable_external_access=false`). Only WHOLLY-aged files are freed — fine,
-/// since flushes are time-ordered and the disk cap backstops the rest.
-/// The exact sequence was proven against duckdb ducklake d318a545.
-fn reclaim_ducklake_disk(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
-        "SELECT * FROM ducklake_expire_snapshots('lake', older_than => now(), dry_run => false);\n\
-         SELECT * FROM ducklake_cleanup_old_files('lake', cleanup_all => true, dry_run => false);",
-    )
-    .context("DuckLake disk reclaim failed (expire_snapshots + cleanup_old_files)")
 }
 
 /// Append a table's buffered batches via a DuckLake catalog-qualified appender.
@@ -1160,16 +1146,6 @@ mod tests {
         assert!(!disk.is_over_cap());
     }
 
-    fn count_parquet_files(dir: &std::path::Path) -> usize {
-        walkdir::WalkDir::new(dir)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| {
-                e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "parquet")
-            })
-            .count()
-    }
-
     /// An `n`-row `(id, ts)` batch with every `ts` set `days_ago` days before
     /// now. Batches must be large enough to exceed DuckLake's inline-row limit
     /// so the appender writes Parquet rather than inlining into the catalog.
@@ -1199,10 +1175,6 @@ mod tests {
         .expect("valid day batch")
     }
 
-    /// Proves the DELETE-then-reclaim sequence actually frees on-disk Parquet,
-    /// not just deletes rows. DELETE alone leaves (or grows) files;
-    /// `reclaim_ducklake_disk` (expire_snapshots + cleanup_old_files) is what
-    /// drops the file count. Real DuckLake, mirrors ducklake_appender_test.rs.
     /// Retention must reach a tenant that has been evicted from the connection
     /// pool, which is the normal state for anything with sporadic traffic.
     ///
@@ -1258,7 +1230,7 @@ mod tests {
     }
 
     #[test]
-    fn retention_reclaims_ducklake_disk() {
+    fn checkpoint_runs_ducklake_native_maintenance() {
         let dir = tempfile::tempdir().unwrap();
         let conn = Connection::open_in_memory().unwrap();
         attach_ducklake(&conn, dir.path());
@@ -1277,11 +1249,18 @@ mod tests {
                 .expect("append");
             appender.flush().expect("flush");
         }
-        // Materialize inlined/WAL data into Parquet, exactly as the production
-        // flusher's periodic `CHECKPOINT lake` does — otherwise small writes
-        // stay inlined in the catalog and there are no files to reclaim.
-        conn.execute_batch("CHECKPOINT lake;").expect("checkpoint");
-        let files_before = count_parquet_files(dir.path());
+        // These batches exceed DuckLake's inline-row limit, so each appender
+        // commit is already a current data file. Measure before CHECKPOINT:
+        // DuckLake defaults auto_compact to true, and a checkpoint with its
+        // default 512 MiB target would compact this fixture even without the
+        // sigiro policy, erasing the control arm.
+        let files_before: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ducklake_list_files('lake', 't')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         let rows_before: i64 = conn
             .query_row("SELECT count(*) FROM lake.t", [], |r| r.get(0))
             .unwrap();
@@ -1295,19 +1274,48 @@ mod tests {
         conn.execute_batch("DELETE FROM lake.t WHERE ts < now()::TIMESTAMP - INTERVAL '7 days'")
             .expect("delete old rows");
 
-        // DELETE alone must NOT reclaim disk — the file count does not drop.
-        let files_after_delete = count_parquet_files(dir.path());
+        // DELETE removes wholly-aged files from the current snapshot, but the
+        // retained days remain one file each. Compaction belongs to DuckLake's
+        // native CHECKPOINT sequence.
+        let files_after_delete: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ducklake_list_files('lake', 't')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert!(
-            files_after_delete >= files_before,
-            "DELETE alone must not reclaim files (before={files_before}, after_delete={files_after_delete})"
+            (7..=8).contains(&files_after_delete),
+            "DELETE should leave one current file per retained day, not compact them (before={files_before}, after_delete={files_after_delete})"
         );
 
-        // The reclaim sequence under test.
-        reclaim_ducklake_disk(&conn).expect("reclaim should succeed");
+        // Activate the same persisted policy the pool sets on every attach.
+        // Delaying it until here gives the test an unconfigured control arm;
+        // with policy active before appender commits, DuckLake compacts the
+        // files as they are written and leaves no backlog to distinguish.
+        crate::pool::set_ducklake_catalog_policy(&conn, 7).expect("set catalog policy");
 
-        let files_after = count_parquet_files(dir.path());
-        let rows_after: i64 = conn
-            .query_row("SELECT count(*) FROM lake.t", [], |r| r.get(0))
+        // This is the same call the production writer makes every 30 seconds.
+        // DuckLake consumes the persisted policy and runs its own flush,
+        // expiry, compaction, rewrite, cleanup, and orphan-removal sequence.
+        conn.execute_batch("CHECKPOINT lake")
+            .expect("native maintenance checkpoint");
+
+        let files_after: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ducklake_list_files('lake', 't')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Touch columns so DuckLake must scan the compacted Parquet instead of
+        // answering count(*) from catalog metadata.
+        let (rows_after, max_id): (i64, i32) = conn
+            .query_row(
+                "SELECT count(*), max(id) FROM lake.t WHERE id >= 0",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
 
         // Days 8..=29 are unambiguously older than 7 days and gone; day 7 sits
@@ -1316,9 +1324,10 @@ mod tests {
             (7 * 3000..=8 * 3000).contains(&rows_after),
             "retention should leave ~7 days of rows, got {rows_after}"
         );
+        assert_eq!(max_id, 2999, "real scan of compacted Parquet must succeed");
         assert!(
-            files_after < files_after_delete,
-            "reclaim must drop on-disk Parquet (before_reclaim={files_after_delete}, after_reclaim={files_after})"
+            files_after <= 2,
+            "native CHECKPOINT must compact the current 30-file table to at most two files (before={files_after_delete}, after={files_after})"
         );
     }
 

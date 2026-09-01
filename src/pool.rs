@@ -408,15 +408,54 @@ impl ProjectPool {
             };
             match attach_result {
                 Ok(()) => {
-                    // zstd + Parquet v2 is the only supported on-disk format:
-                    // half the size of DuckLake's snappy + v1 default and a
-                    // faster scan, measured on production files. No fallback,
-                    // so a catalog that cannot be pinned fails the attach.
-                    conn.execute_batch(
-                        "CALL lake.set_option('parquet_compression', 'zstd'); \
-                         CALL lake.set_option('parquet_version', '2');",
-                    )
-                    .context("failed to pin DuckLake Parquet write options")?;
+                    // Catalog policy. Two groups, both set once per attach and
+                    // persisted by DuckLake in the metadata schema.
+                    //
+                    // WRITE FORMAT. zstd + Parquet v2 is the only supported
+                    // on-disk format: half the size of DuckLake's snappy + v1
+                    // default and a faster scan, measured on production files.
+                    //
+                    // MAINTENANCE. `CHECKPOINT <catalog>` already IS DuckLake's
+                    // maintenance pass. Its implementation runs, in order:
+                    // flush_inlined_data, expire_snapshots, merge_adjacent_files,
+                    // rewrite_data_files, cleanup_old_files,
+                    // delete_orphaned_files. The flusher has called
+                    // `CHECKPOINT lake` every 30s all along, but production had
+                    // persisted only parquet_compression and parquet_version.
+                    // Snapshot expiry was disabled, rewrites required 95% of a
+                    // file to be deleted, and the compaction target was DuckLake's
+                    // 512 MiB default. Measured with the exact policy below on a
+                    // 300-file fixture after a retention DELETE:
+                    //
+                    //   current files before CHECKPOINT   303
+                    //   current files after CHECKPOINT      1 (624,000 rows intact)
+                    //
+                    // Physical files remain for the configured two-day grace;
+                    // current-snapshot file count is the compaction measure.
+                    //
+                    // That is why a hand-rolled reclaim existed here before, and
+                    // why it was unbounded enough to block a tenant's writer
+                    // thread for twenty minutes in production. DuckLake does
+                    // this incrementally per checkpoint when told the policy.
+                    //
+                    // DuckLake defaults auto_compact to true, a 512 MiB target
+                    // file (equal to sigiro's whole DuckDB memory limit), a 0.95
+                    // rewrite threshold, two-day file deletion, and NO snapshot
+                    // expiry. The values below make the existing checkpoint
+                    // useful without allowing one rewrite to target the whole
+                    // memory budget.
+                    //
+                    // `expire_older_than` is tied to the row retention window:
+                    // once rows past that age are deleted, snapshots that old
+                    // can only serve time-travel into data that no longer
+                    // exists. `delete_older_than` is a grace period before an
+                    // unreferenced file is removed, kept far above the 10s query
+                    // timeout so an in-flight scan can never lose its file.
+                    // Both are GLOBAL-only in DuckLake and rejected if scoped.
+                    let retention_days = crate::config::RETENTION_DAYS
+                        .value()
+                        .context("invalid SIGIRO_RETENTION_DAYS")?;
+                    set_ducklake_catalog_policy(conn, retention_days)?;
                     crate::schema::create_tables(conn, Self::prefix())?;
                     // Lock the local filesystem unless data lives in S3 (DuckLake
                     // itself needs network access to reach S3). Local-file mode
@@ -650,6 +689,31 @@ impl ProjectPool {
             entry.shutdown();
         }
     }
+}
+
+/// Persist the policy consumed by DuckLake's native `CHECKPOINT` maintenance.
+///
+/// DuckLake checkpoints already run the full sequence: flush inlined data,
+/// expire snapshots, compact adjacent files, rewrite files with enough deleted
+/// rows, clean unreferenced files, and delete storage orphans. The writer calls
+/// `CHECKPOINT lake` every 30 seconds, so these options are the scheduler and
+/// bounds. Do not duplicate that sequence in sigiro.
+pub(crate) fn set_ducklake_catalog_policy(conn: &Connection, retention_days: u32) -> Result<()> {
+    let expiry = if retention_days == 0 {
+        String::new()
+    } else {
+        format!("{retention_days} days")
+    };
+    conn.execute_batch(&format!(
+        "CALL lake.set_option('parquet_compression', 'zstd'); \
+         CALL lake.set_option('parquet_version', '2'); \
+         CALL lake.set_option('auto_compact', true); \
+         CALL lake.set_option('target_file_size', '32MB'); \
+         CALL lake.set_option('rewrite_delete_threshold', 0.2); \
+         CALL lake.set_option('expire_older_than', '{expiry}'); \
+         CALL lake.set_option('delete_older_than', '2 days');"
+    ))
+    .context("failed to set DuckLake catalog policy")
 }
 
 /// Number of attempts to attach the DuckLake catalog at startup.

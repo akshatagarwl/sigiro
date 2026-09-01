@@ -54,6 +54,41 @@ fn create_project_opens_connection() {
 }
 
 #[test]
+fn create_project_persists_ducklake_maintenance_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = test_pool(dir.path());
+    let readers = pool.create_project("proj_a").unwrap();
+    let conn = readers.get();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT option_name, value FROM lake.options() \
+             WHERE option_name IN ( \
+               'auto_compact', 'target_file_size', 'rewrite_delete_threshold', \
+               'expire_older_than', 'delete_older_than' \
+             ) ORDER BY option_name",
+        )
+        .unwrap();
+    let options: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    assert_eq!(
+        options,
+        vec![
+            ("auto_compact".into(), "true".into()),
+            ("delete_older_than".into(), "2 days".into()),
+            ("expire_older_than".into(), "7 days".into()),
+            ("rewrite_delete_threshold".into(), "0.200000".into()),
+            ("target_file_size".into(), "32000000".into()),
+        ],
+        "project creation must persist the policy consumed by CHECKPOINT"
+    );
+}
+
+#[test]
 fn get_returns_same_connection() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
