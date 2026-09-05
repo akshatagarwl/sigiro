@@ -27,11 +27,14 @@ pub struct ServiceEntry {
 /// continuous anomaly pass (the `sigiro_anomalies` table), biggest shift
 /// first by the unit-free magnitude (after − before) / (after + before)
 /// (comparable across signals; raw |after − before| breaks zero-baseline
-/// ties, then newest first). Ranking, not filtering: every detected shift
-/// is returned — the reader judges significance from `before`/`after`.
+/// ties, then newest first). Ranking, not filtering: the reader judges
+/// significance from `before`/`after`. `truncated` reports the query row cap.
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AnomaliesResponse {
     pub(crate) anomalies: Vec<AnomalyEntry>,
+    /// True when the query row cap omitted shifts. This is an incomplete
+    /// candidate snapshot: automatic submission must wait for a complete one.
+    pub(crate) truncated: bool,
 }
 
 /// One row of the `sigiro_anomalies` table: a worsening regime shift found

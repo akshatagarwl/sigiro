@@ -73,3 +73,11 @@ export type JobRecord = typeof JobRecord.Type;
 
 export const executionId = (request: JobRequest): string =>
   executionIdOf(request.jobId, request.generation, request.attempt);
+
+/** The same dispatch shape is bounded by the bridge and sent by the executor. */
+export const celldPayloadOf = (request: Omit<JobRequest, "leaseToken" | "deadlineSeconds">, workerId: string) => ({
+  executionId: executionIdOf(request.jobId, request.generation, request.attempt), workerId,
+  repository: request.repository, baseRef: request.baseRef, baseSha: request.baseSha,
+  prompt: request.prompt, tests: request.tests, allowedPaths: request.allowedPaths,
+  incidentId: request.incidentId, evidenceUri: request.evidenceUri, evidenceSha256: request.evidenceSha256,
+});

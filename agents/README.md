@@ -4,6 +4,11 @@ An agent turns a telemetry finding into a tested draft PR, coordinated by celld
 and executed by Eve, with an Effect pull worker. The worker pulls assignments outbound, so a
 local/customer-hosted pull worker works without inbound worker networking.
 
+The host-side anomaly bridge connects detection to this execution path:
+`anomaly → diagnosis → immutable evidence → job`. Run one pass or watch with
+`bun run bridge --config policy.json [--watch]`; configuration, recovery, and
+current limits are in [Anomaly bridge](docs/anomaly-bridge.md).
+
 ## Execution flow
 
 ```text
@@ -30,8 +35,9 @@ local/customer-hosted pull worker works without inbound worker networking.
 
 Celld holds durable state, retries, and leases. The worker owns claim,
 durability, and completion reporting; Eve owns repository execution inside its
-sandbox. The worker has no inbound listener, and `WORKER_TOKEN` is used only for
-its authenticated worker-facing COORDINATOR endpoints.
+sandbox. The worker has no inbound listener. The coordinator's `WORKER_TOKEN`
+authenticates bridge submission/status requests and worker claim, heartbeat,
+and completion requests.
 
 ## What it enforces
 
@@ -104,9 +110,14 @@ with the actual test results, commit, and PR. Eve owns its event stream; the wor
 only reads cancellation events to confirm a requested stop. Separate atomic
 success and failure receipt files prevent a late failure from overwriting a PR.
 
-Automatic incident triggering, hosted tenant isolation, and production celld
-fleet failover remain open. Private-repository access and draft-PR publishing use
-the trusted host’s authenticated GitHub CLI. Do not claim
+The bridge persists candidates and exact job submissions, remembers overlapping
+incident members, and reserves its configured repository while work or a draft
+PR remains outstanding. It supports one source/service/repository per state
+directory on one host; the Compose installation does not start the bridge.
+A durable source incident feed, distributed repository admission, publication
+recovery across attempts, hosted tenant isolation, and production celld fleet
+failover remain open. Private-repository access and draft-PR publishing use the
+trusted host’s authenticated GitHub CLI. Do not claim
 any-infrastructure or any-repository support yet.
 
 Deployment: [customer-hosted setup](docs/customer-hosted.md). Boundary and residue:
@@ -116,13 +127,15 @@ Deployment: [customer-hosted setup](docs/customer-hosted.md). Boundary and resid
 
 Eve exports native model/channel/tool spans; Claude MCP execution adds a span
 through the same tracer. The worker uses Effect OTLP tracing/logging and native
-HTTP trace propagation. The configured local Sigiro receiver is
-`http://127.0.0.1:14318`; agent payloads are excluded and safe diagnostic codes
-identify evidence and receipt failures. Effect services/layers are the DI seam.
+HTTP trace propagation. Agent telemetry accepts the local Sigiro receiver at
+`http://127.0.0.1:14318` or the Compose receiver at `http://sigiro:4318`;
+agent payloads are excluded and safe diagnostic codes identify evidence and
+receipt failures. Effect services/layers are the DI seam.
 
 Verified fixes: receipt failures (#34), lease recovery (#35), Claude tool spans
 (#36), early-deadline cancellation (#40), worker restart recovery (#41), and
 publication receipt races (#42), and timeout error normalization (#43). Receipt polling removes stream cursor tracking (#39). Dogfooding found unresolved limitations: Sigiro's case-sensitive log
 severity filters (#37) and celld0.4 dev reloads on file-open events in Docker
-(#38). Continuous proactive scheduling and measured4GB cloud capacity remain
+(#38). The anomaly bridge now provides optional polling; durable incident
+identity across detector reinterpretation and measured4GB cloud capacity remain
 future work.

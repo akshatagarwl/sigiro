@@ -141,6 +141,7 @@ const handle = Effect.fn("handle")(function*(request: Request, env: CoordinatorE
     }));
   }
   if (request.method === "POST" && url.pathname === "/v1/jobs") {
+    if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
     const body = yield* HttpServerRequest.fromWeb(request).text;
     const routing = yield* decodeIdentity(body);
     return yield* forward(env.JOBS.get(env.JOBS.idFromName(routing.jobId)), new Request("http://job.internal/create", {
@@ -152,7 +153,10 @@ const handle = Effect.fn("handle")(function*(request: Request, env: CoordinatorE
   const jobId = decodeURIComponent(match[1]!);
   const action = match[2];
   const stub: DurableObjectStub = env.JOBS.get(env.JOBS.idFromName(jobId));
-  if (request.method === "GET" && action === undefined) return yield* forward(stub, new Request("http://job.internal/status"));
+  if (request.method === "GET" && action === undefined) {
+    if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+    return yield* forward(stub, new Request("http://job.internal/status"));
+  }
   if (request.method !== "POST" || action === undefined) return json({ error: "not found" }, 404);
   if ((action === "heartbeat" || action === "complete") && !authorized(request, env)) {
     return json({ error: "unauthorized" }, 401);

@@ -2,7 +2,7 @@ import { Client, ClientError } from "eve/client";
 import { Context, Effect, Layer, Predicate, Schedule, Schema } from "effect";
 import { JobStore } from "./services.ts";
 import type { JobRecord, JobRequest } from "./types.ts";
-import { executionId } from "./types.ts";
+import { celldPayloadOf, executionId } from "./types.ts";
 import { PublicationReceipt } from "../src/publication.ts";
 import { currentTraceHeaders } from "./telemetry.ts";
 
@@ -41,10 +41,7 @@ export const makeEveExecution = (options: EveExecutionOptions): Layer.Layer<EveE
         try: async (signal) => {
           const response = await client.fetch("/internal/celld/job", {
             method: "POST", signal, headers: { ...headers, "content-type": "application/json" },
-            body: JSON.stringify({ executionId: executionId(request), workerId: options.workerId,
-              repository: request.repository, baseRef: request.baseRef, baseSha: request.baseSha,
-              prompt: request.prompt, tests: request.tests, allowedPaths: request.allowedPaths,
-              incidentId: request.incidentId, evidenceUri: request.evidenceUri, evidenceSha256: request.evidenceSha256 }),
+            body: JSON.stringify(celldPayloadOf(request, options.workerId)),
           });
           if (!response.ok) throw new ClientError(response.status, await response.text(), response.headers);
           return Schema.decodeUnknownSync(Schema.Struct({ sessionId: Schema.NonEmptyString }))(await response.json()).sessionId;

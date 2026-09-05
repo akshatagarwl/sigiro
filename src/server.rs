@@ -1472,7 +1472,10 @@ Unix epoch) over the shift time. Each row carries a ready-to-run \
 adjacent 5-minute detection bucket on the same service share an \
 `incident_id` — one incident across signals, not N independent anomalies \
 (the correlation window is the detection pass's own bucket resolution, \
-never a tuned threshold); `incident_id` is null for uncorrelated rows.",
+never a tuned threshold); `incident_id` is null for uncorrelated rows. \
+`truncated` is true when the query row cap omitted shifts: this is an \
+incomplete candidate snapshot and automatic submission must wait for a \
+complete response.",
     responses(
         (status = 200, description = "Anomaly rows, biggest shift first", body = AnomaliesResponse),
         (status = 401, description = "Missing or invalid bearer token")
@@ -1507,7 +1510,7 @@ async fn anomalies_handler(
                   abs(\"after\" - \"before\") DESC, ts_shift DESC",
         filters.join(" AND ")
     );
-    let (results, _truncated) = execute_sql(&state, &auth, &sql)
+    let (results, truncated) = execute_sql(&state, &auth, &sql)
         .await
         .map_err(|e| bad_request("anomalies query failed", &format!("{e:#}")))?;
 
@@ -1551,7 +1554,10 @@ async fn anomalies_handler(
             }
         }
     }
-    Ok(Json(AnomaliesResponse { anomalies }))
+    Ok(Json(AnomaliesResponse {
+        anomalies,
+        truncated,
+    }))
 }
 
 /// GET /v1/traces/{trace_id} -- return a single trace with full detail including critical path and service breakdown.

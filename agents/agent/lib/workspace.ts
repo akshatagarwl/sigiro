@@ -53,7 +53,7 @@ export function assertRepository(repository: string): void {
 }
 
 /** Evidence is a bounded local artifact created by the trusted Sigiro collector. */
-export async function verifiedEvidence(job: CelldJob): Promise<Buffer> {
+export async function verifiedEvidence(job: Pick<CelldJob, "repository" | "evidenceUri" | "evidenceSha256">): Promise<Buffer> {
   assertRepository(job.repository);
   const configured = process.env.SIGIRO_EVIDENCE_DIR;
   if (!configured) throw new Error("SIGIRO_EVIDENCE_DIR is required");

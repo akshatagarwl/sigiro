@@ -9,11 +9,11 @@ export const currentTraceHeaders = Effect.currentSpan.pipe(
 
 // Export only to the customer's local Sigiro receiver.
 // Only opaque correlation hashes, operation names and error codes leave this process.
-const resource = { attributes: [{ key: "service.name", value: { stringValue: "sigiro-agent-worker" } }], droppedAttributesCount: 0 };
 const attributeKeys = new Set(["execution.hash", "job.hash", "error.type"]);
-const messages = new Set(["Sigiro agent worker started", "job claimed", "job reported", "job execution failed", "Eve cancellation failed", "worker iteration failed", "pending report failed"]);
+const messages = new Set(["Sigiro agent worker started", "job claimed", "job reported", "job execution failed", "Eve cancellation failed", "worker iteration failed", "pending report failed", "bridge job submitted", "bridge pass failed"]);
 
-const serialization = Layer.effect(OtlpSerialization.OtlpSerialization, Effect.gen(function* () {
+const serialization = (serviceName: string) => Layer.effect(OtlpSerialization.OtlpSerialization, Effect.gen(function* () {
+  const resource = { attributes: [{ key: "service.name", value: { stringValue: serviceName } }], droppedAttributesCount: 0 };
   const json = yield* OtlpSerialization.OtlpSerialization;
   return OtlpSerialization.OtlpSerialization.of({
     metrics: json.metrics,
@@ -52,7 +52,7 @@ const transport = Layer.effect(HttpClient.HttpClient, Effect.gen(function* () {
   })));
 })).pipe(Layer.provide(FetchHttpClient.layer));
 
-export const telemetry = Layer.unwrap(Effect.gen(function* () {
+const telemetryFor = (serviceName: string) => Layer.unwrap(Effect.gen(function* () {
   const endpoint = yield* Config.nonEmptyString("OTEL_EXPORTER_OTLP_ENDPOINT").pipe(Config.option);
   if (endpoint._tag === "None") {
     yield* Effect.logInfo("Sigiro telemetry disabled: OTEL_EXPORTER_OTLP_ENDPOINT is not set");
@@ -62,9 +62,12 @@ export const telemetry = Layer.unwrap(Effect.gen(function* () {
   if (url !== "http://127.0.0.1:14318" && url !== "http://sigiro:4318") {
     return yield* Effect.fail(new Config.ConfigError(new ConfigProvider.SourceError({ message: "Agent telemetry requires the local Sigiro receiver: http://127.0.0.1:14318 or http://sigiro:4318" })));
   }
-  const options = { resource: { serviceName: "sigiro-agent-worker" }, exportInterval: "1 second", shutdownTimeout: "5 seconds" } as const;
+  const options = { resource: { serviceName }, exportInterval: "1 second", shutdownTimeout: "5 seconds" } as const;
   return Layer.merge(
     OtlpLogger.layer({ ...options, url: `${url}/v1/logs`, mergeWithExisting: true }),
     OtlpTracer.layer({ ...options, url: `${url}/v1/traces` }),
-  ).pipe(Layer.provide(serialization), Layer.provide(transport));
+  ).pipe(Layer.provide(serialization(serviceName)), Layer.provide(transport));
 }));
+
+export const telemetry = telemetryFor("sigiro-agent-worker");
+export const bridgeTelemetry = telemetryFor("sigiro-agent-bridge");

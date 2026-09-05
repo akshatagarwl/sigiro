@@ -38,6 +38,7 @@ RUN bun install --frozen-lockfile
 COPY src ./src
 COPY coordinator ./coordinator
 COPY executor ./executor
+COPY bridge ./bridge
 COPY agent ./agent
 COPY tsconfig.json ./tsconfig.json
 COPY deploy/start-agent.sh deploy/supervisord.conf ./deploy/

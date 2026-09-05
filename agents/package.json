@@ -5,9 +5,10 @@
   "type": "module",
   "description": "Customer-deployable Sigiro agents coordinated by celld and executed with Eve.",
   "scripts": {
-    "build": "bun run typecheck && bun build coordinator/index.ts --outdir dist/coordinator --target browser && bun build executor/main.ts --outdir dist/executor --target bun",
+    "build": "bun run typecheck && bun build coordinator/index.ts --outdir dist/coordinator --target browser && bun build executor/main.ts --outdir dist/executor --target bun && bun build bridge/main.ts --outdir dist/bridge --target bun",
     "typecheck": "tsc --noEmit",
     "executor": "bun run executor/main.ts",
+    "bridge": "bun run bridge/main.ts",
     "celld:dev": "celld dev coordinator --port 9876 --logs",
     "eve:build": "eve build"
   },
