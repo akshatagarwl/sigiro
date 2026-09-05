@@ -5,6 +5,7 @@ FROM node:24.4.1-bookworm-slim@sha256:36ae19f59c91f3303c7a648f07493fe14c4bd91320
 
 ARG TARGETARCH
 ARG CELLD_VERSION=v0.4.0
+ARG CODEX_VERSION=0.152.0
 ARG CELLD_AMD64_SHA256=0488628597154725db2f61f85434fb381e1b2535d1e9f097c6d20727cd337973
 ARG CELLD_ARM64_SHA256=d95ec7108d2c280144599727ac66106c0123d09c573f5724d3b4d3bc33f7603e
 
@@ -23,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo "$checksum  /tmp/celld.gz" | sha256sum -c - \
     && gzip -dc /tmp/celld.gz > /usr/local/bin/celld \
     && chmod 0755 /usr/local/bin/celld && rm /tmp/celld.gz
+
+RUN npm install --global "@openai/codex@${CODEX_VERSION}"
 
 WORKDIR /app
 ENV PATH=/app/node_modules/.bin:/usr/local/bin:/usr/bin:/bin \

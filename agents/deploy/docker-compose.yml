@@ -32,7 +32,7 @@ services:
     environment:
       SIGIRO_REPOSITORY: ${SIGIRO_REPOSITORY:?set SIGIRO_REPOSITORY to OWNER/REPO}
       EVE_SANDBOX_IMAGE: ${EVE_SANDBOX_IMAGE:?set EVE_SANDBOX_IMAGE to a locally available project image}
-      SIGIRO_AGENT_PROVIDER: claude
+      SIGIRO_AGENT_PROVIDER: ${SIGIRO_AGENT_PROVIDER:-claude}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://sigiro:4318
       CELLD_BUCKET: sigiro-agent
       S3_ENDPOINT: http://minio:9000
