@@ -29,3 +29,6 @@ dist-bin/
 docs-site/.blume/
 docs-site/dist/
 www/.source/
+
+# Letta worktree admin state
+.letta/
