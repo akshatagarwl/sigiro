@@ -1,33 +1,34 @@
-import { Schema } from "effect";
+import { z } from "zod";
 
 const identity = {
-  executionId: Schema.NonEmptyString,
-  headSha: Schema.String,
-  sessionId: Schema.String,
-  updatedAt: Schema.String,
+  executionId: z.string().min(1),
+  headSha: z.string().min(1),
+  sessionId: z.string().min(1),
+  updatedAt: z.string().min(1),
 };
 
-export const PublishedTests = Schema.NonEmptyArray(Schema.Struct({
-  name: Schema.NonEmptyString,
-  command: Schema.NonEmptyString,
-  exitCode: Schema.Literal(0),
-}));
+export const PublishedTests = z.array(z.object({
+  name: z.string().min(1),
+  command: z.string().min(1),
+  exitCode: z.literal(0),
+})).min(1);
 
-export const PublishedReceipt = Schema.Struct({
+export const PublishedReceipt = z.object({
   ...identity,
-  status: Schema.Literal("published"),
-  branch: Schema.NonEmptyString,
-  commitSha: Schema.NonEmptyString,
-  changedPaths: Schema.NonEmptyArray(Schema.NonEmptyString),
-  pullRequestNumber: Schema.Int,
-  pullRequestUrl: Schema.NonEmptyString,
+  status: z.literal("published"),
+  branch: z.string().min(1),
+  commitSha: z.string().min(1),
+  changedPaths: z.array(z.string().min(1)).min(1),
+  pullRequestNumber: z.int(),
+  pullRequestUrl: z.string().min(1),
   tests: PublishedTests,
-});
+}).strict();
 
-/** One wire and disk contract shared by Eve and the executor. */
-export const PublicationReceipt = Schema.Union([PublishedReceipt, Schema.Struct({
+export const FailedReceipt = z.object({
   ...identity,
-  status: Schema.Literal("failed"),
-  error: Schema.NonEmptyString,
-})]);
-export type PublicationReceipt = typeof PublicationReceipt.Type;
+  status: z.literal("failed"),
+  error: z.string().min(1),
+}).strict();
+
+export const PublicationReceipt = z.discriminatedUnion("status", [PublishedReceipt, FailedReceipt]);
+export type PublicationReceipt = z.infer<typeof PublicationReceipt>;

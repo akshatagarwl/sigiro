@@ -3,27 +3,25 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Customer-deployable Sigiro agents coordinated by celld and executed with Eve.",
+  "description": "Customer-deployable Sigiro agents backed by Eve and world-celld.",
   "scripts": {
-    "build": "bun run typecheck && bun build coordinator/index.ts --outdir dist/coordinator --target browser && bun build executor/main.ts --outdir dist/executor --target bun",
+    "build": "bun run typecheck && eve build",
     "typecheck": "tsc --noEmit",
-    "executor": "bun run executor/main.ts",
-    "celld:dev": "celld dev coordinator --port 9876 --logs",
+    "world:dev": "eve dev",
     "eve:build": "eve build"
   },
   "dependencies": {
-    "@effect/platform-bun": "4.0.0-rc.112",
+    "@asciidev/eve-box": "0.1.6",
+    "@ewhauser/world-celld": "0.4.1",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/exporter-trace-otlp-proto": "0.222.0",
     "ai": "^7.0.91",
     "ai-sdk-provider-claude-code": "^4.2.0",
-    "effect": "4.0.0-rc.112",
     "eve": "0.51.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260901.1",
-    "@effect/vitest": "^4.0.0-rc.112",
     "@types/bun": "^1.3.4",
     "esbuild": "^0.25.9",
     "typescript": "^5.9.2",

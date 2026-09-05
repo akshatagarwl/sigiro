@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { GitHubApiError } from "eve/channels/github";
 import type { GitHubHandle } from "eve/channels/github";
 import type { SandboxSession } from "eve/sandbox";
-import type { CelldJob } from "./celld-dispatch.ts";
+import type { WorldJob as CelldJob } from "./celld-dispatch.ts";
 
 const MAX_EVIDENCE_BYTES = 1024 * 1024;
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024;

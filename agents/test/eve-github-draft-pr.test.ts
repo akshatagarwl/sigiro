@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { GitHubApiError } from "eve/channels/github";
 import type { GitHubHandle, GitHubJsonObject } from "eve/channels/github";
-import { assertExpectedBaseSha } from "../agent/channels/github";
-import { publishDraftPr } from "../agent/lib/github-draft-pr";
+import { assertExpectedBaseSha, publishDraftPr } from "../agent/lib/github-draft-pr.ts";
 
 const state = { checkoutPath: "/workspace/repo", headSha: "base", baseRef: null, defaultBranch: "main" } as const;
 const repository = { owner: "acme", name: "demo", fullName: "acme/demo", id: 1, private: true } as const;

@@ -14,7 +14,7 @@ export default otelIntegration({
   recordOutputs: false,
   runtimeContext: ({ session }) => {
     const auth = session.auth.current;
-    if (auth?.authenticator !== "celld-worker-token") return undefined;
+    if (auth?.authenticator !== "world-job") return undefined;
     const { executionId, incidentId } = auth.attributes ?? {};
     return {
       ...(typeof executionId === "string" ? { "execution.hash": createHash("sha256").update(executionId).digest("hex") } : {}),

@@ -1,6 +1,4 @@
 FROM oven/bun:1.3.14-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f AS bun
-FROM docker:27-cli AS docker
-FROM minio/mc:RELEASE.2025-08-13T08-35-41Z AS mc
 FROM node:24.4.1-bookworm-slim@sha256:36ae19f59c91f3303c7a648f07493fe14c4bd91320ac8d898416327bacf1bbfa
 
 ARG TARGETARCH
@@ -9,8 +7,6 @@ ARG CELLD_AMD64_SHA256=0488628597154725db2f61f85434fb381e1b2535d1e9f097c6d20727c
 ARG CELLD_ARM64_SHA256=d95ec7108d2c280144599727ac66106c0123d09c573f5724d3b4d3bc33f7603e
 
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
-COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=mc /usr/bin/mc /usr/local/bin/mc
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash ca-certificates curl git gh openssl supervisor \
     && rm -rf /var/lib/apt/lists/* \
@@ -34,10 +30,9 @@ ENV PATH=/app/node_modules/.bin:/usr/local/bin:/usr/bin:/bin \
     EXECUTOR_STATE_DIR=/var/lib/sigiro-agent/jobs \
     SIGIRO_AGENT_PROVIDER=claude
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile \
+    && cp -R node_modules/@ewhauser/world-celld/celld-worker /app/world-celld-worker
 COPY src ./src
-COPY coordinator ./coordinator
-COPY executor ./executor
 COPY agent ./agent
 COPY tsconfig.json ./tsconfig.json
 COPY deploy/start-agent.sh deploy/supervisord.conf ./deploy/

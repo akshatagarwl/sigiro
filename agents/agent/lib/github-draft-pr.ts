@@ -41,6 +41,10 @@ interface PullRequestResponse {
   readonly title: string;
 }
 
+export function assertExpectedBaseSha(expected: string, actual: string): void {
+  if (expected !== actual) throw new Error(`GitHub base SHA mismatch: the anchor's checked-out head ${actual} differs from the job's base SHA ${expected}`);
+}
+
 export interface DraftPrPublishState {
   readonly checkoutPath: string | null;
   readonly headSha: string | null;
@@ -53,7 +57,7 @@ export interface DraftPrPublishInput {
   readonly sandbox: Pick<SandboxSession, "run" | "readBinaryFile">;
   readonly state: DraftPrPublishState;
   readonly publicationId: string;
-  /** Trusted celld job scope. Omitted for direct human GitHub sessions. */
+  /** Trusted world job scope. Omitted for direct human GitHub sessions. */
   readonly allowedPaths?: readonly string[];
   readonly tests?: readonly { readonly name: string; readonly command: string; readonly exitCode: number }[];
 }

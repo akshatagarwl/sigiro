@@ -16,8 +16,6 @@
     "noEmit": true
   },
   "include": [
-    "coordinator/**/*.ts",
-    "executor/**/*.ts",
     "src/**/*.ts",
     "agent/**/*.ts"
   ]
