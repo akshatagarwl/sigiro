@@ -7,7 +7,7 @@ export const currentTraceHeaders = Effect.currentSpan.pipe(
   Effect.catchTag("NoSuchElementError", () => Effect.succeed({})),
 );
 
-// The user requested dogfooding against the existing local Sigiro receiver.
+// Export only to the customer's local Sigiro receiver.
 // Only opaque correlation hashes, operation names and error codes leave this process.
 const resource = { attributes: [{ key: "service.name", value: { stringValue: "sigiro-agent-worker" } }], droppedAttributesCount: 0 };
 const attributeKeys = new Set(["execution.hash", "job.hash", "error.type"]);
@@ -58,12 +58,13 @@ export const telemetry = Layer.unwrap(Effect.gen(function* () {
     yield* Effect.logInfo("Sigiro telemetry disabled: OTEL_EXPORTER_OTLP_ENDPOINT is not set");
     return Layer.empty;
   }
-  if (endpoint.value.replace(/\/$/, "") !== "http://127.0.0.1:14318") {
-    return yield* Effect.fail(new Config.ConfigError(new ConfigProvider.SourceError({ message: "This rehearsal exports only to the existing local Sigiro receiver: http://127.0.0.1:14318" })));
+  const url = endpoint.value.replace(/\/$/, "");
+  if (url !== "http://127.0.0.1:14318" && url !== "http://sigiro:4318") {
+    return yield* Effect.fail(new Config.ConfigError(new ConfigProvider.SourceError({ message: "Agent telemetry requires the local Sigiro receiver: http://127.0.0.1:14318 or http://sigiro:4318" })));
   }
   const options = { resource: { serviceName: "sigiro-agent-worker" }, exportInterval: "1 second", shutdownTimeout: "5 seconds" } as const;
   return Layer.merge(
-    OtlpLogger.layer({ ...options, url: "http://127.0.0.1:14318/v1/logs", mergeWithExisting: true }),
-    OtlpTracer.layer({ ...options, url: "http://127.0.0.1:14318/v1/traces" }),
+    OtlpLogger.layer({ ...options, url: `${url}/v1/logs`, mergeWithExisting: true }),
+    OtlpTracer.layer({ ...options, url: `${url}/v1/traces` }),
   ).pipe(Layer.provide(serialization), Layer.provide(transport));
 }));

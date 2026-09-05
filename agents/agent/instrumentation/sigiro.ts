@@ -1,10 +1,15 @@
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { otelIntegration } from "eve/instrumentation/otel";
 
+const endpoint = (process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://127.0.0.1:14318").replace(/\/$/, "");
+if (endpoint !== "http://127.0.0.1:14318" && endpoint !== "http://sigiro:4318") {
+  throw new Error("Agent telemetry requires the local Sigiro receiver: http://127.0.0.1:14318 or http://sigiro:4318");
+}
+
 export default otelIntegration({
-  // Only the customer's local demo Sigiro collector receives these spans.
+  // Only the customer's local Sigiro collector receives these spans.
   // Eve removes input/output content, exception events, and status messages.
-  traceExporter: new OTLPTraceExporter({ url: "http://127.0.0.1:14318/v1/traces" }),
+  traceExporter: new OTLPTraceExporter({ url: `${endpoint}/v1/traces` }),
   recordInputs: false,
   recordOutputs: false,
   runtimeContext: ({ session }) => {

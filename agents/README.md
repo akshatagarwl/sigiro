@@ -1,6 +1,6 @@
 # sigiro agents
 
-An agent turns a telemetry finding into a tested patch, coordinated by celld
+An agent turns a telemetry finding into a tested draft PR, coordinated by celld
 and executed by Eve, with an Effect pull worker. The worker pulls assignments outbound, so a
 local/customer-hosted pull worker works without inbound worker networking.
 
@@ -70,6 +70,13 @@ key is required. Credentials stay on the customer's trusted host.
 
 ## Run it
 
+For the three-service Docker Compose installation, follow
+[the customer-hosted setup](docs/customer-hosted.md): Sigiro, MinIO, and an agent
+container bundling celld, Eve, and the worker. GitHub and Claude sign-in use native
+clients with persistent authentication. Investigations create temporary sandboxes.
+
+For local development:
+
 ```sh
 bun install
 bun run build
@@ -97,12 +104,13 @@ with the actual test results, commit, and PR. Eve owns its event stream; the wor
 only reads cancellation events to confirm a requested stop. Separate atomic
 success and failure receipt files prevent a late failure from overwriting a PR.
 
-Real private-repository auth, trigger and dedup integration, hosted tenant
-isolation, and production celld fleet failover remain open. Do not claim
+Automatic incident triggering, hosted tenant isolation, and production celld
+fleet failover remain open. Private-repository access and draft-PR publishing use
+the trusted host’s authenticated GitHub CLI. Do not claim
 any-infrastructure or any-repository support yet.
 
-Deployment: `docs/customer-hosted.md`. Boundary and residue:
-`docs/threat-model.md`.
+Deployment: [customer-hosted setup](docs/customer-hosted.md). Boundary and residue:
+[threat model](docs/threat-model.md).
 
 ## Agent observability
 
