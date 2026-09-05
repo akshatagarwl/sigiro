@@ -3,7 +3,7 @@
 The customer-hosted agent runs exactly two long-lived supervised processes:
 
 ```text
-S3 or R2 ── celld v0.4.0 ── copied @ewhauser/world-celld@0.4.1 worker ── Eve 0.51 Workflow runtime
+S3 or R2 ── celld v0.4.1 ── copied @ewhauser/world-celld@0.4.1 worker ── Eve 0.51 Workflow runtime
 ```
 
 S3 stores celld state. The image copies
