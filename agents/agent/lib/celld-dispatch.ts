@@ -21,6 +21,11 @@ export const worldJobSchema = z.object({
   baseSha: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   prompt: boundedString(),
   tests: z.array(z.object({ name: boundedString(MAX_SHORT_STRING), command: boundedString() }).strict()).min(1).max(100),
+  // Dependency installation for a cold sandbox. A Box VM ships language
+  // runtimes but not this repository's packages, so without these the tests
+  // cannot run. Supplied by the control plane alongside tests, never by the
+  // model, and executed during workspace preparation before the first turn.
+  setup: z.array(z.object({ name: boundedString(MAX_SHORT_STRING), command: boundedString() }).strict()).max(20).optional(),
   allowedPaths: z.array(boundedString(MAX_SHORT_STRING)).min(1).max(1_000),
 }).strict();
 export type WorldJob = z.infer<typeof worldJobSchema>;
@@ -45,6 +50,9 @@ export function messageForJob(job: WorldJob): string {
     `Follow these allowed paths exclusively: ${job.allowedPaths.join(", ")}.`,
     `Base ref: ${job.baseRef}.`,
     `Prompt: ${job.prompt}`,
+    ...(job.setup?.length
+      ? ["Dependencies are already installed. Do not reinstall them unless a test failure proves they are missing."]
+      : ["No dependencies were installed for you. If a test needs packages, install them yourself before running it."]),
     "Run every listed test:",
     job.tests.map(({ name, command }) => `- ${name}: ${command}`).join("\n"),
     "Leave all changes uncommitted so the Eve publisher can publish them.",

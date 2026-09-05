@@ -102,6 +102,27 @@ export async function prepareWorkspace(job: CelldJob, sandbox: SandboxSession): 
   await sandbox.writeBinaryFile({ path: "/workspace/sigiro-evidence.json", content: evidence });
   const result = await sandbox.run({ command: `test ! -e ${quote(CHECKOUT_PATH)} && git clone --no-checkout /workspace/repository.bundle ${quote(CHECKOUT_PATH)} && git -C ${quote(CHECKOUT_PATH)} checkout --detach ${quote(job.baseSha)} && git -C ${quote(CHECKOUT_PATH)} remote remove origin && test "$(git -C ${quote(CHECKOUT_PATH)} rev-parse HEAD)" = ${quote(job.baseSha)} && rm /workspace/repository.bundle` });
   if (result.exitCode !== 0) throw new Error(`Sandbox checkout failed (${result.exitCode}): ${result.stderr}`);
+  await runSetup(job, sandbox);
+}
+
+/**
+ * Installs the repository's dependencies in the cold sandbox.
+ *
+ * The Docker backend received an image that already carried them. A Box VM
+ * ships language runtimes only, so a job whose tests need packages must
+ * install them first or every test fails for a reason unrelated to the change.
+ *
+ * These commands come from the control plane with the job, exactly like
+ * `tests`, and run before the model's first turn. A failure here aborts
+ * preparation rather than handing the model a workspace that cannot build.
+ */
+export async function runSetup(job: CelldJob, sandbox: SandboxSession): Promise<void> {
+  for (const step of job.setup ?? []) {
+    const result = await sandbox.run({ command: `cd ${quote(CHECKOUT_PATH)} && /bin/sh -lc ${quote(step.command)}` });
+    if (result.exitCode !== 0) {
+      throw new Error(`Sandbox setup failed: ${step.name} (exit ${result.exitCode}): ${result.stderr.slice(0, 2000)}`);
+    }
+  }
 }
 
 /** Existing publisher transport; the host's gh credential never reaches the agent. */
