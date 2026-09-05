@@ -50,7 +50,18 @@ export CELLD_VAR_WORKFLOW_CALLBACK_SECRET="$WORKFLOW_CALLBACK_SECRET"
 export CELLD_VAR_WORKFLOW_RETENTION_MS=7776000000
 export CELLD_FLEET_URL=http://127.0.0.1:8080
 export WORKFLOW_BASE_URL=http://127.0.0.1:12000
-export AWS_REGION="${AWS_REGION:-us-east-1}"
+# An S3-compatible store that is not Amazon S3 needs an explicit endpoint, and
+# addresses one pseudo-region. Amazon S3 selects its endpoint from the region.
+if [ -n "${S3_ENDPOINT:-}" ]; then
+  export AWS_REGION="${AWS_REGION:-auto}"
+  CELLD_ENDPOINT_FLAG="--endpoint $S3_ENDPOINT"
+else
+  export AWS_REGION="${AWS_REGION:-us-east-1}"
+  CELLD_ENDPOINT_FLAG=""
+fi
+# supervisord splits its command after interpolating this, so an empty value
+# contributes no argument.
+export CELLD_ENDPOINT_FLAG
 export CELLD_WATCH=/var/lib/sigiro-agent/celld
 export CELLD_DURABILITY=bucket
 export CELLD_MAX_REQUEST_BODY_BYTES=1048576
@@ -60,6 +71,6 @@ export SIGIRO_EVIDENCE_DIR=/var/lib/sigiro-agent/evidence
 export HOST=127.0.0.1
 export PORT=12000
 
-celld deploy /app/world-celld-worker --bucket "$CELLD_BUCKET" --region "$AWS_REGION"
+celld deploy /app/world-celld-worker --bucket "$CELLD_BUCKET" --region "$AWS_REGION" $CELLD_ENDPOINT_FLAG
 
 exec /usr/bin/supervisord -n -c /app/deploy/supervisord.conf

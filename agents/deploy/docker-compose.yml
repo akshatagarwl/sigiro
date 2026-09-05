@@ -20,7 +20,9 @@ services:
       SIGIRO_AGENT_PROVIDER: claude
       OTEL_EXPORTER_OTLP_ENDPOINT: http://sigiro:4318
       CELLD_BUCKET: ${CELLD_BUCKET:?set CELLD_BUCKET to an S3 bucket with conditional-write support}
-      AWS_REGION: ${AWS_REGION:?set AWS_REGION to the bucket's region}
+      # Empty for Amazon S3. Set for an S3-compatible store such as R2.
+      S3_ENDPOINT: ${S3_ENDPOINT-}
+      AWS_REGION: ${AWS_REGION:?set AWS_REGION to the bucket's region, or auto for R2}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in .env}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in .env}
     volumes:
