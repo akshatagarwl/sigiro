@@ -3,6 +3,12 @@
 # `libduckdb-sys 1.10503.1` is DuckDB 1.5.3.
 [tools]
 duckdb = "1.5.3"
+sccache = "0.17.0"
 # Keep Cranelift opt-in. Its macOS backend cannot preserve the `catch_unwind`
 # behavior used in `src/anomaly.rs` and `src/quack.rs`.
 rust = { version = "nightly-2026-09-05", components = ["rustc-codegen-cranelift-preview"] }
+
+# Cache the bundled DuckDB C++ compilation, which mbx does not cover.
+[env]
+CC = "sccache clang"
+CXX = "sccache clang++"
