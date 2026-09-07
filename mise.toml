@@ -4,9 +4,15 @@
 [tools]
 duckdb = "1.5.5"
 sccache = "0.17.0"
-# Keep Cranelift opt-in. Its macOS backend cannot preserve the `catch_unwind`
-# behavior used in `src/anomaly.rs` and `src/quack.rs`.
-rust = { version = "nightly-2026-09-05", components = ["rustc-codegen-cranelift-preview"] }
+# Stable, matching the Dockerfile's `rust:1-slim-bookworm`. Nothing here needs
+# nightly: no `#![feature]`, no `cargo-features`, no `[unstable]`, no `-Z`, and
+# edition 2024 is stable. The previous `nightly-2026-09-05` pin existed only to
+# carry `rustc-codegen-cranelift-preview`, which macOS cannot actually use
+# because Cranelift there does not preserve the `catch_unwind` behavior
+# `src/anomaly.rs` and `src/quack.rs` rely on. Keeping it cost two compiler
+# identities in mbx's cache, so an unactivated `just check` (stable) and a
+# `mise exec -- just check` (nightly) shared nothing and each paid a cold build.
+rust = "1.97.1"
 
 # Cache the bundled DuckDB C++ compilation, which mbx does not cover.
 [env]
