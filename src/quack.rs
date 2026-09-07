@@ -25,22 +25,29 @@ use duckdb::vtab::arrow::WritableVector;
 /// re-verified bump here.
 ///
 /// Empirically, against the DuckDB build actually vendored by this crate's
-/// `duckdb = "1.10503.1"` dependency (DuckDB v1.5.3): quack is NOT in
+/// `duckdb = "1.10505.0"` dependency (DuckDB v1.5.5): quack is NOT in
 /// DuckDB's autoloadable "known extensions" list, so a bare `LOAD quack;`
 /// always fails with "Extension \"quack\" is an existing extension. Install
 /// it first" — [`load_and_pin`] must always `INSTALL` it explicitly. The
 /// `core` repository (DuckDB's default, i.e. plain `INSTALL quack;` with no
-/// `FROM` clause) serves this pinned version. **`core_nightly` serves a
-/// DIFFERENT, newer, UNVERIFIED build** (confirmed empirically: version
-/// `40de7ba` vs. this pin's `1693647`, for the same DuckDB v1.5.3/platform)
-/// — using it as a fallback here was the actual root cause of a boot failure
-/// (`quack extension version mismatch: installed "40de7ba", pinned
-/// "1693647"`) once `core_nightly`'s build drifted away from what this gate
-/// was verified against. Never fall back to `core_nightly`; if `core` stops
-/// serving this exact version, that is exactly the drift this pin exists to
-/// catch — re-verify the authorization gate against the new build and bump
-/// this constant deliberately, rather than widening the install source.
-pub(crate) const EXPECTED_QUACK_VERSION: &str = "1693647";
+/// `FROM` clause) serves this pinned version.
+///
+/// `core` serves a different quack build per DuckDB version, so a DuckDB
+/// bump moves this constant too. The v1.5.3 pin was `1693647`; v1.5.5 serves
+/// `c154811`.
+///
+/// **`core_nightly` serves a DIFFERENT, newer, UNVERIFIED build.** Measured
+/// on v1.5.3, `core_nightly` served `40de7ba` against that pin's `1693647`
+/// for the same platform, and using it as a fallback was the actual root
+/// cause of a boot failure (`quack extension version mismatch: installed
+/// "40de7ba", pinned "1693647"`) once `core_nightly`'s build drifted away
+/// from what this gate was verified against. That comparison has not been
+/// re-measured on v1.5.5, and it does not need to be: never fall back to
+/// `core_nightly`. If `core` stops serving this exact version, that is
+/// exactly the drift this pin exists to catch — re-verify the authorization
+/// gate against the new build and bump this constant deliberately, rather
+/// than widening the install source.
+pub(crate) const EXPECTED_QUACK_VERSION: &str = "c154811";
 
 /// Scalar UDF name installed as the quack authorization gate. Re-registered
 /// from this Rust source on every server boot (see
@@ -127,7 +134,7 @@ struct QuackAuthorizeScalar;
 impl VScalar for QuackAuthorizeScalar {
     type State = ();
 
-    unsafe fn invoke(
+    fn invoke(
         _: &Self::State,
         input: &mut DataChunkHandle,
         output: &mut dyn WritableVector,
@@ -171,7 +178,7 @@ impl VScalar for QuackAuthorizeScalar {
 ///
 /// Uses a non-NULL placeholder for `connection_id` (never literal SQL
 /// `NULL`, and never something a real quack call would send): the
-/// `duckdb = "1.10503.1"` crate's `VScalar` API has no hook for DuckDB's
+/// `duckdb = "1.10505.0"` crate's `VScalar` API has no hook for DuckDB's
 /// "special" null handling, so a registered scalar UDF gets DEFAULT null
 /// handling — DuckDB substitutes SQL NULL as the *whole row's output*
 /// whenever ANY argument is NULL, without ever calling into

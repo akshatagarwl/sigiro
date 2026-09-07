@@ -1,8 +1,8 @@
 # Pins the DuckDB CLI to the exact version the `duckdb` crate embeds, so a
 # shell query against a database file behaves like the server that wrote it.
-# `libduckdb-sys 1.10503.1` is DuckDB 1.5.3.
+# `libduckdb-sys 1.10505.0` is DuckDB 1.5.5.
 [tools]
-duckdb = "1.5.3"
+duckdb = "1.5.5"
 sccache = "0.17.0"
 # Keep Cranelift opt-in. Its macOS backend cannot preserve the `catch_unwind`
 # behavior used in `src/anomaly.rs` and `src/quack.rs`.

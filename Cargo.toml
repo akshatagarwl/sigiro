@@ -78,7 +78,7 @@ rmcp = { version = "3.1.2", features = ["server", "macros", "transport-streamabl
 
 [target.'cfg(target_os = "linux")'.dependencies]
 caps = "0.5"
-duckdb = { version = "=1.10503.1", features = ["appender-arrow", "vscalar"] }
+duckdb = { version = "=1.10505.0", features = ["appender-arrow", "vscalar"] }
 
 # DuckDB does not publish a single self-contained macOS static core archive.
 # Keep local development zero-setup; the production Linux build links the
@@ -96,7 +96,7 @@ duckdb = { version = "=1.10503.1", features = ["appender-arrow", "vscalar"] }
 # It stays a cached file on macOS, which `extensions_needing_install`
 # (src/storage.rs) already resolves at runtime by asking DuckDB.
 [target.'cfg(target_os = "macos")'.dependencies]
-duckdb = { version = "=1.10503.1", features = [
+duckdb = { version = "=1.10505.0", features = [
     "bundled",
     "parquet",
     "json",

@@ -42,7 +42,7 @@
 #   #    Cargo.toml), so it links a prebuilt static archive that the Dockerfile
 #   #    normally prepares. Without Docker, reproduce that step directly:
 #   mkdir -p /tmp/duckdb-static && cd /tmp/duckdb-static
-#   curl -fSL "https://github.com/duckdb/duckdb/releases/download/v1.5.3/static-libs-linux-arm64.zip" -o s.zip
+#   curl -fSL "https://github.com/duckdb/duckdb/releases/download/v1.5.5/static-libs-linux-arm64.zip" -o s.zip
 #   unzip -oq s.zip && rm s.zip
 #   { echo "create m.a"; for a in *.a; do echo "addlib $a"; done; echo save; echo end; } | aarch64-linux-gnu-ar -M
 #   aarch64-linux-gnu-ranlib m.a && mkdir -p /tmp/duckdb-opt

@@ -23,7 +23,7 @@ WORKDIR /build
 # are merged: the bundle's generated_extension_loader references every extension,
 # so it's link-all-or-nothing.
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS duckdb-static
-ARG DUCKDB_VERSION=1.5.3
+ARG DUCKDB_VERSION=1.5.5
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip binutils && rm -rf /var/lib/apt/lists/* && \
     mkdir -p /opt/duckdb /tmp/d && cd /tmp/d && \
