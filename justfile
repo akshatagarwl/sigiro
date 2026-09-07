@@ -5,11 +5,11 @@ _default:
     @just --list
 
 build:
-    cargo build --release --bin sigiro {{ if env("TARGET", "") != "" { "--target " + env("TARGET") } else { "" } }}
+    mbx build --release --bin sigiro {{ if env("TARGET", "") != "" { "--target " + env("TARGET") } else { "" } }}
 
 # Fast verification gate (debug). Run this before every commit.
 check:
-    cargo fmt --check
+    mbx fmt --check
     # Unused dependencies, and source files no target compiles. Neither is
     # reachable by any other gate here: rustc's `dead_code` only sees code it
     # compiles, and hawk only ranks `pub` items inside that same graph — a crate
@@ -18,8 +18,8 @@ check:
     # the dependencies it names. Placed ahead of clippy so it fails before the
     # slow compile. Needs `cargo install cargo-shear`, same as `just hawk` needs
     # cargo-hawk.
-    cargo shear
-    cargo clippy --all-targets --all-features -- -D warnings
+    mbx shear
+    mbx clippy --all-targets --all-features -- -D warnings
     # SIGIRO_SHUTDOWN_TIMEOUT_SECS: production keeps the 5s default; the suite
     # gets 60s. `shutdown_and_wait` waits on a BLOCKING DuckDB drain thread, so
     # its budget is wall-clock while its work is not — under concurrent builds
@@ -27,13 +27,13 @@ check:
     # gated (measured: 2 of 3 runs failed with 3 concurrent cargo builds, 3 of 3
     # passed idle). A gate that fails for unrelated reasons teaches people to
     # re-run it until it passes, which is how a real failure gets waved through.
-    SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 cargo test
+    SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test
 
 # Full release-mode gate. Run before building a deploy image / cutting a release.
 check-release:
-    cargo fmt --check
-    cargo clippy --all-targets --all-features -- -D warnings
-    SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 cargo test --release
+    mbx fmt --check
+    mbx clippy --all-targets --all-features -- -D warnings
+    SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test --release
 
 # Lint for unnecessary `pub` API surface (astral-sh/hawk). Closed-world
 # analysis: anything `pub` the `sigiro` binary can't reach is dead or could be
@@ -48,7 +48,7 @@ check-release:
 # Setting CARGO_TARGET_DIR does NOT fix this: hawk overrides it with its own temp
 # dir, so the env var looked right and changed nothing. Use the flag.
 hawk *args:
-    cargo +1.97.1 hawk check --manifest-path Cargo.toml --target-dir target/hawk \
+    mbx +1.97.1 hawk check --manifest-path Cargo.toml --target-dir target/hawk \
       -A hawk::unnecessary_restricted_visibility \
       -D hawk::dead_public -D hawk::unnecessary_public {{ args }}
 
@@ -70,7 +70,7 @@ run:
     set -euo pipefail
     docker compose -f docker-compose.dev.yml up -d
     trap 'docker compose -f docker-compose.dev.yml down' EXIT
-    cargo run --release --bin sigiro
+    mbx run --release --bin sigiro
 
 # S3-backed distributed "default" project quack E2E (needs Docker: Postgres + MinIO).
 check-s3-e2e:
@@ -83,7 +83,7 @@ check-s3-e2e:
     docker compose -f docker-compose.dev.yml up -d --wait postgres minio
     docker compose -f docker-compose.dev.yml up minio-setup
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-    cargo test --test quack_s3_query_surface_test -- --ignored --nocapture
+    mbx test --test quack_s3_query_surface_test -- --ignored --nocapture
 
 # Storage-mode matrix E2E: proves ingest->flush->query->restart-persistence in
 # all three modes (local file / PG+local data / PG+S3). Needs Docker (Postgres +
@@ -94,7 +94,7 @@ check-storage-matrix-e2e:
     docker compose -f docker-compose.dev.yml up -d --wait postgres minio
     docker compose -f docker-compose.dev.yml up minio-setup
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-    cargo test --test storage_mode_matrix_test -- --ignored --nocapture
+    mbx test --test storage_mode_matrix_test -- --ignored --nocapture
 
 # Hosted control-plane E2E: multi-tenant provisioning + key/revoke/suspend
 # lifecycle + restart-persistence against the shared PG `sigiro_control` catalog.
@@ -104,7 +104,7 @@ check-control-plane-e2e:
     set -euo pipefail
     docker compose -f docker-compose.dev.yml up -d --wait postgres
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-    cargo test --test control_plane_e2e_test -- --ignored --nocapture
+    mbx test --test control_plane_e2e_test -- --ignored --nocapture
 
 # A permanent DuckLake attach failure (data_path / storage-backend mismatch)
 # must fail fast, not wedge the pool in its 30x retry loop. Needs Docker Postgres.
@@ -113,7 +113,7 @@ check-attach-fail-fast-e2e:
     set -euo pipefail
     docker compose -f docker-compose.dev.yml up -d --wait postgres
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-    cargo test --test attach_fail_fast_test -- --ignored --nocapture
+    mbx test --test attach_fail_fast_test -- --ignored --nocapture
 
 # Hosted multi-tenant ISOLATION attack matrix (needs Docker: Postgres catalog).
 # A client with tenant A's key must never read tenant B's data or escape the
@@ -123,7 +123,7 @@ check-hosted-isolation-e2e:
     set -euo pipefail
     docker compose -f docker-compose.dev.yml up -d --wait postgres
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-    cargo test --test hosted_isolation_attack_test -- --ignored --nocapture
+    mbx test --test hosted_isolation_attack_test -- --ignored --nocapture
 
 # Build multi-arch Docker image. Pass --push to push, or --set flags for cache config.
 image *args:
@@ -145,11 +145,13 @@ lima-build:
     set -euo pipefail
     source scripts/lima-cross-env.sh
     ulimit -n 65536 2>/dev/null || true
-    cargo build --release --target "$SIGIRO_LIMA_TARGET" --bin sigiro
+    mbx build --release --target "$SIGIRO_LIMA_TARGET" --bin sigiro
     file "$SIGIRO_LIMA_SIGIRO_BIN"
 
 clean:
-    cargo clean
+    # `mbx clean`, not `cargo clean`: target/ is a link into mbx's shared cache,
+    # so `cargo clean` deletes the link and the next build restores from cache.
+    mbx clean
     docker compose -f docker-compose.dev.yml down -v --remove-orphans
 
 # Refresh www/openapi.json — the snapshot the API reference is generated from.
@@ -159,7 +161,7 @@ clean:
 api-spec:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --quiet --bin sigiro
+    mbx build --quiet --bin sigiro
     # A warm data dir under target/: with a fresh one DuckDB re-downloads its
     # extensions on every run and the wait below times out.
     dir=target/spec-db
