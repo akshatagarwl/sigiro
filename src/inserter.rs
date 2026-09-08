@@ -900,6 +900,8 @@ async fn run_flusher(
     };
     let mut interval = tokio::time::interval(flush_interval);
     let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(30));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    checkpoint_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // First anomaly pass one full period AFTER startup (interval_at skips the
     // immediate tick a plain `interval` fires) — a pass at t=0 would scan
     // before the first flush ever lands and find nothing.
@@ -920,17 +922,23 @@ async fn run_flusher(
                 pool.touch_project(&project_id);
                 // F-25: demoted from debug! to trace! (see flush skipped above).
                 tracing::trace!(project_id, "flusher timer tick");
-                if writer_tx.send(WriterCommand::FlushIfNeeded).await.is_err() {
-                    tracing::error!(project_id, "writer thread stopped before timer flush");
-                    break;
+                match writer_tx.try_send(WriterCommand::FlushIfNeeded) {
+                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        tracing::error!(project_id, "writer thread stopped before timer flush");
+                        break;
+                    }
                 }
             }
 
             _ = checkpoint_interval.tick() => {
                 pool.touch_project(&project_id);
-                if writer_tx.send(WriterCommand::Checkpoint).await.is_err() {
-                    tracing::error!(project_id, "writer thread stopped before checkpoint");
-                    break;
+                match writer_tx.try_send(WriterCommand::Checkpoint) {
+                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        tracing::error!(project_id, "writer thread stopped before checkpoint");
+                        break;
+                    }
                 }
             }
 
