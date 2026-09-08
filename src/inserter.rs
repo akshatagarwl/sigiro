@@ -26,6 +26,13 @@ pub enum RouterError {
     /// Failed to get or create a DuckDB connection.
     #[error("connection failed for project {project_id}")]
     ConnectionFailed { project_id: String },
+    /// Telemetry was queued, but its alert transition could not be made durable.
+    #[error("alert persistence failed for project {project_id}: {source}")]
+    AlertPersistence {
+        project_id: String,
+        #[source]
+        source: anyhow::Error,
+    },
     /// On-disk footprint reached the configured `SIGIRO_MAX_DISK_BYTES` cap —
     /// ingest is rejected to keep the box from filling its disk. Maps to HTTP
     /// 507 / gRPC `resource_exhausted`, distinct from an internal 500.
@@ -159,6 +166,7 @@ pub struct MsgRouter {
     project_senders: DashMap<String, (mpsc::Sender<FlusherCommand>, TokioJoinHandle<()>)>,
     drop_count: AtomicUsize,
     disk: Arc<DiskCapacityState>,
+    alerts: Option<crate::alerts::AlertStore>,
 }
 
 enum FlusherCommand {
@@ -202,6 +210,16 @@ impl MsgRouter {
         Self::with_config_and_disk(pool, FlushConfig::from_env(), disk)
     }
 
+    pub fn new_with_disk_and_alerts(
+        pool: Arc<ProjectPool>,
+        disk: Arc<DiskCapacityState>,
+        alerts: crate::alerts::AlertStore,
+    ) -> Self {
+        let mut router = Self::with_config_and_disk(pool, FlushConfig::from_env(), disk);
+        router.alerts = Some(alerts);
+        router
+    }
+
     pub(crate) fn with_config_and_disk(
         pool: Arc<ProjectPool>,
         flush_config: FlushConfig,
@@ -213,6 +231,7 @@ impl MsgRouter {
             project_senders: DashMap::new(),
             drop_count: AtomicUsize::new(0),
             disk,
+            alerts: None,
         }
     }
 
@@ -326,6 +345,10 @@ impl MsgRouter {
 
         let project_id = msg.project_id().to_string();
         let project_id_for_err = project_id.clone();
+        let alert_batch = match &msg {
+            IngestMsg::Logs { batch, .. } if self.alerts.is_some() => Some(batch.clone()),
+            _ => None,
+        };
 
         // Lazy creation: ensure flusher exists before sending
         self.ensure_flusher(&project_id)?;
@@ -342,7 +365,10 @@ impl MsgRouter {
         match self.flush_config.backpressure {
             BackpressurePolicy::Block => {
                 match sender.send(FlusherCommand::Ingest(Box::new(msg))).await {
-                    Ok(()) => Ok(()),
+                    Ok(()) => {
+                        self.process_alerts(&project_id, alert_batch.as_ref())?;
+                        Ok(())
+                    }
                     Err(e) => {
                         tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
                         drop(entry);
@@ -370,7 +396,10 @@ impl MsgRouter {
             }
             BackpressurePolicy::DropNewest => {
                 match sender.try_send(FlusherCommand::Ingest(Box::new(msg))) {
-                    Ok(()) => Ok(()),
+                    Ok(()) => {
+                        self.process_alerts(&project_id, alert_batch.as_ref())?;
+                        Ok(())
+                    }
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         let count = self.drop_count.fetch_add(1, Ordering::Relaxed) + 1;
                         tracing::warn!(
@@ -405,6 +434,31 @@ impl MsgRouter {
                 }
             }
         }
+    }
+
+    fn process_alerts(
+        &self,
+        project_id: &str,
+        batch: Option<&RecordBatch>,
+    ) -> Result<(), RouterError> {
+        let (Some(alerts), Some(batch)) = (&self.alerts, batch) else {
+            return Ok(());
+        };
+        match alerts.process_log_batch(project_id, batch) {
+            Ok(result) if result.notifications_enqueued > 0 => tracing::info!(
+                project_id,
+                notifications = result.notifications_enqueued,
+                "alert transitions persisted"
+            ),
+            Ok(_) => {}
+            Err(source) => {
+                return Err(RouterError::AlertPersistence {
+                    project_id: project_id.to_string(),
+                    source,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Shut down and await all flusher tasks. Guarantees all buffered data
@@ -531,6 +585,10 @@ impl ProjectFlusher {
             .schema()
             .index_of("body")
             .context("sigiro_logs missing body column")?;
+        let event_name_idx = batch
+            .schema()
+            .index_of("event_name")
+            .context("sigiro_logs missing event_name column")?;
         let body_col = batch
             .column(body_idx)
             .as_any()
@@ -550,18 +608,30 @@ impl ProjectFlusher {
             self.pending_templates.entry(id).or_insert(template);
         }
 
-        // Append template_id and template_values columns to the existing batch
+        // Existing catalogs gain event_name through ALTER TABLE, which appends it
+        // after the template columns. Keep fresh and migrated catalogs positional.
+        let event_name = batch.column(event_name_idx).clone();
+        let event_name_field = batch.schema().field(event_name_idx).clone();
         let id_array = std::sync::Arc::new(UInt64Array::from(template_ids));
         let values_array = std::sync::Arc::new(StringArray::from(template_values));
-        let mut columns: Vec<std::sync::Arc<dyn Array>> = batch.columns().to_vec();
+        let mut columns: Vec<std::sync::Arc<dyn Array>> = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != event_name_idx)
+            .map(|(_, column)| Arc::clone(column))
+            .collect();
         columns.push(id_array);
         columns.push(values_array);
+        columns.push(event_name);
 
         let mut fields: Vec<arrow::datatypes::Field> = batch
             .schema()
             .fields()
             .iter()
-            .map(|f| f.as_ref().clone())
+            .enumerate()
+            .filter(|(index, _)| *index != event_name_idx)
+            .map(|(_, field)| field.as_ref().clone())
             .collect();
         fields.push(arrow::datatypes::Field::new(
             "template_id",
@@ -573,6 +643,7 @@ impl ProjectFlusher {
             arrow::datatypes::DataType::Utf8,
             true,
         ));
+        fields.push(event_name_field);
         let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
 
         RecordBatch::try_new(schema, columns).context("failed to add template columns")

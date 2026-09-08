@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod alerts;
 pub mod anomaly;
 pub mod auth;
 pub mod client;

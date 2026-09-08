@@ -43,7 +43,7 @@ gRPC service path is not routed. Use HTTP, and ask your operator before assuming
 gRPC on any other host.
 
 Your SDK posts each signal to its standard OTLP path (`/v1/traces`, `/v1/logs`,
-`/v1/metrics`, `/v1/profiles`), which it appends to the endpoint above. If your
+`/v1/metrics`, `/v1development/profiles`), which it appends to the endpoint above. If your
 exporter takes a per-signal endpoint instead, give it the full path. HTTP
 supports gzip and the endpoint uses TLS. One request must be **8 MB or smaller**
 after decompression. Default SDK batch sizes stay well below this limit.

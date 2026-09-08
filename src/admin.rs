@@ -86,5 +86,6 @@ pub fn open_admin_db(dir: &camino::Utf8Path) -> Result<Connection> {
         .context("failed to enable WAL mode")?;
 
     create_instance_status_table(&conn)?;
+    crate::alerts::create_tables(&conn)?;
     Ok(conn)
 }

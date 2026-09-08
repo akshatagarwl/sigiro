@@ -39,7 +39,7 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 服务路径也未做路由。请使用 HTTP；对于其他任何主机，也请先咨询运维方，不要想当然地认为 gRPC 可用。
 
 你的 SDK 会将每类信号发送到其标准 OTLP 路径（`/v1/traces`、`/v1/logs`、
-`/v1/metrics`、`/v1/profiles`），并将该路径追加到上面的端点之后。如果你的
+`/v1/metrics`、`/v1development/profiles`），并将该路径追加到上面的端点之后。如果你的
 导出器要求为每类信号分别配置端点，请填写完整路径。HTTP
 支持 gzip，端点使用 TLS。单个请求解压后必须**不超过 8 MB**。
 SDK 的默认批处理大小远低于此上限。

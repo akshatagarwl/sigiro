@@ -679,7 +679,7 @@ pub fn otlp_http_router(
         .route("/v1/traces", post(otlp_http_traces))
         .route("/v1/logs", post(otlp_http_logs))
         .route("/v1/metrics", post(otlp_http_metrics))
-        .route("/v1/profiles", post(otlp_http_profiles))
+        .route("/v1development/profiles", post(otlp_http_profiles))
         .route("/ingest", post(otlp_http_pyroscope))
         .route("/ingest/pyroscope", post(otlp_http_pyroscope))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
@@ -834,7 +834,7 @@ async fn otlp_http_metrics(
     .await
 }
 
-#[instrument(skip_all, fields(endpoint = "/v1/profiles"))]
+#[instrument(skip_all, fields(endpoint = "/v1development/profiles"))]
 async fn otlp_http_profiles(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
@@ -876,7 +876,7 @@ async fn otlp_http_profiles(
 //
 // The pyroscope Rust crate pushes profiles in Pyroscope's own wire format:
 //   PushRequest (prost protobuf) → gzip → HTTP POST
-// Sigiro's OTLP /v1/profiles accepts only OTLP protobuf. This endpoint bridges
+// Sigiro's OTLP /v1development/profiles accepts only OTLP protobuf. This endpoint bridges
 // the two by decoding Pyroscope's native format and converting to the same
 // Arrow RecordBatch that transform_profiles produces.
 //

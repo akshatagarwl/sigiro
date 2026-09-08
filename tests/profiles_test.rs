@@ -362,12 +362,28 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
     );
 
     let response = server
-        .post("/v1/profiles")
+        .post("/v1development/profiles")
         .add_header("Authorization", "Bearer sigiro_dev_test")
         .content_type("application/x-protobuf")
         .bytes(request.into())
         .await;
     response.assert_status_ok();
+
+    let old_path_response = server
+        .post("/v1/profiles")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/x-protobuf")
+        .bytes(
+            build_linked_otlp_profile_request(
+                "linked-svc",
+                time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64,
+                trace_id.clone(),
+                span_id.clone(),
+            )
+            .into(),
+        )
+        .await;
+    old_path_response.assert_status(StatusCode::NOT_FOUND);
 
     let shared_conn = pool.get_project("default").unwrap();
     let expected_trace_id = hex::encode(&trace_id);
@@ -401,7 +417,7 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
         vec![0x22; 8],
     );
     let response = server
-        .post("/v1/profiles")
+        .post("/v1development/profiles")
         .add_header("Authorization", "Bearer sigiro_dev_test")
         .content_type("application/x-protobuf")
         .bytes(invalid_request.into())

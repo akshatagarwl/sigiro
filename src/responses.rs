@@ -14,6 +14,12 @@ pub struct ServicesResponse {
     pub(crate) services: Vec<ServiceEntry>,
 }
 
+/// GET /v1/alerts
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct AlertsResponse {
+    pub(crate) alerts: Vec<crate::alerts::AlertInstance>,
+}
+
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceEntry {

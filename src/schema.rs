@@ -58,10 +58,18 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             scope_attributes      VARCHAR,
             log_attributes        VARCHAR,
             template_id           UBIGINT,
-            template_values       VARCHAR
+            template_values       VARCHAR,
+            event_name            VARCHAR
         )"
     ))
     .context("failed to create sigiro_logs")?;
+
+    // CREATE TABLE IF NOT EXISTS does not evolve existing tenant catalogs.
+    conn.execute_batch(&format!(
+        "ALTER TABLE {prefix}sigiro_logs ADD COLUMN IF NOT EXISTS event_name VARCHAR;
+         UPDATE {prefix}sigiro_logs SET event_name = '' WHERE event_name IS NULL"
+    ))
+    .context("failed to add sigiro_logs.event_name")?;
 
     // Log template lookup table — maps template_id to template text.
     // Populated at insert time by the DRAIN algorithm.

@@ -570,6 +570,7 @@ fn logs_schema() -> Schema {
         Field::new("observed_timestamp", DataType::Int64, false),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
+        Field::new("event_name", DataType::Utf8, false),
         Field::new("service_name", DataType::Utf8, false),
         Field::new("service_namespace", DataType::Utf8, true),
         Field::new("service_instance_id", DataType::Utf8, true),
@@ -865,6 +866,7 @@ pub struct LogBuilders {
     observed_timestamp: Int64Builder,
     trace_id: StringBuilder,
     span_id: StringBuilder,
+    event_name: StringBuilder,
     service_name: StringBuilder,
     service_namespace: StringBuilder,
     service_instance_id: StringBuilder,
@@ -885,6 +887,7 @@ impl LogBuilders {
             observed_timestamp: Int64Builder::new(),
             trace_id: StringBuilder::new(),
             span_id: StringBuilder::new(),
+            event_name: StringBuilder::new(),
             service_name: StringBuilder::new(),
             service_namespace: StringBuilder::new(),
             service_instance_id: StringBuilder::new(),
@@ -955,6 +958,7 @@ impl LogBuilders {
             self.span_id.append_value(&span_id);
         }
 
+        self.event_name.append_value(&log.event_name);
         self.service_name.append_value(&service_name);
         self.service_namespace
             .append_option(extract_string_attr(resource, "service.namespace"));
@@ -997,6 +1001,7 @@ impl LogBuilders {
             Arc::new(self.observed_timestamp.finish()),
             Arc::new(self.trace_id.finish()),
             Arc::new(self.span_id.finish()),
+            Arc::new(self.event_name.finish()),
             Arc::new(self.service_name.finish()),
             Arc::new(self.service_namespace.finish()),
             Arc::new(self.service_instance_id.finish()),

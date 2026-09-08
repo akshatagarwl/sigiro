@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
-use axum_anyhow::{ApiResult, ResultExt, bad_request};
+use axum_anyhow::{ApiResult, ResultExt, bad_request, internal_error};
 use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use axum_valid::Valid;
@@ -47,6 +47,7 @@ use tracing_attributes::instrument;
     paths(
         query_handler,
         services_handler,
+        alerts_handler,
         anomalies_handler,
         trace_detail_handler,
         diagnose_handler,
@@ -59,6 +60,8 @@ use tracing_attributes::instrument;
         schemas(
             ServicesResponse,
             ServiceEntry,
+            AlertsResponse,
+            crate::alerts::AlertInstance,
             AnomaliesResponse,
             AnomalyEntry,
             TraceDetailResponse,
@@ -217,6 +220,7 @@ pub struct AppState {
     pub pool: Arc<ProjectPool>,
     /// Admin SQLite for instance status (and, historically, worker registry).
     pub admin_conn: Arc<Mutex<Connection>>,
+    pub alerts: crate::alerts::AlertStore,
     pub http_client: reqwest::Client,
     pub router: Arc<crate::inserter::MsgRouter>,
     /// Explicit auth mode — Open or Key. Never implicit.
@@ -328,6 +332,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_post(query_handler)
         .typed_post(diagnose_handler)
         .typed_get(services_handler)
+        .typed_get(alerts_handler)
         .typed_get(anomalies_handler)
         .typed_get(trace_detail_handler);
 
@@ -476,7 +481,7 @@ pub fn resolve_listener_bind_ips(
 
 pub async fn run_servers(
     pool: Arc<ProjectPool>,
-    admin_conn: Arc<Mutex<Connection>>,
+    alerts: crate::alerts::AlertStore,
     router: Arc<MsgRouter>,
     data_dir: camino::Utf8PathBuf,
     init_complete: Arc<AtomicBool>,
@@ -578,9 +583,11 @@ pub async fn run_servers(
     // task samples this same directory for the disk cap.
     let maintenance_data_dir = data_dir.clone();
 
+    let admin_conn = alerts.admin_connection();
     let app_state = Arc::new(AppState {
         pool: Arc::clone(&pool),
-        admin_conn: Arc::clone(&admin_conn),
+        admin_conn,
+        alerts,
         http_client: reqwest::Client::new(),
         router: Arc::clone(&router),
         auth_mode: auth_mode.clone(),
@@ -1420,6 +1427,54 @@ async fn services_handler(
     }
 
     Ok(Json(ServicesResponse { services }))
+}
+
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+struct AlertsQuery {
+    /// Filter by lifecycle status: `firing` or `resolved`.
+    status: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/alerts",
+    operation_id = "list-alerts",
+    summary = "List alerts",
+    params(AlertsQuery),
+    responses(
+        (status = 200, description = "Alert instances", body = AlertsResponse),
+        (status = 400, description = "Invalid status filter"),
+        (status = 401, description = "Missing or invalid bearer token")
+    ),
+    security(("bearer" = [])),
+)]
+#[instrument(skip_all)]
+async fn alerts_handler(
+    _path: AlertsPath,
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    axum::extract::Query(query): axum::extract::Query<AlertsQuery>,
+) -> ApiResult<Json<AlertsResponse>> {
+    if let Some(status) = query.status.as_deref()
+        && !matches!(status, "firing" | "resolved")
+    {
+        return Err(bad_request(
+            "invalid alert status",
+            "status must be firing or resolved",
+        ));
+    }
+    let alerts = state
+        .alerts
+        .list(&auth.project_id, query.status.as_deref())
+        .map_err(|error| {
+            tracing::error!(
+                project_id = auth.project_id,
+                "alerts query failed: {error:#}"
+            );
+            internal_error("alerts query failed", "unable to read alert state")
+        })?;
+    Ok(Json(AlertsResponse { alerts }))
 }
 
 /// Query parameters for GET /v1/anomalies.

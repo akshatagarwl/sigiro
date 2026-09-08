@@ -422,6 +422,7 @@ pub struct LogRecord {
     pub(crate) body: String,
     pub(crate) trace_id: Option<String>,
     pub(crate) span_id: Option<String>,
+    pub(crate) event_name: String,
     #[schema(value_type = Object)]
     pub(crate) attributes: Option<serde_json::Value>,
 }
@@ -1623,7 +1624,7 @@ raw_logs AS (
     SELECT epoch_us(timestamp) AS ts_us,
            timestamp::VARCHAR AS timestamp_iso,
            COALESCE(severity_text, 'INFO') AS severity_text,
-           body, trace_id, span_id, log_attributes
+           body, trace_id, span_id, COALESCE(event_name, '') AS event_name, log_attributes
     FROM win_logs
     ORDER BY timestamp DESC
     LIMIT 50
@@ -1904,7 +1905,7 @@ SELECT json_object(
     ) ORDER BY pinned_zero DESC, samples DESC)), '[]'::JSON) FROM log_counters),
     'logs', (SELECT COALESCE(to_json(list(json_object(
         'timestamp', ts_us, 'timestamp_iso', timestamp_iso, 'severity_text', severity_text,
-        'body', body, 'trace_id', trace_id, 'span_id', span_id,
+        'body', body, 'trace_id', trace_id, 'span_id', span_id, 'event_name', event_name,
         'attributes', TRY_CAST(log_attributes AS JSON)
     ) ORDER BY ts_us DESC)), '[]'::JSON) FROM raw_logs),
     'profiles', (SELECT COALESCE(to_json(list(json_object(

@@ -92,12 +92,15 @@ fn build_context_with_auth(auth_mode: sigiro::auth::AuthMode) -> TestContext {
         .expect("failed to create instance_status table");
 
     let admin_conn = Arc::new(Mutex::new(admin_conn));
+    let alerts = sigiro::alerts::AlertStore::new(Arc::clone(&admin_conn))
+        .expect("failed to initialize alert store");
 
     let router = Arc::new(sigiro::inserter::MsgRouter::new(Arc::clone(&pool)));
     router.start();
     let state = Arc::new(AppState {
         pool,
         admin_conn,
+        alerts,
         http_client: reqwest::Client::new(),
         router,
         auth_mode,
@@ -114,7 +117,11 @@ fn build_context_with_auth(auth_mode: sigiro::auth::AuthMode) -> TestContext {
 
 /// Build the OTLP HTTP router (port 4318).
 fn build_otlp_app_with_router(state: &Arc<AppState>) -> (axum::Router, Arc<MsgRouter>) {
-    let router = Arc::new(MsgRouter::new(Arc::clone(&state.pool)));
+    let router = Arc::new(MsgRouter::new_with_disk_and_alerts(
+        Arc::clone(&state.pool),
+        sigiro::inserter::DiskCapacityState::new(0),
+        state.alerts.clone(),
+    ));
     router.start();
     (
         ingest::otlp_http_router(Arc::clone(&router), state.auth_mode.clone(), 8_388_608),
@@ -733,6 +740,7 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
           "scope": {"name": "json-test"},
           "logRecords": [{
             "timeUnixNano": "1700000000500000000",
+            "eventName": "deployment.failed",
             "severityNumber": 17,
             "severityText": "ERROR",
             "body": {"stringValue": "json log body"},
@@ -791,11 +799,11 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
             |r| r.get(0),
         )
         .expect("span count query should succeed");
-    let logs: i64 = guard
+    let (logs, event_name): (i64, String) = guard
         .query_row(
-            "SELECT count(*) FROM lake.sigiro_logs WHERE body = 'json log body'",
+            "SELECT count(*), any_value(event_name) FROM lake.sigiro_logs WHERE body = 'json log body'",
             [],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("log count query should succeed");
     let gauges: i64 = guard
@@ -808,6 +816,7 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
 
     assert_eq!(spans, 1);
     assert_eq!(logs, 1);
+    assert_eq!(event_name, "deployment.failed");
     assert_eq!(gauges, 1);
 
     // Duration/timestamp units: the span spans exactly 1s (end - start = 1e9 ns).
@@ -830,6 +839,214 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
         1_000_000,
         "end_timestamp and timestamp must share the µs unit"
     );
+}
+
+#[tokio::test]
+async fn test_otlp_protobuf_preserves_event_name() {
+    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
+    use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
+    use opentelemetry_proto::tonic::resource::v1::Resource;
+    use prost::Message;
+
+    let ctx = build_test_context();
+    let (app, router) = build_otlp_app_with_router(&ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+    let request = ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            resource: Some(Resource {
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue {
+                        value: Some(
+                            opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                                "protobuf-event-svc".to_string(),
+                            ),
+                        ),
+                    }),
+                }],
+                ..Default::default()
+            }),
+            scope_logs: vec![ScopeLogs {
+                scope: Some(InstrumentationScope::default()),
+                log_records: vec![LogRecord {
+                    time_unix_nano: 1_700_000_000_500_000_000,
+                    observed_time_unix_nano: 1_700_000_000_500_000_000,
+                    event_name: "container.oom_killed".to_string(),
+                    severity_number: 17,
+                    severity_text: "ERROR".to_string(),
+                    attributes: vec![
+                        KeyValue {
+                            key: "container.name".to_string(),
+                            value: Some(AnyValue {
+                                value: Some(
+                                    opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                                        "sigiro-test".to_string(),
+                                    ),
+                                ),
+                            }),
+                        },
+                        KeyValue {
+                            key: "container.id".to_string(),
+                            value: Some(AnyValue {
+                                value: Some(
+                                    opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                                        "container-1".to_string(),
+                                    ),
+                                ),
+                            }),
+                        },
+                    ],
+                    body: Some(AnyValue {
+                        value: Some(
+                            opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                                "protobuf event".to_string(),
+                            ),
+                        ),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    };
+
+    let response = server
+        .post("/v1/logs")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/x-protobuf")
+        .bytes(request.encode_to_vec().into())
+        .await;
+    response.assert_status_ok();
+    router
+        .shutdown_and_wait()
+        .await
+        .expect("flusher should persist protobuf event");
+
+    let conn = ctx
+        .state
+        .pool
+        .get_project("default")
+        .expect("default project should exist");
+    let event_name: String = conn
+        .get()
+        .query_row(
+            "SELECT event_name FROM lake.sigiro_logs WHERE body = 'protobuf event'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("event name should be queryable");
+    assert_eq!(event_name, "container.oom_killed");
+}
+
+#[tokio::test]
+async fn test_otlp_oom_events_drive_alert_lifecycle_once() {
+    let ctx = build_test_context();
+    let (otlp_app, router) = build_otlp_app_with_router(&ctx.state);
+    let otlp = TestServer::new(otlp_app).expect("failed to build OTLP test server");
+    let api = TestServer::new(build_http_router(Arc::clone(&ctx.state)))
+        .expect("failed to build API test server");
+
+    let event = |event_name: &str, timestamp: &str| {
+        json!({
+            "resourceLogs": [{
+                "resource": {"attributes": [{
+                    "key": "service.name",
+                    "value": {"stringValue": "sigiro-hosted"}
+                }]},
+                "scopeLogs": [{"logRecords": [{
+                    "eventName": event_name,
+                    "timeUnixNano": timestamp,
+                    "attributes": [
+                        {"key": "container.name", "value": {"stringValue": "benchapp-sigiro-hosted"}},
+                        {"key": "container.id", "value": {"stringValue": "container-1"}}
+                    ]
+                }]}]
+            }]
+        })
+    };
+
+    for payload in [
+        event("container.oom_killed", "1700000000000000000"),
+        event("container.oom_killed", "1700000000000000000"),
+    ] {
+        otlp.post("/v1/logs")
+            .json(&payload)
+            .await
+            .assert_status_ok();
+    }
+
+    let firing: serde_json::Value = api.get("/v1/alerts").await.json();
+    assert_eq!(firing["alerts"][0]["status"], "firing");
+    assert_eq!(firing["alerts"][0]["occurrence_count"], 1);
+
+    otlp.post("/v1/logs")
+        .json(&event("container.oom_recovered", "1700000001000000000"))
+        .await
+        .assert_status_ok();
+
+    let resolved: serde_json::Value = api.get("/v1/alerts?status=resolved").await.json();
+    assert_eq!(resolved["alerts"][0]["status"], "resolved");
+    assert_eq!(resolved["alerts"][0]["occurrence_count"], 1);
+
+    let (occurrences, notifications): (i64, i64) = ctx
+        .state
+        .admin_conn
+        .lock()
+        .query_row(
+            "SELECT
+                (SELECT count(*) FROM alert_occurrences),
+                (SELECT count(*) FROM alert_outbox)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("alert control state should be queryable");
+    assert_eq!(occurrences, 2);
+    assert_eq!(notifications, 2);
+
+    router
+        .shutdown_and_wait()
+        .await
+        .expect("flusher should persist alert events");
+}
+
+#[tokio::test]
+async fn test_otlp_rejects_event_when_alert_state_is_not_durable() {
+    let ctx = build_test_context();
+    let (otlp_app, router) = build_otlp_app_with_router(&ctx.state);
+    let otlp = TestServer::new(otlp_app).expect("failed to build OTLP test server");
+    ctx.state
+        .admin_conn
+        .lock()
+        .execute_batch("DROP TABLE alert_occurrences")
+        .expect("break alert persistence");
+
+    let response = otlp
+        .post("/v1/logs")
+        .json(&json!({
+            "resourceLogs": [{
+                "resource": {"attributes": [{
+                    "key": "service.name",
+                    "value": {"stringValue": "sigiro-hosted"}
+                }]},
+                "scopeLogs": [{"logRecords": [{
+                    "eventName": "container.oom_killed",
+                    "timeUnixNano": "1700000000000000000",
+                    "attributes": [
+                        {"key": "container.name", "value": {"stringValue": "benchapp-sigiro-hosted"}},
+                        {"key": "container.id", "value": {"stringValue": "container-1"}}
+                    ]
+                }]}]
+            }]
+        }))
+        .await;
+    response.assert_status_internal_server_error();
+
+    router
+        .shutdown_and_wait()
+        .await
+        .expect("queued telemetry should still flush");
 }
 
 #[tokio::test]

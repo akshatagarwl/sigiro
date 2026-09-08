@@ -560,9 +560,23 @@ async fn run_serve() -> Result<()> {
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
+    // Alert control state is injected into both ingest and query surfaces.
+    // Ingest fails when lifecycle state cannot be persisted, forcing OTLP retry.
+    let alert_store = sigiro::alerts::AlertStore::new(Arc::clone(&shared_admin))?;
+    if let Some(delivery) = sigiro::alerts::DeliveryConfig::from_env()? {
+        tokio::spawn(sigiro::alerts::run_delivery(alert_store.clone(), delivery));
+        tracing::info!("alert webhook delivery enabled");
+    } else {
+        tracing::info!("alert webhook delivery disabled");
+    }
+
     let disk_cap = sigiro::config::max_disk_bytes()?;
     let disk_state = sigiro::inserter::DiskCapacityState::new(disk_cap);
-    let router = Arc::new(MsgRouter::new_with_disk(Arc::clone(&pool), disk_state));
+    let router = Arc::new(MsgRouter::new_with_disk_and_alerts(
+        Arc::clone(&pool),
+        disk_state,
+        alert_store.clone(),
+    ));
     router.start();
 
     // Evict idle connections every 2 minutes
@@ -574,7 +588,7 @@ async fn run_serve() -> Result<()> {
         MAX_IDLE_SECS,
     ));
 
-    sigiro::server::run_servers(pool, shared_admin, router, dir.clone(), init_complete).await?;
+    sigiro::server::run_servers(pool, alert_store, router, dir.clone(), init_complete).await?;
     Ok(())
 }
 

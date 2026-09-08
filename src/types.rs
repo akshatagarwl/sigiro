@@ -166,6 +166,11 @@ pub struct ServicesPath;
 #[typed_path("/anomalies")]
 pub struct AnomaliesPath;
 
+/// Route: GET /alerts
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/alerts")]
+pub struct AlertsPath;
+
 /// Route: GET /keys
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/keys")]

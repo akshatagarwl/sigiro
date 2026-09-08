@@ -1,5 +1,22 @@
+#![allow(clippy::disallowed_methods)]
+
 use duckdb::Connection;
 use sigiro::SignalTable;
+
+fn attach_ducklake(conn: &Connection, dir: &std::path::Path) {
+    let data_path = dir.to_string_lossy();
+    let extension_dir = std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .map(|home| format!("{home}/.duckdb/extensions"))
+            .unwrap_or_else(|_| "/tmp/sigiro-test-extensions".to_string())
+    });
+    conn.execute_batch(&format!(
+        "SET home_directory='{data_path}'; SET extension_directory='{extension_dir}'; \
+         INSTALL ducklake; LOAD ducklake; \
+         ATTACH 'ducklake:{data_path}/catalog.ducklake' AS lake"
+    ))
+    .expect("attach DuckLake");
+}
 
 #[test]
 fn create_tables_on_fresh_db() {
@@ -89,4 +106,53 @@ fn create_tables_with_prefix_idempotent() {
         .expect("attach");
     sigiro::schema::create_tables(&conn, "lake.").expect("first");
     sigiro::schema::create_tables(&conn, "lake.").expect("second should also succeed");
+}
+
+#[test]
+fn existing_ducklake_logs_gain_event_name_without_losing_rows() {
+    let dir = tempfile::tempdir().expect("temp directory");
+    let conn = Connection::open_in_memory().expect("in-memory db");
+    attach_ducklake(&conn, dir.path());
+    conn.execute_batch(
+        "CREATE TABLE lake.sigiro_logs (
+            timestamp TIMESTAMP NOT NULL, observed_timestamp BIGINT NOT NULL,
+            trace_id VARCHAR, span_id VARCHAR, service_name VARCHAR NOT NULL,
+            service_namespace VARCHAR, service_instance_id VARCHAR,
+            severity_number INTEGER NOT NULL, severity_text VARCHAR NOT NULL,
+            body VARCHAR, resource_attributes VARCHAR, scope_name VARCHAR,
+            scope_version VARCHAR, scope_attributes VARCHAR, log_attributes VARCHAR,
+            template_id UBIGINT, template_values VARCHAR
+         );
+         INSERT INTO lake.sigiro_logs
+            (timestamp, observed_timestamp, service_name, severity_number, severity_text, body)
+         VALUES (make_timestamp(1), 1, 'old-svc', 9, 'INFO', 'before migration');",
+    )
+    .expect("create old logs schema");
+
+    sigiro::schema::create_tables(&conn, "lake.").expect("migrate existing catalog");
+    sigiro::schema::create_tables(&conn, "lake.").expect("migration must be idempotent");
+
+    let old_event_name: String = conn
+        .query_row(
+            "SELECT event_name FROM lake.sigiro_logs WHERE body = 'before migration'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("old row should remain readable");
+    assert_eq!(old_event_name, "");
+
+    conn.execute_batch(
+        "INSERT INTO lake.sigiro_logs
+            (timestamp, observed_timestamp, event_name, service_name, severity_number,
+             severity_text, body)
+         VALUES (make_timestamp(2), 2, 'container.oom_killed', 'new-svc', 17,
+                 'ERROR', 'after migration')",
+    )
+    .expect("new event row should insert");
+    let rows: i64 = conn
+        .query_row("SELECT count(*) FROM lake.sigiro_logs", [], |row| {
+            row.get(0)
+        })
+        .expect("count migrated rows");
+    assert_eq!(rows, 2);
 }
