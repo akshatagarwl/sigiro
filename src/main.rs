@@ -7,6 +7,9 @@ use sigiro::responses::HealthResponse;
 use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
 use std::sync::atomic::AtomicBool;
 
+#[global_allocator]
+static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
     .usage(styling::AnsiColor::Cyan.on_default().bold())
@@ -434,13 +437,9 @@ async fn run_serve() -> Result<()> {
     // (pyroscope-2.0.0/src/pyroscope.rs:296), so boot samples upload AFTER boot
     // finishes. The delay is in delivery, not collection: the samples carry the
     // boot window as long as the process outlives the first flush.
-    let (_profiling, pyroscope_status) = match start_profiling() {
-        Ok(Some(handle)) => (Some(handle), "active"),
-        Ok(None) => (None, "disabled"),
-        Err(e) => {
-            tracing::warn!("Pyroscope profiling failed to start: {e:#}");
-            (None, "error")
-        }
+    let (_profiling, pyroscope_status) = match start_profiling()? {
+        Some(handle) => (Some(handle), "active"),
+        None => (None, "disabled"),
     };
 
     let kernel = probe_kernel_release();

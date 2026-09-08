@@ -5,7 +5,7 @@
 # QEMU). Carries both GNU cross toolchains + cargo-chef for dep-layer caching.
 FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev mold \
+      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev make mold \
       gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
       gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*

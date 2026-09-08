@@ -43,7 +43,8 @@ serde_json = "1"
 tracing = "0.1"
 tracing-attributes = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
-pyroscope = { version = "2.0.0", features = ["backend-pprof-rs"] }
+pyroscope = { version = "2.0.0", features = ["backend-jemalloc", "backend-pprof-rs"] }
+tikv-jemallocator = { version = "0.6.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 regex = "1"
 drain3 = "0.3.0"

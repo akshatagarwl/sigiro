@@ -4,11 +4,11 @@ services:
       context: ../../..
       dockerfile: Dockerfile
     environment:
-      - SIGIRO_API_KEY=sigiro_dev_e2e_test
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
       - SIGIRO_PYROSCOPE_ENDPOINT=http://localhost:4318
       - SIGIRO_OTEL_AUTH_KEY=sigiro_dev_e2e_test
       - OTEL_SERVICE_NAME=sigiro
+      - MALLOC_CONF=prof:true,prof_active:true,lg_prof_sample:19
     ports:
       - "4317:4317"
       - "4318:4318"

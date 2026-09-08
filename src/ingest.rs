@@ -32,6 +32,7 @@ use opentelemetry_proto::tonic::collector::{
 };
 use prost::Message;
 use serde::Deserialize;
+use std::io::Read;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
@@ -343,9 +344,9 @@ fn stack_trace_builder() -> ListBuilder<StringBuilder> {
     )))
 }
 
-fn append_stack_trace(builder: &mut ListBuilder<StringBuilder>, stack: &[&str]) {
-    for &frame in stack {
-        builder.values().append_value(frame);
+fn append_stack_trace<S: AsRef<str>>(builder: &mut ListBuilder<StringBuilder>, stack: &[S]) {
+    for frame in stack {
+        builder.values().append_value(frame.as_ref());
     }
     builder.append(true);
 }
@@ -655,6 +656,7 @@ impl ProfilesService for OtlpGrpcService {
 struct OtlpHttpState {
     router: Arc<MsgRouter>,
     auth_mode: crate::auth::AuthMode,
+    max_body_bytes: usize,
 }
 
 /// `max_body_bytes` is `SIGIRO_MAX_INGEST_BODY_BYTES` (see
@@ -672,7 +674,11 @@ pub fn otlp_http_router(
     max_body_bytes: usize,
 ) -> Router {
     let rate_limit = auth_mode.requires_auth();
-    let state = Arc::new(OtlpHttpState { router, auth_mode });
+    let state = Arc::new(OtlpHttpState {
+        router,
+        auth_mode,
+        max_body_bytes,
+    });
     let app = Router::new()
         .route("/", post(otlp_http_pyroscope)) // Pyroscope RS SDK posts here
         .route("/push.v1.PusherService/Push", post(otlp_http_pyroscope)) // pyroscope-rs SDK push path
@@ -925,13 +931,16 @@ async fn otlp_http_pyroscope(
         }
     };
 
-    let batch = match transform_pyroscope_profiles(body_bytes, query.name.as_deref()).await {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!("transform pyroscope profiles failed: {e}");
-            return StatusCode::BAD_REQUEST;
-        }
-    };
+    let batch =
+        match transform_pyroscope_profiles(body_bytes, query.name.as_deref(), state.max_body_bytes)
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!("transform pyroscope profiles failed: {e}");
+                return StatusCode::BAD_REQUEST;
+            }
+        };
 
     tracing::info!(
         "pyroscope ingest: project_id={project_id} rows={}",
@@ -1051,19 +1060,9 @@ async fn parse_pyroscope_multipart(
 pub async fn transform_pyroscope_profiles(
     body: Vec<u8>,
     sdk_name: Option<&str>,
+    max_profile_bytes: usize,
 ) -> Result<RecordBatch, Status> {
-    // Stage 1: gzip decompression. The OTLP HTTP router has a
-    // RequestDecompressionLayer that usually already decompressed the body;
-    // detect gzip magic bytes (1f 8b) and only decompress if still gzipped.
-    let decompressed = if body.len() >= 2 && body[0] == 0x1f && body[1] == 0x8b {
-        let mut decoder = flate2::read::GzDecoder::new(&body[..]);
-        let mut out = Vec::new();
-        std::io::Read::read_to_end(&mut decoder, &mut out)
-            .map_err(|e| status_internal(format!("gzip decompression failed: {e}")))?;
-        out
-    } else {
-        body
-    };
+    let decompressed = decompress_profile(body, max_profile_bytes, "Pyroscope request")?;
     tracing::debug!("pyroscope: payload {} bytes", decompressed.len());
 
     // Stage 2: Node sends raw pprof with the application name in the query;
@@ -1124,12 +1123,15 @@ pub async fn transform_pyroscope_profiles(
             // borrowing from push_request (which would create a self-referential struct).
             let raw_bytes = sample.raw_profile.clone();
             let sample_id = sample.id.clone();
-            let pprof_profile = tokio::task::spawn_blocking(move || {
-                pyroscope::encode::r#gen::google::Profile::decode(&raw_bytes[..])
+            let pprof_profile = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+                let decompressed =
+                    decompress_profile(raw_bytes, max_profile_bytes, "embedded pprof profile")?;
+                pyroscope::encode::r#gen::google::Profile::decode(&decompressed[..]).map_err(|e| {
+                    Status::invalid_argument(format!("pprof profile decode failed: {e}"))
+                })
             })
             .await
-            .map_err(|e| status_internal(format!("task join error: {e}")))?
-            .map_err(|e| Status::invalid_argument(format!("pprof profile decode failed: {e}")))?;
+            .map_err(|e| status_internal(format!("task join error: {e}")))??;
 
             // Time and duration in nanoseconds → microseconds
             let ts_us = (pprof_profile.time_nanos / 1000) as i64;
@@ -1201,11 +1203,10 @@ pub async fn transform_pyroscope_profiles(
                                 "pprof sample[{sample_index}] frame[{frame_index}] references missing location id {location_id}"
                             ))
                         })?;
-                    let line = location.line.first().ok_or_else(|| {
-                        Status::invalid_argument(format!(
-                            "pprof location id {location_id} has no line entries"
-                        ))
-                    })?;
+                    let Some(line) = location.line.first() else {
+                        stack.push(format!("0x{:x}", location.address));
+                        continue;
+                    };
                     let function = functions
                         .iter()
                         .find(|function| function.id == line.function_id)
@@ -1234,7 +1235,7 @@ pub async fn transform_pyroscope_profiles(
                             function.id
                         )));
                     }
-                    stack.push(function_name.as_str());
+                    stack.push(function_name.clone());
                 }
                 // pprof stores leaf-first; Sigiro stores caller-first for folded stacks.
                 stack.reverse();
@@ -1292,4 +1293,35 @@ pub async fn transform_pyroscope_profiles(
         ],
     )
     .map_err(arrow_status)
+}
+
+fn decompress_profile(
+    bytes: Vec<u8>,
+    max_profile_bytes: usize,
+    description: &str,
+) -> Result<Vec<u8>, Status> {
+    if bytes.len() > max_profile_bytes {
+        return Err(Status::resource_exhausted(format!(
+            "{description} exceeds the {max_profile_bytes}-byte ingest limit"
+        )));
+    }
+    if !bytes.starts_with(&[0x1f, 0x8b]) {
+        return Ok(bytes);
+    }
+
+    let read_limit = u64::try_from(max_profile_bytes)
+        .ok()
+        .and_then(|limit| limit.checked_add(1))
+        .ok_or_else(|| status_internal("ingest body limit cannot be represented as u64"))?;
+    let mut decompressed = Vec::new();
+    flate2::read::GzDecoder::new(&bytes[..])
+        .take(read_limit)
+        .read_to_end(&mut decompressed)
+        .map_err(|e| Status::invalid_argument(format!("{description} gzip is invalid: {e}")))?;
+    if decompressed.len() > max_profile_bytes {
+        return Err(Status::resource_exhausted(format!(
+            "{description} exceeds the {max_profile_bytes}-byte ingest limit after decompression"
+        )));
+    }
+    Ok(decompressed)
 }

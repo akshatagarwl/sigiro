@@ -8,7 +8,7 @@ use prost::Message;
 use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
 use sigiro::pool::ProjectPool;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::sync::{Arc, Once};
 
 static EXTENSION_ENV: Once = Once::new();
@@ -142,6 +142,45 @@ fn build_pyroscope_push_request(
     gzipped
 }
 
+fn encode_jemalloc_push_request(request: &[u8]) -> Vec<u8> {
+    use pyroscope::encode::r#gen::google::Profile;
+    use pyroscope::encode::r#gen::push::PushRequest;
+
+    let mut encoded = Vec::new();
+    flate2::read::GzDecoder::new(request)
+        .read_to_end(&mut encoded)
+        .expect("decompress PushRequest");
+    let mut push_request = PushRequest::decode(&encoded[..]).expect("decode PushRequest");
+
+    for series in &mut push_request.series {
+        for sample in &mut series.samples {
+            let mut profile = Profile::decode(&sample.raw_profile[..]).expect("decode pprof");
+            for (index, location) in profile.location.iter_mut().enumerate() {
+                location.line.clear();
+                location.address = 0x1000 + index as u64;
+            }
+            sample.raw_profile.clear();
+            profile
+                .encode(&mut sample.raw_profile)
+                .expect("encode jemalloc pprof");
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder
+                .write_all(&sample.raw_profile)
+                .expect("gzip embedded pprof");
+            sample.raw_profile = encoder.finish().expect("finish embedded pprof");
+        }
+    }
+
+    let mut encoded = Vec::new();
+    push_request
+        .encode(&mut encoded)
+        .expect("encode PushRequest");
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&encoded).expect("gzip PushRequest");
+    encoder.finish().expect("finish PushRequest")
+}
+
 // ---------------------------------------------------------------------------
 // E2E: Pyroscope native pipeline → transform → MsgRouter → DuckDB
 // ---------------------------------------------------------------------------
@@ -168,7 +207,7 @@ async fn e2e_pyroscope_native_pipeline() {
     );
 
     // Call transform directly (bytes → Arrow RecordBatch)
-    let batch = sigiro::ingest::transform_pyroscope_profiles(bytes, None)
+    let batch = sigiro::ingest::transform_pyroscope_profiles(bytes, None, 8_388_608)
         .await
         .unwrap();
 
@@ -273,7 +312,7 @@ async fn e2e_pyroscope_empty_push_request() {
     encoder.write_all(&encoded).unwrap();
     encoder.finish().unwrap();
 
-    let batch = sigiro::ingest::transform_pyroscope_profiles(gzipped, None)
+    let batch = sigiro::ingest::transform_pyroscope_profiles(gzipped, None, 8_388_608)
         .await
         .unwrap();
     assert_eq!(
@@ -318,10 +357,10 @@ async fn e2e_pyroscope_multi_series() {
     );
 
     // Process each through transform
-    let batch_a = sigiro::ingest::transform_pyroscope_profiles(bytes_a, None)
+    let batch_a = sigiro::ingest::transform_pyroscope_profiles(bytes_a, None, 8_388_608)
         .await
         .unwrap();
-    let batch_b = sigiro::ingest::transform_pyroscope_profiles(bytes_b, None)
+    let batch_b = sigiro::ingest::transform_pyroscope_profiles(bytes_b, None, 8_388_608)
         .await
         .unwrap();
 
@@ -388,7 +427,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
     let server = TestServer::new(app).unwrap();
 
     let now_ns = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
-    let profile = build_pyroscope_push_request(
+    let profile = encode_jemalloc_push_request(&build_pyroscope_push_request(
         "heap-svc",
         now_ns,
         &["main", "handle_request", "allocate_buffer"],
@@ -399,7 +438,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
             ("inuse_space", "bytes"),
         ],
         &[40, 4096, 20, 2048],
-    );
+    ));
 
     let response = server
         .post("/push.v1.PusherService/Push")
@@ -437,7 +476,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
                 .query_row(
                     "SELECT count(*) FROM lake.sigiro_profiles
                      WHERE service_name = ?1 AND profile_type = ?2 AND unit = ?3 AND value = ?4
-                       AND stack_trace[1] = 'main' AND stack_trace[-1] = 'allocate_buffer'",
+                       AND stack_trace[1] = '0x1000' AND stack_trace[-1] = '0x1002'",
                     duckdb::params!["heap-svc", profile_type, unit, value],
                     |row| row.get(0),
                 )

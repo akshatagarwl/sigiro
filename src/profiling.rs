@@ -2,7 +2,7 @@
 //!
 //! Enabled when `SIGIRO_PYROSCOPE_ENDPOINT` env var is set. Sigiro will:
 //!   - Tag all profiles with `service=<OTEL_SERVICE_NAME or "sigiro">`
-//!   - Send CPU and memory allocation profiles to the Pyroscope server
+//!   - Send CPU and sampled jemalloc heap profiles to the Pyroscope server
 //!
 //! The pyroscope-rs SDK (v2.0) hardcodes a 10-second flush cycle in
 //! `PyroscopeAgentBuilder::build()` — there is no public API to change it.
@@ -14,13 +14,17 @@
 //! to DuckDB — they are independent of the SDK's upload cycle.
 
 use anyhow::{Context, Result};
+use pyroscope::backend::{BackendImpl, BackendUninitialized};
+use pyroscope::pyroscope::{PyroscopeAgent, PyroscopeAgentBuilder, PyroscopeAgentRunning};
 use std::collections::HashMap;
 use tracing_attributes::instrument;
 
-/// Handle to the Pyroscope agent, if configured.
+type RunningAgent = PyroscopeAgent<PyroscopeAgentRunning>;
+
+/// Handles to the Pyroscope agents, if configured.
 pub struct ProfilingHandle {
-    /// The running agent. Must be kept alive for profiling to continue.
-    _agent: pyroscope::PyroscopeAgent<pyroscope::pyroscope::PyroscopeAgentRunning>,
+    _cpu_agent: RunningAgent,
+    _heap_agent: RunningAgent,
 }
 
 /// Start Pyroscope profiling if `SIGIRO_PYROSCOPE_ENDPOINT` is set.
@@ -36,10 +40,11 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
         .value()
         .map_err(anyhow::Error::from)?;
 
-    let backend = pyroscope::backend::pprof_backend(
+    let cpu_backend = pyroscope::backend::pprof_backend(
         pyroscope::backend::pprof::PprofConfig::default(),
         pyroscope::backend::BackendConfig::default(),
     );
+    let heap_backend = pyroscope::backend::jemalloc_backend();
 
     // When sigiro is self-profiling into its own OTLP endpoint, the SDK
     // must authenticate so the server doesn't reject the push with 401.
@@ -55,29 +60,59 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
         _ => None,
     };
 
-    let mut builder = pyroscope::pyroscope::PyroscopeAgentBuilder::new(
+    let cpu_agent = build_agent(
         &endpoint,
         &service_name,
-        100, // sample rate Hz
         "pyroscope-rs",
+        cpu_backend,
+        http_headers.clone(),
+    )
+    .context("failed to start Pyroscope CPU agent")?;
+    let heap_agent = build_agent(
+        &endpoint,
+        &service_name,
+        "pyroscope-jemalloc",
+        heap_backend,
+        http_headers,
+    )
+    .context("failed to start Pyroscope heap agent")?;
+
+    tracing::info!(
+        pyroscope_endpoint = %endpoint,
+        service = %service_name,
+        cpu_sample_rate = 100,
+        heap_sample_interval_bytes = 524_288,
+        auth_configured = crate::config::OTEL_AUTH_KEY.value().map(|k| !k.is_empty()).unwrap_or(false),
+        "Pyroscope CPU and heap profiling enabled"
+    );
+
+    Ok(Some(ProfilingHandle {
+        _cpu_agent: cpu_agent,
+        _heap_agent: heap_agent,
+    }))
+}
+
+fn build_agent(
+    endpoint: &str,
+    service_name: &str,
+    spy_name: &str,
+    backend: BackendImpl<BackendUninitialized>,
+    http_headers: Option<HashMap<String, String>>,
+) -> Result<RunningAgent> {
+    let mut builder = PyroscopeAgentBuilder::new(
+        endpoint,
+        service_name,
+        100,
+        spy_name,
         env!("CARGO_PKG_VERSION"),
         backend,
     );
     if let Some(headers) = http_headers {
         builder = builder.http_headers(headers);
     }
-
-    let agent = builder.build().context("failed to build Pyroscope agent")?;
-
-    let agent = agent.start().context("failed to start Pyroscope agent")?;
-
-    tracing::info!(
-        pyroscope_endpoint = %endpoint,
-        service = %service_name,
-        sample_rate = 100,
-        auth_configured = crate::config::OTEL_AUTH_KEY.value().map(|k| !k.is_empty()).unwrap_or(false),
-        "Pyroscope profiling enabled"
-    );
-
-    Ok(Some(ProfilingHandle { _agent: agent }))
+    builder
+        .build()
+        .context("failed to build Pyroscope agent")?
+        .start()
+        .context("failed to start Pyroscope agent")
 }
