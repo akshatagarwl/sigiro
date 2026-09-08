@@ -666,9 +666,12 @@ impl ProjectFlusher {
 
     fn should_flush(&self) -> bool {
         self.first_flush
-            || self.total_rows >= self.row_threshold
-            || self.total_bytes >= self.byte_threshold
+            || self.reached_flush_threshold()
             || self.last_flush.elapsed() >= self.flush_interval
+    }
+
+    fn reached_flush_threshold(&self) -> bool {
+        self.total_rows >= self.row_threshold || self.total_bytes >= self.byte_threshold
     }
 
     /// Flush all buffered batches to DuckDB using appenders per table.
@@ -1059,10 +1062,22 @@ fn run_writer_thread(
     cfg: &FlushConfig,
 ) -> Connection {
     let mut flusher = ProjectFlusher::new(writer, cfg);
-    while let Some(command) = rx.blocking_recv() {
+    let mut pending = None;
+    while let Some(command) = pending.take().or_else(|| rx.blocking_recv()) {
         match command {
             WriterCommand::Ingest(msg) => {
                 buffer_msg(&mut flusher, *msg);
+                while !flusher.reached_flush_threshold() {
+                    match rx.try_recv() {
+                        Ok(WriterCommand::Ingest(msg)) => buffer_msg(&mut flusher, *msg),
+                        Ok(command) => {
+                            pending = Some(command);
+                            break;
+                        }
+                        Err(mpsc::error::TryRecvError::Empty) => break,
+                        Err(mpsc::error::TryRecvError::Disconnected) => break,
+                    }
+                }
                 if flusher.should_flush()
                     && let Err(e) = flusher.flush(project_id)
                 {
