@@ -108,8 +108,12 @@ fn setup_ducklake_db() -> (Connection, tempfile::TempDir) {
 }
 
 fn flush_span_batches(conn: &Connection, batches: &[RecordBatch]) {
+    flush_batches_to_table(conn, "sigiro_spans", batches);
+}
+
+fn flush_batches_to_table(conn: &Connection, table: &str, batches: &[RecordBatch]) {
     let mut appender = conn
-        .appender_to_catalog_and_db("sigiro_spans", "lake", "main")
+        .appender_to_catalog_and_db(table, "lake", "main")
         .expect("appender");
     for batch in batches {
         appender.append_record_batch(batch.clone()).expect("append");
@@ -275,6 +279,83 @@ fn bench_tiny_flush_matrix(c: &mut Criterion) {
     group.finish();
 }
 
+/// A metrics export commonly populates several physical signal tables at once.
+/// Compare the current per-appender auto-commit behavior with one transaction
+/// around the complete logical flush.
+fn bench_multi_table_transaction(c: &mut Criterion) {
+    let (conn, _dir) = setup_ducklake_db();
+    let tables = [
+        "bench_spans_1",
+        "bench_spans_2",
+        "bench_spans_3",
+        "bench_spans_4",
+    ];
+    for table in tables {
+        conn.execute_batch(&format!(
+            "CREATE TABLE lake.{table} AS SELECT * FROM lake.sigiro_spans WHERE false"
+        ))
+        .expect("create benchmark table");
+    }
+    let batch = make_span_batch(100);
+    let mut group = c.benchmark_group("multi_table_flush");
+    group.sample_size(10);
+
+    group.bench_function("4x100_autocommit", |b| {
+        b.iter(|| {
+            for table in tables {
+                flush_batches_to_table(&conn, table, std::slice::from_ref(&batch));
+            }
+        });
+    });
+    group.bench_function("4x100_one_transaction", |b| {
+        b.iter(|| {
+            conn.execute_batch("BEGIN TRANSACTION")
+                .expect("begin transaction");
+            for table in tables {
+                flush_batches_to_table(&conn, table, std::slice::from_ref(&batch));
+            }
+            conn.execute_batch("COMMIT").expect("commit transaction");
+        });
+    });
+
+    group.finish();
+}
+
+/// DuckLake can retain small inserts in its catalog until maintenance
+/// materializes them. Compare that path with the default immediate Parquet
+/// write that non-profile Sigiro tables currently use.
+fn bench_inlined_small_flush(c: &mut Criterion) {
+    let (conn, _dir) = setup_ducklake_db();
+    conn.execute_batch(
+        "CREATE TABLE lake.bench_direct AS
+             SELECT * FROM lake.sigiro_spans WHERE false;
+         CREATE TABLE lake.bench_inlined AS
+             SELECT * FROM lake.sigiro_spans WHERE false;
+         CALL lake.set_option(
+             'data_inlining_row_limit',
+             1000,
+             table_name => 'bench_inlined'
+         );",
+    )
+    .expect("create inlining benchmark tables");
+    let batch = make_span_batch(100);
+    let mut group = c.benchmark_group("small_flush_storage");
+    group.sample_size(10);
+
+    group.bench_function("100_rows_direct_parquet", |b| {
+        b.iter(|| {
+            flush_batches_to_table(&conn, "bench_direct", std::slice::from_ref(&batch));
+        });
+    });
+    group.bench_function("100_rows_inlined", |b| {
+        b.iter(|| {
+            flush_batches_to_table(&conn, "bench_inlined", std::slice::from_ref(&batch));
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_appender_throughput,
@@ -282,5 +363,7 @@ criterion_group!(
     bench_appender_sustained,
     bench_appender_baseline_duckdb,
     bench_tiny_flush_matrix,
+    bench_multi_table_transaction,
+    bench_inlined_small_flush,
 );
 criterion_main!(benches);
