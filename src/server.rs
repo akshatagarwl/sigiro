@@ -1112,7 +1112,8 @@ async fn execute_sql(
     let sql_clone = sql.to_string();
     let timeout_secs = crate::config::query_timeout_secs()?;
     let max_rows = crate::config::max_result_rows()?;
-    let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
+    let (handle_tx, mut handle_rx) =
+        tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
 
     let mut query_task = tokio::task::spawn_blocking(move || {
         // DuckLake ATTACH can perform network I/O and cold extension loading;
@@ -1125,11 +1126,9 @@ async fn execute_sql(
         // Sent before `prepare`/`query` so the timeout branch below can
         // interrupt this exact connection even if it never gets a chance to
         // run (e.g. still waiting on `readers.get()` for a free connection).
-        // An error here just means the async side gave up waiting — nothing
-        // to interrupt for, so there is nothing to report.
-        if handle_tx.send(conn.interrupt_handle()).is_err() {
-            tracing::debug!("query timeout watchdog receiver dropped before send");
-        }
+        handle_tx
+            .send(conn.interrupt_handle())
+            .map_err(|_| anyhow::anyhow!("query timed out before execution"))?;
 
         let mut stmt = conn
             .prepare(&sql_clone)
@@ -1168,25 +1167,22 @@ async fn execute_sql(
         Ok((results, truncated))
     });
 
-    // ponytail: timeout enforcement polls a shared oneshot handle rather than
-    // tracking per-connection "busy" state, so there's a narrow window where
-    // the deadline fires just as the query finishes and the now-idle pooled
-    // connection gets a spurious interrupt(). DuckDB (this bundled version)
-    // has no `statement_timeout` setting to enforce this engine-side instead;
-    // revisit if spurious interrupts on adjacent queries are ever observed.
     tokio::select! {
         joined = &mut query_task => {
             joined
                 .map_err(|e| anyhow::anyhow!("query task failed: {e}"))?
         }
         () = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
-            if let Ok(handle) = handle_rx.await {
-                tracing::warn!(timeout_secs, "query exceeded timeout — interrupting");
+            let handle = handle_rx.try_recv().ok();
+            tracing::warn!(
+                timeout_secs,
+                executing = handle.is_some(),
+                "query exceeded timeout"
+            );
+            if let Some(handle) = handle {
                 handle.interrupt();
             }
-            (&mut query_task)
-                .await
-                .map_err(|e| anyhow::anyhow!("query task failed: {e}"))?
+            anyhow::bail!("query exceeded {timeout_secs} second timeout")
         }
     }
 }
