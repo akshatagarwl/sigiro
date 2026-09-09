@@ -4,10 +4,10 @@
 //!   - Tag all profiles with `service=<OTEL_SERVICE_NAME or "sigiro">`
 //!   - Send CPU and sampled jemalloc heap profiles to the Pyroscope server
 //!
-//! The pyroscope-rs SDK (v2.0) hardcodes a 10-second flush cycle in
-//! `PyroscopeAgentBuilder::build()` — there is no public API to change it.
-//! Each 10s tick, the SDK snapshots the profiler backend and uploads the
-//! pprof payload via an HTTP POST to `{endpoint}/push.v1.PusherService/Push`.
+//! The SDK snapshots each backend every 10 seconds and uploads the pprof payload
+//! via an HTTP POST to `{endpoint}/push.v1.PusherService/Push`. Version 2.0.4
+//! clears collected CPU samples without dropping and recreating the profiler
+//! guard, avoiding a large allocation and retained-memory spike each cycle.
 //!
 //! Sigiro's own flush settings (SIGIRO_FLUSH_INTERVAL_SECS, SIGIRO_FLUSH_ROW_THRESHOLD,
 //! SIGIRO_BACKPRESSURE_POLICY) control how fast ingested profiles are persisted
