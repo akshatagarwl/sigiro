@@ -15,6 +15,24 @@ variable "PUSH_CACHE" {
   default = "false"
 }
 
+# There is deliberately NO `type=local` cache export.
+#
+# A docker-container builder already keeps a full content-addressed cache inside
+# its own BuildKit state volume, so `cache-to=type=local,dest=.buildx-cache`
+# wrote a SECOND copy of those exact layers into the working tree. Worse, the
+# local exporter has no garbage collection: BuildKit rewrites index.json each
+# build and abandons the previous generation's blobs, so every build since the
+# repo's first leaked its whole layer set. Measured: .buildx-cache reached 27 GB
+# of which only 2.0 GB was reachable from index.json — 24.2 GB of orphans — while
+# the builder held 21.5 GB of the same layers at 100% reclaimable.
+#
+# The builder's cache is now bounded by ~/.config/buildkit/buildkitd.toml
+# (reservedSpace/maxUsedSpace gcpolicy), which self-prunes. That is the single
+# source of cache truth for local builds; the registry cache below is the only
+# cross-machine sharing path. Recreate the builder with that config via:
+#   docker buildx create --name multiplatform --driver docker-container \
+#     --config ~/.config/buildkit/buildkitd.toml --bootstrap
+
 group "default" {
   targets = ["sigiro"]
 }
@@ -42,6 +60,6 @@ target "sigiro" {
   dockerfile = "Dockerfile"
   platforms  = ["linux/amd64", "linux/arm64"]
   tags       = ["${REGISTRY}/sigiro:${TAG}"]
-  cache-from = PUSH_CACHE == "true" ? ["type=local,src=.buildx-cache", "type=registry,ref=${REGISTRY}/sigiro:buildcache"] : ["type=local,src=.buildx-cache"]
-  cache-to   = PUSH_CACHE == "true" ? ["type=local,dest=.buildx-cache,mode=max", "type=registry,ref=${REGISTRY}/sigiro:buildcache,mode=max"] : ["type=local,dest=.buildx-cache,mode=max"]
+  cache-from = PUSH_CACHE == "true" ? ["type=registry,ref=${REGISTRY}/sigiro:buildcache"] : []
+  cache-to   = PUSH_CACHE == "true" ? ["type=registry,ref=${REGISTRY}/sigiro:buildcache,mode=max"] : []
 }
