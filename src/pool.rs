@@ -445,6 +445,10 @@ impl ProjectPool {
                     // useful without allowing one rewrite to target the whole
                     // memory budget.
                     //
+                    // Profile flushes are 11-232 rows in production. Inlining up
+                    // to 1,000 avoids an R2 Parquet file per profiling cycle;
+                    // the same native checkpoint materializes them hourly.
+                    //
                     // `expire_older_than` is tied to the row retention window:
                     // once rows past that age are deleted, snapshots that old
                     // can only serve time-travel into data that no longer
@@ -455,8 +459,8 @@ impl ProjectPool {
                     let retention_days = crate::config::RETENTION_DAYS
                         .value()
                         .context("invalid SIGIRO_RETENTION_DAYS")?;
-                    set_ducklake_catalog_policy(conn, retention_days)?;
                     crate::schema::create_tables(conn, Self::prefix())?;
+                    set_ducklake_catalog_policy(conn, retention_days)?;
                     // Lock the local filesystem unless data lives in S3 (DuckLake
                     // itself needs network access to reach S3). Local-file mode
                     // and distributed-with-local-data mode both lock down.
@@ -711,7 +715,8 @@ pub(crate) fn set_ducklake_catalog_policy(conn: &Connection, retention_days: u32
          CALL lake.set_option('target_file_size', '32MB'); \
          CALL lake.set_option('rewrite_delete_threshold', 0.2); \
          CALL lake.set_option('expire_older_than', '{expiry}'); \
-         CALL lake.set_option('delete_older_than', '2 days');"
+         CALL lake.set_option('delete_older_than', '2 days'); \
+         CALL lake.set_option('data_inlining_row_limit', 1000, table_name => 'sigiro_profiles');"
     ))
     .context("failed to set DuckLake catalog policy")
 }

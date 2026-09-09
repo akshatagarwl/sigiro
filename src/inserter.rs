@@ -1336,6 +1336,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let conn = Connection::open_in_memory().unwrap();
         attach_ducklake(&conn, dir.path());
+        crate::schema::create_tables(&conn, "lake.").expect("create sigiro tables");
         conn.execute_batch("CREATE TABLE lake.t (id INTEGER, ts TIMESTAMP)")
             .expect("create table");
 
