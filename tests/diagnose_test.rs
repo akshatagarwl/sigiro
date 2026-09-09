@@ -1,7 +1,29 @@
 use parking_lot::Mutex;
+use sigiro::TimestampMicros;
 use sigiro::diagnose::{
     DiagnoseRequest, compute_coverage, diagnose, metric_bucket_interval, us_to_iso,
 };
+
+#[test]
+fn timestamp_micros_rejects_implausible_values_and_preserves_json_number() {
+    // Seconds, milliseconds, and nanoseconds must not masquerade as µs.
+    assert!(TimestampMicros::try_new(1_700_000_000).is_err());
+    assert!(TimestampMicros::try_new(1_700_000_000_000).is_err());
+    assert!(TimestampMicros::try_new(1_700_000_000_000_000_000).is_err());
+    assert!(TimestampMicros::try_new(999_999_999_999_999).is_err());
+    assert!(TimestampMicros::try_new(10_000_000_000_000_000).is_err());
+
+    let timestamp = TimestampMicros::try_new(1_700_000_000_123_456).unwrap();
+    assert_eq!(
+        serde_json::to_string(&timestamp).unwrap(),
+        "1700000000123456"
+    );
+    assert_eq!(
+        i64::from(serde_json::from_str::<TimestampMicros>("1700000000123456").unwrap()),
+        1_700_000_000_123_456
+    );
+    assert!(serde_json::from_str::<TimestampMicros>("9223372036854775807").is_err());
+}
 use std::sync::Arc;
 
 /// Helper: run diagnose for one service and return its block.
@@ -14,8 +36,8 @@ fn diagnose_service(
     let req = DiagnoseRequest {
         service: Some(service.to_string()),
         services: None,
-        from_ts: Some(from_ts),
-        to_ts: Some(to_ts),
+        from_ts: Some(sigiro::TimestampMicros::try_new(from_ts).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(to_ts).unwrap()),
     };
     let mut blocks = diagnose(conn, &req, "").expect("diagnose");
     blocks.results.remove(service).expect("block for service")
@@ -90,8 +112,8 @@ fn diagnose_with_in_memory_db() {
     let req = DiagnoseRequest {
         service: Some("nonexistent".to_string()),
         services: None,
-        from_ts: Some(0),
-        to_ts: Some(0),
+        from_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
     };
     let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose should succeed on empty db");
     let block = &blocks.results["nonexistent"];
@@ -162,8 +184,8 @@ fn diagnose_with_real_span_data() {
     let req = DiagnoseRequest {
         service: Some("checkout".to_string()),
         services: None,
-        from_ts: Some(now_us - 60_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
     let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose");
     let block = &blocks.results["checkout"];
@@ -671,8 +693,8 @@ fn diagnose_large_window_still_returns_spans() {
     let req = DiagnoseRequest {
         service: Some("svc".to_string()),
         services: None,
-        from_ts: Some(now_us - 3 * 3600 * 1_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 3 * 3600 * 1_000_000).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
     let blocks = diagnose(&shared.lock(), &req, "").unwrap();
     let block = &blocks.results["svc"];
@@ -704,8 +726,8 @@ fn diagnose_multi_basic() {
     let req = DiagnoseRequest {
         service: None,
         services: Some(vec!["svc-a".into(), "svc-b".into(), "svc-c".into()]),
-        from_ts: Some(now_us - 60_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
     let blocks = diagnose(&shared.lock(), &req, "").unwrap();
     assert_eq!(blocks.results.len(), 3);
@@ -724,8 +746,8 @@ fn diagnose_multi_cap_enforced() {
     let req = DiagnoseRequest {
         service: None,
         services: Some(services),
-        from_ts: Some(0),
-        to_ts: Some(0),
+        from_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
     };
     let result = diagnose(&shared.lock(), &req, "");
     assert!(result.is_err(), "should reject >10 services");
@@ -739,8 +761,8 @@ fn diagnose_multi_empty_rejected() {
     let req = DiagnoseRequest {
         service: None,
         services: Some(vec![]),
-        from_ts: Some(0),
-        to_ts: Some(0),
+        from_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
     };
     assert!(diagnose(&shared.lock(), &req, "").is_err());
 }
@@ -784,8 +806,8 @@ fn diagnose_all_three_signals() {
     let req = DiagnoseRequest {
         service: Some("svc".to_string()),
         services: None,
-        from_ts: Some(now_us - 60_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
     let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose");
     let block = &blocks.results["svc"];
@@ -847,8 +869,8 @@ fn operation_summary_baselines() {
     let req = DiagnoseRequest {
         service: Some("checkout".to_string()),
         services: None,
-        from_ts: Some(now_us - 5 * 60 * 1_000_000),
-        to_ts: Some(now_us + 60_000_000),
+        from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 5 * 60 * 1_000_000).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
     let blocks = diagnose(&shared.lock(), &req, "").expect("diagnose");
     let block = &blocks.results["checkout"];
@@ -2550,8 +2572,8 @@ fn diagnose_fails_loud_when_all_services_fail() {
     let req = DiagnoseRequest {
         service: Some("svc".to_string()),
         services: None,
-        from_ts: Some(0),
-        to_ts: Some(1),
+        from_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
+        to_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_001).unwrap()),
     };
     let err = diagnose(&conn, &req, "")
         .err()
@@ -2855,8 +2877,8 @@ fn diagnose_window_defaults_and_rejects_a_half_open_range() {
     let mk = |from: Option<i64>, to: Option<i64>| DiagnoseRequest {
         service: Some("checkout".into()),
         services: None,
-        from_ts: from,
-        to_ts: to,
+        from_ts: from.map(TimestampMicros::try_new).transpose().unwrap(),
+        to_ts: to.map(TimestampMicros::try_new).transpose().unwrap(),
     };
 
     // Neither bound: the last 15 minutes, matching `sigiro diagnose`.
@@ -2885,7 +2907,12 @@ fn diagnose_window_defaults_and_rejects_a_half_open_range() {
     // fields were mandatory before, and making them optional must not lose it.
     let seconds = 1_780_000_000_i64;
     assert!(
-        mk(Some(seconds), Some(seconds + 900)).validate().is_err(),
+        serde_json::from_value::<DiagnoseRequest>(serde_json::json!({
+            "service": "checkout",
+            "from_ts": seconds,
+            "to_ts": seconds + 900
+        }))
+        .is_err(),
         "a seconds-valued timestamp must still be rejected loudly"
     );
 
@@ -2912,8 +2939,8 @@ fn cli_and_api_resolve_the_same_default_window() {
     let from_cli = DiagnoseRequest {
         service: Some("checkout".into()),
         services: None,
-        from_ts: cli_from,
-        to_ts: cli_to,
+        from_ts: cli_from.map(TimestampMicros::try_new).transpose().unwrap(),
+        to_ts: cli_to.map(TimestampMicros::try_new).transpose().unwrap(),
     };
 
     // What an agent posts: `{"service":"checkout"}` — no bounds at all.
@@ -2934,7 +2961,7 @@ fn cli_and_api_resolve_the_same_default_window() {
     let explicit = DiagnoseRequest {
         service: Some("checkout".into()),
         services: None,
-        from_ts: Some(secs).map(|s| s * 1_000_000),
+        from_ts: Some(secs).map(|s| TimestampMicros::try_new(s * 1_000_000).unwrap()),
         to_ts: None,
     };
     assert_eq!(explicit.window(now), (secs * 1_000_000, now));

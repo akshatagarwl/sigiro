@@ -224,11 +224,13 @@ pub struct Window {
 
 impl Window {
     pub(crate) fn new(from: TimestampMicros, to: TimestampMicros) -> Result<Self> {
+        let from_ts = i64::from(from);
+        let to_ts = i64::from(to);
         Ok(Self {
-            from_ts: from.as_micros(),
-            to_ts: to.as_micros(),
-            from_iso: us_to_iso(from.as_micros())?,
-            to_iso: us_to_iso(to.as_micros())?,
+            from_ts,
+            to_ts,
+            from_iso: us_to_iso(from_ts)?,
+            to_iso: us_to_iso(to_ts)?,
         })
     }
 }

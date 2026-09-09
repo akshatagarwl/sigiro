@@ -87,8 +87,10 @@ fn bench_diagnose(c: &mut Criterion) {
             let req = DiagnoseRequest {
                 service: Some("bench-svc".to_string()),
                 services: None,
-                from_ts: Some(now_us - 15 * 60 * 1_000_000),
-                to_ts: Some(now_us + 60 * 1_000_000),
+                from_ts: Some(
+                    sigiro::TimestampMicros::try_new(now_us - 15 * 60 * 1_000_000).unwrap(),
+                ),
+                to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60 * 1_000_000).unwrap()),
             };
             diagnose(&shared.lock(), &req, "lake.").expect("diagnose");
         });

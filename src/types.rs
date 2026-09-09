@@ -116,27 +116,31 @@ impl StatusCode {
 // TimestampMicros — prevents sec/µs confusion at API boundaries
 // ---------------------------------------------------------------------------
 
-/// Microsecond-precision timestamp. All internal timestamps are in microseconds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TimestampMicros(pub i64);
-
-impl TimestampMicros {
-    /// From epoch microseconds (internal storage).
-    pub(crate) fn from_micros(us: i64) -> Self {
-        Self(us)
-    }
-
-    /// Raw microseconds value (for SQL parameters).
-    pub(crate) fn as_micros(self) -> i64 {
-        self.0
-    }
-}
-
-impl From<i64> for TimestampMicros {
-    fn from(us: i64) -> Self {
-        Self(us)
-    }
-}
+/// Plausible contemporary Unix timestamp in microseconds.
+///
+/// The 16-digit range deliberately rejects values expressed in seconds,
+/// milliseconds, or nanoseconds. It is the same API invariant used by
+/// diagnosis input validation: approximately 2001 through 2286.
+#[nutype::nutype(
+    validate(
+        greater_or_equal = 1_000_000_000_000_000,
+        less = 10_000_000_000_000_000
+    ),
+    derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        Into,
+        Serialize,
+        Deserialize
+    )
+)]
+pub struct TimestampMicros(i64);
 
 // ---------------------------------------------------------------------------
 // Typed path structs — compile-time route checking for axum router

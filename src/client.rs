@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 
+use crate::TimestampMicros;
 use crate::diagnose::{DiagnoseRequest, DiagnoseResponse, DiagnosisBlock};
 
 /// Explicit client auth mode — mirrors server-side AuthMode.
@@ -180,8 +181,8 @@ impl SigiroClient {
             // bound, and the server applies the single default in
             // `DiagnoseRequest::window()`. The CLI must not own a second copy
             // of that rule — see roadmap #72.
-            from_ts: from,
-            to_ts: to,
+            from_ts: from.map(TimestampMicros::try_new).transpose()?,
+            to_ts: to.map(TimestampMicros::try_new).transpose()?,
         };
         let req = self
             .http

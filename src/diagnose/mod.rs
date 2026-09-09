@@ -33,19 +33,17 @@ pub struct DiagnoseRequest {
     #[schema(example = json!(["checkout", "cart"]))]
     pub services: Option<Vec<String>>,
     /// Window start, **microseconds** since the Unix epoch (a 16-digit value,
-    /// e.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.
+    /// e.g. 1780000000000000). Seconds, milliseconds, and nanoseconds are rejected.
     /// OPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the
     /// same default `sigiro diagnose` uses. Providing `to_ts` without `from_ts`
     /// is rejected — a window that ends somewhere with no start is ambiguous,
     /// and guessing one silently would answer a question nobody asked.
-    #[validate(custom(function = "validate_micros_opt"))]
-    #[schema(example = 1780000000000000i64)]
-    pub from_ts: Option<i64>,
+    #[schema(value_type = Option<i64>, example = 1780000000000000i64)]
+    pub from_ts: Option<TimestampMicros>,
     /// Window end, microseconds since the Unix epoch. Must be > `from_ts`.
     /// Optional: defaults to now when `from_ts` is given alone.
-    #[validate(custom(function = "validate_micros_opt"))]
-    #[schema(example = 1780001800000000i64)]
-    pub to_ts: Option<i64>,
+    #[schema(value_type = Option<i64>, example = 1780001800000000i64)]
+    pub to_ts: Option<TimestampMicros>,
 }
 
 /// The default window when the caller supplies neither bound. Matches the CLI's
@@ -59,47 +57,12 @@ impl DiagnoseRequest {
     /// is what rejects `to_ts` without `from_ts`.
     pub fn window(&self, now_micros: i64) -> (i64, i64) {
         match (self.from_ts, self.to_ts) {
-            (Some(from), Some(to)) => (from, to),
-            (Some(from), None) => (from, now_micros),
+            (Some(from), Some(to)) => (from.into(), to.into()),
+            (Some(from), None) => (from.into(), now_micros),
             // Both absent: the documented 15-minute default.
             _ => (now_micros - DEFAULT_WINDOW_MICROS, now_micros),
         }
     }
-}
-
-// Timestamps are MICROSECONDS since the Unix epoch (matching the span/log
-// `timestamp` column). Fail LOUD on the wrong unit: seconds/millis are still
-// "positive" but resolve to ~1970, matching nothing — a false "no telemetry".
-/// `validate_micros` for an optional field. `None` is legal (it means "use the
-/// default"); `Some` still gets the full wrong-unit check, which is the whole
-/// reason these fields were mandatory in the first place — a seconds value is
-/// positive, resolves to ~1970, matches nothing, and reads as "no telemetry".
-fn validate_micros_opt(ts: i64) -> Result<(), validator::ValidationError> {
-    validate_micros(ts)
-}
-
-fn validate_micros(ts: i64) -> Result<(), validator::ValidationError> {
-    const MICROS_MIN: i64 = 1_000_000_000_000_000; // ~2001-09 in µs — catches s / ms
-    const MICROS_MAX: i64 = 10_000_000_000_000_000; // ~2286 in µs — catches ns
-    if (MICROS_MIN..MICROS_MAX).contains(&ts) {
-        return Ok(());
-    }
-    let hint = match ts {
-        t if t <= 0 => "must be a positive Unix timestamp",
-        t if t < 100_000_000_000 => "far too small to be a timestamp",
-        t if t < 100_000_000_000_000 => "looks like SECONDS — multiply by 1_000_000 for µs",
-        t if t < MICROS_MIN => "looks like MILLISECONDS — multiply by 1_000 for µs",
-        _ => "looks like NANOSECONDS — divide by 1_000 for µs",
-    };
-    let mut err = validator::ValidationError::new("timestamp_micros");
-    err.message = Some(
-        format!(
-            "not a plausible microsecond timestamp ({hint}); expected a 16-digit µs value since \
-             the Unix epoch, e.g. 1780000000000000"
-        )
-        .into(),
-    );
-    Err(err)
 }
 
 fn validate_window(req: &DiagnoseRequest) -> Result<(), validator::ValidationError> {
@@ -1109,8 +1072,8 @@ fn diagnose_one(
         findings,
         service: service.to_string(),
         window: Window::new(
-            TimestampMicros::from_micros(from_ts),
-            TimestampMicros::from_micros(to_ts),
+            TimestampMicros::try_new(from_ts)?,
+            TimestampMicros::try_new(to_ts)?,
         )?,
         error_traces_total: payload.stats.error_traces_total,
         coverage,
