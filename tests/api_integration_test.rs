@@ -363,6 +363,31 @@ async fn test_timezone_query_works_under_lockdown() {
 }
 
 #[tokio::test]
+async fn test_query_supports_duckdb_aggregate_filter() {
+    let ctx = build_test_context();
+    let app = build_http_router(ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    let resp = server
+        .post("/v1/query")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .text(
+            "SELECT count(*) FILTER (WHERE status_code = 2) AS errors \
+             FROM sigiro_spans",
+        )
+        .await;
+
+    resp.assert_status_ok();
+    let rows: serde_json::Value =
+        serde_json::from_str(&resp.text()).expect("query response should be JSON");
+    assert_eq!(
+        rows.pointer("/0/errors")
+            .and_then(serde_json::Value::as_i64),
+        Some(0)
+    );
+}
+
+#[tokio::test]
 async fn test_services_with_dev_auth_returns_200() {
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);

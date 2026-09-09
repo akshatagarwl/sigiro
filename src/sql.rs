@@ -13,7 +13,7 @@
 use sqlparser::ast::{
     Expr, ObjectName, Query as SqlQuery, SetExpr, Statement, TableFactor, Visit, Visitor,
 };
-use sqlparser::dialect::GenericDialect;
+use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
 use std::ops::ControlFlow;
@@ -79,8 +79,8 @@ const BLOCKED_TABLE_FUNCTIONS: &[&str] = &[
 ];
 
 /// DuckLake time-travel qualifier, e.g. `AT (VERSION => 3)` or
-/// `AT (TIMESTAMP => '2026-07-09 19:55:00')`. sqlparser's GenericDialect can't
-/// parse the `=>` form, so it is stripped before the SELECT-only structural
+/// `AT (TIMESTAMP => '2026-07-09 19:55:00')`. sqlparser's DuckDB dialect can't
+/// parse the `=>` form yet, so it is stripped before the SELECT-only structural
 /// check. The keyword denylist below still scans the ORIGINAL sql, so this
 /// widens reads without weakening the write/DDL/file-access guards.
 ///
@@ -609,7 +609,10 @@ pub fn validate_read_only_gated(
     allow_information_schema: bool,
     allow_sys_functions: bool,
 ) -> Result<(), String> {
-    let dialect = GenericDialect {};
+    // Validate the syntax users actually execute. GenericDialect rejects
+    // DuckDB's standard aggregate `FILTER (WHERE ...)` clause before the
+    // allowlist visitor can inspect it.
+    let dialect = DuckDbDialect {};
 
     // Every AT (...) clause body must be a literal BEFORE anything else runs:
     // DuckDB executes the clause verbatim, so a non-literal body (function
