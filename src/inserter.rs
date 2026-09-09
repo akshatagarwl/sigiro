@@ -1487,13 +1487,6 @@ mod tests {
     #[tokio::test]
     async fn retention_covers_projects_evicted_from_the_pool() {
         let dir = tempfile::tempdir().unwrap();
-        // Shared extension cache, as the pool and API test binaries use. Without
-        // it every pool in a fresh temp dir cold-downloads icu/parquet/json.
-        // SAFETY: single-threaded test setup; the path is read-only afterwards.
-        #[allow(clippy::disallowed_methods)]
-        unsafe {
-            std::env::set_var("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions");
-        }
         let pool = std::sync::Arc::new(ProjectPool::new(
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
             10,

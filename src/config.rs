@@ -78,8 +78,13 @@ pub(crate) static ALERT_WEBHOOK_TOKEN: Envar<String> =
         EnvarDef::Default(String::new())
     });
 /// DuckDB extension directory (optional — shared cache across tests).
-pub(crate) static EXTENSION_DIR: Envar<String> =
-    Envar::on_startup("SIGIRO_EXTENSION_DIR", || EnvarDef::Default(String::new()));
+pub(crate) static EXTENSION_DIR: Envar<String> = Envar::on_startup("SIGIRO_EXTENSION_DIR", || {
+    EnvarDef::Default(if cfg!(test) {
+        "/tmp/sigiro-test-extensions".to_string()
+    } else {
+        String::new()
+    })
+});
 
 /// DuckDB worker threads per shared project database. Default: host parallelism.
 pub(crate) static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS", || {
