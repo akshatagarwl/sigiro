@@ -84,10 +84,14 @@ clients with persistent authentication. Investigations create temporary sandboxe
 For local development:
 
 ```sh
-bun install
-bun run build
-bun run eve:build
+aube install --frozen-lockfile
+aube run build
+aube run eve:build
 ```
+
+`aube run` installs missing or stale dependencies before starting the script and
+keeps the committed `bun.lock`. Bun remains the runtime and bundler for the
+agent processes; aube owns dependency installation and script dispatch.
 
 Validation uses actual celld/Eve HTTP requests, Sigiro ingestion and both
 subscription-to-draft-PR loops. Local demo files and E2E evidence are ignored in

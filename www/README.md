@@ -10,18 +10,20 @@ app on Vite via vinext, and now Astro.
 ## Commands
 
 ```bash
-bun install
-bun run dev           # astro dev
-bun run build         # astro build → dist/client (assets) + dist/server (the Worker)
-bun run preview       # wrangler dev on the built Worker — the real runtime
-bun run deploy        # wrangler deploy
-bun run lint          # oxlint
-bun run fmt           # oxfmt
-bun run types:check   # astro sync && tsc --noEmit
-bun run og            # regenerate the Open Graph card into public/
+aube install --frozen-lockfile
+aube run dev           # astro dev
+aube run build         # astro build → dist/client (assets) + dist/server (the Worker)
+aube run preview       # wrangler dev on the built Worker — the real runtime
+aube run deploy        # wrangler deploy
+aube run lint          # oxlint
+aube run fmt           # oxfmt
+aube run check         # formatting, linting, and type checks
+aube run og            # regenerate the Open Graph card into public/
 ```
 
-Always verify with `bun run preview` rather than `astro dev`. The two run in
+`aube run` installs missing or stale dependencies before starting the script and
+keeps the committed `bun.lock`; do not add a second lockfile. Always verify with
+`aube run preview` rather than `astro dev`. The two run in
 different engines — `astro dev` is Node, the deployed site is workerd — and at
 least one bug has only ever appeared in the second one (see the Shiki note in
 `src/lib/highlight.ts`).
