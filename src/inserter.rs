@@ -118,9 +118,14 @@ impl DiskCapacityState {
 /// (the OTLP SDK retries). Better to drop one project's data than block all.
 const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
 
+// CHECKPOINT runs DuckLake compaction and catalog cleanup on the sole writer.
+// Large remote catalogs take tens of seconds, so this is hourly maintenance,
+// not a flush mechanism.
+const DUCKLAKE_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 /// Cadence of the continuous anomaly pass (`crate::anomaly`) — how often
 /// each project's persisted error-rate series are re-scanned for regime
-/// shifts. An operational scheduling knob (like the 30s checkpoint and the
+/// shifts. An operational scheduling knob (like DuckLake maintenance and the
 /// hourly retention timers), NOT a detection threshold: detection itself is
 /// BOCPD with no tunables.
 const ANOMALY_PASS_INTERVAL: Duration = Duration::from_secs(300);
@@ -902,7 +907,10 @@ async fn run_flusher(
         }
     };
     let mut interval = tokio::time::interval(flush_interval);
-    let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(30));
+    let mut checkpoint_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + DUCKLAKE_MAINTENANCE_INTERVAL,
+        DUCKLAKE_MAINTENANCE_INTERVAL,
+    );
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     checkpoint_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // First anomaly pass one full period AFTER startup (interval_at skips the

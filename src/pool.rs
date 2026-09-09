@@ -420,7 +420,7 @@ impl ProjectPool {
                     // flush_inlined_data, expire_snapshots, merge_adjacent_files,
                     // rewrite_data_files, cleanup_old_files,
                     // delete_orphaned_files. The flusher has called
-                    // `CHECKPOINT lake` every 30s all along, but production had
+                    // `CHECKPOINT lake` periodically all along, but production had
                     // persisted only parquet_compression and parquet_version.
                     // Snapshot expiry was disabled, rewrites required 95% of a
                     // file to be deleted, and the compaction target was DuckLake's
