@@ -45,6 +45,38 @@ run = "mise tasks ls"
 description = "Release build of the sigiro binary. Set TARGET to cross-compile."
 run = 'mbx build --release --bin sigiro ${TARGET:+--target "$TARGET"}'
 
+[tasks.build-dev]
+description = "Build a debug binary with Apple ld on macOS or pinned jdxld on Linux."
+run = """
+case "$(uname -s)" in
+  Darwin) TMPDIR=/tmp mbx build --bin sigiro ;;
+  Linux) mise run _build-dev-jdxld ;;
+  *) echo "build-dev: unsupported host $(uname -s); expected macOS or Linux" >&2; exit 1 ;;
+esac
+"""
+
+[tasks._build-dev-jdxld]
+hide = true
+# jdxld has no published Linux release yet. Build the reviewed Git commit
+# instead of following its moving main branch; mise installs this only when the
+# Linux branch of build-dev invokes this task.
+tools = { "cargo:https://github.com/jdx/jdxld" = "rev:8ef70b88c7f25da631aa2364076947752ecfa26d" }
+run = """
+if [ "$(uname -s)" != Linux ]; then
+  echo "_build-dev-jdxld: jdxld dev linking is Linux-only" >&2
+  exit 1
+fi
+if ! command -v clang >/dev/null; then
+  echo "_build-dev-jdxld: clang is required to drive jdxld" >&2
+  exit 1
+fi
+TMPDIR=/tmp RUSTFLAGS="-Clinker=clang -Clink-arg=--ld-path=jdxld" mbx build --bin sigiro
+if ! strings target/debug/sigiro | grep -q "Linker: jdxld"; then
+  echo "_build-dev-jdxld: binary does not contain jdxld's linker marker" >&2
+  exit 1
+fi
+"""
+
 # Fast verification gate (debug). Run this before every commit.
 #
 # `shear` catches unused dependencies, and source files no target compiles.

@@ -2,6 +2,11 @@
 
 lockfile_version = 1
 
+[[tools."cargo:https://github.com/jdx/jdxld"]]
+version = "rev:8ef70b88c7f25da631aa2364076947752ecfa26d"
+backend = "cargo:https://github.com/jdx/jdxld"
+specifiers = ["rev:8ef70b88c7f25da631aa2364076947752ecfa26d"]
+
 [[tools.duckdb]]
 version = "1.5.5"
 backend = "aqua:duckdb/duckdb"
