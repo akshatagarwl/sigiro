@@ -552,14 +552,27 @@ export default defineConfig({
 
   navigation: {
     /**
-     * Two external links, and the second one names the file rather than a
-     * section. That is deliberate here: it leaves the docs for the raw spec on
-     * `api.sigiro.com`, so "OpenAPI" is what a reader actually lands on. The
-     * generated reference is a docs page and lives in the sidebar as
-     * "Reference" — see `openapi.route`.
+     * One entry, and it names the file rather than a section. That is
+     * deliberate: it leaves the docs for the raw spec on `api.sigiro.com`, so
+     * "OpenAPI" is what a reader actually lands on. The generated reference is
+     * a docs page and lives in the sidebar as "Reference" — see `openapi.route`.
+     *
+     * No "Home" entry. It read `https://sigiro.com`, which hardcoded this
+     * site's own origin into sidebar chrome on all 68 built pages: on a
+     * `*.workers.dev` preview every reader who clicked it left the preview for
+     * production. It cannot be written root-relative either — blume rebases
+     * internal `featured` hrefs under `basePath` and then localizes them
+     * (`core/navigation.ts` `rebaseHref`, `core/graph.ts` `localizeHref`), so
+     * `/` renders as `/docs`, i.e. the docs index rather than the landing page.
+     * The site root is not expressible here.
+     *
+     * It was redundant regardless: `logo.href` is `/`, and the header brand
+     * link renders on every docs page — verified in `dist/client` that
+     * `/docs`, `/docs/how-to/executor`, `/docs/ja/reference` and
+     * `/docs/reference/operations/run-query` all carry `href="/"` on the
+     * wordmark. Two links to one destination, one of them wrong.
      */
     featured: [
-      { href: "https://sigiro.com", label: "Home" },
       { href: "https://api.sigiro.com/openapi.json", label: "openapi.json" },
     ],
     /**
