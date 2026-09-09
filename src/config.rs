@@ -46,7 +46,7 @@ pub(crate) static AWS_SECRET_ACCESS_KEY: Envar<String> =
     Envar::on_demand("AWS_SECRET_ACCESS_KEY", || EnvarDef::Default(String::new()));
 /// Whether the S3 secret DuckDB attaches with speaks TLS (`USE_SSL` in the
 /// `CREATE SECRET` SQL). Default `true` — real S3 (and R2) require TLS.
-/// Dev/CI S3-compatible stores (MinIO over plain HTTP) set this `false`.
+/// Dev/CI S3-compatible stores (RustFS over plain HTTP) set this `false`.
 /// on_demand (not on_startup) so temp_env::with_vars works in tests, matching
 /// the other S3_* config above.
 pub(crate) static S3_USE_SSL: Envar<bool> =

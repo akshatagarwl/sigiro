@@ -20,8 +20,8 @@ bash setup.sh
 echo "=== Step 2: Build images ==="
 docker compose build
 
-echo "=== Step 3: Start MinIO + Collector ==="
-docker compose up -d minio minio-setup collector
+echo "=== Step 3: Start RustFS + Collector ==="
+docker compose up -d rustfs rustfs-setup collector
 echo "Waiting for collector to be ready..."
 sleep 5
 

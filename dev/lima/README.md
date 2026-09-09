@@ -42,7 +42,7 @@ See `.cargo/config.toml` for details on the cross-compile workaround.
 | VM | Config | Purpose |
 |---|---|---|
 | `sigiro-local` | `sigiro-local.yaml` | Local storage mode (DuckLake files on disk) |
-| `sigiro-s3` | `sigiro-s3.yaml` | S3 storage mode (MinIO + PostgreSQL catalog) |
+| `sigiro-s3` | `sigiro-s3.yaml` | S3 storage mode (RustFS + PostgreSQL catalog) |
 | `fed-central` | `sigiro-fed-central.yaml` | Federation central node (k3s server + sigiro --central) |
 | `fed-collector-1` | `sigiro-fed-collector.yaml` | Federation collector (k3s worker + sigiro --ebpf) |
 | `fed-collector-2` | `sigiro-fed-collector.yaml` | Federation collector (k3s worker + sigiro --ebpf) |
@@ -80,7 +80,7 @@ The test script:
 1. Starts 3 Lima VMs — `fed-central` (k3s server), `fed-collector-1/2` (k3s workers)
 2. Cross-compiles sigiro and copies to all VMs
 3. Builds Docker image and loads into k3s
-4. Deploys k8s manifests: PostgreSQL, MinIO, sigiro-central, sigiro-collector DaemonSet
+4. Deploys k8s manifests: PostgreSQL, RustFS, sigiro-central, sigiro-collector DaemonSet
 5. Deploys OnlineBoutique demo services
 6. Verifies federation via `/v1/federation/workers` and `/v1/diagnose`
 

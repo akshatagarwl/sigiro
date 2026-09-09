@@ -7,7 +7,7 @@
 //!   2. PG catalog + LOCAL data   (CATALOG_URL, no S3_BUCKET): PostgreSQL metadata
 //!      catalog, Parquet on local disk. Source of truth = PG catalog + local data dir.
 //!   3. PG catalog + S3 data      (CATALOG_URL + S3_*): PostgreSQL metadata catalog,
-//!      Parquet in MinIO/S3. Source of truth = PG + S3 (NOT the local disk).
+//!      Parquet in RustFS/S3. Source of truth = PG + S3 (NOT the local disk).
 //!
 //! The persistence assertion is per-mode and encodes each mode's ACTUAL
 //! durability contract:
@@ -28,11 +28,11 @@
 //! from being reused (DuckLake bakes the DATA_PATH into the catalog on first
 //! CREATE and ignores it thereafter).
 //!
-//! `#[ignore]`d — needs Docker (Postgres + MinIO). Run via
+//! `#[ignore]`d — needs Docker (Postgres + RustFS). Run via
 //! `just check-storage-matrix-e2e`, or directly:
 //! ```text
-//! docker compose -f docker-compose.dev.yml up -d --wait postgres minio
-//! docker compose -f docker-compose.dev.yml up minio-setup
+//! docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
+//! docker compose -f docker-compose.dev.yml up rustfs-setup
 //! cargo test --test storage_mode_matrix_test -- --ignored --nocapture
 //! docker compose -f docker-compose.dev.yml down -v
 //! ```
@@ -59,8 +59,8 @@ const CATALOG_LIBPQ: &str = "dbname=ducklake host=127.0.0.1 user=sigiro password
 const S3_BUCKET: &str = "sigiro";
 const S3_REGION: &str = "us-east-1";
 const S3_ENDPOINT: &str = "127.0.0.1:9000";
-const S3_KEY_ID: &str = "minioadmin";
-const S3_SECRET: &str = "minioadmin";
+const S3_KEY_ID: &str = "rustfsadmin";
+const S3_SECRET: &str = "rustfsadmin";
 
 /// The metadata schema DuckLake uses for the `default` tenant — dropped to
 /// reset a PG-backed mode's catalog between modes/runs.
@@ -403,7 +403,7 @@ fn run_mode(mode: &Mode) -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "needs Docker (Postgres catalog + MinIO S3) — run via `just check-storage-matrix-e2e`"]
+#[ignore = "needs Docker (Postgres catalog + RustFS S3) — run via `just check-storage-matrix-e2e`"]
 fn storage_mode_matrix() {
     for mode in MODES {
         println!("== storage mode: {} ==", mode.name);

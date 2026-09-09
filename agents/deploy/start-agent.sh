@@ -51,10 +51,10 @@ export WORKER_ID="${WORKER_ID:-sigiro-agent}"
 export HOST=0.0.0.0
 export PORT=12000
 
-# Compose waits for MinIO health before starting this container. A failed bootstrap
+# Compose waits for RustFS health before starting this container. A failed bootstrap
 # stops startup; supervision begins only after the production deployment succeeds.
-mc --config-dir /tmp/sigiro-mc alias set local "$S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" >/dev/null
-mc --config-dir /tmp/sigiro-mc mb --ignore-existing "local/$CELLD_BUCKET"
+rc alias set local "$S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" >/dev/null
+rc bucket create --ignore-existing "local/$CELLD_BUCKET"
 celld deploy /app/coordinator --bucket "$CELLD_BUCKET" --endpoint "$S3_ENDPOINT" --region "$AWS_REGION"
 
 exec /usr/bin/supervisord -n -c /app/deploy/supervisord.conf

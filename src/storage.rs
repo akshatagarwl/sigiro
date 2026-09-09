@@ -234,7 +234,7 @@ pub struct StorageConfig {
     pub s3_key_id: String,
     pub s3_secret: String,
     /// `USE_SSL` for the S3 secret SQL. `true` for real S3/R2; `false` for
-    /// plain-HTTP dev/CI S3-compatible stores (MinIO). See
+    /// plain-HTTP dev/CI S3-compatible stores (RustFS). See
     /// `crate::config::S3_USE_SSL`.
     pub s3_use_ssl: bool,
 }

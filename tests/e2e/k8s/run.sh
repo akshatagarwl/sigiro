@@ -65,17 +65,17 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
   fi
 fi
 
-# --- Phase 1: Namespace + RBAC + MinIO ---
+# --- Phase 1: Namespace + RBAC + RustFS ---
 echo ""
-echo "=== Phase 1: Namespace + RBAC + MinIO ==="
+echo "=== Phase 1: Namespace + RBAC + RustFS ==="
 cleanup
 kubectl apply -f "$SCRIPT_DIR/namespace.yaml"
 kubectl apply -f "$SCRIPT_DIR/collector-rbac.yaml"
-kubectl apply -f "$SCRIPT_DIR/minio.yaml"
+kubectl apply -f "$SCRIPT_DIR/rustfs.yaml"
 
-echo "Waiting for MinIO..."
-kubectl -n "$NS" rollout status deployment/minio --timeout=120s
-kubectl -n "$NS" wait --for=condition=complete job/minio-setup --timeout=120s
+echo "Waiting for RustFS..."
+kubectl -n "$NS" rollout status deployment/rustfs --timeout=120s
+kubectl -n "$NS" wait --for=condition=complete job/rustfs-setup --timeout=120s
 
 # --- Phase 2: Demo infra (flagd, valkey, kafka, postgresql) ---
 echo ""
@@ -135,11 +135,11 @@ echo ""
 echo "--- Service pod status ---"
 kubectl -n "$NS" get pods --no-headers | sort
 
-# Port-forward MinIO for DuckDB
+# Port-forward RustFS for DuckDB
 echo ""
-echo "=== Setting up MinIO port-forward ==="
-MINIO_POD=$(kubectl -n "$NS" get pods -l app=minio -o jsonpath='{.items[0].metadata.name}')
-kubectl -n "$NS" port-forward "$MINIO_POD" 9000:9000 &>/dev/null &
+echo "=== Setting up RustFS port-forward ==="
+RUSTFS_POD=$(kubectl -n "$NS" get pods -l app=rustfs -o jsonpath='{.items[0].metadata.name}')
+kubectl -n "$NS" port-forward "$RUSTFS_POD" 9000:9000 &>/dev/null &
 PF_PID=$!
 sleep 3
 
@@ -152,8 +152,8 @@ fi
 S3_SETUP="
 INSTALL httpfs; LOAD httpfs;
 SET s3_endpoint='localhost:9000';
-SET s3_access_key_id='minioadmin';
-SET s3_secret_access_key='minioadmin';
+SET s3_access_key_id='rustfsadmin';
+SET s3_secret_access_key='rustfsadmin';
 SET s3_use_ssl=false;
 SET s3_url_style='path';
 "

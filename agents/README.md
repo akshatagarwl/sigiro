@@ -77,7 +77,7 @@ key is required. Credentials stay on the customer's trusted host.
 ## Run it
 
 For the three-service Docker Compose installation, follow
-[the customer-hosted setup](docs/customer-hosted.md): Sigiro, MinIO, and an agent
+[the customer-hosted setup](docs/customer-hosted.md): Sigiro, RustFS, and an agent
 container bundling celld, Eve, and the worker. GitHub and Claude sign-in use native
 clients with persistent authentication. Investigations create temporary sandboxes.
 

@@ -6,7 +6,7 @@
 //!
 //! This is the `query_surface == None` / `TenantKeys` auth mode (NOT the quack
 //! edge, which stays on static/open auth). Storage is PostgreSQL catalog + LOCAL
-//! Parquet, so only Postgres is required (no MinIO); the control-plane behavior
+//! Parquet, so only Postgres is required (no RustFS); the control-plane behavior
 //! is orthogonal to where data files live.
 //!
 //! Coverage:

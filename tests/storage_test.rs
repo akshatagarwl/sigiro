@@ -165,7 +165,7 @@ fn distributed_attach_sql_use_ssl_true_for_real_s3() {
 }
 
 #[test]
-fn distributed_attach_sql_use_ssl_false_for_dev_minio() {
+fn distributed_attach_sql_use_ssl_false_for_dev_rustfs() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = r2_config();
     config.s3_use_ssl = false;
@@ -179,7 +179,7 @@ fn distributed_attach_sql_use_ssl_false_for_dev_minio() {
     let secret_sql = attach.secret_sql.as_deref().expect("S3 secret SQL");
     assert!(
         secret_sql.contains("USE_SSL false"),
-        "SIGIRO_S3_USE_SSL=false must produce USE_SSL false for plain-HTTP dev stores (MinIO): {secret_sql}"
+        "SIGIRO_S3_USE_SSL=false must produce USE_SSL false for plain-HTTP dev stores (RustFS): {secret_sql}"
     );
 }
 

@@ -10,13 +10,13 @@
 #   MODE          "local" (default) or "s3"
 #   SIGIRO_BIN    Path to sigiro binary (default: target/release/sigiro relative to script)
 #   SIGIRO_DATA   Data directory (default: /tmp/sigiro-e2e-data)
-#   MINIO_PORT    MinIO API port for S3 mode (default: 9000)
+#   RUSTFS_PORT    RustFS API port for S3 mode (default: 9000)
 #   PG_PORT       PostgreSQL port for S3 mode (default: 5432)
 set -euo pipefail
 
 MODE="${MODE:-local}"
 SIGIRO_DATA="${SIGIRO_DATA:-/tmp/sigiro-e2e-data}"
-MINIO_PORT="${MINIO_PORT:-9000}"
+RUSTFS_PORT="${RUSTFS_PORT:-9000}"
 PG_PORT="${PG_PORT:-5432}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SIGIRO_BIN="${SIGIRO_BIN:-${SCRIPT_DIR}/../target/release/sigiro}"
@@ -41,7 +41,7 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 cleanup() {
     log "Cleaning up..."
     [ -n "$SIGIRO_PID" ] && kill "$SIGIRO_PID" 2>/dev/null || true
-    pkill -f "minio server" 2>/dev/null || true
+    pkill -x rustfs 2>/dev/null || true
     log "Done."
 }
 trap cleanup EXIT
@@ -62,26 +62,27 @@ rm -rf "$SIGIRO_DATA"
 mkdir -p "$SIGIRO_DATA"
 
 if [ "$MODE" = "s3" ]; then
-    log "Setting up MinIO (S3-compatible storage)..."
+    log "Setting up RustFS (S3-compatible storage)..."
 
-    export MINIO_ROOT_USER=sigiro-test
-    export MINIO_ROOT_PASSWORD=sigiro-test-secret
-    mkdir -p /tmp/minio-data-e2e
-    nohup minio server /tmp/minio-data-e2e --address ":${MINIO_PORT}" --console-address ":9001" > /tmp/minio.log 2>&1 &
-    MINIO_PID=$!
+    export RUSTFS_ACCESS_KEY=sigiro-test
+    export RUSTFS_SECRET_KEY=sigiro-test-secret
+    rm -rf /tmp/rustfs-data-e2e
+    mkdir -p /tmp/rustfs-data-e2e
+    nohup rustfs /tmp/rustfs-data-e2e --address ":${RUSTFS_PORT}" --console-address ":9001" > /tmp/rustfs.log 2>&1 &
+    RUSTFS_PID=$!
     sleep 3
 
-    if ! kill -0 "$MINIO_PID" 2>/dev/null; then
-        fail "MinIO failed to start"
-        cat /tmp/minio.log
+    if ! kill -0 "$RUSTFS_PID" 2>/dev/null; then
+        fail "RustFS failed to start"
+        cat /tmp/rustfs.log
         exit 1
     fi
-    pass "MinIO started (PID ${MINIO_PID})"
+    pass "RustFS started (PID ${RUSTFS_PID})"
 
     # Create bucket
-    mc alias set local "http://localhost:${MINIO_PORT}" sigiro-test sigiro-test-secret --api s3v4
-    mc mb "local/sigiro-test" 2>/dev/null || true
-    pass "MinIO bucket created"
+    rc alias set local "http://localhost:${RUSTFS_PORT}" sigiro-test sigiro-test-secret
+    rc bucket create --ignore-existing "local/sigiro-test"
+    pass "RustFS bucket created"
 
     # Set up PostgreSQL
     log "Setting up PostgreSQL..."
@@ -104,7 +105,7 @@ if [ "$MODE" = "s3" ]; then
     export SIGIRO_S3_PREFIX="e2e-test"
     export AWS_ACCESS_KEY_ID=sigiro-test
     export AWS_SECRET_ACCESS_KEY=sigiro-test-secret
-    export AWS_ENDPOINT_URL="http://localhost:${MINIO_PORT}"
+    export AWS_ENDPOINT_URL="http://localhost:${RUSTFS_PORT}"
 fi
 
 $SIGIRO_BIN serve --no-ebpf > /tmp/sigiro-server.log 2>&1 &
@@ -336,15 +337,15 @@ else
     warn "Server has ${ERROR_COUNT} error mentions in logs"
 fi
 
-# ─── For S3 mode: verify data in MinIO ───────────────────────────
+# ─── For S3 mode: verify data in RustFS ───────────────────────────
 if [ "$MODE" = "s3" ]; then
-    log "Verifying data in MinIO..."
-    MC_FILES=$(mc ls "local/sigiro-test/e2e-test/" --recursive 2>/dev/null | head -10 || echo "")
-    if [ -n "$MC_FILES" ]; then
-        pass "Data files found in MinIO"
-        echo "$MC_FILES"
+    log "Verifying data in RustFS..."
+    RC_FILES=$(rc ls "local/sigiro-test/e2e-test/" --recursive 2>/dev/null | head -10 || echo "")
+    if [ -n "$RC_FILES" ]; then
+        pass "Data files found in RustFS"
+        echo "$RC_FILES"
     else
-        fail "No data files found in MinIO"
+        fail "No data files found in RustFS"
     fi
 
     log "Verifying PostgreSQL catalog..."
@@ -367,7 +368,7 @@ else
 fi
 echo "==========================================="
 echo "Server log: /tmp/sigiro-server.log"
-[ "$MODE" = "s3" ] && echo "MinIO log: /tmp/minio.log"
+[ "$MODE" = "s3" ] && echo "RustFS log: /tmp/rustfs.log"
 echo ""
 
 exit $FAILED

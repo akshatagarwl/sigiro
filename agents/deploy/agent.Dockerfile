@@ -1,6 +1,6 @@
 FROM oven/bun:1.3.14-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f AS bun
 FROM docker:27-cli AS docker
-FROM minio/mc:RELEASE.2025-08-13T08-35-41Z AS mc
+FROM rustfs/rc:v0.1.30@sha256:1296510ec27800668d26a8bdca6251e587086187a9368c7b80134a169e8a3bb8 AS rc
 FROM node:24.4.1-bookworm-slim@sha256:36ae19f59c91f3303c7a648f07493fe14c4bd91320ac8d898416327bacf1bbfa
 
 ARG TARGETARCH
@@ -10,7 +10,7 @@ ARG CELLD_ARM64_SHA256=d95ec7108d2c280144599727ac66106c0123d09c573f5724d3b4d3bc3
 
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=mc /usr/bin/mc /usr/local/bin/mc
+COPY --from=rc /usr/bin/rc /usr/local/bin/rc
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash ca-certificates curl git gh openssl supervisor \
     && rm -rf /var/lib/apt/lists/* \

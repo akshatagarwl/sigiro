@@ -1,7 +1,7 @@
 //! End-to-end test for the S3-backed DISTRIBUTED "default" project quack
 //! query surface (#12b — GPT-5.6's "Option A": reuse the existing
 //! distributed ATTACH path for a single project literally named `default`,
-//! no new storage mode). Requires Docker (Postgres catalog + MinIO S3 — see
+//! no new storage mode). Requires Docker (Postgres catalog + RustFS S3 — see
 //! `docker-compose.dev.yml`).
 //!
 //! Proves the S3/quack refusal previously in `src/server.rs`
@@ -13,7 +13,7 @@
 //! `WITH`-ban — is exactly the same fail-closed AST firewall the quack
 //! authorization gate runs in every storage mode (see
 //! `crate::quack::install_authorization_gate`). This test spawns a real
-//! `sigiro serve` child process against real Postgres + MinIO (mirroring
+//! `sigiro serve` child process against real Postgres + RustFS (mirroring
 //! `tests/quack_query_surface_test.rs`'s patterns: real OTLP/HTTP ingest,
 //! `quack_query(...)` client, readiness poll, "Authorization failed"
 //! assertions, concurrent ingest, SIGTERM shutdown) with
@@ -46,14 +46,14 @@ use std::time::{Duration, Instant};
 
 /// Matches `docker-compose.dev.yml` exactly: `postgres` service
 /// (`POSTGRES_USER=sigiro`, `POSTGRES_PASSWORD=sigiro`, `POSTGRES_DB=ducklake`,
-/// published on `5432`) and `minio` service (root user/password `minioadmin`,
-/// S3 API on `9000`, bucket `sigiro` pre-created by the `minio-setup` job).
+/// published on `5432`) and `rustfs` service (access key/secret `rustfsadmin`,
+/// S3 API on `9000`, bucket `sigiro` pre-created by the `rustfs-setup` job).
 const CATALOG_URL: &str = "postgresql://sigiro:sigiro@127.0.0.1:5432/ducklake";
 const S3_BUCKET: &str = "sigiro";
 const S3_REGION: &str = "us-east-1";
 const S3_ENDPOINT: &str = "127.0.0.1:9000";
-const S3_KEY_ID: &str = "minioadmin";
-const S3_SECRET: &str = "minioadmin";
+const S3_KEY_ID: &str = "rustfsadmin";
+const S3_SECRET: &str = "rustfsadmin";
 
 /// Distinct from the port block `tests/quack_query_surface_test.rs` uses
 /// (41100+) so the two test binaries — which `cargo test` runs concurrently
@@ -89,7 +89,7 @@ impl S3QuackEdge {
     /// Spawn a fresh edge on the fixed test port block, with a FRESH temp
     /// `SIGIRO_DATA_DIR` (dropped — and its directory deleted from disk —
     /// when the returned value's `_data_dir` field is dropped, e.g. at the
-    /// end of `shutdown()`). Catalog (Postgres) and data (S3/MinIO) are
+    /// end of `shutdown()`). Catalog (Postgres) and data (S3/RustFS) are
     /// external Docker services, not per-instance — that is the entire
     /// point of the persistence assertion below.
     fn spawn(token: &str) -> Self {
@@ -140,7 +140,7 @@ impl S3QuackEdge {
     }
 
     fn wait_ready(&self) {
-        // 90s: cold Postgres/MinIO + first-boot extension download can be
+        // 90s: cold Postgres/RustFS + first-boot extension download can be
         // slow, matching the sibling (local-mode) quack E2E test's budget.
         let deadline = Instant::now() + Duration::from_secs(90);
         loop {
@@ -545,11 +545,11 @@ fn run() -> Result<(), String> {
 }
 
 /// Single-pass S3-backed distributed "default" project quack E2E test.
-/// `#[ignore]`d — needs Docker (Postgres + MinIO). Run via
+/// `#[ignore]`d — needs Docker (Postgres + RustFS). Run via
 /// `just check-s3-e2e` or:
 /// `cargo test --test quack_s3_query_surface_test -- --ignored --nocapture`.
 #[test]
-#[ignore = "needs Docker (Postgres catalog + MinIO S3) — run via `just check-s3-e2e`"]
+#[ignore = "needs Docker (Postgres catalog + RustFS S3) — run via `just check-s3-e2e`"]
 fn quack_s3_query_surface_single_iteration() {
     run().expect("S3-backed distributed \"default\" project quack E2E iteration failed");
 }

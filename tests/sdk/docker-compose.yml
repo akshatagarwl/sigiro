@@ -1,36 +1,36 @@
 services:
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
+  rustfs:
+    image: rustfs/rustfs:1.0.0-rc.5@sha256:c36b3efea3d1e503f1a2581abd0e7611e0e5820dd30e1850a52384b3fc52bda4
+    command: /data
     ports:
       - "9000:9000"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/health/ready"]
       interval: 2s
       timeout: 5s
       retries: 10
 
-  minio-setup:
-    image: minio/mc
+  rustfs-setup:
+    image: rustfs/rc:v0.1.30@sha256:1296510ec27800668d26a8bdca6251e587086187a9368c7b80134a169e8a3bb8
     depends_on:
-      minio: { condition: service_healthy }
-    entrypoint: sh -c "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb local/sigiro --ignore-existing"
+      rustfs: { condition: service_healthy }
+    entrypoint: sh -c "rc alias set local http://rustfs:9000 rustfsadmin rustfsadmin && rc bucket create --ignore-existing local/sigiro"
 
   collector:
     build:
       context: ../..
       dockerfile: collector/Dockerfile
     depends_on:
-      minio-setup: { condition: service_completed_successfully }
+      rustfs-setup: { condition: service_completed_successfully }
     environment:
-      S3_ENDPOINT: http://minio:9000
+      S3_ENDPOINT: http://rustfs:9000
       S3_BUCKET: sigiro
       S3_REGION: us-east-1
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
+      S3_ACCESS_KEY: rustfsadmin
+      S3_SECRET_KEY: rustfsadmin
     command: ["--config", "/etc/otelcol/otelcol.e2e.yaml", "--feature-gates=service.profilesSupport"]
     volumes:
       - ../../collector/otelcol.e2e.yaml:/etc/otelcol/otelcol.e2e.yaml:ro

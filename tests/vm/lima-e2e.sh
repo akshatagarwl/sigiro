@@ -18,7 +18,7 @@ warn() { echo -e "${Y}[WARN]${N} $*"; }
 cleanup() {
     [ -f "$PID_FILE" ] && kill "$(cat "$PID_FILE")" 2>/dev/null || true
     rm -f "$PID_FILE"
-    pkill -f "minio server" 2>/dev/null || true
+    pkill -x rustfs 2>/dev/null || true
     log "Cleaned up"
 }
 trap cleanup EXIT
@@ -30,17 +30,17 @@ log "Sigiro E2E — mode=${MODE}"
 rm -rf "$DATA_DIR" && mkdir -p "$DATA_DIR"
 log "Data dir: ${DATA_DIR}"
 
-# ── S3 mode: start MinIO + PostgreSQL ─────────────────
+# ── S3 mode: start RustFS + PostgreSQL ─────────────────
 if [ "$MODE" = "s3" ]; then
-    log "Starting MinIO..."
-    export MINIO_ROOT_USER=sigiro MINIO_ROOT_PASSWORD=sigiro-secret
-    mkdir -p /tmp/minio-data-$$
-    minio server /tmp/minio-data-$$ --address ":9000" --console-address ":9001" > /tmp/minio-$$-log 2>&1 &
+    log "Starting RustFS..."
+    export RUSTFS_ACCESS_KEY=sigiro RUSTFS_SECRET_KEY=sigiro-secret
+    mkdir -p /tmp/rustfs-data-$$
+    rustfs /tmp/rustfs-data-$$ --address ":9000" --console-address ":9001" > /tmp/rustfs-$$-log 2>&1 &
     sleep 2
-    if ! kill -0 $! 2>/dev/null; then fail "MinIO failed"; cat /tmp/minio-$$-log; exit 1; fi
-    pass "MinIO started"
-    mc alias set local http://localhost:9000 sigiro sigiro-secret --api s3v4 2>&1
-    mc mb local/sigiro-e2e 2>/dev/null || true
+    if ! kill -0 $! 2>/dev/null; then fail "RustFS failed"; cat /tmp/rustfs-$$-log; exit 1; fi
+    pass "RustFS started"
+    rc alias set local http://localhost:9000 sigiro sigiro-secret 2>&1
+    rc bucket create --ignore-existing local/sigiro-e2e
     pass "Bucket created"
 
     log "Starting PostgreSQL..."
@@ -148,9 +148,9 @@ log "Services: ${SERVICES}"
 
 # ── S3 verification ───────────────────────────────────
 if [ "$MODE" = "s3" ]; then
-    log "Checking MinIO data files..."
-    FILES=$(mc ls local/sigiro-e2e/e2e/ --recursive 2>/dev/null | head -10 || echo "")
-    [ -n "$FILES" ] && { pass "MinIO has data files"; echo "$FILES"; } || fail "No MinIO data files"
+    log "Checking RustFS data files..."
+    FILES=$(rc ls local/sigiro-e2e/e2e/ --recursive 2>/dev/null | head -10 || echo "")
+    [ -n "$FILES" ] && { pass "RustFS has data files"; echo "$FILES"; } || fail "No RustFS data files"
 
     log "Checking PostgreSQL catalog..."
     TABLES=$(sudo -u postgres psql -d sigiro_e2e -c "\dt" 2>/dev/null | head -20 || echo "")

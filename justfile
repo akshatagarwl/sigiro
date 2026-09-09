@@ -64,7 +64,7 @@ slop:
 install-hooks:
     git config core.hooksPath .githooks
 
-# Run sigiro locally with dev dependencies (Postgres, MinIO).
+# Run sigiro locally with dev dependencies (Postgres, RustFS).
 run:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -72,33 +72,33 @@ run:
     trap 'docker compose -f docker-compose.dev.yml down' EXIT
     mbx run --release --bin sigiro
 
-# S3-backed distributed "default" project quack E2E (needs Docker: Postgres + MinIO).
+# S3-backed distributed "default" project quack E2E (needs Docker: Postgres + RustFS).
 check-s3-e2e:
     #!/usr/bin/env bash
     set -euo pipefail
-    # --wait only on postgres/minio (they have healthchecks); minio-setup is a
+    # --wait only on postgres/rustfs (they have healthchecks); rustfs-setup is a
     # one-shot job that exits 0 once it creates the bucket, which --wait treats
     # as "not running" and fails on if targeted directly. Run it separately,
     # attached, so this recipe blocks until the bucket actually exists.
-    docker compose -f docker-compose.dev.yml up -d --wait postgres minio
-    docker compose -f docker-compose.dev.yml up minio-setup
+    docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
+    docker compose -f docker-compose.dev.yml up rustfs-setup
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
     mbx test --test quack_s3_query_surface_test -- --ignored --nocapture
 
 # Storage-mode matrix E2E: proves ingest->flush->query->restart-persistence in
 # all three modes (local file / PG+local data / PG+S3). Needs Docker (Postgres +
-# MinIO), like check-s3-e2e.
+# RustFS), like check-s3-e2e.
 check-storage-matrix-e2e:
     #!/usr/bin/env bash
     set -euo pipefail
-    docker compose -f docker-compose.dev.yml up -d --wait postgres minio
-    docker compose -f docker-compose.dev.yml up minio-setup
+    docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
+    docker compose -f docker-compose.dev.yml up rustfs-setup
     trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
     mbx test --test storage_mode_matrix_test -- --ignored --nocapture
 
 # Hosted control-plane E2E: multi-tenant provisioning + key/revoke/suspend
 # lifecycle + restart-persistence against the shared PG `sigiro_control` catalog.
-# Needs only Docker Postgres (data files stay local — no MinIO).
+# Needs only Docker Postgres (data files stay local — no RustFS).
 check-control-plane-e2e:
     #!/usr/bin/env bash
     set -euo pipefail
