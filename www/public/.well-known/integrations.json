@@ -1,18 +1,18 @@
 {
   "version": 3,
-  "summary": "Sigiro stores OpenTelemetry data and exposes it through an HTTP API and a documentation MCP server.",
+  "summary": "sigiro reads OpenTelemetry and answers what changed and why: ranked findings, the suspect deploy, and a runnable SQL query on every row. Reachable as a hosted HTTP API, a self-hosted binary with the same API, a CLI, and a public documentation MCP server.",
   "credentials": {
     "tenant-key": {
       "type": "api_key",
-      "label": "Sigiro TenantKey",
-      "setup": "Hosted Sigiro access uses a TenantKey supplied by the Sigiro operator. Send it as a bearer token in the Authorization header. Self-hosted Open mode does not need this credential."
+      "label": "sigiro TenantKey",
+      "setup": "Only the hosted service at `api.sigiro.com` needs a credential. During the invited beta an operator issues each tenant a key of the form `sk_<tenant>_<random>`; it is shown once and can be rotated but not recovered. The same key authorises both OTLP ingest and SQL queries. Send it as `Authorization: Bearer sk_<tenant>_<random>`.\n\n**A self-hosted sigiro needs no credential at all.** It runs in open mode and authenticates no request — the network is the security boundary, so put it behind a tailnet, private network or reverse proxy. A self-hosted server ignores authentication headers entirely, so a wrong key fails there silently rather than with a 401."
     }
   },
   "surfaces": [
     {
       "type": "http",
       "slug": "telemetry-api",
-      "name": "Sigiro telemetry API",
+      "name": "sigiro hosted telemetry API",
       "url": "https://api.sigiro.com",
       "spec": "https://api.sigiro.com/openapi.json",
       "docs": "https://sigiro.com/docs/reference",
@@ -44,9 +44,65 @@
       }
     },
     {
+      "type": "http",
+      "slug": "self-hosted-api",
+      "name": "sigiro self-hosted API (open mode)",
+      "url": "https://<your-sigiro-host>:9999",
+      "spec": "https://api.sigiro.com/openapi.json",
+      "docs": "https://sigiro.com/docs/tutorials/quickstart",
+      "basis": {
+        "via": "declared",
+        "source": "https://sigiro.com/.well-known/integrations.json"
+      },
+      "auth": {
+        "status": "none",
+        "basis": {
+          "via": "declared",
+          "source": "https://sigiro.com/.well-known/integrations.json"
+        }
+      }
+    },
+    {
+      "type": "cli",
+      "slug": "sigiro-cli",
+      "name": "sigiro CLI",
+      "command": "sigiro",
+      "docs": "https://sigiro.com/docs/reference/cli",
+      "install": {
+        "script": "curl -fsSL https://sigiro.com/install | sh",
+        "oci": "ghcr.io/sigiroai/sigiro"
+      },
+      "basis": {
+        "via": "declared",
+        "source": "https://sigiro.com/.well-known/integrations.json"
+      },
+      "auth": {
+        "status": "optional",
+        "entries": [
+          {
+            "use": [
+              {
+                "id": "tenant-key",
+                "mechanics": {
+                  "source": "env",
+                  "in": "env",
+                  "name": "SIGIRO_API_KEY",
+                  "note": "Or the global `--key <TOKEN>` flag, which overrides it. Needed only when `SIGIRO_ENDPOINT` points at the hosted service; a self-hosted server ignores the token. `SIGIRO_ENDPOINT` defaults to http://localhost:9999."
+                }
+              }
+            ],
+            "basis": {
+              "via": "declared",
+              "source": "https://sigiro.com/.well-known/integrations.json"
+            }
+          }
+        ]
+      }
+    },
+    {
       "type": "mcp",
       "slug": "sigiro-docs",
-      "name": "Sigiro documentation MCP server",
+      "name": "sigiro documentation MCP server",
       "url": "https://sigiro.com/mcp",
       "transports": ["streamable-http"],
       "docs": "https://sigiro.com/docs",
