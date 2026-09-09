@@ -107,6 +107,16 @@ fn setup_ducklake_db() -> (Connection, tempfile::TempDir) {
     (conn, dir)
 }
 
+fn flush_span_batches(conn: &Connection, batches: &[RecordBatch]) {
+    let mut appender = conn
+        .appender_to_catalog_and_db("sigiro_spans", "lake", "main")
+        .expect("appender");
+    for batch in batches {
+        appender.append_record_batch(batch.clone()).expect("append");
+    }
+    appender.flush().expect("flush");
+}
+
 /// Benchmark: single-batch appender throughput (sigiro_spans).
 fn bench_appender_throughput(c: &mut Criterion) {
     let (conn, _dir) = setup_ducklake_db();
@@ -119,11 +129,7 @@ fn bench_appender_throughput(c: &mut Criterion) {
 
     group.bench_function("append_10k_spans", |b| {
         b.iter(|| {
-            let mut appender = conn
-                .appender_to_catalog_and_db("sigiro_spans", "lake", "main")
-                .expect("appender");
-            appender.append_record_batch(batch.clone()).expect("append");
-            drop(appender);
+            flush_span_batches(&conn, std::slice::from_ref(&batch));
         });
     });
 
@@ -145,13 +151,7 @@ fn bench_appender_multi_batch(c: &mut Criterion) {
 
     group.bench_function("flush_5x2k_spans", |b| {
         b.iter(|| {
-            let mut appender = conn
-                .appender_to_catalog_and_db("sigiro_spans", "lake", "main")
-                .expect("appender");
-            for batch in &batches {
-                appender.append_record_batch(batch.clone()).expect("append");
-            }
-            drop(appender);
+            flush_span_batches(&conn, &batches);
         });
     });
 
@@ -173,11 +173,7 @@ fn bench_appender_sustained(c: &mut Criterion) {
     group.bench_function("sustained_50x1k_spans", |b| {
         b.iter(|| {
             for _ in 0..flushes {
-                let mut appender = conn
-                    .appender_to_catalog_and_db("sigiro_spans", "lake", "main")
-                    .expect("appender");
-                appender.append_record_batch(batch.clone()).expect("append");
-                drop(appender);
+                flush_span_batches(&conn, std::slice::from_ref(&batch));
             }
         });
     });
@@ -232,9 +228,49 @@ fn bench_appender_baseline_duckdb(c: &mut Criterion) {
         b.iter(|| {
             let mut appender = conn.appender("sigiro_spans").expect("appender");
             appender.append_record_batch(batch.clone()).expect("append");
-            drop(appender);
+            appender.flush().expect("flush");
         });
     });
+
+    group.finish();
+}
+
+/// Production self-profiling produces small batches every ten seconds. Measure
+/// the fixed scheduler/transaction cost separately from bulk throughput, and
+/// compare it with grouping the same rows into one appender flush.
+fn bench_tiny_flush_matrix(c: &mut Criterion) {
+    let batch = make_span_batch(100);
+    let batches = vec![batch.clone(); 10];
+    let mut group = c.benchmark_group("tiny_flush");
+    group.sample_size(10);
+
+    for threads in [1, 2, 4] {
+        let (conn, _dir) = setup_ducklake_db();
+        conn.execute_batch(&format!("SET threads = {threads}"))
+            .expect("set threads");
+
+        group.bench_function(format!("threads_{threads}/10x100_separate"), |b| {
+            b.iter(|| {
+                for batch in &batches {
+                    flush_span_batches(&conn, std::slice::from_ref(batch));
+                }
+            });
+        });
+        group.bench_function(format!("threads_{threads}/10x100_grouped"), |b| {
+            b.iter(|| flush_span_batches(&conn, &batches));
+        });
+        group.bench_function(format!("threads_{threads}/10x100_reused_appender"), |b| {
+            b.iter(|| {
+                let mut appender = conn
+                    .appender_to_catalog_and_db("sigiro_spans", "lake", "main")
+                    .expect("appender");
+                for batch in &batches {
+                    appender.append_record_batch(batch.clone()).expect("append");
+                    appender.flush().expect("flush");
+                }
+            });
+        });
+    }
 
     group.finish();
 }
@@ -245,5 +281,6 @@ criterion_group!(
     bench_appender_multi_batch,
     bench_appender_sustained,
     bench_appender_baseline_duckdb,
+    bench_tiny_flush_matrix,
 );
 criterion_main!(benches);
