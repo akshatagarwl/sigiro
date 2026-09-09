@@ -700,7 +700,7 @@ impl ProjectPool {
 /// DuckLake checkpoints already run the full sequence: flush inlined data,
 /// expire snapshots, compact adjacent files, rewrite files with enough deleted
 /// rows, clean unreferenced files, and delete storage orphans. The writer calls
-/// `CHECKPOINT lake` every 30 seconds, so these options are the scheduler and
+/// `CHECKPOINT lake` hourly, so these options are the scheduler and
 /// bounds. Do not duplicate that sequence in sigiro.
 pub(crate) fn set_ducklake_catalog_policy(conn: &Connection, retention_days: u32) -> Result<()> {
     let expiry = if retention_days == 0 {
