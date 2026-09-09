@@ -74,6 +74,7 @@
 # reason at the definition:
 #
 #   src/anomaly.rs   span_drill_sql    (6) — see above
+#   src/inserter.rs  run_flusher       (6) — async task lifecycle resources
 #   src/server.rs    dfs               (7) — pre-existing, nested recursive walk
 #   tests/diagnose_test.rs             (7,8) insert_spans + insert_spans_full
 #   tests/federated_query_test.rs      (7)  check_row, positional assertions

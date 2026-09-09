@@ -1039,6 +1039,9 @@ fn array_byte_size(array: &dyn Array) -> usize {
 
 /// Per-project flusher loop. Receives pre-transformed RecordBatches,
 /// buffers them, and flushes to DuckDB on timer or row count threshold.
+// This task boundary owns six independent lifecycle resources. Wrapping them in
+// a one-use context struct would hide its dependencies without reducing them.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(project_id = %project_id))]
 async fn run_flusher(
     project_id: String,
