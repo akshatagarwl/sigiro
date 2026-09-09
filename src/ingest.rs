@@ -10,7 +10,7 @@ use axum::{
     http::StatusCode,
     routing::post,
 };
-use headers::{Authorization, HeaderMapExt, authorization::Bearer};
+use headers::HeaderMapExt;
 use multer::Multipart;
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
@@ -715,13 +715,12 @@ pub fn extract_project_id_http(
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
         crate::auth::AuthMode::TenantKeys { .. } => {
-            let auth: Authorization<Bearer> = headers.typed_get().ok_or_else(|| {
+            let token = crate::auth::extract_bearer_token(headers).map_err(|_| {
                 tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
                 StatusCode::UNAUTHORIZED
             })?;
-            let token = auth.token();
 
-            let ctx = auth_mode.verify(token).map_err(|_| {
+            let ctx = auth_mode.verify(&token).map_err(|_| {
                 tracing::warn!("OTLP HTTP: invalid API key");
                 StatusCode::UNAUTHORIZED
             })?;
