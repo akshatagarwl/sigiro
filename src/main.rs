@@ -422,46 +422,8 @@ async fn run_serve() -> Result<()> {
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100, storage_mode));
     let admin_conn = sigiro::admin::open_admin_db(&dir)?;
 
-    // Pyroscope continuous profiling: enabled when SIGIRO_PYROSCOPE_ENDPOINT is set.
-    // Sends CPU + memory allocation profiles to the Pyroscope server.
-    // The smoke-test script fetches these profiles and includes them in diagnose blocks.
-    //
-    // Started HERE, at the head of boot, not at the tail. The expensive part of
-    // startup is everything below this line — DuckDB extension load and the
-    // `default` project pre-create — so an agent started after it profiles an
-    // idle server and cannot answer "why does boot take ~6s". `start_profiling`
-    // takes no arguments and depends on nothing boot builds; only the
-    // `write_instance_status` calls need `admin_conn`, which exists above.
-    //
-    // The pyroscope-rs SDK's flush timer is hardcoded to 10s
-    // (pyroscope-2.0.0/src/pyroscope.rs:296), so boot samples upload AFTER boot
-    // finishes. The delay is in delivery, not collection: the samples carry the
-    // boot window as long as the process outlives the first flush.
-    let (_profiling, pyroscope_status) = match start_profiling()? {
-        Some(handle) => (Some(handle), "active"),
-        None => (None, "disabled"),
-    };
-
     let kernel = probe_kernel_release();
     let (has_bpf, has_net_admin) = probe_capabilities();
-
-    // Write instance status at startup — one transaction, not 13 autocommits.
-    sigiro::admin::write_instance_status_batch(
-        &admin_conn,
-        &[
-            ("pyroscope_status", pyroscope_status),
-            ("version", env!("CARGO_PKG_VERSION")),
-            ("mode", "otlp"),
-            ("platform_os", std::env::consts::OS),
-            ("platform_arch", std::env::consts::ARCH),
-            ("platform_kernel", &kernel),
-            ("capability_bpf", if has_bpf { "true" } else { "false" }),
-            (
-                "capability_net_admin",
-                if has_net_admin { "true" } else { "false" },
-            ),
-        ],
-    )?;
 
     // Extension probe is deferred to first project connection (pool.create_project).
     // Use `sigiro fetch-extensions` to pre-download for offline deployments.
@@ -528,6 +490,30 @@ async fn run_serve() -> Result<()> {
             }
         }
     }
+
+    // backtrace snapshots the loaded shared-library list once. Start profiling
+    // only after DuckDB has loaded its extensions so their native frames resolve.
+    let (_profiling, pyroscope_status) = match start_profiling()? {
+        Some(handle) => (Some(handle), "active"),
+        None => (None, "disabled"),
+    };
+
+    sigiro::admin::write_instance_status_batch(
+        &admin_conn,
+        &[
+            ("pyroscope_status", pyroscope_status),
+            ("version", env!("CARGO_PKG_VERSION")),
+            ("mode", "otlp"),
+            ("platform_os", std::env::consts::OS),
+            ("platform_arch", std::env::consts::ARCH),
+            ("platform_kernel", &kernel),
+            ("capability_bpf", if has_bpf { "true" } else { "false" }),
+            (
+                "capability_net_admin",
+                if has_net_admin { "true" } else { "false" },
+            ),
+        ],
+    )?;
 
     // eBPF capability probe: read-only "could this host run eBPF
     // auto-instrumentation" check, recorded to instance_status. The launcher

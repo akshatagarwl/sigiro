@@ -191,15 +191,29 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+printf "  %-50s" "profile stacks use DuckDB VARCHAR[] / JSON arrays..."
+latest_heap_stack=$(query \
+  "SELECT stack_trace FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space' AND timestamp = make_timestamp(${latest_heap_ts}) LIMIT 1")
+if echo "$latest_heap_stack" | jq -e '.[0].stack_trace | type == "array"' >/dev/null 2>&1; then
+  echo "PASS"
+  PASSES=$((PASSES + 1))
+else
+  echo "FAIL"
+  echo "    stack_trace was not serialized as a JSON array"
+  FAILURES=$((FAILURES + 1))
+fi
+
 printf "  %-50s" "heap allocation frames are symbolized..."
-if echo "$inv" | jq -e \
-  '.results.sigiro.profiles | any(.profile_type == "inuse_space" and (.function | startswith("0x") | not))' \
+heap_frames=$(query \
+  "SELECT unnest(stack_trace) AS frame FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space' AND timestamp = make_timestamp(${latest_heap_ts}) LIMIT 10000")
+if echo "$heap_frames" | jq -e \
+  'any(.[]; .frame | contains("DuckLake"))' \
   >/dev/null 2>&1; then
   echo "PASS"
   PASSES=$((PASSES + 1))
 else
   echo "FAIL"
-  echo "    Heap profiles contain only unresolved addresses"
+  echo "    Heap profile contains no resolved DuckLake extension frame"
   FAILURES=$((FAILURES + 1))
 fi
 

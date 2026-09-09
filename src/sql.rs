@@ -708,7 +708,47 @@ pub fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Val
         ValueRef::Time64(_, t) => serde_json::json!(t),
         ValueRef::Text(b) => serde_json::Value::String(String::from_utf8_lossy(b).to_string()),
         ValueRef::Blob(b) => serde_json::Value::String(format!("[blob {} bytes]", b.len())),
+        ValueRef::List(..) => duckdb_owned_value_to_json(val.to_owned()),
         _ => serde_json::Value::String(format!("{:?}", val)),
+    }
+}
+
+fn duckdb_owned_value_to_json(val: duckdb::types::Value) -> serde_json::Value {
+    use duckdb::types::Value;
+
+    match val {
+        Value::Null => serde_json::Value::Null,
+        Value::Boolean(v) => serde_json::json!(v),
+        Value::TinyInt(v) => serde_json::json!(v),
+        Value::SmallInt(v) => serde_json::json!(v),
+        Value::Int(v) => serde_json::json!(v),
+        Value::BigInt(v) => serde_json::json!(v),
+        Value::HugeInt(v) => match i64::try_from(v) {
+            Ok(n) => serde_json::json!(n),
+            Err(_) => serde_json::Value::String(v.to_string()),
+        },
+        Value::UHugeInt(v) => match u64::try_from(v) {
+            Ok(n) => serde_json::json!(n),
+            Err(_) => serde_json::Value::String(v.to_string()),
+        },
+        Value::UTinyInt(v) => serde_json::json!(v),
+        Value::USmallInt(v) => serde_json::json!(v),
+        Value::UInt(v) => serde_json::json!(v),
+        Value::UBigInt(v) => serde_json::json!(v),
+        Value::Float(v) => serde_json::json!(v),
+        Value::Double(v) => serde_json::json!(v),
+        Value::Decimal(v) => decimal_to_json(&v.to_string()),
+        Value::Timestamp(_, v) => serde_json::json!(v),
+        Value::Text(v) | Value::Enum(v) => serde_json::Value::String(v),
+        Value::Blob(v) | Value::Geometry(v) => {
+            serde_json::Value::String(format!("[blob {} bytes]", v.len()))
+        }
+        Value::Date32(v) => serde_json::json!(v),
+        Value::Time64(_, v) => serde_json::json!(v),
+        Value::List(values) | Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(duckdb_owned_value_to_json).collect())
+        }
+        other => serde_json::Value::String(format!("{other:?}")),
     }
 }
 

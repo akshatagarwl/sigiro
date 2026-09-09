@@ -160,8 +160,8 @@ debug = false
 
 [profile.release]
 # Max runtime optimization (perf is prioritized over build time): thin LTO +
-# single codegen unit. Line tables are the minimum release metadata that
-# backtrace-rs can use to symbolize native jemalloc allocation stacks.
+# single codegen unit. Line tables are sufficient for in-process native
+# symbolization; extension symbols depend on loading extensions first.
 lto = "thin"
 codegen-units = 1
 debug = "line-tables-only"

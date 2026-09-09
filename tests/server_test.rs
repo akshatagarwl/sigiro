@@ -100,6 +100,38 @@ fn value_ref_null() {
 }
 
 #[test]
+fn value_ref_varchar_list_is_a_json_array_for_each_row() {
+    let conn = test_conn();
+    let mut stmt = conn
+        .prepare(
+            "SELECT frames FROM (VALUES
+                (1, ['main']),
+                (2, ['handler', NULL, 'query']),
+                (3, []::VARCHAR[]),
+                (4, NULL::VARCHAR[])
+             ) stacks(id, frames)
+             ORDER BY id",
+        )
+        .unwrap();
+    let mut rows = stmt.query([]).unwrap();
+    let expected = [
+        serde_json::json!(["main"]),
+        serde_json::json!(["handler", null, "query"]),
+        serde_json::json!([]),
+        serde_json::Value::Null,
+    ];
+
+    for expected_value in expected {
+        let row = rows.next().unwrap().unwrap();
+        assert_eq!(
+            duckdb_value_to_json(row.get_ref(0).unwrap()),
+            expected_value
+        );
+    }
+    assert!(rows.next().unwrap().is_none());
+}
+
+#[test]
 fn value_ref_double() {
     let conn = test_conn();
     let mut stmt = conn.prepare("SELECT PI()::DOUBLE AS f").unwrap();
