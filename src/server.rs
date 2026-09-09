@@ -1058,7 +1058,30 @@ async fn health(
         );
     }
 
-    // 2. Init completeness — `AppState::init_complete` is flipped by
+    // 2. DuckLake maintenance health — a project whose writer has failed
+    //    `SIGIRO_MAX_CHECKPOINT_FAILURES` consecutive checkpoints is shedding
+    //    ingest, because nothing it accepts can be materialised into Parquet.
+    //    Reported before init for the same reason as dead flushers: the
+    //    condition means telemetry is being rejected right now.
+    let stalled = state.router.maintenance_health().stalled_projects();
+    if !stalled.is_empty() {
+        tracing::warn!(
+            projects = ?stalled,
+            "health check: DuckLake maintenance stalled — ingest is being shed"
+        );
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(HealthResponse::Degraded {
+                reason: format!(
+                    "DuckLake maintenance stalled for {} project(s): {}",
+                    stalled.len(),
+                    stalled.join(", ")
+                ),
+            }),
+        );
+    }
+
+    // 3. Init completeness — `AppState::init_complete` is flipped by
     //    `run_servers` once `axum_server` reports the HTTP listener bound.
     //    A probe that arrives between the socket accepting connections and
     //    the rest of startup finishing (quack extension load, the `default`

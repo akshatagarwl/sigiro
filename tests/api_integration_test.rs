@@ -1123,3 +1123,44 @@ fn run_serve_does_not_mark_init_complete_before_the_listener_binds() {
         "run_servers must gate init_complete on Handle::listening()"
     );
 }
+
+/// #91: the writer thread's `Checkpoint` arm must RECORD its outcome, not just
+/// log it. This pins the WIRING, because the behavioural tests build their own
+/// `MaintenanceHealth` and drive `checkpoint()` directly — they would keep
+/// passing if `run_writer_thread` went back to bare `warn!` and never told the
+/// gate anything. (Same lesson as #87: a test that constructs its own state
+/// cannot catch a defect in how production assembles that state.)
+#[test]
+fn writer_thread_records_every_checkpoint_outcome() {
+    let inserter_rs =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/inserter.rs"))
+            .expect("src/inserter.rs should be readable");
+
+    assert!(
+        inserter_rs.contains("maintenance.record_checkpoint_failure(project_id)"),
+        "run_writer_thread's Checkpoint arm must record failures into \
+         MaintenanceHealth, otherwise sustained CHECKPOINT failure silently \
+         lets the catalog absorb telemetry that can never be materialised (#91)"
+    );
+    assert!(
+        inserter_rs.contains("maintenance.record_checkpoint_success(project_id)"),
+        "run_writer_thread must record checkpoint SUCCESS too — without it a \
+         recovered backend never re-opens ingest and the shed is permanent (#91)"
+    );
+
+    // The ingest gate must consult the same state the writer records into.
+    assert!(
+        inserter_rs.contains("self.maintenance.is_stalled(&project_id)"),
+        "MsgRouter::send must gate on MaintenanceHealth::is_stalled, or nothing \
+         sheds and #91 is only a log line again"
+    );
+
+    // And the failure must reach the wire as 507 / resource_exhausted, never 500.
+    let ingest_rs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ingest.rs"))
+        .expect("src/ingest.rs should be readable");
+    assert!(
+        ingest_rs.contains("RouterError::MaintenanceStalled"),
+        "the ingest surfaces must map MaintenanceStalled to 507 / \
+         resource_exhausted rather than falling through to a 500"
+    );
+}

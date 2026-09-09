@@ -84,6 +84,9 @@ impl OtlpGrpcService {
                 RouterError::DiskCapacityExceeded => {
                     Status::resource_exhausted("disk capacity exceeded")
                 }
+                RouterError::MaintenanceStalled { .. } => {
+                    Status::resource_exhausted("storage maintenance stalled")
+                }
                 _ => Status::internal("ingest failed"),
             });
         }
@@ -736,7 +739,9 @@ async fn route_ingest_msg(state: &OtlpHttpState, msg: IngestMsg) -> StatusCode {
     if let Err(e) = state.router.send(msg).await {
         tracing::error!(project_id, "ingest router error: {e:?}");
         return match e {
-            RouterError::DiskCapacityExceeded => StatusCode::INSUFFICIENT_STORAGE,
+            RouterError::DiskCapacityExceeded | RouterError::MaintenanceStalled { .. } => {
+                StatusCode::INSUFFICIENT_STORAGE
+            }
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
     }
@@ -961,7 +966,9 @@ async fn otlp_http_pyroscope(
     {
         tracing::error!(pid, "ingest router error: {e:?}");
         return match e {
-            RouterError::DiskCapacityExceeded => StatusCode::INSUFFICIENT_STORAGE,
+            RouterError::DiskCapacityExceeded | RouterError::MaintenanceStalled { .. } => {
+                StatusCode::INSUFFICIENT_STORAGE
+            }
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
     }

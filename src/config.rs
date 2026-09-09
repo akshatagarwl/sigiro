@@ -304,6 +304,27 @@ pub fn max_disk_bytes() -> Result<u64> {
     MAX_DISK_BYTES.value().map_err(anyhow::Error::from)
 }
 
+/// Consecutive DuckLake `CHECKPOINT` failures on one project's writer before
+/// its ingest is shed with 507 / `resource_exhausted`.
+///
+/// A failed checkpoint materialises nothing: telemetry keeps accumulating in
+/// the catalog while no Parquet is written. In distributed mode that catalog is
+/// an external Postgres which `SIGIRO_MAX_DISK_BYTES` never samples, so the
+/// disk gate cannot see the growth — sustained checkpoint failure is the only
+/// signal available.
+///
+/// The default of 3 rides out a transient blip (one failed cycle recovers on
+/// the next, and any success resets the count) while still bounding how long a
+/// genuinely wedged storage backend can absorb unmaterialisable writes. Set 0
+/// to disable shedding: failures are still counted and reported by `/health`,
+/// but ingest keeps being accepted.
+pub(crate) static MAX_CHECKPOINT_FAILURES: Envar<u32> =
+    Envar::on_startup("SIGIRO_MAX_CHECKPOINT_FAILURES", || EnvarDef::Default(3));
+
+pub(crate) fn max_checkpoint_failures() -> Result<u32> {
+    MAX_CHECKPOINT_FAILURES.value().map_err(anyhow::Error::from)
+}
+
 pub(crate) fn disk_sample_seconds() -> Result<u64> {
     let secs = DISK_SAMPLE_SECONDS.value()?;
     anyhow::ensure!(

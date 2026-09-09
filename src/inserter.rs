@@ -38,6 +38,108 @@ pub enum RouterError {
     /// 507 / gRPC `resource_exhausted`, distinct from an internal 500.
     #[error("disk capacity exceeded — ingest rejected to protect the box")]
     DiskCapacityExceeded,
+    /// DuckLake `CHECKPOINT` has failed on every attempt for
+    /// `SIGIRO_MAX_CHECKPOINT_FAILURES` consecutive maintenance cycles, so
+    /// queued telemetry can no longer be materialised into Parquet. Accepting
+    /// more would grow the catalog without bound — in distributed mode that is
+    /// the external Postgres, which `SIGIRO_MAX_DISK_BYTES` never measures.
+    /// Maps to HTTP 507 / gRPC `resource_exhausted`, like the disk cap.
+    #[error(
+        "storage maintenance stalled for project {project_id} — {failures} consecutive DuckLake CHECKPOINT failures; ingest rejected so the catalog cannot grow unbounded"
+    )]
+    MaintenanceStalled { project_id: String, failures: u32 },
+}
+
+/// Per-project DuckLake maintenance health: how many consecutive
+/// `CHECKPOINT lake` attempts have failed on each project's writer.
+///
+/// **Why this gates ingest.** A failed checkpoint means nothing materialises
+/// into Parquet, while ingest keeps appending to the catalog. In distributed
+/// mode the catalog is an external Postgres that `SIGIRO_MAX_DISK_BYTES` never
+/// samples, so the local disk gate cannot see the growth at all. Sustained
+/// failure is therefore its own back-pressure signal.
+///
+/// **Why per project, not per box.** Each project has its own writer thread and
+/// its own DuckLake. A corrupt or unwritable single tenant must not reject
+/// every other tenant's ingest; a genuine shared-storage outage trips every
+/// project independently and reaches the same place.
+///
+/// **Why consecutive, not cumulative.** A checkpoint that fails once and then
+/// succeeds has materialised the backlog — the condition is self-healing and
+/// must not be counted against a later, unrelated failure. Any success resets
+/// the project to healthy.
+#[derive(Debug)]
+pub struct MaintenanceHealth {
+    /// Consecutive checkpoint failures needed before ingest is shed. 0 disables
+    /// shedding entirely (failures are still counted and surfaced on /health).
+    threshold: u32,
+    /// project_id -> consecutive checkpoint failures. Absent means healthy;
+    /// entries are removed on success rather than zeroed, so the map stays the
+    /// size of the unhealthy set.
+    failures: DashMap<String, u32>,
+}
+
+impl MaintenanceHealth {
+    pub fn new(threshold: u32) -> Arc<Self> {
+        Arc::new(Self {
+            threshold,
+            failures: DashMap::new(),
+        })
+    }
+
+    /// A gate that never sheds — the default for tests and any caller that has
+    /// not opted into shedding.
+    pub(crate) fn disabled() -> Arc<Self> {
+        Self::new(0)
+    }
+
+    /// Record one failed `CHECKPOINT`. Returns the new consecutive count and
+    /// whether that count just crossed the shed threshold (so the caller logs
+    /// the transition exactly once, not on every subsequent cycle).
+    pub fn record_checkpoint_failure(&self, project_id: &str) -> (u32, bool) {
+        let mut entry = self.failures.entry(project_id.to_string()).or_insert(0);
+        *entry += 1;
+        let failures = *entry;
+        let tripped = self.threshold > 0 && failures == self.threshold;
+        (failures, tripped)
+    }
+
+    /// Record a successful `CHECKPOINT`. Returns true when this cleared a
+    /// project that had been shedding, so the caller can log the recovery.
+    pub fn record_checkpoint_success(&self, project_id: &str) -> bool {
+        match self.failures.remove(project_id) {
+            Some((_, failures)) => self.threshold > 0 && failures >= self.threshold,
+            None => false,
+        }
+    }
+
+    /// True when this project's writer has failed `threshold` consecutive
+    /// checkpoints. Cheap enough for the ingest hot path: one `DashMap` lookup,
+    /// and only for projects that have actually failed.
+    pub fn is_stalled(&self, project_id: &str) -> bool {
+        self.threshold > 0
+            && self
+                .failures
+                .get(project_id)
+                .is_some_and(|f| *f >= self.threshold)
+    }
+
+    /// Consecutive failure count for a project (0 when healthy).
+    pub fn consecutive_failures(&self, project_id: &str) -> u32 {
+        self.failures.get(project_id).map_or(0, |f| *f)
+    }
+
+    /// Every project currently shedding ingest, for the health endpoint.
+    pub fn stalled_projects(&self) -> Vec<String> {
+        if self.threshold == 0 {
+            return Vec::new();
+        }
+        self.failures
+            .iter()
+            .filter(|e| *e.value() >= self.threshold)
+            .map(|e| e.key().clone())
+            .collect()
+    }
 }
 
 /// Box-level disk-capacity gate, shared (`Arc`) between the ingest router —
@@ -171,6 +273,7 @@ pub struct MsgRouter {
     project_senders: DashMap<String, (mpsc::Sender<FlusherCommand>, TokioJoinHandle<()>)>,
     drop_count: AtomicUsize,
     disk: Arc<DiskCapacityState>,
+    maintenance: Arc<MaintenanceHealth>,
     alerts: Option<crate::alerts::AlertStore>,
 }
 
@@ -215,12 +318,31 @@ impl MsgRouter {
         Self::with_config_and_disk(pool, FlushConfig::from_env(), disk)
     }
 
+    /// Build a router with BOTH the disk gate and the DuckLake maintenance gate
+    /// explicitly supplied. Used by the E2E tests that drive checkpoint failure
+    /// directly; production goes through `new_with_disk_and_alerts`.
+    pub fn new_with_disk_and_maintenance(
+        pool: Arc<ProjectPool>,
+        disk: Arc<DiskCapacityState>,
+        maintenance: Arc<MaintenanceHealth>,
+    ) -> Self {
+        Self::with_config_disk_and_maintenance(pool, FlushConfig::from_env(), disk, maintenance)
+    }
+
     pub fn new_with_disk_and_alerts(
         pool: Arc<ProjectPool>,
         disk: Arc<DiskCapacityState>,
         alerts: crate::alerts::AlertStore,
     ) -> Self {
-        let mut router = Self::with_config_and_disk(pool, FlushConfig::from_env(), disk);
+        let mut router = Self::with_config_disk_and_maintenance(
+            pool,
+            FlushConfig::from_env(),
+            disk,
+            MaintenanceHealth::new(
+                crate::config::max_checkpoint_failures()
+                    .expect("MAX_CHECKPOINT_FAILURES config must be valid"),
+            ),
+        );
         router.alerts = Some(alerts);
         router
     }
@@ -230,12 +352,27 @@ impl MsgRouter {
         flush_config: FlushConfig,
         disk: Arc<DiskCapacityState>,
     ) -> Self {
+        Self::with_config_disk_and_maintenance(
+            pool,
+            flush_config,
+            disk,
+            MaintenanceHealth::disabled(),
+        )
+    }
+
+    pub(crate) fn with_config_disk_and_maintenance(
+        pool: Arc<ProjectPool>,
+        flush_config: FlushConfig,
+        disk: Arc<DiskCapacityState>,
+        maintenance: Arc<MaintenanceHealth>,
+    ) -> Self {
         Self {
             pool,
             flush_config,
             project_senders: DashMap::new(),
             drop_count: AtomicUsize::new(0),
             disk,
+            maintenance,
             alerts: None,
         }
     }
@@ -244,6 +381,12 @@ impl MsgRouter {
     /// can sample and trip/clear the same state the ingest gate reads.
     pub(crate) fn disk_state(&self) -> Arc<DiskCapacityState> {
         Arc::clone(&self.disk)
+    }
+
+    /// Shared handle to the per-project DuckLake maintenance health, so the
+    /// health endpoint reports the same state the ingest gate sheds on.
+    pub(crate) fn maintenance_health(&self) -> Arc<MaintenanceHealth> {
+        Arc::clone(&self.maintenance)
     }
 
     /// Explicit lifecycle start. Logs activation and ensures the router is ready.
@@ -322,12 +465,13 @@ impl MsgRouter {
                 })?;
                 let pool = Arc::clone(&self.pool);
                 let cfg = self.flush_config.clone();
+                let maintenance = Arc::clone(&self.maintenance);
 
                 let (tx, rx) = mpsc::channel::<FlusherCommand>(PROJECT_CHANNEL_CAPACITY);
                 let pid_spawn = pid.clone();
                 tracing::info!(project_id = %pid, "ensure_flusher: spawning new flusher task");
                 let handle = tokio::spawn(async move {
-                    run_flusher(pid_spawn, writer, rx, pool, cfg).await;
+                    run_flusher(pid_spawn, writer, rx, pool, cfg, maintenance).await;
                 });
 
                 e.insert((tx, handle));
@@ -349,6 +493,17 @@ impl MsgRouter {
         }
 
         let project_id = msg.project_id().to_string();
+        // Maintenance gate: this project's writer has failed every checkpoint
+        // for `SIGIRO_MAX_CHECKPOINT_FAILURES` consecutive cycles, so nothing
+        // it accepts can be materialised. Checked per project (after the
+        // box-wide disk gate) so one wedged tenant cannot reject the others.
+        if self.maintenance.is_stalled(&project_id) {
+            return Err(RouterError::MaintenanceStalled {
+                failures: self.maintenance.consecutive_failures(&project_id),
+                project_id,
+            });
+        }
+
         let project_id_for_err = project_id.clone();
         let alert_batch = match &msg {
             IngestMsg::Logs { batch, .. } if self.alerts.is_some() => Some(batch.clone()),
@@ -891,15 +1046,24 @@ async fn run_flusher(
     mut rx: mpsc::Receiver<FlusherCommand>,
     pool: Arc<ProjectPool>,
     cfg: FlushConfig,
+    maintenance: Arc<MaintenanceHealth>,
 ) {
     let flush_interval = cfg.interval;
     let (writer_tx, writer_rx) = mpsc::channel::<WriterCommand>(PROJECT_CHANNEL_CAPACITY);
     let writer_project_id = project_id.clone();
     let writer_cfg = cfg.clone();
+    let writer_maintenance = Arc::clone(&maintenance);
     let writer_handle = match std::thread::Builder::new()
         .name(format!("sigiro-flusher-{project_id}"))
-        .spawn(move || run_writer_thread(&writer_project_id, writer, writer_rx, &writer_cfg))
-    {
+        .spawn(move || {
+            run_writer_thread(
+                &writer_project_id,
+                writer,
+                writer_rx,
+                &writer_cfg,
+                &writer_maintenance,
+            )
+        }) {
         Ok(handle) => handle,
         Err(error) => {
             tracing::error!(project_id, "failed to spawn writer thread: {error}");
@@ -1068,6 +1232,7 @@ fn run_writer_thread(
     writer: Connection,
     mut rx: mpsc::Receiver<WriterCommand>,
     cfg: &FlushConfig,
+    maintenance: &MaintenanceHealth,
 ) -> Connection {
     let mut flusher = ProjectFlusher::new(writer, cfg);
     let mut pending = None;
@@ -1100,8 +1265,37 @@ fn run_writer_thread(
                 }
             }
             WriterCommand::Checkpoint => {
-                if let Err(e) = flusher.checkpoint(project_id) {
-                    tracing::warn!(project_id, "{e:#}");
+                // #91: a failing CHECKPOINT used to only `warn!` and continue,
+                // so an unwritable/unreachable storage backend could have the
+                // catalog absorbing telemetry forever while nothing was ever
+                // materialised into Parquet. Every outcome is now recorded, and
+                // sustained failure sheds ingest (507 / resource_exhausted) at
+                // the top of `MsgRouter::send`.
+                match flusher.checkpoint(project_id) {
+                    Ok(()) => {
+                        if maintenance.record_checkpoint_success(project_id) {
+                            tracing::info!(
+                                project_id,
+                                "DuckLake CHECKPOINT recovered — ingest re-enabled for this project"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        let (failures, tripped) = maintenance.record_checkpoint_failure(project_id);
+                        if tripped {
+                            tracing::error!(
+                                project_id,
+                                failures,
+                                "DuckLake CHECKPOINT failed {failures} consecutive times — REJECTING ingest for this project until a checkpoint succeeds: {e:#}"
+                            );
+                        } else {
+                            tracing::warn!(
+                                project_id,
+                                failures,
+                                "DuckLake CHECKPOINT failed ({failures} consecutive): {e:#}"
+                            );
+                        }
+                    }
                 }
             }
             WriterCommand::PersistAnomalies(inserts) => {
@@ -1329,6 +1523,103 @@ mod tests {
             "retention must sweep every tenant with data on disk, not only those \
              holding a pooled connection when it happens to run; covered {covered:?}"
         );
+    }
+
+    /// #91: a REAL failing `CHECKPOINT` must be counted and must trip the shed
+    /// gate — not merely logged.
+    ///
+    /// The failure is genuine, not injected: after seeding a compaction backlog
+    /// across the real sigiro tables, `chmod 000` on the DuckLake `DATA_PATH`
+    /// makes DuckDB fail the checkpoint with
+    /// `IO Error: ... Failed to create directory ".../sigiro_metrics_histogram":
+    /// Permission denied`. Restoring the mode lets the very next checkpoint
+    /// succeed, which proves the recovery path too.
+    #[test]
+    #[cfg(unix)]
+    fn real_checkpoint_failure_trips_and_recovers_the_shed_gate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        let hp = home.to_string_lossy().to_string();
+        let dp = data.to_string_lossy().to_string();
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!("SET home_directory='{hp}';"))
+            .expect("set home_directory");
+        conn.execute_batch(&format!("SET extension_directory='{}';", extension_dir()))
+            .expect("set extension_directory");
+        conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
+            .expect("install/load ducklake");
+        conn.execute_batch(&format!(
+            "ATTACH 'ducklake:{hp}/catalog.ducklake' AS lake (DATA_PATH '{dp}/')"
+        ))
+        .expect("attach ducklake");
+        crate::schema::create_tables(&conn, "lake.").expect("create sigiro tables");
+
+        // A real compaction backlog: 10 separate commits, so CHECKPOINT has
+        // actual Parquet to write rather than being a no-op.
+        for i in 0..10 {
+            conn.execute_batch(&format!(
+                "INSERT INTO lake.sigiro_metrics_gauge (timestamp, service_name, metric_name, value)
+                 SELECT make_timestamp(1700000000000000 + range), 'svc', 'm', (range + {})::DOUBLE
+                 FROM range(3000)",
+                i * 3000
+            ))
+            .expect("seed insert");
+        }
+        crate::pool::set_ducklake_catalog_policy(&conn, 7).expect("catalog policy");
+
+        let cfg = test_flush_config();
+        let flusher = ProjectFlusher::new(conn, &cfg);
+        let maintenance = MaintenanceHealth::new(3);
+
+        // Break the storage the checkpoint must write to.
+        let mut p = std::fs::metadata(&data).unwrap().permissions();
+        p.set_mode(0o000);
+        std::fs::set_permissions(&data, p).unwrap();
+
+        // Drive the SAME arm production drives, three times.
+        for expected in 1..=3 {
+            let err = flusher
+                .checkpoint("p91")
+                .expect_err("CHECKPOINT must fail while DATA_PATH is unwritable");
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("CHECKPOINT") || msg.contains("Permission denied"),
+                "expected a real DuckLake checkpoint IO failure, got: {msg}"
+            );
+            let (failures, tripped) = maintenance.record_checkpoint_failure("p91");
+            assert_eq!(failures, expected);
+            assert_eq!(
+                tripped,
+                expected == 3,
+                "the trip transition must be reported exactly once, at the threshold"
+            );
+        }
+        assert!(
+            maintenance.is_stalled("p91"),
+            "three consecutive real failures must shed ingest"
+        );
+        assert_eq!(maintenance.stalled_projects(), vec!["p91".to_string()]);
+
+        // Restore storage: the next checkpoint must succeed and re-open ingest.
+        let mut p = std::fs::metadata(&data).unwrap().permissions();
+        p.set_mode(0o700);
+        std::fs::set_permissions(&data, p).unwrap();
+
+        flusher
+            .checkpoint("p91")
+            .expect("CHECKPOINT must succeed once DATA_PATH is writable again");
+        assert!(
+            maintenance.record_checkpoint_success("p91"),
+            "recovery from a shedding state must be reported"
+        );
+        assert!(!maintenance.is_stalled("p91"), "ingest must re-open");
+        assert_eq!(maintenance.consecutive_failures("p91"), 0);
     }
 
     #[test]
