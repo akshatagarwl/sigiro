@@ -153,7 +153,7 @@ pub(crate) static FLUSH_ROW_THRESHOLD: Envar<usize> =
 /// sound production budget — raising it globally would make a real shutdown hang
 /// slower to detect — but a loaded machine can exceed it for reasons unrelated
 /// to the code under test. The test suite raises it via the environment (see
-/// the `test` recipe in the justfile) so a busy laptop does not produce a
+/// the `check` task in mise.toml) so a busy laptop does not produce a
 /// failure that teaches people to re-run the gate until it passes.
 ///
 /// Operators draining a large buffer onto slow disk have the same problem and

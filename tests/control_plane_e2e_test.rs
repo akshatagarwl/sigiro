@@ -26,7 +26,7 @@
 //!     create keeps exactly one row; a surviving key still authenticates).
 //!   - Plus: zero-config LOCAL startup still pre-creates + queries `default`.
 //!
-//! `#[ignore]`d — needs Docker (Postgres). Run via `just check-control-plane-e2e`,
+//! `#[ignore]`d — needs Docker (Postgres). Run via `mise run check-control-plane-e2e`,
 //! or directly:
 //! ```text
 //! docker compose -f docker-compose.dev.yml up -d --wait postgres
@@ -390,7 +390,7 @@ impl Edge {
 }
 
 #[test]
-#[ignore = "needs Docker (Postgres control catalog) — run via `just check-control-plane-e2e`"]
+#[ignore = "needs Docker (Postgres control catalog) — run via `mise run check-control-plane-e2e`"]
 fn control_plane_lifecycle() {
     reset_control_db();
 

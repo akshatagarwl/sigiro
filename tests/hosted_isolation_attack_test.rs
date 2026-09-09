@@ -235,7 +235,7 @@ impl Edge {
 }
 
 #[test]
-#[ignore = "needs Docker (Postgres control catalog) — run via `just check-hosted-isolation-e2e`"]
+#[ignore = "needs Docker (Postgres control catalog) — run via `mise run check-hosted-isolation-e2e`"]
 fn hosted_tenant_isolation_attacks() {
     reset_control_db();
 

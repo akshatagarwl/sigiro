@@ -29,7 +29,7 @@
 //! CREATE and ignores it thereafter).
 //!
 //! `#[ignore]`d — needs Docker (Postgres + RustFS). Run via
-//! `just check-storage-matrix-e2e`, or directly:
+//! `mise run check-storage-matrix-e2e`, or directly:
 //! ```text
 //! docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
 //! docker compose -f docker-compose.dev.yml up rustfs-setup
@@ -403,7 +403,7 @@ fn run_mode(mode: &Mode) -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "needs Docker (Postgres catalog + RustFS S3) — run via `just check-storage-matrix-e2e`"]
+#[ignore = "needs Docker (Postgres catalog + RustFS S3) — run via `mise run check-storage-matrix-e2e`"]
 fn storage_mode_matrix() {
     for mode in MODES {
         println!("== storage mode: {} ==", mode.name);

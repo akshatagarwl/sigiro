@@ -37,7 +37,7 @@
 #   limactl create --name=sigiro-node-b --memory=4 --disk=24 --cpus=2 tests/vm/fleet-node.yaml
 #   limactl start sigiro-node-a && limactl start sigiro-node-b
 #
-#   # 2. The linux/arm64 binary. `just lima-build` alone is NOT enough on macOS:
+#   # 2. The linux/arm64 binary. `mise run lima-build` alone is NOT enough on macOS:
 #   #    the Linux target deliberately omits duckdb's `bundled` feature (see
 #   #    Cargo.toml), so it links a prebuilt static archive that the Dockerfile
 #   #    normally prepares. Without Docker, reproduce that step directly:
@@ -93,7 +93,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ -f "$SIGIRO_BIN" ] || { fail "binary not found at $SIGIRO_BIN — run: just lima-build"; exit 1; }
+[ -f "$SIGIRO_BIN" ] || { fail "binary not found at $SIGIRO_BIN — run: mise run lima-build"; exit 1; }
 log "binary: $SIGIRO_BIN ($(du -h "$SIGIRO_BIN" | cut -f1))"
 
 # ── Deploy + boot every edge ──────────────────────────────────────────

@@ -20,7 +20,7 @@
 //! `SIGIRO_CATALOG_URL`/`SIGIRO_S3_*` set, so `"default"` is a DISTRIBUTED
 //! project backed by S3 cold storage rather than a local DuckDB file.
 //!
-//! `#[ignore]`d by default (needs Docker). Run via `just check-s3-e2e`, or
+//! `#[ignore]`d by default (needs Docker). Run via `mise run check-s3-e2e`, or
 //! directly:
 //! ```text
 //! docker compose -f docker-compose.dev.yml up -d --wait
@@ -546,10 +546,10 @@ fn run() -> Result<(), String> {
 
 /// Single-pass S3-backed distributed "default" project quack E2E test.
 /// `#[ignore]`d — needs Docker (Postgres + RustFS). Run via
-/// `just check-s3-e2e` or:
+/// `mise run check-s3-e2e` or:
 /// `cargo test --test quack_s3_query_surface_test -- --ignored --nocapture`.
 #[test]
-#[ignore = "needs Docker (Postgres catalog + RustFS S3) — run via `just check-s3-e2e`"]
+#[ignore = "needs Docker (Postgres catalog + RustFS S3) — run via `mise run check-s3-e2e`"]
 fn quack_s3_query_surface_single_iteration() {
     run().expect("S3-backed distributed \"default\" project quack E2E iteration failed");
 }

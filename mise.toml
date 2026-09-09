@@ -10,11 +10,239 @@ sccache = "0.17.0"
 # carry `rustc-codegen-cranelift-preview`, which macOS cannot actually use
 # because Cranelift there does not preserve the `catch_unwind` behavior
 # `src/anomaly.rs` and `src/quack.rs` rely on. Keeping it cost two compiler
-# identities in mbx's cache, so an unactivated `just check` (stable) and a
-# `mise exec -- just check` (nightly) shared nothing and each paid a cold build.
+# identities in mbx's cache, so an unactivated `mise run check` (stable) and a
+# `mise exec -- mise run check` (nightly) shared nothing and each paid a cold
+# build.
 rust = "1.97.1"
 
-# Cache the bundled DuckDB C++ compilation, which mbx does not cover.
 [env]
-CC = "sccache clang"
-CXX = "sccache clang++"
+# Cache the bundled DuckDB C++ compilation, which mbx does not cover. Unlike
+# the justfile, `mise run` applies this block to every task, including in CI —
+# so the non-macOS value has to stay `cc`, matching what `.cargo/config.toml`
+# sets there. Only the macOS `bundled` feature actually compiles the DuckDB
+# amalgamation; Linux links the prebuilt static archive.
+CC = "sccache {% if os() == 'macos' %}clang{% else %}cc{% endif %}"
+CXX = "sccache {% if os() == 'macos' %}clang++{% else %}c++{% endif %}"
+# Was `set dotenv-load` in the justfile. Optional: `.env` is gitignored and a
+# clone does not have one, and a missing file must not fail every task.
+_.file = { path = ".env", optional = true }
+
+[tasks.default]
+description = "List the tasks in this repo."
+run = "mise tasks ls"
+
+[tasks.build]
+description = "Release build of the sigiro binary. Set TARGET to cross-compile."
+run = 'mbx build --release --bin sigiro ${TARGET:+--target "$TARGET"}'
+
+# Fast verification gate (debug). Run this before every commit.
+#
+# `shear` catches unused dependencies, and source files no target compiles.
+# Neither is reachable by any other gate here: rustc's `dead_code` only sees
+# code it compiles, and hawk only ranks `pub` items inside that same graph — a
+# crate nobody imports and a .rs nobody links are both invisible to them.
+# Syn-based, no build, under a second, exits 1 on a finding. `mbx shear --fix`
+# removes the dependencies it names. Placed ahead of clippy so it fails before
+# the slow compile. Needs `cargo install cargo-shear`, same as `mise run hawk`
+# needs cargo-hawk.
+#
+# SIGIRO_SHUTDOWN_TIMEOUT_SECS: production keeps the 5s default; the suite gets
+# 60s. `shutdown_and_wait` waits on a BLOCKING DuckDB drain thread, so its
+# budget is wall-clock while its work is not — under concurrent builds on a
+# loaded laptop, 5s produced a failure unrelated to the change being gated
+# (measured: 2 of 3 runs failed with 3 concurrent cargo builds, 3 of 3 passed
+# idle). A gate that fails for unrelated reasons teaches people to re-run it
+# until it passes, which is how a real failure gets waved through.
+[tasks.check]
+description = "Fast debug verification gate. Run before every commit."
+run = [
+    "mbx fmt --check",
+    "mbx shear",
+    "mbx clippy --all-targets --all-features -- -D warnings",
+    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test",
+]
+
+[tasks.check-release]
+description = "Full release-mode gate. Run before building a deploy image / cutting a release."
+run = [
+    "mbx fmt --check",
+    "mbx clippy --all-targets --all-features -- -D warnings",
+    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test --release",
+]
+
+# Lint for unnecessary `pub` API surface (astral-sh/hawk). Closed-world
+# analysis: anything `pub` the `sigiro` binary can't reach is dead or could be
+# `pub(crate)`. Pinned to hawk's own toolchain (it links rustc_private).
+# Denies the two actionable groups; a full-workspace compile, so it's a
+# pre-push gate (`mise run install-hooks`) rather than something run per commit.
+# `--fix` auto-applies the pub→pub(crate) fixes.
+# The target dir is pinned into target/ via hawk's own `--target-dir` flag. Hawk
+# defaults to $TMPDIR/cargo-hawk-target, which macOS prunes on its own schedule,
+# leaving fingerprints that point at build-script output that is gone — the gate
+# then fails on a missing libsqlite3-sys bindgen.rs and has to be cleared by hand.
+# Setting CARGO_TARGET_DIR does NOT fix this: hawk overrides it with its own temp
+# dir, so the env var looked right and changed nothing. Use the flag.
+[tasks.hawk]
+description = "Lint for unnecessary `pub` API surface (astral-sh/hawk)."
+run = """
+mbx +1.97.1 hawk check --manifest-path Cargo.toml --target-dir target/hawk \
+  -A hawk::unnecessary_restricted_visibility \
+  -D hawk::dead_public -D hawk::unnecessary_public
+"""
+
+# Gate structural erosion + clone density (SlopCodeBench metrics). Catches the
+# way agent-extended code rots: features patched into god functions instead of
+# extracted, and per-variant copy-paste. Pre-push, like hawk. Ceilings live in
+# the script; ratchet them down after every refactor that beats them.
+[tasks.slop]
+description = "Gate structural erosion + clone density (SlopCodeBench metrics)."
+run = "python3 scripts/slop_audit.py"
+
+[tasks.install-hooks]
+description = "Point git at the tracked .githooks/ dir (one-time per clone)."
+# So the pre-push hawk + slop gates run. Teammates run this once after cloning.
+run = "git config core.hooksPath .githooks"
+
+[tasks.run]
+description = "Run sigiro locally with dev dependencies (Postgres, RustFS)."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f docker-compose.dev.yml up -d
+trap 'docker compose -f docker-compose.dev.yml down' EXIT
+mbx run --release --bin sigiro
+"""
+
+[tasks.check-s3-e2e]
+description = 'S3-backed distributed "default" project quack E2E (needs Docker: Postgres + RustFS).'
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+# --wait only on postgres/rustfs (they have healthchecks); rustfs-setup is a
+# one-shot job that exits 0 once it creates the bucket, which --wait treats
+# as "not running" and fails on if targeted directly. Run it separately,
+# attached, so this task blocks until the bucket actually exists.
+docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
+docker compose -f docker-compose.dev.yml up rustfs-setup
+trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+mbx test --test quack_s3_query_surface_test -- --ignored --nocapture
+"""
+
+# Storage-mode matrix E2E: proves ingest->flush->query->restart-persistence in
+# all three modes (local file / PG+local data / PG+S3). Needs Docker (Postgres +
+# RustFS), like check-s3-e2e.
+[tasks.check-storage-matrix-e2e]
+description = "Storage-mode matrix E2E (local file / PG+local / PG+S3). Needs Docker."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
+docker compose -f docker-compose.dev.yml up rustfs-setup
+trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+mbx test --test storage_mode_matrix_test -- --ignored --nocapture
+"""
+
+# Hosted control-plane E2E: multi-tenant provisioning + key/revoke/suspend
+# lifecycle + restart-persistence against the shared PG `sigiro_control` catalog.
+# Needs only Docker Postgres (data files stay local — no RustFS).
+[tasks.check-control-plane-e2e]
+description = "Hosted control-plane E2E: provisioning + key lifecycle. Needs Docker Postgres."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f docker-compose.dev.yml up -d --wait postgres
+trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+mbx test --test control_plane_e2e_test -- --ignored --nocapture
+"""
+
+# A permanent DuckLake attach failure (data_path / storage-backend mismatch)
+# must fail fast, not wedge the pool in its 30x retry loop. Needs Docker Postgres.
+[tasks.check-attach-fail-fast-e2e]
+description = "A permanent DuckLake attach failure must fail fast, not wedge the pool."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f docker-compose.dev.yml up -d --wait postgres
+trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+mbx test --test attach_fail_fast_test -- --ignored --nocapture
+"""
+
+# Hosted multi-tenant ISOLATION attack matrix (needs Docker: Postgres catalog).
+# A client with tenant A's key must never read tenant B's data or escape the
+# SQL firewall (cross-schema, ATTACH, file/URL/S3 readers, getenv, CTE, time-travel).
+[tasks.check-hosted-isolation-e2e]
+description = "Hosted multi-tenant isolation attack matrix. Needs Docker Postgres."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f docker-compose.dev.yml up -d --wait postgres
+trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+mbx test --test hosted_isolation_attack_test -- --ignored --nocapture
+"""
+
+[tasks.image]
+description = "Build multi-arch Docker image. Pass --push, or --set flags for cache config."
+run = "docker buildx bake sigiro"
+
+# Fast LOCAL image build: native arch only (no amd64 QEMU emulation), no remote
+# cache, loaded into docker so you can run it. Use this while iterating; use
+# `mise run image -- --push` for the real multi-arch publish. Assumes an arm64 host.
+[tasks.image-dev]
+description = "Fast local native-arch image build, loaded into docker."
+run = """
+docker buildx bake sigiro \
+  --set "*.platform=linux/arm64" \
+  --set "*.cache-to=" \
+  --set "*.cache-from=" \
+  --load
+"""
+
+[tasks.lima-build]
+description = "Cross-compile sigiro for Linux ARM64 Lima VMs."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+source scripts/lima-cross-env.sh
+ulimit -n 65536 2>/dev/null || true
+mbx build --release --target "$SIGIRO_LIMA_TARGET" --bin sigiro
+file "$SIGIRO_LIMA_SIGIRO_BIN"
+"""
+
+[tasks.clean]
+description = "Drop the managed target dir and the dev compose stack."
+# `mbx clean`, not `cargo clean`: target/ is a link into mbx's shared cache,
+# so `cargo clean` deletes the link and the next build restores from cache.
+run = [
+    "mbx clean",
+    "docker compose -f docker-compose.dev.yml down -v --remove-orphans",
+]
+
+# Refresh www/openapi.json — the snapshot the API reference is generated from.
+# Boots the binary, reads its own /openapi.json, and drops the /admin paths: key
+# minting and tenant creation are deliberately not part of the published surface.
+# Run this whenever a #[utoipa::path] changes, then `cd www && bun run api:docs`.
+[tasks.api-spec]
+description = "Refresh www/openapi.json from the binary's own /openapi.json."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mbx build --quiet --bin sigiro
+# A warm data dir under target/: with a fresh one DuckDB re-downloads its
+# extensions on every run and the wait below times out.
+dir=target/spec-db
+mkdir -p "$dir"
+SIGIRO_DATA_DIR="$dir" ./target/debug/sigiro serve >/dev/null 2>&1 &
+trap 'kill %1 2>/dev/null || true' EXIT
+for _ in $(seq 1 60); do
+  curl -sf http://localhost:9999/openapi.json -o "$dir/spec.json" && break
+  sleep 2
+done
+test -s "$dir/spec.json" || { echo "sigiro never served /openapi.json" >&2; exit 1; }
+python3 -c "
+import json
+spec = json.load(open('$dir/spec.json'))
+spec['paths'] = {p: v for p, v in spec['paths'].items() if not p.startswith('/admin')}
+json.dump(spec, open('www/openapi.json', 'w'), indent=2)
+print('wrote www/openapi.json -', len(spec['paths']), 'paths')
+"
+"""
