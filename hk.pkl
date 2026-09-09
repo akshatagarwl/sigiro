@@ -1,0 +1,81 @@
+amends "package://github.com/jdx/hk/releases/download/v1.58.1/hk@1.58.1#/Config.pkl"
+
+local rustInputs = List(
+  "**/*.rs",
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain*",
+  ".cargo/**",
+  "hawk.toml",
+  "clippy.toml",
+  "mise.toml",
+  "mise.lock",
+  "scripts/**"
+)
+
+// hk inherits Delta's deep per-command TMPDIR. mbx creates a Unix socket below
+// it, which exceeds macOS's 104-byte sun_path limit before a check can start.
+// Keep the workaround at the hk/mbx boundary; application tests retain their
+// normal temporary-directory environment.
+local shortTemp = new Mapping<String, String> {
+  ["TMPDIR"] = "/tmp"
+}
+
+local rustfmt = new Step {
+  glob = rustInputs
+  env = shortTemp
+  check = "mbx fmt --check"
+  fix = "mbx fmt"
+}
+
+local shear = new Step {
+  glob = rustInputs
+  env = shortTemp
+  check = "mbx shear"
+}
+
+local clippy = new Step {
+  glob = rustInputs
+  env = shortTemp
+  depends = "shear"
+  check = "mbx clippy --all-targets --all-features -- -D warnings"
+}
+
+local test = new Step {
+  glob = rustInputs
+  env = shortTemp
+  depends = "shear"
+  check = "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test"
+}
+
+hooks {
+  ["pre-commit"] {
+    fix = true
+    stash = "git"
+    steps {
+      ["rustfmt"] = rustfmt
+    }
+  }
+  ["check"] {
+    steps {
+      ["rustfmt"] = rustfmt
+      ["shear"] = shear
+      ["clippy"] = clippy
+      ["test"] = test
+    }
+  }
+  ["pre-push"] {
+    steps {
+      ["hawk"] {
+        glob = rustInputs
+        env = shortTemp
+        check = "mise run hawk"
+      }
+      ["slop"] {
+        glob = rustInputs
+        env = shortTemp
+        check = "mise run slop"
+      }
+    }
+  }
+}

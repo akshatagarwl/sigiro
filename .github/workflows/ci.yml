@@ -24,6 +24,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
+      - run: mise install "packslip:github.com/jdx/hk@1.58.1"
       - run: mise run check
       - run: mise run build
       - uses: eclipse-score/apt-install@v1.0.0

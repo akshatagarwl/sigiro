@@ -65,12 +65,7 @@ run = 'mbx build --release --bin sigiro ${TARGET:+--target "$TARGET"}'
 # until it passes, which is how a real failure gets waved through.
 [tasks.check]
 description = "Fast debug verification gate. Run before every commit."
-run = [
-    "mbx fmt --check",
-    "mbx shear",
-    "mbx clippy --all-targets --all-features -- -D warnings",
-    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test",
-]
+run = "hk check --all"
 
 [tasks.check-release]
 description = "Full release-mode gate. Run before building a deploy image / cutting a release."
@@ -109,9 +104,13 @@ description = "Gate structural erosion + clone density (SlopCodeBench metrics)."
 run = "python3 scripts/slop_audit.py"
 
 [tasks.install-hooks]
-description = "Point git at the tracked .githooks/ dir (one-time per clone)."
-# So the pre-push hawk + slop gates run. Teammates run this once after cloning.
-run = "git config core.hooksPath .githooks"
+description = "Install hk's repository-local Git hooks through mise (one-time per clone)."
+run = """
+if git config --get core.hooksPath >/dev/null; then
+  git config --unset-all core.hooksPath
+fi
+hk install --mise
+"""
 
 [tasks.run]
 description = "Run sigiro locally with dev dependencies (Postgres, RustFS)."
