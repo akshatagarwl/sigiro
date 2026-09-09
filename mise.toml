@@ -4,6 +4,13 @@
 [tools]
 duckdb = "1.5.5"
 sccache = "0.17.0"
+# The packslip backend verifies the vendor's Sigstore identity and artifact
+# digest before installing either tool. Keep exact versions so signer or
+# artifact changes arrive as reviewable mise.lock diffs.
+"packslip:github.com/jdx/hk" = "1.58.1"
+# 2.2.13 is intentionally not selected yet: it is inside mise's 24-hour
+# minimum-release-age window. Do not weaken that supply-chain policy globally.
+"packslip:github.com/aubepkg/aube" = "2.2.12"
 # Stable, matching the Dockerfile's `rust:1-slim-bookworm`. Nothing here needs
 # nightly: no `#![feature]`, no `cargo-features`, no `[unstable]`, no `-Z`, and
 # edition 2024 is stable. The previous `nightly-2026-09-05` pin existed only to
@@ -14,6 +21,9 @@ sccache = "0.17.0"
 # `mise exec -- mise run check` (nightly) shared nothing and each paid a cold
 # build.
 rust = "1.97.1"
+
+[settings]
+lockfile = true
 
 [env]
 # Cache the bundled DuckDB C++ compilation, which mbx does not cover. Unlike
