@@ -32,6 +32,8 @@ need the steps to get it.
   server yourself. Send OTLP to a host that we operate, with a tenant key.
 - **[Send your agent's own telemetry to sigiro](/docs/how-to/agent-telemetry)** —
   point Claude Code or Codex at sigiro, then read the sessions back with SQL.
+- **[Connect sigiro to Executor](/docs/how-to/executor)** — import the OpenAPI API
+  or the documentation MCP server into an agent gateway
 
 ## Reference
 
