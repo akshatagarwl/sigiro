@@ -1,0 +1,66 @@
+{
+  "version": 3,
+  "summary": "Sigiro stores OpenTelemetry data and exposes it through an HTTP API and a documentation MCP server.",
+  "credentials": {
+    "tenant-key": {
+      "type": "api_key",
+      "label": "Sigiro TenantKey",
+      "setup": "Hosted Sigiro access uses a TenantKey supplied by the Sigiro operator. Send it as a bearer token in the Authorization header. Self-hosted Open mode does not need this credential."
+    }
+  },
+  "surfaces": [
+    {
+      "type": "http",
+      "slug": "telemetry-api",
+      "name": "Sigiro telemetry API",
+      "url": "https://api.sigiro.com",
+      "spec": "https://api.sigiro.com/openapi.json",
+      "docs": "https://sigiro.com/docs/reference",
+      "basis": {
+        "via": "declared",
+        "source": "https://sigiro.com/.well-known/integrations.json"
+      },
+      "auth": {
+        "status": "required",
+        "entries": [
+          {
+            "use": [
+              {
+                "id": "tenant-key",
+                "mechanics": {
+                  "source": "http",
+                  "in": "header",
+                  "headerName": "Authorization",
+                  "scheme": "Bearer"
+                }
+              }
+            ],
+            "basis": {
+              "via": "declared",
+              "source": "https://sigiro.com/.well-known/integrations.json"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "mcp",
+      "slug": "sigiro-docs",
+      "name": "Sigiro documentation MCP server",
+      "url": "https://sigiro.com/mcp",
+      "transports": ["streamable-http"],
+      "docs": "https://sigiro.com/docs",
+      "basis": {
+        "via": "declared",
+        "source": "https://sigiro.com/.well-known/integrations.json"
+      },
+      "auth": {
+        "status": "none",
+        "basis": {
+          "via": "declared",
+          "source": "https://sigiro.com/.well-known/integrations.json"
+        }
+      }
+    }
+  ]
+}
