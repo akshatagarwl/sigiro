@@ -5,15 +5,10 @@
 # QEMU). Carries both GNU cross toolchains + cargo-chef for dep-layer caching.
 FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev make mold \
+      pkg-config protobuf-compiler git binutils libssl-dev make mold \
       gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
       gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*
-# UPX (from GitHub release; not in this base's apt). Runs on $BUILDPLATFORM and
-# can pack cross-arch ELF, so it compresses either target binary.
-ARG UPX_VERSION=4.2.4
-RUN curl -fsSL "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-$(dpkg --print-architecture)_linux.tar.xz" \
-      | tar -xJ -C /tmp && cp /tmp/upx-${UPX_VERSION}-*/upx /usr/local/bin/upx && rm -rf /tmp/upx-*
 RUN cargo install cargo-chef --locked && \
     rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 WORKDIR /build
@@ -82,23 +77,18 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
     V=$(echo "$T" | tr 'a-z-' 'A-Z_'); Tu=$(echo "$T" | tr '-' '_'); \
     export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
     mold -run cargo build --release --target "$T" --bin sigiro && \
-    cp "target/${T}/release/sigiro" /build/sigiro.raw && \
-    cp /build/sigiro.raw /build/sigiro && \
-    upx -6 /build/sigiro
+    cp "target/${T}/release/sigiro" /build/sigiro
 
 # The Linux binaries we publish for download, uncompressed.
 #
 # Same build as the image — same pinned DuckDB static archive, same cross-gcc,
 # same mold link — so a downloaded binary and the one in the container are the
-# same artifact. The only difference is UPX, which the image keeps and this does
-# not: compression pays for itself across image layers and pulls, and costs a
-# decompression stub on every start plus the odd endpoint-scanner false positive
-# for a binary a person puts on their laptop.
+# same artifact.
 #
 # `scratch`, so `--output type=local` writes exactly one file per platform and
 # nothing else.
 FROM scratch AS dist
-COPY --from=builder /build/sigiro.raw /sigiro
+COPY --from=builder /build/sigiro /sigiro
 
 # Runtime-prep (has a shell): bake the loadable extensions that aren't static in
 # the binary. Runs the TARGET binary, so pinned to $TARGETPLATFORM.

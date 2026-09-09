@@ -174,6 +174,35 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+latest_heap_ts=$(query \
+  "SELECT max(timestamp) AS ts FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space'" \
+  | jq -r '.[0].ts')
+latest_heap_total=$(query \
+  "SELECT sum(value) AS total FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space' AND timestamp = make_timestamp(${latest_heap_ts})" \
+  | jq -r '.[0].total')
+reported_heap_total=$(echo "$inv" | jq -r \
+  '[.results.sigiro.profiles[] | select(.profile_type == "inuse_space") | .total_value] | add // 0')
+printf "  %-50s" "diagnose reports only the latest heap snapshot..."
+if [ "$reported_heap_total" -le "$latest_heap_total" ] 2>/dev/null; then
+  echo "PASS"
+  PASSES=$((PASSES + 1))
+else
+  echo "FAIL (reported=$reported_heap_total latest-snapshot=$latest_heap_total)"
+  FAILURES=$((FAILURES + 1))
+fi
+
+printf "  %-50s" "heap allocation frames are symbolized..."
+if echo "$inv" | jq -e \
+  '.results.sigiro.profiles | any(.profile_type == "inuse_space" and (.function | startswith("0x") | not))' \
+  >/dev/null 2>&1; then
+  echo "PASS"
+  PASSES=$((PASSES + 1))
+else
+  echo "FAIL"
+  echo "    Heap profiles contain only unresolved addresses"
+  FAILURES=$((FAILURES + 1))
+fi
+
 echo ""
 echo "=== Check 5: Pyroscope self-send to :4318 ==="
 # Use grep -c with || true so a "no matches" result (exit 1) doesn't trigger

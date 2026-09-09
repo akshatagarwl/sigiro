@@ -1755,16 +1755,29 @@ events AS (
     UNION ALL
     SELECT * FROM k8s_events
 ),
-profiles AS (
-    SELECT p.stack_trace[len(p.stack_trace)] AS function,
+profile_rows AS (
+    SELECT p.stack_trace,
            COALESCE(p.profile_type, 'unknown') AS profile_type,
-           sum(p.value)::BIGINT AS total_value,
-           COALESCE(any_value(p.unit), '') AS unit,
-           count(*) AS sample_count
+           p.value,
+           p.unit,
+           p.timestamp,
+           max(p.timestamp) OVER (
+               PARTITION BY COALESCE(p.profile_type, 'unknown')
+           ) AS latest_timestamp
     FROM {prefix}sigiro_profiles p, args a
     WHERE p.service_name = a.service
       AND p.timestamp BETWEEN a.from_ts AND a.to_ts
       AND len(p.stack_trace) > 0
+),
+profiles AS (
+    SELECT p.stack_trace[len(p.stack_trace)] AS function,
+           p.profile_type,
+           sum(p.value)::BIGINT AS total_value,
+           COALESCE(any_value(p.unit), '') AS unit,
+           count(*) AS sample_count
+    FROM profile_rows p
+    WHERE p.profile_type NOT IN ('alloc_objects', 'alloc_space', 'inuse_objects', 'inuse_space')
+       OR p.timestamp = p.latest_timestamp
     GROUP BY function, profile_type
     ORDER BY total_value DESC
     LIMIT 20
