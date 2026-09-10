@@ -1,9 +1,6 @@
 name: CI
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -32,7 +29,7 @@ jobs:
           restore-keys: |
             mise-task-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: Install pinned toolchain
-        run: mise install rust "packslip:github.com/jdx/mr-boxington" "cargo:cargo-shear" "github:astral-sh/hawk" ast-grep "cargo:similarity-rs" "cargo:tokei"
+        run: mise install rust sccache "packslip:github.com/jdx/mr-boxington" "cargo:cargo-shear" "github:astral-sh/hawk" ast-grep "cargo:similarity-rs" "cargo:tokei"
       - run: mise run --skip-tools gate
       - run: mise run --skip-tools build
       - uses: eclipse-score/apt-install@v1.0.0
