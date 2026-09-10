@@ -58,7 +58,7 @@ const CATALOG_URL: &str = "postgresql://sigiro:sigiro@127.0.0.1:5432/ducklake";
 const CATALOG_LIBPQ: &str = "dbname=ducklake host=127.0.0.1 user=sigiro password=sigiro port=5432";
 const S3_BUCKET: &str = "sigiro";
 const S3_REGION: &str = "us-east-1";
-const S3_ENDPOINT: &str = "127.0.0.1:9000";
+const S3_ENDPOINT: &str = "http://127.0.0.1:9000";
 const S3_KEY_ID: &str = "rustfsadmin";
 const S3_SECRET: &str = "rustfsadmin";
 
@@ -170,8 +170,7 @@ impl MatrixEdge {
                 .env("SIGIRO_S3_REGION", S3_REGION)
                 .env("SIGIRO_S3_ENDPOINT", S3_ENDPOINT)
                 .env("SIGIRO_S3_KEY_ID", S3_KEY_ID)
-                .env("SIGIRO_S3_SECRET", S3_SECRET)
-                .env("SIGIRO_S3_USE_SSL", "false");
+                .env("SIGIRO_S3_SECRET", S3_SECRET);
         }
 
         let child = cmd.spawn().expect("failed to spawn `sigiro serve`");

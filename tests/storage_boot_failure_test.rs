@@ -98,3 +98,52 @@ fn serve_refuses_to_boot_with_empty_catalog_url() {
         "boot error must explain the empty catalog URL; got stderr:\n{stderr}"
     );
 }
+
+#[test]
+fn serve_refuses_legacy_host_only_s3_endpoint() {
+    let (success, stderr) = run_serve_expecting_fast_exit(&[
+        (
+            "SIGIRO_CATALOG_URL",
+            "postgresql://sigiro:***@127.0.0.1:5432/ducklake",
+        ),
+        ("SIGIRO_S3_BUCKET", "sigiro-data"),
+        ("SIGIRO_S3_REGION", "us-east-1"),
+        ("SIGIRO_S3_ENDPOINT", "127.0.0.1:9000"),
+        ("SIGIRO_S3_KEY_ID", "key"),
+        ("SIGIRO_S3_SECRET", "secret"),
+    ]);
+    assert!(!success, "serve must reject a host-only S3 endpoint");
+    assert!(
+        stderr.contains("SIGIRO_S3_ENDPOINT")
+            && stderr.contains("http://")
+            && stderr.contains("https://"),
+        "boot error must explain the absolute endpoint URL contract; got stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn serve_refuses_s3_fields_without_bucket() {
+    let (success, stderr) = run_serve_expecting_fast_exit(&[
+        (
+            "SIGIRO_CATALOG_URL",
+            "postgresql://sigiro:***@127.0.0.1:5432/ducklake",
+        ),
+        ("SIGIRO_S3_REGION", "us-east-1"),
+    ]);
+    assert!(!success, "serve must reject S3 fields without a bucket");
+    assert!(
+        stderr.contains("SIGIRO_S3_REGION") && stderr.contains("SIGIRO_S3_BUCKET"),
+        "boot error must name the orphaned field and required bucket; got stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn serve_refuses_s3_fields_without_catalog() {
+    let (success, stderr) =
+        run_serve_expecting_fast_exit(&[("SIGIRO_S3_ENDPOINT", "https://s3.example.com")]);
+    assert!(!success, "serve must reject S3 fields without a catalog");
+    assert!(
+        stderr.contains("SIGIRO_S3_ENDPOINT") && stderr.contains("SIGIRO_CATALOG_URL"),
+        "boot error must name the orphaned field and required catalog; got stderr:\n{stderr}"
+    );
+}

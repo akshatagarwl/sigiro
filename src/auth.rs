@@ -79,7 +79,7 @@ impl AuthMode {
         match storage_mode.distributed_config() {
             Some(storage_config) => {
                 let ext_dir = crate::storage::resolve_extension_dir(data_dir);
-                let control = ControlPlane::open(&storage_config.catalog_url, &ext_dir)?;
+                let control = ControlPlane::open(storage_config.catalog_url(), &ext_dir)?;
                 tracing::info!(
                     "auth_mode=tenant_keys — bearer tokens resolve through sigiro_control"
                 );

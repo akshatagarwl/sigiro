@@ -39,7 +39,8 @@ axum-anyhow = "0.10"
 prefixed-api-key = { version = "0.3", features = ["sha2"] }
 tower_governor = { version = "0.8", features = ["axum"] }
 serde = { version = "1", features = ["derive"] }
-nutype = { version = ">=0.7,<0.8", features = ["serde"] }
+nutype = { version = ">=0.7,<0.8", features = ["regex", "serde"] }
+secrecy = "0.10"
 serde_json = "1"
 tracing = "0.1"
 tracing-attributes = "0.1"

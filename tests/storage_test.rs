@@ -89,15 +89,26 @@ fn from_env_fails_loud_when_s3_bucket_set_without_catalog_url() {
 }
 
 fn r2_config() -> storage::StorageConfig {
-    storage::StorageConfig {
-        catalog_url: "postgresql://sigiro:secret@catalog.example.com:5432/sigiro".to_string(),
-        s3_bucket: "sigiro-tenant-data".to_string(),
-        s3_region: "us-east-1".to_string(),
-        s3_endpoint: "abc123.r2.cloudflarestorage.com".to_string(),
-        s3_key_id: "R2_KEY_ID_EXAMPLE".to_string(),
-        s3_secret: "R2_SECRET_EXAMPLE".to_string(),
-        s3_use_ssl: true,
-    }
+    s3_config(
+        "https://abc123.r2.cloudflarestorage.com",
+        "R2_KEY_ID_EXAMPLE",
+        "R2_SECRET_EXAMPLE",
+    )
+    .unwrap()
+}
+
+fn s3_config(endpoint: &str, key_id: &str, secret: &str) -> anyhow::Result<storage::StorageConfig> {
+    let s3 = storage::S3Config::new(
+        storage::S3BucketName::try_new("sigiro-tenant-data".to_string())?,
+        storage::S3Region::try_new("us-east-1".to_string())?,
+        endpoint.parse()?,
+        key_id.to_string(),
+        secret.to_string(),
+    )?;
+    storage::StorageConfig::new(
+        "postgresql://sigiro:***@catalog.example.com:5432/sigiro".to_string(),
+        storage::DataLocation::S3(s3),
+    )
 }
 
 #[test]
@@ -148,8 +159,7 @@ fn distributed_attach_sql_scopes_each_tenant_to_distinct_catalog_and_s3_prefix()
 #[test]
 fn distributed_attach_sql_use_ssl_true_for_real_s3() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = r2_config();
-    config.s3_use_ssl = true;
+    let config = r2_config();
 
     let attach = storage::distributed_attach_sql(
         &config,
@@ -167,8 +177,12 @@ fn distributed_attach_sql_use_ssl_true_for_real_s3() {
 #[test]
 fn distributed_attach_sql_use_ssl_false_for_dev_rustfs() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = r2_config();
-    config.s3_use_ssl = false;
+    let config = s3_config(
+        "http://127.0.0.1:9000",
+        "R2_KEY_ID_EXAMPLE",
+        "R2_SECRET_EXAMPLE",
+    )
+    .unwrap();
 
     let attach = storage::distributed_attach_sql(
         &config,
@@ -179,48 +193,61 @@ fn distributed_attach_sql_use_ssl_false_for_dev_rustfs() {
     let secret_sql = attach.secret_sql.as_deref().expect("S3 secret SQL");
     assert!(
         secret_sql.contains("USE_SSL false"),
-        "SIGIRO_S3_USE_SSL=false must produce USE_SSL false for plain-HTTP dev stores (RustFS): {secret_sql}"
+        "an HTTP endpoint must produce USE_SSL false for plain-HTTP dev stores: {secret_sql}"
     );
+    assert!(secret_sql.contains("ENDPOINT '127.0.0.1:9000'"));
 }
 
 #[test]
-fn distributed_attach_sql_fails_loud_when_s3_endpoint_missing() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = r2_config();
-    config.s3_endpoint = String::new();
-
-    let err = storage::distributed_attach_sql(
-        &config,
-        camino::Utf8Path::from_path(dir.path()).unwrap(),
-        "alpha",
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("SIGIRO_S3_ENDPOINT"));
+fn s3_config_rejects_non_origin_endpoints() {
+    for endpoint in [
+        "ftp://s3.example.com",
+        "https://user@s3.example.com",
+        "https://s3.example.com/path",
+        "https://s3.example.com?query=yes",
+        "https://s3.example.com#fragment",
+    ] {
+        let err = s3_config(endpoint, "key", "secret").unwrap_err();
+        assert!(
+            err.to_string().contains("SIGIRO_S3_ENDPOINT"),
+            "endpoint {endpoint:?} should fail as a non-origin URL: {err}"
+        );
+    }
 }
 
 #[test]
-fn distributed_attach_sql_fails_loud_when_s3_credentials_missing() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let mut missing_key = r2_config();
-    missing_key.s3_key_id = String::new();
-    let err = storage::distributed_attach_sql(
-        &missing_key,
-        camino::Utf8Path::from_path(dir.path()).unwrap(),
-        "alpha",
-    )
-    .unwrap_err();
+fn s3_config_rejects_missing_credentials() {
+    let err = s3_config("https://s3.example.com", "", "secret").unwrap_err();
     assert!(err.to_string().contains("SIGIRO_S3_KEY_ID"));
 
-    let mut missing_secret = r2_config();
-    missing_secret.s3_secret = String::new();
-    let err = storage::distributed_attach_sql(
-        &missing_secret,
-        camino::Utf8Path::from_path(dir.path()).unwrap(),
-        "alpha",
-    )
-    .unwrap_err();
+    let err = s3_config("https://s3.example.com", "key", "").unwrap_err();
     assert!(err.to_string().contains("SIGIRO_S3_SECRET"));
+}
+
+#[test]
+fn s3_bucket_and_region_reject_empty_values() {
+    assert!(storage::S3BucketName::try_new("  ".to_string()).is_err());
+    assert!(storage::S3Region::try_new("  ".to_string()).is_err());
+
+    for bucket in [
+        "bucket/prefix",
+        "bucket:port",
+        "bucket@host",
+        "bucket\nname",
+    ] {
+        assert!(
+            storage::S3BucketName::try_new(bucket.to_string()).is_err(),
+            "bucket {bucket:?} must not alter the S3 URI authority"
+        );
+    }
+}
+
+#[test]
+fn storage_config_rejects_empty_catalog() {
+    assert!(
+        storage::StorageConfig::new("  ".to_string(), storage::DataLocation::LocalFilesystem)
+            .is_err()
+    );
 }
 
 #[test]

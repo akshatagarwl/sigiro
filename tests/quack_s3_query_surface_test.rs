@@ -51,7 +51,8 @@ use std::time::{Duration, Instant};
 const CATALOG_URL: &str = "postgresql://sigiro:sigiro@127.0.0.1:5432/ducklake";
 const S3_BUCKET: &str = "sigiro";
 const S3_REGION: &str = "us-east-1";
-const S3_ENDPOINT: &str = "127.0.0.1:9000";
+const SIGIRO_S3_ENDPOINT: &str = "http://127.0.0.1:9000";
+const DUCKDB_S3_ENDPOINT: &str = "127.0.0.1:9000";
 const S3_KEY_ID: &str = "rustfsadmin";
 const S3_SECRET: &str = "rustfsadmin";
 
@@ -106,10 +107,9 @@ impl S3QuackEdge {
             .env("SIGIRO_CATALOG_URL", CATALOG_URL)
             .env("SIGIRO_S3_BUCKET", S3_BUCKET)
             .env("SIGIRO_S3_REGION", S3_REGION)
-            .env("SIGIRO_S3_ENDPOINT", S3_ENDPOINT)
+            .env("SIGIRO_S3_ENDPOINT", SIGIRO_S3_ENDPOINT)
             .env("SIGIRO_S3_KEY_ID", S3_KEY_ID)
             .env("SIGIRO_S3_SECRET", S3_SECRET)
-            .env("SIGIRO_S3_USE_SSL", "false")
             .env("SIGIRO_QUERY_SURFACE", "quack")
             .env("SIGIRO_QUACK_BIND", "127.0.0.1")
             .env("SIGIRO_QUACK_PORT", quack_port.to_string())
@@ -494,7 +494,7 @@ fn run() -> Result<(), String> {
     conn.execute_batch(&format!(
         "SET extension_directory = '{}'; INSTALL httpfs; LOAD httpfs; \
          CREATE SECRET (TYPE S3, KEY_ID '{S3_KEY_ID}', SECRET '{S3_SECRET}', \
-         REGION '{S3_REGION}', ENDPOINT '{S3_ENDPOINT}', USE_SSL false, URL_STYLE 'path');",
+         REGION '{S3_REGION}', ENDPOINT '{DUCKDB_S3_ENDPOINT}', USE_SSL false, URL_STYLE 'path');",
         test_extension_dir()
     ))
     .map_err(|e| e.to_string())?;

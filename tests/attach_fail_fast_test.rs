@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
 use sigiro::pool::ProjectPool;
-use sigiro::storage::{self, StorageConfig, StorageMode};
+use sigiro::storage::{self, DataLocation, StorageConfig, StorageMode};
 
 // Matches docker-compose.dev.yml.
 const CATALOG_URL: &str = "postgresql://sigiro:sigiro@127.0.0.1:5432/ducklake";
@@ -22,15 +22,7 @@ const TENANT: &str = "faulttest";
 const SCHEMA: &str = "tenant_faulttest";
 
 fn local_config() -> StorageConfig {
-    StorageConfig {
-        catalog_url: CATALOG_URL.to_string(),
-        s3_bucket: String::new(), // local Parquet — the config that can't match an S3 catalog
-        s3_region: String::new(),
-        s3_endpoint: String::new(),
-        s3_key_id: String::new(),
-        s3_secret: String::new(),
-        s3_use_ssl: true,
-    }
+    StorageConfig::new(CATALOG_URL.to_string(), DataLocation::LocalFilesystem).unwrap()
 }
 
 fn pg_conn() -> duckdb::Connection {

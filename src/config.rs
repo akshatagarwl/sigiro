@@ -24,9 +24,11 @@ pub(crate) static S3_BUCKET: Envar<String> =
     Envar::on_demand("SIGIRO_S3_BUCKET", || EnvarDef::Default(String::new()));
 pub(crate) static S3_REGION: Envar<String> =
     Envar::on_startup("SIGIRO_S3_REGION", || EnvarDef::Default(String::new()));
-/// S3-compatible endpoint host (no scheme), e.g. `<account>.r2.cloudflarestorage.com`
-/// for Cloudflare R2. Required when `SIGIRO_S3_BUCKET` is set — R2/most S3-compatible
-/// stores are unreachable via DuckDB's default AWS endpoint resolution.
+/// Absolute HTTP(S) endpoint URL, e.g.
+/// `https://<account>.r2.cloudflarestorage.com` for Cloudflare R2. Required when
+/// `SIGIRO_S3_BUCKET` is set — R2/most S3-compatible stores are unreachable via
+/// DuckDB's default AWS endpoint resolution. The scheme determines DuckDB's
+/// `USE_SSL` setting.
 /// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static S3_ENDPOINT: Envar<String> =
     Envar::on_demand("SIGIRO_S3_ENDPOINT", || EnvarDef::Default(String::new()));
@@ -44,13 +46,6 @@ pub(crate) static AWS_ACCESS_KEY_ID: Envar<String> =
     Envar::on_demand("AWS_ACCESS_KEY_ID", || EnvarDef::Default(String::new()));
 pub(crate) static AWS_SECRET_ACCESS_KEY: Envar<String> =
     Envar::on_demand("AWS_SECRET_ACCESS_KEY", || EnvarDef::Default(String::new()));
-/// Whether the S3 secret DuckDB attaches with speaks TLS (`USE_SSL` in the
-/// `CREATE SECRET` SQL). Default `true` — real S3 (and R2) require TLS.
-/// Dev/CI S3-compatible stores (RustFS over plain HTTP) set this `false`.
-/// on_demand (not on_startup) so temp_env::with_vars works in tests, matching
-/// the other S3_* config above.
-pub(crate) static S3_USE_SSL: Envar<bool> =
-    Envar::on_demand("SIGIRO_S3_USE_SSL", || EnvarDef::Default(true));
 
 /// OTel service name for self-instrumentation.
 pub(crate) static OTEL_SERVICE_NAME: Envar<String> = Envar::on_startup("OTEL_SERVICE_NAME", || {

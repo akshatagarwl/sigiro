@@ -735,18 +735,24 @@ const ATTACH_BACKOFF: Duration = Duration::from_secs(1);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::StorageConfig;
+    use crate::storage::{DataLocation, S3BucketName, S3Config, S3Region, StorageConfig};
 
     fn s3_config(bucket: &str) -> StorageConfig {
-        StorageConfig {
-            catalog_url: "postgresql://u:p@localhost:5432/db".to_string(),
-            s3_bucket: bucket.to_string(),
-            s3_region: "us-east-1".to_string(),
-            s3_endpoint: "example.r2.cloudflarestorage.com".to_string(),
-            s3_key_id: "key".to_string(),
-            s3_secret: "secret".to_string(),
-            s3_use_ssl: true,
-        }
+        let data = if bucket.is_empty() {
+            DataLocation::LocalFilesystem
+        } else {
+            DataLocation::S3(
+                S3Config::new(
+                    S3BucketName::try_new(bucket.to_string()).unwrap(),
+                    S3Region::try_new("us-east-1".to_string()).unwrap(),
+                    "https://example.r2.cloudflarestorage.com".parse().unwrap(),
+                    "key".to_string(),
+                    "secret".to_string(),
+                )
+                .unwrap(),
+            )
+        };
+        StorageConfig::new("postgresql://u:***@localhost:5432/db".to_string(), data).unwrap()
     }
 
     /// M-B: mirrors the `lock_local` gate in `attach_ducklake` — local-SQLite
@@ -755,7 +761,7 @@ mod tests {
     #[test]
     fn lock_local_gate_locks_unless_s3_bucket_configured() {
         let lock_local = |storage_config: Option<&StorageConfig>| {
-            storage_config.is_none_or(|c| c.s3_bucket.is_empty())
+            storage_config.is_none_or(|config| !config.uses_s3())
         };
 
         assert!(lock_local(None), "local SQLite mode must stay locked");

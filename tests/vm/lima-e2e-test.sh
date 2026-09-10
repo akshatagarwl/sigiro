@@ -102,10 +102,9 @@ if [ "$MODE" = "s3" ]; then
     export SIGIRO_CATALOG_URL="postgresql://sigiro:sigiro-test@localhost:${PG_PORT}/sigiro_catalog"
     export SIGIRO_S3_BUCKET="sigiro-test"
     export SIGIRO_S3_REGION="us-east-1"
-    export SIGIRO_S3_PREFIX="e2e-test"
     export AWS_ACCESS_KEY_ID=sigiro-test
     export AWS_SECRET_ACCESS_KEY=sigiro-test-secret
-    export AWS_ENDPOINT_URL="http://localhost:${RUSTFS_PORT}"
+    export SIGIRO_S3_ENDPOINT="http://localhost:${RUSTFS_PORT}"
 fi
 
 $SIGIRO_BIN serve --no-ebpf > /tmp/sigiro-server.log 2>&1 &

@@ -3,8 +3,10 @@ use crate::types::TenantId;
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use duckdb::Connection;
+use nutype::nutype;
+use secrecy::{ExposeSecret, SecretString};
 use tracing::instrument;
-use url::Url;
+use url::{Position, Url};
 
 /// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
 /// config). Tables accessible as `lake.sigiro_*`.
@@ -87,10 +89,10 @@ pub(crate) fn init_distributed(
     project_dir: &Utf8Path,
     tenant_id: &str,
 ) -> Result<()> {
-    if config.s3_bucket.is_empty() {
-        install_extensions_with_progress(conn, &["ducklake", "postgres"])?;
-    } else {
+    if config.uses_s3() {
         install_extensions_with_progress(conn, &["ducklake", "postgres", "httpfs"])?;
+    } else {
+        install_extensions_with_progress(conn, &["ducklake", "postgres"])?;
     }
 
     let tenant_id = TenantId::try_new(tenant_id.to_owned())
@@ -105,12 +107,14 @@ pub(crate) fn init_distributed(
                 "failed to configure S3 secret — verify SIGIRO_S3_* credentials and endpoint"
             )
         })?;
-        tracing::info!(
-            region = %config.s3_region,
-            bucket = %config.s3_bucket,
-            scope = ?attach.s3_scope,
-            "S3 credentials configured"
-        );
+        if let DataLocation::S3(s3) = &config.data {
+            tracing::info!(
+                region = %s3.region,
+                bucket = %s3.bucket,
+                scope = ?attach.s3_scope,
+                "S3 credentials configured"
+            );
+        }
     }
 
     conn.execute_batch(&attach.attach_sql).map_err(|error| {
@@ -205,19 +209,19 @@ pub(crate) fn init_distributed(
     })?;
     // NEVER log the connection string — it embeds the PostgreSQL password.
     // tenant_id + metadata_schema + data_path fully identify the attach.
-    if config.s3_bucket.is_empty() {
+    if config.uses_s3() {
         tracing::info!(
             tenant_id = %tenant_id,
             metadata_schema = %attach.metadata_schema,
             data_path = %attach.data_path,
-            "DuckLake attached — catalog: PostgreSQL, data: local Parquet"
+            "DuckLake attached — catalog: PostgreSQL, data: S3"
         );
     } else {
         tracing::info!(
             tenant_id = %tenant_id,
             metadata_schema = %attach.metadata_schema,
             data_path = %attach.data_path,
-            "DuckLake attached — catalog: PostgreSQL, data: S3"
+            "DuckLake attached — catalog: PostgreSQL, data: local Parquet"
         );
     }
 
@@ -229,36 +233,95 @@ pub(crate) fn init_distributed(
 /// `catalog_url` can be:
 /// - A libpq connection string: `postgres:dbname=db host=localhost user=u password=p port=5432`
 /// - A PostgreSQL URI: `postgresql://user:***@host:port/dbname` (auto-converted to libpq format)
+#[derive(Debug)]
 pub struct StorageConfig {
-    pub catalog_url: String,
-    pub s3_bucket: String,
-    pub s3_region: String,
-    pub s3_endpoint: String,
-    pub s3_key_id: String,
-    pub s3_secret: String,
-    /// `USE_SSL` for the S3 secret SQL. `true` for real S3/R2; `false` for
-    /// plain-HTTP dev/CI S3-compatible stores (RustFS). See
-    /// `crate::config::S3_USE_SSL`.
-    pub s3_use_ssl: bool,
+    catalog_url: SecretString,
+    data: DataLocation,
 }
 
-/// Hand-written `Debug` that REDACTS every credential-bearing field so the
-/// storage config (and, transitively, [`StorageMode`], which derives `Debug`
-/// over this) can never leak secrets if logged. The `catalog_url` embeds the
-/// PostgreSQL password, and `s3_key_id`/`s3_secret` are the S3/R2 access
-/// credentials — all three are replaced with `<redacted>`. Non-secret fields
-/// (bucket, region, endpoint, SSL flag) stay visible for debuggability.
-impl std::fmt::Debug for StorageConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StorageConfig")
-            .field("catalog_url", &"<redacted>")
-            .field("s3_bucket", &self.s3_bucket)
-            .field("s3_region", &self.s3_region)
-            .field("s3_endpoint", &self.s3_endpoint)
-            .field("s3_key_id", &"<redacted>")
-            .field("s3_secret", &"<redacted>")
-            .field("s3_use_ssl", &self.s3_use_ssl)
-            .finish()
+impl StorageConfig {
+    pub fn new(catalog_url: String, data: DataLocation) -> Result<Self> {
+        anyhow::ensure!(
+            !catalog_url.trim().is_empty(),
+            "SIGIRO_CATALOG_URL must not be empty"
+        );
+        Ok(Self {
+            catalog_url: catalog_url.into(),
+            data,
+        })
+    }
+
+    pub(crate) fn uses_s3(&self) -> bool {
+        matches!(self.data, DataLocation::S3(_))
+    }
+
+    pub(crate) fn catalog_url(&self) -> &str {
+        self.catalog_url.expose_secret()
+    }
+}
+
+#[derive(Debug)]
+pub enum DataLocation {
+    LocalFilesystem,
+    S3(S3Config),
+}
+
+#[nutype(
+    sanitize(trim),
+    validate(not_empty, regex = "^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+    derive(Debug, Clone, PartialEq, Eq, AsRef, Display)
+)]
+pub struct S3BucketName(String);
+
+#[nutype(
+    sanitize(trim),
+    validate(not_empty),
+    derive(Debug, Clone, PartialEq, Eq, AsRef, Display)
+)]
+pub struct S3Region(String);
+
+#[derive(Debug)]
+pub struct S3Config {
+    bucket: S3BucketName,
+    region: S3Region,
+    endpoint: Url,
+    key_id: SecretString,
+    secret: SecretString,
+}
+
+impl S3Config {
+    pub fn new(
+        bucket: S3BucketName,
+        region: S3Region,
+        endpoint: Url,
+        key_id: String,
+        secret: String,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            matches!(endpoint.scheme(), "http" | "https")
+                && endpoint.host().is_some()
+                && endpoint.username().is_empty()
+                && endpoint.password().is_none()
+                && endpoint.path() == "/"
+                && endpoint.query().is_none()
+                && endpoint.fragment().is_none(),
+            "SIGIRO_S3_ENDPOINT must be an HTTP(S) origin URL without credentials, path, query, or fragment"
+        );
+        anyhow::ensure!(
+            !key_id.is_empty(),
+            "SIGIRO_S3_BUCKET is set but no S3 key ID is configured — set SIGIRO_S3_KEY_ID or AWS_ACCESS_KEY_ID"
+        );
+        anyhow::ensure!(
+            !secret.is_empty(),
+            "SIGIRO_S3_BUCKET is set but no S3 secret is configured — set SIGIRO_S3_SECRET or AWS_SECRET_ACCESS_KEY"
+        );
+        Ok(Self {
+            bucket,
+            region,
+            endpoint,
+            key_id: key_id.into(),
+            secret: secret.into(),
+        })
     }
 }
 
@@ -294,24 +357,7 @@ impl StorageMode {
     pub fn from_env() -> Result<Self> {
         match load_config()? {
             Some(config) => Ok(Self::Distributed(config)),
-            None => {
-                // Coherence gate: S3/R2 data storage requires the distributed
-                // PostgreSQL catalog. A bucket set without a catalog URL is a
-                // misconfiguration — fail loud instead of silently dropping to
-                // local-file mode and ignoring the operator's clear intent to
-                // put data in S3.
-                let s3_bucket = crate::config::S3_BUCKET
-                    .value()
-                    .map_err(anyhow::Error::from)?;
-                anyhow::ensure!(
-                    s3_bucket.is_empty(),
-                    "SIGIRO_S3_BUCKET is set (={s3_bucket:?}) but SIGIRO_CATALOG_URL is not — \
-                     S3/R2 data storage requires the distributed PostgreSQL catalog. Set \
-                     SIGIRO_CATALOG_URL to enable distributed mode, or unset SIGIRO_S3_BUCKET to \
-                     use the zero-config local file catalog."
-                );
-                Ok(Self::LocalFile)
-            }
+            None => Ok(Self::LocalFile),
         }
     }
 
@@ -332,7 +378,7 @@ impl StorageMode {
     /// This is the gate for skipping the local-filesystem lockdown, since
     /// DuckLake needs network access to reach S3.
     pub fn uses_s3(&self) -> bool {
-        matches!(self, Self::Distributed(config) if !config.s3_bucket.is_empty())
+        matches!(self, Self::Distributed(config) if config.uses_s3())
     }
 }
 
@@ -404,45 +450,34 @@ pub fn distributed_attach_sql(
     let tenant_id = TenantId::try_new(tenant_id.to_owned())
         .map_err(|e| anyhow::anyhow!("invalid tenant id: {e}"))?;
     let metadata_schema = tenant_metadata_schema(tenant_id.as_ref())?;
-    let catalog_path = postgres_uri_to_libpq(&config.catalog_url)?;
+    let catalog_path = postgres_uri_to_libpq(config.catalog_url())?;
     let catalog_path_sql = escape_sql_string(&catalog_path);
     let metadata_schema_sql = escape_sql_string(&metadata_schema);
 
-    let (data_path, secret_sql, s3_scope) = if config.s3_bucket.is_empty() {
-        std::fs::create_dir_all(project_dir).with_context(|| {
-            format!("failed to create project directory for local data: {project_dir}",)
-        })?;
-        (project_dir.as_str().to_string(), None, None)
-    } else {
-        anyhow::ensure!(
-            !config.s3_endpoint.is_empty(),
-            "SIGIRO_S3_BUCKET is set but SIGIRO_S3_ENDPOINT is missing — required to reach an \
-             S3-compatible store (e.g. Cloudflare R2's <account>.r2.cloudflarestorage.com)"
-        );
-        anyhow::ensure!(
-            !config.s3_key_id.is_empty(),
-            "SIGIRO_S3_BUCKET is set but no S3 key ID is configured — set SIGIRO_S3_KEY_ID or \
-             AWS_ACCESS_KEY_ID"
-        );
-        anyhow::ensure!(
-            !config.s3_secret.is_empty(),
-            "SIGIRO_S3_BUCKET is set but no S3 secret is configured — set SIGIRO_S3_SECRET or \
-             AWS_SECRET_ACCESS_KEY"
-        );
-
-        let data_path = format!("s3://{}/{}/", config.s3_bucket, tenant_id.as_ref());
-        let scope = data_path.clone();
-        let secret_sql = format!(
-            "CREATE OR REPLACE SECRET s3_sigiro (TYPE S3, KEY_ID '{}', SECRET '{}', REGION '{}', \
-             ENDPOINT '{}', URL_STYLE 'path', USE_SSL {}, SCOPE '{}');",
-            escape_sql_string(&config.s3_key_id),
-            escape_sql_string(&config.s3_secret),
-            escape_sql_string(&config.s3_region),
-            escape_sql_string(&config.s3_endpoint),
-            config.s3_use_ssl,
-            escape_sql_string(&scope)
-        );
-        (data_path, Some(secret_sql), Some(scope))
+    let (data_path, secret_sql, s3_scope) = match &config.data {
+        DataLocation::LocalFilesystem => {
+            std::fs::create_dir_all(project_dir).with_context(|| {
+                format!("failed to create project directory for local data: {project_dir}",)
+            })?;
+            (project_dir.as_str().to_string(), None, None)
+        }
+        DataLocation::S3(s3) => {
+            let data_path = format!("s3://{}/{}/", s3.bucket, tenant_id.as_ref());
+            let scope = data_path.clone();
+            let endpoint = &s3.endpoint[Position::BeforeHost..Position::AfterPort];
+            let use_ssl = s3.endpoint.scheme() == "https";
+            let secret_sql = format!(
+                "CREATE OR REPLACE SECRET s3_sigiro (TYPE S3, KEY_ID '{}', SECRET '{}', REGION '{}', \
+                 ENDPOINT '{}', URL_STYLE 'path', USE_SSL {}, SCOPE '{}');",
+                escape_sql_string(s3.key_id.expose_secret()),
+                escape_sql_string(s3.secret.expose_secret()),
+                escape_sql_string(s3.region.as_ref()),
+                escape_sql_string(endpoint),
+                use_ssl,
+                escape_sql_string(&scope)
+            );
+            (data_path, Some(secret_sql), Some(scope))
+        }
     };
 
     let attach_sql = format!(
@@ -470,41 +505,61 @@ pub fn distributed_attach_sql(
 /// [`StorageMode::from_env`], which wraps this AND validates the config as a
 /// coherent axis (e.g. S3 bucket without a catalog URL is rejected).
 pub fn load_config() -> Result<Option<StorageConfig>> {
+    use crate::config;
+
+    let s3_bucket = config::S3_BUCKET.value().map_err(anyhow::Error::from)?;
+    let s3_region = config::S3_REGION.value().map_err(anyhow::Error::from)?;
+    let s3_endpoint = config::S3_ENDPOINT.value().map_err(anyhow::Error::from)?;
+    let s3_key_id = config::S3_KEY_ID.value().map_err(anyhow::Error::from)?;
+    let s3_secret = config::S3_SECRET.value().map_err(anyhow::Error::from)?;
+    let configured_s3_fields = [
+        ("SIGIRO_S3_BUCKET", &s3_bucket),
+        ("SIGIRO_S3_REGION", &s3_region),
+        ("SIGIRO_S3_ENDPOINT", &s3_endpoint),
+        ("SIGIRO_S3_KEY_ID", &s3_key_id),
+        ("SIGIRO_S3_SECRET", &s3_secret),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| (!value.is_empty()).then_some(name))
+    .collect::<Vec<_>>();
+
     let catalog_url = match crate::config::CATALOG_URL.value() {
         Ok(v) if !v.is_empty() => v,
         Ok(_) => anyhow::bail!(
             "SIGIRO_CATALOG_URL is set but empty — provide a valid PostgreSQL catalog URL or unset it"
         ),
-        Err(_) => return Ok(None), // not set — use the local DuckDB file catalog
+        Err(_) => {
+            anyhow::ensure!(
+                configured_s3_fields.is_empty(),
+                "{} configured without SIGIRO_CATALOG_URL",
+                configured_s3_fields.join(", ")
+            );
+            return Ok(None);
+        }
     };
 
-    // At this point catalog_url is a non-empty string (Ok + !is_empty)
-    // Proceed to use it as distributed catalog
-    use crate::config;
-    let s3_bucket = config::S3_BUCKET.value().map_err(anyhow::Error::from)?;
-    let s3_region = config::S3_REGION.value().map_err(anyhow::Error::from)?;
-    if !s3_bucket.is_empty() && s3_region.is_empty() {
-        anyhow::bail!(
-            "SIGIRO_S3_BUCKET is set but SIGIRO_S3_REGION is missing — provide a valid AWS region"
+    let data = if s3_bucket.is_empty() {
+        anyhow::ensure!(
+            configured_s3_fields.is_empty(),
+            "{} configured without SIGIRO_S3_BUCKET",
+            configured_s3_fields.join(", ")
         );
-    }
-    if s3_bucket.is_empty() && !s3_region.is_empty() {
-        tracing::warn!("SIGIRO_S3_REGION is set but SIGIRO_S3_BUCKET is empty — S3 region ignored");
-    }
-    let s3_endpoint = config::S3_ENDPOINT.value().map_err(anyhow::Error::from)?;
-    let s3_key_id = resolve_with_aws_fallback(&config::S3_KEY_ID, &config::AWS_ACCESS_KEY_ID)?;
-    let s3_secret = resolve_with_aws_fallback(&config::S3_SECRET, &config::AWS_SECRET_ACCESS_KEY)?;
-    let s3_use_ssl = config::S3_USE_SSL.value().map_err(anyhow::Error::from)?;
+        DataLocation::LocalFilesystem
+    } else {
+        let region = S3Region::try_new(s3_region)
+        .map_err(|_| anyhow::anyhow!(
+            "SIGIRO_S3_BUCKET is set but SIGIRO_S3_REGION is missing — provide a valid AWS region"
+        ))?;
+        let endpoint = Url::parse(&s3_endpoint)
+            .with_context(|| "SIGIRO_S3_ENDPOINT must be an absolute http:// or https:// URL")?;
+        let key_id = resolve_with_aws_fallback(s3_key_id, &config::AWS_ACCESS_KEY_ID)?;
+        let secret = resolve_with_aws_fallback(s3_secret, &config::AWS_SECRET_ACCESS_KEY)?;
+        let bucket = S3BucketName::try_new(s3_bucket)
+            .map_err(|e| anyhow::anyhow!("invalid SIGIRO_S3_BUCKET: {e}"))?;
+        DataLocation::S3(S3Config::new(bucket, region, endpoint, key_id, secret)?)
+    };
 
-    Ok(Some(StorageConfig {
-        catalog_url,
-        s3_bucket,
-        s3_region,
-        s3_endpoint,
-        s3_key_id,
-        s3_secret,
-        s3_use_ssl,
-    }))
+    Ok(Some(StorageConfig::new(catalog_url, data)?))
 }
 
 /// Read `primary`, falling back to `secondary` (the conventional AWS_* name)
@@ -512,14 +567,13 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
 /// can be overridden explicitly while still picking up plain AWS_ACCESS_KEY_ID/
 /// AWS_SECRET_ACCESS_KEY from the environment by default.
 fn resolve_with_aws_fallback(
-    primary: &typed_env::Envar<String>,
+    primary: String,
     secondary: &typed_env::Envar<String>,
 ) -> Result<String> {
-    let value = primary.value().map_err(anyhow::Error::from)?;
-    if value.is_empty() {
+    if primary.is_empty() {
         secondary.value().map_err(anyhow::Error::from)
     } else {
-        Ok(value)
+        Ok(primary)
     }
 }
 
@@ -797,15 +851,20 @@ mod redaction_tests {
         const S3_KEY_ID: &str = "AKIA_KEY_ID_SHOULD_NOT_LEAK";
         const S3_SECRET: &str = "S3Secret_SHOULD_NOT_LEAK_bytes";
 
-        let config = StorageConfig {
-            catalog_url: format!("postgresql://sigiro:{PG_PASSWORD}@db.internal:5432/ducklake"),
-            s3_bucket: "telemetry-bucket".to_string(),
-            s3_region: "us-east-1".to_string(),
-            s3_endpoint: "s3.example.com".to_string(),
-            s3_key_id: S3_KEY_ID.to_string(),
-            s3_secret: S3_SECRET.to_string(),
-            s3_use_ssl: true,
-        };
+        let config = StorageConfig::new(
+            format!("postgresql://sigiro:{PG_PASSWORD}@db.internal:5432/ducklake"),
+            DataLocation::S3(
+                S3Config::new(
+                    S3BucketName::try_new("telemetry-bucket".to_string()).unwrap(),
+                    S3Region::try_new("us-east-1".to_string()).unwrap(),
+                    "https://s3.example.com".parse().unwrap(),
+                    S3_KEY_ID.to_string(),
+                    S3_SECRET.to_string(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
 
         let config_dbg = format!("{config:?}");
         let mode_dbg = format!("{:?}", StorageMode::Distributed(config));
@@ -824,7 +883,7 @@ mod redaction_tests {
         // Non-secret fields stay visible so the config is still useful in logs.
         assert!(config_dbg.contains("telemetry-bucket"));
         assert!(config_dbg.contains("us-east-1"));
-        assert!(config_dbg.contains("<redacted>"));
+        assert!(config_dbg.contains("[REDACTED]"));
     }
 
     /// A debug-format of `DistributedAttachSql` must never leak the catalog
