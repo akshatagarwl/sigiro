@@ -151,7 +151,7 @@ WHERE service = 'checkout' AND status = 'error'
 GROUP BY model ORDER BY slowest DESC`,
       },
       {
-        cmd: 'sigiro query --sql-file models.sql',
+        cmd: 'sigiro query "$(cat models.sql)"',
         out: `MODEL           CALLS  SLOWEST
 gpt-5.2-mini      246    30.0s
 claude-haiku-4.6   31     2.1s`,
@@ -178,7 +178,7 @@ claude-haiku-4.6   31     2.1s`,
         out: '',
       },
       {
-        cmd: 'sigiro query --sql-file drill.sql',
+        cmd: 'sigiro query "$(cat drill.sql)"',
         out: `TRACE_ID       DURATION  STATUS_MESSAGE
 9f2c1ab4e77d      30012  context deadline exceeded
 3b81fe0a2c56      30004  context deadline exceeded

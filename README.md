@@ -54,7 +54,7 @@ same bytes:
 ```bash
 sigiro status
 sigiro anomalies | jq '.anomalies[] | select(.signal == "latency_p95")'
-sigiro query --sql-file ./report.sql > report.json
+sigiro query "SELECT count(*) FROM sigiro_spans" > report.json
 ```
 
 ## Documentation

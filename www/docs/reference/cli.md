@@ -68,7 +68,6 @@ partials into one answer.
 | Flag                      | Type                   | Default |
 | ------------------------- | ---------------------- | ------- |
 | `<SQL>`                   | string                 | none    |
-| `--sql-file <PATH>`       | path, or `-` for stdin | none    |
 | `--edge <NAME=HOST:PORT>` | repeatable             | none    |
 | `--full-scan`             | flag                   | off     |
 

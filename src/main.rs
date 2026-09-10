@@ -52,10 +52,7 @@ enum Command {
     /// the tailnet (peers tagged tag:sigiro-edge) unless overridden.
     Query {
         /// SQL statement to execute
-        sql: Option<String>,
-        /// Path to a .sql file to execute (use - for stdin)
-        #[arg(long, value_name = "PATH")]
-        sql_file: Option<String>,
+        sql: String,
         /// Edge override: name=host:port. Repeatable. Also settable via
         /// SIGIRO_EDGES (comma-separated). When either is given, tailnet
         /// discovery is skipped entirely.
@@ -208,24 +205,19 @@ async fn main() -> Result<()> {
             run_serve().await?;
         }
         Some(Command::Query {
-            sql,
-            sql_file,
+            sql: sql_arg,
             edge,
             full_scan,
         }) => {
-            // F-14: support --sql-file for long queries, reuse file across runs,
-            // or piping `cat foo.sql | sigiro query --sql-file -`
-            let sql = match (sql, sql_file) {
-                (Some(s), _) => s,
-                (None, Some(path)) if path == "-" => {
-                    use std::io::Read;
-                    let mut s = String::new();
-                    std::io::stdin().read_to_string(&mut s)?;
-                    s
-                }
-                (None, Some(path)) => std::fs::read_to_string(&path)
-                    .with_context(|| format!("failed to read SQL file {path}"))?,
-                (None, None) => anyhow::bail!("provide SQL as argument or via --sql-file"),
+            let sql = if sql_arg == "-" {
+                use std::io::Read;
+                let mut sql = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut sql)
+                    .context("failed to read SQL from stdin")?;
+                sql
+            } else {
+                sql_arg
             };
             let result = sigiro::federate::run_federated_query(&sql, &edge, full_scan).await?;
             let value = serde_json::to_value(&result)?;
@@ -599,4 +591,30 @@ fn init_basic_subscriber() {
         )
         .with_writer(std::io::stderr)
         .init();
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn query_requires_positional_sql() {
+        let parsed = Cli::try_parse_from(["sigiro", "query", "SELECT 1"]).unwrap();
+        assert!(matches!(parsed.command, Some(Command::Query { sql, .. }) if sql == "SELECT 1"));
+
+        let stdin = Cli::try_parse_from(["sigiro", "query", "-"]).unwrap();
+        assert!(matches!(stdin.command, Some(Command::Query { sql, .. }) if sql == "-"));
+
+        assert!(Cli::try_parse_from(["sigiro", "query"]).is_err());
+    }
+
+    #[test]
+    fn query_rejects_sql_file_option() {
+        let error = match Cli::try_parse_from(["sigiro", "query", "--sql-file", "query.sql"]) {
+            Ok(_) => panic!("--sql-file must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
 }
