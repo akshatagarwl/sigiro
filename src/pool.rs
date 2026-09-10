@@ -408,7 +408,7 @@ impl ProjectPool {
             };
             match attach_result {
                 Ok(()) => {
-                    // Catalog policy. Two groups, both set once per attach and
+                    // Catalog policy. Three groups, all set once per attach and
                     // persisted by DuckLake in the metadata schema.
                     //
                     // WRITE FORMAT. zstd + Parquet v2 is the only supported
@@ -445,9 +445,10 @@ impl ProjectPool {
                     // useful without allowing one rewrite to target the whole
                     // memory budget.
                     //
-                    // Profile flushes are 11-232 rows in production. Inlining up
-                    // to 1,000 avoids an R2 Parquet file per profiling cycle;
-                    // the same native checkpoint materializes them hourly.
+                    // SAFETY. Profile inlining stays disabled until DuckLake can
+                    // safely combine it with concurrent retention deletes.
+                    // Persisting zero also replaces the unsafe 1,000-row policy
+                    // in existing catalogs when they next attach.
                     //
                     // `expire_older_than` is tied to the row retention window:
                     // once rows past that age are deleted, snapshots that old
@@ -716,7 +717,7 @@ pub(crate) fn set_ducklake_catalog_policy(conn: &Connection, retention_days: u32
          CALL lake.set_option('rewrite_delete_threshold', 0.2); \
          CALL lake.set_option('expire_older_than', '{expiry}'); \
          CALL lake.set_option('delete_older_than', '2 days'); \
-         CALL lake.set_option('data_inlining_row_limit', 1000, table_name => 'sigiro_profiles');"
+         CALL lake.set_option('data_inlining_row_limit', 0, table_name => 'sigiro_profiles');"
     ))
     .context("failed to set DuckLake catalog policy")
 }

@@ -54,23 +54,50 @@ fn create_project_opens_connection() {
 }
 
 #[test]
-fn create_project_persists_ducklake_maintenance_policy() {
+fn create_project_persists_safe_ducklake_policy() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
     let readers = pool.create_project("proj_a").unwrap();
     let conn = readers.get();
 
+    // Reproduce the unsafe policy persisted by older sigiro versions, then
+    // reattach the existing catalog. Startup must migrate it to the safe value.
+    conn.execute_batch(
+        "CALL lake.set_option( \
+             'data_inlining_row_limit', 1000, table_name => 'sigiro_profiles' \
+         );",
+    )
+    .unwrap();
+    let old_limit: String = conn
+        .query_row(
+            "SELECT value FROM lake.options() \
+             WHERE option_name = 'data_inlining_row_limit' \
+               AND scope_entry = 'main.sigiro_profiles'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(old_limit, "1000", "test must reproduce the old policy");
+
+    drop(conn);
+    drop(readers);
+    pool.evict_idle(Duration::ZERO);
+    let readers = pool.create_project("proj_a").unwrap();
+    let conn = readers.get();
+
     let mut stmt = conn
         .prepare(
-            "SELECT option_name, value FROM lake.options() \
+            "SELECT option_name, value, scope, scope_entry FROM lake.options() \
              WHERE option_name IN ( \
                'auto_compact', 'target_file_size', 'rewrite_delete_threshold', \
-               'expire_older_than', 'delete_older_than' \
+               'expire_older_than', 'delete_older_than', 'data_inlining_row_limit' \
              ) ORDER BY option_name",
         )
         .unwrap();
-    let options: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+    let options: Vec<(String, String, String, Option<String>)> = stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
@@ -78,13 +105,39 @@ fn create_project_persists_ducklake_maintenance_policy() {
     assert_eq!(
         options,
         vec![
-            ("auto_compact".into(), "true".into()),
-            ("delete_older_than".into(), "2 days".into()),
-            ("expire_older_than".into(), "7 days".into()),
-            ("rewrite_delete_threshold".into(), "0.200000".into()),
-            ("target_file_size".into(), "32000000".into()),
+            ("auto_compact".into(), "true".into(), "GLOBAL".into(), None),
+            (
+                "data_inlining_row_limit".into(),
+                "0".into(),
+                "TABLE".into(),
+                Some("main.sigiro_profiles".into()),
+            ),
+            (
+                "delete_older_than".into(),
+                "2 days".into(),
+                "GLOBAL".into(),
+                None
+            ),
+            (
+                "expire_older_than".into(),
+                "7 days".into(),
+                "GLOBAL".into(),
+                None
+            ),
+            (
+                "rewrite_delete_threshold".into(),
+                "0.200000".into(),
+                "GLOBAL".into(),
+                None,
+            ),
+            (
+                "target_file_size".into(),
+                "32000000".into(),
+                "GLOBAL".into(),
+                None
+            ),
         ],
-        "project creation must persist the policy consumed by CHECKPOINT"
+        "project creation must persist safe profile and CHECKPOINT policies"
     );
 }
 
