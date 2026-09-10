@@ -339,11 +339,17 @@ async fn test_diagnose_rejects_singular_service_field() {
         .json(&json!({"service": "checkout", "services": ["cart"]}))
         .await
         .assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
-    server
+    // A valid plural request must pass request-shape validation. Its domain
+    // result depends on whether the platform creates project metadata eagerly.
+    let response = server
         .post("/v1/diagnose")
         .json(&json!({"services": ["nonexistent"]}))
-        .await
-        .assert_status_ok();
+        .await;
+    assert_ne!(
+        response.status_code(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "the plural services field must be accepted"
+    );
 }
 
 #[tokio::test]
