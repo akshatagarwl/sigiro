@@ -162,6 +162,23 @@ pub struct TenantId(String);
 pub struct TimestampMicros(i64);
 
 // ---------------------------------------------------------------------------
+// ApiKeyHashPrefix — validated identity for key revocation
+// ---------------------------------------------------------------------------
+
+/// Unambiguous hexadecimal prefix of a SHA-256 API-key hash.
+///
+/// Eight characters is the control-plane minimum for avoiding accidental broad
+/// matches; 64 is the full hash width. Checked deserialization keeps malformed
+/// path values out of the revocation operation.
+#[nutype::nutype(
+    validate(predicate = |prefix: &str| {
+        (8..=64).contains(&prefix.len()) && prefix.bytes().all(|b| b.is_ascii_hexdigit())
+    }),
+    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
+)]
+pub struct ApiKeyHashPrefix(String);
+
+// ---------------------------------------------------------------------------
 // Typed path structs — compile-time route checking for axum router
 // ---------------------------------------------------------------------------
 // Used with axum_extra::routing::TypedPath for compile-time route verification.
@@ -208,7 +225,7 @@ pub struct AdminTenantsPath;
 #[derive(Debug, Clone, Deserialize, TypedPath)]
 #[typed_path("/keys/{short_token}")]
 pub struct AdminKeyPath {
-    pub(crate) short_token: String,
+    pub(crate) short_token: ApiKeyHashPrefix,
 }
 
 /// Route: GET /status

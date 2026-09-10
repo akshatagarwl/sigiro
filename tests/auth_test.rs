@@ -2,6 +2,23 @@ use sigiro::auth::*;
 use std::sync::Arc;
 
 #[test]
+fn api_key_hash_prefix_checks_construction_and_serde_without_changing_wire_shape() {
+    use sigiro::types::ApiKeyHashPrefix;
+
+    for invalid in ["abc1234".to_owned(), "abc1234!".to_owned(), "a".repeat(65)] {
+        assert!(ApiKeyHashPrefix::try_new(invalid.clone()).is_err());
+        assert!(serde_json::from_str::<ApiKeyHashPrefix>(&format!("\"{invalid}\"")).is_err());
+    }
+
+    let prefix = ApiKeyHashPrefix::try_new("ABCDEF12".to_owned()).unwrap();
+    assert_eq!(serde_json::to_string(&prefix).unwrap(), "\"ABCDEF12\"");
+    assert_eq!(
+        serde_json::from_str::<ApiKeyHashPrefix>("\"ABCDEF12\"").unwrap(),
+        prefix
+    );
+}
+
+#[test]
 fn extract_bearer_token_valid() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("authorization", "Bearer my_secret_key".parse().unwrap());
@@ -79,7 +96,9 @@ fn tenant_key_auth_resolves_valid_key_and_rejects_revoked_or_unknown_keys() {
     assert!(mode.verify("sk_tenant_a_unknown").is_err());
 
     let revoked = control
-        .revoke_key_hash_prefix(&minted.key_hash[..12])
+        .revoke_key_hash_prefix(
+            &sigiro::types::ApiKeyHashPrefix::try_new(minted.key_hash[..12].to_owned()).unwrap(),
+        )
         .unwrap();
     assert!(revoked);
     assert!(mode.verify(&minted.key).is_err());

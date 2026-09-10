@@ -3,7 +3,7 @@
 //! Replaces `serde_json::Value` return types with compile-time verified structs,
 //! enabling accurate OpenAPI schema generation via utoipa.
 
-use crate::types::TenantId;
+use crate::types::{ApiKeyHashPrefix, TenantId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -101,7 +101,8 @@ pub struct CreateKeyResponse {
 #[derive(Serialize, ToSchema)]
 pub struct RevokeKeyResponse {
     pub(crate) revoked: bool,
-    pub(crate) short_token: String,
+    #[schema(value_type = String)]
+    pub(crate) short_token: ApiKeyHashPrefix,
 }
 
 /// POST /admin/tenants

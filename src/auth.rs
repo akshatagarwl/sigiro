@@ -1,4 +1,4 @@
-use crate::types::TenantId;
+use crate::types::{ApiKeyHashPrefix, TenantId};
 use axum::{
     extract::{Request, State},
     http::HeaderMap,
@@ -351,15 +351,11 @@ impl ControlPlane {
         }
     }
 
-    pub fn revoke_key_hash_prefix(&self, key_hash_prefix: &str) -> Result<bool, ControlPlaneError> {
-        if !((8..=64).contains(&key_hash_prefix.len())
-            && key_hash_prefix.bytes().all(|b| b.is_ascii_hexdigit()))
-        {
-            return Err(ControlPlaneError::InvalidInput(
-                "key hash prefix must be 8-64 hexadecimal characters".to_string(),
-            ));
-        }
-        let matches = self.matching_unrevoked_hashes(key_hash_prefix)?;
+    pub fn revoke_key_hash_prefix(
+        &self,
+        key_hash_prefix: &ApiKeyHashPrefix,
+    ) -> Result<bool, ControlPlaneError> {
+        let matches = self.matching_unrevoked_hashes(key_hash_prefix.as_ref())?;
         match matches.as_slice() {
             [] => Ok(false),
             [key_hash] => {

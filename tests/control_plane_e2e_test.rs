@@ -254,12 +254,9 @@ impl Edge {
 
     /// `DELETE /admin/keys/{hash_prefix}` — returns whether a key was revoked.
     fn revoke_key(&self, key_hash: &str) -> bool {
+        let prefix = &key_hash[..16];
         let body: serde_json::Value = reqwest::blocking::Client::new()
-            .delete(format!(
-                "{}/admin/keys/{}",
-                self.base_url(),
-                &key_hash[..16]
-            ))
+            .delete(format!("{}/admin/keys/{prefix}", self.base_url()))
             .bearer_auth(ADMIN_TOKEN)
             .send()
             .expect("revoke_key request")
@@ -267,6 +264,10 @@ impl Edge {
             .expect("revoke_key non-2xx")
             .json()
             .expect("revoke_key body");
+        assert_eq!(
+            body["short_token"], prefix,
+            "hash-prefix wire shape changed"
+        );
         body["revoked"].as_bool().expect("revoked field")
     }
 
