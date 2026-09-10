@@ -128,8 +128,8 @@ sigiro diagnose checkout --from $(date -v-1H +%s)
 ```
 
 The command prints indented JSON. Read the `findings` array first: it is sorted
-critical first, and each item carries a `summary` you can read and a
-`drill_down_sql` you can run.
+critical first, and each item carries a `summary` you can read. Standalone
+findings carry a `drill_down_sql`; incidents carry one on every member shift.
 
 An agent asks the same question over HTTP. The HTTP request needs an explicit
 window, and both timestamps are **microseconds** since the Unix epoch:

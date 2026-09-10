@@ -77,8 +77,11 @@ use tracing_attributes::instrument;
             diagnose::DiagnoseResponse,
             diagnose::DiagnosisBlock,
             diagnose::Finding,
+            diagnose::FindingKind,
+            diagnose::FindingSeverity,
             diagnose::Incident,
             diagnose::IncidentShift,
+            diagnose::AnomalySignal,
             diagnose::OperationSummary,
             diagnose::ErrorTypeCount,
             diagnose::GenAiModelSummary,
@@ -1943,12 +1946,14 @@ fn compute_service_breakdown(
 Root-cause an incident for one or more services over a time window. Returns a \
 triage summary — NOT raw telemetry: a ranked `findings` array (read this \
 first), per-operation anomaly flags, and bounded samples of spans/logs. \
-Every lead carries a ready-to-run SQL string (`drill_down_sql` on findings, \
-operations, spans, and log patterns; `drill_all_sql` on the spans/logs \
+Every lead carries a ready-to-run SQL string (`drill_down_sql` on standalone \
+findings, each incident member shift, operations, spans, and log patterns; \
+`drill_all_sql` on the spans/logs \
 sections) that you paste VERBATIM into `POST /v1/query` to fetch the \
 underlying rows and go deeper. \
 Typical agent loop: `GET /v1/services` → `POST /v1/diagnose` → for any \
-finding or anomalous operation, run its `drill_down_sql` via `/v1/query`. \
+standalone finding, incident member shift, or anomalous operation, run its \
+`drill_down_sql` via `/v1/query`. \
 Timestamps are microseconds since the Unix epoch. The response is a map \
 `{results: {service: block}, errors: {service: message}}` — partial results \
 survive a single failing service.",

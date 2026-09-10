@@ -91,29 +91,105 @@ const MAX_SERVICES: usize = 10;
 /// returned (zero extra SQL, zero extra memory).
 #[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct Finding {
-    /// "critical" | "warning" | "info" — findings are sorted by this.
-    pub severity: String,
-    /// Machine-readable category: "incident" (two or more shifts correlated
-    /// in time — read `incident` for the members), "anomalous_operation"
-    /// (a lone error_rate / latency_p95 shift, which also flags its
-    /// operation summary), "anomalous_log_volume" /
-    /// "anomalous_error_log_rate" / "anomalous_profile_cost" (lone
-    /// standalone shifts — no operation to attach to),
-    /// "errors_without_logs", "coverage_gap", "missing_resource_attributes",
-    /// and the install-health kinds "duplicate_spans", "orphan_spans",
-    /// "missing_client_spans" (telemetry-pipeline faults: is what you are
-    /// reading even trustworthy?).
-    pub kind: String,
+    /// Findings are sorted critical, warning, then info.
+    pub severity: FindingSeverity,
     /// Human/agent-readable one-liner with the concrete numbers.
     pub summary: String,
-    /// Ready-to-run /v1/query SQL for the evidence behind this finding,
-    /// when one exists. Incident findings carry the drills on their member
-    /// shifts instead.
-    pub drill_down_sql: Option<String>,
-    /// Present only when `kind` is "incident": the correlated member shifts
-    /// (each with its own drill) and the suspect deploy, if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub incident: Option<Incident>,
+    #[serde(flatten)]
+    pub kind: FindingKind,
+}
+
+#[derive(
+    Clone, Copy, Serialize, Deserialize, Debug, Eq, Ord, PartialEq, PartialOrd, utoipa::ToSchema,
+)]
+pub enum FindingSeverity {
+    #[serde(rename = "critical")]
+    Critical,
+    #[serde(rename = "warning")]
+    Warning,
+    #[serde(rename = "info")]
+    Info,
+}
+
+impl FindingSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Critical => "critical",
+            Self::Warning => "warning",
+            Self::Info => "info",
+        }
+    }
+}
+
+/// Closed finding categories with category-specific payloads. The internal
+/// serde tag preserves the flat `kind` field while making an incident without
+/// incident data, or incident data on another category, unrepresentable.
+#[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
+#[serde(tag = "kind")]
+pub enum FindingKind {
+    #[serde(rename = "incident")]
+    Incident { incident: Incident },
+    #[serde(rename = "anomalous_operation")]
+    AnomalousOperation { drill_down_sql: Option<String> },
+    #[serde(rename = "anomalous_log_volume")]
+    AnomalousLogVolume { drill_down_sql: Option<String> },
+    #[serde(rename = "anomalous_error_log_rate")]
+    AnomalousErrorLogRate { drill_down_sql: Option<String> },
+    #[serde(rename = "anomalous_profile_cost")]
+    AnomalousProfileCost { drill_down_sql: Option<String> },
+    #[serde(rename = "errors_without_logs")]
+    ErrorsWithoutLogs { drill_down_sql: Option<String> },
+    #[serde(rename = "coverage_gap")]
+    CoverageGap { drill_down_sql: Option<String> },
+    #[serde(rename = "missing_resource_attributes")]
+    MissingResourceAttributes { drill_down_sql: Option<String> },
+    #[serde(rename = "duplicate_spans")]
+    DuplicateSpans { drill_down_sql: Option<String> },
+    #[serde(rename = "orphan_spans")]
+    OrphanSpans { drill_down_sql: Option<String> },
+    #[serde(rename = "missing_client_spans")]
+    MissingClientSpans { drill_down_sql: Option<String> },
+}
+
+impl FindingKind {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Incident { .. } => "incident",
+            Self::AnomalousOperation { .. } => "anomalous_operation",
+            Self::AnomalousLogVolume { .. } => "anomalous_log_volume",
+            Self::AnomalousErrorLogRate { .. } => "anomalous_error_log_rate",
+            Self::AnomalousProfileCost { .. } => "anomalous_profile_cost",
+            Self::ErrorsWithoutLogs { .. } => "errors_without_logs",
+            Self::CoverageGap { .. } => "coverage_gap",
+            Self::MissingResourceAttributes { .. } => "missing_resource_attributes",
+            Self::DuplicateSpans { .. } => "duplicate_spans",
+            Self::OrphanSpans { .. } => "orphan_spans",
+            Self::MissingClientSpans { .. } => "missing_client_spans",
+        }
+    }
+
+    pub fn drill_down_sql(&self) -> Option<&str> {
+        match self {
+            Self::Incident { .. } => None,
+            Self::AnomalousOperation { drill_down_sql }
+            | Self::AnomalousLogVolume { drill_down_sql }
+            | Self::AnomalousErrorLogRate { drill_down_sql }
+            | Self::AnomalousProfileCost { drill_down_sql }
+            | Self::ErrorsWithoutLogs { drill_down_sql }
+            | Self::CoverageGap { drill_down_sql }
+            | Self::MissingResourceAttributes { drill_down_sql }
+            | Self::DuplicateSpans { drill_down_sql }
+            | Self::OrphanSpans { drill_down_sql }
+            | Self::MissingClientSpans { drill_down_sql } => drill_down_sql.as_deref(),
+        }
+    }
+
+    pub const fn incident(&self) -> Option<&Incident> {
+        match self {
+            Self::Incident { incident } => Some(incident),
+            _ => None,
+        }
+    }
 }
 
 /// Cross-signal correlation of the anomaly subsystem: N regime shifts whose
@@ -142,9 +218,8 @@ pub struct Incident {
 /// persisted, with its entity, numbers, and drill kept intact.
 #[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
 pub struct IncidentShift {
-    /// "error_rate" | "latency_p95" | "log_volume" | "error_log_rate" |
-    /// "profile_cost".
-    pub signal: String,
+    /// The health series that shifted.
+    pub signal: AnomalySignal,
     /// The shifted entity, e.g. "operation 'POST /pay'" (span signals) or
     /// "service 'api'" (log/profile signals).
     pub entity: String,
@@ -158,9 +233,24 @@ pub struct IncidentShift {
     pub after: f64,
     /// The shift in prose, e.g. "error rate shifted at 14:30 (5.1% → 50.0%)".
     pub summary: String,
-    /// Ready-to-run /v1/query SQL for the raw telemetry behind this shift
-    /// (persisted by the anomaly pass: the new regime's spans/logs/samples).
-    pub drill_down_sql: Option<String>,
+    /// Ready-to-run /v1/query SQL for the raw telemetry behind this shift.
+    pub drill_down_sql: String,
+}
+
+#[derive(
+    Clone, Copy, Serialize, Deserialize, Debug, Eq, Ord, PartialEq, PartialOrd, utoipa::ToSchema,
+)]
+pub enum AnomalySignal {
+    #[serde(rename = "error_rate")]
+    ErrorRate,
+    #[serde(rename = "latency_p95")]
+    LatencyP95,
+    #[serde(rename = "log_volume")]
+    LogVolume,
+    #[serde(rename = "error_log_rate")]
+    ErrorLogRate,
+    #[serde(rename = "profile_cost")]
+    ProfileCost,
 }
 
 /// Response envelope for a diagnosis: per-service blocks plus
@@ -526,7 +616,7 @@ struct SqlOperationRow {
 /// shift that best represents the operation.
 #[derive(Deserialize)]
 struct AnomalyHit {
-    signal: String,
+    signal: AnomalySignal,
     /// Bucket where the new regime starts, µs since epoch.
     ts_shift: i64,
     before: f64,
@@ -541,8 +631,7 @@ struct AnomalyHit {
     dominant_error_type: Option<String>,
     /// The drill the scheduled pass persisted next to the shift (the new
     /// regime's raw telemetry) — carried into incident member shifts.
-    #[serde(default)]
-    drill_down_sql: Option<String>,
+    drill_down_sql: String,
 }
 
 /// One in-window anomaly whose entity is not a span operation (log_volume /
@@ -598,8 +687,8 @@ fn fmt_duration_us(us: f64) -> String {
 /// "p95 latency shifted at 14:30 (2.1s → 240.0s)".
 fn anomaly_reason(hit: &AnomalyHit) -> String {
     let at = analysis::hhmm_utc(hit.ts_shift);
-    match hit.signal.as_str() {
-        "error_rate" => {
+    match hit.signal {
+        AnomalySignal::ErrorRate => {
             let mostly = hit
                 .dominant_error_type
                 .as_deref()
@@ -610,25 +699,21 @@ fn anomaly_reason(hit: &AnomalyHit) -> String {
                 hit.before, hit.after
             )
         }
-        "latency_p95" => format!(
+        AnomalySignal::LatencyP95 => format!(
             "p95 latency shifted at {at} ({} → {})",
             fmt_duration_us(hit.before),
             fmt_duration_us(hit.after)
         ),
-        "log_volume" => format!(
+        AnomalySignal::LogVolume => format!(
             "log volume shifted at {at} ({:.0} → {:.0} logs per 5min)",
             hit.before, hit.after
         ),
-        "error_log_rate" => format!(
+        AnomalySignal::ErrorLogRate => format!(
             "error-log rate shifted at {at} ({:.1}% → {:.1}%)",
             hit.before, hit.after
         ),
-        "profile_cost" => format!(
+        AnomalySignal::ProfileCost => format!(
             "profile cost shifted at {at} ({:.0} → {:.0} per 5min)",
-            hit.before, hit.after
-        ),
-        other => format!(
-            "{other} shifted at {at} ({:.2} → {:.2})",
             hit.before, hit.after
         ),
     }
@@ -857,10 +942,30 @@ fn diagnose_one(
     // signals) breaks ties. A RANKING, never a filter: every detected shift
     // surfaces exactly once; the agent judges significance from the
     // before/after in the summary.
+    #[derive(Clone, Copy)]
+    enum LoneFindingKind {
+        Operation,
+        LogVolume,
+        ErrorLogRate,
+        ProfileCost,
+    }
+
+    impl LoneFindingKind {
+        fn with_drill(self, drill_down_sql: String) -> FindingKind {
+            let drill_down_sql = Some(drill_down_sql);
+            match self {
+                Self::Operation => FindingKind::AnomalousOperation { drill_down_sql },
+                Self::LogVolume => FindingKind::AnomalousLogVolume { drill_down_sql },
+                Self::ErrorLogRate => FindingKind::AnomalousErrorLogRate { drill_down_sql },
+                Self::ProfileCost => FindingKind::AnomalousProfileCost { drill_down_sql },
+            }
+        }
+    }
+
     struct Member {
         entity: String,
-        lone_kind: String,
-        lone_drill: Option<String>,
+        lone_kind: LoneFindingKind,
+        lone_drill: String,
         hit: AnomalyHit,
     }
     let mut members: Vec<Member> = Vec::new();
@@ -868,8 +973,11 @@ fn diagnose_one(
         for hit in hits {
             members.push(Member {
                 entity: format!("operation '{}'", op.operation),
-                lone_kind: "anomalous_operation".to_string(),
-                lone_drill: op.drill_down_sql.clone(),
+                lone_kind: LoneFindingKind::Operation,
+                lone_drill: op
+                    .drill_down_sql
+                    .clone()
+                    .context("anomalous operation has no drill_down_sql")?,
                 hit,
             });
         }
@@ -877,7 +985,14 @@ fn diagnose_one(
     for sa in payload.service_anomalies {
         members.push(Member {
             entity: format!("service '{}'", sa.operation),
-            lone_kind: format!("anomalous_{}", sa.hit.signal),
+            lone_kind: match sa.hit.signal {
+                AnomalySignal::LogVolume => LoneFindingKind::LogVolume,
+                AnomalySignal::ErrorLogRate => LoneFindingKind::ErrorLogRate,
+                AnomalySignal::ProfileCost => LoneFindingKind::ProfileCost,
+                AnomalySignal::ErrorRate | AnomalySignal::LatencyP95 => {
+                    anyhow::bail!("operation anomaly signal appeared in service_anomalies")
+                }
+            },
             lone_drill: sa.hit.drill_down_sql.clone(),
             hit: sa.hit,
         });
@@ -893,11 +1008,9 @@ fn diagnose_one(
             ranked.push((
                 (1, magnitude, delta),
                 Finding {
-                    severity: "critical".to_string(),
-                    kind: m.lone_kind.clone(),
+                    severity: FindingSeverity::Critical,
                     summary: format!("{}: {}", m.entity, anomaly_reason(&m.hit)),
-                    drill_down_sql: m.lone_drill.clone(),
-                    incident: None,
+                    kind: m.lone_kind.with_drill(m.lone_drill.clone()),
                 },
             ));
             continue;
@@ -923,7 +1036,7 @@ fn diagnose_one(
         for &i in &by_rank {
             let m = &members[i];
             shifts.push(IncidentShift {
-                signal: m.hit.signal.clone(),
+                signal: m.hit.signal,
                 entity: m.entity.clone(),
                 ts_shift: m.hit.ts_shift,
                 ts_shift_iso: us_to_iso(m.hit.ts_shift)?,
@@ -973,16 +1086,16 @@ fn diagnose_one(
         ranked.push((
             (group.len(), magnitude, delta),
             Finding {
-                severity: "critical".to_string(),
-                kind: "incident".to_string(),
+                severity: FindingSeverity::Critical,
                 summary,
-                drill_down_sql: None,
-                incident: Some(Incident {
-                    started_at,
-                    started_at_iso: us_to_iso(started_at)?,
-                    shifts,
-                    deploy,
-                }),
+                kind: FindingKind::Incident {
+                    incident: Incident {
+                        started_at,
+                        started_at_iso: us_to_iso(started_at)?,
+                        shifts,
+                        deploy,
+                    },
+                },
             },
         ));
     }
@@ -1005,31 +1118,31 @@ fn diagnose_one(
             .map(|t| format!(" (mostly '{t}')"))
             .unwrap_or_default();
         findings.push(Finding {
-            severity: "warning".to_string(),
-            kind: "errors_without_logs".to_string(),
+            severity: FindingSeverity::Warning,
             summary: format!(
                 "{} error trace(s){mostly} but zero ERROR-severity logs in this window — \
                  these failures are only visible via span status/status_message; check \
                  that exceptions are logged and exported",
                 payload.stats.error_traces_total
             ),
-            drill_down_sql: Some(format!(
-                "SELECT {error_type} AS error_type, * FROM {prefix}sigiro_spans \
-                 WHERE {span_scope} AND status_code = {err} ORDER BY timestamp DESC",
-                error_type = error_type_expr("")
-            )),
-            incident: None,
+            kind: FindingKind::ErrorsWithoutLogs {
+                drill_down_sql: Some(format!(
+                    "SELECT {error_type} AS error_type, * FROM {prefix}sigiro_spans \
+                     WHERE {span_scope} AND status_code = {err} ORDER BY timestamp DESC",
+                    error_type = error_type_expr("")
+                )),
+            },
         });
     }
     if coverage.has_spans && !coverage.has_logs {
         findings.push(Finding {
-            severity: "warning".to_string(),
-            kind: "coverage_gap".to_string(),
+            severity: FindingSeverity::Warning,
             summary: "spans present but no logs in this window — export OTLP logs so \
                       errors can be correlated with their messages"
                 .to_string(),
-            drill_down_sql: None,
-            incident: None,
+            kind: FindingKind::CoverageGap {
+                drill_down_sql: None,
+            },
         });
     }
     findings.extend(install_health_findings(&payload.stats, prefix, &span_scope));
@@ -1038,21 +1151,17 @@ fn diagnose_one(
         && payload.context.deployment.is_none()
     {
         findings.push(Finding {
-            severity: "info".to_string(),
-            kind: "missing_resource_attributes".to_string(),
+            severity: FindingSeverity::Info,
             summary: "no k8s resource attributes (k8s.namespace.name / k8s.deployment.name) \
                       on spans — the context section is empty; enable OTel resource \
                       detectors to fill it"
                 .to_string(),
-            drill_down_sql: None,
-            incident: None,
+            kind: FindingKind::MissingResourceAttributes {
+                drill_down_sql: None,
+            },
         });
     }
-    findings.sort_by_key(|f| match f.severity.as_str() {
-        "critical" => 0,
-        "warning" => 1,
-        _ => 2,
-    });
+    findings.sort_by_key(|f| f.severity);
 
     Ok(DiagnosisBlock {
         findings,
@@ -1089,57 +1198,57 @@ fn install_health_findings(stats: &SqlStats, prefix: &str, span_scope: &str) -> 
     let mut findings = Vec::new();
     if stats.duplicate_span_pairs > 0 {
         findings.push(Finding {
-            severity: "warning".to_string(),
-            kind: "duplicate_spans".to_string(),
+            severity: FindingSeverity::Warning,
             summary: format!(
                 "{} (trace_id, span_id) pair(s) arrived more than once in this window — an \
                  OTLP exporter retry storm or colliding span ids; counts derived from these \
                  traces are inflated",
                 stats.duplicate_span_pairs
             ),
-            drill_down_sql: Some(format!(
-                "SELECT trace_id, span_id, count(*) AS copies FROM {prefix}sigiro_spans \
-                 WHERE {span_scope} GROUP BY trace_id, span_id HAVING count(*) > 1 \
-                 ORDER BY copies DESC"
-            )),
-            incident: None,
+            kind: FindingKind::DuplicateSpans {
+                drill_down_sql: Some(format!(
+                    "SELECT trace_id, span_id, count(*) AS copies FROM {prefix}sigiro_spans \
+                     WHERE {span_scope} GROUP BY trace_id, span_id HAVING count(*) > 1 \
+                     ORDER BY copies DESC"
+                )),
+            },
         });
     }
     if stats.orphan_span_count > 0 {
         findings.push(Finding {
-            severity: "warning".to_string(),
-            kind: "orphan_spans".to_string(),
+            severity: FindingSeverity::Warning,
             summary: format!(
                 "{} span(s) reference a parent that never arrived — a service in these traces \
                  stopped exporting (rollout, network policy, broken init); the trace tree is \
                  severed above them",
                 stats.orphan_span_count
             ),
-            drill_down_sql: Some(format!(
-                "SELECT trace_id, span_id, parent_span_id, span_name FROM {prefix}sigiro_spans s \
-                 WHERE {span_scope} AND parent_span_id IS NOT NULL AND parent_span_id != '' \
-                 AND NOT EXISTS (SELECT 1 FROM {prefix}sigiro_spans p \
-                 WHERE p.trace_id = s.trace_id AND p.span_id = s.parent_span_id) \
-                 ORDER BY timestamp DESC"
-            )),
-            incident: None,
+            kind: FindingKind::OrphanSpans {
+                drill_down_sql: Some(format!(
+                    "SELECT trace_id, span_id, parent_span_id, span_name FROM {prefix}sigiro_spans s \
+                     WHERE {span_scope} AND parent_span_id IS NOT NULL AND parent_span_id != '' \
+                     AND NOT EXISTS (SELECT 1 FROM {prefix}sigiro_spans p \
+                     WHERE p.trace_id = s.trace_id AND p.span_id = s.parent_span_id) \
+                     ORDER BY timestamp DESC"
+                )),
+            },
         });
     }
     if stats.server_spans > 0 && stats.client_spans == 0 {
         findings.push(Finding {
-            severity: "warning".to_string(),
-            kind: "missing_client_spans".to_string(),
+            severity: FindingSeverity::Warning,
             summary: format!(
                 "{} SERVER span(s) and zero CLIENT spans — this service records what it \
                  receives but nothing it calls; every trace is truncated at this hop. Check \
                  that the outbound HTTP/DB client is instrumented",
                 stats.server_spans
             ),
-            drill_down_sql: Some(format!(
-                "SELECT span_kind, count(*) AS spans FROM {prefix}sigiro_spans \
-                 WHERE {span_scope} GROUP BY span_kind ORDER BY spans DESC"
-            )),
-            incident: None,
+            kind: FindingKind::MissingClientSpans {
+                drill_down_sql: Some(format!(
+                    "SELECT span_kind, count(*) AS spans FROM {prefix}sigiro_spans \
+                     WHERE {span_scope} GROUP BY span_kind ORDER BY spans DESC"
+                )),
+            },
         });
     }
     findings

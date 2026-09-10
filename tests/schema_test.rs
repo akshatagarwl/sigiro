@@ -70,6 +70,18 @@ fn anomalies_table_exists_and_accepts_rows() {
         })
         .unwrap();
     assert_eq!(count, 1);
+
+    let missing_drill = conn.execute_batch(
+        "INSERT INTO sigiro_anomalies
+            (detected_at, service_name, operation, signal, kind, direction,
+             ts_shift, \"before\", \"after\", drill_down_sql)
+         VALUES (now()::TIMESTAMP, 'svc', 'op', 'error_rate', 'changepoint',
+                 'worsening', now()::TIMESTAMP, 1.0, 50.0, NULL)",
+    );
+    assert!(
+        missing_drill.is_err(),
+        "persisted anomaly shifts require drill_down_sql"
+    );
 }
 
 #[test]

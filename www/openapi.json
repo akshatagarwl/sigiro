@@ -10,11 +10,52 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/v1/alerts": {
+      "get": {
+        "tags": [],
+        "summary": "List alerts",
+        "operationId": "list-alerts",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by lifecycle status: `firing` or `resolved`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alert instances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid status filter"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/anomalies": {
       "get": {
         "tags": [],
         "summary": "List anomalies",
-        "description": "Precomputed anomalies: worsening regime shifts (BOCPD changepoints, threshold-free) detected continuously over persisted 5-minute series of every signal \u2014 error_rate and latency_p95 per operation, log_volume, error_log_rate and profile_cost (the service's total profiled cost) per service (the `operation` field holds the entity) \u2014 and persisted to the `sigiro_anomalies` table. Ordered by the unit-free shift magnitude (after - before) / (after + before) descending (1.0 = appeared from a zero baseline, 1/3 = doubled), so the most significant shifts lead regardless of the signal's units \u2014 nothing is filtered out; judge significance from `before`/`after` (raw signal units: %, \u00b5s, logs, profile cost). Optionally filter by `service` and a `from_ts`/`to_ts` window (microseconds since the Unix epoch) over the shift time. Each row carries a ready-to-run `drill_down_sql` for POST /v1/query. Rows whose shifts fall in the same or adjacent 5-minute detection bucket on the same service share an `incident_id` \u2014 one incident across signals, not N independent anomalies (the correlation window is the detection pass's own bucket resolution, never a tuned threshold); `incident_id` is null for uncorrelated rows.",
+        "description": "Precomputed anomalies: worsening regime shifts (BOCPD changepoints, threshold-free) detected continuously over persisted 5-minute series of every signal \u2014 error_rate and latency_p95 per operation, log_volume, error_log_rate and profile_cost (the service's total profiled cost) per service (the `operation` field holds the entity) \u2014 and persisted to the `sigiro_anomalies` table. Ordered by the unit-free shift magnitude (after - before) / (after + before) descending (1.0 = appeared from a zero baseline, 1/3 = doubled), so the most significant shifts lead regardless of the signal's units \u2014 nothing is filtered out; judge significance from `before`/`after` (raw signal units: %, \u00b5s, logs, profile cost). Optionally filter by `service` and a `from_ts`/`to_ts` window (microseconds since the Unix epoch) over the shift time. Each row carries a ready-to-run `drill_down_sql` for POST /v1/query. Rows whose shifts fall in the same or adjacent 5-minute detection bucket on the same service share an `incident_id` \u2014 one incident across signals, not N independent anomalies (the correlation window is the detection pass's own bucket resolution, never a tuned threshold); `incident_id` is null for uncorrelated rows. `truncated` is true when the query row cap omitted shifts: this is an incomplete candidate snapshot and automatic submission must wait for a complete response.",
         "operationId": "list-anomalies",
         "parameters": [
           {
@@ -72,8 +113,8 @@
     "/v1/diagnose": {
       "post": {
         "tags": [],
-        "summary": "Diagnose services",
-        "description": "Root-cause an incident for one or more services over a time window. Returns a triage summary \u2014 NOT raw telemetry: a ranked `findings` array (read this first), per-operation anomaly flags, and bounded samples of spans/logs. Every lead carries a ready-to-run SQL string (`drill_down_sql` on findings, operations, spans, and log patterns; `drill_all_sql` on the spans/logs sections) that you paste VERBATIM into `POST /v1/query` to fetch the underlying rows and go deeper. Typical agent loop: `GET /v1/services` \u2192 `POST /v1/diagnose` \u2192 for any finding or anomalous operation, run its `drill_down_sql` via `/v1/query`. Timestamps are microseconds since the Unix epoch. The response is a map `{results: {service: block}, errors: {service: message}}` \u2014 partial results survive a single failing service.",
+        "summary": "Diagnose a service",
+        "description": "Root-cause an incident for one or more services over a time window. Returns a triage summary \u2014 NOT raw telemetry: a ranked `findings` array (read this first), per-operation anomaly flags, and bounded samples of spans/logs. Every lead carries a ready-to-run SQL string (`drill_down_sql` on standalone findings, each incident member shift, operations, spans, and log patterns; `drill_all_sql` on the spans/logs sections) that you paste VERBATIM into `POST /v1/query` to fetch the underlying rows and go deeper. Typical agent loop: `GET /v1/services` \u2192 `POST /v1/diagnose` \u2192 for any standalone finding, incident member shift, or anomalous operation, run its `drill_down_sql` via `/v1/query`. Timestamps are microseconds since the Unix epoch. The response is a map `{results: {service: block}, errors: {service: message}}` \u2014 partial results survive a single failing service.",
         "operationId": "diagnose-services",
         "requestBody": {
           "content": {
@@ -114,10 +155,10 @@
       "post": {
         "tags": [],
         "summary": "Run a SQL query",
-        "description": "Every `drill_down_sql` that `/v1/diagnose` returns can be pasted here\nverbatim.\n\nReadable tables, optionally qualified `lake.*` or `main.*`:\n\n- `sigiro_spans`\n- `sigiro_logs`\n- `sigiro_log_templates`\n- `sigiro_metrics_gauge`\n- `sigiro_metrics_sum`\n- `sigiro_metrics_histogram`\n- `sigiro_metrics_exp_histogram`\n- `sigiro_profiles`\n- `sigiro_anomalies`",
+        "description": "Every `drill_down_sql` that `/v1/diagnose` returns can be pasted here\nverbatim.\n\nReadable tables, optionally qualified `lake.*` or `main.*`:\n\n- `sigiro_spans`\n- `sigiro_logs`\n- `sigiro_log_templates`\n- `sigiro_metrics_gauge`\n- `sigiro_metrics_sum`\n- `sigiro_metrics_histogram`\n- `sigiro_metrics_exp_histogram`\n- `sigiro_profiles`\n- `sigiro_anomalies`\n\n## Bound `timestamp` with a literal, not `now()`\n\nStatistics pruning only happens when the comparison value is a constant the\nplanner can fold. `now()` is volatile, so any predicate built from it is\nevaluated per row and every file in the table is opened.\n\n```sql\n-- prunes: the planner folds the constant and skips whole files\nWHERE timestamp > TIMESTAMP '2026-08-31 08:00:00'\n\n-- does not prune: opens every file, then filters\nWHERE timestamp > (now() - INTERVAL 1 HOUR)::TIMESTAMP\n```\n\nCompute the bound in your client and send it as a literal.\n\n## If you must use `now()`, cast it\n\nThe `timestamp` columns are `TIMESTAMP` (no timezone) and `now()` returns\n`TIMESTAMPTZ`. Comparing them directly makes DuckDB cast the **column**,\nwhich adds a per-row conversion on top of the missing pruning. Measured\nagainst production on 2026-08-31, same table and window:\n\n| predicate | result |\n|---|---|\n| `timestamp > TIMESTAMP '2026-08-31 08:00:00'` | 200 in 2.48s |\n| `timestamp > (now() - INTERVAL 5 MINUTE)::TIMESTAMP` | 200 in 0.65s |\n| `timestamp > now() - INTERVAL 5 MINUTE` | 400 `INTERRUPT` at 10.98s |\n| `timestamp > TIMESTAMPTZ '2026-08-31 08:00:00+00'` | 400 `INTERRUPT` at 10.65s |\n\nSo the cast is worth having, but it is a mitigation and not the fix: the\nliteral is.",
         "operationId": "run-query",
         "requestBody": {
-          "description": "One SELECT statement. No WITH/CTE clauses \u2014 rewrite them as derived-table subqueries. Scalar functions are allowlisted; file and network readers are blocked.",
+          "description": "One SELECT statement. No WITH/CTE clauses \u2014 rewrite them as derived-table subqueries. Scalar functions are allowlisted; file and network readers are blocked. Bound timestamp columns with a literal TIMESTAMP rather than an expression built from now(), or statistics pruning is lost and the query reads every file.",
           "content": {
             "text/plain": {
               "schema": {
@@ -207,11 +248,70 @@
   },
   "components": {
     "schemas": {
+      "AlertInstance": {
+        "type": "object",
+        "required": [
+          "fingerprint",
+          "rule_id",
+          "status",
+          "service_name",
+          "container_name",
+          "starts_at",
+          "occurrence_count"
+        ],
+        "properties": {
+          "container_name": {
+            "type": "string"
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "occurrence_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "starts_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AlertsResponse": {
+        "type": "object",
+        "description": "GET /v1/alerts",
+        "required": [
+          "alerts"
+        ],
+        "properties": {
+          "alerts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertInstance"
+            }
+          }
+        }
+      },
       "AnomaliesResponse": {
         "type": "object",
-        "description": "GET /v1/anomalies \u2014 precomputed regime shifts of every signal from the\ncontinuous anomaly pass (the `sigiro_anomalies` table), biggest shift\nfirst by the unit-free magnitude (after \u2212 before) / (after + before)\n(comparable across signals; raw |after \u2212 before| breaks zero-baseline\nties, then newest first). Ranking, not filtering: every detected shift\nis returned \u2014 the reader judges significance from `before`/`after`.",
+        "description": "GET /v1/anomalies \u2014 precomputed regime shifts of every signal from the\ncontinuous anomaly pass (the `sigiro_anomalies` table), biggest shift\nfirst by the unit-free magnitude (after \u2212 before) / (after + before)\n(comparable across signals; raw |after \u2212 before| breaks zero-baseline\nties, then newest first). Ranking, not filtering: the reader judges\nsignificance from `before`/`after`. `truncated` reports the query row cap.",
         "required": [
-          "anomalies"
+          "anomalies",
+          "truncated"
         ],
         "properties": {
           "anomalies": {
@@ -219,6 +319,10 @@
             "items": {
               "$ref": "#/components/schemas/AnomalyEntry"
             }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when the query row cap omitted shifts. This is an incomplete\ncandidate snapshot: automatic submission must wait for a complete one."
           }
         }
       },
@@ -295,6 +399,16 @@
             "description": "`ts_shift` as \u00b5s since the Unix epoch \u2014 the value incident\ncorrelation buckets on."
           }
         }
+      },
+      "AnomalySignal": {
+        "type": "string",
+        "enum": [
+          "error_rate",
+          "latency_p95",
+          "log_volume",
+          "error_log_rate",
+          "profile_cost"
+        ]
       },
       "Coverage": {
         "type": "object",
@@ -375,9 +489,6 @@
       },
       "DiagnoseRequest": {
         "type": "object",
-        "required": [
-          "services"
-        ],
         "properties": {
           "from_ts": {
             "type": [
@@ -385,15 +496,26 @@
               "null"
             ],
             "format": "int64",
-            "description": "Window start, **microseconds** since the Unix epoch (a 16-digit value,\ne.g. 1780000000000000). Seconds, milliseconds, and nanoseconds are rejected.\nOPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the\nsame default `sigiro diagnose` uses. Providing `to_ts` without `from_ts`\nis rejected \u2014 a window that ends somewhere with no start is ambiguous,\nand guessing one silently would answer a question nobody asked.",
+            "description": "Window start, **microseconds** since the Unix epoch (a 16-digit value,\ne.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.\nOPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the\nsame default `sigiro diagnose` uses. Providing `to_ts` without `from_ts`\nis rejected \u2014 a window that ends somewhere with no start is ambiguous,\nand guessing one silently would answer a question nobody asked.",
             "example": 1780000000000000
           },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Single service to diagnose. Provide this OR `services` (call\n`GET /v1/services` first to discover valid names).",
+            "example": "checkout"
+          },
           "services": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "string"
             },
-            "description": "Services to diagnose (1\u201310). Call `GET /v1/services` first to discover\nvalid names.",
+            "description": "Multiple services in one call (max 10). Alternative to `service`.",
             "example": [
               "checkout",
               "cart"
@@ -408,8 +530,7 @@
             "description": "Window end, microseconds since the Unix epoch. Must be > `from_ts`.\nOptional: defaults to now when `from_ts` is given alone.",
             "example": 1780001800000000
           }
-        },
-        "additionalProperties": false
+        }
       },
       "DiagnoseResponse": {
         "type": "object",
@@ -560,45 +681,260 @@
         }
       },
       "Finding": {
-        "type": "object",
-        "description": "One ranked, self-contained \"what deserves attention\" item \u2014 the first\nthing an agent reads. Assembled in Rust from data the single query already\nreturned (zero extra SQL, zero extra memory).",
-        "required": [
-          "severity",
-          "kind",
-          "summary"
-        ],
-        "properties": {
-          "drill_down_sql": {
-            "type": [
-              "string",
-              "null"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FindingKind"
+          },
+          {
+            "type": "object",
+            "required": [
+              "severity",
+              "summary"
             ],
-            "description": "Ready-to-run /v1/query SQL for the evidence behind this finding,\nwhen one exists. Incident findings carry the drills on their member\nshifts instead."
-          },
-          "incident": {
-            "oneOf": [
-              {
-                "type": "null"
+            "properties": {
+              "severity": {
+                "$ref": "#/components/schemas/FindingSeverity",
+                "description": "Findings are sorted critical, warning, then info."
               },
-              {
-                "$ref": "#/components/schemas/Incident",
-                "description": "Present only when `kind` is \"incident\": the correlated member shifts\n(each with its own drill) and the suspect deploy, if any."
+              "summary": {
+                "type": "string",
+                "description": "Human/agent-readable one-liner with the concrete numbers."
               }
-            ]
-          },
-          "kind": {
-            "type": "string",
-            "description": "Machine-readable category: \"incident\" (two or more shifts correlated\nin time \u2014 read `incident` for the members), \"anomalous_operation\"\n(a lone error_rate / latency_p95 shift, which also flags its\noperation summary), \"anomalous_log_volume\" /\n\"anomalous_error_log_rate\" / \"anomalous_profile_cost\" (lone\nstandalone shifts \u2014 no operation to attach to),\n\"errors_without_logs\", \"coverage_gap\", \"missing_resource_attributes\",\nand the install-health kinds \"duplicate_spans\", \"orphan_spans\",\n\"missing_client_spans\" (telemetry-pipeline faults: is what you are\nreading even trustworthy?)."
-          },
-          "severity": {
-            "type": "string",
-            "description": "\"critical\" | \"warning\" | \"info\" \u2014 findings are sorted by this."
-          },
-          "summary": {
-            "type": "string",
-            "description": "Human/agent-readable one-liner with the concrete numbers."
+            }
           }
-        }
+        ],
+        "description": "One ranked, self-contained \"what deserves attention\" item \u2014 the first\nthing an agent reads. Assembled in Rust from data the single query already\nreturned (zero extra SQL, zero extra memory)."
+      },
+      "FindingKind": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "incident",
+              "kind"
+            ],
+            "properties": {
+              "incident": {
+                "$ref": "#/components/schemas/Incident"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "incident"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "anomalous_operation"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "anomalous_log_volume"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "anomalous_error_log_rate"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "anomalous_profile_cost"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "errors_without_logs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "coverage_gap"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "missing_resource_attributes"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "duplicate_spans"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "orphan_spans"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "drill_down_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "missing_client_spans"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Closed finding categories with category-specific payloads. The internal\nserde tag preserves the flat `kind` field while making an incident without\nincident data, or incident data on another category, unrepresentable."
+      },
+      "FindingSeverity": {
+        "type": "string",
+        "enum": [
+          "critical",
+          "warning",
+          "info"
+        ]
       },
       "FinishReasonCount": {
         "type": "object",
@@ -734,7 +1070,8 @@
           "ts_shift_iso",
           "before",
           "after",
-          "summary"
+          "summary",
+          "drill_down_sql"
         ],
         "properties": {
           "after": {
@@ -748,19 +1085,16 @@
             "description": "Series mean before the shift (raw signal units)."
           },
           "drill_down_sql": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Ready-to-run /v1/query SQL for the raw telemetry behind this shift\n(persisted by the anomaly pass: the new regime's spans/logs/samples)."
+            "type": "string",
+            "description": "Ready-to-run /v1/query SQL for the raw telemetry behind this shift."
           },
           "entity": {
             "type": "string",
             "description": "The shifted entity, e.g. \"operation 'POST /pay'\" (span signals) or\n\"service 'api'\" (log/profile signals)."
           },
           "signal": {
-            "type": "string",
-            "description": "\"error_rate\" | \"latency_p95\" | \"log_volume\" | \"error_log_rate\" |\n\"profile_cost\"."
+            "$ref": "#/components/schemas/AnomalySignal",
+            "description": "The health series that shifted."
           },
           "summary": {
             "type": "string",
@@ -894,6 +1228,7 @@
           "timestamp_iso",
           "severity_text",
           "body",
+          "event_name",
           "attributes"
         ],
         "properties": {
@@ -901,6 +1236,9 @@
             "type": "object"
           },
           "body": {
+            "type": "string"
+          },
+          "event_name": {
             "type": "string"
           },
           "severity_text": {
@@ -1109,6 +1447,7 @@
                 "timestamp_iso",
                 "severity_text",
                 "body",
+                "event_name",
                 "attributes"
               ],
               "properties": {
@@ -1116,6 +1455,9 @@
                   "type": "object"
                 },
                 "body": {
+                  "type": "string"
+                },
+                "event_name": {
                   "type": "string"
                 },
                 "severity_text": {

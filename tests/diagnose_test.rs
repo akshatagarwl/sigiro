@@ -1,6 +1,6 @@
 use parking_lot::Mutex;
 use sigiro::diagnose::{
-    DiagnoseRequest, compute_coverage, diagnose, metric_bucket_interval, us_to_iso,
+    AnomalySignal, DiagnoseRequest, compute_coverage, diagnose, metric_bucket_interval, us_to_iso,
 };
 use sigiro::{TenantId, TimestampMicros};
 
@@ -1187,11 +1187,16 @@ fn anomaly_pass_persists_worsening_shift_and_diagnose_surfaces_it() {
     let finding = block
         .findings
         .iter()
-        .find(|f| f.kind == "anomalous_operation")
+        .find(|f| f.kind.as_str() == "anomalous_operation")
         .expect("anomalous operation should be a top-level finding");
-    assert_eq!(finding.severity, "critical");
+    assert_eq!(finding.severity.as_str(), "critical");
     assert!(finding.summary.contains("call upstream"));
-    assert!(finding.drill_down_sql.is_some());
+    assert!(finding.kind.drill_down_sql().is_some());
+    let serialized = serde_json::to_value(finding).expect("serialize standalone finding");
+    assert_eq!(serialized["severity"], "critical");
+    assert_eq!(serialized["kind"], "anomalous_operation");
+    assert!(serialized["drill_down_sql"].is_string());
+    assert!(serialized.get("incident").is_none());
 
     // A window that ENDS BEFORE the shift (~50 min ago) must not flag: the
     // anomaly row exists but its ts_shift is outside [from, to]. This window
@@ -1288,7 +1293,7 @@ fn anomaly_chronic_stable_error_rate_is_not_anomalous() {
         !block
             .findings
             .iter()
-            .any(|f| f.kind == "anomalous_operation"),
+            .any(|f| f.kind.as_str() == "anomalous_operation"),
         "no anomaly finding for a regime that never shifted"
     );
     // The chronic badness itself is still on the record as evidence.
@@ -1430,9 +1435,9 @@ fn anomaly_latency_p95_shift_is_detected_and_surfaces() {
     let finding = block
         .findings
         .iter()
-        .find(|f| f.kind == "anomalous_operation")
+        .find(|f| f.kind.as_str() == "anomalous_operation")
         .expect("latency shift should be a top-level finding");
-    assert_eq!(finding.severity, "critical");
+    assert_eq!(finding.severity.as_str(), "critical");
     assert!(finding.summary.contains("GET /slow"));
 }
 
@@ -1498,15 +1503,15 @@ fn anomaly_log_volume_flood_is_detected_and_surfaces_standalone() {
     let finding = block
         .findings
         .iter()
-        .find(|f| f.kind == "anomalous_log_volume")
+        .find(|f| f.kind.as_str() == "anomalous_log_volume")
         .expect("log flood should be a standalone top-level finding");
-    assert_eq!(finding.severity, "critical");
+    assert_eq!(finding.severity.as_str(), "critical");
     assert!(
         finding.summary.contains("log volume shifted at"),
         "summary names the shift: {}",
         finding.summary
     );
-    assert!(finding.drill_down_sql.is_some());
+    assert!(finding.kind.drill_down_sql().is_some());
 }
 
 #[test]
@@ -1569,7 +1574,7 @@ fn anomaly_error_log_rate_shift_is_detected_at_constant_volume() {
     let finding = block
         .findings
         .iter()
-        .find(|f| f.kind == "anomalous_error_log_rate")
+        .find(|f| f.kind.as_str() == "anomalous_error_log_rate")
         .expect("error-log-rate shift should be a standalone finding");
     assert!(
         finding.summary.contains("error-log rate shifted at"),
@@ -1655,7 +1660,7 @@ fn anomaly_profile_cost_shift_is_detected_per_service() {
     let finding = block
         .findings
         .iter()
-        .find(|f| f.kind == "anomalous_profile_cost")
+        .find(|f| f.kind.as_str() == "anomalous_profile_cost")
         .expect("profile cost regression should be a standalone finding");
     assert!(
         finding.summary.contains("service 'svc'")
@@ -1736,34 +1741,44 @@ fn incident_correlates_multi_signal_shifts_and_names_the_deploy() {
     let incidents: Vec<_> = block
         .findings
         .iter()
-        .filter(|f| f.kind == "incident")
+        .filter(|f| f.kind.as_str() == "incident")
         .collect();
     assert_eq!(incidents.len(), 1, "one incident, not N alerts");
     assert!(
         !block
             .findings
             .iter()
-            .any(|f| f.kind.starts_with("anomalous_")),
+            .any(|f| f.kind.as_str().starts_with("anomalous_")),
         "no shift may ALSO surface as a lone finding: {:?}",
         block.findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
     );
     // The incident ranks first — a multi-signal incident outranks everything.
-    assert_eq!(block.findings[0].kind, "incident");
+    assert_eq!(block.findings[0].kind.as_str(), "incident");
 
     let finding = incidents[0];
-    let incident = finding.incident.as_ref().expect("incident payload");
+    let incident = finding.kind.incident().expect("incident payload");
+    let serialized = serde_json::to_value(finding).expect("serialize incident finding");
+    assert_eq!(serialized["severity"], "critical");
+    assert_eq!(serialized["kind"], "incident");
+    assert!(serialized["incident"].is_object());
+    assert!(serialized.get("drill_down_sql").is_none());
     assert_eq!(
         incident.shifts.len(),
         written,
         "every persisted shift is a member — nothing dropped"
     );
-    let member_signals: std::collections::BTreeSet<&str> =
-        incident.shifts.iter().map(|s| s.signal.as_str()).collect();
+    let member_signals: std::collections::BTreeSet<AnomalySignal> =
+        incident.shifts.iter().map(|s| s.signal).collect();
     assert_eq!(
         member_signals,
-        ["error_log_rate", "error_rate", "latency_p95", "log_volume"]
-            .into_iter()
-            .collect()
+        [
+            AnomalySignal::ErrorLogRate,
+            AnomalySignal::ErrorRate,
+            AnomalySignal::LatencyP95,
+            AnomalySignal::LogVolume,
+        ]
+        .into_iter()
+        .collect()
     );
     // Every member keeps its own numbers and a drill that passes the
     // /v1/query firewall and executes.
@@ -1773,10 +1788,7 @@ fn incident_correlates_multi_signal_shifts_and_names_the_deploy() {
             "worsening member: {}",
             shift.summary
         );
-        let drill = shift
-            .drill_down_sql
-            .as_deref()
-            .expect("member shifts carry their persisted drill");
+        let drill = shift.drill_down_sql.as_str();
         sigiro::sql::validate_read_only(drill).expect("member drill must pass the /v1/query guard");
         let drilled: i64 = conn
             .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
@@ -1803,6 +1815,32 @@ fn incident_correlates_multi_signal_shifts_and_names_the_deploy() {
     // Operation summaries still flag independently — correlation changes
     // findings, never the evidence sections.
     assert!(block.operation_summaries[0].is_anomalous);
+}
+
+#[test]
+fn finding_wire_shape_rejects_unknown_kinds_and_incomplete_incidents() {
+    for invalid in [
+        serde_json::json!({
+            "severity": "critical",
+            "kind": "unknown",
+            "summary": "bad"
+        }),
+        serde_json::json!({
+            "severity": "critical",
+            "kind": "incident",
+            "summary": "missing required incident payload"
+        }),
+        serde_json::json!({
+            "severity": "emergency",
+            "kind": "coverage_gap",
+            "summary": "unknown severity"
+        }),
+    ] {
+        assert!(
+            serde_json::from_value::<sigiro::diagnose::Finding>(invalid).is_err(),
+            "invalid finding shape must be rejected"
+        );
+    }
 }
 
 #[test]
@@ -1871,13 +1909,13 @@ fn shifts_in_distant_buckets_stay_separate_findings() {
 
     let block = diagnose_service(&conn, "worker", now_us - 6 * 3_600_000_000, now_us);
     assert!(
-        !block.findings.iter().any(|f| f.kind == "incident"),
+        !block.findings.iter().any(|f| f.kind.as_str() == "incident"),
         "distant shifts must not be welded into an incident"
     );
     let lone: Vec<&str> = block
         .findings
         .iter()
-        .filter(|f| f.kind == "anomalous_operation")
+        .filter(|f| f.kind.as_str() == "anomalous_operation")
         .map(|f| f.summary.as_str())
         .collect();
     assert_eq!(lone.len(), 2, "nothing dropped: {lone:?}");
@@ -1976,17 +2014,19 @@ fn cross_signal_ranking_is_unit_free() {
     let incident = block
         .findings
         .iter()
-        .find(|f| f.kind == "incident")
-        .and_then(|f| f.incident.as_ref())
+        .find(|f| f.kind.as_str() == "incident")
+        .and_then(|f| f.kind.incident())
         .expect("same-bucket shifts must merge into an incident");
     assert_eq!(incident.shifts.len(), 2, "nothing dropped");
     assert!(
-        incident.shifts[0].entity.contains("op-err") && incident.shifts[0].signal == "error_rate",
+        incident.shifts[0].entity.contains("op-err")
+            && incident.shifts[0].signal == AnomalySignal::ErrorRate,
         "error shift leads: {:?}",
         incident.shifts[0].summary
     );
     assert!(
-        incident.shifts[1].entity.contains("op-lat") && incident.shifts[1].signal == "latency_p95",
+        incident.shifts[1].entity.contains("op-lat")
+            && incident.shifts[1].signal == AnomalySignal::LatencyP95,
         "latency shift follows: {:?}",
         incident.shifts[1].summary
     );
@@ -2104,8 +2144,8 @@ fn anomaly_findings_rank_by_shift_magnitude_without_dropping_any() {
     let incident = block
         .findings
         .iter()
-        .find(|f| f.kind == "incident")
-        .and_then(|f| f.incident.as_ref())
+        .find(|f| f.kind.as_str() == "incident")
+        .and_then(|f| f.kind.incident())
         .expect("same-bucket shifts must merge into an incident");
     assert_eq!(
         incident.shifts.len(),
@@ -2284,24 +2324,24 @@ fn status_message_and_errors_without_logs_finding() {
     let f = block
         .findings
         .iter()
-        .find(|f| f.kind == "errors_without_logs")
+        .find(|f| f.kind.as_str() == "errors_without_logs")
         .expect("errors_without_logs finding");
-    assert_eq!(f.severity, "warning");
-    assert!(
-        f.drill_down_sql
-            .as_deref()
-            .unwrap()
-            .contains("status_code = 2")
-    );
+    assert_eq!(f.severity.as_str(), "warning");
+    assert!(f.kind.drill_down_sql().unwrap().contains("status_code = 2"));
 
     // Spans but no logs at all → coverage_gap finding too.
-    assert!(block.findings.iter().any(|f| f.kind == "coverage_gap"));
+    assert!(
+        block
+            .findings
+            .iter()
+            .any(|f| f.kind.as_str() == "coverage_gap")
+    );
     // No k8s resource attributes → info finding.
     assert!(
         block
             .findings
             .iter()
-            .any(|f| f.kind == "missing_resource_attributes")
+            .any(|f| f.kind.as_str() == "missing_resource_attributes")
     );
     // Ranked: no info finding may appear before a warning.
     let sev_rank = |s: &str| match s {
@@ -2312,7 +2352,7 @@ fn status_message_and_errors_without_logs_finding() {
     let ranks: Vec<_> = block
         .findings
         .iter()
-        .map(|f| sev_rank(&f.severity))
+        .map(|f| sev_rank(f.severity.as_str()))
         .collect();
     let mut sorted = ranks.clone();
     sorted.sort_unstable();
@@ -2341,7 +2381,7 @@ fn errors_with_error_logs_do_not_emit_inconsistency_finding() {
         !block
             .findings
             .iter()
-            .any(|f| f.kind == "errors_without_logs"),
+            .any(|f| f.kind.as_str() == "errors_without_logs"),
         "errors WITH error logs are consistent — no finding"
     );
 }
@@ -2471,14 +2511,14 @@ fn error_breakdown_groups_failure_modes_by_derive_priority() {
     let f = block
         .findings
         .iter()
-        .find(|f| f.kind == "errors_without_logs")
+        .find(|f| f.kind.as_str() == "errors_without_logs")
         .expect("errors_without_logs finding");
     assert!(
         f.summary.contains("mostly 'timeout'"),
         "finding names the dominant failure mode: {}",
         f.summary
     );
-    let drill = f.drill_down_sql.as_deref().expect("drill sql");
+    let drill = f.kind.drill_down_sql().expect("drill sql");
     sigiro::sql::validate_read_only(drill)
         .expect("error.type drill_down_sql must pass the /v1/query guard");
     let modes: Vec<String> = conn
@@ -2556,7 +2596,7 @@ fn error_rate_anomaly_names_the_new_regimes_dominant_failure_mode() {
     let finding = block
         .findings
         .iter()
-        .find(|f| f.kind == "anomalous_operation")
+        .find(|f| f.kind.as_str() == "anomalous_operation")
         .expect("anomalous operation finding");
     assert!(
         finding.summary.contains("mostly 'timeout'"),
@@ -2778,11 +2818,11 @@ fn duplicate_spans_surface_as_a_finding_with_a_runnable_drill() {
     let f = block
         .findings
         .iter()
-        .find(|f| f.kind == "duplicate_spans")
+        .find(|f| f.kind.as_str() == "duplicate_spans")
         .expect("duplicate_spans finding");
-    assert_eq!(f.severity, "warning");
+    assert_eq!(f.severity.as_str(), "warning");
     assert!(f.summary.contains('1'), "one duped pair: {}", f.summary);
-    assert_drill_runs(&conn, f.drill_down_sql.as_deref().expect("drill"));
+    assert_drill_runs(&conn, f.kind.drill_down_sql().expect("drill"));
 }
 
 #[test]
@@ -2840,15 +2880,15 @@ fn orphan_spans_surface_as_a_finding_and_cross_service_parents_do_not() {
     let f = block
         .findings
         .iter()
-        .find(|f| f.kind == "orphan_spans")
+        .find(|f| f.kind.as_str() == "orphan_spans")
         .expect("orphan_spans finding");
-    assert_eq!(f.severity, "warning");
+    assert_eq!(f.severity.as_str(), "warning");
     assert!(
         f.summary.starts_with("1 span(s)"),
         "only the truly parentless span counts, not the cross-service child: {}",
         f.summary
     );
-    assert_drill_runs(&conn, f.drill_down_sql.as_deref().expect("drill"));
+    assert_drill_runs(&conn, f.kind.drill_down_sql().expect("drill"));
 }
 
 #[test]
@@ -2872,11 +2912,11 @@ fn server_spans_without_client_spans_surface_as_a_finding() {
     let f = block
         .findings
         .iter()
-        .find(|f| f.kind == "missing_client_spans")
+        .find(|f| f.kind.as_str() == "missing_client_spans")
         .expect("missing_client_spans finding");
-    assert_eq!(f.severity, "warning");
+    assert_eq!(f.severity.as_str(), "warning");
     assert!(f.summary.contains("2 SERVER span(s)"), "{}", f.summary);
-    assert_drill_runs(&conn, f.drill_down_sql.as_deref().expect("drill"));
+    assert_drill_runs(&conn, f.kind.drill_down_sql().expect("drill"));
 }
 
 /// The window is optional, and "optional" has four cases — three legal, one

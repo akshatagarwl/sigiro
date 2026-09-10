@@ -182,6 +182,58 @@ async fn test_openapi_documents_diagnose_for_agents() {
             && spec["components"]["schemas"]["Finding"].is_object(),
         "response schema graph must be published"
     );
+    assert_eq!(
+        spec["components"]["schemas"]["FindingSeverity"]["enum"],
+        serde_json::json!(["critical", "warning", "info"]),
+        "finding severity must be a closed wire enum"
+    );
+    let variants = spec["components"]["schemas"]["FindingKind"]["oneOf"]
+        .as_array()
+        .expect("FindingKind must be a tagged union");
+    let expected_kinds = [
+        "incident",
+        "anomalous_operation",
+        "anomalous_log_volume",
+        "anomalous_error_log_rate",
+        "anomalous_profile_cost",
+        "errors_without_logs",
+        "coverage_gap",
+        "missing_resource_attributes",
+        "duplicate_spans",
+        "orphan_spans",
+        "missing_client_spans",
+    ];
+    let actual_kinds: Vec<&str> = variants
+        .iter()
+        .map(|variant| {
+            variant["properties"]["kind"]["enum"][0]
+                .as_str()
+                .expect("every finding variant has an exact kind tag")
+        })
+        .collect();
+    assert_eq!(actual_kinds, expected_kinds);
+    let incident = &variants[0];
+    assert!(
+        incident["required"]
+            .as_array()
+            .expect("incident required fields")
+            .iter()
+            .any(|field| field == "incident"),
+        "incident payload must be required"
+    );
+    assert!(incident["properties"].get("drill_down_sql").is_none());
+    assert!(
+        variants[1..]
+            .iter()
+            .all(|variant| variant["properties"].get("incident").is_none())
+    );
+    let shift_required = spec["components"]["schemas"]["IncidentShift"]["required"]
+        .as_array()
+        .expect("IncidentShift required fields");
+    assert!(
+        shift_required.iter().any(|field| field == "drill_down_sql"),
+        "incident shifts require their drill query"
+    );
     assert!(
         spec["components"]["securitySchemes"]["bearer"].is_object(),
         "bearer security scheme must be declared so an agent knows auth"
@@ -548,16 +600,20 @@ async fn test_anomalies_incident_id_groups_same_bucket_shifts_per_service() {
                  ts_shift, \"before\", \"after\", drill_down_sql)
              VALUES (now()::TIMESTAMP, 'checkout', 'POST /pay', 'error_rate',
                      'changepoint', 'worsening',
-                     now()::TIMESTAMP - INTERVAL '1 hour', 5.0, 50.0, NULL),
+                     now()::TIMESTAMP - INTERVAL '1 hour', 5.0, 50.0,
+                     'SELECT * FROM lake.sigiro_spans'),
                     (now()::TIMESTAMP, 'checkout', 'checkout', 'log_volume',
                      'changepoint', 'worsening',
-                     now()::TIMESTAMP - INTERVAL '1 hour', 3.0, 40.0, NULL),
+                     now()::TIMESTAMP - INTERVAL '1 hour', 3.0, 40.0,
+                     'SELECT * FROM lake.sigiro_logs'),
                     (now()::TIMESTAMP, 'checkout', 'GET /cart', 'error_rate',
                      'changepoint', 'worsening',
-                     now()::TIMESTAMP - INTERVAL '4 hours', 0.0, 20.0, NULL),
+                     now()::TIMESTAMP - INTERVAL '4 hours', 0.0, 20.0,
+                     'SELECT * FROM lake.sigiro_spans'),
                     (now()::TIMESTAMP, 'other', 'other', 'log_volume',
                      'changepoint', 'worsening',
-                     now()::TIMESTAMP - INTERVAL '1 hour', 2.0, 30.0, NULL)",
+                     now()::TIMESTAMP - INTERVAL '1 hour', 2.0, 30.0,
+                     'SELECT * FROM lake.sigiro_logs')",
         )
         .expect("seed anomaly rows");
     }

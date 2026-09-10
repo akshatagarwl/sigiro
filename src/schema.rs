@@ -244,7 +244,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             \"after\"             DOUBLE NOT NULL,
             -- Ready-to-run /v1/query SQL for the raw telemetry behind the
             -- shift (spans, logs, or profile samples, per the signal).
-            drill_down_sql        VARCHAR
+            drill_down_sql        VARCHAR NOT NULL
         )"
     ))
     .context("failed to create sigiro_anomalies")?;

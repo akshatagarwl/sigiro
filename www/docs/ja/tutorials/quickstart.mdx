@@ -130,8 +130,8 @@ sigiro diagnose checkout --from $(date -v-1H +%s)
 ```
 
 このコマンドはインデント付きの JSON を出力します。まず `findings` 配列を読んで
-ください。深刻度の高い順にソートされており、各項目には読める `summary` と実行できる
-`drill_down_sql` が含まれています。
+ください。深刻度の高い順にソートされており、各項目には読める `summary` があります。
+単独の finding には `drill_down_sql` があり、incident では各 member shift にあります。
 
 エージェントは同じ質問を HTTP 経由で尋ねます。HTTP リクエストには明示的なウィンドウ
 が必要で、両方のタイムスタンプは Unix エポックからの**マイクロ秒**です。
