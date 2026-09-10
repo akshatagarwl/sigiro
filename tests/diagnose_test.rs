@@ -1,11 +1,12 @@
 use parking_lot::Mutex;
 use sigiro::diagnose::{
-    AnomalySignal, DiagnoseRequest, compute_coverage, diagnose, metric_bucket_interval, us_to_iso,
+    AnomalySignal, DiagnoseRequest, DiagnoseServices, compute_coverage, diagnose,
+    metric_bucket_interval, us_to_iso,
 };
 use sigiro::{TenantId, TimestampMicros};
 
 #[test]
-fn diagnose_request_accepts_only_plural_services_field() {
+fn diagnose_services_validate_during_deserialization_and_preserve_json() {
     assert!(serde_json::from_str::<DiagnoseRequest>(r#"{"service":"checkout"}"#).is_err());
     assert!(
         serde_json::from_str::<DiagnoseRequest>(r#"{"service":"checkout","services":["cart"]}"#)
@@ -15,7 +16,16 @@ fn diagnose_request_accepts_only_plural_services_field() {
 
     let request = serde_json::from_str::<DiagnoseRequest>(r#"{"services":["checkout"]}"#)
         .expect("plural services field must deserialize");
-    assert_eq!(request.services, vec!["checkout"]);
+    assert_eq!(request.services.as_ref(), &["checkout"]);
+    assert!(serde_json::from_str::<DiagnoseRequest>(r#"{"services":[]}"#).is_err());
+    let eleven = serde_json::json!({
+        "services": (0..11).map(|i| format!("svc-{i}")).collect::<Vec<_>>()
+    });
+    assert!(serde_json::from_value::<DiagnoseRequest>(eleven).is_err());
+    assert_eq!(
+        serde_json::to_string(&request).unwrap(),
+        r#"{"services":["checkout"],"from_ts":null,"to_ts":null}"#
+    );
 }
 
 #[test]
@@ -62,7 +72,7 @@ fn diagnose_service(
     to_ts: i64,
 ) -> sigiro::diagnose::DiagnosisBlock {
     let req = DiagnoseRequest {
-        services: vec![service.to_string()],
+        services: DiagnoseServices::try_new(vec![service.to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(from_ts).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(to_ts).unwrap()),
     };
@@ -137,7 +147,7 @@ fn diagnose_with_in_memory_db() {
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let shared = Arc::new(Mutex::new(conn));
     let req = DiagnoseRequest {
-        services: vec!["nonexistent".to_string()],
+        services: DiagnoseServices::try_new(vec!["nonexistent".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
     };
@@ -208,7 +218,7 @@ fn diagnose_with_real_span_data() {
 
     let shared = Arc::new(Mutex::new(conn));
     let req = DiagnoseRequest {
-        services: vec!["checkout".to_string()],
+        services: DiagnoseServices::try_new(vec!["checkout".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -716,7 +726,7 @@ fn diagnose_large_window_still_returns_spans() {
     .expect("insert");
     let shared = Arc::new(Mutex::new(conn));
     let req = DiagnoseRequest {
-        services: vec!["svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 3 * 3600 * 1_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -748,7 +758,8 @@ fn diagnose_multi_basic() {
     .expect("insert");
     let shared = Arc::new(Mutex::new(conn));
     let req = DiagnoseRequest {
-        services: vec!["svc-a".into(), "svc-b".into(), "svc-c".into()],
+        services: DiagnoseServices::try_new(vec!["svc-a".into(), "svc-b".into(), "svc-c".into()])
+            .unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -758,34 +769,6 @@ fn diagnose_multi_basic() {
     assert!(blocks.results.contains_key("svc-a"));
     assert!(blocks.results.contains_key("svc-b"));
     assert!(blocks.results.contains_key("svc-c"));
-}
-
-#[test]
-fn diagnose_multi_cap_enforced() {
-    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn, "").expect("create tables");
-    let shared = Arc::new(Mutex::new(conn));
-    let services: Vec<String> = (0..11).map(|i| format!("svc-{i}")).collect();
-    let req = DiagnoseRequest {
-        services,
-        from_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
-        to_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
-    };
-    let result = diagnose(&shared.lock(), &req, "");
-    assert!(result.is_err(), "should reject >10 services");
-}
-
-#[test]
-fn diagnose_multi_empty_rejected() {
-    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
-    sigiro::schema::create_tables(&conn, "").expect("create tables");
-    let shared = Arc::new(Mutex::new(conn));
-    let req = DiagnoseRequest {
-        services: vec![],
-        from_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
-        to_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
-    };
-    assert!(diagnose(&shared.lock(), &req, "").is_err());
 }
 
 #[test]
@@ -825,7 +808,7 @@ fn diagnose_all_three_signals() {
 
     let shared = Arc::new(Mutex::new(conn));
     let req = DiagnoseRequest {
-        services: vec!["svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -887,7 +870,7 @@ fn operation_summary_baselines() {
 
     let shared = Arc::new(Mutex::new(conn));
     let req = DiagnoseRequest {
-        services: vec!["checkout".to_string()],
+        services: DiagnoseServices::try_new(vec!["checkout".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 5 * 60 * 1_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -2629,7 +2612,7 @@ fn diagnose_fails_loud_when_all_services_fail() {
     // Break the schema out from under the query — every service now fails.
     conn.execute_batch("DROP TABLE sigiro_profiles").unwrap();
     let req = DiagnoseRequest {
-        services: vec!["svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(1_780_000_000_000_001).unwrap()),
     };
@@ -2933,7 +2916,7 @@ fn diagnose_window_defaults_and_rejects_a_half_open_range() {
     let fifteen_min = 15 * 60 * 1_000_000;
 
     let mk = |from: Option<i64>, to: Option<i64>| DiagnoseRequest {
-        services: vec!["checkout".into()],
+        services: DiagnoseServices::try_new(vec!["checkout".into()]).unwrap(),
         from_ts: from.map(TimestampMicros::try_new).transpose().unwrap(),
         to_ts: to.map(TimestampMicros::try_new).transpose().unwrap(),
     };
@@ -2994,7 +2977,7 @@ fn cli_and_api_resolve_the_same_default_window() {
     let cli_from: Option<i64> = None::<i64>.map(|s: i64| s * 1_000_000);
     let cli_to: Option<i64> = None::<i64>.map(|s: i64| s * 1_000_000);
     let from_cli = DiagnoseRequest {
-        services: vec!["checkout".into()],
+        services: DiagnoseServices::try_new(vec!["checkout".into()]).unwrap(),
         from_ts: cli_from.map(TimestampMicros::try_new).transpose().unwrap(),
         to_ts: cli_to.map(TimestampMicros::try_new).transpose().unwrap(),
     };
@@ -3015,7 +2998,7 @@ fn cli_and_api_resolve_the_same_default_window() {
     // An explicit CLI window still survives the seconds -> micros mapping.
     let secs = 1_779_999_100_i64;
     let explicit = DiagnoseRequest {
-        services: vec!["checkout".into()],
+        services: DiagnoseServices::try_new(vec!["checkout".into()]).unwrap(),
         from_ts: Some(secs).map(|s| TimestampMicros::try_new(s * 1_000_000).unwrap()),
         to_ts: None,
     };

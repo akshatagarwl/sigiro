@@ -19,14 +19,28 @@ pub use analysis::{
 // DiagnoseRequest — API input (from_ts/to_ts mandatory)
 // ---------------------------------------------------------------------------
 
+const MAX_SERVICES: usize = 10;
+
+/// The bounded set of services accepted by one diagnosis request.
+///
+/// Keeping the 1–10 fan-out limit in the type prevents deserialized requests
+/// and direct Rust callers from constructing an unbounded diagnosis.
+#[nutype::nutype(
+    validate(predicate = |services: &Vec<String>| {
+        !services.is_empty() && services.len() <= MAX_SERVICES
+    }),
+    derive(Debug, Clone, PartialEq, Eq, Into, AsRef, Serialize, Deserialize)
+)]
+pub struct DiagnoseServices(Vec<String>);
+
 #[derive(Clone, Serialize, Deserialize, utoipa::ToSchema, validator::Validate)]
 #[serde(deny_unknown_fields)]
 #[validate(schema(function = "validate_window", skip_on_field_errors = true))]
 pub struct DiagnoseRequest {
     /// Services to diagnose (1–10). Call `GET /v1/services` first to discover
     /// valid names.
-    #[schema(example = json!(["checkout", "cart"]))]
-    pub services: Vec<String>,
+    #[schema(value_type = Vec<String>, example = json!(["checkout", "cart"]))]
+    pub services: DiagnoseServices,
     /// Window start, **microseconds** since the Unix epoch (a 16-digit value,
     /// e.g. 1780000000000000). Seconds, milliseconds, and nanoseconds are rejected.
     /// OPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the
@@ -79,8 +93,6 @@ fn validate_window(req: &DiagnoseRequest) -> Result<(), validator::ValidationErr
         _ => Ok(()),
     }
 }
-
-const MAX_SERVICES: usize = 10;
 
 // ---------------------------------------------------------------------------
 // Response types — every section maps 1:1 to a CTE in the single query
@@ -755,7 +767,6 @@ pub fn diagnose(
     req: &DiagnoseRequest,
     prefix: &str,
 ) -> Result<DiagnoseResponse> {
-    validate_services(&req.services)?;
     // Resolve the window ONCE, before the fan-out: every service in a
     // multi-service diagnosis must describe the same slice of time, and a
     // per-iteration `now` would give each a slightly different one.
@@ -766,7 +777,7 @@ pub fn diagnose(
     let (from_ts, to_ts) = req.window(now_micros);
     let mut results = BTreeMap::new();
     let mut errors = BTreeMap::new();
-    for service in &req.services {
+    for service in req.services.as_ref() {
         // Partial results: one broken service must not discard the others.
         // Each failure is still loud — logged here, surfaced per-service in
         // `errors`, and fatal when NOTHING succeeded.
@@ -789,16 +800,6 @@ pub fn diagnose(
         );
     }
     Ok(DiagnoseResponse { results, errors })
-}
-
-fn validate_services(services: &[String]) -> Result<()> {
-    anyhow::ensure!(!services.is_empty(), "services list must not be empty");
-    anyhow::ensure!(
-        services.len() <= MAX_SERVICES,
-        "max {MAX_SERVICES} services per diagnosis, got {}",
-        services.len()
-    );
-    Ok(())
 }
 
 /// ONE DuckDB round-trip per service: a stack of CTEs (one per report

@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use parking_lot::Mutex;
-use sigiro::diagnose::{DiagnoseRequest, compute_coverage, diagnose};
+use sigiro::diagnose::{DiagnoseRequest, DiagnoseServices, compute_coverage, diagnose};
 use std::sync::Arc;
 
 /// Setup a DuckLake-backed DB matching production config.
@@ -85,7 +85,7 @@ fn bench_diagnose(c: &mut Criterion) {
     group.bench_function("diagnose_full", |b| {
         b.iter(|| {
             let req = DiagnoseRequest {
-                services: vec!["bench-svc".to_string()],
+                services: DiagnoseServices::try_new(vec!["bench-svc".to_string()]).unwrap(),
                 from_ts: Some(
                     sigiro::TimestampMicros::try_new(now_us - 15 * 60 * 1_000_000).unwrap(),
                 ),

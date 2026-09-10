@@ -17,7 +17,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use sigiro::IngestMsg;
-use sigiro::diagnose::{DiagnoseRequest, diagnose};
+use sigiro::diagnose::{DiagnoseRequest, DiagnoseServices, diagnose};
 use sigiro::inserter::MsgRouter;
 use sigiro::otlp::MetricBatches;
 use sigiro::pool::ProjectPool;
@@ -372,7 +372,7 @@ async fn e2e_full_pipeline_ingest_and_diagnose() {
 
     // Run diagnose()
     let req = DiagnoseRequest {
-        services: vec!["checkout".to_string()],
+        services: DiagnoseServices::try_new(vec!["checkout".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -434,7 +434,7 @@ async fn e2e_multi_project_isolation() {
     // Diagnose project A — should only see alpha-svc
     let conn_a = pool.create_project("proj_alpha").unwrap();
     let req_a = DiagnoseRequest {
-        services: vec!["alpha-svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["alpha-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -447,7 +447,7 @@ async fn e2e_multi_project_isolation() {
 
     // Project A should NOT see beta-svc
     let req_beta_on_a = DiagnoseRequest {
-        services: vec!["beta-svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["beta-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -461,7 +461,7 @@ async fn e2e_multi_project_isolation() {
     // Diagnose project B — should only see beta-svc
     let conn_b = pool.create_project("proj_beta").unwrap();
     let req_b = DiagnoseRequest {
-        services: vec!["beta-svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["beta-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -726,7 +726,7 @@ async fn e2e_diagnosis_all_signals() {
 
     // Run diagnose and verify coverage
     let req = DiagnoseRequest {
-        services: vec!["full-svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["full-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -938,7 +938,7 @@ async fn e2e_drain_log_template_dedup() {
     // Verify via diagnose: raw logs come back, and templates dedup to a
     // handful of patterns (not 20 raw lines).
     let req = DiagnoseRequest {
-        services: vec!["api-svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["api-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };

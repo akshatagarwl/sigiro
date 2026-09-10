@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 
 use crate::TimestampMicros;
-use crate::diagnose::{DiagnoseRequest, DiagnoseResponse, DiagnosisBlock};
+use crate::diagnose::{DiagnoseRequest, DiagnoseResponse, DiagnoseServices, DiagnosisBlock};
 
 /// Explicit client auth mode — mirrors server-side AuthMode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,7 +176,7 @@ impl SigiroClient {
         to: Option<i64>,
     ) -> Result<DiagnoseResponse> {
         let body = DiagnoseRequest {
-            services,
+            services: DiagnoseServices::try_new(services)?,
             // Passed through, NOT defaulted. `None` means the caller gave no
             // bound, and the server applies the single default in
             // `DiagnoseRequest::window()`. The CLI must not own a second copy

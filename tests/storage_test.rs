@@ -48,12 +48,14 @@ fn signal_table_all_has_all_tables() {
 
 #[test]
 fn load_config_returns_none_without_env_vars() {
-    // In test environment, SIGIRO_CATALOG_URL is not set
-    let config = storage::load_config().unwrap();
-    assert!(
-        config.is_none(),
-        "load_config should return None when SIGIRO_CATALOG_URL is not set"
-    );
+    temp_env::with_var_unset("SIGIRO_S3_BUCKET", || {
+        // In test environment, SIGIRO_CATALOG_URL is not set.
+        let config = storage::load_config().unwrap();
+        assert!(
+            config.is_none(),
+            "load_config should return None when SIGIRO_CATALOG_URL is not set"
+        );
+    });
 }
 
 // --- Storage-mode config-axis validation (StorageMode::from_env) -------------

@@ -11,7 +11,7 @@ use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use prost::Message;
 use sigiro::IngestMsg;
-use sigiro::diagnose::DiagnoseRequest;
+use sigiro::diagnose::{DiagnoseRequest, DiagnoseServices};
 use sigiro::inserter::MsgRouter;
 use sigiro::pool::ProjectPool;
 use std::sync::{Arc, Once};
@@ -315,7 +315,7 @@ async fn e2e_profiles_pipeline() {
 
     // Verify via diagnose query: top functions
     let req = DiagnoseRequest {
-        services: vec!["api-svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["api-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -498,7 +498,7 @@ async fn e2e_profiles_multi_type() {
 
     // Query profiles — should see both types
     let req = DiagnoseRequest {
-        services: vec!["api-svc".to_string()],
+        services: DiagnoseServices::try_new(vec!["api-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
