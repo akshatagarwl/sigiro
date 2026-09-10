@@ -1,66 +1,75 @@
 ---
 title: Send your agent's own telemetry to sigiro
-description: Claude Code and Codex both emit OpenTelemetry about their own sessions. Point them at sigiro to read token counts, tool calls and session latency back with SQL.
+description: Point Claude Code, Codex, Hermes Agent, or Pi at sigiro to inspect sessions, model latency, tokens, tools, errors, and retries.
 sidebar:
   order: 3
 ---
 
-This guide shows you how to record what your agent does, rather than what your
-service does. Claude Code and Codex both emit OpenTelemetry about their own
-sessions. Point that telemetry at sigiro, and the sessions become rows you can
-query.
+This guide records what your coding agent does, rather than what the application
+it edits does. The resulting spans, logs, and metrics let you find slow model
+calls, repeated tools, failed prerequisites, excess context, and serialized work.
 
-This is a different task from
+This is different from
 [Instrument your code with an agent](/docs/how-to/install-with-ai), which points
-_your service_ at sigiro. Do both if you want both.
+_your application_ at sigiro. Use both when you need both views.
 
 ## Before you start
 
-You need a sigiro server. Start one with `sigiro serve`, or with the Docker
-command in the [quickstart](/docs/tutorials/quickstart#1-run-it).
+Start sigiro and verify its API:
 
-Both agents export over OTLP gRPC on port `4317` in the settings below. A
-self-hosted server needs no key.
+```bash
+sigiro fetch-extensions
+sigiro serve
+curl http://127.0.0.1:9999/health
+```
 
-On the hosted service, use OTLP over **HTTP** instead. Read [Send telemetry to
-hosted sigiro](/docs/how-to/hosted-onboarding#2-point-your-opentelemetry-exporter-at-sigiro)
-first, because a hosted operator does not always expose the gRPC port. Each
-section below ends with the hosted settings.
+The local receiver accepts OTLP/HTTP on `4318` and OTLP/gRPC on `4317`. It has no
+request authentication, so do not expose it to an untrusted network. For the
+hosted service, follow [Send telemetry to hosted
+sigiro](/docs/how-to/hosted-onboarding) instead.
+
+Telemetry can contain prompts, responses, file contents, commands, user
+identifiers, and environment details. The examples below choose conservative
+capture settings. Review every exporter before enabling richer payloads.
 
 ## Claude Code
 
-Claude Code reads its telemetry settings from the environment. Set these
-variables in the environment that starts Claude Code. Use a shell profile, an
-`.envrc` file, or a wrapper script:
+Claude Code has built-in OpenTelemetry export. Configure the process that starts
+`claude`:
 
 ```bash
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
-export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1
+
 export OTEL_METRICS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
+
 export OTEL_LOGS_EXPORTER=otlp
-export OTEL_TRACES_EXPORTER=otlp
-export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
+
+# Short intervals are useful while proving a new local setup.
+export OTEL_METRIC_EXPORT_INTERVAL=10000
+export OTEL_LOGS_EXPORT_INTERVAL=5000
+
+claude
 ```
 
-For the hosted service, change the protocol and the endpoint as well as adding
-the key. `api.sigiro.com` answers on 443 only, so a `:4317` or `:4318` endpoint
-there fails to connect and the agent reports nothing:
+Run one prompt, wait ten seconds, then use the verification steps below. Claude
+Code omits prompt text, assistant text, tool details, tool contents, and raw API
+bodies by default. Do not enable `OTEL_LOG_USER_PROMPTS`,
+`OTEL_LOG_ASSISTANT_RESPONSES`, `OTEL_LOG_TOOL_CONTENT`, or
+`OTEL_LOG_RAW_API_BODIES` unless the additional exposure is intentional.
 
-```bash
-export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.sigiro.com
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"
-```
-
-Keep the key out of every committed file. Your operator tells you which
-endpoint and port to use, so use `https://<your-sigiro-host>` when that host is
-not `api.sigiro.com`.
+Claude Code documents distributed traces as beta, but its current public setup
+guide does not give a complete stable trace configuration. The settings above
+therefore export the documented metrics and events without relying on an old beta
+flag. See [Claude Code monitoring](https://docs.anthropic.com/en/docs/claude-code/monitoring-usage)
+for the version you run.
 
 ## Codex
 
-Codex reads its telemetry settings from its own configuration file, not from the
-environment. Edit `~/.codex/config.toml`:
+Codex reads telemetry settings from `~/.codex/config.toml`:
 
 ```toml
 [otel]
@@ -68,83 +77,141 @@ environment = "dev"
 log_user_prompt = false
 
 [otel.trace_exporter.otlp-grpc]
-endpoint = "http://localhost:4317"
+endpoint = "http://127.0.0.1:4317"
 
 [otel.metrics_exporter.otlp-grpc]
-endpoint = "http://localhost:4317"
+endpoint = "http://127.0.0.1:4317"
 
 [otel.exporter.otlp-grpc]
-endpoint = "http://localhost:4317"
+endpoint = "http://127.0.0.1:4317"
 ```
 
-Codex names one exporter per signal, and `exporter` is the **log** exporter
-alone. Set `trace_exporter` or you get no spans, and set `metrics_exporter` or
-you get no metrics. Both mistakes are silent.
+`exporter` is the log exporter; it does not replace `trace_exporter` or
+`metrics_exporter`. Codex reports itself as `codex_exec`, so look for that
+service name during verification.
 
-For the hosted service, use the HTTP exporter and give each endpoint its **full
-signal path**. Codex sends to the URL exactly as written and appends nothing, so
-a base URL arrives at the wrong route and sigiro rejects it:
+## Hermes Agent
 
-```toml
-[otel]
-environment = "dev"
-log_user_prompt = false
-
-[otel.trace_exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/traces"
-protocol = "binary"
-headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
-
-[otel.metrics_exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/metrics"
-protocol = "binary"
-headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
-
-[otel.exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/logs"
-protocol = "binary"
-headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
-```
-
-`protocol` is required for `otlp-http`, and takes `binary` or `json`. Set
-`SIGIRO_API_KEY` in the environment that starts Codex.
-
-Codex reports itself as `codex_exec` rather than `codex`, so look for that name
-in the check below.
-
-## One limit applies to both
-
-These settings cover the agent process only. They do not cover the commands that
-the agent runs. An application that the agent starts through its shell tool does
-not always inherit these variables, so an instrumented service still needs its
-own exporter settings. Use
-[Instrument your code with an agent](/docs/how-to/install-with-ai) for that.
-
-## Confirm that it works
-
-Start the agent, run one prompt, then ask sigiro which services it received:
+Hermes uses the community
+[`briancaffey/hermes-otel`](https://github.com/briancaffey/hermes-otel) plugin:
 
 ```bash
-curl http://localhost:9999/v1/services
+hermes plugins install briancaffey/hermes-otel/hermes_otel
 ```
 
-The agent reports itself as a service. After it appears, query the sessions:
+Install the plugin requirements into the same Python environment that runs
+Hermes. For a source checkout whose virtual environment is
+`~/git/hermes-agent/venv`:
 
 ```bash
-curl -X POST http://localhost:9999/v1/query \
-  --data "SELECT service_name, span_name, count(*) AS n
+~/git/hermes-agent/venv/bin/pip install \
+  -r ~/.hermes/plugins/hermes_otel/requirements.txt
+```
+
+Use the equivalent `pip` path for your installation; installing these packages
+into an unrelated system Python does not make them visible to Hermes.
+
+Create `~/.hermes/hermes_otel.yaml`:
+
+```yaml
+backends:
+  - type: otlp
+    name: sigiro
+    endpoint: http://127.0.0.1:4318/v1/traces
+    metrics: true
+    logs: true
+
+capture_logs: true
+capture_previews: false
+capture_sender_id: false
+capture_conversation_history: false
+
+# Optional host-level evidence for local performance work.
+host_metrics: true
+host_metrics_gpu: auto
+host_metrics_interval_ms: 1000
+```
+
+Restart Hermes after installing or changing the plugin. The generic OTLP backend
+derives `/v1/metrics` and `/v1/logs` from the trace endpoint. It emits nested
+session, model, API, tool, skill, approval, and subagent spans plus token,
+duration, cost, retry, and resource metrics.
+
+The plugin defaults `capture_previews` to `true`; the explicit `false` above
+prevents prompt, response, tool argument, and tool result previews from being
+exported. `capture_logs: true` can still export Python records from imported
+libraries. Use the plugin's `log_attach_logger` setting when you need a narrower
+logger boundary.
+
+## Pi coding agent
+
+Pi's official `@earendil-works/pi-telemetry` package defines telemetry types but
+currently provides no OTLP exporter. The following setup therefore uses the
+community-maintained
+[`@devkade/pi-opentelemetry`](https://github.com/devkade/pi-opentelemetry)
+extension; review it before adopting it:
+
+```bash
+pi install npm:@devkade/pi-opentelemetry
+
+export PI_OTEL_ENABLE=1
+export OTEL_SERVICE_NAME=pi-coding-agent
+
+export OTEL_TRACES_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces
+
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
+export OTEL_METRIC_EXPORT_INTERVAL=10000
+
+export PI_OTEL_PRIVACY_PROFILE=strict
+export PI_OTEL_PAYLOAD_MAX_BYTES=32768
+
+pi
+```
+
+Inside Pi, `/otel-status` reports exporter state and `/otel-open-trace` opens the
+current trace. The extension documents traces and metrics, not log export. Its
+`strict` privacy profile exposes less than the default
+`detailed-with-redaction` profile.
+
+## Confirm that telemetry arrived
+
+Run one real prompt in the configured agent, then discover the service name:
+
+```bash
+curl http://127.0.0.1:9999/v1/services
+```
+
+Do not guess the emitted vocabulary. Inspect span and metric names first. Replace
+the two timestamps with literal UTC bounds around your test session:
+
+```bash
+curl -sS -X POST http://127.0.0.1:9999/v1/query \
+  -H 'content-type: text/plain' \
+  --data "SELECT service_name, span_name, count(*) AS occurrences
           FROM sigiro_spans
-          WHERE timestamp > now() - INTERVAL '1 hour'
-          GROUP BY 1, 2 ORDER BY n DESC"
+          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
+          GROUP BY service_name, span_name
+          ORDER BY occurrences DESC"
 ```
 
-An agent also reports counters and gauges, and those land in the
-`sigiro_metrics_*` tables rather than in `sigiro_spans`. [About the
-tables](/docs/explanation/tables) says which family holds what, and which
-machine each family describes.
+Metrics can use several OpenTelemetry table types, so discover all of them:
 
-## Next
+```bash
+for table in gauge sum histogram exp_histogram; do
+  curl -sS -X POST http://127.0.0.1:9999/v1/query \
+    -H 'content-type: text/plain' \
+    --data "SELECT metric_name, count(*) AS points
+            FROM sigiro_metrics_${table}
+            WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+              AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
+            GROUP BY metric_name ORDER BY points DESC"
+done
+```
 
-- [Instrument your code with an agent](/docs/how-to/install-with-ai) — point your
-  service at sigiro as well
-- [CLI reference](/docs/reference/cli) — every subcommand and flag
+Literal `TIMESTAMP` bounds let sigiro prune Parquet files. A predicate built from
+`now()` reads every file and becomes progressively slower as local history grows.
+
+Next, [debug and optimize an agent with sigiro](/docs/how-to/debug-agent-performance).

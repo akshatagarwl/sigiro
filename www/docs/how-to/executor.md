@@ -2,7 +2,7 @@
 title: Connect sigiro to Executor
 description: Add sigiro's OpenAPI API or documentation MCP server to Executor, then expose the resulting tools to your agent.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 [Executor](https://executor.sh/) is an integration layer for agents. It imports OpenAPI

@@ -31,7 +31,10 @@ need the steps to get it.
 - **[Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding)** — run no
   server yourself. Send OTLP to a host that we operate, with a tenant key.
 - **[Send your agent's own telemetry to sigiro](/docs/how-to/agent-telemetry)** —
-  point Claude Code or Codex at sigiro, then read the sessions back with SQL.
+  point Claude Code, Codex, Hermes Agent, or Pi at sigiro.
+- **[Debug and optimize an agent](/docs/how-to/debug-agent-performance)** — find
+  where a session spent time and tokens, remove wasted work, and compare the next
+  run with evidence.
 - **[Connect sigiro to Executor](/docs/how-to/executor)** — import the OpenAPI API
   or the documentation MCP server into an agent gateway.
 - **[Send Pyroscope profiles to sigiro](/docs/how-to/send-profiles)** — configure
@@ -46,7 +49,7 @@ type or a limit.
   by the server's `/openapi.json`. Ingest protocols that are not in that
   document, including the Pyroscope-compatible routes, are documented in the
   how-to guides.
-- **[CLI reference](/docs/reference/cli)** — seven subcommands, every flag, and
+- **[CLI reference](/docs/reference/cli)** — eight subcommands, every flag, and
   every environment variable they read.
 
 An agent that reads `/openapi.json` needs no other information from us.
