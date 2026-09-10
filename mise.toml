@@ -29,6 +29,13 @@ ast-grep = "0.45.3"
 # and mbx identities, so every invocation uses the same cache namespace.
 rust = { version = "1.98.1", components = ["rustfmt", "clippy"] }
 
+# Keep Cargo as Rust's package/build engine, but route every repository-local
+# `cargo …` invocation through mbx so no command silently bypasses the shared
+# compiler cache.
+[wrappers.cargo]
+command = "mbx"
+env = { MBX_CARGO_SHIM_MODE = "1" }
+
 [settings]
 lockfile = true
 experimental = true
