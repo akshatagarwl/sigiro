@@ -4,33 +4,41 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 env:
   CARGO_TERM_COLOR: always
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: "true"
+  MISE_TASK_CACHE_DIR: ${{ github.workspace }}/.mise-task-cache
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # Tasks live in mise.toml. `install: false` on purpose: mise.toml pins a
-      # rust and an sccache that the two actions below already provide with GHA
-      # caching, and `mise install` would build a second, uncached copy of each.
-      # The tasks themselves need no tool from mise — only `mise run`.
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
+          version: 2026.9.4
           install: false
-      - uses: mozilla-actions/sccache-action@v0.0.10
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
         with:
-          components: rustfmt, clippy
-      - run: mise install "packslip:github.com/jdx/hk@1.58.1"
-      - run: mise run check
-      - run: mise run build
+          version: v0.17.0
+      - name: Restore successful gate receipts
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ env.MISE_TASK_CACHE_DIR }}
+          key: mise-task-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            mise-task-v2-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install pinned toolchain
+        run: mise install rust "packslip:github.com/jdx/mr-boxington" "cargo:cargo-shear" "github:astral-sh/hawk" ast-grep "cargo:similarity-rs" "cargo:tokei"
+      - run: mise run --skip-tools gate
+      - run: mise run --skip-tools build
       - uses: eclipse-score/apt-install@v1.0.0
         with:
           packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           apt_update: true
-      - run: TARGET=aarch64-unknown-linux-gnu mise run build
+      - run: TARGET=aarch64-unknown-linux-gnu mise run --skip-tools build
       - uses: docker/setup-buildx-action@v3
-      - run: mise run image -- --set "*.tags=ghcr.io/sigiroai/sigiro:${{ github.sha }}" --set "*.cache-from=type=gha" --set "*.cache-to=type=gha,mode=max"
+      - run: mise run --skip-tools image -- --set "*.tags=ghcr.io/sigiroai/sigiro:${{ github.sha }}" --set "*.cache-from=type=gha" --set "*.cache-to=type=gha,mode=max"

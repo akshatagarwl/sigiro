@@ -28,54 +28,12 @@ local rustfmt = new Step {
   fix = "mbx fmt"
 }
 
-local shear = new Step {
-  glob = rustInputs
-  env = shortTemp
-  check = "mbx shear"
-}
-
-local clippy = new Step {
-  glob = rustInputs
-  env = shortTemp
-  depends = "shear"
-  check = "mbx clippy --all-targets --all-features -- -D warnings"
-}
-
-local test = new Step {
-  glob = rustInputs
-  env = shortTemp
-  depends = "shear"
-  check = "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test"
-}
-
 hooks {
   ["pre-commit"] {
     fix = true
     stash = "git"
     steps {
       ["rustfmt"] = rustfmt
-    }
-  }
-  ["check"] {
-    steps {
-      ["rustfmt"] = rustfmt
-      ["shear"] = shear
-      ["clippy"] = clippy
-      ["test"] = test
-    }
-  }
-  ["pre-push"] {
-    steps {
-      ["hawk"] {
-        glob = rustInputs
-        env = shortTemp
-        check = "mise run hawk"
-      }
-      ["slop"] {
-        glob = rustInputs
-        env = shortTemp
-        check = "mise run slop"
-      }
     }
   }
 }

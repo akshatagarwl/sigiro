@@ -8,22 +8,48 @@ sccache = "0.17.0"
 # digest before installing either tool. Keep exact versions so signer or
 # artifact changes arrive as reviewable mise.lock diffs.
 "packslip:github.com/jdx/hk" = "1.58.1"
+"packslip:github.com/jdx/mr-boxington" = "1.9.0"
+"cargo:cargo-shear" = "1.13.4"
+"github:astral-sh/hawk" = "0.1.14"
+ast-grep = "0.45.3"
+"cargo:similarity-rs" = "0.5.0"
+"cargo:tokei" = "15.0.0"
 # 2.2.13 is intentionally not selected yet: it is inside mise's 24-hour
 # minimum-release-age window. Do not weaken that supply-chain policy globally.
 "packslip:github.com/aubepkg/aube" = "2.2.12"
-# Stable, matching the Dockerfile's `rust:1-slim-bookworm`. Nothing here needs
+# Stable, matching the Dockerfile's pinned Rust 1.98.1 image. Nothing here needs
 # nightly: no `#![feature]`, no `cargo-features`, no `[unstable]`, no `-Z`, and
 # edition 2024 is stable. The previous `nightly-2026-09-05` pin existed only to
 # carry `rustc-codegen-cranelift-preview`, which macOS cannot actually use
 # because Cranelift there does not preserve the `catch_unwind` behavior
 # `src/anomaly.rs` and `src/quack.rs` rely on. Keeping it cost two compiler
-# identities in mbx's cache, so an unactivated `mise run check` (stable) and a
-# `mise exec -- mise run check` (nightly) shared nothing and each paid a cold
-# build.
-rust = "1.97.1"
+# identities in mbx's cache, so an unactivated task (stable) and an activated
+# task (nightly) shared nothing and each paid a cold
+# build. The content-addressed gates below also include the resolved compiler
+# and mbx identities, so every invocation uses the same cache namespace.
+rust = "1.98.1"
 
 [settings]
 lockfile = true
+experimental = true
+
+[task_config.input_groups]
+rust-gate = [
+    "src/**",
+    "tests/*.rs",
+    "tests/snapshots/**",
+    "benches/**",
+    "build.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain*",
+    ".cargo/**",
+    "clippy.toml",
+    "hawk.toml",
+    "scripts/**",
+    "mise.lock",
+    ".env",
+]
 
 [env]
 # Cache the bundled DuckDB C++ compilation, which mbx does not cover. Unlike
@@ -43,7 +69,7 @@ run = "mise tasks ls"
 
 [tasks.build]
 description = "Release build of the sigiro binary. Set TARGET to cross-compile."
-run = 'mbx build --release --bin sigiro ${TARGET:+--target "$TARGET"}'
+run = 'mbx build --release --locked --bin sigiro ${TARGET:+--target "$TARGET"}'
 
 [tasks.build-dev]
 description = "Build a debug binary with Apple ld on macOS or pinned jdxld on Linux."
@@ -77,41 +103,48 @@ if ! strings target/debug/sigiro | grep -q "Linker: jdxld"; then
 fi
 """
 
-# Fast verification gate (debug). Run this before every commit.
-#
-# `shear` catches unused dependencies, and source files no target compiles.
-# Neither is reachable by any other gate here: rustc's `dead_code` only sees
-# code it compiles, and hawk only ranks `pub` items inside that same graph — a
-# crate nobody imports and a .rs nobody links are both invisible to them.
-# Syn-based, no build, under a second, exits 1 on a finding. `mbx shear --fix`
-# removes the dependencies it names. Placed ahead of clippy so it fails before
-# the slow compile. Needs `cargo install cargo-shear`, same as `mise run hawk`
-# needs cargo-hawk.
-#
-# SIGIRO_SHUTDOWN_TIMEOUT_SECS: production keeps the 5s default; the suite gets
-# 60s. `shutdown_and_wait` waits on a BLOCKING DuckDB drain thread, so its
-# budget is wall-clock while its work is not — under concurrent builds on a
-# loaded laptop, 5s produced a failure unrelated to the change being gated
-# (measured: 2 of 3 runs failed with 3 concurrent cargo builds, 3 of 3 passed
-# idle). A gate that fails for unrelated reasons teaches people to re-run it
-# until it passes, which is how a real failure gets waved through.
-[tasks.check]
-description = "Fast debug verification gate. Run before every commit."
-run = "hk check --all"
-
-[tasks.check-release]
-description = "Full release-mode gate. Run before building a deploy image / cutting a release."
+# Quick compile-only feedback; the authoritative gate below owns tests.
+[tasks.quick]
+description = "Fast formatting, dependency, and compile checks."
 run = [
     "mbx fmt --check",
+    "mbx shear",
+    "mbx check --all-targets --all-features",
+]
+sources = ["@group:rust-gate"]
+outputs = []
+cache = { enabled = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose", "mbx shear --version"] }
+
+# One sequential, authoritative development gate. A successful result is keyed
+# by source contents, relevant build environment, and exact tool identities.
+[tasks.gate]
+description = "Authoritative development gate, cached by content."
+run = [
+    { task = "quick" },
     "mbx clippy --all-targets --all-features -- -D warnings",
+    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test",
+    { task = "hawk" },
+    { task = "slop" },
+]
+sources = ["@group:rust-gate"]
+outputs = []
+cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose", "mbx shear --version", "mbx hawk --version", "ast-grep --version", "similarity-rs --version", "tokei --version", "python3 --version"] }
+
+[tasks.release]
+description = "Authoritative release-mode tests, cached separately."
+run = [
+    { task = "gate" },
     "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test --release",
 ]
+sources = ["@group:rust-gate"]
+outputs = []
+cache = { enabled = true, audit = true, env = ["CI", "TARGET", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose", "mbx shear --version", "mbx hawk --version", "ast-grep --version", "similarity-rs --version", "tokei --version", "python3 --version"] }
 
 # Lint for unnecessary `pub` API surface (astral-sh/hawk). Closed-world
 # analysis: anything `pub` the `sigiro` binary can't reach is dead or could be
 # `pub(crate)`. Pinned to hawk's own toolchain (it links rustc_private).
 # Denies the two actionable groups; a full-workspace compile, so it's a
-# pre-push gate (`mise run install-hooks`) rather than something run per commit.
+# authoritative gate (`mise run gate`) rather than something run per commit.
 # `--fix` auto-applies the pub→pub(crate) fixes.
 # The target dir is pinned into target/ via hawk's own `--target-dir` flag. Hawk
 # defaults to $TMPDIR/cargo-hawk-target, which macOS prunes on its own schedule,
@@ -122,7 +155,7 @@ run = [
 [tasks.hawk]
 description = "Lint for unnecessary `pub` API surface (astral-sh/hawk)."
 run = """
-mbx +1.97.1 hawk check --manifest-path Cargo.toml --target-dir target/hawk \
+mbx +1.98.1 hawk check --manifest-path Cargo.toml --target-dir target/hawk \
   -A hawk::unnecessary_restricted_visibility \
   -D hawk::dead_public -D hawk::unnecessary_public
 """
@@ -136,12 +169,25 @@ description = "Gate structural erosion + clone density (SlopCodeBench metrics)."
 run = "python3 scripts/slop_audit.py"
 
 [tasks.install-hooks]
-description = "Install hk's repository-local Git hooks through mise (one-time per clone)."
+description = "Install hk's Git 2.54+ repository-local config hooks."
 run = """
-if git config --get core.hooksPath >/dev/null; then
-  git config --unset-all core.hooksPath
+#!/usr/bin/env bash
+set -euo pipefail
+git_bin="$(command -v git)"
+PATH="$(dirname "$git_bin"):$PATH" hk uninstall >/dev/null 2>&1 || true
+if "$git_bin" config --local --get core.hooksPath >/dev/null; then
+  "$git_bin" config --local --unset-all core.hooksPath
 fi
-hk install --mise
+version="$($git_bin version)"
+version="${version#git version }"
+major="${version%%.*}"
+remainder="${version#*.}"
+minor="${remainder%%.*}"
+if (( major < 2 || (major == 2 && minor < 54) )); then
+  echo "install-hooks: Git 2.54+ is required; refusing hk legacy script shims" >&2
+  exit 1
+fi
+PATH="$(dirname "$git_bin"):$PATH" hk install --mise
 """
 
 [tasks.run]

@@ -2,10 +2,55 @@
 
 lockfile_version = 1
 
+[[tools.ast-grep]]
+version = "0.45.3"
+backend = "aqua:ast-grep/ast-grep"
+specifiers = ["0.45.3"]
+
+[tools.ast-grep."platforms.linux-arm64"]
+checksum = "sha256:b39cfbc58da4b869a88b8a4bc57bd5deb0d24541e704cf7c257da7b53ec81c8f"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-aarch64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537333400"
+
+[tools.ast-grep."platforms.linux-x64"]
+checksum = "sha256:f8ac830881339d1edee6b2652f54798c0f4da5a827f2db38a08ee31117783ce8"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-x86_64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537332692"
+
+[tools.ast-grep."platforms.macos-arm64"]
+checksum = "sha256:6d2279dea5bea2ad79c66ea93f5fe54ba926e398a8a26de76c56db68fe59eac6"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-aarch64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537332514"
+
+[tools.ast-grep."platforms.macos-x64"]
+checksum = "sha256:b2ffd26f42810340326a9e8a084bdc3647a8795c1a3f21fc06bd7bef3c7c5b2c"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-x86_64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537333391"
+
+[tools.ast-grep."platforms.windows-x64"]
+checksum = "sha256:3751b7d6be7fd39a80df1180ffe7e053903dcf92d3190e5a8336ff1746af9059"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537334241"
+
+[[tools."cargo:cargo-shear"]]
+version = "1.13.4"
+backend = "cargo:cargo-shear"
+specifiers = ["1.13.4"]
+
 [[tools."cargo:https://github.com/jdx/jdxld"]]
 version = "rev:8ef70b88c7f25da631aa2364076947752ecfa26d"
 backend = "cargo:https://github.com/jdx/jdxld"
 specifiers = ["rev:8ef70b88c7f25da631aa2364076947752ecfa26d"]
+
+[[tools."cargo:similarity-rs"]]
+version = "0.5.0"
+backend = "cargo:similarity-rs"
+specifiers = ["0.5.0"]
+
+[[tools."cargo:tokei"]]
+version = "15.0.0"
+backend = "cargo:tokei"
+specifiers = ["15.0.0"]
 
 [[tools.duckdb]]
 version = "1.5.5"
@@ -47,20 +92,157 @@ checksum = "sha256:e1428b7114a841626b5054723731cbf45c6df91b42ae1a6c355f88fad1f6d
 url = "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-windows-amd64.zip"
 url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/485847051"
 
+[[tools."github:astral-sh/hawk"]]
+version = "0.1.14"
+backend = "github:astral-sh/hawk"
+specifiers = ["0.1.14"]
+
+[tools."github:astral-sh/hawk"."platforms.linux-arm64"]
+checksum = "sha256:2a36ed6244a7b646ada0c7e9bc90cbc1757f17cc4af6675ecb32eec29d7dde23"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384043"
+provenance = "github-attestations"
+
+[tools."github:astral-sh/hawk"."platforms.linux-arm64-musl"]
+checksum = "sha256:2a36ed6244a7b646ada0c7e9bc90cbc1757f17cc4af6675ecb32eec29d7dde23"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384043"
+provenance = "github-attestations"
+
+[tools."github:astral-sh/hawk"."platforms.linux-x64"]
+checksum = "sha256:6cc8b57e0d91edbdf70388254c73e2dcf7653929d83081e47dc2a6d6c85b0369"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384072"
+provenance = "github-attestations"
+
+[tools."github:astral-sh/hawk"."platforms.linux-x64-musl"]
+checksum = "sha256:6cc8b57e0d91edbdf70388254c73e2dcf7653929d83081e47dc2a6d6c85b0369"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384072"
+provenance = "github-attestations"
+
+[tools."github:astral-sh/hawk"."platforms.macos-arm64"]
+checksum = "sha256:a1379620245ba56d53bca3727f57b1db959b6085b4a64dc42a56f12367fd64c6"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384048"
+provenance = "github-attestations"
+provenance_verified = true
+
+[tools."github:astral-sh/hawk"."platforms.macos-x64"]
+checksum = "sha256:73483c42cb80b880d3a407201216aa90df8808546f90ab1cdbe5cd678d891cda"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384063"
+provenance = "github-attestations"
+
 [[tools."packslip:github.com/aubepkg/aube"]]
 version = "2.2.12"
 backend = "packslip:github.com/aubepkg/aube"
 specifiers = ["2.2.12"]
+
+[tools."packslip:github.com/aubepkg/aube"."platforms.linux-arm64"]
+checksum = "sha256:831f212a8b3f2f7a2de891eed7c95856bffadb9e3ec5981377a157f32bcff730"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-aarch64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
+
+[tools."packslip:github.com/aubepkg/aube"."platforms.linux-arm64-musl"]
+checksum = "sha256:b6df7f02c0e58257843c071efd14d65665cebb03fb3462633643c9aeaa36a61f"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-aarch64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
+
+[tools."packslip:github.com/aubepkg/aube"."platforms.linux-x64"]
+checksum = "sha256:ad906bced7d1bf014a2dd8cfa1b03ad0e38a5764f92fe4b30e9e27e303bb7a03"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
+
+[tools."packslip:github.com/aubepkg/aube"."platforms.linux-x64-musl"]
+checksum = "sha256:81a1e1c3d041ce0db51483ad3b892e66dec1e63fff6489ae847880fbd081b92d"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-x86_64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
+
+[tools."packslip:github.com/aubepkg/aube"."platforms.macos-arm64"]
+checksum = "sha256:30235658a0f328f095ff7f178f352a6bfef753a8fe505d991bd9f5db3825f2f6"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-aarch64-apple-darwin.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
+
+[tools."packslip:github.com/aubepkg/aube"."platforms.windows-x64"]
+checksum = "sha256:c734783dfba99509b54dfaf49aa897dffa017a82128a45302e01812231dfeb11"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-x86_64-pc-windows-msvc.zip"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [[tools."packslip:github.com/jdx/hk"]]
 version = "1.58.1"
 backend = "packslip:github.com/jdx/hk"
 specifiers = ["1.58.1"]
 
+[tools."packslip:github.com/jdx/hk"."platforms.linux-arm64"]
+checksum = "sha256:0972e05774ea3651fd521676c1bc6411333fe4404beb4a48067e10b54dfd1b4d"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-aarch64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/hk"."platforms.linux-arm64-musl"]
+checksum = "sha256:a49cc7c21cf914c03fbda6289254bb704d424e91458afd91074f16921f9a5e84"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-aarch64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/hk"."platforms.linux-x64"]
+checksum = "sha256:8139133a70ed7cf1d4a0f2f19c26b1b68d714d81af91b2b1f42c4c524afc0fe5"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/hk"."platforms.linux-x64-musl"]
+checksum = "sha256:df8a97c000d59756c14096a550d211d7346c41abf2a20d394aaa0d9bc9695ef5"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-x86_64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/hk"."platforms.macos-arm64"]
+checksum = "sha256:5529d95c63ea3ba9318f551e19760998a9ddf7ed926a14daf39dc46717ab32bf"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-aarch64-apple-darwin.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/hk"."platforms.windows-x64"]
+checksum = "sha256:fb11cf7aa477f3f0546cf66a05ac9a8563322500e5766f63c011ffb97f5c708d"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-x86_64-pc-windows-msvc.zip"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
+[[tools."packslip:github.com/jdx/mr-boxington"]]
+version = "1.9.0"
+backend = "packslip:github.com/jdx/mr-boxington"
+specifiers = ["1.9.0"]
+
+[tools."packslip:github.com/jdx/mr-boxington"."platforms.linux-arm64"]
+checksum = "sha256:ae29794ecfd2888fa12bbcd591e10fd9d2d3d8ec41ceb8a1c3e1990110ed6557"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-aarch64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/mr-boxington"."platforms.linux-arm64-musl"]
+checksum = "sha256:e3cb0c600ae829fee503fc572bb88588e5ffd557581833b64e73d961fb63f18f"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-aarch64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/mr-boxington"."platforms.linux-x64"]
+checksum = "sha256:7e44a912962c68ef90616315dc3b62f4bdab3407569b6db2704410f020dc19ac"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/mr-boxington"."platforms.linux-x64-musl"]
+checksum = "sha256:b3f69c48845d93f42ed6a354bd53a3917d0e9cc24c8cdb46b28295b0b5769c11"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/mr-boxington"."platforms.macos-arm64"]
+checksum = "sha256:405ff4c3fd007c6eb980a39409f102a9ad6d6582dfa92a0bf8ec90b76903d780"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-aarch64-apple-darwin.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
+[tools."packslip:github.com/jdx/mr-boxington"."platforms.windows-x64"]
+checksum = "sha256:37ddcad90564f36697e1c3520a004fa420dc13b2455d305f6a3cc7ac302ae5e3"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-pc-windows-msvc.zip"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
 [[tools.rust]]
-version = "1.97.1"
+version = "1.98.1"
 backend = "core:rust"
-specifiers = ["1.97.1"]
+specifiers = ["1.98.1"]
 
 [[tools.sccache]]
 version = "0.17.0"
