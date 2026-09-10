@@ -107,39 +107,17 @@ jobs:
           packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           apt_update: true
 
-      # DuckDB's own prebuilt static archive, the same source and the same
-      # pinned version the Dockerfile uses. Compiling the amalgamation here
-      # instead would add roughly half an hour per Linux target for a byte-
-      # identical result.
-      #
-      # macOS is not here on purpose: Cargo.toml selects the `bundled` feature on
-      # macOS so that a clone builds with no setup, and changing that to suit CI
-      # would cost every developer that property. macOS pays the compile.
       - name: DuckDB static libs
-        if: runner.os == 'Linux'
         env:
           DUCKDB_VERSION: 1.5.5
-          ARCH: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'arm64' || 'amd64' }}
+          DUCKDB_STATIC_CACHE: ${{ runner.temp }}/duckdb-static
         run: |
           set -euo pipefail
-          mkdir -p /opt/duckdb /tmp/d && cd /tmp/d
-          curl -fSL --retry 3 \
-            "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/static-libs-linux-${ARCH}.zip" \
-            -o s.zip
-          unzip -q s.zip
-          test -f libduckdb_static.a && test -f duckdb.h
-          # The release ships several archives and the link needs one. Merge them
-          # with an `ar` MRI script — byte-for-byte the Dockerfile's step, and
-          # the reason it is not `ar x` into a directory: these archives contain
-          # same-named objects, so unpacking them together silently drops all but
-          # the last of each name and the link fails far away from the cause.
-          { echo "create m.a"; for a in *.a; do echo "addlib $a"; done; echo save; echo end; } | ar -M
-          ranlib m.a
-          cp m.a /opt/duckdb/libduckdb_static.a
-          cp duckdb.h /opt/duckdb/
-          echo "DUCKDB_LIB_DIR=/opt/duckdb" >> "$GITHUB_ENV"
-          echo "DUCKDB_INCLUDE_DIR=/opt/duckdb" >> "$GITHUB_ENV"
+          eval "$(scripts/prepare-duckdb-static.sh '${{ matrix.target }}')"
+          echo "DUCKDB_LIB_DIR=$DUCKDB_LIB_DIR" >> "$GITHUB_ENV"
+          echo "DUCKDB_INCLUDE_DIR=$DUCKDB_INCLUDE_DIR" >> "$GITHUB_ENV"
           echo "DUCKDB_STATIC=1" >> "$GITHUB_ENV"
+          echo "DUCKDB_STATIC_CACHE=$DUCKDB_STATIC_CACHE" >> "$GITHUB_ENV"
 
       - name: Build
         env:

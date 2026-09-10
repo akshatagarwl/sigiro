@@ -1519,6 +1519,10 @@ mod tests {
             "retention must sweep every tenant with data on disk, not only those \
              holding a pooled connection when it happens to run; covered {covered:?}"
         );
+        router
+            .shutdown_and_wait()
+            .await
+            .expect("retention test flushers must shut down cleanly");
     }
 
     /// #91: a REAL failing `CHECKPOINT` must be counted and must trip the shed

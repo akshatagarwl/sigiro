@@ -664,22 +664,9 @@ pub(crate) fn install_extensions_with_progress(conn: &Connection, names: &[&str]
 pub(crate) const LOCKDOWN_PRELOADED_EXTENSIONS: &[&str] = &["parquet", "json", "icu"];
 
 /// Which of `names` this binary does NOT have statically linked, and therefore
-/// has to cache as a file before the filesystem lockdown.
-///
-/// **Why this is a runtime question and not a constant.** `Cargo.toml` builds a
-/// different DuckDB per platform: Linux links the merged static archive the
-/// Dockerfile prepares (`ar`-merging every fragment, so `json`/`icu`/`parquet`
-/// really are built in), while macOS uses the `bundled` feature — DuckDB core
-/// compiled from the vendored amalgamation, WITHOUT those extension fragments —
-/// because DuckDB publishes no self-contained macOS static archive. The same
-/// split applies to the published binaries: the Linux downloads are the same
-/// artifact as the image, the macOS downloads are `bundled`.
-///
-/// Hardcoding either answer breaks the other platform, which is exactly how this
-/// bug happened: both `prewarm_extensions` and `lock_filesystem` asserted in
-/// comments that these three were static, which was true only of the Docker
-/// build, so on macOS `sigiro serve` came up and then answered every query with
-/// a 400 about a missing `json.duckdb_extension`.
+/// has to cache as a file before the filesystem lockdown. The build pipeline
+/// merges every archive fragment for each target, but this runtime query keeps
+/// extension loading correct if an upstream bundle changes its contents.
 ///
 /// Asking DuckDB is exact and costs one query. **`INSTALL` is not a no-op on a
 /// statically linked extension** — verified: it downloads from the repository,
@@ -802,17 +789,8 @@ pub fn prewarm_extensions(data_dir: &Utf8Path) -> Result<()> {
     // The extensions `lock_filesystem` LOADs, cached only where this binary does
     // not already carry them.
     //
-    // This block used to not exist, on the stated premise that
-    // core_functions/json/parquet/icu "are statically linked into the binary via
-    // the prebuilt DuckDB static bundle, so they need no baked file". That is
-    // true of the Linux builds (the Dockerfile ar-merges every fragment, and the
-    // published Linux binaries are the same artifact) and FALSE of macOS, which
-    // uses Cargo's `bundled` feature and gets DuckDB core without them. The
-    // result was that a fresh macOS install served /health 200 and answered
-    // every real query with a 400 naming a missing json.duckdb_extension.
-    //
-    // Deciding per-extension at runtime rather than per-platform at compile time
-    // keeps this correct if either build's fragment set changes. See
+    // Decide per extension at runtime rather than per platform at compile time;
+    // see
     // `extensions_needing_install` for why an unconditional INSTALL is wrong.
     let missing = extensions_needing_install(&conn, LOCKDOWN_PRELOADED_EXTENSIONS)?;
     if missing.is_empty() {

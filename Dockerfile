@@ -14,18 +14,15 @@ RUN cargo install cargo-chef --locked && \
 WORKDIR /build
 
 # Prebuilt DuckDB static libs for the TARGET arch: download + ar-merge, NO
-# compile. Runs on $BUILDPLATFORM (ar/unzip are arch-agnostic). All fragments
-# are merged: the bundle's generated_extension_loader references every extension,
-# so it's link-all-or-nothing.
+# compile. All build surfaces use the same pinned preparation script.
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS duckdb-static
 ARG DUCKDB_VERSION=1.5.5
 ARG TARGETARCH
+COPY scripts/prepare-duckdb-static.sh /usr/local/bin/prepare-duckdb-static
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip binutils && rm -rf /var/lib/apt/lists/* && \
-    mkdir -p /opt/duckdb /tmp/d && cd /tmp/d && \
-    curl -fSL --retry 3 "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/static-libs-linux-${TARGETARCH}.zip" -o s.zip && \
-    unzip -q s.zip && test -f libduckdb_static.a && test -f duckdb.h && \
-    { echo "create m.a"; for a in *.a; do echo "addlib $a"; done; echo save; echo end; } | ar -M && \
-    ranlib m.a && cp m.a /opt/duckdb/libduckdb_static.a && cp duckdb.h /opt/duckdb/ && cd / && rm -rf /tmp/d
+    case "$TARGETARCH" in amd64) T=x86_64-unknown-linux-gnu ;; arm64) T=aarch64-unknown-linux-gnu ;; *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; esac && \
+    eval "$(DUCKDB_VERSION="$DUCKDB_VERSION" DUCKDB_STATIC_CACHE=/opt/duckdb-cache /usr/local/bin/prepare-duckdb-static "$T")" && \
+    mkdir -p /opt/duckdb && cp "$DUCKDB_LIB_DIR/libduckdb_static.a" "$DUCKDB_INCLUDE_DIR/duckdb.h" /opt/duckdb/
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock build.rs ./

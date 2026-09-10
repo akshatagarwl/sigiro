@@ -59,11 +59,8 @@ rust-gate = [
 ]
 
 [env]
-# Cache the bundled DuckDB C++ compilation, which mbx does not cover. Unlike
-# the justfile, `mise run` applies this block to every task, including in CI —
-# so the non-macOS value has to stay `cc`, matching what `.cargo/config.toml`
-# sets there. Only the macOS `bundled` feature actually compiles the DuckDB
-# amalgamation; Linux links the prebuilt static archive.
+# Keep C/C++ tools available for native dependencies; DuckDB itself is always
+# supplied by scripts/prepare-duckdb-static.sh and never compiled here.
 CC = "sccache {% if os() == 'macos' %}clang{% else %}cc{% endif %}"
 CXX = "sccache {% if os() == 'macos' %}clang++{% else %}c++{% endif %}"
 # Was `set dotenv-load` in the justfile. Optional: `.env` is gitignored and a
@@ -76,13 +73,13 @@ run = "mise tasks ls"
 
 [tasks.build]
 description = "Release build of the sigiro binary. Set TARGET to cross-compile."
-run = 'mbx build --release --locked --bin sigiro ${TARGET:+--target "$TARGET"}'
+run = 'scripts/run-with-duckdb-static.sh mbx build --release --locked --bin sigiro ${TARGET:+--target "$TARGET"}'
 
 [tasks.build-dev]
 description = "Build a debug binary with Apple ld on macOS or pinned jdxld on Linux."
 run = """
 case "$(uname -s)" in
-  Darwin) TMPDIR=/tmp mbx build --bin sigiro ;;
+  Darwin) TMPDIR=/tmp scripts/run-with-duckdb-static.sh mbx build --bin sigiro ;;
   Linux) mise run _build-dev-jdxld ;;
   *) echo "build-dev: unsupported host $(uname -s); expected macOS or Linux" >&2; exit 1 ;;
 esac
@@ -103,7 +100,7 @@ if ! command -v clang >/dev/null; then
   echo "_build-dev-jdxld: clang is required to drive jdxld" >&2
   exit 1
 fi
-TMPDIR=/tmp RUSTFLAGS="-Clinker=clang -Clink-arg=--ld-path=jdxld" mbx build --bin sigiro
+TMPDIR=/tmp RUSTFLAGS="-Clinker=clang -Clink-arg=--ld-path=jdxld" scripts/run-with-duckdb-static.sh mbx build --bin sigiro
 if ! strings target/debug/sigiro | grep -q "Linker: jdxld"; then
   echo "_build-dev-jdxld: binary does not contain jdxld's linker marker" >&2
   exit 1
@@ -113,14 +110,20 @@ fi
 # Quick compile-only feedback; the authoritative gate below owns tests.
 [tasks.quick]
 description = "Fast formatting, dependency, and compile checks."
-run = [
-    "mbx fmt --check",
-    "mbx shear",
-    "mbx check --all-targets --all-features",
-]
+run = """
+set -euo pipefail
+eval "$(scripts/prepare-duckdb-static.sh "$(rustc -vV | sed -n 's/^host: //p')")"
+mbx fmt --check
+mbx shear
+mbx check --all-targets --all-features
+"""
 sources = ["@group:rust-gate"]
 outputs = []
 cache = { enabled = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose", "mbx shear --version"] }
+
+[tasks.verify-prebuilt-duckdb]
+description = "Verify DuckDB archive reuse and a build without C++ compilation."
+run = "scripts/verify-prebuilt-duckdb.sh"
 
 # One sequential, authoritative development gate. A successful result is keyed
 # by source contents, relevant build environment, and exact tool identities.
@@ -128,8 +131,8 @@ cache = { enabled = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "
 description = "Authoritative development gate, cached by content."
 run = [
     { task = "quick" },
-    "mbx clippy --all-targets --all-features -- -D warnings",
-    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test",
+    "scripts/run-with-duckdb-static.sh mbx clippy --all-targets --all-features -- -D warnings",
+    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test",
     { task = "hawk" },
     { task = "slop" },
 ]
@@ -141,7 +144,7 @@ cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED
 description = "Authoritative release-mode tests, cached separately."
 run = [
     { task = "gate" },
-    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 mbx test --release",
+    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test --release",
 ]
 sources = ["@group:rust-gate"]
 outputs = []
@@ -162,7 +165,7 @@ cache = { enabled = true, audit = true, env = ["CI", "TARGET", "RUSTFLAGS", "CAR
 [tasks.hawk]
 description = "Lint for unnecessary `pub` API surface (astral-sh/hawk)."
 run = """
-mbx +1.98.1 hawk check --manifest-path Cargo.toml --target-dir target/hawk \
+scripts/run-with-duckdb-static.sh mbx +1.98.1 hawk check --manifest-path Cargo.toml --target-dir target/hawk \
   -A hawk::unnecessary_restricted_visibility \
   -D hawk::dead_public -D hawk::unnecessary_public
 """
@@ -204,7 +207,7 @@ run = """
 set -euo pipefail
 docker compose -f docker-compose.dev.yml up -d
 trap 'docker compose -f docker-compose.dev.yml down' EXIT
-mbx run --release --bin sigiro
+scripts/run-with-duckdb-static.sh mbx run --release --bin sigiro
 """
 
 [tasks.check-s3-e2e]
@@ -219,7 +222,7 @@ set -euo pipefail
 docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
 docker compose -f docker-compose.dev.yml up rustfs-setup
 trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-mbx test --test quack_s3_query_surface_test -- --ignored --nocapture
+scripts/run-with-duckdb-static.sh mbx test --test quack_s3_query_surface_test -- --ignored --nocapture
 """
 
 # Storage-mode matrix E2E: proves ingest->flush->query->restart-persistence in
@@ -233,7 +236,7 @@ set -euo pipefail
 docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
 docker compose -f docker-compose.dev.yml up rustfs-setup
 trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-mbx test --test storage_mode_matrix_test -- --ignored --nocapture
+scripts/run-with-duckdb-static.sh mbx test --test storage_mode_matrix_test -- --ignored --nocapture
 """
 
 # Hosted control-plane E2E: multi-tenant provisioning + key/revoke/suspend
@@ -246,7 +249,7 @@ run = """
 set -euo pipefail
 docker compose -f docker-compose.dev.yml up -d --wait postgres
 trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-mbx test --test control_plane_e2e_test -- --ignored --nocapture
+scripts/run-with-duckdb-static.sh mbx test --test control_plane_e2e_test -- --ignored --nocapture
 """
 
 # A permanent DuckLake attach failure (data_path / storage-backend mismatch)
@@ -258,7 +261,7 @@ run = """
 set -euo pipefail
 docker compose -f docker-compose.dev.yml up -d --wait postgres
 trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-mbx test --test attach_fail_fast_test -- --ignored --nocapture
+scripts/run-with-duckdb-static.sh mbx test --test attach_fail_fast_test -- --ignored --nocapture
 """
 
 # Hosted multi-tenant ISOLATION attack matrix (needs Docker: Postgres catalog).
@@ -271,7 +274,7 @@ run = """
 set -euo pipefail
 docker compose -f docker-compose.dev.yml up -d --wait postgres
 trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
-mbx test --test hosted_isolation_attack_test -- --ignored --nocapture
+scripts/run-with-duckdb-static.sh mbx test --test hosted_isolation_attack_test -- --ignored --nocapture
 """
 
 [tasks.image]
@@ -298,6 +301,7 @@ run = """
 set -euo pipefail
 source scripts/lima-cross-env.sh
 ulimit -n 65536 2>/dev/null || true
+eval "$(scripts/prepare-duckdb-static.sh "$SIGIRO_LIMA_TARGET")"
 mbx build --release --target "$SIGIRO_LIMA_TARGET" --bin sigiro
 file "$SIGIRO_LIMA_SIGIRO_BIN"
 """
@@ -320,7 +324,7 @@ description = "Refresh www/openapi.json from the binary's own /openapi.json."
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-mbx build --quiet --bin sigiro
+scripts/run-with-duckdb-static.sh mbx build --quiet --bin sigiro
 # A warm data dir under target/: with a fresh one DuckDB re-downloads its
 # extensions on every run and the wait below times out.
 dir=target/spec-db

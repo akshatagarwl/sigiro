@@ -2,6 +2,8 @@
 !Cargo.toml
 !Cargo.lock
 !build.rs
+!scripts/
+!scripts/prepare-duckdb-static.sh
 !src/
 !src/**
 !benches/

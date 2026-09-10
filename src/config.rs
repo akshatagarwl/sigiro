@@ -94,7 +94,7 @@ pub(crate) static DUCKDB_MEMORY_LIMIT: Envar<String> =
         EnvarDef::Default("400MB".to_string())
     });
 
-/// Per-query wall-clock timeout in seconds. DuckDB (bundled version) has no
+/// Per-query wall-clock timeout in seconds. DuckDB (pinned version) has no
 /// `statement_timeout` setting, so this is enforced by interrupting the
 /// reader connection from a watchdog once the deadline passes (see
 /// `execute_sql` in server.rs). Default: 30s.

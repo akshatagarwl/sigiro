@@ -84,31 +84,13 @@ rmcp = { version = "3.1.2", features = ["server", "macros", "transport-streamabl
 
 [target.'cfg(target_os = "linux")'.dependencies]
 caps = "0.5"
-duckdb = { version = "=1.10505.0", features = ["appender-arrow", "vscalar"] }
+duckdb = { version = "=1.10505.0", default-features = false, features = ["appender-arrow", "vscalar"] }
 
-# DuckDB does not publish a single self-contained macOS static core archive.
-# Keep local development zero-setup; the production Linux build links the
-# version-pinned static archive prepared in the Dockerfile instead.
-#
-# `parquet` and `json` statically link those two extensions INTO the binary, so
-# there is no `.duckdb_extension` file to SHA-256 and `dlopen` at every boot.
-# Linux already gets this from the merged static archive the Dockerfile builds;
-# without these features macOS was the only platform paying for them as files.
-# Both resolve to `bundled`, which this target already used — no new build
-# backend, no cmake.
-#
-# `icu` is deliberately NOT here: the duckdb crate routes it through
-# `bundled-cmake`, a different build backend that adds a cmake dependency.
-# It stays a cached file on macOS, which `extensions_needing_install`
-# (src/storage.rs) already resolves at runtime by asking DuckDB.
+# All supported targets use the pinned upstream static bundle prepared by
+# scripts/prepare-duckdb-static.sh. Keeping this dependency feature-free is
+# intentional: `bundled`, `parquet`, and `json` would compile DuckDB locally.
 [target.'cfg(target_os = "macos")'.dependencies]
-duckdb = { version = "=1.10505.0", features = [
-    "bundled",
-    "parquet",
-    "json",
-    "appender-arrow",
-    "vscalar",
-] }
+duckdb = { version = "=1.10505.0", default-features = false, features = ["appender-arrow", "vscalar"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -594,16 +594,10 @@ impl ProjectPool {
     /// distroless image and fails with "Permission denied"; `LOAD` uses whatever
     /// copy is already available with no network access.
     ///
-    /// **What satisfies these three depends on the platform, and assuming
-    /// otherwise is what broke this.** The Linux builds link the Dockerfile's
-    /// ar-merged static archive, so parquet/json/icu are genuinely built in.
-    /// macOS uses Cargo's `bundled` feature — DuckDB core without those
-    /// fragments — so there they must exist as files, which is what
-    /// `storage::prewarm_extensions` now guarantees by asking DuckDB which ones
-    /// are `STATICALLY_LINKED` rather than hardcoding an answer. An earlier
-    /// version of this comment asserted all three were always static; on macOS
-    /// that made every query fail with a 400 for a missing json.duckdb_extension
-    /// while /health still returned 200.
+    /// Each supported target links the same kind of ar-merged upstream static
+    /// bundle. `storage::prewarm_extensions` still asks DuckDB which extensions
+    /// are `STATICALLY_LINKED` rather than hardcoding an answer, so an upstream
+    /// bundle change cannot turn into a late query failure.
     ///
     /// The names live in `storage::LOCKDOWN_PRELOADED_EXTENSIONS` so the prewarm
     /// and this batch cannot drift apart.
