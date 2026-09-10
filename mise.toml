@@ -27,7 +27,7 @@ ast-grep = "0.45.3"
 # task (nightly) shared nothing and each paid a cold
 # build. The content-addressed gates below also include the resolved compiler
 # and mbx identities, so every invocation uses the same cache namespace.
-rust = "1.98.1"
+rust = { version = "1.98.1", components = ["rustfmt", "clippy"] }
 
 [settings]
 lockfile = true
