@@ -443,7 +443,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
     let response = server
         .post("/push.v1.PusherService/Push")
         .add_header("Authorization", "Bearer sigiro_dev_test")
-        .content_type("application/proto")
+        .content_type("application/octet-stream")
         .bytes(profile.into())
         .await;
     response.assert_status_ok();

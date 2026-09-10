@@ -656,7 +656,7 @@ impl ProfilesService for OtlpGrpcService {
 
 // OTLP HTTP endpoints on :4318
 
-struct OtlpHttpState {
+pub(crate) struct OtlpHttpState {
     router: Arc<MsgRouter>,
     auth_mode: crate::auth::AuthMode,
     max_body_bytes: usize,
@@ -683,14 +683,14 @@ pub fn otlp_http_router(
         max_body_bytes,
     });
     let app = Router::new()
-        .route("/", post(otlp_http_pyroscope)) // Pyroscope RS SDK posts here
-        .route("/push.v1.PusherService/Push", post(otlp_http_pyroscope)) // pyroscope-rs SDK push path
+        .route("/", post(pyroscope_root)) // Pyroscope RS SDK posts here
+        .route("/push.v1.PusherService/Push", post(pyroscope_push)) // pyroscope-rs SDK push path
         .route("/v1/traces", post(otlp_http_traces))
         .route("/v1/logs", post(otlp_http_logs))
         .route("/v1/metrics", post(otlp_http_metrics))
         .route("/v1development/profiles", post(otlp_http_profiles))
-        .route("/ingest", post(otlp_http_pyroscope))
-        .route("/ingest/pyroscope", post(otlp_http_pyroscope))
+        .route("/ingest", post(pyroscope_ingest))
+        .route("/ingest/pyroscope", post(pyroscope_ingest_pyroscope))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         .with_state(state);
 
@@ -895,13 +895,88 @@ async fn otlp_http_profiles(
 
 /// HTTP handler for Pyroscope's native push format.
 ///
-/// Accepts two formats:
-/// - `application/proto` (gzip-compressed PushRequest) — Pyroscope Rust SDK
-/// - `multipart/form-data` (Pyroscope Node SDK format) — form file "profile" contains raw pprof
-#[derive(Default, Deserialize)]
-struct PyroscopeIngestQuery {
+/// Accepts these formats (and binary payloads without a Content-Type):
+/// - `application/proto`, `application/octet-stream`, or `binary/octet-stream` —
+///   PushRequest, or raw pprof with `name`
+/// - `multipart/form-data` — `profile` contains PushRequest, or raw pprof with `name`
+#[derive(Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct PyroscopeIngestQuery {
+    /// When present, the body is a raw pprof profile and the service name is the
+    /// part before the first `{`. When absent, the body is a Pyroscope
+    /// PushRequest and each series must contain a `service_name` label.
     name: Option<String>,
 }
+
+struct PyroscopeProfileBody;
+
+impl utoipa::PartialSchema for PyroscopeProfileBody {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::String)
+            .format(Some(utoipa::openapi::SchemaFormat::KnownFormat(
+                utoipa::openapi::KnownFormat::Binary,
+            )))
+            .into()
+    }
+}
+
+impl utoipa::ToSchema for PyroscopeProfileBody {}
+
+const PYROSCOPE_INGEST_DESCRIPTION: &str = "Accept a Pyroscope PushRequest or raw pprof profile. With `name`, the payload is raw pprof and the service name is the part before the first `{`; without `name`, the payload is a PushRequest whose series require a `service_name` label. Binary bodies may be gzip-compressed. Multipart bodies must carry the payload in the `profile` field. A missing Content-Type is also accepted as a binary body. See the [profile ingest guide](https://sigiro.com/docs/how-to/send-profiles).";
+
+macro_rules! pyroscope_ingest_handler {
+    ($handler:ident, $path:literal, $operation_id:literal) => {
+        #[utoipa::path(
+            post,
+            path = $path,
+            operation_id = $operation_id,
+            summary = "Ingest Pyroscope profiles",
+            description = PYROSCOPE_INGEST_DESCRIPTION,
+            params(PyroscopeIngestQuery),
+            request_body(
+                description = "Pyroscope PushRequest or raw pprof bytes. For multipart/form-data, put the binary payload in the `profile` field.",
+                content(
+                    (PyroscopeProfileBody = "application/proto"),
+                    (PyroscopeProfileBody = "application/octet-stream"),
+                    (PyroscopeProfileBody = "binary/octet-stream"),
+                    (PyroscopeProfileBody = "multipart/form-data")
+                )
+            ),
+            responses(
+                (status = 200, description = "Profile accepted"),
+                (status = 400, description = "Unsupported media type, malformed payload, missing service name, or empty profile"),
+                (status = 401, description = "Missing or invalid bearer token"),
+                (status = 413, description = "Request body exceeds the configured ingest limit"),
+                (status = 429, description = "Ingest rate limit exceeded"),
+                (status = 500, description = "Ingest failed"),
+                (status = 507, description = "Storage cannot currently accept ingest")
+            ),
+            security(("bearer" = [])),
+        )]
+        pub(crate) async fn $handler(
+            state: State<Arc<OtlpHttpState>>,
+            query: Query<PyroscopeIngestQuery>,
+            headers: axum::http::HeaderMap,
+            body: Bytes,
+        ) -> StatusCode {
+            otlp_http_pyroscope(state, query, headers, body).await
+        }
+    };
+}
+
+pyroscope_ingest_handler!(pyroscope_root, "/", "ingestPyroscopeRoot");
+pyroscope_ingest_handler!(
+    pyroscope_push,
+    "/push.v1.PusherService/Push",
+    "ingestPyroscopePush"
+);
+pyroscope_ingest_handler!(pyroscope_ingest, "/ingest", "ingestPyroscope");
+pyroscope_ingest_handler!(
+    pyroscope_ingest_pyroscope,
+    "/ingest/pyroscope",
+    "ingestPyroscopeAlias"
+);
 
 async fn otlp_http_pyroscope(
     State(state): State<Arc<OtlpHttpState>>,
@@ -1046,6 +1121,7 @@ async fn parse_pyroscope_multipart(
         Err("profile form field not found in multipart body".to_string())
     } else if content_type.is_empty()
         || content_type.contains("application/proto")
+        || content_type.contains("application/octet-stream")
         || content_type.contains("binary/octet-stream")
     {
         if body.is_empty() {
@@ -1055,7 +1131,8 @@ async fn parse_pyroscope_multipart(
     } else {
         Err(format!(
             "unimplemented: Content-Type '{}' is not supported for Pyroscope ingest; \
-             supported: 'multipart/form-data' (SDK pprof), 'application/proto' (gzip-compressed PushRequest)",
+             supported: 'multipart/form-data' (SDK pprof), 'application/proto' or \
+             'application/octet-stream' (binary profile payload)",
             content_type
         ))
     }

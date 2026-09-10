@@ -241,6 +241,89 @@ async fn test_openapi_documents_diagnose_for_agents() {
 }
 
 #[tokio::test]
+async fn test_pyroscope_routes_and_public_openapi_stay_in_sync() {
+    // Axum does not expose stable route introspection. Exercise every live alias
+    // through the same merged routers production uses, then assert those paths'
+    // generated operations. This catches either half of the drift without a
+    // third hand-maintained list falsely claiming completeness for every route.
+    let ctx = build_test_context();
+    let ingest_app = ingest::otlp_http_router(
+        Arc::clone(&ctx.state.router),
+        ctx.state.auth_mode.clone(),
+        8_388_608,
+    );
+    let app = build_http_router(Arc::clone(&ctx.state)).merge(ingest_app);
+    let server = TestServer::new(app).expect("failed to build test server");
+    let paths = [
+        "/",
+        "/push.v1.PusherService/Push",
+        "/ingest",
+        "/ingest/pyroscope",
+    ];
+
+    for path in paths {
+        let response = server
+            .post(path)
+            .content_type("application/proto")
+            .bytes(Vec::new().into())
+            .await;
+        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    let spec: serde_json::Value =
+        serde_json::from_str(&server.get("/openapi.json").await.text()).expect("openapi is JSON");
+    let binary_schema = &spec["components"]["schemas"]["PyroscopeProfileBody"];
+    assert_eq!(binary_schema["type"], "string");
+    assert_eq!(binary_schema["format"], "binary");
+
+    for path in paths {
+        let operation = &spec["paths"][path]["post"];
+        assert!(operation.is_object(), "{path} must be in the public spec");
+        assert!(
+            operation["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("https://sigiro.com/docs/how-to/send-profiles"),
+            "{path} must link to the complete profile ingest guide"
+        );
+
+        let name = operation["parameters"]
+            .as_array()
+            .expect("Pyroscope operation parameters")
+            .iter()
+            .find(|parameter| parameter["name"] == "name")
+            .expect("Pyroscope name query parameter");
+        assert_eq!(name["in"], "query");
+        assert_eq!(name["required"], false);
+        let name_description = name["description"].as_str().unwrap_or_default();
+        assert!(name_description.contains("raw pprof"));
+        assert!(name_description.contains("service_name"));
+
+        let request_body = &operation["requestBody"];
+        assert_eq!(request_body["required"], true);
+        for content_type in [
+            "application/proto",
+            "application/octet-stream",
+            "binary/octet-stream",
+            "multipart/form-data",
+        ] {
+            assert_eq!(
+                request_body["content"][content_type]["schema"]["$ref"],
+                "#/components/schemas/PyroscopeProfileBody",
+                "{path} must describe {content_type} as binary"
+            );
+        }
+        assert_eq!(operation["security"], json!([{"bearer": []}]));
+        for status in ["200", "400", "401", "413", "429", "500", "507"] {
+            assert!(
+                operation["responses"][status].is_object(),
+                "{path} must document response {status}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_diagnose_rejects_singular_service_field() {
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);
