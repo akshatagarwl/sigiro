@@ -1,0 +1,45 @@
+name: Skill distribution
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - '.gitmodules'
+      - '.github/workflows/skill-distribution.yml'
+      - 'scripts/check-skill-distribution.sh'
+      - 'skills'
+      - 'www/blume.config.ts'
+      - 'www/bun.lock'
+      - 'www/package.json'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.gitmodules'
+      - '.github/workflows/skill-distribution.yml'
+      - 'scripts/check-skill-distribution.sh'
+      - 'skills'
+      - 'www/blume.config.ts'
+      - 'www/bun.lock'
+      - 'www/package.json'
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+        with:
+          version: 2026.9.4
+          install: false
+      - if: github.event_name == 'push' || github.event_name == 'pull_request'
+        run: mise exec bun@1.4.0 -- bash scripts/check-skill-distribution.sh local
+      - if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: mise exec bun@1.4.0 -- bash scripts/check-skill-distribution.sh remote

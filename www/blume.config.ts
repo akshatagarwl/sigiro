@@ -537,9 +537,9 @@ export default defineConfig({
      * has four consumers: this endpoint, `npx skills add`, the Cursor plugin
      * manifest and the Claude Code plugin manifest. Three of those have
      * nothing to do with the site, and a copy per channel is four texts that
-     * drift. Repo-root `skills/` is a peer of `src/` and `docs/`, matches the
-     * layout `npx skills add` already consumes, and moves to the public
-     * integration repo as a directory rather than as a rewrite.
+     * drift. Repo-root `skills/` is the pinned public integration repository;
+     * its nested `skills/` directory is the layout `npx skills add` consumes.
+     * Reading through the gitlink leaves one editable, public source.
      *
      * WHAT THE SKILL IS ALLOWED TO SAY. It restates neither the endpoint list
      * (`api.sigiro.com/openapi.json` describes it, and a skill that duplicates
@@ -556,7 +556,7 @@ export default defineConfig({
      * readable at its URL without unpacking. `llms.txt` gains an "Agent skills"
      * section from the same collection pass, so the two cannot disagree.
      */
-    skills: "../skills",
+    skills: "../skills/skills",
     /**
      * `ask` stays off. It needs an API key, a model provider and a per-query
      * bill, and the landing page already hands a reader's own assistant a

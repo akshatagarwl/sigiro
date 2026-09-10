@@ -1,3 +1,6 @@
 [submodule "opentelemetry-demo"]
 	path = tests/fixtures/opentelemetry-demo
 	url = https://github.com/open-telemetry/opentelemetry-demo.git
+[submodule "skills"]
+	path = skills
+	url = https://github.com/sigiroai/skills.git
