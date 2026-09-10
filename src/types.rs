@@ -113,6 +113,25 @@ impl StatusCode {
 }
 
 // ---------------------------------------------------------------------------
+// TenantId — prevents invalid identifiers reaching storage and SQL boundaries
+// ---------------------------------------------------------------------------
+
+/// Canonical tenant identifier used for filesystem, schema, and control-plane keys.
+///
+/// The character and length rules are part of the type so deserialized API input
+/// cannot bypass the storage identifier invariant.
+#[nutype::nutype(
+    validate(predicate = |id: &str| {
+        !id.is_empty()
+            && id.len() <= 56
+            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            && !matches!(id, "extensions" | "tenants")
+    }),
+    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
+)]
+pub struct TenantId(String);
+
+// ---------------------------------------------------------------------------
 // TimestampMicros — prevents sec/µs confusion at API boundaries
 // ---------------------------------------------------------------------------
 

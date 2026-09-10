@@ -1131,7 +1131,7 @@ async fn execute_sql(
     // create/get APIs, while every process can recover its in-memory project
     // entry after a restart or when a request lands on another Machine.
     let pool = Arc::clone(&state.pool);
-    let project_id = auth.tenant_id.clone();
+    let project_id = auth.tenant_id.as_ref().to_owned();
     let sql_clone = sql.to_string();
     let timeout_secs = crate::config::query_timeout_secs()?;
     let max_rows = crate::config::max_result_rows()?;
@@ -1972,10 +1972,10 @@ async fn diagnose_handler(
 ) -> ApiResult<Json<diagnose::DiagnoseResponse>> {
     let data_dir = crate::data_dir().context_internal("Diagnose", "SIGIRO_DATA_DIR not set")?;
     let project_data_path = if state.pool.storage_mode().is_distributed() {
-        crate::storage::tenant_data_dir(&data_dir, &auth.tenant_id)
+        crate::storage::tenant_data_dir(&data_dir, auth.tenant_id.as_ref())
             .context_internal("Diagnose", "invalid tenant id")?
     } else {
-        data_dir.join(&auth.tenant_id)
+        data_dir.join(auth.tenant_id.as_ref())
     };
     if !project_data_path.exists()
         || project_data_path
@@ -1992,7 +1992,7 @@ async fn diagnose_handler(
         ));
     }
     let pool = Arc::clone(&state.pool);
-    let project_id = auth.tenant_id.clone();
+    let project_id = auth.tenant_id.as_ref().to_owned();
     let blocks = tokio::task::spawn_blocking(move || {
         let readers = pool
             .create_project(&project_id)
@@ -2054,14 +2054,14 @@ fn control_plane_from_state(state: &AppState) -> ApiResult<Arc<auth::ControlPlan
 async fn create_tenant_handler(
     _path: AdminTenantsPath,
     State(state): State<Arc<AppState>>,
-    Valid(Json(req)): Valid<Json<CreateTenantRequest>>,
+    Json(req): Json<CreateTenantRequest>,
 ) -> ApiResult<Json<CreateTenantResponse>> {
     let control = control_plane_from_state(&state)?;
     control
-        .create_tenant(&req.id)
+        .create_tenant(req.id.as_ref())
         .map_err(auth::ControlPlaneError::into_api_error)?;
     Ok(Json(CreateTenantResponse {
-        id: req.id,
+        id: req.id.into(),
         status: "active".to_string(),
     }))
 }
@@ -2078,11 +2078,11 @@ async fn create_tenant_handler(
 async fn create_key_handler(
     _path: AdminKeysPath,
     State(state): State<Arc<AppState>>,
-    Valid(Json(req)): Valid<Json<CreateKeyRequest>>,
+    Json(req): Json<CreateKeyRequest>,
 ) -> ApiResult<Json<CreateKeyResponse>> {
     let control = control_plane_from_state(&state)?;
     let minted = control
-        .mint_key(&req.tenant_id)
+        .mint_key(req.tenant_id.as_ref())
         .map_err(auth::ControlPlaneError::into_api_error)?;
     Ok(Json(CreateKeyResponse {
         key: minted.key,

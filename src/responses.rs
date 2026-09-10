@@ -3,6 +3,7 @@
 //! Replaces `serde_json::Value` return types with compile-time verified structs,
 //! enabling accurate OpenAPI schema generation via utoipa.
 
+use crate::types::TenantId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -110,29 +111,16 @@ pub struct CreateTenantResponse {
     pub(crate) status: String,
 }
 
-#[derive(Deserialize, ToSchema, validator::Validate)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateTenantRequest {
-    #[validate(custom(function = "validate_tenant_id"))]
-    pub(crate) id: String,
+    #[schema(value_type = String)]
+    pub(crate) id: TenantId,
 }
 
-#[derive(Deserialize, ToSchema, validator::Validate)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateKeyRequest {
-    #[validate(custom(function = "validate_tenant_id"))]
-    pub(crate) tenant_id: String,
-}
-
-/// Validate a tenant id at the API boundary (fail loud early), reusing the
-/// canonical rules from `storage::sanitize_tenant_id` so the API and the
-/// storage layer never disagree on what a valid tenant id is.
-fn validate_tenant_id(id: &str) -> Result<(), validator::ValidationError> {
-    crate::storage::sanitize_tenant_id(id)
-        .map(|_| ())
-        .map_err(|e| {
-            let mut err = validator::ValidationError::new("tenant_id");
-            err.message = Some(e.to_string().into());
-            err
-        })
+    #[schema(value_type = String)]
+    pub(crate) tenant_id: TenantId,
 }
 
 /// GET /admin/status

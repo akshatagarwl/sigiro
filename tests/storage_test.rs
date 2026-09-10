@@ -242,7 +242,7 @@ fn tenant_id_sanitization_rejects_injection_and_path_tokens() {
     }
 
     assert_eq!(
-        storage::sanitize_tenant_id("tenant_123").unwrap(),
+        storage::sanitize_tenant_id("tenant_123").unwrap().as_ref(),
         "tenant_123"
     );
     assert_eq!(
@@ -263,7 +263,10 @@ fn sanitize_tenant_id_rejects_reserved_ids() {
     // "default" is NOT reserved — it names a normal distributed tenant,
     // independently namespaced from the local-mode "default project" dir
     // (see sanitize_tenant_id's doc comment).
-    assert_eq!(storage::sanitize_tenant_id("default").unwrap(), "default");
+    assert_eq!(
+        storage::sanitize_tenant_id("default").unwrap().as_ref(),
+        "default"
+    );
 }
 
 #[test]

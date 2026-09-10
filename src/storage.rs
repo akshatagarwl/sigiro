@@ -1,4 +1,5 @@
 use crate::sql::escape_sql_string;
+use crate::types::TenantId;
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use duckdb::Connection;
@@ -92,7 +93,9 @@ pub(crate) fn init_distributed(
         install_extensions_with_progress(conn, &["ducklake", "postgres", "httpfs"])?;
     }
 
-    let attach = distributed_attach_sql(config, project_dir, tenant_id)?;
+    let tenant_id = TenantId::try_new(tenant_id.to_owned())
+        .map_err(|e| anyhow::anyhow!("invalid tenant id: {e}"))?;
+    let attach = distributed_attach_sql(config, project_dir, tenant_id.as_ref())?;
 
     if let Some(secret_sql) = &attach.secret_sql {
         // Generic message: the DuckDB error could echo the CREATE SECRET SQL
@@ -204,14 +207,14 @@ pub(crate) fn init_distributed(
     // tenant_id + metadata_schema + data_path fully identify the attach.
     if config.s3_bucket.is_empty() {
         tracing::info!(
-            tenant_id,
+            tenant_id = %tenant_id,
             metadata_schema = %attach.metadata_schema,
             data_path = %attach.data_path,
             "DuckLake attached — catalog: PostgreSQL, data: local Parquet"
         );
     } else {
         tracing::info!(
-            tenant_id,
+            tenant_id = %tenant_id,
             metadata_schema = %attach.metadata_schema,
             data_path = %attach.data_path,
             "DuckLake attached — catalog: PostgreSQL, data: S3"
@@ -373,29 +376,13 @@ impl std::fmt::Debug for DistributedAttachSql {
 /// other tenant gets — nothing about the name `default` collides with
 /// anything. `"extensions"` and `"tenants"` remain reserved because they name
 /// real fixed directories under `data_dir` that a tenant dir would shadow.
-pub fn sanitize_tenant_id(tenant_id: &str) -> Result<String> {
-    anyhow::ensure!(!tenant_id.is_empty(), "tenant id must not be empty");
-    anyhow::ensure!(
-        tenant_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_'),
-        "tenant id must contain only ASCII letters, digits, and underscores"
-    );
-    anyhow::ensure!(
-        tenant_id.len() <= 56,
-        "tenant id is too long: metadata schema tenant_<id> must fit PostgreSQL's 63-byte identifier limit"
-    );
-    anyhow::ensure!(
-        !matches!(tenant_id, "extensions" | "tenants"),
-        "tenant id {tenant_id:?} is reserved (collides with the shared extension dir \
-         or the tenants/ parent dir)"
-    );
-    Ok(tenant_id.to_string())
+pub fn sanitize_tenant_id(tenant_id: &str) -> Result<TenantId> {
+    TenantId::try_new(tenant_id.to_owned()).map_err(|e| anyhow::anyhow!("invalid tenant id: {e}"))
 }
 
 pub fn tenant_metadata_schema(tenant_id: &str) -> Result<String> {
-    let token = sanitize_tenant_id(tenant_id)?;
-    Ok(format!("tenant_{token}"))
+    let tenant_id = sanitize_tenant_id(tenant_id)?;
+    Ok(format!("tenant_{}", tenant_id.as_ref()))
 }
 
 /// Per-tenant data directory in distributed mode: `<data_dir>/tenants/<tenant_id>`.
@@ -405,9 +392,8 @@ pub fn tenant_metadata_schema(tenant_id: &str) -> Result<String> {
 /// (the actual per-tenant connection) and the diagnose handler's data-existence
 /// check so the two can never disagree on layout.
 pub fn tenant_data_dir(data_dir: &Utf8Path, tenant_id: &str) -> Result<camino::Utf8PathBuf> {
-    Ok(data_dir
-        .join("tenants")
-        .join(sanitize_tenant_id(tenant_id)?))
+    let tenant_id = sanitize_tenant_id(tenant_id)?;
+    Ok(data_dir.join("tenants").join(tenant_id.as_ref()))
 }
 
 pub fn distributed_attach_sql(
@@ -415,8 +401,9 @@ pub fn distributed_attach_sql(
     project_dir: &Utf8Path,
     tenant_id: &str,
 ) -> Result<DistributedAttachSql> {
-    let tenant_token = sanitize_tenant_id(tenant_id)?;
-    let metadata_schema = format!("tenant_{tenant_token}");
+    let tenant_id = TenantId::try_new(tenant_id.to_owned())
+        .map_err(|e| anyhow::anyhow!("invalid tenant id: {e}"))?;
+    let metadata_schema = tenant_metadata_schema(tenant_id.as_ref())?;
     let catalog_path = postgres_uri_to_libpq(&config.catalog_url)?;
     let catalog_path_sql = escape_sql_string(&catalog_path);
     let metadata_schema_sql = escape_sql_string(&metadata_schema);
@@ -443,7 +430,7 @@ pub fn distributed_attach_sql(
              AWS_SECRET_ACCESS_KEY"
         );
 
-        let data_path = format!("s3://{}/{tenant_token}/", config.s3_bucket);
+        let data_path = format!("s3://{}/{}/", config.s3_bucket, tenant_id.as_ref());
         let scope = data_path.clone();
         let secret_sql = format!(
             "CREATE OR REPLACE SECRET s3_sigiro (TYPE S3, KEY_ID '{}', SECRET '{}', REGION '{}', \

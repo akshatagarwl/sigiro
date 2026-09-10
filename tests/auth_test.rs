@@ -71,7 +71,7 @@ fn tenant_key_auth_resolves_valid_key_and_rejects_revoked_or_unknown_keys() {
         control: Arc::clone(&control),
     };
     let ctx = mode.verify(&minted.key).unwrap();
-    assert_eq!(ctx.tenant_id, "tenant_a");
+    assert_eq!(ctx.tenant_id.as_ref(), "tenant_a");
     assert_eq!(ctx.project_id, "tenant_a");
     assert_ne!(minted.key_hash, minted.key);
     assert_eq!(minted.key_hash, hash_api_key(&minted.key));
@@ -93,7 +93,9 @@ fn tenant_key_auth_resolves_valid_key_and_rejects_revoked_or_unknown_keys() {
 fn default_is_local_valid_but_rejected_by_hosted_control_plane() {
     // Local/edge path: still accepts "default" byte-for-byte.
     assert_eq!(
-        sigiro::storage::sanitize_tenant_id("default").unwrap(),
+        sigiro::storage::sanitize_tenant_id("default")
+            .unwrap()
+            .as_ref(),
         "default"
     );
 

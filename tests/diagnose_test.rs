@@ -1,8 +1,8 @@
 use parking_lot::Mutex;
-use sigiro::TimestampMicros;
 use sigiro::diagnose::{
     DiagnoseRequest, compute_coverage, diagnose, metric_bucket_interval, us_to_iso,
 };
+use sigiro::{TenantId, TimestampMicros};
 
 #[test]
 fn diagnose_request_accepts_only_plural_services_field() {
@@ -39,6 +39,20 @@ fn timestamp_micros_rejects_implausible_values_and_preserves_json_number() {
     assert!(serde_json::from_str::<TimestampMicros>("9223372036854775807").is_err());
 }
 use std::sync::Arc;
+
+#[test]
+fn tenant_id_rejects_invalid_wire_values_and_preserves_string_json() {
+    for invalid in ["", "tenant-name", "extensions", "tenants", &"x".repeat(57)] {
+        assert!(TenantId::try_new(invalid.to_string()).is_err());
+        assert!(serde_json::from_value::<TenantId>(serde_json::json!(invalid)).is_err());
+    }
+    let tenant = TenantId::try_new("acme_42".to_owned()).unwrap();
+    assert_eq!(serde_json::to_string(&tenant).unwrap(), "\"acme_42\"");
+    assert_eq!(
+        serde_json::from_str::<TenantId>("\"acme_42\"").unwrap(),
+        tenant
+    );
+}
 
 /// Helper: run diagnose for one service and return its block.
 fn diagnose_service(

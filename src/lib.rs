@@ -35,7 +35,7 @@ use camino::Utf8PathBuf;
 // `sigiro::ingest` or `sigiro::inserter`.
 
 pub use diagnose::{DiagnosisBlock, Window};
-pub use types::{IngestMsg, SignalTable, TimestampMicros};
+pub use types::{IngestMsg, SignalTable, TenantId, TimestampMicros};
 // Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
 pub use inserter::MsgRouter;
 

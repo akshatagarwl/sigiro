@@ -1,3 +1,4 @@
+use crate::types::TenantId;
 use axum::{
     extract::{Request, State},
     http::HeaderMap,
@@ -15,18 +16,20 @@ use std::sync::Arc;
 /// Self-hosted: all requests route to the default project.
 #[derive(Clone, Debug)]
 pub struct AuthContext {
-    pub tenant_id: String,
+    pub tenant_id: TenantId,
     pub project_id: String,
 }
 
 impl AuthContext {
     fn default_project() -> Self {
-        Self::for_tenant("default".to_string())
+        Self::for_tenant(
+            TenantId::try_new("default".to_owned()).expect("default is a valid tenant id"),
+        )
     }
 
-    fn for_tenant(tenant_id: String) -> Self {
+    fn for_tenant(tenant_id: TenantId) -> Self {
         Self {
-            project_id: tenant_id.clone(),
+            project_id: tenant_id.as_ref().to_owned(),
             tenant_id,
         }
     }
@@ -301,7 +304,7 @@ impl ControlPlane {
         })
     }
 
-    pub(crate) fn resolve_tenant(&self, raw_key: &str) -> anyhow::Result<String> {
+    pub(crate) fn resolve_tenant(&self, raw_key: &str) -> anyhow::Result<TenantId> {
         anyhow::ensure!(
             raw_key.starts_with("sk_"),
             "tenant API key must use the sk_<tenant>_<random> format"
@@ -321,6 +324,10 @@ impl ControlPlane {
                     .into_iter()
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("API key hash not found or revoked"))
+                    .and_then(|id| {
+                        TenantId::try_new(id)
+                            .map_err(|e| anyhow::anyhow!("invalid tenant id in control plane: {e}"))
+                    })
             }
             None => {
                 let conn = self.conn.lock();
@@ -332,8 +339,14 @@ impl ControlPlane {
                      LIMIT 1",
                     self.qualified_schema, self.qualified_schema
                 );
-                conn.query_row(&sql, duckdb::params![key_hash], |row| row.get(0))
-                    .map_err(|e| anyhow::anyhow!("API key hash not found or revoked: {e}"))
+                conn.query_row(&sql, duckdb::params![key_hash], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|e| anyhow::anyhow!("API key hash not found or revoked: {e}"))
+                .and_then(|id| {
+                    TenantId::try_new(id)
+                        .map_err(|e| anyhow::anyhow!("invalid tenant id in control plane: {e}"))
+                })
             }
         }
     }
@@ -479,12 +492,12 @@ impl ControlPlane {
 fn ensure_hosted_tenant_id(tenant_id: &str) -> Result<String, ControlPlaneError> {
     let tenant_id = crate::storage::sanitize_tenant_id(tenant_id)
         .map_err(|e| ControlPlaneError::InvalidInput(format!("{e:#}")))?;
-    if tenant_id == "default" {
+    if tenant_id.as_ref() == "default" {
         return Err(ControlPlaneError::Conflict(
             "tenant id \"default\" is reserved for the local/edge project and cannot be provisioned in the hosted control plane".to_string(),
         ));
     }
-    Ok(tenant_id)
+    Ok(tenant_id.into())
 }
 
 /// Portable control-plane DDL — runs against BOTH the real hosted PostgreSQL

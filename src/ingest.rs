@@ -139,7 +139,7 @@ pub fn extract_project_id_grpc(
             let ctx = auth_mode
                 .verify(token)
                 .map_err(|_| Status::unauthenticated("Invalid API key"))?;
-            Ok(ctx.tenant_id)
+            Ok(ctx.tenant_id.as_ref().to_owned())
         }
     }
 }
@@ -727,7 +727,7 @@ pub fn extract_project_id_http(
                 tracing::warn!("OTLP HTTP: invalid API key");
                 StatusCode::UNAUTHORIZED
             })?;
-            Ok(ctx.tenant_id)
+            Ok(ctx.tenant_id.as_ref().to_owned())
         }
     }
 }
