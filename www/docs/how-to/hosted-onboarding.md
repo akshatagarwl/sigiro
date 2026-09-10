@@ -43,10 +43,15 @@ gRPC service path is not routed. Use HTTP, and ask your operator before assuming
 gRPC on any other host.
 
 Your SDK posts each signal to its standard OTLP path (`/v1/traces`, `/v1/logs`,
-`/v1/metrics`, `/v1development/profiles`), which it appends to the endpoint above. If your
-exporter takes a per-signal endpoint instead, give it the full path. HTTP
-supports gzip and the endpoint uses TLS. One request must be **8 MB or smaller**
-after decompression. Default SDK batch sizes stay well below this limit.
+`/v1/metrics`, `/v1development/profiles`), which it appends to the endpoint above.
+If your exporter takes a per-signal endpoint instead, give it the full path.
+HTTP supports gzip and the endpoint uses TLS. One request must be **8 MB or
+smaller** after decompression. Default SDK batch sizes stay well below this
+limit.
+
+A Pyroscope SDK does not use the OTLP profiles path. Follow [Send Pyroscope
+profiles to sigiro](/docs/how-to/send-profiles) for its target, request format
+and service-name rules.
 
 ## 3. Confirm that the data arrives
 
@@ -59,7 +64,7 @@ curl -s "https://<your-sigiro-host>/v1/query" \
   --data 'SELECT count(*) AS n FROM sigiro_spans'
 ```
 
-A non-zero `n` means that traces arrive. Query only *after* your first batch. A new
+A non-zero `n` means that traces arrive. Query only _after_ your first batch. A new
 tenant that never sent data has no storage.
 
 ## 4. Query your data (SQL API)
@@ -114,14 +119,14 @@ GROUP BY 1, 2 ORDER BY errors DESC;
 
 ## 5. Limits
 
-| Limit | Value | What sigiro does when you exceed it |
-|-------|-------|-----------|
-| Query timeout | 10 s | sigiro rejects the query (400) |
-| Result rows | 100,000 | sigiro truncates the response and sets `x-sigiro-truncated: true` |
-| Query memory | ~400 MB | the query fails (400) |
-| Ingest body | 8 MB (decompressed) | 413 (HTTP) / RESOURCE_EXHAUSTED (gRPC) |
-| SQL/API request rate | 5 req/s per tenant, burst 20 | 429 |
-| OTLP/HTTP request rate | 50 req/s per source, burst 100 | 429 |
+| Limit                  | Value                          | What sigiro does when you exceed it                               |
+| ---------------------- | ------------------------------ | ----------------------------------------------------------------- |
+| Query timeout          | 10 s                           | sigiro rejects the query (400)                                    |
+| Result rows            | 100,000                        | sigiro truncates the response and sets `x-sigiro-truncated: true` |
+| Query memory           | ~400 MB                        | the query fails (400)                                             |
+| Ingest body            | 8 MB (decompressed)            | 413 (HTTP) / RESOURCE_EXHAUSTED (gRPC)                            |
+| SQL/API request rate   | 5 req/s per tenant, burst 20   | 429                                                               |
+| OTLP/HTTP request rate | 50 req/s per source, burst 100 | 429                                                               |
 
 sigiro has no secondary indexes. Therefore **bound every query by `timestamp`**. A
 bound gives you speed. A bound also prevents timeouts and truncation.
@@ -136,7 +141,7 @@ for a long time.
 
 - [Instrument your code with an agent](/docs/how-to/install-with-ai) — if your
   service still has no OpenTelemetry
-- [API reference](/docs/reference) — the five endpoints, each with a request
-  playground
+- [API reference](/docs/reference) — the HTTP operations currently described by
+  the server's `/openapi.json`
 - [About evidence instead of a dashboard](/docs/explanation/evidence) — why
   `/v1/diagnose` returns a ranked list rather than a chart
