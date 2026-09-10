@@ -526,6 +526,38 @@ export default defineConfig({
     /** Generated, including the API reference, replacing two route handlers. */
     llmsTxt: { enabled: true, openapi: true },
     /**
+     * ONE skill, published at `/.well-known/agent-skills/`. Not zero-config:
+     * `skills` has no default in Blume's schema, so the endpoint 404s until
+     * this line names a directory that exists.
+     *
+     * THE PATH ESCAPES `www/`, DELIBERATELY. `ai.skills` resolves against the
+     * project root, which is this directory, so `"skills"` would be the
+     * frictionless answer — and it would put the skill inside the website
+     * package, which is the one place it does not belong. The same SKILL.md
+     * has four consumers: this endpoint, `npx skills add`, the Cursor plugin
+     * manifest and the Claude Code plugin manifest. Three of those have
+     * nothing to do with the site, and a copy per channel is four texts that
+     * drift. Repo-root `skills/` is a peer of `src/` and `docs/`, matches the
+     * layout `npx skills add` already consumes, and moves to the public
+     * integration repo as a directory rather than as a rewrite.
+     *
+     * WHAT THE SKILL IS ALLOWED TO SAY. It restates neither the endpoint list
+     * (`api.sigiro.com/openapi.json` describes it, and a skill that duplicates
+     * a spec is tokens without capability) nor the install and onboarding
+     * pages (it links `/docs/how-to/install-with-ai` and
+     * `/docs/how-to/hosted-onboarding`). What it carries is the ordering the
+     * spec cannot state — services, then diagnose, then a finding's
+     * `drill_down_sql` posted verbatim to `/v1/query` — and the triage for an
+     * empty answer, where the same silence means a broken setup, an SDK that
+     * never connected, or a genuinely quiet service.
+     *
+     * Blume publishes a lone `SKILL.md` verbatim and a skill with supporting
+     * files as a `.tar.gz`; this one is a single file on purpose, so it is
+     * readable at its URL without unpacking. `llms.txt` gains an "Agent skills"
+     * section from the same collection pass, so the two cannot disagree.
+     */
+    skills: "../skills",
+    /**
      * `ask` stays off. It needs an API key, a model provider and a per-query
      * bill, and the landing page already hands a reader's own assistant a
      * prefilled prompt pointed at these docs for nothing.
