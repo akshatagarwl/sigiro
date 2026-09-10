@@ -169,6 +169,13 @@ async fn test_openapi_documents_diagnose_for_agents() {
             .contains("microsecond"),
         "diagnose description must state the microsecond timestamp unit"
     );
+    let request = &spec["components"]["schemas"]["DiagnoseRequest"];
+    assert_eq!(request["required"], json!(["services"]));
+    assert!(request["properties"]["services"].is_object());
+    assert!(
+        request["properties"].get("service").is_none(),
+        "diagnose must expose only the plural services field"
+    );
     // The response body schema graph must resolve (findings/drill fields).
     assert!(
         spec["components"]["schemas"]["DiagnoseResponse"].is_object()
@@ -179,6 +186,29 @@ async fn test_openapi_documents_diagnose_for_agents() {
         spec["components"]["securitySchemes"]["bearer"].is_object(),
         "bearer security scheme must be declared so an agent knows auth"
     );
+}
+
+#[tokio::test]
+async fn test_diagnose_rejects_singular_service_field() {
+    let ctx = build_test_context();
+    let app = build_http_router(ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+
+    server
+        .post("/v1/diagnose")
+        .json(&json!({"service": "checkout"}))
+        .await
+        .assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    server
+        .post("/v1/diagnose")
+        .json(&json!({"service": "checkout", "services": ["cart"]}))
+        .await
+        .assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    server
+        .post("/v1/diagnose")
+        .json(&json!({"services": ["nonexistent"]}))
+        .await
+        .assert_status_ok();
 }
 
 #[tokio::test]

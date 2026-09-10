@@ -137,7 +137,7 @@ window, and both timestamps are **microseconds** since the Unix epoch:
 ```bash
 curl -X POST http://localhost:9999/v1/diagnose \
   -H 'content-type: application/json' \
-  -d "{\"service\":\"checkout\",
+  -d "{\"services\":[\"checkout\"],
        \"from_ts\":$(( $(date +%s) - 900 ))000000,
        \"to_ts\":$(date +%s)000000}"
 ```

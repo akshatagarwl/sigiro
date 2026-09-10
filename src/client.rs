@@ -60,7 +60,9 @@ impl SigiroClient {
         from: Option<i64>,
         to: Option<i64>,
     ) -> Result<DiagnosisBlock> {
-        let mut resp = self.diagnose_multi(Some(service), None, from, to).await?;
+        let mut resp = self
+            .diagnose_multi(vec![service.to_string()], from, to)
+            .await?;
         if let Some(block) = resp.results.remove(service) {
             return Ok(block);
         }
@@ -164,18 +166,16 @@ impl SigiroClient {
         }
     }
 
-    /// Diagnose one or more services. Pass `service` for single, `services` for multi.
+    /// Diagnose one or more services.
     /// Returns partial results: successful blocks in `results`, per-service
     /// failures in `errors`.
     pub(crate) async fn diagnose_multi(
         &self,
-        service: Option<&str>,
-        services: Option<Vec<String>>,
+        services: Vec<String>,
         from: Option<i64>,
         to: Option<i64>,
     ) -> Result<DiagnoseResponse> {
         let body = DiagnoseRequest {
-            service: service.map(str::to_string),
             services,
             // Passed through, NOT defaulted. `None` means the caller gave no
             // bound, and the server applies the single default in

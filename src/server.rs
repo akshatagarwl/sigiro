@@ -1937,7 +1937,7 @@ fn compute_service_breakdown(
     post,
     path = "/v1/diagnose",
     operation_id = "diagnose-services",
-    summary = "Diagnose a service",
+    summary = "Diagnose services",
     request_body = diagnose::DiagnoseRequest,
     description = "\
 Root-cause an incident for one or more services over a time window. Returns a \

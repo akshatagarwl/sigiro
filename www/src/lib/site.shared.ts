@@ -129,7 +129,7 @@ export const HOW_SESSIONS = {
   ask: {
     run: [
       {
-        cmd: `curl -sX POST localhost:9999/v1/diagnose -d '{"service":"checkout"}'`,
+        cmd: `curl -sX POST localhost:9999/v1/diagnose -d '{"services":["checkout"]}'`,
         out: `{
   "summary": "two signals moved together on checkout at 18:35",
   "suspect": "deploy 9f2c1ab, landed 18:33",
@@ -161,7 +161,7 @@ claude-haiku-4.6   31     2.1s`,
   prove: {
     run: [
       {
-        cmd: `curl -s localhost:9999/v1/diagnose -d '{"service":"checkout"}' > answer.json`,
+        cmd: `curl -s localhost:9999/v1/diagnose -d '{"services":["checkout"]}' > answer.json`,
         out: '',
       },
       {

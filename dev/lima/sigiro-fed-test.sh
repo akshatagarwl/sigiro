@@ -425,8 +425,8 @@ echo "--- /v1/diagnose ---"
 DIAGNOSE_RESP=$(curl -s -X POST "http://127.0.0.1:${CENTRAL_HTTP_PORT}/v1/diagnose" \
   -H "Authorization: Bearer sigiro_dev_test" \
   -H "Content-Type: application/json" \
-  -d '{"sql":"SELECT * FROM lake.sigiro_spans LIMIT 5"}')
-DIAGNOSE_COUNT=$(echo "$DIAGNOSE_RESP" | jq 'length' || echo 0)
+  -d '{"services":["central-synthetic"]}')
+DIAGNOSE_COUNT=$(echo "$DIAGNOSE_RESP" | jq '.results | length' || echo 0)
 if [[ "$DIAGNOSE_COUNT" -eq 0 ]]; then
   echo "WARNING: /v1/diagnose returned no rows"
 else

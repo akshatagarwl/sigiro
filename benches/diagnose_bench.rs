@@ -85,8 +85,7 @@ fn bench_diagnose(c: &mut Criterion) {
     group.bench_function("diagnose_full", |b| {
         b.iter(|| {
             let req = DiagnoseRequest {
-                service: Some("bench-svc".to_string()),
-                services: None,
+                services: vec!["bench-svc".to_string()],
                 from_ts: Some(
                     sigiro::TimestampMicros::try_new(now_us - 15 * 60 * 1_000_000).unwrap(),
                 ),

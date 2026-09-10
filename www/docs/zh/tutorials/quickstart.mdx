@@ -108,7 +108,7 @@ agent 通过 HTTP 提出同样的问题。HTTP 请求需要显式指定时间窗
 ```bash
 curl -X POST http://localhost:9999/v1/diagnose \
   -H 'content-type: application/json' \
-  -d "{\"service\":\"checkout\",
+  -d "{\"services\":[\"checkout\"],
        \"from_ts\":$(( $(date +%s) - 900 ))000000,
        \"to_ts\":$(date +%s)000000}"
 ```

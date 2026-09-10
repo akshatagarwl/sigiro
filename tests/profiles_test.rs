@@ -315,8 +315,7 @@ async fn e2e_profiles_pipeline() {
 
     // Verify via diagnose query: top functions
     let req = DiagnoseRequest {
-        service: Some("api-svc".to_string()),
-        services: None,
+        services: vec!["api-svc".to_string()],
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };
@@ -499,8 +498,7 @@ async fn e2e_profiles_multi_type() {
 
     // Query profiles — should see both types
     let req = DiagnoseRequest {
-        service: Some("api-svc".to_string()),
-        services: None,
+        services: vec!["api-svc".to_string()],
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
         to_ts: Some(sigiro::TimestampMicros::try_new(now_us + 60_000_000).unwrap()),
     };

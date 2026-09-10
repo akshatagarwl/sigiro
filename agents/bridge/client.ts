@@ -87,7 +87,7 @@ export const makeBridgeClient = Effect.fn("makeBridgeClient")(function* (options
   const diagnose = Effect.fn("BridgeClient.diagnose")(function* (service: string, fromTs: number, toTs: number) {
     const response = yield* request("diagnose", HttpClientRequest.post(sigiro("/v1/diagnose")).pipe(
       HttpClientRequest.bearerToken(options.sigiroApiKey),
-      HttpClientRequest.bodyJsonUnsafe({ service, from_ts: fromTs, to_ts: toTs }),
+      HttpClientRequest.bodyJsonUnsafe({ services: [service], from_ts: fromTs, to_ts: toTs }),
     ), 2 * 1024 * 1024);
     const envelope = yield* decode(DiagnosisResponse, response, "diagnose");
     if (Object.hasOwn(envelope.errors, service)) return yield* failure("diagnose", "service diagnosis reported an error", true);

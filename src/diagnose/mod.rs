@@ -20,18 +20,13 @@ pub use analysis::{
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Serialize, Deserialize, utoipa::ToSchema, validator::Validate)]
+#[serde(deny_unknown_fields)]
 #[validate(schema(function = "validate_window", skip_on_field_errors = true))]
 pub struct DiagnoseRequest {
-    /// Single service to diagnose. Provide this OR `services` (call
-    /// `GET /v1/services` first to discover valid names).
-    // The example is published in /openapi.json and on the docs page. "checkout"
-    // is the service every other example on the site uses; the previous value named
-    // an unrelated internal deployment.
-    #[schema(example = "checkout")]
-    pub service: Option<String>,
-    /// Multiple services in one call (max 10). Alternative to `service`.
+    /// Services to diagnose (1–10). Call `GET /v1/services` first to discover
+    /// valid names.
     #[schema(example = json!(["checkout", "cart"]))]
-    pub services: Option<Vec<String>>,
+    pub services: Vec<String>,
     /// Window start, **microseconds** since the Unix epoch (a 16-digit value,
     /// e.g. 1780000000000000). Seconds, milliseconds, and nanoseconds are rejected.
     /// OPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the
@@ -48,7 +43,7 @@ pub struct DiagnoseRequest {
 
 /// The default window when the caller supplies neither bound. Matches the CLI's
 /// `--from` default so `sigiro diagnose svc` and `POST /v1/diagnose
-/// {"service":"svc"}` describe the same slice of time.
+/// {"services":["svc"]}` describe the same slice of time.
 const DEFAULT_WINDOW_MICROS: i64 = 15 * 60 * 1_000_000;
 
 impl DiagnoseRequest {
@@ -675,7 +670,7 @@ pub fn diagnose(
     req: &DiagnoseRequest,
     prefix: &str,
 ) -> Result<DiagnoseResponse> {
-    let services = resolve_services(req)?;
+    validate_services(&req.services)?;
     // Resolve the window ONCE, before the fan-out: every service in a
     // multi-service diagnosis must describe the same slice of time, and a
     // per-iteration `now` would give each a slightly different one.
@@ -686,7 +681,7 @@ pub fn diagnose(
     let (from_ts, to_ts) = req.window(now_micros);
     let mut results = BTreeMap::new();
     let mut errors = BTreeMap::new();
-    for service in &services {
+    for service in &req.services {
         // Partial results: one broken service must not discard the others.
         // Each failure is still loud — logged here, surfaced per-service in
         // `errors`, and fatal when NOTHING succeeded.
@@ -711,23 +706,14 @@ pub fn diagnose(
     Ok(DiagnoseResponse { results, errors })
 }
 
-fn resolve_services(req: &DiagnoseRequest) -> Result<Vec<String>> {
-    let services = match (&req.service, &req.services) {
-        (Some(s), None) => vec![s.clone()],
-        (None, Some(list)) => list.clone(),
-        (Some(s), Some(list)) => std::iter::once(s.clone())
-            .chain(list.iter().cloned())
-            .unique()
-            .collect(),
-        (None, None) => anyhow::bail!("either 'service' or 'services' must be provided"),
-    };
+fn validate_services(services: &[String]) -> Result<()> {
     anyhow::ensure!(!services.is_empty(), "services list must not be empty");
     anyhow::ensure!(
         services.len() <= MAX_SERVICES,
         "max {MAX_SERVICES} services per diagnosis, got {}",
         services.len()
     );
-    Ok(services)
+    Ok(())
 }
 
 /// ONE DuckDB round-trip per service: a stack of CTEs (one per report

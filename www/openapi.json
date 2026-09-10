@@ -72,7 +72,7 @@
     "/v1/diagnose": {
       "post": {
         "tags": [],
-        "summary": "Diagnose a service",
+        "summary": "Diagnose services",
         "description": "Root-cause an incident for one or more services over a time window. Returns a triage summary \u2014 NOT raw telemetry: a ranked `findings` array (read this first), per-operation anomaly flags, and bounded samples of spans/logs. Every lead carries a ready-to-run SQL string (`drill_down_sql` on findings, operations, spans, and log patterns; `drill_all_sql` on the spans/logs sections) that you paste VERBATIM into `POST /v1/query` to fetch the underlying rows and go deeper. Typical agent loop: `GET /v1/services` \u2192 `POST /v1/diagnose` \u2192 for any finding or anomalous operation, run its `drill_down_sql` via `/v1/query`. Timestamps are microseconds since the Unix epoch. The response is a map `{results: {service: block}, errors: {service: message}}` \u2014 partial results survive a single failing service.",
         "operationId": "diagnose-services",
         "requestBody": {
@@ -376,45 +376,40 @@
       "DiagnoseRequest": {
         "type": "object",
         "required": [
-          "from_ts",
-          "to_ts"
+          "services"
         ],
         "properties": {
           "from_ts": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "Window start, **microseconds** since the Unix epoch (a 16-digit value,\ne.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.",
+            "description": "Window start, **microseconds** since the Unix epoch (a 16-digit value,\ne.g. 1780000000000000). Seconds, milliseconds, and nanoseconds are rejected.\nOPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the\nsame default `sigiro diagnose` uses. Providing `to_ts` without `from_ts`\nis rejected \u2014 a window that ends somewhere with no start is ambiguous,\nand guessing one silently would answer a question nobody asked.",
             "example": 1780000000000000
           },
-          "service": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Single service to diagnose. Provide this OR `services` (call\n`GET /v1/services` first to discover valid names).",
-            "example": "checkout"
-          },
           "services": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Multiple services in one call (max 10). Alternative to `service`.",
+            "description": "Services to diagnose (1\u201310). Call `GET /v1/services` first to discover\nvalid names.",
             "example": [
               "checkout",
               "cart"
             ]
           },
           "to_ts": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "Window end, microseconds since the Unix epoch. Must be > `from_ts`.",
+            "description": "Window end, microseconds since the Unix epoch. Must be > `from_ts`.\nOptional: defaults to now when `from_ts` is given alone.",
             "example": 1780001800000000
           }
-        }
+        },
+        "additionalProperties": false
       },
       "DiagnoseResponse": {
         "type": "object",

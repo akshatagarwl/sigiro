@@ -159,7 +159,7 @@ HOUR_AGO_US=$((NOW_US - 3600 * 1000000))
 inv=$(curl -sf -X POST "$SIGIRO_URL/v1/diagnose" \
   -H "$DEV_AUTH" \
   -H 'Content-Type: application/json' \
-  -d "{\"service\":\"sigiro\",\"from_ts\":${HOUR_AGO_US},\"to_ts\":${NOW_US}}") || true
+  -d "{\"services\":[\"sigiro\"],\"from_ts\":${HOUR_AGO_US},\"to_ts\":${NOW_US}}") || true
 printf "  %-50s" "diagnose returns CPU and heap profiles..."
 if echo "$inv" | jq -e '
   .results.sigiro.profiles |
