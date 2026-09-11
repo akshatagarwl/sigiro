@@ -1367,6 +1367,17 @@ async fn query_handler(
 
 /// GET /v1/services — discover what services are sending telemetry.
 /// Agents call this before /diagnose to know what services exist.
+#[derive(serde::Deserialize)]
+struct ServiceQueryRow {
+    service_name: String,
+    first_seen: Option<String>,
+    last_seen: Option<String>,
+    span_count: i64,
+    log_count: i64,
+    metric_count: i64,
+    total_count: i64,
+}
+
 #[utoipa::path(
     get,
     path = "/v1/services",
@@ -1388,13 +1399,34 @@ async fn services_handler(
     let prefix = ProjectPool::prefix();
     let sql = format!(
         "SELECT service_name, \
-                min(timestamp)::VARCHAR AS first_seen, \
-                max(timestamp)::VARCHAR AS last_seen, \
-                count(*) AS span_count \
-         FROM {}sigiro_spans \
+                min(first_seen)::VARCHAR AS first_seen, \
+                max(last_seen)::VARCHAR AS last_seen, \
+                sum(span_count)::BIGINT AS span_count, \
+                sum(log_count)::BIGINT AS log_count, \
+                sum(metric_count)::BIGINT AS metric_count, \
+                sum(span_count + log_count + metric_count)::BIGINT AS total_count \
+         FROM ( \
+             SELECT service_name, min(timestamp) AS first_seen, max(timestamp) AS last_seen, \
+                    count(*) AS span_count, 0::BIGINT AS log_count, 0::BIGINT AS metric_count \
+             FROM {prefix}sigiro_spans GROUP BY service_name \
+             UNION ALL \
+             SELECT service_name, min(timestamp), max(timestamp), 0, count(*), 0 \
+             FROM {prefix}sigiro_logs GROUP BY service_name \
+             UNION ALL \
+             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) \
+             FROM {prefix}sigiro_metrics_gauge GROUP BY service_name \
+             UNION ALL \
+             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) \
+             FROM {prefix}sigiro_metrics_sum GROUP BY service_name \
+             UNION ALL \
+             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) \
+             FROM {prefix}sigiro_metrics_histogram GROUP BY service_name \
+             UNION ALL \
+             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) \
+             FROM {prefix}sigiro_metrics_exp_histogram GROUP BY service_name \
+         ) AS per_signal \
          GROUP BY service_name \
-         ORDER BY span_count DESC",
-        prefix
+         ORDER BY total_count DESC, service_name ASC"
     );
     let (results, _truncated) = execute_sql(&state, &auth, &sql)
         .await
@@ -1402,31 +1434,18 @@ async fn services_handler(
 
     let mut services = Vec::new();
     for row in results {
-        let obj = row.as_object().ok_or_else(|| {
-            bad_request("services query failed", "expected object row from query")
-        })?;
-        let name = obj
-            .get("service_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let first_seen = obj
-            .get("first_seen")
-            .and_then(|v| v.as_str())
-            .map(std::string::ToString::to_string);
-        let last_seen = obj
-            .get("last_seen")
-            .and_then(|v| v.as_str())
-            .map(std::string::ToString::to_string);
-        let span_count = obj
-            .get("span_count")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0);
+        let row: ServiceQueryRow = serde_json::from_value(row)
+            .map_err(|e| bad_request("services query failed", &e.to_string()))?;
         services.push(ServiceEntry {
-            name,
-            first_seen,
-            last_seen,
-            span_count,
+            name: row.service_name,
+            first_seen: row.first_seen,
+            last_seen: row.last_seen,
+            signals: ServiceSignals {
+                spans: row.span_count,
+                logs: row.log_count,
+                metrics: row.metric_count,
+            },
+            total_count: row.total_count,
         });
     }
 

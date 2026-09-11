@@ -570,7 +570,7 @@ async fn test_query_supports_duckdb_aggregate_filter() {
 }
 
 #[tokio::test]
-async fn test_services_with_dev_auth_returns_200() {
+async fn test_services_returns_empty_list_for_empty_project() {
     let ctx = build_test_context();
     let app = build_http_router(ctx.state);
     let server = TestServer::new(app).expect("failed to build test server");
@@ -580,12 +580,120 @@ async fn test_services_with_dev_auth_returns_200() {
         .add_header("Authorization", "Bearer sigiro_dev_test")
         .await;
     resp.assert_status_ok();
-    // Should return {"services":[]} for empty project
     let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
-    assert!(
-        body.get("services").is_some(),
-        "expected 'services' key in response"
+    assert_eq!(body, json!({"services": []}));
+}
+
+#[tokio::test]
+async fn test_services_discovers_every_supported_signal() {
+    let ctx = build_test_context();
+    let readers = ctx
+        .state
+        .pool
+        .get_project("default")
+        .expect("default project exists");
+    readers
+        .get()
+        .execute_batch(
+            "INSERT INTO lake.sigiro_spans
+                 (timestamp, end_timestamp, duration, service_name, span_name, span_kind, status_code)
+             VALUES
+                 ('2026-01-10 00:00:00', 1, 1, 'mixed', 'request', 2, 1),
+                 ('2026-01-01 00:00:00', 1, 1, 'span-only', 'request', 2, 1);
+
+             INSERT INTO lake.sigiro_logs
+                 (timestamp, observed_timestamp, service_name, severity_number, severity_text)
+             VALUES
+                 ('2026-01-08 00:00:00', 1, 'mixed', 9, 'INFO'),
+                 ('2026-01-02 00:00:00', 1, 'log-only', 9, 'INFO'),
+                 ('2026-01-03 00:00:00', 1, 'log-only', 9, 'INFO');
+
+             INSERT INTO lake.sigiro_metrics_gauge
+                 (timestamp, metric_name, value, service_name)
+             VALUES
+                 ('2026-01-09 00:00:00', 'cpu', 1, 'mixed'),
+                 ('2026-01-04 00:00:00', 'cpu', 1, 'gauge-only');
+
+             INSERT INTO lake.sigiro_metrics_sum
+                 (timestamp, metric_name, value, service_name, aggregation_temporality, is_monotonic)
+             VALUES
+                 ('2026-01-11 00:00:00', 'requests', 1, 'mixed', 2, true),
+                 ('2026-01-05 00:00:00', 'requests', 1, 'sum-only', 2, true);
+
+             INSERT INTO lake.sigiro_metrics_histogram
+                 (timestamp, metric_name, count, bucket_counts, explicit_bounds,
+                  service_name, aggregation_temporality)
+             VALUES
+                 ('2026-01-06 00:00:00', 'latency', 999, '[]', '[]',
+                  'histogram-only', 2);
+
+             INSERT INTO lake.sigiro_metrics_exp_histogram
+                 (timestamp, metric_name, count, scale, zero_count, service_name,
+                  aggregation_temporality)
+             VALUES
+                 ('2026-01-07 00:00:00', 'latency', 999, 0, 0,
+                  'exp-histogram-only', 2);",
+        )
+        .expect("seed cross-signal telemetry");
+
+    let server = TestServer::new(build_http_router(ctx.state)).expect("build test server");
+    let resp = server.get("/v1/services").await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
+    let services = body["services"].as_array().expect("services array");
+
+    let names: Vec<&str> = services
+        .iter()
+        .map(|service| service["name"].as_str().expect("service name"))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "mixed",
+            "log-only",
+            "exp-histogram-only",
+            "gauge-only",
+            "histogram-only",
+            "span-only",
+            "sum-only",
+        ],
+        "services order by total count descending, then name ascending"
     );
+
+    let service = |name: &str| {
+        services
+            .iter()
+            .find(|service| service["name"] == name)
+            .unwrap_or_else(|| panic!("missing service {name}"))
+    };
+    assert_eq!(
+        service("mixed")["signals"],
+        json!({"spans": 1, "logs": 1, "metrics": 2})
+    );
+    assert_eq!(service("mixed")["totalCount"], 4);
+    assert_eq!(service("mixed")["firstSeen"], "2026-01-08 00:00:00");
+    assert_eq!(service("mixed")["lastSeen"], "2026-01-11 00:00:00");
+    assert_eq!(
+        service("log-only")["signals"],
+        json!({"spans": 0, "logs": 2, "metrics": 0})
+    );
+    assert_eq!(
+        service("span-only")["signals"],
+        json!({"spans": 1, "logs": 0, "metrics": 0})
+    );
+    for name in [
+        "gauge-only",
+        "sum-only",
+        "histogram-only",
+        "exp-histogram-only",
+    ] {
+        assert_eq!(
+            service(name)["signals"],
+            json!({"spans": 0, "logs": 0, "metrics": 1}),
+            "metric-family-only service {name}"
+        );
+        assert_eq!(service(name)["totalCount"], 1);
+    }
 }
 
 #[tokio::test]

@@ -27,7 +27,15 @@ pub struct ServiceEntry {
     pub(crate) name: String,
     pub(crate) first_seen: Option<String>,
     pub(crate) last_seen: Option<String>,
-    pub(crate) span_count: i64,
+    pub(crate) signals: ServiceSignals,
+    pub(crate) total_count: i64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct ServiceSignals {
+    pub(crate) spans: i64,
+    pub(crate) logs: i64,
+    pub(crate) metrics: i64,
 }
 
 /// GET /v1/anomalies — precomputed regime shifts of every signal from the
