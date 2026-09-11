@@ -1684,11 +1684,13 @@ async fn trace_detail_handler(
         .map_err(|e| bad_request("trace detail query failed", &format!("{e:#}")))?;
 
     let mut spans: Vec<SpanDetail> = Vec::new();
-    let mut span_map: std::collections::HashMap<String, SpanDetail> =
+    let mut span_map: std::collections::HashMap<crate::types::SpanId, SpanDetail> =
         std::collections::HashMap::new();
-    let mut parent_to_children: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
-    let mut root_span_id: Option<String> = None;
+    let mut parent_to_children: std::collections::HashMap<
+        crate::types::SpanId,
+        Vec<crate::types::SpanId>,
+    > = std::collections::HashMap::new();
+    let mut root_span_id: Option<crate::types::SpanId> = None;
     let mut total_duration_us: i64 = 0;
     let mut error_count: i64 = 0;
     let mut services_set: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1702,16 +1704,30 @@ async fn trace_detail_handler(
             )
         })?;
 
-        let span_id = obj
-            .get("span_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let span_id = crate::types::SpanId::try_new(
+            obj.get("span_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        )
+        .map_err(|e| {
+            bad_request(
+                "trace detail query failed",
+                &format!("invalid span_id: {e}"),
+            )
+        })?;
         let parent_span_id = obj
             .get("parent_span_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            .filter(|id| !id.is_empty())
+            .map(|id| crate::types::SpanId::try_new(id.to_string()))
+            .transpose()
+            .map_err(|e| {
+                bad_request(
+                    "trace detail query failed",
+                    &format!("invalid parent_span_id: {e}"),
+                )
+            })?;
         let duration_us = obj
             .get("duration")
             .and_then(serde_json::Value::as_i64)
@@ -1729,11 +1745,7 @@ async fn trace_detail_handler(
         let span = SpanDetail {
             trace_id: trace_id.clone(),
             span_id: span_id.clone(),
-            parent_span_id: if parent_span_id.is_empty() {
-                None
-            } else {
-                Some(parent_span_id.clone())
-            },
+            parent_span_id: parent_span_id.clone(),
             span_name: obj
                 .get("span_name")
                 .and_then(|v| v.as_str())
@@ -1786,13 +1798,13 @@ async fn trace_detail_handler(
         }
         services_set.insert(service_name);
 
-        if parent_span_id.is_empty() {
-            root_span_id = Some(span_id.clone());
-        } else {
+        if let Some(parent_span_id) = parent_span_id {
             parent_to_children
                 .entry(parent_span_id)
                 .or_default()
                 .push(span_id.clone());
+        } else {
+            root_span_id = Some(span_id.clone());
         }
 
         let is_longer = max_duration_span
@@ -1845,18 +1857,21 @@ async fn trace_detail_handler(
 
 /// Compute the critical path: longest duration-sum path from root to any leaf.
 fn compute_critical_path(
-    root_id: &str,
-    parent_to_children: &std::collections::HashMap<String, Vec<String>>,
-    span_map: &std::collections::HashMap<String, SpanDetail>,
-) -> Vec<String> {
+    root_id: &crate::types::SpanId,
+    parent_to_children: &std::collections::HashMap<crate::types::SpanId, Vec<crate::types::SpanId>>,
+    span_map: &std::collections::HashMap<crate::types::SpanId, SpanDetail>,
+) -> Vec<crate::types::SpanId> {
     #[allow(clippy::too_many_arguments)]
     fn dfs(
-        span_id: &str,
-        parent_to_children: &std::collections::HashMap<String, Vec<String>>,
-        span_map: &std::collections::HashMap<String, SpanDetail>,
-        current_path: &[String],
+        span_id: &crate::types::SpanId,
+        parent_to_children: &std::collections::HashMap<
+            crate::types::SpanId,
+            Vec<crate::types::SpanId>,
+        >,
+        span_map: &std::collections::HashMap<crate::types::SpanId, SpanDetail>,
+        current_path: &[crate::types::SpanId],
         current_duration: i64,
-        best_path: &mut Vec<String>,
+        best_path: &mut Vec<crate::types::SpanId>,
         best_duration: &mut i64,
     ) {
         let span = match span_map.get(span_id) {
@@ -1864,7 +1879,7 @@ fn compute_critical_path(
             None => return,
         };
         let mut path = current_path.to_vec();
-        path.push(span_id.to_string());
+        path.push(span_id.clone());
         let new_duration = current_duration.saturating_add(span.duration_us);
 
         // Leaf node: check if this path is the critical path

@@ -169,6 +169,8 @@ async fn trace_detail_preserves_canonical_trace_id_wire_shape() {
     assert_eq!(body["trace_id"], TRACE_ID);
     assert_eq!(body["root_span"]["trace_id"], TRACE_ID);
     assert_eq!(body["spans"][0]["trace_id"], TRACE_ID);
+    assert_eq!(body["root_span"]["span_id"], "2222222222222222");
+    assert_eq!(body["critical_path"][0], "2222222222222222");
 }
 
 #[tokio::test]
@@ -954,6 +956,21 @@ async fn test_otlp_traces_empty_payload_returns_200() {
         .content_type("application/json")
         .await;
     resp.assert_status(axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn otlp_rejects_noncanonical_span_ids() {
+    let ctx = build_test_context();
+    let server = TestServer::new(build_otlp_app(&ctx.state)).expect("failed to build test server");
+    let payload = r#"{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"bad-span-id"}}]},"scopeSpans":[{"spans":[{"traceId":"11111111111111111111111111111111","spanId":"22","name":"invalid","startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000001000000000"}]}]}]}"#;
+
+    server
+        .post("/v1/traces")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .bytes(payload.into())
+        .content_type("application/json")
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

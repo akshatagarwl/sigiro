@@ -13,7 +13,7 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use serde_json::Value as JsonValue;
 
-use crate::types::TraceId;
+use crate::types::{SpanId, TraceId};
 
 /// Convert a nanosecond count — every OTLP `*_unix_nano` timestamp and any
 /// span duration — to microseconds, the unit every sigiro table stores.
@@ -166,22 +166,22 @@ impl TraceBuilders {
 
         let trace_id = TraceId::try_new(hex::encode(&span.trace_id))
             .map_err(|error| DecodeError::Parse(format!("invalid trace_id: {error}")))?;
-        let span_id = hex::encode(&span.span_id);
-        let parent_span_id = hex::encode(&span.parent_span_id);
-
-        if span_id.is_empty() {
-            return Err(DecodeError::Parse(
-                "span_id is empty — every span must have a valid span ID".into(),
-            ));
-        }
+        let span_id = SpanId::try_new(hex::encode(&span.span_id))
+            .map_err(|error| DecodeError::Parse(format!("invalid span_id: {error}")))?;
+        let parent_span_id = if span.parent_span_id.is_empty() {
+            None
+        } else {
+            Some(
+                SpanId::try_new(hex::encode(&span.parent_span_id)).map_err(|error| {
+                    DecodeError::Parse(format!("invalid parent_span_id: {error}"))
+                })?,
+            )
+        };
 
         self.trace_id.append_value(trace_id.as_ref());
-        self.span_id.append_value(&span_id);
-        if parent_span_id.is_empty() {
-            self.parent_span_id.append_null();
-        } else {
-            self.parent_span_id.append_value(&parent_span_id);
-        }
+        self.span_id.append_value(span_id.as_ref());
+        self.parent_span_id
+            .append_option(parent_span_id.as_ref().map(AsRef::as_ref));
 
         if span.trace_state.is_empty() {
             self.trace_state.append_null();
@@ -947,18 +947,22 @@ impl LogBuilders {
                     .map_err(|error| DecodeError::Parse(format!("invalid trace_id: {error}")))?,
             )
         };
-        let span_id = hex::encode(&log.span_id);
+        let span_id = if log.span_id.is_empty() {
+            None
+        } else {
+            Some(
+                SpanId::try_new(hex::encode(&log.span_id))
+                    .map_err(|error| DecodeError::Parse(format!("invalid span_id: {error}")))?,
+            )
+        };
 
         self.timestamp.append_value(nanos_to_micros(timestamp));
         self.observed_timestamp
             .append_value(nanos_to_micros(observed));
         self.trace_id
             .append_option(trace_id.as_ref().map(AsRef::as_ref));
-        if span_id.is_empty() {
-            self.span_id.append_null();
-        } else {
-            self.span_id.append_value(&span_id);
-        }
+        self.span_id
+            .append_option(span_id.as_ref().map(AsRef::as_ref));
 
         self.event_name.append_value(&log.event_name);
         self.service_name.append_value(&service_name);
