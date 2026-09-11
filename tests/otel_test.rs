@@ -1,4 +1,4 @@
-use sigiro::otel::{TelemetryConfig, init_telemetry};
+use sigiro::otel::{OtelAuthKey, TelemetryConfig, init_telemetry};
 
 // A small instrumented function to exercise #[tracing::instrument].
 // We keep the name and a field to verify instrumentation at runtime.
@@ -19,8 +19,8 @@ fn integration_otel_self_instrumentation_tests() {
 
     let mut config = TelemetryConfig::from_env().expect("TelemetryConfig should not fail");
     // Ensure auth key is set so init_telemetry succeeds when endpoint is configured.
-    if config.auth_key.is_none() || config.auth_key.as_ref().unwrap().is_empty() {
-        config.auth_key = Some("test_auth_key_12345".to_string());
+    if config.auth_key.is_none() {
+        config.auth_key = Some(OtelAuthKey::try_new("test_auth_key_12345".to_string()).unwrap());
     }
     let guard_opt = init_telemetry(config).expect("init_telemetry should not fail");
 
@@ -34,4 +34,10 @@ fn integration_otel_self_instrumentation_tests() {
 
     // After any guard drop, instrumented function can still be called without panic
     let _ = instrumented_test_function(6);
+}
+
+#[test]
+fn otel_auth_key_rejects_empty_credentials() {
+    assert!(OtelAuthKey::try_new(String::new()).is_err());
+    assert!(OtelAuthKey::try_new("test_auth_key_12345".to_string()).is_ok());
 }

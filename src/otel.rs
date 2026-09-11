@@ -4,12 +4,29 @@ use opentelemetry_otlp::{LogExporter, SpanExporter, WithExportConfig, WithHttpCo
 use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider};
 use tracing_subscriber::prelude::*;
 
+/// Non-empty bearer credential used by Sigiro's own telemetry exporters.
+///
+/// Deliberately omits `Debug`, `Display`, and Serde traits so configuration
+/// logging and generic serialization cannot disclose the credential.
+#[nutype::nutype(validate(not_empty), derive(Clone, AsRef))]
+pub struct OtelAuthKey(String);
+
 /// OTel configuration — read once at startup, passed to init_telemetry()
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TelemetryConfig {
     pub(crate) endpoint: String,
     pub(crate) service_name: String,
-    pub auth_key: Option<String>,
+    pub auth_key: Option<OtelAuthKey>,
+}
+
+pub(crate) fn otel_auth_key_from_env() -> Result<Option<OtelAuthKey>> {
+    let raw = crate::config::OTEL_AUTH_KEY
+        .value()
+        .map_err(anyhow::Error::from)?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(OtelAuthKey::try_new(raw)?))
 }
 
 impl TelemetryConfig {
@@ -23,10 +40,7 @@ impl TelemetryConfig {
         let service_name = crate::config::OTEL_SERVICE_NAME
             .value()
             .map_err(anyhow::Error::from)?;
-        let auth_key = crate::config::OTEL_AUTH_KEY
-            .value()
-            .ok()
-            .filter(|k| !k.is_empty());
+        let auth_key = otel_auth_key_from_env()?;
         Ok(Self {
             endpoint,
             service_name,
@@ -75,8 +89,8 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
     // Auth headers for self-ingestion — auth_key read at app entry, not at runtime.
     // Require auth key when endpoint is configured; do not fall back to a hardcoded default.
     let auth_key = match config.auth_key {
-        Some(ref k) if !k.is_empty() => k.as_str(),
-        _ => {
+        Some(ref key) => key.as_ref(),
+        None => {
             anyhow::bail!(
                 "SIGIRO_OTEL_AUTH_KEY is required when OTEL_EXPORTER_OTLP_ENDPOINT is set. \
                  Set it to a strong random value or unset OTEL_EXPORTER_OTLP_ENDPOINT to disable self-telemetry."

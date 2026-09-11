@@ -51,13 +51,17 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
     // `SIGIRO_OTEL_AUTH_KEY` is the same key the OTel self-instrumentation
     // uses (see src/otel.rs) — reusing it here keeps self-profiling working
     // out of the box without inventing a new env var.
-    let http_headers = match crate::config::OTEL_AUTH_KEY.value() {
-        Ok(k) if !k.is_empty() => {
+    let auth_key = crate::otel::otel_auth_key_from_env()?;
+    let http_headers = match auth_key.as_ref() {
+        Some(key) => {
             let mut h = HashMap::new();
-            h.insert("Authorization".to_string(), format!("Bearer {k}"));
+            h.insert(
+                "Authorization".to_string(),
+                format!("Bearer {}", key.as_ref()),
+            );
             Some(h)
         }
-        _ => None,
+        None => None,
     };
 
     let cpu_agent = build_agent(
@@ -82,7 +86,7 @@ pub fn start_profiling() -> Result<Option<ProfilingHandle>> {
         service = %service_name,
         cpu_sample_rate = 100,
         heap_sample_interval_bytes = 524_288,
-        auth_configured = crate::config::OTEL_AUTH_KEY.value().map(|k| !k.is_empty()).unwrap_or(false),
+        auth_configured = auth_key.is_some(),
         "Pyroscope CPU and heap profiling enabled"
     );
 
