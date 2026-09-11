@@ -54,6 +54,14 @@ export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"
 切勿将密钥提交到任何文件中。使用哪个端点和端口由你的运营方告知，因此当主机不是
 `api.sigiro.com` 时，请使用 `https://<your-sigiro-host>`。
 
+默认情况下，失败的工具可能只报告 `TelemetrySafeError` 或 `ShellError` 之类的通用状态。要在调试时查看工具失败的原因，请显式启用工具详情：
+
+```bash
+export OTEL_LOG_TOOL_DETAILS=1
+```
+
+启用后，导出的数据可能包含命令、文件路径和错误文本。只有在可以接受额外隐私暴露时才启用此设置。
+
 ## Codex
 
 Codex 从自己的配置文件读取遥测配置，而不是从环境变量读取。请编辑

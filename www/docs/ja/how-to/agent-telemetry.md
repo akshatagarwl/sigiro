@@ -44,6 +44,14 @@ export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"
 
 キーはコミット対象のファイルに一切含めないようにします。使用するエンドポイントとポートはホスティング事業者から案内されるため、そのホストが `api.sigiro.com` でない場合は `https://<your-sigiro-host>` を使用してください。
 
+デフォルトでは、失敗したツールは `TelemetrySafeError` や `ShellError` のような一般的なステータスしか報告しないことがあります。失敗の理由をデバッグ中に確認するには、詳細を明示的に有効にします。
+
+```bash
+export OTEL_LOG_TOOL_DETAILS=1
+```
+
+この設定を有効にすると、コマンド、ファイルパス、エラーテキストが送信される可能性があります。追加のプライバシー上のリスクを許容できる場合にだけ有効にしてください。
+
 ## Codex
 
 Codex はテレメトリー設定を環境変数からではなく、独自の設定ファイルから読み取ります。`~/.codex/config.toml` を編集してください。

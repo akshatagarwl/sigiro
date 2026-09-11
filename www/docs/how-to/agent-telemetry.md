@@ -73,6 +73,17 @@ bodies by default. Do not enable `OTEL_LOG_USER_PROMPTS`,
 `OTEL_LOG_ASSISTANT_RESPONSES`, `OTEL_LOG_TOOL_CONTENT`, or
 `OTEL_LOG_RAW_API_BODIES` unless the additional exposure is intentional.
 
+By default, a failed tool may only report a generic status such as
+`TelemetrySafeError` or `ShellError`. To see why a tool failed while debugging,
+opt in to its details:
+
+```bash
+export OTEL_LOG_TOOL_DETAILS=1
+```
+
+This can export commands, file paths, and error text. Enable it only when that
+additional privacy exposure is acceptable.
+
 Claude Code documents distributed traces as beta, but its current public setup
 guide does not give a complete stable trace configuration. The settings above
 therefore export the documented metrics and events without relying on an old beta

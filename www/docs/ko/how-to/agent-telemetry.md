@@ -58,6 +58,17 @@ export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"
 알려주므로, 해당 호스트가 `api.sigiro.com` 이 아닌 경우
 `https://<your-sigiro-host>` 를 사용하십시오.
 
+기본적으로 실패한 도구는 `TelemetrySafeError` 또는 `ShellError`와 같은 일반적인
+상태만 보고할 수 있습니다. 디버깅 중 실패 원인을 확인하려면 도구 세부 정보를
+명시적으로 활성화하십시오:
+
+```bash
+export OTEL_LOG_TOOL_DETAILS=1
+```
+
+이 설정을 활성화하면 명령, 파일 경로, 오류 텍스트가 전송될 수 있습니다. 추가적인
+개인정보 노출을 허용할 수 있을 때만 활성화하십시오.
+
 ## Codex
 
 Codex는 환경이 아니라 자체 설정 파일에서 텔레메트리 설정을 읽습니다.
