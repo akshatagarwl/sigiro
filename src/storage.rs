@@ -22,9 +22,8 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     // Load the ONLY extension this mode needs: ducklake. The catalog is a
     // DuckDB file (see the ATTACH below), so the sqlite extension — needed only
     // for `ducklake:sqlite:` catalog backends — is NOT required here. It used to
-    // be installed "for compatibility" but that pulled a runtime download into
-    // the read-only baked extension dir (/opt/sigiro/extensions), failing with
-    // "Permission denied" and wedging the attach-retry loop in local mode.
+    // be installed "for compatibility" but that pulled an unnecessary runtime
+    // download into the extension cache in local mode.
     // Emit a progress line before each step so cold starts don't look like
     // a hang (F-01/F-29). With a fresh extension dir, DuckDB synchronously
     // downloads ~5MB of .duckdb_extension files over HTTP and emits no
@@ -633,11 +632,11 @@ pub fn table_prefix() -> &'static str {
     TABLE_PREFIX
 }
 
-pub fn resolve_extension_dir(data_dir: &Utf8Path) -> camino::Utf8PathBuf {
+pub(crate) fn resolve_extension_dir(data_dir: &Utf8Path) -> camino::Utf8PathBuf {
     crate::config::EXTENSION_DIR
         .value()
         .ok()
-        .filter(|s| !s.is_empty())
+        .filter(|path| !path.is_empty())
         .map(camino::Utf8PathBuf::from)
         .unwrap_or_else(|| data_dir.join("extensions"))
 }
@@ -658,24 +657,20 @@ pub(crate) fn install_extensions_with_progress(conn: &Connection, names: &[&str]
 ///
 /// This list and that `LOAD` batch must agree: anything named there but not
 /// satisfiable at that moment fails the connection, and because the lockdown is
-/// irreversible and instance-global there is no recovery. `prewarm_extensions`
-/// caches whichever of these the running binary does not already carry, and
-/// [`lock_filesystem_loads_are_prewarmed`] asserts the two stay in step.
+/// irreversible and instance-global there is no recovery.
 pub(crate) const LOCKDOWN_PRELOADED_EXTENSIONS: &[&str] = &["parquet", "json", "icu"];
 
 /// Which of `names` this binary does NOT have statically linked, and therefore
-/// has to cache as a file before the filesystem lockdown. The build pipeline
-/// merges every archive fragment for each target, but this runtime query keeps
-/// extension loading correct if an upstream bundle changes its contents.
+/// has to cache as a file before the filesystem lockdown. The runtime query
+/// keeps extension loading correct if an upstream bundle changes its contents.
 ///
 /// Asking DuckDB is exact and costs one query. **`INSTALL` is not a no-op on a
 /// statically linked extension** — verified: it downloads from the repository,
 /// writes a `.duckdb_extension` file and flips `install_mode` from
 /// `STATICALLY_LINKED` to `REPOSITORY`. On the distroless image that write
-/// targets a read-only `/opt/sigiro/extensions`, so installing unconditionally
-/// would trade a working static load for a needless download at best and a
-/// permission failure at worst.
-fn extensions_needing_install(conn: &Connection, names: &[&str]) -> Result<Vec<String>> {
+/// targets the writable persistent data-dir cache, so installing unconditionally
+/// would cause needless downloads.
+pub(crate) fn extensions_needing_install(conn: &Connection, names: &[&str]) -> Result<Vec<String>> {
     let mut needed = Vec::new();
     for name in names {
         // `install_mode` is NULL for an extension that is neither loaded nor
@@ -741,78 +736,6 @@ pub(crate) fn install_extensions_from(
         })?;
         tracing::info!("loaded DuckDB extension: {name}");
     }
-    Ok(())
-}
-
-/// Pre-download DuckDB extensions into the standard extension directory
-/// so the first `sigiro serve` doesn't hang on a 30-90s blocking download.
-/// This is what `sigiro fetch-extensions` invokes.
-///
-/// Takes the pool's overall `data_dir` (not a per-project dir) and resolves
-/// the target directory via [`resolve_extension_dir`] — the SAME resolution
-/// `attach_ducklake` uses at serve-time (`SIGIRO_EXTENSION_DIR` if set, else
-/// `data_dir/extensions`, deliberately WITHOUT a per-project segment: the
-/// extension cache is shared across all projects). Previously this hardcoded
-/// `<project_dir>/extensions`, which for the common case (no
-/// `SIGIRO_EXTENSION_DIR` override, prewarming the "default" project)
-/// resolved to `<data_dir>/default/extensions` — a directory
-/// `attach_ducklake` never reads from (it reads `<data_dir>/extensions`) —
-/// so `sigiro fetch-extensions` silently prewarmed a directory serve-time
-/// never consulted, defeating its entire purpose.
-///
-/// Includes `httpfs` and `quack`: `attach_ducklake` loads both, unconditionally
-/// of `SIGIRO_QUERY_SURFACE`, right before it locks down filesystem access
-/// (`enable_external_access = false` is instance-global and irreversible — an
-/// extension not already loaded before that point can never load afterward on
-/// this or any cloned connection). Pre-warming them here means that lockdown
-/// never has to fall back to a live network install. `quack` is warmed via
-/// [`crate::quack::load_and_pin`] (not [`install_extensions_with_progress`])
-/// so its version pin is verified here too, not just at serve-time — a drift
-/// between what `sigiro fetch-extensions` cached and what serve-time expects
-/// would otherwise surface as a confusing later failure.
-pub fn prewarm_extensions(data_dir: &Utf8Path) -> Result<()> {
-    let ext_dir = resolve_extension_dir(data_dir);
-    std::fs::create_dir_all(&ext_dir)
-        .with_context(|| format!("failed to create extensions directory: {ext_dir}"))?;
-    let conn = Connection::open_in_memory()
-        .context("failed to open in-memory DuckDB for extension prewarm")?;
-    let ext_dir_str = ext_dir.as_str();
-    conn.execute_batch(&format!("SET extension_directory = '{ext_dir_str}';"))
-        .context("failed to set extension_directory")?;
-    tracing::info!(
-        "pre-warming DuckDB extensions into {} (may take 30-90s on first run)...",
-        ext_dir
-    );
-    // sqlite is local-catalog-only (hosted uses a postgres catalog) and
-    // downloads on demand for local dev.
-    install_extensions_with_progress(&conn, &["ducklake", "postgres", "httpfs"])?;
-    // The extensions `lock_filesystem` LOADs, cached only where this binary does
-    // not already carry them.
-    //
-    // Decide per extension at runtime rather than per platform at compile time;
-    // see
-    // `extensions_needing_install` for why an unconditional INSTALL is wrong.
-    let missing = extensions_needing_install(&conn, LOCKDOWN_PRELOADED_EXTENSIONS)?;
-    if missing.is_empty() {
-        tracing::info!("parquet/json/icu are statically linked into this binary — no files needed");
-    } else {
-        tracing::info!(
-            "caching lockdown-preloaded extensions not static in this binary: {}",
-            missing.join(", ")
-        );
-        let refs: Vec<&str> = missing.iter().map(String::as_str).collect();
-        install_extensions_with_progress(&conn, &refs)?;
-    }
-    // system_stats backs the `sys_*` host-statistics functions federated fleet
-    // queries reach (`crate::federate`). `attach_ducklake` installs it right
-    // before the irreversible filesystem lockdown, so pre-warming it here is
-    // what keeps that path off the network at serve time — same reasoning as
-    // httpfs/quack above. Published to the COMMUNITY repo, not core.
-    install_extensions_from(&conn, &["system_stats"], ExtensionRepo::Community)
-        .context("failed to pre-warm the system_stats extension")?;
-    tracing::info!("pre-warming the quack query-surface extension (version-pinned)...");
-    crate::quack::load_and_pin(&conn).context("failed to pre-warm the quack extension")?;
-    tracing::info!("DuckDB extensions pre-warmed successfully");
     Ok(())
 }
 

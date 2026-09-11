@@ -72,7 +72,8 @@ pub(crate) static ALERT_WEBHOOK_TOKEN: Envar<String> =
     Envar::on_demand("SIGIRO_ALERT_WEBHOOK_TOKEN", || {
         EnvarDef::Default(String::new())
     });
-/// DuckDB extension directory (optional — shared cache across tests).
+/// Optional DuckDB extension-cache override. Normal deployments use
+/// `<SIGIRO_DATA_DIR>/extensions`; tests may share a cache across isolated data dirs.
 pub(crate) static EXTENSION_DIR: Envar<String> = Envar::on_startup("SIGIRO_EXTENSION_DIR", || {
     EnvarDef::Default(if cfg!(test) {
         "/tmp/sigiro-test-extensions".to_string()

@@ -91,12 +91,6 @@ tailnet 上で見つける必要があります。1 つのローカルサーバ�
 `sigiro status` はサーバーの `/health` エンドポイントを読み取り、ヘルスブロックを出力します。
 `/health` にキーは不要です。
 
-## fetch-extensions
-
-`sigiro fetch-extensions` は、最初の `sigiro serve` の前に、クエリ拡張機能をデータディレクトリに
-ダウンロードします。sigiro のインストール後に一度実行するか、外部ネットワークにアクセスできない
-ホストへのデプロイ前に実行してください。
-
 ## healthcheck
 
 `sigiro healthcheck` はローカルの `/health` エンドポイントをプローブし、サーバーが準備完了の場合に

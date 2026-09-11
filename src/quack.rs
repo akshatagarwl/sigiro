@@ -69,10 +69,6 @@ pub(crate) struct QuackToken(String);
 /// Install (if needed) and load the `quack` DuckDB extension on `conn`, then
 /// assert the loaded build matches [`EXPECTED_QUACK_VERSION`]. Fails loud on
 /// a mismatch — refuses to serve rather than trust an unpinned extension.
-///
-/// Also called by [`crate::storage::prewarm_extensions`] so `sigiro
-/// fetch-extensions` and the quack E2E test warm (and version-verify) this
-/// exact same pinned build ahead of time, not just at serve-time.
 pub(crate) fn load_and_pin(conn: &Connection) -> Result<()> {
     if let Err(bare_load_error) = conn.execute_batch("LOAD quack;") {
         // `FROM core` is required, not merely the default: see

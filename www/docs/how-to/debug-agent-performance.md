@@ -18,8 +18,7 @@ claim.
 
 ## 1. Start an isolated local sigiro
 
-Install the latest release and download its query extensions before the first
-server start:
+Install the latest release and start the server:
 
 ```bash
 curl -fsSL https://sigiro.com/install | sh
@@ -31,7 +30,6 @@ unset SIGIRO_S3_BUCKET SIGIRO_S3_ENDPOINT SIGIRO_S3_REGION
 unset SIGIRO_S3_KEY_ID SIGIRO_S3_SECRET
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 
-sigiro fetch-extensions
 sigiro serve
 ```
 

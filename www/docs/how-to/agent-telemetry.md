@@ -30,7 +30,6 @@ settings in this guide.
 Start sigiro and verify its API:
 
 ```bash
-sigiro fetch-extensions
 sigiro serve
 curl http://127.0.0.1:9999/health
 ```

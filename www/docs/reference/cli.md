@@ -1,11 +1,11 @@
 ---
 title: CLI
-description: Every sigiro subcommand, its arguments, and the environment variables it reads. sigiro has eight subcommands.
+description: Every sigiro subcommand, its arguments, and the environment variables it reads. sigiro has seven subcommands.
 sidebar:
   order: 2
 ---
 
-`sigiro` has eight subcommands. Client commands print indented JSON on success;
+`sigiro` has seven subcommands. Client commands print indented JSON on success;
 server commands remain attached to their protocol or listener.
 
 The global flag `--key <TOKEN>` sets the bearer token for a hosted endpoint. It
@@ -89,12 +89,6 @@ such a query by default.
 
 `sigiro status` reads the server `/health` endpoint and prints the health block.
 `/health` needs no key.
-
-## fetch-extensions
-
-`sigiro fetch-extensions` downloads the query extensions into the data directory
-before the first `sigiro serve`. Run this once after you install sigiro, or
-before a deploy to a host with no outbound network access.
 
 ## healthcheck
 

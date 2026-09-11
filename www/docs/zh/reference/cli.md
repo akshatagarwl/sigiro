@@ -84,12 +84,6 @@ sigiro 会拒绝这类查询。
 `sigiro status` 读取服务器的 `/health` 端点并输出健康状况块。`/health` 不需要
 key。
 
-## fetch-extensions
-
-`sigiro fetch-extensions` 在首次执行 `sigiro serve` 之前把查询扩展下载到数据
-目录中。安装 sigiro 之后运行一次，或在部署到没有出站网络访问权限的主机之前
-运行。
-
 ## healthcheck
 
 `sigiro healthcheck` 探测本地 `/health` 端点，只有在服务器就绪时才以 `0` 退出。

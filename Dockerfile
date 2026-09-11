@@ -74,7 +74,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
     V=$(echo "$T" | tr 'a-z-' 'A-Z_'); Tu=$(echo "$T" | tr '-' '_'); \
     export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
     mold -run cargo build --release --target "$T" --bin sigiro && \
-    cp "target/${T}/release/sigiro" /build/sigiro
+    cp "target/${T}/release/sigiro" /build/sigiro && \
+    mkdir -p /build/data-dir
 
 # The Linux binaries we publish for download, uncompressed.
 #
@@ -87,29 +88,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
 FROM scratch AS dist
 COPY --from=builder /build/sigiro /sigiro
 
-# Runtime-prep (has a shell): bake the loadable extensions that aren't static in
-# the binary. Runs the TARGET binary, so pinned to $TARGETPLATFORM.
-FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS runtime-prep
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /build/sigiro /usr/local/bin/sigiro
-ENV SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
-RUN /usr/local/bin/sigiro fetch-extensions
-# An empty data dir to COPY --chown into distroless, which has no shell to mkdir
-# with. Without this, `docker run <image>` dies on "failed to create data
-# directory /var/lib/sigiro: Permission denied" because nonroot can't write /var/lib.
-RUN mkdir -p /var/lib/sigiro
-
 # Final image: distroless/cc (glibc 2.36 + libstdc++ + ca-certificates), no shell,
 # runs as the built-in nonroot user.
 FROM gcr.io/distroless/cc-debian12
 COPY --from=builder /build/sigiro /usr/local/bin/sigiro
-COPY --from=runtime-prep /opt/sigiro/extensions /opt/sigiro/extensions
-COPY --from=runtime-prep --chown=nonroot:nonroot /var/lib/sigiro /var/lib/sigiro
-# Keep the extension dir OUTSIDE the data dir: a hosted volume mounts over
-# SIGIRO_DATA_DIR and would mask baked extensions, forcing a cold re-download.
-ENV SIGIRO_DATA_DIR=/var/lib/sigiro \
-    SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
+COPY --from=builder --chown=nonroot:nonroot /build/data-dir /var/lib/sigiro
+ENV SIGIRO_DATA_DIR=/var/lib/sigiro
 USER nonroot
+WORKDIR /var/lib/sigiro
 EXPOSE 4317 4318 9999
 # Shell-free healthcheck: distroless has no curl/sh, so the usual
 # `curl -f /health` can't run. `sigiro healthcheck` exits 0 only when Ready.

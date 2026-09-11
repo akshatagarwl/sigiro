@@ -380,6 +380,8 @@ impl ProjectPool {
         project_dir: &camino::Utf8Path,
     ) -> Result<()> {
         let ext_dir = crate::storage::resolve_extension_dir(&self.data_dir);
+        std::fs::create_dir_all(&ext_dir)
+            .with_context(|| format!("failed to create DuckDB extension directory: {ext_dir}"))?;
         let temp_dir = project_dir.join(".tmp");
         std::fs::create_dir_all(&temp_dir)
             .with_context(|| format!("failed to create DuckDB temp directory: {temp_dir}"))?;
@@ -521,6 +523,17 @@ impl ProjectPool {
                                  filesystem access",
                             )?;
                         }
+                        let missing = crate::storage::extensions_needing_install(
+                            conn,
+                            crate::storage::LOCKDOWN_PRELOADED_EXTENSIONS,
+                        )?;
+                        if !missing.is_empty() {
+                            let refs: Vec<&str> = missing.iter().map(String::as_str).collect();
+                            crate::storage::install_extensions_with_progress(conn, &refs).context(
+                                "failed to install lockdown-preloaded DuckDB extensions \
+                                     before locking filesystem access",
+                            )?;
+                        }
                         self.lock_filesystem(conn, &ext_dir)?;
                     }
                     return Ok(());
@@ -589,18 +602,11 @@ impl ProjectPool {
     /// extension with no filesystem or network access at query time, so pre-loading
     /// it does not widen the lockdown surface.
     ///
-    /// LOAD, never INSTALL. `INSTALL` forces a repo download into the baked
-    /// extension dir (/opt/sigiro/extensions), which is read-only on the
-    /// distroless image and fails with "Permission denied"; `LOAD` uses whatever
-    /// copy is already available with no network access.
+    /// Install missing extensions into the writable persistent data-dir cache,
+    /// then LOAD them. This all happens before the irreversible lockdown.
     ///
-    /// Each supported target links the same kind of ar-merged upstream static
-    /// bundle. `storage::prewarm_extensions` still asks DuckDB which extensions
-    /// are `STATICALLY_LINKED` rather than hardcoding an answer, so an upstream
-    /// bundle change cannot turn into a late query failure.
-    ///
-    /// The names live in `storage::LOCKDOWN_PRELOADED_EXTENSIONS` so the prewarm
-    /// and this batch cannot drift apart.
+    /// The names live in `storage::LOCKDOWN_PRELOADED_EXTENSIONS` so the
+    /// production initialization and this batch cannot drift apart.
     fn lock_filesystem(&self, conn: &Connection, ext_dir: &camino::Utf8Path) -> Result<()> {
         let data_dir = self.data_dir.as_str().replace('\'', "''");
         let ext = ext_dir.as_str().replace('\'', "''");
@@ -626,9 +632,7 @@ impl ProjectPool {
     ) -> Result<OpenedProject> {
         let base = Connection::open_in_memory()
             .with_context(|| "failed to open in-memory DuckDB".to_string())?;
-        tracing::info!(
-            "DuckDB: loading extensions on first use (run `sigiro fetch-extensions` to pre-warm)"
-        );
+        tracing::info!("DuckDB: loading extensions during project initialization");
         self.attach_ducklake(&base, project_id, project_dir)?;
         // Ensure DuckLake tables are discoverable without schema prefix.
         base.execute_batch("USE lake;")
@@ -773,39 +777,15 @@ mod tests {
     /// Every extension `lock_filesystem` preloads is satisfiable on THIS build,
     /// either statically linked or present as a cached file.
     ///
-    /// This is the regression guard for the class of bug that has now hit this
-    /// surface three times: `prewarm_extensions` and `lock_filesystem` each held
-    /// their own belief about what the binary contains, and nothing checked that
-    /// they agreed. The third instance shipped in the published macOS binaries —
-    /// `sigiro serve` started, `/health` returned 200, and every query 400'd on a
-    /// missing `json.duckdb_extension`.
-    ///
-    /// Deliberately asserts the *outcome* (the batch succeeds) rather than
-    /// mirroring the list, so it stays honest on whichever platform runs it: on
-    /// Linux the extensions are static and this passes with an empty extension
-    /// dir; on macOS it passes only because the prewarm cached them.
+    /// Regression guard: production project initialization must install any
+    /// lockdown extensions that are not statically linked before the lockdown.
     #[test]
-    fn lock_filesystem_loads_are_prewarmed() {
+    fn project_initialization_loads_extensions_before_lockdown() {
         let dir = tempfile::tempdir().unwrap();
         let data_dir = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
-
-        // Same call `sigiro fetch-extensions` makes.
-        crate::storage::prewarm_extensions(&data_dir)
-            .expect("prewarm must succeed on a fresh data dir");
-
-        let ext_dir = crate::storage::resolve_extension_dir(&data_dir);
         let pool = ProjectPool::new(data_dir, 10, crate::storage::StorageMode::LocalFile);
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(&format!(
-            "SET extension_directory = '{}';",
-            ext_dir.as_str().replace('\'', "''")
-        ))
-        .unwrap();
-
-        pool.lock_filesystem(&conn, &ext_dir).expect(
-            "every LOCKDOWN_PRELOADED_EXTENSIONS entry must be loadable after prewarm — \
-             if this fails, prewarm_extensions is not caching something lock_filesystem needs",
-        );
+        pool.create_project("default")
+            .expect("production initialization must load extensions before lockdown");
     }
 
     /// M-B (asserted-SQL): `lock_filesystem` actually sets

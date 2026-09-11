@@ -27,10 +27,8 @@ struct TestContext {
     _tmp_dir: TempDir,
 }
 
-/// Build a test AppState with temp directories.
-/// Sets SIGIRO_EXTENSION_DIR to a stable path so all tests share one
-/// extension cache (downloads happen once, not per-test), and creates
-/// an in-memory SQLite admin DB with all required tables.
+/// Build a test AppState with temp directories and an in-memory SQLite admin
+/// DB with all required tables.
 fn build_test_context() -> TestContext {
     // Self-host default: `Open` auth (no per-request key). The auth-rejection
     // test uses `build_context_with_auth` to exercise `TenantKeys`.
@@ -40,41 +38,6 @@ fn build_test_context() -> TestContext {
 fn build_context_with_auth(auth_mode: sigiro::auth::AuthMode) -> TestContext {
     let tmp_dir = TempDir::new().expect("failed to create temp dir");
     let data_dir = camino::Utf8PathBuf::from_path_buf(tmp_dir.path().to_path_buf()).unwrap();
-
-    // `pool::open_connection` reads SIGIRO_EXTENSION_DIR via
-    // `crate::config::EXTENSION_DIR.value()` to locate the shared DuckDB
-    // extension cache. This env var is process-global and therefore racy
-    // across parallel tests, but it is read-only after the first
-    // download — the worst case is two tests downloading the same file,
-    // never a correctness bug. SIGIRO_DATA_DIR is NOT set here: data_dir
-    // is passed explicitly through `AppState` so the env var is no
-    // longer needed for any test code path.
-    //
-    // SAFETY: set_var is unsafe in concurrent programs; this is a test
-    // helper that runs in the same process as the server under test. The
-    // race is benign for the read-only cache (see comment above).
-    unsafe {
-        std::env::set_var("SIGIRO_EXTENSION_DIR", "/tmp/sigiro-test-extensions");
-    }
-
-    // Prewarm exactly as `sigiro fetch-extensions` does, instead of relying on
-    // autoload to populate the cache incidentally.
-    //
-    // Without this the suite depended on an accident: `ducklake` and `httpfs`
-    // pull `parquet` in transitively, but nothing pulls `json` or `icu`, so on a
-    // platform where those are not statically linked (macOS — see
-    // `storage::extensions_needing_install`) every test here failed at
-    // `create_project` with a missing `json.duckdb_extension` as soon as
-    // /tmp/sigiro-test-extensions was cleared. That is the same defect users hit
-    // on a fresh install, and the shared cache is what hid it locally.
-    //
-    // Idempotent and cheap once the cache is warm, and a no-op on a build where
-    // the extensions are static. The argument is ignored in practice because
-    // `resolve_extension_dir` prefers SIGIRO_EXTENSION_DIR, set just above — the
-    // same resolution serve-time uses, so this warms the directory the pool
-    // actually reads.
-    sigiro::storage::prewarm_extensions(&data_dir)
-        .expect("failed to prewarm DuckDB extensions for the test extension cache");
 
     let pool = Arc::new(ProjectPool::new(
         data_dir.clone(),

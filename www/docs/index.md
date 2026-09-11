@@ -49,7 +49,7 @@ type or a limit.
   by the server's `/openapi.json`. Ingest protocols that are not in that
   document, including the Pyroscope-compatible routes, are documented in the
   how-to guides.
-- **[CLI reference](/docs/reference/cli)** — eight subcommands, every flag, and
+- **[CLI reference](/docs/reference/cli)** — seven subcommands, every flag, and
   every environment variable they read.
 
 An agent that reads `/openapi.json` needs no other information from us.

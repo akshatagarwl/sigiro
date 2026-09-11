@@ -9,11 +9,14 @@
 //!   cargo test --test attach_fail_fast_test -- --ignored --nocapture
 //!   docker compose -f docker-compose.dev.yml down -v
 
+#![allow(clippy::disallowed_methods)]
+// This isolated E2E process points production startup at the cache populated by
+// its setup connections so the timed assertion measures only attach retries.
+
 use std::time::{Duration, Instant};
 
-use camino::Utf8PathBuf;
 use sigiro::pool::ProjectPool;
-use sigiro::storage::{self, DataLocation, StorageConfig, StorageMode};
+use sigiro::storage::{DataLocation, StorageConfig, StorageMode};
 
 // Matches docker-compose.dev.yml.
 const CATALOG_URL: &str = "postgresql://sigiro:sigiro@127.0.0.1:5432/ducklake";
@@ -27,8 +30,14 @@ fn local_config() -> StorageConfig {
 
 fn pg_conn() -> duckdb::Connection {
     let conn = duckdb::Connection::open_in_memory().expect("open in-memory duckdb");
-    conn.execute_batch("INSTALL ducklake; LOAD ducklake; INSTALL postgres; LOAD postgres;")
-        .expect("load ducklake+postgres extensions");
+    conn.execute_batch(
+        "INSTALL ducklake; LOAD ducklake;
+         INSTALL postgres; LOAD postgres;
+         INSTALL parquet; LOAD parquet;
+         INSTALL json; LOAD json;
+         INSTALL icu; LOAD icu;",
+    )
+    .expect("load extensions required by distributed local-data initialization");
     conn
 }
 
@@ -65,11 +74,19 @@ fn poison_with_s3_data_path() {
 #[ignore = "needs Docker Postgres (docker-compose.dev.yml)"]
 fn poisoned_catalog_fails_fast_not_wedged() {
     let tmp = tempfile::tempdir().expect("create temp data dir");
-    let data_dir = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).expect("utf8 data dir");
+    let data_dir =
+        camino::Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).expect("utf8 data dir");
 
-    // Warm the pool's extension cache so the TIMED attach below measures retry-loop
-    // time, not a cold extension download.
-    storage::prewarm_extensions(&data_dir).expect("prewarm extensions");
+    // The setup connections below install ducklake and postgres before the timed
+    // assertion. Point the production pool at that same cache so the assertion
+    // measures attach retry behavior, not first-run network latency.
+    let extension_dir = std::env::var("HOME")
+        .map(|home| format!("{home}/.duckdb/extensions"))
+        .expect("HOME must be set for the DuckDB extension cache");
+    // SAFETY: this ignored E2E test is the only test in its process.
+    unsafe {
+        std::env::set_var("SIGIRO_EXTENSION_DIR", extension_dir);
+    }
 
     drop_schema();
     poison_with_s3_data_path();

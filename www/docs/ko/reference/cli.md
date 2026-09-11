@@ -91,12 +91,6 @@ tailnet에서 찾아야 합니다. 단일 로컬 서버에 대해 SQL을 실행�
 `sigiro status`는 서버의 `/health` 엔드포인트를 읽어 헬스 블록을 출력합니다.
 `/health`는 키를 필요로 하지 않습니다.
 
-## fetch-extensions
-
-`sigiro fetch-extensions`는 최초 `sigiro serve` 실행 전에 쿼리 확장을 데이터 디렉터리로
-다운로드합니다. sigiro를 설치한 후 한 번 실행하거나, 외부 네트워크 접속이 불가능한
-호스트로 배포하기 전에 실행하십시오.
-
 ## healthcheck
 
 `sigiro healthcheck`는 로컬 `/health` 엔드포인트를 검사하고, 서버가 준비된 경우에만

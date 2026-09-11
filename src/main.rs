@@ -91,10 +91,6 @@ enum Command {
         #[arg(long)]
         to: Option<i64>,
     },
-    /// Pre-download DuckDB extensions into the data dir so the first
-    /// `sigiro serve` doesn't hang on a 30-90s blocking download (F-01).
-    /// Use this once after installing sigiro, or before an offline deploy.
-    FetchExtensions,
     /// Probe the local /health endpoint and exit 0 if ready, non-zero
     /// otherwise. This is the container HEALTHCHECK for the distroless image,
     /// which has no shell or curl for the usual `curl -f /health` probe.
@@ -306,16 +302,6 @@ async fn main() -> Result<()> {
             let value = serde_json::to_value(&resp)?;
             println!("{}", format_output(&value)?);
         }
-        Some(Command::FetchExtensions) => {
-            let dir = data_dir()?;
-            std::fs::create_dir_all(&dir)
-                .with_context(|| format!("failed to create data directory {dir}"))?;
-            sigiro::storage::prewarm_extensions(&dir)?;
-            println!(
-                "DuckDB extensions pre-warmed into {}",
-                sigiro::storage::resolve_extension_dir(&dir)
-            );
-        }
         Some(Command::Healthcheck) => {
             // Shell-free liveness probe for the distroless container HEALTHCHECK.
             // /health is public (no auth). Exit 0 only when fully Ready so the
@@ -394,10 +380,7 @@ async fn run_serve() -> Result<()> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create data directory {dir}"))?;
-    tracing::info!(
-        "sigiro starting — data_dir={}, first-run extension download may take 30-90s",
-        dir
-    );
+    tracing::info!(%dir, "sigiro starting");
 
     // Init-complete flag — flipped at the tail of init so /health reports
     // Ready only after the server is actually serving traffic. Owned by
@@ -416,9 +399,6 @@ async fn run_serve() -> Result<()> {
 
     let kernel = probe_kernel_release();
     let (has_bpf, has_net_admin) = probe_capabilities();
-
-    // Extension probe is deferred to first project connection (pool.create_project).
-    // Use `sigiro fetch-extensions` to pre-download for offline deployments.
 
     // Pre-create the "default" project.
     //
