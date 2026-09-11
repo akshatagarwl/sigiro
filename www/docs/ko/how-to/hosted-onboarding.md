@@ -1,8 +1,8 @@
 ---
 title: 호스티드 sigiro로 텔레메트리 전송
 description: >-
-  테넌트 키로 호스티드 sigiro에 OpenTelemetry를 전송한 뒤, SQL로 다시 조회합니다. 직접 운영해야 하는 인프라는 없습니다.
-  초대 기반 베타 기간에는 각 테넌트를 저희가 직접 설정합니다.
+  테넌트 키로 호스티드 sigiro에 OpenTelemetry를 전송한 뒤 SQL로 조회합니다. 운영할 인프라는 없으며, 초대 기반 베타
+  기간에는 저희가 각 테넌트를 설정합니다.
 sidebar:
   order: 2
 ---

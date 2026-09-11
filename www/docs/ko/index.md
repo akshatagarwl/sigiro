@@ -2,7 +2,7 @@
 title: sigiro 문서
 description: >-
   sigiro는 스스로 복구하는 소프트웨어를 위한 탐지 및 진단 계층입니다. OpenTelemetry가 들어가고, 순위가 매겨진 결과와 실행
-  가능한 SQL이 나옵니다. 대시보드가 아니라 에이전트를 위한 것입니다.
+  가능한 SQL이 나옵니다.
 sidebar:
   order: 0
 ---

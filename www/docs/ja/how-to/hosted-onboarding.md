@@ -1,8 +1,8 @@
 ---
 title: ホスト型 sigiro へのテレメトリ送信
 description: >-
-  テナントキーを使ってホスト型 sigiro に OpenTelemetry を送信し、SQL
-  で照会します。インフラの運用は不要です。招待制ベータの期間中は、各テナントを当社が手作業でセットアップします。
+  テナントキーでホスト型 sigiro に OpenTelemetry を送信し、SQL
+  で照会します。インフラの運用は不要で、招待制ベータの期間は当社が各テナントを設定します。
 sidebar:
   order: 2
 ---

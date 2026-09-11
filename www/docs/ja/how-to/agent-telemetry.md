@@ -1,8 +1,8 @@
 ---
 title: エージェント自身のテレメトリーを sigiro に送信する
 description: >-
-  Claude Code と Codex はどちらも、自身のセッションに関する OpenTelemetry を出力します。これらを sigiro
-  に向けることで、トークン数、ツール呼び出し、セッションのレイテンシーを SQL で読み出せます。
+  Claude Code と Codex は自身のセッションの OpenTelemetry を出力します。sigiro
+  に向ければ、トークン数やツール呼び出し、レイテンシーを SQL で読み出せます。
 sidebar:
   order: 3
 ---

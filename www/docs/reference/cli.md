@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: Every sigiro subcommand, its arguments, and the environment variables it reads. sigiro has seven subcommands.
+description: Every sigiro subcommand, its arguments, and the environment variables it reads. sigiro has seven subcommands; the client ones print indented JSON.
 sidebar:
   order: 2
 ---

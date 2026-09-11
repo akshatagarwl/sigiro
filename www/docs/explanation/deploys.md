@@ -1,6 +1,6 @@
 ---
 title: About deploy detection, and what your spans must carry
-description: sigiro reads one attribute for deploys — service.version on the resource of a span. This page explains how a version becomes a deploy event, how sigiro picks the suspect deploy, and what you get when a service sends no version at all.
+description: sigiro reads one attribute for deploys — service.version on a span's resource. How a version becomes a deploy event, and what happens without one.
 sidebar:
   order: 4
 ---

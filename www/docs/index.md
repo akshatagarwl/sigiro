@@ -1,6 +1,6 @@
 ---
 title: sigiro docs
-description: sigiro is the detect and diagnose layer for software that repairs itself. OpenTelemetry goes in. Ranked results and runnable SQL come out, for agents and not for dashboards.
+description: sigiro is the detect and diagnose layer for software that repairs itself. OpenTelemetry goes in; ranked results and runnable SQL come out, for agents.
 sidebar:
   order: 0
 ---

@@ -1,6 +1,6 @@
 ---
 title: Send telemetry to hosted sigiro
-description: Send OpenTelemetry to hosted sigiro with a tenant key, then query it back with SQL. You run no infrastructure. We set up each tenant by hand during the invited beta.
+description: Send OpenTelemetry to hosted sigiro with a tenant key, then query it back with SQL. You run no infrastructure; we set up each tenant by hand.
 sidebar:
   order: 2
 ---

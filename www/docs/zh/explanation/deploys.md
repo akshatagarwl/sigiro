@@ -1,8 +1,8 @@
 ---
 title: 关于部署检测，以及你的 span 必须携带的信息
 description: >-
-  sigiro 只读取一个属性来判断部署——span 资源上的 service.version。本页说明一个版本号如何变成部署事件、sigiro
-  如何挑选可疑部署，以及当某个服务完全不发送版本号时你会得到什么。
+  sigiro 只读取一个属性来判断部署——span
+  资源上的 service.version。本页说明版本号如何变成部署事件，以及服务不发送版本号时会得到什么。
 sidebar:
   order: 4
 ---

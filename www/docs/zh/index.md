@@ -1,6 +1,6 @@
 ---
 title: sigiro 文档
-description: sigiro 是自修复软件的检测与诊断层。输入 OpenTelemetry，输出排序后的结果和可运行的 SQL，面向智能体而非仪表盘。
+description: sigiro 是自修复软件的检测与诊断层。输入 OpenTelemetry，输出排序后的结果和每条结果背后可运行的 SQL，面向智能体而非仪表盘。
 sidebar:
   order: 0
 ---

@@ -1,8 +1,8 @@
 ---
 title: 에이전트로 코드 계측하기
 description: >-
-  에이전트에게 프롬프트 하나를 전달하십시오. 에이전트가 서비스에 OpenTelemetry 자동 계측을 추가하고 sigiro를 가리키도록
-  설정합니다. Claude Code, OpenCode, Codex에서 사용할 수 있습니다.
+  에이전트에게 프롬프트 하나를 전달하면, 서비스에 OpenTelemetry 자동 계측을 추가하고 sigiro를 가리킵니다. Claude
+  Code, OpenCode, Codex에서 동작합니다.
 sidebar:
   order: 1
 ---

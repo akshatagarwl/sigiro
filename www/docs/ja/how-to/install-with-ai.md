@@ -1,8 +1,8 @@
 ---
 title: エージェントでコードを計装する
 description: >-
-  エージェントにプロンプトを 1 つ渡すだけです。エージェントがサービスに OpenTelemetry の自動計装を追加し、その向き先を sigiro
-  に設定します。これは Claude Code、OpenCode、Codex で動作します。
+  エージェントにプロンプトを 1 つ渡すだけです。サービスに OpenTelemetry の自動計装を追加し、sigiro
+  に向けます。Claude Code、OpenCode、Codex で動作します。
 sidebar:
   order: 1
 ---

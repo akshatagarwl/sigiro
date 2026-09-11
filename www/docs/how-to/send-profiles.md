@@ -1,6 +1,6 @@
 ---
 title: Send Pyroscope profiles to sigiro
-description: Send pprof profiles from the verified Pyroscope Rust SDK to sigiro over Pyroscope-compatible HTTP. Configure the target and authentication, then confirm the profile rows with SQL.
+description: Send pprof profiles from the verified Pyroscope Rust SDK to sigiro over Pyroscope-compatible HTTP, then confirm the profile rows with SQL.
 sidebar:
   order: 6
 ---

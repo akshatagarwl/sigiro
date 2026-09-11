@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: sigiro 的每个子命令、参数以及读取的环境变量。sigiro 有七个子命令，每个都输出带缩进的 JSON。
+description: sigiro 的每个子命令、参数以及读取的环境变量。sigiro 有七个子命令，客户端命令成功时输出带缩进的 JSON，服务端命令保持连接不退出。
 sidebar:
   order: 2
 ---

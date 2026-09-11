@@ -1,6 +1,6 @@
 ---
 title: Instrument your code with an agent
-description: Give one prompt to an agent. The agent adds OpenTelemetry auto-instrumentation to your service and points it at sigiro. This works with Claude Code, OpenCode, and Codex.
+description: Give one prompt to an agent. It adds OpenTelemetry auto-instrumentation to your service and points it at sigiro — in Claude Code, OpenCode, or Codex.
 sidebar:
   order: 1
 ---
