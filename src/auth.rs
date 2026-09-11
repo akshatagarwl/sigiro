@@ -127,6 +127,13 @@ impl AuthMode {
             }
         }
     }
+
+    /// Verify a bearer token and return the routing identity used by ingest.
+    /// Keep this projection beside authentication so every transport resolves
+    /// an authenticated request the same way.
+    pub(crate) fn verify_project_id(&self, raw_key: &str) -> Result<String, ApiError> {
+        Ok(self.verify(raw_key)?.tenant_id.as_ref().to_owned())
+    }
 }
 
 /// Errors from the hosted control-plane provisioning surface. The non-`Internal`
