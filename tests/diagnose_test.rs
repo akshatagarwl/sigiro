@@ -1515,6 +1515,11 @@ fn anomaly_error_log_rate_shift_is_detected_at_constant_volume() {
     for i in 1..=10_i64 {
         insert_logs(&conn, "svc", now_us - i * bucket, (10, 5));
     }
+    conn.execute(
+        "UPDATE sigiro_logs SET severity_text = 'Error' WHERE severity_number = 17",
+        [],
+    )
+    .expect("preserve producer severity spelling");
 
     let written = run_anomaly_pass(&conn);
     assert!(written >= 1);
@@ -1543,8 +1548,8 @@ fn anomaly_error_log_rate_shift_is_detected_at_constant_volume() {
     sigiro::sql::validate_read_only(&drill)
         .expect("error_log_rate drill_down_sql must pass the /v1/query guard");
     assert!(
-        drill.contains("severity_text IN"),
-        "drill targets ERROR-class logs: {drill}"
+        drill.contains("severity_number >= 17"),
+        "drill uses OTLP severity numbers for ERROR-class logs: {drill}"
     );
     let drilled: i64 = conn
         .query_row(&format!("SELECT count(*) FROM ({drill}) t"), [], |r| {
@@ -2343,7 +2348,7 @@ fn status_message_and_errors_without_logs_finding() {
 }
 
 #[test]
-fn errors_with_error_logs_do_not_emit_inconsistency_finding() {
+fn otlp_error_severity_number_and_text_fallback_are_classified_consistently() {
     let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
     sigiro::schema::create_tables(&conn, "").expect("create tables");
     let now_us = {
@@ -2356,7 +2361,25 @@ fn errors_with_error_logs_do_not_emit_inconsistency_finding() {
          VALUES (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'op', 2, 2, 'api');
          INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
             severity_text, body)
-         VALUES (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'it broke')"
+         VALUES
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'error', 'fallback error'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'CrItIcAl', 'fallback critical'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'ALERT', 'fallback alert'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'Emergency', 'fallback emergency'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'SEVERE', 'fallback severe'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'DPANIC', 'fallback dpanic'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'panic', 'fallback panic'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'FATAL', 'fallback fatal'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'err', 'fallback err'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'CRIT', 'fallback crit'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'Emerg', 'fallback emerg'),
+            (make_timestamp({now_us}), {now_us}, 'api', 17, 'not-error-text', 'numeric 17'),
+            (make_timestamp({now_us}), {now_us}, 'api', 20, 'not-error-text', 'numeric 20'),
+            (make_timestamp({now_us}), {now_us}, 'api', 21, '', 'numeric 21'),
+            (make_timestamp({now_us}), {now_us}, 'api', 24, '', 'numeric 24'),
+            (make_timestamp({now_us}), {now_us}, 'api', 25, 'unknown', 'numeric 25'),
+            (make_timestamp({now_us}), {now_us}, 'api', 16, 'ERROR', 'misleading info'),
+            (make_timestamp({now_us}), {now_us}, 'api', 0, 'INFO', 'unspecified info')"
     ))
     .expect("insert");
     let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
@@ -2365,7 +2388,19 @@ fn errors_with_error_logs_do_not_emit_inconsistency_finding() {
             .findings
             .iter()
             .any(|f| f.kind.as_str() == "errors_without_logs"),
-        "errors WITH error logs are consistent — no finding"
+        "numeric and fallback ERROR logs are consistent with the error span"
+    );
+
+    let patterns = serde_json::to_value(&block.log_patterns).expect("serialize log patterns");
+    let error_logs: i64 = patterns
+        .as_array()
+        .expect("log patterns array")
+        .iter()
+        .map(|pattern| pattern["error_count"].as_i64().expect("error_count"))
+        .sum();
+    assert_eq!(
+        error_logs, 16,
+        "all official/abbreviated zero fallbacks and numeric 17+ classify; numeric 16 and unspecified INFO do not"
     );
 }
 

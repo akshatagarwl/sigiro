@@ -1068,7 +1068,7 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
 }
 
 #[tokio::test]
-async fn test_otlp_protobuf_preserves_event_name() {
+async fn test_otlp_protobuf_preserves_event_name_and_classifies_mixed_case_error() {
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
     use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
@@ -1100,7 +1100,7 @@ async fn test_otlp_protobuf_preserves_event_name() {
                     observed_time_unix_nano: 1_700_000_000_500_000_000,
                     event_name: "container.oom_killed".to_string(),
                     severity_number: 17,
-                    severity_text: "ERROR".to_string(),
+                    severity_text: "Error".to_string(),
                     attributes: vec![
                         KeyValue {
                             key: "container.name".to_string(),
@@ -1164,6 +1164,22 @@ async fn test_otlp_protobuf_preserves_event_name() {
         )
         .expect("event name should be queryable");
     assert_eq!(event_name, "container.oom_killed");
+
+    let api = TestServer::new(build_http_router(Arc::clone(&ctx.state)))
+        .expect("failed to build API test server");
+    let diagnosis: serde_json::Value = api
+        .post("/v1/diagnose")
+        .json(&json!({
+            "services": ["protobuf-event-svc"],
+            "from_ts": 1_700_000_000_000_000_i64,
+            "to_ts": 1_700_000_001_000_000_i64
+        }))
+        .await
+        .json();
+    assert_eq!(
+        diagnosis["results"]["protobuf-event-svc"]["log_patterns"][0]["error_count"], 1,
+        "OTLP severity number 17 must classify mixed-case SeverityText as an error"
+    );
 }
 
 #[tokio::test]

@@ -47,7 +47,9 @@ use anyhow::{Context, Result};
 use augurs_changepoint::{Detector, NormalGammaDetector};
 use duckdb::Connection;
 
-use crate::diagnose::{is_error_expr, operation_drill_filter, operation_key_expr};
+use crate::diagnose::{
+    is_error_expr, is_error_log_expr, operation_drill_filter, operation_key_expr,
+};
 use crate::types::StatusCode;
 
 /// How far back the pass looks when building each entity's series. Matches
@@ -105,11 +107,6 @@ const SIGNAL_LATENCY_P95: &str = "latency_p95";
 const SIGNAL_LOG_VOLUME: &str = "log_volume";
 const SIGNAL_ERROR_LOG_RATE: &str = "error_log_rate";
 const SIGNAL_PROFILE_COST: &str = "profile_cost";
-
-/// ERROR-class log severities — the SAME set /v1/diagnose's `log_stats`
-/// CTE counts (duplication marked for later review: the diagnose SQL
-/// inlines it twice already).
-const ERROR_SEVERITIES_SQL: &str = "('ERROR', 'ERR', 'FATAL', 'CRITICAL')";
 
 /// One worsening regime shift found in a series.
 #[derive(Debug)]
@@ -336,11 +333,12 @@ fn detect_log_signals(
     cutoff_us: i64,
     inserts: &mut Vec<AnomalyInsert>,
 ) -> Result<()> {
+    let is_err = is_error_log_expr("l.");
     let series_sql = format!(
         "SELECT l.service_name,
                 epoch_us(time_bucket(INTERVAL '{DETECTION_BUCKET_MINUTES} minutes', l.timestamp)) AS bucket_ts,
                 count(*)::DOUBLE AS volume,
-                count(CASE WHEN l.severity_text IN {ERROR_SEVERITIES_SQL} THEN 1 END)
+                count(CASE WHEN {is_err} THEN 1 END)
                     * 100.0 / count(*) AS err_log_rate
          FROM {prefix}sigiro_logs l
          WHERE l.timestamp >= make_timestamp({cutoff_us})
@@ -565,7 +563,7 @@ fn log_drill_sql(prefix: &str, service: &str, shift: &Shift, errors_only: bool) 
     let svc = service.replace('\'', "''");
     let ts = shift.ts_shift_us;
     let severity = if errors_only {
-        format!(" AND severity_text IN {ERROR_SEVERITIES_SQL}")
+        format!(" AND {}", is_error_log_expr(""))
     } else {
         String::new()
     };

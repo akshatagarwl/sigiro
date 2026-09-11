@@ -1309,6 +1309,25 @@ pub(crate) fn is_error_expr(q: &str) -> String {
     )
 }
 
+/// The ONE "this log is ERROR-or-higher" predicate. Normative OTel behavior is
+/// number-first: SeverityNumber is authoritative when present, ERROR starts at
+/// 17, and FATAL starts at 21. Sigiro's policy adds a case-insensitive
+/// SeverityText fallback only for UNSPECIFIED (0), using the official appendix
+/// labels plus common abbreviations. This prevents an INFO record mislabeled
+/// "ERROR" from becoming an error. Values above the proto's recommended 0..24
+/// range are conservatively treated as errors by the retained `>= 17` rule;
+/// handling those out-of-range values is implementation-defined.
+///
+/// `q` is the column qualifier ("l." in table scans, "" in derived-table and
+/// drill SQL). `lower` is allowed by the public query firewall, so generated
+/// anomaly drill-down SQL remains executable through `/v1/query`.
+pub(crate) fn is_error_log_expr(q: &str) -> String {
+    format!(
+        "({q}severity_number >= 17 OR ({q}severity_number = 0 AND \
+lower({q}severity_text) IN ('error', 'err', 'critical', 'crit', 'alert', 'emergency', 'emerg', 'severe', 'dpanic', 'panic', 'fatal')))"
+    )
+}
+
 /// The ONE derived OTel `error.type` expression (semconv "recording
 /// errors", STABLE) — the failure-mode dimension of an error span. Only
 /// meaningful for error spans: callers gate on `status_code = 2` themselves
@@ -1359,6 +1378,8 @@ pub(crate) fn operation_drill_filter(span_name: &str, operation: &str) -> String
 pub(crate) fn build_diagnosis_sql(prefix: &str, bucket: &str) -> String {
     let err = StatusCode::Error.as_i32();
     let is_err_s = is_error_expr("s.");
+    let is_err_log = is_error_log_expr("");
+    let is_err_log_l = is_error_log_expr("l.");
     let op_key = operation_key_expr("s.");
     let error_type = error_type_expr("s.");
     // The in-window span filter, repeated by the CTEs that need columns
@@ -1453,7 +1474,7 @@ log_stats AS (
            -- keeps the count correct for untemplated logs without holding
            -- every distinct body string in memory.
            count(DISTINCT COALESCE(template_id, hash(body))) AS log_template_count,
-           count(CASE WHEN severity_text IN ('ERROR', 'ERR', 'FATAL', 'CRITICAL') THEN 1 END) AS error_logs_total
+           count(CASE WHEN {is_err_log} THEN 1 END) AS error_logs_total
     FROM win_logs
 ),
 profile_stats AS (
@@ -1694,7 +1715,7 @@ log_patterns AS (
            any_value(l.body) AS example_body,
            l.severity_text,
            count(*) AS cnt,
-           count(CASE WHEN l.severity_text IN ('ERROR', 'ERR', 'FATAL', 'CRITICAL') THEN 1 END) AS error_count,
+           count(CASE WHEN {is_err_log_l} THEN 1 END) AS error_count,
            min(l.timestamp)::VARCHAR AS first_seen,
            max(l.timestamp)::VARCHAR AS last_seen,
            list_slice(
