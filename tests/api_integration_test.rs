@@ -12,6 +12,7 @@ use serde_json::json;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 use sigiro::admin;
+use sigiro::client::{ClientAuth, SigiroClient};
 use sigiro::ingest;
 use sigiro::inserter::MsgRouter;
 use sigiro::pool::ProjectPool;
@@ -770,7 +771,10 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
     }
 
     let app = build_http_router(Arc::clone(&ctx.state));
-    let server = TestServer::new(app).expect("failed to build test server");
+    let server = TestServer::builder()
+        .http_transport()
+        .build(app)
+        .expect("failed to build HTTP test server");
 
     // Unfiltered: BOTH rows come back (rank, don't filter — the trivial
     // 24.9→25.3 shift is never dropped), biggest unit-free relative shift
@@ -802,6 +806,36 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
     assert_eq!(
         rows[1]["operation"], "GET /cart",
         "the smaller shift ranks second, never filtered out"
+    );
+
+    // This integration test is a separate crate, so reading these fields proves
+    // the typed client response is usable by external Rust consumers rather
+    // than only by Sigiro's in-crate CLI and MCP serializers.
+    let client = SigiroClient::new(
+        server.server_url("/").expect("test server URL").as_str(),
+        ClientAuth::Open,
+    );
+    let response = client
+        .anomalies(Some("checkout"), None, None)
+        .await
+        .expect("typed anomaly response");
+    assert!(!response.truncated);
+    assert_eq!(response.anomalies.len(), 2);
+    let entry = &response.anomalies[0];
+    assert!(!entry.detected_at.is_empty());
+    assert_eq!(entry.service_name, "checkout");
+    assert_eq!(entry.operation, "POST /pay");
+    assert_eq!(entry.signal, "error_rate");
+    assert_eq!(entry.kind, "changepoint");
+    assert_eq!(entry.direction, "worsening");
+    assert!(!entry.ts_shift.is_empty());
+    assert!(entry.ts_shift_us > 0);
+    assert!(entry.incident_id.is_none());
+    assert_eq!(entry.before, 0.0);
+    assert_eq!(entry.after, 42.0);
+    assert_eq!(
+        entry.drill_down_sql.as_deref(),
+        Some("SELECT * FROM lake.sigiro_spans")
     );
 
     // Service filter: a non-matching service returns an empty list.
