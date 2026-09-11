@@ -17,7 +17,7 @@ use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extract
 use utoipa::OpenApi;
 
 use crate::admin;
-use crate::auth::{self, AuthContext};
+use crate::auth;
 use crate::diagnose;
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::{DiskCapacityState, MsgRouter};
@@ -178,8 +178,8 @@ impl KeyExtractor for TenantRateLimitKeyExtractor {
         req: &axum::http::Request<T>,
     ) -> Result<Self::Key, tower_governor::GovernorError> {
         req.extensions()
-            .get::<AuthContext>()
-            .map(|ctx| format!("tenant:{}", ctx.tenant_id))
+            .get::<TenantId>()
+            .map(|tenant_id| format!("tenant:{tenant_id}"))
             .ok_or(tower_governor::GovernorError::UnableToExtractKey)
     }
 }
@@ -333,7 +333,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     let rate_limit_v1 = app_state.auth_mode.requires_auth();
 
     // v1 API routes. In hosted mode the source limiter runs before auth to
-    // bound bogus-token work, then auth injects a trusted AuthContext, then the
+    // bound bogus-token work, then auth injects a trusted TenantId, then the
     // per-tenant limiter runs before the handler.
     let v1 = Router::new()
         .typed_post(query_handler)
@@ -1108,7 +1108,7 @@ async fn healthz(
 /// them.
 async fn execute_sql(
     state: &AppState,
-    auth: &AuthContext,
+    auth: &TenantId,
     sql: &str,
 ) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
     // Explicit DI boundary: the authenticated tenant identity selects the
@@ -1116,7 +1116,7 @@ async fn execute_sql(
     // create/get APIs, while every process can recover its in-memory project
     // entry after a restart or when a request lands on another Machine.
     let pool = Arc::clone(&state.pool);
-    let project_id = auth.tenant_id.as_ref().to_owned();
+    let project_id = auth.as_ref().to_owned();
     let sql_clone = sql.to_string();
     let timeout_secs = crate::config::query_timeout_secs()?;
     let max_rows = crate::config::max_result_rows()?;
@@ -1319,7 +1319,7 @@ your SELECT's column names", body = Vec<serde_json::Value>,
 async fn query_handler(
     _path: QueryPath,
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthContext>,
+    Extension(auth): Extension<TenantId>,
     body: String,
 ) -> ApiResult<QueryResponse> {
     // Truncated SQL preview so every query outcome (reject / fail / complete)
@@ -1383,7 +1383,7 @@ of an agent loop: pick a service here, then diagnose it.",
 async fn services_handler(
     _path: ServicesPath,
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthContext>,
+    Extension(auth): Extension<TenantId>,
 ) -> ApiResult<Json<ServicesResponse>> {
     let prefix = ProjectPool::prefix();
     let sql = format!(
@@ -1457,7 +1457,7 @@ struct AlertsQuery {
 async fn alerts_handler(
     _path: AlertsPath,
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthContext>,
+    Extension(auth): Extension<TenantId>,
     axum::extract::Query(query): axum::extract::Query<AlertsQuery>,
 ) -> ApiResult<Json<AlertsResponse>> {
     if let Some(status) = query.status.as_deref()
@@ -1470,12 +1470,9 @@ async fn alerts_handler(
     }
     let alerts = state
         .alerts
-        .list(&auth.project_id, query.status.as_deref())
+        .list(auth.as_ref(), query.status.as_deref())
         .map_err(|error| {
-            tracing::error!(
-                project_id = auth.project_id,
-                "alerts query failed: {error:#}"
-            );
+            tracing::error!(project_id = auth.as_ref(), "alerts query failed: {error:#}");
             internal_error("alerts query failed", "unable to read alert state")
         })?;
     Ok(Json(AlertsResponse { alerts }))
@@ -1545,7 +1542,7 @@ complete response.",
 async fn anomalies_handler(
     _path: AnomaliesPath,
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthContext>,
+    Extension(auth): Extension<TenantId>,
     axum::extract::Query(q): axum::extract::Query<AnomaliesQuery>,
 ) -> ApiResult<Json<AnomaliesResponse>> {
     let prefix = ProjectPool::prefix();
@@ -1639,7 +1636,7 @@ or from any SQL query over `sigiro_spans`.",
 async fn trace_detail_handler(
     _path: TraceDetailPath,
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthContext>,
+    Extension(auth): Extension<TenantId>,
 ) -> ApiResult<Json<TraceDetailResponse>> {
     let prefix = ProjectPool::prefix();
     let trace_id = _path.trace_id;
@@ -1961,7 +1958,7 @@ survive a single failing service.",
 async fn diagnose_handler(
     _path: DiagnosePath,
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthContext>,
+    Extension(auth): Extension<TenantId>,
     // `Valid<Json<..>>` runs the `validator` derives on DiagnoseRequest at
     // EXTRACTION time (axum's validating-extractor equivalent of middleware) —
     // from_ts/to_ts must be plausible MICROSECOND timestamps (fail loud on
@@ -1970,10 +1967,10 @@ async fn diagnose_handler(
 ) -> ApiResult<Json<diagnose::DiagnoseResponse>> {
     let data_dir = crate::data_dir().context_internal("Diagnose", "SIGIRO_DATA_DIR not set")?;
     let project_data_path = if state.pool.storage_mode().is_distributed() {
-        crate::storage::tenant_data_dir(&data_dir, auth.tenant_id.as_ref())
+        crate::storage::tenant_data_dir(&data_dir, auth.as_ref())
             .context_internal("Diagnose", "invalid tenant id")?
     } else {
-        data_dir.join(auth.tenant_id.as_ref())
+        data_dir.join(auth.as_ref())
     };
     if !project_data_path.exists()
         || project_data_path
@@ -1985,12 +1982,12 @@ async fn diagnose_handler(
             "No Data Found",
             &format!(
                 "No data found for project {}. Please ingest data before calling diagnose.",
-                auth.tenant_id
+                auth
             ),
         ));
     }
     let pool = Arc::clone(&state.pool);
-    let project_id = auth.tenant_id.as_ref().to_owned();
+    let project_id = auth.as_ref().to_owned();
     let blocks = tokio::task::spawn_blocking(move || {
         let readers = pool
             .create_project(&project_id)

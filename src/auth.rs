@@ -12,29 +12,6 @@ use headers::{Authorization, HeaderMapExt, authorization::Bearer};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-/// Auth context extracted from the API key — attached to request extensions.
-/// Self-hosted: all requests route to the default project.
-#[derive(Clone, Debug)]
-pub struct AuthContext {
-    pub tenant_id: TenantId,
-    pub project_id: String,
-}
-
-impl AuthContext {
-    fn default_project() -> Self {
-        Self::for_tenant(
-            TenantId::try_new("default".to_owned()).expect("default is a valid tenant id"),
-        )
-    }
-
-    fn for_tenant(tenant_id: TenantId) -> Self {
-        Self {
-            project_id: tenant_id.as_ref().to_owned(),
-            tenant_id,
-        }
-    }
-}
-
 /// Explicit auth mode — never implicit. The dual-mode auth axis:
 /// - `Open`: no per-request auth (self-host / edge / quack, protected by the
 ///   network perimeter). Selected when `SIGIRO_CATALOG_URL` is unset, or on any
@@ -112,9 +89,11 @@ impl AuthMode {
     /// Verify a raw bearer token against this auth mode.
     /// Open mode: always succeeds.
     /// TenantKeys mode: token must resolve to an active tenant via the control plane.
-    pub fn verify(&self, raw_key: &str) -> Result<AuthContext, ApiError> {
+    pub fn verify(&self, raw_key: &str) -> Result<TenantId, ApiError> {
         match self {
-            AuthMode::Open => Ok(AuthContext::default_project()),
+            AuthMode::Open => {
+                Ok(TenantId::try_new("default".to_owned()).expect("default is a valid tenant id"))
+            }
             AuthMode::TenantKeys { control } => {
                 let tenant_id = control.resolve_tenant(raw_key).map_err(|e| {
                     tracing::warn!("tenant API key rejected: {e:#}");
@@ -123,16 +102,9 @@ impl AuthMode {
                         "The provided API key is unknown or revoked",
                     )
                 })?;
-                Ok(AuthContext::for_tenant(tenant_id))
+                Ok(tenant_id)
             }
         }
-    }
-
-    /// Verify a bearer token and return the routing identity used by ingest.
-    /// Keep this projection beside authentication so every transport resolves
-    /// an authenticated request the same way.
-    pub(crate) fn verify_project_id(&self, raw_key: &str) -> Result<String, ApiError> {
-        Ok(self.verify(raw_key)?.tenant_id.as_ref().to_owned())
     }
 }
 
@@ -635,14 +607,16 @@ pub(crate) async fn auth_middleware(
     match &state.auth_mode {
         AuthMode::Open => {
             let mut req = req;
-            req.extensions_mut().insert(AuthContext::default_project());
+            req.extensions_mut().insert(
+                TenantId::try_new("default".to_owned()).expect("default is a valid tenant id"),
+            );
             Ok(next.run(req).await)
         }
         AuthMode::TenantKeys { .. } => {
             let token = extract_bearer_token(req.headers())?;
-            let ctx = state.auth_mode.verify(&token)?;
+            let tenant_id = state.auth_mode.verify(&token)?;
             let mut req = req;
-            req.extensions_mut().insert(ctx);
+            req.extensions_mut().insert(tenant_id);
             Ok(next.run(req).await)
         }
     }

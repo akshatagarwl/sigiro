@@ -138,7 +138,8 @@ pub fn extract_project_id_grpc(
                 .ok_or_else(|| Status::unauthenticated("Expected: Bearer <key>"))?;
 
             auth_mode
-                .verify_project_id(token)
+                .verify(token)
+                .map(|tenant_id| tenant_id.as_ref().to_owned())
                 .map_err(|_| Status::unauthenticated("Invalid API key"))
         }
     }
@@ -708,10 +709,13 @@ pub fn extract_project_id_http(
                 StatusCode::UNAUTHORIZED
             })?;
 
-            auth_mode.verify_project_id(&token).map_err(|_| {
-                tracing::warn!("OTLP HTTP: invalid API key");
-                StatusCode::UNAUTHORIZED
-            })
+            auth_mode
+                .verify(&token)
+                .map(|tenant_id| tenant_id.as_ref().to_owned())
+                .map_err(|_| {
+                    tracing::warn!("OTLP HTTP: invalid API key");
+                    StatusCode::UNAUTHORIZED
+                })
         }
     }
 }

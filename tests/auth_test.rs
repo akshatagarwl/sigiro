@@ -41,8 +41,8 @@ fn extract_bearer_token_malformed() {
 #[test]
 fn auth_mode_open_allows_any() {
     let mode = AuthMode::Open;
-    let ctx = mode.verify("anything").unwrap();
-    assert_eq!(ctx.project_id, "default");
+    let tenant_id: sigiro::types::TenantId = mode.verify("anything").unwrap();
+    assert_eq!(tenant_id.as_ref(), "default");
 }
 
 /// No `SIGIRO_CATALOG_URL` (local self-host) ⇒ `Open` (no per-request auth).
@@ -87,9 +87,8 @@ fn tenant_key_auth_resolves_valid_key_and_rejects_revoked_or_unknown_keys() {
     let mode = AuthMode::TenantKeys {
         control: Arc::clone(&control),
     };
-    let ctx = mode.verify(&minted.key).unwrap();
-    assert_eq!(ctx.tenant_id.as_ref(), "tenant_a");
-    assert_eq!(ctx.project_id, "tenant_a");
+    let tenant_id: sigiro::types::TenantId = mode.verify(&minted.key).unwrap();
+    assert_eq!(tenant_id.as_ref(), "tenant_a");
     assert_ne!(minted.key_hash, minted.key);
     assert_eq!(minted.key_hash, hash_api_key(&minted.key));
 
