@@ -13,6 +13,8 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use serde_json::Value as JsonValue;
 
+use crate::types::TraceId;
+
 /// Convert a nanosecond count — every OTLP `*_unix_nano` timestamp and any
 /// span duration — to microseconds, the unit every sigiro table stores.
 ///
@@ -162,22 +164,18 @@ impl TraceBuilders {
         }
         self.duration.append_value(nanos_to_micros(dur));
 
-        let trace_id = hex::encode(&span.trace_id);
+        let trace_id = TraceId::try_new(hex::encode(&span.trace_id))
+            .map_err(|error| DecodeError::Parse(format!("invalid trace_id: {error}")))?;
         let span_id = hex::encode(&span.span_id);
         let parent_span_id = hex::encode(&span.parent_span_id);
 
-        if trace_id.is_empty() {
-            return Err(DecodeError::Parse(
-                "trace_id is empty — every span must have a valid trace ID".into(),
-            ));
-        }
         if span_id.is_empty() {
             return Err(DecodeError::Parse(
                 "span_id is empty — every span must have a valid span ID".into(),
             ));
         }
 
-        self.trace_id.append_value(&trace_id);
+        self.trace_id.append_value(trace_id.as_ref());
         self.span_id.append_value(&span_id);
         if parent_span_id.is_empty() {
             self.parent_span_id.append_null();
@@ -941,17 +939,21 @@ impl LogBuilders {
             ));
         }
 
+        let trace_id = if log.trace_id.is_empty() {
+            None
+        } else {
+            Some(
+                TraceId::try_new(hex::encode(&log.trace_id))
+                    .map_err(|error| DecodeError::Parse(format!("invalid trace_id: {error}")))?,
+            )
+        };
+        let span_id = hex::encode(&log.span_id);
+
         self.timestamp.append_value(nanos_to_micros(timestamp));
         self.observed_timestamp
             .append_value(nanos_to_micros(observed));
-
-        let trace_id = hex::encode(&log.trace_id);
-        let span_id = hex::encode(&log.span_id);
-        if trace_id.is_empty() {
-            self.trace_id.append_null();
-        } else {
-            self.trace_id.append_value(&trace_id);
-        }
+        self.trace_id
+            .append_option(trace_id.as_ref().map(AsRef::as_ref));
         if span_id.is_empty() {
             self.span_id.append_null();
         } else {

@@ -178,6 +178,16 @@ pub struct TimestampMicros(i64);
 )]
 pub struct ApiKeyHashPrefix(String);
 
+#[nutype::nutype(
+    validate(predicate = |id: &str| {
+        id.len() == 32
+            && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            && id.bytes().any(|b| b != b'0')
+    }),
+    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
+)]
+pub struct TraceId(String);
+
 // ---------------------------------------------------------------------------
 // Typed path structs — compile-time route checking for axum router
 // ---------------------------------------------------------------------------
@@ -255,5 +265,5 @@ pub struct HealthzPath;
 #[derive(Debug, Clone, Deserialize, TypedPath)]
 #[typed_path("/traces/{trace_id}")]
 pub struct TraceDetailPath {
-    pub(crate) trace_id: String,
+    pub(crate) trace_id: TraceId,
 }

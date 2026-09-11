@@ -144,6 +144,52 @@ fn mark_test_context_ready(ctx: &TestContext) {
 }
 
 #[tokio::test]
+async fn trace_detail_preserves_canonical_trace_id_wire_shape() {
+    const TRACE_ID: &str = "11111111111111111111111111111111";
+    let ctx = build_test_context();
+    ctx.state
+        .pool
+        .get_project("default")
+        .expect("default project exists")
+        .get()
+        .execute(
+            "INSERT INTO lake.sigiro_spans (
+                timestamp, end_timestamp, duration, trace_id, span_id,
+                service_name, span_name, span_kind, status_code
+             ) VALUES (now(), 1700000000000010, 10, ?1,
+                '2222222222222222', 'checkout', 'GET /cart', 2, 1)",
+            duckdb::params![TRACE_ID],
+        )
+        .expect("seed trace span");
+
+    let server = TestServer::new(build_http_router(ctx.state)).expect("build test server");
+    let response = server.get(&format!("/v1/traces/{TRACE_ID}")).await;
+    response.assert_status_ok();
+    let body: serde_json::Value = serde_json::from_str(&response.text()).expect("trace JSON");
+    assert_eq!(body["trace_id"], TRACE_ID);
+    assert_eq!(body["root_span"]["trace_id"], TRACE_ID);
+    assert_eq!(body["spans"][0]["trace_id"], TRACE_ID);
+}
+
+#[tokio::test]
+async fn trace_detail_rejects_noncanonical_trace_ids_during_path_deserialization() {
+    let ctx = build_test_context();
+    let server = TestServer::new(build_http_router(ctx.state)).expect("build test server");
+
+    for invalid in [
+        "1111111111111111111111111111111",
+        "1111111111111111111111111111111g",
+        "1111111111111111111111111111111A",
+        "00000000000000000000000000000000",
+    ] {
+        server
+            .get(&format!("/v1/traces/{invalid}"))
+            .await
+            .assert_status(axum::http::StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
 async fn test_openapi_documents_diagnose_for_agents() {
     // Cold-start agentic discoverability: /openapi.json is the only public
     // discovery surface, so the flagship /v1/diagnose MUST be fully

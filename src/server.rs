@@ -1664,8 +1664,8 @@ async fn trace_detail_handler(
     Extension(auth): Extension<AuthContext>,
 ) -> ApiResult<Json<TraceDetailResponse>> {
     let prefix = ProjectPool::prefix();
-    let trace_id = _path.trace_id.clone();
-    let safe_trace_id = escape_sql_string(&trace_id);
+    let trace_id = _path.trace_id;
+    let safe_trace_id = escape_sql_string(trace_id.as_ref());
 
     let sql = format!(
         "SELECT
@@ -1730,11 +1730,7 @@ async fn trace_detail_handler(
             .to_string();
 
         let span = SpanDetail {
-            trace_id: obj
-                .get("trace_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
+            trace_id: trace_id.clone(),
             span_id: span_id.clone(),
             parent_span_id: if parent_span_id.is_empty() {
                 None

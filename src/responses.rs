@@ -3,7 +3,7 @@
 //! Replaces `serde_json::Value` return types with compile-time verified structs,
 //! enabling accurate OpenAPI schema generation via utoipa.
 
-use crate::types::{ApiKeyHashPrefix, TenantId};
+use crate::types::{ApiKeyHashPrefix, TenantId, TraceId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -155,7 +155,8 @@ pub enum HealthResponse {
 /// Complete trace detail response with critical path and service breakdown.
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct TraceDetailResponse {
-    pub(crate) trace_id: String,
+    #[schema(value_type = String)]
+    pub(crate) trace_id: TraceId,
     pub(crate) total_duration_us: i64,
     pub(crate) root_span: SpanDetail,
     pub(crate) span_count: i64,
@@ -169,7 +170,8 @@ pub struct TraceDetailResponse {
 /// Individual span detail in trace detail response.
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
 pub struct SpanDetail {
-    pub(crate) trace_id: String,
+    #[schema(value_type = String)]
+    pub(crate) trace_id: TraceId,
     pub(crate) span_id: String,
     pub(crate) parent_span_id: Option<String>,
     pub(crate) span_name: String,

@@ -1,4 +1,5 @@
 use crate::otlp::{InputFormat, MetricBatches};
+use crate::types::TraceId;
 use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, ListBuilder, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -456,7 +457,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
     fn resolve_link(
         link_index: i32,
         dict: &opentelemetry_proto::tonic::profiles::v1development::ProfilesDictionary,
-    ) -> Result<Option<(String, String)>, Status> {
+    ) -> Result<Option<(TraceId, String)>, Status> {
         if link_index == 0 {
             return Ok(None);
         }
@@ -472,21 +473,15 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                 dict.link_table.len()
             ))
         })?;
-        if link.trace_id.len() != 16 {
-            return Err(Status::invalid_argument(format!(
-                "profile link trace_id at index {link_index} must be 16 bytes, got {}",
-                link.trace_id.len()
-            )));
-        }
+        let trace_id = TraceId::try_new(hex::encode(&link.trace_id)).map_err(|error| {
+            Status::invalid_argument(format!(
+                "invalid profile link trace_id at index {link_index}: {error}"
+            ))
+        })?;
         if link.span_id.len() != 8 {
             return Err(Status::invalid_argument(format!(
                 "profile link span_id at index {link_index} must be 8 bytes, got {}",
                 link.span_id.len()
-            )));
-        }
-        if link.trace_id.iter().all(|b| *b == 0) {
-            return Err(Status::invalid_argument(format!(
-                "profile link trace_id at index {link_index} must not be all zeros"
             )));
         }
         if link.span_id.iter().all(|b| *b == 0) {
@@ -495,10 +490,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
             )));
         }
 
-        Ok(Some((
-            hex::encode(&link.trace_id),
-            hex::encode(&link.span_id),
-        )))
+        Ok(Some((trace_id, hex::encode(&link.span_id))))
     }
 
     for rp in &request.resource_profiles {
@@ -565,7 +557,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                         profile_ids.append_value(pid);
                         match &link {
                             Some((trace_id, span_id)) => {
-                                trace_ids.append_value(trace_id);
+                                trace_ids.append_value(trace_id.as_ref());
                                 span_ids.append_value(span_id);
                             }
                             None => {
