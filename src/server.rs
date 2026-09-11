@@ -428,25 +428,12 @@ impl ServerPorts {
 /// Open-auth surface on a wildcard bind is reachable from anywhere. Parse the
 /// address and reject any `is_unspecified()` (all-interfaces) form rather than
 /// string-matching the two obvious spellings — the wildcard has many equivalent
-/// textual forms (`0.0.0.0`, `::`, `[::]`, `0::0`, `0:0:0:0:0:0:0:0`,
+/// textual forms (`0.0.0.0`, `::`, `0::0`, `0:0:0:0:0:0:0:0`,
 /// `::ffff:0.0.0.0`) that all bind every interface, and matching only the
 /// literals would leave exactly the same hole open under a different spelling.
-pub fn validate_quack_bind_address(bind: &str) -> Result<()> {
-    let normalized = bind
-        .strip_prefix('[')
-        .and_then(|b| b.strip_suffix(']'))
-        .unwrap_or(bind);
-    let ip: std::net::IpAddr = normalized
-        .parse()
-        .with_context(|| format!("SIGIRO_QUACK_BIND {bind:?} is not a valid IP address"))?;
-    let wildcard = match ip {
-        std::net::IpAddr::V4(v4) => v4.is_unspecified(),
-        std::net::IpAddr::V6(v6) => {
-            v6.is_unspecified() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_unspecified())
-        }
-    };
+pub fn validate_quack_bind_address(bind: std::net::IpAddr) -> Result<()> {
     anyhow::ensure!(
-        !wildcard,
+        !bind.to_canonical().is_unspecified(),
         "SIGIRO_QUACK_BIND must not be a wildcard address ({bind:?}) — quack has no working \
          TLS of its own; bind an explicit loopback/private interface and rely on a network \
          perimeter (e.g. Tailscale) for anything wider"
@@ -466,23 +453,14 @@ pub fn validate_quack_bind_address(bind: &str) -> Result<()> {
 /// unrelated default). Edge mode returns the SAME address for both, so
 /// HTTP/OTLP-HTTP/gRPC all end up bound exactly where quack itself is.
 pub fn resolve_listener_bind_ips(
-    edge_bind: Option<&str>,
-) -> Result<(std::net::IpAddr, std::net::IpAddr)> {
+    edge_bind: Option<std::net::IpAddr>,
+) -> (std::net::IpAddr, std::net::IpAddr) {
     match edge_bind {
-        Some(bind) => {
-            let normalized = bind
-                .strip_prefix('[')
-                .and_then(|b| b.strip_suffix(']'))
-                .unwrap_or(bind);
-            let ip: std::net::IpAddr = normalized
-                .parse()
-                .with_context(|| format!("SIGIRO_QUACK_BIND {bind:?} is not a valid IP address"))?;
-            Ok((ip, ip))
-        }
-        None => Ok((
+        Some(bind) => (bind, bind),
+        None => (
             std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
-        )),
+        ),
     }
 }
 
@@ -507,15 +485,18 @@ pub async fn run_servers(
     // falls back to today's wildcard bind, unchanged. See
     // `validate_quack_bind_address` for why a wildcard is rejected outright.
     let edge_bind = if query_surface == crate::config::QuerySurface::Quack {
-        let bind = crate::config::QUACK_BIND
+        let raw_bind = crate::config::QUACK_BIND
             .value()
             .map_err(anyhow::Error::from)?;
-        validate_quack_bind_address(&bind)?;
+        let bind = raw_bind
+            .parse()
+            .with_context(|| format!("SIGIRO_QUACK_BIND {raw_bind:?} is not a valid IP address"))?;
+        validate_quack_bind_address(bind)?;
         Some(bind)
     } else {
         None
     };
-    let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(edge_bind.as_deref())?;
+    let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(edge_bind);
 
     // TLS configuration
     let (otlp_http_tls_config, grpc_tls_config) = match (
@@ -619,7 +600,7 @@ pub async fn run_servers(
     // `crate::quack::install_authorization_gate`, which wraps this same
     // validator). `enable_external_access` staying on in S3 mode is required
     // for DuckLake itself to reach S3, not a hole left open for user queries.
-    let quack_shutdown_tx = if let Some(bind) = edge_bind.clone() {
+    let quack_shutdown_tx = if let Some(bind) = edge_bind {
         let port = crate::config::QUACK_PORT
             .value()
             .map_err(anyhow::Error::from)?;
@@ -635,10 +616,10 @@ pub async fn run_servers(
         crate::quack::install_authorization_gate(&quack_conn)?;
         // Derived once and moved into the shutdown task below, so the stop call
         // cannot address a different URI than the start call — see `QuackUri`.
-        let quack_uri = crate::quack::QuackUri::new(&bind, port);
+        let quack_uri = crate::quack::QuackUri::new(bind, port);
         let listen = crate::quack::start_server(&quack_conn, &quack_uri, token.as_ref())?;
         tracing::info!(
-            bind,
+            bind = %bind,
             port,
             listen_uri = %listen.listen_uri,
             "quack query surface serving (in-process, read-only)"

@@ -676,39 +676,36 @@ fn value_ref_mixed_types_from_table() {
 
 #[test]
 fn validate_quack_bind_rejects_ipv4_wildcard() {
-    assert!(validate_quack_bind_address("0.0.0.0").is_err());
+    assert!(validate_quack_bind_address("0.0.0.0".parse().unwrap()).is_err());
 }
 
 #[test]
 fn validate_quack_bind_rejects_ipv6_wildcard() {
-    assert!(validate_quack_bind_address("::").is_err());
-    assert!(validate_quack_bind_address("[::]").is_err());
+    assert!(validate_quack_bind_address("::".parse().unwrap()).is_err());
 }
 
 #[test]
 fn validate_quack_bind_rejects_equivalent_wildcard_spellings() {
     // The unspecified address has many textual forms; all bind every
     // interface, so a parse-then-is_unspecified check must reject each.
-    for w in ["0::0", "0:0:0:0:0:0:0:0", "::ffff:0.0.0.0", "[0::0]"] {
+    for w in ["0::0", "0:0:0:0:0:0:0:0", "::ffff:0.0.0.0"] {
         assert!(
-            validate_quack_bind_address(w).is_err(),
+            validate_quack_bind_address(w.parse().unwrap()).is_err(),
             "wildcard spelling {w:?} must be rejected"
         );
     }
-    // A non-IP (hostname) must fail loud, not be silently accepted.
-    assert!(validate_quack_bind_address("localhost").is_err());
 }
 
 #[test]
 fn validate_quack_bind_allows_private_addresses() {
-    assert!(validate_quack_bind_address("127.0.0.1").is_ok());
-    assert!(validate_quack_bind_address("100.64.0.1").is_ok()); // a Tailscale-shaped CGNAT IP
+    assert!(validate_quack_bind_address("127.0.0.1".parse().unwrap()).is_ok());
+    assert!(validate_quack_bind_address("100.64.0.1".parse().unwrap()).is_ok()); // a Tailscale-shaped CGNAT IP
 }
 
 #[test]
 fn resolve_listener_bind_ips_hosted_mode_keeps_wildcards() {
     // query_surface == None (hosted): byte-identical to before this fix.
-    let (http_ip, grpc_ip) = resolve_listener_bind_ips(None).expect("hosted resolution");
+    let (http_ip, grpc_ip) = resolve_listener_bind_ips(None);
     assert_eq!(http_ip, "0.0.0.0".parse::<std::net::IpAddr>().unwrap());
     assert_eq!(grpc_ip, "::".parse::<std::net::IpAddr>().unwrap());
 }
@@ -718,13 +715,8 @@ fn resolve_listener_bind_ips_edge_mode_uses_quack_bind_everywhere() {
     // query_surface == Quack, SIGIRO_QUACK_BIND unset → default 127.0.0.1:
     // HTTP/OTLP-HTTP and gRPC must resolve to the SAME private address quack
     // itself binds — never the wildcard.
-    let (http_ip, grpc_ip) = resolve_listener_bind_ips(Some("127.0.0.1")).expect("edge resolution");
     let loopback = "127.0.0.1".parse::<std::net::IpAddr>().unwrap();
+    let (http_ip, grpc_ip) = resolve_listener_bind_ips(Some(loopback));
     assert_eq!(http_ip, loopback);
     assert_eq!(grpc_ip, loopback);
-}
-
-#[test]
-fn resolve_listener_bind_ips_rejects_unparseable_bind() {
-    assert!(resolve_listener_bind_ips(Some("not-an-ip")).is_err());
 }
