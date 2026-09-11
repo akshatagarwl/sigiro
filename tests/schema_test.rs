@@ -60,8 +60,8 @@ fn anomalies_table_exists_and_accepts_rows() {
         "INSERT INTO sigiro_anomalies
             (detected_at, service_name, operation, signal, kind, direction,
              ts_shift, \"before\", \"after\", drill_down_sql)
-         VALUES (now()::TIMESTAMP, 'svc', 'op', 'error_rate', 'changepoint',
-                 'worsening', now()::TIMESTAMP, 1.0, 50.0, 'SELECT 1')",
+         VALUES (now(), 'svc', 'op', 'error_rate', 'changepoint',
+                 'worsening', now(), 1.0, 50.0, 'SELECT 1')",
     )
     .expect("sigiro_anomalies must accept a full anomaly row");
     let count: i64 = conn
@@ -75,8 +75,8 @@ fn anomalies_table_exists_and_accepts_rows() {
         "INSERT INTO sigiro_anomalies
             (detected_at, service_name, operation, signal, kind, direction,
              ts_shift, \"before\", \"after\", drill_down_sql)
-         VALUES (now()::TIMESTAMP, 'svc', 'op', 'error_rate', 'changepoint',
-                 'worsening', now()::TIMESTAMP, 1.0, 50.0, NULL)",
+         VALUES (now(), 'svc', 'op', 'error_rate', 'changepoint',
+                 'worsening', now(), 1.0, 50.0, NULL)",
     );
     assert!(
         missing_drill.is_err(),
@@ -121,7 +121,24 @@ fn create_tables_with_prefix_idempotent() {
 }
 
 #[test]
-fn existing_ducklake_logs_gain_event_name_without_losing_rows() {
+fn unrelated_catalog_schema_does_not_reject_fresh_target() {
+    let conn = Connection::open_in_memory().expect("in-memory db");
+    conn.execute_batch(
+        "ATTACH ':memory:' AS unrelated;
+         CREATE TABLE unrelated.sigiro_logs (
+             timestamp TIMESTAMP NOT NULL,
+             observed_timestamp BIGINT NOT NULL
+         );
+         ATTACH ':memory:' AS lake",
+    )
+    .expect("attach unrelated and target catalogs");
+
+    sigiro::schema::create_tables(&conn, "lake.")
+        .expect("an unrelated catalog must not affect fresh target validation");
+}
+
+#[test]
+fn existing_pre_timestamptz_catalog_is_rejected_loudly() {
     let dir = tempfile::tempdir().expect("temp directory");
     let conn = Connection::open_in_memory().expect("in-memory db");
     attach_ducklake(&conn, dir.path());
@@ -137,34 +154,46 @@ fn existing_ducklake_logs_gain_event_name_without_losing_rows() {
          );
          INSERT INTO lake.sigiro_logs
             (timestamp, observed_timestamp, service_name, severity_number, severity_text, body)
-         VALUES (make_timestamp(1), 1, 'old-svc', 9, 'INFO', 'before migration');",
+         VALUES (make_timestamptz(1), 1, 'old-svc', 9, 'INFO', 'before migration');",
     )
     .expect("create old logs schema");
 
-    sigiro::schema::create_tables(&conn, "lake.").expect("migrate existing catalog");
-    sigiro::schema::create_tables(&conn, "lake.").expect("migration must be idempotent");
+    let error = sigiro::schema::create_tables(&conn, "lake.")
+        .expect_err("pre-TIMESTAMPTZ catalog must be rejected");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("catalog version is unsupported")
+            || message.contains("expected TIMESTAMPTZ")
+            || message.contains("partial DuckLake catalog schema"),
+        "{message}"
+    );
+}
 
-    let old_event_name: String = conn
+#[test]
+fn partial_catalog_is_rejected_before_schema_mutation() {
+    let conn = Connection::open_in_memory().expect("in-memory db");
+    conn.execute_batch(
+        "ATTACH ':memory:' AS lake;
+         CREATE TABLE lake.sigiro_logs (
+             timestamp TIMESTAMPTZ NOT NULL,
+             observed_timestamp TIMESTAMPTZ NOT NULL,
+             service_name VARCHAR NOT NULL
+         );",
+    )
+    .expect("create partial catalog");
+
+    let error = sigiro::schema::create_tables(&conn, "lake.")
+        .expect_err("partial catalog must be rejected");
+    assert!(format!("{error:#}").contains("partial DuckLake catalog schema"));
+
+    let event_name: i64 = conn
         .query_row(
-            "SELECT event_name FROM lake.sigiro_logs WHERE body = 'before migration'",
+            "SELECT count(*) FROM information_schema.columns
+             WHERE table_catalog = 'lake' AND table_name = 'sigiro_logs'
+               AND column_name = 'event_name'",
             [],
             |row| row.get(0),
         )
-        .expect("old row should remain readable");
-    assert_eq!(old_event_name, "");
-
-    conn.execute_batch(
-        "INSERT INTO lake.sigiro_logs
-            (timestamp, observed_timestamp, event_name, service_name, severity_number,
-             severity_text, body)
-         VALUES (make_timestamp(2), 2, 'container.oom_killed', 'new-svc', 17,
-                 'ERROR', 'after migration')",
-    )
-    .expect("new event row should insert");
-    let rows: i64 = conn
-        .query_row("SELECT count(*) FROM lake.sigiro_logs", [], |row| {
-            row.get(0)
-        })
-        .expect("count migrated rows");
-    assert_eq!(rows, 2);
+        .expect("inspect partial catalog");
+    assert_eq!(event_name, 0, "rejection must not add event_name");
 }

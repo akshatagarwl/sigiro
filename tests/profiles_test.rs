@@ -6,7 +6,9 @@
 // every reader goes through typed-env; a test-only knob routed through
 // typed-env would add a production config entry production never reads.
 
-use arrow::array::{Int64Array, ListBuilder, StringArray, StringBuilder};
+use arrow::array::{
+    Int64Array, ListBuilder, StringArray, StringBuilder, TimestampMicrosecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use prost::Message;
@@ -53,7 +55,7 @@ fn make_profiles_batch(
         Field::new("service_name", DataType::Utf8, false),
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
         Field::new("profile_type", DataType::Utf8, true),
@@ -107,7 +109,7 @@ fn make_profiles_batch(
             Arc::new(StringArray::from(trace_ids)),
             Arc::new(StringArray::from(span_ids)),
             Arc::new(StringArray::from(service_names)),
-            Arc::new(arrow::array::TimestampMicrosecondArray::from(timestamps)),
+            Arc::new(TimestampMicrosecondArray::from(timestamps).with_timezone("UTC")),
             Arc::new(StringArray::from(profile_types)),
             Arc::new(stack_traces.finish()),
             Arc::new(Int64Array::from(values)),
@@ -420,6 +422,16 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
         .add_header("Authorization", "Bearer sigiro_dev_test")
         .content_type("application/x-protobuf")
         .bytes(invalid_request.into())
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+
+    let overflow_request =
+        build_linked_otlp_profile_request("linked-svc", i64::MAX as u64 + 1, trace_id, span_id);
+    let response = server
+        .post("/v1development/profiles")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/x-protobuf")
+        .bytes(overflow_request.into())
         .await;
     response.assert_status(StatusCode::BAD_REQUEST);
 

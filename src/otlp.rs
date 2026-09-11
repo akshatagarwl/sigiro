@@ -15,16 +15,22 @@ use serde_json::Value as JsonValue;
 
 use crate::types::TraceId;
 
-/// Convert a nanosecond count — every OTLP `*_unix_nano` timestamp and any
-/// span duration — to microseconds, the unit every sigiro table stores.
-///
-/// Routed through `time::Duration` so the conversion is a named domain
-/// operation, never a bare divisor: a stray `/1_000_000` (instead of `/1_000`)
-/// on the span path is exactly what silently made every latency 1000x too
-/// small. There is now one obvious way to do this, and it cannot be wrong.
+/// Convert a non-negative absolute OTLP nanosecond timestamp to epoch microseconds.
 #[inline]
-fn nanos_to_micros(nanos: i64) -> i64 {
-    time::Duration::nanoseconds(nanos).whole_microseconds() as i64
+pub(crate) fn nanos_to_micros(nanos: i64) -> Result<i64, &'static str> {
+    if nanos < 0 {
+        return Err("absolute timestamp must not be negative");
+    }
+    Ok(nanos / 1_000)
+}
+
+/// Convert a non-negative duration in nanoseconds to microseconds.
+#[inline]
+pub(crate) fn duration_nanos_to_micros(nanos: i64) -> Result<i64, &'static str> {
+    if nanos < 0 {
+        return Err("duration must not be negative");
+    }
+    Ok(nanos / 1_000)
 }
 
 // ============================================================================
@@ -77,7 +83,7 @@ pub struct SkippedMetrics {
 /// Arrow builders for the flat trace span schema.
 pub struct TraceBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    end_timestamp: Int64Builder,
+    end_timestamp: TimestampMicrosecondBuilder,
     duration: Int64Builder,
     trace_id: StringBuilder,
     span_id: StringBuilder,
@@ -106,8 +112,8 @@ pub struct TraceBuilders {
 impl TraceBuilders {
     pub(crate) fn new() -> Self {
         Self {
-            timestamp: TimestampMicrosecondBuilder::new(),
-            end_timestamp: Int64Builder::new(),
+            timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
+            end_timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
             duration: Int64Builder::new(),
             trace_id: StringBuilder::new(),
             span_id: StringBuilder::new(),
@@ -153,16 +159,20 @@ impl TraceBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(nanos_to_micros(start));
-        self.end_timestamp.append_value(nanos_to_micros(end));
-
-        let dur = end.saturating_sub(start);
+        let dur = end.checked_sub(start).ok_or_else(|| {
+            DecodeError::Parse("span end_time must be >= start_time (duration overflow)".into())
+        })?;
         if dur < 0 {
             return Err(DecodeError::Parse(
                 "span end_time must be >= start_time (negative duration detected)".into(),
             ));
         }
-        self.duration.append_value(nanos_to_micros(dur));
+        self.timestamp
+            .append_value(nanos_to_micros(start).map_err(|e| DecodeError::Parse(e.into()))?);
+        self.end_timestamp
+            .append_value(nanos_to_micros(end).map_err(|e| DecodeError::Parse(e.into()))?);
+        self.duration
+            .append_value(duration_nanos_to_micros(dur).map_err(|e| DecodeError::Parse(e.into()))?);
 
         let trace_id = TraceId::try_new(hex::encode(&span.trace_id))
             .map_err(|error| DecodeError::Parse(format!("invalid trace_id: {error}")))?;
@@ -528,10 +538,14 @@ fn traces_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("end_timestamp", DataType::Int64, false),
+        Field::new(
+            "end_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
         Field::new("duration", DataType::Int64, false),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
@@ -562,10 +576,14 @@ fn logs_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("observed_timestamp", DataType::Int64, false),
+        Field::new(
+            "observed_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
         Field::new("event_name", DataType::Utf8, false),
@@ -587,10 +605,14 @@ fn gauge_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new(
+            "start_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        ),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
         Field::new("metric_unit", DataType::Utf8, false),
@@ -612,10 +634,14 @@ fn sum_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new(
+            "start_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        ),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
         Field::new("metric_unit", DataType::Utf8, false),
@@ -639,10 +665,14 @@ fn histogram_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new(
+            "start_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        ),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
         Field::new("metric_unit", DataType::Utf8, false),
@@ -670,10 +700,14 @@ fn exp_histogram_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new(
+            "start_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        ),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
         Field::new("metric_unit", DataType::Utf8, false),
@@ -861,7 +895,7 @@ fn exemplars_to_json(exemplars: &[opentelemetry_proto::tonic::metrics::v1::Exemp
 /// Arrow builders for the flat log record schema.
 pub struct LogBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    observed_timestamp: Int64Builder,
+    observed_timestamp: TimestampMicrosecondBuilder,
     trace_id: StringBuilder,
     span_id: StringBuilder,
     event_name: StringBuilder,
@@ -881,8 +915,8 @@ pub struct LogBuilders {
 impl LogBuilders {
     pub(crate) fn new() -> Self {
         Self {
-            timestamp: TimestampMicrosecondBuilder::new(),
-            observed_timestamp: Int64Builder::new(),
+            timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
+            observed_timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
             trace_id: StringBuilder::new(),
             span_id: StringBuilder::new(),
             event_name: StringBuilder::new(),
@@ -949,9 +983,10 @@ impl LogBuilders {
         };
         let span_id = hex::encode(&log.span_id);
 
-        self.timestamp.append_value(nanos_to_micros(timestamp));
+        self.timestamp
+            .append_value(nanos_to_micros(timestamp).map_err(|e| DecodeError::Parse(e.into()))?);
         self.observed_timestamp
-            .append_value(nanos_to_micros(observed));
+            .append_value(nanos_to_micros(observed).map_err(|e| DecodeError::Parse(e.into()))?);
         self.trace_id
             .append_option(trace_id.as_ref().map(AsRef::as_ref));
         if span_id.is_empty() {
@@ -1055,7 +1090,7 @@ struct MetricContext<'a> {
 
 struct GaugeBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    start_timestamp: Int64Builder,
+    start_timestamp: TimestampMicrosecondBuilder,
     metric_name: StringBuilder,
     metric_description: StringBuilder,
     metric_unit: StringBuilder,
@@ -1075,8 +1110,8 @@ struct GaugeBuilders {
 impl GaugeBuilders {
     fn new() -> Self {
         Self {
-            timestamp: TimestampMicrosecondBuilder::new(),
-            start_timestamp: Int64Builder::new(),
+            timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
+            start_timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
             metric_name: StringBuilder::new(),
             metric_description: StringBuilder::new(),
             metric_unit: StringBuilder::new(),
@@ -1127,8 +1162,13 @@ impl GaugeBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(nanos_to_micros(time));
-        self.start_timestamp.append_value(nanos_to_micros(start));
+        self.timestamp
+            .append_value(nanos_to_micros(time).map_err(|e| DecodeError::Parse(e.into()))?);
+        self.start_timestamp.append_option(if start == 0 {
+            None
+        } else {
+            Some(nanos_to_micros(start).map_err(|e| DecodeError::Parse(e.into()))?)
+        });
         self.metric_name.append_value(ctx.name);
         self.metric_description.append_value(ctx.description);
         self.metric_unit.append_value(ctx.unit);
@@ -1190,7 +1230,7 @@ impl GaugeBuilders {
 
 struct SumBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    start_timestamp: Int64Builder,
+    start_timestamp: TimestampMicrosecondBuilder,
     metric_name: StringBuilder,
     metric_description: StringBuilder,
     metric_unit: StringBuilder,
@@ -1212,8 +1252,8 @@ struct SumBuilders {
 impl SumBuilders {
     fn new() -> Self {
         Self {
-            timestamp: TimestampMicrosecondBuilder::new(),
-            start_timestamp: Int64Builder::new(),
+            timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
+            start_timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
             metric_name: StringBuilder::new(),
             metric_description: StringBuilder::new(),
             metric_unit: StringBuilder::new(),
@@ -1268,8 +1308,13 @@ impl SumBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(nanos_to_micros(time));
-        self.start_timestamp.append_value(nanos_to_micros(start));
+        self.timestamp
+            .append_value(nanos_to_micros(time).map_err(|e| DecodeError::Parse(e.into()))?);
+        self.start_timestamp.append_option(if start == 0 {
+            None
+        } else {
+            Some(nanos_to_micros(start).map_err(|e| DecodeError::Parse(e.into()))?)
+        });
         self.metric_name.append_value(ctx.name);
         self.metric_description.append_value(ctx.description);
         self.metric_unit.append_value(ctx.unit);
@@ -1335,7 +1380,7 @@ impl SumBuilders {
 
 struct HistogramBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    start_timestamp: Int64Builder,
+    start_timestamp: TimestampMicrosecondBuilder,
     metric_name: StringBuilder,
     metric_description: StringBuilder,
     metric_unit: StringBuilder,
@@ -1361,8 +1406,8 @@ struct HistogramBuilders {
 impl HistogramBuilders {
     fn new() -> Self {
         Self {
-            timestamp: TimestampMicrosecondBuilder::new(),
-            start_timestamp: Int64Builder::new(),
+            timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
+            start_timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
             metric_name: StringBuilder::new(),
             metric_description: StringBuilder::new(),
             metric_unit: StringBuilder::new(),
@@ -1405,8 +1450,13 @@ impl HistogramBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(nanos_to_micros(time));
-        self.start_timestamp.append_value(nanos_to_micros(start));
+        self.timestamp
+            .append_value(nanos_to_micros(time).map_err(|e| DecodeError::Parse(e.into()))?);
+        self.start_timestamp.append_option(if start == 0 {
+            None
+        } else {
+            Some(nanos_to_micros(start).map_err(|e| DecodeError::Parse(e.into()))?)
+        });
         self.metric_name.append_value(ctx.name);
         self.metric_description.append_value(ctx.description);
         self.metric_unit.append_value(ctx.unit);
@@ -1498,7 +1548,7 @@ impl HistogramBuilders {
 
 struct ExpHistogramBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    start_timestamp: Int64Builder,
+    start_timestamp: TimestampMicrosecondBuilder,
     metric_name: StringBuilder,
     metric_description: StringBuilder,
     metric_unit: StringBuilder,
@@ -1529,8 +1579,8 @@ struct ExpHistogramBuilders {
 impl ExpHistogramBuilders {
     fn new() -> Self {
         Self {
-            timestamp: TimestampMicrosecondBuilder::new(),
-            start_timestamp: Int64Builder::new(),
+            timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
+            start_timestamp: TimestampMicrosecondBuilder::new().with_timezone("UTC"),
             metric_name: StringBuilder::new(),
             metric_description: StringBuilder::new(),
             metric_unit: StringBuilder::new(),
@@ -1578,8 +1628,13 @@ impl ExpHistogramBuilders {
             ))
         })?;
 
-        self.timestamp.append_value(nanos_to_micros(time));
-        self.start_timestamp.append_value(nanos_to_micros(start));
+        self.timestamp
+            .append_value(nanos_to_micros(time).map_err(|e| DecodeError::Parse(e.into()))?);
+        self.start_timestamp.append_option(if start == 0 {
+            None
+        } else {
+            Some(nanos_to_micros(start).map_err(|e| DecodeError::Parse(e.into()))?)
+        });
         self.metric_name.append_value(ctx.name);
         self.metric_description.append_value(ctx.description);
         self.metric_unit.append_value(ctx.unit);
@@ -1688,5 +1743,25 @@ impl ExpHistogramBuilders {
             Arc::new(self.aggregation_temporality.finish()),
         ];
         Ok(Some(RecordBatch::try_new(Arc::new(schema), arrays)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{duration_nanos_to_micros, nanos_to_micros};
+
+    #[test]
+    fn absolute_time_rejects_negative_and_preserves_i64_boundary() {
+        assert!(nanos_to_micros(-1).is_err());
+        assert_eq!(nanos_to_micros(i64::MAX).unwrap(), i64::MAX / 1_000);
+    }
+
+    #[test]
+    fn duration_time_rejects_negative_and_handles_maximum_without_overflow() {
+        assert!(duration_nanos_to_micros(-1).is_err());
+        assert_eq!(
+            duration_nanos_to_micros(i64::MAX).unwrap(),
+            i64::MAX / 1_000
+        );
     }
 }

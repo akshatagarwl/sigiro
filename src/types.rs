@@ -1,7 +1,18 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
 
 use crate::otlp::MetricBatches;
+use anyhow::{Context, Result};
 use arrow::record_batch::RecordBatch;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+
+/// Format a Unix timestamp in microseconds as RFC 3339.
+pub(crate) fn timestamp_micros_to_rfc3339(timestamp_us: i64) -> Result<String> {
+    OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp_us) * 1_000)
+        .context("timestamp is out of range")?
+        .format(&Rfc3339)
+        .context("failed to format timestamp")
+}
 
 // --------------------------------------------------------------------------
 // IngestMsg — carried across modules for routing

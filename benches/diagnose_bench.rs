@@ -39,7 +39,7 @@ fn setup_populated_db() -> (Arc<Mutex<duckdb::Connection>>, tempfile::TempDir) {
         let dur = (i + 1) * 1_000_000;
         let ts = now_us - (100 - i) * 1_000_000;
         sql.push_str(&format!(
-            "(make_timestamp({ts}), {ts}+{dur}, {dur}, 'trace-{i}', 'span-{i}', '', '{op}', 2, {status}, 'bench-svc', 'pod-{pod}', '{{\"k8s.namespace.name\":\"prod\"}}')",
+            "(make_timestamptz({ts}), make_timestamptz({ts}+{dur}), {dur}, 'trace-{i}', 'span-{i}', '', '{op}', 2, {status}, 'bench-svc', 'pod-{pod}', '{{\"k8s.namespace.name\":\"prod\"}}')",
             pod = i % 3
         ));
     }
@@ -64,7 +64,7 @@ fn setup_populated_db() -> (Arc<Mutex<duckdb::Connection>>, tempfile::TempDir) {
         let sev_num = if i % 4 == 0 { 13 } else { 9 };
         let body = body.replace('\'', "''");
         log_sql.push_str(&format!(
-            "(make_timestamp({ts}), {ts}, 'bench-svc', {sev_num}, '{sev}', '{body}')"
+            "(make_timestamptz({ts}), make_timestamptz({ts}), 'bench-svc', {sev_num}, '{sev}', '{body}')"
         ));
     }
     conn.execute_batch(&log_sql).expect("insert logs");

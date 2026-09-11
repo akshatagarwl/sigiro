@@ -19,17 +19,10 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     std::fs::create_dir_all(project_dir)
         .with_context(|| format!("failed to create project directory: {project_dir}",))?;
 
-    // Load the ONLY extension this mode needs: ducklake. The catalog is a
-    // DuckDB file (see the ATTACH below), so the sqlite extension — needed only
-    // for `ducklake:sqlite:` catalog backends — is NOT required here. It used to
-    // be installed "for compatibility" but that pulled a runtime download into
-    // the read-only baked extension dir (/opt/sigiro/extensions), failing with
-    // "Permission denied" and wedging the attach-retry loop in local mode.
-    // Emit a progress line before each step so cold starts don't look like
-    // a hang (F-01/F-29). With a fresh extension dir, DuckDB synchronously
-    // downloads ~5MB of .duckdb_extension files over HTTP and emits no
-    // output of its own; users see nothing for 30-90s.
-    install_extensions_with_progress(conn, &["ducklake"])?;
+    // Load the mandatory storage extensions for this mode: ducklake and icu.
+    // ICU is required for TIMESTAMPTZ arithmetic and is loaded before attach or
+    // schema/query readiness; failures propagate and never fall back.
+    install_extensions_with_progress(conn, &["ducklake", "icu"])?;
 
     // Attach DuckLake with DuckDB file catalog + local Parquet.
     // Uses catalog.ducklake (DuckDB native catalog) instead of SQLite
@@ -90,9 +83,9 @@ pub(crate) fn init_distributed(
     tenant_id: &str,
 ) -> Result<()> {
     if config.uses_s3() {
-        install_extensions_with_progress(conn, &["ducklake", "postgres", "httpfs"])?;
+        install_extensions_with_progress(conn, &["ducklake", "postgres", "httpfs", "icu"])?;
     } else {
-        install_extensions_with_progress(conn, &["ducklake", "postgres"])?;
+        install_extensions_with_progress(conn, &["ducklake", "postgres", "icu"])?;
     }
 
     let tenant_id = TenantId::try_new(tenant_id.to_owned())
@@ -785,7 +778,7 @@ pub fn prewarm_extensions(data_dir: &Utf8Path) -> Result<()> {
     );
     // sqlite is local-catalog-only (hosted uses a postgres catalog) and
     // downloads on demand for local dev.
-    install_extensions_with_progress(&conn, &["ducklake", "postgres", "httpfs"])?;
+    install_extensions_with_progress(&conn, &["ducklake", "postgres", "httpfs", "icu"])?;
     // The extensions `lock_filesystem` LOADs, cached only where this binary does
     // not already carry them.
     //

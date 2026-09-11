@@ -1,12 +1,12 @@
 ---
 source: tests/diagnose_test.rs
-assertion_line: 756
+assertion_line: 922
 expression: ctx
 ---
 {
   "service_name": "checkout",
-  "first_seen": "2023-11-14 22:13:20",
-  "last_seen": "2023-11-14 22:13:20",
+  "first_seen": "2023-11-15 03:43:20+05:30",
+  "last_seen": "2023-11-15 03:43:20+05:30",
   "namespace": "prod",
   "deployment": "checkout-v2",
   "pod_count": 1,

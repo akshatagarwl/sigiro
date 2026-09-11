@@ -1228,6 +1228,10 @@ type QueryResponse = (
 /// The SQL-subset contract, stated once and surfaced in BOTH places an agent
 /// hits it: the /openapi.json operation description and every guard
 /// rejection. Rejections that don't say what IS allowed force trial-and-error.
+///
+/// Exact epoch-microsecond constructor: `make_timestamptz(microseconds)` is the
+/// only supported conversion for absolute instants. Do not use floating-point
+/// division with `to_timestamp`, which rounds large epoch values.
 fn query_sql_contract() -> String {
     format!(
         "Accepts exactly one read-only SELECT statement (raw SQL as the request body). \
@@ -1263,38 +1267,23 @@ fn query_sql_contract() -> String {
 /// - `sigiro_profiles`
 /// - `sigiro_anomalies`
 ///
-/// ## Bound `timestamp` with a literal, not `now()`
+/// ## Bound `timestamp` with a TIMESTAMPTZ literal, not a cast
 ///
 /// Statistics pruning only happens when the comparison value is a constant the
-/// planner can fold. `now()` is volatile, so any predicate built from it is
-/// evaluated per row and every file in the table is opened.
+/// planner can fold. Send an absolute instant with an explicit UTC offset, or
+/// use `now()` directly for a rolling window.
 ///
 /// ```sql
 /// -- prunes: the planner folds the constant and skips whole files
-/// WHERE timestamp > TIMESTAMP '2026-08-31 08:00:00'
+/// WHERE timestamp > TIMESTAMPTZ '2026-08-31 08:00:00+00'
 ///
-/// -- does not prune: opens every file, then filters
-/// WHERE timestamp > (now() - INTERVAL 1 HOUR)::TIMESTAMP
+/// -- rolling windows keep the column's native TIMESTAMPTZ type
+/// WHERE timestamp > now() - INTERVAL 1 HOUR
 /// ```
 ///
-/// Compute the bound in your client and send it as a literal.
-///
-/// ## If you must use `now()`, cast it
-///
-/// The `timestamp` columns are `TIMESTAMP` (no timezone) and `now()` returns
-/// `TIMESTAMPTZ`. Comparing them directly makes DuckDB cast the **column**,
-/// which adds a per-row conversion on top of the missing pruning. Measured
-/// against production on 2026-08-31, same table and window:
-///
-/// | predicate | result |
-/// |---|---|
-/// | `timestamp > TIMESTAMP '2026-08-31 08:00:00'` | 200 in 2.48s |
-/// | `timestamp > (now() - INTERVAL 5 MINUTE)::TIMESTAMP` | 200 in 0.65s |
-/// | `timestamp > now() - INTERVAL 5 MINUTE` | 400 `INTERRUPT` at 10.98s |
-/// | `timestamp > TIMESTAMPTZ '2026-08-31 08:00:00+00'` | 400 `INTERRUPT` at 10.65s |
-///
-/// So the cast is worth having, but it is a mitigation and not the fix: the
-/// literal is.
+/// Compute absolute bounds in your client and send them as TIMESTAMPTZ literals.
+/// `now()` already returns TIMESTAMPTZ; do not cast either side to naive
+/// `TIMESTAMP`.
 #[utoipa::path(
     post,
     path = "/v1/query",
@@ -1317,9 +1306,8 @@ fn query_sql_contract() -> String {
         content_type = "text/plain",
         description = "One SELECT statement. No WITH/CTE clauses — rewrite them as \
 derived-table subqueries. Scalar functions are allowlisted; file and network \
-readers are blocked. Bound timestamp columns with a literal TIMESTAMP rather \
-than an expression built from now(), or statistics pruning is lost and the \
-query reads every file.",
+readers are blocked. Compare TIMESTAMPTZ columns with TIMESTAMPTZ literals \
+or native now() expressions.",
         example = json!(
             "SELECT service_name, count(*) AS errors FROM sigiro_spans \
 WHERE status_code = 'STATUS_CODE_ERROR' GROUP BY 1 ORDER BY 2 DESC"
@@ -1576,10 +1564,10 @@ async fn anomalies_handler(
         filters.push(format!("service_name = '{}'", escape_sql_string(service)));
     }
     if let Some(from_ts) = q.from_ts {
-        filters.push(format!("ts_shift >= make_timestamp({from_ts})"));
+        filters.push(format!("ts_shift >= make_timestamptz({from_ts})"));
     }
     if let Some(to_ts) = q.to_ts {
-        filters.push(format!("ts_shift <= make_timestamp({to_ts})"));
+        filters.push(format!("ts_shift <= make_timestamptz({to_ts})"));
     }
     let sql = format!(
         "SELECT detected_at::VARCHAR AS detected_at, service_name, operation, signal, kind, \

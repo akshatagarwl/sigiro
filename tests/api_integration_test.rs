@@ -156,7 +156,8 @@ async fn trace_detail_preserves_canonical_trace_id_wire_shape() {
             "INSERT INTO lake.sigiro_spans (
                 timestamp, end_timestamp, duration, trace_id, span_id,
                 service_name, span_name, span_kind, status_code
-             ) VALUES (now(), 1700000000000010, 10, ?1,
+             ) VALUES (TIMESTAMPTZ '2023-11-14 22:13:20+00',
+                TIMESTAMPTZ '2023-11-14 22:13:20.000010+00', 10, ?1,
                 '2222222222222222', 'checkout', 'GET /cart', 2, 1)",
             duckdb::params![TRACE_ID],
         )
@@ -643,12 +644,12 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
             "INSERT INTO lake.sigiro_anomalies
                 (detected_at, service_name, operation, signal, kind, direction,
                  ts_shift, \"before\", \"after\", drill_down_sql)
-             VALUES (now()::TIMESTAMP, 'checkout', 'POST /pay', 'error_rate',
+             VALUES (now(), 'checkout', 'POST /pay', 'error_rate',
                      'changepoint', 'worsening',
-                     now()::TIMESTAMP - INTERVAL '1 hour', 0.0, 42.0,
+                     now() - INTERVAL '1 hour', 0.0, 42.0,
                      'SELECT * FROM lake.sigiro_spans'),
-                    (now()::TIMESTAMP, 'checkout', 'GET /cart', 'error_rate',
-                     'changepoint', 'worsening', now()::TIMESTAMP, 24.9, 25.3,
+                    (now(), 'checkout', 'GET /cart', 'error_rate',
+                     'changepoint', 'worsening', now(), 24.9, 25.3,
                      'SELECT * FROM lake.sigiro_spans')",
         )
         .expect("seed anomaly rows");
@@ -733,21 +734,21 @@ async fn test_anomalies_incident_id_groups_same_bucket_shifts_per_service() {
             "INSERT INTO lake.sigiro_anomalies
                 (detected_at, service_name, operation, signal, kind, direction,
                  ts_shift, \"before\", \"after\", drill_down_sql)
-             VALUES (now()::TIMESTAMP, 'checkout', 'POST /pay', 'error_rate',
+             VALUES (now(), 'checkout', 'POST /pay', 'error_rate',
                      'changepoint', 'worsening',
-                     now()::TIMESTAMP - INTERVAL '1 hour', 5.0, 50.0,
+                     now() - INTERVAL '1 hour', 5.0, 50.0,
                      'SELECT * FROM lake.sigiro_spans'),
-                    (now()::TIMESTAMP, 'checkout', 'checkout', 'log_volume',
+                    (now(), 'checkout', 'checkout', 'log_volume',
                      'changepoint', 'worsening',
-                     now()::TIMESTAMP - INTERVAL '1 hour', 3.0, 40.0,
+                     now() - INTERVAL '1 hour', 3.0, 40.0,
                      'SELECT * FROM lake.sigiro_logs'),
-                    (now()::TIMESTAMP, 'checkout', 'GET /cart', 'error_rate',
+                    (now(), 'checkout', 'GET /cart', 'error_rate',
                      'changepoint', 'worsening',
-                     now()::TIMESTAMP - INTERVAL '4 hours', 0.0, 20.0,
+                     now() - INTERVAL '4 hours', 0.0, 20.0,
                      'SELECT * FROM lake.sigiro_spans'),
-                    (now()::TIMESTAMP, 'other', 'other', 'log_volume',
+                    (now(), 'other', 'other', 'log_volume',
                      'changepoint', 'worsening',
-                     now()::TIMESTAMP - INTERVAL '1 hour', 2.0, 30.0,
+                     now() - INTERVAL '1 hour', 2.0, 30.0,
                      'SELECT * FROM lake.sigiro_logs')",
         )
         .expect("seed anomaly rows");
@@ -1008,6 +1009,13 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
               "timeUnixNano": "1700000000500000000",
               "asDouble": 42.5
             }]}
+          }, {
+            "name": "json.sum",
+            "sum": {"aggregationTemporality": 2, "dataPoints": [{
+              "timeUnixNano": "1700000000500000000",
+              "startTimeUnixNano": "1700000000000000000",
+              "asDouble": 7.0
+            }]}
           }]
         }]
       }]
@@ -1070,7 +1078,7 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
     // the span path divided ns by 1_000_000 (→ ms) instead of 1_000.
     let (duration, start_us, end_us): (i64, i64, i64) = guard
         .query_row(
-            "SELECT duration, epoch_us(timestamp), end_timestamp FROM lake.sigiro_spans \
+            "SELECT duration, epoch_us(timestamp), epoch_us(end_timestamp) FROM lake.sigiro_spans \
              WHERE trace_id = '11111111111111111111111111111111'",
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -1085,6 +1093,54 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
         1_000_000,
         "end_timestamp and timestamp must share the µs unit"
     );
+
+    let timestamptz_columns: i64 = guard
+        .query_row(
+            "SELECT count(*) FROM information_schema.columns
+             WHERE table_name IN (
+                 'sigiro_spans', 'sigiro_logs', 'sigiro_log_templates',
+                 'sigiro_metrics_gauge', 'sigiro_metrics_sum',
+                 'sigiro_metrics_histogram', 'sigiro_metrics_exp_histogram',
+                 'sigiro_profiles', 'sigiro_anomalies'
+             )
+             AND column_name IN (
+                 'timestamp', 'end_timestamp', 'observed_timestamp', 'first_seen',
+                 'start_timestamp', 'detected_at', 'ts_shift'
+             )
+             AND data_type = 'TIMESTAMP WITH TIME ZONE'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("absolute-time schema query should succeed");
+    assert_eq!(
+        timestamptz_columns, 16,
+        "every absolute instant column must be TIMESTAMPTZ, never BIGINT"
+    );
+
+    let (observed_us, metric_start_us): (i64, Option<i64>) = guard
+        .query_row(
+            "SELECT epoch_us(observed_timestamp),
+                    (SELECT epoch_us(start_timestamp)
+                       FROM lake.sigiro_metrics_gauge
+                      WHERE metric_name = 'json.request.duration'
+                        AND service_name = 'json-svc')
+               FROM lake.sigiro_logs
+              WHERE body = 'json log body'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("companion absolute-time values should be queryable");
+    assert_eq!(observed_us, 0);
+    assert_eq!(metric_start_us, None, "zero metric start time is unset");
+
+    let sum_start_us: Option<i64> = guard
+        .query_row(
+            "SELECT epoch_us(start_timestamp) FROM lake.sigiro_metrics_sum LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .expect("nonzero sum metric start time should be queryable");
+    assert_eq!(sum_start_us, Some(1_700_000_000_000_000));
 }
 
 #[tokio::test]
@@ -1175,15 +1231,18 @@ async fn test_otlp_protobuf_preserves_event_name() {
         .pool
         .get_project("default")
         .expect("default project should exist");
-    let event_name: String = conn
+    let (event_name, observed_us): (String, i64) = conn
         .get()
         .query_row(
-            "SELECT event_name FROM lake.sigiro_logs WHERE body = 'protobuf event'",
+            "SELECT event_name, epoch_us(observed_timestamp)
+               FROM lake.sigiro_logs
+              WHERE body = 'protobuf event'",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .expect("event name should be queryable");
+        .expect("event name and observed timestamp should be queryable");
     assert_eq!(event_name, "container.oom_killed");
+    assert_eq!(observed_us, 1_700_000_000_500_000);
 }
 
 #[tokio::test]

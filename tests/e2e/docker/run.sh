@@ -178,7 +178,7 @@ latest_heap_ts=$(query \
   "SELECT max(timestamp) AS ts FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space'" \
   | jq -r '.[0].ts')
 latest_heap_total=$(query \
-  "SELECT sum(value) AS total FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space' AND timestamp = make_timestamp(${latest_heap_ts})" \
+  "SELECT sum(value) AS total FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space' AND timestamp = make_timestamptz(${latest_heap_ts})" \
   | jq -r '.[0].total')
 reported_heap_total=$(echo "$inv" | jq -r \
   '[.results.sigiro.profiles[] | select(.profile_type == "inuse_space") | .total_value] | add // 0')
@@ -193,7 +193,7 @@ fi
 
 printf "  %-50s" "profile stacks use DuckDB VARCHAR[] / JSON arrays..."
 latest_heap_stack=$(query \
-  "SELECT stack_trace FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space' AND timestamp = make_timestamp(${latest_heap_ts}) LIMIT 1")
+  "SELECT stack_trace FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space' AND timestamp = make_timestamptz(${latest_heap_ts}) LIMIT 1")
 if echo "$latest_heap_stack" | jq -e '.[0].stack_trace | type == "array"' >/dev/null 2>&1; then
   echo "PASS"
   PASSES=$((PASSES + 1))
@@ -205,7 +205,7 @@ fi
 
 printf "  %-50s" "heap allocation frames are symbolized..."
 heap_frames=$(query \
-  "SELECT unnest(stack_trace) AS frame FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space' AND timestamp = make_timestamp(${latest_heap_ts}) LIMIT 10000")
+  "SELECT unnest(stack_trace) AS frame FROM $PROFILE_SCHEMA.sigiro_profiles WHERE profile_type = 'inuse_space' AND timestamp = make_timestamptz(${latest_heap_ts}) LIMIT 10000")
 if echo "$heap_frames" | jq -e \
   'any(.[]; .frame | contains("DuckLake"))' \
   >/dev/null 2>&1; then

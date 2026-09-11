@@ -192,7 +192,7 @@ const SAFE_FUNCTIONS: &[&str] = &["PRAGMA_DATABASE_SIZE", "RANGE"];
 ///   `src/schema.rs`) — never itself routed through this gate (it runs
 ///   directly against `ctx.conn`), but real DuckDB usage this system
 ///   already relies on and representative of what a legitimate ad-hoc
-///   analytics query needs: `any_value`, `first`, `make_timestamp`,
+///   analytics query needs: `any_value`, `first`, `make_timestamptz`,
 ///   `time_bucket`, `len`.
 /// - Standard read-only observability/analytics scalars and aggregates
 ///   with no filesystem/network/settings access (string/date/math/
@@ -231,8 +231,7 @@ const SCALAR_FUNCTIONS: &[&str] = &[
     "EPOCH_MS",
     "STRFTIME",
     "STRPTIME",
-    "TO_TIMESTAMP",
-    "MAKE_TIMESTAMP",
+    "MAKE_TIMESTAMPTZ",
     "TIME_BUCKET",
     // String
     "LOWER",

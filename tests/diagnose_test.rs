@@ -110,7 +110,7 @@ fn setup_drain_logs(
             &format!(
                 "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
                     severity_text, body, template_id, template_values)
-                 VALUES (make_timestamp({now_us}), {now_us}, 'api', {severity_number}, '{severity_text}', ?, ?, ?)"
+                 VALUES (make_timestamptz({now_us}), make_timestamptz({now_us}), 'api', {severity_number}, '{severity_text}', ?, ?, ?)"
             ),
             duckdb::params![body, id, values_json],
         )
@@ -209,11 +209,11 @@ fn diagnose_with_real_span_data() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
-            (make_timestamp({now_us}), {now_us} + 500000000, 500000000, 'trace-1', 'span-1', '', 'POST /checkout', 2, 2, 'checkout'),
-            (make_timestamp({now_us}), {now_us} + 200000000, 200000000, 'trace-2', 'span-2', '', 'POST /checkout', 2, 1, 'checkout'),
-            (make_timestamp({now_us}), {now_us} + 300000000, 300000000, 'trace-3', 'span-3', '', 'POST /checkout', 2, 2, 'checkout'),
-            (make_timestamp({now_us}), {now_us} + 1000000, 1000000, 'trace-4', 'span-4', '', 'GET /health', 2, 1, 'checkout'),
-            (make_timestamp({now_us}), {now_us} + 2000000, 2000000, 'trace-5', 'span-5', '', 'GET /health', 2, 1, 'checkout');"
+            (make_timestamptz({now_us}), make_timestamptz({now_us} + 500000000), 500000000, 'trace-1', 'span-1', '', 'POST /checkout', 2, 2, 'checkout'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us} + 200000000), 200000000, 'trace-2', 'span-2', '', 'POST /checkout', 2, 1, 'checkout'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us} + 300000000), 300000000, 'trace-3', 'span-3', '', 'POST /checkout', 2, 2, 'checkout'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us} + 1000000), 1000000, 'trace-4', 'span-4', '', 'GET /health', 2, 1, 'checkout'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us} + 2000000), 2000000, 'trace-5', 'span-5', '', 'GET /health', 2, 1, 'checkout');"
     )).expect("insert spans");
 
     let shared = Arc::new(Mutex::new(conn));
@@ -368,9 +368,9 @@ fn service_context_with_k8s_attrs() {
             parent_span_id, span_name, span_kind, status_code, service_name,
             service_instance_id, resource_attributes)
          VALUES
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'op', 2, 1, 'checkout',
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 's1', '', 'op', 2, 1, 'checkout',
              'pod-1', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'op', 2, 1, 'checkout',
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't2', 's2', '', 'op', 2, 1, 'checkout',
              'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}')"
     ))
     .expect("insert");
@@ -392,8 +392,8 @@ fn service_context_dependencies() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx1', '', 'POST /pay', 3, 1, 'checkout'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments')"
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 'trace-x', 'sx1', '', 'POST /pay', 3, 1, 'checkout'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments')"
     ))
     .expect("insert");
     let ctx = diagnose_service(&conn, "checkout", now_us - 60_000_000, now_us + 60_000_000).context;
@@ -423,9 +423,9 @@ fn derived_events_deploy_detection() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name, resource_attributes)
          VALUES
-            (make_timestamp({now_us} - 60000000), {now_us}, 1000, 't1', 's1', '', 'op', 2, 1, 'api',
+            (make_timestamptz({now_us} - 60000000), make_timestamptz({now_us}), 1000, 't1', 's1', '', 'op', 2, 1, 'api',
              '{{\"service.version\":\"v1.0.0\"}}'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'op', 2, 1, 'api',
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't2', 's2', '', 'op', 2, 1, 'api',
              '{{\"service.version\":\"v1.1.0\"}}')"
     ))
     .expect("insert");
@@ -452,7 +452,7 @@ fn derived_events_k8s_oomkilled() {
         "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
             severity_text, body)
          VALUES
-            (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR',
+            (make_timestamptz({now_us}), make_timestamptz({now_us}), 'api', 17, 'ERROR',
              'Container killed due to OOMKilled')"
     ))
     .expect("insert");
@@ -721,7 +721,7 @@ fn diagnose_large_window_still_returns_spans() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'op', 2, 1, 'svc')"
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 's1', '', 'op', 2, 1, 'svc')"
     ))
     .expect("insert");
     let shared = Arc::new(Mutex::new(conn));
@@ -751,9 +751,9 @@ fn diagnose_multi_basic() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'op', 2, 1, 'svc-a'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'op', 2, 1, 'svc-b'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't3', 's3', '', 'op', 2, 1, 'svc-c')"
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 's1', '', 'op', 2, 1, 'svc-a'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't2', 's2', '', 'op', 2, 1, 'svc-b'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't3', 's3', '', 'op', 2, 1, 'svc-c')"
     ))
     .expect("insert");
     let shared = Arc::new(Mutex::new(conn));
@@ -795,14 +795,14 @@ fn diagnose_all_three_signals() {
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
-         VALUES (make_timestamp({now_us}), {now_us} + 1000, 1000, 't1', 's1', '', 'op', 2, 1, 'svc');
+         VALUES (make_timestamptz({now_us}), make_timestamptz({now_us} + 1000), 1000, 't1', 's1', '', 'op', 2, 1, 'svc');
          INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
             severity_text, body)
-         VALUES (make_timestamp({now_us}), {now_us}, 'svc', 13, 'WARN', 'something happened');
+         VALUES (make_timestamptz({now_us}), make_timestamptz({now_us}), 'svc', 13, 'WARN', 'something happened');
          INSERT INTO sigiro_metrics_gauge (timestamp, metric_name, value, service_name)
-         VALUES (make_timestamp({now_us}), 'cpu.usage', 42.0, 'svc');
+         VALUES (make_timestamptz({now_us}), 'cpu.usage', 42.0, 'svc');
          INSERT INTO sigiro_profiles (profile_id, service_name, timestamp, profile_type, stack_trace, value, unit)
-         VALUES ('p1', 'svc', make_timestamp({now_us}), 'cpu', ['main', 'handler'], 1000, 'samples');"
+         VALUES ('p1', 'svc', make_timestamptz({now_us}), 'cpu', ['main', 'handler'], 1000, 'samples');"
     ))
     .expect("insert all signals");
 
@@ -861,11 +861,11 @@ fn operation_summary_baselines() {
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
             -- Baseline: healthy
-            (make_timestamp({baseline_ts}), {baseline_ts} + 50000000, 50000000, 'bl-1', 'bs-1', '', 'POST /checkout', 2, 1, 'checkout'),
-            (make_timestamp({baseline_ts}), {baseline_ts} + 60000000, 60000000, 'bl-2', 'bs-2', '', 'POST /checkout', 2, 1, 'checkout'),
+            (make_timestamptz({baseline_ts}), make_timestamptz({baseline_ts} + 50000000), 50000000, 'bl-1', 'bs-1', '', 'POST /checkout', 2, 1, 'checkout'),
+            (make_timestamptz({baseline_ts}), make_timestamptz({baseline_ts} + 60000000), 60000000, 'bl-2', 'bs-2', '', 'POST /checkout', 2, 1, 'checkout'),
             -- Current: broken
-            (make_timestamp({now_us}), {now_us} + 800000000, 800000000, 'cur-1', 'cs-1', '', 'POST /checkout', 2, 2, 'checkout'),
-            (make_timestamp({now_us}), {now_us} + 900000000, 900000000, 'cur-2', 'cs-2', '', 'POST /checkout', 2, 2, 'checkout');"
+            (make_timestamptz({now_us}), make_timestamptz({now_us} + 800000000), 800000000, 'cur-1', 'cs-1', '', 'POST /checkout', 2, 2, 'checkout'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us} + 900000000), 900000000, 'cur-2', 'cs-2', '', 'POST /checkout', 2, 2, 'checkout');"
     )).expect("insert spans");
 
     let shared = Arc::new(Mutex::new(conn));
@@ -912,9 +912,9 @@ fn snapshot_query_service_context_shape() {
             parent_span_id, span_name, span_kind, status_code, service_name,
             service_instance_id, resource_attributes)
          VALUES
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx1', '', 'POST /pay', 3, 1, 'checkout',
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 'trace-x', 'sx1', '', 'POST /pay', 3, 1, 'checkout',
              'pod-1', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"checkout-v2\"}}'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments',
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 'trace-x', 'sx2', 'sx1', 'process', 2, 1, 'payments',
              'pod-2', '{{\"k8s.namespace.name\":\"prod\",\"k8s.deployment.name\":\"payments-v1\"}}')"
     ))
     .expect("insert");
@@ -986,7 +986,7 @@ fn insert_spans_full(
             None => "NULL".to_string(),
         };
         values.push(format!(
-            "(make_timestamp({ts_us}), {ts_us} + {duration_us}, {duration_us}, \
+            "(make_timestamptz({ts_us}), make_timestamptz({ts_us} + {duration_us}), {duration_us}, \
              'tr-{span_name}-{ts_us}-{i}', 'sp-{ts_us}-{i}', '', '{span_name}', 2, {status}, \
              '{service}', {attrs_sql}, {msg_sql})"
         ));
@@ -1013,7 +1013,7 @@ fn insert_logs(conn: &duckdb::Connection, service: &str, ts_us: i64, counts: (us
             (9, "INFO")
         };
         values.push(format!(
-            "(make_timestamp({ts_us}), {ts_us}, '{service}', {sev_num}, '{sev_text}', \
+            "(make_timestamptz({ts_us}), make_timestamptz({ts_us}), '{service}', {sev_num}, '{sev_text}', \
              'log line {i} at {ts_us}')"
         ));
     }
@@ -1038,7 +1038,7 @@ fn insert_profile_sample(
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_profiles (profile_id, service_name, timestamp, profile_type,
             stack_trace, value, unit)
-         VALUES ('p-{function}-{ts_us}', '{service}', make_timestamp({ts_us}), 'cpu',
+         VALUES ('p-{function}-{ts_us}', '{service}', make_timestamptz({ts_us}), 'cpu',
                  ['main', '{function}'], {value}, 'samples')"
     ))
     .expect("insert profile sample");
@@ -1699,7 +1699,7 @@ fn incident_correlates_multi_signal_shifts_and_names_the_deploy() {
     conn.execute_batch(&format!(
         "UPDATE sigiro_spans \
          SET resource_attributes = '{{\"service.version\":\"v2\"}}' \
-         WHERE service_name = 'worker' AND timestamp >= make_timestamp({shift_us})"
+         WHERE service_name = 'worker' AND timestamp >= make_timestamptz({shift_us})"
     ))
     .expect("mark deployed version");
 
@@ -2255,12 +2255,12 @@ fn deploy_events_suppressed_for_steady_version() {
             parent_span_id, span_name, span_kind, status_code, service_name, resource_attributes)
          VALUES
             -- v1 running BEFORE the window (baseline) and inside it: steady state.
-            (make_timestamp({baseline_ts}), {baseline_ts}+1000, 1000, 't0', 's0', '', 'op', 2, 1, 'api',
+            (make_timestamptz({baseline_ts}), make_timestamptz({baseline_ts}+1000), 1000, 't0', 's0', '', 'op', 2, 1, 'api',
              '{{\"service.version\":\"v1\"}}'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'op', 2, 1, 'api',
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 's1', '', 'op', 2, 1, 'api',
              '{{\"service.version\":\"v1\"}}'),
             -- v2 appears ONLY inside the window: a real deploy.
-            (make_timestamp({now_us} + 1000), {now_us}+2000, 1000, 't2', 's2', '', 'op', 2, 1, 'api',
+            (make_timestamptz({now_us} + 1000), make_timestamptz({now_us}+2000), 1000, 't2', 's2', '', 'op', 2, 1, 'api',
              '{{\"service.version\":\"v2\"}}')"
     ))
     .expect("insert");
@@ -2290,7 +2290,7 @@ fn status_message_and_errors_without_logs_finding() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name, status_message)
          VALUES
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'POST', 3, 2, 'worker',
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 's1', '', 'POST', 3, 2, 'worker',
              '429 Too Many Requests')"
     ))
     .expect("insert");
@@ -2353,10 +2353,10 @@ fn errors_with_error_logs_do_not_emit_inconsistency_finding() {
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
-         VALUES (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'op', 2, 2, 'api');
+         VALUES (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 's1', '', 'op', 2, 2, 'api');
          INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
             severity_text, body)
-         VALUES (make_timestamp({now_us}), {now_us}, 'api', 17, 'ERROR', 'it broke')"
+         VALUES (make_timestamptz({now_us}), make_timestamptz({now_us}), 'api', 17, 'ERROR', 'it broke')"
     ))
     .expect("insert");
     let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
@@ -2791,9 +2791,9 @@ fn duplicate_spans_surface_as_a_finding_with_a_runnable_drill() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'GET /a', 2, 0, 'api'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'GET /a', 2, 0, 'api'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'GET /b', 2, 0, 'api')"
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 's1', '', 'GET /a', 2, 0, 'api'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 's1', '', 'GET /a', 2, 0, 'api'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't2', 's2', '', 'GET /b', 2, 0, 'api')"
     ))
     .expect("insert");
 
@@ -2821,8 +2821,8 @@ fn clean_spans_emit_no_install_health_findings() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
-            (make_timestamp({now_us}), {now_us}+2000, 2000, 't1', 'root', '', 'GET /a', 2, 0, 'api'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 'kid', 'root', 'GET db', 3, 0, 'api')"
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+2000), 2000, 't1', 'root', '', 'GET /a', 2, 0, 'api'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 'kid', 'root', 'GET db', 3, 0, 'api')"
     ))
     .expect("insert");
 
@@ -2853,9 +2853,9 @@ fn orphan_spans_surface_as_a_finding_and_cross_service_parents_do_not() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
-            (make_timestamp({now_us}), {now_us}+3000, 3000, 't1', 'up', '', 'GET /a', 2, 0, 'gateway'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 'kid', 'up', 'GET /b', 2, 0, 'api'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 'lost', 'gone', 'GET /c', 2, 0, 'api')"
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+3000), 3000, 't1', 'up', '', 'GET /a', 2, 0, 'gateway'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 'kid', 'up', 'GET /b', 2, 0, 'api'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't2', 'lost', 'gone', 'GET /c', 2, 0, 'api')"
     ))
     .expect("insert");
 
@@ -2886,8 +2886,8 @@ fn server_spans_without_client_spans_surface_as_a_finding() {
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 's1', '', 'GET /a', 2, 0, 'ingress'),
-            (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 's2', '', 'GET /b', 2, 0, 'ingress')"
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't1', 's1', '', 'GET /a', 2, 0, 'ingress'),
+            (make_timestamptz({now_us}), make_timestamptz({now_us}+1000), 1000, 't2', 's2', '', 'GET /b', 2, 0, 'ingress')"
     ))
     .expect("insert");
 

@@ -55,10 +55,14 @@ fn make_spans_batch(n: usize, service_name: &str, span_name: &str, ts_base: i64)
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("end_timestamp", DataType::Int64, false),
+        Field::new(
+            "end_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
         Field::new("duration", DataType::Int64, false),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
@@ -102,8 +106,8 @@ fn make_spans_batch(n: usize, service_name: &str, span_name: &str, ts_base: i64)
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(TimestampMicrosecondArray::from(timestamps)),
-            Arc::new(Int64Array::from(end_timestamps)),
+            Arc::new(TimestampMicrosecondArray::from(timestamps).with_timezone("UTC")),
+            Arc::new(TimestampMicrosecondArray::from(end_timestamps).with_timezone("UTC")),
             Arc::new(Int64Array::from(durations)),
             Arc::new(StringArray::from(trace_id_refs)),
             Arc::new(StringArray::from(span_id_refs)),
@@ -139,10 +143,14 @@ fn make_logs_batch(n: usize, service_name: &str, ts_base: i64) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("observed_timestamp", DataType::Int64, false),
+        Field::new(
+            "observed_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
         Field::new("event_name", DataType::Utf8, false),
@@ -171,8 +179,8 @@ fn make_logs_batch(n: usize, service_name: &str, ts_base: i64) -> RecordBatch {
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(TimestampMicrosecondArray::from(timestamps)),
-            Arc::new(Int64Array::from(observed)),
+            Arc::new(TimestampMicrosecondArray::from(timestamps).with_timezone("UTC")),
+            Arc::new(TimestampMicrosecondArray::from(observed).with_timezone("UTC")),
             Arc::new(StringArray::from(nulls.clone())),
             Arc::new(StringArray::from(nulls.clone())),
             Arc::new(StringArray::from(vec![""; n])),
@@ -199,10 +207,14 @@ fn make_gauge_batch(n: usize, service_name: &str, ts_base: i64) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("start_timestamp", DataType::Int64, true),
+        Field::new(
+            "start_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        ),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, true),
         Field::new("metric_unit", DataType::Utf8, true),
@@ -230,8 +242,8 @@ fn make_gauge_batch(n: usize, service_name: &str, ts_base: i64) -> RecordBatch {
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(TimestampMicrosecondArray::from(timestamps)),
-            Arc::new(Int64Array::from(null_i64s)),
+            Arc::new(TimestampMicrosecondArray::from(timestamps).with_timezone("UTC")),
+            Arc::new(TimestampMicrosecondArray::from(null_i64s).with_timezone("UTC")),
             Arc::new(StringArray::from(metric_names)),
             Arc::new(StringArray::from(nulls.clone())),
             Arc::new(StringArray::from(nulls.clone())),
@@ -265,7 +277,7 @@ fn make_profiles_batch(
         Field::new("service_name", DataType::Utf8, false),
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
         Field::new("profile_type", DataType::Utf8, true),
@@ -319,7 +331,9 @@ fn make_profiles_batch(
             Arc::new(StringArray::from(trace_ids)),
             Arc::new(StringArray::from(span_ids)),
             Arc::new(StringArray::from(service_names)),
-            Arc::new(arrow::array::TimestampMicrosecondArray::from(timestamps)),
+            Arc::new(
+                arrow::array::TimestampMicrosecondArray::from(timestamps).with_timezone("UTC"),
+            ),
             Arc::new(StringArray::from(profile_types)),
             Arc::new(stack_traces.finish()),
             Arc::new(Int64Array::from(values)),
@@ -784,10 +798,14 @@ fn make_templated_logs_batch(bodies: &[&str], service_name: &str, ts_base: i64) 
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("observed_timestamp", DataType::Int64, false),
+        Field::new(
+            "observed_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
         Field::new("event_name", DataType::Utf8, false),
@@ -814,8 +832,8 @@ fn make_templated_logs_batch(bodies: &[&str], service_name: &str, ts_base: i64) 
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(TimestampMicrosecondArray::from(timestamps)),
-            Arc::new(Int64Array::from(observed)),
+            Arc::new(TimestampMicrosecondArray::from(timestamps).with_timezone("UTC")),
+            Arc::new(TimestampMicrosecondArray::from(observed).with_timezone("UTC")),
             Arc::new(StringArray::from(nulls.clone())),
             Arc::new(StringArray::from(nulls.clone())),
             Arc::new(StringArray::from(vec![""; n])),

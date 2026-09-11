@@ -4,7 +4,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::types::TimestampMicros;
+use crate::types::{TimestampMicros, timestamp_micros_to_rfc3339};
 
 // NOTE: changepoint detection (augurs BOCPD) no longer lives here — it moved
 // to the scheduled anomaly pass in `crate::anomaly`, which persists results
@@ -187,14 +187,7 @@ pub fn metric_bucket_interval(from_ts: i64, to_ts: i64) -> &'static str {
 // ---------------------------------------------------------------------------
 
 pub fn us_to_iso(us: i64) -> Result<String> {
-    let ns = us
-        .checked_mul(1000)
-        .ok_or_else(|| anyhow::anyhow!("timestamp overflow: {us}"))?;
-    let dt = time::OffsetDateTime::from_unix_timestamp_nanos(ns.into())
-        .map_err(|_| anyhow::anyhow!("invalid timestamp_micros: {us}"))?;
-    dt.format(&time::format_description::well_known::Rfc3339)
-        .map(|s| s.to_string())
-        .map_err(|_| anyhow::anyhow!("format failed for timestamp_micros: {us}"))
+    timestamp_micros_to_rfc3339(us)
 }
 
 /// Service dependency graph node with aggregated stats.

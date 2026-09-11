@@ -191,8 +191,8 @@ curl -sS -X POST http://127.0.0.1:9999/v1/query \
   -H 'content-type: text/plain' \
   --data "SELECT service_name, span_name, count(*) AS occurrences
           FROM sigiro_spans
-          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
-            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
+          WHERE timestamp >= TIMESTAMPTZ '2026-09-10 12:00:00+00'
+            AND timestamp <  TIMESTAMPTZ '2026-09-10 13:00:00+00'
           GROUP BY service_name, span_name
           ORDER BY occurrences DESC"
 ```
@@ -205,8 +205,8 @@ for table in gauge sum histogram exp_histogram; do
     -H 'content-type: text/plain' \
     --data "SELECT metric_name, count(*) AS points
             FROM sigiro_metrics_${table}
-            WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
-              AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
+            WHERE timestamp >= TIMESTAMPTZ '2026-09-10 12:00:00+00'
+              AND timestamp <  TIMESTAMPTZ '2026-09-10 13:00:00+00'
             GROUP BY metric_name ORDER BY points DESC"
 done
 ```

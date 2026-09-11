@@ -249,7 +249,7 @@ async fn main() -> Result<()> {
             let recent_ingest = if matches!(state.as_str(), "ready" | "starting") {
                 match sigiro::client::try_build_client() {
                     Ok(client) => match client.query(
-                        "SELECT (SELECT count(*) FROM lake.sigiro_spans WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS spans_5m, (SELECT count(*) FROM lake.sigiro_logs WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS logs_5m, CAST((SELECT max(timestamp) FROM lake.sigiro_spans) AS VARCHAR) AS last_span_ts, CAST((SELECT max(timestamp) FROM lake.sigiro_logs) AS VARCHAR) AS last_log_ts",
+                        "SELECT (SELECT count(*) FROM lake.sigiro_spans WHERE timestamp > CURRENT_TIMESTAMP - interval 5 minute) AS spans_5m, (SELECT count(*) FROM lake.sigiro_logs WHERE timestamp > CURRENT_TIMESTAMP - interval 5 minute) AS logs_5m, CAST((SELECT max(timestamp) FROM lake.sigiro_spans) AS VARCHAR) AS last_span_ts, CAST((SELECT max(timestamp) FROM lake.sigiro_logs) AS VARCHAR) AS last_log_ts",
                     ).await {
                         Ok(rows) => rows.into_iter().next().map(|r| {
                             serde_json::json!({

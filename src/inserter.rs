@@ -934,19 +934,12 @@ impl ProjectFlusher {
 
     #[tracing::instrument(skip_all, fields(project_id = %project_id, days))]
     fn retention_cleanup(&self, project_id: &str, days: u32) -> Result<()> {
-        // Compute the cutoff in RUST and use `make_timestamp` — deliberately NO
-        // DuckDB timezone ops. The locked-down runtime never loads the `icu`
-        // extension, and EVERY TIMESTAMPTZ path autoloads it and fails: `now()
-        // - INTERVAL` ("No function matches -(TIMESTAMPTZ, INTERVAL)"),
-        // `AT TIME ZONE`, and even `epoch(now())` ("Extension Autoloading Error:
-        // ... 'icu'"). `make_timestamp(<micros>)` is a core scalar (no icu) that
-        // builds a naive UTC TIMESTAMP matching the naive-UTC `timestamp`
-        // columns, so the comparison is correct with zero timezone dependency.
+        // Compute the cutoff in Rust and compare the TIMESTAMPTZ column directly.
         let cutoff_micros = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000)
             - i128::from(days) * 86_400 * 1_000_000;
         for table in self.table_names.values() {
             let sql =
-                format!("DELETE FROM {table} WHERE timestamp < make_timestamp({cutoff_micros})");
+                format!("DELETE FROM {table} WHERE timestamp < make_timestamptz({cutoff_micros})");
             self.conn
                 .execute_batch(&sql)
                 .with_context(|| format!("retention cleanup failed for {table}"))?;
@@ -1565,7 +1558,7 @@ mod tests {
         for i in 0..10 {
             conn.execute_batch(&format!(
                 "INSERT INTO lake.sigiro_metrics_gauge (timestamp, service_name, metric_name, value)
-                 SELECT make_timestamp(1700000000000000 + range), 'svc', 'm', (range + {})::DOUBLE
+                 SELECT make_timestamptz(1700000000000000 + range), 'svc', 'm', (range + {})::DOUBLE
                  FROM range(3000)",
                 i * 3000
             ))
@@ -1665,7 +1658,7 @@ mod tests {
         );
 
         // Retention: drop everything older than 7 days (rows for days 8..=29).
-        conn.execute_batch("DELETE FROM lake.t WHERE ts < now()::TIMESTAMP - INTERVAL '7 days'")
+        conn.execute_batch("DELETE FROM lake.t WHERE ts < now() - INTERVAL '7 days'")
             .expect("delete old rows");
 
         // DELETE removes wholly-aged files from the current snapshot, but the

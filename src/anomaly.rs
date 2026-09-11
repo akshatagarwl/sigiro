@@ -260,7 +260,7 @@ fn detect_span_signals(
                 count(CASE WHEN {is_err} THEN 1 END) * 100.0 / count(*) AS err_rate,
                 approx_quantile(s.duration, 0.95)::DOUBLE AS p95_us
          FROM {prefix}sigiro_spans s
-         WHERE s.timestamp >= make_timestamp({cutoff_us})
+         WHERE s.timestamp >= make_timestamptz({cutoff_us})
            AND s.span_name NOT LIKE '%TraceService/Export%'
          GROUP BY s.service_name, operation, bucket_ts
          ORDER BY s.service_name, operation, bucket_ts"
@@ -343,7 +343,7 @@ fn detect_log_signals(
                 count(CASE WHEN l.severity_text IN {ERROR_SEVERITIES_SQL} THEN 1 END)
                     * 100.0 / count(*) AS err_log_rate
          FROM {prefix}sigiro_logs l
-         WHERE l.timestamp >= make_timestamp({cutoff_us})
+         WHERE l.timestamp >= make_timestamptz({cutoff_us})
          GROUP BY l.service_name, bucket_ts
          ORDER BY l.service_name, bucket_ts"
     );
@@ -414,7 +414,7 @@ fn detect_profile_cost(
                 epoch_us(time_bucket(INTERVAL '{DETECTION_BUCKET_MINUTES} minutes', p.timestamp)) AS bucket_ts,
                 COALESCE(sum(p.value), 0)::DOUBLE AS cost
          FROM {prefix}sigiro_profiles p
-         WHERE p.timestamp >= make_timestamp({cutoff_us})
+         WHERE p.timestamp >= make_timestamptz({cutoff_us})
          GROUP BY p.service_name, bucket_ts
          ORDER BY p.service_name, bucket_ts"
     );
@@ -479,8 +479,8 @@ pub fn persist(conn: &Connection, prefix: &str, inserts: &[AnomalyInsert]) -> Re
                 "INSERT INTO {prefix}sigiro_anomalies
                  (detected_at, service_name, operation, signal, kind, direction,
                   ts_shift, \"before\", \"after\", drill_down_sql)
-                 VALUES (make_timestamp(?), ?, ?, ?, 'changepoint',
-                         'worsening', make_timestamp(?), ?, ?, ?)"
+                 VALUES (make_timestamptz(?), ?, ?, ?, 'changepoint',
+                         'worsening', make_timestamptz(?), ?, ?, ?)"
             ))
             .context("failed to prepare sigiro_anomalies insert")?;
         for row in inserts {
@@ -553,7 +553,7 @@ fn span_drill_sql(
     };
     format!(
         "SELECT * FROM {prefix}sigiro_spans \
-         WHERE service_name = '{svc}' AND {filter} AND timestamp >= make_timestamp({ts}) \
+         WHERE service_name = '{svc}' AND {filter} AND timestamp >= make_timestamptz({ts}) \
          ORDER BY {order}"
     )
 }
@@ -571,7 +571,7 @@ fn log_drill_sql(prefix: &str, service: &str, shift: &Shift, errors_only: bool) 
     };
     format!(
         "SELECT * FROM {prefix}sigiro_logs \
-         WHERE service_name = '{svc}'{severity} AND timestamp >= make_timestamp({ts}) \
+         WHERE service_name = '{svc}'{severity} AND timestamp >= make_timestamptz({ts}) \
          ORDER BY timestamp DESC"
     )
 }
@@ -586,7 +586,7 @@ fn profile_drill_sql(prefix: &str, service: &str, shift: &Shift) -> String {
     let ts = shift.ts_shift_us;
     format!(
         "SELECT * FROM {prefix}sigiro_profiles \
-         WHERE service_name = '{svc}' AND timestamp >= make_timestamp({ts}) \
+         WHERE service_name = '{svc}' AND timestamp >= make_timestamptz({ts}) \
          ORDER BY value DESC"
     )
 }

@@ -616,7 +616,7 @@ fn validate_allows_analytics_scalars_used_by_sigiro() {
         validate_read_only(
             "SELECT COUNT(*) AS total, COALESCE(NULLIF(template_text, ''), body) AS pattern \
              FROM lake.sigiro_logs \
-             WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes' \
+             WHERE timestamp > now() - INTERVAL '15 minutes' \
              GROUP BY pattern ORDER BY total DESC LIMIT 10"
         )
         .is_ok()
@@ -627,7 +627,7 @@ fn validate_allows_analytics_scalars_used_by_sigiro() {
             "SELECT quantile_cont(duration, 0.99) AS p99, \
                     COUNT(CASE WHEN duration > 1000000 THEN 1 END) AS slow_count \
              FROM lake.sigiro_spans \
-             WHERE timestamp > now()::TIMESTAMP - INTERVAL '15 minutes'"
+             WHERE timestamp > now() - INTERVAL '15 minutes'"
         )
         .is_ok()
     );
@@ -644,6 +644,7 @@ fn validate_allows_analytics_scalars_used_by_sigiro() {
         )
         .is_ok()
     );
+    assert!(validate_read_only("SELECT make_timestamp(1) FROM sigiro_spans").is_err());
 }
 
 #[test]

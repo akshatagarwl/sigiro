@@ -9,7 +9,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 pub(crate) const OOM_FIRING_EVENT: &str = "container.oom_killed";
 pub(crate) const OOM_RECOVERED_EVENT: &str = "container.oom_recovered";
@@ -233,8 +232,10 @@ impl AlertStore {
                         status,
                         service_name,
                         container_name,
-                        starts_at: format_timestamp(starts_at_us)?,
-                        ends_at: ends_at_us.map(format_timestamp).transpose()?,
+                        starts_at: crate::types::timestamp_micros_to_rfc3339(starts_at_us)?,
+                        ends_at: ends_at_us
+                            .map(crate::types::timestamp_micros_to_rfc3339)
+                            .transpose()?,
                         occurrence_count,
                     })
                 },
@@ -597,10 +598,10 @@ fn enqueue(tx: &rusqlite::Transaction<'_>, transition: &AlertTransition<'_>) -> 
 
 fn webhook_payload(transition: &AlertTransition<'_>) -> Result<String> {
     let event = transition.event;
-    let starts_at = format_timestamp(transition.starts_at_us)?;
+    let starts_at = crate::types::timestamp_micros_to_rfc3339(transition.starts_at_us)?;
     let ends_at = transition
         .ends_at_us
-        .map(format_timestamp)
+        .map(crate::types::timestamp_micros_to_rfc3339)
         .transpose()?
         .unwrap_or_else(|| "0001-01-01T00:00:00Z".to_string());
     serde_json::to_string(&serde_json::json!({
@@ -693,13 +694,6 @@ fn hash_hex(parts: &[&str]) -> String {
         hasher.update(part.as_bytes());
     }
     hex::encode(hasher.finalize())
-}
-
-fn format_timestamp(timestamp_us: i64) -> Result<String> {
-    OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp_us) * 1_000)
-        .context("alert timestamp is out of range")?
-        .format(&Rfc3339)
-        .context("failed to format alert timestamp")
 }
 
 fn now_us() -> i64 {

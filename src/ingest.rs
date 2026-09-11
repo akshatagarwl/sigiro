@@ -317,6 +317,10 @@ impl MetricsService for OtlpGrpcService {
 ///   → Dictionary.location_table[].line[].function_index
 ///   → Dictionary.function_table[].name_strindex
 ///   → Dictionary.string_table[]
+fn utc_timestamp_array(values: Vec<i64>) -> TimestampMicrosecondArray {
+    TimestampMicrosecondArray::from(values).with_timezone("UTC")
+}
+
 fn profile_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("profile_id", DataType::Utf8, true),
@@ -325,7 +329,7 @@ fn profile_schema() -> Arc<Schema> {
         Field::new("service_name", DataType::Utf8, false),
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
         Field::new("profile_type", DataType::Utf8, true),
@@ -372,7 +376,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                     Arc::new(StringBuilder::new().finish()),
                     Arc::new(StringBuilder::new().finish()),
                     Arc::new(StringBuilder::new().finish()),
-                    Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
+                    Arc::new(utc_timestamp_array(Vec::<i64>::new())),
                     Arc::new(StringBuilder::new().finish()),
                     Arc::new(empty_stack_trace_array()),
                     Arc::new(Int64Array::from(Vec::<i64>::new())),
@@ -525,7 +529,11 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
 
         for sp in &rp.scope_profiles {
             for profile in &sp.profiles {
-                let ts_us = (profile.time_unix_nano / 1000) as i64;
+                let ts_us =
+                    crate::otlp::nanos_to_micros(i64::try_from(profile.time_unix_nano).map_err(
+                        |_| Status::invalid_argument("profile timestamp exceeds i64 nanoseconds"),
+                    )?)
+                    .map_err(Status::invalid_argument)?;
                 let pid_hex;
                 let pid = if profile.profile_id.is_empty() {
                     ""
@@ -590,7 +598,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                 Arc::new(trace_ids.finish()),
                 Arc::new(span_ids.finish()),
                 Arc::new(service_names.finish()),
-                Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
+                Arc::new(utc_timestamp_array(Vec::<i64>::new())),
                 Arc::new(profile_types.finish()),
                 Arc::new(stack_traces.finish()),
                 Arc::new(Int64Array::from(Vec::<i64>::new())),
@@ -608,7 +616,7 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
             Arc::new(trace_ids.finish()),
             Arc::new(span_ids.finish()),
             Arc::new(service_names.finish()),
-            Arc::new(TimestampMicrosecondArray::from(timestamps)),
+            Arc::new(utc_timestamp_array(timestamps)),
             Arc::new(profile_types.finish()),
             Arc::new(stack_traces.finish()),
             Arc::new(Int64Array::from(values)),
@@ -1208,8 +1216,10 @@ pub async fn transform_pyroscope_profiles(
             .await
             .map_err(|e| status_internal(format!("task join error: {e}")))??;
 
-            // Time and duration in nanoseconds → microseconds
-            let ts_us = (pprof_profile.time_nanos / 1000) as i64;
+            // Pyroscope pprof timestamps use the same checked OTLP boundary
+            // conversion as all other absolute instants.
+            let ts_us = crate::otlp::nanos_to_micros(pprof_profile.time_nanos)
+                .map_err(Status::invalid_argument)?;
 
             if service_name.is_empty() {
                 return Err(Status::invalid_argument(
@@ -1341,7 +1351,7 @@ pub async fn transform_pyroscope_profiles(
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(StringBuilder::new().finish()),
-                Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
+                Arc::new(utc_timestamp_array(Vec::<i64>::new())),
                 Arc::new(StringBuilder::new().finish()),
                 Arc::new(empty_stack_trace_array()),
                 Arc::new(Int64Array::from(Vec::<i64>::new())),
@@ -1359,7 +1369,7 @@ pub async fn transform_pyroscope_profiles(
             Arc::new(trace_ids.finish()),
             Arc::new(span_ids.finish()),
             Arc::new(service_names.finish()),
-            Arc::new(TimestampMicrosecondArray::from(timestamps)),
+            Arc::new(utc_timestamp_array(timestamps)),
             Arc::new(profile_types.finish()),
             Arc::new(stack_traces.finish()),
             Arc::new(Int64Array::from(values)),

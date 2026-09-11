@@ -131,8 +131,8 @@ curl -sS -D /tmp/sigiro-headers -X POST http://127.0.0.1:9999/v1/query \
                  max(duration) / 1000000.0 AS slowest_seconds
           FROM sigiro_spans
           WHERE service_name = '<service-name>'
-            AND timestamp >= TIMESTAMP '2026-09-10 12:00:00'
-            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
+            AND timestamp >= TIMESTAMPTZ '2026-09-10 12:00:00+00'
+            AND timestamp <  TIMESTAMPTZ '2026-09-10 13:00:00+00'
           GROUP BY span_name
           ORDER BY total_seconds DESC"
 ```

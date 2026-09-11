@@ -42,10 +42,14 @@ fn make_spans_batch(n: usize) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("end_timestamp", DataType::Int64, false),
+        Field::new(
+            "end_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
         Field::new("duration", DataType::Int64, false),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
@@ -86,8 +90,8 @@ fn make_spans_batch(n: usize) -> RecordBatch {
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(TimestampMicrosecondArray::from(timestamps)),
-            Arc::new(Int64Array::from(end_timestamps)),
+            Arc::new(TimestampMicrosecondArray::from(timestamps).with_timezone("UTC")),
+            Arc::new(TimestampMicrosecondArray::from(end_timestamps).with_timezone("UTC")),
             Arc::new(Int64Array::from(durations)),
             Arc::new(StringArray::from(strings.clone())), // trace_id
             Arc::new(StringArray::from(strings.clone())), // span_id

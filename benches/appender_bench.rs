@@ -14,10 +14,14 @@ fn make_span_batch(n: usize) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "timestamp",
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("end_timestamp", DataType::Int64, false),
+        Field::new(
+            "end_timestamp",
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
         Field::new("duration", DataType::Int64, false),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
@@ -44,6 +48,10 @@ fn make_span_batch(n: usize) -> RecordBatch {
     ]));
 
     let timestamps: Vec<i64> = (0..n).map(|i| now_us + i as i64).collect();
+    let end_timestamps: Vec<i64> = timestamps
+        .iter()
+        .map(|timestamp| timestamp + 1000)
+        .collect();
     let trace_ids: Vec<Option<String>> = (0..n).map(|i| Some(format!("trace-{i}"))).collect();
     let span_ids: Vec<Option<String>> = (0..n).map(|i| Some(format!("span-{i}"))).collect();
     let services: Vec<&str> = vec!["bench-svc"; n];
@@ -65,8 +73,8 @@ fn make_span_batch(n: usize) -> RecordBatch {
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(TimestampMicrosecondArray::from(timestamps)) as ArrayRef,
-            Arc::new(Int64Array::from((0..n as i64).collect::<Vec<_>>())),
+            Arc::new(TimestampMicrosecondArray::from(timestamps).with_timezone("UTC")) as ArrayRef,
+            Arc::new(TimestampMicrosecondArray::from(end_timestamps).with_timezone("UTC")),
             Arc::new(Int64Array::from(
                 (0..n as i64).map(|i| (i + 1) * 1000).collect::<Vec<_>>(),
             )),

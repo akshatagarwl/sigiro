@@ -843,7 +843,8 @@ fn diagnose_one(
     // an agent that spots a lead can execute it directly to go deeper.
     let err = StatusCode::Error.as_i32();
     let svc = service.replace('\'', "''");
-    let window = format!("timestamp BETWEEN make_timestamp({from_ts}) AND make_timestamp({to_ts})");
+    let window =
+        format!("timestamp BETWEEN make_timestamptz({from_ts}) AND make_timestamptz({to_ts})");
     // Reproduce the win_spans filter exactly so a drilled count reconciles with
     // the `total` we reported (win_spans drops OTLP export self-spans).
     let span_scope = format!(
@@ -1373,10 +1374,10 @@ pub(crate) fn build_diagnosis_sql(prefix: &str, bucket: &str) -> String {
         r#"
 WITH args AS (
     SELECT ?::VARCHAR AS service,
-           make_timestamp(?::BIGINT) AS from_ts,
-           make_timestamp(?::BIGINT) AS to_ts,
-           make_timestamp(?::BIGINT) AS bl_from,
-           make_timestamp(?::BIGINT) AS bl_to
+           make_timestamptz(?::BIGINT) AS from_ts,
+           make_timestamptz(?::BIGINT) AS to_ts,
+           make_timestamptz(?::BIGINT) AS bl_from,
+           make_timestamptz(?::BIGINT) AS bl_to
 ),
 -- Deliberately NARROW: this CTE is referenced by several sections, so DuckDB
 -- materializes it. The wide VARCHAR columns (span_attributes, events_json,
@@ -1671,7 +1672,7 @@ top_spans AS (
            s.span_name, s.span_kind, s.status_code, s.status_message,
            s.duration AS duration_us,
            epoch_us(s.timestamp) AS start_ts,
-           s.end_timestamp AS end_ts,
+           epoch_us(s.end_timestamp) AS end_ts,
            s.timestamp::VARCHAR AS start_iso,
            s.span_attributes, s.events_json
     FROM {prefix}sigiro_spans s, args a
