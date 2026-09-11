@@ -13,6 +13,18 @@ This is different from
 [Instrument your code with an agent](/docs/how-to/install-with-ai), which points
 _your application_ at sigiro. Use both when you need both views.
 
+## Install the sigiro skill
+
+Install the public skill before you start the agent:
+
+```bash
+npx skills add sigiroai/skills
+```
+
+The [`debug-with-sigiro` skill](https://github.com/sigiroai/skills) teaches the
+agent how to inspect telemetry in sigiro. It does not change the telemetry
+settings in this guide.
+
 ## Before you start
 
 Start sigiro and verify its API:

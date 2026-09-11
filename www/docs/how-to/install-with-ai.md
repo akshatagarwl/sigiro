@@ -13,6 +13,18 @@ exporter at sigiro.
 This works with Claude Code, OpenCode, Codex, or any agent that edits files and
 runs your package manager.
 
+## Install the sigiro skill
+
+Install the public skill before you start the agent:
+
+```bash
+npx skills add sigiroai/skills
+```
+
+The [`debug-with-sigiro` skill](https://github.com/sigiroai/skills) teaches the
+agent how to use sigiro after telemetry arrives. This guide stays focused on
+instrumentation.
+
 ## Before you start
 
 You need a sigiro server as the destination. Start one with `sigiro serve`, or with
