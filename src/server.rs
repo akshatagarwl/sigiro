@@ -623,10 +623,7 @@ pub async fn run_servers(
         let port = crate::config::QUACK_PORT
             .value()
             .map_err(anyhow::Error::from)?;
-        let token = crate::config::QUACK_TOKEN
-            .value()
-            .map_err(anyhow::Error::from)?;
-        let token = if token.is_empty() { None } else { Some(token) };
+        let token = crate::config::quack_token()?;
 
         let quack_conn = pool.clone_connection("default").context(
             "failed to open the quack query-surface connection — run_serve should have \
@@ -639,7 +636,7 @@ pub async fn run_servers(
         // Derived once and moved into the shutdown task below, so the stop call
         // cannot address a different URI than the start call — see `QuackUri`.
         let quack_uri = crate::quack::QuackUri::new(&bind, port);
-        let listen = crate::quack::start_server(&quack_conn, &quack_uri, token.as_deref())?;
+        let listen = crate::quack::start_server(&quack_conn, &quack_uri, token.as_ref())?;
         tracing::info!(
             bind,
             port,

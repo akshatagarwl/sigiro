@@ -244,6 +244,23 @@ const COMBINED_SQL: &str = "SELECT service_name, count(*) AS c, sum(duration) AS
      avg(duration) AS avg_duration, min(duration) AS min_duration, max(duration) AS max_duration \
      FROM sigiro_spans WHERE timestamp > '2000-01-01' GROUP BY service_name ORDER BY service_name";
 
+#[test]
+fn federated_query_rejects_short_quack_token_before_connecting() {
+    let output = run_query(
+        COMBINED_SQL,
+        &["unreachable=127.0.0.1:1".to_string()],
+        "abc",
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid SIGIRO_QUACK_TOKEN"),
+        "expected token validation failure, got: {stderr}"
+    );
+    assert!(!stderr.contains("edge unreachable"));
+}
+
 /// One full scenario: spawn 2 edges, ingest overlapping per-service data,
 /// run the federated query, assert every fold against ground truth, assert
 /// count(DISTINCT ...) and a dead edge both fail loud, then shut down.

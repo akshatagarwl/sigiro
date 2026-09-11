@@ -1315,7 +1315,11 @@ fn build_final_sql(parsed: &ParsedQuery, part_tables: &[String]) -> String {
 /// Wrap `inner_sql` in the `quack_query(...)` remote-exec call for `edge`.
 /// Mirrors `tests/quack_query_surface_test.rs`'s `wrap_quack_query` — the
 /// documented client pattern (`quack_query`, not `ATTACH`; see module docs).
-fn wrap_quack_query(edge: &Edge, inner_sql: &str, token: Option<&str>) -> String {
+fn wrap_quack_query(
+    edge: &Edge,
+    inner_sql: &str,
+    token: Option<&crate::quack::QuackToken>,
+) -> String {
     let mut sql = format!(
         "SELECT * FROM quack_query('quack://{}:{}', '{}'",
         edge.host,
@@ -1325,7 +1329,7 @@ fn wrap_quack_query(edge: &Edge, inner_sql: &str, token: Option<&str>) -> String
     if let Some(t) = token {
         sql.push_str(&format!(
             ", token := '{}'",
-            crate::sql::escape_sql_string(t)
+            crate::sql::escape_sql_string(t.as_ref())
         ));
     }
     sql.push_str(", disable_ssl := true);");
@@ -1341,11 +1345,11 @@ fn wrap_quack_query(edge: &Edge, inner_sql: &str, token: Option<&str>) -> String
 async fn fetch_edge(
     edge: Edge,
     partial_sql: String,
-    token: Option<String>,
+    token: Option<crate::quack::QuackToken>,
     timeout: Duration,
     effective_cap: i64,
 ) -> Result<(String, Option<RecordBatch>), (String, String)> {
-    let wrapped = wrap_quack_query(&edge, &partial_sql, token.as_deref());
+    let wrapped = wrap_quack_query(&edge, &partial_sql, token.as_ref());
     let edge_name = edge.name;
     let log_name = edge_name.clone();
     let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
@@ -1455,10 +1459,7 @@ pub async fn run_federated_query(
     check_limit_within_cap(&parsed, row_cap)?;
     let effective_cap = effective_edge_cap(&parsed, row_cap);
     let timeout = Duration::from_secs(crate::config::query_timeout_secs()?);
-    let raw_token = crate::config::QUACK_TOKEN
-        .value()
-        .context("failed to read SIGIRO_QUACK_TOKEN")?;
-    let token = (!raw_token.is_empty()).then_some(raw_token);
+    let token = crate::config::quack_token()?;
     let partial_sql = build_partial_sql(&parsed, row_cap);
     tracing::debug!(partial_sql, "federated query per-edge partial");
 

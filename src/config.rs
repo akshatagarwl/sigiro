@@ -418,8 +418,18 @@ pub(crate) static QUACK_PORT: Envar<u16> =
 /// above defaults to loopback and any wider exposure is the operator's own,
 /// explicit choice. on_demand (not on_startup) so temp_env::with_vars works
 /// in tests, matching the S3_* secret pattern above.
-pub(crate) static QUACK_TOKEN: Envar<String> =
+static QUACK_TOKEN: Envar<String> =
     Envar::on_demand("SIGIRO_QUACK_TOKEN", || EnvarDef::Default(String::new()));
+
+pub(crate) fn quack_token() -> Result<Option<crate::quack::QuackToken>> {
+    let raw = QUACK_TOKEN.value()?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    crate::quack::QuackToken::try_new(raw)
+        .map(Some)
+        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_QUACK_TOKEN: {error}"))
+}
 
 /// Federated query coordinator (`sigiro query`) edge override: comma-separated
 /// `name=host:port` entries. When set (together with any `--edge` CLI flags),

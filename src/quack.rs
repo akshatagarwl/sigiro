@@ -55,6 +55,17 @@ pub(crate) const EXPECTED_QUACK_VERSION: &str = "c154811";
 /// run may have left in the catalog.
 const AUTH_FUNCTION_NAME: &str = "sigiro_quack_authorize";
 
+/// Optional credential shared by quack servers and federated clients.
+///
+/// Quack rejects tokens shorter than four bytes. Keeping that rule in a
+/// non-displayable type prevents either side from carrying an unusable token
+/// and avoids accidentally formatting the credential outside the SQL boundary.
+#[nutype::nutype(
+    validate(predicate = |token: &str| token.len() >= 4),
+    derive(Clone, AsRef)
+)]
+pub(crate) struct QuackToken(String);
+
 /// Install (if needed) and load the `quack` DuckDB extension on `conn`, then
 /// assert the loaded build matches [`EXPECTED_QUACK_VERSION`]. Fails loud on
 /// a mismatch — refuses to serve rather than trust an unpinned extension.
@@ -383,15 +394,8 @@ pub(crate) struct QuackListen {
 pub(crate) fn start_server(
     conn: &Connection,
     uri: &QuackUri,
-    token: Option<&str>,
+    token: Option<&QuackToken>,
 ) -> Result<QuackListen> {
-    if let Some(t) = token {
-        anyhow::ensure!(
-            t.len() >= 4,
-            "SIGIRO_QUACK_TOKEN must be at least 4 characters (quack's own minimum)"
-        );
-    }
-
     let mut sql = format!(
         "SELECT listen_uri FROM quack_serve('{}'",
         crate::sql::escape_sql_string(&uri.0)
@@ -399,7 +403,7 @@ pub(crate) fn start_server(
     if let Some(t) = token {
         sql.push_str(&format!(
             ", token := '{}'",
-            crate::sql::escape_sql_string(t)
+            crate::sql::escape_sql_string(t.as_ref())
         ));
     }
     sql.push_str(", allow_other_hostname := true, disable_ssl := true);");
