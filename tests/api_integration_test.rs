@@ -137,6 +137,48 @@ async fn trace_detail_preserves_canonical_trace_id_wire_shape() {
 }
 
 #[tokio::test]
+async fn trace_detail_uses_elapsed_span_envelope_for_total_duration() {
+    const TRACE_ID: &str = "33333333333333333333333333333333";
+    const START_US: i64 = 1_700_000_000_000_000;
+    let ctx = build_test_context();
+    ctx.state
+        .pool
+        .get_project("default")
+        .expect("default project exists")
+        .get()
+        .execute_batch(&format!(
+            "INSERT INTO lake.sigiro_spans (
+                timestamp, end_timestamp, duration, trace_id, span_id,
+                parent_span_id, service_name, span_name, span_kind, status_code
+             ) VALUES
+                (make_timestamp({START_US}), {START_US} + 10000000, 10000000,
+                    '{TRACE_ID}', '1111111111111111', '', 'frontend', 'request', 2, 1),
+                (make_timestamp({START_US} + 1000000), {START_US} + 5000000, 4000000,
+                    '{TRACE_ID}', '2222222222222222', '1111111111111111',
+                    'database', 'query', 3, 1),
+                (make_timestamp({START_US} + 8000000), {START_US} + 13000000, 5000000,
+                    '{TRACE_ID}', '3333333333333333', '1111111111111111',
+                    'worker', 'flush', 3, 1)"
+        ))
+        .expect("seed overlapping trace spans");
+
+    let server = TestServer::new(build_http_router(ctx.state)).expect("build test server");
+    let response = server.get(&format!("/v1/traces/{TRACE_ID}")).await;
+    response.assert_status_ok();
+    let body: serde_json::Value = serde_json::from_str(&response.text()).expect("trace JSON");
+
+    assert_eq!(body["total_duration_us"], 13_000_000);
+    assert_eq!(body["root_span"]["duration_us"], 10_000_000);
+    let inclusive_percentage_total = body["service_breakdown"]
+        .as_array()
+        .expect("service breakdown array")
+        .iter()
+        .map(|entry| entry["percentage"].as_f64().expect("numeric percentage"))
+        .sum::<f64>();
+    assert!((inclusive_percentage_total - 100.0).abs() < 0.001);
+}
+
+#[tokio::test]
 async fn trace_detail_rejects_noncanonical_trace_ids_during_path_deserialization() {
     let ctx = build_test_context();
     let server = TestServer::new(build_http_router(ctx.state)).expect("build test server");

@@ -1667,6 +1667,7 @@ async fn trace_detail_handler(
             status_code, service_name, span_kind,
             span_attributes, resource_attributes,
             timestamp::VARCHAR AS start_timestamp,
+            epoch_us(timestamp) AS start_us,
             end_timestamp,
             events_json, links_json,
             scope_name, scope_version,
@@ -1688,7 +1689,9 @@ async fn trace_detail_handler(
         Vec<crate::types::SpanId>,
     > = std::collections::HashMap::new();
     let mut root_span_id: Option<crate::types::SpanId> = None;
-    let mut total_duration_us: i64 = 0;
+    let mut earliest_start_us: Option<i64> = None;
+    let mut latest_end_us: Option<i64> = None;
+    let mut inclusive_duration_us: i64 = 0;
     let mut error_count: i64 = 0;
     let mut services_set: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut max_duration_span: Option<SpanDetail> = None;
@@ -1729,6 +1732,24 @@ async fn trace_detail_handler(
             .get("duration")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
+        let start_us = obj
+            .get("start_us")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| {
+                bad_request(
+                    "trace detail query failed",
+                    "span start timestamp is not an integer",
+                )
+            })?;
+        let end_us = obj
+            .get("end_timestamp")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| {
+                bad_request(
+                    "trace detail query failed",
+                    "span end timestamp is not an integer",
+                )
+            })?;
         let status_code = obj
             .get("status_code")
             .and_then(serde_json::Value::as_i64)
@@ -1789,7 +1810,9 @@ async fn trace_detail_handler(
                 .and_then(|v| v.as_str())
                 .map(std::string::ToString::to_string),
         };
-        total_duration_us = total_duration_us.saturating_add(duration_us);
+        earliest_start_us = Some(earliest_start_us.map_or(start_us, |start| start.min(start_us)));
+        latest_end_us = Some(latest_end_us.map_or(end_us, |end| end.max(end_us)));
+        inclusive_duration_us = inclusive_duration_us.saturating_add(duration_us);
         if status_code == 2 {
             error_count += 1;
         }
@@ -1836,8 +1859,18 @@ async fn trace_detail_handler(
     // Compute critical path (longest path from root to leaf by duration sum)
     let critical_path = compute_critical_path(&root_span.span_id, &parent_to_children, &span_map);
 
-    // Compute service breakdown
-    let service_breakdown = compute_service_breakdown(&spans, total_duration_us);
+    let trace_start_us = earliest_start_us.expect("non-empty traces have a start timestamp");
+    let trace_end_us = latest_end_us.expect("non-empty traces have an end timestamp");
+    let total_duration_us = trace_end_us.checked_sub(trace_start_us).ok_or_else(|| {
+        bad_request(
+            "trace detail query failed",
+            "trace end timestamp precedes its start timestamp",
+        )
+    })?;
+
+    // Service durations remain cumulative inclusive work; their percentages
+    // therefore use cumulative work rather than elapsed wall-clock time.
+    let service_breakdown = compute_service_breakdown(&spans, inclusive_duration_us);
 
     Ok(Json(TraceDetailResponse {
         trace_id,

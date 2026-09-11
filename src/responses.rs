@@ -165,6 +165,7 @@ pub enum HealthResponse {
 pub struct TraceDetailResponse {
     #[schema(value_type = String)]
     pub(crate) trace_id: TraceId,
+    /// Elapsed wall-clock time from the earliest span start to the latest span end, in microseconds.
     pub(crate) total_duration_us: i64,
     pub(crate) root_span: SpanDetail,
     pub(crate) span_count: i64,
@@ -204,6 +205,8 @@ pub struct SpanDetail {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct ServiceBreakdownEntry {
     pub(crate) service: String,
+    /// Cumulative inclusive duration of the service's spans, in microseconds.
     pub(crate) duration_us: i64,
+    /// Percentage of cumulative inclusive span duration across all services.
     pub(crate) percentage: f64,
 }
