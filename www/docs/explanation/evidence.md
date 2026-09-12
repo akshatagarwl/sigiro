@@ -41,15 +41,32 @@ detector is a direction: sigiro keeps a shift when the mean after the changepoin
 is worse than the mean before it. More errors, slower, louder, costlier. That is a
 comparison rather than a number somebody picked.
 
+### Fixed model assumptions
+
+Threshold-free does not mean assumption-free. sigiro standardizes each series and
+uses the fixed defaults below. They are not configuration options.
+
+| Assumption         | Fixed value               | Meaning                                                                  |
+| ------------------ | ------------------------- | ------------------------------------------------------------------------ |
+| Hazard timescale   | `250` buckets             | Expected run length of about 20 hours 50 minutes at 5 minutes per bucket |
+| Normal-Gamma prior | `NormalGamma(0, 1, 1, 1)` | Prior for the standardized Gaussian series                               |
+| Run-length cutoff  | `1e-6`                    | Discards negligible run-length probability mass                          |
+| CDF threshold      | `1e-3`                    | Truncates the low-probability tail                                       |
+
+The detector then selects changepoints from the most likely run length and drops
+the initial point, which only marks the start of the series. Users cannot tune
+these values. Changing them changes the shared detection model and therefore
+requires a tested sigiro release, not a per-service setting.
+
 Five signals are detected:
 
-| Signal | Keyed by | Measures |
-| --- | --- | --- |
-| `error_rate` | service and operation | percent of error spans in each bucket |
-| `latency_p95` | service and operation | p95 span duration in each bucket |
-| `log_volume` | service | log count in each bucket |
-| `error_log_rate` | service | percent of ERROR-class logs in each bucket |
-| `profile_cost` | service | total profiled cost in each bucket |
+| Signal           | Keyed by              | Measures                                   |
+| ---------------- | --------------------- | ------------------------------------------ |
+| `error_rate`     | service and operation | percent of error spans in each bucket      |
+| `latency_p95`    | service and operation | p95 span duration in each bucket           |
+| `log_volume`     | service               | log count in each bucket                   |
+| `error_log_rate` | service               | percent of ERROR-class logs in each bucket |
+| `profile_cost`   | service               | total profiled cost in each bucket         |
 
 Two consequences follow, and both surprise people.
 
