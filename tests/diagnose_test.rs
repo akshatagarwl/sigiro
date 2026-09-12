@@ -285,13 +285,10 @@ fn diagnose_with_real_span_data() {
             .iter()
             .any(|s| s.reason.contains("no logs"))
     );
-    assert!(
-        block
-            .coverage
-            .signals
-            .iter()
-            .any(|s| s.reason.contains("spans exist but no logs"))
-    );
+    assert!(block.coverage.signals.iter().any(|s| {
+        s.reason
+            .contains("spans were observed, but no logs were observed")
+    }));
     assert!(
         !block
             .coverage
@@ -316,12 +313,24 @@ fn coverage_spans_only() {
     assert!(c.has_spans);
     assert!(!c.has_logs);
     assert!(!c.has_metrics);
-    assert!(
-        c.signals
-            .iter()
-            .any(|s| s.reason.contains("spans exist but no logs"))
-    );
+    assert!(c.signals.iter().any(|s| {
+        s.reason
+            .contains("spans were observed, but no logs were observed")
+    }));
     assert!(!c.signals.iter().any(|s| s.reason.contains("no spans")));
+}
+
+#[test]
+fn coverage_logs_only_reason_agrees_with_flags() {
+    let c = compute_coverage(0, 5, 0, 0);
+    let correlated = c.signals.last().expect("correlated signal coverage");
+
+    assert!(!correlated.available);
+    assert_eq!(correlated.severity, "medium");
+    assert_eq!(
+        correlated.reason,
+        "logs were observed, but no spans were observed for this service in the selected window"
+    );
 }
 
 #[test]
@@ -2324,9 +2333,9 @@ fn status_message_and_errors_without_logs_finding() {
             .iter()
             .any(|f| f.kind.as_str() == "coverage_gap")
     );
-    // No k8s resource attributes → info finding.
+    // A generic non-cluster worker must not be told to enable Kubernetes detectors.
     assert!(
-        block
+        !block
             .findings
             .iter()
             .any(|f| f.kind.as_str() == "missing_resource_attributes")
@@ -2345,6 +2354,53 @@ fn status_message_and_errors_without_logs_finding() {
     let mut sorted = ranks.clone();
     sorted.sort_unstable();
     assert_eq!(ranks, sorted, "findings must be sorted by severity");
+}
+
+#[test]
+fn missing_k8s_resource_finding_requires_k8s_evidence() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = {
+        let odt = time::OffsetDateTime::now_utc();
+        odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
+    };
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+            parent_span_id, span_name, span_kind, status_code, service_name, resource_attributes)
+         VALUES
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 'local-t', 'local-s', '', 'tool', 2, 1,
+             'claude-code', '{{\"os.type\":\"darwin\"}}'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 'container-t', 'container-s', '', 'request', 2, 1,
+             'container-api', '{{\"container.id\":\"container-1\"}}'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 'cloud-t', 'cloud-s', '', 'request', 2, 1,
+             'cloud-api', '{{\"cloud.provider\":\"aws\"}}'),
+            (make_timestamp({now_us}), {now_us}+1000, 1000, 'k8s-t', 'k8s-s', '', 'request', 2, 1,
+             'k8s-api', '{{\"k8s.pod.name\":\"api-123\"}}')"
+    ))
+    .expect("insert spans");
+
+    let finding_present = |service: &str| {
+        diagnose_service(&conn, service, now_us - 60_000_000, now_us + 60_000_000)
+            .findings
+            .iter()
+            .any(|finding| finding.kind.as_str() == "missing_resource_attributes")
+    };
+
+    assert!(!finding_present("claude-code"));
+    assert!(!finding_present("container-api"));
+    assert!(!finding_present("cloud-api"));
+    assert!(finding_present("k8s-api"));
+
+    let public_json = serde_json::to_value(diagnose_service(
+        &conn,
+        "k8s-api",
+        now_us - 60_000_000,
+        now_us + 60_000_000,
+    ))
+    .expect("serialize public diagnosis response");
+    assert!(public_json["context"].get("has_k8s_attributes").is_none());
+    serde_json::from_value::<sigiro::diagnose::DiagnosisBlock>(public_json)
+        .expect("deserialize public diagnosis response without internal detection field");
 }
 
 #[test]

@@ -353,6 +353,9 @@ pub struct ServiceContext {
     /// "no pods identified" from "service not seen".
     pub pod_count: i64,
     pub(crate) has_instance_id: bool,
+    #[serde(skip_serializing, default)]
+    #[schema(ignore)]
+    pub(crate) has_k8s_attributes: bool,
     pub dependencies: Vec<ServiceDependency>,
     pub dependents: Vec<ServiceDependency>,
 }
@@ -1148,6 +1151,7 @@ fn diagnose_one(
     }
     findings.extend(install_health_findings(&payload.stats, prefix, &span_scope));
     if coverage.has_spans
+        && payload.context.has_k8s_attributes
         && payload.context.namespace.is_none()
         && payload.context.deployment.is_none()
     {
@@ -1867,6 +1871,11 @@ svc_meta AS (
            any_value(NULLIF(s.resource_attributes::JSON->>'k8s.deployment.name', '')) AS deployment,
            count(DISTINCT s.service_instance_id) AS pod_count,
            count(DISTINCT s.service_instance_id) > 0 AS has_instance_id,
+           COALESCE(bool_or(EXISTS (
+               SELECT 1
+               FROM json_each(s.resource_attributes::JSON) AS attribute
+               WHERE attribute.key LIKE 'k8s.%'
+           )), false) AS has_k8s_attributes,
            min(s.timestamp)::VARCHAR AS first_seen,
            max(s.timestamp)::VARCHAR AS last_seen
     FROM {prefix}sigiro_spans s, args a
@@ -1935,6 +1944,7 @@ SELECT json_object(
         'deployment', (SELECT deployment FROM svc_meta),
         'pod_count', (SELECT pod_count FROM svc_meta),
         'has_instance_id', (SELECT has_instance_id FROM svc_meta),
+        'has_k8s_attributes', (SELECT has_k8s_attributes FROM svc_meta),
         'dependencies', (SELECT COALESCE(to_json(list(json_object(
             'service_name', service_name, 'span_count', span_count,
             'error_count', error_count, 'error_rate', error_rate

@@ -41,7 +41,7 @@ expression: coverage
       "signal_type": "correlated_signals",
       "available": false,
       "severity": "none",
-      "reason": "neither spans nor logs available"
+      "reason": "neither spans nor logs were observed for this service in the selected window"
     }
   ]
 }

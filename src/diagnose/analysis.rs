@@ -77,7 +77,7 @@ pub fn compute_coverage(
                 // was a sigiro crash on ingest. Distinguish the cases so the
                 // message helps diagnose, not scold.
                 if has_logs || has_metrics {
-                    "no spans but logs/metrics present — check if OTLP trace endpoint is reachable and SDK is configured to export traces (not just logs/metrics)".to_string()
+                    "no spans observed for this service in the selected window — if traces are expected, verify trace instrumentation, sampling, and export configuration".to_string()
                 } else {
                     "no spans, logs, or metrics found for this service in the time window — check service_name spelling, the time window (--from/--to), and that the service is actually sending OTLP".to_string()
                 }
@@ -138,9 +138,12 @@ pub fn compute_coverage(
             reason: if has_spans && has_logs {
                 "spans and logs are both available for correlation".to_string()
             } else if has_spans {
-                "spans exist but no logs — rely on span data for diagnosis".to_string()
+                "spans were observed, but no logs were observed for this service in the selected window".to_string()
+            } else if has_logs {
+                "logs were observed, but no spans were observed for this service in the selected window".to_string()
             } else {
-                "neither spans nor logs available".to_string()
+                "neither spans nor logs were observed for this service in the selected window"
+                    .to_string()
             },
         },
     ];
