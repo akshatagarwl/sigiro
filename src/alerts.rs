@@ -15,6 +15,13 @@ pub(crate) const OOM_FIRING_EVENT: &str = "container.oom_killed";
 pub(crate) const OOM_RECOVERED_EVENT: &str = "container.oom_recovered";
 const OOM_RULE_ID: &str = "container-oom";
 
+/// Non-empty bearer credential used only for alert webhook delivery.
+///
+/// Deliberately omits `Debug`, `Display`, and Serde traits so configuration
+/// logging and generic serialization cannot disclose the credential.
+#[nutype::nutype(validate(not_empty), derive(Clone, AsRef))]
+pub struct AlertWebhookToken(String);
+
 #[derive(Clone)]
 pub struct AlertStore {
     conn: Arc<Mutex<Connection>>,
@@ -51,7 +58,7 @@ pub struct PendingNotification {
 #[derive(Clone)]
 pub struct DeliveryConfig {
     url: url::Url,
-    token: Option<String>,
+    token: Option<AlertWebhookToken>,
 }
 
 impl fmt::Debug for DeliveryConfig {
@@ -80,11 +87,8 @@ impl DeliveryConfig {
             url.scheme() == "https" || loopback_http,
             "SIGIRO_ALERT_WEBHOOK_URL must use HTTPS unless it targets loopback"
         );
-        let token = crate::config::ALERT_WEBHOOK_TOKEN.value()?;
-        Ok(Some(Self {
-            url,
-            token: (!token.is_empty()).then_some(token),
-        }))
+        let token = crate::config::alert_webhook_token()?;
+        Ok(Some(Self { url, token }))
     }
 }
 
@@ -327,7 +331,7 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(notification.payload);
             if let Some(token) = &config.token {
-                request = request.bearer_auth(token);
+                request = request.bearer_auth(token.as_ref());
             }
             match request.send().await {
                 Ok(response) if response.status().is_success() => {

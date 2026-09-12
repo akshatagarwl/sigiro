@@ -68,10 +68,19 @@ pub(crate) static ALERT_WEBHOOK_URL: Envar<String> =
         EnvarDef::Default(String::new())
     });
 /// Optional bearer token for the alert webhook.
-pub(crate) static ALERT_WEBHOOK_TOKEN: Envar<String> =
-    Envar::on_demand("SIGIRO_ALERT_WEBHOOK_TOKEN", || {
-        EnvarDef::Default(String::new())
-    });
+static ALERT_WEBHOOK_TOKEN: Envar<String> = Envar::on_demand("SIGIRO_ALERT_WEBHOOK_TOKEN", || {
+    EnvarDef::Default(String::new())
+});
+
+pub(crate) fn alert_webhook_token() -> Result<Option<crate::alerts::AlertWebhookToken>> {
+    let raw = ALERT_WEBHOOK_TOKEN.value()?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    crate::alerts::AlertWebhookToken::try_new(raw)
+        .map(Some)
+        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_ALERT_WEBHOOK_TOKEN: {error}"))
+}
 /// Optional DuckDB extension-cache override. Normal deployments use
 /// `<SIGIRO_DATA_DIR>/extensions`; tests may share a cache across isolated data dirs.
 pub(crate) static EXTENSION_DIR: Envar<String> = Envar::on_startup("SIGIRO_EXTENSION_DIR", || {
