@@ -1145,13 +1145,13 @@ fn order_by_sql(order_by: &[(String, bool, NullOrder)]) -> String {
 /// `cap+1` overflow sentinel (see `build_partial_sql`/`fetch_edge`) can never
 /// trip. Left unchecked, that silently returns `row_cap` rows instead of the
 /// `n` the user asked for. Fail loud instead, before that pushdown happens.
-fn check_limit_within_cap(parsed: &ParsedQuery, row_cap: usize) -> Result<()> {
+fn check_limit_within_cap(parsed: &ParsedQuery, row_cap: crate::config::QueryRowCap) -> Result<()> {
     if parsed.group_keys.is_empty()
         && !parsed.is_aggregate()
         && let Some(n) = parsed.limit
     {
         anyhow::ensure!(
-            n <= row_cap as i64,
+            n <= row_cap.as_usize() as i64,
             "LIMIT {n} exceeds SIGIRO_QUERY_ROW_CAP = {row_cap}; narrow the query or raise the cap"
         );
     }
@@ -1164,8 +1164,8 @@ fn check_limit_within_cap(parsed: &ParsedQuery, row_cap: usize) -> Result<()> {
 /// it. Every other shape (GROUP BY complete groups, full-table aggregates,
 /// top-N before the fold) is capped at the full `row_cap` safety net, since
 /// no per-edge LIMIT can be pushed down without breaking correctness.
-fn effective_edge_cap(parsed: &ParsedQuery, row_cap: usize) -> i64 {
-    let cap = row_cap as i64;
+fn effective_edge_cap(parsed: &ParsedQuery, row_cap: crate::config::QueryRowCap) -> i64 {
+    let cap = row_cap.as_usize() as i64;
     if parsed.group_keys.is_empty() && !parsed.is_aggregate() {
         parsed.limit.map_or(cap, |n| n.min(cap))
     } else {
@@ -1213,7 +1213,7 @@ fn passthrough_extra_order_cols(parsed: &ParsedQuery) -> Vec<String> {
 /// Build the SQL sent to each edge via `quack_query`. Always wrapped in an
 /// outer `LIMIT {cap}+1` so a result of exactly `cap+1` rows is a
 /// distinguishable "this edge blew past the cap" signal (see `fetch_edge`).
-fn build_partial_sql(parsed: &ParsedQuery, row_cap: usize) -> String {
+fn build_partial_sql(parsed: &ParsedQuery, row_cap: crate::config::QueryRowCap) -> String {
     let effective_cap = effective_edge_cap(parsed, row_cap);
     let mut select_parts = Vec::new();
     for (idx, item) in parsed.select_items.iter().enumerate() {

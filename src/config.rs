@@ -453,13 +453,24 @@ pub(crate) static EDGES: Envar<String> =
 /// the federated query coordinator. Protects against a query with no
 /// prunable time bound (or a non-selective one) pulling unbounded rows
 /// across the network from a single edge. Default: 1_000_000.
-pub(crate) static QUERY_ROW_CAP: Envar<usize> =
+#[nutype::nutype(
+    validate(greater = 0),
+    derive(Debug, Clone, Copy, PartialEq, Eq, FromStr, AsRef, Display)
+)]
+pub struct QueryRowCap(usize);
+
+impl QueryRowCap {
+    pub fn as_usize(&self) -> usize {
+        *self.as_ref()
+    }
+}
+
+static QUERY_ROW_CAP: Envar<usize> =
     Envar::on_startup("SIGIRO_QUERY_ROW_CAP", || EnvarDef::Default(1_000_000));
 
-pub(crate) fn query_row_cap() -> Result<usize> {
-    let cap = QUERY_ROW_CAP.value()?;
-    anyhow::ensure!(cap > 0, "SIGIRO_QUERY_ROW_CAP must be greater than zero");
-    Ok(cap)
+pub(crate) fn query_row_cap() -> Result<QueryRowCap> {
+    QueryRowCap::try_new(QUERY_ROW_CAP.value()?)
+        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_QUERY_ROW_CAP: {error}"))
 }
 
 /// Admin bearer token for distributed tenant/key provisioning endpoints.
