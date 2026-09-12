@@ -20,6 +20,7 @@
     "ai-sdk-provider-claude-code": "^4.2.0",
     "effect": "4.0.0-rc.112",
     "eve": "0.51.0",
+    "shell-quote": "1.10.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {

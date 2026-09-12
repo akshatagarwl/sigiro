@@ -7,12 +7,12 @@ import { fileURLToPath } from "node:url";
 import { GitHubApiError } from "eve/channels/github";
 import type { GitHubHandle } from "eve/channels/github";
 import type { SandboxSession } from "eve/sandbox";
+import { quote } from "shell-quote";
 import type { CelldJob } from "./celld-dispatch.ts";
 
 const MAX_EVIDENCE_BYTES = 1024 * 1024;
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024;
 export const CHECKOUT_PATH = "/workspace/repository";
-const quote = (text: string): string => `'${text.replaceAll("'", "'\\''")}'`;
 
 export class EvidenceDigestMismatchError extends Error {
   constructor() {
@@ -100,7 +100,7 @@ export async function prepareWorkspace(job: CelldJob, sandbox: SandboxSession): 
   if ((await stat(bundle)).size > MAX_BUNDLE_BYTES) throw new Error("Repository bundle exceeds 64 MiB");
   await sandbox.writeBinaryFile({ path: "/workspace/repository.bundle", content: await readFile(bundle) });
   await sandbox.writeBinaryFile({ path: "/workspace/sigiro-evidence.json", content: evidence });
-  const result = await sandbox.run({ command: `test ! -e ${quote(CHECKOUT_PATH)} && git clone --no-checkout /workspace/repository.bundle ${quote(CHECKOUT_PATH)} && git -C ${quote(CHECKOUT_PATH)} checkout --detach ${quote(job.baseSha)} && git -C ${quote(CHECKOUT_PATH)} remote remove origin && test "$(git -C ${quote(CHECKOUT_PATH)} rev-parse HEAD)" = ${quote(job.baseSha)} && rm /workspace/repository.bundle` });
+  const result = await sandbox.run({ command: `test ! -e ${quote([CHECKOUT_PATH])} && git clone --no-checkout /workspace/repository.bundle ${quote([CHECKOUT_PATH])} && git -C ${quote([CHECKOUT_PATH])} checkout --detach ${quote([job.baseSha])} && git -C ${quote([CHECKOUT_PATH])} remote remove origin && test "$(git -C ${quote([CHECKOUT_PATH])} rev-parse HEAD)" = ${quote([job.baseSha])} && rm /workspace/repository.bundle` });
   if (result.exitCode !== 0) throw new Error(`Sandbox checkout failed (${result.exitCode}): ${result.stderr}`);
 }
 

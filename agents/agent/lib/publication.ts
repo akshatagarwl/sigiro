@@ -1,13 +1,12 @@
 import { Schema } from "effect";
 import type { SessionContext } from "eve/context";
+import { quote } from "shell-quote";
 import { PublishedReceipt, PublishedTests } from "../../src/publication.ts";
 import type { CelldJob } from "./celld-dispatch.ts";
 import { publishDraftPr } from "./github-draft-pr.ts";
 import type { DraftPrPublishInput } from "./github-draft-pr.ts";
 import { writeReceipt } from "./publication-receipts.ts";
 import { CHECKOUT_PATH } from "./workspace.ts";
-
-const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 /** Publish only the active worker's pinned job through the trusted host client. */
 export async function publishJob({ job, session, sandbox, github }: {
@@ -27,13 +26,13 @@ export async function publishJob({ job, session, sandbox, github }: {
   }
   if (github.repository.fullName !== job.repository) throw new Error("Publication repository does not match the job");
   const assertHead = async () => {
-    const result = await sandbox.run({ command: `git -C ${quote(CHECKOUT_PATH)} rev-parse HEAD` });
+    const result = await sandbox.run({ command: `git -C ${quote([CHECKOUT_PATH])} rev-parse HEAD` });
     if (result.exitCode !== 0 || result.stdout.trim() !== job.baseSha) throw new Error("Publication checkout does not match the job's pinned base SHA");
   };
   await assertHead();
   const results = [];
   for (const test of job.tests) {
-    const result = await sandbox.run({ command: `cd ${quote(CHECKOUT_PATH)} && /bin/sh -lc ${quote(test.command)}` });
+    const result = await sandbox.run({ command: `cd ${quote([CHECKOUT_PATH])} && /bin/sh -lc ${quote([test.command])}` });
     results.push({ ...test, exitCode: result.exitCode });
   }
   const failed = results.find((test) => test.exitCode !== 0);

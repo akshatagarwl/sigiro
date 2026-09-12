@@ -3,6 +3,7 @@ import { matchesGlob } from "node:path";
 import { GitHubApiError } from "eve/channels/github";
 import type { GitHubHandle, GitHubJsonObject } from "eve/channels/github";
 import type { SandboxSession } from "eve/sandbox";
+import { quote } from "shell-quote";
 
 /** The only blob modes GitHub tree writes may carry here. */
 type BlobMode = "100644" | "100755";
@@ -114,8 +115,6 @@ const disallowed = (path: string, allowedPaths: readonly string[] | undefined): 
   escaping(path) || forbidden(path) ||
   (allowedPaths !== undefined && !matchesAllowed(path, allowedPaths));
 
-const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
-
 const isStatus = (value: string): value is ChangedFile["status"] => value === "A" || value === "M" || value === "D";
 
 /**
@@ -182,7 +181,7 @@ const runGit = async (sandbox: Pick<SandboxSession, "run">, command: string) => 
 };
 
 const changedFiles = async (sandbox: Pick<SandboxSession, "run" | "readBinaryFile">, checkoutPath: string, allowedPaths?: readonly string[]): Promise<ChangedFile[]> => {
-  const result = await runGit(sandbox, `git -C ${quote(checkoutPath)} add -A -- . && git -C ${quote(checkoutPath)} diff --cached --raw -z --no-renames`);
+  const result = await runGit(sandbox, `git -C ${quote([checkoutPath])} add -A -- . && git -C ${quote([checkoutPath])} diff --cached --raw -z --no-renames`);
   const staged = parseRawDiff(result.stdout);
   const rejected = staged.filter(({ path }) => disallowed(path, allowedPaths)).map(({ path }) => path);
   if (rejected.length > 0) {
