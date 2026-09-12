@@ -151,7 +151,21 @@ const og = new URL(SITE.ogImage, SITE.url).href;
     <meta name="theme-color" content="#141312" media="(prefers-color-scheme: dark)" />
 
     <meta property="og:type" content="website" />
-    <meta property="og:url" content={SITE.url} />
+    {/*
+      `canonical`, not `SITE.url`. These four pages share one layout and three of
+      them are localized, so a constant here published `https://sigiro.com` as the
+      Open Graph URL of `/ja`, `/ko` and `/zh` while `<link rel="canonical">` two
+      lines up named the localized URL — the two tags disagreed on what the page
+      is. A scraper that follows og:url over canonical renders the English page's
+      card for a Japanese URL, and `blume audit` flagged all three under "Open
+      Graph URL not matching canonical".
+
+      The prop is already per-locale and already carries the trailing slash the
+      server actually serves (see `canonical` in `Landing.astro`), so reusing it
+      is what keeps the two tags from drifting again rather than a second
+      expression that has to be kept in step.
+    */}
+    <meta property="og:url" content={canonical} />
     <meta property="og:site_name" content={SITE.name} />
     <meta property="og:title" content={copy.site.title} />
     <meta property="og:description" content={copy.site.description} />
