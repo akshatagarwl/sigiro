@@ -102,11 +102,26 @@ pub(crate) fn correlate_shifts(ts_shift_us: &[i64]) -> Vec<Vec<usize>> {
 }
 
 // The signals this pass detects (the `signal` column of `sigiro_anomalies`).
-const SIGNAL_ERROR_RATE: &str = "error_rate";
-const SIGNAL_LATENCY_P95: &str = "latency_p95";
-const SIGNAL_LOG_VOLUME: &str = "log_volume";
-const SIGNAL_ERROR_LOG_RATE: &str = "error_log_rate";
-const SIGNAL_PROFILE_COST: &str = "profile_cost";
+#[derive(Debug, Clone, Copy)]
+enum AnomalySignal {
+    ErrorRate,
+    LatencyP95,
+    LogVolume,
+    ErrorLogRate,
+    ProfileCost,
+}
+
+impl AnomalySignal {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ErrorRate => "error_rate",
+            Self::LatencyP95 => "latency_p95",
+            Self::LogVolume => "log_volume",
+            Self::ErrorLogRate => "error_log_rate",
+            Self::ProfileCost => "profile_cost",
+        }
+    }
+}
 
 /// One worsening regime shift found in a series.
 #[derive(Debug)]
@@ -129,7 +144,7 @@ pub struct AnomalyInsert {
     /// The entity the series was keyed by: operation name (span signals)
     /// or service name (log and profile signals).
     operation: String,
-    signal: &'static str,
+    signal: AnomalySignal,
     shift: Shift,
     drill_down_sql: String,
 }
@@ -301,7 +316,7 @@ fn detect_span_signals(
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: operation.clone(),
-                signal: SIGNAL_ERROR_RATE,
+                signal: AnomalySignal::ErrorRate,
                 shift,
                 drill_down_sql,
             });
@@ -312,7 +327,7 @@ fn detect_span_signals(
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: operation.clone(),
-                signal: SIGNAL_LATENCY_P95,
+                signal: AnomalySignal::LatencyP95,
                 shift,
                 drill_down_sql,
             });
@@ -372,7 +387,7 @@ fn detect_log_signals(
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: service.clone(),
-                signal: SIGNAL_LOG_VOLUME,
+                signal: AnomalySignal::LogVolume,
                 shift,
                 drill_down_sql,
             });
@@ -382,7 +397,7 @@ fn detect_log_signals(
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: service.clone(),
-                signal: SIGNAL_ERROR_LOG_RATE,
+                signal: AnomalySignal::ErrorLogRate,
                 shift,
                 drill_down_sql,
             });
@@ -441,7 +456,7 @@ fn detect_profile_cost(
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: service.clone(),
-                signal: SIGNAL_PROFILE_COST,
+                signal: AnomalySignal::ProfileCost,
                 shift,
                 drill_down_sql,
             });
@@ -486,7 +501,7 @@ pub fn persist(conn: &Connection, prefix: &str, inserts: &[AnomalyInsert]) -> Re
                 now_us,
                 row.service,
                 row.operation,
-                row.signal,
+                row.signal.as_str(),
                 row.shift.ts_shift_us,
                 row.shift.before,
                 row.shift.after,
