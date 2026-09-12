@@ -546,7 +546,7 @@ impl ProjectPool {
                     // genuinely transient causes earn the retry loop.
                     let fatal = e
                         .downcast_ref::<crate::storage::AttachError>()
-                        .filter(|a| !a.retryable)
+                        .filter(|a| !crate::storage::AttachError::is_retryable(a.category))
                         .map(|a| a.category);
                     if let Some(category) = fatal {
                         return Err(e.context(format!(

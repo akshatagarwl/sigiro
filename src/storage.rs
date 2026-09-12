@@ -56,14 +56,13 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
 #[derive(Debug, Clone)]
 pub struct AttachError {
     pub(crate) category: &'static str,
-    pub(crate) retryable: bool,
     message: String,
 }
 
 impl AttachError {
     /// Categories whose cause is transient and clears without operator action.
     /// Everything else is permanent — fail fast rather than retry.
-    fn is_retryable(category: &str) -> bool {
+    pub(crate) fn is_retryable(category: &str) -> bool {
         matches!(
             category,
             "dns" | "unreachable" | "unknown" | "catalog_conflict"
@@ -181,7 +180,6 @@ pub(crate) fn init_distributed(
         } else {
             "unknown"
         };
-        let retryable = AttachError::is_retryable(category);
         // `data_path` is the signature of a backend swap: DuckLake pins DATA_PATH
         // into the catalog at creation, so a config that later points elsewhere
         // (e.g. an S3-created catalog now configured for local Parquet) can never
@@ -198,7 +196,6 @@ pub(crate) fn init_distributed(
         };
         anyhow::Error::from(AttachError {
             category,
-            retryable,
             message: format!(
                 "failed to attach DuckLake PostgreSQL catalog for tenant {tenant_id} \
                  (metadata schema {}, category {category}) — {hint}",
