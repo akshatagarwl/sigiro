@@ -100,12 +100,12 @@ timestamp seen for each (microseconds since the Unix epoch). The entry point of 
 loop: pick a service here, then diagnose it."
     )]
     async fn list_services(&self) -> Result<CallToolResult, ErrorData> {
-        let rows = self
+        let response = self
             .client
-            .query("SELECT service_name, count(*) AS span_count FROM sigiro_spans GROUP BY service_name ORDER BY span_count DESC")
+            .services()
             .await
             .map_err(|e| upstream_error("list_services failed", &e))?;
-        json_result(&rows)
+        json_result(&response)
     }
 
     #[tool(

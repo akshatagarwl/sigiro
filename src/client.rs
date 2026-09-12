@@ -102,6 +102,23 @@ impl SigiroClient {
         resp.json().await.context("failed to parse query response")
     }
 
+    /// GET /v1/services — every service that has reported telemetry, with
+    /// per-signal counts and the first and last timestamps seen.
+    pub async fn services(&self) -> Result<crate::responses::ServicesResponse> {
+        let req = self.http.get(format!("{}/v1/services", self.base_url));
+        let resp = self
+            .auth
+            .apply(req)
+            .send()
+            .await
+            .context("failed to connect to sigiro server")?;
+
+        let resp = self.expect_ok(resp).await?;
+        resp.json()
+            .await
+            .context("failed to parse services response")
+    }
+
     /// GET /v1/anomalies — the precomputed anomaly table (all signals, ranked
     /// biggest shift first, with cross-signal `incident_id` grouping). The
     /// entry point for the detect→diagnose loop: poll this, act on new

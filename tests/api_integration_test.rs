@@ -7,6 +7,8 @@
 #![allow(clippy::disallowed_methods)]
 
 use axum_test::TestServer;
+use rmcp::model::CallToolRequestParams;
+use rmcp::{ClientHandler, ServiceExt};
 use serde_json::json;
 
 use parking_lot::Mutex;
@@ -15,6 +17,7 @@ use sigiro::admin;
 use sigiro::client::{ClientAuth, SigiroClient};
 use sigiro::ingest;
 use sigiro::inserter::MsgRouter;
+use sigiro::mcp::SigiroMcp;
 use sigiro::pool::ProjectPool;
 use sigiro::server::{AppState, build_http_router};
 use std::sync::Arc;
@@ -27,6 +30,11 @@ struct TestContext {
     // error (previously it was silently recreated), so this must outlive the state.
     _tmp_dir: TempDir,
 }
+
+#[derive(Clone, Default)]
+struct TestMcpClient;
+
+impl ClientHandler for TestMcpClient {}
 
 /// Build a test AppState with temp directories and an in-memory SQLite admin
 /// DB with all required tables.
@@ -679,7 +687,10 @@ async fn test_services_discovers_every_supported_signal() {
         )
         .expect("seed cross-signal telemetry");
 
-    let server = TestServer::new(build_http_router(ctx.state)).expect("build test server");
+    let server = TestServer::builder()
+        .http_transport()
+        .build(build_http_router(ctx.state))
+        .expect("build test server");
     let resp = server.get("/v1/services").await;
     resp.assert_status_ok();
     let body: serde_json::Value = serde_json::from_str(&resp.text()).expect("valid JSON");
@@ -737,6 +748,66 @@ async fn test_services_discovers_every_supported_signal() {
         );
         assert_eq!(service(name)["totalCount"], 1);
     }
+
+    let client = SigiroClient::new(
+        server.server_url("/").expect("test server URL").as_str(),
+        ClientAuth::Open,
+    );
+    let typed = client.services().await.expect("typed services response");
+    assert_eq!(typed.services.len(), 7);
+    let typed_log_only = typed
+        .services
+        .iter()
+        .find(|service| service.name == "log-only")
+        .expect("typed log-only service");
+    assert_eq!(
+        typed_log_only.first_seen.as_deref(),
+        Some("2026-01-02 00:00:00")
+    );
+    assert_eq!(
+        typed_log_only.last_seen.as_deref(),
+        Some("2026-01-03 00:00:00")
+    );
+    assert_eq!(typed_log_only.signals.spans, 0);
+    assert_eq!(typed_log_only.signals.logs, 2);
+    assert_eq!(typed_log_only.signals.metrics, 0);
+    assert_eq!(typed_log_only.total_count, 2);
+    let expected = serde_json::to_value(typed).expect("serialize typed services response");
+
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let mcp_server = tokio::spawn(async move {
+        SigiroMcp::new(client)
+            .serve(server_transport)
+            .await?
+            .waiting()
+            .await?;
+        anyhow::Ok(())
+    });
+    let mcp_client = TestMcpClient
+        .serve(client_transport)
+        .await
+        .expect("start MCP client");
+    let result = mcp_client
+        .call_tool(CallToolRequestParams::new("list_services"))
+        .await
+        .expect("call list_services");
+    let text = result
+        .content
+        .first()
+        .and_then(|content| content.as_text())
+        .map(|content| content.text.as_str())
+        .expect("list_services text result");
+    let actual: serde_json::Value = serde_json::from_str(text).expect("valid MCP services JSON");
+    assert_eq!(
+        actual, expected,
+        "HTTP client and MCP service contracts differ"
+    );
+
+    mcp_client.cancel().await.expect("stop MCP client");
+    mcp_server
+        .await
+        .expect("join MCP server")
+        .expect("stop MCP server");
 }
 
 #[tokio::test]
