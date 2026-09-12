@@ -670,7 +670,7 @@ pub fn validate_read_only_gated(
 }
 /// Fixed vocabulary used by query admission and query telemetry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TableFamily {
+pub(crate) enum TableFamily {
     Spans,
     Logs,
     Metrics,
@@ -680,7 +680,7 @@ pub enum TableFamily {
 }
 
 impl TableFamily {
-    pub const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Spans => "spans",
             Self::Logs => "logs",
@@ -693,16 +693,16 @@ impl TableFamily {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ResourcePolicyError {
+pub(crate) enum ResourcePolicyError {
     RequiresTimeBounds { primary_table_family: TableFamily },
 }
 
 impl ResourcePolicyError {
-    pub const fn code(self) -> &'static str {
+    pub(crate) const fn code(self) -> &'static str {
         "query_requires_time_bounds"
     }
 
-    pub const fn primary_table_family(self) -> TableFamily {
+    pub(crate) const fn primary_table_family(self) -> TableFamily {
         match self {
             Self::RequiresTimeBounds {
                 primary_table_family,
@@ -756,13 +756,22 @@ fn timestamp_ref(expr: &Expr) -> bool {
 }
 
 fn literal_timestamp(expr: &Expr) -> bool {
+    fn finite(value: &str) -> bool {
+        !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "infinity" | "+infinity" | "-infinity"
+        )
+    }
+
     match expr {
-        Expr::TypedString { data_type, .. } => matches!(data_type, DataType::Timestamp(_, _)),
+        Expr::TypedString { data_type, value } => {
+            matches!(data_type, DataType::Timestamp(_, _)) && finite(value)
+        }
         Expr::Cast {
             expr, data_type, ..
         } => {
             matches!(data_type, DataType::Timestamp(_, _))
-                && matches!(expr.as_ref(), Expr::Value(Value::SingleQuotedString(_)))
+                && matches!(expr.as_ref(), Expr::Value(Value::SingleQuotedString(value)) if finite(value))
         }
         _ => false,
     }
@@ -805,27 +814,21 @@ fn mark_bound(expr: &Expr, scans: &mut [RawScan]) {
     }
 }
 
-fn inspect_expr(expr: &Expr, scans: &mut [RawScan]) -> bool {
-    matches!(
-        expr.visit(&mut BoundVisitor { scans }),
-        ControlFlow::Break(())
-    )
-}
-
-struct BoundVisitor<'a> {
-    scans: &'a mut [RawScan],
-}
-impl Visitor for BoundVisitor<'_> {
-    type Break = ();
-    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<()> {
-        if matches!(
-            expr,
-            Expr::Subquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. }
-        ) {
-            return ControlFlow::Break(());
+fn inspect_mandatory_predicate(expr: &Expr, scans: &mut [RawScan]) {
+    match expr {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } => {
+            inspect_mandatory_predicate(left, scans);
+            inspect_mandatory_predicate(right, scans);
         }
-        mark_bound(expr, self.scans);
-        ControlFlow::Continue(())
+        Expr::Nested(expr) => inspect_mandatory_predicate(expr, scans),
+        // Only a direct comparison in a mandatory AND branch proves a scan
+        // bound. OR, NOT, CASE, projections, GROUP BY, HAVING, and JOIN ON do
+        // not safely restrict every output path and therefore prove nothing.
+        _ => mark_bound(expr, scans),
     }
 }
 
@@ -912,35 +915,10 @@ fn inspect_select(select: &Select, scans: &mut Vec<RawScan>) -> bool {
 }
 
 fn inspect_exprs_in_select(select: &Select, scans: &mut [RawScan]) -> bool {
-    let mut nested = false;
-    for item in &select.projection {
-        if let sqlparser::ast::SelectItem::ExprWithAlias { expr, .. } = item {
-            nested |= inspect_expr(expr, scans);
-        }
-        if let sqlparser::ast::SelectItem::UnnamedExpr(expr) = item {
-            nested |= inspect_expr(expr, scans);
-        }
-    }
     if let Some(selection) = &select.selection {
-        nested |= inspect_expr(selection, scans);
+        inspect_mandatory_predicate(selection, scans);
     }
-    for table in &select.from {
-        for join in &table.joins {
-            nested |= matches!(
-                join.join_operator.visit(&mut BoundVisitor { scans }),
-                ControlFlow::Break(())
-            );
-        }
-    }
-    if let sqlparser::ast::GroupByExpr::Expressions(exprs, _) = &select.group_by {
-        for e in exprs {
-            nested |= inspect_expr(e, scans);
-        }
-    }
-    if let Some(having) = &select.having {
-        nested |= inspect_expr(having, scans);
-    }
-    nested
+    false
 }
 
 fn inspect_set_expr(expr: &SetExpr, scans: &mut Vec<RawScan>) -> bool {
@@ -957,12 +935,14 @@ fn inspect_set_expr(expr: &SetExpr, scans: &mut Vec<RawScan>) -> bool {
 /// Enforce the evidence-backed admission rule for public raw telemetry reads.
 /// Security validation must run first; this function only answers whether each
 /// high-volume physical scan is provably half-open bounded by literal timestamps.
-pub fn validate_raw_telemetry_policy(sql: &str) -> Result<TableFamily, ResourcePolicyError> {
+pub(crate) fn validate_raw_telemetry_policy(sql: &str) -> Result<TableFamily, ResourcePolicyError> {
     let dialect = DuckDbDialect {};
-    let statements =
-        Parser::parse_sql(&dialect, sql).map_err(|_| ResourcePolicyError::RequiresTimeBounds {
+    let parseable = TIME_TRAVEL_AT.replace_all(sql, " ");
+    let statements = Parser::parse_sql(&dialect, &parseable).map_err(|_| {
+        ResourcePolicyError::RequiresTimeBounds {
             primary_table_family: TableFamily::None,
-        })?;
+        }
+    })?;
     let Some(Statement::Query(query)) = statements.first() else {
         return Ok(TableFamily::None);
     };
@@ -1152,6 +1132,12 @@ mod raw_telemetry_policy_tests {
             "SELECT * FROM lake.sigiro_spans WHERE timestamp > TIMESTAMP '2026-01-01' AND timestamp <= TIMESTAMP '2026-01-02'",
             "SELECT * FROM lake.sigiro_spans WHERE timestamp BETWEEN TIMESTAMP '2026-01-01' AND TIMESTAMP '2026-01-02'",
             "SELECT * FROM lake.sigiro_spans WHERE timestamp >= '2026-01-01' AND timestamp < '2026-01-02'",
+            "SELECT * FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '-infinity' AND timestamp < TIMESTAMP 'infinity'",
+            "SELECT * FROM lake.sigiro_spans WHERE timestamp >= CAST('-infinity' AS TIMESTAMP) AND timestamp < CAST('+infinity' AS TIMESTAMP)",
+            "SELECT timestamp >= TIMESTAMP '2026-01-01' AS lower_ok, timestamp < TIMESTAMP '2026-01-02' AS upper_ok FROM lake.sigiro_spans",
+            "SELECT * FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01' OR timestamp < TIMESTAMP '2026-01-02'",
+            "SELECT status_code, count(*) FROM lake.sigiro_spans GROUP BY status_code, timestamp >= TIMESTAMP '2026-01-01', timestamp < TIMESTAMP '2026-01-02'",
+            "SELECT status_code, count(*) FROM lake.sigiro_spans GROUP BY status_code HAVING min(timestamp) >= TIMESTAMP '2026-01-01' AND max(timestamp) < TIMESTAMP '2026-01-02'",
             "SELECT * FROM lake.sigiro_spans a JOIN lake.sigiro_logs b ON true WHERE a.timestamp >= TIMESTAMP '2026-01-01' AND a.timestamp < TIMESTAMP '2026-01-02'",
             "SELECT * FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02' UNION ALL SELECT * FROM lake.sigiro_logs",
             "SELECT * FROM (SELECT * FROM lake.sigiro_spans) x WHERE x.timestamp >= TIMESTAMP '2026-01-01' AND x.timestamp < TIMESTAMP '2026-01-02'",
@@ -1179,5 +1165,6 @@ mod raw_telemetry_policy_tests {
             Ok(TableFamily::Spans)
         );
         assert!(validate_raw_telemetry_policy("SELECT (SELECT max(timestamp) FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02') FROM range(1)").is_err());
+        assert!(validate_raw_telemetry_policy("SELECT * FROM lake.sigiro_spans AT (TIMESTAMP => '2026-01-01 00:00:00') WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02'").is_ok());
     }
 }
