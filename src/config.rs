@@ -108,7 +108,19 @@ pub(crate) static DUCKDB_MEMORY_LIMIT: Envar<String> =
 /// `statement_timeout` setting, so this is enforced by interrupting the
 /// reader connection from a watchdog once the deadline passes (see
 /// `execute_sql` in server.rs). Default: 30s.
-pub(crate) static QUERY_TIMEOUT_SECONDS: Envar<u64> =
+#[nutype::nutype(
+    validate(greater = 0),
+    derive(Debug, Clone, Copy, PartialEq, Eq, FromStr, AsRef, Into, Display)
+)]
+pub struct QueryTimeoutSeconds(u64);
+
+impl QueryTimeoutSeconds {
+    pub fn as_secs(&self) -> u64 {
+        *self.as_ref()
+    }
+}
+
+static QUERY_TIMEOUT_SECONDS: Envar<u64> =
     Envar::on_startup("SIGIRO_QUERY_TIMEOUT_SECONDS", || EnvarDef::Default(30));
 
 /// Max rows a single `/v1/query` call will collect before stopping early and
@@ -226,13 +238,10 @@ pub(crate) fn duckdb_memory_limit() -> Result<String> {
     Ok(memory_limit)
 }
 
-pub(crate) fn query_timeout_secs() -> Result<u64> {
-    let secs = QUERY_TIMEOUT_SECONDS.value()?;
-    anyhow::ensure!(
-        secs > 0,
-        "SIGIRO_QUERY_TIMEOUT_SECONDS must be greater than zero"
-    );
-    Ok(secs)
+pub(crate) fn query_timeout_secs() -> Result<QueryTimeoutSeconds> {
+    let raw = QUERY_TIMEOUT_SECONDS.value()?;
+    QueryTimeoutSeconds::try_new(raw)
+        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_QUERY_TIMEOUT_SECONDS: {error}"))
 }
 
 pub(crate) fn max_result_rows() -> Result<usize> {

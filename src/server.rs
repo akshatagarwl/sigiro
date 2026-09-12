@@ -1180,10 +1180,10 @@ async fn execute_sql(
             joined
                 .map_err(|e| anyhow::anyhow!("query task failed: {e}"))?
         }
-        () = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
+        () = tokio::time::sleep(Duration::from_secs(timeout_secs.as_secs())) => {
             let handle = handle_rx.try_recv().ok();
             tracing::warn!(
-                timeout_secs,
+                timeout_secs = %timeout_secs,
                 executing = handle.is_some(),
                 "query exceeded timeout"
             );

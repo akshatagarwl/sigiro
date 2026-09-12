@@ -1458,7 +1458,7 @@ pub async fn run_federated_query(
     let row_cap = crate::config::query_row_cap()?;
     check_limit_within_cap(&parsed, row_cap)?;
     let effective_cap = effective_edge_cap(&parsed, row_cap);
-    let timeout = Duration::from_secs(crate::config::query_timeout_secs()?);
+    let timeout = Duration::from_secs(crate::config::query_timeout_secs()?.as_secs());
     let token = crate::config::quack_token()?;
     let partial_sql = build_partial_sql(&parsed, row_cap);
     tracing::debug!(partial_sql, "federated query per-edge partial");

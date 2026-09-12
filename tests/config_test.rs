@@ -1,5 +1,18 @@
 #![allow(clippy::disallowed_methods)]
 
+use sigiro::config::QueryTimeoutSeconds;
+
+#[test]
+fn query_timeout_seconds_rejects_zero_at_construction_and_config_parsing() {
+    assert!(QueryTimeoutSeconds::try_new(0).is_err());
+    assert!("0".parse::<QueryTimeoutSeconds>().is_err());
+
+    let timeout = "30"
+        .parse::<QueryTimeoutSeconds>()
+        .expect("positive timeout must retain the existing numeric config format");
+    assert_eq!(timeout.as_secs(), 30);
+}
+
 #[test]
 fn data_dir_uses_platform_default_when_unset() {
     // data_dir() falls back to the platform data directory when SIGIRO_DATA_DIR
