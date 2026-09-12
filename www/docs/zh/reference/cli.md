@@ -4,6 +4,7 @@ description: sigiro 的每个子命令、参数以及读取的环境变量。sig
 sidebar:
   order: 2
 ---
+
 `sigiro` 有七个子命令。每个子命令在执行成功时都会输出带缩进的 JSON。没有第二种
 输出格式，也不做 TTY 检测。
 
@@ -17,12 +18,12 @@ sidebar:
 
 启动 OTLP gRPC 服务器、OTLP HTTP 服务器和查询 API。
 
-| 标志 | 覆盖 | 默认值 |
-| --- | --- | --- |
-| `--data-dir <PATH>` | `SIGIRO_DATA_DIR` | `~/.local/share/sigiro` |
-| `--http-port <PORT>` | `SIGIRO_HTTP_PORT` | `9999` |
-| `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318` |
-| `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT` | `4317` |
+| 标志                      | 覆盖                    | 默认值                  |
+| ------------------------- | ----------------------- | ----------------------- |
+| `--data-dir <PATH>`       | `SIGIRO_DATA_DIR`       | `~/.local/share/sigiro` |
+| `--http-port <PORT>`      | `SIGIRO_HTTP_PORT`      | `9999`                  |
+| `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318`                  |
+| `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT`      | `4317`                  |
 
 首次启动时会将查询扩展下载到数据目录中。该下载耗时 30–90 秒，并会阻塞启动过程。
 
@@ -30,10 +31,10 @@ sidebar:
 
 `sigiro diagnose <SERVICE>` 针对一个服务返回一个诊断块。
 
-| 标志 | 类型 | 默认值 |
-| --- | --- | --- |
+| 标志                     | 类型 | 默认值               |
+| ------------------------ | ---- | -------------------- |
 | `--from <EPOCH_SECONDS>` | 整数 | 当前时间之前 15 分钟 |
-| `--to <EPOCH_SECONDS>` | 整数 | 当前时间 |
+| `--to <EPOCH_SECONDS>`   | 整数 | 当前时间             |
 
 `--from` 和 `--to` 的单位是 Unix 纪元**秒**。对应的 HTTP 字段名为 `from_ts` 和
 `to_ts`，它们的单位是 Unix 纪元**微秒**。这两个 HTTP 字段都是可选的。如果两者都
@@ -47,11 +48,11 @@ sidebar:
 `sigiro anomalies` 列出检测到的状态突变（regime shift），按突变幅度从大到小排列，
 每一行都带有跨信号的 `incident_id`。
 
-| 标志 | 类型 | 默认值 |
-| --- | --- | --- |
-| `--service <NAME>` | 字符串 | 所有服务 |
-| `--from <EPOCH_SECONDS>` | 整数 | 无下界 |
-| `--to <EPOCH_SECONDS>` | 整数 | 无上界 |
+| 标志                     | 类型   | 默认值   |
+| ------------------------ | ------ | -------- |
+| `--service <NAME>`       | 字符串 | 所有服务 |
+| `--from <EPOCH_SECONDS>` | 整数   | 无下界   |
+| `--to <EPOCH_SECONDS>`   | 整数   | 无上界   |
 
 这些行来自 `sigiro_anomalies` 表，由一个定时任务写入。请求时不会进行任何计算。
 
@@ -60,11 +61,11 @@ sidebar:
 `sigiro query "<SQL>"` 是一个**联邦协调器**，而不是本地客户端。它会解析一个或多个
 边缘节点，向每个边缘节点下推一个局部查询，并把这些局部结果合并成一个答案。
 
-| 标志 | 类型 | 默认值 |
-| --- | --- | --- |
-| `<SQL>` | 字符串 | 无 |
-| `--edge <NAME=HOST:PORT>` | 可重复 | 无 |
-| `--full-scan` | 标志 | 关闭 |
+| 标志                      | 类型   | 默认值 |
+| ------------------------- | ------ | ------ |
+| `<SQL>`                   | 字符串 | 无     |
+| `--edge <NAME=HOST:PORT>` | 可重复 | 无     |
+| `--full-scan`             | 标志   | 关闭   |
 
 边缘节点的解析顺序如下。`SIGIRO_EDGES`（以逗号分隔的 `name=host:port`）和
 `--edge` 会被逐字采用，其中任意一个都会跳过自动发现。两者都未设置时，sigiro 会运行

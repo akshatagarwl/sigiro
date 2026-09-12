@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 1
 ---
+
 本指南介绍如何为一个尚未接入任何检测的服务添加 OpenTelemetry，具体的代码修改由智能体完成。把下面的提示词粘贴给智能体即可。智能体会检测你的框架、安装官方自动检测组件，并把导出器指向 sigiro。
 
 此方法适用于 Claude Code、OpenCode、Codex，或任何能够编辑文件并运行你的包管理器的智能体。
@@ -68,14 +69,14 @@ Framework: <fastapi|express|spring-boot|rails|...>
 
 ## 3. 检查你获得的覆盖范围
 
-| 语言 | 方案 | 覆盖范围 |
-|----------|----------|--------|
-| Python | `opentelemetry-instrument` CLI + distro | HTTP（FastAPI、Flask、Starlette）、数据库（psycopg2、asyncpg）、Redis |
-| Node.js | `@opentelemetry/auto-instrumentations-node` | HTTP（Express、Fastify）、数据库（pg、mysql2、mongoose） |
-| Java | `opentelemetry-javaagent.jar` | HTTP（Servlets、Spring）、数据库（JDBC）、JVM 指标 |
-| .NET | `OpenTelemetry.AutoInstrumentation` startup hook | HTTP（ASP.NET Core）、数据库（EF Core） |
-| Ruby | `opentelemetry-instrumentation-all` gem | HTTP（Rails）、数据库（ActiveRecord）、Sidekiq |
-| Go | `otelc` 编译期检测 | HTTP 服务端 span、Go 运行时指标、第三方库 |
+| 语言    | 方案                                             | 覆盖范围                                                              |
+| ------- | ------------------------------------------------ | --------------------------------------------------------------------- |
+| Python  | `opentelemetry-instrument` CLI + distro          | HTTP（FastAPI、Flask、Starlette）、数据库（psycopg2、asyncpg）、Redis |
+| Node.js | `@opentelemetry/auto-instrumentations-node`      | HTTP（Express、Fastify）、数据库（pg、mysql2、mongoose）              |
+| Java    | `opentelemetry-javaagent.jar`                    | HTTP（Servlets、Spring）、数据库（JDBC）、JVM 指标                    |
+| .NET    | `OpenTelemetry.AutoInstrumentation` startup hook | HTTP（ASP.NET Core）、数据库（EF Core）                               |
+| Ruby    | `opentelemetry-instrumentation-all` gem          | HTTP（Rails）、数据库（ActiveRecord）、Sidekiq                        |
+| Go      | `otelc` 编译期检测                               | HTTP 服务端 span、Go 运行时指标、第三方库                             |
 
 如果某个库没有产生 span，只针对该库手写 span 即可。
 

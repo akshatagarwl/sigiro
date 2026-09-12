@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 2
 ---
+
 sigiro는 두 종류의 테이블을 제공하며, 쿼리에서는 서로 비슷해 보입니다. 한 종류는
 여러분의 서비스가 전송한 텔레메트리를 보관합니다. 다른 종류는 sigiro 자신이 실행
 중인 머신을 읽습니다. 둘 다 CPU, 메모리 또는 디스크에 관한 질문에 답하지만, 어느
@@ -17,10 +18,10 @@ sigiro는 두 종류의 테이블을 제공하며, 쿼리에서는 서로 비슷
 
 ## 두 계열, 두 대상
 
-| 계열 | 무엇인가 | 누구의 머신인가 | 시간 |
-| --- | --- | --- | --- |
-| `sigiro_spans`, `sigiro_logs`, `sigiro_log_templates`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`, `sigiro_metrics_exp_histogram`, `sigiro_profiles`, `sigiro_anomalies` | 저장된 텔레메트리 | OTLP를 전송한 대상 — 여러분의 호스트에서, 어디에서 실행되든 여러분의 서비스 | 과거 이력, `timestamp` 컬럼 보유 |
-| `sys_cpu_info()`, `sys_memory_info()`, `sys_disk_info()`, `sys_network_info()`, `sys_os_info()` | 실시간 테이블 함수 | 이 sigiro 프로세스가 실행 중인 단 하나의 머신 | 현재 시점의 측정값 하나, 이력 없음, 시간 컬럼 없음 |
+| 계열                                                                                                                                                                                                   | 무엇인가           | 누구의 머신인가                                                             | 시간                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | --------------------------------------------------------------------------- | -------------------------------------------------- |
+| `sigiro_spans`, `sigiro_logs`, `sigiro_log_templates`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`, `sigiro_metrics_exp_histogram`, `sigiro_profiles`, `sigiro_anomalies` | 저장된 텔레메트리  | OTLP를 전송한 대상 — 여러분의 호스트에서, 어디에서 실행되든 여러분의 서비스 | 과거 이력, `timestamp` 컬럼 보유                   |
+| `sys_cpu_info()`, `sys_memory_info()`, `sys_disk_info()`, `sys_network_info()`, `sys_os_info()`                                                                                                        | 실시간 테이블 함수 | 이 sigiro 프로세스가 실행 중인 단 하나의 머신                               | 현재 시점의 측정값 하나, 이력 없음, 시간 컬럼 없음 |
 
 `sigiro_*` 이름은 테이블입니다. `sys_*` 이름은 함수이며, 빈 괄호를 붙여
 호출합니다. 이것이 눈에 보이는 유일한 차이이며, 차이로서는 충분하지 않습니다.

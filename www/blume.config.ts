@@ -1,8 +1,8 @@
-import { fileURLToPath } from "node:url";
-import sitemap from "@astrojs/sitemap";
-import { defineConfig } from "blume";
-import type { AstroIntegration } from "astro";
-import { CF_ANALYTICS_TOKEN, SITE } from "./src/lib/site";
+import { fileURLToPath } from 'node:url';
+import sitemap from '@astrojs/sitemap';
+import { defineConfig } from 'blume';
+import type { AstroIntegration } from 'astro';
+import { CF_ANALYTICS_TOKEN, SITE } from './src/lib/site';
 
 /**
  * The two things this project needs from Astro that Blume's config cannot express.
@@ -26,19 +26,19 @@ import { CF_ANALYTICS_TOKEN, SITE } from "./src/lib/site";
  * in, and the way Blume mounts its own `.well-known/mcp.json` endpoint.
  */
 const sigiro = (): AstroIntegration => ({
-  name: "sigiro",
+  name: 'sigiro',
   hooks: {
-    "astro:config:setup": ({ injectRoute, updateConfig }) => {
+    'astro:config:setup': ({ injectRoute, updateConfig }) => {
       updateConfig({
         vite: {
           resolve: {
-            alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+            alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
           },
         },
       });
       injectRoute({
-        pattern: "/dl/[...key]",
-        entrypoint: fileURLToPath(new URL("./src/dl.ts", import.meta.url)),
+        pattern: '/dl/[...key]',
+        entrypoint: fileURLToPath(new URL('./src/dl.ts', import.meta.url)),
       });
     },
   },
@@ -66,7 +66,7 @@ const sigiro = (): AstroIntegration => ({
  * their own subdomain.
  */
 export default defineConfig({
-  title: "sigiro",
+  title: 'sigiro',
   /**
    * Imported, not copied. This string reaches `llms.txt`, `llms-full.txt`, every
    * `/docs/**` page and `agent-readability.json` — the artifacts an agent reads —
@@ -78,7 +78,7 @@ export default defineConfig({
    */
   description: SITE.description,
 
-  logo: { text: "sigiro", href: "/" },
+  logo: { text: 'sigiro', href: '/' },
 
   /**
    * The docs sit under `/docs`, the landing page owns `/`.
@@ -93,7 +93,7 @@ export default defineConfig({
    * days at docs.sigiro.com; that Worker, its routes and its custom domain are
    * deleted, so the hostname no longer resolves at all.
    */
-  basePath: "/docs",
+  basePath: '/docs',
 
   /**
    * `sigiro()` is the alias + `/dl` route, above.
@@ -178,17 +178,17 @@ export default defineConfig({
      * The section root moved from `/api` to `/reference` — see `openapi.route`.
      * That first rule carries every inbound link to `/docs/api`, including the one
      * in the footer of every page this site has served. */
-    { from: "/api", to: "/reference", status: 302 },
-    { from: "/api/get-trace", to: "/reference", status: 302 },
-    { from: "/api/investigate-services", to: "/reference", status: 302 },
-    { from: "/api/list-anomalies", to: "/reference", status: 302 },
-    { from: "/api/list-services", to: "/reference", status: 302 },
-    { from: "/api/run-query", to: "/reference", status: 302 },
-    { from: "/api/v1/anomalies/get", to: "/reference", status: 302 },
-    { from: "/api/v1/investigate/post", to: "/reference", status: 302 },
-    { from: "/api/v1/query/post", to: "/reference", status: 302 },
-    { from: "/api/v1/services/get", to: "/reference", status: 302 },
-    { from: "/api/v1/traces/trace_id/get", to: "/reference", status: 302 },
+    { from: '/api', to: '/reference', status: 302 },
+    { from: '/api/get-trace', to: '/reference', status: 302 },
+    { from: '/api/investigate-services', to: '/reference', status: 302 },
+    { from: '/api/list-anomalies', to: '/reference', status: 302 },
+    { from: '/api/list-services', to: '/reference', status: 302 },
+    { from: '/api/run-query', to: '/reference', status: 302 },
+    { from: '/api/v1/anomalies/get', to: '/reference', status: 302 },
+    { from: '/api/v1/investigate/post', to: '/reference', status: 302 },
+    { from: '/api/v1/query/post', to: '/reference', status: 302 },
+    { from: '/api/v1/services/get', to: '/reference', status: 302 },
+    { from: '/api/v1/traces/trace_id/get', to: '/reference', status: 302 },
 
     /* GROUP 2 — the three flat guide URLs, retired when the docs were sorted into
      * Diátaxis sections (tutorial / how-to / reference / explanation).
@@ -205,15 +205,15 @@ export default defineConfig({
      * agent that kept `/docs/quickstart.md` is exactly the reader this product is
      * for, so the extensionless form alone would have covered browsers and missed
      * them. */
-    { from: "/quickstart", to: "/tutorials/quickstart", status: 302 },
-    { from: "/quickstart.md", to: "/tutorials/quickstart.md", status: 302 },
-    { from: "/quickstart.mdx", to: "/tutorials/quickstart.mdx", status: 302 },
-    { from: "/install-with-ai", to: "/how-to/install-with-ai", status: 302 },
-    { from: "/install-with-ai.md", to: "/how-to/install-with-ai.md", status: 302 },
-    { from: "/install-with-ai.mdx", to: "/how-to/install-with-ai.mdx", status: 302 },
-    { from: "/hosted-onboarding", to: "/how-to/hosted-onboarding", status: 302 },
-    { from: "/hosted-onboarding.md", to: "/how-to/hosted-onboarding.md", status: 302 },
-    { from: "/hosted-onboarding.mdx", to: "/how-to/hosted-onboarding.mdx", status: 302 },
+    { from: '/quickstart', to: '/tutorials/quickstart', status: 302 },
+    { from: '/quickstart.md', to: '/tutorials/quickstart.md', status: 302 },
+    { from: '/quickstart.mdx', to: '/tutorials/quickstart.mdx', status: 302 },
+    { from: '/install-with-ai', to: '/how-to/install-with-ai', status: 302 },
+    { from: '/install-with-ai.md', to: '/how-to/install-with-ai.md', status: 302 },
+    { from: '/install-with-ai.mdx', to: '/how-to/install-with-ai.mdx', status: 302 },
+    { from: '/hosted-onboarding', to: '/how-to/hosted-onboarding', status: 302 },
+    { from: '/hosted-onboarding.md', to: '/how-to/hosted-onboarding.md', status: 302 },
+    { from: '/hosted-onboarding.mdx', to: '/how-to/hosted-onboarding.mdx', status: 302 },
   ],
 
   /**
@@ -277,24 +277,24 @@ export default defineConfig({
    * that disagrees — so it also nudges older pages on a retranslation.
    */
   i18n: {
-    defaultLocale: "en",
+    defaultLocale: 'en',
     locales: [
-      { code: "en", label: "English" },
+      { code: 'en', label: 'English' },
       /* Simplified, mainland conventions. Technical register — this reader is
          installing a binary, not reading marketing. */
-      { code: "zh", label: "简体中文", style: "Simplified Chinese, mainland technical register" },
+      { code: 'zh', label: '简体中文', style: 'Simplified Chinese, mainland technical register' },
       /* です/ます rather than plain form: the standard register for Japanese
          software documentation. */
       {
-        code: "ja",
-        label: "日本語",
-        style: "Polite です/ます form, technical documentation register",
+        code: 'ja',
+        label: '日本語',
+        style: 'Polite です/ます form, technical documentation register',
       },
       /* 합니다 style, the formal-polite register Korean technical docs use. */
       {
-        code: "ko",
-        label: "한국어",
-        style: "Formal 합니다 style, technical documentation register",
+        code: 'ko',
+        label: '한국어',
+        style: 'Formal 합니다 style, technical documentation register',
       },
     ],
   },
@@ -344,24 +344,24 @@ export default defineConfig({
   analytics: {
     scripts: [
       {
-        src: "https://static.cloudflareinsights.com/beacon.min.js",
-        strategy: "defer",
+        src: 'https://static.cloudflareinsights.com/beacon.min.js',
+        strategy: 'defer',
         attributes: {
-          "data-cf-beacon": `{"token": "${CF_ANALYTICS_TOKEN}"}`,
+          'data-cf-beacon': `{"token": "${CF_ANALYTICS_TOKEN}"}`,
         },
       },
     ],
   },
 
   deployment: {
-    site: "https://sigiro.com",
+    site: 'https://sigiro.com',
     // Named rather than left to auto-detection, which keys off CI environment
     // variables and would pick nothing on a laptop — the dev server warned that
     // there was no adapter and a build would fail.
     //
     // `server` and not `static` because the MCP route below is request-time.
-    adapter: "cloudflare",
-    output: "server",
+    adapter: 'cloudflare',
+    output: 'server',
 
     /**
      * `server` because the injected `/dl/[...key]` route and the MCP endpoint are
@@ -382,13 +382,13 @@ export default defineConfig({
    * exactly the custom code this move is meant to delete.
    */
   theme: {
-    accent: { light: "#4568FF", dark: "#93B0FF" },
-    background: { light: "#EFEEEA", dark: "#141312" },
+    accent: { light: '#4568FF', dark: '#93B0FF' },
+    background: { light: '#EFEEEA', dark: '#141312' },
     // The roles are display/body/mono, and both Geist faces are in Blume's
     // curated set — so the pairing the design language is written for comes
     // across with no self-hosting to arrange.
-    fonts: { display: "geist", body: "geist", mono: "geist-mono" },
-    mode: "system",
+    fonts: { display: 'geist', body: 'geist', mono: 'geist-mono' },
+    mode: 'system',
   },
 
   /**
@@ -422,9 +422,9 @@ export default defineConfig({
      * `redirects` block above, which now sends the old section root and the ten
      * legacy per-operation URLs here.
      */
-    route: "/reference",
-    spec: "https://api.sigiro.com/openapi.json",
-    codeSamples: ["curl", "javascript", "python"],
+    route: '/reference',
+    spec: 'https://api.sigiro.com/openapi.json',
+    codeSamples: ['curl', 'javascript', 'python'],
 
     /**
      * OFF. 1.5.2 added a "Try it" panel to every operation page and defaulted it
@@ -519,9 +519,9 @@ export default defineConfig({
      */
     mcp: {
       enabled: true,
-      name: "sigiro-docs",
+      name: 'sigiro-docs',
       instructions:
-        "Documentation for sigiro, an observability data layer. For live telemetry, use the sigiro API at https://api.sigiro.com — its full surface is described at https://api.sigiro.com/openapi.json.",
+        'Documentation for sigiro, an observability data layer. For live telemetry, use the sigiro API at https://api.sigiro.com — its full surface is described at https://api.sigiro.com/openapi.json.',
     },
     /** Generated, including the API reference, replacing two route handlers. */
     llmsTxt: { enabled: true, openapi: true },
@@ -556,7 +556,7 @@ export default defineConfig({
      * readable at its URL without unpacking. `llms.txt` gains an "Agent skills"
      * section from the same collection pass, so the two cannot disagree.
      */
-    skills: "../skills/skills",
+    skills: '../skills/skills',
     /**
      * `ask` stays off. It needs an API key, a model provider and a per-query
      * bill, and the landing page already hands a reader's own assistant a
@@ -565,7 +565,7 @@ export default defineConfig({
   },
 
   /** Orama, local, no hosted service and no key. */
-  search: { provider: "orama" },
+  search: { provider: 'orama' },
 
   /**
    * No `github` key, deliberately. It drove two surfaces and both were wrong:
@@ -604,9 +604,7 @@ export default defineConfig({
      * `/docs/reference/operations/run-query` all carry `href="/"` on the
      * wordmark. Two links to one destination, one of them wrong.
      */
-    featured: [
-      { href: "https://api.sigiro.com/openapi.json", label: "openapi.json" },
-    ],
+    featured: [{ href: 'https://api.sigiro.com/openapi.json', label: 'openapi.json' }],
     /**
      * No explicit `sidebar` here on purpose. Listing the four pages did fix the
      * order, and it also silently dropped the generated API reference from the

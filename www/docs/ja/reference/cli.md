@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 2
 ---
+
 `sigiro` には 7 つのサブコマンドがあります。すべてのサブコマンドは、成功時にインデントされた
 JSON を出力します。2 つ目の出力形式は存在せず、TTY 検出も行いません。
 
@@ -19,12 +20,12 @@ JSON を出力します。2 つ目の出力形式は存在せず、TTY 検出も
 
 OTLP gRPC サーバー、OTLP HTTP サーバー、およびクエリ API を起動します。
 
-| フラグ | 上書き対象 | デフォルト |
-| --- | --- | --- |
-| `--data-dir <PATH>` | `SIGIRO_DATA_DIR` | `~/.local/share/sigiro` |
-| `--http-port <PORT>` | `SIGIRO_HTTP_PORT` | `9999` |
-| `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318` |
-| `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT` | `4317` |
+| フラグ                    | 上書き対象              | デフォルト              |
+| ------------------------- | ----------------------- | ----------------------- |
+| `--data-dir <PATH>`       | `SIGIRO_DATA_DIR`       | `~/.local/share/sigiro` |
+| `--http-port <PORT>`      | `SIGIRO_HTTP_PORT`      | `9999`                  |
+| `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318`                  |
+| `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT`      | `4317`                  |
 
 初回起動時には、クエリ拡張機能がデータディレクトリにダウンロードされます。このダウンロードには
 30〜90 秒かかり、その間は起動がブロックされます。
@@ -33,10 +34,10 @@ OTLP gRPC サーバー、OTLP HTTP サーバー、およびクエリ API を起�
 
 `sigiro diagnose <SERVICE>` は、1 つのサービスに対して 1 つの診断ブロックを返します。
 
-| フラグ | 型 | デフォルト |
-| --- | --- | --- |
+| フラグ                   | 型   | デフォルト       |
+| ------------------------ | ---- | ---------------- |
 | `--from <EPOCH_SECONDS>` | 整数 | 現在から 15 分前 |
-| `--to <EPOCH_SECONDS>` | 整数 | 現在 |
+| `--to <EPOCH_SECONDS>`   | 整数 | 現在             |
 
 `--from` と `--to` はエポック**秒**です。対応する HTTP フィールド名は
 `from_ts` と `to_ts` であり、こちらはエポック**マイクロ秒**です。どちらの HTTP フィールドも
@@ -51,11 +52,11 @@ OTLP gRPC サーバー、OTLP HTTP サーバー、およびクエリ API を起�
 `sigiro anomalies` は、検出されたレジームシフトを、変化の大きいものから順に一覧表示します。
 各行には、シグナル横断的な `incident_id` が含まれます。
 
-| フラグ | 型 | デフォルト |
-| --- | --- | --- |
-| `--service <NAME>` | 文字列 | すべてのサービス |
-| `--from <EPOCH_SECONDS>` | 整数 | 下限なし |
-| `--to <EPOCH_SECONDS>` | 整数 | 上限なし |
+| フラグ                   | 型     | デフォルト       |
+| ------------------------ | ------ | ---------------- |
+| `--service <NAME>`       | 文字列 | すべてのサービス |
+| `--from <EPOCH_SECONDS>` | 整数   | 下限なし         |
+| `--to <EPOCH_SECONDS>`   | 整数   | 上限なし         |
 
 各行は、スケジュールされたパスが書き込む `sigiro_anomalies` テーブルから取得されます。
 リクエスト時に計算される項目はありません。
@@ -66,11 +67,11 @@ OTLP gRPC サーバー、OTLP HTTP サーバー、およびクエリ API を起�
 1 つ以上のエッジを解決し、各エッジに部分クエリをプッシュして、その部分結果を 1 つの回答に
 まとめます。
 
-| フラグ | 型 | デフォルト |
-| --- | --- | --- |
-| `<SQL>` | 文字列 | なし |
-| `--edge <NAME=HOST:PORT>` | 繰り返し指定可能 | なし |
-| `--full-scan` | フラグ | オフ |
+| フラグ                    | 型               | デフォルト |
+| ------------------------- | ---------------- | ---------- |
+| `<SQL>`                   | 文字列           | なし       |
+| `--edge <NAME=HOST:PORT>` | 繰り返し指定可能 | なし       |
+| `--full-scan`             | フラグ           | オフ       |
 
 エッジの解決順序は次のとおりです。`SIGIRO_EDGES`（カンマ区切りの
 `name=host:port`）と `--edge` はそのまま使用され、いずれか一方が設定されていればディスカバリーは

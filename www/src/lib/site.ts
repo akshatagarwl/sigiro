@@ -109,10 +109,7 @@ export const getCopy = (locale: Locale) => {
         label: c.integrations.readLabel,
         /* The one prose entry in an otherwise all-brand list, appended here so
            the locale file owns the sentence and the shared file owns the marks. */
-        items: [
-          ...INTEGRATION_ITEMS.read,
-          { name: c.integrations.readAnySql, icon: null },
-        ],
+        items: [...INTEGRATION_ITEMS.read, { name: c.integrations.readAnySql, icon: null }],
       },
     ],
     nav: [

@@ -49,6 +49,8 @@ export default defineConfig({
     ignorePatterns: [
       '.astro/**',
       'dist/**',
+      'docs/tutorials/quickstart.mdx',
+      'docs/*/tutorials/quickstart.mdx',
       'openapi.json',
       'DESIGN.md',
       'tsconfig.json',

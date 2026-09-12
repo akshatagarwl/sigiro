@@ -65,11 +65,11 @@ Nothing is computed for the request.
 resolves one or more edges, pushes a partial query to each edge, and folds the
 partials into one answer.
 
-| Flag                      | Type                   | Default |
-| ------------------------- | ---------------------- | ------- |
-| `<SQL>`                   | string                 | none    |
-| `--edge <NAME=HOST:PORT>` | repeatable             | none    |
-| `--full-scan`             | flag                   | off     |
+| Flag                      | Type       | Default |
+| ------------------------- | ---------- | ------- |
+| `<SQL>`                   | string     | none    |
+| `--edge <NAME=HOST:PORT>` | repeatable | none    |
+| `--full-scan`             | flag       | off     |
 
 Edge resolution has this order. `SIGIRO_EDGES` (comma-separated
 `name=host:port`) and `--edge` are used verbatim, and either one skips discovery.

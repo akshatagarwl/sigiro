@@ -44,9 +44,11 @@ async function readSitemapUrls(): Promise<string[]> {
 async function assertKeyIsLive(): Promise<void> {
   const url = `https://${HOST}/${KEY}.txt`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`key file ${url} returned ${res.status} — deploy it before submitting`);
+  if (!res.ok)
+    throw new Error(`key file ${url} returned ${res.status} — deploy it before submitting`);
   const body = (await res.text()).trim();
-  if (body !== KEY) throw new Error(`key file body is ${JSON.stringify(body)}, expected ${JSON.stringify(KEY)}`);
+  if (body !== KEY)
+    throw new Error(`key file body is ${JSON.stringify(body)}, expected ${JSON.stringify(KEY)}`);
 }
 
 /**
@@ -88,13 +90,22 @@ async function main(): Promise<void> {
 
   const urlList = await keepLiveUrls(candidates);
   const skipped = candidates.length - urlList.length;
-  if (urlList.length === 0) throw new Error(`no live URLs to submit (all ${candidates.length} failed their status check)`);
-  if (skipped > 0) console.warn(`warning: ${skipped} of ${candidates.length} URLs are not serving and were not submitted`);
+  if (urlList.length === 0)
+    throw new Error(`no live URLs to submit (all ${candidates.length} failed their status check)`);
+  if (skipped > 0)
+    console.warn(
+      `warning: ${skipped} of ${candidates.length} URLs are not serving and were not submitted`,
+    );
 
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: { 'content-type': 'application/json; charset=utf-8' },
-    body: JSON.stringify({ host: HOST, key: KEY, keyLocation: `https://${HOST}/${KEY}.txt`, urlList }),
+    body: JSON.stringify({
+      host: HOST,
+      key: KEY,
+      keyLocation: `https://${HOST}/${KEY}.txt`,
+      urlList,
+    }),
   });
 
   const text = await res.text();

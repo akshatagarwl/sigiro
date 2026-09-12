@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 3
 ---
+
 本指南介绍如何记录 agent 的行为，而不是你的服务的行为。Claude Code 和 Codex
 都会发出关于自身会话的 OpenTelemetry 数据。将这些遥测数据指向 sigiro，会话就会
 变成可供查询的数据行。

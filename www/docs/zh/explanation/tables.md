@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 2
 ---
+
 sigiro 提供两类表，在查询语句里它们看起来一模一样。一类存放你的服务发送来的遥测数据，另一类读取
 sigiro 自身运行所在的那台机器。两者都能回答关于 CPU、内存或磁盘的问题，
 而且都不会告诉你它指的是哪台机器。
@@ -16,10 +17,10 @@ sigiro 自身运行所在的那台机器。两者都能回答关于 CPU、内存
 
 ## 两个家族，两个主体
 
-| 家族 | 它是什么 | 谁的机器 | 时间 |
-| --- | --- | --- | --- |
-| `sigiro_spans`、`sigiro_logs`、`sigiro_log_templates`、`sigiro_metrics_gauge`、`sigiro_metrics_sum`、`sigiro_metrics_histogram`、`sigiro_metrics_exp_histogram`、`sigiro_profiles`、`sigiro_anomalies` | 已存储的遥测数据 | 发送 OTLP 的一方——你的服务，在你的主机上，无论它们跑在哪里 | 历史数据，带有 `timestamp` 列 |
-| `sys_cpu_info()`、`sys_memory_info()`、`sys_disk_info()`、`sys_network_info()`、`sys_os_info()` | 实时表函数 | 当前 sigiro 进程运行所在的那一台机器 | 此刻的一次测量，没有历史，也没有时间列 |
+| 家族                                                                                                                                                                                                   | 它是什么         | 谁的机器                                                   | 时间                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- | ---------------------------------------------------------- | -------------------------------------- |
+| `sigiro_spans`、`sigiro_logs`、`sigiro_log_templates`、`sigiro_metrics_gauge`、`sigiro_metrics_sum`、`sigiro_metrics_histogram`、`sigiro_metrics_exp_histogram`、`sigiro_profiles`、`sigiro_anomalies` | 已存储的遥测数据 | 发送 OTLP 的一方——你的服务，在你的主机上，无论它们跑在哪里 | 历史数据，带有 `timestamp` 列          |
+| `sys_cpu_info()`、`sys_memory_info()`、`sys_disk_info()`、`sys_network_info()`、`sys_os_info()`                                                                                                        | 实时表函数       | 当前 sigiro 进程运行所在的那一台机器                       | 此刻的一次测量，没有历史，也没有时间列 |
 
 `sigiro_*` 这些名字是表。`sys_*` 这些名字是函数，调用时要带一对
 空括号。这是唯一可见的区别，而这点区别远远不够。

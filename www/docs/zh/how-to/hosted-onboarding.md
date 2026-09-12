@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 2
 ---
+
 本指南介绍如何将 OpenTelemetry 数据发送到由我们运维的 sigiro 主机，
 以及如何把数据查询回来。你无需运行任何基础设施。
 
@@ -109,14 +110,14 @@ GROUP BY 1, 2 ORDER BY errors DESC;
 
 ## 5. 限制
 
-| 限制项 | 取值 | 超出时 sigiro 的处理方式 |
-|-------|-------|-----------|
-| 查询超时 | 10 秒 | sigiro 拒绝该查询（400） |
-| 结果行数 | 100,000 | sigiro 截断响应并设置 `x-sigiro-truncated: true` |
-| 查询内存 | 约 400 MB | 查询失败（400） |
-| 摄取请求体 | 8 MB（解压后） | 413（HTTP）/ RESOURCE_EXHAUSTED（gRPC） |
-| SQL/API 请求速率 | 每租户 5 req/s，突发 20 | 429 |
-| OTLP/HTTP 请求速率 | 每来源 50 req/s，突发 100 | 429 |
+| 限制项             | 取值                      | 超出时 sigiro 的处理方式                         |
+| ------------------ | ------------------------- | ------------------------------------------------ |
+| 查询超时           | 10 秒                     | sigiro 拒绝该查询（400）                         |
+| 结果行数           | 100,000                   | sigiro 截断响应并设置 `x-sigiro-truncated: true` |
+| 查询内存           | 约 400 MB                 | 查询失败（400）                                  |
+| 摄取请求体         | 8 MB（解压后）            | 413（HTTP）/ RESOURCE_EXHAUSTED（gRPC）          |
+| SQL/API 请求速率   | 每租户 5 req/s，突发 20   | 429                                              |
+| OTLP/HTTP 请求速率 | 每来源 50 req/s，突发 100 | 429                                              |
 
 sigiro 没有二级索引。因此**请为每个查询都加上 `timestamp` 范围限定**。
 范围限定能带来速度，也能避免超时和结果截断。

@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 3
 ---
+
 이 가이드에서는 서비스가 하는 일이 아니라 에이전트가 하는 일을 기록하는 방법을
 설명합니다. Claude Code와 Codex는 모두 자체 세션에 대한 OpenTelemetry를
 내보냅니다. 해당 텔레메트리를 sigiro로 보내면 세션이 조회 가능한 행이 됩니다.

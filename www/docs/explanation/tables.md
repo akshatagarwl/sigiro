@@ -16,10 +16,10 @@ correct and describes a machine you did not ask about.
 
 ## Two families, two subjects
 
-| Family | What it is | Whose machine | Time |
-| --- | --- | --- | --- |
-| `sigiro_spans`, `sigiro_logs`, `sigiro_log_templates`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`, `sigiro_metrics_exp_histogram`, `sigiro_profiles`, `sigiro_anomalies` | Stored telemetry | Whatever sent OTLP — your services, on your hosts, wherever they run | Historical, with a `timestamp` column |
-| `sys_cpu_info()`, `sys_memory_info()`, `sys_disk_info()`, `sys_network_info()`, `sys_os_info()` | Live table functions | The one machine this sigiro process runs on | One measurement at this instant, with no history and no time column |
+| Family                                                                                                                                                                                                 | What it is           | Whose machine                                                        | Time                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `sigiro_spans`, `sigiro_logs`, `sigiro_log_templates`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`, `sigiro_metrics_exp_histogram`, `sigiro_profiles`, `sigiro_anomalies` | Stored telemetry     | Whatever sent OTLP — your services, on your hosts, wherever they run | Historical, with a `timestamp` column                               |
+| `sys_cpu_info()`, `sys_memory_info()`, `sys_disk_info()`, `sys_network_info()`, `sys_os_info()`                                                                                                        | Live table functions | The one machine this sigiro process runs on                          | One measurement at this instant, with no history and no time column |
 
 The `sigiro_*` names are tables. The `sys_*` names are functions, and you call
 them with empty parentheses. That is the only visible difference, and it is not

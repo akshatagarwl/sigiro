@@ -89,14 +89,14 @@ it at sigiro.
 
 ## 3. Check the coverage you get
 
-| Language | Approach | Covers |
-|----------|----------|--------|
-| Python | `opentelemetry-instrument` CLI + distro | HTTP (FastAPI, Flask, Starlette), DB (psycopg2, asyncpg), Redis |
-| Node.js | `@opentelemetry/auto-instrumentations-node` | HTTP (Express, Fastify), DB (pg, mysql2, mongoose) |
-| Java | `opentelemetry-javaagent.jar` | HTTP (Servlets, Spring), DB (JDBC), JVM metrics |
-| .NET | `OpenTelemetry.AutoInstrumentation` startup hook | HTTP (ASP.NET Core), DB (EF Core) |
-| Ruby | `opentelemetry-instrumentation-all` gem | HTTP (Rails), DB (ActiveRecord), Sidekiq |
-| Go | `otelc` compile-time instrumentation | HTTP server spans, Go runtime metrics, third-party libraries |
+| Language | Approach                                         | Covers                                                          |
+| -------- | ------------------------------------------------ | --------------------------------------------------------------- |
+| Python   | `opentelemetry-instrument` CLI + distro          | HTTP (FastAPI, Flask, Starlette), DB (psycopg2, asyncpg), Redis |
+| Node.js  | `@opentelemetry/auto-instrumentations-node`      | HTTP (Express, Fastify), DB (pg, mysql2, mongoose)              |
+| Java     | `opentelemetry-javaagent.jar`                    | HTTP (Servlets, Spring), DB (JDBC), JVM metrics                 |
+| .NET     | `OpenTelemetry.AutoInstrumentation` startup hook | HTTP (ASP.NET Core), DB (EF Core)                               |
+| Ruby     | `opentelemetry-instrumentation-all` gem          | HTTP (Rails), DB (ActiveRecord), Sidekiq                        |
+| Go       | `otelc` compile-time instrumentation             | HTTP server spans, Go runtime metrics, third-party libraries    |
 
 If a library gets no spans, add the spans by hand for that library only.
 

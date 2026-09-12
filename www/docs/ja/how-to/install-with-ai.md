@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 1
 ---
+
 このガイドでは、計装がまったく入っていないサービスに OpenTelemetry を追加する方法を、エージェントに編集させながら説明します。以下のプロンプトをエージェントに貼り付けてください。エージェントがフレームワークを検出し、公式の自動計装をインストールし、エクスポーターの向き先を sigiro に設定します。
 
 これは Claude Code、OpenCode、Codex、あるいはファイルを編集してパッケージマネージャーを実行できる任意のエージェントで動作します。
@@ -68,14 +69,14 @@ Framework: <fastapi|express|spring-boot|rails|...>
 
 ## 3. 得られるカバレッジを確認する
 
-| 言語 | アプローチ | カバー範囲 |
-|----------|----------|--------|
-| Python | `opentelemetry-instrument` CLI + ディストリビューション | HTTP（FastAPI、Flask、Starlette）、DB（psycopg2、asyncpg）、Redis |
-| Node.js | `@opentelemetry/auto-instrumentations-node` | HTTP（Express、Fastify）、DB（pg、mysql2、mongoose） |
-| Java | `opentelemetry-javaagent.jar` | HTTP（サーブレット、Spring）、DB（JDBC）、JVM メトリクス |
-| .NET | `OpenTelemetry.AutoInstrumentation` スタートアップフック | HTTP（ASP.NET Core）、DB（EF Core） |
-| Ruby | `opentelemetry-instrumentation-all` gem | HTTP（Rails）、DB（ActiveRecord）、Sidekiq |
-| Go | `otelc` コンパイル時計装 | HTTP サーバースパン、Go ランタイムメトリクス、サードパーティライブラリ |
+| 言語    | アプローチ                                               | カバー範囲                                                             |
+| ------- | -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Python  | `opentelemetry-instrument` CLI + ディストリビューション  | HTTP（FastAPI、Flask、Starlette）、DB（psycopg2、asyncpg）、Redis      |
+| Node.js | `@opentelemetry/auto-instrumentations-node`              | HTTP（Express、Fastify）、DB（pg、mysql2、mongoose）                   |
+| Java    | `opentelemetry-javaagent.jar`                            | HTTP（サーブレット、Spring）、DB（JDBC）、JVM メトリクス               |
+| .NET    | `OpenTelemetry.AutoInstrumentation` スタートアップフック | HTTP（ASP.NET Core）、DB（EF Core）                                    |
+| Ruby    | `opentelemetry-instrumentation-all` gem                  | HTTP（Rails）、DB（ActiveRecord）、Sidekiq                             |
+| Go      | `otelc` コンパイル時計装                                 | HTTP サーバースパン、Go ランタイムメトリクス、サードパーティライブラリ |
 
 あるライブラリでスパンがまったく取得できない場合は、そのライブラリに限って手動でスパンを追加してください。
 

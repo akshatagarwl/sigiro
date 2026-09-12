@@ -20,13 +20,13 @@ sigiro reads `service.version` from the **resource attributes of a span**.
 
 That is the whole source. sigiro reads no other field for a deploy:
 
-| Not read for deploys | Why not |
-| --- | --- |
-| `deployment.environment`, `deployment.*` | No query reads them |
-| `git.commit.sha`, `vcs.*` | No query reads them |
-| `service.version` on a log, a metric or a profile | sigiro scans `sigiro_spans` alone |
-| A CI webhook, a deploy API, a release feed | sigiro has no ingest path except OTLP |
-| The Kubernetes API server | sigiro never connects to it |
+| Not read for deploys                              | Why not                               |
+| ------------------------------------------------- | ------------------------------------- |
+| `deployment.environment`, `deployment.*`          | No query reads them                   |
+| `git.commit.sha`, `vcs.*`                         | No query reads them                   |
+| `service.version` on a log, a metric or a profile | sigiro scans `sigiro_spans` alone     |
+| A CI webhook, a deploy API, a release feed        | sigiro has no ingest path except OTLP |
+| The Kubernetes API server                         | sigiro never connects to it           |
 
 Resource attributes arrive over OTLP and land verbatim as a JSON string in the
 `resource_attributes` column of `sigiro_spans`. Three resource attributes get a

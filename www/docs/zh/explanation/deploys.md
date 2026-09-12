@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 4
 ---
+
 诊断结果可以点出一个可疑部署：_incident ~14:30 on service 'checkout':
 … ; suspect deploy: version 1.4.2 first seen at 14:29_。这是一个很强的论断，
 读者有理由追问它的依据从何而来。
@@ -20,13 +21,13 @@ sigiro 从 **span 的资源属性** 中读取 `service.version`。
 
 这就是全部来源。sigiro 不会为部署读取任何其他字段：
 
-| 不用于部署判断的字段 | 为什么不用 |
-| --- | --- |
-| `deployment.environment`、`deployment.*` | 没有任何查询读取它们 |
-| `git.commit.sha`、`vcs.*` | 没有任何查询读取它们 |
-| 日志、指标或 profile 上的 `service.version` | sigiro 只扫描 `sigiro_spans` |
-| CI webhook、部署 API、发布信息流 | 除 OTLP 之外，sigiro 没有任何接入通道 |
-| Kubernetes API server | sigiro 从不连接它 |
+| 不用于部署判断的字段                        | 为什么不用                            |
+| ------------------------------------------- | ------------------------------------- |
+| `deployment.environment`、`deployment.*`    | 没有任何查询读取它们                  |
+| `git.commit.sha`、`vcs.*`                   | 没有任何查询读取它们                  |
+| 日志、指标或 profile 上的 `service.version` | sigiro 只扫描 `sigiro_spans`          |
+| CI webhook、部署 API、发布信息流            | 除 OTLP 之外，sigiro 没有任何接入通道 |
+| Kubernetes API server                       | sigiro 从不连接它                     |
 
 资源属性通过 OTLP 到达，并原样落入 `sigiro_spans` 表的 `resource_attributes` 列，
 存为一个 JSON 字符串。有三个资源属性在写入时拥有各自独立的列——`service.name`、

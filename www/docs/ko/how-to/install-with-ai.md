@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 1
 ---
+
 이 가이드에서는 계측이 전혀 없는 서비스에 OpenTelemetry를 추가하는 방법을 설명하며, 편집 작업은 에이전트가 수행합니다. 아래 프롬프트를 에이전트에 붙여넣으십시오. 에이전트가 프레임워크를 감지하고, 공식 자동 계측을 설치한 뒤, 익스포터가 sigiro를 가리키도록 설정합니다.
 
 이 방법은 Claude Code, OpenCode, Codex 또는 파일을 편집하고 패키지 관리자를 실행할 수 있는 모든 에이전트에서 동작합니다.
@@ -68,14 +69,14 @@ Framework: <fastapi|express|spring-boot|rails|...>
 
 ## 3. 확보되는 커버리지를 확인하십시오
 
-| 언어 | 접근 방식 | 커버리지 |
-|----------|----------|--------|
-| Python | `opentelemetry-instrument` CLI + distro | HTTP(FastAPI, Flask, Starlette), DB(psycopg2, asyncpg), Redis |
-| Node.js | `@opentelemetry/auto-instrumentations-node` | HTTP(Express, Fastify), DB(pg, mysql2, mongoose) |
-| Java | `opentelemetry-javaagent.jar` | HTTP(서블릿, Spring), DB(JDBC), JVM 메트릭 |
-| .NET | `OpenTelemetry.AutoInstrumentation` 시작 훅 | HTTP(ASP.NET Core), DB(EF Core) |
-| Ruby | `opentelemetry-instrumentation-all` gem | HTTP(Rails), DB(ActiveRecord), Sidekiq |
-| Go | `otelc` 컴파일 타임 계측 | HTTP 서버 스팬, Go 런타임 메트릭, 서드파티 라이브러리 |
+| 언어    | 접근 방식                                   | 커버리지                                                      |
+| ------- | ------------------------------------------- | ------------------------------------------------------------- |
+| Python  | `opentelemetry-instrument` CLI + distro     | HTTP(FastAPI, Flask, Starlette), DB(psycopg2, asyncpg), Redis |
+| Node.js | `@opentelemetry/auto-instrumentations-node` | HTTP(Express, Fastify), DB(pg, mysql2, mongoose)              |
+| Java    | `opentelemetry-javaagent.jar`               | HTTP(서블릿, Spring), DB(JDBC), JVM 메트릭                    |
+| .NET    | `OpenTelemetry.AutoInstrumentation` 시작 훅 | HTTP(ASP.NET Core), DB(EF Core)                               |
+| Ruby    | `opentelemetry-instrumentation-all` gem     | HTTP(Rails), DB(ActiveRecord), Sidekiq                        |
+| Go      | `otelc` 컴파일 타임 계측                    | HTTP 서버 스팬, Go 런타임 메트릭, 서드파티 라이브러리         |
 
 특정 라이브러리에서 스팬이 생성되지 않는 경우, 해당 라이브러리에 한해서만 수동으로 스팬을 추가하십시오.
 

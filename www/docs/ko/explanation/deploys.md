@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 4
 ---
+
 진단은 용의 배포를 지목할 수 있습니다: _'checkout' 서비스에서 14:30경 인시던트:
 … ; 용의 배포: 버전 1.4.2가 14:29에 처음 관측됨_. 이는 강력한 주장이며,
 읽는 사람이 그 근거를 묻는 것은 당연합니다.
@@ -21,13 +22,13 @@ sigiro는 **스팬의 리소스 속성**에서 `service.version`을 읽습니다
 
 그것이 출처의 전부입니다. sigiro는 배포를 위해 다른 어떤 필드도 읽지 않습니다:
 
-| 배포를 위해 읽지 않는 것 | 읽지 않는 이유 |
-| --- | --- |
-| `deployment.environment`, `deployment.*` | 어떤 쿼리도 이를 읽지 않습니다 |
-| `git.commit.sha`, `vcs.*` | 어떤 쿼리도 이를 읽지 않습니다 |
-| 로그, 메트릭 또는 프로파일의 `service.version` | sigiro는 `sigiro_spans`만 스캔합니다 |
-| CI 웹훅, 배포 API, 릴리스 피드 | sigiro에는 OTLP 외의 인제스트 경로가 없습니다 |
-| Kubernetes API 서버 | sigiro는 이에 절대 연결하지 않습니다 |
+| 배포를 위해 읽지 않는 것                       | 읽지 않는 이유                                |
+| ---------------------------------------------- | --------------------------------------------- |
+| `deployment.environment`, `deployment.*`       | 어떤 쿼리도 이를 읽지 않습니다                |
+| `git.commit.sha`, `vcs.*`                      | 어떤 쿼리도 이를 읽지 않습니다                |
+| 로그, 메트릭 또는 프로파일의 `service.version` | sigiro는 `sigiro_spans`만 스캔합니다          |
+| CI 웹훅, 배포 API, 릴리스 피드                 | sigiro에는 OTLP 외의 인제스트 경로가 없습니다 |
+| Kubernetes API 서버                            | sigiro는 이에 절대 연결하지 않습니다          |
 
 리소스 속성은 OTLP를 통해 도착하여 `sigiro_spans`의 `resource_attributes` 컬럼에
 JSON 문자열로 그대로 저장됩니다. 세 개의 리소스 속성은 인제스트 시점에 자체 컬럼을

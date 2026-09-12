@@ -6,6 +6,7 @@ description: >-
 sidebar:
   order: 4
 ---
+
 診断は容疑デプロイを名指しできます: _incident ~14:30 on service 'checkout':
 … ; suspect deploy: version 1.4.2 first seen at 14:29_。これは強い主張であり、
 読み手がその根拠を問うのは当然です。
@@ -21,13 +22,13 @@ sigiro は **スパンのリソース属性** から `service.version` を読み
 
 これがすべての情報源です。sigiro はデプロイのために他のフィールドを一切読み取りません:
 
-| デプロイのために読み取らないもの | 理由 |
-| --- | --- |
-| `deployment.environment`、`deployment.*` | どのクエリもこれらを読み取りません |
-| `git.commit.sha`、`vcs.*` | どのクエリもこれらを読み取りません |
-| ログ、メトリクス、プロファイル上の `service.version` | sigiro は `sigiro_spans` のみをスキャンします |
-| CI Webhook、デプロイ API、リリースフィード | sigiro には OTLP 以外の取り込み経路がありません |
-| Kubernetes API サーバー | sigiro は決して接続しません |
+| デプロイのために読み取らないもの                     | 理由                                            |
+| ---------------------------------------------------- | ----------------------------------------------- |
+| `deployment.environment`、`deployment.*`             | どのクエリもこれらを読み取りません              |
+| `git.commit.sha`、`vcs.*`                            | どのクエリもこれらを読み取りません              |
+| ログ、メトリクス、プロファイル上の `service.version` | sigiro は `sigiro_spans` のみをスキャンします   |
+| CI Webhook、デプロイ API、リリースフィード           | sigiro には OTLP 以外の取り込み経路がありません |
+| Kubernetes API サーバー                              | sigiro は決して接続しません                     |
 
 リソース属性は OTLP 経由で到着し、`sigiro_spans` の `resource_attributes` カラムに
 JSON 文字列としてそのまま格納されます。取り込み時に専用のカラムを持つリソース属性は

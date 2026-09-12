@@ -10,7 +10,7 @@
     "deploy": "wrangler deploy --config dist/server/wrangler.json",
     "lint": "vp lint",
     "check": "vp check",
-    "fmt": "oxfmt .",
+    "fmt": "vp fmt",
     "doctor": "blume doctor",
     "og": "bun run scripts/generate-og.tsx",
     "indexnow": "bun run scripts/indexnow.ts"
