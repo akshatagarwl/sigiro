@@ -119,6 +119,7 @@ fn build_test_context() -> TestContext {
         data_dir: data_path.to_owned(),
         init_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         query_surface: sigiro::config::QuerySurface::None,
+        query_timeout: std::time::Duration::from_secs(30),
     });
     state.mark_init_complete();
     TestContext {

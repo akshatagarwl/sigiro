@@ -308,6 +308,94 @@ fn local_mode_locks_filesystem_access() {
 }
 
 #[test]
+fn reader_pool_accounts_for_contention_and_returns_to_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = test_pool_with_max(dir.path(), 1);
+    let readers = pool.create_project("contended").unwrap();
+    let capacity = readers.capacity();
+    assert!(capacity > 0);
+    assert_eq!(readers.active(), 0);
+    assert_eq!(readers.waiters(), 0);
+
+    let immediate = readers
+        .try_get()
+        .expect("reader should be immediately available");
+    assert!(!immediate.pool_waited());
+    drop(immediate);
+
+    let held: Vec<_> = (0..capacity).map(|_| readers.get()).collect();
+    assert_eq!(readers.active(), capacity);
+
+    let waiting_pool = readers.clone();
+    let waiter = std::thread::spawn(move || {
+        let connection = waiting_pool.get();
+        assert!(connection.pool_waited());
+        drop(connection);
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while readers.waiters() == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "contending reader never became a waiter"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(readers.active(), capacity);
+    assert_eq!(readers.waiters(), 1);
+
+    drop(held);
+    waiter.join().unwrap();
+    assert_eq!(readers.active(), 0);
+    assert_eq!(readers.waiters(), 0);
+
+    let returned = readers.get();
+    assert_eq!(readers.active(), 1);
+    drop(returned);
+    assert_eq!(readers.active(), 0);
+    assert_eq!(readers.waiters(), 0);
+}
+
+#[test]
+fn reader_pool_rejects_expired_deadline_before_fast_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = test_pool(dir.path());
+    let readers = pool.create_project("expired").unwrap();
+    let deadline = Instant::now() - Duration::from_millis(1);
+
+    assert!(readers.get_until(deadline).is_err());
+    assert_eq!(readers.active(), 0);
+    assert_eq!(readers.waiters(), 0);
+    assert!(
+        readers.try_get().is_some(),
+        "expired attempt must not consume a reader"
+    );
+}
+
+#[test]
+fn reader_pool_accounting_recovers_when_holder_unwinds() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = test_pool(dir.path());
+    let readers = pool.create_project("unwind").unwrap();
+    let capacity = readers.capacity();
+    let held: Vec<_> = (0..capacity).map(|_| readers.get()).collect();
+    let unwinding_pool = readers.clone();
+
+    let panicking = std::thread::spawn(move || {
+        let _connection = unwinding_pool.get();
+        panic!("test unwind after acquiring reader");
+    });
+    drop(held);
+    assert!(panicking.join().is_err());
+    assert_eq!(readers.active(), 0);
+    assert_eq!(readers.waiters(), 0);
+
+    let returned = readers.get();
+    drop(returned);
+    assert_eq!(readers.active(), 0);
+}
+
+#[test]
 fn remove_project() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());

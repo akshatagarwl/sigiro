@@ -5,6 +5,7 @@ use duckdb::Connection;
 use parking_lot::{Condvar, Mutex};
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 /// Per-project DuckDB connection pool.
@@ -52,12 +53,20 @@ pub struct ReaderPool {
 struct ReaderPoolInner {
     available: Mutex<Vec<Connection>>,
     ready: Condvar,
+    capacity: usize,
+    active: AtomicUsize,
+    waiters: AtomicUsize,
 }
 
 pub struct ReaderConnection {
     conn: Option<Connection>,
     pool: Arc<ReaderPoolInner>,
+    pool_waited: bool,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("reader pool acquisition timed out")]
+pub struct ReaderPoolTimeout;
 
 impl ReaderPool {
     fn new(base: &Connection, size: usize) -> Result<Self> {
@@ -77,21 +86,97 @@ impl ReaderPool {
             inner: Arc::new(ReaderPoolInner {
                 available: Mutex::new(available),
                 ready: Condvar::new(),
+                capacity: size,
+                active: AtomicUsize::new(0),
+                waiters: AtomicUsize::new(0),
             }),
+        })
+    }
+
+    pub fn try_get(&self) -> Option<ReaderConnection> {
+        let mut available = self.inner.available.lock();
+        let conn = available.pop()?;
+        self.inner.active.fetch_add(1, Ordering::Relaxed);
+        Some(ReaderConnection {
+            conn: Some(conn),
+            pool: Arc::clone(&self.inner),
+            pool_waited: false,
         })
     }
 
     pub fn get(&self) -> ReaderConnection {
         let mut available = self.inner.available.lock();
+        if let Some(conn) = available.pop() {
+            self.inner.active.fetch_add(1, Ordering::Relaxed);
+            return ReaderConnection {
+                conn: Some(conn),
+                pool: Arc::clone(&self.inner),
+                pool_waited: false,
+            };
+        }
+        let _waiter = WaiterGuard::new(&self.inner.waiters);
         loop {
+            self.inner.ready.wait(&mut available);
             if let Some(conn) = available.pop() {
+                self.inner.active.fetch_add(1, Ordering::Relaxed);
                 return ReaderConnection {
                     conn: Some(conn),
                     pool: Arc::clone(&self.inner),
+                    pool_waited: true,
                 };
             }
-            self.inner.ready.wait(&mut available);
         }
+    }
+
+    pub fn get_until(&self, deadline: Instant) -> Result<ReaderConnection, ReaderPoolTimeout> {
+        let mut available = self.inner.available.lock();
+        if Instant::now() >= deadline {
+            return Err(ReaderPoolTimeout);
+        }
+        if let Some(conn) = available.pop() {
+            self.inner.active.fetch_add(1, Ordering::Relaxed);
+            return Ok(ReaderConnection {
+                conn: Some(conn),
+                pool: Arc::clone(&self.inner),
+                pool_waited: false,
+            });
+        }
+
+        let _waiter = WaiterGuard::new(&self.inner.waiters);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ReaderPoolTimeout);
+            }
+            let timed_out = self
+                .inner
+                .ready
+                .wait_for(&mut available, remaining)
+                .timed_out();
+            if let Some(conn) = available.pop() {
+                self.inner.active.fetch_add(1, Ordering::Relaxed);
+                return Ok(ReaderConnection {
+                    conn: Some(conn),
+                    pool: Arc::clone(&self.inner),
+                    pool_waited: true,
+                });
+            }
+            if timed_out {
+                return Err(ReaderPoolTimeout);
+            }
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity
+    }
+
+    pub fn active(&self) -> usize {
+        self.inner.active.load(Ordering::Relaxed)
+    }
+
+    pub fn waiters(&self) -> usize {
+        self.inner.waiters.load(Ordering::Relaxed)
     }
 
     pub fn same_pool(&self, other: &Self) -> bool {
@@ -112,10 +197,34 @@ impl Deref for ReaderConnection {
 impl Drop for ReaderConnection {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take() {
+            self.pool.active.fetch_sub(1, Ordering::Relaxed);
             let mut available = self.pool.available.lock();
             available.push(conn);
             self.pool.ready.notify_one();
         }
+    }
+}
+
+impl ReaderConnection {
+    pub fn pool_waited(&self) -> bool {
+        self.pool_waited
+    }
+}
+
+struct WaiterGuard<'a> {
+    waiters: &'a AtomicUsize,
+}
+
+impl<'a> WaiterGuard<'a> {
+    fn new(waiters: &'a AtomicUsize) -> Self {
+        waiters.fetch_add(1, Ordering::Relaxed);
+        Self { waiters }
+    }
+}
+
+impl Drop for WaiterGuard<'_> {
+    fn drop(&mut self) {
+        self.waiters.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

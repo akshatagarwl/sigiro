@@ -79,6 +79,7 @@ fn build_context_with_auth(auth_mode: sigiro::auth::AuthMode) -> TestContext {
         data_dir: data_dir.clone(),
         init_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         query_surface: sigiro::config::QuerySurface::None,
+        query_timeout: std::time::Duration::from_secs(30),
     });
 
     TestContext {
@@ -583,7 +584,12 @@ async fn test_query_midstream_error_never_returns_partial_rows() {
         axum::http::StatusCode::OK,
         "mid-stream query error must not return 200 with partial rows"
     );
-    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    resp.assert_status(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["code"], "query_execution_failed");
+    assert_eq!(body["retryable"], false);
+    assert!(!resp.text().contains("Conversion Error"));
+    assert!(!resp.text().contains("not_a_number"));
 }
 
 #[tokio::test]

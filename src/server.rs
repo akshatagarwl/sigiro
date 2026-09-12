@@ -1,5 +1,11 @@
 use anyhow::{Context, Result};
-use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
+use axum::{
+    Extension, Json, Router,
+    body::Body,
+    extract::State,
+    http::{HeaderValue, Response, StatusCode},
+    middleware as axum_mw,
+};
 use axum_anyhow::{ApiResult, ResultExt, bad_request, internal_error};
 use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
@@ -9,7 +15,7 @@ use rusqlite::Connection;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tonic::transport::{Identity, Server as TonicServer, ServerTlsConfig};
@@ -251,6 +257,9 @@ pub struct AppState {
     /// Currently inert — set from `SIGIRO_QUERY_SURFACE` at startup, read by
     /// a future feature (see `crate::config::QuerySurface`).
     pub query_surface: crate::config::QuerySurface,
+    /// Resolved once at startup; tests can inject a short deadline without
+    /// mutating process-global configuration.
+    pub query_timeout: Duration,
 }
 
 impl AppState {
@@ -473,6 +482,7 @@ pub async fn run_servers(
 ) -> Result<()> {
     let ports = ServerPorts::load()?;
     let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?;
+    let query_timeout = Duration::from_secs(crate::config::query_timeout_secs()?);
 
     let query_surface = crate::config::query_surface()?;
     let auth_mode =
@@ -582,6 +592,7 @@ pub async fn run_servers(
         data_dir,
         init_complete: Arc::clone(&init_complete),
         query_surface,
+        query_timeout,
     });
 
     // Edge query-serving surface: served in-process, on a connection cloned
@@ -1103,112 +1114,411 @@ async fn healthz(
     health(HealthPath, State(state)).await
 }
 
-/// Execute SQL against the local DuckDB project connection. Returns the
-/// result rows plus whether the row cap (`SIGIRO_MAX_RESULT_ROWS`) truncated
-/// them.
+#[derive(Debug)]
+enum QueryFailure {
+    Validation(anyhow::Error),
+    PoolInit(anyhow::Error),
+    Prepare(anyhow::Error),
+    Execution(anyhow::Error),
+    Fetch(anyhow::Error),
+    StorageUnavailable(anyhow::Error),
+    Timeout(anyhow::Error),
+    MemoryLimit(anyhow::Error),
+    TempIo(anyhow::Error),
+    Serialization(anyhow::Error),
+    Internal(anyhow::Error),
+}
+
+impl QueryFailure {
+    fn source(&self) -> &anyhow::Error {
+        match self {
+            Self::Validation(e)
+            | Self::PoolInit(e)
+            | Self::Prepare(e)
+            | Self::Execution(e)
+            | Self::Fetch(e)
+            | Self::StorageUnavailable(e)
+            | Self::Timeout(e)
+            | Self::MemoryLimit(e)
+            | Self::TempIo(e)
+            | Self::Serialization(e)
+            | Self::Internal(e) => e,
+        }
+    }
+    fn class(&self) -> &'static str {
+        match self {
+            Self::Validation(_) => "validation",
+            Self::PoolInit(_) => "pool_init",
+            Self::Prepare(_) => "prepare",
+            Self::Execution(_) => "execution",
+            Self::Fetch(_) => "fetch",
+            Self::StorageUnavailable(_) => "storage_unavailable",
+            Self::Timeout(_) => "timeout",
+            Self::MemoryLimit(_) => "memory_limit",
+            Self::TempIo(_) => "temp_io",
+            Self::Serialization(_) => "serialization",
+            Self::Internal(_) => "internal",
+        }
+    }
+    fn response(self) -> QueryApiError {
+        let (status, code, message, retryable) = match &self {
+            Self::Validation(_) => (
+                StatusCode::BAD_REQUEST,
+                "query_invalid",
+                format!(
+                    "The query is malformed or not permitted. {}",
+                    query_sql_contract()
+                ),
+                false,
+            ),
+            Self::Prepare(_) => (
+                StatusCode::BAD_REQUEST,
+                "query_invalid",
+                "The query is malformed or not permitted.".to_owned(),
+                false,
+            ),
+            Self::Fetch(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "query_fetch_failed",
+                "The query could not be read to completion.".to_owned(),
+                false,
+            ),
+            Self::StorageUnavailable(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "query_storage_unavailable",
+                "Query storage is temporarily unavailable; retry later.".to_owned(),
+                true,
+            ),
+            Self::Timeout(_) => (
+                StatusCode::REQUEST_TIMEOUT,
+                "query_timeout",
+                "The query exceeded the configured time limit; narrow the query and retry."
+                    .to_owned(),
+                true,
+            ),
+            Self::MemoryLimit(_) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "query_memory_limit_exceeded",
+                "The query is valid but too expensive; narrow its time range or projection."
+                    .to_owned(),
+                false,
+            ),
+            Self::TempIo(_) => (
+                StatusCode::INSUFFICIENT_STORAGE,
+                "query_temp_storage_unavailable",
+                "Temporary query storage is unavailable; retry later.".to_owned(),
+                true,
+            ),
+            Self::PoolInit(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "query_pool_unavailable",
+                "Query storage is temporarily unavailable; retry later.".to_owned(),
+                true,
+            ),
+            Self::Execution(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "query_execution_failed",
+                "The query could not be completed.".to_owned(),
+                false,
+            ),
+            Self::Serialization(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "query_serialization_failed",
+                "The query result could not be encoded.".to_owned(),
+                false,
+            ),
+            Self::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "query_unavailable",
+                "The query could not be completed; retry later.".to_owned(),
+                true,
+            ),
+        };
+        QueryApiError {
+            status,
+            code,
+            message,
+            retryable,
+            source: self,
+        }
+    }
+}
+
+fn classify_duckdb_failure(error: anyhow::Error, phase: QueryFailurePhase) -> QueryFailure {
+    let text = error.to_string().to_ascii_lowercase();
+    if text.contains("out of memory") || text.contains("could not allocate memory") {
+        return QueryFailure::MemoryLimit(error);
+    }
+    if text.contains("no space left on device")
+        || text.contains("disk full")
+        || text.contains("temporary directory is full")
+        || text.contains("could not write to temporary directory")
+    {
+        return QueryFailure::TempIo(error);
+    }
+    if text.contains("connection reset")
+        || text.contains("connection refused")
+        || text.contains("broken pipe")
+        || text.contains("catalog is locked")
+        || text.contains("database is locked")
+    {
+        return QueryFailure::StorageUnavailable(error);
+    }
+    match phase {
+        QueryFailurePhase::Prepare => QueryFailure::Prepare(error),
+        QueryFailurePhase::Execution => QueryFailure::Execution(error),
+        QueryFailurePhase::Fetch => QueryFailure::Fetch(error),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum QueryFailurePhase {
+    Prepare,
+    Execution,
+    Fetch,
+}
+
+struct QueryApiError {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+    retryable: bool,
+    source: QueryFailure,
+}
+
+impl axum::response::IntoResponse for QueryApiError {
+    fn into_response(self) -> axum::response::Response {
+        tracing::warn!(
+            error_class = self.source.class(),
+            code = self.code,
+            retryable = self.retryable,
+            "query failed"
+        );
+        (
+            self.status,
+            Json(serde_json::json!({
+                "code": self.code,
+                "message": self.message,
+                "retryable": self.retryable
+            })),
+        )
+            .into_response()
+    }
+}
+
+struct QueryExecution {
+    results: Vec<serde_json::Value>,
+    truncated: bool,
+    columns: usize,
+}
+
+async fn execute_query_sql(
+    state: &AppState,
+    auth: &TenantId,
+    sql: &str,
+) -> std::result::Result<QueryExecution, QueryFailure> {
+    execute_query_sql_with_timeout(state, auth, sql, state.query_timeout).await
+}
+
+async fn execute_query_sql_with_timeout(
+    state: &AppState,
+    auth: &TenantId,
+    sql: &str,
+    timeout: Duration,
+) -> std::result::Result<QueryExecution, QueryFailure> {
+    let pool = Arc::clone(&state.pool);
+    let project_id = auth.as_ref().to_owned();
+    let sql_clone = sql.to_owned();
+    let max_rows = crate::config::max_result_rows().map_err(QueryFailure::Internal)?;
+    let query_span = tracing::Span::current();
+    let dispatch = tracing::dispatcher::get_default(std::clone::Clone::clone);
+
+    // Cold project initialization may load extensions or attach storage. It is
+    // intentionally awaited separately: a timeout cannot cancel that work, so
+    // it must not be hidden inside a timed spawn_blocking task.
+    let init_span = tracing::info_span!(parent: &query_span, "sigiro.query.pool_init");
+    let init_dispatch = dispatch.clone();
+    let readers = tokio::task::spawn_blocking(move || {
+        tracing::dispatcher::with_default(&init_dispatch, || {
+            init_span.in_scope(|| pool.create_project(&project_id))
+        })
+    })
+    .await
+    .map_err(|e| QueryFailure::Internal(anyhow::anyhow!("query initialization task failed: {e}")))?
+    .map_err(QueryFailure::PoolInit)?;
+
+    // This is the admission/execution deadline, starting after project
+    // initialization. The parent request span still measures initialization,
+    // engine work, materialization, and serialization end to end.
+    let deadline = Instant::now() + timeout;
+    let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
+    let query_span_for_blocking = query_span.clone();
+    let query_dispatch = dispatch;
+    let mut query_task = tokio::task::spawn_blocking(move || {
+        tracing::dispatcher::with_default(&query_dispatch, || -> Result<_, QueryFailure> {
+            let conn = if let Some(conn) = readers.try_get() {
+                query_span_for_blocking.record("pool_waited", false);
+                query_span_for_blocking.record("pool_capacity", readers.capacity() as u64);
+                query_span_for_blocking.record("pool_active", readers.active() as u64);
+                query_span_for_blocking.record("pool_waiters", readers.waiters() as u64);
+                conn
+            } else {
+                // The snapshot is intentionally taken before registration/drop
+                // races can erase this request's waiter. It describes observed
+                // admission pressure, not an exact queue depth.
+                query_span_for_blocking.record("pool_capacity", readers.capacity() as u64);
+                query_span_for_blocking.record("pool_active", readers.active() as u64);
+                query_span_for_blocking.record("pool_waiters", (readers.waiters() + 1) as u64);
+                let wait =
+                    tracing::info_span!(parent: &query_span_for_blocking, "sigiro.query.pool_wait");
+                let conn = wait.in_scope(|| readers.get_until(deadline)).map_err(|_| {
+                    QueryFailure::Timeout(anyhow::anyhow!("reader pool acquisition timed out"))
+                })?;
+                query_span_for_blocking.record("pool_waited", true);
+                conn
+            };
+            handle_tx.send(conn.interrupt_handle()).map_err(|_| {
+                QueryFailure::Internal(anyhow::anyhow!("query timeout handle receiver closed"))
+            })?;
+            let prepare =
+                tracing::info_span!(parent: &query_span_for_blocking, "sigiro.query.prepare");
+            let mut stmt = prepare.in_scope(|| conn.prepare(&sql_clone)).map_err(|e| {
+                classify_duckdb_failure(
+                    anyhow::anyhow!("DuckDB prepare failed: {e}"),
+                    QueryFailurePhase::Prepare,
+                )
+            })?;
+            let execute =
+                tracing::info_span!(parent: &query_span_for_blocking, "sigiro.query.execute");
+            let mut rows = execute.in_scope(|| stmt.query([])).map_err(|e| {
+                classify_duckdb_failure(
+                    anyhow::anyhow!("DuckDB query failed: {e}"),
+                    QueryFailurePhase::Execution,
+                )
+            })?;
+            let fetch = tracing::info_span!(parent: &query_span_for_blocking, "sigiro.query.fetch_materialize");
+            fetch.in_scope(|| -> Result<_, QueryFailure> {
+                let column_names = rows
+                    .as_ref()
+                    .map(duckdb::Statement::column_names)
+                    .unwrap_or_default();
+                let mut results = Vec::new();
+                let mut truncated = false;
+                while let Some(row) = rows.next().map_err(|e| {
+                    classify_duckdb_failure(
+                        anyhow::anyhow!("DuckDB row read failed: {e}"),
+                        QueryFailurePhase::Fetch,
+                    )
+                })? {
+                    if results.len() >= max_rows {
+                        truncated = true;
+                        break;
+                    }
+                    let mut obj = serde_json::Map::new();
+                    for (i, name) in column_names.iter().enumerate() {
+                        let val = row.get_ref(i).map_err(|e| {
+                            classify_duckdb_failure(
+                                anyhow::anyhow!("DuckDB column read failed: {e}"),
+                                QueryFailurePhase::Fetch,
+                            )
+                        })?;
+                        obj.insert(name.clone(), duckdb_value_to_json(val));
+                    }
+                    results.push(serde_json::Value::Object(obj));
+                }
+                Ok(QueryExecution {
+                    results,
+                    truncated,
+                    columns: column_names.len(),
+                })
+            })
+        })
+    });
+
+    tokio::select! {
+        joined = &mut query_task => joined.map_err(|e| QueryFailure::Internal(anyhow::anyhow!("query task failed: {e}")))?,
+        () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+            // Awaiting the handle closes the race where the deadline fires just
+            // before the blocking worker registers it. The sender closes when
+            // admission times out, so this wait cannot strand a worker.
+            if let Ok(handle) = handle_rx.await {
+                handle.interrupt();
+            }
+            let result = query_task.await
+                .map_err(|e| QueryFailure::Internal(anyhow::anyhow!("query task failed after interrupt: {e}")))?;
+            match result {
+                Ok(_) => Err(QueryFailure::Timeout(anyhow::anyhow!("query exceeded configured timeout"))),
+                Err(QueryFailure::Timeout(_)) => Err(QueryFailure::Timeout(anyhow::anyhow!("query exceeded configured timeout"))),
+                Err(_) => Err(QueryFailure::Timeout(anyhow::anyhow!("query exceeded configured timeout"))),
+            }
+        }
+    }
+}
+
+/// Legacy helper used by the non-query endpoints, which retain their existing
+/// error envelope and tuple result shape.
 async fn execute_sql(
     state: &AppState,
     auth: &TenantId,
     sql: &str,
 ) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
-    // Explicit DI boundary: the authenticated tenant identity selects the
-    // idempotent project setup operation. The pool itself keeps strict
-    // create/get APIs, while every process can recover its in-memory project
-    // entry after a restart or when a request lands on another Machine.
-    let pool = Arc::clone(&state.pool);
-    let project_id = auth.as_ref().to_owned();
-    let sql_clone = sql.to_string();
-    let timeout_secs = crate::config::query_timeout_secs()?;
-    let max_rows = crate::config::max_result_rows()?;
-    let (handle_tx, mut handle_rx) =
-        tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
-
-    let mut query_task = tokio::task::spawn_blocking(move || {
-        // DuckLake ATTACH can perform network I/O and cold extension loading;
-        // keep it on the blocking worker with the query, never on Tokio's
-        // async runtime thread.
-        let readers = pool
-            .create_project(&project_id)
-            .with_context(|| format!("failed to initialize project {project_id}"))?;
-        let conn = readers.get();
-        // Sent before `prepare`/`query` so the timeout branch below can
-        // interrupt this exact connection even if it never gets a chance to
-        // run (e.g. still waiting on `readers.get()` for a free connection).
-        handle_tx
-            .send(conn.interrupt_handle())
-            .map_err(|_| anyhow::anyhow!("query timed out before execution"))?;
-
-        let mut stmt = conn
-            .prepare(&sql_clone)
-            .map_err(|e| anyhow::anyhow!("failed to prepare query: {e}"))?;
-        // Execute ONCE. Column names come from the live statement behind the
-        // Rows handle (owned Vec, so the borrow ends before we iterate).
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| anyhow::anyhow!("failed to execute query: {e}"))?;
-        let column_names: Vec<String> = rows
-            .as_ref()
-            .map(duckdb::Statement::column_names)
-            .unwrap_or_default();
-        let mut results = Vec::new();
-        let mut truncated = false;
-        // Propagate a mid-stream error instead of silently truncating the
-        // result and returning partial rows as HTTP 200. Row-cap truncation
-        // (below) is the one deliberate, reported exception.
-        while let Some(row) = rows
-            .next()
-            .map_err(|e| anyhow::anyhow!("row read failed: {e}"))?
-        {
-            if results.len() >= max_rows {
-                truncated = true;
-                break;
-            }
-            let mut obj = serde_json::Map::new();
-            for (i, name) in column_names.iter().enumerate() {
-                let val = row
-                    .get_ref(i)
-                    .map_err(|e| anyhow::anyhow!("column read failed: {e}"))?;
-                obj.insert(name.clone(), duckdb_value_to_json(val));
-            }
-            results.push(serde_json::Value::Object(obj));
-        }
-        Ok((results, truncated))
-    });
-
-    tokio::select! {
-        joined = &mut query_task => {
-            joined
-                .map_err(|e| anyhow::anyhow!("query task failed: {e}"))?
-        }
-        () = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
-            let handle = handle_rx.try_recv().ok();
-            tracing::warn!(
-                timeout_secs,
-                executing = handle.is_some(),
-                "query exceeded timeout"
-            );
-            if let Some(handle) = handle {
-                handle.interrupt();
-            }
-            anyhow::bail!("query exceeded {timeout_secs} second timeout")
-        }
-    }
+    execute_query_sql(state, auth, sql)
+        .await
+        .map(|result| (result.results, result.truncated))
+        .map_err(|failure| anyhow::anyhow!("{}", failure.source()))
 }
 
 /// `x-sigiro-truncated` header + JSON rows — signals `SIGIRO_MAX_RESULT_ROWS`
 /// truncation without changing the response body shape (still a bare array,
 /// so existing callers like `SigiroClient::query` keep working unchanged).
-type QueryResponse = (
-    [(&'static str, &'static str); 1],
-    Json<Vec<serde_json::Value>>,
-);
+type QueryResponse = Response<Body>;
+
+struct QueryResponseMetadata {
+    rows_returned: u64,
+    columns: u64,
+    truncated: bool,
+    response_bytes: u64,
+}
+
+fn serialize_query_response(
+    execution: &QueryExecution,
+) -> std::result::Result<(QueryResponse, QueryResponseMetadata), QueryFailure> {
+    // Serialization is intentionally outside the interrupt deadline: the
+    // materialized result is bounded by max_rows, while the parent request
+    // span measures this bounded work in total.
+    let truncated = execution.truncated;
+    let rows_returned = execution.results.len() as u64;
+    let columns = execution.columns as u64;
+    let serialize = tracing::info_span!("sigiro.query.serialize");
+    let bytes = serialize
+        .in_scope(|| serde_json::to_vec(&execution.results))
+        .map_err(|e| QueryFailure::Serialization(anyhow::Error::from(e)))?;
+    let response_bytes = bytes.len() as u64;
+    let response = Response::builder()
+        .header("content-type", HeaderValue::from_static("application/json"))
+        .header(
+            "x-sigiro-truncated",
+            if truncated { "true" } else { "false" },
+        )
+        .body(Body::from(bytes))
+        .map_err(|e| QueryFailure::Serialization(anyhow::Error::from(e)))?;
+    Ok((
+        response,
+        QueryResponseMetadata {
+            rows_returned,
+            columns,
+            truncated,
+            response_bytes,
+        },
+    ))
+}
 
 /// The SQL-subset contract, stated once and surfaced in BOTH places an agent
 /// hits it: the /openapi.json operation description and every guard
 /// rejection. Rejections that don't say what IS allowed force trial-and-error.
 fn query_sql_contract() -> String {
     format!(
-        "Accepts exactly one read-only SELECT statement (raw SQL as the request body). \
+        "Accepts exactly one read-only SELECT statement (SQL as the request body). \
          Allowed tables (optionally qualified as lake.* or main.*): {}. \
          WITH/CTE clauses are not supported — rewrite as derived-table subqueries \
          (SELECT ... FROM (SELECT ...) t). Scalar functions are allowlisted \
@@ -1316,17 +1626,46 @@ your SELECT's column names", body = Vec<serde_json::Value>,
             ]))
     ),
 )]
-#[instrument(skip_all, fields(sql_len = body.len()))]
+#[instrument(name = "sigiro.query", skip_all, fields(
+    storage_mode = tracing::field::Empty,
+    sql_bytes = body.len(),
+    outcome = tracing::field::Empty,
+    error_class = tracing::field::Empty,
+    rows_returned = tracing::field::Empty,
+    columns = tracing::field::Empty,
+    truncated = tracing::field::Empty,
+    response_bytes_uncompressed = tracing::field::Empty,
+    query_timeout_seconds = tracing::field::Empty,
+    max_rows = tracing::field::Empty,
+    duckdb_threads = tracing::field::Empty,
+    pool_capacity = tracing::field::Empty,
+    pool_active = tracing::field::Empty,
+    pool_waiters = tracing::field::Empty,
+    pool_waited = tracing::field::Empty,
+))]
 async fn query_handler(
     _path: QueryPath,
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<TenantId>,
     body: String,
-) -> ApiResult<QueryResponse> {
-    // Truncated SQL preview so every query outcome (reject / fail / complete)
-    // leaves a server-side trace — a silently-throttled or errored query used
-    // to leave none, which is what let a false "data loss" RCA take hold.
-    let sql_preview: String = body.chars().take(200).collect();
+) -> std::result::Result<QueryResponse, QueryApiError> {
+    let query_span = tracing::Span::current();
+    query_span.record(
+        "storage_mode",
+        if state.pool.storage_mode().is_distributed() {
+            "distributed"
+        } else {
+            "local"
+        },
+    );
+    query_span.record("query_timeout_seconds", state.query_timeout.as_secs());
+    if let Ok(max_rows) = crate::config::max_result_rows() {
+        query_span.record("max_rows", max_rows as u64);
+    }
+    if let Ok(threads) = crate::config::duckdb_threads() {
+        query_span.record("duckdb_threads", threads as u64);
+    }
+
     // In hosted mode (shared PostgreSQL catalog) block information_schema
     // enumeration — it would expose the control plane + sibling tenant schema
     // names. Local/self-host keeps it (single-catalog, safe).
@@ -1336,37 +1675,427 @@ async fn query_handler(
     // own machine — it leaks our infrastructure AND is misleading by
     // construction. `sigiro_metrics_*` carries host telemetry the tenant sent.
     let allow_sys_functions = !state.pool.storage_mode().is_distributed();
-    if let Err(e) = validate_read_only_gated(&body, allow_information_schema, allow_sys_functions) {
-        tracing::warn!(sql = %sql_preview, "query rejected (validation): {e}");
-        return Err(bad_request(
-            "query rejected",
-            &format!("{e}. {}", query_sql_contract()),
-        ));
+    let validate = tracing::info_span!("sigiro.query.validate");
+    if let Err(e) = validate
+        .in_scope(|| validate_read_only_gated(&body, allow_information_schema, allow_sys_functions))
+    {
+        tracing::Span::current().record("outcome", "error");
+        tracing::Span::current().record("error_class", "validation");
+        return Err(QueryFailure::Validation(anyhow::anyhow!(e)).response());
     }
-    match execute_sql(&state, &auth, &body).await {
-        Ok((results, truncated)) => {
-            tracing::info!(
-                rows = results.len(),
-                truncated,
-                sql = %sql_preview,
-                "query completed"
-            );
-            // SIGIRO_MAX_RESULT_ROWS was hit — the client must not mistake a
-            // capped result for the complete answer.
-            let truncated_header = [(
-                "x-sigiro-truncated",
-                if truncated { "true" } else { "false" },
-            )];
-            Ok((truncated_header, Json(results)))
+    match execute_query_sql(&state, &auth, &body).await {
+        Ok(execution) => {
+            let (response, metadata) = match serialize_query_response(&execution) {
+                Ok(result) => result,
+                Err(e) => {
+                    query_span.record("outcome", "error");
+                    query_span.record("error_class", e.class());
+                    return Err(e.response());
+                }
+            };
+            query_span.record("outcome", "success");
+            query_span.record("rows_returned", metadata.rows_returned);
+            query_span.record("columns", metadata.columns);
+            query_span.record("truncated", metadata.truncated);
+            query_span.record("response_bytes_uncompressed", metadata.response_bytes);
+            Ok(response)
         }
         Err(e) => {
-            tracing::warn!(sql = %sql_preview, "query failed: {e:#}");
-            Err(bad_request("query rejected", &format!("{e:#}")))
+            tracing::Span::current().record("outcome", "error");
+            tracing::Span::current().record("error_class", e.class());
+            Err(e.response())
         }
     }
 }
 
-/// GET /v1/services — discover what services are sending telemetry.
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[derive(Clone, Debug)]
+    struct CapturedSpan {
+        id: u64,
+        parent_id: Option<u64>,
+        name: String,
+        fields: BTreeMap<String, String>,
+    }
+
+    #[derive(Clone)]
+    struct CaptureLayer(Arc<Mutex<Vec<CapturedSpan>>>);
+
+    struct FieldCapture<'a>(&'a mut BTreeMap<String, String>);
+    impl tracing::field::Visit for FieldCapture<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.insert(field.name().to_owned(), format!("{value:?}"));
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.insert(field.name().to_owned(), value.to_owned());
+        }
+        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+            self.0.insert(field.name().to_owned(), value.to_string());
+        }
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.0.insert(field.name().to_owned(), value.to_string());
+        }
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.0.insert(field.name().to_owned(), value.to_string());
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for CaptureLayer
+    where
+        S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut fields = BTreeMap::new();
+            attrs.record(&mut FieldCapture(&mut fields));
+            let parent_id = ctx
+                .span(id)
+                .and_then(|span| span.parent().map(|parent| parent.id().into_u64()));
+            self.0.lock().push(CapturedSpan {
+                id: id.into_u64(),
+                parent_id,
+                name: attrs.metadata().name().to_owned(),
+                fields,
+            });
+        }
+
+        fn on_record(
+            &self,
+            id: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut fields = BTreeMap::new();
+            values.record(&mut FieldCapture(&mut fields));
+            if let Some(span) = self
+                .0
+                .lock()
+                .iter_mut()
+                .find(|span| span.id == id.into_u64())
+            {
+                span.fields.extend(fields);
+            }
+        }
+    }
+
+    fn captured_subscriber() -> (Arc<Mutex<Vec<CapturedSpan>>>, impl tracing::Subscriber) {
+        use tracing_subscriber::{layer::SubscriberExt, registry};
+        let spans = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = registry().with(CaptureLayer(Arc::clone(&spans)));
+        (spans, subscriber)
+    }
+
+    #[test]
+    fn classifies_pinned_duckdb_resource_errors_without_exposing_text() {
+        let oom = classify_duckdb_failure(
+            anyhow::anyhow!(
+                "Out of Memory Error: could not allocate block of size 256.0 KiB (3.7 GiB/3.7 GiB used)"
+            ),
+            QueryFailurePhase::Fetch,
+        );
+        assert!(matches!(oom, QueryFailure::MemoryLimit(_)));
+
+        let temp = classify_duckdb_failure(
+            anyhow::anyhow!("IO Error: Could not write file: No space left on device"),
+            QueryFailurePhase::Execution,
+        );
+        assert!(matches!(temp, QueryFailure::TempIo(_)));
+
+        let response =
+            QueryFailure::MemoryLimit(anyhow::anyhow!("tenant-secret raw SQL")).response();
+        assert_eq!(response.code, "query_memory_limit_exceeded");
+        assert!(!response.message.contains("tenant-secret"));
+        assert!(!response.message.contains("raw SQL"));
+
+        for (message, phase) in [
+            (
+                "Permission denied while opening catalog",
+                QueryFailurePhase::Prepare,
+            ),
+            ("No such file or directory", QueryFailurePhase::Prepare),
+            (
+                "network connection reset by peer",
+                QueryFailurePhase::Execution,
+            ),
+        ] {
+            let failure = classify_duckdb_failure(anyhow::anyhow!(message), phase);
+            assert!(!matches!(failure, QueryFailure::TempIo(_)), "{message}");
+        }
+        assert!(matches!(
+            classify_duckdb_failure(
+                anyhow::anyhow!("unexpected engine failure"),
+                QueryFailurePhase::Fetch
+            ),
+            QueryFailure::Fetch(_)
+        ));
+        let execution_response =
+            QueryFailure::Execution(anyhow::anyhow!("engine failed")).response();
+        assert_eq!(execution_response.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!execution_response.retryable);
+        let storage_response = classify_duckdb_failure(
+            anyhow::anyhow!("connection reset by peer"),
+            QueryFailurePhase::Execution,
+        )
+        .response();
+        assert_eq!(storage_response.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(storage_response.retryable);
+        assert_eq!(storage_response.code, "query_storage_unavailable");
+    }
+
+    #[tokio::test]
+    async fn serializes_query_rows_to_the_emitted_bytes() {
+        let execution = QueryExecution {
+            results: vec![serde_json::json!({"service": "checkout", "count": 2})],
+            truncated: true,
+            columns: 2,
+        };
+        let (response, metadata) = serialize_query_response(&execution).unwrap();
+        assert_eq!(response.headers()["content-type"], "application/json");
+        assert_eq!(response.headers()["x-sigiro-truncated"], "true");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), br#"[{"count":2,"service":"checkout"}]"#);
+        assert_eq!(bytes.len(), 34);
+        assert_eq!(metadata.response_bytes, bytes.len() as u64);
+        assert_eq!(metadata.rows_returned, 1);
+        assert_eq!(metadata.columns, 2);
+        assert!(metadata.truncated);
+    }
+
+    fn test_state(timeout: Duration) -> (Arc<AppState>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        let pool = Arc::new(ProjectPool::new(
+            data_dir.clone(),
+            10,
+            crate::storage::StorageMode::LocalFile,
+        ));
+        let admin = Arc::new(Mutex::new(rusqlite::Connection::open_in_memory().unwrap()));
+        let alerts = crate::alerts::AlertStore::new(Arc::clone(&admin)).unwrap();
+        let router = Arc::new(crate::inserter::MsgRouter::new(Arc::clone(&pool)));
+        let state = Arc::new(AppState {
+            pool,
+            admin_conn: admin,
+            alerts,
+            http_client: reqwest::Client::new(),
+            router,
+            auth_mode: crate::auth::AuthMode::Open,
+            data_dir,
+            init_complete: Arc::new(AtomicBool::new(true)),
+            query_surface: crate::config::QuerySurface::None,
+            query_timeout: timeout,
+        });
+        (state, dir)
+    }
+
+    #[tokio::test]
+    async fn real_http_query_has_stable_success_wire_contract() {
+        let (state, _dir) = test_state(Duration::from_secs(2));
+        let app = build_http_router(state);
+        let server = axum_test::TestServer::new(app).unwrap();
+        let response = server.post("/v1/query").text("SELECT 1 AS answer").await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        assert_eq!(response.text(), r#"[{"answer":1}]"#);
+        assert_eq!(response.content_type(), "application/json");
+        assert_eq!(response.headers()["x-sigiro-truncated"], "false");
+    }
+
+    #[tokio::test]
+    async fn real_http_validation_error_is_stable_and_does_not_echo_input() {
+        let (state, _dir) = test_state(Duration::from_secs(2));
+        let app = build_http_router(state);
+        let server = axum_test::TestServer::new(app).unwrap();
+        let response = server
+            .post("/v1/query")
+            .text("DROP TABLE tenant-secret; SELECT raw SQL")
+            .await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["code"], "query_invalid");
+        assert_eq!(body["retryable"], false);
+        assert_eq!(
+            body["message"],
+            format!(
+                "The query is malformed or not permitted. {}",
+                query_sql_contract()
+            )
+        );
+        assert!(!response.text().contains("tenant-secret"));
+        assert!(!response.text().contains("raw SQL"));
+    }
+
+    #[tokio::test]
+    async fn real_http_query_emits_parented_fixed_phase_spans_without_pool_wait() {
+        let (spans, subscriber) = captured_subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (state, _dir) = test_state(Duration::from_secs(2));
+        let server = axum_test::TestServer::new(build_http_router(state)).unwrap();
+        let response = server.post("/v1/query").text("SELECT 1").await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let spans = spans.lock().clone();
+        let query = spans
+            .iter()
+            .find(|span| span.name == "sigiro.query")
+            .expect("query span");
+        let query_id = query.id;
+        for phase in [
+            "sigiro.query.validate",
+            "sigiro.query.pool_init",
+            "sigiro.query.prepare",
+            "sigiro.query.execute",
+            "sigiro.query.fetch_materialize",
+            "sigiro.query.serialize",
+        ] {
+            let span = spans
+                .iter()
+                .find(|span| span.name == phase)
+                .unwrap_or_else(|| panic!("missing span {phase}: {spans:?}"));
+            assert_eq!(span.parent_id, Some(query_id), "wrong parent for {phase}");
+        }
+        let ordered = [
+            "sigiro.query.validate",
+            "sigiro.query.pool_init",
+            "sigiro.query.prepare",
+            "sigiro.query.execute",
+            "sigiro.query.fetch_materialize",
+            "sigiro.query.serialize",
+        ]
+        .iter()
+        .map(|phase| spans.iter().position(|span| span.name == *phase).unwrap())
+        .collect::<Vec<_>>();
+        assert!(
+            ordered.windows(2).all(|pair| pair[0] < pair[1]),
+            "phase order: {ordered:?}"
+        );
+        assert!(
+            !spans
+                .iter()
+                .any(|span| span.name == "sigiro.query.pool_wait")
+        );
+        assert_eq!(query.fields["outcome"], "success");
+        assert_eq!(query.fields["rows_returned"], "1");
+        assert_eq!(query.fields["columns"], "1");
+        assert_eq!(query.fields["truncated"], "false");
+        assert_eq!(
+            query.fields["response_bytes_uncompressed"],
+            response.text().len().to_string()
+        );
+        assert!(
+            !query
+                .fields
+                .values()
+                .any(|value| value.contains("SELECT 1"))
+        );
+        assert!(!query.fields.values().any(|value| value.contains("secret")));
+    }
+
+    #[tokio::test]
+    async fn real_http_validation_emits_no_duckdb_phase_spans() {
+        let (spans, subscriber) = captured_subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (state, _dir) = test_state(Duration::from_secs(2));
+        let server = axum_test::TestServer::new(build_http_router(state)).unwrap();
+        let response = server.post("/v1/query").text("DELETE FROM secret").await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let spans = spans.lock().clone();
+        let query = spans
+            .iter()
+            .find(|span| span.name == "sigiro.query")
+            .expect("query span");
+        assert_eq!(query.fields["outcome"], "error");
+        assert_eq!(query.fields["error_class"], "validation");
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.name == "sigiro.query.validate")
+        );
+        assert!(!spans.iter().any(|span| {
+            matches!(
+                span.name.as_str(),
+                "sigiro.query.pool_init"
+                    | "sigiro.query.pool_wait"
+                    | "sigiro.query.prepare"
+                    | "sigiro.query.execute"
+                    | "sigiro.query.fetch_materialize"
+                    | "sigiro.query.serialize"
+            )
+        }));
+        assert!(
+            !query
+                .fields
+                .values()
+                .any(|value| value.contains("DELETE FROM secret"))
+        );
+    }
+    #[tokio::test]
+    async fn real_http_pool_timeout_cleans_up_and_later_query_succeeds() {
+        let (spans, subscriber) = captured_subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (state, _dir) = test_state(Duration::from_millis(30));
+        let readers = state.pool.create_project("default").unwrap();
+        let held: Vec<_> = (0..readers.capacity()).map(|_| readers.get()).collect();
+        let app = build_http_router(Arc::clone(&state));
+        let server = axum_test::TestServer::new(app).unwrap();
+        let response = server.post("/v1/query").text("SELECT 1").await;
+        assert_eq!(response.status_code(), StatusCode::REQUEST_TIMEOUT);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["code"], "query_timeout");
+        let spans = spans.lock().clone();
+        let query = spans
+            .iter()
+            .find(|span| span.name == "sigiro.query")
+            .expect("query span");
+        let query_id = query.id;
+        let wait = spans
+            .iter()
+            .find(|span| span.name == "sigiro.query.pool_wait")
+            .expect("pool wait span");
+        assert_eq!(wait.parent_id, Some(query_id));
+        assert_eq!(query.fields["outcome"], "error");
+        assert_eq!(query.fields["error_class"], "timeout");
+        assert_eq!(
+            query.fields["pool_capacity"],
+            readers.capacity().to_string()
+        );
+        assert_eq!(query.fields["pool_active"], readers.capacity().to_string());
+        assert_eq!(query.fields["pool_waiters"], "1");
+        drop(spans);
+        drop(held);
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while readers.waiters() != 0 || readers.active() != 0 {
+            assert!(std::time::Instant::now() < deadline);
+            tokio::task::yield_now().await;
+        }
+        let response = server.post("/v1/query").text("SELECT 1").await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn real_http_execution_timeout_interrupts_and_recovers() {
+        let (state, _dir) = test_state(Duration::from_millis(5));
+        let server = axum_test::TestServer::new(build_http_router(Arc::clone(&state))).unwrap();
+        let response = server
+            .post("/v1/query")
+            .text("SELECT sum(i) FROM range(100000000000) t(i)")
+            .await;
+        assert_eq!(response.status_code(), StatusCode::REQUEST_TIMEOUT);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["code"], "query_timeout");
+
+        let response = server.post("/v1/query").text("SELECT 1").await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        assert_eq!(response.text(), r#"[{"1":1}]"#);
+    }
+}
+
 /// Agents call this before /diagnose to know what services exist.
 #[derive(serde::Deserialize)]
 struct ServiceQueryRow {
