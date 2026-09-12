@@ -455,10 +455,10 @@
       "post": {
         "tags": [],
         "summary": "Run a SQL query",
-        "description": "Every `drill_down_sql` that `/v1/diagnose` returns can be pasted here\nverbatim.\n\nReadable tables, optionally qualified `lake.*` or `main.*`:\n\n- `sigiro_spans`\n- `sigiro_logs`\n- `sigiro_log_templates`\n- `sigiro_metrics_gauge`\n- `sigiro_metrics_sum`\n- `sigiro_metrics_histogram`\n- `sigiro_metrics_exp_histogram`\n- `sigiro_profiles`\n- `sigiro_anomalies`\n\n## Bound `timestamp` with a literal, not `now()`\n\nStatistics pruning only happens when the comparison value is a constant the\nplanner can fold. `now()` is volatile, so any predicate built from it is\nevaluated per row and every file in the table is opened.\n\n```sql\n-- prunes: the planner folds the constant and skips whole files\nWHERE timestamp > TIMESTAMP '2026-08-31 08:00:00'\n\n-- does not prune: opens every file, then filters\nWHERE timestamp > (now() - INTERVAL 1 HOUR)::TIMESTAMP\n```\n\nCompute the bound in your client and send it as a literal.\n\n## If you must use `now()`, cast it\n\nThe `timestamp` columns are `TIMESTAMP` (no timezone) and `now()` returns\n`TIMESTAMPTZ`. Comparing them directly makes DuckDB cast the **column**,\nwhich adds a per-row conversion on top of the missing pruning. Measured\nagainst production on 2026-08-31, same table and window:\n\n| predicate | result |\n|---|---|\n| `timestamp > TIMESTAMP '2026-08-31 08:00:00'` | 200 in 2.48s |\n| `timestamp > (now() - INTERVAL 5 MINUTE)::TIMESTAMP` | 200 in 0.65s |\n| `timestamp > now() - INTERVAL 5 MINUTE` | 400 `INTERRUPT` at 10.98s |\n| `timestamp > TIMESTAMPTZ '2026-08-31 08:00:00+00'` | 400 `INTERRUPT` at 10.65s |\n\nSo the cast is worth having, but it is a mitigation and not the fix: the\nliteral is.",
+        "description": "Every `drill_down_sql` that `/v1/diagnose` returns can be pasted here\nverbatim.\n\nReadable tables, optionally qualified `lake.*` or `main.*`:\n\n- `sigiro_spans`\n- `sigiro_logs`\n- `sigiro_log_templates`\n- `sigiro_metrics_gauge`\n- `sigiro_metrics_sum`\n- `sigiro_metrics_histogram`\n- `sigiro_metrics_exp_histogram`\n- `sigiro_profiles`\n- `sigiro_anomalies`\n\n## Bounded telemetry workflow\n\nRaw spans, logs, metrics, and profiles require both sides of a half-open\nUTC time range as literal `TIMESTAMP` values. Compute the instants in your\nclient; do not send `now()` or `current_timestamp`. Those dynamic predicates\nare rejected with `query_requires_time_bounds` (HTTP 422), rather than being\nallowed to scan the full retention window.\n\nStart with a narrow aggregate over grouping keys and counts. Then fetch\nselected rows, including wide JSON columns, with another bounded query for\nonly the groups and small window you need. `LIMIT` caps returned rows (and\nsome output/sort work); it does not cap scan work or aggregate hash memory.\n\n```sql\n-- First: narrow aggregate, with explicit half-open UTC bounds\nSELECT service_name, span_name, count(*) AS occurrences\nFROM sigiro_spans\nWHERE timestamp >= TIMESTAMP '2026-09-11 12:00:00'\n  AND timestamp <  TIMESTAMP '2026-09-11 13:00:00'\nGROUP BY service_name, span_name\nORDER BY occurrences DESC\nLIMIT 20\n\n-- Then: selected bounded detail, where wide JSON is appropriate\nSELECT timestamp, trace_id, service_name, span_name, span_attributes\nFROM sigiro_spans\nWHERE service_name = 'checkout'\n  AND span_name = 'HTTP GET'\n  AND timestamp >= TIMESTAMP '2026-09-11 12:00:00'\n  AND timestamp <  TIMESTAMP '2026-09-11 12:05:00'\nORDER BY timestamp DESC\nLIMIT 100\n```\n\nValid but expensive bounded SQL can still return\n`query_memory_limit_exceeded`; narrow the range, grouping, or projection.\n`query_timeout` means the configured timeout expired after project\ninitialization and covers reader admission plus DuckDB execution. The parent\nrequest span also includes initialization and response serialization.\n`query_temp_storage_unavailable` means temporary storage is full or\nunwritable; `query_storage_unavailable` means query storage is temporarily\nunavailable. Retry the latter two after remediation; do not blindly retry a\nquery rejected for bounds or memory.",
         "operationId": "run-query",
         "requestBody": {
-          "description": "One SELECT statement. No WITH/CTE clauses \u2014 rewrite them as derived-table subqueries. Scalar functions are allowlisted; file and network readers are blocked. Bound timestamp columns with a literal TIMESTAMP rather than an expression built from now(), or statistics pruning is lost and the query reads every file.",
+          "description": "One SELECT statement. No WITH/CTE clauses \u2014 rewrite them as derived-table subqueries. For raw spans, logs, metrics, and profiles, use both half-open UTC timestamp bounds as literal TIMESTAMP values computed by your client; now() and current_timestamp are rejected with query_requires_time_bounds. Start with a narrow aggregate, then fetch selected wide JSON detail in a smaller bounded query. LIMIT caps output, not scan or aggregate hash memory. Remediate query_timeout, query_memory_limit_exceeded, query_temp_storage_unavailable, and query_storage_unavailable according to their codes.",
           "content": {
             "text/plain": {
               "schema": {
@@ -488,6 +488,96 @@
                     "service_name": "cart"
                   }
                 ]
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or disallowed query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryErrorResponse"
+                },
+                "example": {
+                  "code": "query_invalid",
+                  "message": "The query is malformed or not permitted.",
+                  "retryable": false
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Query deadline exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryErrorResponse"
+                },
+                "example": {
+                  "code": "query_timeout",
+                  "message": "The query exceeded the configured time limit; narrow the query and retry.",
+                  "retryable": true
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Query rejected with query_requires_time_bounds or query_memory_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryErrorResponse"
+                },
+                "example": {
+                  "code": "query_requires_time_bounds",
+                  "message": "Raw telemetry queries require a half-open literal timestamp range.",
+                  "retryable": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Query failed with query_execution_failed, query_fetch_failed, query_serialization_failed, or query_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryErrorResponse"
+                },
+                "example": {
+                  "code": "query_execution_failed",
+                  "message": "The query could not be completed.",
+                  "retryable": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Query failed with query_storage_unavailable or query_pool_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryErrorResponse"
+                },
+                "example": {
+                  "code": "query_storage_unavailable",
+                  "message": "Query storage is temporarily unavailable; retry later.",
+                  "retryable": true
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Temporary query storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryErrorResponse"
+                },
+                "example": {
+                  "code": "query_temp_storage_unavailable",
+                  "message": "Temporary query storage is unavailable; retry later.",
+                  "retryable": true
+                }
               }
             }
           }
@@ -1721,6 +1811,28 @@
         "type": "string",
         "format": "binary"
       },
+      "QueryErrorResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable error code."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable remediation hint; never raw database error text."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying without changing the query may succeed later."
+          }
+        }
+      },
       "SampledSection_LogRecord": {
         "type": "object",
         "description": "A bounded sample of a larger set that carries its own \"there's more, and\nhere's how to get it\" affordance, so an agent can decide to drill without\nguessing. When `total > sample.len()`, run `drill_all_sql` via /v1/query.",
@@ -1832,7 +1944,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "Ready-to-run query for the full trace this span belongs to (every span\nsharing its `trace_id`, chronological). Filled in Rust."
+                  "description": "Ready-to-run query for spans sharing this `trace_id` in the diagnosis\nwindow plus one hour of context on each side, chronological. Filled in Rust."
                 },
                 "duration_us": {
                   "type": "integer",
@@ -2230,7 +2342,7 @@
               "string",
               "null"
             ],
-            "description": "Ready-to-run query for the full trace this span belongs to (every span\nsharing its `trace_id`, chronological). Filled in Rust."
+            "description": "Ready-to-run query for spans sharing this `trace_id` in the diagnosis\nwindow plus one hour of context on each side, chronological. Filled in Rust."
           },
           "duration_us": {
             "type": "integer",

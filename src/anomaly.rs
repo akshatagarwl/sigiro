@@ -128,6 +128,9 @@ impl AnomalySignal {
 struct Shift {
     /// First bucket of the NEW regime, µs since epoch.
     ts_shift_us: i64,
+    /// End of the observed series' final bucket, µs since epoch. Raw drill
+    /// queries use this as their finite half-open upper bound.
+    series_end_us: i64,
     /// Series mean before the shift (raw signal units).
     before: f64,
     /// Series mean from the shift onward.
@@ -210,6 +213,11 @@ fn worsening_shifts(bucket_ts: &[i64], y: &[f64]) -> Vec<Shift> {
             let after = mean(&y[start..]);
             (after > before).then(|| Shift {
                 ts_shift_us: bucket_ts[start],
+                series_end_us: bucket_ts
+                    .last()
+                    .copied()
+                    .unwrap_or(bucket_ts[start])
+                    .saturating_add(DETECTION_BUCKET_US),
                 before,
                 after,
             })
@@ -312,7 +320,7 @@ fn detect_span_signals(
         }
         for shift in worsening_shifts(&bucket_ts, &err_rate) {
             let drill_down_sql =
-                span_drill_sql(prefix, service, span_name, operation, &shift, true);
+                span_drill_sql(prefix, service, span_name, operation, &shift, true)?;
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: operation.clone(),
@@ -323,7 +331,7 @@ fn detect_span_signals(
         }
         for shift in worsening_shifts(&bucket_ts, &p95_us) {
             let drill_down_sql =
-                span_drill_sql(prefix, service, span_name, operation, &shift, false);
+                span_drill_sql(prefix, service, span_name, operation, &shift, false)?;
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: operation.clone(),
@@ -383,7 +391,7 @@ fn detect_log_signals(
             i += 1;
         }
         for shift in worsening_shifts(&bucket_ts, &volume) {
-            let drill_down_sql = log_drill_sql(prefix, service, &shift, false);
+            let drill_down_sql = log_drill_sql(prefix, service, &shift, false)?;
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: service.clone(),
@@ -393,7 +401,7 @@ fn detect_log_signals(
             });
         }
         for shift in worsening_shifts(&bucket_ts, &err_log_rate) {
-            let drill_down_sql = log_drill_sql(prefix, service, &shift, true);
+            let drill_down_sql = log_drill_sql(prefix, service, &shift, true)?;
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: service.clone(),
@@ -452,7 +460,7 @@ fn detect_profile_cost(
             i += 1;
         }
         for shift in worsening_shifts(&bucket_ts, &cost) {
-            let drill_down_sql = profile_drill_sql(prefix, service, &shift);
+            let drill_down_sql = profile_drill_sql(prefix, service, &shift)?;
             inserts.push(AnomalyInsert {
                 service: service.clone(),
                 operation: service.clone(),
@@ -554,39 +562,43 @@ fn span_drill_sql(
     operation: &str,
     shift: &Shift,
     errors_first: bool,
-) -> String {
+) -> Result<String> {
     let err = StatusCode::Error.as_i32();
     let svc = service.replace('\'', "''");
     let filter = operation_drill_filter(span_name, operation);
-    let ts = shift.ts_shift_us;
+    let from = crate::diagnose::us_to_iso(shift.ts_shift_us)?;
+    let to = crate::diagnose::us_to_iso(shift.series_end_us)?;
     let order = if errors_first {
         format!("CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC")
     } else {
         "duration DESC".to_string()
     };
-    format!(
+    Ok(format!(
         "SELECT * FROM {prefix}sigiro_spans \
-         WHERE service_name = '{svc}' AND {filter} AND timestamp >= make_timestamp({ts}) \
+         WHERE service_name = '{svc}' AND {filter} \
+           AND timestamp >= TIMESTAMP '{from}' AND timestamp < TIMESTAMP '{to}' \
          ORDER BY {order}"
-    )
+    ))
 }
 
 /// Ready-to-run /v1/query SQL for the logs behind a log-signal anomaly: the
 /// service's logs from the shift onward, newest first. `errors_only`
 /// restricts to ERROR-class severities (error_log_rate shifts).
-fn log_drill_sql(prefix: &str, service: &str, shift: &Shift, errors_only: bool) -> String {
+fn log_drill_sql(prefix: &str, service: &str, shift: &Shift, errors_only: bool) -> Result<String> {
     let svc = service.replace('\'', "''");
-    let ts = shift.ts_shift_us;
+    let from = crate::diagnose::us_to_iso(shift.ts_shift_us)?;
+    let to = crate::diagnose::us_to_iso(shift.series_end_us)?;
     let severity = if errors_only {
         format!(" AND {}", is_error_log_expr(""))
     } else {
         String::new()
     };
-    format!(
+    Ok(format!(
         "SELECT * FROM {prefix}sigiro_logs \
-         WHERE service_name = '{svc}'{severity} AND timestamp >= make_timestamp({ts}) \
+         WHERE service_name = '{svc}'{severity} \
+           AND timestamp >= TIMESTAMP '{from}' AND timestamp < TIMESTAMP '{to}' \
          ORDER BY timestamp DESC"
-    )
+    ))
 }
 
 /// Ready-to-run /v1/query SQL for the profile samples behind a profile_cost
@@ -594,12 +606,44 @@ fn log_drill_sql(prefix: &str, service: &str, shift: &Shift, errors_only: bool) 
 /// service's total cost) from the shift onward, costliest first, so the
 /// regressing functions lead. Uses only allowlisted scalar functions so it
 /// passes `validate_read_only` verbatim.
-fn profile_drill_sql(prefix: &str, service: &str, shift: &Shift) -> String {
+fn profile_drill_sql(prefix: &str, service: &str, shift: &Shift) -> Result<String> {
     let svc = service.replace('\'', "''");
-    let ts = shift.ts_shift_us;
-    format!(
+    let from = crate::diagnose::us_to_iso(shift.ts_shift_us)?;
+    let to = crate::diagnose::us_to_iso(shift.series_end_us)?;
+    Ok(format!(
         "SELECT * FROM {prefix}sigiro_profiles \
-         WHERE service_name = '{svc}' AND timestamp >= make_timestamp({ts}) \
+         WHERE service_name = '{svc}' \
+           AND timestamp >= TIMESTAMP '{from}' AND timestamp < TIMESTAMP '{to}' \
          ORDER BY value DESC"
-    )
+    ))
+}
+
+#[cfg(test)]
+mod drill_query_tests {
+    use super::{Shift, log_drill_sql, profile_drill_sql, span_drill_sql};
+
+    #[test]
+    fn generated_raw_drills_pass_admission_and_execute() {
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory DuckDB");
+        crate::schema::create_tables(&conn, "").expect("create telemetry tables");
+        let shift = Shift {
+            ts_shift_us: 1_767_225_600_000_000,
+            series_end_us: 1_767_229_200_000_000,
+            before: 1.0,
+            after: 2.0,
+        };
+        let queries = [
+            span_drill_sql("", "checkout", "GET", "GET", &shift, true).expect("span drill"),
+            log_drill_sql("", "checkout", &shift, true).expect("log drill"),
+            profile_drill_sql("", "checkout", &shift).expect("profile drill"),
+        ];
+
+        for sql in queries {
+            crate::sql::validate_read_only(&sql).expect("security admission");
+            crate::sql::validate_raw_telemetry_policy(&sql).expect("resource admission");
+            let mut statement = conn.prepare(&sql).expect("prepare generated drill");
+            let mut rows = statement.query([]).expect("execute generated drill");
+            assert!(rows.next().expect("read generated drill").is_none());
+        }
+    }
 }

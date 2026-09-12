@@ -108,6 +108,7 @@ use tracing_attributes::instrument;
             diagnose::SignalCoverage,
             diagnose::ServiceDependency,
             diagnose::Window,
+            QueryErrorResponse,
         )
     ),
     modifiers(&SecurityAddon),
@@ -1289,6 +1290,17 @@ enum QueryFailurePhase {
     Fetch,
 }
 
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+struct QueryErrorResponse {
+    /// Stable machine-readable error code.
+    code: String,
+    /// Human-readable remediation hint; never raw database error text.
+    message: String,
+    /// Whether retrying without changing the query may succeed later.
+    retryable: bool,
+}
+
 struct QueryApiError {
     status: StatusCode,
     code: &'static str,
@@ -1307,11 +1319,11 @@ impl axum::response::IntoResponse for QueryApiError {
         );
         (
             self.status,
-            Json(serde_json::json!({
-                "code": self.code,
-                "message": self.message,
-                "retryable": self.retryable
-            })),
+            Json(QueryErrorResponse {
+                code: self.code.to_owned(),
+                message: self.message,
+                retryable: self.retryable,
+            }),
         )
             .into_response()
     }
@@ -1494,9 +1506,9 @@ struct QueryResponseMetadata {
 fn serialize_query_response(
     execution: &QueryExecution,
 ) -> std::result::Result<(QueryResponse, QueryResponseMetadata), QueryFailure> {
-    // Serialization is intentionally outside the interrupt deadline: the
-    // materialized result is bounded by max_rows, while the parent request
-    // span measures this bounded work in total.
+    // Serialization is intentionally outside the DuckDB interrupt deadline.
+    // The result is cardinality-bounded by max_rows, while the parent request
+    // span measures serialization and its exact output bytes.
     let truncated = execution.truncated;
     let rows_returned = execution.results.len() as u64;
     let columns = execution.columns as u64;
@@ -1644,11 +1656,23 @@ AND timestamp < TIMESTAMP '2026-09-11 13:00:00' GROUP BY 1 ORDER BY 2 DESC"
         // schema-driven renderer samples `Vec<Value>` to `[null]`, which reads as
         // a broken endpoint rather than "rows, shaped by your SELECT".
         (status = 200, description = "Query results — one object per row, keyed by \
-your SELECT's column names", body = Vec<serde_json::Value>,
+            your SELECT's column names", body = Vec<serde_json::Value>,
             example = json!([
                 { "service_name": "checkout", "errors": 128 },
                 { "service_name": "cart", "errors": 4 }
-            ]))
+            ])),
+        (status = 400, description = "Malformed or disallowed query", body = QueryErrorResponse,
+            example = json!({ "code": "query_invalid", "message": "The query is malformed or not permitted.", "retryable": false })),
+        (status = 408, description = "Query deadline exceeded", body = QueryErrorResponse,
+            example = json!({ "code": "query_timeout", "message": "The query exceeded the configured time limit; narrow the query and retry.", "retryable": true })),
+        (status = 422, description = "Query rejected with query_requires_time_bounds or query_memory_limit_exceeded", body = QueryErrorResponse,
+            example = json!({ "code": "query_requires_time_bounds", "message": "Raw telemetry queries require a half-open literal timestamp range.", "retryable": false })),
+        (status = 500, description = "Query failed with query_execution_failed, query_fetch_failed, query_serialization_failed, or query_unavailable", body = QueryErrorResponse,
+            example = json!({ "code": "query_execution_failed", "message": "The query could not be completed.", "retryable": false })),
+        (status = 503, description = "Query failed with query_storage_unavailable or query_pool_unavailable", body = QueryErrorResponse,
+            example = json!({ "code": "query_storage_unavailable", "message": "Query storage is temporarily unavailable; retry later.", "retryable": true })),
+        (status = 507, description = "Temporary query storage unavailable", body = QueryErrorResponse,
+            example = json!({ "code": "query_temp_storage_unavailable", "message": "Temporary query storage is unavailable; retry later.", "retryable": true }))
     ),
 )]
 #[instrument(name = "sigiro.query", skip_all, fields(
@@ -1763,6 +1787,12 @@ mod query_tests {
 
     #[derive(Clone)]
     struct CaptureLayer(Arc<Mutex<Vec<CapturedSpan>>>);
+
+    static TRACE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn lock_trace_tests() -> tokio::sync::MutexGuard<'static, ()> {
+        TRACE_TEST_LOCK.lock().await
+    }
 
     struct FieldCapture<'a>(&'a mut BTreeMap<String, String>);
     impl tracing::field::Visit for FieldCapture<'_> {
@@ -1938,6 +1968,7 @@ mod query_tests {
 
     #[tokio::test]
     async fn real_http_query_has_stable_success_wire_contract() {
+        let _trace_test_guard = lock_trace_tests().await;
         let (state, _dir) = test_state(Duration::from_secs(2));
         let app = build_http_router(state);
         let server = axum_test::TestServer::new(app).unwrap();
@@ -1950,6 +1981,7 @@ mod query_tests {
 
     #[tokio::test]
     async fn real_http_validation_error_is_stable_and_does_not_echo_input() {
+        let _trace_test_guard = lock_trace_tests().await;
         let (state, _dir) = test_state(Duration::from_secs(2));
         let app = build_http_router(state);
         let server = axum_test::TestServer::new(app).unwrap();
@@ -1974,6 +2006,7 @@ mod query_tests {
 
     #[tokio::test]
     async fn real_http_query_emits_parented_fixed_phase_spans_without_pool_wait() {
+        let _trace_test_guard = lock_trace_tests().await;
         let (spans, subscriber) = captured_subscriber();
         let _guard = tracing::subscriber::set_default(subscriber);
         let (state, _dir) = test_state(Duration::from_secs(2));
@@ -2039,6 +2072,7 @@ mod query_tests {
 
     #[tokio::test]
     async fn real_http_validation_emits_no_duckdb_phase_spans() {
+        let _trace_test_guard = lock_trace_tests().await;
         let (spans, subscriber) = captured_subscriber();
         let _guard = tracing::subscriber::set_default(subscriber);
         let (state, _dir) = test_state(Duration::from_secs(2));
@@ -2078,23 +2112,34 @@ mod query_tests {
 
     #[tokio::test]
     async fn real_http_policy_rejection_is_private_and_skips_duckdb_phases() {
+        use axum::body::{Body, to_bytes};
+        use axum::http::Request;
+        use tower::ServiceExt;
+        use tracing::instrument::WithSubscriber;
+
+        let _trace_test_guard = lock_trace_tests().await;
         let (spans, subscriber) = captured_subscriber();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
         let (state, _dir) = test_state(Duration::from_secs(2));
-        let server = axum_test::TestServer::new(build_http_router(state)).unwrap();
-        let response = server
-            .post("/v1/query")
-            .text(
+        let request = Request::post("/v1/query")
+            .body(Body::from(
                 "SELECT count(*) FROM sigiro_spans \
                  WHERE service_name = 'tenant-secret'",
-            )
-            .await;
+            ))
+            .unwrap();
+        let response = build_http_router(state)
+            .oneshot(request)
+            .with_subscriber(dispatch.clone())
+            .await
+            .unwrap();
 
-        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
-        let body: serde_json::Value = response.json();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(body["code"], "query_requires_time_bounds");
         assert_eq!(body["retryable"], false);
-        assert!(!response.text().contains("tenant-secret"));
+        assert!(!String::from_utf8_lossy(&body_bytes).contains("tenant-secret"));
 
         let spans = spans.lock().clone();
         let query = spans
@@ -2125,6 +2170,7 @@ mod query_tests {
 
     #[tokio::test]
     async fn real_http_pool_timeout_cleans_up_and_later_query_succeeds() {
+        let _trace_test_guard = lock_trace_tests().await;
         let (spans, subscriber) = captured_subscriber();
         let _guard = tracing::subscriber::set_default(subscriber);
         let (state, _dir) = test_state(Duration::from_millis(30));
@@ -2168,7 +2214,8 @@ mod query_tests {
 
     #[tokio::test]
     async fn real_http_execution_timeout_interrupts_and_recovers() {
-        let (state, _dir) = test_state(Duration::from_millis(5));
+        let _trace_test_guard = lock_trace_tests().await;
+        let (state, _dir) = test_state(Duration::from_millis(250));
         let server = axum_test::TestServer::new(build_http_router(Arc::clone(&state))).unwrap();
         let response = server
             .post("/v1/query")

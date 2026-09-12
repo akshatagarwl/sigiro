@@ -329,10 +329,13 @@ scripts/run-with-duckdb-static.sh mbx build --quiet --bin sigiro
 # extensions on every run and the wait below times out.
 dir=target/spec-db
 mkdir -p "$dir"
-SIGIRO_DATA_DIR="$dir" ./target/debug/sigiro serve >/dev/null 2>&1 &
-trap 'kill %1 2>/dev/null || true' EXIT
+./target/debug/sigiro serve --data-dir "$dir" --http-port 19999 \
+  --otlp-http-port 14318 --otlp-grpc-port 14317 >/dev/null 2>&1 &
+pid=$!
+trap 'kill "$pid" 2>/dev/null || true' EXIT
 for _ in $(seq 1 60); do
-  curl -sf http://localhost:9999/openapi.json -o "$dir/spec.json" && break
+  kill -0 "$pid" 2>/dev/null || { echo "sigiro exited before serving /openapi.json" >&2; exit 1; }
+  curl -sf http://localhost:19999/openapi.json -o "$dir/spec.json" && break
   sleep 2
 done
 test -s "$dir/spec.json" || { echo "sigiro never served /openapi.json" >&2; exit 1; }

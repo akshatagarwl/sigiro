@@ -82,12 +82,13 @@ GROUP BY 1, 2 ORDER BY p95_ms DESC LIMIT 10;
 ```
 
 ```sql
--- Error-log rate per route, last 15 min
-SELECT service_name, log_attributes ->> 'http.route' AS route, count(*) AS errors
-FROM sigiro_logs
-WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
-  AND timestamp <  TIMESTAMP '2026-09-10 13:00:00' AND severity_number >= 17
-GROUP BY 1, 2 ORDER BY errors DESC;
+-- 次に、選択したグループの範囲指定された詳細。幅の広い JSON はここでのみ取得します
+SELECT timestamp, trace_id, service_name, span_name, span_attributes
+FROM sigiro_spans
+WHERE service_name = 'checkout' AND span_name = 'HTTP GET'
+  AND timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-10 12:05:00'
+ORDER BY timestamp DESC LIMIT 100;
 ```
 
 `query_timeout`（408）はプロジェクト初期化後のリーダー受付と DuckDB 実行に適用される

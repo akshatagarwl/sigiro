@@ -104,16 +104,16 @@ pub(crate) static DUCKDB_MEMORY_LIMIT: Envar<String> =
         EnvarDef::Default("400MB".to_string())
     });
 
-/// Per-query wall-clock timeout in seconds. DuckDB (pinned version) has no
-/// `statement_timeout` setting, so this is enforced by interrupting the
-/// reader connection from a watchdog once the deadline passes (see
-/// `execute_sql` in server.rs). Default: 30s.
+/// Query admission and execution timeout in seconds, starting after cold
+/// project initialization. DuckDB (pinned version) has no `statement_timeout`
+/// setting, so this is enforced by interrupting the reader connection from a
+/// watchdog once the deadline passes. Default: 30s.
 pub(crate) static QUERY_TIMEOUT_SECONDS: Envar<u64> =
     Envar::on_startup("SIGIRO_QUERY_TIMEOUT_SECONDS", || EnvarDef::Default(30));
 
 /// Max rows a single `/v1/query` call will collect before stopping early and
-/// reporting truncation. Default: 100_000 — bounds the in-memory result Vec
-/// and the JSON response size for a hosted multi-tenant instance.
+/// reporting truncation. Default: 100_000. This bounds result cardinality, not
+/// the byte width of an individual row.
 pub(crate) static MAX_RESULT_ROWS: Envar<usize> =
     Envar::on_startup("SIGIRO_MAX_RESULT_ROWS", || EnvarDef::Default(100_000));
 

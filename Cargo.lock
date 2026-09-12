@@ -4524,6 +4524,7 @@ dependencies = [
  "time",
  "tokio",
  "tonic",
+ "tower",
  "tower-http",
  "tower_governor",
  "tracing",

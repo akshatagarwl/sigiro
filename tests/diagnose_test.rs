@@ -266,7 +266,7 @@ fn diagnose_with_real_span_data() {
             .as_ref()
             .unwrap()
             .contains("trace_id ="),
-        "span drill query fetches the span's full trace"
+        "span drill query fetches bounded context for the span's trace"
     );
     assert!(
         block.spans.drill_all_sql.contains("sigiro_spans"),
@@ -2937,14 +2937,15 @@ fn orphan_spans_surface_as_a_finding_and_cross_service_parents_do_not() {
         let odt = time::OffsetDateTime::now_utc();
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
-    // 'kid' names a parent that exists but belongs to ANOTHER service — the
-    // normal distributed-trace shape, and NOT an orphan. 'lost' names a
-    // parent nobody ever exported.
+    // 'kid' names a parent that exists in another service just outside the
+    // diagnosis window but inside the ±1-hour dependency context — the normal
+    // distributed-trace shape, and NOT an orphan. 'lost' names a parent nobody
+    // ever exported.
     conn.execute_batch(&format!(
         "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
             parent_span_id, span_name, span_kind, status_code, service_name)
          VALUES
-            (make_timestamp({now_us}), {now_us}+3000, 3000, 't1', 'up', '', 'GET /a', 2, 0, 'gateway'),
+            (make_timestamp({now_us} - 120000000), {now_us} - 119997000, 3000, 't1', 'up', '', 'GET /a', 2, 0, 'gateway'),
             (make_timestamp({now_us}), {now_us}+1000, 1000, 't1', 'kid', 'up', 'GET /b', 2, 0, 'api'),
             (make_timestamp({now_us}), {now_us}+1000, 1000, 't2', 'lost', 'gone', 'GET /c', 2, 0, 'api')"
     ))
@@ -2962,7 +2963,17 @@ fn orphan_spans_surface_as_a_finding_and_cross_service_parents_do_not() {
         "only the truly parentless span counts, not the cross-service child: {}",
         f.summary
     );
-    assert_drill_runs(&conn, f.kind.drill_down_sql().expect("drill"));
+    let drill = f.kind.drill_down_sql().expect("drill");
+    assert_drill_runs(&conn, drill);
+    let drilled: i64 = conn
+        .query_row(&format!("SELECT count(*) FROM ({drill})"), [], |row| {
+            row.get(0)
+        })
+        .expect("count orphan drill rows");
+    assert_eq!(
+        drilled, 1,
+        "drill must agree with the diagnosed orphan count"
+    );
 }
 
 #[test]
@@ -2991,6 +3002,37 @@ fn server_spans_without_client_spans_surface_as_a_finding() {
     assert_eq!(f.severity.as_str(), "warning");
     assert!(f.summary.contains("2 SERVER span(s)"), "{}", f.summary);
     assert_drill_runs(&conn, f.kind.drill_down_sql().expect("drill"));
+}
+
+#[test]
+fn diagnosis_and_generated_drills_share_half_open_window_semantics() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let from_us = 1_767_225_600_000_000_i64;
+    let to_us = from_us + 60_000_000;
+    conn.execute_batch(&format!(
+        "INSERT INTO sigiro_spans
+           (timestamp, end_timestamp, duration, trace_id, span_id, span_name,
+            span_kind, status_code, service_name)
+         VALUES
+           (make_timestamp({from_us}), {from_us}, 1, 't1', 's1', 'GET /', 2, 0, 'api'),
+           (make_timestamp({}), {}, 1, 't2', 's2', 'GET /', 2, 0, 'api'),
+           (make_timestamp({to_us}), {to_us}, 1, 't3', 's3', 'GET /', 2, 0, 'api')",
+        to_us - 1,
+        to_us - 1,
+    ))
+    .expect("insert boundary spans");
+
+    let block = diagnose_service(&conn, "api", from_us, to_us);
+    assert_eq!(block.spans.total, 2, "to_ts must be excluded");
+    let drill = &block.spans.drill_all_sql;
+    assert_drill_runs(&conn, drill);
+    let drilled: i64 = conn
+        .query_row(&format!("SELECT count(*) FROM ({drill})"), [], |row| {
+            row.get(0)
+        })
+        .expect("count drilled rows");
+    assert_eq!(drilled, block.spans.total);
 }
 
 /// The window is optional, and "optional" has four cases — three legal, one

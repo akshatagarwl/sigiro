@@ -288,7 +288,7 @@ async fn main() -> Result<()> {
             let to_ts = to.map(|s| s * 1_000_000);
             let block = client.diagnose(&service, from_ts, to_ts).await?;
             // No ad-hoc trace hint anymore: every span carries its own
-            // `drill_down_sql` (the full trace) and each sampled section its
+            // bounded trace-context `drill_down_sql` and each sampled section its
             // `drill_all_sql`, so the response is self-describing.
             let value = serde_json::to_value(&block)?;
             println!("{}", format_output(&value)?);

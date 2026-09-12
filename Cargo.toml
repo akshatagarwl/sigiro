@@ -95,6 +95,7 @@ duckdb = { version = "=1.10505.0", default-features = false, features = ["append
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 axum-test = "17"
+tower = { version = "0.5", features = ["util"] }
 temp-env = "0.3"
 insta = { version = "1.47.2", features = ["yaml", "json"] }
 

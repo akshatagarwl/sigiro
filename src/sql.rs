@@ -1166,5 +1166,15 @@ mod raw_telemetry_policy_tests {
         );
         assert!(validate_raw_telemetry_policy("SELECT (SELECT max(timestamp) FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02') FROM range(1)").is_err());
         assert!(validate_raw_telemetry_policy("SELECT * FROM lake.sigiro_spans AT (TIMESTAMP => '2026-01-01 00:00:00') WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02'").is_ok());
+        let bounded_orphan_drill = "SELECT s.trace_id, s.span_id FROM lake.sigiro_spans s \
+            LEFT JOIN (SELECT trace_id, span_id FROM lake.sigiro_spans p \
+              WHERE p.timestamp >= TIMESTAMP '2026-01-01' AND p.timestamp < TIMESTAMP '2026-01-02') p \
+              ON p.trace_id = s.trace_id AND p.span_id = s.parent_span_id \
+            WHERE s.timestamp >= TIMESTAMP '2026-01-01' AND s.timestamp < TIMESTAMP '2026-01-02' \
+              AND p.span_id IS NULL";
+        assert_eq!(
+            validate_raw_telemetry_policy(bounded_orphan_drill),
+            Ok(TableFamily::Spans)
+        );
     }
 }

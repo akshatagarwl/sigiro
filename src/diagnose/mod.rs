@@ -471,8 +471,8 @@ pub struct SpanRecord {
     pub(crate) span_attributes: Option<serde_json::Value>,
     #[schema(value_type = Object)]
     pub(crate) events: Option<serde_json::Value>,
-    /// Ready-to-run query for the full trace this span belongs to (every span
-    /// sharing its `trace_id`, chronological). Filled in Rust.
+    /// Ready-to-run query for spans sharing this `trace_id` in the diagnosis
+    /// window plus one hour of context on each side, chronological. Filled in Rust.
     pub drill_down_sql: Option<String>,
 }
 
@@ -818,6 +818,23 @@ fn diagnose_one(
 ) -> Result<DiagnosisBlock> {
     let bucket = metric_bucket_interval(from_ts, to_ts);
     let window_us = to_ts - from_ts;
+    let from_iso = us_to_iso(from_ts).context("invalid diagnosis start timestamp")?;
+    let to_iso = us_to_iso(to_ts).context("invalid diagnosis end timestamp")?;
+    let context_from_iso = us_to_iso(from_ts.saturating_sub(60 * 60 * 1_000_000))
+        .context("invalid diagnosis context start timestamp")?;
+    let context_to_iso = us_to_iso(to_ts.saturating_add(60 * 60 * 1_000_000))
+        .context("invalid diagnosis context end timestamp")?;
+    let window =
+        format!("timestamp >= TIMESTAMP '{from_iso}' AND timestamp < TIMESTAMP '{to_iso}'");
+    let outer_window =
+        format!("s.timestamp >= TIMESTAMP '{from_iso}' AND s.timestamp < TIMESTAMP '{to_iso}'");
+    let trace_window = format!(
+        "timestamp >= TIMESTAMP '{context_from_iso}' AND timestamp < TIMESTAMP '{context_to_iso}'"
+    );
+    let parent_window = format!(
+        "p.timestamp >= TIMESTAMP '{context_from_iso}' \
+         AND p.timestamp < TIMESTAMP '{context_to_iso}'"
+    );
     // Baseline window: 4x the diagnosis window, ending where it starts.
     let baseline_from = from_ts.saturating_sub(window_us.saturating_mul(4));
 
@@ -846,11 +863,14 @@ fn diagnose_one(
     // an agent that spots a lead can execute it directly to go deeper.
     let err = StatusCode::Error.as_i32();
     let svc = service.replace('\'', "''");
-    let window = format!("timestamp BETWEEN make_timestamp({from_ts}) AND make_timestamp({to_ts})");
     // Reproduce the win_spans filter exactly so a drilled count reconciles with
     // the `total` we reported (win_spans drops OTLP export self-spans).
     let span_scope = format!(
         "service_name = '{svc}' AND {window} AND span_name NOT LIKE '%TraceService/Export%'"
+    );
+    let outer_span_scope = format!(
+        "s.service_name = '{svc}' AND {outer_window} \
+         AND s.span_name NOT LIKE '%TraceService/Export%'"
     );
 
     // #1: raw logs behind each pattern.
@@ -895,12 +915,14 @@ fn diagnose_one(
         ));
     }
 
-    // #1: the full trace each exemplar span belongs to.
+    // #1: trace context around each exemplar. The same ±1-hour context used by
+    // dependency/orphan analysis keeps this finite for /v1/query admission.
     let mut span_rows = payload.spans;
     for s in &mut span_rows {
         let tid = s.trace_id.replace('\'', "''");
         s.drill_down_sql = Some(format!(
-            "SELECT * FROM {prefix}sigiro_spans WHERE trace_id = '{tid}' ORDER BY timestamp ASC"
+            "SELECT * FROM {prefix}sigiro_spans \
+             WHERE trace_id = '{tid}' AND {trace_window} ORDER BY timestamp ASC"
         ));
     }
 
@@ -1149,7 +1171,13 @@ fn diagnose_one(
             },
         });
     }
-    findings.extend(install_health_findings(&payload.stats, prefix, &span_scope));
+    findings.extend(install_health_findings(
+        &payload.stats,
+        prefix,
+        &span_scope,
+        &outer_span_scope,
+        &parent_window,
+    ));
     if coverage.has_spans
         && payload.context.has_k8s_attributes
         && payload.context.namespace.is_none()
@@ -1199,7 +1227,13 @@ fn diagnose_one(
 ///
 /// Migrated from the deleted `sigiro diagnose` CLI report, which was the only
 /// place these were checked.
-fn install_health_findings(stats: &SqlStats, prefix: &str, span_scope: &str) -> Vec<Finding> {
+fn install_health_findings(
+    stats: &SqlStats,
+    prefix: &str,
+    span_scope: &str,
+    outer_span_scope: &str,
+    parent_window: &str,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     if stats.duplicate_span_pairs > 0 {
         findings.push(Finding {
@@ -1230,11 +1264,13 @@ fn install_health_findings(stats: &SqlStats, prefix: &str, span_scope: &str) -> 
             ),
             kind: FindingKind::OrphanSpans {
                 drill_down_sql: Some(format!(
-                    "SELECT trace_id, span_id, parent_span_id, span_name FROM {prefix}sigiro_spans s \
-                     WHERE {span_scope} AND parent_span_id IS NOT NULL AND parent_span_id != '' \
-                     AND NOT EXISTS (SELECT 1 FROM {prefix}sigiro_spans p \
-                     WHERE p.trace_id = s.trace_id AND p.span_id = s.parent_span_id) \
-                     ORDER BY timestamp DESC"
+                    "SELECT s.trace_id, s.span_id, s.parent_span_id, s.span_name FROM {prefix}sigiro_spans s \
+                     LEFT JOIN (SELECT trace_id, span_id FROM {prefix}sigiro_spans p \
+                       WHERE {parent_window}) p \
+                       ON p.trace_id = s.trace_id AND p.span_id = s.parent_span_id \
+                     WHERE {outer_span_scope} AND s.parent_span_id IS NOT NULL \
+                       AND s.parent_span_id != '' AND p.span_id IS NULL \
+                     ORDER BY s.timestamp DESC"
                 )),
             },
         });
@@ -1391,7 +1427,7 @@ pub(crate) fn build_diagnosis_sql(prefix: &str, bucket: &str) -> String {
     // Duplication marked for later review: SQL has no way to share a
     // predicate without also sharing a projection.
     let span_win = "s.service_name = a.service \
-      AND s.timestamp BETWEEN a.from_ts AND a.to_ts \
+      AND s.timestamp >= a.from_ts AND s.timestamp < a.to_ts \
       AND s.span_name NOT LIKE '%TraceService/Export%'";
 
     format!(
@@ -1426,7 +1462,7 @@ win_logs AS (
     SELECT l.*
     FROM {prefix}sigiro_logs l, args a
     WHERE l.service_name = a.service
-      AND l.timestamp BETWEEN a.from_ts AND a.to_ts
+      AND l.timestamp >= a.from_ts AND l.timestamp < a.to_ts
 ),
 span_stats AS (
     SELECT count(*) AS spans_total,
@@ -1468,8 +1504,8 @@ orphan_spans AS (
           SELECT 1 FROM {prefix}sigiro_spans p
           WHERE p.trace_id = s.trace_id
             AND p.span_id = s.parent_span_id
-            AND p.timestamp BETWEEN a.from_ts - INTERVAL '1 hour'
-                                AND a.to_ts + INTERVAL '1 hour'
+            AND p.timestamp >= a.from_ts - INTERVAL '1 hour'
+            AND p.timestamp < a.to_ts + INTERVAL '1 hour'
       )
 ),
 log_stats AS (
@@ -1485,26 +1521,26 @@ profile_stats AS (
     SELECT count(*) AS profile_sample_count
     FROM {prefix}sigiro_profiles p, args a
     WHERE p.service_name = a.service
-      AND p.timestamp BETWEEN a.from_ts AND a.to_ts
+      AND p.timestamp >= a.from_ts AND p.timestamp < a.to_ts
 ),
 metric_points AS (
     SELECT m.timestamp, m.metric_name, m.value AS p95_src, m.value AS avg_src, 1::BIGINT AS cnt
     FROM {prefix}sigiro_metrics_gauge m, args a
-    WHERE m.service_name = a.service AND m.timestamp BETWEEN a.from_ts AND a.to_ts
+    WHERE m.service_name = a.service AND m.timestamp >= a.from_ts AND m.timestamp < a.to_ts
     UNION ALL
     SELECT m.timestamp, m.metric_name, m.value, m.value, 1::BIGINT
     FROM {prefix}sigiro_metrics_sum m, args a
-    WHERE m.service_name = a.service AND m.timestamp BETWEEN a.from_ts AND a.to_ts
+    WHERE m.service_name = a.service AND m.timestamp >= a.from_ts AND m.timestamp < a.to_ts
     UNION ALL
     SELECT m.timestamp, m.metric_name, m.max,
            CASE WHEN m.count > 0 THEN m.sum / m.count ELSE 0 END, m.count::BIGINT
     FROM {prefix}sigiro_metrics_histogram m, args a
-    WHERE m.service_name = a.service AND m.timestamp BETWEEN a.from_ts AND a.to_ts
+    WHERE m.service_name = a.service AND m.timestamp >= a.from_ts AND m.timestamp < a.to_ts
     UNION ALL
     SELECT m.timestamp, m.metric_name, m.max,
            CASE WHEN m.count > 0 THEN m.sum / m.count ELSE 0 END, m.count::BIGINT
     FROM {prefix}sigiro_metrics_exp_histogram m, args a
-    WHERE m.service_name = a.service AND m.timestamp BETWEEN a.from_ts AND a.to_ts
+    WHERE m.service_name = a.service AND m.timestamp >= a.from_ts AND m.timestamp < a.to_ts
 ),
 metrics AS (
     SELECT time_bucket(INTERVAL '{bucket}', timestamp)::VARCHAR AS bucket,
@@ -1535,7 +1571,7 @@ ops_baseline AS (
            approx_quantile(s.duration, 0.95) AS bl_p95
     FROM {prefix}sigiro_spans s, args a
     WHERE s.service_name = a.service
-      AND s.timestamp BETWEEN a.bl_from AND a.bl_to
+      AND s.timestamp >= a.bl_from AND s.timestamp < a.bl_to
       AND s.span_name NOT LIKE '%TraceService/Export%'
     GROUP BY operation
 ),
@@ -1629,7 +1665,7 @@ shift_dominant AS (
         JOIN args a ON an.service_name = a.service
         JOIN win_spans w ON w.operation = an.operation AND w.ts >= an.ts_shift
         WHERE an.signal = 'error_rate'
-          AND an.ts_shift BETWEEN a.from_ts AND a.to_ts
+          AND an.ts_shift >= a.from_ts AND an.ts_shift < a.to_ts
           AND w.error_type IS NOT NULL
         GROUP BY an.operation, an.ts_shift, w.error_type
     )
@@ -1659,7 +1695,7 @@ op_anomalies AS (
         ON sd.operation = an.operation AND sd.ts_shift = an.ts_shift, args a
     WHERE an.service_name = a.service
       AND an.signal IN ('error_rate', 'latency_p95')
-      AND an.ts_shift BETWEEN a.from_ts AND a.to_ts
+      AND an.ts_shift >= a.from_ts AND an.ts_shift < a.to_ts
     GROUP BY an.operation
 ),
 -- The NON-operation-keyed anomalies for this service in the same window:
@@ -1673,7 +1709,7 @@ service_anomalies AS (
     FROM {prefix}sigiro_anomalies an, args a
     WHERE an.service_name = a.service
       AND an.signal NOT IN ('error_rate', 'latency_p95')
-      AND an.ts_shift BETWEEN a.from_ts AND a.to_ts
+      AND an.ts_shift >= a.from_ts AND an.ts_shift < a.to_ts
 ),
 -- is_anomalous / anomaly_reason are assembled in Rust from the joined
 -- `anomalies` rows. This CTE only gathers the evidence: current aggregates,
@@ -1818,7 +1854,7 @@ deploy_events AS (
           SELECT (s.resource_attributes::JSON->>'service.version')
           FROM {prefix}sigiro_spans s, args a
           WHERE s.service_name = a.service
-            AND s.timestamp BETWEEN a.bl_from AND a.bl_to
+            AND s.timestamp >= a.bl_from AND s.timestamp < a.bl_to
             AND (s.resource_attributes::JSON->>'service.version') IS NOT NULL
       )
     GROUP BY version
@@ -1850,7 +1886,7 @@ profile_rows AS (
            ) AS latest_timestamp
     FROM {prefix}sigiro_profiles p, args a
     WHERE p.service_name = a.service
-      AND p.timestamp BETWEEN a.from_ts AND a.to_ts
+      AND p.timestamp >= a.from_ts AND p.timestamp < a.to_ts
       AND len(p.stack_trace) > 0
 ),
 profiles AS (
@@ -1900,7 +1936,8 @@ deps AS (
     FROM {prefix}sigiro_spans s2
     JOIN client_traces ct ON s2.trace_id = ct.trace_id, args a
     WHERE s2.service_name != a.service
-      AND s2.timestamp BETWEEN a.from_ts - INTERVAL '1 hour' AND a.to_ts + INTERVAL '1 hour'
+      AND s2.timestamp >= a.from_ts - INTERVAL '1 hour'
+      AND s2.timestamp < a.to_ts + INTERVAL '1 hour'
     GROUP BY s2.service_name
     ORDER BY span_count DESC
     LIMIT 20
@@ -1915,7 +1952,8 @@ dependents AS (
     WHERE s1.service_name != a.service
       AND s1.span_kind IN (3, 4)
       AND s1.span_name NOT LIKE '%TraceService/Export%'
-      AND s1.timestamp BETWEEN a.from_ts - INTERVAL '1 hour' AND a.to_ts + INTERVAL '1 hour'
+      AND s1.timestamp >= a.from_ts - INTERVAL '1 hour'
+      AND s1.timestamp < a.to_ts + INTERVAL '1 hour'
     GROUP BY s1.service_name
     ORDER BY span_count DESC
     LIMIT 20
