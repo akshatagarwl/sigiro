@@ -1300,7 +1300,8 @@ than an expression built from now(), or statistics pruning is lost and the \
 query reads every file.",
         example = json!(
             "SELECT service_name, count(*) AS errors FROM sigiro_spans \
-WHERE status_code = 'STATUS_CODE_ERROR' GROUP BY 1 ORDER BY 2 DESC"
+WHERE status_code = 2 AND timestamp >= TIMESTAMP '2026-09-11 12:00:00' \
+AND timestamp < TIMESTAMP '2026-09-11 13:00:00' GROUP BY 1 ORDER BY 2 DESC"
         ),
     ),
     responses(

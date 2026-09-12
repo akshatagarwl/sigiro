@@ -303,6 +303,40 @@ async fn test_openapi_documents_diagnose_for_agents() {
 }
 
 #[tokio::test]
+async fn openapi_query_request_example_executes() {
+    let ctx = build_test_context();
+    ctx.state
+        .pool
+        .get_project("default")
+        .expect("default project exists")
+        .get()
+        .execute(
+            "INSERT INTO lake.sigiro_spans (
+                timestamp, end_timestamp, duration, trace_id, span_id,
+                service_name, span_name, span_kind, status_code
+             ) VALUES (now(), epoch_us(now()), 0,
+                '11111111111111111111111111111111', '2222222222222222',
+                'checkout', 'GET /cart', 2, 2)",
+            [],
+        )
+        .expect("seed error span");
+    let server = TestServer::new(build_http_router(ctx.state)).expect("build test server");
+    let spec: serde_json::Value =
+        serde_json::from_str(&server.get("/openapi.json").await.text()).expect("openapi is JSON");
+    let query =
+        spec["paths"]["/v1/query"]["post"]["requestBody"]["content"]["text/plain"]["example"]
+            .as_str()
+            .expect("query request example must be SQL text");
+
+    server
+        .post("/v1/query")
+        .content_type("text/plain")
+        .bytes(query.as_bytes().to_vec().into())
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
 async fn test_pyroscope_routes_and_public_openapi_stay_in_sync() {
     // Axum does not expose stable route introspection. Exercise every live alias
     // through the same merged routers production uses, then assert those paths'
