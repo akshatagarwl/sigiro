@@ -1159,7 +1159,7 @@ async fn execute_sql(
             .next()
             .map_err(|e| anyhow::anyhow!("row read failed: {e}"))?
         {
-            if results.len() >= max_rows {
+            if results.len() >= max_rows.as_usize() {
                 truncated = true;
                 break;
             }

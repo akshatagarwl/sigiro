@@ -114,7 +114,19 @@ pub(crate) static QUERY_TIMEOUT_SECONDS: Envar<u64> =
 /// Max rows a single `/v1/query` call will collect before stopping early and
 /// reporting truncation. Default: 100_000 — bounds the in-memory result Vec
 /// and the JSON response size for a hosted multi-tenant instance.
-pub(crate) static MAX_RESULT_ROWS: Envar<usize> =
+#[nutype::nutype(
+    validate(greater = 0),
+    derive(Debug, Clone, Copy, PartialEq, Eq, FromStr, AsRef, Into, Display)
+)]
+pub struct MaxResultRows(usize);
+
+impl MaxResultRows {
+    pub fn as_usize(&self) -> usize {
+        *self.as_ref()
+    }
+}
+
+static MAX_RESULT_ROWS: Envar<usize> =
     Envar::on_startup("SIGIRO_MAX_RESULT_ROWS", || EnvarDef::Default(100_000));
 
 /// Pyroscope profiling endpoint (optional — no profiling if unset).
@@ -235,10 +247,10 @@ pub(crate) fn query_timeout_secs() -> Result<u64> {
     Ok(secs)
 }
 
-pub(crate) fn max_result_rows() -> Result<usize> {
-    let rows = MAX_RESULT_ROWS.value()?;
-    anyhow::ensure!(rows > 0, "SIGIRO_MAX_RESULT_ROWS must be greater than zero");
-    Ok(rows)
+pub(crate) fn max_result_rows() -> Result<MaxResultRows> {
+    let raw = MAX_RESULT_ROWS.value()?;
+    MaxResultRows::try_new(raw)
+        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_MAX_RESULT_ROWS: {error}"))
 }
 
 fn default_duckdb_threads() -> usize {
