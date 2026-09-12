@@ -54,7 +54,8 @@ SELECT service_name, metric_name, value, timestamp
 FROM sigiro_metrics_gauge
 WHERE service_name = 'checkout'
   AND metric_name LIKE 'system.filesystem%'
-  AND timestamp > now() - INTERVAL '1 hour'
+  AND timestamp >= TIMESTAMP '2026-09-10 00:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-11 00:00:00'
 ORDER BY timestamp DESC;
 ```
 

@@ -158,7 +158,9 @@ the raw SQL rather than JSON:
 curl -X POST http://localhost:9999/v1/query \
   --data "SELECT service_name, count(*) AS errors
           FROM sigiro_spans
-          WHERE status_code = 2 AND timestamp > now() - INTERVAL '1 hour'
+          WHERE status_code = 2
+            AND timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
           GROUP BY 1 ORDER BY errors DESC"
 ```
 

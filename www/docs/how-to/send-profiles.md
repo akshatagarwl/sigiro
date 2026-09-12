@@ -131,7 +131,8 @@ curl -s -X POST http://localhost:9999/v1/query \
   --data "SELECT service_name, profile_type, unit, count(*) AS samples
           FROM sigiro_profiles
           WHERE service_name = 'checkout'
-            AND timestamp > now() - INTERVAL '1 hour'
+            AND timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
           GROUP BY 1, 2, 3
           ORDER BY samples DESC"
 ```

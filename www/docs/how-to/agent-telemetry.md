@@ -233,7 +233,18 @@ for table in gauge sum histogram exp_histogram; do
 done
 ```
 
-Literal `TIMESTAMP` bounds let sigiro prune Parquet files. A predicate built from
-`now()` reads every file and becomes progressively slower as local history grows.
+Literal `TIMESTAMP` bounds let sigiro prune Parquet files. Compute both bounds in
+the client and use a half-open range (`>=` lower, `<` upper) for every raw
+spans/logs/metrics/profiles query. `now()` and `current_timestamp` are rejected
+with `query_requires_time_bounds` (HTTP 422), not accepted as a way to scan
+current history. Start with a narrow aggregate of grouping keys and counts,
+then fetch selected rows and wide JSON in a smaller bounded detail query.
+`LIMIT` caps output, not scan or aggregate hash memory. If a bounded query is
+too expensive, narrow it after `query_memory_limit_exceeded`; handle
+`query_timeout`, `query_temp_storage_unavailable`, and
+`query_storage_unavailable` according to their stable codes. The configured
+timeout covers reader admission and DuckDB execution after project
+initialization; the total request span also includes initialization and
+serialization.
 
 Next, [debug and optimize an agent with sigiro](/docs/how-to/debug-agent-performance).

@@ -149,7 +149,8 @@ sigiro는 시간상의 상관관계만 주장하며 그 이상은 주장하지 �
 SELECT DISTINCT resource_attributes::JSON->>'service.version' AS version
 FROM sigiro_spans
 WHERE service_name = 'checkout'
-  AND timestamp > now() - INTERVAL '24 hours';
+  AND timestamp >= TIMESTAMP '2026-09-10 00:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-11 00:00:00';
 ```
 
 결과는 이렇게 읽으십시오:

@@ -150,7 +150,8 @@ curl http://localhost:9999/v1/services
 curl -X POST http://localhost:9999/v1/query \
   --data "SELECT service_name, span_name, count(*) AS n
           FROM sigiro_spans
-          WHERE timestamp > now() - INTERVAL '1 hour'
+          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
           GROUP BY 1, 2 ORDER BY n DESC"
 ```
 
@@ -158,6 +159,14 @@ curl -X POST http://localhost:9999/v1/query \
 `sigiro_metrics_*` 테이블에 저장됩니다. [테이블
 소개](/docs/explanation/tables) 에서 어떤 계열이 무엇을 담고 있는지, 그리고 각
 계열이 어떤 머신을 설명하는지 확인할 수 있습니다.
+
+`LIMIT`는 출력만 제한하며 스캔이나 집계 해시 메모리는 제한하지 않습니다. `now()`와
+`current_timestamp`는 `query_requires_time_bounds`(422)로 거부됩니다. 클라이언트에서
+UTC 경계를 계산하고 모든 원시 telemetry 쿼리에 반개 구간 리터럴을 사용하십시오. `query_timeout`은
+프로젝트 초기화 후 reader admission과 DuckDB 실행에 적용되며, 전체 요청 span에는 초기화와
+직렬화도 포함됩니다. `query_memory_limit_exceeded`이면 범위/프로젝션을 줄이고,
+`query_temp_storage_unavailable` 또는 `query_storage_unavailable`이면 저장소를 복구한 뒤
+재시도하십시오.
 
 ## 다음 단계
 

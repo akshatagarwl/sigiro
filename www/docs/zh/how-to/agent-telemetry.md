@@ -138,13 +138,20 @@ agent 会把自己上报为一个服务。等它出现之后，再查询会话�
 curl -X POST http://localhost:9999/v1/query \
   --data "SELECT service_name, span_name, count(*) AS n
           FROM sigiro_spans
-          WHERE timestamp > now() - INTERVAL '1 hour'
+          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
           GROUP BY 1, 2 ORDER BY n DESC"
 ```
 
 agent 还会上报计数器和仪表值，这些数据会落到 `sigiro_metrics_*` 系列表中，而不是
 `sigiro_spans` 表。[关于这些表](/docs/explanation/tables)说明了各系列表分别存放
 什么数据，以及每个系列描述的是哪一台机器。
+
+`LIMIT` 只限制输出，不限制扫描或聚合哈希内存。`now()` 和 `current_timestamp` 会被
+`query_requires_time_bounds`（422）拒绝。请在客户端计算 UTC 边界，并为所有 raw telemetry 查询使用半开区间字面量。`query_timeout` 适用于项目初始化后的
+reader admission 和 DuckDB 执行，整个请求 span 还包括初始化和序列化。出现
+`query_memory_limit_exceeded` 时请缩小范围或投影；出现 `query_temp_storage_unavailable` 或
+`query_storage_unavailable` 时请在存储恢复后重试。
 
 ## 下一步
 

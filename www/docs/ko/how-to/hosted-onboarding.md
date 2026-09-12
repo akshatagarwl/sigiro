@@ -58,7 +58,9 @@ gzip을 지원하며 엔드포인트는 TLS를 사용합니다. 하나의 요청
 ```bash
 curl -s "https://<your-sigiro-host>/v1/query" \
   -H "Authorization: Bearer sk_<yourtenant>_<random>" \
-  --data 'SELECT count(*) AS n FROM sigiro_spans'
+  --data "SELECT count(*) AS n FROM sigiro_spans
+          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'"
 ```
 
 `n`이 0이 아니면 트레이스가 수신되고 있다는 뜻입니다. 첫 배치를 보낸 _다음에만_ 쿼리하십시오.
@@ -95,38 +97,53 @@ DDL을 거부합니다. 또한 파일, URL, S3 리더(`read_csv`,
 하나의 공유 카탈로그가 모든 테넌트를 담고 있으므로, 호스티드 서비스는
 `information_schema`도 차단합니다.
 
-**예시:**
+**예시:** 먼저 좁은 집계를 실행한 다음 선택한 상세 행을 가져오십시오. 클라이언트에서
+UTC 리터럴을 계산하고, 원시 spans/logs/metrics/profiles 쿼리에는 모두 반개 구간
+(`>=` 하한, `<` 상한)의 `TIMESTAMP` 리터럴을 사용하십시오. `now()`와
+`current_timestamp`는 사용하지 마십시오. `query_requires_time_bounds`(422)로
+거부됩니다.
 
 ```sql
--- Slowest operations, last hour
-SELECT service_name, span_name,
-       approx_quantile(duration, 0.95) / 1000.0 AS p95_ms, count(*) AS n
+-- 먼저: 좁은 집계
+SELECT service_name, span_name, count(*) AS occurrences
 FROM sigiro_spans
-WHERE timestamp > now() - INTERVAL '1 hour'
-GROUP BY 1, 2 ORDER BY p95_ms DESC LIMIT 10;
+WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
+GROUP BY service_name, span_name
+ORDER BY occurrences DESC
+LIMIT 20;
 ```
 
 ```sql
--- Error-log rate per route, last 15 min
-SELECT service_name, log_attributes ->> 'http.route' AS route, count(*) AS errors
-FROM sigiro_logs
-WHERE timestamp > now() - INTERVAL '15 minutes' AND severity_number >= 17
-GROUP BY 1, 2 ORDER BY errors DESC;
+-- 다음: 선택한 그룹의 제한된 상세 데이터. 넓은 JSON은 여기서만 조회
+SELECT timestamp, trace_id, service_name, span_name, span_attributes
+FROM sigiro_spans
+WHERE service_name = 'checkout' AND span_name = 'HTTP GET'
+  AND timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-10 12:05:00'
+ORDER BY timestamp DESC LIMIT 100;
 ```
+
+`LIMIT`는 반환 행과 일부 출력/정렬 작업만 제한하며 스캔이나 집계 해시 메모리를
+제한하지 않습니다. `query_timeout`(408)은 프로젝트 초기화 후 리더 승인과 DuckDB
+실행에 적용되는 설정 시간 제한입니다. 전체 요청 span에는 초기화와 직렬화도
+포함됩니다. `query_memory_limit_exceeded`(422)이면 범위나 프로젝션을 줄이십시오.
+`query_temp_storage_unavailable`(507)은 임시 저장소를 복구한 뒤 재시도하고,
+`query_storage_unavailable`(503)은 저장소가 복구된 뒤 재시도하십시오.
 
 ## 5. 제한
 
-| 제한                | 값                          | 초과 시 sigiro의 동작                                            |
-| ------------------- | --------------------------- | ---------------------------------------------------------------- |
-| 쿼리 타임아웃       | 10초                        | sigiro가 쿼리를 거부합니다 (400)                                 |
-| 결과 행 수          | 100,000                     | sigiro가 응답을 절단하고 `x-sigiro-truncated: true`를 설정합니다 |
-| 쿼리 메모리         | 약 400 MB                   | 쿼리가 실패합니다 (400)                                          |
-| 인제스트 본문       | 8 MB (압축 해제 기준)       | 413 (HTTP) / RESOURCE_EXHAUSTED (gRPC)                           |
-| SQL/API 요청 속도   | 테넌트당 5 req/s, 버스트 20 | 429                                                              |
-| OTLP/HTTP 요청 속도 | 소스당 50 req/s, 버스트 100 | 429                                                              |
+| 제한                | 값                          | 초과 시 sigiro의 동작                           |
+| ------------------- | --------------------------- | ----------------------------------------------- |
+| 쿼리 타임아웃       | 10초                        | `query_timeout` (408)                           |
+| 결과 행 수          | 100,000                     | 응답을 절단하고 `x-sigiro-truncated: true` 설정 |
+| 쿼리 메모리         | 설정된 공유 한도            | `query_memory_limit_exceeded` (422)             |
+| 인제스트 본문       | 8 MB (압축 해제 기준)       | 413 (HTTP) / RESOURCE_EXHAUSTED (gRPC)          |
+| SQL/API 요청 속도   | 테넌트당 5 req/s, 버스트 20 | 429                                             |
+| OTLP/HTTP 요청 속도 | 소스당 50 req/s, 버스트 100 | 429                                             |
 
-sigiro에는 보조 인덱스가 없습니다. 따라서 **모든 쿼리를 `timestamp`로 제한하십시오**.
-제한을 두면 속도가 빨라집니다. 또한 타임아웃과 절단도 방지됩니다.
+sigiro에는 보조 인덱스가 없습니다. 따라서 모든 원시 텔레메트리 쿼리에
+명시적인 반개 구간 UTC `timestamp` 리터럴을 지정하십시오.
 
 ## 6. 데이터 보존
 

@@ -60,8 +60,10 @@ Then run this query:
 
 ```bash
 curl -s "https://<your-sigiro-host>/v1/query" \
-  -H "Authorization: Bearer sk_<yourtenant>_<random>" \
-  --data 'SELECT count(*) AS n FROM sigiro_spans'
+  -H "Authorization: Bearer sk_<yo...dom>" \
+  --data "SELECT count(*) AS n FROM sigiro_spans
+          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'"
 ```
 
 A non-zero `n` means that traces arrive. Query only _after_ your first batch. A new
@@ -98,38 +100,56 @@ contains. Rewrite it as a derived-table subquery: `SELECT ... FROM (SELECT ...) 
 The hosted service blocks `information_schema` too, because one shared catalog holds
 every tenant.
 
-**Examples:**
+**Examples:** Start with a narrow aggregate, then fetch selected detail. Compute
+literal UTC bounds in your client and use a half-open range on every raw
+spans/logs/metrics/profiles query. Do not use `now()` or `current_timestamp`;
+sigiro rejects those predicates with `query_requires_time_bounds` (422).
 
 ```sql
--- Slowest operations, last hour
-SELECT service_name, span_name,
-       approx_quantile(duration, 0.95) / 1000.0 AS p95_ms, count(*) AS n
+-- First: narrow aggregate
+SELECT service_name, span_name, count(*) AS occurrences
 FROM sigiro_spans
-WHERE timestamp > now() - INTERVAL '1 hour'
-GROUP BY 1, 2 ORDER BY p95_ms DESC LIMIT 10;
+WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
+GROUP BY service_name, span_name
+ORDER BY occurrences DESC
+LIMIT 20;
 ```
 
 ```sql
--- Error-log rate per route, last 15 min
-SELECT service_name, log_attributes ->> 'http.route' AS route, count(*) AS errors
-FROM sigiro_logs
-WHERE timestamp > now() - INTERVAL '15 minutes' AND severity_number >= 17
-GROUP BY 1, 2 ORDER BY errors DESC;
+-- Then: selected bounded detail, including wide JSON only for the selected group
+SELECT timestamp, trace_id, service_name, span_name, span_attributes
+FROM sigiro_spans
+WHERE service_name = 'checkout' AND span_name = 'HTTP GET'
+  AND timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-10 12:05:00'
+ORDER BY timestamp DESC LIMIT 100;
 ```
+
+`LIMIT` caps returned rows and some output/sort work; it does not cap scan work
+or aggregate hash memory. `query_timeout` (408) means the configured timeout
+expired after project initialization and covers reader admission plus DuckDB
+execution; the total request span also includes initialization and serialization.
+For valid but too-expensive SQL, narrow the range/projection after
+`query_memory_limit_exceeded` (422). For `query_temp_storage_unavailable`
+(507), free or repair temporary storage before retrying. For
+`query_storage_unavailable` (503), retry after storage availability is restored.
 
 ## 5. Limits
 
 | Limit                  | Value                          | What sigiro does when you exceed it                               |
 | ---------------------- | ------------------------------ | ----------------------------------------------------------------- |
-| Query timeout          | 10 s                           | sigiro rejects the query (400)                                    |
+| Query timeout          | 10 s                           | `query_timeout` (408)                                             |
 | Result rows            | 100,000                        | sigiro truncates the response and sets `x-sigiro-truncated: true` |
-| Query memory           | ~400 MB                        | the query fails (400)                                             |
+| Query memory           | configured shared cap          | `query_memory_limit_exceeded` (422)                               |
 | Ingest body            | 8 MB (decompressed)            | 413 (HTTP) / RESOURCE_EXHAUSTED (gRPC)                            |
 | SQL/API request rate   | 5 req/s per tenant, burst 20   | 429                                                               |
 | OTLP/HTTP request rate | 50 req/s per source, burst 100 | 429                                                               |
 
-sigiro has no secondary indexes. Therefore **bound every query by `timestamp`**. A
-bound gives you speed. A bound also prevents timeouts and truncation.
+sigiro has no secondary indexes. Therefore **bound every raw telemetry query by
+`timestamp` with explicit half-open literal UTC bounds**. A bound gives you
+speed, while the narrow-aggregate-then-detail workflow keeps scans and
+intermediate memory predictable.
 
 ## 6. Data retention
 

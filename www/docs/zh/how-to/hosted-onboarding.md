@@ -53,7 +53,9 @@ SDK 的默认批处理大小远低于此上限。
 ```bash
 curl -s "https://<your-sigiro-host>/v1/query" \
   -H "Authorization: Bearer sk_<yourtenant>_<random>" \
-  --data 'SELECT count(*) AS n FROM sigiro_spans'
+  --data "SELECT count(*) AS n FROM sigiro_spans
+          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'"
 ```
 
 `n` 为非零值即表示链路追踪数据已到达。请在发送第一批数据*之后*再查询。
@@ -89,14 +91,19 @@ curl -s "https://<your-sigiro-host>/v1/query" \
 请改写为派生表子查询：`SELECT ... FROM (SELECT ...) t`。
 托管服务同样屏蔽了 `information_schema`，因为一个共享目录中保存着所有租户的信息。
 
-**示例：**
+**示例：**先先只聚合分组键和计数，再在更小的范围内获取选定分组的详细数据。在
+客户端计算 UTC 边界，并为 raw spans/logs/metrics/profiles 使用半开区间的字面量
+`TIMESTAMP`（`>=` 下界、`<` 上界）。不要使用 `now()` 或 `current_timestamp`；
+sigiro 会以 `query_requires_time_bounds`（422）拒绝它们。`LIMIT` 只限制输出，
+不限制扫描或聚合哈希内存。
 
 ```sql
 -- Slowest operations, last hour
 SELECT service_name, span_name,
        approx_quantile(duration, 0.95) / 1000.0 AS p95_ms, count(*) AS n
 FROM sigiro_spans
-WHERE timestamp > now() - INTERVAL '1 hour'
+WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
 GROUP BY 1, 2 ORDER BY p95_ms DESC LIMIT 10;
 ```
 
@@ -104,23 +111,29 @@ GROUP BY 1, 2 ORDER BY p95_ms DESC LIMIT 10;
 -- Error-log rate per route, last 15 min
 SELECT service_name, log_attributes ->> 'http.route' AS route, count(*) AS errors
 FROM sigiro_logs
-WHERE timestamp > now() - INTERVAL '15 minutes' AND severity_number >= 17
+WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-10 13:00:00' AND severity_number >= 17
 GROUP BY 1, 2 ORDER BY errors DESC;
 ```
+
+`query_timeout`（408）表示项目初始化后 reader admission 与 DuckDB 执行所用的配置超时；
+整个请求 span 还包括初始化和序列化。出现 `query_memory_limit_exceeded`（422）时，
+请缩小范围或投影。`query_temp_storage_unavailable`（507）应先修复临时存储，
+`query_storage_unavailable`（503）应在存储恢复后重试。
 
 ## 5. 限制
 
 | 限制项             | 取值                      | 超出时 sigiro 的处理方式                         |
 | ------------------ | ------------------------- | ------------------------------------------------ |
-| 查询超时           | 10 秒                     | sigiro 拒绝该查询（400）                         |
+| 查询超时           | 10 秒                     | `query_timeout`（408）                           |
 | 结果行数           | 100,000                   | sigiro 截断响应并设置 `x-sigiro-truncated: true` |
-| 查询内存           | 约 400 MB                 | 查询失败（400）                                  |
+| 查询内存           | 已配置的共享上限          | `query_memory_limit_exceeded`（422）             |
 | 摄取请求体         | 8 MB（解压后）            | 413（HTTP）/ RESOURCE_EXHAUSTED（gRPC）          |
 | SQL/API 请求速率   | 每租户 5 req/s，突发 20   | 429                                              |
 | OTLP/HTTP 请求速率 | 每来源 50 req/s，突发 100 | 429                                              |
 
-sigiro 没有二级索引。因此**请为每个查询都加上 `timestamp` 范围限定**。
-范围限定能带来速度，也能避免超时和结果截断。
+sigiro 没有二级索引。因此，**请为每个 raw telemetry 查询都加上 `timestamp` 的显式半开区间字面量**。
+先缩小聚合再获取详细数据，可以让扫描和中间内存更可控。
 
 ## 6. 数据留存
 

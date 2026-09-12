@@ -74,7 +74,12 @@ pub struct DiagnoseArgs {
 #[schemars(crate = "rmcp::schemars")]
 pub struct QueryArgs {
     /// The SQL to execute. Paste a `drill_down_sql` or `drill_all_sql` string
-    /// VERBATIM from a `list_anomalies` or `diagnose_service` response.
+    /// VERBATIM from a `list_anomalies` or `diagnose_service` response. Raw
+    /// spans, logs, metrics, and profiles require half-open literal UTC
+    /// `TIMESTAMP` bounds; compute literals in the client, and do not use
+    /// `now()` or `current_timestamp`. Start with a narrow aggregate, then
+    /// fetch selected bounded detail. `LIMIT` caps output, not scan or
+    /// aggregate hash memory.
     pub(crate) sql: String,
 }
 
@@ -159,7 +164,12 @@ tool to fetch the underlying rows and go deeper. Typical agent loop: `list_servi
         description = "Execute SQL against the telemetry store and return the rows. This is \
 the drill-down step: pass a `drill_down_sql` or `drill_all_sql` string VERBATIM from a \
 `list_anomalies` or `diagnose_service` response to fetch the underlying rows behind a \
-finding. Timestamps in the data are microseconds since the Unix epoch."
+finding. Raw telemetry requires half-open literal UTC TIMESTAMP bounds computed by \
+the client; now() and current_timestamp are rejected with \
+query_requires_time_bounds. Start narrow, then fetch selected bounded detail; LIMIT \
+does not cap scan or aggregate hash memory. Handle query_timeout, \
+query_memory_limit_exceeded, query_temp_storage_unavailable, and \
+query_storage_unavailable by their stable codes."
     )]
     async fn run_query(
         &self,

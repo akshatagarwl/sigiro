@@ -1562,38 +1562,49 @@ fn query_sql_contract() -> String {
 /// - `sigiro_profiles`
 /// - `sigiro_anomalies`
 ///
-/// ## Bound `timestamp` with a literal, not `now()`
+/// ## Bounded telemetry workflow
 ///
-/// Statistics pruning only happens when the comparison value is a constant the
-/// planner can fold. `now()` is volatile, so any predicate built from it is
-/// evaluated per row and every file in the table is opened.
+/// Raw spans, logs, metrics, and profiles require both sides of a half-open
+/// UTC time range as literal `TIMESTAMP` values. Compute the instants in your
+/// client; do not send `now()` or `current_timestamp`. Those dynamic predicates
+/// are rejected with `query_requires_time_bounds` (HTTP 422), rather than being
+/// allowed to scan the full retention window.
+///
+/// Start with a narrow aggregate over grouping keys and counts. Then fetch
+/// selected rows, including wide JSON columns, with another bounded query for
+/// only the groups and small window you need. `LIMIT` caps returned rows (and
+/// some output/sort work); it does not cap scan work or aggregate hash memory.
 ///
 /// ```sql
-/// -- prunes: the planner folds the constant and skips whole files
-/// WHERE timestamp > TIMESTAMP '2026-08-31 08:00:00'
+/// -- First: narrow aggregate, with explicit half-open UTC bounds
+/// SELECT service_name, span_name, count(*) AS occurrences
+/// FROM sigiro_spans
+/// WHERE timestamp >= TIMESTAMP '2026-09-11 12:00:00'
+///   AND timestamp <  TIMESTAMP '2026-09-11 13:00:00'
+/// GROUP BY service_name, span_name
+/// ORDER BY occurrences DESC
+/// LIMIT 20
 ///
-/// -- does not prune: opens every file, then filters
-/// WHERE timestamp > (now() - INTERVAL 1 HOUR)::TIMESTAMP
+/// -- Then: selected bounded detail, where wide JSON is appropriate
+/// SELECT timestamp, trace_id, service_name, span_name, span_attributes
+/// FROM sigiro_spans
+/// WHERE service_name = 'checkout'
+///   AND span_name = 'HTTP GET'
+///   AND timestamp >= TIMESTAMP '2026-09-11 12:00:00'
+///   AND timestamp <  TIMESTAMP '2026-09-11 12:05:00'
+/// ORDER BY timestamp DESC
+/// LIMIT 100
 /// ```
 ///
-/// Compute the bound in your client and send it as a literal.
-///
-/// ## If you must use `now()`, cast it
-///
-/// The `timestamp` columns are `TIMESTAMP` (no timezone) and `now()` returns
-/// `TIMESTAMPTZ`. Comparing them directly makes DuckDB cast the **column**,
-/// which adds a per-row conversion on top of the missing pruning. Measured
-/// against production on 2026-08-31, same table and window:
-///
-/// | predicate | result |
-/// |---|---|
-/// | `timestamp > TIMESTAMP '2026-08-31 08:00:00'` | 200 in 2.48s |
-/// | `timestamp > (now() - INTERVAL 5 MINUTE)::TIMESTAMP` | 200 in 0.65s |
-/// | `timestamp > now() - INTERVAL 5 MINUTE` | 400 `INTERRUPT` at 10.98s |
-/// | `timestamp > TIMESTAMPTZ '2026-08-31 08:00:00+00'` | 400 `INTERRUPT` at 10.65s |
-///
-/// So the cast is worth having, but it is a mitigation and not the fix: the
-/// literal is.
+/// Valid but expensive bounded SQL can still return
+/// `query_memory_limit_exceeded`; narrow the range, grouping, or projection.
+/// `query_timeout` means the configured timeout expired after project
+/// initialization and covers reader admission plus DuckDB execution. The parent
+/// request span also includes initialization and response serialization.
+/// `query_temp_storage_unavailable` means temporary storage is full or
+/// unwritable; `query_storage_unavailable` means query storage is temporarily
+/// unavailable. Retry the latter two after remediation; do not blindly retry a
+/// query rejected for bounds or memory.
 #[utoipa::path(
     post,
     path = "/v1/query",
@@ -1615,10 +1626,13 @@ fn query_sql_contract() -> String {
         content = String,
         content_type = "text/plain",
         description = "One SELECT statement. No WITH/CTE clauses — rewrite them as \
-derived-table subqueries. Scalar functions are allowlisted; file and network \
-readers are blocked. Bound timestamp columns with a literal TIMESTAMP rather \
-than an expression built from now(), or statistics pruning is lost and the \
-query reads every file.",
+derived-table subqueries. For raw spans, logs, metrics, and profiles, use both \
+half-open UTC timestamp bounds as literal TIMESTAMP values computed by your \
+client; now() and current_timestamp are rejected with query_requires_time_bounds. \
+Start with a narrow aggregate, then fetch selected wide JSON detail in a smaller \
+bounded query. LIMIT caps output, not scan or aggregate hash memory. Remediate \
+query_timeout, query_memory_limit_exceeded, query_temp_storage_unavailable, and \
+query_storage_unavailable according to their codes.",
         example = json!(
             "SELECT service_name, count(*) AS errors FROM sigiro_spans \
 WHERE status_code = 2 AND timestamp >= TIMESTAMP '2026-09-11 12:00:00' \

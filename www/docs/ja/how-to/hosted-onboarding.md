@@ -40,7 +40,9 @@ SDK は各シグナルを標準の OTLP パス（`/v1/traces`、`/v1/logs`、`/v
 ```bash
 curl -s "https://<your-sigiro-host>/v1/query" \
   -H "Authorization: Bearer sk_<yourtenant>_<random>" \
-  --data 'SELECT count(*) AS n FROM sigiro_spans'
+  --data "SELECT count(*) AS n FROM sigiro_spans
+          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'"
 ```
 
 `n` が 0 以外であれば、トレースが届いています。クエリは最初のバッチを送信した*後*に実行してください。データを一度も送信していない新規テナントには、ストレージが存在しません。
@@ -62,14 +64,20 @@ curl -s "https://<your-sigiro-host>/v1/query" \
 
 **CTE は拒否されます。** `WITH` 句は、その内容にかかわらず検証に失敗します。派生テーブルのサブクエリとして書き換えてください: `SELECT ... FROM (SELECT ...) t`。ホスト型サービスでは、1 つの共有カタログがすべてのテナントを保持しているため、`information_schema` もブロックされます。
 
-**例:**
+**例:** まずグループキーと件数だけを集計し、その後、選択したグループの詳細を
+小さな範囲で取得します。クライアントで UTC の境界を計算し、raw
+spans/logs/metrics/profiles には必ず半開区間のリテラル `TIMESTAMP`（`>=` と `<`）を
+指定してください。`now()` と `current_timestamp` は
+`query_requires_time_bounds`（422）で拒否されます。`LIMIT` は出力を制限しますが、
+スキャンや集約ハッシュのメモリは制限しません。
 
 ```sql
 -- Slowest operations, last hour
 SELECT service_name, span_name,
        approx_quantile(duration, 0.95) / 1000.0 AS p95_ms, count(*) AS n
 FROM sigiro_spans
-WHERE timestamp > now() - INTERVAL '1 hour'
+WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
 GROUP BY 1, 2 ORDER BY p95_ms DESC LIMIT 10;
 ```
 
@@ -77,22 +85,31 @@ GROUP BY 1, 2 ORDER BY p95_ms DESC LIMIT 10;
 -- Error-log rate per route, last 15 min
 SELECT service_name, log_attributes ->> 'http.route' AS route, count(*) AS errors
 FROM sigiro_logs
-WHERE timestamp > now() - INTERVAL '15 minutes' AND severity_number >= 17
+WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+  AND timestamp <  TIMESTAMP '2026-09-10 13:00:00' AND severity_number >= 17
 GROUP BY 1, 2 ORDER BY errors DESC;
 ```
 
+`query_timeout`（408）はプロジェクト初期化後のリーダー受付と DuckDB 実行に適用される
+設定時間です。リクエスト全体の span には初期化とシリアライズも含まれます。
+`query_memory_limit_exceeded`（422）なら範囲・射影を狭めてください。
+`query_temp_storage_unavailable`（507）は一時ストレージを直してから、
+`query_storage_unavailable`（503）はストレージ復旧後に再試行します。
+
 ## 5. 制限
 
-| 制限                       | 値                                  | 超過時の sigiro の動作                                                 |
-| -------------------------- | ----------------------------------- | ---------------------------------------------------------------------- |
-| クエリのタイムアウト       | 10 秒                               | sigiro がクエリを拒否します（400）                                     |
-| 結果行数                   | 100,000                             | sigiro がレスポンスを打ち切り、`x-sigiro-truncated: true` を設定します |
-| クエリメモリ               | 約 400 MB                           | クエリが失敗します（400）                                              |
-| 取り込みボディ             | 8 MB（展開後）                      | 413（HTTP）/ RESOURCE_EXHAUSTED（gRPC）                                |
-| SQL/API リクエストレート   | テナントあたり 5 req/s、バースト 20 | 429                                                                    |
-| OTLP/HTTP リクエストレート | ソースあたり 50 req/s、バースト 100 | 429                                                                    |
+| 制限                       | 値                                  | 超過時の sigiro の動作                                       |
+| -------------------------- | ----------------------------------- | ------------------------------------------------------------ |
+| クエリのタイムアウト       | 10 秒                               | `query_timeout`（408）                                       |
+| 結果行数                   | 100,000                             | レスポンスを打ち切り `x-sigiro-truncated: true` を設定します |
+| クエリメモリ               | 設定された共有上限                  | `query_memory_limit_exceeded`（422）                         |
+| 取り込みボディ             | 8 MB（展開後）                      | 413（HTTP）/ RESOURCE_EXHAUSTED（gRPC）                      |
+| SQL/API リクエストレート   | テナントあたり 5 req/s、バースト 20 | 429                                                          |
+| OTLP/HTTP リクエストレート | ソースあたり 50 req/s、バースト 100 | 429                                                          |
 
-sigiro にはセカンダリインデックスがありません。そのため、**すべてのクエリを `timestamp` で範囲指定してください**。範囲指定は速度をもたらします。また、タイムアウトと打ち切りも防ぎます。
+sigiro にはセカンダリインデックスがありません。そのため、**すべての raw telemetry クエリを
+`timestamp` の明示的な半開区間リテラルで範囲指定してください**。範囲指定は速度をもたらし、
+集約を狭くしてから詳細を取得する流れはスキャンと中間メモリを予測しやすくします。
 
 ## 6. データ保持
 
