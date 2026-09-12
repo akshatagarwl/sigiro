@@ -45,6 +45,8 @@ struct QueryMeasurement {
     rows: usize,
     shape: Vec<String>,
     truncated: Option<String>,
+    has_truncated_header: bool,
+    body: Value,
     diagnostics_before: Diagnostics,
     diagnostics_after: Diagnostics,
     tmp_bytes_before: u64,
@@ -215,6 +217,7 @@ async fn run_query(
         .get("x-sigiro-truncated")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
+    let has_truncated_header = response.headers().contains_key("x-sigiro-truncated");
     let body = response.text();
     let parsed_body = serde_json::from_str::<Value>(&body).ok();
     let rows = parsed_body
@@ -238,6 +241,8 @@ async fn run_query(
         rows,
         shape,
         truncated,
+        has_truncated_header,
+        body: parsed_body.unwrap_or(Value::Null),
         diagnostics_before,
         diagnostics_after,
         tmp_bytes_before,
@@ -296,43 +301,29 @@ async fn real_ducklake_query_shapes_report_memory_pressure_and_health() {
     let mut measurements = Vec::with_capacity(queries.len());
     for (name, sql) in queries {
         let measurement = run_query(&server, name, sql, &tmp_dir).await;
-        assert!(
-            matches!(measurement.status, StatusCode::OK | StatusCode::BAD_REQUEST),
-            "{name} returned unrelated HTTP status {}",
-            measurement.status
-        );
-        if measurement.status == StatusCode::OK {
+        if name == "bounded_literal_narrow" {
+            assert_eq!(measurement.status, StatusCode::OK, "{name}");
             assert_eq!(
                 measurement.truncated.as_deref(),
                 Some("false"),
                 "successful {name} response must explicitly report no truncation"
             );
             match name {
-                "unbounded_narrow_status" => {
-                    assert_eq!(measurement.rows, 4);
-                    assert_eq!(measurement.shape, ["rows", "status_code"]);
-                }
-                "unbounded_json_status_source" => {
-                    assert_eq!(measurement.rows, rows);
-                    assert_eq!(measurement.shape, ["rows", "source", "status_code"]);
-                }
-                "wide_json_projection_grouping" => {
-                    assert_eq!(measurement.rows, rows);
-                    assert_eq!(
-                        measurement.shape,
-                        ["resource_attributes", "rows", "span_attributes"]
-                    );
-                }
                 "bounded_literal_narrow" => {
                     assert_eq!(measurement.rows, 4);
                     assert_eq!(measurement.shape, ["rows", "status_code"]);
                 }
-                "now_pruning_loss_control" => {
-                    assert!(measurement.rows > 0);
-                    assert_eq!(measurement.shape, ["rows", "status_code"]);
-                }
                 _ => unreachable!("all query names are handled"),
             }
+        } else {
+            assert_eq!(
+                measurement.status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{name}"
+            );
+            assert_eq!(measurement.body["code"], "query_requires_time_bounds");
+            assert_eq!(measurement.body["retryable"], false);
+            assert!(!measurement.has_truncated_header);
         }
         measurements.push(measurement);
 

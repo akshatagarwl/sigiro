@@ -30,7 +30,8 @@ use crate::inserter::{DiskCapacityState, MsgRouter};
 use crate::pool::ProjectPool;
 use crate::responses::*;
 use crate::sql::{
-    ALLOWED_TABLES, duckdb_value_to_json, escape_sql_string, validate_read_only_gated,
+    ALLOWED_TABLES, duckdb_value_to_json, escape_sql_string, validate_raw_telemetry_policy,
+    validate_read_only_gated,
 };
 use crate::types::*;
 use tracing_attributes::instrument;
@@ -1117,6 +1118,7 @@ async fn healthz(
 #[derive(Debug)]
 enum QueryFailure {
     Validation(anyhow::Error),
+    Policy(crate::sql::ResourcePolicyError),
     PoolInit(anyhow::Error),
     Prepare(anyhow::Error),
     Execution(anyhow::Error),
@@ -1130,24 +1132,27 @@ enum QueryFailure {
 }
 
 impl QueryFailure {
-    fn source(&self) -> &anyhow::Error {
+    fn into_anyhow(self) -> anyhow::Error {
         match self {
-            Self::Validation(e)
-            | Self::PoolInit(e)
-            | Self::Prepare(e)
-            | Self::Execution(e)
-            | Self::Fetch(e)
-            | Self::StorageUnavailable(e)
-            | Self::Timeout(e)
-            | Self::MemoryLimit(e)
-            | Self::TempIo(e)
-            | Self::Serialization(e)
-            | Self::Internal(e) => e,
+            Self::Validation(error)
+            | Self::PoolInit(error)
+            | Self::Prepare(error)
+            | Self::Execution(error)
+            | Self::Fetch(error)
+            | Self::StorageUnavailable(error)
+            | Self::Timeout(error)
+            | Self::MemoryLimit(error)
+            | Self::TempIo(error)
+            | Self::Serialization(error)
+            | Self::Internal(error) => error,
+            Self::Policy(_) => anyhow::anyhow!("query rejected by resource policy"),
         }
     }
+
     fn class(&self) -> &'static str {
         match self {
             Self::Validation(_) => "validation",
+            Self::Policy(_) => "policy",
             Self::PoolInit(_) => "pool_init",
             Self::Prepare(_) => "prepare",
             Self::Execution(_) => "execution",
@@ -1162,6 +1167,12 @@ impl QueryFailure {
     }
     fn response(self) -> QueryApiError {
         let (status, code, message, retryable) = match &self {
+            Self::Policy(error) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                error.code(),
+                "Raw telemetry queries require a half-open literal timestamp range, for example timestamp >= TIMESTAMP '2026-01-01 00:00:00' AND timestamp < TIMESTAMP '2026-01-01 01:00:00'.".to_owned(),
+                false,
+            ),
             Self::Validation(_) => (
                 StatusCode::BAD_REQUEST,
                 "query_invalid",
@@ -1465,7 +1476,7 @@ async fn execute_sql(
     execute_query_sql(state, auth, sql)
         .await
         .map(|result| (result.results, result.truncated))
-        .map_err(|failure| anyhow::anyhow!("{}", failure.source()))
+        .map_err(QueryFailure::into_anyhow)
 }
 
 /// `x-sigiro-truncated` header + JSON rows — signals `SIGIRO_MAX_RESULT_ROWS`
@@ -1631,6 +1642,7 @@ your SELECT's column names", body = Vec<serde_json::Value>,
     sql_bytes = body.len(),
     outcome = tracing::field::Empty,
     error_class = tracing::field::Empty,
+    primary_table_family = tracing::field::Empty,
     rows_returned = tracing::field::Empty,
     columns = tracing::field::Empty,
     truncated = tracing::field::Empty,
@@ -1682,6 +1694,20 @@ async fn query_handler(
         tracing::Span::current().record("outcome", "error");
         tracing::Span::current().record("error_class", "validation");
         return Err(QueryFailure::Validation(anyhow::anyhow!(e)).response());
+    }
+    match validate_raw_telemetry_policy(&body) {
+        Ok(family) => {
+            query_span.record("primary_table_family", family.as_str());
+        }
+        Err(policy) => {
+            query_span.record(
+                "primary_table_family",
+                policy.primary_table_family().as_str(),
+            );
+            query_span.record("outcome", "error");
+            query_span.record("error_class", "policy");
+            return Err(QueryFailure::Policy(policy).response());
+        }
     }
     match execute_query_sql(&state, &auth, &body).await {
         Ok(execution) => {
@@ -2035,6 +2061,54 @@ mod query_tests {
                 .any(|value| value.contains("DELETE FROM secret"))
         );
     }
+
+    #[tokio::test]
+    async fn real_http_policy_rejection_is_private_and_skips_duckdb_phases() {
+        let (spans, subscriber) = captured_subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (state, _dir) = test_state(Duration::from_secs(2));
+        let server = axum_test::TestServer::new(build_http_router(state)).unwrap();
+        let response = server
+            .post("/v1/query")
+            .text(
+                "SELECT count(*) FROM sigiro_spans \
+                 WHERE service_name = 'tenant-secret'",
+            )
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["code"], "query_requires_time_bounds");
+        assert_eq!(body["retryable"], false);
+        assert!(!response.text().contains("tenant-secret"));
+
+        let spans = spans.lock().clone();
+        let query = spans
+            .iter()
+            .find(|span| span.name == "sigiro.query")
+            .expect("query span");
+        assert_eq!(query.fields["outcome"], "error");
+        assert_eq!(query.fields["error_class"], "policy");
+        assert_eq!(query.fields["primary_table_family"], "spans");
+        assert!(
+            !query
+                .fields
+                .values()
+                .any(|value| value.contains("tenant-secret"))
+        );
+        assert!(!spans.iter().any(|span| {
+            matches!(
+                span.name.as_str(),
+                "sigiro.query.pool_init"
+                    | "sigiro.query.pool_wait"
+                    | "sigiro.query.prepare"
+                    | "sigiro.query.execute"
+                    | "sigiro.query.fetch_materialize"
+                    | "sigiro.query.serialize"
+            )
+        }));
+    }
+
     #[tokio::test]
     async fn real_http_pool_timeout_cleans_up_and_later_query_succeeds() {
         let (spans, subscriber) = captured_subscriber();

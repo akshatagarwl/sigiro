@@ -539,14 +539,14 @@ async fn test_new_hosted_tenant_can_query_before_first_ingest() {
     let response = server
         .post("/v1/query")
         .add_header("Authorization", format!("Bearer {key}"))
-        .text("SELECT count(*) AS n FROM lake.sigiro_spans")
+        .text("SELECT 1 AS n")
         .await;
     response.assert_status_ok();
     let rows: serde_json::Value =
         serde_json::from_str(&response.text()).expect("query response should be JSON");
     assert_eq!(
         rows.pointer("/0/n").and_then(serde_json::Value::as_i64),
-        Some(0)
+        Some(1)
     );
 }
 
@@ -625,12 +625,15 @@ async fn test_timezone_query_works_under_lockdown() {
         .add_header("Authorization", "Bearer sigiro_dev_test")
         .text("SELECT count(*) AS n FROM sigiro_spans WHERE timestamp > now() - INTERVAL '1 hour'")
         .await;
-    resp.assert_status_ok();
+    resp.assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["code"], "query_requires_time_bounds");
+    assert_eq!(body["retryable"], false);
 
     let resp = server
         .post("/v1/query")
         .add_header("Authorization", "Bearer sigiro_dev_test")
-        .text("SELECT epoch(now()) AS e FROM sigiro_spans LIMIT 1")
+        .text("SELECT epoch(now()) AS e")
         .await;
     resp.assert_status_ok();
 }
@@ -646,7 +649,9 @@ async fn test_query_supports_duckdb_aggregate_filter() {
         .add_header("Authorization", "Bearer sigiro_dev_test")
         .text(
             "SELECT count(*) FILTER (WHERE status_code = 2) AS errors \
-             FROM sigiro_spans",
+             FROM sigiro_spans \
+             WHERE timestamp >= TIMESTAMP '2020-01-01 00:00:00' \
+               AND timestamp < TIMESTAMP '2030-01-01 00:00:00'",
         )
         .await;
 

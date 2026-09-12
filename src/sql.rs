@@ -11,7 +11,8 @@
 //! the positive scalar-function allowlist and the table allowlist combine.
 
 use sqlparser::ast::{
-    Expr, ObjectName, Query as SqlQuery, SetExpr, Statement, TableFactor, Visit, Visitor,
+    BinaryOperator, DataType, Expr, ObjectName, Query as SqlQuery, Select, SetExpr, Statement,
+    TableFactor, Value, Visit, Visitor,
 };
 use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
@@ -667,6 +668,336 @@ pub fn validate_read_only_gated(
     }
     Ok(())
 }
+/// Fixed vocabulary used by query admission and query telemetry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TableFamily {
+    Spans,
+    Logs,
+    Metrics,
+    Profiles,
+    Multiple,
+    None,
+}
+
+impl TableFamily {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Spans => "spans",
+            Self::Logs => "logs",
+            Self::Metrics => "metrics",
+            Self::Profiles => "profiles",
+            Self::Multiple => "multiple",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ResourcePolicyError {
+    RequiresTimeBounds { primary_table_family: TableFamily },
+}
+
+impl ResourcePolicyError {
+    pub const fn code(self) -> &'static str {
+        "query_requires_time_bounds"
+    }
+
+    pub const fn primary_table_family(self) -> TableFamily {
+        match self {
+            Self::RequiresTimeBounds {
+                primary_table_family,
+            } => primary_table_family,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RawScan {
+    family: TableFamily,
+    qualifier: String,
+    lower: bool,
+    upper: bool,
+    sealed: bool,
+}
+
+fn raw_family(name: &ObjectName) -> Option<TableFamily> {
+    match name.0.last()?.value.to_ascii_uppercase().as_str() {
+        "SIGIRO_SPANS" => Some(TableFamily::Spans),
+        "SIGIRO_LOGS" => Some(TableFamily::Logs),
+        "SIGIRO_METRICS_GAUGE"
+        | "SIGIRO_METRICS_SUM"
+        | "SIGIRO_METRICS_HISTOGRAM"
+        | "SIGIRO_METRICS_EXP_HISTOGRAM" => Some(TableFamily::Metrics),
+        "SIGIRO_PROFILES" => Some(TableFamily::Profiles),
+        _ => None,
+    }
+}
+
+fn qualified_timestamp(expr: &Expr, alias: Option<&str>) -> bool {
+    match expr {
+        Expr::Identifier(ident) => ident.value.eq_ignore_ascii_case("timestamp"),
+        Expr::CompoundIdentifier(parts) if parts.len() >= 2 => {
+            parts
+                .last()
+                .is_some_and(|part| part.value.eq_ignore_ascii_case("timestamp"))
+                && alias.is_some_and(|a| {
+                    parts[..parts.len() - 1]
+                        .last()
+                        .is_some_and(|qualifier| qualifier.value.eq_ignore_ascii_case(a))
+                })
+        }
+        _ => false,
+    }
+}
+
+fn timestamp_ref(expr: &Expr) -> bool {
+    matches!(expr, Expr::Identifier(ident) if ident.value.eq_ignore_ascii_case("timestamp"))
+        || matches!(expr, Expr::CompoundIdentifier(parts) if parts.len() >= 2 && parts.last().is_some_and(|part| part.value.eq_ignore_ascii_case("timestamp")))
+}
+
+fn literal_timestamp(expr: &Expr) -> bool {
+    match expr {
+        Expr::TypedString { data_type, .. } => matches!(data_type, DataType::Timestamp(_, _)),
+        Expr::Cast {
+            expr, data_type, ..
+        } => {
+            matches!(data_type, DataType::Timestamp(_, _))
+                && matches!(expr.as_ref(), Expr::Value(Value::SingleQuotedString(_)))
+        }
+        _ => false,
+    }
+}
+
+fn mark_bound(expr: &Expr, scans: &mut [RawScan]) {
+    let Expr::BinaryOp { left, op, right } = expr else {
+        return;
+    };
+    let (column, value, lower) = match op {
+        BinaryOperator::GtEq if timestamp_ref(left) => (left.as_ref(), right.as_ref(), true),
+        BinaryOperator::Lt if timestamp_ref(left) => (left.as_ref(), right.as_ref(), false),
+        BinaryOperator::LtEq if timestamp_ref(right) => (right.as_ref(), left.as_ref(), true),
+        BinaryOperator::Gt if timestamp_ref(right) => (right.as_ref(), left.as_ref(), false),
+        _ => return,
+    };
+    if !literal_timestamp(value) {
+        return;
+    }
+    let unqualified = matches!(column, Expr::Identifier(_));
+    let single_scan = scans.len() == 1;
+    for scan in scans.iter_mut() {
+        if scan.sealed || (unqualified && !single_scan) {
+            continue;
+        }
+        if qualified_timestamp(
+            column,
+            if unqualified {
+                None
+            } else {
+                Some(&scan.qualifier)
+            },
+        ) {
+            if lower {
+                scan.lower = true;
+            } else {
+                scan.upper = true;
+            }
+        }
+    }
+}
+
+fn inspect_expr(expr: &Expr, scans: &mut [RawScan]) -> bool {
+    matches!(
+        expr.visit(&mut BoundVisitor { scans }),
+        ControlFlow::Break(())
+    )
+}
+
+struct BoundVisitor<'a> {
+    scans: &'a mut [RawScan],
+}
+impl Visitor for BoundVisitor<'_> {
+    type Break = ();
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<()> {
+        if matches!(
+            expr,
+            Expr::Subquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. }
+        ) {
+            return ControlFlow::Break(());
+        }
+        mark_bound(expr, self.scans);
+        ControlFlow::Continue(())
+    }
+}
+
+struct RawTableCounter {
+    count: usize,
+    family: TableFamily,
+}
+impl Visitor for RawTableCounter {
+    type Break = ();
+    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<()> {
+        let Some(family) = (match factor {
+            TableFactor::Table { name, .. } => raw_family(name),
+            _ => None,
+        }) else {
+            return ControlFlow::Continue(());
+        };
+        self.count += 1;
+        self.family = if self.family == TableFamily::None || self.family == family {
+            family
+        } else {
+            TableFamily::Multiple
+        };
+        ControlFlow::Continue(())
+    }
+}
+
+fn inspect_factor(factor: &TableFactor, scans: &mut Vec<RawScan>) -> bool {
+    match factor {
+        TableFactor::Table { name, alias, .. } => {
+            if let Some(family) = raw_family(name) {
+                scans.push(RawScan {
+                    family,
+                    qualifier: alias.as_ref().map_or_else(
+                        || {
+                            name.0
+                                .last()
+                                .expect("raw table name is non-empty")
+                                .value
+                                .clone()
+                        },
+                        |a| a.name.value.clone(),
+                    ),
+                    lower: false,
+                    upper: false,
+                    sealed: false,
+                });
+            }
+            false
+        }
+        TableFactor::Derived { subquery, .. } => {
+            let before = scans.len();
+            let nested = inspect_set_expr(&subquery.body, scans);
+            for scan in &mut scans[before..] {
+                scan.sealed = true;
+            }
+            nested
+        }
+        TableFactor::NestedJoin {
+            table_with_joins, ..
+        } => inspect_table_with_joins(table_with_joins, scans),
+        _ => false,
+    }
+}
+
+fn inspect_table_with_joins(
+    table: &sqlparser::ast::TableWithJoins,
+    scans: &mut Vec<RawScan>,
+) -> bool {
+    let mut nested = inspect_factor(&table.relation, scans);
+    for join in &table.joins {
+        nested |= inspect_factor(&join.relation, scans);
+    }
+    nested
+}
+
+fn inspect_select(select: &Select, scans: &mut Vec<RawScan>) -> bool {
+    let before = scans.len();
+    let mut nested = false;
+    for table in &select.from {
+        nested |= inspect_table_with_joins(table, scans);
+    }
+    nested |= inspect_exprs_in_select(select, &mut scans[before..]);
+    nested
+}
+
+fn inspect_exprs_in_select(select: &Select, scans: &mut [RawScan]) -> bool {
+    let mut nested = false;
+    for item in &select.projection {
+        if let sqlparser::ast::SelectItem::ExprWithAlias { expr, .. } = item {
+            nested |= inspect_expr(expr, scans);
+        }
+        if let sqlparser::ast::SelectItem::UnnamedExpr(expr) = item {
+            nested |= inspect_expr(expr, scans);
+        }
+    }
+    if let Some(selection) = &select.selection {
+        nested |= inspect_expr(selection, scans);
+    }
+    for table in &select.from {
+        for join in &table.joins {
+            nested |= matches!(
+                join.join_operator.visit(&mut BoundVisitor { scans }),
+                ControlFlow::Break(())
+            );
+        }
+    }
+    if let sqlparser::ast::GroupByExpr::Expressions(exprs, _) = &select.group_by {
+        for e in exprs {
+            nested |= inspect_expr(e, scans);
+        }
+    }
+    if let Some(having) = &select.having {
+        nested |= inspect_expr(having, scans);
+    }
+    nested
+}
+
+fn inspect_set_expr(expr: &SetExpr, scans: &mut Vec<RawScan>) -> bool {
+    match expr {
+        SetExpr::Select(select) => inspect_select(select, scans),
+        SetExpr::Query(query) => inspect_set_expr(&query.body, scans),
+        SetExpr::SetOperation { left, right, .. } => {
+            inspect_set_expr(left, scans) | inspect_set_expr(right, scans)
+        }
+        _ => false,
+    }
+}
+
+/// Enforce the evidence-backed admission rule for public raw telemetry reads.
+/// Security validation must run first; this function only answers whether each
+/// high-volume physical scan is provably half-open bounded by literal timestamps.
+pub fn validate_raw_telemetry_policy(sql: &str) -> Result<TableFamily, ResourcePolicyError> {
+    let dialect = DuckDbDialect {};
+    let statements =
+        Parser::parse_sql(&dialect, sql).map_err(|_| ResourcePolicyError::RequiresTimeBounds {
+            primary_table_family: TableFamily::None,
+        })?;
+    let Some(Statement::Query(query)) = statements.first() else {
+        return Ok(TableFamily::None);
+    };
+    let mut scans = Vec::new();
+    let nested = inspect_set_expr(&query.body, &mut scans);
+    let mut counter = RawTableCounter {
+        count: 0,
+        family: TableFamily::None,
+    };
+    let _visit_result = query.visit(&mut counter);
+    let family = scans
+        .iter()
+        .map(|s| s.family)
+        .fold(TableFamily::None, |acc, next| {
+            if acc == TableFamily::None {
+                next
+            } else if acc == next {
+                acc
+            } else {
+                TableFamily::Multiple
+            }
+        });
+    let family = if family == TableFamily::None {
+        counter.family
+    } else {
+        family
+    };
+    if nested || counter.count != scans.len() || scans.iter().any(|s| !s.lower || !s.upper) {
+        return Err(ResourcePolicyError::RequiresTimeBounds {
+            primary_table_family: family,
+        });
+    }
+    Ok(family)
+}
+
 /// Convert one DuckDB column value to a `serde_json::Value`. The ONE
 /// canonical value converter — shared by the `/v1/query` HTTP path
 /// (`execute_sql` above) and the federated query coordinator
@@ -768,5 +1099,85 @@ fn decimal_to_json(exact: &str) -> serde_json::Value {
         serde_json::json!(f)
     } else {
         serde_json::Value::String(exact.to_string())
+    }
+}
+
+#[cfg(test)]
+mod raw_telemetry_policy_tests {
+    use super::{TableFamily, validate_raw_telemetry_policy};
+
+    const BOUNDS: &str = "timestamp >= TIMESTAMP '2026-01-01 00:00:00' AND timestamp < TIMESTAMP '2026-01-02 00:00:00'";
+
+    #[test]
+    fn admits_safe_and_literal_bounded_queries() {
+        for query in [
+            "SELECT 1",
+            "SELECT * FROM range(3)",
+            "SELECT * FROM pragma_database_size()",
+            "SELECT * FROM lake.sigiro_anomalies",
+            "SELECT * FROM lake.sigiro_log_templates",
+        ] {
+            assert!(validate_raw_telemetry_policy(query).is_ok(), "{query}");
+        }
+        for table in [
+            "sigiro_spans",
+            "sigiro_logs",
+            "sigiro_metrics_gauge",
+            "sigiro_metrics_sum",
+            "sigiro_metrics_histogram",
+            "sigiro_metrics_exp_histogram",
+            "sigiro_profiles",
+        ] {
+            let query = format!("SELECT * FROM lake.{table} WHERE {BOUNDS}");
+            assert!(validate_raw_telemetry_policy(&query).is_ok(), "{query}");
+        }
+        assert_eq!(
+            validate_raw_telemetry_policy(&format!(
+                "SELECT * FROM lake.sigiro_spans WHERE {BOUNDS}"
+            )),
+            Ok(TableFamily::Spans)
+        );
+        assert!(validate_raw_telemetry_policy("SELECT * FROM lake.sigiro_spans s WHERE s.timestamp >= CAST('2026-01-01' AS TIMESTAMP) AND s.timestamp < CAST('2026-01-02' AS TIMESTAMP)").is_ok());
+        assert!(validate_raw_telemetry_policy("SELECT * FROM lake.sigiro_spans WHERE sigiro_spans.timestamp >= TIMESTAMP '2026-01-01' AND sigiro_spans.timestamp < TIMESTAMP '2026-01-02'").is_ok());
+        assert!(validate_raw_telemetry_policy("SELECT * FROM lake.sigiro_spans WHERE lake.sigiro_spans.timestamp >= TIMESTAMP '2026-01-01' AND lake.sigiro_spans.timestamp < TIMESTAMP '2026-01-02'").is_ok());
+    }
+
+    #[test]
+    fn rejects_unbounded_dynamic_or_ambiguous_queries() {
+        for query in [
+            "SELECT * FROM lake.sigiro_spans",
+            "SELECT * FROM lake.sigiro_spans LIMIT 1",
+            "SELECT * FROM lake.sigiro_spans WHERE timestamp >= now() - INTERVAL '1 hour' AND timestamp < now()",
+            "SELECT * FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01'",
+            "SELECT * FROM lake.sigiro_spans WHERE timestamp > TIMESTAMP '2026-01-01' AND timestamp <= TIMESTAMP '2026-01-02'",
+            "SELECT * FROM lake.sigiro_spans WHERE timestamp BETWEEN TIMESTAMP '2026-01-01' AND TIMESTAMP '2026-01-02'",
+            "SELECT * FROM lake.sigiro_spans WHERE timestamp >= '2026-01-01' AND timestamp < '2026-01-02'",
+            "SELECT * FROM lake.sigiro_spans a JOIN lake.sigiro_logs b ON true WHERE a.timestamp >= TIMESTAMP '2026-01-01' AND a.timestamp < TIMESTAMP '2026-01-02'",
+            "SELECT * FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02' UNION ALL SELECT * FROM lake.sigiro_logs",
+            "SELECT * FROM (SELECT * FROM lake.sigiro_spans) x WHERE x.timestamp >= TIMESTAMP '2026-01-01' AND x.timestamp < TIMESTAMP '2026-01-02'",
+            "SELECT * FROM lake.sigiro_spans s WHERE wrong.timestamp >= TIMESTAMP '2026-01-01' AND wrong.timestamp < TIMESTAMP '2026-01-02'",
+        ] {
+            assert!(
+                validate_raw_telemetry_policy(query).is_err(),
+                "unexpected pass: {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn requires_every_physical_scan_to_be_bounded() {
+        let joined = "SELECT * FROM lake.sigiro_spans a JOIN lake.sigiro_logs b ON a.trace_id = b.trace_id WHERE a.timestamp >= TIMESTAMP '2026-01-01' AND a.timestamp < TIMESTAMP '2026-01-02' AND b.timestamp >= TIMESTAMP '2026-01-01' AND b.timestamp < TIMESTAMP '2026-01-02'";
+        assert_eq!(
+            validate_raw_telemetry_policy(joined),
+            Ok(TableFamily::Multiple)
+        );
+        let union = "SELECT * FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02' UNION ALL SELECT * FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02'";
+        assert_eq!(validate_raw_telemetry_policy(union), Ok(TableFamily::Spans));
+        let derived = "SELECT * FROM (SELECT * FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02') x";
+        assert_eq!(
+            validate_raw_telemetry_policy(derived),
+            Ok(TableFamily::Spans)
+        );
+        assert!(validate_raw_telemetry_policy("SELECT (SELECT max(timestamp) FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '2026-01-01' AND timestamp < TIMESTAMP '2026-01-02') FROM range(1)").is_err());
     }
 }
