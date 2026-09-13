@@ -844,7 +844,7 @@ fn diagnose_one(
     // window (safely quoted), which the SQL doesn't have handy — so it's pure
     // string work, no extra DB round-trip. Each targets /v1/query verbatim, so
     // an agent that spots a lead can execute it directly to go deeper.
-    let err = StatusCode::Error.as_i32();
+    let is_err = is_error_expr("");
     let svc = service.replace('\'', "''");
     let window = format!("timestamp BETWEEN make_timestamp({from_ts}) AND make_timestamp({to_ts})");
     // Reproduce the win_spans filter exactly so a drilled count reconciles with
@@ -892,7 +892,7 @@ fn diagnose_one(
         op.drill_down_sql = Some(format!(
             "SELECT * FROM {prefix}sigiro_spans \
              WHERE {span_scope} AND {filter} \
-             ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC"
+             ORDER BY CASE WHEN {is_err} THEN 0 ELSE 1 END, duration DESC"
         ));
     }
 
@@ -913,7 +913,7 @@ fn diagnose_one(
         drill_all_sql: format!(
             "SELECT * FROM {prefix}sigiro_spans \
              WHERE {span_scope} \
-             ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC"
+             ORDER BY CASE WHEN {is_err} THEN 0 ELSE 1 END, duration DESC"
         ),
         sample: span_rows,
     };
@@ -1126,14 +1126,14 @@ fn diagnose_one(
             severity: FindingSeverity::Warning,
             summary: format!(
                 "{} error trace(s){mostly} but zero ERROR-severity logs in this window — \
-                 these failures are only visible via span status/status_message; check \
+                 these failures are only visible via span telemetry; check \
                  that exceptions are logged and exported",
                 payload.stats.error_traces_total
             ),
             kind: FindingKind::ErrorsWithoutLogs {
                 drill_down_sql: Some(format!(
                     "SELECT {error_type} AS error_type, * FROM {prefix}sigiro_spans \
-                     WHERE {span_scope} AND status_code = {err} ORDER BY timestamp DESC",
+                     WHERE {span_scope} AND {is_err} ORDER BY timestamp DESC",
                     error_type = error_type_expr("")
                 )),
             },
@@ -1290,6 +1290,17 @@ NULLIF(json_extract_string({q}span_attributes, 'server.address'), '')), '') \
     )
 }
 
+/// The preferred HTTP response status. Current OTel semantic conventions win
+/// when both keys are present; an absent or empty current value falls back to
+/// the legacy `http.status_code` emitted by older instrumentation.
+fn http_status_code_expr(q: &str) -> String {
+    format!(
+        "COALESCE(\
+NULLIF(json_extract_string({q}span_attributes, 'http.response.status_code'), ''), \
+NULLIF(json_extract_string({q}span_attributes, 'http.status_code'), ''))"
+    )
+}
+
 /// The ONE "this span failed" predicate. `q` is the column qualifier ("s."
 /// inside the query, "" in drill SQL).
 ///
@@ -1308,9 +1319,9 @@ NULLIF(json_extract_string({q}span_attributes, 'server.address'), '')), '') \
 /// try_cast) so drill SQL still passes `validate_read_only`.
 pub(crate) fn is_error_expr(q: &str) -> String {
     let err = StatusCode::Error.as_i32();
+    let http_status = http_status_code_expr(q);
     format!(
-        "({q}status_code = {err} OR TRY_CAST(NULLIF(json_extract_string(\
-{q}span_attributes, 'http.response.status_code'), '') AS INTEGER) >= 500)"
+        "({q}status_code = {err} OR COALESCE(TRY_CAST({http_status} AS INTEGER) >= 500, false))"
     )
 }
 
@@ -1335,10 +1346,10 @@ lower({q}severity_text) IN ('error', 'err', 'critical', 'crit', 'alert', 'emerge
 
 /// The ONE derived OTel `error.type` expression (semconv "recording
 /// errors", STABLE) — the failure-mode dimension of an error span. Only
-/// meaningful for error spans: callers gate on `status_code = 2` themselves
-/// (a CASE in `win_spans`, a WHERE in drill SQL). Priority per span:
+/// meaningful for error spans: callers gate on [`is_error_expr`]. Priority per span:
 /// 1. the span's real `error.type` attribute — the standard, wins outright;
-/// 2. `http.response.status_code` — OTel's own rule for HTTP status errors:
+/// 2. current `http.response.status_code`, then legacy `http.status_code` —
+///    OTel's own rule for HTTP status errors:
 ///    `error.type` IS the code string ("429", "500");
 /// 3. 'timeout' when `status_message` mentions one — most SDKs today (e.g.
 ///    shopfront's) emit only free-text status;
@@ -1351,10 +1362,11 @@ lower({q}severity_text) IN ('error', 'err', 'critical', 'crit', 'alert', 'emerge
 /// it passes `validate_read_only` verbatim. `q` is the column qualifier,
 /// exactly as in `operation_key_expr`.
 fn error_type_expr(q: &str) -> String {
+    let http_status = http_status_code_expr(q);
     format!(
         "COALESCE(\
 NULLIF(json_extract_string({q}span_attributes, 'error.type'), ''), \
-NULLIF(json_extract_string({q}span_attributes, 'http.response.status_code'), ''), \
+{http_status}, \
 CASE WHEN contains(lower(COALESCE({q}status_message, '')), 'timeout') THEN 'timeout' END, \
 '_OTHER')"
     )
@@ -1381,8 +1393,9 @@ pub(crate) fn operation_drill_filter(span_name: &str, operation: &str) -> String
 /// Every section is a CTE; the final SELECT packs them into one JSON object
 /// via scalar subqueries, so the whole diagnosis is a single round-trip.
 pub(crate) fn build_diagnosis_sql(prefix: &str, bucket: &str) -> String {
-    let err = StatusCode::Error.as_i32();
     let is_err_s = is_error_expr("s.");
+    let is_err_s1 = is_error_expr("s1.");
+    let is_err_s2 = is_error_expr("s2.");
     let is_err_log = is_error_log_expr("");
     let is_err_log_l = is_error_log_expr("l.");
     let op_key = operation_key_expr("s.");
@@ -1574,7 +1587,7 @@ gen_ai_spans AS (
                NULLIF(json_extract_string(s.span_attributes, 'gen_ai.response.model'), '')
            ) AS model,
            NULLIF(json_extract_string(s.span_attributes, 'gen_ai.operation.name'), '') AS operation,
-           s.status_code, s.duration,
+           {is_err_s} AS is_error, s.duration,
            TRY_CAST(json_extract_string(s.span_attributes, 'gen_ai.usage.input_tokens') AS BIGINT) AS input_tokens,
            TRY_CAST(json_extract_string(s.span_attributes, 'gen_ai.usage.output_tokens') AS BIGINT) AS output_tokens,
            -- Semconv says finish_reasons is a string ARRAY; tolerate SDKs
@@ -1590,7 +1603,7 @@ gen_ai_spans AS (
 gen_ai_models AS (
     SELECT system, model,
            count(*) AS call_count,
-           count(CASE WHEN status_code = {err} THEN 1 END) * 100.0 / count(*) AS error_pct,
+           count(CASE WHEN is_error THEN 1 END) * 100.0 / count(*) AS error_pct,
            approx_quantile(duration, 0.95) AS p95,
            -- sum skips NULLs and is NULL when every call lacked the attr —
            -- "not reported" stays distinct from a real 0.
@@ -1699,10 +1712,10 @@ top_spans AS (
            epoch_us(s.timestamp) AS start_ts,
            s.end_timestamp AS end_ts,
            s.timestamp::VARCHAR AS start_iso,
-           s.span_attributes, s.events_json
+           s.span_attributes, s.events_json, {is_err_s} AS is_error
     FROM {prefix}sigiro_spans s, args a
     WHERE {span_win}
-    ORDER BY CASE WHEN s.status_code = {err} THEN 0 ELSE 1 END, s.duration DESC
+    ORDER BY CASE WHEN is_error THEN 0 ELSE 1 END, s.duration DESC
     LIMIT 25
 ),
 raw_logs AS (
@@ -1894,8 +1907,8 @@ svc_traces AS (
 deps AS (
     SELECT s2.service_name,
            count(*) AS span_count,
-           count(CASE WHEN s2.status_code = {err} THEN 1 END) AS error_count,
-           count(CASE WHEN s2.status_code = {err} THEN 1 END) * 100.0 / count(*) AS error_rate
+           count(CASE WHEN {is_err_s2} THEN 1 END) AS error_count,
+           count(CASE WHEN {is_err_s2} THEN 1 END) * 100.0 / count(*) AS error_rate
     FROM {prefix}sigiro_spans s2
     JOIN client_traces ct ON s2.trace_id = ct.trace_id, args a
     WHERE s2.service_name != a.service
@@ -1907,8 +1920,8 @@ deps AS (
 dependents AS (
     SELECT s1.service_name,
            count(*) AS span_count,
-           count(CASE WHEN s1.status_code = {err} THEN 1 END) AS error_count,
-           count(CASE WHEN s1.status_code = {err} THEN 1 END) * 100.0 / count(*) AS error_rate
+           count(CASE WHEN {is_err_s1} THEN 1 END) AS error_count,
+           count(CASE WHEN {is_err_s1} THEN 1 END) * 100.0 / count(*) AS error_rate
     FROM {prefix}sigiro_spans s1
     JOIN svc_traces st ON s1.trace_id = st.trace_id, args a
     WHERE s1.service_name != a.service
@@ -1988,11 +2001,11 @@ SELECT json_object(
         'trace_id', trace_id, 'span_id', span_id, 'parent_span_id', parent_span_id,
         'span_name', span_name, 'span_kind', span_kind, 'status_code', status_code,
         'status_message', status_message,
-        'is_error', status_code = {err}, 'duration_us', duration_us,
+        'is_error', is_error, 'duration_us', duration_us,
         'start_ts', start_ts, 'end_ts', end_ts, 'start_iso', start_iso,
         'span_attributes', TRY_CAST(span_attributes AS JSON),
         'events', TRY_CAST(events_json AS JSON)
-    ) ORDER BY CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration_us DESC)),
+    ) ORDER BY CASE WHEN is_error THEN 0 ELSE 1 END, duration_us DESC)),
         '[]'::JSON) FROM top_spans),
     'log_patterns', (SELECT COALESCE(to_json(list(json_object(
         'pattern', pattern, 'template_id', template_id, 'example_body', example_body,

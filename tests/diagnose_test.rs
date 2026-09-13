@@ -2609,6 +2609,167 @@ fn error_breakdown_groups_failure_modes_by_derive_priority() {
 }
 
 #[test]
+fn http_error_classification_prefers_current_status_and_falls_back_to_legacy() {
+    let conn = duckdb::Connection::open_in_memory().expect("in-memory db");
+    sigiro::schema::create_tables(&conn, "").expect("create tables");
+    let now_us = 1_800_000_000_000_000_i64;
+    let cases = [
+        ("current", r#"{"http.response.status_code":"500"}"#, 3_000),
+        ("legacy", r#"{"http.status_code":"500"}"#, 1_000),
+        (
+            "current-wins",
+            r#"{"http.response.status_code":"200","http.status_code":"500"}"#,
+            9_000,
+        ),
+        (
+            "empty-current-falls-back",
+            r#"{"http.response.status_code":"","http.status_code":"500"}"#,
+            2_000,
+        ),
+        ("neither", r#"{}"#, 8_000),
+        ("empty", r#"{"http.status_code":""}"#, 7_000),
+        ("malformed", r#"{"http.status_code":{}}"#, 6_000),
+        (
+            "non-numeric",
+            r#"{"http.status_code":"server-error"}"#,
+            5_000,
+        ),
+    ];
+    for (i, (name, attributes, duration)) in cases.into_iter().enumerate() {
+        conn.execute(
+            "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, trace_id, span_id,
+                parent_span_id, span_name, span_kind, status_code, service_name, span_attributes)
+             VALUES (make_timestamp(?), ? + ?, ?, ?, ?, '', 'GET /status', 2, 1, 'api', ?)",
+            duckdb::params![
+                now_us + i as i64,
+                now_us + i as i64,
+                duration,
+                duration,
+                name,
+                "",
+                attributes
+            ],
+        )
+        .expect("insert status case");
+    }
+
+    let block = diagnose_service(&conn, "api", now_us - 60_000_000, now_us + 60_000_000);
+    assert_eq!(block.error_traces_total, 3);
+    let operation = block
+        .operation_summaries
+        .iter()
+        .find(|operation| operation.operation == "GET /status")
+        .expect("status operation");
+    assert_eq!(operation.error_count, 3);
+    assert_eq!(operation.error_breakdown[0].error_type, "500");
+    assert_eq!(operation.error_breakdown[0].count, 3);
+
+    let sampled_json = serde_json::to_value(&block.spans.sample).expect("serialize span sample");
+    let sampled: Vec<_> = sampled_json
+        .as_array()
+        .expect("span sample array")
+        .iter()
+        .map(|span| {
+            (
+                span["trace_id"].as_str().expect("trace id"),
+                span["is_error"].as_bool().expect("error flag"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sampled[..3],
+        [
+            ("current", true),
+            ("empty-current-falls-back", true),
+            ("legacy", true)
+        ],
+        "all generated diagnosis ordering must use the shared classification"
+    );
+    assert!(
+        sampled.iter().skip(3).all(|(_, is_error)| !is_error),
+        "current 200 must win over legacy 500; absent, empty, malformed, and non-numeric values stay healthy"
+    );
+
+    let drill = operation
+        .drill_down_sql
+        .as_deref()
+        .expect("operation drill");
+    sigiro::sql::validate_read_only(drill).expect("generated operation drill passes firewall");
+    let first: String = conn
+        .query_row(drill, [], |row| row.get("trace_id"))
+        .expect("execute operation drill");
+    assert_eq!(
+        first, "current",
+        "generated drill must order HTTP errors first"
+    );
+
+    let finding = block
+        .findings
+        .iter()
+        .find(|finding| finding.kind.as_str() == "errors_without_logs")
+        .expect("errors-without-logs finding");
+    let finding_drill = finding.kind.drill_down_sql().expect("finding drill");
+    let legacy_count: i64 = conn
+        .query_row(
+            &format!(
+                "SELECT count(*) FROM ({finding_drill}) errors WHERE trace_id = 'legacy' AND error_type = '500'"
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .expect("execute finding drill");
+    assert_eq!(
+        legacy_count, 1,
+        "legacy-only 500 must not fall through to _OTHER"
+    );
+
+    let anomaly_conn = duckdb::Connection::open_in_memory().expect("anomaly db");
+    sigiro::schema::create_tables(&anomaly_conn, "").expect("create anomaly tables");
+    let bucket = 5 * 60_000_000_i64;
+    for i in 11..=40_i64 {
+        insert_spans(
+            &anomaly_conn,
+            "legacy-worker",
+            "call upstream",
+            now_us - i * bucket,
+            (10, 0),
+            10_000,
+            Some(r#"{"http.status_code":"200"}"#),
+        );
+    }
+    for i in 1..=10_i64 {
+        insert_spans(
+            &anomaly_conn,
+            "legacy-worker",
+            "call upstream",
+            now_us - i * bucket,
+            (10, 0),
+            10_000,
+            Some(r#"{"http.status_code":"500"}"#),
+        );
+    }
+    assert!(run_anomaly_pass(&anomaly_conn) >= 1);
+    let anomaly_drill: String = anomaly_conn
+        .query_row(
+            "SELECT drill_down_sql FROM sigiro_anomalies
+             WHERE service_name = 'legacy-worker' AND signal = 'error_rate'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("legacy error-rate anomaly");
+    assert!(anomaly_drill.contains("http.response.status_code"));
+    assert!(anomaly_drill.contains("http.status_code"));
+    let anomaly_rows: i64 = anomaly_conn
+        .query_row(
+            &format!("SELECT count(*) FROM ({anomaly_drill}) spans"),
+            [],
+            |row| row.get(0),
+        )
+        .expect("execute anomaly drill");
+    assert!(anomaly_rows > 0, "generated anomaly drill must execute");
+}
+
+#[test]
 fn error_rate_anomaly_names_the_new_regimes_dominant_failure_mode() {
     // Old regime: 30% errors, all HTTP 429 (chronic rate-limit noise). New
     // regime: 50% errors, all timeouts. Over a 3h window the WINDOW-wide

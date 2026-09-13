@@ -50,7 +50,6 @@ use duckdb::Connection;
 use crate::diagnose::{
     is_error_expr, is_error_log_expr, operation_drill_filter, operation_key_expr,
 };
-use crate::types::StatusCode;
 
 /// How far back the pass looks when building each entity's series. Matches
 /// the raw retention default (7 days) — a coverage window for the series,
@@ -555,12 +554,14 @@ fn span_drill_sql(
     shift: &Shift,
     errors_first: bool,
 ) -> String {
-    let err = StatusCode::Error.as_i32();
     let svc = service.replace('\'', "''");
     let filter = operation_drill_filter(span_name, operation);
     let ts = shift.ts_shift_us;
     let order = if errors_first {
-        format!("CASE WHEN status_code = {err} THEN 0 ELSE 1 END, duration DESC")
+        format!(
+            "CASE WHEN {} THEN 0 ELSE 1 END, duration DESC",
+            is_error_expr("")
+        )
     } else {
         "duration DESC".to_string()
     };
