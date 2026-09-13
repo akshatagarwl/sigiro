@@ -30,6 +30,8 @@ export class EveExecution extends Context.Service<EveExecution, {
 
 export interface EveExecutionOptions { readonly url: string; readonly workerToken: string; readonly workerId: string; }
 const asFailure = (cause: unknown): EveFailure => cause instanceof EveFailure ? cause : new EveFailure(cause instanceof Error && typeof cause.message === "string" ? cause.message : String(cause), cause);
+const remainingDeadlineMillis = (acceptedAt: string, deadlineSeconds: number): number =>
+  Date.parse(acceptedAt) + deadlineSeconds * 1000 - Date.now();
 
 export const makeEveExecution = (options: EveExecutionOptions): Layer.Layer<EveExecution, never, JobStore> =>
   Layer.effect(EveExecution, Effect.gen(function* () {
@@ -78,7 +80,7 @@ export const makeEveExecution = (options: EveExecutionOptions): Layer.Layer<EveE
       const id = executionId(request);
       const record = yield* jobs.get(id).pipe(Effect.mapError(asFailure));
       if (record === undefined) return yield* new EveFailure("job disappeared");
-      const remaining = Date.parse(record.acceptedAt) + request.deadlineSeconds * 1000 - Date.now();
+      const remaining = remainingDeadlineMillis(record.acceptedAt, request.deadlineSeconds);
       if (remaining <= 0) return yield* new EveDeadlineExceeded({ sessionId: record.eveSessionId ?? "not-dispatched" });
       const sessionId = yield* sessionFor(record).pipe(
         Effect.timeout(`${remaining} millis`),
@@ -87,7 +89,7 @@ export const makeEveExecution = (options: EveExecutionOptions): Layer.Layer<EveE
       // Eve owns execution durability. The trusted publisher's receipt is the outcome.
       const outcome = yield* receipt(request, sessionId).pipe(
         Effect.repeat({ schedule: Schedule.spaced("1 second"), until: Predicate.isNotUndefined<PublicationReceipt | undefined> }),
-        Effect.timeout(`${Math.max(1, Date.parse(record.acceptedAt) + request.deadlineSeconds * 1000 - Date.now())} millis`),
+        Effect.timeout(`${Math.max(1, remainingDeadlineMillis(record.acceptedAt, request.deadlineSeconds))} millis`),
         Effect.catchTag("TimeoutError", () => new EveDeadlineExceeded({ sessionId })),
       );
       if (outcome.status === "failed") return yield* new EveFailure(outcome.error);
