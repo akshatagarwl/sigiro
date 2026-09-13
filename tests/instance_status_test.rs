@@ -17,13 +17,13 @@ fn create_table_and_write_keys() {
     write_instance_status(&conn, "mode", "otlp").unwrap();
     write_instance_status(&conn, "platform_os", "linux").unwrap();
     write_instance_status(&conn, "platform_arch", "x86_64").unwrap();
-    write_instance_status(&conn, "ebpf_status", "disabled").unwrap();
+    write_instance_status(&conn, "platform_kernel", "6.8.0").unwrap();
 
     let rows = read_all_status(&conn).unwrap();
     assert_eq!(rows.len(), 5);
     assert_eq!(rows.get("version").unwrap(), "0.1.0");
     assert_eq!(rows.get("mode").unwrap(), "otlp");
-    assert_eq!(rows.get("ebpf_status").unwrap(), "disabled");
+    assert_eq!(rows.get("platform_kernel").unwrap(), "6.8.0");
 }
 
 #[test]
@@ -47,7 +47,7 @@ fn batch_matches_individual_writes() {
         ("mode", "otlp"),
         ("platform_os", "linux"),
         ("platform_arch", "x86_64"),
-        ("capability_bpf", "false"),
+        ("platform_kernel", "6.8.0"),
     ];
 
     let singles = test_conn();

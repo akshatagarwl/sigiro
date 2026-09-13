@@ -107,7 +107,7 @@ if [ "$MODE" = "s3" ]; then
     export SIGIRO_S3_ENDPOINT="http://localhost:${RUSTFS_PORT}"
 fi
 
-$SIGIRO_BIN serve --no-ebpf > /tmp/sigiro-server.log 2>&1 &
+$SIGIRO_BIN serve > /tmp/sigiro-server.log 2>&1 &
 SIGIRO_PID=$!
 log "Server PID: ${SIGIRO_PID}"
 sleep 3

@@ -5,7 +5,6 @@ pub mod auth;
 pub mod client;
 pub mod config;
 pub mod drain;
-pub mod ebpf;
 pub mod federate;
 
 pub mod diagnose;

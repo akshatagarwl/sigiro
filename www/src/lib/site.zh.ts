@@ -20,8 +20,8 @@ import type { LandingCopy } from './site.en';
  *    OpenTelemetry, OTLP, SQL, or any product, brand, command, URL, HTTP verb
  *    or path. Those live in `site.shared.ts` where a translation cannot reach
  *    them; the few that appear here are copied byte-for-byte.
- * 4. Never mention Parquet, DuckDB, S3 or eBPF. The storage engine is an
- *    implementation detail.
+ * 4. Never mention storage engines or runtime internals. They are
+ *    implementation details.
  *
  * **WARNING — the causation rule.** English says "suspect deploy", never
  * "cause". sigiro correlates a deploy in time with a shift, and correlation in

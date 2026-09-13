@@ -64,7 +64,7 @@ if [ "$MODE" = "s3" ]; then
     export SIGIRO_S3_ENDPOINT="http://localhost:9000"
 fi
 
-$BIN serve --no-ebpf > /tmp/sigiro-$$-server.log 2>&1 &
+$BIN serve > /tmp/sigiro-$$-server.log 2>&1 &
 echo $! > "$PID_FILE"
 SERVER_PID=$(cat "$PID_FILE")
 log "Server PID: ${SERVER_PID}"

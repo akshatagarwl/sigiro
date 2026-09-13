@@ -40,9 +40,8 @@ provision:
     set -eux -o pipefail
     export DEBIAN_FRONTEND=noninteractive
 
-    # Install eBPF dependencies
     apt-get update
-    apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git bpfcc-tools linux-headers-generic
+    apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git
 
     # Create sigiro user and data directory
     useradd -m -s /bin/bash sigiro || true
@@ -68,14 +67,12 @@ provision:
     export SIGIRO_OTLP_HTTP_PORT=4318
     export SIGIRO_CENTRAL_URL=http://host.lima.internal:9999
     export SIGIRO_API_KEY=sigiro_dev_test
-    export SIGIRO_EBPF=true
     export SIGIRO_QUACK_PORT=5432
     export SIGIRO_QUACK_TOKEN=fed-token-central
 
     # SIGIRO_ENDPOINT and SIGIRO_QUACK_ADVERTISE_PORT are set by the test script
     # based on the host port-forward mapping for this VM.
 
-    # Run as federation collector with eBPF
     ./sigiro serve 2>&1 | tee /tmp/sigiro-collector.log
     RUNCOLLECTOR
     chmod +x "${VM_HOME}/sigiro/bin/run-collector.sh"

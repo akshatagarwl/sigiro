@@ -32,7 +32,7 @@ provision:
     set -eux -o pipefail
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git bpfcc-tools linux-headers-generic
+    apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev git
 
     # Install Rust
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
@@ -62,7 +62,6 @@ provision:
 
     mkdir -p "$SIGIRO_DATA_DIR"
 
-    # Run with eBPF auto-instrumentation
-    ./sigiro serve --ebpf 2>&1 | tee /tmp/sigiro-new.log
+    ./sigiro serve 2>&1 | tee /tmp/sigiro-new.log
     RUNNEW
     chmod +x "${VM_HOME}/sigiro/bin/run-new.sh"

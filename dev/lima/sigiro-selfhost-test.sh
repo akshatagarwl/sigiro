@@ -93,7 +93,7 @@ vm_ssh "$OLD_VM" "cd ~/sigiro && \
   SIGIRO_HTTP_PORT=9999 \
   SIGIRO_GRPC_PORT=4317 \
   SIGIRO_OTLP_HTTP_PORT=4318 \
-  nohup ./target/release/sigiro serve --no-ebpf > /tmp/sigiro-old.log 2>&1 & \
+  nohup ./target/release/sigiro serve > /tmp/sigiro-old.log 2>&1 & \
   echo \"Old PID: \$!\""
 
 sleep 5
@@ -117,7 +117,7 @@ vm_ssh "$NEW_VM" "cd ~/sigiro && \
   SIGIRO_OTLP_HTTP_PORT=4315 \
   OTEL_EXPORTER_OTLP_ENDPOINT=http://${OLD_IP}:4317 \
   SIGIRO_PYROSCOPE_ENDPOINT=http://${OLD_IP}:9999 \
-  nohup ./target/release/sigiro serve --ebpf > /tmp/sigiro-new.log 2>&1 & \
+  nohup ./target/release/sigiro serve > /tmp/sigiro-new.log 2>&1 & \
   echo \"New PID: \$!\""
 
 sleep 10

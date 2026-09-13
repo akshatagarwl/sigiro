@@ -354,28 +354,6 @@ fn probe_kernel_release() -> String {
     }
 }
 
-/// Effective (CAP_BPF, CAP_NET_ADMIN). Always (false, false) off Linux, where
-/// the capability model does not exist and the eBPF path cannot run anyway.
-fn probe_capabilities() -> (bool, bool) {
-    #[cfg(target_os = "linux")]
-    {
-        (
-            caps::has_cap(None, caps::CapSet::Effective, caps::Capability::CAP_BPF)
-                .unwrap_or(false),
-            caps::has_cap(
-                None,
-                caps::CapSet::Effective,
-                caps::Capability::CAP_NET_ADMIN,
-            )
-            .unwrap_or(false),
-        )
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        (false, false)
-    }
-}
-
 async fn run_serve() -> Result<()> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)
@@ -398,7 +376,6 @@ async fn run_serve() -> Result<()> {
     let admin_conn = sigiro::admin::open_admin_db(&dir)?;
 
     let kernel = probe_kernel_release();
-    let (has_bpf, has_net_admin) = probe_capabilities();
 
     // Pre-create the "default" project.
     //
@@ -479,25 +456,8 @@ async fn run_serve() -> Result<()> {
             ("platform_os", std::env::consts::OS),
             ("platform_arch", std::env::consts::ARCH),
             ("platform_kernel", &kernel),
-            ("capability_bpf", if has_bpf { "true" } else { "false" }),
-            (
-                "capability_net_admin",
-                if has_net_admin { "true" } else { "false" },
-            ),
         ],
     )?;
-
-    // eBPF capability probe: read-only "could this host run eBPF
-    // auto-instrumentation" check, recorded to instance_status. The launcher
-    // itself is a future feature — there is nothing to start here yet.
-    let ebpf_status = sigiro::ebpf::ebpf_status("obi");
-    sigiro::ebpf::write_ebpf_status(&admin_conn, &ebpf_status)?;
-    if ebpf_status.status != "ready" {
-        tracing::info!(
-            "eBPF unavailable: {} — running in OTLP-only mode",
-            ebpf_status.reason
-        );
-    }
 
     tracing::info!("sigiro init complete — data_dir={}", dir);
     // The init-complete flag is NOT flipped here. It used to be, and that made

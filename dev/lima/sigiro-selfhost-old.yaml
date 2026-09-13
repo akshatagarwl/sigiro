@@ -51,6 +51,6 @@ provision:
     export SIGIRO_DATA_DIR=/tmp/sigiro-old
     mkdir -p "$SIGIRO_DATA_DIR"
     cd "${VM_HOME}/sigiro/bin"
-    ./sigiro serve --no-ebpf 2>&1 | tee /tmp/sigiro-old.log
+    ./sigiro serve 2>&1 | tee /tmp/sigiro-old.log
     RUNOLD
     chmod +x "${VM_HOME}/sigiro/bin/run-old.sh"

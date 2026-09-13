@@ -256,7 +256,6 @@ export SIGIRO_HTTP_PORT=9999
 export SIGIRO_OTLP_HTTP_PORT=4318
 export SIGIRO_CENTRAL_URL=http://host.lima.internal:${CENTRAL_HTTP_PORT}
 export SIGIRO_API_KEY=sigiro_dev_test
-export SIGIRO_EBPF=false
 export SIGIRO_QUACK_PORT=5432
 export SIGIRO_QUACK_TOKEN=fed-token-central
 mkdir -p ${C1_HOME}/sigiro/data
@@ -274,7 +273,6 @@ export SIGIRO_HTTP_PORT=9999
 export SIGIRO_OTLP_HTTP_PORT=4318
 export SIGIRO_CENTRAL_URL=http://host.lima.internal:${CENTRAL_HTTP_PORT}
 export SIGIRO_API_KEY=sigiro_dev_test
-export SIGIRO_EBPF=false
 export SIGIRO_QUACK_PORT=5432
 export SIGIRO_QUACK_TOKEN=fed-token-central
 mkdir -p ${C2_HOME}/sigiro/data

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy OTel demo on K8s with real eBPF profiles and verify telemetry.
+# Deploy OTel demo on K8s and verify telemetry.
 # Usage: ./run.sh [--context <k8s-context>] [--cleanup] [--skip-build]
 set -euo pipefail
 
@@ -97,7 +97,7 @@ kubectl -n "$NS" wait --for=condition=ready pod -l app=postgresql --timeout=60s
 
 # --- Phase 3: Collector DaemonSet ---
 echo ""
-echo "=== Phase 3: Collector DaemonSet (eBPF) ==="
+echo "=== Phase 3: Collector DaemonSet ==="
 kubectl apply -f "$SCRIPT_DIR/collector.yaml"
 
 echo "Waiting for collector..."
@@ -118,7 +118,7 @@ done
 # --- Phase 5: Collect telemetry ---
 echo ""
 echo "=== Phase 5: Collecting telemetry (3 minutes) ==="
-echo "Load generator is driving traffic through the demo. eBPF profiler is capturing stacks."
+echo "Load generator is driving traffic through the demo."
 sleep 180
 
 # --- Phase 6: Verify ---
@@ -230,15 +230,6 @@ echo ""
 echo "=== K8s metadata enrichment ==="
 run_check "Spans have k8s.namespace.name in metadata" \
   "SELECT count(*) > 0 FROM $PARQUET WHERE signal='span' AND metadata LIKE '%k8s.namespace.name%';" "true"
-run_info "Profiles have k8s.pod.name in metadata (needs real Linux eBPF)" \
-  "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND metadata LIKE '%k8s.pod.name%';" "true"
-
-echo ""
-echo "=== eBPF quality (informational) ==="
-run_info "eBPF profiles have app-level service names" \
-  "SELECT count(DISTINCT service) > 1 FROM $PARQUET WHERE signal='profile' AND service IS NOT NULL AND service <> '' AND service <> 'unknown_service';" "true"
-run_info "eBPF profiles have app-level functions in stacks" \
-  "SELECT count(*) > 0 FROM $PARQUET WHERE signal='profile' AND stacktrace IS NOT NULL AND len(stacktrace) > 3;" "true"
 
 echo ""
 echo "=== Data summary ==="

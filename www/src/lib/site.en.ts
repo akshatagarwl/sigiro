@@ -8,8 +8,8 @@
  *    accurate it is, and that was the diagnosis on the previous draft.
  * 2. Vary the rhythm. The old copy hinged eleven sentences on an em-dash, which
  *    is what made every line sound like the same line. Budget for the page is two.
- * 3. Never mention Parquet, DuckDB, S3 or eBPF. Users care about outcomes; the
- *    storage engine is an implementation detail.
+ * 3. Never mention storage engines or runtime internals. Users care about
+ *    outcomes, not implementation details.
  *
  * Cost claims name no competitor and quote no multiplier. The page sells the
  * self-hosted product — free, and running in five minutes — and quotes **no

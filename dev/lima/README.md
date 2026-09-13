@@ -44,8 +44,8 @@ See `.cargo/config.toml` for details on the cross-compile workaround.
 | `sigiro-local` | `sigiro-local.yaml` | Local storage mode (DuckLake files on disk) |
 | `sigiro-s3` | `sigiro-s3.yaml` | S3 storage mode (RustFS + PostgreSQL catalog) |
 | `fed-central` | `sigiro-fed-central.yaml` | Federation central node (k3s server + sigiro --central) |
-| `fed-collector-1` | `sigiro-fed-collector.yaml` | Federation collector (k3s worker + sigiro --ebpf) |
-| `fed-collector-2` | `sigiro-fed-collector.yaml` | Federation collector (k3s worker + sigiro --ebpf) |
+| `fed-collector-1` | `sigiro-fed-collector.yaml` | Federation collector (k3s worker) |
+| `fed-collector-2` | `sigiro-fed-collector.yaml` | Federation collector (k3s worker) |
 
 ## Quick Start
 

@@ -56,7 +56,6 @@ drain3 = "0.3.0"
 hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
-which = "5"
 parking_lot = "0.12"
 thiserror = "2"
 url = "2"
@@ -83,7 +82,6 @@ itertools = "0.14.0"
 rmcp = { version = "3.1.2", features = ["client", "server", "macros", "transport-streamable-http-server", "transport-io", "schemars"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-caps = "0.5"
 # Keep the mature v1 ergonomic API while linking DuckDB v2's compatibility C
 # API from scripts/prepare-duckdb-static.sh. duckdb-rs's DuckDB v2 branch has
 # not restored appender-arrow or vscalar yet; both are required by Sigiro.
