@@ -42,5 +42,5 @@ ORDER BY timestamp DESC;
 
 ## 次に読む
 
-- [ダッシュボードではなく証拠について](/ja/docs/explanation/evidence)
-- [ホスト型 sigiro にテレメトリを送信する](/ja/docs/how-to/hosted-onboarding#4-query-your-data-sql-api)
+- [ダッシュボードではなく証拠について](/docs/ja/explanation/evidence)
+- [ホスト型 sigiro にテレメトリを送信する](/docs/ja/how-to/hosted-onboarding#4-データを照会するsql-api)

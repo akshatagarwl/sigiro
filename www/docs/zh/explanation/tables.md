@@ -42,5 +42,5 @@ ORDER BY timestamp DESC;
 
 ## 后续阅读
 
-- [为何使用证据而非仪表板](/zh/docs/explanation/evidence)
-- [向托管 sigiro 发送遥测数据](/zh/docs/how-to/hosted-onboarding#4-query-your-data-sql-api)
+- [为何使用证据而非仪表板](/docs/zh/explanation/evidence)
+- [向托管 sigiro 发送遥测数据](/docs/zh/how-to/hosted-onboarding#4-查询你的数据sql-api)

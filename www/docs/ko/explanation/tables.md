@@ -42,5 +42,5 @@ ORDER BY timestamp DESC;
 
 ## 다음 문서
 
-- [대시보드 대신 증거를 사용하는 이유](/ko/docs/explanation/evidence)
-- [호스팅 sigiro로 텔레메트리 보내기](/ko/docs/how-to/hosted-onboarding#4-query-your-data-sql-api)
+- [대시보드 대신 증거를 사용하는 이유](/docs/ko/explanation/evidence)
+- [호스팅 sigiro로 텔레메트리 보내기](/docs/ko/how-to/hosted-onboarding#4-데이터-쿼리하기-sql-api)
