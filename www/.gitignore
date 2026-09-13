@@ -39,3 +39,6 @@ yarn-error.log*
 # cloudflare — local state for `wrangler dev`
 .wrangler/
 .blume-verify/
+
+# alchemy — local CLI metadata; stack state is stored remotely in Cloudflare
+/.alchemy/

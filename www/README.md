@@ -28,6 +28,25 @@ different engines — `astro dev` is Node, the deployed site is workerd — and 
 least one bug has only ever appeared in the second one (see the Shiki note in
 `src/lib/highlight.ts`).
 
+## Alchemy migration
+
+The resource-free `alchemy.run.ts` is the migration composition root. It pins the
+remote Cloudflare state backend and accepts only `dev`, `prod`, or a positive
+`pr-<number>` stage. It does not own the website Worker or any Cloudflare resource
+yet; Wrangler remains the deployment path until production adoption is reviewed.
+
+After an operator has explicitly bootstrapped the shared Cloudflare state store,
+review the production stack with:
+
+```bash
+aube run alchemy:plan:prod
+```
+
+This command is deliberately `alchemy plan --stage prod --no-input`: it cannot
+approve the first-run state-store bootstrap and does not apply, adopt, deploy, or
+destroy resources. Bootstrap is a separate live Cloudflare mutation and requires
+human approval.
+
 ## What is where
 
 | Path                                   | What it is                                                                                                                                                                                                                 |
