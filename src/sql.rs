@@ -101,7 +101,6 @@ static TIME_TRAVEL_AT_LITERAL: std::sync::LazyLock<regex::Regex> = std::sync::La
 pub(crate) const ALLOWED_TABLES: &[&str] = &[
     "SIGIRO_SPANS",
     "SIGIRO_LOGS",
-    "SIGIRO_LOG_TEMPLATES",
     "SIGIRO_METRICS_GAUGE",
     "SIGIRO_METRICS_SUM",
     "SIGIRO_METRICS_HISTOGRAM",

@@ -259,13 +259,6 @@ pub struct AdminStatusPath;
 #[typed_path("/health")]
 pub struct HealthPath;
 
-/// Route: GET /v1/health
-/// Alias of /health, kept for compatibility with the
-/// "all OTLP HTTP endpoints live under /v1/..." convention.
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/v1/health")]
-pub struct V1HealthPath;
-
 /// Route: GET /healthz
 /// Alias of /health, for Kubernetes liveness/readiness probes.
 #[derive(Debug, Clone, TypedPath)]

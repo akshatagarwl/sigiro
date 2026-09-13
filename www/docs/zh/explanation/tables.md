@@ -11,7 +11,6 @@ sigiro 存储通过 OTLP 发送的遥测数据。每一行描述发送该遥测�
 
 - `sigiro_spans` — 追踪和 span 时序
 - `sigiro_logs` — 日志记录
-- `sigiro_log_templates` — 去重后的日志模板
 - `sigiro_metrics_gauge` — 时间点数值
 - `sigiro_metrics_sum` — 单调和非单调累加值
 - `sigiro_metrics_histogram` — 显式桶直方图

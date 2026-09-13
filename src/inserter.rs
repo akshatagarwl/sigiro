@@ -4,7 +4,7 @@ use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use dashmap::DashMap;
 use duckdb::Connection;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -688,7 +688,6 @@ struct ProjectFlusher {
     byte_threshold: usize,
     flush_interval: Duration,
     drain: DrainTree,
-    pending_templates: HashMap<u64, String>,
     first_flush: bool,
 }
 
@@ -713,7 +712,6 @@ impl ProjectFlusher {
             byte_threshold: cfg.byte_threshold,
             flush_interval: cfg.interval,
             drain: DrainTree::new(),
-            pending_templates: HashMap::new(),
             first_flush: true,
         }
     }
@@ -738,17 +736,13 @@ impl ProjectFlusher {
         self.total_bytes += batch_bytes;
         self.buffers.entry(signal).or_default().push(batch);
     }
-    /// Run DRAIN on each log body and append `template_id` and `template_values` columns.
+    /// Run DRAIN on each log body and append its classification to the same row.
     #[instrument(skip_all, fields(rows = batch.num_rows()))]
     fn classify_logs(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let body_idx = batch
             .schema()
             .index_of("body")
             .context("sigiro_logs missing body column")?;
-        let event_name_idx = batch
-            .schema()
-            .index_of("event_name")
-            .context("sigiro_logs missing event_name column")?;
         let body_col = batch
             .column(body_idx)
             .as_any()
@@ -757,6 +751,7 @@ impl ProjectFlusher {
 
         let mut template_ids = Vec::with_capacity(batch.num_rows());
         let mut template_values = Vec::with_capacity(batch.num_rows());
+        let mut template_texts = Vec::with_capacity(batch.num_rows());
         for i in 0..batch.num_rows() {
             let body = body_col.value(i);
             let (template, id, values) = self.drain.classify(body);
@@ -765,33 +760,22 @@ impl ProjectFlusher {
             let values_json =
                 serde_json::to_string(&values).expect("values must serialize to JSON");
             template_values.push(values_json);
-            self.pending_templates.entry(id).or_insert(template);
+            template_texts.push(template);
         }
 
-        // Existing catalogs gain event_name through ALTER TABLE, which appends it
-        // after the template columns. Keep fresh and migrated catalogs positional.
-        let event_name = batch.column(event_name_idx).clone();
-        let event_name_field = batch.schema().field(event_name_idx).clone();
         let id_array = std::sync::Arc::new(UInt64Array::from(template_ids));
         let values_array = std::sync::Arc::new(StringArray::from(template_values));
-        let mut columns: Vec<std::sync::Arc<dyn Array>> = batch
-            .columns()
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != event_name_idx)
-            .map(|(_, column)| Arc::clone(column))
-            .collect();
+        let text_array = std::sync::Arc::new(StringArray::from(template_texts));
+        let mut columns = batch.columns().to_vec();
         columns.push(id_array);
         columns.push(values_array);
-        columns.push(event_name);
+        columns.push(text_array);
 
         let mut fields: Vec<arrow::datatypes::Field> = batch
             .schema()
             .fields()
             .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != event_name_idx)
-            .map(|(_, field)| field.as_ref().clone())
+            .map(|field| field.as_ref().clone())
             .collect();
         fields.push(arrow::datatypes::Field::new(
             "template_id",
@@ -803,7 +787,11 @@ impl ProjectFlusher {
             arrow::datatypes::DataType::Utf8,
             true,
         ));
-        fields.push(event_name_field);
+        fields.push(arrow::datatypes::Field::new(
+            "template_text",
+            arrow::datatypes::DataType::Utf8,
+            true,
+        ));
         let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
 
         RecordBatch::try_new(schema, columns).context("failed to add template columns")
@@ -868,40 +856,6 @@ impl ProjectFlusher {
             }
         }
 
-        // Flush new log templates to the lookup table
-        if !self.pending_templates.is_empty() {
-            let tpl_table = format!(
-                "{}sigiro_log_templates",
-                self.table_names
-                    .get(&SignalTable::Logs)
-                    .map_or("", |t| { t.strip_suffix("sigiro_logs").unwrap_or("") })
-            );
-            for (id, text) in self.pending_templates.drain() {
-                // Dedup: skip insert if template already exists.
-                // DuckLake does not support UNIQUE constraints, so we check manually.
-                let exists: bool = conn
-                    .query_row(
-                        &format!("SELECT 1 FROM {tpl_table} WHERE template_id = ? LIMIT 1"),
-                        duckdb::params![id],
-                        |_| Ok(true),
-                    )
-                    .unwrap_or(false);
-                if exists {
-                    continue;
-                }
-                if let Err(e) = conn.execute(
-                    &format!("INSERT INTO {tpl_table} (template_id, template_text) VALUES (?, ?)"),
-                    duckdb::params![id, text],
-                ) {
-                    tracing::warn!(
-                        project_id,
-                        template_id = id,
-                        "failed to insert log template: {e}"
-                    );
-                }
-            }
-        }
-
         tracing::info!(
             project_id,
             rows = self.total_rows,
@@ -951,6 +905,7 @@ impl ProjectFlusher {
                 .execute_batch(&sql)
                 .with_context(|| format!("retention cleanup failed for {table}"))?;
         }
+
         // DELETE writes DuckLake delete-files. The periodic `CHECKPOINT lake`
         // performs DuckLake's own bounded rewrite, compaction, snapshot expiry,
         // old-file cleanup, and orphan deletion using the catalog policy set in

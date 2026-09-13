@@ -74,8 +74,7 @@ curl -s "https://<your-sigiro-host>/v1/query" \
 
 각 테넌트는 격리된 카탈로그를 가지므로 **자신의** 데이터만 볼 수 있습니다.
 
-**테이블:** `sigiro_spans`, `sigiro_logs`, `sigiro_log_templates`,
-`sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`,
+**테이블:** `sigiro_spans`, `sigiro_logs`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`,
 `sigiro_metrics_exp_histogram`, `sigiro_profiles`, 그리고 `sigiro_anomalies`
 테이블. `sigiro_anomalies` 테이블은 미리 계산된 국면 전환(regime shift)을 담고 있습니다. 이상 탐지 패스가
 이 전환을 지속적으로 기록합니다. `GET /v1/anomalies`는 동일한 전환을 타입이 지정된

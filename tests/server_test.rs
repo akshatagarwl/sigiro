@@ -354,6 +354,10 @@ fn validate_blocks_unknown_relation_even_when_bare() {
     // A bare identifier that simply isn't a sigiro table/view must still be
     // rejected — the allowlist is positive, not a denylist.
     assert!(validate_read_only("SELECT * FROM some_other_table").is_err());
+    assert!(
+        validate_read_only("SELECT * FROM sigiro_log_templates").is_err(),
+        "the removed template lookup must not remain on the public query surface"
+    );
 }
 
 #[test]

@@ -39,13 +39,14 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_spans")?;
 
-    // Logs — 15 columns, direct Arrow builder (src/otlp.rs)
+    // Logs — OTLP fields plus DRAIN classification stored on the same row.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_logs (
             timestamp             TIMESTAMP NOT NULL,
             observed_timestamp    BIGINT NOT NULL,
             trace_id              VARCHAR,
             span_id               VARCHAR,
+            event_name            VARCHAR,
             service_name          VARCHAR NOT NULL,
             service_namespace     VARCHAR,
             service_instance_id   VARCHAR,
@@ -59,30 +60,10 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             log_attributes        VARCHAR,
             template_id           UBIGINT,
             template_values       VARCHAR,
-            event_name            VARCHAR
+            template_text         VARCHAR
         )"
     ))
     .context("failed to create sigiro_logs")?;
-
-    // CREATE TABLE IF NOT EXISTS does not evolve existing tenant catalogs.
-    conn.execute_batch(&format!(
-        "ALTER TABLE {prefix}sigiro_logs ADD COLUMN IF NOT EXISTS event_name VARCHAR;
-         UPDATE {prefix}sigiro_logs SET event_name = '' WHERE event_name IS NULL"
-    ))
-    .context("failed to add sigiro_logs.event_name")?;
-
-    // Log template lookup table — maps template_id to template text.
-    // Populated at insert time by the DRAIN algorithm.
-    // No PRIMARY KEY — DuckLake does not support PK/UNIQUE constraints.
-    // Duplicate template rows are harmless; dedup is done at insert time.
-    conn.execute_batch(&format!(
-        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_log_templates (
-            template_id           UBIGINT,
-            template_text         VARCHAR NOT NULL,
-            first_seen            TIMESTAMP NOT NULL DEFAULT now()
-        )"
-    ))
-    .context("failed to create sigiro_log_templates")?;
 
     // Gauge — 16 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(

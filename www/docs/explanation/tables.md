@@ -13,7 +13,6 @@ machine running the server.
 
 - `sigiro_spans` — traces and span timing
 - `sigiro_logs` — log records
-- `sigiro_log_templates` — deduplicated log templates
 - `sigiro_metrics_gauge` — point-in-time values
 - `sigiro_metrics_sum` — monotonic and non-monotonic sums
 - `sigiro_metrics_histogram` — explicit-bucket histograms

@@ -11,7 +11,6 @@ sigiro는 OTLP로 전송된 텔레메트리를 저장합니다. 각 행은 해�
 
 - `sigiro_spans` — 트레이스와 스팬 시간
 - `sigiro_logs` — 로그 레코드
-- `sigiro_log_templates` — 중복 제거된 로그 템플릿
 - `sigiro_metrics_gauge` — 특정 시점의 값
 - `sigiro_metrics_sum` — 단조 및 비단조 합계
 - `sigiro_metrics_histogram` — 명시적 버킷 히스토그램

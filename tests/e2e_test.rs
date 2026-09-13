@@ -911,21 +911,22 @@ async fn e2e_drain_log_template_dedup() {
         "DRAIN should collapse 20 logs to ≤4 templates, got {distinct_templates}"
     );
 
-    // Template lookup table should have entries
-    let template_count: i64 = conn
-        .query_row("SELECT count(*) FROM lake.sigiro_log_templates", [], |r| {
-            r.get(0)
-        })
+    // Template text is stored with each immutable log fact, so retention needs
+    // no cross-table cleanup and distributed writers cannot create dangling IDs.
+    let classified_logs: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM lake.sigiro_logs
+             WHERE template_text IS NOT NULL AND template_text != ''",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert!(
-        template_count >= 1,
-        "sigiro_log_templates should have entries"
-    );
+    assert_eq!(classified_logs, 20, "every log should carry its template");
 
     // At least one template should contain a placeholder (<*>, <NUM>, <IP>, etc.)
     let wildcard_count: i64 = conn
         .query_row(
-            "SELECT count(*) FROM lake.sigiro_log_templates WHERE template_text LIKE '%<%>%'",
+            "SELECT count(*) FROM lake.sigiro_logs WHERE template_text LIKE '%<%>%'",
             [],
             |r| r.get(0),
         )

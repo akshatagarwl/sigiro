@@ -386,7 +386,6 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     // no Swagger UI or extra doc endpoints, to minimize surface area.
     Router::new()
         .typed_get(health)
-        .typed_get(v1_health)
         .typed_get(healthz)
         .route("/openapi.json", axum::routing::get(openapi_json))
         .nest("/v1", v1)
@@ -1088,14 +1087,6 @@ async fn health(
 }
 
 #[instrument(skip(state))]
-async fn v1_health(
-    _path: V1HealthPath,
-    State(state): State<Arc<AppState>>,
-) -> impl axum::response::IntoResponse {
-    health(HealthPath, State(state)).await
-}
-
-#[instrument(skip(state))]
 async fn healthz(
     _path: HealthzPath,
     State(state): State<Arc<AppState>>,
@@ -1240,7 +1231,6 @@ fn query_sql_contract() -> String {
 ///
 /// - `sigiro_spans`
 /// - `sigiro_logs`
-/// - `sigiro_log_templates`
 /// - `sigiro_metrics_gauge`
 /// - `sigiro_metrics_sum`
 /// - `sigiro_metrics_histogram`

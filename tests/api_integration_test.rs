@@ -463,6 +463,12 @@ async fn test_health_returns_ok_when_ready() {
         Some("ready"),
         "expected ready status, got {body}"
     );
+
+    server.get("/healthz").await.assert_status_ok();
+    server
+        .get("/v1/health")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

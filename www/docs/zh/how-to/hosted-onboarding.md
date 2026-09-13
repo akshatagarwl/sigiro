@@ -69,7 +69,7 @@ curl -s "https://<your-sigiro-host>/v1/query" \
 
 你只能看到**自己的**数据，因为每个租户都拥有独立的目录（catalog）。
 
-**数据表：** `sigiro_spans`、`sigiro_logs`、`sigiro_log_templates`、
+**数据表：** `sigiro_spans`、`sigiro_logs`、
 `sigiro_metrics_gauge`、`sigiro_metrics_sum`、`sigiro_metrics_histogram`、
 `sigiro_metrics_exp_histogram`、`sigiro_profiles`，以及 `sigiro_anomalies`
 表。`sigiro_anomalies` 表保存预先计算好的状态突变（regime shift）。异常检测过程

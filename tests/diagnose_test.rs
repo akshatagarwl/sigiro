@@ -100,28 +100,20 @@ fn setup_drain_logs(
         drain.classify(example);
     }
 
-    let mut seen_templates: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for body in bodies {
         let (template, id, values) = drain.classify(body);
-        // Mirror the real ingest path: inserter.rs stores the recovered variable
-        // tokens as a JSON array, which is what log_counters reads.
+        // Mirror the real ingest path: template text and recovered variable
+        // tokens are stored on the immutable log row.
         let values_json = serde_json::to_string(&values).expect("values serialize");
         conn.execute(
             &format!(
                 "INSERT INTO sigiro_logs (timestamp, observed_timestamp, service_name, severity_number,
-                    severity_text, body, template_id, template_values)
-                 VALUES (make_timestamp({now_us}), {now_us}, 'api', {severity_number}, '{severity_text}', ?, ?, ?)"
+                    severity_text, body, template_id, template_values, template_text)
+                 VALUES (make_timestamp({now_us}), {now_us}, 'api', {severity_number}, '{severity_text}', ?, ?, ?, ?)"
             ),
-            duckdb::params![body, id, values_json],
+            duckdb::params![body, id, values_json, template],
         )
         .expect("insert log");
-        if seen_templates.insert(id) {
-            conn.execute(
-                "INSERT INTO sigiro_log_templates (template_id, template_text) VALUES (?, ?)",
-                duckdb::params![id, template],
-            )
-            .expect("insert template");
-        }
     }
 
     (Arc::new(Mutex::new(conn)), now_us)

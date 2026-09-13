@@ -10,6 +10,306 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/": {
+      "post": {
+        "tags": [
+          "crate::ingest"
+        ],
+        "summary": "Ingest Pyroscope profiles",
+        "description": "Accept a Pyroscope PushRequest or raw pprof profile. With `name`, the payload is raw pprof and the service name is the part before the first `{`; without `name`, the payload is a PushRequest whose series require a `service_name` label. Binary bodies may be gzip-compressed. Multipart bodies must carry the payload in the `profile` field. A missing Content-Type is also accepted as a binary body. See the [profile ingest guide](https://sigiro.com/docs/how-to/send-profiles).",
+        "operationId": "ingestPyroscopeRoot",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "When present, the body is a raw pprof profile and the service name is the\npart before the first `{`. When absent, the body is a Pyroscope\nPushRequest and each series must contain a `service_name` label.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Pyroscope PushRequest or raw pprof bytes. For multipart/form-data, put the binary payload in the `profile` field.",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "binary/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Profile accepted"
+          },
+          "400": {
+            "description": "Unsupported media type, malformed payload, missing service name, or empty profile"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "413": {
+            "description": "Request body exceeds the configured ingest limit"
+          },
+          "429": {
+            "description": "Ingest rate limit exceeded"
+          },
+          "500": {
+            "description": "Ingest failed"
+          },
+          "507": {
+            "description": "Storage cannot currently accept ingest"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/ingest": {
+      "post": {
+        "tags": [
+          "crate::ingest"
+        ],
+        "summary": "Ingest Pyroscope profiles",
+        "description": "Accept a Pyroscope PushRequest or raw pprof profile. With `name`, the payload is raw pprof and the service name is the part before the first `{`; without `name`, the payload is a PushRequest whose series require a `service_name` label. Binary bodies may be gzip-compressed. Multipart bodies must carry the payload in the `profile` field. A missing Content-Type is also accepted as a binary body. See the [profile ingest guide](https://sigiro.com/docs/how-to/send-profiles).",
+        "operationId": "ingestPyroscope",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "When present, the body is a raw pprof profile and the service name is the\npart before the first `{`. When absent, the body is a Pyroscope\nPushRequest and each series must contain a `service_name` label.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Pyroscope PushRequest or raw pprof bytes. For multipart/form-data, put the binary payload in the `profile` field.",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "binary/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Profile accepted"
+          },
+          "400": {
+            "description": "Unsupported media type, malformed payload, missing service name, or empty profile"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "413": {
+            "description": "Request body exceeds the configured ingest limit"
+          },
+          "429": {
+            "description": "Ingest rate limit exceeded"
+          },
+          "500": {
+            "description": "Ingest failed"
+          },
+          "507": {
+            "description": "Storage cannot currently accept ingest"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/ingest/pyroscope": {
+      "post": {
+        "tags": [
+          "crate::ingest"
+        ],
+        "summary": "Ingest Pyroscope profiles",
+        "description": "Accept a Pyroscope PushRequest or raw pprof profile. With `name`, the payload is raw pprof and the service name is the part before the first `{`; without `name`, the payload is a PushRequest whose series require a `service_name` label. Binary bodies may be gzip-compressed. Multipart bodies must carry the payload in the `profile` field. A missing Content-Type is also accepted as a binary body. See the [profile ingest guide](https://sigiro.com/docs/how-to/send-profiles).",
+        "operationId": "ingestPyroscopeAlias",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "When present, the body is a raw pprof profile and the service name is the\npart before the first `{`. When absent, the body is a Pyroscope\nPushRequest and each series must contain a `service_name` label.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Pyroscope PushRequest or raw pprof bytes. For multipart/form-data, put the binary payload in the `profile` field.",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "binary/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Profile accepted"
+          },
+          "400": {
+            "description": "Unsupported media type, malformed payload, missing service name, or empty profile"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "413": {
+            "description": "Request body exceeds the configured ingest limit"
+          },
+          "429": {
+            "description": "Ingest rate limit exceeded"
+          },
+          "500": {
+            "description": "Ingest failed"
+          },
+          "507": {
+            "description": "Storage cannot currently accept ingest"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/push.v1.PusherService/Push": {
+      "post": {
+        "tags": [
+          "crate::ingest"
+        ],
+        "summary": "Ingest Pyroscope profiles",
+        "description": "Accept a Pyroscope PushRequest or raw pprof profile. With `name`, the payload is raw pprof and the service name is the part before the first `{`; without `name`, the payload is a PushRequest whose series require a `service_name` label. Binary bodies may be gzip-compressed. Multipart bodies must carry the payload in the `profile` field. A missing Content-Type is also accepted as a binary body. See the [profile ingest guide](https://sigiro.com/docs/how-to/send-profiles).",
+        "operationId": "ingestPyroscopePush",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "When present, the body is a raw pprof profile and the service name is the\npart before the first `{`. When absent, the body is a Pyroscope\nPushRequest and each series must contain a `service_name` label.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Pyroscope PushRequest or raw pprof bytes. For multipart/form-data, put the binary payload in the `profile` field.",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "binary/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PyroscopeProfileBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Profile accepted"
+          },
+          "400": {
+            "description": "Unsupported media type, malformed payload, missing service name, or empty profile"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "413": {
+            "description": "Request body exceeds the configured ingest limit"
+          },
+          "429": {
+            "description": "Ingest rate limit exceeded"
+          },
+          "500": {
+            "description": "Ingest failed"
+          },
+          "507": {
+            "description": "Storage cannot currently accept ingest"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/alerts": {
       "get": {
         "tags": [],
@@ -71,7 +371,7 @@
             "name": "from_ts",
             "in": "query",
             "description": "Only shifts at or after this time (microseconds since the Unix epoch).",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "integer",
               "format": "int64"
@@ -81,7 +381,7 @@
             "name": "to_ts",
             "in": "query",
             "description": "Only shifts at or before this time (microseconds since the Unix epoch).",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "integer",
               "format": "int64"
@@ -113,7 +413,7 @@
     "/v1/diagnose": {
       "post": {
         "tags": [],
-        "summary": "Diagnose a service",
+        "summary": "Diagnose services",
         "description": "Root-cause an incident for one or more services over a time window. Returns a triage summary \u2014 NOT raw telemetry: a ranked `findings` array (read this first), per-operation anomaly flags, and bounded samples of spans/logs. Every lead carries a ready-to-run SQL string (`drill_down_sql` on standalone findings, each incident member shift, operations, spans, and log patterns; `drill_all_sql` on the spans/logs sections) that you paste VERBATIM into `POST /v1/query` to fetch the underlying rows and go deeper. Typical agent loop: `GET /v1/services` \u2192 `POST /v1/diagnose` \u2192 for any standalone finding, incident member shift, or anomalous operation, run its `drill_down_sql` via `/v1/query`. Timestamps are microseconds since the Unix epoch. The response is a map `{results: {service: block}, errors: {service: message}}` \u2014 partial results survive a single failing service.",
         "operationId": "diagnose-services",
         "requestBody": {
@@ -155,7 +455,7 @@
       "post": {
         "tags": [],
         "summary": "Run a SQL query",
-        "description": "Every `drill_down_sql` that `/v1/diagnose` returns can be pasted here\nverbatim.\n\nReadable tables, optionally qualified `lake.*` or `main.*`:\n\n- `sigiro_spans`\n- `sigiro_logs`\n- `sigiro_log_templates`\n- `sigiro_metrics_gauge`\n- `sigiro_metrics_sum`\n- `sigiro_metrics_histogram`\n- `sigiro_metrics_exp_histogram`\n- `sigiro_profiles`\n- `sigiro_anomalies`\n\n## Bound `timestamp` with a literal, not `now()`\n\nStatistics pruning only happens when the comparison value is a constant the\nplanner can fold. `now()` is volatile, so any predicate built from it is\nevaluated per row and every file in the table is opened.\n\n```sql\n-- prunes: the planner folds the constant and skips whole files\nWHERE timestamp > TIMESTAMP '2026-08-31 08:00:00'\n\n-- does not prune: opens every file, then filters\nWHERE timestamp > (now() - INTERVAL 1 HOUR)::TIMESTAMP\n```\n\nCompute the bound in your client and send it as a literal.\n\n## If you must use `now()`, cast it\n\nThe `timestamp` columns are `TIMESTAMP` (no timezone) and `now()` returns\n`TIMESTAMPTZ`. Comparing them directly makes DuckDB cast the **column**,\nwhich adds a per-row conversion on top of the missing pruning. Measured\nagainst production on 2026-08-31, same table and window:\n\n| predicate | result |\n|---|---|\n| `timestamp > TIMESTAMP '2026-08-31 08:00:00'` | 200 in 2.48s |\n| `timestamp > (now() - INTERVAL 5 MINUTE)::TIMESTAMP` | 200 in 0.65s |\n| `timestamp > now() - INTERVAL 5 MINUTE` | 400 `INTERRUPT` at 10.98s |\n| `timestamp > TIMESTAMPTZ '2026-08-31 08:00:00+00'` | 400 `INTERRUPT` at 10.65s |\n\nSo the cast is worth having, but it is a mitigation and not the fix: the\nliteral is.",
+        "description": "Every `drill_down_sql` that `/v1/diagnose` returns can be pasted here\nverbatim.\n\nReadable tables, optionally qualified `lake.*` or `main.*`:\n\n- `sigiro_spans`\n- `sigiro_logs`\n- `sigiro_metrics_gauge`\n- `sigiro_metrics_sum`\n- `sigiro_metrics_histogram`\n- `sigiro_metrics_exp_histogram`\n- `sigiro_profiles`\n- `sigiro_anomalies`\n\n## Bound `timestamp` with a literal, not `now()`\n\nStatistics pruning only happens when the comparison value is a constant the\nplanner can fold. `now()` is volatile, so any predicate built from it is\nevaluated per row and every file in the table is opened.\n\n```sql\n-- prunes: the planner folds the constant and skips whole files\nWHERE timestamp > TIMESTAMP '2026-08-31 08:00:00'\n\n-- does not prune: opens every file, then filters\nWHERE timestamp > (now() - INTERVAL 1 HOUR)::TIMESTAMP\n```\n\nCompute the bound in your client and send it as a literal.\n\n## If you must use `now()`, cast it\n\nThe `timestamp` columns are `TIMESTAMP` (no timezone) and `now()` returns\n`TIMESTAMPTZ`. Comparing them directly makes DuckDB cast the **column**,\nwhich adds a per-row conversion on top of the missing pruning. Measured\nagainst production on 2026-08-31, same table and window:\n\n| predicate | result |\n|---|---|\n| `timestamp > TIMESTAMP '2026-08-31 08:00:00'` | 200 in 2.48s |\n| `timestamp > (now() - INTERVAL 5 MINUTE)::TIMESTAMP` | 200 in 0.65s |\n| `timestamp > now() - INTERVAL 5 MINUTE` | 400 `INTERRUPT` at 10.98s |\n| `timestamp > TIMESTAMPTZ '2026-08-31 08:00:00+00'` | 400 `INTERRUPT` at 10.65s |\n\nSo the cast is worth having, but it is a mitigation and not the fix: the\nliteral is.",
         "operationId": "run-query",
         "requestBody": {
           "description": "One SELECT statement. No WITH/CTE clauses \u2014 rewrite them as derived-table subqueries. Scalar functions are allowlisted; file and network readers are blocked. Bound timestamp columns with a literal TIMESTAMP rather than an expression built from now(), or statistics pruning is lost and the query reads every file.",
@@ -164,7 +464,7 @@
               "schema": {
                 "type": "string"
               },
-              "example": "SELECT service_name, count(*) AS errors FROM sigiro_spans WHERE status_code = 'STATUS_CODE_ERROR' GROUP BY 1 ORDER BY 2 DESC"
+              "example": "SELECT service_name, count(*) AS errors FROM sigiro_spans WHERE status_code = 2 AND timestamp >= TIMESTAMP '2026-09-11 12:00:00' AND timestamp < TIMESTAMP '2026-09-11 13:00:00' GROUP BY 1 ORDER BY 2 DESC"
             }
           },
           "required": true
@@ -489,6 +789,9 @@
       },
       "DiagnoseRequest": {
         "type": "object",
+        "required": [
+          "services"
+        ],
         "properties": {
           "from_ts": {
             "type": [
@@ -496,26 +799,15 @@
               "null"
             ],
             "format": "int64",
-            "description": "Window start, **microseconds** since the Unix epoch (a 16-digit value,\ne.g. 1780000000000000). Seconds/millis/nanos are rejected with a hint.\nOPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the\nsame default `sigiro diagnose` uses. Providing `to_ts` without `from_ts`\nis rejected \u2014 a window that ends somewhere with no start is ambiguous,\nand guessing one silently would answer a question nobody asked.",
+            "description": "Window start, **microseconds** since the Unix epoch (a 16-digit value,\ne.g. 1780000000000000). Seconds, milliseconds, and nanoseconds are rejected.\nOPTIONAL: omit both `from_ts` and `to_ts` for the last 15 minutes, the\nsame default `sigiro diagnose` uses. Providing `to_ts` without `from_ts`\nis rejected \u2014 a window that ends somewhere with no start is ambiguous,\nand guessing one silently would answer a question nobody asked.",
             "example": 1780000000000000
           },
-          "service": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Single service to diagnose. Provide this OR `services` (call\n`GET /v1/services` first to discover valid names).",
-            "example": "checkout"
-          },
           "services": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Multiple services in one call (max 10). Alternative to `service`.",
+            "description": "Services to diagnose (1\u201310). Call `GET /v1/services` first to discover\nvalid names.",
             "example": [
               "checkout",
               "cart"
@@ -530,7 +822,8 @@
             "description": "Window end, microseconds since the Unix epoch. Must be > `from_ts`.\nOptional: defaults to now when `from_ts` is given alone.",
             "example": 1780001800000000
           }
-        }
+        },
+        "additionalProperties": false
       },
       "DiagnoseResponse": {
         "type": "object",
@@ -1174,7 +1467,7 @@
               "string",
               "null"
             ],
-            "description": "Pre-built SQL query the agent can run to fetch all raw logs matching\nthis pattern in chronological order. Uses `template_id` for precise\nfiltering. Filled in Rust (needs the caller's window + service)."
+            "description": "Pre-built SQL query the agent can run to fetch all raw logs matching\nthis pattern in chronological order. Filled in Rust (needs the caller's\nwindow + service)."
           },
           "error_count": {
             "type": "integer",
@@ -1216,7 +1509,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Template ID (hash) for filtering raw logs. None if no template was extracted.",
+            "description": "Stable template ID for compact grouping. None if no template was extracted.",
             "minimum": 0
           }
         }
@@ -1424,6 +1717,10 @@
           }
         }
       },
+      "PyroscopeProfileBody": {
+        "type": "string",
+        "format": "binary"
+      },
       "SampledSection_LogRecord": {
         "type": "object",
         "description": "A bounded sample of a larger set that carries its own \"there's more, and\nhere's how to get it\" affordance, so an agent can decide to drill without\nguessing. When `total > sample.len()`, run `drill_all_sql` via /v1/query.",
@@ -1617,11 +1914,13 @@
         "properties": {
           "duration_us": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Cumulative inclusive duration of the service's spans, in microseconds."
           },
           "percentage": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "description": "Percentage of cumulative inclusive span duration across all services."
           },
           "service": {
             "type": "string"
@@ -1722,7 +2021,8 @@
         "type": "object",
         "required": [
           "name",
-          "spanCount"
+          "signals",
+          "totalCount"
         ],
         "properties": {
           "firstSeen": {
@@ -1740,7 +2040,32 @@
           "name": {
             "type": "string"
           },
-          "spanCount": {
+          "signals": {
+            "$ref": "#/components/schemas/ServiceSignals"
+          },
+          "totalCount": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ServiceSignals": {
+        "type": "object",
+        "required": [
+          "spans",
+          "logs",
+          "metrics"
+        ],
+        "properties": {
+          "logs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "metrics": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "spans": {
             "type": "integer",
             "format": "int64"
           }
@@ -2017,7 +2342,8 @@
           },
           "total_duration_us": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Elapsed wall-clock time from the earliest span start to the latest span end, in microseconds."
           },
           "trace_id": {
             "type": "string"

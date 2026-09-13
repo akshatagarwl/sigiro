@@ -11,7 +11,6 @@ sigiro は OTLP で送信されたテレメトリを保存します。各行が�
 
 - `sigiro_spans` — トレースとスパン時間
 - `sigiro_logs` — ログレコード
-- `sigiro_log_templates` — 重複排除されたログテンプレート
 - `sigiro_metrics_gauge` — 時点値
 - `sigiro_metrics_sum` — 単調・非単調の合計
 - `sigiro_metrics_histogram` — 明示的バケットのヒストグラム

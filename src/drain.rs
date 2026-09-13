@@ -9,7 +9,7 @@
 //! "Drain: An Online Log Parsing Approach with Fixed Depth Tree" (2017).
 
 use itertools::Itertools;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use sha2::{Digest, Sha256};
 
 /// Masking rules applied (in order) inside drain3 before tokenization. Order is
 /// load-bearing: specific patterns run before the generic number rule so e.g.
@@ -132,9 +132,12 @@ fn is_variable(token: &str) -> bool {
 
 /// Stable hash of a template string → u64 template_id.
 fn hash_template(template: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    template.hash(&mut hasher);
-    hasher.finish()
+    let digest = Sha256::digest(template.as_bytes());
+    u64::from_be_bytes(
+        digest[..8]
+            .try_into()
+            .expect("SHA-256 digest has at least eight bytes"),
+    )
 }
 
 #[cfg(test)]
@@ -189,6 +192,14 @@ mod tests {
         assert_eq!(id1, id2);
         assert!(t1.contains("<IP>"));
         assert!(t1.contains("<NUM>"));
+    }
+
+    #[test]
+    fn template_id_has_a_stable_persisted_format() {
+        assert_eq!(
+            hash_template("request <*> completed"),
+            8_435_527_724_091_850_299
+        );
     }
 
     #[test]

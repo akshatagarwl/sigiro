@@ -77,8 +77,7 @@ tenant that never sent data has no storage.
 
 You see **your own** data only, because each tenant has an isolated catalog.
 
-**Tables:** `sigiro_spans`, `sigiro_logs`, `sigiro_log_templates`,
-`sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`,
+**Tables:** `sigiro_spans`, `sigiro_logs`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`,
 `sigiro_metrics_exp_histogram`, `sigiro_profiles`, and the `sigiro_anomalies`
 table. The `sigiro_anomalies` table holds precomputed regime shifts. The anomaly pass
 writes these shifts continuously. `GET /v1/anomalies` serves the same shifts as typed

@@ -495,11 +495,11 @@ pub struct LogRecord {
 pub struct LogPattern {
     /// Template or pattern string.
     pub pattern: String,
-    /// Template ID (hash) for filtering raw logs. None if no template was extracted.
+    /// Stable template ID for compact grouping. None if no template was extracted.
     pub template_id: Option<u64>,
     /// Pre-built SQL query the agent can run to fetch all raw logs matching
-    /// this pattern in chronological order. Uses `template_id` for precise
-    /// filtering. Filled in Rust (needs the caller's window + service).
+    /// this pattern in chronological order. Filled in Rust (needs the caller's
+    /// window + service).
     pub drill_down_sql: Option<String>,
     /// Example log body.
     pub example_body: Option<String>,
@@ -856,13 +856,14 @@ fn diagnose_one(
     // #1: raw logs behind each pattern.
     let mut log_patterns = payload.log_patterns;
     for p in &mut log_patterns {
-        p.drill_down_sql = p.template_id.map(|tid| {
-            format!(
-                "SELECT * FROM {prefix}sigiro_logs \
-                 WHERE service_name = '{svc}' AND template_id = {tid} AND {window} \
-                 ORDER BY timestamp ASC"
-            )
-        });
+        let pattern = crate::sql::escape_sql_string(&p.pattern);
+        p.drill_down_sql = Some(format!(
+            "SELECT * FROM {prefix}sigiro_logs \
+             WHERE service_name = '{svc}' \
+               AND COALESCE(NULLIF(template_text, ''), body) = '{pattern}' \
+               AND {window} \
+             ORDER BY timestamp ASC"
+        ));
     }
 
     // Anomaly flags come from the persisted `sigiro_anomalies` table (the
@@ -1714,7 +1715,7 @@ raw_logs AS (
     LIMIT 50
 ),
 log_patterns AS (
-    SELECT COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
+    SELECT COALESCE(NULLIF(l.template_text, ''), l.body) AS pattern,
            any_value(l.template_id) AS template_id,
            any_value(l.body) AS example_body,
            l.severity_text,
@@ -1727,7 +1728,6 @@ log_patterns AS (
                    FILTER (WHERE l.template_values IS NOT NULL AND l.template_values != '[]'),
                1, 5) AS sample_values
     FROM win_logs l
-    LEFT JOIN {prefix}sigiro_log_templates t ON l.template_id = t.template_id
     GROUP BY pattern, l.severity_text
     ORDER BY cnt DESC
     LIMIT 50
@@ -1738,15 +1738,14 @@ log_patterns AS (
 -- pairs each value with its own label. Two `unnest`es in one projection expand
 -- row-wise in DuckDB, which is the zip.
 log_counter_pairs AS (
-    SELECT COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
+    SELECT COALESCE(NULLIF(l.template_text, ''), l.body) AS pattern,
            unnest(list_filter(
-               str_split(COALESCE(NULLIF(t.template_text, ''), l.body), ' '),
+               str_split(COALESCE(NULLIF(l.template_text, ''), l.body), ' '),
                lambda x: x = '<*>' OR x LIKE '%<NUM>%' OR x LIKE '%<IP>%'
                     OR x LIKE '%<UUID>%' OR x LIKE '%<HEX>%'
            )) AS label,
            unnest(from_json(l.template_values, '["VARCHAR"]')) AS raw_value
     FROM win_logs l
-    LEFT JOIN {prefix}sigiro_log_templates t ON l.template_id = t.template_id
     WHERE l.template_values IS NOT NULL AND l.template_values != '[]'
 ),
 log_counters AS (
