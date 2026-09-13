@@ -723,7 +723,7 @@ pub async fn run_servers(
         Arc::clone(&router),
         maintenance_data_dir,
         router.disk_state(),
-    );
+    )?;
 
     let server_error = tokio::select! {
         result = servers.join_next() => {
@@ -918,46 +918,29 @@ fn spawn_storage_maintenance_task(
     router: Arc<MsgRouter>,
     data_dir: camino::Utf8PathBuf,
     disk: Arc<DiskCapacityState>,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let retention_days = match crate::config::RETENTION_DAYS.value() {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::error!("invalid SIGIRO_RETENTION_DAYS, disabling retention: {e:#}");
-            0
-        }
-    };
+) -> Result<Option<tokio::task::JoinHandle<()>>> {
+    let retention_days = crate::config::RETENTION_DAYS.value()?;
     let cap = disk.cap;
     if retention_days == 0 && cap == 0 {
-        return None;
+        return Ok(None);
     }
 
-    let sample_secs = match crate::config::disk_sample_seconds() {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("invalid SIGIRO_DISK_SAMPLE_SECONDS, using 30s: {e:#}");
-            30
-        }
-    };
+    let sample_secs = crate::config::disk_sample_seconds()?;
 
     tracing::info!(
         retention_days,
         disk_cap_bytes = cap,
-        sample_secs,
+        sample_secs = sample_secs.get(),
         "storage maintenance enabled"
     );
-    if cap > 0
-        && !crate::config::S3_BUCKET
-            .value()
-            .unwrap_or_default()
-            .is_empty()
-    {
+    if cap > 0 && !crate::config::S3_BUCKET.value()?.is_empty() {
         tracing::warn!(
             "SIGIRO_MAX_DISK_BYTES caps only the LOCAL catalog/inline/temp footprint in S3 mode — cold Parquet in the bucket is not counted"
         );
     }
 
-    Some(tokio::spawn(async move {
-        let mut sample_interval = tokio::time::interval(Duration::from_secs(sample_secs));
+    Ok(Some(tokio::spawn(async move {
+        let mut sample_interval = tokio::time::interval(Duration::from_secs(sample_secs.get()));
         let mut retention_interval = tokio::time::interval(Duration::from_secs(3600));
         loop {
             tokio::select! {
@@ -1022,7 +1005,7 @@ fn spawn_storage_maintenance_task(
                 }
             }
         }
-    }))
+    })))
 }
 
 #[instrument(skip(state))]

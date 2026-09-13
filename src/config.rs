@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use typed_env::{Envar, EnvarDef};
 
 // ---------------------------------------------------------------------------
@@ -299,7 +299,7 @@ pub(crate) static MAX_DISK_BYTES: Envar<u64> =
 
 /// How often the storage-maintenance task samples the `SIGIRO_DATA_DIR`
 /// on-disk byte size for the disk cap. Default: 30s.
-pub(crate) static DISK_SAMPLE_SECONDS: Envar<u64> =
+static DISK_SAMPLE_SECONDS: Envar<u64> =
     Envar::on_startup("SIGIRO_DISK_SAMPLE_SECONDS", || EnvarDef::Default(30));
 
 pub fn max_disk_bytes() -> Result<u64> {
@@ -327,13 +327,9 @@ pub(crate) fn max_checkpoint_failures() -> Result<u32> {
     MAX_CHECKPOINT_FAILURES.value().map_err(anyhow::Error::from)
 }
 
-pub(crate) fn disk_sample_seconds() -> Result<u64> {
-    let secs = DISK_SAMPLE_SECONDS.value()?;
-    anyhow::ensure!(
-        secs > 0,
-        "SIGIRO_DISK_SAMPLE_SECONDS must be greater than zero"
-    );
-    Ok(secs)
+pub(crate) fn disk_sample_seconds() -> Result<NonZeroU64> {
+    NonZeroU64::new(DISK_SAMPLE_SECONDS.value()?)
+        .context("SIGIRO_DISK_SAMPLE_SECONDS must be greater than zero")
 }
 
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
