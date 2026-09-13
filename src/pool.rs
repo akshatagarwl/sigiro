@@ -3,6 +3,7 @@ use camino::Utf8PathBuf;
 use dashmap::DashMap;
 use duckdb::Connection;
 use parking_lot::{Condvar, Mutex};
+use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -60,8 +61,8 @@ pub struct ReaderConnection {
 }
 
 impl ReaderPool {
-    fn new(base: &Connection, size: usize) -> Result<Self> {
-        anyhow::ensure!(size > 0, "reader pool size must be greater than zero");
+    fn new(base: &Connection, size: NonZeroUsize) -> Result<Self> {
+        let size = size.get();
         let mut available = Vec::with_capacity(size);
         for _ in 0..size {
             let reader = base

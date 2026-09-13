@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::num::NonZeroUsize;
 use typed_env::{Envar, EnvarDef};
 
 // ---------------------------------------------------------------------------
@@ -92,8 +93,12 @@ pub(crate) static EXTENSION_DIR: Envar<String> = Envar::on_startup("SIGIRO_EXTEN
 });
 
 /// DuckDB worker threads per shared project database. Default: host parallelism.
-pub(crate) static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS", || {
-    EnvarDef::Default(default_duckdb_threads())
+static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS", || {
+    EnvarDef::Default(
+        std::thread::available_parallelism()
+            .expect("failed to determine available parallelism")
+            .get(),
+    )
 });
 
 /// DuckDB memory cap per shared project database. Default: 400 MB — safely
@@ -208,13 +213,10 @@ pub(crate) fn backpressure_policy() -> Result<BackpressurePolicy> {
     }
 }
 
-pub(crate) fn duckdb_threads() -> Result<usize> {
-    let threads = DUCKDB_THREADS.value()?;
-    anyhow::ensure!(
-        threads > 0,
-        "SIGIRO_DUCKDB_THREADS must be greater than zero"
-    );
-    Ok(threads)
+pub(crate) fn duckdb_threads() -> Result<NonZeroUsize> {
+    let raw = DUCKDB_THREADS.value()?;
+    NonZeroUsize::new(raw)
+        .ok_or_else(|| anyhow::anyhow!("SIGIRO_DUCKDB_THREADS must be greater than zero"))
 }
 
 pub(crate) fn duckdb_memory_limit() -> Result<String> {
@@ -239,12 +241,6 @@ pub(crate) fn max_result_rows() -> Result<usize> {
     let rows = MAX_RESULT_ROWS.value()?;
     anyhow::ensure!(rows > 0, "SIGIRO_MAX_RESULT_ROWS must be greater than zero");
     Ok(rows)
-}
-
-fn default_duckdb_threads() -> usize {
-    std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1)
 }
 
 /// Byte-size threshold that triggers an immediate flush. Default: 8_388_608 (8 MiB).
