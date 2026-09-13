@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::num::NonZeroUsize;
 use typed_env::{Envar, EnvarDef};
 
@@ -258,18 +258,14 @@ pub(crate) static FLUSH_BYTE_THRESHOLD: Envar<usize> =
 /// (enforced when the body is collected into `Bytes`, which happens after
 /// `RequestDecompressionLayer` has already un-gzipped it), so this also
 /// bounds a gzip-bomb, not just the wire size.
-pub(crate) static MAX_INGEST_BODY_BYTES: Envar<usize> =
+static MAX_INGEST_BODY_BYTES: Envar<usize> =
     Envar::on_startup("SIGIRO_MAX_INGEST_BODY_BYTES", || {
         EnvarDef::Default(8_388_608)
     });
 
-pub(crate) fn max_ingest_body_bytes() -> Result<usize> {
-    let bytes = MAX_INGEST_BODY_BYTES.value()?;
-    anyhow::ensure!(
-        bytes > 0,
-        "SIGIRO_MAX_INGEST_BODY_BYTES must be greater than zero"
-    );
-    Ok(bytes)
+pub(crate) fn max_ingest_body_bytes() -> Result<NonZeroUsize> {
+    NonZeroUsize::new(MAX_INGEST_BODY_BYTES.value()?)
+        .context("SIGIRO_MAX_INGEST_BODY_BYTES must be greater than zero")
 }
 
 /// Hard cap on total bytes under `SIGIRO_DATA_DIR`. 0 = disabled (default).

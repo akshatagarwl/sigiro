@@ -1191,6 +1191,23 @@ async fn test_admin_status_returns_200_with_admin_token() {
 }
 
 #[tokio::test]
+async fn ingest_body_limit_caps_http_payloads() {
+    let ctx = build_test_context();
+    let app = ingest::otlp_http_router(
+        Arc::clone(&ctx.state.router),
+        ctx.state.auth_mode.clone(),
+        16,
+    );
+    TestServer::new(app)
+        .expect("build OTLP test server")
+        .post("/v1/traces")
+        .content_type("application/x-protobuf")
+        .bytes(vec![0; 17].into())
+        .await
+        .assert_status(axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 // F-05: empty batch is a valid no-op (e.g. OTel SDK shutdown sends an
 // empty final flush). The server should return 200 OK, not 400.
 async fn test_otlp_traces_empty_payload_returns_200() {

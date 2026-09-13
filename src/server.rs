@@ -472,7 +472,7 @@ pub async fn run_servers(
     init_complete: Arc<AtomicBool>,
 ) -> Result<()> {
     let ports = ServerPorts::load()?;
-    let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?;
+    let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?.get();
 
     let query_surface = crate::config::query_surface()?;
     let auth_mode =
