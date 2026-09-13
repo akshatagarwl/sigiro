@@ -1509,9 +1509,11 @@ pub(crate) struct AnomaliesQuery {
     /// Filter to one service.
     service: Option<String>,
     /// Only shifts at or after this time (microseconds since the Unix epoch).
-    from_ts: Option<i64>,
+    #[param(value_type = i64)]
+    from_ts: Option<TimestampMicros>,
     /// Only shifts at or before this time (microseconds since the Unix epoch).
-    to_ts: Option<i64>,
+    #[param(value_type = i64)]
+    to_ts: Option<TimestampMicros>,
 }
 
 /// GET /v1/anomalies — the precomputed anomalies table, ALL signals,
@@ -1571,9 +1573,11 @@ async fn anomalies_handler(
         filters.push(format!("service_name = '{}'", escape_sql_string(service)));
     }
     if let Some(from_ts) = q.from_ts {
+        let from_ts: i64 = from_ts.into();
         filters.push(format!("ts_shift >= make_timestamp({from_ts})"));
     }
     if let Some(to_ts) = q.to_ts {
+        let to_ts: i64 = to_ts.into();
         filters.push(format!("ts_shift <= make_timestamp({to_ts})"));
     }
     let sql = format!(
