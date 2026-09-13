@@ -15,7 +15,7 @@ The server starts on:
 - OTLP gRPC: `localhost:4317`
 - OTLP HTTP: `localhost:4318`
 
-No configuration required. Data is stored in the platform data directory (`~/.local/share/sigiro` on Unix, `%LOCALAPPDATA%\sigiro` on Windows). Override with `SIGIRO_DATA_DIR`.
+No configuration required. Data is stored in the platform data directory (`~/.local/share/sigiro` on Unix, `%LOCALAPPDATA%\sigiro` on Windows). Override with `SIGIRO_DATA_DIR`. The [local data layout](docs/notes/architecture/ducklake-integration.md#local-mode) identifies the DuckLake catalog, Parquet files, and separate administrative database.
 
 ## Authentication
 
