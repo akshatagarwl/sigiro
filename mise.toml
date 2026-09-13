@@ -118,6 +118,7 @@ fi
 [tasks.quick]
 description = "Fast formatting, dependency, and compile checks."
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 eval "$(scripts/prepare-duckdb-static.sh "$(rustc -vV | sed -n 's/^host: //p')")"
 mbx fmt --check
