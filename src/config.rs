@@ -168,16 +168,25 @@ pub(crate) static FLUSH_ROW_THRESHOLD: Envar<usize> =
 ///
 /// Operators draining a large buffer onto slow disk have the same problem and
 /// the same lever.
-pub(crate) static SHUTDOWN_TIMEOUT_SECS: Envar<u64> =
+#[nutype::nutype(
+    validate(greater = 0),
+    derive(Debug, Clone, Copy, PartialEq, Eq, FromStr, AsRef, Display)
+)]
+pub struct ShutdownTimeoutSeconds(u64);
+
+impl ShutdownTimeoutSeconds {
+    pub fn as_secs(&self) -> u64 {
+        *self.as_ref()
+    }
+}
+
+static SHUTDOWN_TIMEOUT_SECS: Envar<u64> =
     Envar::on_startup("SIGIRO_SHUTDOWN_TIMEOUT_SECS", || EnvarDef::Default(5));
 
-pub(crate) fn shutdown_timeout_secs() -> Result<u64> {
-    let secs = SHUTDOWN_TIMEOUT_SECS.value()?;
-    anyhow::ensure!(
-        secs > 0,
-        "SIGIRO_SHUTDOWN_TIMEOUT_SECS must be greater than zero"
-    );
-    Ok(secs)
+pub(crate) fn shutdown_timeout_secs() -> Result<ShutdownTimeoutSeconds> {
+    let raw = SHUTDOWN_TIMEOUT_SECS.value()?;
+    ShutdownTimeoutSeconds::try_new(raw)
+        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_SHUTDOWN_TIMEOUT_SECS: {error}"))
 }
 
 /// Backpressure policy when the per-project channel is full. Default: "block".

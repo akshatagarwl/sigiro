@@ -640,7 +640,9 @@ impl MsgRouter {
         let budget_secs = crate::config::shutdown_timeout_secs()?;
         let mut failures = Vec::new();
         for (project_id, mut handle) in flushers {
-            match tokio::time::timeout(Duration::from_secs(budget_secs), &mut handle).await {
+            match tokio::time::timeout(Duration::from_secs(budget_secs.as_secs()), &mut handle)
+                .await
+            {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     failures.push(format!("{project_id}: flusher task failed: {error}"));

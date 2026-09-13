@@ -1,5 +1,18 @@
 #![allow(clippy::disallowed_methods)]
 
+use sigiro::config::ShutdownTimeoutSeconds;
+
+#[test]
+fn shutdown_timeout_seconds_rejects_zero_and_preserves_numeric_config_format() {
+    assert!(ShutdownTimeoutSeconds::try_new(0).is_err());
+    assert!("0".parse::<ShutdownTimeoutSeconds>().is_err());
+
+    let timeout = "5"
+        .parse::<ShutdownTimeoutSeconds>()
+        .expect("positive timeout must retain the existing numeric config format");
+    assert_eq!(timeout.as_secs(), 5);
+}
+
 #[test]
 fn data_dir_uses_platform_default_when_unset() {
     // data_dir() falls back to the platform data directory when SIGIRO_DATA_DIR
