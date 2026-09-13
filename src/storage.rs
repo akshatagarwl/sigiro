@@ -8,6 +8,9 @@ use secrecy::{ExposeSecret, SecretString};
 use tracing::instrument;
 use url::{Position, Url};
 
+const EXPECTED_DUCKDB_VERSION: &str = "v2.0.0-alpha41489";
+const EXPECTED_DUCKLAKE_VERSION: &str = "eb7b95df82";
+
 /// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
 /// config). Tables accessible as `lake.sigiro_*`.
 /// Catalog stored in `project_dir/catalog.ducklake` (a DuckDB file catalog, NOT
@@ -29,6 +32,7 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     // downloads ~5MB of .duckdb_extension files over HTTP and emits no
     // output of its own; users see nothing for 30-90s.
     install_extensions_with_progress(conn, &["ducklake"])?;
+    verify_duckdb_stack(conn)?;
 
     // Attach DuckLake with DuckDB file catalog + local Parquet.
     // Uses catalog.ducklake (DuckDB native catalog) instead of SQLite
@@ -92,6 +96,7 @@ pub(crate) fn init_distributed(
     } else {
         install_extensions_with_progress(conn, &["ducklake", "postgres"])?;
     }
+    verify_duckdb_stack(conn)?;
 
     let tenant_id = TenantId::try_new(tenant_id.to_owned())
         .map_err(|e| anyhow::anyhow!("invalid tenant id: {e}"))?;
@@ -646,7 +651,27 @@ pub(crate) fn resolve_extension_dir(data_dir: &Utf8Path) -> camino::Utf8PathBuf 
 /// on a fresh data dir, with no progress output. The user sees nothing
 /// and concludes the process has died.
 pub(crate) fn install_extensions_with_progress(conn: &Connection, names: &[&str]) -> Result<()> {
-    install_extensions_from(conn, names, ExtensionRepo::Core)
+    install_extensions_from(conn, names)
+}
+
+fn verify_duckdb_stack(conn: &Connection) -> Result<()> {
+    let (duckdb_version, ducklake_version): (String, String) = conn
+        .query_row(
+            "SELECT version(), extension_version FROM duckdb_extensions() \
+             WHERE extension_name = 'ducklake'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .context("failed to read DuckDB/DuckLake versions")?;
+    anyhow::ensure!(
+        duckdb_version == EXPECTED_DUCKDB_VERSION,
+        "DuckDB version mismatch: linked {duckdb_version:?}, expected {EXPECTED_DUCKDB_VERSION:?}"
+    );
+    anyhow::ensure!(
+        ducklake_version == EXPECTED_DUCKLAKE_VERSION,
+        "DuckLake version mismatch: loaded {ducklake_version:?}, expected {EXPECTED_DUCKLAKE_VERSION:?}"
+    );
+    Ok(())
 }
 
 /// The extensions [`crate::pool::Pool::lock_filesystem`] `LOAD`s immediately
@@ -690,47 +715,18 @@ pub(crate) fn extensions_needing_install(conn: &Connection, names: &[&str]) -> R
     Ok(needed)
 }
 
-/// Which DuckDB extension repository an extension is published to. A core
-/// extension resolves from `extensions.duckdb.org`; a community extension is
-/// NOT there and must be installed `FROM community`, or the download fails
-/// with an HTTP 404 that names only the core candidates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExtensionRepo {
-    Core,
-    Community,
-}
-
-impl ExtensionRepo {
-    /// The `FROM <repo>` suffix for an `INSTALL` statement.
-    fn install_suffix(self) -> &'static str {
-        match self {
-            Self::Core => "",
-            Self::Community => " FROM community",
-        }
-    }
-}
-
-/// Install + load each extension in `names` from `repo`, logging progress.
-pub(crate) fn install_extensions_from(
-    conn: &Connection,
-    names: &[&str],
-    repo: ExtensionRepo,
-) -> Result<()> {
+/// Install + load each core extension in `names`, logging progress.
+pub(crate) fn install_extensions_from(conn: &Connection, names: &[&str]) -> Result<()> {
     let total = names.len();
     for (i, name) in names.iter().enumerate() {
         tracing::info!(
-            "installing DuckDB extension {name} ({}/{}, {repo:?} repo) — first run may download \
+            "installing DuckDB extension {name} ({}/{}) — first run may download \
              ~5MB, please wait",
             i + 1,
-            total
+            total,
         );
-        conn.execute_batch(&format!(
-            "INSTALL {name}{}; LOAD {name};",
-            repo.install_suffix()
-        ))
-        .with_context(|| {
-            format!("failed to install/load extension {name} from the {repo:?} repo")
-        })?;
+        conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
+            .with_context(|| format!("failed to install/load extension {name}"))?;
         tracing::info!("loaded DuckDB extension: {name}");
     }
     Ok(())

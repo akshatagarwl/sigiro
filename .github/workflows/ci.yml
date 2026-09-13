@@ -37,25 +37,13 @@ jobs:
       # bundled feature (Cargo.toml). The gate needs it before its first Rust command.
       - name: DuckDB static libs
         env:
-          DUCKDB_VERSION: 1.5.5
+          DUCKDB_STATIC_CACHE: ${{ runner.temp }}/duckdb-static
         run: |
           set -euo pipefail
-          install_dir="$RUNNER_TEMP/duckdb/amd64"
-          work_dir="$RUNNER_TEMP/duckdb-static-amd64"
-          mkdir -p "$install_dir" "$work_dir"
-          cd "$work_dir"
-          curl -fSL --retry 3 \
-            "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/static-libs-linux-amd64.zip" \
-            -o static-libs.zip
-          unzip -q static-libs.zip
-          test -f libduckdb_static.a && test -f duckdb.h
-          { echo "create merged.a"; for archive in *.a; do echo "addlib $archive"; done; echo save; echo end; } | ar -M
-          ranlib merged.a
-          cp merged.a "$install_dir/libduckdb_static.a"
-          cp duckdb.h "$install_dir/"
+          eval "$(scripts/prepare-duckdb-static.sh x86_64-unknown-linux-gnu)"
           {
-            echo "DUCKDB_LIB_DIR=$install_dir"
-            echo "DUCKDB_INCLUDE_DIR=$install_dir"
+            echo "DUCKDB_LIB_DIR=$DUCKDB_LIB_DIR"
+            echo "DUCKDB_INCLUDE_DIR=$DUCKDB_INCLUDE_DIR"
             echo "DUCKDB_STATIC=1"
           } >> "$GITHUB_ENV"
       - run: mise run --skip-tools gate

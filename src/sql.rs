@@ -17,29 +17,6 @@ use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
 use std::ops::ControlFlow;
-
-/// System-statistics table functions federatable in a FROM position.
-///
-/// These are the `system_stats` community extension's table functions, read
-/// from the HOST THE EDGE RUNS ON — a live point-in-time reading of that
-/// machine, NOT stored telemetry. A federated query over one of these
-/// answers "what does each node look like right now"; it has no history and
-/// no time bound, so `require_time_bound` never applies to it.
-///
-/// Matched case-insensitively against the function name. This is the SINGLE
-/// definition of the `sys_*` surface: the edge-side authorization gate
-/// (`is_safe_function` / `is_no_arg_function`) and the federation coordinator
-/// (`crate::federate`) both read it, so the coordinator's push list and the
-/// gate's allowlist cannot drift apart and let a query pass one but be denied
-/// by the other.
-pub(crate) const SYS_STATS_FUNCTIONS: &[&str] = &[
-    "SYS_CPU_INFO",
-    "SYS_DISK_INFO",
-    "SYS_MEMORY_INFO",
-    "SYS_NETWORK_INFO",
-    "SYS_OS_INFO",
-];
-
 /// Escape a string for safe use inside a SQL single-quoted string literal.
 pub(crate) fn escape_sql_string(s: &str) -> String {
     s.replace('\'', "''")
@@ -142,27 +119,6 @@ pub(crate) const ALLOWED_TABLES: &[&str] = &[
 /// - `RANGE` — tests/api_integration_test.rs
 ///   `test_query_midstream_error_never_returns_partial_rows` (`FROM range(5) t(i)`,
 ///   a pure row generator with no filesystem/network access).
-///
-/// The `sys_*` host-statistics functions are ALSO accepted in a FROM position
-/// (see `is_safe_function`), but are defined once in
-/// `SYS_STATS_FUNCTIONS` rather than duplicated here, so the
-/// coordinator's push list and this gate cannot drift apart.
-///
-/// Those are a DELIBERATE widening of this gate, and the only allowed relation
-/// functions that expose host state rather than DuckDB state: they report the
-/// disk, memory, CPU, network interfaces, and OS of the machine the edge runs
-/// on, to any caller the quack surface accepts. quack has no working TLS of its
-/// own (see `crate::quack`'s module docs), so the network perimeter — e.g. a
-/// tailnet — is what keeps that readable only by the operator. Accepted for the
-/// self-hosted fleet-monitoring case; revisit before exposing the quack surface
-/// to an untrusted network.
-///
-/// They read host state but take no arguments and touch NO caller-controlled
-/// path: unlike the `BLOCKED_TABLE_FUNCTIONS` reader family
-/// (`read_csv('/etc/passwd')`), there is no argument through which a caller can
-/// choose what gets read. That is why they can be allowlisted without
-/// reopening the arbitrary-file-read hole, and why `is_no_arg_function`
-/// rejects any `sys_*` call that carries arguments.
 const SAFE_FUNCTIONS: &[&str] = &["PRAGMA_DATABASE_SIZE", "RANGE"];
 
 /// Case-insensitive SCALAR function names allowed anywhere a plain
@@ -334,68 +290,11 @@ fn is_allowed_table(name: &ObjectName, allow_information_schema: bool) -> bool {
     }
 }
 
-/// A table-valued-function / pivot-style relation is safe only if its
-/// (possibly qualified) name is on `SAFE_FUNCTIONS` — matched on the final
-/// identifier so `main.pragma_database_size()` and `pragma_database_size()`
-/// are treated the same.
-/// True when `name` is a `sys_*` host-statistics function that this caller is
-/// not allowed to reach. Used to raise a message that names the alternative
-/// instead of a bare "not allowed", which sends a tenant looking for a typo.
-fn is_gated_sys_function(name: &ObjectName, allow_sys_functions: bool) -> bool {
-    !allow_sys_functions
-        && name
-            .0
-            .last()
-            .is_some_and(|i| SYS_STATS_FUNCTIONS.contains(&i.value.to_uppercase().as_str()))
-}
-
-/// The rejection text for a gated `sys_*` call.
-fn gated_sys_message(name: &ObjectName) -> String {
-    format!(
-        "query rejected: {name} is not available on the hosted service. The sys_* \
-         functions read the machine sigiro runs on, which here is ours and not \
-         yours. Query sigiro_metrics_* for host telemetry your own services sent."
-    )
-}
-
-fn is_safe_function(name: &ObjectName, allow_sys_functions: bool) -> bool {
+fn is_safe_function(name: &ObjectName) -> bool {
     name.0.last().is_some_and(|ident| {
         let upper = ident.value.to_uppercase();
         SAFE_FUNCTIONS.contains(&upper.as_str())
-            || (allow_sys_functions && SYS_STATS_FUNCTIONS.contains(&upper.as_str()))
     })
-}
-
-/// Allowlisted relation functions that accept NO arguments, so any argument
-/// in the call is a caller-controlled value the function was never meant to
-/// receive. `SAFE_FUNCTIONS` matches on name alone; this is what stops that
-/// name match from carrying an argument along with it (e.g.
-/// `sys_disk_info('/etc/passwd')`).
-///
-/// True if `name` is an allowlisted relation function that takes no arguments,
-/// matched on the final identifier like `is_safe_function`.
-///
-/// Sourced from `SYS_STATS_FUNCTIONS` — the single definition
-/// of the `sys_*` surface — so the coordinator's push list and this gate can
-/// never drift apart. `PRAGMA_DATABASE_SIZE` is also argument-free but is
-/// deliberately excluded: it is reached only through sigiro's own `/v1/query`
-/// call site, and constraining it would change an existing working path for no
-/// security gain. `RANGE` is argument-taking by nature.
-fn is_no_arg_function(name: &ObjectName) -> bool {
-    name.0
-        .last()
-        .is_some_and(|ident| SYS_STATS_FUNCTIONS.contains(&ident.value.to_uppercase().as_str()))
-}
-
-/// True if a parsed function call carries any argument. `TableFactor::
-/// TableFunction` wraps an `Expr::Function`, whose arguments live in a
-/// `FunctionArguments` enum rather than a plain list.
-fn function_has_args(f: &sqlparser::ast::Function) -> bool {
-    match &f.args {
-        sqlparser::ast::FunctionArguments::None => false,
-        sqlparser::ast::FunctionArguments::Subquery(_) => true,
-        sqlparser::ast::FunctionArguments::List(list) => !list.args.is_empty(),
-    }
 }
 
 /// A SCALAR function call (`Expr::Function`, appearing anywhere in the
@@ -454,11 +353,6 @@ struct AllowlistVisitor {
     /// When false (hosted mode), `information_schema` enumeration is rejected —
     /// see `validate_read_only_with`.
     allow_information_schema: bool,
-    /// When false (hosted mode), the `sys_*` host-statistics functions are
-    /// rejected. They describe the machine sigiro itself runs on, which on the
-    /// hosted service is OUR box and never the tenant's — see
-    /// `validate_read_only_with`.
-    allow_sys_functions: bool,
 }
 
 impl Visitor for AllowlistVisitor {
@@ -477,25 +371,10 @@ impl Visitor for AllowlistVisitor {
         match table_factor {
             TableFactor::Table { name, args, .. } => {
                 if let Some(args) = args {
-                    if is_gated_sys_function(name, self.allow_sys_functions) {
-                        return ControlFlow::Break(gated_sys_message(name));
-                    }
-                    if !is_safe_function(name, self.allow_sys_functions) {
+                    if !is_safe_function(name) {
                         return ControlFlow::Break(format!("query rejected: {name} not allowed"));
                     }
-                    // A `sys_*` host-statistics function takes NO arguments.
-                    // The allowlist matches on name alone, so without this an
-                    // argument-carrying call like `sys_disk_info('/etc/passwd')`
-                    // would pass the gate on the strength of its name and hand
-                    // a caller-controlled value to the extension. Reject any
-                    // argument outright: no allowlisted `sys_*` function has a
-                    // legitimate argument form, so there is nothing to lose and
-                    // no path for a caller to choose what gets read.
-                    if is_no_arg_function(name) && !args.args.is_empty() {
-                        return ControlFlow::Break(format!(
-                            "query rejected: {name} takes no arguments"
-                        ));
-                    }
+                    let _ = args;
                     return ControlFlow::Continue(());
                 }
                 if is_allowed_table(name, self.allow_information_schema) {
@@ -511,30 +390,16 @@ impl Visitor for AllowlistVisitor {
                 ControlFlow::Continue(())
             }
             TableFactor::Function { name, args, .. } => {
-                if is_gated_sys_function(name, self.allow_sys_functions) {
-                    return ControlFlow::Break(gated_sys_message(name));
-                }
-                if !is_safe_function(name, self.allow_sys_functions) {
+                if !is_safe_function(name) {
                     return ControlFlow::Break(format!(
                         "query rejected: function {name} not allowed"
                     ));
                 }
-                // See the `TableFactor::Table` arm: a no-argument `sys_*`
-                // function must never receive a caller-controlled argument.
-                if is_no_arg_function(name) && !args.is_empty() {
-                    return ControlFlow::Break(format!(
-                        "query rejected: {name} takes no arguments"
-                    ));
-                }
+                let _ = args;
                 ControlFlow::Continue(())
             }
             TableFactor::TableFunction { expr, .. } => match expr {
-                Expr::Function(f)
-                    if is_safe_function(&f.name, self.allow_sys_functions)
-                        && !(is_no_arg_function(&f.name) && function_has_args(f)) =>
-                {
-                    ControlFlow::Continue(())
-                }
+                Expr::Function(f) if is_safe_function(&f.name) => ControlFlow::Continue(()),
                 _ => ControlFlow::Break("query rejected: table function not allowed".to_string()),
             },
             // UNNEST, PIVOT, UNPIVOT, JSON_TABLE, OPENJSON, MATCH_RECOGNIZE, etc.
@@ -587,28 +452,7 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
 /// (`sigiro_control.*`) and sibling tenant schemas. Data reads are already
 /// blocked by the table allowlist; this closes the structure disclosure.
 /// The `/v1/query` handler passes `!hosted`; local/edge callers pass `true`.
-///
-/// `allow_sys_functions = false` (HOSTED mode) additionally rejects the
-/// `sys_*` host-statistics functions. They read the machine sigiro itself runs
-/// on — disks, memory, CPU, network interfaces, OS. On the hosted service that
-/// machine is OURS and is never the tenant's, so the surface is both an
-/// infrastructure disclosure and, worse, misleading by construction: it can
-/// never answer a question about the caller's own hosts. `sigiro_metrics_*` is
-/// where those questions are answered. Self-host and local keep it, and the
-/// `sigiro query` fleet coordinator is unaffected — there each edge's `sys_*`
-/// genuinely describes that operator's own machines, which is the entire point
-/// of the fleet-stats work.
 pub fn validate_read_only_with(sql: &str, allow_information_schema: bool) -> Result<(), String> {
-    validate_read_only_gated(sql, allow_information_schema, true)
-}
-
-/// `validate_read_only_with` plus the `sys_*` gate. Separate so the existing
-/// two-argument signature keeps working for every local/edge caller.
-pub fn validate_read_only_gated(
-    sql: &str,
-    allow_information_schema: bool,
-    allow_sys_functions: bool,
-) -> Result<(), String> {
     // Validate the syntax users actually execute. GenericDialect rejects
     // DuckDB's standard aggregate `FILTER (WHERE ...)` clause before the
     // allowlist visitor can inspect it.
@@ -649,7 +493,6 @@ pub fn validate_read_only_gated(
     };
     if let ControlFlow::Break(msg) = query.visit(&mut AllowlistVisitor {
         allow_information_schema,
-        allow_sys_functions,
     }) {
         return Err(msg);
     }
@@ -667,6 +510,20 @@ pub fn validate_read_only_gated(
     }
     Ok(())
 }
+/// Read and convert one DuckDB result cell. DuckDB v2 emits a dedicated
+/// Arrow `Null` array for an untyped SQL `NULL`; duckdb-rs 1.x cannot turn
+/// that array into `ValueRef`, so handle it before calling `Row::get_ref`.
+pub fn duckdb_row_value_to_json(
+    row: &duckdb::Row<'_>,
+    idx: usize,
+    data_type: &arrow::datatypes::DataType,
+) -> duckdb::Result<serde_json::Value> {
+    if matches!(data_type, arrow::datatypes::DataType::Null) {
+        return Ok(serde_json::Value::Null);
+    }
+    row.get_ref(idx).map(duckdb_value_to_json)
+}
+
 /// Convert one DuckDB column value to a `serde_json::Value`. The ONE
 /// canonical value converter — shared by the `/v1/query` HTTP path
 /// (`execute_sql` above) and the federated query coordinator

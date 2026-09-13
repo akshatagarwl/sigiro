@@ -34,7 +34,6 @@
 //!   classes, `group_sets`, modifier types, comparison operator names) was
 //!   verified directly against this crate's pinned DuckDB build, not guessed.
 
-use crate::sql::SYS_STATS_FUNCTIONS;
 use anyhow::{Context, Result};
 use arrow::record_batch::RecordBatch;
 use serde_json::Value;
@@ -268,15 +267,9 @@ impl NullOrder {
     }
 }
 
-// The `sys_*` surface this module pushes to each edge is
-// `crate::sql::SYS_STATS_FUNCTIONS`, imported at the top of this file. It is
-// defined next to the firewall that enforces it so the coordinator's push list
-// and the gate's allowlist cannot drift apart.
-
 /// The FROM relation of a federatable query.
 ///
-/// The two variants differ in exactly one way that matters downstream: how
-/// the relation is rendered into the SQL pushed to each edge (see
+/// The relation is rendered into the SQL pushed to each edge (see
 /// [`FromRelation::render`]). Everything else in the pipeline — projection,
 /// WHERE, GROUP BY, aggregate partial/fold — is relation-agnostic and works
 /// off column names alone.
@@ -284,8 +277,6 @@ impl NullOrder {
 pub enum FromRelation {
     /// A `sigiro_*` DuckLake table, e.g. `sigiro_spans`.
     Table(String),
-    /// A `sys_*` host-statistics table function, e.g. `sys_disk_info`.
-    SysStats(String),
 }
 
 impl FromRelation {
@@ -296,32 +287,20 @@ impl FromRelation {
     /// default catalog, so an unqualified name fails there ("Table
     /// sigiro_spans does not exist! Did you mean lake.sigiro_spans?").
     ///
-    /// A `sys_*` table function is NOT in the `lake` catalog — it is not in
-    /// any catalog — so qualifying it that way fails at the edge for the
-    /// mirror-image reason. It renders as a bare call instead.
     fn render(&self) -> String {
         match self {
             Self::Table(table) => format!("{}.{}", quote_ident("lake"), quote_ident(table)),
-            Self::SysStats(func) => format!("{}()", quote_ident(func)),
         }
     }
 
     /// The name a column qualifier may legitimately use for this relation
-    /// (`sigiro_spans.service` / `sys_disk_info.mount_point`). Used by
+    /// (`sigiro_spans.service`). Used by
     /// `column_ref_name` to tell a real table qualifier apart from struct
     /// field access.
     fn qualifier_name(&self) -> &str {
         match self {
             Self::Table(table) => table,
-            Self::SysStats(func) => func,
         }
-    }
-
-    /// True when this relation is stored telemetry with a `timestamp` column,
-    /// and therefore subject to the time-bound requirement. Host statistics
-    /// are instantaneous and have no timestamp to bound.
-    fn is_time_series(&self) -> bool {
-        matches!(self, Self::Table(_))
     }
 }
 
@@ -422,8 +401,8 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
     let from_table = field(node, "from_table")?;
     let from_type = field_str(from_table, "type")?;
     anyhow::ensure!(
-        matches!(from_type, "BASE_TABLE" | "TABLE_FUNCTION"),
-        "federated queries support exactly one base table or sys_* table function in FROM \
+        from_type == "BASE_TABLE",
+        "federated queries support exactly one base table in FROM \
          (no JOIN, subquery, or CTE reference); got a {from_type} relation"
     );
     anyhow::ensure!(
@@ -458,71 +437,7 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
             );
             FromRelation::Table(table)
         }
-        // A table function's name lives at `from_table.function.function_name`
-        // — NOT at `table_name`, which does not exist on this node shape (AST
-        // shape verified directly against this crate's pinned DuckDB build via
-        // `json_serialize_sql`, same as the rest of this module).
-        _ => {
-            let function = field(from_table, "function")?;
-            let catalog = field_str(function, "catalog")?;
-            anyhow::ensure!(
-                catalog.is_empty(),
-                "cross-catalog function references are not supported in a federated query; \
-                 got catalog {catalog:?}"
-            );
-            let schema = field_str(function, "schema")?;
-            anyhow::ensure!(
-                schema.is_empty() || schema.eq_ignore_ascii_case("main"),
-                "unexpected schema qualifier {schema:?} on the FROM function — expected unqualified or main."
-            );
-            let func = field_str(function, "function_name")?.to_string();
-            anyhow::ensure!(
-                SYS_STATS_FUNCTIONS.contains(&func.to_uppercase().as_str()),
-                "federated queries may only target sigiro_* tables or the sys_* host-statistics \
-                 functions ({}); got {func:?}",
-                SYS_STATS_FUNCTIONS.join(", ").to_lowercase()
-            );
-            // These functions take no arguments. Accepting arguments here
-            // would push an unvalidated expression to every edge, so a call
-            // that has any is rejected outright rather than silently ignored.
-            //
-            // Every field read below is REQUIRED, never defaulted: each one is
-            // a guard on what gets pushed to every edge, so a missing or
-            // wrong-typed field means this build's AST is not the shape these
-            // checks were written against. Defaulting to the permitted value
-            // (`children` absent => 0 args, `distinct` absent => false,
-            // `with_ordinality` absent => WITHOUT_ORDINALITY) would turn a
-            // DuckDB parser change into a SILENTLY WEAKENED guard rather than
-            // a loud failure — the same name-only-allowlist hole this arm
-            // exists to close. Fail loud instead; `field`/`field_str` already
-            // name the missing key.
-            let arg_count = field(function, "children")?
-                .as_array()
-                .context("TABLE_FUNCTION children is not an array")?
-                .len();
-            anyhow::ensure!(
-                arg_count == 0,
-                "{func}() takes no arguments in a federated query; got {arg_count}"
-            );
-            anyhow::ensure!(
-                field(function, "filter")?.is_null(),
-                "FILTER is not supported on a federated {func}() call"
-            );
-            anyhow::ensure!(
-                !field(function, "distinct")?
-                    .as_bool()
-                    .context("TABLE_FUNCTION distinct is not a boolean")?,
-                "DISTINCT is not supported on a federated {func}() call"
-            );
-            // `WITH ORDINALITY` adds a synthetic column the coordinator's
-            // fold has never seen; reject rather than mis-project it.
-            anyhow::ensure!(
-                field_str(from_table, "with_ordinality")?
-                    .eq_ignore_ascii_case("WITHOUT_ORDINALITY"),
-                "WITH ORDINALITY is not supported in a federated query"
-            );
-            FromRelation::SysStats(func)
-        }
+        _ => unreachable!("from_type was checked above"),
     };
     let table = from.qualifier_name().to_string();
     let table_alias = from_table
@@ -622,10 +537,13 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                     field_str(limit_expr, "class")? == "CONSTANT",
                     "LIMIT must be a literal integer in a federated query"
                 );
-                let n = limit_expr
-                    .get("value")
-                    .and_then(|v| v.get("value"))
-                    .and_then(Value::as_i64)
+                let literal = field(limit_expr, "literal")?;
+                anyhow::ensure!(
+                    field_str(literal, "kind")? == "INTEGER",
+                    "LIMIT literal is not an integer"
+                );
+                let n = field_str(literal, "text")?
+                    .parse::<i64>()
                     .context("LIMIT literal is not an integer")?;
                 limit = Some(n);
             }
@@ -675,14 +593,22 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                     .is_some_and(|o| !o.is_empty());
                 anyhow::ensure!(!has_order_bys, "ordered aggregates are not federatable");
                 let function_name = field_str(item, "function_name")?.to_lowercase();
-                // Required, not defaulted: `single_column_arg` enforces
-                // "exactly one plain column" against this list, so an absent
-                // `children` read as empty would turn a real argument list
-                // into a length-0 check and mis-push the aggregate.
-                let children = field(item, "children")?
+                // DuckDB v2 represents each function argument as a named
+                // wrapper around its expression. Federated aggregates accept
+                // positional expressions only.
+                let arguments = field(item, "arguments")?
                     .as_array()
-                    .context("aggregate children is not an array")?
-                    .clone();
+                    .context("aggregate arguments is not an array")?;
+                let children = arguments
+                    .iter()
+                    .map(|argument| {
+                        anyhow::ensure!(
+                            field_str(argument, "name")?.is_empty(),
+                            "named aggregate arguments are not federatable"
+                        );
+                        Ok(field(argument, "expression")?.clone())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 let (kind, arg) = match function_name.as_str() {
                     "count_star" => (AggKind::Count, None),
                     "count" => (
@@ -890,7 +816,7 @@ fn is_null_field(v: &Value, key: &str) -> bool {
 fn deparse_expr(v: &Value, table: &str, table_alias: &str) -> Result<String> {
     match field_str(v, "class")? {
         "COLUMN_REF" => Ok(quote_ident(&column_ref_name(v, table, table_alias)?)),
-        "CONSTANT" => deparse_constant(field(v, "value")?),
+        "CONSTANT" => deparse_constant(field(v, "literal")?),
         "COMPARISON" => {
             let op = comparison_op(field_str(v, "type")?)?;
             let left = deparse_expr(field(v, "left")?, table, table_alias)?;
@@ -934,98 +860,29 @@ fn comparison_op(t: &str) -> Result<&'static str> {
     })
 }
 
-fn deparse_constant(value: &Value) -> Result<String> {
-    // `is_null` is checked FIRST and is required: a NULL constant carries no
-    // `value` key at all (verified against this crate's pinned DuckDB build),
-    // so the read below would fail on it. Order matters here.
-    if field(value, "is_null")?
-        .as_bool()
-        .context("CONSTANT is_null is not a boolean")?
-    {
-        return Ok("NULL".to_string());
-    }
-    let type_obj = value.get("type").context("CONSTANT missing type")?;
-    // Required, not defaulted: a placeholder id would fall through this match
-    // to the "unsupported constant type" bail, reporting a fabricated type
-    // name instead of the real "the AST has no id field" cause.
-    let type_id = field_str(type_obj, "id")?;
-    let raw = value.get("value").context("CONSTANT missing value")?;
-    match type_id {
-        "VARCHAR" => {
-            let s = raw.as_str().context("VARCHAR constant is not a string")?;
-            Ok(format!("'{}'", crate::sql::escape_sql_string(s)))
+fn deparse_constant(literal: &Value) -> Result<String> {
+    let kind = field_str(literal, "kind")?;
+    let text = field_str(literal, "text")?;
+    match kind {
+        "NULL_LITERAL" => Ok("NULL".to_string()),
+        "STRING" => Ok(format!("'{}'", crate::sql::escape_sql_string(text))),
+        "BOOLEAN" => match text {
+            "true" => Ok("TRUE".to_string()),
+            "false" => Ok("FALSE".to_string()),
+            _ => anyhow::bail!("invalid BOOLEAN literal text: {text:?}"),
+        },
+        "INTEGER" => {
+            text.parse::<i128>()
+                .with_context(|| format!("invalid INTEGER literal text: {text:?}"))?;
+            Ok(text.to_string())
         }
-        // Required, not defaulted: a non-boolean here silently deparsed to
-        // FALSE, pushing a WHERE clause that means something the user never
-        // wrote.
-        "BOOLEAN" => Ok(
-            if raw.as_bool().context("BOOLEAN constant is not a boolean")? {
-                "TRUE"
-            } else {
-                "FALSE"
-            }
-            .to_string(),
-        ),
-        "TINYINT" | "SMALLINT" | "INTEGER" | "BIGINT" | "UTINYINT" | "USMALLINT" | "UINTEGER"
-        | "UBIGINT" | "DOUBLE" | "FLOAT" => Ok(raw.to_string()),
-        // DECIMAL is serialized as an unscaled mantissa (`value`) + a separate
-        // `type_info.scale` — e.g. the literal `1.5` comes back as
-        // `{"type_info":{"scale":1,...},"value":15}`. Emitting the raw
-        // mantissa (as the old code did) reproduces `15`, ten times too big.
-        // Reconstruct the actual decimal text from mantissa + scale using
-        // integer string manipulation only (no float involved, so no
-        // rounding risk).
-        "DECIMAL" => {
-            let type_info = type_obj
-                .get("type_info")
-                .context("DECIMAL constant missing type_info")?;
-            deparse_decimal(raw, type_info)
+        "NUMERIC" => {
+            text.parse::<f64>()
+                .with_context(|| format!("invalid NUMERIC literal text: {text:?}"))?;
+            Ok(text.to_string())
         }
-        // HUGEINT/UHUGEINT (128-bit) constants are serialized as a
-        // `{"upper":..,"lower":..}` object, not a JSON number — splicing that
-        // object's Display/to_string() into SQL text (as the old code did via
-        // the shared `raw.to_string()` arm) produces garbage SQL, not a wrong
-        // number. Fail loud instead of ever doing that.
-        "HUGEINT" | "UHUGEINT" => anyhow::bail!(
-            "unsupported WHERE literal type {type_id}: 128-bit integer literals are serialized \
-             by DuckDB as a {{upper,lower}} object rather than a plain number and cannot be \
-             safely deparsed into SQL text by this planner — narrow the literal to fit a 64-bit \
-             integer"
-        ),
-        other => anyhow::bail!("unsupported WHERE literal type: {other}"),
+        other => anyhow::bail!("unsupported WHERE literal kind: {other}"),
     }
-}
-
-/// Reconstruct a DECIMAL literal's exact text from its unscaled mantissa and
-/// scale (e.g. mantissa `155`, scale `1` -> `"15.5"`). Pure integer/string
-/// arithmetic — never round-trips through a float, so it cannot introduce the
-/// rounding error a `mantissa as f64 / 10f64.powi(scale)` approach could.
-fn deparse_decimal(raw: &Value, type_info: &Value) -> Result<String> {
-    let scale = type_info
-        .get("scale")
-        .and_then(Value::as_i64)
-        .context("DECIMAL type_info missing scale")?;
-    anyhow::ensure!(
-        scale >= 0,
-        "DECIMAL literal has an unsupported negative scale {scale}"
-    );
-    let mantissa = raw.as_i64().with_context(|| {
-        format!(
-            "DECIMAL literal mantissa {raw:?} does not fit in a 64-bit integer — not federatable"
-        )
-    })?;
-    if scale == 0 {
-        return Ok(mantissa.to_string());
-    }
-    let scale = scale as usize;
-    let negative = mantissa < 0;
-    let digits = mantissa.unsigned_abs().to_string();
-    let digits = format!("{digits:0>width$}", width = scale + 1);
-    let (int_part, frac_part) = digits.split_at(digits.len() - scale);
-    Ok(format!(
-        "{}{int_part}.{frac_part}",
-        if negative { "-" } else { "" }
-    ))
 }
 
 /// Generic recursive scan of the (already-validated) WHERE AST for any
@@ -1230,9 +1087,7 @@ fn build_partial_sql(parsed: &ParsedQuery, row_cap: usize) -> String {
     for col in passthrough_extra_order_cols(parsed) {
         select_parts.push(quote_ident(&col));
     }
-    // The FROM relation renders itself — a DuckLake table catalog-qualified
-    // as `lake.<table>`, a `sys_*` function as a bare call (see
-    // `FromRelation::render` for why each form is required at the edge). The
+    // The FROM relation renders itself as a DuckLake catalog-qualified table.
     // final fold (build_final_sql) runs on local materialized tables, so it
     // is never qualified.
     let mut inner = format!(
@@ -1443,13 +1298,10 @@ pub async fn run_federated_query(
         .context("failed to load the json extension needed to plan the federated query")?;
 
     let parsed = plan_query(&coord, sql)?;
-    // The time-bound requirement exists to stop an un-prunable scan of stored
-    // telemetry across every edge. A `sys_*` host-statistics call is a live
-    // point-in-time reading with no timestamp column and a handful of rows per
-    // edge, so there is nothing to bound and nothing to blow up — requiring
-    // `--full-scan` there would be a demand the user cannot satisfy.
+    // The time-bound requirement stops an un-prunable scan of stored telemetry
+    // across every edge.
     anyhow::ensure!(
-        !parsed.from.is_time_series() || parsed.has_time_bound || allow_full_scan,
+        parsed.has_time_bound || allow_full_scan,
         "federated query has no bound on the timestamp column in its WHERE clause — this is the \
          un-prunable cross-edge blowup case. Add a WHERE timestamp filter, or pass --full-scan \
          to run anyway."
@@ -1541,6 +1393,14 @@ pub async fn run_federated_query(
         .as_ref()
         .map(duckdb::Statement::column_names)
         .unwrap_or_default();
+    let column_types = rows
+        .as_ref()
+        .map(|statement| {
+            (0..statement.column_count())
+                .map(|idx| statement.column_type(idx))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let mut results = Vec::new();
     while let Some(row) = rows
         .next()
@@ -1548,10 +1408,9 @@ pub async fn run_federated_query(
     {
         let mut obj = serde_json::Map::new();
         for (i, name) in column_names.iter().enumerate() {
-            let val = row
-                .get_ref(i)
+            let val = crate::sql::duckdb_row_value_to_json(row, i, &column_types[i])
                 .context("failed to read a coordinator fold result column")?;
-            obj.insert(name.clone(), crate::sql::duckdb_value_to_json(val));
+            obj.insert(name.clone(), val);
         }
         results.push(Value::Object(obj));
     }
@@ -1563,35 +1422,29 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn type_info(scale: i64) -> Value {
-        json!({ "scale": scale })
+    #[test]
+    fn deparse_duckdb-v2_literals_preserves_exact_text() {
+        assert_eq!(
+            deparse_constant(&json!({ "kind": "NUMERIC", "text": "1.50" })).unwrap(),
+            "1.50"
+        );
+        assert_eq!(
+            deparse_constant(&json!({ "kind": "STRING", "text": "it's" })).unwrap(),
+            "'it''s'"
+        );
+        assert_eq!(
+            deparse_constant(&json!({ "kind": "NULL_LITERAL", "text": "" })).unwrap(),
+            "NULL"
+        );
     }
 
-    /// `deparse_decimal` reconstructs the exact literal text from DuckDB's
-    /// unscaled-mantissa + scale serialization. The E2E's `duration > 15.5`
-    /// assertion only proves the boundary lands somewhere between 15 and 16
-    /// — it can't tell "15.5" from a truncated "15" (a 10x-scale bug that
-    /// coincidentally still excludes 15 for other reasons). This asserts the
-    /// produced SQL literal text directly.
     #[test]
-    fn deparse_decimal_reconstructs_exact_literal() {
-        assert_eq!(deparse_decimal(&json!(15), &type_info(1)).unwrap(), "1.5");
-        assert_eq!(deparse_decimal(&json!(5), &type_info(2)).unwrap(), "0.05");
-        assert_eq!(deparse_decimal(&json!(-15), &type_info(1)).unwrap(), "-1.5");
-        assert_eq!(deparse_decimal(&json!(150), &type_info(2)).unwrap(), "1.50");
-        assert_eq!(deparse_decimal(&json!(42), &type_info(0)).unwrap(), "42");
-    }
-
-    /// A mantissa that doesn't fit in a 64-bit integer (e.g. a
-    /// HUGEINT-backed DECIMAL) must fail loud, never silently
-    /// truncate/wrap/misrender.
-    #[test]
-    fn deparse_decimal_bails_on_oversized_mantissa() {
-        let oversized = json!(u64::MAX);
-        let err = deparse_decimal(&oversized, &type_info(2)).unwrap_err();
+    fn deparse_duckdb-v2_literal_rejects_invalid_numeric_text() {
+        let err =
+            deparse_constant(&json!({ "kind": "NUMERIC", "text": "1; DROP TABLE t" })).unwrap_err();
         assert!(
-            err.to_string().contains("does not fit"),
-            "expected a 'does not fit' error, got: {err}"
+            err.to_string().contains("invalid NUMERIC literal text"),
+            "unexpected error: {err}"
         );
     }
 }

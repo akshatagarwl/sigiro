@@ -24,7 +24,7 @@ use crate::inserter::{DiskCapacityState, MsgRouter};
 use crate::pool::ProjectPool;
 use crate::responses::*;
 use crate::sql::{
-    ALLOWED_TABLES, duckdb_value_to_json, escape_sql_string, validate_read_only_gated,
+    ALLOWED_TABLES, duckdb_row_value_to_json, escape_sql_string, validate_read_only_with,
 };
 use crate::types::*;
 use tracing_attributes::instrument;
@@ -1150,6 +1150,14 @@ async fn execute_sql(
             .as_ref()
             .map(duckdb::Statement::column_names)
             .unwrap_or_default();
+        let column_types = rows
+            .as_ref()
+            .map(|statement| {
+                (0..statement.column_count())
+                    .map(|idx| statement.column_type(idx))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let mut results = Vec::new();
         let mut truncated = false;
         // Propagate a mid-stream error instead of silently truncating the
@@ -1165,10 +1173,9 @@ async fn execute_sql(
             }
             let mut obj = serde_json::Map::new();
             for (i, name) in column_names.iter().enumerate() {
-                let val = row
-                    .get_ref(i)
+                let val = duckdb_row_value_to_json(row, i, &column_types[i])
                     .map_err(|e| anyhow::anyhow!("column read failed: {e}"))?;
-                obj.insert(name.clone(), duckdb_value_to_json(val));
+                obj.insert(name.clone(), val);
             }
             results.push(serde_json::Value::Object(obj));
         }
@@ -1331,12 +1338,7 @@ async fn query_handler(
     // enumeration — it would expose the control plane + sibling tenant schema
     // names. Local/self-host keeps it (single-catalog, safe).
     let allow_information_schema = !state.pool.storage_mode().is_distributed();
-    // Same axis, second disclosure: `sys_*` reads the host sigiro runs on. In
-    // hosted mode that host is ours, so the answer is never about the tenant's
-    // own machine — it leaks our infrastructure AND is misleading by
-    // construction. `sigiro_metrics_*` carries host telemetry the tenant sent.
-    let allow_sys_functions = !state.pool.storage_mode().is_distributed();
-    if let Err(e) = validate_read_only_gated(&body, allow_information_schema, allow_sys_functions) {
+    if let Err(e) = validate_read_only_with(&body, allow_information_schema) {
         tracing::warn!(sql = %sql_preview, "query rejected (validation): {e}");
         return Err(bad_request(
             "query rejected",

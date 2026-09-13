@@ -60,8 +60,7 @@ Why sigiro works as it does. Read this part when you want to know the reasons,
 the costs and the alternatives. You do not need a terminal.
 
 - **[About the tables, and which machine they describe](/docs/explanation/tables)**
-  — why `sigiro_metrics_*` and `sys_*` answer questions about different
-  machines, and how to avoid a confident wrong answer.
+  — the stored signals and how to avoid answering with data from the wrong machine.
 - **[About evidence instead of a dashboard](/docs/explanation/evidence)** — why
   the answer is a ranked list with a runnable query on every row.
 - **[About deploy detection, and what your spans must

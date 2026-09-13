@@ -3,27 +3,28 @@
 # Usage: eval "$(scripts/prepare-duckdb-static.sh TARGET_TRIPLE)"
 set -euo pipefail
 
-version="${DUCKDB_VERSION:-1.5.5}"
+version="v2.0.0-alpha41489"
+commit="10de9573794001c649621013bdd93553b54e00c9"
 target="${1:-$(rustc -vV | sed -n 's/^host: //p')}"
 cache_root="${DUCKDB_STATIC_CACHE:-${CARGO_TARGET_DIR:-target}/duckdb-static}"
 if [[ "$cache_root" != /* ]]; then
   cache_root="$(cd "$(dirname "$0")/.." && pwd)/$cache_root"
 fi
-cache_dir="${cache_root}/${version}/${target}"
-archive="${cache_dir}/static-libs.zip"
+cache_dir="${cache_root}/${version}-${commit:0:10}/${target}"
+archive="${cache_dir}/static-libs.tar.gz"
 lib="${cache_dir}/libduckdb_static.a"
 header="${cache_dir}/duckdb.h"
 
 case "$target" in
-  x86_64-unknown-linux-gnu) platform=linux-amd64; checksum=deb47c5300f3c99725e84cdb14d214c3b12bbd748b613b1698b938c894cb68eb ;;
-  aarch64-unknown-linux-gnu) platform=linux-arm64; checksum=ea6a34cb49ec2db5ed23d9e8311237c53c32abf9cdbf5dd608c4176c3dd8bfeb ;;
-  x86_64-apple-darwin) platform=osx-amd64; checksum=a27d36fa1247a3ffa1692e7aa0bf4ea4d1e0ee51da7c4df7a5db5217357b1b4d ;;
-  aarch64-apple-darwin) platform=osx-arm64; checksum=d79ec66b8a4054b866faada82e9e31f859a713c555b3f1c4b71c4a43d3273e9c ;;
+  x86_64-unknown-linux-gnu) platform=linux-amd64; checksum=f4997440399d63d789c7e85924f2a63ef4c5e54421cd50d397e06a561e7052ad ;;
+  aarch64-unknown-linux-gnu) platform=linux-arm64; checksum=227cecab7a00fa2e2da1577f30af6a43b465e0ff5a82afc75ae1803e9951fd0b ;;
+  x86_64-apple-darwin) platform=osx-amd64; checksum=c1657abf48c3c58180393c6e05dabdb91cd5d24dc8c45f98c4a91f487fb9031e ;;
+  aarch64-apple-darwin) platform=osx-arm64; checksum=cf19469791067f6f6855debc8054f35802c8c091c4fe9b1009245b1e7263ccec ;;
   *) echo "prepare-duckdb-static: unsupported target: $target" >&2; exit 2 ;;
 esac
 
 mkdir -p "$cache_dir"
-url="https://github.com/duckdb/duckdb/releases/download/v${version}/static-libs-${platform}.zip"
+url="https://duckdb-staging.duckdb.org/${commit:0:10}/${version}/duckdb/duckdb/github_release/duckdb-static-libs-${platform}.tar.gz"
 if command -v sha256sum >/dev/null 2>&1; then
   checksum_cmd=(sha256sum)
 else
@@ -42,7 +43,7 @@ printf '%s  %s\n' "$checksum" "$archive" | "${checksum_cmd[@]}" -c - >/dev/null
 if [[ ! -s "$lib" || ! -s "$header" ]]; then
   work="$(mktemp -d "${cache_dir}/extract.XXXXXX")"
   trap 'rm -rf "$work"' EXIT
-  unzip -q "$archive" -d "$work"
+  tar -xzf "$archive" -C "$work"
   fragments=()
   while IFS= read -r fragment; do fragments+=("$fragment"); done < <(find "$work" -type f -name '*.a' -print | sort)
   [[ ${#fragments[@]} -gt 0 ]] || { echo "prepare-duckdb-static: archive has no .a fragments" >&2; exit 1; }

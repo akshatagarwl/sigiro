@@ -1741,7 +1741,7 @@ log_counter_pairs AS (
     SELECT COALESCE(NULLIF(t.template_text, ''), l.body) AS pattern,
            unnest(list_filter(
                str_split(COALESCE(NULLIF(t.template_text, ''), l.body), ' '),
-               x -> x = '<*>' OR x LIKE '%<NUM>%' OR x LIKE '%<IP>%'
+               lambda x: x = '<*>' OR x LIKE '%<NUM>%' OR x LIKE '%<IP>%'
                     OR x LIKE '%<UUID>%' OR x LIKE '%<HEX>%'
            )) AS label,
            unnest(from_json(l.template_values, '["VARCHAR"]')) AS raw_value

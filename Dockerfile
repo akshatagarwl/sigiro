@@ -16,12 +16,11 @@ WORKDIR /build
 # Prebuilt DuckDB static libs for the TARGET arch: download + ar-merge, NO
 # compile. All build surfaces use the same pinned preparation script.
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS duckdb-static
-ARG DUCKDB_VERSION=1.5.5
 ARG TARGETARCH
 COPY scripts/prepare-duckdb-static.sh /usr/local/bin/prepare-duckdb-static
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip binutils && rm -rf /var/lib/apt/lists/* && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl binutils && rm -rf /var/lib/apt/lists/* && \
     case "$TARGETARCH" in amd64) T=x86_64-unknown-linux-gnu ;; arm64) T=aarch64-unknown-linux-gnu ;; *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; esac && \
-    eval "$(DUCKDB_VERSION="$DUCKDB_VERSION" DUCKDB_STATIC_CACHE=/opt/duckdb-cache /usr/local/bin/prepare-duckdb-static "$T")" && \
+    eval "$(DUCKDB_STATIC_CACHE=/opt/duckdb-cache /usr/local/bin/prepare-duckdb-static "$T")" && \
     mkdir -p /opt/duckdb && cp "$DUCKDB_LIB_DIR/libduckdb_static.a" "$DUCKDB_INCLUDE_DIR/duckdb.h" /opt/duckdb/
 
 FROM chef AS planner

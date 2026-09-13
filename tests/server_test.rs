@@ -1,6 +1,8 @@
 use duckdb::Connection;
 use sigiro::server::{resolve_listener_bind_ips, validate_quack_bind_address};
-use sigiro::sql::{duckdb_value_to_json, validate_read_only, validate_read_only_with};
+use sigiro::sql::{
+    duckdb_row_value_to_json, duckdb_value_to_json, validate_read_only, validate_read_only_with,
+};
 
 fn test_conn() -> Connection {
     let conn = Connection::open_in_memory().expect("in-memory db");
@@ -95,8 +97,13 @@ fn value_ref_null() {
     let conn = test_conn();
     let mut stmt = conn.prepare("SELECT NULL AS n").unwrap();
     let mut rows = stmt.query([]).unwrap();
+    let data_type = rows.as_ref().unwrap().column_type(0);
     let row = rows.next().unwrap().unwrap();
-    assert!(duckdb_value_to_json(row.get_ref(0).unwrap()).is_null());
+    assert!(
+        duckdb_row_value_to_json(row, 0, &data_type)
+            .unwrap()
+            .is_null()
+    );
 }
 
 #[test]

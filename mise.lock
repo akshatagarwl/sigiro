@@ -52,46 +52,6 @@ version = "15.0.0"
 backend = "cargo:tokei"
 specifiers = ["15.0.0"]
 
-[[tools.duckdb]]
-version = "1.5.5"
-backend = "aqua:duckdb/duckdb"
-specifiers = ["1.5.5"]
-
-[tools.duckdb."platforms.linux-arm64"]
-checksum = "sha256:02163197027a42149147364d31fa67cac82108517a4be43304a1cc226eaef07a"
-url = "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-arm64.zip"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/485846943"
-
-[tools.duckdb."platforms.linux-arm64-musl"]
-checksum = "sha256:520e4a9024be2f5bd2dafd84b806740c0544e4b47412291f200bd739a5b0f7ff"
-url = "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-arm64-musl.zip"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/485846922"
-
-[tools.duckdb."platforms.linux-x64"]
-checksum = "sha256:08c0ca117111fcede14239d0093792352befdc174218c344d232c13279643d05"
-url = "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/485846903"
-
-[tools.duckdb."platforms.linux-x64-musl"]
-checksum = "sha256:4261fe20bab47d92742d5e21eee979e9e81548442985b9e3327725e1f755c910"
-url = "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64-musl.zip"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/485846869"
-
-[tools.duckdb."platforms.macos-arm64"]
-checksum = "sha256:7a4bc3a93f7f92f5b40cd09c21afaf98e415c6cb9d9170064993782e779f4115"
-url = "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-osx-universal.zip"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/485847030"
-
-[tools.duckdb."platforms.macos-x64"]
-checksum = "sha256:7a4bc3a93f7f92f5b40cd09c21afaf98e415c6cb9d9170064993782e779f4115"
-url = "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-osx-universal.zip"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/485847030"
-
-[tools.duckdb."platforms.windows-x64"]
-checksum = "sha256:e1428b7114a841626b5054723731cbf45c6df91b42ae1a6c355f88fad1f6dc4c"
-url = "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-windows-amd64.zip"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/485847051"
-
 [[tools."github:astral-sh/hawk"]]
 version = "0.1.14"
 backend = "github:astral-sh/hawk"
@@ -133,6 +93,35 @@ checksum = "sha256:73483c42cb80b880d3a407201216aa90df8808546f90ab1cdbe5cd678d891
 url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-apple-darwin.tar.gz"
 url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384063"
 provenance = "github-attestations"
+
+[[tools."http:duckdb"]]
+version = "v2.0.0-alpha41489"
+backend = "http:duckdb"
+specifiers = ["v2.0.0-alpha41489"]
+
+[tools."http:duckdb"."platforms.linux-arm64"]
+checksum = "sha256:e92f0ec283c983ec9b36f5abadeb03127b32ce360e2c3051fef9b1bdf331af9c"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-arm64.tar.gz"
+
+[tools."http:duckdb"."platforms.linux-arm64-musl"]
+checksum = "sha256:e92f0ec283c983ec9b36f5abadeb03127b32ce360e2c3051fef9b1bdf331af9c"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-arm64.tar.gz"
+
+[tools."http:duckdb"."platforms.linux-x64"]
+checksum = "sha256:57215243cde3a00b3f64f7bceb4f3a972b4f45f0770a8418b7977a65abba9290"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz"
+
+[tools."http:duckdb"."platforms.linux-x64-musl"]
+checksum = "sha256:57215243cde3a00b3f64f7bceb4f3a972b4f45f0770a8418b7977a65abba9290"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz"
+
+[tools."http:duckdb"."platforms.macos-arm64"]
+checksum = "sha256:d71af9d28992a03f811792a56e2bb9b8776f3820455aa0006cedc2eda254d8f5"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-osx-arm64.tar.gz"
+
+[tools."http:duckdb"."platforms.macos-x64"]
+checksum = "sha256:63d90c09c58f5ad788341859c18d62e6ba2d9fecf3c3035cbadde56257ed055a"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-osx-amd64.tar.gz"
 
 [[tools."packslip:github.com/aubepkg/aube"]]
 version = "2.2.12"

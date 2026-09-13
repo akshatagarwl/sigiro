@@ -497,32 +497,6 @@ impl ProjectPool {
                                 "failed to load/pin the quack extension before locking down \
                                  filesystem access",
                             )?;
-                            // Same irreversible-lockdown rule: the system_stats
-                            // community extension backs the `sys_*`
-                            // host-statistics functions that federated fleet
-                            // queries reach (federate::SYS_STATS_FUNCTIONS).
-                            // It is NOT statically linked the way
-                            // parquet/json/icu are, so it needs INSTALL (a
-                            // network download from the COMMUNITY repo) while
-                            // external access is still open — afterwards it can
-                            // never load.
-                            //
-                            // Gated on the quack surface, exactly like the two
-                            // installs above: `sys_*` is reachable ONLY through
-                            // that surface, so installing it when the surface
-                            // is off would add a boot-time dependency on an
-                            // external repo to every deployment that cannot use
-                            // the feature — including the hosted box, where
-                            // SIGIRO_QUERY_SURFACE defaults to `none`.
-                            crate::storage::install_extensions_from(
-                                conn,
-                                &["system_stats"],
-                                crate::storage::ExtensionRepo::Community,
-                            )
-                            .context(
-                                "failed to install/load system_stats before locking down \
-                                 filesystem access",
-                            )?;
                         }
                         let missing = crate::storage::extensions_needing_install(
                             conn,

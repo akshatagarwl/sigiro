@@ -1,8 +1,4 @@
-# Pins the DuckDB CLI to the exact version the `duckdb` crate embeds, so a
-# shell query against a database file behaves like the server that wrote it.
-# `libduckdb-sys 1.10505.0` is DuckDB 1.5.5.
 [tools]
-duckdb = "1.5.5"
 sccache = "0.17.0"
 # The packslip backend verifies the vendor's Sigstore identity and artifact
 # digest before installing either tool. Keep exact versions so signer or
@@ -28,6 +24,17 @@ ast-grep = "0.45.3"
 # build. The content-addressed gates below also include the resolved compiler
 # and mbx identities, so every invocation uses the same cache namespace.
 rust = { version = "1.98.1", components = ["rustfmt", "clippy"], targets = ["aarch64-unknown-linux-gnu"] }
+
+# DuckDB v2 is not published through DuckDB's stable release channel yet.
+# Install its exact upstream staging CLI through mise's built-in HTTP backend.
+[tools."http:duckdb"]
+version = "v2.0.0-alpha41489"
+
+[tools."http:duckdb".platforms]
+linux-x64 = { url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz", checksum = "sha256:57215243cde3a00b3f64f7bceb4f3a972b4f45f0770a8418b7977a65abba9290" }
+linux-arm64 = { url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-arm64.tar.gz", checksum = "sha256:e92f0ec283c983ec9b36f5abadeb03127b32ce360e2c3051fef9b1bdf331af9c" }
+macos-x64 = { url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-osx-amd64.tar.gz", checksum = "sha256:63d90c09c58f5ad788341859c18d62e6ba2d9fecf3c3035cbadde56257ed055a" }
+macos-arm64 = { url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-osx-arm64.tar.gz", checksum = "sha256:d71af9d28992a03f811792a56e2bb9b8776f3820455aa0006cedc2eda254d8f5" }
 
 # Keep Cargo as Rust's package/build engine, but route every repository-local
 # `cargo …` invocation through mbx so no command silently bypasses the shared

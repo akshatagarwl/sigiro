@@ -109,7 +109,6 @@ jobs:
 
       - name: DuckDB static libs
         env:
-          DUCKDB_VERSION: 1.5.5
           DUCKDB_STATIC_CACHE: ${{ runner.temp }}/duckdb-static
         run: |
           set -euo pipefail

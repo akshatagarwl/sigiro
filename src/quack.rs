@@ -24,8 +24,7 @@ use duckdb::vtab::arrow::WritableVector;
 /// authorization semantics underneath this gate without a deliberate,
 /// re-verified bump here.
 ///
-/// Empirically, against the DuckDB build actually vendored by this crate's
-/// `duckdb = "1.10505.0"` dependency (DuckDB v1.5.5): quack is NOT in
+/// Empirically, against the pinned DuckDB v2.0 DuckDB v2 alpha: quack is NOT in
 /// DuckDB's autoloadable "known extensions" list, so a bare `LOAD quack;`
 /// always fails with "Extension \"quack\" is an existing extension. Install
 /// it first" — [`load_and_pin`] must always `INSTALL` it explicitly. The
@@ -33,21 +32,12 @@ use duckdb::vtab::arrow::WritableVector;
 /// `FROM` clause) serves this pinned version.
 ///
 /// `core` serves a different quack build per DuckDB version, so a DuckDB
-/// bump moves this constant too. The v1.5.3 pin was `1693647`; v1.5.5 serves
-/// `c154811`.
-///
-/// **`core_nightly` serves a DIFFERENT, newer, UNVERIFIED build.** Measured
-/// on v1.5.3, `core_nightly` served `40de7ba` against that pin's `1693647`
-/// for the same platform, and using it as a fallback was the actual root
-/// cause of a boot failure (`quack extension version mismatch: installed
-/// "40de7ba", pinned "1693647"`) once `core_nightly`'s build drifted away
-/// from what this gate was verified against. That comparison has not been
-/// re-measured on v1.5.5, and it does not need to be: never fall back to
+/// bump moves this constant too. Never fall back to
 /// `core_nightly`. If `core` stops serving this exact version, that is
 /// exactly the drift this pin exists to catch — re-verify the authorization
 /// gate against the new build and bump this constant deliberately, rather
 /// than widening the install source.
-pub(crate) const EXPECTED_QUACK_VERSION: &str = "c154811";
+pub(crate) const EXPECTED_QUACK_VERSION: &str = "50bd1913e4";
 
 /// Scalar UDF name installed as the quack authorization gate. Re-registered
 /// from this Rust source on every server boot (see
@@ -263,54 +253,6 @@ fn self_test_authorization_gate(conn: &Connection) -> Result<()> {
         "authorization gate self-test FAILED: a known-bad SELECT current_setting(...) was \
          ALLOWED — refusing to serve the quack query surface"
     );
-
-    // The `sys_*` host-statistics functions are a DELIBERATE, NAMED exception
-    // to the config-leak denials asserted immediately above: federated fleet
-    // queries (crate::federate) reach them through this surface, so they must
-    // be permitted here — while `getenv`/`current_setting` stay denied. Both
-    // halves are asserted so the pairing can never drift: widening the gate
-    // far enough to leak process env or DuckDB config still refuses to bind a
-    // port, and narrowing it far enough to break fleet queries fails at boot
-    // instead of at the first query.
-    let sys_stats_allowed: bool = conn
-        .query_row(
-            &format!("SELECT {AUTH_FUNCTION_NAME}('self-test', 'SELECT * FROM sys_disk_info()')"),
-            [],
-            |row| row.get(0),
-        )
-        .context(
-            "authorization gate self-test: failed to invoke the gate on a known-good \
-             sys_disk_info() query",
-        )?;
-    anyhow::ensure!(
-        sys_stats_allowed,
-        "authorization gate self-test FAILED: SELECT * FROM sys_disk_info() was DENIED — \
-         federated fleet queries would fail at every edge. server::SAFE_FUNCTIONS and \
-         federate::SYS_STATS_FUNCTIONS must agree; refusing to serve the quack query surface"
-    );
-
-    // A `sys_*` call carrying arguments is NOT part of that exception. The
-    // allowlist matches on function NAME, so this asserts the surrounding
-    // structural checks still reject a call shape the coordinator never
-    // produces, rather than trusting the name alone.
-    let sys_stats_args_denied: bool = conn
-        .query_row(
-            &format!(
-                "SELECT {AUTH_FUNCTION_NAME}('self-test', 'SELECT * FROM sys_disk_info(''/etc/passwd'')')"
-            ),
-            [],
-            |row| row.get(0),
-        )
-        .context(
-            "authorization gate self-test: failed to invoke the gate on a known-bad \
-             argument-carrying sys_disk_info() query",
-        )?;
-    anyhow::ensure!(
-        !sys_stats_args_denied,
-        "authorization gate self-test FAILED: sys_disk_info() WITH AN ARGUMENT was ALLOWED — \
-         refusing to serve the quack query surface"
-    );
-
     Ok(())
 }
 
