@@ -142,7 +142,7 @@ pub async fn extract_project_id_grpc(
     auth_mode
         .authenticate_ingest(token)
         .await
-        .map(|tenant_id| tenant_id.into())
+        .map(Into::into)
         .map_err(|error| match error {
             crate::auth::AuthError::InsufficientScope(_) => {
                 Status::permission_denied("Access token lacks telemetry:ingest scope")
@@ -720,7 +720,7 @@ pub async fn extract_project_id_http(
     auth_mode
         .authenticate_ingest(token.as_deref())
         .await
-        .map(|tenant_id| tenant_id.into())
+        .map(Into::into)
         .map_err(|error| match error {
             crate::auth::AuthError::InsufficientScope(_) => StatusCode::FORBIDDEN,
             crate::auth::AuthError::InvalidToken | crate::auth::AuthError::JwksUnavailable => {
