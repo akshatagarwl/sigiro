@@ -572,14 +572,12 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
                 for sample in &profile.sample {
                     let stack = resolve_stack(sample.stack_index, &dict, string_table)?;
                     let link = resolve_link(sample.link_index, &dict)?;
-                    let sample_values = if sample.values.is_empty() {
-                        vec![0i64]
-                    } else {
-                        sample.values.clone()
-                    };
+                    let sample_values = std::iter::once(0i64)
+                        .take(usize::from(sample.values.is_empty()))
+                        .chain(sample.values.iter().copied());
 
                     // For multi-value profiles, write one row per value
-                    for &val in &sample_values {
+                    for val in sample_values {
                         profile_ids.append_value(pid);
                         match &link {
                             Some((trace_id, span_id)) => {
