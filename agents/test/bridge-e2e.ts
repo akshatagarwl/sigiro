@@ -34,7 +34,7 @@ const coordinator = local("COORDINATOR_URL");
 const config = JSON.parse(await readFile(configPath, "utf8"));
 const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 await mkdir(output, { recursive: true, mode: 0o700 });
-for (const name of ["SIGIRO_API_KEY", "EVE_WORKER_TOKEN"]) {
+for (const name of ["SIGIRO_ACCESS_TOKEN", "EVE_WORKER_TOKEN"]) {
   const path = process.env[`${name}_FILE`];
   if (path !== undefined) process.env[name] = (await readFile(path, "utf8")).trim();
   assert.ok(process.env[name], `${name} must not be empty`);
@@ -52,7 +52,7 @@ async function run(args: string[], cwd: string, name: string, env: Record<string
 async function request(path: string, init: RequestInit = {}, origin = sigiro): Promise<any> {
   const response = await fetch(`${origin}${path}`, {
     ...init, redirect: "error", signal: AbortSignal.timeout(60_000),
-    headers: { authorization: `Bearer ${origin === coordinator ? process.env.EVE_WORKER_TOKEN : process.env.SIGIRO_API_KEY ?? ""}`, ...init.headers },
+    headers: { authorization: `Bearer ${origin === coordinator ? process.env.EVE_WORKER_TOKEN : process.env.SIGIRO_ACCESS_TOKEN ?? ""}`, ...init.headers },
   });
   assert.ok(response.ok, `${path} returned HTTP ${response.status}: ${(await response.clone().text()).slice(0, 400)}`);
   return response.json();

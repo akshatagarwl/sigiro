@@ -23,7 +23,7 @@ const DiagnosisIdentity = Schema.Struct({
 const PullRequest = Schema.Struct({ state: Schema.Literals(["open", "closed"]), merged: Schema.Boolean });
 
 export const makeBridgeClient = Effect.fn("makeBridgeClient")(function* (options: {
-  sigiroUrl: string; sigiroApiKey: string; coordinatorUrl: string; workerToken: string;
+  sigiroUrl: string; sigiroAccessToken: string; coordinatorUrl: string; workerToken: string;
 }) {
   // DI: capture existing transport/process capabilities without another service layer.
   const client = HttpClient.withScope(yield* HttpClient.HttpClient);
@@ -76,7 +76,7 @@ export const makeBridgeClient = Effect.fn("makeBridgeClient")(function* (options
   const anomalies = Effect.fn("BridgeClient.anomalies")(function* (service: string) {
     const response = yield* request("read anomalies", HttpClientRequest.get(sigiro("/v1/anomalies"), {
       urlParams: { service },
-    }).pipe(HttpClientRequest.bearerToken(options.sigiroApiKey)), 1024 * 1024);
+    }).pipe(HttpClientRequest.bearerToken(options.sigiroAccessToken)), 1024 * 1024);
     const result = yield* decode(AnomaliesResponse, response, "read anomalies");
     if (result.truncated) return yield* failure("read anomalies", "anomaly response is truncated; narrow the configured service");
     if (result.anomalies.some((row) => row.service_name !== service)) {
@@ -86,7 +86,7 @@ export const makeBridgeClient = Effect.fn("makeBridgeClient")(function* (options
   });
   const diagnose = Effect.fn("BridgeClient.diagnose")(function* (service: string, fromTs: number, toTs: number) {
     const response = yield* request("diagnose", HttpClientRequest.post(sigiro("/v1/diagnose")).pipe(
-      HttpClientRequest.bearerToken(options.sigiroApiKey),
+      HttpClientRequest.bearerToken(options.sigiroAccessToken),
       HttpClientRequest.bodyJsonUnsafe({ services: [service], from_ts: fromTs, to_ts: toTs }),
     ), 2 * 1024 * 1024);
     const envelope = yield* decode(DiagnosisResponse, response, "diagnose");

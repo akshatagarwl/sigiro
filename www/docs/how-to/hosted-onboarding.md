@@ -1,6 +1,6 @@
 ---
 title: Send telemetry to hosted sigiro
-description: Send OpenTelemetry to hosted sigiro with a tenant key, then query it back with SQL. You run no infrastructure; we set up each tenant by hand.
+description: Send OpenTelemetry to hosted sigiro with an OAuth access token, then query it back with SQL. You run no infrastructure; we set up each tenant by hand.
 sidebar:
   order: 2
 ---
@@ -12,11 +12,11 @@ sigiro reads traces, logs, metrics and profiles. During the invited beta, we set
 up each tenant by hand. Replace `<your-sigiro-host>` below with the host that
 your operator gives you.
 
-## 1. Get your API key
+## 1. Get an OAuth access token
 
-Your operator sends you a key with the form `sk_<yourtenant>_<random>`. Treat the key
-like a password. sigiro shows the key one time only. You cannot recover the key, but
-you can rotate it. The key authenticates **both** ingest and queries.
+Hosted authentication is provided by Better Auth. Organizations are the tenants. Sigiro does not expose a hosted tenant or token provisioning UI; use the Better Auth/OAuth API to sign in and obtain an OAuth access token. Treat the token as a secret.
+
+The same token authenticates OTLP ingest and API queries.
 
 ## 2. Point your OpenTelemetry exporter at sigiro
 
@@ -27,7 +27,7 @@ Use standard OTLP over HTTP. For authentication, use the standard
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk_<yourtenant>_<random>"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <oauth-access-token>"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
@@ -60,7 +60,7 @@ Then run this query:
 
 ```bash
 curl -s "https://<your-sigiro-host>/v1/query" \
-  -H "Authorization: Bearer sk_<yourtenant>_<random>" \
+  -H "Authorization: Bearer <oauth-access-token>" \
   --data 'SELECT count(*) AS n FROM sigiro_spans'
 ```
 
@@ -70,7 +70,7 @@ tenant that never sent data has no storage.
 ## 4. Query your data (SQL API)
 
 - **Endpoint:** `POST /v1/query` on the main HTTPS port.
-- **Auth:** `Authorization: Bearer sk_<yourtenant>_<random>`.
+- **Auth:** `Authorization: Bearer <oauth-access-token>`.
 - **Body:** the raw SQL string, not JSON.
 - **Response:** a JSON array of row objects. The header
   `x-sigiro-truncated: true|false` reports whether sigiro capped the results.

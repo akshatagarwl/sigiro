@@ -13,20 +13,20 @@ sidebar:
 
 ## 시작하기 전에
 
-대상이 될 sigiro 서버가 필요합니다. `sigiro serve`로 서버를 시작하거나, [퀵스타트](/docs/tutorials/quickstart#1-run-it)의 Docker 명령으로 시작하십시오. 자체 호스팅 서버에는 키가 필요하지 않습니다. 호스팅 서비스에만 키가 필요하며, 해당 키는 `sk_<tenant>_<random>` 형식입니다.
+대상이 될 sigiro 서버가 필요합니다. `sigiro serve`로 서버를 시작하거나, [퀵스타트](/docs/tutorials/quickstart#1-run-it)의 Docker 명령으로 시작하십시오. 자체 호스팅 서버에는 액세스 토큰이 필요하지 않습니다. 호스팅 서비스에만 액세스 토큰이 필요하며, 형식은 `<oauth-access-token>`입니다.
 
 자동 계측은 Python, Node.js, Java, .NET, Ruby용으로 제공됩니다. 서비스가 Go로 작성된 경우에는 이 프롬프트를 사용하지 마십시오. 대신 [Go 섹션](#go-instrument-the-build-not-the-source)으로 이동하십시오.
 
 ## 1. 에이전트에 다음 프롬프트를 전달하십시오
 
-엔드포인트를 교체하십시오. 호스팅 서비스를 사용하지 않는 경우 키 줄을 삭제하십시오.
+엔드포인트를 교체하십시오. 호스팅 서비스를 사용하지 않는 경우 액세스 토큰 줄을 삭제하십시오.
 
 ```
 Instrument this codebase for sigiro observability.
 
 SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
                  https://<your-sigiro-host> with no port)
-HOSTED API KEY: sk_<tenant>_<random>  (omit entirely for a self-hosted server)
+HOSTED OAUTH ACCESS TOKEN: <oauth-access-token>  (omit entirely for a self-hosted server)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
 metrics, and logs to sigiro. Make the minimum change that works — prefer
@@ -44,9 +44,9 @@ Rules:
 - For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
-- For hosted sigiro, do NOT hardcode the tenant key — read it from SIGIRO_API_KEY
+- For hosted sigiro, do NOT hardcode the OAuth access token — read it from SIGIRO_ACCESS_TOKEN
 - If a file already initializes the OTel SDK, update it rather than re-initializing
-- Add SIGIRO_API_KEY to .env.example only for a hosted deployment
+- Add SIGIRO_ACCESS_TOKEN to .env.example only for a hosted deployment
 ```
 
 에이전트가 언어를 잘못 감지한 경우, 다음과 같이 직접 알려주십시오.
@@ -136,9 +136,9 @@ curl http://localhost:9999/v1/services
 
 실제 트래픽이 발생한 후 몇 초 이내에 서비스가 나타납니다. 서비스가 나타난 후에는 `sigiro diagnose my-service`가 읽을 데이터가 확보됩니다.
 
-서비스가 나타나지 않으면 다음 사항을 확인하십시오. 자체 호스팅 서버에서는 포트를 확인하십시오. HTTP는 `:4318`, gRPC는 `:4317`입니다. 호스팅 서비스에서는 그 반대로, 엔드포인트에 포트가 **없는지** 확인하고, localhost가 아니라 `https://<your-sigiro-host>/v1/services`를 키와 함께 조회하십시오. `sigiro status`를 실행하여 서버가 정상 상태인지 확인하십시오. 잘못된 익스포터 설정은 부팅 시점에 오류를 보고하므로, 서비스 자체의 로그에서 OTel 시작 오류를 확인하십시오.
+서비스가 나타나지 않으면 다음 사항을 확인하십시오. 자체 호스팅 서버에서는 포트를 확인하십시오. HTTP는 `:4318`, gRPC는 `:4317`입니다. 호스팅 서비스에서는 그 반대로, 엔드포인트에 포트가 **없는지** 확인하고, localhost가 아니라 `https://<your-sigiro-host>/v1/services`를 액세스 토큰과 함께 조회하십시오. `sigiro status`를 실행하여 서버가 정상 상태인지 확인하십시오. 잘못된 익스포터 설정은 부팅 시점에 오류를 보고하므로, 서비스 자체의 로그에서 OTel 시작 오류를 확인하십시오.
 
-호스팅 서비스에서는 헤더가 정확히 `Authorization: Bearer sk_<tenant>_<random>` 형식인지 확인하십시오. 자체 호스팅 서버는 모든 인증 헤더를 무시합니다. 따라서 키가 잘못되어도 메시지나 401 응답 없이 실패합니다.
+호스팅 서비스에서는 헤더가 정확히 `Authorization: Bearer <oauth-access-token>` 형식인지 확인하십시오. 자체 호스팅 서버는 모든 인증 헤더를 무시합니다. 따라서 토큰이 잘못되어도 메시지나 401 응답 없이 실패합니다.
 
 ## 다음 단계
 

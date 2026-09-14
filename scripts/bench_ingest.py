@@ -132,13 +132,12 @@ def make_batch(
     return traces_data.SerializeToString()
 
 
-def send_batch(endpoint: str, batch: bytes, auth_key: str) -> tuple[float, bool]:
+def send_batch(endpoint: str, batch: bytes, access_token: str | None) -> tuple[float, bool]:
     import requests
 
-    headers = {
-        "Content-Type": "application/x-protobuf",
-        "Authorization": f"Bearer {auth_key}",
-    }
+    headers = {"Content-Type": "application/x-protobuf"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
     start = time.time()
     resp = requests.post(
         f"{endpoint}/v1/traces",
@@ -205,7 +204,7 @@ def run_benchmark(args) -> BenchmarkResult:
         next_send += batch_interval
 
         try:
-            latency, ok = send_batch(args.endpoint, batch, args.auth_key)
+            latency, ok = send_batch(args.endpoint, batch, args.access_token)
             latencies.append(latency)
             spans_sent += spans_per_batch
             if not ok:
@@ -252,7 +251,7 @@ def main():
     parser.add_argument("--services", type=int, default=3, help="Number of services")
     parser.add_argument("--spans-per-trace", type=int, default=5, help="Spans per trace")
     parser.add_argument("--traces-per-batch", type=int, default=10, help="Traces per batch")
-    parser.add_argument("--auth-key", default="sigiro_dev_xxx", help="Bearer token for Sigiro")
+    parser.add_argument("--access-token", help="OAuth access token for hosted Sigiro")
     args = parser.parse_args()
 
     result = run_benchmark(args)

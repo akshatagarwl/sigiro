@@ -77,7 +77,6 @@ provision:
     export SIGIRO_CATALOG_URL=postgresql://sigiro:sigiro_pass@localhost:5432/sigiro_fed
     export SIGIRO_QUACK_PORT=5433
     export SIGIRO_QUACK_TOKEN=fed-token-central
-    export SIGIRO_API_KEY=sigiro_dev_test
     export SIGIRO_HOST=0.0.0.0
 
     mkdir -p "${SIGIRO_DATA_DIR}"

@@ -28,11 +28,11 @@ In the Executor web UI:
 2. Paste the OpenAPI URL.
 3. Let Executor detect and index the operations.
 4. Create a connection for the integration.
-5. Add the hosted sigiro tenant key to that connection if the API asks for it.
+5. Add the hosted sigiro OAuth access token to that connection if the API asks for it.
 6. Set a policy for each tool. Use approval for tools that run SQL or inspect telemetry.
 
 The specification is public and does not require a key to read. The hosted API itself
-still requires the tenant key. Self-hosted sigiro can use the same import pattern with
+still requires the OAuth access token. Self-hosted sigiro can use the same import pattern with
 the OpenAPI URL served by your own instance — and needs no key at all, because a
 self-hosted server runs in open mode and authenticates no request.
 
@@ -86,8 +86,8 @@ should expose operations for services, traces, anomalies, investigations and que
 The docs import should expose documentation search and page retrieval.
 
 Then test one read-only call first. For a hosted API connection, confirm that the
-request includes the tenant key and that the returned data belongs to the intended
-sigiro tenant. Do not put a tenant key in this page, an OpenAPI URL, or an agent
+request includes the OAuth access token and that the returned data belongs to the intended
+sigiro tenant. Do not put an OAuth access token in this page, an OpenAPI URL, or an agent
 prompt checked into a repository.
 
 ## Next

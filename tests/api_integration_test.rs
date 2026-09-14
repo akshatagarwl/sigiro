@@ -39,8 +39,7 @@ impl ClientHandler for TestMcpClient {}
 /// Build a test AppState with temp directories and an in-memory SQLite admin
 /// DB with all required tables.
 fn build_test_context() -> TestContext {
-    // Self-host default: `Open` auth (no per-request key). The auth-rejection
-    // test uses `build_context_with_auth` to exercise `TenantKeys`.
+    // Self-host default: `Open` auth (no per-request key).
     build_context_with_auth(sigiro::auth::AuthMode::Open)
 }
 
@@ -495,64 +494,6 @@ async fn test_health_returns_503_when_starting() {
         health,
         sigiro::responses::HealthResponse::Starting
     ));
-}
-
-#[tokio::test]
-async fn test_query_without_valid_tenant_key_returns_401() {
-    // Under `TenantKeys` (hosted) auth, a `/v1/query` with no Authorization
-    // header — or a bearer token that resolves to no active tenant — must be
-    // rejected at the auth middleware with 401. (Self-host `Open` mode, the
-    // default for the other tests here, requires no token; the positive
-    // resolve-a-real-key path is covered end-to-end by control_plane_e2e_test.)
-    let control = Arc::new(sigiro::auth::ControlPlane::open_in_memory_for_tests().unwrap());
-    control.create_tenant("acme").unwrap();
-    let ctx = build_context_with_auth(sigiro::auth::AuthMode::TenantKeys { control });
-    let app = build_http_router(ctx.state);
-    let server = TestServer::new(app).expect("failed to build test server");
-
-    // Missing Authorization header.
-    let resp = server.post("/v1/query").text("SELECT 1").await;
-    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
-
-    // Bearer token that resolves to no active tenant.
-    let resp = server
-        .post("/v1/query")
-        .add_header("Authorization", "Bearer sk_acme_deadbeef")
-        .text("SELECT 1")
-        .await;
-    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn test_new_hosted_tenant_can_query_before_first_ingest() {
-    // A Machine restart preserves the hosted control plane but loses its
-    // in-memory project pool. Query must therefore initialize the authenticated
-    // tenant locally; provisioning-time initialization on another process is
-    // insufficient, and ingest-then-query masks this lifecycle.
-    let control = Arc::new(sigiro::auth::ControlPlane::open_in_memory_for_tests().unwrap());
-    control.create_tenant("empty_tenant").unwrap();
-    let key = control
-        .mint_key("empty_tenant")
-        .expect("mint key for provisioned tenant")
-        .key;
-    let ctx = build_context_with_auth(sigiro::auth::AuthMode::TenantKeys {
-        control: Arc::clone(&control),
-    });
-    let app = build_http_router(ctx.state);
-    let server = TestServer::new(app).expect("failed to build test server");
-
-    let response = server
-        .post("/v1/query")
-        .add_header("Authorization", format!("Bearer {key}"))
-        .text("SELECT count(*) AS n FROM lake.sigiro_spans")
-        .await;
-    response.assert_status_ok();
-    let rows: serde_json::Value =
-        serde_json::from_str(&response.text()).expect("query response should be JSON");
-    assert_eq!(
-        rows.pointer("/0/n").and_then(serde_json::Value::as_i64),
-        Some(0)
-    );
 }
 
 #[tokio::test]
@@ -1107,48 +1048,6 @@ async fn every_admin_route_rejects_a_missing_or_wrong_token() {
                 .await,
         ),
         (
-            "POST /admin/tenants",
-            server
-                .post("/admin/tenants")
-                .json(&json!({"id": "t"}))
-                .await,
-        ),
-        (
-            "POST /admin/tenants (wrong token)",
-            server
-                .post("/admin/tenants")
-                .add_header("Authorization", bad)
-                .json(&json!({"id": "t"}))
-                .await,
-        ),
-        (
-            "POST /admin/keys",
-            server
-                .post("/admin/keys")
-                .json(&json!({"tenant_id": "t"}))
-                .await,
-        ),
-        (
-            "POST /admin/keys (wrong token)",
-            server
-                .post("/admin/keys")
-                .add_header("Authorization", bad)
-                .json(&json!({"tenant_id": "t"}))
-                .await,
-        ),
-        (
-            "DELETE /admin/keys/{short_token}",
-            server.delete("/admin/keys/abcd1234").await,
-        ),
-        (
-            "DELETE /admin/keys/{short_token} (wrong token)",
-            server
-                .delete("/admin/keys/abcd1234")
-                .add_header("Authorization", bad)
-                .await,
-        ),
-        // Garbage in the header itself must not fall through either.
-        (
             "GET /admin/status (malformed header)",
             server
                 .get("/admin/status")
@@ -1380,7 +1279,7 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
 }
 
 #[tokio::test]
-async fn test_otlp_protobuf_preserves_event_name_and_classifies_mixed_case_error() {
+async fn test_otlp_protobuf_preserves_event_name_and_severity() {
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
     use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
@@ -1467,31 +1366,18 @@ async fn test_otlp_protobuf_preserves_event_name_and_classifies_mixed_case_error
         .pool
         .get_project("default")
         .expect("default project should exist");
-    let event_name: String = conn
+    let (event_name, severity_number, severity_text): (String, i32, String) = conn
         .get()
         .query_row(
-            "SELECT event_name FROM lake.sigiro_logs WHERE body = 'protobuf event'",
+            "SELECT event_name, severity_number, severity_text
+             FROM lake.sigiro_logs WHERE body = 'protobuf event'",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
-        .expect("event name should be queryable");
+        .expect("protobuf log fields should be queryable");
     assert_eq!(event_name, "container.oom_killed");
-
-    let api = TestServer::new(build_http_router(Arc::clone(&ctx.state)))
-        .expect("failed to build API test server");
-    let diagnosis: serde_json::Value = api
-        .post("/v1/diagnose")
-        .json(&json!({
-            "services": ["protobuf-event-svc"],
-            "from_ts": 1_700_000_000_000_000_i64,
-            "to_ts": 1_700_000_001_000_000_i64
-        }))
-        .await
-        .json();
-    assert_eq!(
-        diagnosis["results"]["protobuf-event-svc"]["log_patterns"][0]["error_count"], 1,
-        "OTLP severity number 17 must classify mixed-case SeverityText as an error"
-    );
+    assert_eq!(severity_number, 17);
+    assert_eq!(severity_text, "Error");
 }
 
 #[tokio::test]

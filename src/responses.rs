@@ -3,7 +3,7 @@
 //! Replaces `serde_json::Value` return types with compile-time verified structs,
 //! enabling accurate OpenAPI schema generation via utoipa.
 
-use crate::types::{ApiKeyHashPrefix, SpanId, TenantId, TraceId};
+use crate::types::{SpanId, TraceId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -95,41 +95,6 @@ pub struct AnomalyEntry {
     /// Ready-to-run SQL for POST /v1/query: the raw telemetry behind the
     /// shift (spans, logs, or profile samples, per the signal).
     pub drill_down_sql: Option<String>,
-}
-
-/// POST /admin/keys
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct CreateKeyResponse {
-    pub(crate) key: String,
-    pub(crate) key_hash: String,
-    pub(crate) tenant_id: String,
-}
-
-/// DELETE /admin/keys/{short_token}
-#[derive(Serialize, ToSchema)]
-pub struct RevokeKeyResponse {
-    pub(crate) revoked: bool,
-    #[schema(value_type = String)]
-    pub(crate) short_token: ApiKeyHashPrefix,
-}
-
-/// POST /admin/tenants
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct CreateTenantResponse {
-    pub(crate) id: String,
-    pub(crate) status: String,
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct CreateTenantRequest {
-    #[schema(value_type = String)]
-    pub(crate) id: TenantId,
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct CreateKeyRequest {
-    #[schema(value_type = String)]
-    pub(crate) tenant_id: TenantId,
 }
 
 /// GET /admin/status

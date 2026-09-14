@@ -24,8 +24,12 @@ pub enum RouterError {
     #[error("channel closed for project {project_id}")]
     ChannelClosed { project_id: String },
     /// Failed to get or create a DuckDB connection.
-    #[error("connection failed for project {project_id}")]
-    ConnectionFailed { project_id: String },
+    #[error("connection failed for project {project_id}: {source:#}")]
+    ConnectionFailed {
+        project_id: String,
+        #[source]
+        source: anyhow::Error,
+    },
     /// Telemetry was queued, but its alert transition could not be made durable.
     #[error("alert persistence failed for project {project_id}: {source}")]
     AlertPersistence {
@@ -453,14 +457,16 @@ impl MsgRouter {
                 Ok(())
             }
             Entry::Vacant(e) => {
-                self.pool.create_project(project_id).map_err(|_| {
+                self.pool.create_project(project_id).map_err(|source| {
                     RouterError::ConnectionFailed {
                         project_id: project_id.to_string(),
+                        source,
                     }
                 })?;
-                let writer = self.pool.take_writer(project_id).map_err(|_| {
+                let writer = self.pool.take_writer(project_id).map_err(|source| {
                     RouterError::ConnectionFailed {
                         project_id: project_id.to_string(),
+                        source,
                     }
                 })?;
                 let pool = Arc::clone(&self.pool);
@@ -518,6 +524,9 @@ impl MsgRouter {
                 .get(&project_id)
                 .ok_or_else(|| RouterError::ConnectionFailed {
                     project_id: project_id.clone(),
+                    source: anyhow::anyhow!(
+                        "project sender disappeared after flusher initialization"
+                    ),
                 })?;
 
         let sender = &entry.value().0;

@@ -6,21 +6,23 @@ use crate::diagnose::{DiagnoseRequest, DiagnoseResponse, DiagnoseServices, Diagn
 /// Explicit client auth mode — mirrors server-side AuthMode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientAuth {
-    /// No API key configured. Server must be in open mode.
+    /// No access token configured. Server must be in open mode.
     Open,
     /// Bearer token auth.
     Bearer { token: String },
 }
 
 impl ClientAuth {
-    /// Build from a raw API key string.
+    /// Build from a raw OAuth access token.
     /// Empty string → Open (logged once at build time).
-    pub(crate) fn from_key(api_key: String) -> Self {
-        if api_key.is_empty() {
-            tracing::debug!("client_auth=open — no API key configured");
+    pub(crate) fn from_access_token(access_token: String) -> Self {
+        if access_token.is_empty() {
+            tracing::debug!("client_auth=open — no access token configured");
             ClientAuth::Open
         } else {
-            ClientAuth::Bearer { token: api_key }
+            ClientAuth::Bearer {
+                token: access_token,
+            }
         }
     }
 
@@ -76,7 +78,7 @@ impl SigiroClient {
         match resp.status().as_u16() {
             200 => Ok(resp),
             401 => bail!(
-                "Unauthorized (401): this hosted endpoint requires a bearer token; set SIGIRO_API_KEY"
+                "Unauthorized (401): this hosted endpoint requires a bearer token; set SIGIRO_ACCESS_TOKEN"
             ),
             429 => bail!("Rate limited. Try again later."),
             s => {
@@ -174,7 +176,7 @@ impl SigiroClient {
                 .await
                 .context("failed to parse /health response"),
             401 => bail!(
-                "Unauthorized (401): this hosted endpoint requires a bearer token; set SIGIRO_API_KEY"
+                "Unauthorized (401): this hosted endpoint requires a bearer token; set SIGIRO_ACCESS_TOKEN"
             ),
             s => {
                 let body = resp.text().await.context("failed to read error body")?;
@@ -221,13 +223,13 @@ impl SigiroClient {
 
 /// Build a client from config.
 ///
-/// `SIGIRO_API_KEY` is client-only configuration. When present, it is sent as
-/// a bearer token to a hosted (`TenantKeys`) endpoint; it never configures
-/// server-side authentication.
+/// `SIGIRO_ACCESS_TOKEN` is client-only configuration. When present, it is sent
+/// unchanged as a bearer token; the server remains the sole JWT verifier.
 pub fn try_build_client() -> anyhow::Result<SigiroClient> {
     let base_url = crate::config::ENDPOINT
         .value()
         .map_err(anyhow::Error::from)?;
-    let auth = ClientAuth::from_key(crate::config::API_KEY.value().unwrap_or_default());
+    let auth =
+        ClientAuth::from_access_token(crate::config::ACCESS_TOKEN.value().unwrap_or_default());
     Ok(SigiroClient::new(&base_url, auth))
 }

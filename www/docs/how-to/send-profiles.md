@@ -22,7 +22,7 @@ Pyroscope-compatible HTTP is available on the main sigiro port, `9999`, and on
 the OTLP HTTP port, `4318`. Use the main port unless you deliberately separate
 ingest traffic. Sigiro does not listen for profiles on port `4040`.
 
-A self-hosted server in Open auth mode needs no key. A server in TenantKeys mode,
+A self-hosted server in Open auth mode needs no key. A server in Better Auth OAuth/JWT mode,
 including hosted sigiro, requires `Authorization: Bearer YOUR_TENANT_KEY`.
 
 ## Configure pyroscope-rs
@@ -42,7 +42,7 @@ let endpoint = "http://localhost:9999";
 let http_headers = None;
 ```
 
-For hosted sigiro, use the HTTPS origin with no port and add the tenant key:
+For hosted sigiro, use the HTTPS origin with no port and add the OAuth access token:
 
 ```rust
 use std::collections::HashMap;
@@ -51,7 +51,7 @@ let endpoint = "https://api.sigiro.com";
 let mut headers = HashMap::new();
 headers.insert(
     "Authorization".to_string(),
-    format!("Bearer {}", std::env::var("SIGIRO_API_KEY")?),
+    format!("Bearer {}", std::env::var("SIGIRO_ACCESS_TOKEN")?),
 );
 let http_headers = Some(headers);
 ```
@@ -81,7 +81,7 @@ let _profile_agent = builder.build()?.start()?;
 Keep `_profile_agent` in scope for the life of the process. The SDK sends a batch
 every 10 seconds. If the handle is dropped early, no later batch reaches sigiro.
 
-Do not put the tenant key in source control. Set `SIGIRO_API_KEY` in the
+Do not put the OAuth access token in source control. Set `SIGIRO_ACCESS_TOKEN` in the
 environment that starts the process.
 
 ## HTTP contract
@@ -113,7 +113,7 @@ returns `400` and stores nothing.
 
 Sigiro accepts gzip and limits each request to 8 MiB after decompression by
 default. A request over the HTTP body limit returns `413`. A malformed or
-unsupported profile returns `400`, a missing or invalid TenantKeys bearer token
+unsupported profile returns `400`, a missing or invalid Better Auth OAuth/JWT bearer token
 returns `401`, and a capacity gate returns `507`. A `200` response means sigiro
 accepted the batch.
 

@@ -1,7 +1,7 @@
 ---
 title: 向托管版 sigiro 发送遥测数据
 description: >-
-  使用租户密钥将 OpenTelemetry 数据发送到托管版 sigiro，然后用 SQL 查询回来。你无需运行任何基础设施。在邀请制 Beta
+  使用 OAuth 访问令牌将 OpenTelemetry 数据发送到托管版 sigiro，然后用 SQL 查询回来。你无需运行任何基础设施。在邀请制 Beta
   期间，我们为每个租户手动完成配置。
 sidebar:
   order: 2
@@ -13,10 +13,11 @@ sidebar:
 sigiro 可读取链路追踪、日志、指标和性能剖析数据。在邀请制 Beta 期间，我们为每个租户
 手动完成配置。请把下文中的 `<your-sigiro-host>` 替换为运维方提供给你的主机地址。
 
-## 1. 获取你的 API 密钥
+## 1. 获取 OAuth 访问令牌
 
-运维方会向你发送一个形如 `sk_<yourtenant>_<random>` 的密钥。请像对待密码一样对待该密钥。
-sigiro 只会展示密钥一次。密钥无法恢复，但可以轮换。该密钥**同时**用于数据摄取和查询的身份认证。
+托管认证由 Better Auth 提供。Organizations 就是租户。Sigiro 不提供托管租户或令牌发放 UI；请使用 Better Auth/OAuth API 登录并获取 OAuth 访问令牌。请将令牌作为机密信息保管。
+
+同一个令牌同时用于 OTLP 数据摄取和 API 查询的身份认证。
 
 ## 2. 将 OpenTelemetry 导出器指向 sigiro
 
@@ -27,7 +28,7 @@ sigiro 只会展示密钥一次。密钥无法恢复，但可以轮换。该密�
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk_<yourtenant>_<random>"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <oauth-access-token>"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
@@ -52,7 +53,7 @@ SDK 的默认批处理大小远低于此上限。
 
 ```bash
 curl -s "https://<your-sigiro-host>/v1/query" \
-  -H "Authorization: Bearer sk_<yourtenant>_<random>" \
+  -H "Authorization: Bearer <oauth-access-token>" \
   --data 'SELECT count(*) AS n FROM sigiro_spans'
 ```
 
@@ -62,7 +63,7 @@ curl -s "https://<your-sigiro-host>/v1/query" \
 ## 4. 查询你的数据（SQL API）
 
 - **端点：** 主 HTTPS 端口上的 `POST /v1/query`。
-- **认证：** `Authorization: Bearer sk_<yourtenant>_<random>`。
+- **认证：** `Authorization: Bearer <oauth-access-token>`。
 - **请求体：** 原始 SQL 字符串，而非 JSON。
 - **响应：** 由行对象组成的 JSON 数组。响应头
   `x-sigiro-truncated: true|false` 表示 sigiro 是否对结果做了截断。

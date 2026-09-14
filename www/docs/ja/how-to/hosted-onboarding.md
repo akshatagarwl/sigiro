@@ -1,7 +1,7 @@
 ---
 title: ホスト型 sigiro へのテレメトリ送信
 description: >-
-  テナントキーでホスト型 sigiro に OpenTelemetry を送信し、SQL
+  OAuth アクセストークンでホステッド sigiro に OpenTelemetry を送信し、SQL
   で照会します。インフラの運用は不要で、招待制ベータの期間は当社が各テナントを設定します。
 sidebar:
   order: 2
@@ -11,9 +11,11 @@ sidebar:
 
 sigiro はトレース、ログ、メトリクス、プロファイルを読み取ります。招待制ベータの期間中は、各テナントを当社が手作業でセットアップします。以下の `<your-sigiro-host>` は、運用担当者から提供されたホストに置き換えてください。
 
-## 1. API キーを取得する
+## 1. OAuthアクセストークンを取得する
 
-運用担当者から `sk_<yourtenant>_<random>` という形式のキーが送られます。このキーはパスワードと同様に扱ってください。sigiro がキーを表示するのは 1 回だけです。キーを復元することはできませんが、ローテーションは可能です。このキーは取り込みと照会の**両方**を認証します。
+ホステッド環境の認証は Better Auth が提供します。Organizations はテナントです。Sigiro はホステッド環境のテナントやトークンを発行する UI を提供していません。Better Auth/OAuth API を使ってサインインし、OAuth アクセストークンを取得してください。トークンは秘密情報として扱ってください。
+
+同じトークンで OTLP の取り込みと API クエリを認証します。
 
 ## 2. OpenTelemetry エクスポーターを sigiro に向ける
 
@@ -23,7 +25,7 @@ sigiro はトレース、ログ、メトリクス、プロファイルを読み�
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk_<yourtenant>_<random>"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <oauth-access-token>"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
@@ -39,7 +41,7 @@ SDK は各シグナルを標準の OTLP パス（`/v1/traces`、`/v1/logs`、`/v
 
 ```bash
 curl -s "https://<your-sigiro-host>/v1/query" \
-  -H "Authorization: Bearer sk_<yourtenant>_<random>" \
+  -H "Authorization: Bearer <oauth-access-token>" \
   --data 'SELECT count(*) AS n FROM sigiro_spans'
 ```
 
@@ -48,7 +50,7 @@ curl -s "https://<your-sigiro-host>/v1/query" \
 ## 4. データを照会する（SQL API）
 
 - **エンドポイント:** メインの HTTPS ポートで `POST /v1/query`。
-- **認証:** `Authorization: Bearer sk_<yourtenant>_<random>`。
+- **認証:** `Authorization: Bearer <oauth-access-token>`。
 - **ボディ:** JSON ではなく、生の SQL 文字列。
 - **レスポンス:** 行オブジェクトの JSON 配列。ヘッダー `x-sigiro-truncated: true|false` は、sigiro が結果を打ち切ったかどうかを示します。
 

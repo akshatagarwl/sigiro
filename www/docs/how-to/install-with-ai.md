@@ -30,7 +30,7 @@ instrumentation.
 You need a sigiro server as the destination. Start one with `sigiro serve`, or with
 the Docker command in the [quickstart](/docs/tutorials/quickstart#1-run-it). A
 self-hosted server needs no key. Only the hosted service needs a key, and that key
-has the form `sk_<tenant>_<random>`.
+has the form `<oauth-access-token>`.
 
 Auto-instrumentation exists for Python, Node.js, Java, .NET and Ruby. If your
 service is Go, do not use the prompt. Go to
@@ -45,7 +45,7 @@ Instrument this codebase for sigiro observability.
 
 SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
                  https://<your-sigiro-host> with no port)
-HOSTED API KEY: sk_<tenant>_<random>  (omit entirely for a self-hosted server)
+HOSTED OAUTH ACCESS TOKEN: <oauth-access-token>  (omit entirely for a self-hosted server)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
 metrics, and logs to sigiro. Make the minimum change that works — prefer
@@ -63,9 +63,9 @@ Rules:
 - For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
-- For hosted sigiro, do NOT hardcode the tenant key — read it from SIGIRO_API_KEY
+- For hosted sigiro, do NOT hardcode the OAuth access token — read it from SIGIRO_ACCESS_TOKEN
 - If a file already initializes the OTel SDK, update it rather than re-initializing
-- Add SIGIRO_API_KEY to .env.example only for a hosted deployment
+- Add SIGIRO_ACCESS_TOKEN to .env.example only for a hosted deployment
 ```
 
 If the agent detects the wrong language, tell it directly:
@@ -192,7 +192,7 @@ service for OTel startup errors, because a wrong exporter configuration reports
 the fault at boot.
 
 On the hosted service, confirm that the header is exactly
-`Authorization: Bearer sk_<tenant>_<random>`. A self-hosted server ignores all
+`Authorization: Bearer <oauth-access-token>`. A self-hosted server ignores all
 authentication headers. Therefore a wrong key fails there without a message and
 without a 401 response.
 

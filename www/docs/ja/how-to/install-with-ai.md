@@ -13,20 +13,20 @@ sidebar:
 
 ## はじめる前に
 
-送信先として sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイックスタート](/docs/tutorials/quickstart#1-run-it)にある Docker コマンドで起動してください。セルフホストのサーバーにはキーは不要です。キーが必要なのはホステッドサービスのみで、そのキーは `sk_<tenant>_<random>` という形式です。
+送信先として sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイックスタート](/docs/tutorials/quickstart#1-run-it)にある Docker コマンドで起動してください。セルフホストのサーバーにはアクセストークンは不要です。アクセストークンが必要なのはホステッドサービスのみで、その形式は `<oauth-access-token>` です。
 
 自動計装は Python、Node.js、Java、.NET、Ruby 向けに提供されています。対象のサービスが Go の場合、このプロンプトは使用しないでください。代わりに [Go のセクション](#go-instrument-the-build-not-the-source)へ進んでください。
 
 ## 1. エージェントに次のプロンプトを渡す
 
-エンドポイントを置き換えてください。ホステッドサービスを使用しない場合は、キーの行を削除してください。
+エンドポイントを置き換えてください。ホステッドサービスを使用しない場合は、アクセストークンの行を削除してください。
 
 ```
 Instrument this codebase for sigiro observability.
 
 SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
                  https://<your-sigiro-host> with no port)
-HOSTED API KEY: sk_<tenant>_<random>  (omit entirely for a self-hosted server)
+HOSTED OAUTH ACCESS TOKEN: <oauth-access-token>  (omit entirely for a self-hosted server)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
 metrics, and logs to sigiro. Make the minimum change that works — prefer
@@ -44,9 +44,9 @@ Rules:
 - For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
-- For hosted sigiro, do NOT hardcode the tenant key — read it from SIGIRO_API_KEY
+- For hosted sigiro, do NOT hardcode the OAuth access token — read it from SIGIRO_ACCESS_TOKEN
 - If a file already initializes the OTel SDK, update it rather than re-initializing
-- Add SIGIRO_API_KEY to .env.example only for a hosted deployment
+- Add SIGIRO_ACCESS_TOKEN to .env.example only for a hosted deployment
 ```
 
 エージェントが誤った言語を検出した場合は、直接指示してください。
@@ -136,9 +136,9 @@ curl http://localhost:9999/v1/services
 
 実際のトラフィックが発生してから数秒以内にサービスが表示されます。表示された後は、`sigiro diagnose my-service` が読み取れるデータが揃っています。
 
-サービスが表示されない場合は、次の点を確認してください。セルフホストのサーバーでは、ポートを確認します。HTTP は `:4318`、gRPC は `:4317` です。ホステッドサービスでは、その逆に、エンドポイントにポートが**付いていない**ことを確認し、localhost ではなく `https://<your-sigiro-host>/v1/services` に自分のキーを添えて問い合わせてください。`sigiro status` を実行して、サーバーが正常であることを確認します。自分のサービスのログを読み、OTel の起動時エラーを確認してください。エクスポーターの設定が誤っている場合、起動時に障害がレポートされるためです。
+サービスが表示されない場合は、次の点を確認してください。セルフホストのサーバーでは、ポートを確認します。HTTP は `:4318`、gRPC は `:4317` です。ホステッドサービスでは、その逆に、エンドポイントにポートが**付いていない**ことを確認し、localhost ではなく `https://<your-sigiro-host>/v1/services` にアクセストークンを添えて問い合わせてください。`sigiro status` を実行して、サーバーが正常であることを確認します。自分のサービスのログを読み、OTel の起動時エラーを確認してください。エクスポーターの設定が誤っている場合、起動時に障害がレポートされるためです。
 
-ホステッドサービスでは、ヘッダーが正確に `Authorization: Bearer sk_<tenant>_<random>` であることを確認してください。セルフホストのサーバーはすべての認証ヘッダーを無視します。そのため、誤ったキーを指定しても、メッセージも 401 レスポンスもなく失敗します。
+ホステッドサービスでは、ヘッダーが正確に `Authorization: Bearer <oauth...en>` であることを確認してください。セルフホストのサーバーはすべての認証ヘッダーを無視します。そのため、誤ったトークンを指定しても、メッセージも 401 レスポンスもなく失敗します。
 
 ## 次のステップ
 

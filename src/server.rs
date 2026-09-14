@@ -56,9 +56,6 @@ use tracing_attributes::instrument;
         crate::ingest::pyroscope_ingest,
         crate::ingest::pyroscope_ingest_pyroscope,
         admin_status,
-        create_tenant_handler,
-        create_key_handler,
-        revoke_key_handler,
             ),
     components(
         schemas(
@@ -71,11 +68,6 @@ use tracing_attributes::instrument;
             TraceDetailResponse,
             SpanDetail,
             ServiceBreakdownEntry,
-            CreateKeyResponse,
-            RevokeKeyResponse,
-            CreateTenantRequest,
-            CreateTenantResponse,
-            CreateKeyRequest,
             AdminStatusResponse,
             diagnose::DiagnoseRequest,
             diagnose::DiagnoseResponse,
@@ -166,7 +158,7 @@ impl KeyExtractor for SourceRateLimitKeyExtractor {
 
 /// Post-auth rate-limit key. Auth middleware inserts this trusted tenant
 /// context before the limiter runs, so one tenant cannot consume another's
-/// query allowance and raw API keys never live in the governor key map.
+/// query allowance and raw access tokens never live in the governor key map.
 #[derive(Clone)]
 struct TenantRateLimitKeyExtractor;
 
@@ -280,10 +272,8 @@ impl AppState {
 /// `/openapi.json` is unauthenticated by design: it is the entire discoverability
 /// surface, and an agent has to be able to read it before it has a key. That is
 /// the right call for the query endpoints and the wrong one for
-/// `/admin/tenants`, `/admin/keys` and `/admin/status` — those mint and revoke
-/// credentials and enumerate tenants. Publishing their exact shape to anyone who
-/// asks is free reconnaissance: it does not grant access, since every one of them
-/// still requires the admin token, but it removes the need to guess.
+/// `/admin/status` — it exposes instance state and remains protected by the
+/// separate admin token. Publishing its exact shape is unnecessary reconnaissance.
 ///
 /// It also fixes three things at once rather than one at a time. The docs site
 /// generates its API reference from this document, so the admin pages disappear
@@ -305,16 +295,7 @@ static PUBLIC_SPEC: std::sync::LazyLock<utoipa::openapi::OpenApi> =
             .retain(|path, _| !path.starts_with("/admin"));
 
         if let Some(components) = spec.components.as_mut() {
-            for schema in [
-                "AdminStatusResponse",
-                "CreateKeyRequest",
-                "CreateKeyResponse",
-                "CreateTenantRequest",
-                "CreateTenantResponse",
-                "RevokeKeyResponse",
-            ] {
-                components.schemas.remove(schema);
-            }
+            components.schemas.remove("AdminStatusResponse");
         }
 
         spec
@@ -369,16 +350,13 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         ))
     };
 
-    // All /admin routes, including status, are admin-token gated by a LAYER —
+    // /admin/status is admin-token gated by a LAYER —
     // the same shape as /v1's auth_middleware above. Previously each handler
     // called require_admin_token() as its first line, so the gate depended on
     // whoever wrote the next handler remembering to. Enforcing it here means a
     // new admin route cannot be added unauthenticated by omission.
     let admin = Router::new()
         .typed_get(admin_status)
-        .typed_post(create_tenant_handler)
-        .typed_post(create_key_handler)
-        .typed_delete(revoke_key_handler)
         .layer(axum_mw::from_fn(auth::admin_auth_middleware));
 
     // Public routes + v1 API + admin. Discoverability is the single
@@ -475,7 +453,7 @@ pub async fn run_servers(
 
     let query_surface = crate::config::query_surface()?;
     let auth_mode =
-        crate::auth::AuthMode::from_runtime_config(&data_dir, query_surface, pool.storage_mode())?;
+        crate::auth::AuthMode::from_runtime_config(query_surface, pool.storage_mode()).await?;
 
     // The bind address enforced for EVERY listener (HTTP, OTLP-HTTP, gRPC, and
     // quack itself) when this node is a quack edge — resolved once here so
@@ -2058,87 +2036,4 @@ async fn admin_status(
         state.router.dropped_messages().to_string(),
     );
     Ok(Json(AdminStatusResponse { status: map }))
-}
-
-fn control_plane_from_state(state: &AppState) -> ApiResult<Arc<auth::ControlPlane>> {
-    state.auth_mode.control_plane().ok_or_else(|| {
-        bad_request(
-            "distributed auth required",
-            "tenant provisioning requires SIGIRO_CATALOG_URL distributed mode",
-        )
-    })
-}
-
-/// POST /admin/tenants — create or reactivate a tenant in the distributed control plane.
-#[utoipa::path(
-    post,
-    path = "/admin/tenants",
-    request_body = CreateTenantRequest,
-    responses(
-        (status = 200, description = "Tenant created", body = CreateTenantResponse)
-    ),
-)]
-async fn create_tenant_handler(
-    _path: AdminTenantsPath,
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateTenantRequest>,
-) -> ApiResult<Json<CreateTenantResponse>> {
-    let control = control_plane_from_state(&state)?;
-    control
-        .create_tenant(req.id.as_ref())
-        .map_err(auth::ControlPlaneError::into_api_error)?;
-    Ok(Json(CreateTenantResponse {
-        id: req.id.into(),
-        status: "active".to_string(),
-    }))
-}
-
-/// POST /admin/keys — mint an API key for an existing tenant.
-#[utoipa::path(
-    post,
-    path = "/admin/keys",
-    request_body = CreateKeyRequest,
-    responses(
-        (status = 200, description = "API key created", body = CreateKeyResponse)
-    ),
-)]
-async fn create_key_handler(
-    _path: AdminKeysPath,
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateKeyRequest>,
-) -> ApiResult<Json<CreateKeyResponse>> {
-    let control = control_plane_from_state(&state)?;
-    let minted = control
-        .mint_key(req.tenant_id.as_ref())
-        .map_err(auth::ControlPlaneError::into_api_error)?;
-    Ok(Json(CreateKeyResponse {
-        key: minted.key,
-        key_hash: minted.key_hash,
-        tenant_id: minted.tenant_id,
-    }))
-}
-
-/// DELETE /admin/keys/{short_token} — revoke an API key by hash prefix.
-#[utoipa::path(
-    delete,
-    path = "/admin/keys/{short_token}",
-    params(
-        ("short_token" = String, Path, description = "8-64 character key hash prefix")
-    ),
-    responses(
-        (status = 200, description = "API key revoked", body = RevokeKeyResponse)
-    ),
-)]
-async fn revoke_key_handler(
-    AdminKeyPath { short_token }: AdminKeyPath,
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<Json<RevokeKeyResponse>> {
-    let control = control_plane_from_state(&state)?;
-    let revoked = control
-        .revoke_key_hash_prefix(&short_token)
-        .map_err(auth::ControlPlaneError::into_api_error)?;
-    Ok(Json(RevokeKeyResponse {
-        revoked,
-        short_token,
-    }))
 }

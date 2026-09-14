@@ -29,7 +29,7 @@ need the steps to get it.
   one prompt to an agent. The agent connects OpenTelemetry to your service and
   points it at sigiro.
 - **[Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding)** — run no
-  server yourself. Send OTLP to a host that we operate, with a tenant key.
+  server yourself. Send OTLP to a host that we operate, with an OAuth access token.
 - **[Send your agent's own telemetry to sigiro](/docs/how-to/agent-telemetry)** —
   point Claude Code, Codex, Hermes Agent, or Pi at sigiro.
 - **[Debug and optimize an agent](/docs/how-to/debug-agent-performance)** — find

@@ -13,7 +13,7 @@ sidebar:
 
 ## 开始之前
 
-你需要一个 sigiro 服务端作为数据目的地。可以用 `sigiro serve` 启动，也可以使用 [快速开始](/docs/tutorials/quickstart#1-run-it) 中的 Docker 命令启动。自托管服务端不需要密钥。只有托管服务需要密钥，密钥的格式为 `sk_<tenant>_<random>`。
+你需要一个 sigiro 服务端作为数据目的地。可以用 `sigiro serve` 启动，也可以使用 [快速开始](/docs/tutorials/quickstart#1-run-it) 中的 Docker 命令启动。自托管服务端不需要访问令牌。只有托管服务需要访问令牌，格式为 `<oauth-access-token>`。
 
 Python、Node.js、Java、.NET 和 Ruby 均有自动检测方案。如果你的服务是 Go，请不要使用该提示词，改为查看 [Go 章节](#go-instrument-the-build-not-the-source)。
 
@@ -26,7 +26,7 @@ Instrument this codebase for sigiro observability.
 
 SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
                  https://<your-sigiro-host> with no port)
-HOSTED API KEY: sk_<tenant>_<random>  (omit entirely for a self-hosted server)
+HOSTED OAUTH ACCESS TOKEN: <oauth-access-token>  (omit entirely for a self-hosted server)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
 metrics, and logs to sigiro. Make the minimum change that works — prefer
@@ -44,9 +44,9 @@ Rules:
 - For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
-- For hosted sigiro, do NOT hardcode the tenant key — read it from SIGIRO_API_KEY
+- For hosted sigiro, do NOT hardcode the OAuth access token — read it from SIGIRO_ACCESS_TOKEN
 - If a file already initializes the OTel SDK, update it rather than re-initializing
-- Add SIGIRO_API_KEY to .env.example only for a hosted deployment
+- Add SIGIRO_ACCESS_TOKEN to .env.example only for a hosted deployment
 ```
 
 如果智能体识别错了语言，直接告诉它：
@@ -136,9 +136,9 @@ curl http://localhost:9999/v1/services
 
 在有真实流量后的几秒钟内，你的服务就会出现。它出现之后，`sigiro diagnose my-service` 就有数据可读了。
 
-如果服务没有出现，请做以下检查。在自托管服务端上，确认端口：HTTP 用 `:4318`，gRPC 用 `:4317`。在托管服务上则相反，确认 endpoint **不带**端口，并且用你的密钥查询 `https://<your-sigiro-host>/v1/services`，而不是 localhost。运行 `sigiro status` 确认服务端健康。查看你自己服务的日志，看是否有 OTel 启动错误，因为导出器配置错误会在启动时报告故障。
+如果服务没有出现，请做以下检查。在自托管服务端上，确认端口：HTTP 用 `:4318`，gRPC 用 `:4317`。在托管服务上则相反，确认 endpoint **不带**端口，并且使用访问令牌查询 `https://<your-sigiro-host>/v1/services`，而不是 localhost。运行 `sigiro status` 确认服务端健康。查看你自己服务的日志，看是否有 OTel 启动错误，因为导出器配置错误会在启动时报告故障。
 
-在托管服务上，确认请求头严格为 `Authorization: Bearer sk_<tenant>_<random>`。自托管服务端会忽略所有认证头。因此错误的密钥在自托管环境下不会有任何提示，也不会返回 401。
+在托管服务上，确认请求头严格为 `Authorization: Bearer <oauth-access-token>`。自托管服务端会忽略所有认证头。因此令牌错误时不会有任何提示，也不会返回 401。
 
 ## 下一步
 

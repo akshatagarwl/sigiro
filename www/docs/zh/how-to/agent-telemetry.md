@@ -49,7 +49,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.sigiro.com
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_ACCESS_TOKEN}"
 ```
 
 切勿将密钥提交到任何文件中。使用哪个端点和端口由你的运营方告知，因此当主机不是
@@ -99,21 +99,21 @@ log_user_prompt = false
 [otel.trace_exporter.otlp-http]
 endpoint = "https://api.sigiro.com/v1/traces"
 protocol = "binary"
-headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.metrics_exporter.otlp-http]
 endpoint = "https://api.sigiro.com/v1/metrics"
 protocol = "binary"
-headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.exporter.otlp-http]
 endpoint = "https://api.sigiro.com/v1/logs"
 protocol = "binary"
-headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 ```
 
 `otlp-http` 必须设置 `protocol`，取值为 `binary` 或 `json`。并在启动 Codex 的环境
-中设置 `SIGIRO_API_KEY`。
+中设置 `SIGIRO_ACCESS_TOKEN`。
 
 Codex 上报自身的名称是 `codex_exec` 而不是 `codex`，因此在下面的检查中请查找这个
 名称。

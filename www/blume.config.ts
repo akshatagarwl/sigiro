@@ -449,9 +449,9 @@ export default defineConfig({
      *
      * `playground.proxy` is the documented escape hatch for (2) — `true` mounts
      * a built-in `/_api-proxy` server route. Deliberately not taken. Every
-     * hosted endpoint needs a tenant key, so a proxy turns the docs Worker into
+     * hosted endpoint needs a Better Auth OAuth access token, so a proxy turns the docs Worker into
      * a credential-forwarding relay for the telemetry API: a reader pastes
-     * `sk_<tenant>_<random>` into a docs page and this origin ships it onward.
+     * `<oauth-access-token>` into a docs page and this origin ships it onward.
      * That is a product and security decision about the API's trust boundary,
      * not a docs-framework setting, and it is not one an upgrade should make.
      *

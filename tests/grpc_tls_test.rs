@@ -71,10 +71,13 @@ impl TlsServer {
             .env("SIGIRO_GRPC_PORT", grpc_port.to_string())
             .env("SIGIRO_TLS_CERT", &cert_path)
             .env("SIGIRO_TLS_KEY", &key_path)
+            .env("SIGIRO_SHUTDOWN_TIMEOUT_SECS", "10")
             .env("OTEL_EXPORTER_OTLP_ENDPOINT", "")
             .env("RUST_LOG", "info")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            // Inherit output so the child cannot deadlock when an unread pipe
+            // fills during a cold CI startup or graceful shutdown.
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .spawn()
             .expect("failed to spawn `sigiro serve`");
 
@@ -118,7 +121,7 @@ impl TlsServer {
     fn shutdown(mut self) {
         // SAFETY: sends SIGTERM only to this test's child process.
         unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             match self
                 .child
@@ -146,7 +149,7 @@ impl TlsServer {
                     self.child
                         .wait()
                         .expect("failed to wait for force-killed sigiro process");
-                    panic!("sigiro serve did not exit within 15s of SIGTERM");
+                    panic!("sigiro serve did not exit within 30s of SIGTERM");
                 }
             }
         }
@@ -256,5 +259,11 @@ async fn direct_ingest_uses_tls_while_proxy_upstream_stays_plaintext() {
         "plaintext HTTP unexpectedly succeeded against the TLS OTLP/HTTP listener"
     );
 
+    // Graceful shutdown waits for active HTTP/2 connections. Release every
+    // successful client/response before SIGTERM so this test measures server
+    // shutdown rather than its own open keep-alive connections.
+    drop(tls_http_response);
+    drop(http_health);
+    drop(tls_client);
     server.shutdown();
 }

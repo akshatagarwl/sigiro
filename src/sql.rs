@@ -447,9 +447,9 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
 /// `allow_information_schema = false` (HOSTED mode) additionally rejects
 /// `information_schema` enumeration. With a shared PostgreSQL catalog, the
 /// DuckLake attach exposes the WHOLE database's `information_schema` to a
-/// tenant connection, letting it read the NAMES of the control plane
-/// (`sigiro_control.*`) and sibling tenant schemas. Data reads are already
-/// blocked by the table allowlist; this closes the structure disclosure.
+/// tenant connection, letting it read the names of sibling tenant schemas.
+/// Data reads are already blocked by the table allowlist; this closes the
+/// structure disclosure.
 /// The `/v1/query` handler passes `!hosted`; local/edge callers pass `true`.
 pub fn validate_read_only_with(sql: &str, allow_information_schema: bool) -> Result<(), String> {
     // Validate the syntax users actually execute. GenericDialect rejects

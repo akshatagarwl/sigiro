@@ -40,7 +40,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.sigiro.com
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_API_KEY}"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_ACCESS_TOKEN}"
 ```
 
 キーはコミット対象のファイルに一切含めないようにします。使用するエンドポイントとポートはホスティング事業者から案内されるため、そのホストが `api.sigiro.com` でない場合は `https://<your-sigiro-host>` を使用してください。
@@ -84,20 +84,20 @@ log_user_prompt = false
 [otel.trace_exporter.otlp-http]
 endpoint = "https://api.sigiro.com/v1/traces"
 protocol = "binary"
-headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.metrics_exporter.otlp-http]
 endpoint = "https://api.sigiro.com/v1/metrics"
 protocol = "binary"
-headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.exporter.otlp-http]
 endpoint = "https://api.sigiro.com/v1/logs"
 protocol = "binary"
-headers = { authorization = "Bearer ${SIGIRO_API_KEY}" }
+headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 ```
 
-`otlp-http` では `protocol` が必須で、`binary` または `json` を指定します。`SIGIRO_API_KEY` は Codex を起動する環境で設定します。
+`otlp-http` では `protocol` が必須で、`binary` または `json` を指定します。`SIGIRO_ACCESS_TOKEN` は Codex を起動する環境で設定します。
 
 Codex は自身を `codex` ではなく `codex_exec` として報告するため、以下の確認手順ではその名前を探してください。
 

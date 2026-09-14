@@ -24,15 +24,14 @@ Sigiro has two server authentication modes:
 * **Open** (default): self-hosted servers and edge/query-surface nodes run with
   no per-request authentication. Secure the network perimeter with a tailnet,
   private network, or reverse proxy.
-* **TenantKeys** (hosted): set `SIGIRO_CATALOG_URL` to use the hosted control
-  plane. Requests authenticate with per-tenant bearer keys minted and managed
-  through that control plane.
+* **Better Auth OAuth/JWT** (hosted): configure the issuer, audience, and JWKS
+  settings. Requests carry OAuth access-token JWTs; organizations are tenants.
 
-`SIGIRO_API_KEY` is **client-only** configuration for calling a hosted endpoint:
+`SIGIRO_ACCESS_TOKEN` is **client-only** configuration for calling a hosted endpoint:
 
 ```bash
-SIGIRO_API_KEY=<tenant-bearer-key> sigiro status
-# or: sigiro --key <tenant-bearer-key> status
+SIGIRO_ACCESS_TOKEN=<oauth-access-token> sigiro status
+# or: sigiro --token <oauth-access-token> status
 ```
 
 ## End-to-End Test

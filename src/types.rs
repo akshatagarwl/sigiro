@@ -162,21 +162,8 @@ pub struct TenantId(String);
 pub struct TimestampMicros(i64);
 
 // ---------------------------------------------------------------------------
-// ApiKeyHashPrefix — validated identity for key revocation
+// Typed path structs — compile-time route checking for axum router
 // ---------------------------------------------------------------------------
-
-/// Unambiguous hexadecimal prefix of a SHA-256 API-key hash.
-///
-/// Eight characters is the control-plane minimum for avoiding accidental broad
-/// matches; 64 is the full hash width. Checked deserialization keeps malformed
-/// path values out of the revocation operation.
-#[nutype::nutype(
-    validate(predicate = |prefix: &str| {
-        (8..=64).contains(&prefix.len()) && prefix.bytes().all(|b| b.is_ascii_hexdigit())
-    }),
-    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
-)]
-pub struct ApiKeyHashPrefix(String);
 
 #[nutype::nutype(
     validate(predicate = |id: &str| {
@@ -188,7 +175,6 @@ pub struct ApiKeyHashPrefix(String);
 )]
 pub struct TraceId(String);
 
-/// Canonical 8-byte OpenTelemetry span identifier encoded as lowercase hex.
 #[nutype::nutype(
     validate(predicate = |id: &str| {
         id.len() == 16
@@ -199,9 +185,6 @@ pub struct TraceId(String);
 )]
 pub struct SpanId(String);
 
-// ---------------------------------------------------------------------------
-// Typed path structs — compile-time route checking for axum router
-// ---------------------------------------------------------------------------
 // Used with axum_extra::routing::TypedPath for compile-time route verification.
 
 use axum_extra::routing::TypedPath;
@@ -231,23 +214,6 @@ pub struct AnomaliesPath;
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/alerts")]
 pub struct AlertsPath;
-
-/// Route: GET /keys
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/keys")]
-pub struct AdminKeysPath;
-
-/// Route: GET /tenants
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/tenants")]
-pub struct AdminTenantsPath;
-
-/// Route: GET /keys/{short_token}
-#[derive(Debug, Clone, Deserialize, TypedPath)]
-#[typed_path("/keys/{short_token}")]
-pub struct AdminKeyPath {
-    pub(crate) short_token: ApiKeyHashPrefix,
-}
 
 /// Route: GET /status
 #[derive(Debug, Clone, TypedPath)]

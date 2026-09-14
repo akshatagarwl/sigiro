@@ -291,8 +291,6 @@ sleep 5
 
 # ─── Step 9: Query data ──────────────────────────────────────────
 log "Querying stored data..."
-# Use the dev key for CLI commands
-export SIGIRO_API_KEY="${API_KEY}"
 QUERY_RESULT=$($SIGIRO_BIN query "SELECT count(*) as cnt FROM lake.sigiro_spans" 2>&1) || true
 log "Query result:"
 echo "$QUERY_RESULT"

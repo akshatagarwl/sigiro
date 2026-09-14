@@ -78,13 +78,13 @@ def start_sigiro(
     bin_path: Path,
     data_dir: Path,
     ports: Ports,
-    api_key: str,
+    access_token: str,
     extra_env: dict[str, str],
     log_path: Path,
 ) -> subprocess.Popen[str]:
     env = os.environ.copy()
     env.update(extra_env)
-    env["SIGIRO_API_KEY"] = api_key
+    env["SIGIRO_ACCESS_TOKEN"] = access_token
     data_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("w")
     return subprocess.Popen(
@@ -129,11 +129,11 @@ def newest_bench_result(out_dir: Path) -> dict[str, Any]:
     return json.loads(files[-1].read_text())
 
 
-def query_service_counts(base_url: str, api_key: str) -> list[dict[str, Any]]:
+def query_service_counts(base_url: str, access_token: str) -> list[dict[str, Any]]:
     request = urllib.request.Request(
         f"{base_url}/v1/query",
         data=SERVICE_COUNTS_SQL.encode(),
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers={"Authorization": f"Bearer {access_token}"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -142,14 +142,14 @@ def query_service_counts(base_url: str, api_key: str) -> list[dict[str, Any]]:
 
 def wait_for_profiles(
     base_url: str,
-    api_key: str,
+    access_token: str,
     timeout_sec: int,
     profiles_before: int,
 ) -> list[dict[str, Any]]:
     deadline = time.monotonic() + timeout_sec
     last_counts: list[dict[str, Any]] = []
     while time.monotonic() < deadline:
-        last_counts = query_service_counts(base_url, api_key)
+        last_counts = query_service_counts(base_url, access_token)
         profiles_after = int(
             last_counts[0].get("profiles_all_time", 0) if last_counts else 0
         )
@@ -478,7 +478,7 @@ def main() -> int:
         action="store_true",
         help="Regenerate CSV, SVG, and HTML from iterations.jsonl without starting Sigiro",
     )
-    parser.add_argument("--api-key", default="sigiro_dev_self_improve")
+    parser.add_argument("--access-token", default="sigiro_dev_self_improve")
     parser.add_argument("--timeout-sec", type=int, default=90)
     parser.add_argument("--rate", type=int, default=500)
     parser.add_argument("--duration", type=int, default=10)
@@ -550,28 +550,28 @@ def main() -> int:
             args.stable_bin,
             args.out_dir / "stable-data",
             stable_ports,
-            args.api_key,
+            args.access_token,
             {"SIGIRO_EXTENSION_DIR": str(extension_dir)},
             args.out_dir / "stable.log",
         )
         stable_startup, _ = wait_health(f"http://127.0.0.1:{stable_ports.http}", args.timeout_sec)
         env = os.environ.copy()
         env["SIGIRO_ENDPOINT"] = f"http://127.0.0.1:{stable_ports.http}"
-        env["SIGIRO_API_KEY"] = args.api_key
+        env["SIGIRO_ACCESS_TOKEN"] = args.access_token
         stable_url = f"http://127.0.0.1:{stable_ports.http}"
-        counts_before_result = query_service_counts(stable_url, args.api_key)
+        counts_before_result = query_service_counts(stable_url, args.access_token)
         counts_before = counts_before_result[0] if counts_before_result else {}
 
         candidate_proc = start_sigiro(
             args.candidate_bin,
             args.out_dir / f"candidate-data-{iteration}",
             candidate_ports,
-            args.api_key,
+            args.access_token,
             {
                 "OTEL_SERVICE_NAME": "sigiro-candidate",
                 "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://127.0.0.1:{stable_ports.otlp_http}",
                 "SIGIRO_PYROSCOPE_ENDPOINT": f"http://127.0.0.1:{stable_ports.otlp_http}",
-                "SIGIRO_OTEL_AUTH_KEY": args.api_key,
+                "SIGIRO_OTEL_AUTH_KEY": args.access_token,
                 "SIGIRO_EXTENSION_DIR": str(extension_dir),
             },
             args.out_dir / "candidate.log",
@@ -584,7 +584,7 @@ def main() -> int:
             "--endpoint",
             f"http://127.0.0.1:{candidate_ports.otlp_http}",
             "--auth-key",
-            args.api_key,
+            args.access_token,
             "--rate",
             str(args.rate),
             "--duration",
@@ -599,7 +599,7 @@ def main() -> int:
 
         wait_for_profiles(
             stable_url,
-            args.api_key,
+            args.access_token,
             args.profile_timeout_sec,
             int(counts_before.get("profiles_all_time", 0) or 0),
         )
@@ -609,7 +609,7 @@ def main() -> int:
         time.sleep(2)
         diagnose = run_json([str(args.stable_bin), "--output", "json", "diagnose", "sigiro-candidate"], env)
         (args.out_dir / "diagnose-sigiro-candidate.json").write_text(json.dumps(diagnose, indent=2) + "\n")
-        service_counts = query_service_counts(stable_url, args.api_key)
+        service_counts = query_service_counts(stable_url, args.access_token)
         counts = service_counts[0] if service_counts else {}
         (args.out_dir / "service-counts.json").write_text(
             json.dumps({"before": counts_before, "after": counts}, indent=2) + "\n"

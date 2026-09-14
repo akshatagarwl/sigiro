@@ -8,8 +8,8 @@ sidebar:
 `sigiro` has seven subcommands. Client commands print indented JSON on success;
 server commands remain attached to their protocol or listener.
 
-The global flag `--key <TOKEN>` sets the bearer token for a hosted endpoint. It
-overrides `SIGIRO_API_KEY`. A self-hosted server ignores the token.
+The global flag `--token <TOKEN>` sets the bearer token for a hosted endpoint. It
+overrides `SIGIRO_ACCESS_TOKEN`. A self-hosted server ignores the token.
 
 All client subcommands reach the server at `SIGIRO_ENDPOINT`, which defaults to
 `http://localhost:9999`.

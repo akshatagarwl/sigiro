@@ -342,16 +342,40 @@ pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
     EnvarDef::Default("http://localhost:9999".to_string())
 });
 
-/// Bearer token for a hosted (`TenantKeys`) endpoint. Client-only: it is sent
+/// Bearer token for a hosted JWT endpoint. Client-only: it is sent
 /// as a bearer token by `client::try_build_client` and never configures
 /// server-side authentication.
 ///
 /// `on_demand`, not `on_startup`, because `main.rs` writes this variable from
-/// the `--key` flag after startup and a cached read would miss it. Empty string
-/// rather than `Unset` so the caller keeps its "no key means no auth" shape
+/// the `--token` flag after startup and a cached read would miss it. Empty string
+/// rather than `Unset` so the caller keeps its "no token means no auth" shape
 /// without an error path.
-pub(crate) static API_KEY: Envar<String> =
-    Envar::on_demand("SIGIRO_API_KEY", || EnvarDef::Default(String::new()));
+pub(crate) static ACCESS_TOKEN: Envar<String> =
+    Envar::on_demand("SIGIRO_ACCESS_TOKEN", || EnvarDef::Default(String::new()));
+
+/// Better Auth OAuth issuer, protected-resource audience, and JWKS endpoint.
+/// Set all three to make Sigiro a JWT resource server. Distributed storage
+/// rejects startup unless all three are present; local/edge modes may be Open.
+pub(crate) static AUTH_ISSUER: Envar<String> =
+    Envar::on_demand("SIGIRO_AUTH_ISSUER", || EnvarDef::Default(String::new()));
+pub(crate) static AUTH_AUDIENCE: Envar<String> =
+    Envar::on_demand("SIGIRO_AUTH_AUDIENCE", || EnvarDef::Default(String::new()));
+pub(crate) static AUTH_JWKS_URL: Envar<String> =
+    Envar::on_demand("SIGIRO_AUTH_JWKS_URL", || EnvarDef::Default(String::new()));
+
+pub(crate) fn jwt_resource_server_config() -> Result<Option<(String, String, String)>> {
+    let issuer = AUTH_ISSUER.value()?;
+    let audience = AUTH_AUDIENCE.value()?;
+    let jwks_url = AUTH_JWKS_URL.value()?;
+    if issuer.is_empty() && audience.is_empty() && jwks_url.is_empty() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        !issuer.is_empty() && !audience.is_empty() && !jwks_url.is_empty(),
+        "SIGIRO_AUTH_ISSUER, SIGIRO_AUTH_AUDIENCE, and SIGIRO_AUTH_JWKS_URL must be set together"
+    );
+    Ok(Some((issuer, audience, jwks_url)))
+}
 
 /// Path to the direct-ingest TLS certificate PEM file (ports 4317 and 4318).
 /// The main HTTP API stays plaintext for a TLS-terminating reverse proxy.

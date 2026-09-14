@@ -21,9 +21,9 @@ const STYLES: styling::Styles = styling::Styles::styled()
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
-    /// Client bearer token for a hosted endpoint (overrides SIGIRO_API_KEY).
+    /// OAuth access token for a hosted endpoint (overrides SIGIRO_ACCESS_TOKEN).
     #[arg(long, global = true)]
-    key: Option<String>,
+    token: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -163,10 +163,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // This is client-only configuration. Apply it before any command resolves
-    // endpoint configuration, so `--key` has the same behavior as
-    // SIGIRO_API_KEY without changing server authentication.
-    if let Some(key) = &cli.key {
-        unsafe { std::env::set_var("SIGIRO_API_KEY", key) };
+    // endpoint configuration, so `--token` has the same behavior as
+    // SIGIRO_ACCESS_TOKEN without changing server authentication.
+    if let Some(token) = &cli.token {
+        unsafe { std::env::set_var("SIGIRO_ACCESS_TOKEN", token) };
     }
 
     match cli.command {
@@ -518,7 +518,7 @@ async fn run_evictor(pool: Arc<ProjectPool>, interval_secs: u64, max_idle_secs: 
     }
 }
 
-/// Build HTTP client from config. Fails fast if API key or endpoint is not configured.
+/// Build HTTP client from config. Fails fast if the access token or endpoint is not configured.
 fn require_client() -> Result<sigiro::client::SigiroClient> {
     sigiro::client::try_build_client()
 }

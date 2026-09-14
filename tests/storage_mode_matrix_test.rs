@@ -310,7 +310,7 @@ impl MatrixEdge {
 /// Drop the DuckLake metadata schema for the `default` tenant from the shared
 /// Postgres catalog, so a PG-backed mode starts from a clean catalog and its
 /// DATA_PATH (local vs S3) is the one that actually takes effect. Uses DuckDB's
-/// `postgres` extension exactly as `auth::ControlPlane` does.
+/// `postgres` extension exactly as the production distributed-storage path does.
 fn reset_pg_catalog() {
     let conn =
         duckdb::Connection::open_in_memory().expect("open in-memory DuckDB for catalog reset");

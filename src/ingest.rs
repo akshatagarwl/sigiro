@@ -121,26 +121,35 @@ impl OtlpGrpcService {
 }
 
 /// Extract project_id from gRPC metadata.
-/// Uses the explicit AuthMode — Open mode skips auth, TenantKeys mode validates Bearer token.
-pub fn extract_project_id_grpc(
+/// Uses the explicit AuthMode — Open mode skips auth, JWT mode validates Bearer token.
+pub async fn extract_project_id_grpc(
     auth_mode: &crate::auth::AuthMode,
     metadata: &tonic::metadata::MetadataMap,
 ) -> Result<String, Status> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::TenantKeys { .. } => {
+        crate::auth::AuthMode::Jwt { .. } => {
             let token = metadata
                 .get("authorization")
                 .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
                 .to_str()
                 .map_err(|_| Status::unauthenticated("Invalid Authorization encoding"))?
                 .strip_prefix("Bearer ")
-                .ok_or_else(|| Status::unauthenticated("Expected: Bearer <key>"))?;
+                .ok_or_else(|| Status::unauthenticated("Expected: Bearer <access-token>"))?;
 
             auth_mode
-                .verify(token)
-                .map(|tenant_id| tenant_id.as_ref().to_owned())
-                .map_err(|_| Status::unauthenticated("Invalid API key"))
+                .authenticate(token, crate::auth::TELEMETRY_INGEST_SCOPE)
+                .await
+                .map(|context| context.tenant_id.as_ref().to_owned())
+                .map_err(|error| match error {
+                    crate::auth::AuthError::InsufficientScope(_) => {
+                        Status::permission_denied("Access token lacks telemetry:ingest scope")
+                    }
+                    crate::auth::AuthError::InvalidToken
+                    | crate::auth::AuthError::JwksUnavailable => {
+                        Status::unauthenticated("Invalid access token")
+                    }
+                })
         }
     }
 }
@@ -211,7 +220,7 @@ impl TraceService for OtlpGrpcService {
         &self,
         request: Request<ExportTraceServiceRequest>,
     ) -> Result<Response<ExportTraceServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         // Transform on tokio blocking pool — no double decode.
         // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
@@ -240,7 +249,7 @@ impl LogsService for OtlpGrpcService {
         &self,
         request: Request<ExportLogsServiceRequest>,
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let (batch, rejected) = transform_logs(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
@@ -281,7 +290,7 @@ impl MetricsService for OtlpGrpcService {
         &self,
         request: Request<ExportMetricsServiceRequest>,
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
         let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -620,7 +629,7 @@ impl ProfilesService for OtlpGrpcService {
         &self,
         request: Request<ExportProfilesServiceRequest>,
     ) -> Result<Response<ExportProfilesServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
+        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         let req = request.into_inner();
         let batch = spawn_transform("transform profiles", move || transform_profiles(req)).await?;
         if batch.num_rows() == 0 {
@@ -696,25 +705,27 @@ pub fn otlp_http_router(
 }
 
 /// Extract project_id from HTTP Authorization header.
-/// Uses the explicit AuthMode — Open mode skips auth, TenantKeys mode validates Bearer token.
-pub fn extract_project_id_http(
+/// Uses the explicit AuthMode — Open mode skips auth, JWT mode validates Bearer token.
+pub async fn extract_project_id_http(
     auth_mode: &crate::auth::AuthMode,
     headers: &axum::http::HeaderMap,
 ) -> Result<String, StatusCode> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::TenantKeys { .. } => {
+        crate::auth::AuthMode::Jwt { .. } => {
             let token = crate::auth::extract_bearer_token(headers).map_err(|_| {
                 tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
                 StatusCode::UNAUTHORIZED
             })?;
 
             auth_mode
-                .verify(&token)
-                .map(|tenant_id| tenant_id.as_ref().to_owned())
-                .map_err(|_| {
-                    tracing::warn!("OTLP HTTP: invalid API key");
-                    StatusCode::UNAUTHORIZED
+                .authenticate(&token, crate::auth::TELEMETRY_INGEST_SCOPE)
+                .await
+                .map(|context| context.tenant_id.as_ref().to_owned())
+                .map_err(|error| match error {
+                    crate::auth::AuthError::InsufficientScope(_) => StatusCode::FORBIDDEN,
+                    crate::auth::AuthError::InvalidToken
+                    | crate::auth::AuthError::JwksUnavailable => StatusCode::UNAUTHORIZED,
                 })
         }
     }
@@ -742,7 +753,7 @@ async fn otlp_http_traces(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -769,7 +780,7 @@ async fn otlp_http_logs(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -799,7 +810,7 @@ async fn otlp_http_metrics(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -838,7 +849,7 @@ async fn otlp_http_profiles(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -972,7 +983,7 @@ async fn otlp_http_pyroscope(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
         Err(status) => {
             tracing::warn!("pyroscope: auth failed: {status}");

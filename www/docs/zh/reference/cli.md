@@ -8,8 +8,8 @@ sidebar:
 `sigiro` 有七个子命令。每个子命令在执行成功时都会输出带缩进的 JSON。没有第二种
 输出格式，也不做 TTY 检测。
 
-全局标志 `--key <TOKEN>` 用于设置访问托管端点的 bearer token。它会覆盖
-`SIGIRO_API_KEY`。自托管服务器会忽略该 token。
+全局标志 `--token <TOKEN>` 用于设置访问托管端点的 bearer token。它会覆盖
+`SIGIRO_ACCESS_TOKEN`。自托管服务器会忽略该 token。
 
 所有客户端子命令都会访问 `SIGIRO_ENDPOINT` 指定的服务器，默认值为
 `http://localhost:9999`。

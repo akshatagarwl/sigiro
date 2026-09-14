@@ -2,10 +2,10 @@
   "version": 3,
   "summary": "sigiro reads OpenTelemetry and answers what changed and why: ranked findings, the suspect deploy, and a runnable SQL query on every row. Reachable as a hosted HTTP API, a self-hosted binary serving the same API with no credential, a CLI, and a public documentation MCP server.",
   "credentials": {
-    "tenant_key": {
-      "type": "api_key",
-      "label": "sigiro TenantKey",
-      "setup": "Only the hosted service at `api.sigiro.com` needs a credential. During the invited beta an operator issues each tenant a key of the form `sk_<tenant>_<random>`; it is shown once and can be rotated but not recovered. The same key authorises both OTLP ingest and SQL queries. Send it as `Authorization: Bearer sk_<tenant>_<random>`.\n\n**A self-hosted sigiro needs no credential at all.** It runs in open mode and authenticates no request — the network is the security boundary, so put it behind a tailnet, private network or reverse proxy. A self-hosted server ignores authentication headers entirely, so a wrong key fails there silently rather than with a 401."
+    "oauth_access_token": {
+      "type": "oauth2",
+      "label": "Better Auth OAuth access token",
+      "setup": "Use the Better Auth/OAuth API to sign in and obtain an OAuth access token for the hosted service. Organizations are the tenants. Send it as Authorization: Bearer <oauth-access-token> for OTLP and API requests. Self-hosted Open mode needs no credential."
     }
   },
   "surfaces": [
@@ -26,7 +26,7 @@
           {
             "use": [
               {
-                "id": "tenant_key",
+                "id": "oauth_access_token",
                 "mechanics": {
                   "source": "http",
                   "in": "header",
@@ -89,11 +89,13 @@
           {
             "use": [
               {
-                "id": "tenant_key",
+                "id": "oauth_access_token",
                 "mechanics": {
                   "source": "cli",
-                  "command": "sigiro anomalies --key sk_<tenant>_<random>",
-                  "env": ["SIGIRO_API_KEY"]
+                  "command": "sigiro anomalies --token <oauth-access-token>",
+                  "env": [
+                    "SIGIRO_ACCESS_TOKEN"
+                  ]
                 }
               }
             ],
@@ -110,7 +112,9 @@
       "slug": "sigiro-docs",
       "name": "sigiro documentation MCP server",
       "url": "https://sigiro.com/mcp",
-      "transports": ["streamable-http"],
+      "transports": [
+        "streamable-http"
+      ],
       "docs": "https://sigiro.com/docs",
       "basis": {
         "via": "declared",

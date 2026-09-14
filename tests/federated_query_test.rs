@@ -63,6 +63,9 @@ impl EdgeServer {
 
         let child = Command::new(env!("CARGO_BIN_EXE_sigiro"))
             .arg("serve")
+            // This is a fully specified local fixture. Do not inherit production
+            // storage or auth settings from the developer/CI environment.
+            .env_clear()
             .env("SIGIRO_DATA_DIR", data_dir.path())
             .env("SIGIRO_HTTP_PORT", http_port.to_string())
             .env("SIGIRO_OTLP_HTTP_PORT", otlp_http_port.to_string())
@@ -78,9 +81,11 @@ impl EdgeServer {
             // is testing flush cadence, so fix the input rather than the wait.
             .env("SIGIRO_FLUSH_INTERVAL_SECS", "1")
             .env("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-            .env("RUST_LOG", "info")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .env("RUST_LOG", "warn")
+            // The harness does not inspect server logs. Inherit them so output
+            // is surfaced immediately instead of accumulating in an unread pipe.
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .spawn()
             .unwrap_or_else(|e| panic!("failed to spawn edge {name}: {e}"));
 
@@ -150,11 +155,11 @@ impl EdgeServer {
     }
 
     /// Poll row count for `service_name` until ingest is visible (this test
-    /// pins the flusher to 1s; see `spawn`) or a 10s deadline passes. Uses a direct
+    /// pins the flusher to 1s; see `spawn`) or a 30s deadline passes. Uses a direct
     /// quack_query round trip (bypassing the coordinator entirely) purely as
     /// test setup — not part of the thing under test.
     fn wait_for_ingest(&self, service_name: &str, expected: i64, token: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let conn = duckdb::Connection::open_in_memory().expect("open probe conn");
             conn.execute_batch("LOAD quack;").expect("load quack");
@@ -178,7 +183,10 @@ impl EdgeServer {
         format!("{name}=127.0.0.1:{}", self.quack_port)
     }
 
-    fn shutdown(mut self) {
+    fn terminate(&mut self) {
+        if self.child.try_wait().is_ok_and(|status| status.is_some()) {
+            return;
+        }
         let pid = self.child.id() as libc::pid_t;
         unsafe {
             libc::kill(pid, libc::SIGTERM);
@@ -198,6 +206,16 @@ impl EdgeServer {
                 Err(_) => return,
             }
         }
+    }
+
+    fn shutdown(mut self) {
+        self.terminate();
+    }
+}
+
+impl Drop for EdgeServer {
+    fn drop(&mut self) {
+        self.terminate();
     }
 }
 

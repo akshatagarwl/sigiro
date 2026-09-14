@@ -43,7 +43,7 @@ Command.make("bridge", {
   }
   const client = yield* makeBridgeClient({
     sigiroUrl: runtime.sigiroUrl, coordinatorUrl: runtime.coordinatorUrl,
-    sigiroApiKey: yield* secret("SIGIRO_API_KEY"), workerToken: yield* secret("EVE_WORKER_TOKEN"),
+    sigiroAccessToken: yield* secret("SIGIRO_ACCESS_TOKEN"), workerToken: yield* secret("EVE_WORKER_TOKEN"),
   });
   const pass = bridgeOnce({ settings: policy, evidenceDir: resolve(runtime.evidenceDir), stateDir: resolve(runtime.stateDir) }, client).pipe(
     Effect.flatMap((result) => Console.log(JSON.stringify(result))),
