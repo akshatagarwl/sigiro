@@ -29,7 +29,7 @@ export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <oauth-access-token>"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
-**エンドポイントにポートは含まれません。** ホスト型 sigiro は標準の HTTPS ポートで OTLP を終端するため、`https://api.sigiro.com` がエンドポイントの全体です。セルフホストの[クイックスタート](/docs/tutorials/quickstart#2-send-it-telemetry)から `:4318` をコピーしないでください。`api.sigiro.com` ではそのポートは接続を拒否し、接続できなかった SDK は、その失敗をここではなく自身のサービスログに報告します。ホストが異なる場合は運用担当者にお問い合わせください。
+**エンドポイントにポートは含まれません。** ホスト型 sigiro は標準の HTTPS ポートで OTLP を終端するため、`https://api.sigiro.com` がエンドポイントの全体です。セルフホストの[クイックスタート](/docs/tutorials/quickstart#2-テレメトリを送信する)から `:4318` をコピーしないでください。`api.sigiro.com` ではそのポートは接続を拒否し、接続できなかった SDK は、その失敗をここではなく自身のサービスログに報告します。ホストが異なる場合は運用担当者にお問い合わせください。
 
 **`api.sigiro.com` では OTLP/gRPC は利用できません。** ポート `4317` は閉じており、gRPC のサービスパスはルーティングされていません。HTTP を使用してください。また、他のホストで gRPC が使えると想定する前に、運用担当者に確認してください。
 

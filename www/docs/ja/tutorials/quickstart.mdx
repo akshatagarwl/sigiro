@@ -109,7 +109,7 @@ sigiro anomalies --service checkout
 
 ここでは何も設定しません。選ぶべきしきい値はなく、常に遅いが*安定している*サービス
 は異常ではありません。sigiro がどのように判断しているかを読むには、
-[ダッシュボードではなくエビデンスについて](/docs/explanation/evidence#a-baseline-not-a-threshold)
+[ダッシュボードではなくエビデンスについて](/docs/explanation/evidence#しきい値ではなくベースライン)
 をご覧ください。
 
 起動して間もないサーバーではリストが空になることがあります。sigiro が比較を行うには
@@ -172,7 +172,7 @@ curl -X POST http://localhost:9999/v1/query \
 を読みます。
 
 `sigiro_spans` は 9 つのテーブルのうちの 1 つです。
-[ホスト版ガイド](/docs/how-to/hosted-onboarding#4-query-your-data-sql-api)では 9 つ
+[ホスト版ガイド](/docs/how-to/hosted-onboarding#4-データを照会するsql-api)では 9 つ
 すべてと、それらに適用される規則を一覧しており、[テーブルについて](/docs/explanation/tables)
 では各ファミリーが何を計測するのかを説明しています。
 

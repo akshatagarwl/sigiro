@@ -13,9 +13,9 @@ sidebar:
 
 ## 开始之前
 
-你需要一个 sigiro 服务端作为数据目的地。可以用 `sigiro serve` 启动，也可以使用 [快速开始](/docs/tutorials/quickstart#1-run-it) 中的 Docker 命令启动。自托管服务端不需要访问令牌。只有托管服务需要访问令牌，格式为 `<oauth-access-token>`。
+你需要一个 sigiro 服务端作为数据目的地。可以用 `sigiro serve` 启动，也可以使用 [快速开始](/docs/tutorials/quickstart#1-运行它) 中的 Docker 命令启动。自托管服务端不需要访问令牌。只有托管服务需要访问令牌，格式为 `<oauth-access-token>`。
 
-Python、Node.js、Java、.NET 和 Ruby 均有自动检测方案。如果你的服务是 Go，请不要使用该提示词，改为查看 [Go 章节](#go-instrument-the-build-not-the-source)。
+Python、Node.js、Java、.NET 和 Ruby 均有自动检测方案。如果你的服务是 Go，请不要使用该提示词，改为查看 [Go 章节](#go检测构建过程而不是源码)。
 
 ## 1. 把这条提示词交给智能体
 
@@ -108,7 +108,7 @@ chmod +x otelc
 
 首次构建会下载 OpenTelemetry 相关包，因此比普通构建耗时更长。你的 `go.mod` 文件保持不变。
 
-启动二进制文件时使用与 [快速开始](/docs/tutorials/quickstart#2-send-it-telemetry) 相同的两个环境变量：
+启动二进制文件时使用与 [快速开始](/docs/tutorials/quickstart#2-向它发送遥测数据) 相同的两个环境变量：
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
@@ -142,6 +142,6 @@ curl http://localhost:9999/v1/services
 
 ## 下一步
 
-- [快速开始](/docs/tutorials/quickstart#3-ask-what-changed) —— 询问发生了什么变化以及原因
+- [快速开始](/docs/tutorials/quickstart#3-询问发生了什么变化) —— 询问发生了什么变化以及原因
 - [把智能体自身的遥测数据发送到 sigiro](/docs/how-to/agent-telemetry) —— 把 Claude Code 或 Codex 也指向 sigiro
 - [向托管版 sigiro 发送遥测数据](/docs/how-to/hosted-onboarding) —— 如果你不想自己运行服务端，请使用这种方式

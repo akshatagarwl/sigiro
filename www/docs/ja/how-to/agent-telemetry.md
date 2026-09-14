@@ -15,11 +15,11 @@ sidebar:
 
 ## 始める前に
 
-sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイックスタート](/docs/tutorials/quickstart#1-run-it)にある Docker コマンドで起動してください。
+sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイックスタート](/docs/tutorials/quickstart#1-実行する)にある Docker コマンドで起動してください。
 
 以下の設定では、どちらのエージェントもポート `4317` の OTLP gRPC 経由でエクスポートします。セルフホストのサーバーではキーは不要です。
 
-ホスティングサービスでは、代わりに **HTTP** 経由の OTLP を使用してください。ホスティング事業者が必ずしも gRPC ポートを公開しているとは限らないため、先に [ホスティング版 sigiro にテレメトリーを送信する](/docs/how-to/hosted-onboarding#2-point-your-opentelemetry-exporter-at-sigiro) をお読みください。以下の各セクションの末尾には、ホスティング版向けの設定を記載しています。
+ホスティングサービスでは、代わりに **HTTP** 経由の OTLP を使用してください。ホスティング事業者が必ずしも gRPC ポートを公開しているとは限らないため、先に [ホスティング版 sigiro にテレメトリーを送信する](/docs/how-to/hosted-onboarding#2-opentelemetry-エクスポーターを-sigiro-に向ける) をお読みください。以下の各セクションの末尾には、ホスティング版向けの設定を記載しています。
 
 ## Claude Code
 

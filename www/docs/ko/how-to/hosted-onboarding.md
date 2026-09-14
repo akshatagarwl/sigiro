@@ -35,7 +35,7 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 
 **엔드포인트에는 포트를 붙이지 않습니다.** 호스티드 sigiro는 표준 HTTPS 포트에서
 OTLP를 종료하므로 `https://api.sigiro.com` 자체가 전체 엔드포인트입니다. 셀프 호스팅
-[퀵스타트](/docs/tutorials/quickstart#2-send-it-telemetry)의 `:4318`을 복사하지 마십시오.
+[퀵스타트](/docs/tutorials/quickstart#2-텔레메트리-전송하기)의 `:4318`을 복사하지 마십시오.
 `api.sigiro.com`에서는 해당 포트가 연결을 거부하며, 연결에 실패한 SDK는 그 실패를
 여기가 아니라 여러분의 서비스 로그에 기록합니다. 호스트가 다른 경우에는
 운영자에게 문의하십시오.

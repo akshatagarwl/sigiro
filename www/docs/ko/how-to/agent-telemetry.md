@@ -18,14 +18,14 @@ sidebar:
 ## 시작하기 전에
 
 sigiro 서버가 필요합니다. `sigiro serve` 명령으로 서버를 시작하거나,
-[빠른 시작](/docs/tutorials/quickstart#1-run-it) 의 Docker 명령을 사용하십시오.
+[빠른 시작](/docs/tutorials/quickstart#1-실행하기) 의 Docker 명령을 사용하십시오.
 
 아래 설정에서 두 에이전트 모두 `4317` 포트에서 OTLP gRPC로 내보냅니다.
 자체 호스팅 서버에는 키가 필요하지 않습니다.
 
 호스팅 서비스에서는 대신 **HTTP** 기반 OTLP를 사용하십시오. 호스팅 운영자가
 gRPC 포트를 항상 노출하지는 않으므로, 먼저 [호스팅 sigiro로 텔레메트리
-전송하기](/docs/how-to/hosted-onboarding#2-point-your-opentelemetry-exporter-at-sigiro)
+전송하기](/docs/how-to/hosted-onboarding#2-opentelemetry-익스포터를-sigiro로-지정하기)
 를 읽어 보십시오. 아래 각 절의 끝에 호스팅 설정이 나와 있습니다.
 
 ## Claude Code

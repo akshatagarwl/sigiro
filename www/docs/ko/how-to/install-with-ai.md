@@ -13,9 +13,9 @@ sidebar:
 
 ## 시작하기 전에
 
-대상이 될 sigiro 서버가 필요합니다. `sigiro serve`로 서버를 시작하거나, [퀵스타트](/docs/tutorials/quickstart#1-run-it)의 Docker 명령으로 시작하십시오. 자체 호스팅 서버에는 액세스 토큰이 필요하지 않습니다. 호스팅 서비스에만 액세스 토큰이 필요하며, 형식은 `<oauth-access-token>`입니다.
+대상이 될 sigiro 서버가 필요합니다. `sigiro serve`로 서버를 시작하거나, [퀵스타트](/docs/tutorials/quickstart#1-실행하기)의 Docker 명령으로 시작하십시오. 자체 호스팅 서버에는 액세스 토큰이 필요하지 않습니다. 호스팅 서비스에만 액세스 토큰이 필요하며, 형식은 `<oauth-access-token>`입니다.
 
-자동 계측은 Python, Node.js, Java, .NET, Ruby용으로 제공됩니다. 서비스가 Go로 작성된 경우에는 이 프롬프트를 사용하지 마십시오. 대신 [Go 섹션](#go-instrument-the-build-not-the-source)으로 이동하십시오.
+자동 계측은 Python, Node.js, Java, .NET, Ruby용으로 제공됩니다. 서비스가 Go로 작성된 경우에는 이 프롬프트를 사용하지 마십시오. 대신 [Go 섹션](#go-소스가-아니라-빌드를-계측하십시오)으로 이동하십시오.
 
 ## 1. 에이전트에 다음 프롬프트를 전달하십시오
 
@@ -108,7 +108,7 @@ chmod +x otelc
 
 첫 번째 빌드에서는 OpenTelemetry 패키지를 다운로드하므로 일반 빌드보다 시간이 더 오래 걸립니다. `go.mod` 파일은 변경되지 않습니다.
 
-[퀵스타트](/docs/tutorials/quickstart#2-send-it-telemetry)에서 사용하는 것과 동일한 두 개의 변수로 바이너리를 시작하십시오.
+[퀵스타트](/docs/tutorials/quickstart#2-텔레메트리-전송하기)에서 사용하는 것과 동일한 두 개의 변수로 바이너리를 시작하십시오.
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
@@ -142,6 +142,6 @@ curl http://localhost:9999/v1/services
 
 ## 다음 단계
 
-- [퀵스타트](/docs/tutorials/quickstart#3-ask-what-changed) — 무엇이 어떻게 왜 변경되었는지 질의하기
+- [퀵스타트](/docs/tutorials/quickstart#3-무엇이-변했는지-묻기) — 무엇이 어떻게 왜 변경되었는지 질의하기
 - [에이전트 자체의 텔레메트리를 sigiro로 전송하기](/docs/how-to/agent-telemetry) — Claude Code나 Codex도 sigiro를 가리키도록 설정하기
 - [호스팅 sigiro로 텔레메트리 전송하기](/docs/how-to/hosted-onboarding) — 서버를 직접 운영하고 싶지 않은 경우 사용

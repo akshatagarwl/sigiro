@@ -17,13 +17,13 @@ sidebar:
 ## 开始之前
 
 你需要一台 sigiro 服务器。用 `sigiro serve` 启动，或使用
-[快速上手](/docs/tutorials/quickstart#1-run-it)中的 Docker 命令启动。
+[快速上手](/docs/tutorials/quickstart#1-运行它)中的 Docker 命令启动。
 
 在下面的配置中，两个 agent 都通过 OTLP gRPC 从 `4317` 端口导出数据。自托管服务器
 不需要密钥。
 
 在托管服务上，请改用 OTLP over **HTTP**。请先阅读[将遥测数据发送到托管版
-sigiro](/docs/how-to/hosted-onboarding#2-point-your-opentelemetry-exporter-at-sigiro)，
+sigiro](/docs/how-to/hosted-onboarding#2-将-opentelemetry-导出器指向-sigiro)，
 因为托管服务的运营方并不总会开放 gRPC 端口。下面每一节的末尾都给出了托管服务的
 配置。
 

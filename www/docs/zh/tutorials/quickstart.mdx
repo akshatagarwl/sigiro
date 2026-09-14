@@ -88,7 +88,7 @@ sigiro anomalies
 sigiro anomalies --service checkout
 ```
 
-这里你不需要配置任何东西。没有阈值需要选择，而一个一直很慢但*稳定*的服务并不算异常。要了解 sigiro 如何做出这一判断，请参阅[关于用证据取代仪表盘](/docs/explanation/evidence#a-baseline-not-a-threshold)。
+这里你不需要配置任何东西。没有阈值需要选择，而一个一直很慢但*稳定*的服务并不算异常。要了解 sigiro 如何做出这一判断，请参阅[关于用证据取代仪表盘](/docs/explanation/evidence#基线而非阈值)。
 
 请注意，在刚启动不久的服务端上，这个列表可能为空。sigiro 需要几个 5 分钟的历史分桶才能进行比较，所以让你的服务运行一段时间后再来询问。
 
@@ -131,7 +131,7 @@ curl -X POST http://localhost:9999/v1/query \
 
 请注意这个查询限定了 `timestamp` 的范围。在每个查询中都要限定 `timestamp`：sigiro 不维护二级索引，因此有范围限定的查询只读取少量文件，而没有限定的查询会读取每一个文件。
 
-`sigiro_spans` 是九张表之一。[托管版指南](/docs/how-to/hosted-onboarding#4-query-your-data-sql-api)列出了全部九张表以及适用于它们的规则，[关于这些表](/docs/explanation/tables)则解释了每一类表所度量的内容。
+`sigiro_spans` 是九张表之一。[托管版指南](/docs/how-to/hosted-onboarding#4-查询你的数据sql-api)列出了全部九张表以及适用于它们的规则，[关于这些表](/docs/explanation/tables)则解释了每一类表所度量的内容。
 
 ## 你做了什么
 

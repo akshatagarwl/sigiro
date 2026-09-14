@@ -13,9 +13,9 @@ sidebar:
 
 ## はじめる前に
 
-送信先として sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイックスタート](/docs/tutorials/quickstart#1-run-it)にある Docker コマンドで起動してください。セルフホストのサーバーにはアクセストークンは不要です。アクセストークンが必要なのはホステッドサービスのみで、その形式は `<oauth-access-token>` です。
+送信先として sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイックスタート](/docs/tutorials/quickstart#1-実行する)にある Docker コマンドで起動してください。セルフホストのサーバーにはアクセストークンは不要です。アクセストークンが必要なのはホステッドサービスのみで、その形式は `<oauth-access-token>` です。
 
-自動計装は Python、Node.js、Java、.NET、Ruby 向けに提供されています。対象のサービスが Go の場合、このプロンプトは使用しないでください。代わりに [Go のセクション](#go-instrument-the-build-not-the-source)へ進んでください。
+自動計装は Python、Node.js、Java、.NET、Ruby 向けに提供されています。対象のサービスが Go の場合、このプロンプトは使用しないでください。代わりに [Go のセクション](#go-ソースではなくビルドを計装する)へ進んでください。
 
 ## 1. エージェントに次のプロンプトを渡す
 
@@ -108,7 +108,7 @@ chmod +x otelc
 
 初回のビルドでは OpenTelemetry のパッケージをダウンロードするため、通常のビルドより時間がかかります。`go.mod` ファイルは変更されません。
 
-[クイックスタート](/docs/tutorials/quickstart#2-send-it-telemetry)で使用しているのと同じ 2 つの変数を指定して、バイナリを起動します。
+[クイックスタート](/docs/tutorials/quickstart#2-テレメトリを送信する)で使用しているのと同じ 2 つの変数を指定して、バイナリを起動します。
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
@@ -142,6 +142,6 @@ curl http://localhost:9999/v1/services
 
 ## 次のステップ
 
-- [クイックスタート](/docs/tutorials/quickstart#3-ask-what-changed) — 何がどう変わったのかを尋ねる
+- [クイックスタート](/docs/tutorials/quickstart#3-何が変わったかを尋ねる) — 何がどう変わったのかを尋ねる
 - [エージェント自身のテレメトリを sigiro に送る](/docs/how-to/agent-telemetry) — Claude Code や Codex の向き先も sigiro にする
 - [ホステッド sigiro にテレメトリを送る](/docs/how-to/hosted-onboarding) — サーバーを自分で運用したくない場合はこちら

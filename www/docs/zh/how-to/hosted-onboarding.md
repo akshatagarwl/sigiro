@@ -33,7 +33,7 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
 **该端点不带端口号。** 托管版 sigiro 在标准 HTTPS 端口上接收 OTLP，
-因此 `https://api.sigiro.com` 就是完整的端点。请不要照搬自托管[快速上手](/docs/tutorials/quickstart#2-send-it-telemetry)中的
+因此 `https://api.sigiro.com` 就是完整的端点。请不要照搬自托管[快速上手](/docs/tutorials/quickstart#2-向它发送遥测数据)中的
 `:4318`：在 `api.sigiro.com` 上，该端口会拒绝连接，而无法建立连接的 SDK
 只会把这一失败记录在你自己服务的日志里，而不会记录在这里。如果你的主机有所不同，请咨询运维方。
 
