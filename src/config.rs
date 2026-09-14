@@ -156,8 +156,26 @@ pub(crate) static FLUSH_INTERVAL_SECS: Envar<u64> =
 /// Row count threshold that triggers an immediate flush. Default: 10_000.
 /// When this many rows are buffered across all signal tables, the flusher
 /// writes them to DuckDB without waiting for the timer.
-pub(crate) static FLUSH_ROW_THRESHOLD: Envar<usize> =
+#[nutype::nutype(
+    validate(greater = 0),
+    derive(Debug, Clone, Copy, PartialEq, Eq, FromStr, AsRef, Display)
+)]
+pub struct FlushRowThreshold(usize);
+
+impl FlushRowThreshold {
+    pub fn as_usize(&self) -> usize {
+        *self.as_ref()
+    }
+}
+
+static FLUSH_ROW_THRESHOLD: Envar<usize> =
     Envar::on_startup("SIGIRO_FLUSH_ROW_THRESHOLD", || EnvarDef::Default(10_000));
+
+pub(crate) fn flush_row_threshold() -> Result<FlushRowThreshold> {
+    let raw = FLUSH_ROW_THRESHOLD.value()?;
+    FlushRowThreshold::try_new(raw)
+        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_FLUSH_ROW_THRESHOLD: {error}"))
+}
 
 /// How long `InsertRouter::shutdown_and_wait` gives each project's flusher to
 /// drain before aborting it. Default: 5s.

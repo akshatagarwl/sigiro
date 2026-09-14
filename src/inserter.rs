@@ -235,7 +235,7 @@ const ANOMALY_PASS_INTERVAL: Duration = Duration::from_secs(300);
 /// Flusher configuration derived from env vars at startup.
 #[derive(Debug, Clone)]
 pub struct FlushConfig {
-    pub(crate) row_threshold: usize,
+    pub(crate) row_threshold: crate::config::FlushRowThreshold,
     pub(crate) byte_threshold: usize,
     pub(crate) interval: Duration,
     pub(crate) backpressure: BackpressurePolicy,
@@ -243,9 +243,8 @@ pub struct FlushConfig {
 
 impl FlushConfig {
     pub(crate) fn from_env() -> Self {
-        let row_threshold = crate::config::FLUSH_ROW_THRESHOLD
-            .value()
-            .expect("FLUSH_ROW_THRESHOLD config must be valid");
+        let row_threshold =
+            crate::config::flush_row_threshold().expect("FLUSH_ROW_THRESHOLD config must be valid");
         let byte_threshold = crate::config::FLUSH_BYTE_THRESHOLD
             .value()
             .expect("FLUSH_BYTE_THRESHOLD config must be valid");
@@ -684,7 +683,7 @@ struct ProjectFlusher {
     total_rows: usize,
     total_bytes: usize,
     last_flush: Instant,
-    row_threshold: usize,
+    row_threshold: crate::config::FlushRowThreshold,
     byte_threshold: usize,
     flush_interval: Duration,
     drain: DrainTree,
@@ -819,7 +818,7 @@ impl ProjectFlusher {
     }
 
     fn reached_flush_threshold(&self) -> bool {
-        self.total_rows >= self.row_threshold || self.total_bytes >= self.byte_threshold
+        self.total_rows >= self.row_threshold.as_usize() || self.total_bytes >= self.byte_threshold
     }
 
     /// Flush all buffered batches to DuckDB using appenders per table.
@@ -1344,7 +1343,8 @@ mod tests {
 
     fn test_flush_config() -> FlushConfig {
         FlushConfig {
-            row_threshold: 1_000_000,
+            row_threshold: crate::config::FlushRowThreshold::try_new(1_000_000)
+                .expect("positive row threshold"),
             byte_threshold: 1_000_000_000,
             interval: Duration::from_secs(3600),
             backpressure: BackpressurePolicy::Block,

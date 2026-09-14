@@ -1,5 +1,18 @@
 #![allow(clippy::disallowed_methods)]
 
+use sigiro::config::FlushRowThreshold;
+
+#[test]
+fn flush_row_threshold_rejects_zero_and_preserves_numeric_config_format() {
+    assert!(FlushRowThreshold::try_new(0).is_err());
+    assert!("0".parse::<FlushRowThreshold>().is_err());
+
+    let threshold = "10000"
+        .parse::<FlushRowThreshold>()
+        .expect("positive row threshold must retain the existing numeric config format");
+    assert_eq!(threshold.as_usize(), 10_000);
+}
+
 #[test]
 fn data_dir_uses_platform_default_when_unset() {
     // data_dir() falls back to the platform data directory when SIGIRO_DATA_DIR
