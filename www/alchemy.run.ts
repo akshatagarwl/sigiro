@@ -7,10 +7,7 @@ export const stageSchema = Schema.Union([
   Schema.Literals(['dev', 'prod']),
   Schema.TemplateLiteral([
     'pr-',
-    Schema.NumberFromString.pipe(
-      Schema.check(Schema.isInt()),
-      Schema.check(Schema.isGreaterThan(0)),
-    ),
+    Schema.Number.pipe(Schema.check(Schema.isInt()), Schema.check(Schema.isGreaterThan(0))),
   ]),
 ]);
 

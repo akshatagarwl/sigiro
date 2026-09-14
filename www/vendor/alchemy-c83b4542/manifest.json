@@ -1,0 +1,18 @@
+{
+  "purpose": "Temporary package set carrying alchemy-run/alchemy#1636 until an official Alchemy v2 beta is published.",
+  "alchemyCommit": "c83b454219a7786673b112e78db3cc43cd548047",
+  "distilledCommit": "c5b839daa092a6dbbc64e0f156ffeb16efee620f",
+  "removalIssue": "https://github.com/akshatagarwl/sigiro/issues/237",
+  "artifacts": {
+    "alchemy-2.0.0-beta.77-c83b4542.tgz": "0c39ef2cd82252bdc78fc847fad258f1abf56b028751f5a97c1fbfa5f3cb7544",
+    "distilled.cloud-aws-1.0.0-rc.9.tgz": "67c157751b60eb7c9415db8af92dea8b09096156297c5e6033b1ec722b868ba7",
+    "distilled.cloud-axiom-1.0.0-rc.9.tgz": "eec0206b2d901eee02a8274441bac54888d306d428cfac94cb2562c184646e34",
+    "distilled.cloud-cloudflare-1.0.0-rc.9.tgz": "e5e787b5fb8adc27bdbfd142301ba5a9b681780a8c529eebf123f6feb2b97b0f",
+    "distilled.cloud-core-1.0.0-rc.9.tgz": "f80220c88b009c325ac497dfe4f4addc1ed63fa2168a7b48d69ae5aa65e23ace",
+    "distilled.cloud-fly-io-1.0.0-rc.9.tgz": "23bbfb595829d3a038f1d37a984db452ae4b8e210778f10749daa64c63a9dbf7",
+    "distilled.cloud-hetzner-1.0.0-rc.9.tgz": "3efa1256c71897ba039951763e09688e6a261a2d2d2ea1b7e5bc87e836c1c379",
+    "distilled.cloud-neon-1.0.0-rc.9.tgz": "ee8432c61e87a047ac8218e9f2130e513c3986e86d6fb9e56d1d93d52269375f",
+    "distilled.cloud-planetscale-1.0.0-rc.9.tgz": "80286b61c5077b26e1c8ed635207a8a85bf5175009960634837484a9af664b19",
+    "distilled.cloud-railway-1.0.0-rc.9.tgz": "edba3b978712613207ef82dfc7a8c2bc4b4b9c8f7c80c8eddcc0ccf787ebb507"
+  }
+}
