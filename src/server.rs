@@ -21,7 +21,7 @@ use crate::auth;
 use crate::diagnose;
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::{DiskCapacityState, MsgRouter};
-use crate::pool::ProjectPool;
+use crate::pool::TenantPool;
 use crate::responses::*;
 use crate::sql::{
     ALLOWED_TABLES, duckdb_row_value_to_json, escape_sql_string, validate_read_only_with,
@@ -224,7 +224,7 @@ pub(crate) fn rate_limit_error_response(
 }
 
 pub struct AppState {
-    pub pool: Arc<ProjectPool>,
+    pub pool: Arc<TenantPool>,
     /// Admin SQLite for instance status (and, historically, worker registry).
     pub admin_conn: Arc<Mutex<Connection>>,
     pub alerts: crate::alerts::AlertStore,
@@ -247,7 +247,7 @@ pub struct AppState {
     /// existence check, which is faster and impossible to forget to set.
     /// --- DI pattern: production code calls `mark_init_complete()`; tests call `.store(true)` directly. ---
     pub init_complete: Arc<AtomicBool>,
-    /// Which cross-project query surface (if any) this node exposes.
+    /// Which cross-tenant query surface (if any) this node exposes.
     /// Currently inert — set from `SIGIRO_QUERY_SURFACE` at startup, read by
     /// a future feature (see `crate::config::QuerySurface`).
     pub query_surface: crate::config::QuerySurface,
@@ -464,7 +464,7 @@ pub fn resolve_listener_bind_ips(
 }
 
 pub async fn run_servers(
-    pool: Arc<ProjectPool>,
+    pool: Arc<TenantPool>,
     alerts: crate::alerts::AlertStore,
     router: Arc<MsgRouter>,
     data_dir: camino::Utf8PathBuf,
@@ -589,7 +589,7 @@ pub async fn run_servers(
     // lock — see crate::quack module docs). `query_surface == None` (the
     // default) changes nothing: no extension load, no server, no new port.
     //
-    // Serving over an S3-backed distributed "default" project (SIGIRO_CATALOG_URL
+    // Serving over an S3-backed distributed "default" tenant (SIGIRO_CATALOG_URL
     // set + SIGIRO_S3_BUCKET set) is supported here with NO extra guard: the
     // filesystem lockdown (`pool::lock_filesystem`) is what's skipped in that
     // mode, not the security boundary — `validate_read_only` (SELECT-only +
@@ -607,9 +607,9 @@ pub async fn run_servers(
 
         let quack_conn = pool.clone_connection("default").context(
             "failed to open the quack query-surface connection — run_serve should have \
-             pre-created the single-edge \"default\" project before run_servers starts \
+             pre-created the single-edge \"default\" tenant before run_servers starts \
              (see main.rs run_serve's quack pre-create, which fails loud on its own \
-             create_project error rather than deferring the failure to here)",
+             create_tenant error rather than deferring the failure to here)",
         )?;
         crate::quack::load_and_pin(&quack_conn)?;
         crate::quack::install_authorization_gate(&quack_conn)?;
@@ -1025,22 +1025,22 @@ async fn health(
         );
     }
 
-    // 2. DuckLake maintenance health — a project whose writer has failed
+    // 2. DuckLake maintenance health — a tenant whose writer has failed
     //    `SIGIRO_MAX_CHECKPOINT_FAILURES` consecutive checkpoints is shedding
     //    ingest, because nothing it accepts can be materialised into Parquet.
     //    Reported before init for the same reason as dead flushers: the
     //    condition means telemetry is being rejected right now.
-    let stalled = state.router.maintenance_health().stalled_projects();
+    let stalled = state.router.maintenance_health().stalled_tenants();
     if !stalled.is_empty() {
         tracing::warn!(
-            projects = ?stalled,
+            tenants = ?stalled,
             "health check: DuckLake maintenance stalled — ingest is being shed"
         );
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             axum::Json(HealthResponse::Degraded {
                 reason: format!(
-                    "DuckLake maintenance stalled for {} project(s): {}",
+                    "DuckLake maintenance stalled for {} tenant(s): {}",
                     stalled.len(),
                     stalled.join(", ")
                 ),
@@ -1052,7 +1052,7 @@ async fn health(
     //    `run_servers` once `axum_server` reports the HTTP listener bound.
     //    A probe that arrives between the socket accepting connections and
     //    the rest of startup finishing (quack extension load, the `default`
-    //    project's DuckLake attach — which can be S3-backed) gets 503, so
+    //    tenant's DuckLake attach — which can be S3-backed) gets 503, so
     //    k8s readiness and docker healthchecks do not route traffic to a
     //    server that is listening but not yet serving.
     if !state.init_complete.load(Ordering::Acquire) {
@@ -1077,7 +1077,7 @@ async fn healthz(
     health(HealthPath, State(state)).await
 }
 
-/// Execute SQL against the local DuckDB project connection. Returns the
+/// Execute SQL against the local DuckDB tenant connection. Returns the
 /// result rows plus whether the row cap (`SIGIRO_MAX_RESULT_ROWS`) truncated
 /// them.
 async fn execute_sql(
@@ -1086,11 +1086,11 @@ async fn execute_sql(
     sql: &str,
 ) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
     // Explicit DI boundary: the authenticated tenant identity selects the
-    // idempotent project setup operation. The pool itself keeps strict
-    // create/get APIs, while every process can recover its in-memory project
+    // idempotent tenant setup operation. The pool itself keeps strict
+    // create/get APIs, while every process can recover its in-memory tenant
     // entry after a restart or when a request lands on another Machine.
     let pool = Arc::clone(&state.pool);
-    let project_id = auth.as_ref().to_owned();
+    let tenant_id = auth.as_ref().to_owned();
     let sql_clone = sql.to_string();
     let timeout_secs = crate::config::query_timeout_secs()?;
     let max_rows = crate::config::max_result_rows()?;
@@ -1102,8 +1102,8 @@ async fn execute_sql(
         // keep it on the blocking worker with the query, never on Tokio's
         // async runtime thread.
         let readers = pool
-            .create_project(&project_id)
-            .with_context(|| format!("failed to initialize project {project_id}"))?;
+            .create_tenant(&tenant_id)
+            .with_context(|| format!("failed to initialize tenant {tenant_id}"))?;
         let conn = readers.get();
         // Sent before `prepare`/`query` so the timeout branch below can
         // interrupt this exact connection even if it never gets a chance to
@@ -1372,7 +1372,7 @@ async fn services_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<TenantId>,
 ) -> ApiResult<Json<ServicesResponse>> {
-    let prefix = ProjectPool::prefix();
+    let prefix = TenantPool::prefix();
     let sql = format!(
         "SELECT service_name, \
                 min(first_seen)::VARCHAR AS first_seen, \
@@ -1467,7 +1467,7 @@ async fn alerts_handler(
         .alerts
         .list(auth.as_ref(), query.status.as_deref())
         .map_err(|error| {
-            tracing::error!(project_id = auth.as_ref(), "alerts query failed: {error:#}");
+            tracing::error!(tenant_id = auth.as_ref(), "alerts query failed: {error:#}");
             internal_error("alerts query failed", "unable to read alert state")
         })?;
     Ok(Json(AlertsResponse { alerts }))
@@ -1542,7 +1542,7 @@ async fn anomalies_handler(
     Extension(auth): Extension<TenantId>,
     axum::extract::Query(q): axum::extract::Query<AnomaliesQuery>,
 ) -> ApiResult<Json<AnomaliesResponse>> {
-    let prefix = ProjectPool::prefix();
+    let prefix = TenantPool::prefix();
     let mut filters = vec!["1 = 1".to_string()];
     if let Some(service) = &q.service {
         filters.push(format!("service_name = '{}'", escape_sql_string(service)));
@@ -1637,7 +1637,7 @@ async fn trace_detail_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<TenantId>,
 ) -> ApiResult<Json<TraceDetailResponse>> {
-    let prefix = ProjectPool::prefix();
+    let prefix = TenantPool::prefix();
     let trace_id = _path.trace_id;
     let safe_trace_id = escape_sql_string(trace_id.as_ref());
 
@@ -1998,14 +1998,14 @@ async fn diagnose_handler(
     Valid(Json(req)): Valid<Json<diagnose::DiagnoseRequest>>,
 ) -> ApiResult<Json<diagnose::DiagnoseResponse>> {
     let data_dir = crate::data_dir().context_internal("Diagnose", "SIGIRO_DATA_DIR not set")?;
-    let project_data_path = if state.pool.storage_mode().is_distributed() {
+    let tenant_data_path = if state.pool.storage_mode().is_distributed() {
         crate::storage::tenant_data_dir(&data_dir, auth.as_ref())
             .context_internal("Diagnose", "invalid tenant id")?
     } else {
         data_dir.join(auth.as_ref())
     };
-    if !project_data_path.exists()
-        || project_data_path
+    if !tenant_data_path.exists()
+        || tenant_data_path
             .read_dir()
             .map(|mut i| i.next().is_none())
             .unwrap_or(true)
@@ -2013,19 +2013,19 @@ async fn diagnose_handler(
         return Err(axum_anyhow::not_found(
             "No Data Found",
             &format!(
-                "No data found for project {}. Please ingest data before calling diagnose.",
+                "No data found for tenant {}. Please ingest data before calling diagnose.",
                 auth
             ),
         ));
     }
     let pool = Arc::clone(&state.pool);
-    let project_id = auth.as_ref().to_owned();
+    let tenant_id = auth.as_ref().to_owned();
     let blocks = tokio::task::spawn_blocking(move || {
         let readers = pool
-            .create_project(&project_id)
-            .with_context(|| format!("failed to initialize project {project_id}"))?;
+            .create_tenant(&tenant_id)
+            .with_context(|| format!("failed to initialize tenant {tenant_id}"))?;
         let conn = readers.get();
-        diagnose::diagnose(&conn, &req, ProjectPool::prefix())
+        diagnose::diagnose(&conn, &req, TenantPool::prefix())
     })
     .await
     .map_err(|e| anyhow::anyhow!("diagnosis task failed: {e}"))

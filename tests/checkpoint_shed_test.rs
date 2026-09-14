@@ -20,7 +20,7 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use axum_test::TestServer;
 use sigiro::inserter::{DiskCapacityState, MaintenanceHealth, MsgRouter, RouterError};
-use sigiro::pool::ProjectPool;
+use sigiro::pool::TenantPool;
 use sigiro::types::IngestMsg;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -46,7 +46,7 @@ const TRACES_JSON: &str = r#"{
 fn router_with(maintenance: Arc<MaintenanceHealth>) -> (Arc<MsgRouter>, TempDir) {
     let tmp = TempDir::new().expect("temp dir");
     let data_dir = camino::Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-    let pool = Arc::new(ProjectPool::new(
+    let pool = Arc::new(TenantPool::new(
         data_dir,
         4,
         sigiro::storage::StorageMode::LocalFile,
@@ -117,7 +117,7 @@ async fn otlp_http_ingest_returns_507_when_checkpoints_stall() {
 }
 
 /// `MsgRouter::send` surfaces the typed error the gRPC path maps to
-/// `resource_exhausted`, carrying the project and the failure count.
+/// `resource_exhausted`, carrying the tenant and the failure count.
 #[tokio::test]
 async fn router_send_surfaces_typed_maintenance_stalled_error() {
     let maintenance = MaintenanceHealth::new(2);
@@ -128,7 +128,7 @@ async fn router_send_surfaces_typed_maintenance_stalled_error() {
     let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
     let err = router
         .send(IngestMsg::Traces {
-            project_id: "default".to_string(),
+            tenant_id: "default".to_string(),
             batch,
         })
         .await
@@ -136,10 +136,10 @@ async fn router_send_surfaces_typed_maintenance_stalled_error() {
 
     match err {
         RouterError::MaintenanceStalled {
-            ref project_id,
+            ref tenant_id,
             failures,
         } => {
-            assert_eq!(project_id, "default");
+            assert_eq!(tenant_id, "default");
             assert_eq!(failures, 2);
         }
         other => panic!("expected MaintenanceStalled, got {other:?}"),
@@ -157,10 +157,10 @@ async fn successful_checkpoint_reopens_ingest() {
     maintenance.record_checkpoint_failure("default");
     assert!(maintenance.is_stalled("default"));
 
-    // Recovery returns true only when it actually cleared a shedding project.
+    // Recovery returns true only when it actually cleared a shedding tenant.
     assert!(
         maintenance.record_checkpoint_success("default"),
-        "clearing a shedding project must report the recovery transition"
+        "clearing a shedding tenant must report the recovery transition"
     );
     assert!(!maintenance.is_stalled("default"));
     assert_eq!(maintenance.consecutive_failures("default"), 0);
@@ -179,9 +179,9 @@ async fn successful_checkpoint_reopens_ingest() {
     resp.assert_status(axum::http::StatusCode::OK);
 }
 
-/// Shedding is PER PROJECT: one wedged tenant must not reject another's ingest.
+/// Shedding is PER TENANT: one wedged tenant must not reject another's ingest.
 #[tokio::test]
-async fn stalled_project_does_not_shed_other_projects() {
+async fn stalled_tenant_does_not_shed_other_tenants() {
     let maintenance = MaintenanceHealth::new(2);
     let (router, _tmp) = router_with(Arc::clone(&maintenance));
 
@@ -192,17 +192,17 @@ async fn stalled_project_does_not_shed_other_projects() {
 
     let err = router
         .send(IngestMsg::Traces {
-            project_id: "wedged".to_string(),
+            tenant_id: "wedged".to_string(),
             batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
         })
         .await
-        .expect_err("the wedged project must be shed");
+        .expect_err("the wedged tenant must be shed");
     assert!(matches!(err, RouterError::MaintenanceStalled { .. }));
 
     assert_eq!(
-        maintenance.stalled_projects(),
+        maintenance.stalled_tenants(),
         vec!["wedged".to_string()],
-        "only the wedged project may be reported stalled"
+        "only the wedged tenant may be reported stalled"
     );
 }
 
@@ -219,13 +219,13 @@ async fn threshold_zero_counts_failures_without_shedding() {
     assert_eq!(maintenance.consecutive_failures("default"), 25);
     assert!(!maintenance.is_stalled("default"), "0 disables shedding");
     assert!(
-        maintenance.stalled_projects().is_empty(),
+        maintenance.stalled_tenants().is_empty(),
         "a disabled gate reports nothing as stalled"
     );
 
     let err = router
         .send(IngestMsg::Traces {
-            project_id: "default".to_string(),
+            tenant_id: "default".to_string(),
             batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
         })
         .await;

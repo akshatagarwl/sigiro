@@ -1236,7 +1236,7 @@ fn anomaly_pass_fails_loud_but_is_isolated_by_the_caller() {
     );
     // ...and the inserter's detection task catches exactly this Err and logs
     // it (spawn_anomaly_detection; persist errors are likewise caught in
-    // ProjectFlusher::persist_anomalies), so ingest/flush never see it.
+    // TenantFlusher::persist_anomalies), so ingest/flush never see it.
 }
 
 #[test]

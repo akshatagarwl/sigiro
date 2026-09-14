@@ -8,16 +8,16 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Per-project DuckDB connection pool.
-/// Each project gets its own DuckLake catalog + Parquet directory for data isolation.
+/// Per-tenant DuckDB connection pool.
+/// Each tenant gets its own DuckLake catalog + Parquet directory for data isolation.
 /// The DuckDB connection is in-memory (just a coordinator) — all data lives in
-/// the `.ducklake` catalog file + Parquet files under the project directory.
-pub struct ProjectPool {
+/// the `.ducklake` catalog file + Parquet files under the tenant directory.
+pub struct TenantPool {
     pub connections: DashMap<String, PoolEntry>,
     data_dir: Utf8PathBuf,
     max_connections: usize,
     /// Storage mode, resolved ONCE at boot and threaded in here so the pool's
-    /// per-project dir selection and DuckLake attach never re-derive it from
+    /// per-tenant dir selection and DuckLake attach never re-derive it from
     /// `storage::load_config()`.
     storage_mode: crate::storage::StorageMode,
 }
@@ -120,12 +120,12 @@ impl Drop for ReaderConnection {
     }
 }
 
-struct OpenedProject {
+struct OpenedTenant {
     writer: Connection,
     readers: ReaderPool,
 }
 
-impl ProjectPool {
+impl TenantPool {
     pub fn new(
         data_dir: Utf8PathBuf,
         max_connections: usize,
@@ -149,18 +149,18 @@ impl ProjectPool {
         crate::storage::table_prefix()
     }
 
-    /// Create a connection for a project (idempotent — setup operation).
+    /// Create a connection for a tenant (idempotent — setup operation).
     ///
-    /// Used for project initialization. If two callers race, the loser re-enters
+    /// Used for tenant initialization. If two callers race, the loser re-enters
     /// and finds the winner's connection (no duplicate created).
     ///
     /// Thread-safe: uses DashMap entry API to prevent concurrent callers from
-    /// creating duplicate connections for the same project.
-    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
-    pub fn create_project(&self, project_id: &str) -> Result<ReaderPool> {
+    /// creating duplicate connections for the same tenant.
+    #[tracing::instrument(skip(self), fields(tenant_id = %tenant_id))]
+    pub fn create_tenant(&self, tenant_id: &str) -> Result<ReaderPool> {
         use dashmap::mapref::entry::Entry;
 
-        match self.connections.entry(project_id.to_string()) {
+        match self.connections.entry(tenant_id.to_string()) {
             Entry::Occupied(ref mut entry) => {
                 entry.get_mut().last_access = Instant::now();
                 Ok(entry.get().readers.clone())
@@ -174,25 +174,25 @@ impl ProjectPool {
                     self.evict_oldest();
                 }
 
-                let project_dir = if self.storage_mode.is_distributed() {
-                    crate::storage::tenant_data_dir(&self.data_dir, project_id)?
+                let tenant_dir = if self.storage_mode.is_distributed() {
+                    crate::storage::tenant_data_dir(&self.data_dir, tenant_id)?
                 } else {
-                    self.data_dir.join(project_id)
+                    self.data_dir.join(tenant_id)
                 };
                 let opened = self
-                    .open_project_connections(project_id, &project_dir)
+                    .open_tenant_connections(tenant_id, &tenant_dir)
                     .with_context(|| {
-                        format!("failed to open DuckDB connection for project {project_id}")
+                        format!("failed to open DuckDB connection for tenant {tenant_id}")
                     })?;
 
                 // Re-enter via entry API — another task may have inserted while we
                 // were in open_connection (which downloads extensions on cold start).
-                match self.connections.entry(project_id.to_string()) {
+                match self.connections.entry(tenant_id.to_string()) {
                     Entry::Occupied(ref mut entry) => {
                         // Another task won the race — use their connection, discard ours.
                         // Our connection's Drop will clean up.
                         entry.get_mut().last_access = Instant::now();
-                        tracing::info!(project_id, "reused DuckDB connection (race loser)");
+                        tracing::info!(tenant_id, "reused DuckDB connection (race loser)");
                         Ok(entry.get().readers.clone())
                     }
                     Entry::Vacant(entry) => {
@@ -202,7 +202,7 @@ impl ProjectPool {
                             readers,
                             last_access: Instant::now(),
                         });
-                        tracing::info!(project_id, "opened DuckDB connection (DuckLake)");
+                        tracing::info!(tenant_id, "opened DuckDB connection (DuckLake)");
                         Ok(opened.readers)
                     }
                 }
@@ -210,46 +210,46 @@ impl ProjectPool {
         }
     }
 
-    /// Get the connection for a project (strict — no auto-create).
+    /// Get the connection for a tenant (strict — no auto-create).
     ///
-    /// Returns only an existing connection. Fails if the project was not created.
-    /// Use `create_project()` first to initialize a project.
-    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
-    pub fn get_project(&self, project_id: &str) -> Result<ReaderPool> {
-        if let Some(mut entry) = self.connections.get_mut(project_id) {
+    /// Returns only an existing connection. Fails if the tenant was not created.
+    /// Use `create_tenant()` first to initialize a tenant.
+    #[tracing::instrument(skip(self), fields(tenant_id = %tenant_id))]
+    pub fn get_tenant(&self, tenant_id: &str) -> Result<ReaderPool> {
+        if let Some(mut entry) = self.connections.get_mut(tenant_id) {
             entry.last_access = Instant::now();
             Ok(entry.readers.clone())
         } else {
             Err(anyhow::anyhow!(
-                "connection not found for project {project_id} — \
-                 call create_project() first"
+                "connection not found for tenant {tenant_id} — \
+                 call create_tenant() first"
             ))
         }
     }
 
-    /// Transfer the single writer connection to the per-project flusher.
-    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
-    pub fn take_writer(&self, project_id: &str) -> Result<Connection> {
-        let entry = self.connections.get(project_id).ok_or_else(|| {
+    /// Transfer the single writer connection to the per-tenant flusher.
+    #[tracing::instrument(skip(self), fields(tenant_id = %tenant_id))]
+    pub fn take_writer(&self, tenant_id: &str) -> Result<Connection> {
+        let entry = self.connections.get(tenant_id).ok_or_else(|| {
             anyhow::anyhow!(
-                "connection not found for project {project_id} — \
-                 call create_project() first"
+                "connection not found for tenant {tenant_id} — \
+                 call create_tenant() first"
             )
         })?;
         let mut writer = entry.writer.lock();
         writer.take().ok_or_else(|| {
-            anyhow::anyhow!("writer already owned by flusher for project {project_id}")
+            anyhow::anyhow!("writer already owned by flusher for tenant {tenant_id}")
         })
     }
 
     /// Return the writer connection after a flusher exits cleanly.
-    #[tracing::instrument(skip(self, writer), fields(project_id = %project_id))]
-    pub fn return_writer(&self, project_id: &str, writer: Connection) {
-        if let Some(entry) = self.connections.get(project_id) {
+    #[tracing::instrument(skip(self, writer), fields(tenant_id = %tenant_id))]
+    pub fn return_writer(&self, tenant_id: &str, writer: Connection) {
+        if let Some(entry) = self.connections.get(tenant_id) {
             let mut slot = entry.writer.lock();
             if slot.is_some() {
                 tracing::warn!(
-                    project_id,
+                    tenant_id,
                     "writer returned while idle writer already exists"
                 );
                 return;
@@ -258,21 +258,21 @@ impl ProjectPool {
         } else {
             if let Err(e) = writer.execute_batch("CHECKPOINT lake;") {
                 tracing::warn!(
-                    project_id,
-                    "DuckDB CHECKPOINT failed for removed project: {e}"
+                    tenant_id,
+                    "DuckDB CHECKPOINT failed for removed tenant: {e}"
                 );
             }
-            tracing::debug!(project_id, "dropped writer for removed project");
+            tracing::debug!(tenant_id, "dropped writer for removed tenant");
         }
     }
 
     /// Clone a fresh connection sharing the SAME in-memory DuckDB instance
-    /// (and therefore the same attached DuckLake catalog) as `project_id`'s
+    /// (and therefore the same attached DuckLake catalog) as `tenant_id`'s
     /// writer/readers. Used by the quack query-surface server, which needs
     /// one long-lived dedicated connection for the life of the process —
     /// not one borrowed from, and competing with, the bounded reader pool.
-    pub(crate) fn clone_connection(&self, project_id: &str) -> Result<Connection> {
-        let reader = self.get_project(project_id)?.get();
+    pub(crate) fn clone_connection(&self, tenant_id: &str) -> Result<Connection> {
+        let reader = self.get_tenant(tenant_id)?.get();
         let conn = reader
             .try_clone()
             .context("failed to clone DuckDB connection for the quack query surface")?;
@@ -281,39 +281,39 @@ impl ProjectPool {
         Ok(conn)
     }
 
-    pub(crate) fn project_ids(&self) -> Vec<String> {
+    pub(crate) fn tenant_ids(&self) -> Vec<String> {
         self.connections
             .iter()
             .map(|entry| entry.key().clone())
             .collect()
     }
 
-    /// Every project that has data and therefore needs periodic maintenance,
+    /// Every tenant that has data and therefore needs periodic maintenance,
     /// whether or not it currently holds a pooled connection.
     ///
-    /// [`Self::project_ids`] returns only the live connection map, which is the
+    /// [`Self::tenant_ids`] returns only the live connection map, which is the
     /// wrong set for anything that must not miss a tenant. `run_evictor` drops
-    /// any project idle for 300s while retention runs hourly, so a low-traffic
+    /// any tenant idle for 300s while retention runs hourly, so a low-traffic
     /// tenant is almost never pooled at the moment retention fires. Measured on
     /// the hosted box on 2026-08-31: one tenant had accumulated 3,227 snapshots
     /// and 3,030 data files spanning nine days under a seven-day policy, and the
     /// container log showed a single retention run, for the one tenant that
     /// ingests continuously and is therefore always pooled.
     ///
-    /// The durable source is the per-project directory on disk, which both
+    /// The durable source is the per-tenant directory on disk, which both
     /// storage modes create and neither removes: `<data_dir>/tenants/<id>` when
     /// distributed, `<data_dir>/<id>` otherwise. Verified against production,
     /// where the hosted volume holds a `tenants/` entry per tenant even though
     /// its Parquet lives in S3.
     ///
-    /// Unioned with the live map so a project created in this process is covered
+    /// Unioned with the live map so a tenant created in this process is covered
     /// before anything has been flushed to disk for it.
     ///
     /// A directory that cannot be read is skipped rather than fatal: retention
-    /// covering fewer projects is bad, and retention failing to start at all is
+    /// covering fewer tenants is bad, and retention failing to start at all is
     /// worse.
-    pub fn known_project_ids(&self) -> Vec<String> {
-        let mut ids = self.project_ids();
+    pub fn known_tenant_ids(&self) -> Vec<String> {
+        let mut ids = self.tenant_ids();
         let root = if self.storage_mode.is_distributed() {
             self.data_dir.join("tenants")
         } else {
@@ -330,7 +330,7 @@ impl ProjectPool {
                     };
                     // `sanitize_tenant_id` owns the definition of a legal tenant
                     // id, including the reserved names (`extensions`, `tenants`)
-                    // that sit beside per-project directories in local mode.
+                    // that sit beside per-tenant directories in local mode.
                     // Reusing it keeps this from drifting into a second, weaker
                     // copy of that rule.
                     if crate::storage::sanitize_tenant_id(&name).is_err() {
@@ -344,27 +344,27 @@ impl ProjectPool {
             Err(error) => {
                 tracing::warn!(
                     dir = %root,
-                    "could not enumerate project directories; maintenance will \
-                     cover only the projects currently pooled: {error}"
+                    "could not enumerate tenant directories; maintenance will \
+                     cover only the tenants currently pooled: {error}"
                 );
             }
         }
         ids
     }
 
-    /// Refresh last_access for an existing project entry so it is not evicted as idle.
-    /// Callers (e.g. long-running per-project flusher tasks) should call this periodically
+    /// Refresh last_access for an existing tenant entry so it is not evicted as idle.
+    /// Callers (e.g. long-running per-tenant flusher tasks) should call this periodically
     /// to prevent the idle evictor from removing their connection while they are alive.
-    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
-    pub(crate) fn touch_project(&self, project_id: &str) {
-        if let Some(mut entry) = self.connections.get_mut(project_id) {
+    #[tracing::instrument(skip(self), fields(tenant_id = %tenant_id))]
+    pub(crate) fn touch_tenant(&self, tenant_id: &str) {
+        if let Some(mut entry) = self.connections.get_mut(tenant_id) {
             entry.last_access = Instant::now();
         }
     }
 
     /// Shared setup for a fresh in-memory DuckDB connection: set the
     /// extension cache, cap memory/threads, attach DuckLake (PostgreSQL or
-    /// local file), and create the sigiro tables. Used by per-project
+    /// local file), and create the sigiro tables. Used by per-tenant
     /// connections.
     ///
     /// The attach is retried up to `ATTACH_ATTEMPTS` times with
@@ -377,13 +377,13 @@ impl ProjectPool {
     fn attach_ducklake(
         &self,
         conn: &Connection,
-        project_id: &str,
-        project_dir: &camino::Utf8Path,
+        tenant_id: &str,
+        tenant_dir: &camino::Utf8Path,
     ) -> Result<()> {
         let ext_dir = crate::storage::resolve_extension_dir(&self.data_dir);
         std::fs::create_dir_all(&ext_dir)
             .with_context(|| format!("failed to create DuckDB extension directory: {ext_dir}"))?;
-        let temp_dir = project_dir.join(".tmp");
+        let temp_dir = tenant_dir.join(".tmp");
         std::fs::create_dir_all(&temp_dir)
             .with_context(|| format!("failed to create DuckDB temp directory: {temp_dir}"))?;
         let temp_dir_sql = temp_dir.as_str().replace('\'', "''");
@@ -405,9 +405,9 @@ impl ProjectPool {
         for attempt in 1..=ATTACH_ATTEMPTS {
             let attach_result = match self.storage_mode.distributed_config() {
                 Some(config) => {
-                    crate::storage::init_distributed(conn, config, project_dir, project_id)
+                    crate::storage::init_distributed(conn, config, tenant_dir, tenant_id)
                 }
-                None => crate::storage::init_default(conn, project_dir),
+                None => crate::storage::init_default(conn, tenant_dir),
             };
             match attach_result {
                 Ok(()) => {
@@ -599,16 +599,16 @@ impl ProjectPool {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, project_dir), fields(project_dir = %project_dir))]
-    fn open_project_connections(
+    #[tracing::instrument(skip(self, tenant_dir), fields(tenant_dir = %tenant_dir))]
+    fn open_tenant_connections(
         &self,
-        project_id: &str,
-        project_dir: &camino::Utf8Path,
-    ) -> Result<OpenedProject> {
+        tenant_id: &str,
+        tenant_dir: &camino::Utf8Path,
+    ) -> Result<OpenedTenant> {
         let base = Connection::open_in_memory()
             .with_context(|| "failed to open in-memory DuckDB".to_string())?;
-        tracing::info!("DuckDB: loading extensions during project initialization");
-        self.attach_ducklake(&base, project_id, project_dir)?;
+        tracing::info!("DuckDB: loading extensions during tenant initialization");
+        self.attach_ducklake(&base, tenant_id, tenant_dir)?;
         // Ensure DuckLake tables are discoverable without schema prefix.
         base.execute_batch("USE lake;")
             .context("failed to set DuckDB default schema")?;
@@ -620,7 +620,7 @@ impl ProjectPool {
             .context("failed to set writer default schema")?;
         let readers = ReaderPool::new(&base, crate::config::duckdb_threads()?)
             .context("failed to create DuckDB reader pool")?;
-        Ok(OpenedProject { writer, readers })
+        Ok(OpenedTenant { writer, readers })
     }
 
     /// Evict connections idle longer than the given duration.
@@ -656,14 +656,14 @@ impl ProjectPool {
             if let Some((_, entry)) = self.connections.remove(&key) {
                 entry.shutdown();
             }
-            tracing::info!(project_id = %key, "evicted oldest DuckDB connection");
+            tracing::info!(tenant_id = %key, "evicted oldest DuckDB connection");
         }
     }
 
-    /// Remove a project's connection (for account deletion).
-    #[tracing::instrument(skip(self), fields(project_id = %project_id))]
-    pub fn remove(&self, project_id: &str) {
-        if let Some((_, entry)) = self.connections.remove(project_id) {
+    /// Remove a tenant's connection (for account deletion).
+    #[tracing::instrument(skip(self), fields(tenant_id = %tenant_id))]
+    pub fn remove(&self, tenant_id: &str) {
+        if let Some((_, entry)) = self.connections.remove(tenant_id) {
             entry.shutdown();
         }
     }
@@ -752,14 +752,14 @@ mod tests {
     /// Every extension `lock_filesystem` preloads is satisfiable on THIS build,
     /// either statically linked or present as a cached file.
     ///
-    /// Regression guard: production project initialization must install any
+    /// Regression guard: production tenant initialization must install any
     /// lockdown extensions that are not statically linked before the lockdown.
     #[test]
-    fn project_initialization_loads_extensions_before_lockdown() {
+    fn tenant_initialization_loads_extensions_before_lockdown() {
         let dir = tempfile::tempdir().unwrap();
         let data_dir = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
-        let pool = ProjectPool::new(data_dir, 10, crate::storage::StorageMode::LocalFile);
-        pool.create_project("default")
+        let pool = TenantPool::new(data_dir, 10, crate::storage::StorageMode::LocalFile);
+        pool.create_tenant("default")
             .expect("production initialization must load extensions before lockdown");
     }
 
@@ -773,7 +773,7 @@ mod tests {
         let ext_dir = data_dir.join("extensions");
         std::fs::create_dir_all(&ext_dir).unwrap();
 
-        let pool = ProjectPool::new(data_dir, 10, crate::storage::StorageMode::LocalFile);
+        let pool = TenantPool::new(data_dir, 10, crate::storage::StorageMode::LocalFile);
         let conn = Connection::open_in_memory().unwrap();
         pool.lock_filesystem(&conn, &ext_dir).unwrap();
 

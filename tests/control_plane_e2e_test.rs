@@ -512,7 +512,7 @@ fn control_plane_lifecycle() {
         "idempotent create must leave exactly one tenant row"
     );
     // Surviving (unrevoked) key still authenticates + prior data persisted.
-    // Projects are materialized lazily on ingest, so a fresh ingest with the
+    // Tenants are materialized lazily on ingest, so a fresh ingest with the
     // surviving key re-attaches tenant acme's DuckLake catalog in this new
     // process; once attached, the spans written BEFORE the restart (PG catalog
     // + local data are the source of truth) are queryable again.
@@ -547,15 +547,15 @@ fn control_plane_lifecycle() {
     let local_dir = tempfile::tempdir().expect("temp local data dir");
     let local = Edge::spawn_local(local_dir.path());
     let svc_local = format!("cp-local-{}", std::process::id());
-    // Open auth: no Bearer key needed; project resolves to "default".
+    // Open auth: no Bearer key needed; tenant resolves to "default".
     local.ingest_spans("", &svc_local, SPANS);
     let local_seen = local.wait_for_count("", &svc_local, SPANS as i64);
     assert_eq!(
         local_seen, SPANS as i64,
-        "zero-config LOCAL startup must create + query the 'default' project"
+        "zero-config LOCAL startup must create + query the 'default' tenant"
     );
     local.shutdown().expect("local edge shutdown");
-    println!("  zero-config LOCAL 'default' project ingest+query OK ({local_seen} spans)");
+    println!("  zero-config LOCAL 'default' tenant ingest+query OK ({local_seen} spans)");
 
     println!("control-plane lifecycle E2E passed");
 }

@@ -1,6 +1,6 @@
-//! End-to-end test for the S3-backed DISTRIBUTED "default" project quack
+//! End-to-end test for the S3-backed DISTRIBUTED "default" tenant quack
 //! query surface (#12b — GPT-5.6's "Option A": reuse the existing
-//! distributed ATTACH path for a single project literally named `default`,
+//! distributed ATTACH path for a single tenant literally named `default`,
 //! no new storage mode). Requires Docker (Postgres catalog + RustFS S3 — see
 //! `docker-compose.dev.yml`).
 //!
@@ -18,7 +18,7 @@
 //! `quack_query(...)` client, readiness poll, "Authorization failed"
 //! assertions, concurrent ingest, SIGTERM shutdown) with
 //! `SIGIRO_CATALOG_URL`/`SIGIRO_S3_*` set, so `"default"` is a DISTRIBUTED
-//! project backed by S3 cold storage rather than a local DuckDB file.
+//! tenant backed by S3 cold storage rather than a local DuckDB file.
 //!
 //! `#[ignore]`d by default (needs Docker). Run via `mise run check-s3-e2e`, or
 //! directly:
@@ -73,10 +73,10 @@ fn test_extension_dir() -> String {
 }
 
 /// A live `sigiro serve` child process with `SIGIRO_CATALOG_URL` +
-/// `SIGIRO_S3_*` set, so the pre-created `"default"` project (see
+/// `SIGIRO_S3_*` set, so the pre-created `"default"` tenant (see
 /// `main.rs run_serve`, which now ALWAYS pre-creates `"default"` when quack
 /// is enabled, regardless of storage mode) is a distributed, S3-backed
-/// project rather than a local DuckDB file.
+/// tenant rather than a local DuckDB file.
 struct S3QuackEdge {
     child: Child,
     _data_dir: tempfile::TempDir,
@@ -154,7 +154,7 @@ impl S3QuackEdge {
             }
             assert!(
                 Instant::now() < deadline,
-                "sigiro serve (S3-backed default project) did not report /health ready within 90s"
+                "sigiro serve (S3-backed default tenant) did not report /health ready within 90s"
             );
             std::thread::sleep(Duration::from_millis(200));
         }
@@ -211,7 +211,7 @@ impl S3QuackEdge {
     }
 
     /// Poll `count(*)` for `service_name` until it reaches `expected` or a
-    /// 20s deadline passes (this test pins the per-project flusher to 1s in
+    /// 20s deadline passes (this test pins the per-tenant flusher to 1s in
     /// `spawn`; the flush now does an explicit COMMIT, so data should surface
     /// within a flush cycle plus margin — no need to wait past the 30s
     /// CHECKPOINT timer).
@@ -369,7 +369,7 @@ fn security_assertions(server: &S3QuackEdge, controlled_url: &str) {
         assert!(
             result.is_err(),
             "SECURITY FAILURE: {label} ({sql:?}) was NOT rejected by the quack authorization gate \
-             over the S3-backed distributed \"default\" project"
+             over the S3-backed distributed \"default\" tenant"
         );
         let message = result.unwrap_err();
         assert!(
@@ -381,7 +381,7 @@ fn security_assertions(server: &S3QuackEdge, controlled_url: &str) {
     }
 }
 
-/// Full lifecycle for the S3-backed distributed "default" project. Returns
+/// Full lifecycle for the S3-backed distributed "default" tenant. Returns
 /// `Err` describing the first failure so `main` can print a clean summary.
 fn run() -> Result<(), String> {
     // quack requires a >= 4 character token.
@@ -395,7 +395,7 @@ fn run() -> Result<(), String> {
     let controlled = ControlledListener::bind();
 
     // 2. Spawn the edge — SIGIRO_CATALOG_URL + SIGIRO_S3_* set, so "default"
-    //    is pre-created by run_serve as a DISTRIBUTED, S3-backed project.
+    //    is pre-created by run_serve as a DISTRIBUTED, S3-backed tenant.
     let server = S3QuackEdge::spawn(&token);
 
     // 3. Ingest telemetry over real OTLP/HTTP, read it back over quack.
@@ -408,12 +408,12 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("cleanup after count mismatch also failed: {e}"))
             .and(Err(format!(
                 "expected {INITIAL_SPANS} spans visible via quack over the S3-backed default \
-                 project after ingest, saw {seen}"
+                 tenant after ingest, saw {seen}"
             )));
     }
     println!(
         "  [SELECT] {seen} rows visible via quack over the S3-backed distributed \"default\" \
-         project — OTLP ingest + quack read both work"
+         tenant — OTLP ingest + quack read both work"
     );
 
     // 4. Security assertions: every read-side attack must be rejected by the
@@ -446,7 +446,7 @@ fn run() -> Result<(), String> {
     println!("  [count unchanged] {after_attacks} rows after all attack attempts");
 
     // 7. Concurrent ingest works while quack concurrently serves reads, over
-    //    the S3-backed distributed project.
+    //    the S3-backed distributed tenant.
     const CONCURRENT_SPANS: usize = 20;
     let concurrent_service = format!("{service_name}-concurrent");
     let query_errors = std::thread::scope(|scope| {
@@ -521,7 +521,7 @@ fn run() -> Result<(), String> {
     //    (external Docker services) with a BRAND NEW local DATA_DIR (a fresh
     //    tempdir — the old one is gone). If the data survives, it proves the
     //    S3/Postgres pair (not the local disk) is the actual source of truth
-    //    for the distributed "default" project.
+    //    for the distributed "default" tenant.
     let server2 = S3QuackEdge::spawn(&token);
     let after_restart = server2.quack_select_i64(&format!(
         "SELECT count(*) FROM lake.sigiro_spans WHERE service_name = '{service_name}'"
@@ -544,12 +544,12 @@ fn run() -> Result<(), String> {
     restart_result
 }
 
-/// Single-pass S3-backed distributed "default" project quack E2E test.
+/// Single-pass S3-backed distributed "default" tenant quack E2E test.
 /// `#[ignore]`d — needs Docker (Postgres + RustFS). Run via
 /// `mise run check-s3-e2e` or:
 /// `cargo test --test quack_s3_query_surface_test -- --ignored --nocapture`.
 #[test]
 #[ignore = "needs Docker (Postgres catalog + RustFS S3) — run via `mise run check-s3-e2e`"]
 fn quack_s3_query_surface_single_iteration() {
-    run().expect("S3-backed distributed \"default\" project quack E2E iteration failed");
+    run().expect("S3-backed distributed \"default\" tenant quack E2E iteration failed");
 }

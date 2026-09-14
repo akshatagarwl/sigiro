@@ -219,7 +219,7 @@ scripts/run-with-duckdb-static.sh mbx run --release --bin sigiro
 """
 
 [tasks.check-s3-e2e]
-description = 'S3-backed distributed "default" project quack E2E (needs Docker: Postgres + RustFS).'
+description = 'S3-backed distributed "default" tenant quack E2E (needs Docker: Postgres + RustFS).'
 run = """
 #!/usr/bin/env bash
 set -euo pipefail

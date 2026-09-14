@@ -2,7 +2,7 @@
 //! over the DuckDB `quack` client-server protocol, in-process, on a
 //! connection cloned from the same in-memory DuckDB instance ingest writes
 //! to (a DuckDB-file catalog is one-writer-XOR-many-readers, so a separate
-//! process cannot share the lock — see `pool::ProjectPool::clone_connection`).
+//! process cannot share the lock — see `pool::TenantPool::clone_connection`).
 //!
 //! Two independent guards, both required:
 //! - [`load_and_pin`]: refuses to serve an unpinned/unexpected quack build.

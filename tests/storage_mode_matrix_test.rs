@@ -18,7 +18,7 @@
 //!     `quack_s3_query_surface_test.rs`.
 //!
 //! All three modes enable the `quack` query surface over the pre-created
-//! `default` project (the ONE ingest+read path that stays on static/open auth
+//! `default` tenant (the ONE ingest+read path that stays on static/open auth
 //! even against a distributed catalog — see `auth::AuthMode::from_runtime_config`),
 //! so the read side is identical across modes and the only variable is storage.
 //!

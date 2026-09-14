@@ -13,14 +13,14 @@ const EXPECTED_DUCKLAKE_VERSION: &str = "eb7b95df82";
 
 /// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
 /// config). Tables accessible as `lake.sigiro_*`.
-/// Catalog stored in `project_dir/catalog.ducklake` (a DuckDB file catalog, NOT
+/// Catalog stored in `tenant_dir/catalog.ducklake` (a DuckDB file catalog, NOT
 /// SQLite — see the ATTACH below for why).
-/// Parquet stored in `project_dir/catalog.ducklake.files/` (auto-created by DuckLake).
-#[instrument(skip(conn), fields(dir = %project_dir))]
-pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
-    let project_dir_str = project_dir.as_str();
-    std::fs::create_dir_all(project_dir)
-        .with_context(|| format!("failed to create project directory: {project_dir}",))?;
+/// Parquet stored in `tenant_dir/catalog.ducklake.files/` (auto-created by DuckLake).
+#[instrument(skip(conn), fields(dir = %tenant_dir))]
+pub fn init_default(conn: &Connection, tenant_dir: &Utf8Path) -> Result<()> {
+    let tenant_dir_str = tenant_dir.as_str();
+    std::fs::create_dir_all(tenant_dir)
+        .with_context(|| format!("failed to create tenant directory: {tenant_dir}",))?;
 
     // Load the ONLY extension this mode needs: ducklake. The catalog is a
     // DuckDB file (see the ATTACH below), so the sqlite extension — needed only
@@ -38,7 +38,7 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     // Uses catalog.ducklake (DuckDB native catalog) instead of SQLite
     // because the appender API is tested and verified to work with
     // DuckDB file catalogs (see tests/ducklake_appender_test.rs).
-    let attach_sql = format!("ATTACH 'ducklake:{project_dir_str}/catalog.ducklake' AS lake");
+    let attach_sql = format!("ATTACH 'ducklake:{tenant_dir_str}/catalog.ducklake' AS lake");
     conn.execute_batch(&attach_sql)
         .context("failed to attach DuckLake catalog")?;
     tracing::info!("DuckLake attached — catalog: DuckDB file, data: local Parquet");
@@ -84,11 +84,11 @@ impl std::error::Error for AttachError {}
 
 /// Initialize DuckLake with PostgreSQL catalog + optional S3 data files.
 /// Multi-writer safe — multiple sigiro instances can attach to the same catalog.
-#[instrument(skip(conn), fields(dir = %project_dir))]
+#[instrument(skip(conn), fields(dir = %tenant_dir))]
 pub(crate) fn init_distributed(
     conn: &Connection,
     config: &StorageConfig,
-    project_dir: &Utf8Path,
+    tenant_dir: &Utf8Path,
     tenant_id: &str,
 ) -> Result<()> {
     if config.uses_s3() {
@@ -100,7 +100,7 @@ pub(crate) fn init_distributed(
 
     let tenant_id = TenantId::try_new(tenant_id.to_owned())
         .map_err(|e| anyhow::anyhow!("invalid tenant id: {e}"))?;
-    let attach = distributed_attach_sql(config, project_dir, tenant_id.as_ref())?;
+    let attach = distributed_attach_sql(config, tenant_dir, tenant_id.as_ref())?;
 
     if let Some(secret_sql) = &attach.secret_sql {
         // Generic message: the DuckDB error could echo the CREATE SECRET SQL
@@ -334,7 +334,7 @@ impl S3Config {
 /// sigiro is a single binary with a dual-mode storage contract along ONE
 /// coherent config axis:
 /// - **local file** (zero-config default): a DuckDB-native `catalog.ducklake`
-///   file catalog + local Parquet, one per project dir. No external services.
+///   file catalog + local Parquet, one per tenant dir. No external services.
 /// - **distributed/hosted**: a shared PostgreSQL catalog (multi-writer safe,
 ///   per-tenant metadata schemas) with data files either on local disk or in
 ///   S3/R2.
@@ -414,10 +414,10 @@ impl std::fmt::Debug for DistributedAttachSql {
 }
 
 /// `"default"` is a valid tenant id — it is NOT reserved. In distributed mode
-/// every tenant's project dir lives under `data_dir/tenants/<id>` (see
+/// every tenant's data directory lives under `data_dir/tenants/<id>` (see
 /// [`tenant_data_dir`]), so a tenant literally named `default` gets
 /// `data_dir/tenants/default`, never `data_dir/default` (the LOCAL-mode
-/// default project dir, a completely different code path/config). Its
+/// default tenant data directory, a completely different code path/config). Its
 /// metadata schema (`tenant_default`) and S3 data prefix (`default/`) are
 /// likewise namespaced by the same `tenant_` / bucket-prefix scheme every
 /// other tenant gets — nothing about the name `default` collides with
@@ -435,7 +435,7 @@ pub fn tenant_metadata_schema(tenant_id: &str) -> Result<String> {
 /// Per-tenant data directory in distributed mode: `<data_dir>/tenants/<tenant_id>`.
 /// Nesting under `tenants/` (rather than `<data_dir>/<tenant_id>` directly) keeps
 /// per-tenant dirs from ever colliding with sibling top-level dirs (the default
-/// project's `default/`, the shared `extensions/` dir). Shared by `ProjectPool`
+/// tenant's `default/`, the shared `extensions/` dir). Shared by `TenantPool`
 /// (the actual per-tenant connection) and the diagnose handler's data-existence
 /// check so the two can never disagree on layout.
 pub fn tenant_data_dir(data_dir: &Utf8Path, tenant_id: &str) -> Result<camino::Utf8PathBuf> {
@@ -445,7 +445,7 @@ pub fn tenant_data_dir(data_dir: &Utf8Path, tenant_id: &str) -> Result<camino::U
 
 pub fn distributed_attach_sql(
     config: &StorageConfig,
-    project_dir: &Utf8Path,
+    tenant_dir: &Utf8Path,
     tenant_id: &str,
 ) -> Result<DistributedAttachSql> {
     let tenant_id = TenantId::try_new(tenant_id.to_owned())
@@ -457,10 +457,10 @@ pub fn distributed_attach_sql(
 
     let (data_path, secret_sql, s3_scope) = match &config.data {
         DataLocation::LocalFilesystem => {
-            std::fs::create_dir_all(project_dir).with_context(|| {
-                format!("failed to create project directory for local data: {project_dir}",)
+            std::fs::create_dir_all(tenant_dir).with_context(|| {
+                format!("failed to create tenant directory for local data: {tenant_dir}",)
             })?;
-            (project_dir.as_str().to_string(), None, None)
+            (tenant_dir.as_str().to_string(), None, None)
         }
         DataLocation::S3(s3) => {
             let data_path = format!("s3://{}/{}/", s3.bucket, tenant_id.as_ref());

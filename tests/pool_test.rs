@@ -4,12 +4,12 @@
 // every reader goes through typed-env; a test-only knob routed through
 // typed-env would add a production config entry production never reads.
 
-use sigiro::pool::ProjectPool;
+use sigiro::pool::TenantPool;
 use std::sync::Once;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-fn test_pool(dir: &std::path::Path) -> ProjectPool {
+fn test_pool(dir: &std::path::Path) -> TenantPool {
     test_pool_with_max(dir, 10)
 }
 
@@ -21,7 +21,7 @@ fn test_extension_dir() -> String {
     })
 }
 
-fn test_pool_with_max(dir: &std::path::Path, max_connections: usize) -> ProjectPool {
+fn test_pool_with_max(dir: &std::path::Path, max_connections: usize) -> TenantPool {
     static EXTENSION_ENV: Once = Once::new();
     EXTENSION_ENV.call_once(|| {
         // SAFETY: all tests in this binary use the same read-only extension cache.
@@ -29,7 +29,7 @@ fn test_pool_with_max(dir: &std::path::Path, max_connections: usize) -> ProjectP
             std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
         }
     });
-    ProjectPool::new(
+    TenantPool::new(
         camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
         max_connections,
         sigiro::storage::StorageMode::LocalFile,
@@ -37,11 +37,11 @@ fn test_pool_with_max(dir: &std::path::Path, max_connections: usize) -> ProjectP
 }
 
 #[test]
-fn create_project_opens_connection() {
+fn create_tenant_opens_connection() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
 
-    let readers = pool.create_project("proj_a").unwrap();
+    let readers = pool.create_tenant("proj_a").unwrap();
     assert_eq!(pool.connections.len(), 1);
 
     // Verify tables were created (now in lake.* schema)
@@ -54,10 +54,10 @@ fn create_project_opens_connection() {
 }
 
 #[test]
-fn create_project_persists_safe_ducklake_policy() {
+fn create_tenant_persists_safe_ducklake_policy() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
-    let readers = pool.create_project("proj_a").unwrap();
+    let readers = pool.create_tenant("proj_a").unwrap();
     let conn = readers.get();
 
     // Reproduce the unsafe policy persisted by older sigiro versions, then
@@ -82,7 +82,7 @@ fn create_project_persists_safe_ducklake_policy() {
     drop(conn);
     drop(readers);
     pool.evict_idle(Duration::ZERO);
-    let readers = pool.create_project("proj_a").unwrap();
+    let readers = pool.create_tenant("proj_a").unwrap();
     let conn = readers.get();
 
     let mut stmt = conn
@@ -137,7 +137,7 @@ fn create_project_persists_safe_ducklake_policy() {
                 None
             ),
         ],
-        "project creation must persist safe profile and CHECKPOINT policies"
+        "tenant creation must persist safe profile and CHECKPOINT policies"
     );
 }
 
@@ -146,30 +146,30 @@ fn get_returns_same_connection() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
 
-    let conn1 = pool.create_project("proj_a").unwrap();
-    let conn2 = pool.create_project("proj_a").unwrap();
+    let conn1 = pool.create_tenant("proj_a").unwrap();
+    let conn2 = pool.create_tenant("proj_a").unwrap();
     assert!(conn1.same_pool(&conn2));
     assert_eq!(pool.connections.len(), 1);
 }
 
 #[test]
-fn different_projects_different_connections() {
+fn different_tenants_different_connections() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
 
-    let conn_a = pool.create_project("proj_a").unwrap();
-    let conn_b = pool.create_project("proj_b").unwrap();
+    let conn_a = pool.create_tenant("proj_a").unwrap();
+    let conn_b = pool.create_tenant("proj_b").unwrap();
     assert!(!conn_a.same_pool(&conn_b));
     assert_eq!(pool.connections.len(), 2);
 }
 
 #[test]
-fn data_isolation_between_projects() {
+fn data_isolation_between_tenants() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
 
-    // Insert into project A using raw SQL with all required columns
-    let conn_a = pool.create_project("proj_a").unwrap();
+    // Insert into tenant A using raw SQL with all required columns
+    let conn_a = pool.create_tenant("proj_a").unwrap();
     {
         let conn = conn_a.get();
         conn.execute_batch(
@@ -179,15 +179,15 @@ fn data_isolation_between_projects() {
         .unwrap();
     }
 
-    // Project B should have no data
-    let conn_b = pool.create_project("proj_b").unwrap();
+    // Tenant B should have no data
+    let conn_b = pool.create_tenant("proj_b").unwrap();
     {
         let conn = conn_b.get();
         let mut stmt = conn
             .prepare("SELECT count(*) FROM lake.sigiro_metrics_gauge")
             .unwrap();
         let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
-        assert_eq!(count, 0, "project B should have no data from project A");
+        assert_eq!(count, 0, "tenant B should have no data from tenant A");
     }
 }
 
@@ -196,7 +196,7 @@ fn reader_queries_do_not_wait_for_writer_transaction() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
 
-    let readers = pool.create_project("proj_a").unwrap();
+    let readers = pool.create_tenant("proj_a").unwrap();
     let writer = pool.take_writer("proj_a").unwrap();
     let (writer_started_tx, writer_started_rx) = mpsc::channel();
     let (commit_tx, commit_rx) = mpsc::channel();
@@ -252,8 +252,8 @@ fn evict_idle_removes_old_connections() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
 
-    pool.create_project("proj_a").unwrap();
-    pool.create_project("proj_b").unwrap();
+    pool.create_tenant("proj_a").unwrap();
+    pool.create_tenant("proj_b").unwrap();
     assert_eq!(pool.connections.len(), 2);
 
     // Evict with zero duration — everything is "idle"
@@ -266,13 +266,13 @@ fn evict_oldest_at_capacity() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool_with_max(dir.path(), 2);
 
-    pool.create_project("proj_a").unwrap();
+    pool.create_tenant("proj_a").unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));
-    pool.create_project("proj_b").unwrap();
+    pool.create_tenant("proj_b").unwrap();
     assert_eq!(pool.connections.len(), 2);
 
     // Opening a third should evict the oldest (proj_a)
-    pool.create_project("proj_c").unwrap();
+    pool.create_tenant("proj_c").unwrap();
     assert_eq!(pool.connections.len(), 2);
     assert!(pool.connections.contains_key("proj_b"));
     assert!(pool.connections.contains_key("proj_c"));
@@ -282,7 +282,7 @@ fn evict_oldest_at_capacity() {
 fn local_mode_locks_filesystem_access() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
-    let readers = pool.create_project("proj_a").unwrap();
+    let readers = pool.create_tenant("proj_a").unwrap();
     let conn = readers.get();
     for call in [
         "read_csv('/etc/passwd')",
@@ -308,11 +308,11 @@ fn local_mode_locks_filesystem_access() {
 }
 
 #[test]
-fn remove_project() {
+fn remove_tenant() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
 
-    pool.create_project("proj_a").unwrap();
+    pool.create_tenant("proj_a").unwrap();
     assert_eq!(pool.connections.len(), 1);
 
     pool.remove("proj_a");
@@ -323,7 +323,7 @@ fn remove_project() {
 /// happen to hold a pooled connection at the moment it runs.
 ///
 /// `MsgRouter::run_retention_cleanup` iterates the pool's live connection map.
-/// `run_evictor` drops any project idle for `MAX_IDLE_SECS` (300) while
+/// `run_evictor` drops any tenant idle for `MAX_IDLE_SECS` (300) while
 /// retention fires hourly, so a low-traffic tenant is almost never in the map
 /// when the sweep happens and is silently skipped forever.
 ///
@@ -332,25 +332,25 @@ fn remove_project() {
 /// container log showed a single retention run, for the one tenant that ingests
 /// continuously and is therefore always pooled.
 #[test]
-fn known_project_ids_survives_eviction() {
+fn known_tenant_ids_survives_eviction() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
 
-    pool.create_project("proj_a").unwrap();
-    pool.create_project("proj_b").unwrap();
+    pool.create_tenant("proj_a").unwrap();
+    pool.create_tenant("proj_b").unwrap();
 
-    let while_pooled = pool.known_project_ids();
+    let while_pooled = pool.known_tenant_ids();
     assert!(
         while_pooled.iter().any(|id| id == "proj_a")
             && while_pooled.iter().any(|id| id == "proj_b"),
-        "both projects must be known while pooled, got {while_pooled:?}"
+        "both tenants must be known while pooled, got {while_pooled:?}"
     );
 
     // Exactly what the idle evictor does to a tenant with no recent traffic.
     pool.evict_idle(std::time::Duration::ZERO);
     assert_eq!(pool.connections.len(), 0, "eviction emptied the pool");
 
-    let after_eviction = pool.known_project_ids();
+    let after_eviction = pool.known_tenant_ids();
     assert!(
         after_eviction.iter().any(|id| id == "proj_a")
             && after_eviction.iter().any(|id| id == "proj_b"),
@@ -360,20 +360,20 @@ fn known_project_ids_survives_eviction() {
 }
 
 /// The enumeration must not hand retention the shared directories that sit
-/// beside the per-project ones. `extensions` and `tenants` are reserved by
+/// beside the per-tenant ones. `extensions` and `tenants` are reserved by
 /// `storage::sanitize_tenant_id` for exactly this reason.
 #[test]
-fn known_project_ids_excludes_reserved_directories() {
+fn known_tenant_ids_excludes_reserved_directories() {
     let dir = tempfile::tempdir().unwrap();
     let pool = test_pool(dir.path());
-    pool.create_project("proj_a").unwrap();
+    pool.create_tenant("proj_a").unwrap();
     std::fs::create_dir_all(dir.path().join("extensions")).unwrap();
     std::fs::create_dir_all(dir.path().join("tenants")).unwrap();
 
-    let ids = pool.known_project_ids();
+    let ids = pool.known_tenant_ids();
     assert!(
         ids.iter().any(|id| id == "proj_a"),
-        "real project missing: {ids:?}"
+        "real tenant missing: {ids:?}"
     );
     assert!(
         !ids.iter().any(|id| id == "extensions" || id == "tenants"),

@@ -13,30 +13,30 @@ use arrow::record_batch::RecordBatch;
 #[derive(Debug)]
 pub enum IngestMsg {
     Traces {
-        project_id: String,
+        tenant_id: String,
         batch: RecordBatch,
     },
     Logs {
-        project_id: String,
+        tenant_id: String,
         batch: RecordBatch,
     },
     Metrics {
-        project_id: String,
+        tenant_id: String,
         batches: MetricBatches,
     },
     Profiles {
-        project_id: String,
+        tenant_id: String,
         batch: RecordBatch,
     },
 }
 
 impl IngestMsg {
-    pub(crate) fn project_id(&self) -> &str {
+    pub(crate) fn tenant_id(&self) -> &str {
         match self {
-            IngestMsg::Traces { project_id, .. }
-            | IngestMsg::Logs { project_id, .. }
-            | IngestMsg::Metrics { project_id, .. }
-            | IngestMsg::Profiles { project_id, .. } => project_id,
+            IngestMsg::Traces { tenant_id, .. }
+            | IngestMsg::Logs { tenant_id, .. }
+            | IngestMsg::Metrics { tenant_id, .. }
+            | IngestMsg::Profiles { tenant_id, .. } => tenant_id,
         }
     }
 }

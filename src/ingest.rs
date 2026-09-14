@@ -76,11 +76,11 @@ impl OtlpGrpcService {
     }
 
     /// Route a batch to the inserter.
-    #[instrument(skip_all, fields(project_id))]
+    #[instrument(skip_all, fields(tenant_id))]
     async fn route_batch(&self, msg: IngestMsg) -> Result<(), Status> {
-        let project_id = msg.project_id().to_string();
+        let tenant_id = msg.tenant_id().to_string();
         if let Err(e) = self.router.send(msg).await {
-            tracing::error!(project_id, "ingest router error: {e:?}");
+            tracing::error!(tenant_id, "ingest router error: {e:?}");
             return Err(match e {
                 RouterError::DiskCapacityExceeded => {
                     Status::resource_exhausted("disk capacity exceeded")
@@ -120,9 +120,9 @@ impl OtlpGrpcService {
     }
 }
 
-/// Extract project_id from gRPC metadata.
+/// Extract tenant_id from gRPC metadata.
 /// Uses the explicit AuthMode — Open mode skips auth, TenantKeys mode validates Bearer token.
-pub fn extract_project_id_grpc(
+pub fn extract_tenant_id_grpc(
     auth_mode: &crate::auth::AuthMode,
     metadata: &tonic::metadata::MetadataMap,
 ) -> Result<String, Status> {
@@ -206,18 +206,18 @@ async fn transform_metrics(bytes: Bytes, fmt: InputFormat) -> Result<MetricBatch
 
 #[tonic::async_trait]
 impl TraceService for OtlpGrpcService {
-    #[instrument(skip_all, fields(project_id))]
+    #[instrument(skip_all, fields(tenant_id))]
     async fn export(
         &self,
         request: Request<ExportTraceServiceRequest>,
     ) -> Result<Response<ExportTraceServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
+        let tenant_id = extract_tenant_id_grpc(&self.auth_mode, request.metadata())?;
         // Transform on tokio blocking pool — no double decode.
         // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let batch = transform_traces(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
-            tracing::warn!(project_id, "export traces: empty batch after transform");
+            tracing::warn!(tenant_id, "export traces: empty batch after transform");
             return Ok(Response::new(ExportTraceServiceResponse {
                 partial_success: Some(ExportTracePartialSuccess {
                     rejected_spans: 1,
@@ -225,7 +225,7 @@ impl TraceService for OtlpGrpcService {
                 }),
             }));
         }
-        self.route_batch(IngestMsg::Traces { project_id, batch })
+        self.route_batch(IngestMsg::Traces { tenant_id, batch })
             .await?;
         Ok(Response::new(ExportTraceServiceResponse {
             partial_success: None,
@@ -235,17 +235,17 @@ impl TraceService for OtlpGrpcService {
 
 #[tonic::async_trait]
 impl LogsService for OtlpGrpcService {
-    #[instrument(skip_all, fields(project_id))]
+    #[instrument(skip_all, fields(tenant_id))]
     async fn export(
         &self,
         request: Request<ExportLogsServiceRequest>,
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
+        let tenant_id = extract_tenant_id_grpc(&self.auth_mode, request.metadata())?;
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let (batch, rejected) = transform_logs(bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
             tracing::warn!(
-                project_id,
+                tenant_id,
                 rejected,
                 "export logs: empty batch after transform"
             );
@@ -257,13 +257,9 @@ impl LogsService for OtlpGrpcService {
             }));
         }
         if rejected > 0 {
-            tracing::warn!(
-                project_id,
-                rejected,
-                "export logs: skipped unusable records"
-            );
+            tracing::warn!(tenant_id, rejected, "export logs: skipped unusable records");
         }
-        self.route_batch(IngestMsg::Logs { project_id, batch })
+        self.route_batch(IngestMsg::Logs { tenant_id, batch })
             .await?;
         let partial_success = (rejected > 0).then(|| ExportLogsPartialSuccess {
             rejected_log_records: rejected as i64,
@@ -276,12 +272,12 @@ impl LogsService for OtlpGrpcService {
 
 #[tonic::async_trait]
 impl MetricsService for OtlpGrpcService {
-    #[instrument(skip_all, fields(project_id))]
+    #[instrument(skip_all, fields(tenant_id))]
     async fn export(
         &self,
         request: Request<ExportMetricsServiceRequest>,
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
+        let tenant_id = extract_tenant_id_grpc(&self.auth_mode, request.metadata())?;
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
         let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -292,7 +288,7 @@ impl MetricsService for OtlpGrpcService {
                 .as_ref()
                 .is_some_and(|b| b.num_rows() > 0);
         if !has_data {
-            tracing::warn!(project_id, "export metrics: empty batch after transform");
+            tracing::warn!(tenant_id, "export metrics: empty batch after transform");
             return Ok(Response::new(ExportMetricsServiceResponse {
                 partial_success: Some(ExportMetricsPartialSuccess {
                     rejected_data_points: 1,
@@ -300,11 +296,8 @@ impl MetricsService for OtlpGrpcService {
                 }),
             }));
         }
-        self.route_batch(IngestMsg::Metrics {
-            project_id,
-            batches,
-        })
-        .await?;
+        self.route_batch(IngestMsg::Metrics { tenant_id, batches })
+            .await?;
         Ok(Response::new(ExportMetricsServiceResponse {
             partial_success: None,
         }))
@@ -615,16 +608,16 @@ fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBat
 
 #[tonic::async_trait]
 impl ProfilesService for OtlpGrpcService {
-    #[instrument(skip_all, fields(project_id))]
+    #[instrument(skip_all, fields(tenant_id))]
     async fn export(
         &self,
         request: Request<ExportProfilesServiceRequest>,
     ) -> Result<Response<ExportProfilesServiceResponse>, Status> {
-        let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata())?;
+        let tenant_id = extract_tenant_id_grpc(&self.auth_mode, request.metadata())?;
         let req = request.into_inner();
         let batch = spawn_transform("transform profiles", move || transform_profiles(req)).await?;
         if batch.num_rows() == 0 {
-            tracing::warn!(project_id, "export profiles: empty batch after transform");
+            tracing::warn!(tenant_id, "export profiles: empty batch after transform");
             return Ok(Response::new(ExportProfilesServiceResponse {
                 partial_success: Some(ExportProfilesPartialSuccess {
                     rejected_profiles: 1,
@@ -632,7 +625,7 @@ impl ProfilesService for OtlpGrpcService {
                 }),
             }));
         }
-        self.route_batch(IngestMsg::Profiles { project_id, batch })
+        self.route_batch(IngestMsg::Profiles { tenant_id, batch })
             .await?;
         Ok(Response::new(ExportProfilesServiceResponse {
             partial_success: None,
@@ -695,9 +688,9 @@ pub fn otlp_http_router(
     }
 }
 
-/// Extract project_id from HTTP Authorization header.
+/// Extract tenant_id from HTTP Authorization header.
 /// Uses the explicit AuthMode — Open mode skips auth, TenantKeys mode validates Bearer token.
-pub fn extract_project_id_http(
+pub fn extract_tenant_id_http(
     auth_mode: &crate::auth::AuthMode,
     headers: &axum::http::HeaderMap,
 ) -> Result<String, StatusCode> {
@@ -723,9 +716,9 @@ pub fn extract_project_id_http(
 /// Common helper: send ingest message.
 /// Returns 500 on failure, 200 on success.
 async fn route_ingest_msg(state: &OtlpHttpState, msg: IngestMsg) -> StatusCode {
-    let project_id = msg.project_id().to_string();
+    let tenant_id = msg.tenant_id().to_string();
     if let Err(e) = state.router.send(msg).await {
-        tracing::error!(project_id, "ingest router error: {e:?}");
+        tracing::error!(tenant_id, "ingest router error: {e:?}");
         return match e {
             RouterError::DiskCapacityExceeded | RouterError::MaintenanceStalled { .. } => {
                 StatusCode::INSUFFICIENT_STORAGE
@@ -742,7 +735,7 @@ async fn otlp_http_traces(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let tenant_id = match extract_tenant_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -760,7 +753,7 @@ async fn otlp_http_traces(
     if batch.num_rows() == 0 {
         return StatusCode::OK;
     }
-    route_ingest_msg(&state, IngestMsg::Traces { project_id, batch }).await
+    route_ingest_msg(&state, IngestMsg::Traces { tenant_id, batch }).await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
@@ -769,7 +762,7 @@ async fn otlp_http_logs(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let tenant_id = match extract_tenant_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -784,13 +777,13 @@ async fn otlp_http_logs(
     // Per-record failures (e.g. unusable service.name) skip that record rather
     // than rejecting the batch; valid siblings are still routed.
     if rejected > 0 {
-        tracing::warn!(project_id, rejected, "otlp logs: skipped unusable records");
+        tracing::warn!(tenant_id, rejected, "otlp logs: skipped unusable records");
     }
     // F-05: empty batch is a valid no-op (see otlp_http_traces).
     if batch.num_rows() == 0 {
         return StatusCode::OK;
     }
-    route_ingest_msg(&state, IngestMsg::Logs { project_id, batch }).await
+    route_ingest_msg(&state, IngestMsg::Logs { tenant_id, batch }).await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
@@ -799,7 +792,7 @@ async fn otlp_http_metrics(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let tenant_id = match extract_tenant_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -822,14 +815,7 @@ async fn otlp_http_metrics(
         // F-05: empty batch is a valid no-op (see otlp_http_traces).
         return StatusCode::OK;
     }
-    route_ingest_msg(
-        &state,
-        IngestMsg::Metrics {
-            project_id,
-            batches,
-        },
-    )
-    .await
+    route_ingest_msg(&state, IngestMsg::Metrics { tenant_id, batches }).await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1development/profiles"))]
@@ -838,7 +824,7 @@ async fn otlp_http_profiles(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let tenant_id = match extract_tenant_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => return status,
     };
@@ -861,13 +847,10 @@ async fn otlp_http_profiles(
         }
     };
     if batch.num_rows() == 0 {
-        tracing::warn!(
-            project_id,
-            "batch empty after transform — profile data lost"
-        );
+        tracing::warn!(tenant_id, "batch empty after transform — profile data lost");
         return StatusCode::BAD_REQUEST;
     }
-    route_ingest_msg(&state, IngestMsg::Profiles { project_id, batch }).await
+    route_ingest_msg(&state, IngestMsg::Profiles { tenant_id, batch }).await
 }
 
 // ─── Pyroscope native format ingest ──────────────────────────────────────────
@@ -972,7 +955,7 @@ async fn otlp_http_pyroscope(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let project_id = match extract_project_id_http(&state.auth_mode, &headers) {
+    let tenant_id = match extract_tenant_id_http(&state.auth_mode, &headers) {
         Ok(id) => id,
         Err(status) => {
             tracing::warn!("pyroscope: auth failed: {status}");
@@ -985,7 +968,7 @@ async fn otlp_http_pyroscope(
         .map(|c| c.to_string())
         .unwrap_or_else(|| "(none)".to_string());
     tracing::debug!(
-        "otlp_http_pyroscope: project_id={project_id} body_len={} ct={ct}",
+        "otlp_http_pyroscope: tenant_id={tenant_id} body_len={} ct={ct}",
         body.len()
     );
 
@@ -1010,24 +993,24 @@ async fn otlp_http_pyroscope(
         };
 
     tracing::info!(
-        "pyroscope ingest: project_id={project_id} rows={}",
+        "pyroscope ingest: tenant_id={tenant_id} rows={}",
         batch.num_rows()
     );
 
     if batch.num_rows() == 0 {
         tracing::warn!(
-            project_id,
+            tenant_id,
             "otlp_http_profiles: batch empty after transform — profile data lost"
         );
         return StatusCode::BAD_REQUEST;
     }
-    let pid = project_id.clone();
+    let failed_tenant_id = tenant_id.clone();
     if let Err(e) = state
         .router
-        .send(IngestMsg::Profiles { project_id, batch })
+        .send(IngestMsg::Profiles { tenant_id, batch })
         .await
     {
-        tracing::error!(pid, "ingest router error: {e:?}");
+        tracing::error!(tenant_id = failed_tenant_id, "ingest router error: {e:?}");
         return match e {
             RouterError::DiskCapacityExceeded | RouterError::MaintenanceStalled { .. } => {
                 StatusCode::INSUFFICIENT_STORAGE

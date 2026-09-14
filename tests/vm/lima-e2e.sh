@@ -87,17 +87,6 @@ else
     tail -20 /tmp/sigiro-$$-server.log
 fi
 
-# ── Create API key ────────────────────────────────────
-log "Creating API key..."
-KEY_OUT=$($BIN admin create-key --project e2e --plan free 2>&1) || true
-API_KEY=$(echo "$KEY_OUT" | grep -oE 'sigiro_[A-Za-z0-9]+' || echo "")
-if [ -n "$API_KEY" ]; then
-    pass "Key: ${API_KEY:0:20}..."
-else
-    warn "Using dev key"
-    API_KEY="sigiro_dev"
-fi
-
 # ── Send OTLP traces ──────────────────────────────────
 log "Ingesting traces..."
 NOW=$(date +%s)

@@ -2,7 +2,7 @@
 //!
 //! This is the scheduled half of the anomaly subsystem
 //! (docs/plans/01-continuous-anomaly-subsystem.md): a periodic pass — driven
-//! from the per-project inserter timer (src/inserter.rs) — that runs augurs
+//! from the per-tenant inserter timer (src/inserter.rs) — that runs augurs
 //! BOCPD changepoint detection over continuous 5-minute series of every
 //! detected signal and persists the results into the `sigiro_anomalies`
 //! table. `/v1/diagnose` and `/v1/anomalies` READ that table; nothing is
@@ -27,7 +27,7 @@
 //! DuckLake writer (which it would otherwise block for seconds, stalling
 //! ingest flushes):
 //! - [`detect`] — the multi-day series scans + BOCPD, run on a READER
-//!   connection from the project's `ReaderPool`;
+//!   connection from the tenant's `ReaderPool`;
 //! - [`persist`] — the brief DELETE+INSERT of the results, the only part
 //!   that runs on the writer connection (DuckLake single-writer semantics).
 //!
@@ -221,7 +221,7 @@ fn worsening_shifts(bucket_ts: &[i64], y: &[f64]) -> Vec<Shift> {
 /// every entity's 5-minute series over the last [`SERIES_LOOKBACK_DAYS`]
 /// (one scan per telemetry table: spans → error_rate + latency_p95, logs →
 /// log_volume + error_log_rate, profiles → profile_cost) and runs BOCPD over
-/// every series. Read-only: run it on a READER connection from the project's
+/// every series. Read-only: run it on a READER connection from the tenant's
 /// `ReaderPool`, never on the writer — these scans take seconds and would
 /// stall ingest flushes. Hand the returned rows to [`persist`] on the writer.
 ///

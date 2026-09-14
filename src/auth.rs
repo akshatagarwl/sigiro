@@ -459,7 +459,7 @@ impl ControlPlane {
 }
 
 /// `"default"` is reserved in the HOSTED control plane: it names the local/edge
-/// project (pre-created by `run_serve`, reachable via Open auth), so
+/// tenant (pre-created by `run_serve`, reachable via Open auth), so
 /// a hosted operator must never provision a control-plane tenant literally
 /// named `default`. `sanitize_tenant_id` deliberately still ACCEPTS `"default"`
 /// (the edge depends on it) — this extra rejection applies only on the hosted
@@ -469,7 +469,7 @@ fn ensure_hosted_tenant_id(tenant_id: &str) -> Result<String, ControlPlaneError>
         .map_err(|e| ControlPlaneError::InvalidInput(format!("{e:#}")))?;
     if tenant_id.as_ref() == "default" {
         return Err(ControlPlaneError::Conflict(
-            "tenant id \"default\" is reserved for the local/edge project and cannot be provisioned in the hosted control plane".to_string(),
+            "tenant id \"default\" is reserved for the local/edge tenant and cannot be provisioned in the hosted control plane".to_string(),
         ));
     }
     Ok(tenant_id.into())
