@@ -16,15 +16,15 @@ fn tenant_keys_mode(tenant: &str) -> (AuthMode, String) {
 fn grpc_auth_open_mode_allows_any() {
     let mut metadata = tonic::metadata::MetadataMap::new();
     metadata.insert("authorization", "Bearer anything".parse().unwrap());
-    let project_id = sigiro::ingest::extract_project_id_grpc(&AuthMode::Open, &metadata).unwrap();
-    assert_eq!(project_id, "default");
+    let tenant_id = sigiro::ingest::extract_tenant_id_grpc(&AuthMode::Open, &metadata).unwrap();
+    assert_eq!(tenant_id, "default");
 }
 
 #[test]
 fn grpc_auth_missing_header_fails() {
     let (mode, _key) = tenant_keys_mode("acme");
     let metadata = tonic::metadata::MetadataMap::new();
-    let err = sigiro::ingest::extract_project_id_grpc(&mode, &metadata).unwrap_err();
+    let err = sigiro::ingest::extract_tenant_id_grpc(&mode, &metadata).unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unauthenticated);
 }
 
@@ -33,7 +33,7 @@ fn grpc_auth_invalid_key_fails() {
     let (mode, _key) = tenant_keys_mode("acme");
     let mut metadata = tonic::metadata::MetadataMap::new();
     metadata.insert("authorization", "Bearer sk_acme_deadbeef".parse().unwrap());
-    let err = sigiro::ingest::extract_project_id_grpc(&mode, &metadata).unwrap_err();
+    let err = sigiro::ingest::extract_tenant_id_grpc(&mode, &metadata).unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unauthenticated);
 }
 
@@ -42,23 +42,23 @@ fn grpc_auth_matching_key_resolves_tenant() {
     let (mode, key) = tenant_keys_mode("acme");
     let mut metadata = tonic::metadata::MetadataMap::new();
     metadata.insert("authorization", format!("Bearer {key}").parse().unwrap());
-    let project_id = sigiro::ingest::extract_project_id_grpc(&mode, &metadata).unwrap();
-    assert_eq!(project_id, "acme");
+    let tenant_id = sigiro::ingest::extract_tenant_id_grpc(&mode, &metadata).unwrap();
+    assert_eq!(tenant_id, "acme");
 }
 
 #[test]
 fn http_auth_open_mode_allows_any() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("authorization", "Bearer anything".parse().unwrap());
-    let project_id = sigiro::ingest::extract_project_id_http(&AuthMode::Open, &headers).unwrap();
-    assert_eq!(project_id, "default");
+    let tenant_id = sigiro::ingest::extract_tenant_id_http(&AuthMode::Open, &headers).unwrap();
+    assert_eq!(tenant_id, "default");
 }
 
 #[test]
 fn http_auth_missing_header_returns_401() {
     let (mode, _key) = tenant_keys_mode("acme");
     let headers = axum::http::HeaderMap::new();
-    let err = sigiro::ingest::extract_project_id_http(&mode, &headers).unwrap_err();
+    let err = sigiro::ingest::extract_tenant_id_http(&mode, &headers).unwrap_err();
     assert_eq!(err, axum::http::StatusCode::UNAUTHORIZED);
 }
 
@@ -67,7 +67,7 @@ fn http_auth_invalid_key_returns_401() {
     let (mode, _key) = tenant_keys_mode("acme");
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("authorization", "Bearer sk_acme_deadbeef".parse().unwrap());
-    let err = sigiro::ingest::extract_project_id_http(&mode, &headers).unwrap_err();
+    let err = sigiro::ingest::extract_tenant_id_http(&mode, &headers).unwrap_err();
     assert_eq!(err, axum::http::StatusCode::UNAUTHORIZED);
 }
 
@@ -76,6 +76,6 @@ fn http_auth_matching_key_resolves_tenant() {
     let (mode, key) = tenant_keys_mode("acme");
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("authorization", format!("Bearer {key}").parse().unwrap());
-    let project_id = sigiro::ingest::extract_project_id_http(&mode, &headers).unwrap();
-    assert_eq!(project_id, "acme");
+    let tenant_id = sigiro::ingest::extract_tenant_id_http(&mode, &headers).unwrap();
+    assert_eq!(tenant_id, "acme");
 }

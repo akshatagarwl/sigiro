@@ -9,7 +9,7 @@ use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
-use sigiro::pool::ProjectPool;
+use sigiro::pool::TenantPool;
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
@@ -23,14 +23,14 @@ fn test_extension_dir() -> String {
     })
 }
 
-fn test_pool(dir: &std::path::Path) -> Arc<ProjectPool> {
+fn test_pool(dir: &std::path::Path) -> Arc<TenantPool> {
     EXTENSION_ENV.call_once(|| {
         // SAFETY: all tests in this binary use the same read-only extension cache.
         unsafe {
             std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
         }
     });
-    Arc::new(ProjectPool::new(
+    Arc::new(TenantPool::new(
         camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
         10,
         sigiro::storage::StorageMode::LocalFile,
@@ -128,7 +128,7 @@ async fn inserter_processes_spans_for_single_project() {
         let batch = make_spans_batch(100);
         router
             .send(IngestMsg::Traces {
-                project_id: "test_project".to_string(),
+                tenant_id: "test_project".to_string(),
                 batch,
             })
             .await
@@ -139,7 +139,7 @@ async fn inserter_processes_spans_for_single_project() {
     router.shutdown_and_wait().await.unwrap();
 
     // Verify data landed in DuckDB
-    let conn = pool.create_project("test_project").unwrap();
+    let conn = pool.create_tenant("test_project").unwrap();
     let conn = conn.get();
     let count: i64 = conn
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
@@ -160,14 +160,14 @@ async fn inserter_isolates_projects() {
     for _ in 0..5 {
         router
             .send(IngestMsg::Traces {
-                project_id: "project_a".to_string(),
+                tenant_id: "project_a".to_string(),
                 batch: make_spans_batch(100),
             })
             .await
             .unwrap();
         router
             .send(IngestMsg::Traces {
-                project_id: "project_b".to_string(),
+                tenant_id: "project_b".to_string(),
                 batch: make_spans_batch(50),
             })
             .await
@@ -176,8 +176,8 @@ async fn inserter_isolates_projects() {
 
     router.shutdown_and_wait().await.unwrap();
 
-    // Each project should have its own data
-    let conn_a = pool.create_project("project_a").unwrap();
+    // Each tenant should have its own data
+    let conn_a = pool.create_tenant("project_a").unwrap();
     let count_a: i64 = conn_a
         .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
@@ -185,7 +185,7 @@ async fn inserter_isolates_projects() {
         })
         .unwrap();
 
-    let conn_b = pool.create_project("project_b").unwrap();
+    let conn_b = pool.create_tenant("project_b").unwrap();
     let count_b: i64 = conn_b
         .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
@@ -216,17 +216,17 @@ async fn inserter_handles_backpressure() {
     for i in 0..100 {
         router
             .send(IngestMsg::Traces {
-                project_id: "fast_project".to_string(),
+                tenant_id: "fast_project".to_string(),
                 batch: make_spans_batch(10),
             })
             .await
             .unwrap();
 
-        // Every 10th message goes to a different project
+        // Every 10th message goes to a different tenant
         if i % 10 == 0 {
             router
                 .send(IngestMsg::Traces {
-                    project_id: "slow_project".to_string(),
+                    tenant_id: "slow_project".to_string(),
                     batch: make_spans_batch(10),
                 })
                 .await
@@ -237,7 +237,7 @@ async fn inserter_handles_backpressure() {
     router.shutdown_and_wait().await.unwrap();
 
     // Both projects should have data — no drops under backpressure
-    let conn = pool.create_project("fast_project").unwrap();
+    let conn = pool.create_tenant("fast_project").unwrap();
     let count: i64 = conn
         .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
@@ -246,7 +246,7 @@ async fn inserter_handles_backpressure() {
         .unwrap();
     assert!(count > 0, "fast_project should have some spans");
 
-    let conn2 = pool.create_project("slow_project").unwrap();
+    let conn2 = pool.create_tenant("slow_project").unwrap();
     let count2: i64 = conn2
         .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
@@ -272,7 +272,7 @@ async fn inserter_throughput_single_project() {
     for _ in 0..num_batches {
         router
             .send(IngestMsg::Traces {
-                project_id: "throughput_test".to_string(),
+                tenant_id: "throughput_test".to_string(),
                 batch: make_spans_batch(batch_size),
             })
             .await
@@ -282,7 +282,7 @@ async fn inserter_throughput_single_project() {
     router.shutdown_and_wait().await.unwrap();
     let elapsed = start.elapsed();
 
-    let conn = pool.create_project("throughput_test").unwrap();
+    let conn = pool.create_tenant("throughput_test").unwrap();
     let count: i64 = conn
         .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {

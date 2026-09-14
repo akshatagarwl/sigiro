@@ -13,7 +13,7 @@ use prost::Message;
 use sigiro::IngestMsg;
 use sigiro::diagnose::{DiagnoseRequest, DiagnoseServices};
 use sigiro::inserter::MsgRouter;
-use sigiro::pool::ProjectPool;
+use sigiro::pool::TenantPool;
 use std::sync::{Arc, Once};
 
 static EXTENSION_ENV: Once = Once::new();
@@ -26,14 +26,14 @@ fn test_extension_dir() -> String {
     })
 }
 
-fn test_pool(dir: &std::path::Path) -> Arc<ProjectPool> {
+fn test_pool(dir: &std::path::Path) -> Arc<TenantPool> {
     EXTENSION_ENV.call_once(|| {
         // SAFETY: all tests in this binary use the same read-only extension cache.
         unsafe {
             std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
         }
     });
-    Arc::new(ProjectPool::new(
+    Arc::new(TenantPool::new(
         camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
         10,
         sigiro::storage::StorageMode::LocalFile,
@@ -274,7 +274,7 @@ async fn e2e_profiles_pipeline() {
 
     router
         .send(IngestMsg::Profiles {
-            project_id: "profile_test".to_string(),
+            tenant_id: "profile_test".to_string(),
             batch: make_profiles_batch("api-svc", now_us, &stacks),
         })
         .await
@@ -283,7 +283,7 @@ async fn e2e_profiles_pipeline() {
     router.shutdown_and_wait().await.unwrap();
 
     // Verify rows landed in DuckDB
-    let conn = pool.create_project("profile_test").unwrap();
+    let conn = pool.create_tenant("profile_test").unwrap();
     let conn = conn.get();
 
     let total: i64 = conn
@@ -384,7 +384,7 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
         .await;
     old_path_response.assert_status(StatusCode::NOT_FOUND);
 
-    let shared_conn = pool.get_project("default").unwrap();
+    let shared_conn = pool.get_tenant("default").unwrap();
     let expected_trace_id = hex::encode(&trace_id);
     let expected_span_id = hex::encode(&span_id);
     let mut linked_rows = 0;
@@ -436,7 +436,7 @@ async fn e2e_otlp_profiles_store_sample_trace_span_link() {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-type profiles (CPU + heap in same project)
+// Multi-type profiles (CPU + heap in same tenant)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -468,14 +468,14 @@ async fn e2e_profiles_multi_type() {
 
     router
         .send(IngestMsg::Profiles {
-            project_id: "multi_type".to_string(),
+            tenant_id: "multi_type".to_string(),
             batch: make_profiles_batch("api-svc", now_us, &cpu_stacks),
         })
         .await
         .unwrap();
     router
         .send(IngestMsg::Profiles {
-            project_id: "multi_type".to_string(),
+            tenant_id: "multi_type".to_string(),
             batch: make_profiles_batch("api-svc", now_us + 100, &heap_stacks),
         })
         .await
@@ -483,7 +483,7 @@ async fn e2e_profiles_multi_type() {
 
     router.shutdown_and_wait().await.unwrap();
 
-    let conn = pool.create_project("multi_type").unwrap();
+    let conn = pool.create_tenant("multi_type").unwrap();
     let conn = conn.get();
 
     // Should have both profile types
@@ -535,7 +535,7 @@ async fn e2e_profiles_empty_batch() {
     // Empty profiles batch
     router
         .send(IngestMsg::Profiles {
-            project_id: "empty_profiles".to_string(),
+            tenant_id: "empty_profiles".to_string(),
             batch: make_profiles_batch("api-svc", now_us, &[]),
         })
         .await
@@ -543,7 +543,7 @@ async fn e2e_profiles_empty_batch() {
 
     router.shutdown_and_wait().await.unwrap();
 
-    let conn = pool.create_project("empty_profiles").unwrap();
+    let conn = pool.create_tenant("empty_profiles").unwrap();
     let conn = conn.get();
 
     let total: i64 = conn

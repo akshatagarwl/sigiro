@@ -1,7 +1,7 @@
 //! End-to-end tests for the sigiro observability pipeline.
 //!
 //! These tests verify the full OTLP ingest → DuckDB → diagnose path,
-//! multi-project isolation, services endpoint simulation, query validation,
+//! multi-tenant isolation, services endpoint simulation, query validation,
 //! and diagnosis with all signal types.
 
 #![allow(clippy::disallowed_methods)]
@@ -20,7 +20,7 @@ use sigiro::IngestMsg;
 use sigiro::diagnose::{DiagnoseRequest, DiagnoseServices, diagnose};
 use sigiro::inserter::MsgRouter;
 use sigiro::otlp::MetricBatches;
-use sigiro::pool::ProjectPool;
+use sigiro::pool::TenantPool;
 use sigiro::sql::validate_read_only;
 use std::sync::{Arc, Once};
 
@@ -34,14 +34,14 @@ fn test_extension_dir() -> String {
     })
 }
 
-fn test_pool(dir: &std::path::Path) -> Arc<ProjectPool> {
+fn test_pool(dir: &std::path::Path) -> Arc<TenantPool> {
     EXTENSION_ENV.call_once(|| {
         // SAFETY: all tests in this binary use the same read-only extension cache.
         unsafe {
             std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
         }
     });
-    Arc::new(ProjectPool::new(
+    Arc::new(TenantPool::new(
         camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
         10,
         sigiro::storage::StorageMode::LocalFile,
@@ -351,7 +351,7 @@ async fn e2e_full_pipeline_ingest_and_diagnose() {
         let batch = make_spans_batch(20, "checkout", "POST /checkout", now_us + i * 100);
         router
             .send(IngestMsg::Traces {
-                project_id: "proj_e2e".to_string(),
+                tenant_id: "proj_e2e".to_string(),
                 batch,
             })
             .await
@@ -361,7 +361,7 @@ async fn e2e_full_pipeline_ingest_and_diagnose() {
     router.shutdown_and_wait().await.unwrap();
 
     // Verify data in DuckDB
-    let conn = pool.create_project("proj_e2e").unwrap();
+    let conn = pool.create_tenant("proj_e2e").unwrap();
     let count: i64 = conn
         .get()
         .query_row("SELECT count(*) FROM lake.sigiro_spans", [], |row| {
@@ -396,7 +396,7 @@ async fn e2e_full_pipeline_ingest_and_diagnose() {
 }
 
 // ===========================================================================
-// TEST 2: Multi-project isolation — project A and B ingest independently,
+// TEST 2: Multi-tenant isolation — tenant A and B ingest independently,
 //         diagnose on A should not see B's data
 // ===========================================================================
 #[tokio::test]
@@ -411,19 +411,19 @@ async fn e2e_multi_project_isolation() {
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
 
-    // Project A: "alpha-svc" with 30 spans
+    // Tenant A: "alpha-svc" with 30 spans
     router
         .send(IngestMsg::Traces {
-            project_id: "proj_alpha".to_string(),
+            tenant_id: "proj_alpha".to_string(),
             batch: make_spans_batch(30, "alpha-svc", "GET /alpha", now_us),
         })
         .await
         .unwrap();
 
-    // Project B: "beta-svc" with 50 spans
+    // Tenant B: "beta-svc" with 50 spans
     router
         .send(IngestMsg::Traces {
-            project_id: "proj_beta".to_string(),
+            tenant_id: "proj_beta".to_string(),
             batch: make_spans_batch(50, "beta-svc", "GET /beta", now_us),
         })
         .await
@@ -431,8 +431,8 @@ async fn e2e_multi_project_isolation() {
 
     router.shutdown_and_wait().await.unwrap();
 
-    // Diagnose project A — should only see alpha-svc
-    let conn_a = pool.create_project("proj_alpha").unwrap();
+    // Diagnose tenant A — should only see alpha-svc
+    let conn_a = pool.create_tenant("proj_alpha").unwrap();
     let req_a = DiagnoseRequest {
         services: DiagnoseServices::try_new(vec!["alpha-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
@@ -445,7 +445,7 @@ async fn e2e_multi_project_isolation() {
     assert_eq!(block_a.operation_summaries.len(), 1);
     assert_eq!(block_a.operation_summaries[0].span_name, "GET /alpha");
 
-    // Project A should NOT see beta-svc
+    // Tenant A should NOT see beta-svc
     let req_beta_on_a = DiagnoseRequest {
         services: DiagnoseServices::try_new(vec!["beta-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
@@ -455,11 +455,11 @@ async fn e2e_multi_project_isolation() {
     let block_beta_on_a = &blocks_beta_on_a.results["beta-svc"];
     assert_eq!(
         block_beta_on_a.coverage.span_count, 0,
-        "beta-svc should NOT appear in project alpha's DB"
+        "beta-svc should NOT appear in tenant alpha's DB"
     );
 
-    // Diagnose project B — should only see beta-svc
-    let conn_b = pool.create_project("proj_beta").unwrap();
+    // Diagnose tenant B — should only see beta-svc
+    let conn_b = pool.create_tenant("proj_beta").unwrap();
     let req_b = DiagnoseRequest {
         services: DiagnoseServices::try_new(vec!["beta-svc".to_string()]).unwrap(),
         from_ts: Some(sigiro::TimestampMicros::try_new(now_us - 60_000_000).unwrap()),
@@ -488,24 +488,24 @@ async fn e2e_services_endpoint_simulation() {
         odt.unix_timestamp() * 1_000_000 + odt.microsecond() as i64
     };
 
-    // Ingest spans for 3 different services into the same project
+    // Ingest spans for 3 different services into the same tenant
     router
         .send(IngestMsg::Traces {
-            project_id: "proj_services".to_string(),
+            tenant_id: "proj_services".to_string(),
             batch: make_spans_batch(10, "api-gateway", "GET /route", now_us),
         })
         .await
         .unwrap();
     router
         .send(IngestMsg::Traces {
-            project_id: "proj_services".to_string(),
+            tenant_id: "proj_services".to_string(),
             batch: make_spans_batch(25, "user-service", "GET /users", now_us + 100),
         })
         .await
         .unwrap();
     router
         .send(IngestMsg::Traces {
-            project_id: "proj_services".to_string(),
+            tenant_id: "proj_services".to_string(),
             batch: make_spans_batch(15, "order-service", "POST /orders", now_us + 200),
         })
         .await
@@ -514,7 +514,7 @@ async fn e2e_services_endpoint_simulation() {
     router.shutdown_and_wait().await.unwrap();
 
     // Query the services table grouped by service_name
-    let conn = pool.create_project("proj_services").unwrap();
+    let conn = pool.create_tenant("proj_services").unwrap();
     let conn_guard = conn.get();
 
     let mut stmt = conn_guard
@@ -648,7 +648,7 @@ async fn e2e_diagnosis_all_signals() {
     // Ingest spans
     router
         .send(IngestMsg::Traces {
-            project_id: "proj_all_signals".to_string(),
+            tenant_id: "proj_all_signals".to_string(),
             batch: make_spans_batch(10, "full-svc", "GET /data", now_us),
         })
         .await
@@ -657,7 +657,7 @@ async fn e2e_diagnosis_all_signals() {
     // Ingest logs
     router
         .send(IngestMsg::Logs {
-            project_id: "proj_all_signals".to_string(),
+            tenant_id: "proj_all_signals".to_string(),
             batch: make_logs_batch(5, "full-svc", now_us),
         })
         .await
@@ -667,7 +667,7 @@ async fn e2e_diagnosis_all_signals() {
     let gauge_batch = make_gauge_batch(3, "full-svc", now_us);
     router
         .send(IngestMsg::Metrics {
-            project_id: "proj_all_signals".to_string(),
+            tenant_id: "proj_all_signals".to_string(),
             batches: MetricBatches {
                 gauge: Some(gauge_batch),
                 sum: None,
@@ -696,7 +696,7 @@ async fn e2e_diagnosis_all_signals() {
     ];
     router
         .send(IngestMsg::Profiles {
-            project_id: "proj_all_signals".to_string(),
+            tenant_id: "proj_all_signals".to_string(),
             batch: make_profiles_batch("full-svc", now_us, &profile_stacks),
         })
         .await
@@ -705,7 +705,7 @@ async fn e2e_diagnosis_all_signals() {
     router.shutdown_and_wait().await.unwrap();
 
     // Verify raw counts in DuckDB
-    let conn = pool.create_project("proj_all_signals").unwrap();
+    let conn = pool.create_tenant("proj_all_signals").unwrap();
     {
         let guard = conn.get();
         let spans: i64 = guard
@@ -864,14 +864,14 @@ async fn e2e_drain_log_template_dedup() {
 
     router
         .send(IngestMsg::Logs {
-            project_id: "drain_test".to_string(),
+            tenant_id: "drain_test".to_string(),
             batch: make_templated_logs_batch(&req_refs, "api-svc", now_us),
         })
         .await
         .unwrap();
     router
         .send(IngestMsg::Logs {
-            project_id: "drain_test".to_string(),
+            tenant_id: "drain_test".to_string(),
             batch: make_templated_logs_batch(&login_refs, "api-svc", now_us + 100),
         })
         .await
@@ -880,7 +880,7 @@ async fn e2e_drain_log_template_dedup() {
     router.shutdown_and_wait().await.unwrap();
 
     // Verify: 20 rows in sigiro_logs, each with a template_id
-    let conn = pool.create_project("drain_test").unwrap();
+    let conn = pool.create_tenant("drain_test").unwrap();
     let conn = conn.get();
 
     let total_logs: i64 = conn

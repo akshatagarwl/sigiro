@@ -7,7 +7,7 @@
 use prost::Message;
 use sigiro::IngestMsg;
 use sigiro::inserter::MsgRouter;
-use sigiro::pool::ProjectPool;
+use sigiro::pool::TenantPool;
 use std::io::{Read, Write};
 use std::sync::{Arc, Once};
 
@@ -21,14 +21,14 @@ fn test_extension_dir() -> String {
     })
 }
 
-fn test_pool(dir: &std::path::Path) -> Arc<ProjectPool> {
+fn test_pool(dir: &std::path::Path) -> Arc<TenantPool> {
     EXTENSION_ENV.call_once(|| {
         // SAFETY: all tests in this binary use the same read-only extension cache.
         unsafe {
             std::env::set_var("SIGIRO_EXTENSION_DIR", test_extension_dir());
         }
     });
-    Arc::new(ProjectPool::new(
+    Arc::new(TenantPool::new(
         camino::Utf8PathBuf::from_path_buf(dir.to_path_buf()).unwrap(),
         10,
         sigiro::storage::StorageMode::LocalFile,
@@ -216,7 +216,7 @@ async fn e2e_pyroscope_native_pipeline() {
     // Send through the router
     router
         .send(IngestMsg::Profiles {
-            project_id: "pyro_test".to_string(),
+            tenant_id: "pyro_test".to_string(),
             batch,
         })
         .await
@@ -225,7 +225,7 @@ async fn e2e_pyroscope_native_pipeline() {
     router.shutdown_and_wait().await.unwrap();
 
     // Verify in DuckDB
-    let conn = pool.create_project("pyro_test").unwrap();
+    let conn = pool.create_tenant("pyro_test").unwrap();
     let conn = conn.get();
 
     let total: i64 = conn
@@ -369,14 +369,14 @@ async fn e2e_pyroscope_multi_series() {
 
     router
         .send(IngestMsg::Profiles {
-            project_id: "pyro_multi".to_string(),
+            tenant_id: "pyro_multi".to_string(),
             batch: batch_a,
         })
         .await
         .unwrap();
     router
         .send(IngestMsg::Profiles {
-            project_id: "pyro_multi".to_string(),
+            tenant_id: "pyro_multi".to_string(),
             batch: batch_b,
         })
         .await
@@ -384,7 +384,7 @@ async fn e2e_pyroscope_multi_series() {
 
     router.shutdown_and_wait().await.unwrap();
 
-    let conn = pool.create_project("pyro_multi").unwrap();
+    let conn = pool.create_tenant("pyro_multi").unwrap();
     let conn = conn.get();
 
     let total: i64 = conn
@@ -448,7 +448,7 @@ async fn e2e_pyroscope_heap_profile_http_preserves_every_sample_type() {
         .await;
     response.assert_status_ok();
 
-    let shared_conn = pool.get_project("default").unwrap();
+    let shared_conn = pool.get_tenant("default").unwrap();
     let mut stored_rows = 0;
     for _ in 0..50 {
         stored_rows = shared_conn

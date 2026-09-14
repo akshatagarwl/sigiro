@@ -195,7 +195,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     .context("failed to create sigiro_profiles")?;
 
     // Anomalies — written by the scheduled anomaly pass (src/anomaly.rs,
-    // driven from the per-project inserter timer), read by /v1/diagnose
+    // driven from the per-tenant inserter timer), read by /v1/diagnose
     // and /v1/anomalies. Detection is BOCPD changepoints (augurs) over
     // continuous 5-minute series of every signal — NO arbitrary thresholds
     // anywhere (docs/plans/01-continuous-anomaly-subsystem.md). Lives in the

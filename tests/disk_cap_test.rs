@@ -4,7 +4,7 @@
 //! that the gRPC path maps to `resource_exhausted`.
 //!
 //! The gate short-circuits at the very top of `router.send`, before any
-//! flusher/DuckDB work, so these tests need no project connection or ingest
+//! flusher/DuckDB work, so these tests need no tenant connection or ingest
 //! plumbing — just an armed, tripped `DiskCapacityState`.
 
 #![allow(clippy::disallowed_methods)]
@@ -13,7 +13,7 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use axum_test::TestServer;
 use sigiro::inserter::{DiskCapacityState, MsgRouter, RouterError};
-use sigiro::pool::ProjectPool;
+use sigiro::pool::TenantPool;
 use sigiro::types::IngestMsg;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -42,7 +42,7 @@ const TRACES_JSON: &str = r#"{
 fn tripped_router() -> (Arc<MsgRouter>, Arc<DiskCapacityState>, TempDir) {
     let tmp = TempDir::new().expect("temp dir");
     let data_dir = camino::Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-    let pool = Arc::new(ProjectPool::new(
+    let pool = Arc::new(TenantPool::new(
         data_dir,
         4,
         sigiro::storage::StorageMode::LocalFile,
@@ -90,7 +90,7 @@ async fn router_send_surfaces_typed_disk_capacity_error() {
     let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
     let err = router
         .send(IngestMsg::Traces {
-            project_id: "default".to_string(),
+            tenant_id: "default".to_string(),
             batch,
         })
         .await
@@ -108,7 +108,7 @@ async fn otlp_http_ingest_ok_when_under_disk_cap() {
     // the trip state, not merely "cap configured").
     let tmp = TempDir::new().expect("temp dir");
     let data_dir = camino::Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-    let pool = Arc::new(ProjectPool::new(
+    let pool = Arc::new(TenantPool::new(
         data_dir,
         4,
         sigiro::storage::StorageMode::LocalFile,

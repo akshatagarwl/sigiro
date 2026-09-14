@@ -29,7 +29,7 @@ pub struct AlertStore {
 
 #[derive(Debug, Clone)]
 pub struct AlertEvent {
-    pub(crate) project_id: String,
+    pub(crate) tenant_id: String,
     pub(crate) event_name: String,
     pub(crate) timestamp_us: i64,
     pub(crate) service_name: String,
@@ -129,10 +129,10 @@ impl AlertStore {
 
     pub(crate) fn process_log_batch(
         &self,
-        project_id: &str,
+        tenant_id: &str,
         batch: &RecordBatch,
     ) -> Result<ProcessResult> {
-        let events = events_from_log_batch(project_id, batch)?;
+        let events = events_from_log_batch(tenant_id, batch)?;
         self.process_events(&events)
     }
 
@@ -152,21 +152,16 @@ impl AlertStore {
             let occurrence = occurrence_key(event);
             let inserted = tx.execute(
                 "INSERT OR IGNORE INTO alert_occurrences
-                 (project_id, occurrence_key, fingerprint, observed_at_us)
+                 (tenant_id, occurrence_key, fingerprint, observed_at_us)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    event.project_id,
-                    occurrence,
-                    fingerprint,
-                    event.timestamp_us
-                ],
+                params![event.tenant_id, occurrence, fingerprint, event.timestamp_us],
             )?;
             if inserted == 0 {
                 continue;
             }
             accepted_events += 1;
 
-            let stored = read_stored_alert(&tx, &event.project_id, &fingerprint)?;
+            let stored = read_stored_alert(&tx, &event.tenant_id, &fingerprint)?;
             if event.event_name == OOM_FIRING_EVENT {
                 notifications_enqueued +=
                     process_firing(&tx, event, &fingerprint, stored.as_ref())?;
@@ -186,16 +181,12 @@ impl AlertStore {
         })
     }
 
-    pub(crate) fn list(
-        &self,
-        project_id: &str,
-        status: Option<&str>,
-    ) -> Result<Vec<AlertInstance>> {
+    pub(crate) fn list(&self, tenant_id: &str, status: Option<&str>) -> Result<Vec<AlertInstance>> {
         let conn = self.conn.lock();
         let mut sql = String::from(
             "SELECT fingerprint, rule_id, status, service_name, container_name,
                     starts_at_us, ends_at_us, occurrence_count
-             FROM alert_instances WHERE project_id = ?1",
+             FROM alert_instances WHERE tenant_id = ?1",
         );
         if status.is_some() {
             sql.push_str(" AND status = ?2");
@@ -215,8 +206,8 @@ impl AlertStore {
             ))
         };
         let rows = match status {
-            Some(status) => stmt.query_map(params![project_id, status], map_row)?,
-            None => stmt.query_map(params![project_id], map_row)?,
+            Some(status) => stmt.query_map(params![tenant_id, status], map_row)?,
+            None => stmt.query_map(params![tenant_id], map_row)?,
         };
         rows.collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
@@ -377,7 +368,7 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
 pub(crate) fn create_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS alert_instances (
-            project_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
             fingerprint TEXT NOT NULL,
             rule_id TEXT NOT NULL,
             status TEXT NOT NULL,
@@ -387,18 +378,18 @@ pub(crate) fn create_tables(conn: &Connection) -> Result<()> {
             ends_at_us INTEGER,
             occurrence_count INTEGER NOT NULL,
             updated_at_us INTEGER NOT NULL,
-            PRIMARY KEY (project_id, fingerprint)
+            PRIMARY KEY (tenant_id, fingerprint)
          );
          CREATE TABLE IF NOT EXISTS alert_occurrences (
-            project_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
             occurrence_key TEXT NOT NULL,
             fingerprint TEXT NOT NULL,
             observed_at_us INTEGER NOT NULL,
-            PRIMARY KEY (project_id, occurrence_key)
+            PRIMARY KEY (tenant_id, occurrence_key)
          );
          CREATE TABLE IF NOT EXISTS alert_outbox (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
             fingerprint TEXT NOT NULL,
             transition TEXT NOT NULL,
             payload_json TEXT NOT NULL,
@@ -410,13 +401,13 @@ pub(crate) fn create_tables(conn: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS alert_outbox_due
             ON alert_outbox (sent_at_us, next_attempt_at_us, id);
          CREATE INDEX IF NOT EXISTS alert_instances_project_status
-            ON alert_instances (project_id, status, updated_at_us);",
+            ON alert_instances (tenant_id, status, updated_at_us);",
     )
     .context("failed to create alert tables")
 }
 
 pub(crate) fn events_from_log_batch(
-    project_id: &str,
+    tenant_id: &str,
     batch: &RecordBatch,
 ) -> Result<Vec<AlertEvent>> {
     let schema = batch.schema();
@@ -455,7 +446,7 @@ pub(crate) fn events_from_log_batch(
         let container_name = required_string(&attributes, "container.name", 128)?;
         let container_id = required_string(&attributes, "container.id", 128)?;
         events.push(AlertEvent {
-            project_id: project_id.to_string(),
+            tenant_id: tenant_id.to_string(),
             event_name: event_name.to_string(),
             timestamp_us: timestamps.value(row),
             service_name: service_name.to_string(),
@@ -485,8 +476,8 @@ fn process_firing(
             tx.execute(
                 "UPDATE alert_instances
                  SET occurrence_count = occurrence_count + 1, updated_at_us = ?3
-                 WHERE project_id = ?1 AND fingerprint = ?2",
-                params![event.project_id, fingerprint, event.timestamp_us],
+                 WHERE tenant_id = ?1 AND fingerprint = ?2",
+                params![event.tenant_id, fingerprint, event.timestamp_us],
             )?;
             Ok(0)
         }
@@ -496,9 +487,9 @@ fn process_firing(
                 "UPDATE alert_instances SET status = 'firing', service_name = ?3,
                     container_name = ?4, starts_at_us = ?5, ends_at_us = NULL,
                     occurrence_count = ?6, updated_at_us = ?5
-                 WHERE project_id = ?1 AND fingerprint = ?2",
+                 WHERE tenant_id = ?1 AND fingerprint = ?2",
                 params![
-                    event.project_id,
+                    event.tenant_id,
                     fingerprint,
                     event.service_name,
                     event.container_name,
@@ -522,11 +513,11 @@ fn process_firing(
         None => {
             tx.execute(
                 "INSERT INTO alert_instances
-                 (project_id, fingerprint, rule_id, status, service_name, container_name,
+                 (tenant_id, fingerprint, rule_id, status, service_name, container_name,
                   starts_at_us, ends_at_us, occurrence_count, updated_at_us)
                  VALUES (?1, ?2, ?3, 'firing', ?4, ?5, ?6, NULL, 1, ?6)",
                 params![
-                    event.project_id,
+                    event.tenant_id,
                     fingerprint,
                     OOM_RULE_ID,
                     event.service_name,
@@ -558,11 +549,11 @@ fn process_resolution(
 ) -> Result<()> {
     tx.execute(
         "UPDATE alert_instances SET status = 'resolved', ends_at_us = ?3, updated_at_us = ?3
-         WHERE project_id = ?1 AND fingerprint = ?2",
-        params![event.project_id, fingerprint, event.timestamp_us],
+         WHERE tenant_id = ?1 AND fingerprint = ?2",
+        params![event.tenant_id, fingerprint, event.timestamp_us],
     )?;
     let original = AlertEvent {
-        project_id: event.project_id.clone(),
+        tenant_id: event.tenant_id.clone(),
         event_name: event.event_name.clone(),
         timestamp_us: event.timestamp_us,
         service_name: stored.service_name.clone(),
@@ -586,10 +577,10 @@ fn enqueue(tx: &rusqlite::Transaction<'_>, transition: &AlertTransition<'_>) -> 
     let payload = webhook_payload(transition)?;
     tx.execute(
         "INSERT INTO alert_outbox
-         (project_id, fingerprint, transition, payload_json, next_attempt_at_us)
+         (tenant_id, fingerprint, transition, payload_json, next_attempt_at_us)
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
-            transition.event.project_id,
+            transition.event.tenant_id,
             transition.fingerprint,
             transition.status,
             payload,
@@ -614,7 +605,7 @@ fn webhook_payload(transition: &AlertTransition<'_>) -> Result<String> {
             "status": transition.status,
             "labels": {
                 "alertname": "ContainerOOMKilled",
-                "project": event.project_id,
+                "tenant": event.tenant_id,
                 "service": event.service_name,
                 "container": event.container_name,
                 "severity": "critical",
@@ -631,7 +622,7 @@ fn webhook_payload(transition: &AlertTransition<'_>) -> Result<String> {
         "groupLabels": {"alertname": "ContainerOOMKilled"},
         "commonLabels": {
             "alertname": "ContainerOOMKilled",
-            "project": event.project_id,
+            "tenant": event.tenant_id,
             "service": event.service_name,
             "container": event.container_name,
             "severity": "critical",
@@ -647,13 +638,13 @@ fn webhook_payload(transition: &AlertTransition<'_>) -> Result<String> {
 
 fn read_stored_alert(
     tx: &rusqlite::Transaction<'_>,
-    project_id: &str,
+    tenant_id: &str,
     fingerprint: &str,
 ) -> Result<Option<StoredAlert>> {
     tx.query_row(
         "SELECT status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count
-         FROM alert_instances WHERE project_id = ?1 AND fingerprint = ?2",
-        params![project_id, fingerprint],
+         FROM alert_instances WHERE tenant_id = ?1 AND fingerprint = ?2",
+        params![tenant_id, fingerprint],
         |row| {
             Ok(StoredAlert {
                 status: row.get(0)?,
@@ -672,7 +663,7 @@ fn read_stored_alert(
 fn alert_fingerprint(event: &AlertEvent) -> String {
     hash_hex(&[
         "sigiro/alert/v1",
-        &event.project_id,
+        &event.tenant_id,
         OOM_RULE_ID,
         &event.service_name,
         &event.container_name,
@@ -683,7 +674,7 @@ fn alert_fingerprint(event: &AlertEvent) -> String {
 fn occurrence_key(event: &AlertEvent) -> String {
     hash_hex(&[
         "sigiro/alert-occurrence/v1",
-        &event.project_id,
+        &event.tenant_id,
         &event.event_name,
         &event.timestamp_us.to_string(),
         &event.container_id,

@@ -104,7 +104,7 @@ fn tenant_key_auth_resolves_valid_key_and_rejects_revoked_or_unknown_keys() {
 }
 
 /// Per-mode "default" resolution: the name `"default"` stays valid for the
-/// local/edge project (`sanitize_tenant_id` accepts it — the edge pre-creates
+/// local/edge tenant (`sanitize_tenant_id` accepts it — the edge pre-creates
 /// it), but the HOSTED control plane must fail loud when an operator tries to
 /// provision a tenant literally named `default`.
 #[test]

@@ -1,7 +1,7 @@
 //! End-to-end test for the quack read-only edge query-serving surface
 //! (`SIGIRO_QUERY_SURFACE=quack`).
 //!
-//! Unlike this repo's other integration tests (which build a `ProjectPool`/
+//! Unlike this repo's other integration tests (which build a `TenantPool`/
 //! `AppState` in-process and drive the axum `Router` directly), this test
 //! spawns the REAL `sigiro serve` binary as a child process. That is
 //! deliberate: the thing under test is the production boot sequence itself —
@@ -189,7 +189,7 @@ impl QuackEdgeServer {
     }
 
     /// Poll `count(*)` for `service_name` until it reaches `expected` or a
-    /// 10s deadline passes (this test pins the per-project flusher to 1s in
+    /// 10s deadline passes (this test pins the per-tenant flusher to 1s in
     /// `spawn`, so ingested rows are not visible instantly).
     fn wait_for_span_count(&self, service_name: &str, expected: i64) -> i64 {
         let deadline = Instant::now() + Duration::from_secs(10);

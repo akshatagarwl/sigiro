@@ -528,7 +528,7 @@ pub fn duckdb_row_value_to_json(
 /// (`execute_sql` above) and the federated query coordinator
 /// (`crate::federate::run_federated_query`), which reads rows off its own
 /// local coordinator connection the same way this handler reads rows off a
-/// project reader connection. Public so tests can exercise it directly too.
+/// tenant reader connection. Public so tests can exercise it directly too.
 pub fn duckdb_value_to_json(val: duckdb::types::ValueRef<'_>) -> serde_json::Value {
     use duckdb::types::ValueRef;
     match val {

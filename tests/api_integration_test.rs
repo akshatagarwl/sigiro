@@ -18,7 +18,7 @@ use sigiro::client::{ClientAuth, SigiroClient};
 use sigiro::ingest;
 use sigiro::inserter::MsgRouter;
 use sigiro::mcp::SigiroMcp;
-use sigiro::pool::ProjectPool;
+use sigiro::pool::TenantPool;
 use sigiro::server::{AppState, build_http_router};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -48,15 +48,15 @@ fn build_context_with_auth(auth_mode: sigiro::auth::AuthMode) -> TestContext {
     let tmp_dir = TempDir::new().expect("failed to create temp dir");
     let data_dir = camino::Utf8PathBuf::from_path_buf(tmp_dir.path().to_path_buf()).unwrap();
 
-    let pool = Arc::new(ProjectPool::new(
+    let pool = Arc::new(TenantPool::new(
         data_dir.clone(),
         4,
         sigiro::storage::StorageMode::LocalFile,
     ));
 
-    // Explicit DI: initialize the default project connection before handlers access it.
-    pool.create_project("default")
-        .expect("failed to init default project connection");
+    // Explicit DI: initialize the default tenant connection before handlers access it.
+    pool.create_tenant("default")
+        .expect("failed to init default tenant connection");
 
     // In-memory SQLite admin DB with all required tables
     let admin_conn = Connection::open_in_memory().expect("failed to open in-memory SQLite");
@@ -121,8 +121,8 @@ async fn trace_detail_preserves_canonical_trace_id_wire_shape() {
     let ctx = build_test_context();
     ctx.state
         .pool
-        .get_project("default")
-        .expect("default project exists")
+        .get_tenant("default")
+        .expect("default tenant exists")
         .get()
         .execute(
             "INSERT INTO lake.sigiro_spans (
@@ -152,8 +152,8 @@ async fn trace_detail_uses_elapsed_span_envelope_for_total_duration() {
     let ctx = build_test_context();
     ctx.state
         .pool
-        .get_project("default")
-        .expect("default project exists")
+        .get_tenant("default")
+        .expect("default tenant exists")
         .get()
         .execute_batch(&format!(
             "INSERT INTO lake.sigiro_spans (
@@ -307,8 +307,8 @@ async fn openapi_query_request_example_executes() {
     let ctx = build_test_context();
     ctx.state
         .pool
-        .get_project("default")
-        .expect("default project exists")
+        .get_tenant("default")
+        .expect("default tenant exists")
         .get()
         .execute(
             "INSERT INTO lake.sigiro_spans (
@@ -436,7 +436,7 @@ async fn test_diagnose_rejects_singular_service_field() {
         .await
         .assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
     // A valid plural request must pass request-shape validation. Its domain
-    // result depends on whether the platform creates project metadata eagerly.
+    // result depends on whether the platform creates tenant metadata eagerly.
     let response = server
         .post("/v1/diagnose")
         .json(&json!({"services": ["nonexistent"]}))
@@ -526,7 +526,7 @@ async fn test_query_without_valid_tenant_key_returns_401() {
 #[tokio::test]
 async fn test_new_hosted_tenant_can_query_before_first_ingest() {
     // A Machine restart preserves the hosted control plane but loses its
-    // in-memory project pool. Query must therefore initialize the authenticated
+    // in-memory tenant pool. Query must therefore initialize the authenticated
     // tenant locally; provisioning-time initialization on another process is
     // insufficient, and ingest-then-query masks this lifecycle.
     let control = Arc::new(sigiro::auth::ControlPlane::open_in_memory_for_tests().unwrap());
@@ -681,8 +681,8 @@ async fn test_services_discovers_every_supported_signal() {
     let readers = ctx
         .state
         .pool
-        .get_project("default")
-        .expect("default project exists");
+        .get_tenant("default")
+        .expect("default tenant exists");
     readers
         .get()
         .execute_batch(
@@ -854,7 +854,7 @@ async fn test_services_discovers_every_supported_signal() {
 async fn test_anomalies_endpoint_returns_persisted_rows() {
     let ctx = build_test_context();
 
-    // Seed two anomaly rows into the default project's table — /v1/anomalies
+    // Seed two anomaly rows into the default tenant's table — /v1/anomalies
     // reads exactly what the scheduled pass (sigiro::anomaly) writes. The
     // BIGGER shift (0→42, unit-free magnitude 1.0 vs ≈0.008 for 24.9→25.3)
     // is deliberately given the OLDER ts_shift, so the ordering assertion
@@ -863,8 +863,8 @@ async fn test_anomalies_endpoint_returns_persisted_rows() {
         let readers = ctx
             .state
             .pool
-            .create_project("default")
-            .expect("default project");
+            .create_tenant("default")
+            .expect("default tenant");
         let conn = readers.get();
         conn.execute_batch(
             "INSERT INTO lake.sigiro_anomalies
@@ -986,8 +986,8 @@ async fn test_anomalies_incident_id_groups_same_bucket_shifts_per_service() {
         let readers = ctx
             .state
             .pool
-            .create_project("default")
-            .expect("default project");
+            .create_tenant("default")
+            .expect("default tenant");
         let conn = readers.get();
         conn.execute_batch(
             "INSERT INTO lake.sigiro_anomalies
@@ -1327,8 +1327,8 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
     let conn = ctx
         .state
         .pool
-        .get_project("default")
-        .expect("default project connection should exist");
+        .get_tenant("default")
+        .expect("default tenant connection should exist");
     let guard = conn.get();
     let spans: i64 = guard
         .query_row(
@@ -1465,8 +1465,8 @@ async fn test_otlp_protobuf_preserves_event_name_and_classifies_mixed_case_error
     let conn = ctx
         .state
         .pool
-        .get_project("default")
-        .expect("default project should exist");
+        .get_tenant("default")
+        .expect("default tenant should exist");
     let event_name: String = conn
         .get()
         .query_row(
@@ -1691,20 +1691,20 @@ fn writer_thread_records_every_checkpoint_outcome() {
             .expect("src/inserter.rs should be readable");
 
     assert!(
-        inserter_rs.contains("maintenance.record_checkpoint_failure(project_id)"),
+        inserter_rs.contains("maintenance.record_checkpoint_failure(tenant_id)"),
         "run_writer_thread's Checkpoint arm must record failures into \
          MaintenanceHealth, otherwise sustained CHECKPOINT failure silently \
          lets the catalog absorb telemetry that can never be materialised (#91)"
     );
     assert!(
-        inserter_rs.contains("maintenance.record_checkpoint_success(project_id)"),
+        inserter_rs.contains("maintenance.record_checkpoint_success(tenant_id)"),
         "run_writer_thread must record checkpoint SUCCESS too — without it a \
          recovered backend never re-opens ingest and the shed is permanent (#91)"
     );
 
     // The ingest gate must consult the same state the writer records into.
     assert!(
-        inserter_rs.contains("self.maintenance.is_stalled(&project_id)"),
+        inserter_rs.contains("self.maintenance.is_stalled(&tenant_id)"),
         "MsgRouter::send must gate on MaintenanceHealth::is_stalled, or nothing \
          sheds and #91 is only a log line again"
     );

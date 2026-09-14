@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 use sigiro::responses::HealthResponse;
-use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
+use sigiro::{data_dir, inserter::MsgRouter, pool::TenantPool, profiling::start_profiling};
 use std::sync::atomic::AtomicBool;
 
 #[global_allocator]
@@ -367,32 +367,32 @@ async fn run_serve() -> Result<()> {
 
     // Resolve the storage mode ONCE, up front, validating the config as a
     // coherent axis (fail-loud on incoherence, e.g. S3 bucket without a catalog
-    // URL). Threaded into the pool so every per-project attach uses this single
+    // URL). Threaded into the pool so every per-tenant attach uses this single
     // decision instead of re-reading the environment.
     let storage_mode = sigiro::storage::StorageMode::from_env()?;
 
-    // MsgRouter: handlers send directly to per-project flusher tasks.
-    let pool = Arc::new(ProjectPool::new(dir.clone(), 100, storage_mode));
+    // MsgRouter: handlers send directly to per-tenant flusher tasks.
+    let pool = Arc::new(TenantPool::new(dir.clone(), 100, storage_mode));
     let admin_conn = sigiro::admin::open_admin_db(&dir)?;
 
     let kernel = probe_kernel_release();
 
-    // Pre-create the "default" project.
+    // Pre-create the "default" tenant.
     //
     // - Quack enabled (SIGIRO_QUERY_SURFACE=quack): ALWAYS pre-create,
     //   regardless of storage mode. The quack query surface is served over a
-    //   connection *cloned from the "default" project's* pool entry (see
+    //   connection *cloned from the "default" tenant's* pool entry (see
     //   crate::server::run_servers's `pool.clone_connection("default")`) —
-    //   this holds whether "default" is a local DuckDB-file project or a
-    //   distributed (SIGIRO_CATALOG_URL) project backed by S3 cold storage
+    //   this holds whether "default" is a local DuckDB-file tenant or a
+    //   distributed (SIGIRO_CATALOG_URL) tenant backed by S3 cold storage
     //   (the single-edge "Option A" quack-over-S3 topology: one distributed
-    //   project literally named "default", reusing the same distributed
+    //   tenant literally named "default", reusing the same distributed
     //   ATTACH path every other tenant uses — see src/storage.rs
     //   `sanitize_tenant_id`, which no longer reserves "default"). A
     //   pre-create failure here used to be downgraded to a non-fatal WARN
     //   unconditionally, which let boot continue into a server that then
     //   failed minutes later with the misleading "connection not found for
-    //   project default — call create_project() first" instead of this, its
+    //   tenant default — call create_tenant() first" instead of this, its
     //   real cause. Fail loud here instead.
     // - Quack disabled + local storage: pre-create so ad-hoc local queries
     //   work without ingest first; non-fatal on failure (existing behavior).
@@ -405,37 +405,37 @@ async fn run_serve() -> Result<()> {
     let quack_enabled = sigiro::config::query_surface()? == sigiro::config::QuerySurface::Quack;
 
     if quack_enabled {
-        pool.create_project("default").map_err(|e| {
+        pool.create_tenant("default").map_err(|e| {
             let mut chain = format!("{e}");
             for cause in e.chain().skip(1) {
                 chain.push_str(&format!("\n  Caused by: {cause}"));
             }
             anyhow::anyhow!(
-                "default project init failed and SIGIRO_QUERY_SURFACE=quack requires it (the \
-                 quack query surface serves from the \"default\" project's connection) — \
+                "default tenant init failed and SIGIRO_QUERY_SURFACE=quack requires it (the \
+                 quack query surface serves from the \"default\" tenant's connection) — \
                  refusing to boot into a server that would fail later with a misleading \
                  \"connection not found\" instead:\n{chain}"
             )
         })?;
         let topology = if storage_mode.uses_s3() {
-            "distributed S3 project default"
+            "distributed S3 tenant default"
         } else if storage_mode.is_distributed() {
-            "distributed local-data project default"
+            "distributed local-data tenant default"
         } else {
-            "local project default"
+            "local tenant default"
         };
         tracing::info!("serving quack edge — {topology}");
     } else if distributed {
-        tracing::info!("distributed storage configured — skipping default project pre-create");
+        tracing::info!("distributed storage configured — skipping default tenant pre-create");
     } else {
-        match pool.create_project("default") {
-            Ok(_) => tracing::info!("default project initialized"),
+        match pool.create_tenant("default") {
+            Ok(_) => tracing::info!("default tenant initialized"),
             Err(e) => {
                 let mut chain = format!("{e}");
                 for cause in e.chain().skip(1) {
                     chain.push_str(&format!("\n  Caused by: {cause}"));
                 }
-                tracing::warn!("default project init failed (non-fatal): {chain}");
+                tracing::warn!("default tenant init failed (non-fatal): {chain}");
             }
         }
     }
@@ -510,7 +510,7 @@ async fn run_serve() -> Result<()> {
 }
 
 #[tracing::instrument(skip_all)]
-async fn run_evictor(pool: Arc<ProjectPool>, interval_secs: u64, max_idle_secs: u64) {
+async fn run_evictor(pool: Arc<TenantPool>, interval_secs: u64, max_idle_secs: u64) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     loop {
         interval.tick().await;

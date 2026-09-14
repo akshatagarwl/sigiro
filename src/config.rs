@@ -92,7 +92,7 @@ pub(crate) static EXTENSION_DIR: Envar<String> = Envar::on_startup("SIGIRO_EXTEN
     })
 });
 
-/// DuckDB worker threads per shared project database. Default: host parallelism.
+/// DuckDB worker threads per shared tenant database. Default: host parallelism.
 static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS", || {
     EnvarDef::Default(
         std::thread::available_parallelism()
@@ -101,7 +101,7 @@ static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS",
     )
 });
 
-/// DuckDB memory cap per shared project database. Default: 400 MB — safely
+/// DuckDB memory cap per shared tenant database. Default: 400 MB — safely
 /// under a small hosted container's limit, so DuckDB errors/spills instead of
 /// the OS OOM-killing the whole process. Still env-overridable for larger boxes.
 pub(crate) static DUCKDB_MEMORY_LIMIT: Envar<String> =
@@ -128,7 +128,7 @@ pub(crate) static PYROSCOPE_ENDPOINT: Envar<String> =
         EnvarDef::Default(String::new())
     });
 
-/// Flush interval for per-project flusher tasks (seconds). Default: 60s.
+/// Flush interval for per-tenant flusher tasks (seconds). Default: 60s.
 /// Controls how often buffered rows are flushed to DuckDB, even if the row
 /// threshold hasn't been reached. Lower values reduce data-loss window on
 /// crashes; higher values reduce I/O overhead.
@@ -159,7 +159,7 @@ pub(crate) static FLUSH_INTERVAL_SECS: Envar<u64> =
 pub(crate) static FLUSH_ROW_THRESHOLD: Envar<usize> =
     Envar::on_startup("SIGIRO_FLUSH_ROW_THRESHOLD", || EnvarDef::Default(10_000));
 
-/// How long `InsertRouter::shutdown_and_wait` gives each project's flusher to
+/// How long `InsertRouter::shutdown_and_wait` gives each tenant's flusher to
 /// drain before aborting it. Default: 5s.
 ///
 /// The budget is wall-clock but the work is not: the flusher hands a Shutdown
@@ -185,7 +185,7 @@ pub(crate) fn shutdown_timeout_secs() -> Result<u64> {
     Ok(secs)
 }
 
-/// Backpressure policy when the per-project channel is full. Default: "block".
+/// Backpressure policy when the per-tenant channel is full. Default: "block".
 /// - "block": sender awaits space (preserves data, may slow ingest)
 /// - "drop-newest": drops the incoming message (prevents stalls, loses newest data)
 pub(crate) static BACKPRESSURE_POLICY: Envar<String> =
@@ -193,7 +193,7 @@ pub(crate) static BACKPRESSURE_POLICY: Envar<String> =
         EnvarDef::Default("block".to_string())
     });
 
-/// Backpressure policy for per-project ingest channels.
+/// Backpressure policy for per-tenant ingest channels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackpressurePolicy {
     /// Block the sender until space is available. Guarantees no data loss but may
@@ -281,13 +281,13 @@ pub(crate) fn max_ingest_body_bytes() -> Result<NonZeroUsize> {
 /// still drains to disk. Post-breach overshoot is roughly one sampling window
 /// of ingest (`sample_interval × ingest_rate`) plus the full queued backlog —
 /// and that backlog scales with the number of active tenants, NOT a fixed
-/// amount: each project has its own `PROJECT_CHANNEL_CAPACITY`-deep channel of
+/// amount: each tenant has its own `PROJECT_CHANNEL_CAPACITY`-deep channel of
 /// messages up to `SIGIRO_MAX_INGEST_BODY_BYTES` each, plus in-flush buffers.
 /// SET THE CAP BELOW PHYSICAL DISK WITH ENOUGH HEADROOM TO ABSORB THAT. For the
-/// single-tenant / few-project self-host-edge deployments this serves today the
+/// single-tenant / few-tenant self-host-edge deployments this serves today the
 /// backlog is small against a multi-GB margin (and DuckLake compresses on write,
 /// so on-disk overshoot is well under the raw queued bytes); a many-tenant box
-/// must size headroom to its project count. Do not set it at the disk's true
+/// must size headroom to its tenant count. Do not set it at the disk's true
 /// limit.
 ///
 // ponytail: soft cap sized by headroom is right for single/few-tenant edges.
@@ -306,7 +306,7 @@ pub fn max_disk_bytes() -> Result<u64> {
     MAX_DISK_BYTES.value().map_err(anyhow::Error::from)
 }
 
-/// Consecutive DuckLake `CHECKPOINT` failures on one project's writer before
+/// Consecutive DuckLake `CHECKPOINT` failures on one tenant's writer before
 /// its ingest is shed with 507 / `resource_exhausted`.
 ///
 /// A failed checkpoint materialises nothing: telemetry keeps accumulating in
@@ -374,8 +374,8 @@ pub(crate) static RETENTION_DAYS: Envar<u32> =
 pub(crate) static CATALOG_URL: Envar<String> =
     Envar::on_startup("SIGIRO_CATALOG_URL", || EnvarDef::Unset);
 
-/// Which cross-project query surface (if any) this node exposes.
-/// - "none" (default): no cross-project query surface.
+/// Which cross-tenant query surface (if any) this node exposes.
+/// - "none" (default): no cross-tenant query surface.
 /// - "quack": the DuckDB `quack` extension serves this node's DuckLake data
 ///   for external ATTACH. Inert until the query-surface feature lands.
 pub(crate) static QUERY_SURFACE: Envar<String> = Envar::on_startup("SIGIRO_QUERY_SURFACE", || {

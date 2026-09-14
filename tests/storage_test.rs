@@ -290,7 +290,7 @@ fn sanitize_tenant_id_rejects_reserved_ids() {
     }
 
     // "default" is NOT reserved — it names a normal distributed tenant,
-    // independently namespaced from the local-mode "default project" dir
+    // independently namespaced from the local-mode "default tenant" dir
     // (see sanitize_tenant_id's doc comment).
     assert_eq!(
         storage::sanitize_tenant_id("default").unwrap().as_ref(),

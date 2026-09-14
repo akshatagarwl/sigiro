@@ -15,7 +15,7 @@
 
 use std::time::{Duration, Instant};
 
-use sigiro::pool::ProjectPool;
+use sigiro::pool::TenantPool;
 use sigiro::storage::{DataLocation, StorageConfig, StorageMode};
 
 // Matches docker-compose.dev.yml.
@@ -91,14 +91,14 @@ fn poisoned_catalog_fails_fast_not_wedged() {
     drop_schema();
     poison_with_s3_data_path();
 
-    let pool = ProjectPool::new(
+    let pool = TenantPool::new(
         data_dir.clone(),
         4,
         StorageMode::Distributed(local_config()),
     );
 
     let start = Instant::now();
-    let result = pool.create_project(TENANT);
+    let result = pool.create_tenant(TENANT);
     let elapsed = start.elapsed();
 
     drop_schema(); // cleanup regardless of the assertions below
