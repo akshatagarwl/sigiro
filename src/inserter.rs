@@ -249,15 +249,14 @@ impl FlushConfig {
         let byte_threshold = crate::config::FLUSH_BYTE_THRESHOLD
             .value()
             .expect("FLUSH_BYTE_THRESHOLD config must be valid");
-        let interval_secs = crate::config::FLUSH_INTERVAL_SECS
-            .value()
-            .expect("FLUSH_INTERVAL_SECS config must be valid");
+        let interval_secs = crate::config::flush_interval_seconds()
+            .expect("SIGIRO_FLUSH_INTERVAL_SECS config must be valid");
         let backpressure =
             crate::config::backpressure_policy().expect("BACKPRESSURE_POLICY config must be valid");
         Self {
             row_threshold,
             byte_threshold,
-            interval: Duration::from_secs(interval_secs),
+            interval: Duration::from_secs(interval_secs.as_secs()),
             backpressure,
         }
     }

@@ -150,8 +150,26 @@ pub(crate) static PYROSCOPE_ENDPOINT: Envar<String> =
 /// see roadmap #89 for the two that are not (accumulation-triggered
 /// materialization of DuckLake inlined data, and `ducklake_merge_adjacent_files`
 /// compaction). Do not raise it again without measuring file SIZE, not count.
-pub(crate) static FLUSH_INTERVAL_SECS: Envar<u64> =
+#[nutype::nutype(
+    validate(greater = 0),
+    derive(Debug, Clone, Copy, PartialEq, Eq, FromStr, AsRef, Display)
+)]
+pub struct FlushIntervalSeconds(u64);
+
+impl FlushIntervalSeconds {
+    pub fn as_secs(&self) -> u64 {
+        *self.as_ref()
+    }
+}
+
+static FLUSH_INTERVAL_SECS: Envar<u64> =
     Envar::on_startup("SIGIRO_FLUSH_INTERVAL_SECS", || EnvarDef::Default(1));
+
+pub(crate) fn flush_interval_seconds() -> Result<FlushIntervalSeconds> {
+    let raw = FLUSH_INTERVAL_SECS.value()?;
+    FlushIntervalSeconds::try_new(raw)
+        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_FLUSH_INTERVAL_SECS: {error}"))
+}
 
 /// Row count threshold that triggers an immediate flush. Default: 10_000.
 /// When this many rows are buffered across all signal tables, the flusher

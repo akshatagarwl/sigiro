@@ -1,5 +1,18 @@
 #![allow(clippy::disallowed_methods)]
 
+use sigiro::config::FlushIntervalSeconds;
+
+#[test]
+fn flush_interval_seconds_rejects_zero_and_preserves_numeric_config_format() {
+    assert!(FlushIntervalSeconds::try_new(0).is_err());
+    assert!("0".parse::<FlushIntervalSeconds>().is_err());
+
+    let interval = "1"
+        .parse::<FlushIntervalSeconds>()
+        .expect("positive interval must retain the existing numeric config format");
+    assert_eq!(interval.as_secs(), 1);
+}
+
 #[test]
 fn data_dir_uses_platform_default_when_unset() {
     // data_dir() falls back to the platform data directory when SIGIRO_DATA_DIR
