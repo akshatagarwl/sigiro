@@ -159,6 +159,9 @@ async fn main() -> Result<()> {
             None
         }
     };
+    let _runtime_metrics_guard = _telemetry_guard
+        .as_ref()
+        .map(|_| sigiro::runtime_metrics::spawn());
 
     let cli = Cli::parse();
 
@@ -514,7 +517,14 @@ async fn run_evictor(pool: Arc<ProjectPool>, interval_secs: u64, max_idle_secs: 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     loop {
         interval.tick().await;
-        pool.evict_idle(std::time::Duration::from_secs(max_idle_secs));
+        let pool = Arc::clone(&pool);
+        if let Err(error) = tokio::task::spawn_blocking(move || {
+            pool.evict_idle(std::time::Duration::from_secs(max_idle_secs));
+        })
+        .await
+        {
+            tracing::error!("idle eviction task failed: {error}");
+        }
     }
 }
 

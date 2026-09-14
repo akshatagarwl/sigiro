@@ -930,6 +930,26 @@ fn check_row(
     Ok(())
 }
 
+/// Reject pathological fanout before opening any edge connection.
+#[test]
+fn federated_query_rejects_excessive_edge_count() {
+    let edges: Vec<String> = (0..65)
+        .map(|index| format!("edge-{index}=127.0.0.1:{}", 20_000 + index))
+        .collect();
+    let output = run_query(
+        "SELECT count(*) FROM sigiro_spans WHERE timestamp > now() - interval '1 minute'",
+        &edges,
+        "test-token",
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("exceeding the maximum of 64"),
+        "unexpected excessive-edge error: {stderr}"
+    );
+}
+
 /// Single-pass smoke test — always runs as part of the standard `cargo test` gate.
 #[test]
 fn federated_query_single_iteration() {

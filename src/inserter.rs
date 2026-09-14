@@ -30,13 +30,6 @@ pub enum RouterError {
         #[source]
         source: anyhow::Error,
     },
-    /// Telemetry was queued, but its alert transition could not be made durable.
-    #[error("alert persistence failed for project {project_id}: {source}")]
-    AlertPersistence {
-        project_id: String,
-        #[source]
-        source: anyhow::Error,
-    },
     /// On-disk footprint reached the configured `SIGIRO_MAX_DISK_BYTES` cap —
     /// ingest is rejected to keep the box from filling its disk. Maps to HTTP
     /// 507 / gRPC `resource_exhausted`, distinct from an internal 500.
@@ -52,6 +45,9 @@ pub enum RouterError {
         "storage maintenance stalled for project {project_id} — {failures} consecutive DuckLake CHECKPOINT failures; ingest rejected so the catalog cannot grow unbounded"
     )]
     MaintenanceStalled { project_id: String, failures: u32 },
+    /// Expensive work reached its process-wide concurrency budget.
+    #[error(transparent)]
+    Admission(#[from] crate::workload::AdmissionError),
 }
 
 /// Per-project DuckLake maintenance health: how many consecutive
@@ -275,9 +271,11 @@ pub struct MsgRouter {
     pool: Arc<ProjectPool>,
     flush_config: FlushConfig,
     project_senders: DashMap<String, (mpsc::Sender<FlusherCommand>, TokioJoinHandle<()>)>,
+    project_initializers: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     drop_count: AtomicUsize,
     disk: Arc<DiskCapacityState>,
     maintenance: Arc<MaintenanceHealth>,
+    workloads: crate::workload::WorkloadBudget,
     alerts: Option<crate::alerts::AlertStore>,
 }
 
@@ -374,9 +372,11 @@ impl MsgRouter {
             pool,
             flush_config,
             project_senders: DashMap::new(),
+            project_initializers: DashMap::new(),
             drop_count: AtomicUsize::new(0),
             disk,
             maintenance,
+            workloads: crate::workload::WorkloadBudget::new(),
             alerts: None,
         }
     }
@@ -410,6 +410,10 @@ impl MsgRouter {
         self.drop_count.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn workloads(&self) -> crate::workload::WorkloadBudget {
+        self.workloads.clone()
+    }
+
     pub(crate) async fn run_retention_cleanup(&self, days: u32) -> Result<()> {
         // `known_project_ids`, NOT `project_ids`. The latter is the live
         // connection map, and the idle evictor drops anything untouched for
@@ -419,6 +423,7 @@ impl MsgRouter {
         // not have one, so enumerating beyond the pool is safe.
         for project_id in self.pool.known_project_ids() {
             self.ensure_flusher(&project_id)
+                .await
                 .map_err(|e| anyhow::anyhow!("failed to ensure retention flusher: {e}"))?;
             let sender = self
                 .project_senders
@@ -444,47 +449,62 @@ impl MsgRouter {
     }
 
     /// Ensure a flusher exists for the project (lazy creation on first use).
-    /// Creates the connection and spawns the flusher task if not yet registered.
-    /// Thread-safe via DashMap entry API. No side effects if already initialized.
-    fn ensure_flusher(&self, project_id: &str) -> Result<(), RouterError> {
-        use dashmap::mapref::entry::Entry;
+    /// DuckLake attachment runs once per project on Tokio's blocking pool.
+    async fn ensure_flusher(&self, project_id: &str) -> Result<(), RouterError> {
+        if self.project_senders.contains_key(project_id) {
+            return Ok(());
+        }
+
+        let initializer = self
+            .project_initializers
+            .entry(project_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let _initializing = initializer.lock().await;
+        if self.project_senders.contains_key(project_id) {
+            return Ok(());
+        }
 
         let pid = project_id.to_string();
-        match self.project_senders.entry(pid.clone()) {
-            Entry::Occupied(_) => {
-                // Already registered — return Ok, caller can send immediately.
-                tracing::debug!(project_id = %pid, "ensure_flusher: flusher already exists for project");
-                Ok(())
-            }
-            Entry::Vacant(e) => {
-                self.pool.create_project(project_id).map_err(|source| {
-                    RouterError::ConnectionFailed {
-                        project_id: project_id.to_string(),
-                        source,
-                    }
-                })?;
-                let writer = self.pool.take_writer(project_id).map_err(|source| {
-                    RouterError::ConnectionFailed {
-                        project_id: project_id.to_string(),
-                        source,
-                    }
-                })?;
-                let pool = Arc::clone(&self.pool);
-                let cfg = self.flush_config.clone();
-                let maintenance = Arc::clone(&self.maintenance);
+        let permit = self
+            .workloads
+            .try_acquire(crate::workload::WorkloadClass::ProjectInit)?;
+        let pool_for_open = Arc::clone(&self.pool);
+        let open_pid = pid.clone();
+        let writer_result = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            pool_for_open.create_project_writer(&open_pid)
+        })
+        .await
+        .map_err(|source| RouterError::ConnectionFailed {
+            project_id: pid.clone(),
+            source: anyhow::anyhow!("project initialization task failed: {source}"),
+        })
+        .and_then(|result| {
+            result.map_err(|source| RouterError::ConnectionFailed {
+                project_id: pid.clone(),
+                source,
+            })
+        });
+        let writer = match writer_result {
+            Ok(writer) => writer,
+            Err(error) => return Err(error),
+        };
 
-                let (tx, rx) = mpsc::channel::<FlusherCommand>(PROJECT_CHANNEL_CAPACITY);
-                let pid_spawn = pid.clone();
-                tracing::info!(project_id = %pid, "ensure_flusher: spawning new flusher task");
-                let handle = tokio::spawn(async move {
-                    run_flusher(pid_spawn, writer, rx, pool, cfg, maintenance).await;
-                });
-
-                e.insert((tx, handle));
-                tracing::info!(project_id = %pid, "ensure_flusher: inserted new sender into project_senders");
-                Ok(())
-            }
-        }
+        let pool = Arc::clone(&self.pool);
+        let cfg = self.flush_config.clone();
+        let maintenance = Arc::clone(&self.maintenance);
+        let workloads = self.workloads.clone();
+        let (tx, rx) = mpsc::channel::<FlusherCommand>(PROJECT_CHANNEL_CAPACITY);
+        let pid_spawn = pid.clone();
+        tracing::info!(project_id = %pid, "ensure_flusher: spawning new flusher task");
+        let handle = tokio::spawn(async move {
+            run_flusher(pid_spawn, writer, rx, pool, cfg, maintenance, workloads).await;
+        });
+        self.project_senders.insert(pid.clone(), (tx, handle));
+        self.project_initializers.remove(&pid);
+        tracing::info!(project_id = %pid, "ensure_flusher: inserted new sender into project_senders");
+        Ok(())
     }
 
     /// Route a message to the appropriate per-project flusher.
@@ -516,31 +536,37 @@ impl MsgRouter {
             _ => None,
         };
 
-        // Lazy creation: ensure flusher exists before sending
-        self.ensure_flusher(&project_id)?;
+        // Lazy creation: ensure flusher exists before sending.
+        self.ensure_flusher(&project_id).await?;
 
-        let entry =
-            self.project_senders
-                .get(&project_id)
-                .ok_or_else(|| RouterError::ConnectionFailed {
-                    project_id: project_id.clone(),
-                    source: anyhow::anyhow!(
-                        "project sender disappeared after flusher initialization"
-                    ),
-                })?;
+        let sender = self
+            .project_senders
+            .get(&project_id)
+            .map(|entry| entry.value().0.clone())
+            .ok_or_else(|| RouterError::ConnectionFailed {
+                project_id: project_id.clone(),
+                source: anyhow::anyhow!("project sender disappeared after flusher initialization"),
+            })?;
 
-        let sender = &entry.value().0;
+        let alert_permit = if alert_batch.is_some() {
+            Some(
+                self.workloads
+                    .try_acquire(crate::workload::WorkloadClass::Maintenance)?,
+            )
+        } else {
+            None
+        };
 
         match self.flush_config.backpressure {
             BackpressurePolicy::Block => {
                 match sender.send(FlusherCommand::Ingest(Box::new(msg))).await {
                     Ok(()) => {
-                        self.process_alerts(&project_id, alert_batch.as_ref())?;
+                        self.process_alerts(&project_id, alert_batch, alert_permit)
+                            .await;
                         Ok(())
                     }
                     Err(e) => {
                         tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
-                        drop(entry);
                         // Remove the entry and check if the flusher task panicked.
                         if let Some((_, (_, handle))) = self.project_senders.remove(&project_id)
                             && handle.is_finished()
@@ -566,7 +592,8 @@ impl MsgRouter {
             BackpressurePolicy::DropNewest => {
                 match sender.try_send(FlusherCommand::Ingest(Box::new(msg))) {
                     Ok(()) => {
-                        self.process_alerts(&project_id, alert_batch.as_ref())?;
+                        self.process_alerts(&project_id, alert_batch, alert_permit)
+                            .await;
                         Ok(())
                     }
                     Err(mpsc::error::TrySendError::Full(_)) => {
@@ -580,7 +607,6 @@ impl MsgRouter {
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         tracing::error!(project_id = %project_id_for_err, "send failed: channel closed");
-                        drop(entry);
                         if let Some((_, (_, handle))) = self.project_senders.remove(&project_id)
                             && handle.is_finished()
                         {
@@ -605,15 +631,34 @@ impl MsgRouter {
         }
     }
 
-    fn process_alerts(
+    async fn process_alerts(
         &self,
         project_id: &str,
-        batch: Option<&RecordBatch>,
-    ) -> Result<(), RouterError> {
-        let (Some(alerts), Some(batch)) = (&self.alerts, batch) else {
-            return Ok(());
+        batch: Option<RecordBatch>,
+        permit: Option<crate::workload::WorkloadPermit>,
+    ) {
+        let (Some(alerts), Some(batch), Some(permit)) = (self.alerts.clone(), batch, permit) else {
+            return;
         };
-        match alerts.process_log_batch(project_id, batch) {
+        let project_id = project_id.to_string();
+        let alert_project_id = project_id.clone();
+        let result = match tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            alerts.process_log_batch(&alert_project_id, &batch)
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(source) => {
+                tracing::error!(
+                    project_id,
+                    error = %source,
+                    "alert task failed after telemetry was accepted"
+                );
+                return;
+            }
+        };
+        match result {
             Ok(result) if result.notifications_enqueued > 0 => tracing::info!(
                 project_id,
                 notifications = result.notifications_enqueued,
@@ -621,13 +666,13 @@ impl MsgRouter {
             ),
             Ok(_) => {}
             Err(source) => {
-                return Err(RouterError::AlertPersistence {
-                    project_id: project_id.to_string(),
-                    source,
-                });
+                tracing::error!(
+                    project_id,
+                    error = %source,
+                    "alert persistence failed after telemetry was accepted"
+                );
             }
         }
-        Ok(())
     }
 
     /// Shut down and await all flusher tasks. Guarantees all buffered data
@@ -1014,15 +1059,22 @@ async fn run_flusher(
     pool: Arc<ProjectPool>,
     cfg: FlushConfig,
     maintenance: Arc<MaintenanceHealth>,
+    workloads: crate::workload::WorkloadBudget,
 ) {
     let flush_interval = cfg.interval;
     let (writer_tx, writer_rx) = mpsc::channel::<WriterCommand>(PROJECT_CHANNEL_CAPACITY);
     let writer_project_id = project_id.clone();
     let writer_cfg = cfg.clone();
     let writer_maintenance = Arc::clone(&maintenance);
+    let writer_slot = Arc::new(parking_lot::Mutex::new(Some(writer)));
+    let writer_for_thread = Arc::clone(&writer_slot);
     let writer_handle = match std::thread::Builder::new()
         .name(format!("sigiro-flusher-{project_id}"))
         .spawn(move || {
+            let writer = writer_for_thread
+                .lock()
+                .take()
+                .expect("writer is transferred exactly once");
             run_writer_thread(
                 &writer_project_id,
                 writer,
@@ -1034,6 +1086,9 @@ async fn run_flusher(
         Ok(handle) => handle,
         Err(error) => {
             tracing::error!(project_id, "failed to spawn writer thread: {error}");
+            if let Some(writer) = writer_slot.lock().take() {
+                pool.return_writer(&project_id, writer);
+            }
             return;
         }
     };
@@ -1093,7 +1148,7 @@ async fn run_flusher(
                     );
                 } else {
                     anomaly_detection =
-                        Some(spawn_anomaly_detection(&project_id, &pool, &writer_tx));
+                        spawn_anomaly_detection(&project_id, &pool, &writer_tx, &workloads);
                 }
             }
 
@@ -1157,13 +1212,22 @@ fn spawn_anomaly_detection(
     project_id: &str,
     pool: &Arc<ProjectPool>,
     writer_tx: &mpsc::Sender<WriterCommand>,
-) -> TokioJoinHandle<()> {
+    workloads: &crate::workload::WorkloadBudget,
+) -> Option<TokioJoinHandle<()>> {
+    let permit = match workloads.try_acquire(crate::workload::WorkloadClass::Anomaly) {
+        Ok(permit) => permit,
+        Err(error) => {
+            tracing::warn!(project_id, "{error}; skipping anomaly pass");
+            return None;
+        }
+    };
     let project_id = project_id.to_string();
     let pool = Arc::clone(pool);
     let writer_tx = writer_tx.clone();
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let reader_project_id = project_id.clone();
         let detected = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             // `readers.get()` blocks until a reader is free — fine on the
             // blocking pool, and it competes with queries, never with the
             // writer.
@@ -1191,7 +1255,7 @@ fn spawn_anomaly_detection(
                 "anomaly detection panicked — ingest/flush/retention unaffected: {e}"
             ),
         }
-    })
+    }))
 }
 
 fn run_writer_thread(
@@ -1286,9 +1350,9 @@ fn run_writer_thread(
     if let Err(e) = flusher.flush(project_id) {
         tracing::error!(project_id, "final flush failed: {e:#}");
     }
-    if let Err(e) = flusher.checkpoint(project_id) {
-        tracing::warn!(project_id, "final DuckLake CHECKPOINT failed: {e:#}");
-    }
+    // A successful flush commits the final DuckLake transaction. CHECKPOINT is
+    // compaction/retention maintenance, not the durability boundary, and remains
+    // owned by ProjectPool after the writer has been returned without lock overlap.
     flusher.into_connection()
 }
 

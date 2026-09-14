@@ -1452,7 +1452,7 @@ async fn test_otlp_oom_events_drive_alert_lifecycle_once() {
 }
 
 #[tokio::test]
-async fn test_otlp_rejects_event_when_alert_state_is_not_durable() {
+async fn test_otlp_accepts_event_when_alert_state_is_not_durable() {
     let ctx = build_test_context();
     let (otlp_app, router) = build_otlp_app_with_router(&ctx.state);
     let otlp = TestServer::new(otlp_app).expect("failed to build OTLP test server");
@@ -1481,7 +1481,7 @@ async fn test_otlp_rejects_event_when_alert_state_is_not_durable() {
             }]
         }))
         .await;
-    response.assert_status_internal_server_error();
+    response.assert_status_ok();
 
     router
         .shutdown_and_wait()

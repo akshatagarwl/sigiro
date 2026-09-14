@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
-use axum_anyhow::{ApiResult, ResultExt, bad_request, internal_error};
+use axum_anyhow::{ApiError, ApiResult, ResultExt, bad_request, internal_error, too_many_requests};
 use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use axum_valid::Valid;
@@ -1072,10 +1072,15 @@ async fn execute_sql(
     let sql_clone = sql.to_string();
     let timeout_secs = crate::config::query_timeout_secs()?;
     let max_rows = crate::config::max_result_rows()?;
+    let permit = state
+        .router
+        .workloads()
+        .try_acquire(crate::workload::WorkloadClass::Query)?;
     let (handle_tx, mut handle_rx) =
         tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
 
     let mut query_task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         // DuckLake ATTACH can perform network I/O and cold extension loading;
         // keep it on the blocking worker with the query, never on Tokio's
         // async runtime thread.
@@ -1151,6 +1156,17 @@ async fn execute_sql(
             }
             anyhow::bail!("query exceeded {timeout_secs} second timeout")
         }
+    }
+}
+
+fn query_api_error(title: &str, error: &anyhow::Error) -> ApiError {
+    if error
+        .downcast_ref::<crate::workload::AdmissionError>()
+        .is_some()
+    {
+        too_many_requests(title, &format!("{error:#}"))
+    } else {
+        bad_request(title, &format!("{error:#}"))
     }
 }
 
@@ -1314,7 +1330,7 @@ async fn query_handler(
         }
         Err(e) => {
             tracing::warn!(sql = %sql_preview, "query failed: {e:#}");
-            Err(bad_request("query rejected", &format!("{e:#}")))
+            Err(query_api_error("query rejected", &e))
         }
     }
 }
@@ -1384,7 +1400,7 @@ async fn services_handler(
     );
     let (results, _truncated) = execute_sql(&state, &auth, &sql)
         .await
-        .map_err(|e| bad_request("services query failed", &format!("{e:#}")))?;
+        .map_err(|e| query_api_error("services query failed", &e))?;
 
     let mut services = Vec::new();
     for row in results {
@@ -1441,13 +1457,27 @@ async fn alerts_handler(
             "status must be firing or resolved",
         ));
     }
-    let alerts = state
-        .alerts
-        .list(auth.as_ref(), query.status.as_deref())
-        .map_err(|error| {
-            tracing::error!(project_id = auth.as_ref(), "alerts query failed: {error:#}");
-            internal_error("alerts query failed", "unable to read alert state")
-        })?;
+    let alert_store = state.alerts.clone();
+    let project_id = auth.as_ref().to_string();
+    let status = query.status;
+    let permit = state
+        .router
+        .workloads()
+        .try_acquire(crate::workload::WorkloadClass::Maintenance)
+        .map_err(|error| too_many_requests("alerts busy", &error.to_string()))?;
+    let alerts = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        alert_store.list(&project_id, status.as_deref())
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(project_id = auth.as_ref(), "alerts task failed: {error}");
+        internal_error("alerts query failed", "unable to read alert state")
+    })?
+    .map_err(|error| {
+        tracing::error!(project_id = auth.as_ref(), "alerts query failed: {error:#}");
+        internal_error("alerts query failed", "unable to read alert state")
+    })?;
     Ok(Json(AlertsResponse { alerts }))
 }
 
@@ -1545,7 +1575,7 @@ async fn anomalies_handler(
     );
     let (results, truncated) = execute_sql(&state, &auth, &sql)
         .await
-        .map_err(|e| bad_request("anomalies query failed", &format!("{e:#}")))?;
+        .map_err(|e| query_api_error("anomalies query failed", &e))?;
 
     let mut anomalies = Vec::with_capacity(results.len());
     for row in results {
@@ -1637,7 +1667,7 @@ async fn trace_detail_handler(
     );
     let (results, _truncated) = execute_sql(&state, &auth, &sql)
         .await
-        .map_err(|e| bad_request("trace detail query failed", &format!("{e:#}")))?;
+        .map_err(|e| query_api_error("trace detail query failed", &e))?;
 
     let mut spans: Vec<SpanDetail> = Vec::new();
     let mut span_map: std::collections::HashMap<crate::types::SpanId, SpanDetail> =
@@ -1998,7 +2028,14 @@ async fn diagnose_handler(
     }
     let pool = Arc::clone(&state.pool);
     let project_id = auth.as_ref().to_owned();
+    let permit = state
+        .router
+        .workloads()
+        .try_acquire(crate::workload::WorkloadClass::Query)
+        .map_err(anyhow::Error::from)
+        .map_err(|error| query_api_error("Diagnosis busy", &error))?;
     let blocks = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         let readers = pool
             .create_project(&project_id)
             .with_context(|| format!("failed to initialize project {project_id}"))?;

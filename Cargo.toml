@@ -71,7 +71,7 @@ walkdir = "2"
 
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "logs"] }
-opentelemetry-otlp = { version = "0.31", features = ["http-proto", "reqwest-blocking-client", "logs"] }
+opentelemetry-otlp = { version = "0.31.1", features = ["http-proto", "reqwest-blocking-client", "logs", "metrics"] }
 opentelemetry-appender-tracing = "0.31"
 tracing-opentelemetry = "0.32"
 typed-env = "0.3.0"
@@ -82,6 +82,7 @@ camino = "1.2.2"
 itertools = "0.14.0"
 rmcp = { version = "3.1.2", features = ["client", "server", "macros", "transport-streamable-http-server", "transport-io", "schemars"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+tokio-metrics = "0.5.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Keep the mature v1 ergonomic API while linking DuckDB v2's compatibility C

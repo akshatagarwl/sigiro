@@ -85,8 +85,8 @@ impl OtlpGrpcService {
                 RouterError::DiskCapacityExceeded => {
                     Status::resource_exhausted("disk capacity exceeded")
                 }
-                RouterError::MaintenanceStalled { .. } => {
-                    Status::resource_exhausted("storage maintenance stalled")
+                RouterError::MaintenanceStalled { .. } | RouterError::Admission(_) => {
+                    Status::resource_exhausted(e.to_string())
                 }
                 _ => Status::internal("ingest failed"),
             });
@@ -172,43 +172,64 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
         })
 }
 
-/// Run a CPU-bound transform on the tokio blocking pool.
-/// Maps both transform errors and task-panic errors to `Status::internal`.
-async fn spawn_transform<T, E>(
+/// Run a CPU-bound transform on the Tokio blocking pool.
+/// Payload errors retain their status; only blocking-task failure is internal.
+async fn spawn_transform<T>(
+    workloads: crate::workload::WorkloadBudget,
     name: &'static str,
-    f: impl FnOnce() -> Result<T, E> + Send + 'static,
+    f: impl FnOnce() -> Result<T, Status> + Send + 'static,
 ) -> Result<T, Status>
 where
     T: Send + 'static,
-    E: std::fmt::Display,
 {
-    tokio::task::spawn_blocking(move || f().map_err(|e| status_internal(format!("{name}: {e}"))))
-        .await
-        .map_err(|e| status_internal(format!("{name} task panicked: {e}")))?
+    let permit = workloads
+        .try_acquire(crate::workload::WorkloadClass::Transform)
+        .map_err(|error| Status::resource_exhausted(error.to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        f()
+    })
+    .await
+    .map_err(|e| status_internal(format!("{name} task panicked: {e}")))?
 }
 
 /// Transform raw bytes into Arrow RecordBatch on the tokio blocking pool.
 /// Supports both protobuf and JSON input based on Content-Type header.
 #[instrument(skip_all, fields(endpoint = "/v1/traces"))]
-async fn transform_traces(bytes: Bytes, fmt: InputFormat) -> Result<RecordBatch, Status> {
-    spawn_transform("transform traces", move || {
+async fn transform_traces(
+    workloads: crate::workload::WorkloadBudget,
+    bytes: Bytes,
+    fmt: InputFormat,
+) -> Result<RecordBatch, Status> {
+    spawn_transform(workloads, "transform traces", move || {
         crate::otlp::transform_traces(&bytes, fmt)
+            .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
-async fn transform_logs(bytes: Bytes, fmt: InputFormat) -> Result<(RecordBatch, u64), Status> {
-    spawn_transform("transform logs", move || {
+async fn transform_logs(
+    workloads: crate::workload::WorkloadBudget,
+    bytes: Bytes,
+    fmt: InputFormat,
+) -> Result<(RecordBatch, u64), Status> {
+    spawn_transform(workloads, "transform logs", move || {
         crate::otlp::transform_logs(&bytes, fmt)
+            .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
-async fn transform_metrics(bytes: Bytes, fmt: InputFormat) -> Result<MetricBatches, Status> {
-    spawn_transform("transform metrics", move || {
+async fn transform_metrics(
+    workloads: crate::workload::WorkloadBudget,
+    bytes: Bytes,
+    fmt: InputFormat,
+) -> Result<MetricBatches, Status> {
+    spawn_transform(workloads, "transform metrics", move || {
         crate::otlp::transform_metrics(&bytes, fmt)
+            .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
 }
@@ -224,7 +245,7 @@ impl TraceService for OtlpGrpcService {
         // Transform on tokio blocking pool — no double decode.
         // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
-        let batch = transform_traces(bytes, InputFormat::Protobuf).await?;
+        let batch = transform_traces(self.router.workloads(), bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
             tracing::warn!(project_id, "export traces: empty batch after transform");
             return Ok(Response::new(ExportTraceServiceResponse {
@@ -251,7 +272,8 @@ impl LogsService for OtlpGrpcService {
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
-        let (batch, rejected) = transform_logs(bytes, InputFormat::Protobuf).await?;
+        let (batch, rejected) =
+            transform_logs(self.router.workloads(), bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
             tracing::warn!(
                 project_id,
@@ -292,7 +314,8 @@ impl MetricsService for OtlpGrpcService {
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
-        let batches = transform_metrics(bytes, InputFormat::Protobuf).await?;
+        let batches =
+            transform_metrics(self.router.workloads(), bytes, InputFormat::Protobuf).await?;
         let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
             || batches.sum.as_ref().is_some_and(|b| b.num_rows() > 0)
             || batches.histogram.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -631,7 +654,10 @@ impl ProfilesService for OtlpGrpcService {
     ) -> Result<Response<ExportProfilesServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         let req = request.into_inner();
-        let batch = spawn_transform("transform profiles", move || transform_profiles(req)).await?;
+        let batch = spawn_transform(self.router.workloads(), "transform profiles", move || {
+            transform_profiles(req)
+        })
+        .await?;
         if batch.num_rows() == 0 {
             tracing::warn!(project_id, "export profiles: empty batch after transform");
             return Ok(Response::new(ExportProfilesServiceResponse {
@@ -741,10 +767,19 @@ async fn route_ingest_msg(state: &OtlpHttpState, msg: IngestMsg) -> StatusCode {
             RouterError::DiskCapacityExceeded | RouterError::MaintenanceStalled { .. } => {
                 StatusCode::INSUFFICIENT_STORAGE
             }
+            RouterError::Admission(_) => StatusCode::TOO_MANY_REQUESTS,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
     }
     StatusCode::OK
+}
+
+fn transform_http_status(status: &Status) -> StatusCode {
+    match status.code() {
+        tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
+        tonic::Code::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/traces"))]
@@ -758,11 +793,11 @@ async fn otlp_http_traces(
         Err(status) => return status,
     };
     let fmt = detect_format(&headers);
-    let batch = match transform_traces(body, fmt).await {
+    let batch = match transform_traces(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform traces: {e}");
-            return StatusCode::BAD_REQUEST;
+            return transform_http_status(&e);
         }
     };
     // F-05: empty batch is a valid no-op (e.g. OTel SDK shutdown sends an
@@ -785,11 +820,11 @@ async fn otlp_http_logs(
         Err(status) => return status,
     };
     let fmt = detect_format(&headers);
-    let (batch, rejected) = match transform_logs(body, fmt).await {
+    let (batch, rejected) = match transform_logs(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform logs: {e}");
-            return StatusCode::BAD_REQUEST;
+            return transform_http_status(&e);
         }
     };
     // Per-record failures (e.g. unusable service.name) skip that record rather
@@ -815,11 +850,11 @@ async fn otlp_http_metrics(
         Err(status) => return status,
     };
     let fmt = detect_format(&headers);
-    let batches = match transform_metrics(body, fmt).await {
+    let batches = match transform_metrics(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform metrics: {e}");
-            return StatusCode::BAD_REQUEST;
+            return transform_http_status(&e);
         }
     };
     let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -853,22 +888,17 @@ async fn otlp_http_profiles(
         Ok(id) => id,
         Err(status) => return status,
     };
-    let req = match ExportProfilesServiceRequest::decode(body) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("failed to decode profiles request: {e}");
-            return StatusCode::BAD_REQUEST;
-        }
-    };
-    let batch = match tokio::task::spawn_blocking(move || transform_profiles(req)).await {
-        Ok(Ok(b)) => b,
-        Ok(Err(e)) => {
-            tracing::error!("failed to transform profiles: {e}");
-            return StatusCode::BAD_REQUEST;
-        }
-        Err(e) => {
-            tracing::error!("transform profiles task panicked: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR;
+    let batch = match spawn_transform(state.router.workloads(), "transform profiles", move || {
+        let request = ExportProfilesServiceRequest::decode(body)
+            .map_err(|error| Status::invalid_argument(format!("decode profiles: {error}")))?;
+        transform_profiles(request)
+    })
+    .await
+    {
+        Ok(batch) => batch,
+        Err(error) => {
+            tracing::error!("failed to transform profiles: {error}");
+            return transform_http_status(&error);
         }
     };
     if batch.num_rows() == 0 {
@@ -1009,16 +1039,21 @@ async fn otlp_http_pyroscope(
         }
     };
 
-    let batch =
-        match transform_pyroscope_profiles(body_bytes, query.name.as_deref(), state.max_body_bytes)
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::error!("transform pyroscope profiles failed: {e}");
-                return StatusCode::BAD_REQUEST;
-            }
-        };
+    let sdk_name = query.name;
+    let max_profile_bytes = state.max_body_bytes;
+    let batch = match spawn_transform(
+        state.router.workloads(),
+        "transform pyroscope profiles",
+        move || transform_pyroscope_profiles(body_bytes, sdk_name.as_deref(), max_profile_bytes),
+    )
+    .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("transform pyroscope profiles failed: {e}");
+            return transform_http_status(&e);
+        }
+    };
 
     tracing::info!(
         "pyroscope ingest: project_id={project_id} rows={}",
@@ -1043,6 +1078,7 @@ async fn otlp_http_pyroscope(
             RouterError::DiskCapacityExceeded | RouterError::MaintenanceStalled { .. } => {
                 StatusCode::INSUFFICIENT_STORAGE
             }
+            RouterError::Admission(_) => StatusCode::TOO_MANY_REQUESTS,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
     }
@@ -1139,7 +1175,7 @@ async fn parse_pyroscope_multipart(
 
 /// Decode either a Pyroscope PushRequest or an SDK raw pprof profile into an
 /// Arrow RecordBatch using the same schema as transform_profiles.
-pub async fn transform_pyroscope_profiles(
+pub fn transform_pyroscope_profiles(
     body: Vec<u8>,
     sdk_name: Option<&str>,
     max_profile_bytes: usize,
@@ -1200,20 +1236,17 @@ pub async fn transform_pyroscope_profiles(
             .unwrap_or("");
 
         for sample in &series.samples {
-            // Decode the pprof Profile from raw_profile bytes.
-            // Clone bytes first so we can move them into spawn_blocking without
-            // borrowing from push_request (which would create a self-referential struct).
-            let raw_bytes = sample.raw_profile.clone();
-            let sample_id = sample.id.clone();
-            let pprof_profile = tokio::task::spawn_blocking(move || -> Result<_, Status> {
-                let decompressed =
-                    decompress_profile(raw_bytes, max_profile_bytes, "embedded pprof profile")?;
-                pyroscope::encode::r#gen::google::Profile::decode(&decompressed[..]).map_err(|e| {
-                    Status::invalid_argument(format!("pprof profile decode failed: {e}"))
-                })
-            })
-            .await
-            .map_err(|e| status_internal(format!("task join error: {e}")))??;
+            // Decode each embedded pprof synchronously; the whole transform runs
+            // in one blocking-pool task from the HTTP handler.
+            let decompressed = decompress_profile(
+                sample.raw_profile.clone(),
+                max_profile_bytes,
+                "embedded pprof profile",
+            )?;
+            let pprof_profile = pyroscope::encode::r#gen::google::Profile::decode(
+                &decompressed[..],
+            )
+            .map_err(|e| Status::invalid_argument(format!("pprof profile decode failed: {e}")))?;
 
             // Time and duration in nanoseconds → microseconds
             let ts_us = (pprof_profile.time_nanos / 1000) as i64;
@@ -1323,7 +1356,7 @@ pub async fn transform_pyroscope_profiles(
                 stack.reverse();
 
                 for ((profile_type, unit), &value) in sample_types.iter().zip(&pprof_sample.value) {
-                    profile_ids.append_value(&sample_id);
+                    profile_ids.append_value(&sample.id);
                     trace_ids.append_null();
                     span_ids.append_null();
                     service_names.append_value(service_name);
@@ -1406,4 +1439,25 @@ fn decompress_profile(
         )));
     }
     Ok(decompressed)
+}
+
+#[cfg(test)]
+mod http_status_tests {
+    use super::*;
+
+    #[test]
+    fn transform_failures_have_distinct_http_statuses() {
+        assert_eq!(
+            transform_http_status(&Status::invalid_argument("invalid payload")),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            transform_http_status(&Status::resource_exhausted("busy")),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            transform_http_status(&Status::internal("worker panic")),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 }

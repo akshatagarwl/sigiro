@@ -3,6 +3,7 @@ use camino::Utf8PathBuf;
 use dashmap::DashMap;
 use duckdb::Connection;
 use parking_lot::{Condvar, Mutex};
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -20,6 +21,12 @@ pub struct ProjectPool {
     /// per-project dir selection and DuckLake attach never re-derive it from
     /// `storage::load_config()`.
     storage_mode: crate::storage::StorageMode,
+    /// Single-flight gate for expensive DuckLake project attachment. Callers
+    /// waiting here are always already on a blocking worker or startup thread.
+    initializing: Mutex<HashSet<String>>,
+    initialized: Condvar,
+    /// Serializes the final capacity check and insertion across project IDs.
+    capacity: Mutex<()>,
 }
 
 pub struct PoolEntry {
@@ -34,8 +41,11 @@ pub struct PoolEntry {
 impl PoolEntry {
     /// Checkpoint DuckLake before dropping so data is persisted to Parquet.
     fn shutdown(&self) {
-        let guard = self.writer.lock();
-        if let Some(writer) = guard.as_ref() {
+        let writer = {
+            let mut slot = self.writer.lock();
+            slot.take()
+        };
+        if let Some(writer) = writer {
             if let Err(e) = writer.execute_batch("CHECKPOINT lake;") {
                 tracing::warn!("DuckDB CHECKPOINT failed during shutdown: {e}");
             }
@@ -125,6 +135,20 @@ struct OpenedProject {
     readers: ReaderPool,
 }
 
+struct ProjectInitialization<'a> {
+    project_id: &'a str,
+    initializing: &'a Mutex<HashSet<String>>,
+    initialized: &'a Condvar,
+}
+
+impl Drop for ProjectInitialization<'_> {
+    fn drop(&mut self) {
+        let removed = self.initializing.lock().remove(self.project_id);
+        debug_assert!(removed, "project initialization owner must hold the gate");
+        self.initialized.notify_all();
+    }
+}
+
 impl ProjectPool {
     pub fn new(
         data_dir: Utf8PathBuf,
@@ -136,6 +160,9 @@ impl ProjectPool {
             data_dir,
             max_connections,
             storage_mode,
+            initializing: Mutex::new(HashSet::new()),
+            initialized: Condvar::new(),
+            capacity: Mutex::new(()),
         }
     }
 
@@ -151,63 +178,129 @@ impl ProjectPool {
 
     /// Create a connection for a project (idempotent — setup operation).
     ///
-    /// Used for project initialization. If two callers race, the loser re-enters
-    /// and finds the winner's connection (no duplicate created).
-    ///
-    /// Thread-safe: uses DashMap entry API to prevent concurrent callers from
-    /// creating duplicate connections for the same project.
+    /// Expensive DuckLake attachment is single-flight per project. Concurrent
+    /// callers wait for the owner and reuse its connection instead of opening
+    /// duplicate catalogs, extensions, writers, and reader pools.
     #[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub fn create_project(&self, project_id: &str) -> Result<ReaderPool> {
+        self.open_project(project_id, false)
+            .map(|(readers, _)| readers)
+    }
+
+    /// Create a project and transfer its writer as one lifecycle operation.
+    /// Eviction cannot remove the entry between initialization and writer handoff.
+    pub fn create_project_writer(&self, project_id: &str) -> Result<Connection> {
+        self.open_project(project_id, true)?
+            .1
+            .ok_or_else(|| anyhow::anyhow!("writer was not transferred for project {project_id}"))
+    }
+
+    fn existing_project(
+        &self,
+        project_id: &str,
+        take_writer: bool,
+    ) -> Result<Option<(ReaderPool, Option<Connection>)>> {
+        let Some(mut entry) = self.connections.get_mut(project_id) else {
+            return Ok(None);
+        };
+        entry.last_access = Instant::now();
+        let readers = entry.readers.clone();
+        let writer = if take_writer {
+            Some(entry.writer.lock().take().ok_or_else(|| {
+                anyhow::anyhow!("writer already owned by flusher for project {project_id}")
+            })?)
+        } else {
+            None
+        };
+        Ok(Some((readers, writer)))
+    }
+
+    fn open_project(
+        &self,
+        project_id: &str,
+        take_writer: bool,
+    ) -> Result<(ReaderPool, Option<Connection>)> {
         use dashmap::mapref::entry::Entry;
 
-        match self.connections.entry(project_id.to_string()) {
-            Entry::Occupied(ref mut entry) => {
+        if let Some(opened) = self.existing_project(project_id, take_writer)? {
+            return Ok(opened);
+        }
+
+        let mut initializing = self.initializing.lock();
+        loop {
+            if let Some(opened) = self.existing_project(project_id, take_writer)? {
+                return Ok(opened);
+            }
+            if initializing.insert(project_id.to_string()) {
+                break;
+            }
+            self.initialized.wait(&mut initializing);
+        }
+        drop(initializing);
+        let _initialization = ProjectInitialization {
+            project_id,
+            initializing: &self.initializing,
+            initialized: &self.initialized,
+        };
+
+        let project_dir = if self.storage_mode.is_distributed() {
+            crate::storage::tenant_data_dir(&self.data_dir, project_id)?
+        } else {
+            self.data_dir.join(project_id)
+        };
+        let opened = self
+            .open_project_connections(project_id, &project_dir)
+            .with_context(|| {
+                format!("failed to open DuckDB connection for project {project_id}")
+            })?;
+
+        let _capacity = self.capacity.lock();
+        if let Some(existing) = self.existing_project(project_id, take_writer)? {
+            return Ok(existing);
+        }
+        let evicted = if self.connections.len() >= self.max_connections {
+            Some(self.remove_oldest_idle().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "project connection capacity {} exhausted by active projects",
+                    self.max_connections
+                )
+            })?)
+        } else {
+            None
+        };
+
+        let result = match self.connections.entry(project_id.to_string()) {
+            Entry::Occupied(mut entry) => {
                 entry.get_mut().last_access = Instant::now();
-                Ok(entry.get().readers.clone())
+                let readers = entry.get().readers.clone();
+                let writer = if take_writer {
+                    Some(entry.get().writer.lock().take().ok_or_else(|| {
+                        anyhow::anyhow!("writer already owned by flusher for project {project_id}")
+                    })?)
+                } else {
+                    None
+                };
+                Ok((readers, writer))
             }
             Entry::Vacant(entry) => {
-                // Evict if at capacity before creating new.
-                // Entry guard is dropped first to avoid holding two entries.
-                drop(entry);
-
-                if self.connections.len() >= self.max_connections {
-                    self.evict_oldest();
-                }
-
-                let project_dir = if self.storage_mode.is_distributed() {
-                    crate::storage::tenant_data_dir(&self.data_dir, project_id)?
-                } else {
-                    self.data_dir.join(project_id)
-                };
-                let opened = self
-                    .open_project_connections(project_id, &project_dir)
-                    .with_context(|| {
-                        format!("failed to open DuckDB connection for project {project_id}")
-                    })?;
-
-                // Re-enter via entry API — another task may have inserted while we
-                // were in open_connection (which downloads extensions on cold start).
-                match self.connections.entry(project_id.to_string()) {
-                    Entry::Occupied(ref mut entry) => {
-                        // Another task won the race — use their connection, discard ours.
-                        // Our connection's Drop will clean up.
-                        entry.get_mut().last_access = Instant::now();
-                        tracing::info!(project_id, "reused DuckDB connection (race loser)");
-                        Ok(entry.get().readers.clone())
-                    }
-                    Entry::Vacant(entry) => {
-                        let readers = opened.readers.clone();
-                        entry.insert(PoolEntry {
-                            writer: Mutex::new(Some(opened.writer)),
-                            readers,
-                            last_access: Instant::now(),
-                        });
-                        tracing::info!(project_id, "opened DuckDB connection (DuckLake)");
-                        Ok(opened.readers)
-                    }
-                }
+                let readers = opened.readers.clone();
+                let mut writer = Some(opened.writer);
+                let transferred = take_writer.then(|| writer.take().expect("writer is present"));
+                entry.insert(PoolEntry {
+                    writer: Mutex::new(writer),
+                    readers: readers.clone(),
+                    last_access: Instant::now(),
+                });
+                tracing::info!(project_id, "opened DuckDB connection (DuckLake)");
+                Ok((readers, transferred))
             }
+        };
+        drop(_capacity);
+        if let Some((evicted_project_id, entry)) = evicted {
+            entry.shutdown();
+            tracing::info!(project_id = %evicted_project_id, "evicted oldest DuckDB connection");
         }
+        result
     }
 
     /// Get the connection for a project (strict — no auto-create).
@@ -629,14 +722,22 @@ impl ProjectPool {
     pub fn evict_idle(&self, max_idle: std::time::Duration) {
         let now = Instant::now();
         let before = self.connections.len();
-        self.connections.retain(|_, entry| {
-            if now.duration_since(entry.last_access) >= max_idle {
+        let idle_keys: Vec<String> = self
+            .connections
+            .iter()
+            .filter(|entry| {
+                now.duration_since(entry.last_access) >= max_idle && entry.writer.lock().is_some()
+            })
+            .map(|entry| entry.key().clone())
+            .collect();
+        for key in idle_keys {
+            if let Some((_, entry)) = self
+                .connections
+                .remove_if(&key, |_, entry| entry.writer.lock().is_some())
+            {
                 entry.shutdown();
-                false
-            } else {
-                true
             }
-        });
+        }
         let evicted = before - self.connections.len();
         if evicted > 0 {
             tracing::info!(evicted, "evicted idle DuckDB connections");
@@ -646,18 +747,17 @@ impl ProjectPool {
     /// Evict the oldest connection to make room for a new one.
     /// Checkpoints DuckLake before dropping so data is persisted to Parquet.
     #[tracing::instrument(skip(self))]
-    fn evict_oldest(&self) {
+    fn remove_oldest_idle(&self) -> Option<(String, PoolEntry)> {
         let oldest = self
             .connections
             .iter()
+            .filter(|entry| entry.writer.lock().is_some())
             .min_by_key(|entry| entry.last_access)
-            .map(|entry| entry.key().clone());
-        if let Some(key) = oldest {
-            if let Some((_, entry)) = self.connections.remove(&key) {
-                entry.shutdown();
-            }
-            tracing::info!(project_id = %key, "evicted oldest DuckDB connection");
-        }
+            .map(|entry| entry.key().clone())?;
+        let (_, entry) = self
+            .connections
+            .remove_if(&oldest, |_, entry| entry.writer.lock().is_some())?;
+        Some((oldest, entry))
     }
 
     /// Remove a project's connection (for account deletion).

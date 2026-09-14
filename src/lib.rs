@@ -17,11 +17,13 @@ pub mod pool;
 pub mod profiling;
 pub(crate) mod quack;
 pub mod responses;
+pub mod runtime_metrics;
 pub mod schema;
 pub mod server;
 pub mod sql;
 pub mod storage;
 pub mod types;
+pub mod workload;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;

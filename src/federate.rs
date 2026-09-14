@@ -1167,6 +1167,35 @@ fn build_final_sql(parsed: &ParsedQuery, part_tables: &[String]) -> String {
 // Scatter / gather orchestration.
 // ---------------------------------------------------------------------------
 
+// Keep the coordinator's fanout bounded even when edge discovery returns a
+// large tailnet. These are deliberately simple process-wide limits: the
+// query timeout still bounds each individual edge request.
+const MAX_FEDERATED_EDGES: usize = 64;
+const MAX_IN_FLIGHT_EDGE_FETCHES: usize = 8;
+
+fn check_edge_count(edges: &[Edge]) -> Result<()> {
+    anyhow::ensure!(
+        edges.len() <= MAX_FEDERATED_EDGES,
+        "federated query resolved {} edges, exceeding the maximum of {}; refusing to spawn edge fetches",
+        edges.len(),
+        MAX_FEDERATED_EDGES
+    );
+    Ok(())
+}
+
+fn add_edge_rows(total_rows: &mut usize, edge_rows: usize, row_cap: usize) -> Result<()> {
+    *total_rows = total_rows
+        .checked_add(edge_rows)
+        .context("aggregate federated row count overflowed usize")?;
+    anyhow::ensure!(
+        *total_rows <= row_cap,
+        "federated query returned {} rows across edge batches, exceeding the aggregate row cap of {}; narrow the query or raise SIGIRO_QUERY_ROW_CAP",
+        *total_rows,
+        row_cap
+    );
+    Ok(())
+}
+
 /// Wrap `inner_sql` in the `quack_query(...)` remote-exec call for `edge`.
 /// Mirrors `tests/quack_query_surface_test.rs`'s `wrap_quack_query` — the
 /// documented client pattern (`quack_query`, not `ATTACH`; see module docs).
@@ -1286,6 +1315,7 @@ pub async fn run_federated_query(
     allow_full_scan: bool,
 ) -> Result<Vec<Value>> {
     let edges = resolve_edges(cli_edges)?;
+    check_edge_count(&edges)?;
     tracing::info!(
         edges = ?edges.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
         "resolved federated query edges"
@@ -1316,7 +1346,9 @@ pub async fn run_federated_query(
     tracing::debug!(partial_sql, "federated query per-edge partial");
 
     let mut set = tokio::task::JoinSet::new();
-    for edge in &edges {
+    let mut next_edge = 0;
+    while next_edge < edges.len() && next_edge < MAX_IN_FLIGHT_EDGE_FETCHES {
+        let edge = &edges[next_edge];
         set.spawn(fetch_edge(
             edge.clone(),
             partial_sql.clone(),
@@ -1324,13 +1356,22 @@ pub async fn run_federated_query(
             timeout,
             effective_cap,
         ));
+        next_edge += 1;
     }
 
     let mut edge_batches: Vec<(String, RecordBatch)> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
+    let mut aggregate_rows = 0;
+    let mut aggregate_limit_error = None;
     while let Some(joined) = set.join_next().await {
         match joined {
-            Ok(Ok((name, Some(batch)))) => edge_batches.push((name, batch)),
+            Ok(Ok((name, Some(batch)))) => {
+                if let Err(error) = add_edge_rows(&mut aggregate_rows, batch.num_rows(), row_cap) {
+                    aggregate_limit_error = Some(error.to_string());
+                } else {
+                    edge_batches.push((name, batch));
+                }
+            }
             Ok(Ok((_name, None))) => {}
             Ok(Err((name, msg))) => failures.push((name, msg)),
             Err(join_err) => failures.push((
@@ -1338,6 +1379,25 @@ pub async fn run_federated_query(
                 format!("task panicked: {join_err}"),
             )),
         }
+        if aggregate_limit_error.is_some() {
+            set.abort_all();
+            break;
+        }
+        if next_edge < edges.len() {
+            let edge = &edges[next_edge];
+            set.spawn(fetch_edge(
+                edge.clone(),
+                partial_sql.clone(),
+                token.clone(),
+                timeout,
+                effective_cap,
+            ));
+            next_edge += 1;
+        }
+    }
+
+    if let Some(error) = aggregate_limit_error {
+        anyhow::bail!("{error}");
     }
 
     anyhow::ensure!(
