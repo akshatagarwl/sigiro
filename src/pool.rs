@@ -39,6 +39,22 @@ pub struct PoolEntry {
 }
 
 impl PoolEntry {
+    fn access(
+        &mut self,
+        project_id: &str,
+        take_writer: bool,
+    ) -> Result<(ReaderPool, Option<Connection>)> {
+        self.last_access = Instant::now();
+        let writer = if take_writer {
+            Some(self.writer.lock().take().ok_or_else(|| {
+                anyhow::anyhow!("writer already owned by flusher for project {project_id}")
+            })?)
+        } else {
+            None
+        };
+        Ok((self.readers.clone(), writer))
+    }
+
     /// Checkpoint DuckLake before dropping so data is persisted to Parquet.
     fn shutdown(&self) {
         let writer = {
@@ -203,16 +219,7 @@ impl ProjectPool {
         let Some(mut entry) = self.connections.get_mut(project_id) else {
             return Ok(None);
         };
-        entry.last_access = Instant::now();
-        let readers = entry.readers.clone();
-        let writer = if take_writer {
-            Some(entry.writer.lock().take().ok_or_else(|| {
-                anyhow::anyhow!("writer already owned by flusher for project {project_id}")
-            })?)
-        } else {
-            None
-        };
-        Ok(Some((readers, writer)))
+        Ok(Some(entry.access(project_id, take_writer)?))
     }
 
     fn open_project(
@@ -270,18 +277,7 @@ impl ProjectPool {
         };
 
         let result = match self.connections.entry(project_id.to_string()) {
-            Entry::Occupied(mut entry) => {
-                entry.get_mut().last_access = Instant::now();
-                let readers = entry.get().readers.clone();
-                let writer = if take_writer {
-                    Some(entry.get().writer.lock().take().ok_or_else(|| {
-                        anyhow::anyhow!("writer already owned by flusher for project {project_id}")
-                    })?)
-                } else {
-                    None
-                };
-                Ok((readers, writer))
-            }
+            Entry::Occupied(mut entry) => entry.get_mut().access(project_id, take_writer),
             Entry::Vacant(entry) => {
                 let readers = opened.readers.clone();
                 let mut writer = Some(opened.writer);
