@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "alchemy:plan:prod": "alchemy plan ./alchemy.run.ts --stage prod --no-input",
+    "alchemy:plan": "ALCHEMY_STAGE=prod alchemy plan ./alchemy.run.ts --no-input",
     "dev": "blume dev",
     "build": "blume build",
     "preview": "wrangler dev --config dist/server/wrangler.json",

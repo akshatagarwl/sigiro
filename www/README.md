@@ -30,22 +30,20 @@ least one bug has only ever appeared in the second one (see the Shiki note in
 
 ## Alchemy migration
 
-The resource-free `alchemy.run.ts` is the migration composition root. It pins the
-remote Cloudflare state backend and accepts only `dev`, `prod`, or a positive
-`pr-<number>` stage. It does not own the website Worker or any Cloudflare resource
-yet; Wrangler remains the deployment path until production adoption is reviewed.
+`alchemy.run.ts` is the only infrastructure composition root. It uses the remote
+Cloudflare state backend and declares the existing production zone, downloads
+bucket, website Worker, binding, and routes with adoption and retention policies.
+Sigiro has no other remotely deployed environment.
 
-After an operator has explicitly bootstrapped the shared Cloudflare state store,
-review the production stack with:
+Review the infrastructure with:
 
 ```bash
-aube run alchemy:plan:prod
+aube run alchemy:plan
 ```
 
-This command is deliberately `alchemy plan --stage prod --no-input`: it cannot
-approve the first-run state-store bootstrap and does not apply, adopt, deploy, or
-destroy resources. Bootstrap is a separate live Cloudflare mutation and requires
-human approval.
+The script fixes Alchemy's required internal state key to production, so callers
+never choose or pass a stage. It plans but does not apply, deploy, or destroy
+resources.
 
 ## What is where
 
