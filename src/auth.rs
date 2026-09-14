@@ -313,6 +313,16 @@ impl AuthMode {
         !matches!(self, AuthMode::Open)
     }
 
+    pub(crate) async fn authenticate_ingest(
+        &self,
+        token: Option<&str>,
+    ) -> Result<TenantId, AuthError> {
+        Ok(self
+            .authenticate(token.unwrap_or_default(), TELEMETRY_INGEST_SCOPE)
+            .await?
+            .tenant_id)
+    }
+
     pub(crate) async fn authenticate(
         &self,
         token: &str,

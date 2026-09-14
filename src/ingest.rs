@@ -126,32 +126,31 @@ pub async fn extract_project_id_grpc(
     auth_mode: &crate::auth::AuthMode,
     metadata: &tonic::metadata::MetadataMap,
 ) -> Result<String, Status> {
-    match auth_mode {
-        crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::Jwt { .. } => {
-            let token = metadata
+    let token = if auth_mode.requires_auth() {
+        Some(
+            metadata
                 .get("authorization")
                 .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
                 .to_str()
                 .map_err(|_| Status::unauthenticated("Invalid Authorization encoding"))?
                 .strip_prefix("Bearer ")
-                .ok_or_else(|| Status::unauthenticated("Expected: Bearer <access-token>"))?;
-
-            auth_mode
-                .authenticate(token, crate::auth::TELEMETRY_INGEST_SCOPE)
-                .await
-                .map(|context| context.tenant_id.as_ref().to_owned())
-                .map_err(|error| match error {
-                    crate::auth::AuthError::InsufficientScope(_) => {
-                        Status::permission_denied("Access token lacks telemetry:ingest scope")
-                    }
-                    crate::auth::AuthError::InvalidToken
-                    | crate::auth::AuthError::JwksUnavailable => {
-                        Status::unauthenticated("Invalid access token")
-                    }
-                })
-        }
-    }
+                .ok_or_else(|| Status::unauthenticated("Expected: Bearer <access-token>"))?,
+        )
+    } else {
+        None
+    };
+    auth_mode
+        .authenticate_ingest(token)
+        .await
+        .map(|tenant_id| tenant_id.into())
+        .map_err(|error| match error {
+            crate::auth::AuthError::InsufficientScope(_) => {
+                Status::permission_denied("Access token lacks telemetry:ingest scope")
+            }
+            crate::auth::AuthError::InvalidToken | crate::auth::AuthError::JwksUnavailable => {
+                Status::unauthenticated("Invalid access token")
+            }
+        })
 }
 
 /// Detect InputFormat from Content-Type header.
@@ -710,25 +709,24 @@ pub async fn extract_project_id_http(
     auth_mode: &crate::auth::AuthMode,
     headers: &axum::http::HeaderMap,
 ) -> Result<String, StatusCode> {
-    match auth_mode {
-        crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::Jwt { .. } => {
-            let token = crate::auth::extract_bearer_token(headers).map_err(|_| {
-                tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
+    let token = if auth_mode.requires_auth() {
+        Some(crate::auth::extract_bearer_token(headers).map_err(|_| {
+            tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
+            StatusCode::UNAUTHORIZED
+        })?)
+    } else {
+        None
+    };
+    auth_mode
+        .authenticate_ingest(token.as_deref())
+        .await
+        .map(|tenant_id| tenant_id.into())
+        .map_err(|error| match error {
+            crate::auth::AuthError::InsufficientScope(_) => StatusCode::FORBIDDEN,
+            crate::auth::AuthError::InvalidToken | crate::auth::AuthError::JwksUnavailable => {
                 StatusCode::UNAUTHORIZED
-            })?;
-
-            auth_mode
-                .authenticate(&token, crate::auth::TELEMETRY_INGEST_SCOPE)
-                .await
-                .map(|context| context.tenant_id.as_ref().to_owned())
-                .map_err(|error| match error {
-                    crate::auth::AuthError::InsufficientScope(_) => StatusCode::FORBIDDEN,
-                    crate::auth::AuthError::InvalidToken
-                    | crate::auth::AuthError::JwksUnavailable => StatusCode::UNAUTHORIZED,
-                })
-        }
-    }
+            }
+        })
 }
 
 /// Common helper: send ingest message.
