@@ -41,6 +41,16 @@ export default Alchemy.Stack(
         name: 'sigiro.com',
       }),
     );
+    const authRecord = yield* productionResource(
+      Cloudflare.DNS.Record('AuthRecord', {
+        zoneId: zone.zoneId,
+        name: 'auth.sigiro.com',
+        type: 'A',
+        content: '203.0.113.10',
+        proxied: false,
+        ttl: 60,
+      }),
+    );
 
     const website = yield* productionResource(
       Cloudflare.Worker('Website', {
@@ -79,6 +89,7 @@ export default Alchemy.Stack(
       zone,
       downloads,
       emailSending,
+      authRecord,
 
       website,
       apexRoute,
