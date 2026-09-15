@@ -316,6 +316,15 @@ async function expectOk(response: Response, operation: string): Promise<Response
   if (missingResourceAuthorizeResponse.ok || missingResourceAuthorizeResponse.status === 302) {
     throw new Error("authorization accepted a request without an RFC 8707 resource");
   }
+  const missingPkceAuthorizeUrl = new URL(authorizeUrl);
+  missingPkceAuthorizeUrl.searchParams.delete("code_challenge");
+  missingPkceAuthorizeUrl.searchParams.delete("code_challenge_method");
+  const missingPkceAuthorizeResponse = await cimdAuth.handler(
+    new Request(missingPkceAuthorizeUrl, { headers: { cookie, origin: env.BETTER_AUTH_URL } }),
+  );
+  if (missingPkceAuthorizeResponse.ok || missingPkceAuthorizeResponse.status === 302) {
+    throw new Error("authorization accepted a request without PKCE S256");
+  }
   const authorizeResponse = await cimdAuth.handler(
     new Request(authorizeUrl, { headers: { cookie, origin: env.BETTER_AUTH_URL } }),
   );

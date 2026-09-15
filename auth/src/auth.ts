@@ -64,6 +64,16 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
       before: createAuthMiddleware(async (context) => {
         if (context.path === "/oauth2/authorize") {
           requireResource(context.query?.resource, runtime.resource);
+          if (
+            typeof context.query?.code_challenge !== "string" ||
+            context.query.code_challenge === "" ||
+            context.query.code_challenge_method !== "S256"
+          ) {
+            throw new APIError("BAD_REQUEST", {
+              error: "invalid_request",
+              message: "authorization requires PKCE with code_challenge_method S256",
+            });
+          }
         }
         if (context.path === "/oauth2/token" || context.path === "/device/code") {
           requireResource(context.body?.resource, runtime.resource);
