@@ -307,6 +307,16 @@ async fn openapi_json() -> axum::Json<&'static utoipa::openapi::OpenApi> {
     axum::Json(&*PUBLIC_SPEC)
 }
 
+async fn oauth_protected_resource_metadata(
+    State(state): State<Arc<AppState>>,
+) -> axum::Json<auth::ProtectedResourceMetadata> {
+    let metadata = state
+        .auth_mode
+        .protected_resource_metadata()
+        .expect("protected-resource metadata route exists only in JWT mode");
+    axum::Json(metadata)
+}
+
 /// Build the HTTP Router for the main API (port 9999).
 /// Extracted from `run_servers` so integration tests can build the same
 /// router with test state without starting TCP listeners.
@@ -362,10 +372,16 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     // Public routes + v1 API + admin. Discoverability is the single
     // machine-readable OpenAPI contract at /openapi.json (public, no auth) —
     // no Swagger UI or extra doc endpoints, to minimize surface area.
-    Router::new()
+    let public = Router::new()
         .typed_get(health)
         .typed_get(healthz)
-        .route("/openapi.json", axum::routing::get(openapi_json))
+        .route("/openapi.json", axum::routing::get(openapi_json));
+    let public = match app_state.auth_mode.protected_resource_metadata_path() {
+        Some(path) => public.route(path, axum::routing::get(oauth_protected_resource_metadata)),
+        None => public,
+    };
+
+    public
         .nest("/v1", v1)
         .nest("/admin", admin)
         .layer(tower_http::trace::TraceLayer::new_for_http())

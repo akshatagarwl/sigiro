@@ -2,14 +2,14 @@ use crate::types::TenantId;
 use anyhow::Context;
 use axum::{
     extract::{Request, State},
-    http::HeaderMap,
+    http::{HeaderMap, HeaderValue, header},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use axum_anyhow::ApiError;
 use headers::{Authorization, HeaderMapExt, authorization::Bearer};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     sync::Arc,
@@ -24,6 +24,15 @@ pub(crate) const SERVICES_READ_SCOPE: &str = "services:read";
 pub(crate) const TRACES_READ_SCOPE: &str = "traces:read";
 pub(crate) const ANOMALIES_READ_SCOPE: &str = "anomalies:read";
 pub(crate) const ALERTS_READ_SCOPE: &str = "alerts:read";
+const SUPPORTED_SCOPES: &[&str] = &[
+    TELEMETRY_INGEST_SCOPE,
+    SERVICES_READ_SCOPE,
+    DIAGNOSE_READ_SCOPE,
+    TRACES_READ_SCOPE,
+    QUERY_READ_SCOPE,
+    ANOMALIES_READ_SCOPE,
+    ALERTS_READ_SCOPE,
+];
 
 const JWKS_CACHE_TTL: Duration = Duration::from_secs(300);
 const JWKS_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -79,6 +88,8 @@ struct CachedJwks {
 pub struct JwtVerifier {
     issuer: String,
     audience: String,
+    resource_metadata_url: String,
+    resource_metadata_path: String,
     jwks_url: String,
     client: reqwest::Client,
     cache: RwLock<Option<CachedJwks>>,
@@ -110,9 +121,13 @@ impl JwtVerifier {
             anyhow::ensure!(!value.trim().is_empty(), "{name} must not be empty");
             validate_auth_url(name, value)?;
         }
+        let resource_metadata_url = protected_resource_metadata_url(&audience)?;
+        let resource_metadata_path = resource_metadata_url.path().to_owned();
         let verifier = Self {
             issuer,
             audience,
+            resource_metadata_url: resource_metadata_url.to_string(),
+            resource_metadata_path,
             jwks_url,
             client: reqwest::Client::builder()
                 .timeout(JWKS_FETCH_TIMEOUT)
@@ -271,6 +286,40 @@ fn validate_auth_url(name: &str, value: &str) -> anyhow::Result<url::Url> {
     Ok(parsed)
 }
 
+fn protected_resource_metadata_url(resource: &str) -> anyhow::Result<url::Url> {
+    let mut metadata_url = validate_auth_url("SIGIRO_AUTH_AUDIENCE", resource)?;
+    anyhow::ensure!(
+        metadata_url.username().is_empty()
+            && metadata_url.password().is_none()
+            && metadata_url.query().is_none()
+            && metadata_url.fragment().is_none(),
+        "SIGIRO_AUTH_AUDIENCE must not contain credentials, a query, or a fragment"
+    );
+    let resource_path = metadata_url.path().trim_matches('/');
+    let metadata_path = if resource_path.is_empty() {
+        "/.well-known/oauth-protected-resource".to_owned()
+    } else {
+        format!("/.well-known/oauth-protected-resource/{resource_path}")
+    };
+    metadata_url.set_path(&metadata_path);
+    Ok(metadata_url)
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProtectedResourceMetadata {
+    resource: String,
+    authorization_servers: [String; 1],
+    scopes_supported: &'static [&'static str],
+    bearer_methods_supported: [&'static str; 1],
+}
+
+#[derive(Clone, Copy)]
+enum BearerChallenge {
+    Missing,
+    InvalidToken,
+    InsufficientScope(&'static str),
+}
+
 /// Explicit auth mode — Open for local self-host/edge, JWT for hosted storage.
 #[derive(Clone, Debug)]
 pub enum AuthMode {
@@ -311,6 +360,45 @@ impl AuthMode {
     /// True if this mode requires an Authorization header.
     pub fn requires_auth(&self) -> bool {
         !matches!(self, AuthMode::Open)
+    }
+
+    pub(crate) fn protected_resource_metadata_path(&self) -> Option<&str> {
+        match self {
+            AuthMode::Open => None,
+            AuthMode::Jwt { verifier } => Some(&verifier.resource_metadata_path),
+        }
+    }
+
+    pub(crate) fn protected_resource_metadata(&self) -> Option<ProtectedResourceMetadata> {
+        match self {
+            AuthMode::Open => None,
+            AuthMode::Jwt { verifier } => Some(ProtectedResourceMetadata {
+                resource: verifier.audience.clone(),
+                authorization_servers: [verifier.issuer.clone()],
+                scopes_supported: SUPPORTED_SCOPES,
+                bearer_methods_supported: ["header"],
+            }),
+        }
+    }
+
+    fn bearer_challenge(&self, challenge: BearerChallenge) -> Option<HeaderValue> {
+        let AuthMode::Jwt { verifier } = self else {
+            return None;
+        };
+        let suffix = match challenge {
+            BearerChallenge::Missing => String::new(),
+            BearerChallenge::InvalidToken => ", error=\"invalid_token\"".to_owned(),
+            BearerChallenge::InsufficientScope(scope) => {
+                format!(", error=\"insufficient_scope\", scope=\"{scope}\"")
+            }
+        };
+        Some(
+            HeaderValue::from_str(&format!(
+                "Bearer resource_metadata=\"{}\"{suffix}",
+                verifier.resource_metadata_url
+            ))
+            .expect("validated resource metadata URL produces a valid challenge header"),
+        )
     }
 
     pub(crate) async fn authenticate(
@@ -394,29 +482,69 @@ pub(crate) async fn auth_middleware(
     State(state): State<Arc<crate::server::AppState>>,
     req: Request,
     next: Next,
-) -> Result<Response, ApiError> {
+) -> Response {
     match &state.auth_mode {
         AuthMode::Open => {
             let mut req = req;
             req.extensions_mut().insert(
                 TenantId::try_new("default".to_owned()).expect("default is a valid tenant id"),
             );
-            Ok(next.run(req).await)
+            next.run(req).await
         }
         AuthMode::Jwt { .. } => {
-            let token = extract_bearer_token(req.headers())?;
-            let required_scope = required_http_scope(req.method(), req.uri().path())?;
-            let context = state
-                .auth_mode
-                .authenticate(&token, required_scope)
-                .await
-                .map_err(AuthError::into_api_error)?;
+            let token = match extract_bearer_token(req.headers()) {
+                Ok(token) => token,
+                Err(error) => {
+                    let challenge = if req.headers().contains_key(header::AUTHORIZATION) {
+                        BearerChallenge::InvalidToken
+                    } else {
+                        BearerChallenge::Missing
+                    };
+                    return challenged_response(&state.auth_mode, error, challenge);
+                }
+            };
+            let required_scope = match required_http_scope(req.method(), req.uri().path()) {
+                Ok(scope) => scope,
+                Err(error) => return error.into_response(),
+            };
+            let context = match state.auth_mode.authenticate(&token, required_scope).await {
+                Ok(context) => context,
+                Err(error) => {
+                    let challenge = match error {
+                        AuthError::InsufficientScope(scope) => {
+                            BearerChallenge::InsufficientScope(scope)
+                        }
+                        AuthError::InvalidToken | AuthError::JwksUnavailable => {
+                            BearerChallenge::InvalidToken
+                        }
+                    };
+                    return challenged_response(
+                        &state.auth_mode,
+                        error.into_api_error(),
+                        challenge,
+                    );
+                }
+            };
             let mut req = req;
             req.extensions_mut().insert(context.tenant_id.clone());
             req.extensions_mut().insert(context);
-            Ok(next.run(req).await)
+            next.run(req).await
         }
     }
+}
+
+fn challenged_response(
+    auth_mode: &AuthMode,
+    error: ApiError,
+    challenge: BearerChallenge,
+) -> Response {
+    let mut response = error.into_response();
+    if let Some(value) = auth_mode.bearer_challenge(challenge) {
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, value);
+    }
+    response
 }
 
 fn required_http_scope(method: &axum::http::Method, path: &str) -> Result<&'static str, ApiError> {

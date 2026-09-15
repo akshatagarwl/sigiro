@@ -18,7 +18,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ISSUER: &str = "http://127.0.0.1:1/better-auth";
-const AUDIENCE: &str = "http://127.0.0.1:2/api";
+const AUDIENCE: &str = "http://127.0.0.1:2/api/";
+const RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource/api";
+const RESOURCE_METADATA_URL: &str = "http://127.0.0.1:2/.well-known/oauth-protected-resource/api";
 const KID: &str = "hosted-e2e-key-1";
 const PUBLIC_KEY_X: &str = "Tn3DoRl__bp9FXiHIBEXzVMxEOXRVx1l-cD2mzDZMN4";
 const PRIVATE_KEY: &[u8] = include_bytes!("fixtures/auth_ed25519_private.der");
@@ -274,29 +276,50 @@ fn hosted_jwt_auth_scopes_otlp_and_tenant_isolation() {
     let service_a = "hosted-jwt-acme";
     let service_b = "hosted-jwt-globex";
 
+    let metadata = server
+        .request(RESOURCE_METADATA_PATH, None)
+        .send()
+        .expect("protected-resource metadata request");
+    assert_eq!(metadata.status(), reqwest::StatusCode::OK);
     assert_eq!(
-        server
-            .request("/v1/services", None)
-            .send()
-            .unwrap()
-            .status(),
-        reqwest::StatusCode::UNAUTHORIZED
+        metadata.headers()[reqwest::header::CONTENT_TYPE],
+        "application/json"
     );
+    let metadata = metadata.json::<Value>().expect("metadata JSON");
+    assert_eq!(metadata["resource"], AUDIENCE);
+    assert_eq!(metadata["authorization_servers"][0], ISSUER);
+    assert_eq!(metadata["bearer_methods_supported"][0], "header");
+
+    let missing = server
+        .request("/v1/services", None)
+        .send()
+        .expect("missing-token request");
+    assert_eq!(missing.status(), reqwest::StatusCode::UNAUTHORIZED);
     assert_eq!(
-        server
-            .request("/v1/services", Some("not-a-jwt"))
-            .send()
-            .unwrap()
-            .status(),
-        reqwest::StatusCode::UNAUTHORIZED
+        missing.headers()[reqwest::header::WWW_AUTHENTICATE],
+        format!("Bearer resource_metadata=\"{RESOURCE_METADATA_URL}\"")
     );
+
+    let invalid = server
+        .request("/v1/services", Some("not-a-jwt"))
+        .send()
+        .expect("invalid-token request");
+    assert_eq!(invalid.status(), reqwest::StatusCode::UNAUTHORIZED);
     assert_eq!(
-        server
-            .request("/v1/services", Some(&acme_query))
-            .send()
-            .unwrap()
-            .status(),
-        reqwest::StatusCode::FORBIDDEN
+        invalid.headers()[reqwest::header::WWW_AUTHENTICATE],
+        format!("Bearer resource_metadata=\"{RESOURCE_METADATA_URL}\", error=\"invalid_token\"")
+    );
+
+    let insufficient = server
+        .request("/v1/services", Some(&acme_query))
+        .send()
+        .expect("insufficient-scope request");
+    assert_eq!(insufficient.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(
+        insufficient.headers()[reqwest::header::WWW_AUTHENTICATE],
+        format!(
+            "Bearer resource_metadata=\"{RESOURCE_METADATA_URL}\", error=\"insufficient_scope\", scope=\"services:read\""
+        )
     );
     assert_eq!(
         server
