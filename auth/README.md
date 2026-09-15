@@ -23,9 +23,10 @@ Required environment variables:
 - `DATABASE_URL`
 - `SIGIRO_RESOURCE=https://api.sigiro.com`
 - `EMAIL_FROM=noreply@sigiro.com`
-- `RESEND_API_KEY`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_EMAIL_API_TOKEN`
 
-PostgreSQL remains private. The service connects directly to it over the Kamal network; there is no Hyperdrive, VPC bridge, or database tunnel in the steady-state topology. Resend delivers verification email for the verified `sigiro.com` sender domain.
+PostgreSQL remains private. The service connects directly to it over the Kamal network; there is no Hyperdrive, VPC bridge, or database tunnel in the steady-state topology. Cloudflare Email Sending's REST API delivers verification email for the existing `sigiro.com` sender domain; the Worker-only email binding is not required.
 
 ## Local verification
 

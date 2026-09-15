@@ -15,8 +15,9 @@
     "migrate": "node --env-file-if-exists=.env --import tsx src/migrate.ts",
     "dev": "node --env-file-if-exists=.env --import tsx --watch src/server.ts",
     "start": "node dist/server.js",
+    "test:email": "node --import tsx test/cloudflare-email-e2e.ts",
     "test:e2e": "node --env-file-if-exists=.env --import tsx test/e2e.ts",
-    "test": "bun run check && node --env-file-if-exists=.env --import tsx test/run.ts"
+    "test": "bun run check && bun run test:email && node --env-file-if-exists=.env --import tsx test/run.ts"
   },
   "dependencies": {
     "@better-auth/cimd": "1.7.5",
@@ -24,8 +25,8 @@
     "@better-auth/oauth-provider": "1.7.5",
     "@better-auth/passkey": "1.7.5",
     "better-auth": "1.7.5",
-    "pg": "8.16.3",
-    "resend": "6.28.0"
+    "cloudflare": "7.1.0",
+    "pg": "8.16.3"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

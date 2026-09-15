@@ -34,6 +34,8 @@ const server = spawn("node", ["--import", "tsx", "src/server.ts"], {
     SIGIRO_RESOURCE: required("SIGIRO_RESOURCE"),
     DATABASE_URL: required("DATABASE_URL"),
     EMAIL_FROM: process.env.EMAIL_FROM ?? "noreply@sigiro.com",
+    CLOUDFLARE_ACCOUNT_ID: "test-account",
+    CLOUDFLARE_EMAIL_API_TOKEN: "test-token",
   },
   stdio: "inherit",
 });

@@ -1,10 +1,11 @@
 import { createServer } from "node:http";
 
 import { toNodeHandler } from "better-auth/node";
+import Cloudflare from "cloudflare";
 import { Pool } from "pg";
-import { Resend } from "resend";
 
 import { createAuth } from "./auth.js";
+import { sendCloudflareEmail } from "./email.js";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -31,7 +32,11 @@ const database = new Pool({
   max: 10,
   connectionTimeoutMillis: 5_000,
 });
-const resend = environment === "production" ? new Resend(required("RESEND_API_KEY")) : undefined;
+const cloudflare =
+  environment === "production"
+    ? new Cloudflare({ apiToken: required("CLOUDFLARE_EMAIL_API_TOKEN"), maxRetries: 2, timeout: 10_000 })
+    : undefined;
+const cloudflareAccountId = environment === "production" ? required("CLOUDFLARE_ACCOUNT_ID") : undefined;
 
 const auth = createAuth({
   baseURL,
@@ -41,9 +46,8 @@ const auth = createAuth({
   testOTP,
   emailFrom: required("EMAIL_FROM"),
   async sendEmail(message) {
-    if (!resend) throw new Error("email delivery is unavailable outside production");
-    const { error } = await resend.emails.send(message);
-    if (error) throw new Error(`Resend rejected email: ${error.message}`);
+    if (!cloudflare || !cloudflareAccountId) throw new Error("email delivery is unavailable outside production");
+    await sendCloudflareEmail(cloudflare, cloudflareAccountId, message);
   },
 });
 
