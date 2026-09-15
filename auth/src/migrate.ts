@@ -9,7 +9,21 @@ const required = (name: string): string => {
   return value;
 };
 
-const database = new Pool({ connectionString: required("DATABASE_URL") });
+const environment = required("ENVIRONMENT");
+if (environment !== "production" && environment !== "test") {
+  throw new Error("ENVIRONMENT must be production or test");
+}
+
+const database = new Pool({
+  connectionString: required("DATABASE_URL"),
+  ssl:
+    environment === "production"
+      ? {
+          ca: Buffer.from(required("DATABASE_CA_CERT_B64"), "base64").toString("utf8"),
+          rejectUnauthorized: true,
+        }
+      : undefined,
+});
 
 try {
   const migrations = await getMigrations(

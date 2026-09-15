@@ -20,7 +20,8 @@ const run = (command: string, args: string[], env = process.env): Promise<number
   });
 
 if ((await run("docker", ["compose", "up", "-d", "--wait"])) !== 0) process.exit(1);
-if ((await run("node", ["--import", "tsx", "src/migrate.ts"])) !== 0) process.exit(1);
+if ((await run("node", ["--import", "tsx", "src/migrate.ts"], { ...process.env, ENVIRONMENT: "test" })) !== 0)
+  process.exit(1);
 
 const server = spawn("node", ["--import", "tsx", "src/server.ts"], {
   cwd: root,
