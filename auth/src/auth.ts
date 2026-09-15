@@ -1,8 +1,8 @@
 import { cimd } from "@better-auth/cimd";
+import { fetchClientMetadataResource as fetchClientMetadataResourceNode } from "@better-auth/cimd/node";
 import { mcp } from "@better-auth/mcp";
 import { oauthDeviceAuthorization, type ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 import { passkey } from "@better-auth/passkey";
-import { isPublicRoutableHost } from "@better-auth/core/utils/host";
 import { betterAuth } from "better-auth";
 import { emailOTP, jwt, organization } from "better-auth/plugins";
 import type { Pool } from "pg";
@@ -38,30 +38,8 @@ export interface AuthRuntime {
     text: string;
   }): Promise<void>;
   emailFrom: string;
+  fetchClientMetadataResource?: ClientMetadataResourceFetch;
 }
-
-const fetchClientMetadataResource: ClientMetadataResourceFetch = async (input, init) => {
-  const request = new Request(input, init);
-  const url = new URL(request.url);
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    url.hash ||
-    !isPublicRoutableHost(url.hostname)
-  ) {
-    throw new Error("CIMD metadata must use a public HTTPS URL without credentials or fragments");
-  }
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    throw new Error("CIMD metadata requests must use GET or HEAD");
-  }
-
-  const response = await fetch(request, { redirect: "manual" });
-  if (response.status >= 300 && response.status < 400) {
-    throw new Error("CIMD metadata redirects are not allowed");
-  }
-  return response;
-};
 
 export const createAuthOptions = (runtime: AuthRuntime) =>
   ({
@@ -112,9 +90,19 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
         extensions: [
           {
             claims: {
-              accessToken: ({ client, referenceId }) => ({
-                tid: referenceId ?? client.referenceId,
-              }),
+              accessToken: async ({ client, referenceId, sessionId }) => {
+                const registeredTenantId = referenceId ?? client.referenceId;
+                if (registeredTenantId) return { tid: registeredTenantId };
+                if (!sessionId) throw new Error("token issuance has no tenant-bearing session or client");
+
+                const session = await runtime.database.query<{ activeOrganizationId: string | null }>(
+                  'SELECT "activeOrganizationId" FROM session WHERE id = $1',
+                  [sessionId],
+                );
+                const activeOrganizationId = session.rows[0]?.activeOrganizationId;
+                if (!activeOrganizationId) throw new Error("token session has no active organization");
+                return { tid: activeOrganizationId };
+              },
             },
           },
         ],
@@ -124,7 +112,7 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
       }),
       oauthDeviceAuthorization(),
       cimd({
-        fetchClientMetadataResource,
+        fetchClientMetadataResource: runtime.fetchClientMetadataResource ?? fetchClientMetadataResourceNode,
         metadataProfile: "mcp-2026-07-28",
       }),
     ],

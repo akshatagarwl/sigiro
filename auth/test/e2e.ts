@@ -1,6 +1,10 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { createHash, randomBytes } from "node:crypto";
 import { validateCimdMetadata } from "@better-auth/cimd";
+import { fetchClientMetadataResource as fetchClientMetadataResourceNode } from "@better-auth/cimd/node";
+import { Pool } from "pg";
+
+import { createAuth } from "../src/auth.js";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -12,6 +16,8 @@ const env = {
   BETTER_AUTH_URL: required("BETTER_AUTH_URL"),
   AUTH_TEST_OTP: required("AUTH_TEST_OTP"),
   SIGIRO_RESOURCE: required("SIGIRO_RESOURCE"),
+  BETTER_AUTH_SECRET: required("BETTER_AUTH_SECRET"),
+  DATABASE_URL: required("DATABASE_URL"),
 };
 
 const failures: string[] = [];
@@ -81,13 +87,15 @@ async function expectOk(response: Response, operation: string): Promise<Response
     jwks_uri?: string;
     grant_types_supported?: string[];
     code_challenge_methods_supported?: string[];
+    registration_endpoint?: string;
   };
   if (
     metadata.issuer !== `${env.BETTER_AUTH_URL}/api/auth` ||
     metadata.jwks_uri !== `${env.BETTER_AUTH_URL}/api/auth/jwks` ||
     !metadata.grant_types_supported?.includes("authorization_code") ||
     !metadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:device_code") ||
-    metadata.code_challenge_methods_supported?.join(" ") !== "S256"
+    metadata.code_challenge_methods_supported?.join(" ") !== "S256" ||
+    metadata.registration_endpoint !== undefined
   ) {
     throw new Error("OAuth discovery metadata is incomplete");
   }
@@ -134,6 +142,22 @@ async function expectOk(response: Response, operation: string): Promise<Response
   if (!cimdValidation.valid) {
     throw new Error(`CIMD MCP profile rejected valid metadata: ${cimdValidation.error}`);
   }
+  let loopbackRejected = false;
+  try {
+    await fetchClientMetadataResourceNode("https://127.0.0.1/.well-known/oauth-client");
+  } catch {
+    loopbackRejected = true;
+  }
+  if (!loopbackRejected) throw new Error("official CIMD transport allowed a loopback address");
+  const dcrResponse = await fetch(`${env.BETTER_AUTH_URL}/api/auth/oauth2/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: "deprecated DCR client",
+      redirect_uris: ["http://127.0.0.1:3110/callback"],
+    }),
+  });
+  if (dcrResponse.ok) throw new Error("deprecated dynamic client registration is enabled");
 
   const organizationsResponse = await expectOk(await request("/organization/list"), "organization list");
   const organizations = (await organizationsResponse.json()) as Array<{ id: string }>;
@@ -222,23 +246,41 @@ async function expectOk(response: Response, operation: string): Promise<Response
   }
 
   const redirectUri = "http://127.0.0.1:3110/callback";
-  const publicClient = (await (
-    await expectOk(
-      await request("/oauth2/create-client", {
-        client_name: "Sigiro kill-test MCP client",
-        redirect_uris: [redirectUri],
-        grant_types: [
-          "authorization_code",
-          "refresh_token",
-          "urn:ietf:params:oauth:grant-type:device_code",
-        ],
-        token_endpoint_auth_method: "none",
-        application_type: "native",
-        scope: "openid profile email offline_access diagnose:read",
-      }),
-      "OAuth client creation",
-    )
-  ).json()) as { client_id: string };
+  const cimdClientMetadata = {
+    client_id: cimdClientId,
+    client_name: "Sigiro CIMD kill-test client",
+    redirect_uris: [redirectUri],
+    grant_types: [
+      "authorization_code",
+      "refresh_token",
+    ],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+    application_type: "native",
+    scope: "openid profile email offline_access diagnose:read",
+  };
+  let metadataFetches = 0;
+  const cimdDatabase = new Pool({ connectionString: env.DATABASE_URL, allowExitOnIdle: true });
+  const cimdAuth = createAuth({
+    baseURL: env.BETTER_AUTH_URL,
+    secret: env.BETTER_AUTH_SECRET,
+    resource: env.SIGIRO_RESOURCE,
+    database: cimdDatabase,
+    testOTP: env.AUTH_TEST_OTP,
+    emailFrom: "noreply@sigiro.com",
+    async sendEmail() {},
+    async fetchClientMetadataResource(input) {
+      const metadataUrl = input instanceof Request ? input.url : input.toString();
+      if (metadataUrl !== cimdClientId) throw new Error(`unexpected CIMD fetch: ${metadataUrl}`);
+      metadataFetches += 1;
+      return Response.json(cimdClientMetadata, {
+        headers: { "cache-control": "public, max-age=3600" },
+      });
+    },
+  });
+  const publicClient = { client_id: cimdClientId };
+  const cimdRequest = (path: string, init?: RequestInit) =>
+    cimdAuth.handler(new Request(`${env.BETTER_AUTH_URL}/api/auth${path}`, init));
   const verifier = randomBytes(48).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   const authorizeUrl = new URL(`${env.BETTER_AUTH_URL}/api/auth/oauth2/authorize`);
@@ -252,12 +294,42 @@ async function expectOk(response: Response, operation: string): Promise<Response
     code_challenge_method: "S256",
     resource: env.SIGIRO_RESOURCE,
   }).toString();
-  const authorizeResponse = await fetch(authorizeUrl, {
-    headers: { cookie },
-    redirect: "manual",
-  });
+  const authorizeResponse = await cimdAuth.handler(
+    new Request(authorizeUrl, { headers: { cookie, origin: env.BETTER_AUTH_URL } }),
+  );
   if (!authorizeResponse.ok && authorizeResponse.status !== 302) {
     throw new Error(`authorize failed: ${authorizeResponse.status} ${await authorizeResponse.text()}`);
+  }
+  if (metadataFetches !== 1) throw new Error(`CIMD metadata fetched ${metadataFetches} times`);
+  const clientRows = await cimdDatabase.query<{
+    clientId: string;
+    clientDiscoveryId: string | null;
+    clientSecret: string | null;
+    name: string | null;
+    redirectUris: string[];
+    tokenEndpointAuthMethod: string | null;
+  }>(
+    'SELECT "clientId", "clientDiscoveryId", "clientSecret", name, "redirectUris", "tokenEndpointAuthMethod" FROM "oauthClient" WHERE "clientId" = $1',
+    [cimdClientId],
+  );
+  const cimdClient = clientRows.rows[0];
+  if (
+    clientRows.rowCount !== 1 ||
+    !cimdClient ||
+    cimdClient.clientDiscoveryId !== "cimd" ||
+    cimdClient.clientSecret !== null ||
+    cimdClient.name !== cimdClientMetadata.client_name ||
+    cimdClient.redirectUris.join(" ") !== redirectUri ||
+    cimdClient.tokenEndpointAuthMethod !== "none"
+  ) {
+    throw new Error(`persisted CIMD client is incorrect: ${JSON.stringify(cimdClient)}`);
+  }
+  const resourceRows = await cimdDatabase.query<{ identifier: string }>(
+    'SELECT resource.identifier FROM "oauthClientResource" link JOIN "oauthResource" resource ON resource.identifier = link."resourceId" WHERE link."clientId" = $1',
+    [cimdClientId],
+  );
+  if (resourceRows.rowCount !== 1 || resourceRows.rows[0]?.identifier !== env.SIGIRO_RESOURCE) {
+    throw new Error(`CIMD client was not bound to the Sigiro resource: ${JSON.stringify(resourceRows.rows)}`);
   }
   const authorizeRedirect = authorizeResponse.status === 302
     ? authorizeResponse.headers.get("location")
@@ -267,7 +339,7 @@ async function expectOk(response: Response, operation: string): Promise<Response
   if (oauthQuery === "") {
     throw new Error(`authorize did not produce a signed consent query: ${consentUrl}`);
   }
-  const consentResponse = await fetch(`${env.BETTER_AUTH_URL}/api/auth/oauth2/consent`, {
+  const consentResponse = await cimdRequest("/oauth2/consent", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -288,7 +360,7 @@ async function expectOk(response: Response, operation: string): Promise<Response
   if (!code || callback.searchParams.get("state") !== "kill-test-state") {
     throw new Error(`consent callback omitted code or state: ${callback}`);
   }
-  const pkceTokenResponse = await fetch(`${env.BETTER_AUTH_URL}/api/auth/oauth2/token`, {
+  const pkceTokenResponse = await cimdRequest("/oauth2/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -320,7 +392,7 @@ async function expectOk(response: Response, operation: string): Promise<Response
     throw new Error("PKCE access token omitted the tenant claim");
   }
   const rotatedResponse = await expectOk(
-    await fetch(`${env.BETTER_AUTH_URL}/api/auth/oauth2/token`, {
+    await cimdRequest("/oauth2/token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -360,7 +432,7 @@ async function expectOk(response: Response, operation: string): Promise<Response
     if (rotatedToken.refresh_token === pkceToken.refresh_token) {
       failures.push("refresh-token exchange returned the original token");
     }
-    const replayResponse = await fetch(`${env.BETTER_AUTH_URL}/api/auth/oauth2/token`, {
+    const replayResponse = await cimdRequest("/oauth2/token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -375,11 +447,28 @@ async function expectOk(response: Response, operation: string): Promise<Response
     }
   }
 
+  const deviceClient = (await (
+    await expectOk(
+      await request("/oauth2/create-client", {
+        client_name: "Sigiro kill-test device client",
+        redirect_uris: [redirectUri],
+        grant_types: ["urn:ietf:params:oauth:grant-type:device_code"],
+        token_endpoint_auth_method: "none",
+        application_type: "native",
+        scope: "diagnose:read",
+      }),
+      "device client pre-registration",
+    )
+  ).json()) as { client_id: string };
   const deviceResponse = await expectOk(
-    await request("/device/code", {
-      client_id: publicClient.client_id,
-      scope: "diagnose:read",
-      resource: env.SIGIRO_RESOURCE,
+    await cimdRequest("/device/code", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, origin: env.BETTER_AUTH_URL },
+      body: JSON.stringify({
+        client_id: deviceClient.client_id,
+        scope: "diagnose:read",
+        resource: env.SIGIRO_RESOURCE,
+      }),
     }),
     "device authorization",
   );
@@ -392,23 +481,26 @@ async function expectOk(response: Response, operation: string): Promise<Response
     throw new Error("device authorization response omitted codes");
   }
   await expectOk(
-    await fetch(
-      `${env.BETTER_AUTH_URL}/api/auth/device?${new URLSearchParams({ user_code: device.user_code })}`,
-      { headers: { cookie } },
-    ),
+    await cimdRequest(`/device?${new URLSearchParams({ user_code: device.user_code })}`, {
+      headers: { cookie },
+    }),
     "device verification claim",
   );
   await expectOk(
-    await request("/device/approve", { userCode: device.user_code }),
+    await cimdRequest("/device/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, origin: env.BETTER_AUTH_URL },
+      body: JSON.stringify({ userCode: device.user_code }),
+    }),
     "device approval",
   );
   await new Promise((resolve) => setTimeout(resolve, (device.interval ?? 5) * 1_000));
-  const deviceTokenResponse = await fetch(`${env.BETTER_AUTH_URL}/api/auth/oauth2/token`, {
+  const deviceTokenResponse = await cimdRequest("/oauth2/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      client_id: publicClient.client_id,
+      client_id: deviceClient.client_id,
       device_code: device.device_code,
       resource: env.SIGIRO_RESOURCE,
     }),
@@ -431,7 +523,7 @@ async function expectOk(response: Response, operation: string): Promise<Response
   }
 
   process.stdout.write(
-    "client_credentials, authorization_code + PKCE, and device JWTs verified\n",
+    "client_credentials, CIMD authorization_code + PKCE, and device JWTs verified\n",
   );
   if (failures.length > 0) {
     throw new Error(`kill-test failed: ${failures.join("; ")}`);

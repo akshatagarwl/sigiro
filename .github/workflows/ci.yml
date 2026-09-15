@@ -70,6 +70,7 @@ jobs:
       - run: bun run db:up
       - run: bun run migrate
       - run: bun run test
+      - run: docker build -t sigiro-auth:ci .
       - run: bun audit --production
       - if: always()
         run: bun run db:down

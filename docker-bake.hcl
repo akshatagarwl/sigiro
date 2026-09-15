@@ -63,3 +63,10 @@ target "sigiro" {
   cache-from = PUSH_CACHE == "true" ? ["type=registry,ref=${REGISTRY}/sigiro:buildcache"] : []
   cache-to   = PUSH_CACHE == "true" ? ["type=registry,ref=${REGISTRY}/sigiro:buildcache,mode=max"] : []
 }
+
+target "sigiro-auth" {
+  context    = "auth"
+  dockerfile = "Dockerfile"
+  platforms  = ["linux/amd64", "linux/arm64"]
+  tags       = ["${REGISTRY}/sigiro-auth:${TAG}"]
+}

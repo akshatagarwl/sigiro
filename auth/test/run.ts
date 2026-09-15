@@ -1,4 +1,7 @@
-const root = new URL("..", import.meta.url).pathname;
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
 
 process.env.NO_PROXY = "127.0.0.1,localhost";
 process.env.no_proxy = process.env.NO_PROXY;
@@ -9,60 +12,33 @@ const required = (name: string): string => {
   return value;
 };
 
-const compose = Bun.spawn(["docker", "compose", "up", "-d", "--wait"], {
-  cwd: root,
-  stdout: "inherit",
-  stderr: "inherit",
-});
-if ((await compose.exited) !== 0) process.exit(1);
+const run = (command: string, args: string[], env = process.env): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: root, env, stdio: "inherit" });
+    child.once("error", reject);
+    child.once("exit", (code) => resolve(code ?? 1));
+  });
 
-const migrate = Bun.spawn(["bun", "src/migrate.ts"], {
-  cwd: root,
-  env: process.env,
-  stdout: "inherit",
-  stderr: "inherit",
-});
-if ((await migrate.exited) !== 0) process.exit(1);
+if ((await run("docker", ["compose", "up", "-d", "--wait"])) !== 0) process.exit(1);
+if ((await run("node", ["--import", "tsx", "src/migrate.ts"])) !== 0) process.exit(1);
 
-const server = Bun.spawn(
-  [
-    "bunx",
-    "wrangler",
-    "dev",
-    "--local",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    "3100",
-    "--local-upstream",
-    "127.0.0.1",
-    "--var",
-    "ENVIRONMENT:test",
-    "--var",
-    `BETTER_AUTH_SECRET:${required("BETTER_AUTH_SECRET")}`,
-    "--var",
-    `AUTH_TEST_OTP:${required("AUTH_TEST_OTP")}`,
-    "--var",
-    `BETTER_AUTH_URL:${required("BETTER_AUTH_URL")}`,
-    "--var",
-    `SIGIRO_RESOURCE:${required("SIGIRO_RESOURCE")}`,
-    "--var",
-    `EMAIL_FROM:${process.env.EMAIL_FROM ?? "noreply@sigiro.com"}`,
-  ],
-  {
-    cwd: root,
-    env: {
-      ...process.env,
-      CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: required("DATABASE_URL"),
-    },
-    stdout: "inherit",
-    stderr: "inherit",
+const server = spawn("node", ["--import", "tsx", "src/server.ts"], {
+  cwd: root,
+  env: {
+    ...process.env,
+    ENVIRONMENT: "test",
+    PORT: "3100",
+    BETTER_AUTH_SECRET: required("BETTER_AUTH_SECRET"),
+    AUTH_TEST_OTP: required("AUTH_TEST_OTP"),
+    BETTER_AUTH_URL: required("BETTER_AUTH_URL"),
+    SIGIRO_RESOURCE: required("SIGIRO_RESOURCE"),
+    DATABASE_URL: required("DATABASE_URL"),
+    EMAIL_FROM: process.env.EMAIL_FROM ?? "noreply@sigiro.com",
   },
-);
+  stdio: "inherit",
+});
 
-const stopServer = () => {
-  server.kill();
-};
+const stopServer = () => server.kill("SIGTERM");
 process.on("SIGINT", stopServer);
 process.on("SIGTERM", stopServer);
 
@@ -76,26 +52,18 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
       break;
     }
   } catch {
-    // Wrangler has not started listening yet.
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  await Bun.sleep(100);
 }
 if (!ready) {
   stopServer();
-  await server.exited;
-  throw new Error("Worker did not become ready");
+  throw new Error("auth service did not become ready");
 }
 
 try {
-  const tests = Bun.spawn(["bun", "test/e2e.ts"], {
-    cwd: root,
-    env: process.env,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  process.exitCode = await tests.exited;
+  process.exitCode = await run("node", ["--import", "tsx", "test/e2e.ts"]);
 } finally {
   stopServer();
-  await server.exited;
-  await Bun.$`docker compose down`.cwd(root).quiet();
+  await new Promise((resolve) => server.once("exit", resolve));
+  await run("docker", ["compose", "down"]);
 }

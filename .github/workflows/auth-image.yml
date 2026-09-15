@@ -1,0 +1,32 @@
+name: Auth image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - auth/**
+      - docker-bake.hcl
+      - .github/workflows/auth-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username '${{ github.actor }}' --password-stdin
+      - name: Publish immutable auth image
+        env:
+          REGISTRY: ghcr.io/akshatagarwl
+          TAG: ${{ github.sha }}
+        run: |
+          docker buildx create --use
+          docker buildx bake sigiro-auth --set 'sigiro-auth.platform=linux/amd64' --push
