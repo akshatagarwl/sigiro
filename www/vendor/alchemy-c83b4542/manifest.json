@@ -4,6 +4,7 @@
   "distilledCommit": "c5b839daa092a6dbbc64e0f156ffeb16efee620f",
   "removalIssue": "https://github.com/akshatagarwl/sigiro/issues/237",
   "artifacts": {
+    "alchemy.run-cloudflare-runtime-2.0.0-beta.77.tgz": "4e91bb7721e3f33c07c845ecba85cac4599b59877bcbac00535af8534fd48acb",
     "alchemy-2.0.0-beta.77-c83b4542.tgz": "0c39ef2cd82252bdc78fc847fad258f1abf56b028751f5a97c1fbfa5f3cb7544",
     "distilled.cloud-aws-1.0.0-rc.9.tgz": "67c157751b60eb7c9415db8af92dea8b09096156297c5e6033b1ec722b868ba7",
     "distilled.cloud-axiom-1.0.0-rc.9.tgz": "eec0206b2d901eee02a8274441bac54888d306d428cfac94cb2562c184646e34",

@@ -31,6 +31,13 @@ const database = new Pool({
   connectionString: required("DATABASE_URL"),
   max: 10,
   connectionTimeoutMillis: 5_000,
+  ssl:
+    environment === "production"
+      ? {
+          ca: Buffer.from(required("DATABASE_CA_CERT_B64"), "base64").toString("utf8"),
+          rejectUnauthorized: true,
+        }
+      : undefined,
 });
 const cloudflare =
   environment === "production"

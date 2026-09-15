@@ -35,6 +35,13 @@ export default Alchemy.Stack(
         forceDestroy: false,
       }),
     );
+    const emailSending = yield* productionResource(
+      Cloudflare.Email.SendingSubdomain('TransactionalEmail', {
+        zoneId: zone.zoneId,
+        name: 'sigiro.com',
+      }),
+    );
+
     const website = yield* productionResource(
       Cloudflare.Worker('Website', {
         name: 'sigiro-www',
@@ -67,6 +74,15 @@ export default Alchemy.Stack(
       }),
     );
 
-    return { stage, zone, downloads, website, apexRoute, wwwRoute };
+    return {
+      stage,
+      zone,
+      downloads,
+      emailSending,
+
+      website,
+      apexRoute,
+      wwwRoute,
+    };
   }),
 );

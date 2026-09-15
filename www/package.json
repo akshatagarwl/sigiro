@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "alchemy:deploy": "ALCHEMY_STAGE=prod alchemy deploy ./alchemy.run.ts --yes",
     "alchemy:plan": "ALCHEMY_STAGE=prod alchemy plan ./alchemy.run.ts --no-input",
+    "alchemy:hetzner:deploy": "ALCHEMY_STAGE=prod alchemy deploy ./alchemy.hetzner.run.ts --yes",
+    "alchemy:hetzner:plan": "ALCHEMY_STAGE=prod alchemy plan ./alchemy.hetzner.run.ts --no-input",
     "dev": "blume dev",
     "build": "blume build",
     "preview": "wrangler dev --config dist/server/wrangler.json",
@@ -28,6 +31,7 @@
     "sigiro-icons": "npm:simple-icons@16.28.0"
   },
   "devDependencies": {
+    "@alchemy.run/frontend-frameworks": "2.0.0-beta.77",
     "@effect/platform-bun": "4.0.0-rc.115",
     "@oxlint/plugins": "1.78.0",
     "@types/bun": "1.3.4",
@@ -43,6 +47,7 @@
     "wrangler": "4.118.0"
   },
   "overrides": {
+    "@alchemy.run/cloudflare-runtime": "file:./vendor/alchemy-c83b4542/alchemy.run-cloudflare-runtime-2.0.0-beta.77.tgz",
     "@distilled.cloud/aws": "file:./vendor/alchemy-c83b4542/distilled.cloud-aws-1.0.0-rc.9.tgz",
     "@distilled.cloud/axiom": "file:./vendor/alchemy-c83b4542/distilled.cloud-axiom-1.0.0-rc.9.tgz",
     "@distilled.cloud/cloudflare": "file:./vendor/alchemy-c83b4542/distilled.cloud-cloudflare-1.0.0-rc.9.tgz",
