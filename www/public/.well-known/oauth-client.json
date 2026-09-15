@@ -1,5 +1,5 @@
 {
-  "client_id": "https://sigiro.com/.well-known/oauth-client",
+  "client_id": "https://sigiro.com/.well-known/oauth-client.json",
   "client_name": "Sigiro Production Verification Agent",
   "redirect_uris": ["http://127.0.0.1:3110/callback"],
   "grant_types": ["authorization_code", "refresh_token"],
