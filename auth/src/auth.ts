@@ -4,6 +4,7 @@ import { mcp } from "@better-auth/mcp";
 import { oauthDeviceAuthorization, type ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { emailOTP, jwt, organization } from "better-auth/plugins";
 import type { Pool } from "pg";
 
@@ -41,6 +42,16 @@ export interface AuthRuntime {
   fetchClientMetadataResource?: ClientMetadataResourceFetch;
 }
 
+const requireResource = (value: unknown, expected: string): void => {
+  const resources = Array.isArray(value) ? value : [value];
+  if (resources.length !== 1 || resources[0] !== expected) {
+    throw new APIError("BAD_REQUEST", {
+      error: "invalid_target",
+      message: `resource must be ${expected}`,
+    });
+  }
+};
+
 export const createAuthOptions = (runtime: AuthRuntime) =>
   ({
     appName: "Sigiro",
@@ -49,6 +60,16 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
     database: runtime.database,
     disabledPaths: ["/token"],
     telemetry: { enabled: false },
+    hooks: {
+      before: createAuthMiddleware(async (context) => {
+        if (context.path === "/oauth2/authorize") {
+          requireResource(context.query?.resource, runtime.resource);
+        }
+        if (context.path === "/oauth2/token" || context.path === "/device/code") {
+          requireResource(context.body?.resource, runtime.resource);
+        }
+      }),
+    },
     plugins: [
       organization(),
       jwt({

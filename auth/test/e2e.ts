@@ -196,6 +196,20 @@ async function expectOk(response: Response, operation: string): Promise<Response
     throw new Error("OAuth client was created without a secret");
   }
 
+  const missingResourceTokenResponse = await fetch(`${env.BETTER_AUTH_URL}/api/auth/oauth2/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: client.client_id,
+      client_secret: client.client_secret,
+      scope: "diagnose:read",
+    }),
+  });
+  if (missingResourceTokenResponse.ok) {
+    throw new Error("client_credentials accepted a request without an RFC 8707 resource");
+  }
+
   const tokenResponse = await fetch(`${env.BETTER_AUTH_URL}/api/auth/oauth2/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -294,6 +308,14 @@ async function expectOk(response: Response, operation: string): Promise<Response
     code_challenge_method: "S256",
     resource: env.SIGIRO_RESOURCE,
   }).toString();
+  const missingResourceAuthorizeUrl = new URL(authorizeUrl);
+  missingResourceAuthorizeUrl.searchParams.delete("resource");
+  const missingResourceAuthorizeResponse = await cimdAuth.handler(
+    new Request(missingResourceAuthorizeUrl, { headers: { cookie, origin: env.BETTER_AUTH_URL } }),
+  );
+  if (missingResourceAuthorizeResponse.ok || missingResourceAuthorizeResponse.status === 302) {
+    throw new Error("authorization accepted a request without an RFC 8707 resource");
+  }
   const authorizeResponse = await cimdAuth.handler(
     new Request(authorizeUrl, { headers: { cookie, origin: env.BETTER_AUTH_URL } }),
   );
