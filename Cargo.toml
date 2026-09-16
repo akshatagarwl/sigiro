@@ -1,6 +1,6 @@
 [package]
 name = "sigiro"
-version = "0.1.1"
+version = "0.1.0"
 edition = "2024"
 # The real floor, not an aspiration: `rmcp` and `darling` both require 1.88,
 # so a lower number here does not buy compatibility — it silently costs it.
