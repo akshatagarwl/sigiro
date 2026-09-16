@@ -171,6 +171,10 @@ try {
   assert.equal(redirect.status, 302);
   assert.equal(redirect.headers.get('location'), `${base}/device?from=auth`);
 
+  const deviceApproval = await fetch(`${base}/device/capabilities?code=test`);
+  assert.equal(deviceApproval.status, 200);
+  assert.equal((await deviceApproval.json()).origin, 'auth');
+
   const apiResponse = await fetch(`${base}/v1/traces?probe=1`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-protobuf' },
@@ -195,7 +199,7 @@ try {
   assert.equal(canonical.status, 308);
   assert.equal(canonical.headers.get('location'), `http://sigiro.com:${workerPort}/sign-up`);
 
-  console.log('edge smoke: 10 routes passed');
+  console.log('edge smoke: 11 routes passed');
 } catch (error) {
   console.error(stdout);
   console.error(stderr);

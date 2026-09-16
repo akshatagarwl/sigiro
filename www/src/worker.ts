@@ -11,6 +11,8 @@ const AUTH_PATHS = new Set([
   '/sign-up',
 ]);
 
+const AUTH_PAGE_PREFIXES = ['/consent/', '/device/', '/sign-in/', '/sign-up/'];
+
 const API_PATHS = new Set([
   '/.well-known/oauth-protected-resource',
   '/health',
@@ -23,7 +25,10 @@ const API_PATHS = new Set([
 ]);
 
 const isAuthPath = (pathname: string): boolean =>
-  pathname === '/api/auth' || pathname.startsWith('/api/auth/') || AUTH_PATHS.has(pathname);
+  pathname === '/api/auth' ||
+  pathname.startsWith('/api/auth/') ||
+  AUTH_PATHS.has(pathname) ||
+  AUTH_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 
 const isApiPath = (pathname: string): boolean =>
   pathname.startsWith('/v1/') || API_PATHS.has(pathname);
