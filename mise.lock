@@ -37,38 +37,38 @@ checksum = "sha256:63d90c09c58f5ad788341859c18d62e6ba2d9fecf3c3035cbadde56257ed0
 url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-osx-amd64.tar.gz"
 
 [[tools."packslip:github.com/aubepkg/aube"]]
-version = "2.2.12"
+version = "2.2.16"
 backend = "packslip:github.com/aubepkg/aube"
-specifiers = ["2.2.12"]
+specifiers = ["2.2.16"]
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.linux-arm64"]
-checksum = "sha256:831f212a8b3f2f7a2de891eed7c95856bffadb9e3ec5981377a157f32bcff730"
-url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-aarch64-unknown-linux-gnu.tar.gz"
+checksum = "sha256:a3b3a44ebff731672741c41d65b806dc8e138252f81e50240e3f8a359deb065d"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.16/aube-v2.2.16-aarch64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.linux-arm64-musl"]
-checksum = "sha256:b6df7f02c0e58257843c071efd14d65665cebb03fb3462633643c9aeaa36a61f"
-url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-aarch64-unknown-linux-musl.tar.gz"
+checksum = "sha256:2ee2ada278809c180bae121863093158b7dc1f6983aa96db6cee1ce1a49a4a0f"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.16/aube-v2.2.16-aarch64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.linux-x64"]
-checksum = "sha256:ad906bced7d1bf014a2dd8cfa1b03ad0e38a5764f92fe4b30e9e27e303bb7a03"
-url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-x86_64-unknown-linux-gnu.tar.gz"
+checksum = "sha256:f459e96c1eba2068ea921875748fe1777e78b919886f2a83058b8c5c50e139ef"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.16/aube-v2.2.16-x86_64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.linux-x64-musl"]
-checksum = "sha256:81a1e1c3d041ce0db51483ad3b892e66dec1e63fff6489ae847880fbd081b92d"
-url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-x86_64-unknown-linux-musl.tar.gz"
+checksum = "sha256:61097c72679196bae2a0ae19dd6cc9113e6a950ae7c84753b4b66526509d230d"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.16/aube-v2.2.16-x86_64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.macos-arm64"]
-checksum = "sha256:30235658a0f328f095ff7f178f352a6bfef753a8fe505d991bd9f5db3825f2f6"
-url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-aarch64-apple-darwin.tar.gz"
+checksum = "sha256:325b967ee1f554012e56db3b57473924352302468fc3dcbf37f0336efdc03597"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.16/aube-v2.2.16-aarch64-apple-darwin.tar.gz"
 signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.windows-x64"]
-checksum = "sha256:c734783dfba99509b54dfaf49aa897dffa017a82128a45302e01812231dfeb11"
-url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-x86_64-pc-windows-msvc.zip"
+checksum = "sha256:e7fba256b8f966e1063099644f765ad23ce713a4fc938ce0c41dcf76378a55d1"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.16/aube-v2.2.16-x86_64-pc-windows-msvc.zip"
 signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [[tools."packslip:github.com/jdx/hk"]]

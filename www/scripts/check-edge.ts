@@ -1,4 +1,87 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import {
+  createServer,
+  type IncomingMessage,
+  request as httpRequest,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+const toHeaders = (source: Record<string, string | string[] | undefined>): Headers => {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(source)) {
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(name, item);
+    } else if (value !== undefined) {
+      headers.set(name, value);
+    }
+  }
+  return headers;
+};
+
+const requestBody = async (request: IncomingMessage): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request)
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
+};
+
+const sendResponse = async (response: Response, target: ServerResponse): Promise<void> => {
+  target.statusCode = response.status;
+  response.headers.forEach((value, name) => target.setHeader(name, value));
+  target.end(response.body === null ? undefined : Buffer.from(await response.arrayBuffer()));
+};
+
+const startServer = async (
+  handler: (request: Request) => Promise<Response> | Response,
+): Promise<{ server: Server; port: number }> => {
+  const server = createServer(async (incoming, outgoing) => {
+    try {
+      const host = incoming.headers.host ?? '127.0.0.1';
+      const body =
+        incoming.method === 'GET' || incoming.method === 'HEAD'
+          ? undefined
+          : await requestBody(incoming);
+      const request = new Request(`http://${host}${incoming.url ?? '/'}`, {
+        method: incoming.method,
+        headers: toHeaders(incoming.headers),
+        body,
+      });
+      await sendResponse(await handler(request), outgoing);
+    } catch (error) {
+      outgoing.statusCode = 500;
+      outgoing.end(error instanceof Error ? error.message : String(error));
+    }
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  // SAFETY: this server is bound to a TCP host, so Node returns AddressInfo.
+  const address = server.address() as AddressInfo;
+  return { server, port: address.port };
+};
+
+const closeServer = async (server: Server): Promise<void> => {
+  server.close();
+  await once(server, 'close');
+};
+
+const requestWithHost = (
+  url: string,
+  host: string,
+): Promise<{ status: number; headers: Headers }> =>
+  new Promise((resolve, reject) => {
+    const request = httpRequest(url, { headers: { host } }, (response) => {
+      response.resume();
+      response.on('end', () => {
+        resolve({ status: response.statusCode ?? 0, headers: toHeaders(response.headers) });
+      });
+    });
+    request.on('error', reject);
+    request.end();
+  });
 
 const jsonOrigin = async (origin: string, request: Request): Promise<Response> => {
   const url = new URL(request.url);
@@ -15,27 +98,15 @@ const jsonOrigin = async (origin: string, request: Request): Promise<Response> =
   });
 };
 
-const auth = Bun.serve({
-  hostname: '127.0.0.1',
-  port: 0,
-  fetch: (request) => jsonOrigin('auth', request),
-});
-const api = Bun.serve({
-  hostname: '127.0.0.1',
-  port: 0,
-  fetch: (request) => jsonOrigin('api', request),
-});
-const reservation = Bun.serve({
-  hostname: '127.0.0.1',
-  port: 0,
-  fetch: () => new Response(null, { status: 503 }),
-});
+const auth = await startServer((request) => jsonOrigin('auth', request));
+const api = await startServer((request) => jsonOrigin('api', request));
+const reservation = await startServer(() => new Response(null, { status: 503 }));
 const workerPort = reservation.port;
-reservation.stop(true);
-const worker = Bun.spawn(
+await closeServer(reservation.server);
+
+const worker = spawn(
+  'wrangler',
   [
-    'bunx',
-    'wrangler',
     'dev',
     '--config',
     'wrangler.preview.jsonc',
@@ -46,17 +117,24 @@ const worker = Bun.spawn(
     '--var',
     `API_ORIGIN_URL:http://127.0.0.1:${api.port}`,
   ],
-  { stdout: 'pipe', stderr: 'pipe' },
+  { stdio: ['ignore', 'pipe', 'pipe'] },
 );
-const stdout = new Response(worker.stdout).text();
-const stderr = new Response(worker.stderr).text();
+let stdout = '';
+let stderr = '';
+worker.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+  stdout += chunk;
+});
+worker.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+  stderr += chunk;
+});
 const base = `http://127.0.0.1:${workerPort}`;
 
 const stop = async (): Promise<void> => {
-  worker.kill();
-  await worker.exited;
-  auth.stop(true);
-  api.stop(true);
+  if (worker.exitCode === null) {
+    worker.kill();
+    await once(worker, 'exit');
+  }
+  await Promise.all([closeServer(auth.server), closeServer(api.server)]);
 };
 
 try {
@@ -69,7 +147,7 @@ try {
       // The bounded readiness loop owns transient connection refusal.
     }
     if (Date.now() >= deadline) throw new Error('Wrangler did not become ready within 20 seconds');
-    await Bun.sleep(100);
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
   const home = await fetch(`${base}/`);
@@ -113,17 +191,14 @@ try {
   const admin = await fetch(`${base}/admin/status`);
   assert.notEqual(admin.headers.get('content-type'), 'application/json');
 
-  const canonical = await fetch(`${base}/sign-up`, {
-    headers: { host: `www.sigiro.com:${workerPort}` },
-    redirect: 'manual',
-  });
+  const canonical = await requestWithHost(`${base}/sign-up`, `www.sigiro.com:${workerPort}`);
   assert.equal(canonical.status, 308);
   assert.equal(canonical.headers.get('location'), `http://sigiro.com:${workerPort}/sign-up`);
 
   console.log('edge smoke: 10 routes passed');
 } catch (error) {
-  console.error(await stdout);
-  console.error(await stderr);
+  console.error(stdout);
+  console.error(stderr);
   throw error;
 } finally {
   await stop();

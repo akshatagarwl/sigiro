@@ -2,8 +2,8 @@
  * Announce this site's URLs to IndexNow (Bing, Yandex, Seznam, Naver).
  *
  * Why this is a script and not an Astro integration. `astro-indexnow` exists and
- * submits "at build time", which is the wrong trigger here: `bun run build` and
- * `bun run deploy` are separate steps, so a build-time submission announces URLs
+ * submits "at build time", which is the wrong trigger here: `aube run build` and
+ * `aube run deploy` are separate steps, so a build-time submission announces URLs
  * that are not live yet, and announces them again for every build that is never
  * deployed. IndexNow rate-limits and de-prioritises noisy hosts, so submitting a
  * URL before it changed is not free. This runs after a deploy instead.

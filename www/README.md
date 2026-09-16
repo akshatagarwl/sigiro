@@ -24,7 +24,7 @@ aube run og            # regenerate the Open Graph card into public/
 ```
 
 `aube run` installs missing or stale dependencies before starting the script and
-keeps the committed `bun.lock`; do not add a second lockfile. `aube run dev` is
+uses the committed `aube-lock.yaml`; do not add a second lockfile. `aube run dev` is
 for page development only. Use `aube run check:edge` while editing the wrapper;
 it starts isolated mock origins and checks the complete route split, request
 forwarding, redirect rewriting, and canonical-host redirect. Use
@@ -43,9 +43,12 @@ Two infrastructure composition roots share Alchemy's remote Cloudflare state bac
 Review both plans with:
 
 ```bash
-aube run alchemy:plan
-HCLOUD_TOKEN="$HCLOUD_TOKEN" aube run alchemy:hetzner:plan
+mise run alchemy-plan
+mise run alchemy-hetzner-plan
 ```
+
+The Hetzner task uses `HCLOUD_TOKEN` when it is set and otherwise reads the token
+from the active `hcloud` context without printing it.
 
 Both scripts fix Alchemy's stage to production. Planning does not apply, deploy, or destroy resources. The Hetzner plan must be fully no-op after adoption.
 

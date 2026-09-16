@@ -1,0 +1,9 @@
+# @pierre/theme@2.0.0 is pinned transitively by the reviewed Blume graph.
+# npm serves signed bytes from pierrecomputer/pierre, but this release omitted
+# provenance that existed on an earlier prerelease. Keep the exception exact.
+trustPolicyExclude = ["@pierre/theme@2.0.0"]
+
+# Alchemy's Effect v4 fixes are vendored as reviewed, repository-owned
+# tarballs and selected with exact overrides. Aube otherwise rejects those
+# intentional local transitive dependencies before it can verify the lock.
+blockExoticSubdeps = false

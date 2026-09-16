@@ -5,9 +5,9 @@ sccache = "0.17.0"
 # artifact changes arrive as reviewable mise.lock diffs.
 "packslip:github.com/jdx/hk" = "1.58.1"
 "packslip:github.com/jdx/mr-boxington" = "1.11.1"
-# 2.2.13 is intentionally not selected yet: it is inside mise's 24-hour
+# 2.2.17 is intentionally not selected yet: it is inside mise's 24-hour
 # minimum-release-age window. Do not weaken that supply-chain policy globally.
-"packslip:github.com/aubepkg/aube" = "2.2.12"
+"packslip:github.com/aubepkg/aube" = "2.2.16"
 # Stable, matching the Dockerfile's pinned Rust 1.98.1 image. Nothing here needs
 # nightly: no `#![feature]`, no `cargo-features`, no `[unstable]`, no `-Z`, and
 # edition 2024 is stable. The previous `nightly-2026-09-05` pin existed only to
@@ -71,6 +71,33 @@ _.file = { path = ".env", optional = true }
 [tasks.default]
 description = "List the tasks in this repo."
 run = "mise tasks ls"
+
+[tasks.www-install]
+description = "Install website dependencies from the frozen aube lockfile."
+run = "aube -C www install --frozen-lockfile"
+
+[tasks.alchemy-plan]
+description = "Plan the production Cloudflare stack without applying changes."
+run = "aube -C www run alchemy:plan"
+
+[tasks.alchemy-deploy]
+description = "Deploy the production Cloudflare stack through Alchemy."
+run = "aube -C www run alchemy:deploy"
+
+[tasks.alchemy-hetzner-plan]
+description = "Plan the adopted production Hetzner stack without applying changes."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+  export HCLOUD_TOKEN="$(hcloud config get token --allow-sensitive)"
+fi
+if [[ -z "$HCLOUD_TOKEN" ]]; then
+  echo "alchemy-hetzner-plan: HCLOUD_TOKEN is unavailable and the active hcloud context has no token" >&2
+  exit 1
+fi
+aube -C www run alchemy:hetzner:plan
+"""
 
 [tasks.build]
 description = "Release build of the sigiro binary. Set TARGET to cross-compile."
