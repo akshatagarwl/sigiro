@@ -7,11 +7,18 @@ sidebar:
   order: 2
 ---
 
-`sigiro`에는 일곱 개의 서브커맨드가 있습니다. 모든 서브커맨드는 성공 시 들여쓰기된
+`sigiro`에는 아홉 개의 서브커맨드가 있습니다. 모든 서브커맨드는 성공 시 들여쓰기된
 JSON을 출력합니다. 두 번째 출력 형식은 없으며, TTY 감지도 수행하지 않습니다.
 
-전역 플래그 `--token <TOKEN>`은 호스팅 엔드포인트용 베어러 토큰을 설정합니다. 이 플래그는
-`SIGIRO_ACCESS_TOKEN`를 재정의합니다. 자체 호스팅 서버는 토큰을 무시합니다.
+신규 사용자는 `sigiro signup --name "Your Name" --email you@example.com`을 실행하십시오.
+6자리 OTP가 이메일로 전송되며, 터미널에서 안전하게 입력하면 개인 워크스페이스를 정확히 하나
+생성하고 활성화합니다. 브라우저 없이 내부에서 OAuth 디바이스 인증을 완료하고 갱신/액세스
+자격 증명을 OS 자격 증명 저장소에 저장합니다. 기존 계정은 브라우저 기반 `sigiro auth login`을
+사용하십시오. `sigiro auth status`, `sigiro auth token`, `sigiro auth logout`으로 로그인 상태를 관리합니다.
+
+전역 플래그 `--token <TOKEN>`은 자동화용 베어러 토큰을 명시적으로 설정합니다. 이 플래그는
+`SIGIRO_ACCESS_TOKEN`를 재정의합니다. Open 모드의 자체 호스팅 서버에는 필요하지 않지만,
+정적 베어러 인증을 설정한 서버에는 필요합니다.
 
 모든 클라이언트 서브커맨드는 `SIGIRO_ENDPOINT`에 지정된 서버에 접속하며, 기본값은
 `http://localhost:9999`입니다.

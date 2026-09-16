@@ -22,6 +22,8 @@ sidebar:
 在下面的配置中，两个 agent 都通过 OTLP gRPC 从 `4317` 端口导出数据。自托管服务器
 不需要密钥。
 
+使用托管服务时，新用户请运行 `sigiro signup --name "Your Name" --email you@example.com`；已有账号请运行 `sigiro auth login`。
+
 在托管服务上，请改用 OTLP over **HTTP**。请先阅读[将遥测数据发送到托管版
 sigiro](/docs/how-to/hosted-onboarding#2-将-opentelemetry-导出器指向-sigiro)，
 因为托管服务的运营方并不总会开放 gRPC 端口。下面每一节的末尾都给出了托管服务的

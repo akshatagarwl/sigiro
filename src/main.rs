@@ -95,11 +95,41 @@ enum Command {
     /// otherwise. This is the container HEALTHCHECK for the distroless image,
     /// which has no shell or curl for the usual `curl -f /health` probe.
     Healthcheck,
+    /// Authenticate this CLI with Sigiro Cloud.
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+    /// Create a hosted account, verify email, and securely store OAuth credentials.
+    Signup {
+        /// Name for the hosted account.
+        #[arg(long)]
+        name: String,
+        /// Email address that receives the one-time verification code.
+        #[arg(long)]
+        email: String,
+    },
     /// Serve the MCP (Model Context Protocol) tool surface over stdio, so any
     /// MCP client (Claude Desktop, Cursor, a benchmark harness) can drive the
     /// detect→diagnose→drill loop. Talks to a running `sigiro serve` over
     /// HTTP, so point SIGIRO_ENDPOINT at it if it is not on localhost.
     Mcp,
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    /// Open a browser and sign in with an email one-time code.
+    Login {
+        /// Print the verification URL instead of opening a browser.
+        #[arg(long)]
+        no_browser: bool,
+    },
+    /// Show whether an OAuth login is stored, without revealing credentials.
+    Status,
+    /// Print the current access token for explicit OTLP/CI configuration.
+    Token,
+    /// Revoke the refresh token and remove local credentials.
+    Logout,
 }
 
 /// Every command prints pretty JSON. One format, so a pipeline and a human read
@@ -227,11 +257,14 @@ async fn main() -> Result<()> {
             // single source of truth for "ready" vs "starting" vs "degraded";
             // the CLI does not read the .ready file directly (would be a
             // second path that can drift from the server's view).
-            let base_url = sigiro::config::ENDPOINT
-                .value()
-                .unwrap_or_else(|_| "http://localhost:9999".to_string());
+            let configured_endpoint = sigiro::config::ENDPOINT.value().unwrap_or_default();
+            let base_url = if configured_endpoint.is_empty() {
+                "http://localhost:9999"
+            } else {
+                &configured_endpoint
+            };
             let health_client =
-                sigiro::client::SigiroClient::new(&base_url, sigiro::client::ClientAuth::Open);
+                sigiro::client::SigiroClient::new(base_url, sigiro::client::ClientAuth::Open);
             let (state, detail) = match health_client.health().await {
                 Ok(HealthResponse::Ready) => ("ready".to_string(), "ok".to_string()),
                 Ok(HealthResponse::Starting) => (
@@ -246,7 +279,7 @@ async fn main() -> Result<()> {
             // query setup fails, report the exact failure instead of silently
             // collapsing it to null.
             let recent_ingest = if matches!(state.as_str(), "ready" | "starting") {
-                match sigiro::client::try_build_client() {
+                match sigiro::client::try_build_client().await {
                     Ok(client) => match client.query(
                         "SELECT (SELECT count(*) FROM lake.sigiro_spans WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS spans_5m, (SELECT count(*) FROM lake.sigiro_logs WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS logs_5m, CAST((SELECT max(timestamp) FROM lake.sigiro_spans) AS VARCHAR) AS last_span_ts, CAST((SELECT max(timestamp) FROM lake.sigiro_logs) AS VARCHAR) AS last_log_ts",
                     ).await {
@@ -282,7 +315,7 @@ async fn main() -> Result<()> {
             println!("{}", format_output(&value)?);
         }
         Some(Command::Diagnose { service, from, to }) => {
-            let client = require_client()?;
+            let client = require_client().await?;
             // Epoch-seconds args → µs, matching the API. `None` stays `None`:
             // the 15-minute default lives in `DiagnoseRequest::window()` and
             // nowhere else, so the CLI and the API cannot disagree about what
@@ -297,7 +330,7 @@ async fn main() -> Result<()> {
             println!("{}", format_output(&value)?);
         }
         Some(Command::Anomalies { service, from, to }) => {
-            let client = require_client()?;
+            let client = require_client().await?;
             // Epoch-seconds args → µs, matching the API (Option = no filter).
             let from_ts = from.map(|s| s * 1_000_000);
             let to_ts = to.map(|s| s * 1_000_000);
@@ -309,11 +342,14 @@ async fn main() -> Result<()> {
             // Shell-free liveness probe for the distroless container HEALTHCHECK.
             // /health is public (no auth). Exit 0 only when fully Ready so the
             // orchestrator doesn't route to a still-initializing instance.
-            let base_url = sigiro::config::ENDPOINT
-                .value()
-                .unwrap_or_else(|_| "http://localhost:9999".to_string());
+            let configured_endpoint = sigiro::config::ENDPOINT.value().unwrap_or_default();
+            let base_url = if configured_endpoint.is_empty() {
+                "http://localhost:9999"
+            } else {
+                &configured_endpoint
+            };
             let client =
-                sigiro::client::SigiroClient::new(&base_url, sigiro::client::ClientAuth::Open);
+                sigiro::client::SigiroClient::new(base_url, sigiro::client::ClientAuth::Open);
             match client.health().await {
                 Ok(HealthResponse::Ready) => {}
                 other => {
@@ -322,13 +358,37 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Some(Command::Auth { command }) => match command {
+            AuthCommand::Login { no_browser } => {
+                let status = sigiro::oauth::login(no_browser).await?;
+                println!("{}", format_output(&serde_json::to_value(status)?)?);
+            }
+            AuthCommand::Status => {
+                let status = sigiro::oauth::status().await?;
+                println!("{}", format_output(&serde_json::to_value(status)?)?);
+            }
+            AuthCommand::Token => println!("{}", sigiro::oauth::access_token().await?),
+            AuthCommand::Logout => {
+                let deleted = sigiro::oauth::logout().await?;
+                println!(
+                    "{}",
+                    format_output(
+                        &serde_json::json!({ "authenticated": false, "deleted": deleted })
+                    )?
+                );
+            }
+        },
+        Some(Command::Signup { name, email }) => {
+            let status = sigiro::oauth::signup(name, email).await?;
+            println!("{}", format_output(&serde_json::to_value(status)?)?);
+        }
         Some(Command::Mcp) => {
             // stdio transport: the client owns the process lifetime, so this
             // runs until the peer closes. Logging must NOT go to stdout —
             // stdout is the JSON-RPC channel and any stray byte corrupts the
             // stream (see init_basic_subscriber, which writes to stderr).
             use rmcp::ServiceExt;
-            let client = sigiro::client::try_build_client()?;
+            let client = sigiro::client::try_build_client().await?;
             tracing::info!(endpoint = client.base_url(), "starting sigiro MCP server");
             let service = sigiro::mcp::SigiroMcp::new(client)
                 .serve((tokio::io::stdin(), tokio::io::stdout()))
@@ -528,9 +588,9 @@ async fn run_evictor(pool: Arc<ProjectPool>, interval_secs: u64, max_idle_secs: 
     }
 }
 
-/// Build HTTP client from config. Fails fast if the access token or endpoint is not configured.
-fn require_client() -> Result<sigiro::client::SigiroClient> {
-    sigiro::client::try_build_client()
+/// Build an HTTP client from explicit configuration or the stored OAuth login.
+async fn require_client() -> Result<sigiro::client::SigiroClient> {
+    sigiro::client::try_build_client().await
 }
 
 fn init_basic_subscriber() {

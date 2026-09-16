@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 
 import { toNodeHandler } from "better-auth/node";
@@ -6,6 +7,7 @@ import { Pool } from "pg";
 
 import { createAuth } from "./auth.js";
 import { sendCloudflareEmail } from "./email.js";
+import { authUIResponse } from "./ui.js";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -58,6 +60,36 @@ const auth = createAuth({
   },
 });
 
+const ensurePersonalOrganization = async (request: Request): Promise<Response> => {
+  const session = await auth.api.getSession({ headers: request.headers });
+  if (!session) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  let organizations = await auth.api.listOrganizations({ headers: request.headers });
+  if (organizations.length === 0) {
+    const slug = `personal-${createHash("sha256").update(session.user.id).digest("hex").slice(0, 20)}`;
+    try {
+      await auth.api.createOrganization({
+        headers: request.headers,
+        body: { name: `${session.user.name || session.user.email}'s workspace`, slug },
+      });
+    } catch (cause) {
+      organizations = await auth.api.listOrganizations({ headers: request.headers });
+      if (organizations.length === 0) throw cause;
+    }
+    organizations = await auth.api.listOrganizations({ headers: request.headers });
+  }
+
+  const organization = organizations[0];
+  if (!organization) throw new Error("personal organization provisioning returned no organization");
+  if (session.session.activeOrganizationId !== organization.id) {
+    await auth.api.setActiveOrganization({
+      headers: request.headers,
+      body: { organizationId: organization.id },
+    });
+  }
+  return Response.json({ organization: { id: organization.id, name: organization.name } });
+};
+
 const errorResponse = () => Response.json({ error: "internal_server_error" }, { status: 500 });
 
 const withCors = (response: Response, request: Request): Response => {
@@ -87,9 +119,21 @@ const dispatch = async (request: Request): Promise<Response> => {
     }
 
     const url = new URL(request.url);
+    const origin = request.headers.get("origin");
+    if (request.method === "POST" && origin !== null && origin !== new URL(baseURL).origin) {
+      return Response.json({ error: "forbidden" }, { status: 403 });
+    }
+    const ui = authUIResponse(url.pathname);
+    if (ui && (request.method === "GET" || request.method === "HEAD")) {
+      return request.method === "HEAD" ? new Response(null, { status: ui.status, headers: ui.headers }) : ui;
+    }
     if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/health") {
       await database.query("SELECT 1");
       return withCors(Response.json({ status: "ok" }), request);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/onboarding/ensure-personal-organization") {
+      return withCors(await ensurePersonalOrganization(request), request);
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/admin/oauth2/create-client") {

@@ -1,6 +1,6 @@
 ---
 title: Send telemetry to hosted sigiro
-description: Send OpenTelemetry to hosted sigiro with an OAuth access token, then query it back with SQL. You run no infrastructure; we set up each tenant by hand.
+description: Create a hosted sigiro account from the terminal, send OpenTelemetry, and query it back with SQL.
 sidebar:
   order: 2
 ---
@@ -8,13 +8,26 @@ sidebar:
 This guide shows you how to send OpenTelemetry to a sigiro host that we operate,
 and how to query the data back. You run no infrastructure.
 
-sigiro reads traces, logs, metrics and profiles. During the invited beta, we set
-up each tenant by hand. Replace `<your-sigiro-host>` below with the host that
-your operator gives you.
+sigiro reads traces, logs, metrics and profiles. For a new hosted account, run:
 
-## 1. Get an OAuth access token
+```bash
+sigiro signup --name "Your Name" --email you@example.com
+sigiro auth status
+```
 
-Hosted authentication is provided by Better Auth. Organizations are the tenants. Sigiro does not expose a hosted tenant or token provisioning UI; use the Better Auth/OAuth API to sign in and obtain an OAuth access token. Treat the token as a secret.
+The command emails a six-digit OTP and prompts for it securely in the terminal.
+It creates and activates exactly one personal workspace, completes OAuth device
+authorization internally without a browser, and stores refresh/access credentials
+in your operating system's credential store. It uses the hosted endpoint by default.
+Use `sigiro auth logout` to revoke and remove the stored credentials.
+
+## 1. Sign up and sign in
+
+Hosted authentication is provided by Better Auth. Organizations are the tenants.
+Use `sigiro signup` for first-time onboarding rather than provisioning a token
+manually. For an existing account, use browser-based `sigiro auth login`; use
+`--no-browser` when that machine cannot open a browser. Both flows keep credentials
+out of shell history.
 
 The same token authenticates OTLP ingest and API queries.
 
@@ -27,9 +40,13 @@ Use standard OTLP over HTTP. For authentication, use the standard
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <oauth-access-token>"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $(sigiro auth token)"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
+
+`sigiro auth token` prints a short-lived access token and refreshes the stored
+session before doing so. Use this form for an interactive test, not as a
+long-running collector secret.
 
 **The endpoint carries no port.** A hosted sigiro terminates OTLP on the standard
 HTTPS port, so `https://api.sigiro.com` is the whole endpoint. Do not copy the

@@ -10,12 +10,21 @@ sidebar:
 本指南介绍如何将 OpenTelemetry 数据发送到由我们运维的 sigiro 主机，
 以及如何把数据查询回来。你无需运行任何基础设施。
 
-sigiro 可读取链路追踪、日志、指标和性能剖析数据。在邀请制 Beta 期间，我们为每个租户
-手动完成配置。请把下文中的 `<your-sigiro-host>` 替换为运维方提供给你的主机地址。
+sigiro 可读取链路追踪、日志、指标和性能剖析数据。新用户请直接在终端运行：
 
-## 1. 获取 OAuth 访问令牌
+```bash
+sigiro signup --name "Your Name" --email you@example.com
+sigiro auth status
+```
 
-托管认证由 Better Auth 提供。Organizations 就是租户。Sigiro 不提供托管租户或令牌发放 UI；请使用 Better Auth/OAuth API 登录并获取 OAuth 访问令牌。请将令牌作为机密信息保管。
+CLI 会把凭据保存在操作系统的凭据存储中。请把下文中的 `<your-sigiro-host>` 替换为运维方提供给你的主机地址。
+
+## 1. 注册并登录
+
+托管认证由 Better Auth 提供。Organizations 就是租户。`sigiro signup` 会发送六位数一次性验证码，
+在终端安全地提示输入，创建并激活唯一的个人工作区，在内部完成无需浏览器的 OAuth 设备授权，
+并将刷新令牌和访问令牌存入操作系统凭据存储。已有账号请使用浏览器登录 `sigiro auth login`；
+不要手动调用 OAuth API 或复制令牌。
 
 同一个令牌同时用于 OTLP 数据摄取和 API 查询的身份认证。
 
@@ -28,9 +37,11 @@ sigiro 可读取链路追踪、日志、指标和性能剖析数据。在邀请�
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <oauth-access-token>"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $(sigiro auth token)"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
+
+`sigiro auth token` 会先刷新已存储的会话，再输出一个短期访问令牌。此方式仅用于交互式测试，不应作为长期运行的收集器密钥。
 
 **该端点不带端口号。** 托管版 sigiro 在标准 HTTPS 端口上接收 OTLP，
 因此 `https://api.sigiro.com` 就是完整的端点。请不要照搬自托管[快速上手](/docs/tutorials/quickstart#2-向它发送遥测数据)中的

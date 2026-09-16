@@ -13,7 +13,7 @@ sidebar:
 
 ## はじめる前に
 
-送信先として sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイックスタート](/docs/tutorials/quickstart#1-実行する)にある Docker コマンドで起動してください。セルフホストのサーバーにはアクセストークンは不要です。アクセストークンが必要なのはホステッドサービスのみで、その形式は `<oauth-access-token>` です。
+送信先として sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイックスタート](/docs/tutorials/quickstart#1-実行する)にある Docker コマンドで起動してください。ホスト版の新規ユーザーは `sigiro signup --name "Your Name" --email you@example.com`、既存アカウントは `sigiro auth login` を実行してください。セルフホストのサーバーには認証情報は不要です。
 
 自動計装は Python、Node.js、Java、.NET、Ruby 向けに提供されています。対象のサービスが Go の場合、このプロンプトは使用しないでください。代わりに [Go のセクション](#go-ソースではなくビルドを計装する)へ進んでください。
 
@@ -26,7 +26,7 @@ Instrument this codebase for sigiro observability.
 
 SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
                  https://<your-sigiro-host> with no port)
-HOSTED OAUTH ACCESS TOKEN: <oauth-access-token>  (omit entirely for a self-hosted server)
+HOSTED AUTH: sigiro signup --name "Your Name" --email you@example.com  (new account; use sigiro auth login for an existing account; omit for self-hosted)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
 metrics, and logs to sigiro. Make the minimum change that works — prefer
@@ -41,12 +41,12 @@ Rules:
 - Set OTEL_EXPORTER_OTLP_ENDPOINT to the SIGIRO ENDPOINT above exactly as given.
   A self-hosted server listens on :4318; a hosted one carries no port. Do not add
   or remove a port
-- For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
+- ホスト版では `sigiro auth token` で bearer token を読み取り、ソースコードにコピーしない
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
-- For hosted sigiro, do NOT hardcode the OAuth access token — read it from SIGIRO_ACCESS_TOKEN
+- ホスト版の新規ユーザーは `sigiro signup --name "Your Name" --email you@example.com`、既存ユーザーは `sigiro auth login` を使い、認証情報をハードコードしない
 - If a file already initializes the OTel SDK, update it rather than re-initializing
-- Add SIGIRO_ACCESS_TOKEN to .env.example only for a hosted deployment
+- 自動化の場合のみ環境変数から認証情報を読み取り、対話的な利用では `sigiro signup` または `sigiro auth login` を使う
 ```
 
 エージェントが誤った言語を検出した場合は、直接指示してください。

@@ -81,7 +81,7 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
       }),
     },
     plugins: [
-      organization(),
+      organization({ organizationLimit: 1 }),
       jwt({
         disableSettingJwtHeader: true,
         jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
@@ -141,7 +141,7 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
           typeof session?.activeOrganizationId === "string" ? session.activeOrganizationId : undefined,
         clientPrivileges: ({ session }) => typeof session?.activeOrganizationId === "string",
       }),
-      oauthDeviceAuthorization(),
+      oauthDeviceAuthorization({ verificationUri: `${new URL(runtime.baseURL).origin}/device` }),
       cimd({
         fetchClientMetadataResource: runtime.fetchClientMetadataResource ?? fetchClientMetadataResourceNode,
         metadataProfile: "mcp-2026-07-28",

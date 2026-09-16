@@ -360,6 +360,10 @@ export const NAV_HREFS = {
   reference: '/docs/reference',
 } as const;
 
+/** Hosted onboarding and the self-hosted CLI install entry points. */
+export const SIGNUP_HREF = 'https://auth.sigiro.com/sign-up';
+export const INSTALL_HREF = 'https://sigiro.com/install';
+
 /** Social links. The labels are brand names, so nothing here is translated. */
 export const SOCIAL = [
   { href: 'https://x.com/SigiroAI', label: 'X' },

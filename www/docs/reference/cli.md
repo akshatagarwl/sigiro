@@ -1,15 +1,24 @@
 ---
 title: CLI
-description: Every sigiro subcommand, its arguments, and the environment variables it reads. sigiro has seven subcommands; the client ones print indented JSON.
+description: Every sigiro subcommand, its arguments, and the environment variables it reads, including hosted signup and login.
 sidebar:
   order: 2
 ---
 
-`sigiro` has seven subcommands. Client commands print indented JSON on success;
+`sigiro` has nine subcommands. Client commands print indented JSON on success;
 server commands remain attached to their protocol or listener.
 
-The global flag `--token <TOKEN>` sets the bearer token for a hosted endpoint. It
-overrides `SIGIRO_ACCESS_TOKEN`. A self-hosted server ignores the token.
+For a new hosted account, run `sigiro signup --name "Your Name" --email
+you@example.com`. It emails a six-digit OTP, prompts for it securely in the
+terminal, creates and activates exactly one personal workspace, completes OAuth
+device authorization internally, and stores refresh/access credentials in the OS
+credential store. For an existing account, use browser-based `sigiro auth login`;
+`--no-browser` prints its verification URL instead. `sigiro auth status`,
+`sigiro auth token`, and `sigiro auth logout` manage the stored session.
+
+The global flag `--token <TOKEN>` is an explicit override for automation. It
+overrides `SIGIRO_ACCESS_TOKEN`. Open-mode self-hosted servers do not require it;
+self-hosted servers configured with static bearer authentication do.
 
 All client subcommands reach the server at `SIGIRO_ENDPOINT`, which defaults to
 `http://localhost:9999`.

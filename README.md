@@ -1,10 +1,29 @@
 # Sigiro
 
-Observability platform with DuckDB-based storage, OTLP ingestion, and federated queries.
+Observability platform with OTLP ingestion, ranked diagnosis, and SQL queries for agents.
+
+## Hosted or self-hosted
+
+For a new hosted account, sign up directly in the terminal. The command emails a
+six-digit OTP, creates one personal workspace, completes OAuth device authorization,
+and stores credentials in the OS credential store:
+
+```bash
+curl -fsSL https://sigiro.com/install | sh
+sigiro signup --name "Your Name" --email you@example.com
+sigiro auth status
+```
+
+For an existing account, use browser-based `sigiro auth login` instead. Use
+`sigiro auth logout` to revoke the refresh token and remove credentials.
+Self-hosting requires no account;
+Open mode requires no token, while production deployments can require one static
+bearer token:
 
 ## Quick Start
 
-Download the latest binary for your platform from the releases page, then run:
+Download the latest binary for your platform from the releases page, or use the
+installer above, then run:
 
 ```bash
 sigiro serve
@@ -27,7 +46,7 @@ Sigiro has two server authentication modes:
 * **Better Auth OAuth/JWT** (hosted): configure the issuer, audience, and JWKS
   settings. Requests carry OAuth access-token JWTs; organizations are tenants.
 
-`SIGIRO_ACCESS_TOKEN` is **client-only** configuration for calling a hosted endpoint:
+For automation, `SIGIRO_ACCESS_TOKEN` is **client-only** configuration for calling a hosted endpoint:
 
 ```bash
 SIGIRO_ACCESS_TOKEN=<oauth-access-token> sigiro status

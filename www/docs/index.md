@@ -28,8 +28,9 @@ need the steps to get it.
 - **[Instrument your code with an agent](/docs/how-to/install-with-ai)** — give
   one prompt to an agent. The agent connects OpenTelemetry to your service and
   points it at sigiro.
-- **[Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding)** — run no
-  server yourself. Send OTLP to a host that we operate, with an OAuth access token.
+- **[Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding)** — create a
+  new account with `sigiro signup`, or use `sigiro auth login` for an existing
+  account, then send OTLP to a host that we operate.
 - **[Send your agent's own telemetry to sigiro](/docs/how-to/agent-telemetry)** —
   point Claude Code, Codex, Hermes Agent, or Pi at sigiro.
 - **[Debug and optimize an agent](/docs/how-to/debug-agent-performance)** — find

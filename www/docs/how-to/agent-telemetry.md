@@ -36,7 +36,8 @@ curl http://127.0.0.1:9999/health
 
 The local receiver accepts OTLP/HTTP on `4318` and OTLP/gRPC on `4317`. It has no
 request authentication, so do not expose it to an untrusted network. For the
-hosted service, follow [Send telemetry to hosted
+the hosted service, run `sigiro signup --name "Your Name" --email you@example.com`
+for a new account (or `sigiro auth login` for an existing account), and follow [Send telemetry to hosted
 sigiro](/docs/how-to/hosted-onboarding) instead.
 
 Telemetry can contain prompts, responses, file contents, commands, user

@@ -13,7 +13,7 @@ sidebar:
 
 ## 시작하기 전에
 
-대상이 될 sigiro 서버가 필요합니다. `sigiro serve`로 서버를 시작하거나, [퀵스타트](/docs/tutorials/quickstart#1-실행하기)의 Docker 명령으로 시작하십시오. 자체 호스팅 서버에는 액세스 토큰이 필요하지 않습니다. 호스팅 서비스에만 액세스 토큰이 필요하며, 형식은 `<oauth-access-token>`입니다.
+대상 서버로 사용할 sigiro 서버가 필요합니다. `sigiro serve`로 서버를 시작하거나, [퀵스타트](/docs/tutorials/quickstart#1-실행하기)의 Docker 명령으로 시작하십시오. 호스팅 서비스의 신규 사용자는 `sigiro signup --name "Your Name" --email you@example.com`을, 기존 계정은 `sigiro auth login`을 실행하십시오. 자체 호스팅 서버에는 인증 정보가 필요하지 않습니다.
 
 자동 계측은 Python, Node.js, Java, .NET, Ruby용으로 제공됩니다. 서비스가 Go로 작성된 경우에는 이 프롬프트를 사용하지 마십시오. 대신 [Go 섹션](#go-소스가-아니라-빌드를-계측하십시오)으로 이동하십시오.
 
@@ -26,7 +26,7 @@ Instrument this codebase for sigiro observability.
 
 SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
                  https://<your-sigiro-host> with no port)
-HOSTED OAUTH ACCESS TOKEN: <oauth-access-token>  (omit entirely for a self-hosted server)
+HOSTED AUTH: sigiro signup --name "Your Name" --email you@example.com  (new account; use sigiro auth login for an existing account; omit for self-hosted)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
 metrics, and logs to sigiro. Make the minimum change that works — prefer
@@ -41,12 +41,12 @@ Rules:
 - Set OTEL_EXPORTER_OTLP_ENDPOINT to the SIGIRO ENDPOINT above exactly as given.
   A self-hosted server listens on :4318; a hosted one carries no port. Do not add
   or remove a port
-- For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
+- 호스팅 버전에서는 `sigiro auth token`으로 bearer token을 읽고 소스 코드에 복사하지 마십시오
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
-- For hosted sigiro, do NOT hardcode the OAuth access token — read it from SIGIRO_ACCESS_TOKEN
+- 호스팅 버전의 신규 사용자는 `sigiro signup --name "Your Name" --email you@example.com`, 기존 사용자는 `sigiro auth login`을 사용하고 인증 정보를 하드코딩하지 마십시오
 - If a file already initializes the OTel SDK, update it rather than re-initializing
-- Add SIGIRO_ACCESS_TOKEN to .env.example only for a hosted deployment
+- 자동화에서만 환경 변수로 인증 정보를 읽고 대화형 사용에는 `sigiro signup` 또는 `sigiro auth login`을 사용하십시오
 ```
 
 에이전트가 언어를 잘못 감지한 경우, 다음과 같이 직접 알려주십시오.

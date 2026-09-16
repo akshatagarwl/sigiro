@@ -28,9 +28,10 @@ instrumentation.
 ## Before you start
 
 You need a sigiro server as the destination. Start one with `sigiro serve`, or with
-the Docker command in the [quickstart](/docs/tutorials/quickstart#1-run-it). A
-self-hosted server needs no key. Only the hosted service needs a key, and that key
-has the form `<oauth-access-token>`.
+the Docker command in the [quickstart](/docs/tutorials/quickstart#1-run-it). For
+hosted sigiro, run `sigiro signup --name "Your Name" --email you@example.com` for
+a new account (or browser-based `sigiro auth login` for an existing account) before
+starting the agent. Self-hosted servers need no key.
 
 Auto-instrumentation exists for Python, Node.js, Java, .NET and Ruby. If your
 service is Go, do not use the prompt. Go to
@@ -38,14 +39,17 @@ service is Go, do not use the prompt. Go to
 
 ## 1. Give the agent this prompt
 
-Replace the endpoint. Delete the key line unless you use the hosted service.
+Replace the endpoint. For a new hosted account, run the terminal signup command
+first; for an existing account, use the logged-in CLI session instead of copying a
+token into the prompt.
 
 ```
 Instrument this codebase for sigiro observability.
 
 SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
                  https://<your-sigiro-host> with no port)
-HOSTED OAUTH ACCESS TOKEN: <oauth-access-token>  (omit entirely for a self-hosted server)
+HOSTED AUTH: sigiro signup --name "Your Name" --email you@example.com  (new account;
+             use sigiro auth login for an existing account; omit for self-hosted)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
 metrics, and logs to sigiro. Make the minimum change that works — prefer
@@ -60,12 +64,14 @@ Rules:
 - Set OTEL_EXPORTER_OTLP_ENDPOINT to the SIGIRO ENDPOINT above exactly as given.
   A self-hosted server listens on :4318; a hosted one carries no port. Do not add
   or remove a port
-- For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
+- For hosted sigiro only, read a bearer token with `sigiro auth token`; never paste it into source
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
-- For hosted sigiro, do NOT hardcode the OAuth access token — read it from SIGIRO_ACCESS_TOKEN
+- For a new hosted account, use `sigiro signup --name "Your Name" --email you@example.com`;
+  for an existing account, use `sigiro auth login`. Never hardcode credentials.
 - If a file already initializes the OTel SDK, update it rather than re-initializing
-- Add SIGIRO_ACCESS_TOKEN to .env.example only for a hosted deployment
+- For automation only, read credentials from the environment; interactive users should
+  use the OS credential store via `sigiro signup` or `sigiro auth login`
 ```
 
 If the agent detects the wrong language, tell it directly:

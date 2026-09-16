@@ -337,10 +337,10 @@ pub(crate) fn disk_sample_seconds() -> Result<NonZeroU64> {
 pub(crate) static DATA_DIR: Envar<String> =
     Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);
 
-/// Server URL for CLI client and admin commands.
-pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
-    EnvarDef::Default("http://localhost:9999".to_string())
-});
+/// Server URL for CLI client and admin commands. An empty value selects the
+/// hosted endpoint after OAuth login and localhost otherwise.
+pub static ENDPOINT: Envar<String> =
+    Envar::on_startup("SIGIRO_ENDPOINT", || EnvarDef::Default(String::new()));
 
 /// Bearer token for a hosted JWT endpoint. Client-only: it is sent
 /// as a bearer token by `client::try_build_client` and never configures

@@ -19,6 +19,8 @@ sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイ
 
 以下の設定では、どちらのエージェントもポート `4317` の OTLP gRPC 経由でエクスポートします。セルフホストのサーバーではキーは不要です。
 
+ホスト版を使う場合、新規ユーザーは `sigiro signup --name "Your Name" --email you@example.com`、既存アカウントは `sigiro auth login` を実行してください。
+
 ホスティングサービスでは、代わりに **HTTP** 経由の OTLP を使用してください。ホスティング事業者が必ずしも gRPC ポートを公開しているとは限らないため、先に [ホスティング版 sigiro にテレメトリーを送信する](/docs/how-to/hosted-onboarding#2-opentelemetry-エクスポーターを-sigiro-に向ける) をお読みください。以下の各セクションの末尾には、ホスティング版向けの設定を記載しています。
 
 ## Claude Code

@@ -10,13 +10,22 @@ sidebar:
 이 가이드는 저희가 운영하는 sigiro 호스트로 OpenTelemetry를 전송하는 방법과
 데이터를 다시 조회하는 방법을 설명합니다. 직접 운영해야 하는 인프라는 없습니다.
 
-sigiro는 트레이스, 로그, 메트릭, 프로파일을 읽습니다. 초대 기반 베타 기간에는 각 테넌트를
-저희가 직접 설정합니다. 아래의 `<your-sigiro-host>`를 운영자가 제공한 호스트로
-바꾸십시오.
+sigiro는 트레이스, 로그, 메트릭, 프로파일을 읽습니다. 신규 사용자는 터미널에서 다음을 실행하십시오.
 
-## 1. OAuth 액세스 토큰 받기
+```bash
+sigiro signup --name "Your Name" --email you@example.com
+sigiro auth status
+```
 
-호스팅 인증은 Better Auth가 제공합니다. Organizations는 테넌트입니다. Sigiro는 호스팅 테넌트나 토큰 발급 UI를 제공하지 않으므로, Better Auth/OAuth API를 사용해 로그인하고 OAuth 액세스 토큰을 받으십시오. 토큰은 비밀 정보로 취급하십시오.
+CLI는 운영체제 자격 증명 저장소에 인증 정보를 저장합니다. 아래의 `<your-sigiro-host>`를 운영자가 제공한 호스트로 바꾸십시오.
+
+## 1. 가입하고 로그인하기
+
+호스팅 인증은 Better Auth가 제공합니다. Organizations는 테넌트입니다.
+`sigiro signup`은 6자리 OTP를 이메일로 보내고 터미널에서 안전하게 입력하도록 한 뒤, 개인 워크스페이스를
+정확히 하나 생성·활성화하고 브라우저 없이 OAuth 디바이스 인증을 내부에서 완료하며 자격 증명을 OS 자격
+증명 저장소에 저장합니다. 기존 계정은 브라우저 기반 `sigiro auth login`을 사용하십시오. OAuth API를
+수동으로 호출하거나 토큰을 복사하지 마십시오.
 
 동일한 토큰으로 OTLP 인제스트와 API 쿼리를 인증합니다.
 
@@ -29,9 +38,11 @@ HTTP 기반의 표준 OTLP를 사용하십시오. 인증에는 표준
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <oauth-access-token>"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $(sigiro auth token)"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
+
+`sigiro auth token`은 저장된 세션을 갱신한 뒤 수명이 짧은 액세스 토큰을 출력합니다. 이 방식은 대화형 테스트에만 사용하고 장시간 실행되는 수집기의 비밀 값으로 사용하지 마십시오.
 
 **엔드포인트에는 포트를 붙이지 않습니다.** 호스티드 sigiro는 표준 HTTPS 포트에서
 OTLP를 종료하므로 `https://api.sigiro.com` 자체가 전체 엔드포인트입니다. 셀프 호스팅

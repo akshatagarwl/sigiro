@@ -25,7 +25,7 @@ interface Props {
 
 const { locale } = Astro.props;
 const copy = getCopy(locale);
-const { site: SITE, sections: SECTIONS, promises: PROMISES, call: CALL } = copy;
+const { site: SITE, sections: SECTIONS, promises: PROMISES, signup: SIGNUP, install: INSTALL } = copy;
 
 /** English is served at `/`; the others at `/<locale>`. */
 /**
@@ -87,8 +87,9 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
             {SITE.description}
           </p>
           <div class="flex flex-wrap items-center gap-3">
-            <a href={quickstart} class={PRIMARY}>{copy.ui.getStarted}</a>
-            <a href={CALL.href} class={SECONDARY}>{CALL.label}</a>
+            <a href={SIGNUP.href} class={PRIMARY}>{SIGNUP.label}</a>
+            <a href={INSTALL.href} class={SECONDARY}>{INSTALL.label}</a>
+            <a href={quickstart} class="meta text-ink-3 hover:text-ink">{copy.ui.getStarted}</a>
           </div>
         </div>
       </div>

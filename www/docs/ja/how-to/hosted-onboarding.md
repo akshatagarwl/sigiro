@@ -9,11 +9,21 @@ sidebar:
 
 このガイドでは、当社が運用する sigiro ホストへ OpenTelemetry を送信する方法と、そのデータを照会する方法を説明します。インフラの運用は不要です。
 
-sigiro はトレース、ログ、メトリクス、プロファイルを読み取ります。招待制ベータの期間中は、各テナントを当社が手作業でセットアップします。以下の `<your-sigiro-host>` は、運用担当者から提供されたホストに置き換えてください。
+sigiro はトレース、ログ、メトリクス、プロファイルを読み取ります。新規ユーザーは次をターミナルで実行します。
 
-## 1. OAuthアクセストークンを取得する
+```bash
+sigiro signup --name "Your Name" --email you@example.com
+sigiro auth status
+```
 
-ホステッド環境の認証は Better Auth が提供します。Organizations はテナントです。Sigiro はホステッド環境のテナントやトークンを発行する UI を提供していません。Better Auth/OAuth API を使ってサインインし、OAuth アクセストークンを取得してください。トークンは秘密情報として扱ってください。
+CLI は認証情報を OS の資格情報ストアに保存します。以下の `<your-sigiro-host>` は、運用担当者から提供されたホストに置き換えてください。
+
+## 1. 登録してサインインする
+
+ホステッド環境の認証は Better Auth が提供します。Organizations はテナントです。新規登録では 6 桁の
+OTP をメールで受け取り、ターミナルで安全に入力します。個人用ワークスペースを 1 つだけ作成・有効化し、
+ブラウザーなしで OAuth デバイス認証を完了して、資格情報を OS の資格情報ストアに保存します。
+既存アカウントはブラウザーベースの `sigiro auth login` を使い、OAuth API を手動で呼び出したり、トークンをコピーしたりしないでください。
 
 同じトークンで OTLP の取り込みと API クエリを認証します。
 
@@ -25,9 +35,11 @@ sigiro はトレース、ログ、メトリクス、プロファイルを読み�
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <oauth-access-token>"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $(sigiro auth token)"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
+
+`sigiro auth token` は保存済みセッションを更新してから、短期間有効なアクセストークンを出力します。この方法は対話的なテスト専用であり、長時間動作するコレクターのシークレットには使用しないでください。
 
 **エンドポイントにポートは含まれません。** ホスト型 sigiro は標準の HTTPS ポートで OTLP を終端するため、`https://api.sigiro.com` がエンドポイントの全体です。セルフホストの[クイックスタート](/docs/tutorials/quickstart#2-テレメトリを送信する)から `:4318` をコピーしないでください。`api.sigiro.com` ではそのポートは接続を拒否し、接続できなかった SDK は、その失敗をここではなく自身のサービスログに報告します。ホストが異なる場合は運用担当者にお問い合わせください。
 

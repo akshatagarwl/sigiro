@@ -22,7 +22,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "tim
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 dirs = "6"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "cookies"] }
 dashmap = "6"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
@@ -83,6 +83,10 @@ itertools = "0.14.0"
 rmcp = { version = "3.1.2", features = ["client", "server", "macros", "transport-streamable-http-server", "transport-io", "schemars"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 tokio-metrics = "0.5.1"
+oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
+keyring = "4.2.0"
+webbrowser = { version = "1.2.4", features = ["hardened"] }
+rpassword = "7.4.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Keep the mature v1 ergonomic API while linking DuckDB v2's compatibility C

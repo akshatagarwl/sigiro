@@ -85,6 +85,8 @@ export const ZH: LandingCopy = {
   ui: {
     /** The hero's primary action, and the same label in the header. */
     getStarted: '开始使用',
+    signUp: '注册',
+    installCli: '安装 CLI',
     /** The line under the hero loop. Restates the two claims that decide
         whether a reader keeps reading: it is free self-hosted, and nothing
         leaves their infrastructure. Same wording as `promises[3]`, and it must

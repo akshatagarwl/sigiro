@@ -68,15 +68,60 @@ async function expectOk(response: Response, operation: string): Promise<Response
     throw new Error("untrusted auth origin was allowed by CORS");
   }
 
-  const email = "m2m-owner@sigiro.local";
+  const signupPage = await expectOk(await fetch(`${env.BETTER_AUTH_URL}/sign-up`), "sign-up page");
+  if (
+    !signupPage.headers.get("content-security-policy")?.includes("frame-ancestors 'none'") ||
+    !(await signupPage.text()).includes("Create your Sigiro account")
+  ) {
+    throw new Error("sign-up page omitted its security policy or account form");
+  }
+
+  const email = `m2m-owner-${randomBytes(8).toString("hex")}@sigiro.local`;
   await expectOk(
     await request("/email-otp/send-verification-otp", { email, type: "sign-in" }),
     "OTP dispatch",
   );
   await expectOk(
-    await request("/sign-in/email-otp", { email, otp: env.AUTH_TEST_OTP! }),
+    await request("/sign-in/email-otp", { email, otp: env.AUTH_TEST_OTP!, name: "M2M Owner" }),
     "email OTP sign-in",
   );
+  const firstProvision = (await expectOk(
+    await fetch(`${env.BETTER_AUTH_URL}/api/auth/onboarding/ensure-personal-organization`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, origin: env.BETTER_AUTH_URL },
+      body: "{}",
+    }),
+    "personal organization provisioning",
+  ).then((response) => response.json())) as { organization?: { id?: string } };
+  const secondProvision = (await expectOk(
+    await fetch(`${env.BETTER_AUTH_URL}/api/auth/onboarding/ensure-personal-organization`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, origin: env.BETTER_AUTH_URL },
+      body: "{}",
+    }),
+    "idempotent personal organization provisioning",
+  ).then((response) => response.json())) as { organization?: { id?: string } };
+  if (!firstProvision.organization?.id || firstProvision.organization.id !== secondProvision.organization?.id) {
+    throw new Error("personal organization provisioning was not idempotent");
+  }
+  const unauthenticatedProvision = await fetch(
+    `${env.BETTER_AUTH_URL}/api/auth/onboarding/ensure-personal-organization`,
+    { method: "POST", headers: { "content-type": "application/json", origin: env.BETTER_AUTH_URL }, body: "{}" },
+  );
+  if (unauthenticatedProvision.status !== 401) {
+    throw new Error("personal organization provisioning accepted an unauthenticated request");
+  }
+  const crossOriginProvision = await fetch(
+    `${env.BETTER_AUTH_URL}/api/auth/onboarding/ensure-personal-organization`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, origin: "https://untrusted.example" },
+      body: "{}",
+    },
+  );
+  if (crossOriginProvision.status !== 403) {
+    throw new Error("personal organization provisioning accepted a cross-origin request");
+  }
 
   const metadataResponse = await expectOk(
     await fetch(`${env.BETTER_AUTH_URL}/api/auth/.well-known/oauth-authorization-server`),
@@ -506,10 +551,18 @@ async function expectOk(response: Response, operation: string): Promise<Response
   const device = (await deviceResponse.json()) as {
     device_code?: string;
     user_code?: string;
+    verification_uri?: string;
+    verification_uri_complete?: string;
     interval?: number;
   };
-  if (!device.device_code || !device.user_code) {
-    throw new Error("device authorization response omitted codes");
+  if (
+    !device.device_code ||
+    !device.user_code ||
+    device.verification_uri !== `${new URL(env.BETTER_AUTH_URL).origin}/device` ||
+    device.verification_uri_complete !==
+      `${new URL(env.BETTER_AUTH_URL).origin}/device?user_code=${encodeURIComponent(device.user_code)}`
+  ) {
+    throw new Error("device authorization response omitted codes or the user-facing verification URL");
   }
   await expectOk(
     await cimdRequest(`/device?${new URLSearchParams({ user_code: device.user_code })}`, {

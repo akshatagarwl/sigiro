@@ -37,16 +37,6 @@ const home = locale === 'en' ? '/' : `/${locale}`;
  */
 const localize = (href: string) =>
   locale === 'en' || !href.startsWith('/docs') ? href : href.replace('/docs', `/docs/${locale}`);
-/**
- * The quickstart, on the reader's own docs locale.
- *
- * Must match the hero's link in `Landing.astro`. It did not on the first pass:
- * this was a bare `/docs/tutorials/quickstart`, so a localized page offered the
- * Chinese quickstart in the hero and the English one in the header — two buttons
- * with the same label going to different languages.
- */
-const quickstart
-  = locale === 'en' ? '/docs/tutorials/quickstart' : `/docs/${locale}/tutorials/quickstart`;
 ---
 
 <header
@@ -87,6 +77,7 @@ const quickstart
     last — so `hidden` lost and the button showed on a phone anyway.
   */}
   <div class="hidden sm:block">
-    <a href={quickstart} class={COMPACT}>{copy.ui.getStarted}</a>
+    <a href={copy.signup.href} class={COMPACT}>{copy.signup.label}</a>
+    <a href={copy.install.href} class={`${COMPACT} ml-1`}>{copy.install.label}</a>
   </div>
 </header>

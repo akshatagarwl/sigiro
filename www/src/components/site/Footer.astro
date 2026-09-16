@@ -100,6 +100,8 @@ const localize = (href: string) =>
     <a href={CALL.href} class="meta text-ink-3 hover:text-ink">
       {CALL.label.toLowerCase()}
     </a>
+    <a href={copy.signup.href} class="meta text-ink-3 hover:text-ink">{copy.signup.label}</a>
+    <a href={copy.install.href} class="meta text-ink-3 hover:text-ink">{copy.install.label}</a>
     {/*
       Blume generates `/llms.txt` from the same content it renders, and it is at
       the site root now rather than behind a redirect to another hostname — which

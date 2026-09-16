@@ -37,6 +37,8 @@ import {
   type Locale,
   LOOP_SESSIONS,
   NAV_HREFS,
+  SIGNUP_HREF,
+  INSTALL_HREF,
   READ_ALL_THREE,
   SITE_SHARED,
 } from './site.shared';
@@ -117,6 +119,8 @@ export const getCopy = (locale: Locale) => {
       { href: NAV_HREFS.reference, label: c.nav.reference },
     ],
     call: { href: CALL_HREF, label: c.callLabel },
+    signup: { href: SIGNUP_HREF, label: c.ui.signUp },
+    install: { href: INSTALL_HREF, label: c.ui.installCli },
     /* The three URLs are prepended from the shared constant rather than written
        into any locale file, so a translation cannot corrupt a path. The
        assistant reads the URLs regardless of the language around them. */

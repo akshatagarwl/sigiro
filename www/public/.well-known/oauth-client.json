@@ -1,10 +1,10 @@
 {
   "client_id": "https://sigiro.com/.well-known/oauth-client.json",
-  "client_name": "Sigiro Production Verification Agent",
-  "redirect_uris": ["http://127.0.0.1:3110/callback"],
-  "grant_types": ["authorization_code", "refresh_token"],
-  "response_types": ["code"],
-  "token_endpoint_auth_method": "none",
+  "client_name": "Sigiro CLI",
+  "client_uri": "https://sigiro.com/",
   "application_type": "native",
-  "scope": "openid profile email offline_access diagnose:read"
+  "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
+  "token_endpoint_auth_method": "none",
+  "scope": "openid profile email offline_access telemetry:ingest services:read diagnose:read traces:read query:read anomalies:read",
+  "resources": ["https://api.sigiro.com"]
 }

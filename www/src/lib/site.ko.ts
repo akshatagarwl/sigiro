@@ -104,6 +104,8 @@ export const KO: LandingCopy = {
   ui: {
     /** The hero's primary action, and the same label in the header. */
     getStarted: '시작하기',
+    signUp: '가입하기',
+    installCli: 'CLI 설치',
     /** The line under the hero loop. Restates the two claims that decide
         whether a reader keeps reading: it is free self-hosted, and nothing
         leaves their infrastructure. Wording matches `promises[3]`, and it

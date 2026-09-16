@@ -22,6 +22,10 @@ OpenTelemetry를 읽습니다. 그리고 자동 루프가 결함을 복구하기
 - **[퀵스타트](/docs/tutorials/quickstart)** — 서버를 실행하고, 텔레메트리를 서버로
   전송한 다음, 무엇이 변경되었고 왜 그런지 질의합니다. 5분이 소요됩니다.
 
+호스팅 sigiro의 신규 사용자는 `sigiro signup --name "Your Name" --email you@example.com`을
+실행하여 터미널에서 가입하십시오. 기존 계정은 브라우저 기반 `sigiro auth login`을 사용하십시오.
+자체 호스팅 sigiro는 계정이나 토큰이 필요하지 않습니다.
+
 ## 사용 방법 가이드
 
 한 가지 작업에 대한 지침입니다. 원하는 것이 무엇인지 이미 알고 있고 그것을 달성하기
@@ -31,8 +35,7 @@ OpenTelemetry를 읽습니다. 그리고 자동 루프가 결함을 복구하기
   프롬프트 하나를 전달하십시오. 에이전트가 OpenTelemetry를 서비스에 연결하고 이를
   sigiro로 향하게 합니다.
 - **[호스팅형 sigiro로 텔레메트리 전송하기](/docs/how-to/hosted-onboarding)** —
-  서버를 직접 운영하지 않습니다. 테넌트 키와 함께 OTLP를 당사가 운영하는 호스트로
-  전송합니다.
+  `sigiro signup`으로 새 계정을 만들거나 `sigiro auth login`으로 기존 계정에 로그인한 뒤 당사가 운영하는 호스트로 OTLP를 전송합니다.
 - **[에이전트 자체 텔레메트리를 sigiro로 전송하기](/docs/how-to/agent-telemetry)** —
   Claude Code 또는 Codex를 sigiro로 향하게 한 다음, SQL로 세션을 다시 읽어들입니다.
 

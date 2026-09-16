@@ -22,6 +22,10 @@ OpenTelemetry を読み取ります。そして、自動化されたループが
 - **[クイックスタート](/docs/tutorials/quickstart)** — サーバーを起動し、テレメトリを
   送信して、何が変わったのか、そしてなぜかを問い合わせます。所要時間は 5 分です。
 
+ホスト版の新規ユーザーは `sigiro signup --name "Your Name" --email you@example.com` を
+実行してターミナルで登録してください。既存アカウントはブラウザーベースの
+`sigiro auth login` を使用します。セルフホスト版はアカウントもトークンも不要です。
+
 ## ハウツーガイド
 
 1 つのタスクを実行するための手引きです。やりたいことが決まっていて、
@@ -31,7 +35,7 @@ OpenTelemetry を読み取ります。そして、自動化されたループが
   エージェントにプロンプトを 1 つ渡します。エージェントが OpenTelemetry をサービスに接続し、
   sigiro に向けて設定します。
 - **[ホスト版 sigiro にテレメトリを送信する](/docs/how-to/hosted-onboarding)** —
-  自分でサーバーを運用する必要はありません。テナントキーを添えて、当社が運用するホストへ OTLP を送信します。
+  `sigiro signup` で新規アカウントを作成するか、`sigiro auth login` で既存アカウントにログインし、当社が運用するホストへ OTLP を送信します。
 - **[エージェント自身のテレメトリを sigiro に送信する](/docs/how-to/agent-telemetry)** —
   Claude Code または Codex を sigiro に向けて設定し、SQL でセッションを読み返します。
 

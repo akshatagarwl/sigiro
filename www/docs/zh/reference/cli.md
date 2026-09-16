@@ -5,11 +5,17 @@ sidebar:
   order: 2
 ---
 
-`sigiro` 有七个子命令。每个子命令在执行成功时都会输出带缩进的 JSON。没有第二种
+`sigiro` 有九个子命令。每个子命令在执行成功时都会输出带缩进的 JSON。没有第二种
 输出格式，也不做 TTY 检测。
 
-全局标志 `--token <TOKEN>` 用于设置访问托管端点的 bearer token。它会覆盖
-`SIGIRO_ACCESS_TOKEN`。自托管服务器会忽略该 token。
+新用户请运行 `sigiro signup --name "Your Name" --email you@example.com`。命令会发送六位数
+的一次性验证码，在终端安全地提示输入，创建并激活唯一的个人工作区，在内部完成 OAuth
+设备授权，并将刷新令牌和访问令牌存入操作系统凭据存储。已有账号请使用浏览器登录
+`sigiro auth login`；`sigiro auth status`、`sigiro auth token` 和 `sigiro auth logout` 管理登录状态。
+
+全局标志 `--token <TOKEN>` 为自动化显式设置 bearer token。它会覆盖
+`SIGIRO_ACCESS_TOKEN`。Open 模式的自托管服务器不需要 token；启用静态 bearer
+认证的自托管服务器则需要。
 
 所有客户端子命令都会访问 `SIGIRO_ENDPOINT` 指定的服务器，默认值为
 `http://localhost:9999`。

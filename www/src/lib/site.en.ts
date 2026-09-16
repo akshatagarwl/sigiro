@@ -109,6 +109,8 @@ export const EN = {
   ui: {
     /** The hero's primary action, and the same label in the header. */
     getStarted: 'Get started',
+    signUp: 'Sign up',
+    installCli: 'Install CLI',
     /** The line under the hero loop. Restates the two claims that decide
         whether a reader keeps reading: it is free self-hosted, and nothing
         leaves their infrastructure. */

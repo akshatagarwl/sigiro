@@ -83,6 +83,8 @@ export const JA: LandingCopy = {
   ui: {
     /** The hero's primary action, and the same label in the header. */
     getStarted: 'はじめる',
+    signUp: '登録する',
+    installCli: 'CLI をインストール',
     /** The line under the hero loop. Restates the two claims that decide
         whether a reader keeps reading: it is free self-hosted, and nothing
         leaves their infrastructure. Must not imply a hosted signup — there is

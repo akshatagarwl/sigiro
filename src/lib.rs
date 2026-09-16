@@ -11,6 +11,7 @@ pub mod diagnose;
 pub mod ingest;
 pub mod inserter;
 pub mod mcp;
+pub mod oauth;
 pub mod otel;
 pub mod otlp;
 pub mod pool;
