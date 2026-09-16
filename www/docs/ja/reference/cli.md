@@ -1,7 +1,7 @@
 ---
 title: CLI
 description: >-
-  sigiro のすべてのサブコマンド、その引数、および読み取る環境変数。sigiro には 7
+  sigiro のすべてのサブコマンド、その引数、および読み取る環境変数。sigiro には 9
   つのサブコマンドがあり、クライアント側はインデントされた JSON を出力します。
 sidebar:
   order: 2
@@ -21,6 +21,25 @@ OS の資格情報ストアに保存します。既存アカウントはブラ�
 
 すべてのクライアントサブコマンドは、`SIGIRO_ENDPOINT` に指定されたサーバーに接続します。
 デフォルトは `http://localhost:9999` です。
+
+## ホスト型エージェント認証
+
+別の Agent Auth 実行ファイルをインストールしたり起動したりする必要はありません。既存の
+Sigiro インターフェースを使用します。
+
+- `sigiro signup --name "Your Name" --email you@example.com` でホスト型アカウントを作成します。
+- `sigiro mcp` で MCP クライアントに Sigiro の運用ツールを公開します。
+- エージェントホストの ID 登録と管理には `https://sigiro.com/api/auth` を使用します。
+
+プロバイダーのディスカバリー文書は
+`https://sigiro.com/.well-known/agent-configuration`、保護対象 API リソースは
+`https://sigiro.com` です。Agent Auth のライフサイクルルートには、API ベースからの相対パスで
+`/host/enroll`、`/agent/register`、`/agent/status`、`/agent/rotate-key`、`/agent/revoke`
+があります。必要最小限の capability だけを要求してください。テレメトリーエージェントには
+`telemetry:ingest` だけを付与します。
+
+Sigiro はプロトコルと鍵のライフサイクル処理に公式 Agent Auth 実装を内部利用します。
+ユーザー向けの別 CLI は公開しません。
 
 ## serve
 
@@ -103,3 +122,9 @@ tailnet 上で見つける必要があります。1 つのローカルサーバ�
 `sigiro healthcheck` はローカルの `/health` エンドポイントをプローブし、サーバーが準備完了の場合に
 のみ `0` を返して終了します。distroless イメージにはシェルも `curl` も含まれていないため、これが
 コンテナの `HEALTHCHECK` になります。
+
+## mcp
+
+`sigiro mcp` は stdio Model Context Protocol サーバーを起動します。
+`list_services`、`list_anomalies`、`diagnose_service`、`run_query` を公開し、
+分析エージェントは HTTP リクエストを直接組み立てずに Sigiro を調査できます。

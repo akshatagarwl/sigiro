@@ -28,16 +28,3 @@
 # `agent-readability.json` advertises, since Blume derives that from `seo.sitemap`
 # rather than from whatever generator actually ran.
 /sitemap.xml    /sitemap-index.xml                       302
-
-# The API description lives on the API, which is the only thing that can keep it
-# honest. This site has never held a copy and should not start — but `/openapi.json`
-# is the path a reader guesses, and it answered 404 to every one of them, including
-# the assistants the footer sends here. A 302 costs nothing and cannot drift.
-#
-# 301, not 302, and the reason is a machine reader rather than a browser.
-# integrations.sh probes this exact path, followed the 302, and recorded a SECOND
-# HTTP surface at `sigiro.com` with its spec set to this URL — the same API listed
-# twice, one entry pointing at a redirect. A permanent redirect states that
-# `api.sigiro.com/openapi.json` is the canonical location rather than one of two
-# equal addresses, which is what `/.well-known/integrations.json` also declares.
-/openapi.json   https://api.sigiro.com/openapi.json      301

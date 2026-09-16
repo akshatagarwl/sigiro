@@ -28,6 +28,7 @@ export const BridgePolicy = Schema.Struct({
   maxAgeSeconds: PositiveInt.check(Schema.isLessThanOrEqualTo(7 * 24 * 60 * 60)),
 });
 export type BridgePolicy = typeof BridgePolicy.Type;
+const equalPolicy = Schema.toEquivalence(JobPolicy);
 
 export const Anomaly = Schema.Struct({
   detected_at: Schema.NonEmptyString,
@@ -96,7 +97,7 @@ export const BridgeRecord = Schema.Union([
   const job = "job" in record ? record.job : undefined;
   if (job !== undefined && (job.jobId !== `sigiro-${record.candidateId}` || job.incidentId !== record.candidateId ||
     job.generation !== 1 || job.repository !== record.repository || job.baseRef !== record.settings.baseRef ||
-    JSON.stringify(job.policy) !== JSON.stringify(record.settings.policy))) return "job differs from the candidate or its frozen execution policy";
+    !equalPolicy(job.policy, record.settings.policy))) return "job differs from the candidate or its frozen execution policy";
   return true;
 }));
 export type BridgeRecord = typeof BridgeRecord.Type;

@@ -423,7 +423,7 @@ export default defineConfig({
      * legacy per-operation URLs here.
      */
     route: '/reference',
-    spec: 'https://api.sigiro.com/openapi.json',
+    spec: 'https://sigiro.com/openapi.json',
     codeSamples: ['curl', 'javascript', 'python'],
 
     /**
@@ -431,35 +431,17 @@ export default defineConfig({
      * on with the Blume renderer; on this spec it cannot complete a single
      * request, so it is an affordance that fails for every reader.
      *
-     * Two independent reasons, both measured against the live spec and the live
-     * API rather than assumed:
-     *
-     *   1. NO BASE URL. `api.sigiro.com/openapi.json` declares no `servers`
+     * The live spec at `sigiro.com/openapi.json` declares no `servers`
      *      block, and Blume's playground model is `servers: args.servers.map(…)`
      *      with `server: model.servers[0] ?? ""`. The built page carries
      *      `"servers":[]`, so the panel renders only its "Custom base URL"
      *      field — placeholder `https://api.example.com` — and a reader who
      *      presses Send without typing one sends to nothing.
-     *   2. NO CORS. `curl -sI -H 'Origin: https://sigiro.com'
-     *      https://api.sigiro.com/openapi.json` returns 200 with zero
-     *      `access-control-allow-origin` headers, and an OPTIONS preflight on
-     *      `/v1/services` answers 401 with `Allow: GET,HEAD`. The panel fires
-     *      the request straight from the browser, so even with a base URL typed
-     *      in, the response is unreadable to the page.
-     *
-     * `playground.proxy` is the documented escape hatch for (2) — `true` mounts
-     * a built-in `/_api-proxy` server route. Deliberately not taken. Every
-     * hosted endpoint needs a Better Auth OAuth access token, so a proxy turns the docs Worker into
-     * a credential-forwarding relay for the telemetry API: a reader pastes
-     * `<oauth-access-token>` into a docs page and this origin ships it onward.
-     * That is a product and security decision about the API's trust boundary,
-     * not a docs-framework setting, and it is not one an upgrade should make.
      *
      * Nothing is lost against 1.4.3, which had no playground at all. The
      * per-operation `codeSamples` above are unchanged and remain copy-pasteable,
      * which is the affordance that actually works against an API that requires
-     * a key and speaks to no browser origin. Revisit if the API ever declares
-     * `servers` and sends CORS headers for `sigiro.com`.
+     * a token. Revisit if the API ever declares `servers`.
      */
     playground: false,
   },
@@ -471,18 +453,11 @@ export default defineConfig({
      *
      * 1.6.2 gave every site a read-only JSON docs API under `/api/docs/` and
      * described it with a generated OpenAPI 3.1 document at `/openapi.json`.
-     * That path is already spoken for here, twice over:
+     * That path is already the telemetry API's own description: the website
+     * Worker proxies `/openapi.json` to the API origin, and
+     * `public/.well-known/integrations.json` declares it as the canonical spec.
      *
-     *   - `public/_redirects` 301s `/openapi.json` to
-     *     `https://api.sigiro.com/openapi.json`, the telemetry API's own
-     *     description. The comment on that rule records why it is a 301 and not
-     *     a 302: integrations.sh probed the path, followed a 302, and recorded a
-     *     second HTTP surface at `sigiro.com` whose spec was this redirect.
-     *   - `public/.well-known/integrations.json` names that same api.sigiro.com
-     *     URL as the canonical spec for two of its four surfaces.
-     *
-     * Leaving `api` on published a *different* document at that path, and the
-     * damage is not confined to which of the two answers a request. Three
+     * Leaving `api` on would publish a *different* document at that path. Three
      * surfaces advertise the generated document as this site's machine-readable
      * service description, all verified in `dist/client` on 1.6.3:
      *
@@ -491,18 +466,16 @@ export default defineConfig({
      *   - the homepage `Link:` header → `rel="service-desc"`
      *
      * So an agent that reads any of those three is sent to a URL that either
-     * hands it the telemetry spec while calling it the docs API, or — if the
-     * generated static file shadows the redirect at the edge — kills the 301
-     * that integrations.sh depends on. The second is the worse failure and the
-     * first is still a false statement about what sigiro's API is.
+     * hand it the telemetry spec while calling it the docs API, or shadow the
+     * API proxy with a static file. Both are false statements about the service.
      *
      * MOVING IT WAS THE PREFERRED FIX AND IS NOT POSSIBLE. `OPENAPI_PATH` is a
      * module constant in `blume/src/ai/api/paths.ts` (`"/openapi.json"`), and
      * `planApi` reads it directly; no config key relocates it. The only other
      * escape hatch 1.6.2 documents is shipping a `public/openapi.json`, which
-     * this repo deliberately does not have — the API's description lives on the
-     * API, which is the only thing that can keep it honest — and which would
-     * shadow the redirect with a static file rather than remove the conflict.
+     * this repo deliberately does not have — the API owns its description — and
+     * which would shadow the proxy with a static file rather than remove the
+     * conflict.
      *
      * What is given up is a REST twin of tools we already serve. `ai.mcp` below
      * exposes the same page snapshot through the same four operations, and it is
@@ -521,7 +494,7 @@ export default defineConfig({
       enabled: true,
       name: 'sigiro-docs',
       instructions:
-        'Documentation for sigiro, an observability data layer. For live telemetry, use the sigiro API at https://api.sigiro.com — its full surface is described at https://api.sigiro.com/openapi.json.',
+        'Documentation for sigiro, an observability data layer. For live telemetry, use the sigiro API at https://sigiro.com — its full surface is described at https://sigiro.com/openapi.json.',
     },
     /** Generated, including the API reference, replacing two route handlers. */
     llmsTxt: { enabled: true, openapi: true },
@@ -542,7 +515,7 @@ export default defineConfig({
      * Reading through the gitlink leaves one editable, public source.
      *
      * WHAT THE SKILL IS ALLOWED TO SAY. It restates neither the endpoint list
-     * (`api.sigiro.com/openapi.json` describes it, and a skill that duplicates
+     * (`sigiro.com/openapi.json` describes it, and a skill that duplicates
      * a spec is tokens without capability) nor the install and onboarding
      * pages (it links `/docs/how-to/install-with-ai` and
      * `/docs/how-to/hosted-onboarding`). What it carries is the ordering the
@@ -585,7 +558,7 @@ export default defineConfig({
   navigation: {
     /**
      * One entry, and it names the file rather than a section. That is
-     * deliberate: it leaves the docs for the raw spec on `api.sigiro.com`, so
+     * deliberate: it leaves the docs for the raw spec on `sigiro.com`, so
      * "OpenAPI" is what a reader actually lands on. The generated reference is
      * a docs page and lives in the sidebar as "Reference" — see `openapi.route`.
      *
@@ -604,7 +577,7 @@ export default defineConfig({
      * `/docs/reference/operations/run-query` all carry `href="/"` on the
      * wordmark. Two links to one destination, one of them wrong.
      */
-    featured: [{ href: 'https://api.sigiro.com/openapi.json', label: 'openapi.json' }],
+    featured: [{ href: 'https://sigiro.com/openapi.json', label: 'openapi.json' }],
     /**
      * No explicit `sidebar` here on purpose. Listing the four pages did fix the
      * order, and it also silently dropped the generated API reference from the

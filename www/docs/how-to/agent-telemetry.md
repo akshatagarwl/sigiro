@@ -18,10 +18,10 @@ _your application_ at sigiro. Use both when you need both views.
 Install the public skill before you start the agent:
 
 ```bash
-npx skills add sigiroai/skills
+npx skills add Arnav12114/skills
 ```
 
-The [`debug-with-sigiro` skill](https://github.com/sigiroai/skills) teaches the
+The [`debug-with-sigiro` skill](https://github.com/Arnav12114/skills) teaches the
 agent how to inspect telemetry in sigiro. It does not change the telemetry
 settings in this guide.
 

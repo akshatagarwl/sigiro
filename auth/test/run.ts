@@ -23,34 +23,46 @@ if ((await run("docker", ["compose", "up", "-d", "--wait"])) !== 0) process.exit
 if ((await run("node", ["--import", "tsx", "src/migrate.ts"], { ...process.env, ENVIRONMENT: "test" })) !== 0)
   process.exit(1);
 
+const serverEnvironment = {
+  ...process.env,
+  ENVIRONMENT: "test",
+  BETTER_AUTH_SECRET: required("BETTER_AUTH_SECRET"),
+  AUTH_TEST_OTP: required("AUTH_TEST_OTP"),
+  BETTER_AUTH_URL: required("BETTER_AUTH_URL"),
+  SIGIRO_RESOURCE: required("SIGIRO_RESOURCE"),
+  DATABASE_URL: required("DATABASE_URL"),
+  EMAIL_FROM: process.env.EMAIL_FROM ?? "noreply@sigiro.com",
+  CLOUDFLARE_ACCOUNT_ID: "test-account",
+  CLOUDFLARE_EMAIL_API_TOKEN: "test-token",
+};
+
 const server = spawn("node", ["--import", "tsx", "src/server.ts"], {
   cwd: root,
-  env: {
-    ...process.env,
-    ENVIRONMENT: "test",
-    PORT: "3100",
-    BETTER_AUTH_SECRET: required("BETTER_AUTH_SECRET"),
-    AUTH_TEST_OTP: required("AUTH_TEST_OTP"),
-    BETTER_AUTH_URL: required("BETTER_AUTH_URL"),
-    SIGIRO_RESOURCE: required("SIGIRO_RESOURCE"),
-    DATABASE_URL: required("DATABASE_URL"),
-    EMAIL_FROM: process.env.EMAIL_FROM ?? "noreply@sigiro.com",
-    CLOUDFLARE_ACCOUNT_ID: "test-account",
-    CLOUDFLARE_EMAIL_API_TOKEN: "test-token",
-  },
+  env: { ...serverEnvironment, PORT: "3100" },
+  stdio: "inherit",
+});
+const secondaryServer = spawn("node", ["--import", "tsx", "src/server.ts"], {
+  cwd: root,
+  env: { ...serverEnvironment, PORT: "3101" },
   stdio: "inherit",
 });
 
-const stopServer = () => server.kill("SIGTERM");
-process.on("SIGINT", stopServer);
-process.on("SIGTERM", stopServer);
+const stopServers = () => {
+  server.kill("SIGTERM");
+  secondaryServer.kill("SIGTERM");
+};
+process.on("SIGINT", stopServers);
+process.on("SIGTERM", stopServers);
 
 let ready = false;
 for (let attempt = 0; attempt < 100; attempt += 1) {
-  if (server.exitCode !== null) break;
+  if (server.exitCode !== null || secondaryServer.exitCode !== null) break;
   try {
-    const response = await fetch("http://127.0.0.1:3100/health");
-    if (response.ok) {
+    const [primary, secondary] = await Promise.all([
+      fetch("http://127.0.0.1:3100/health"),
+      fetch("http://127.0.0.1:3101/health"),
+    ]);
+    if (primary.ok && secondary.ok) {
       ready = true;
       break;
     }
@@ -59,14 +71,20 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   }
 }
 if (!ready) {
-  stopServer();
-  throw new Error("auth service did not become ready");
+  stopServers();
+  throw new Error("auth services did not become ready");
 }
 
 try {
-  process.exitCode = await run("node", ["--import", "tsx", "test/e2e.ts"]);
+  process.exitCode = await run("node", ["--import", "tsx", "test/e2e.ts"], {
+    ...process.env,
+    SIGIRO_SECONDARY_AUTH_URL: "http://127.0.0.1:3101",
+  });
 } finally {
-  stopServer();
-  await new Promise((resolve) => server.once("exit", resolve));
+  stopServers();
+  await Promise.all([
+    new Promise((resolve) => server.once("exit", resolve)),
+    new Promise((resolve) => secondaryServer.once("exit", resolve)),
+  ]);
   await run("docker", ["compose", "down"]);
 }

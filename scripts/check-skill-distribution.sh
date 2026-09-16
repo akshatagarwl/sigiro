@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 skill_name=debug-with-sigiro
 canonical_skill="${CANONICAL_SKILL:-$repo_root/skills/skills/$skill_name/SKILL.md}"
-skill_source="${SKILL_SOURCE:-sigiroai/skills}"
+skill_source="${SKILL_SOURCE:-Arnav12114/skills}"
 mode="${1:-remote}"
 
 case "$mode" in
@@ -28,7 +28,7 @@ mkdir "$work_dir/install-bin"
 "$work_dir/install-bin/sigiro" --version
 
 if [ "$mode" = remote ]; then
-  public_skill_url="${PUBLIC_SKILL_URL:-https://raw.githubusercontent.com/sigiroai/skills/main/skills/$skill_name/SKILL.md}"
+  public_skill_url="${PUBLIC_SKILL_URL:-https://raw.githubusercontent.com/Arnav12114/skills/main/skills/$skill_name/SKILL.md}"
   curl -fsSL --retry 3 "$public_skill_url" -o "$work_dir/public-skill.md"
   cmp "$canonical_skill" "$work_dir/public-skill.md"
 fi

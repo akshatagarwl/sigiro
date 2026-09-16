@@ -13,8 +13,10 @@ app on Vite via vinext, and now Astro.
 aube install --frozen-lockfile
 aube run dev           # astro dev
 aube run build         # astro build → dist/client (assets) + dist/server (the Worker)
-aube run preview       # wrangler dev on the built Worker — the real runtime
-aube run deploy        # wrangler deploy
+aube run preview       # local workerd preview of the wrapper Worker
+aube run check:edge    # sub-second auth/API routing smoke test against the current build
+aube run check:edge:full # rebuild, then run the routing smoke test
+aube run deploy        # Alchemy deploys the wrapper Worker and infrastructure
 aube run lint          # oxlint
 aube run fmt           # Vite+ formatter using vite.config.ts
 aube run check         # formatting, linting, and type checks
@@ -22,11 +24,14 @@ aube run og            # regenerate the Open Graph card into public/
 ```
 
 `aube run` installs missing or stale dependencies before starting the script and
-keeps the committed `bun.lock`; do not add a second lockfile. Always verify with
-`aube run preview` rather than `astro dev`. The two run in
-different engines — `astro dev` is Node, the deployed site is workerd — and at
-least one bug has only ever appeared in the second one (see the Shiki note in
-`src/lib/highlight.ts`).
+keeps the committed `bun.lock`; do not add a second lockfile. `aube run dev` is
+for page development only. Use `aube run check:edge` while editing the wrapper;
+it starts isolated mock origins and checks the complete route split, request
+forwarding, redirect rewriting, and canonical-host redirect. Use
+`check:edge:full` after changing Blume or static assets. The sole production
+deployment path is Alchemy, which deploys `src/worker.ts`; do not deploy the
+generated `dist/server/wrangler.json` directly because it contains only Blume's
+inner Worker and bypasses the apex auth and API proxies.
 
 ## Alchemy migration
 
@@ -75,7 +80,10 @@ Nothing else does. A React component rendered from `.astro` with no `client:*`
 directive is static markup, including the ones still marked `'use client'` — that
 directive is a Next convention and Astro ignores it.
 
-## The docs are not here
+## Public routing
 
-They are [Blume](https://useblume.dev) at docs.sigiro.com, in `docs-site/`.
-`/docs/*` on this origin redirects there; the rules are in `public/_redirects`.
+The landing page and [Blume](https://useblume.dev) documentation are served from
+`sigiro.com`; documentation lives under `/docs`. The Alchemy-deployed wrapper
+Worker routes only the public auth, API, protected-resource discovery, and
+OTLP/HTTP paths to their origin-only services. `www.sigiro.com` redirects to the
+single canonical origin before any authentication flow runs.

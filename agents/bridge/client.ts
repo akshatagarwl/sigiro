@@ -7,6 +7,7 @@ import { AnomaliesResponse, JsonObject } from "./types.ts";
 
 const failure = (operation: string, detail: string, retryable = false) =>
   new BridgeError({ operation, detail, retryable });
+const isBridgeError = Schema.is(BridgeError);
 const decode = <S extends Schema.Top & { readonly DecodingServices: never }>(
   schema: S, value: unknown, operation: string,
 ) => Schema.decodeUnknownEffect(schema)(value).pipe(
@@ -45,10 +46,10 @@ export const makeBridgeClient = Effect.fn("makeBridgeClient")(function* (options
         return new TextDecoder().decode(bytes);
       }),
     );
-  const parseJson = (text: string, operation: string, retryable = false) => Effect.try({
-    try: () => JSON.parse(text) as unknown,
-    catch: () => failure(operation, "response is not valid JSON", retryable),
-  });
+  const parseJson = (text: string, operation: string, retryable = false) =>
+    Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(text).pipe(
+      Effect.mapError(() => failure(operation, "response is not valid JSON", retryable)),
+    );
   const request = Effect.fn("BridgeClient.request")(function* (
     operation: string, request: HttpClientRequest.HttpClientRequest, limit: number, allowMissing = false,
   ) {
@@ -60,15 +61,14 @@ export const makeBridgeClient = Effect.fn("makeBridgeClient")(function* (options
       return yield* failure(operation, `HTTP ${response.status}`, response.status === 429 || response.status >= 500);
     }
     const text = yield* boundedText(response.stream, limit, operation).pipe(
-      Effect.mapError((error) => error instanceof BridgeError ? error : failure(operation, "response stream failed", true)),
+      Effect.mapError((error) => isBridgeError(error) ? error : failure(operation, "response stream failed", true)),
     );
     // A successful create may have committed even when its acknowledgement is unreadable.
     return yield* parseJson(text, operation, operation === "submit job");
   },
   Effect.scoped,
   Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
-  Effect.timeout("30 seconds"),
-  Effect.catchTag("TimeoutError", () => Effect.fail(failure("HTTP request", "timed out after 30 seconds", true))),
+  Effect.timeoutOrElse({ duration: "30 seconds", orElse: () => Effect.fail(failure("HTTP request", "timed out after 30 seconds", true)) }),
   Effect.retry({ times: 3, schedule: Schedule.exponential("200 millis"), while: (error) => error.retryable }));
 
   const sigiro = (path: string) => `${options.sigiroUrl.replace(/\/$/, "")}${path}`;
@@ -107,7 +107,7 @@ export const makeBridgeClient = Effect.fn("makeBridgeClient")(function* (options
       boundedText(handle.stderr, 64 * 1024, "GitHub"),
       handle.exitCode,
     ], { concurrency: "unbounded" }).pipe(
-      Effect.mapError((error) => error instanceof BridgeError ? error : failure("GitHub", "could not read gh result", true)),
+      Effect.mapError((error) => isBridgeError(error) ? error : failure("GitHub", "could not read gh result", true)),
     );
     if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
       // Only expose the numeric HTTP status, never remote response text or credentials.
@@ -118,8 +118,8 @@ export const makeBridgeClient = Effect.fn("makeBridgeClient")(function* (options
       return yield* failure("GitHub", `gh exited with status ${exitCode}${httpStatus ? ` (HTTP ${httpStatus})` : ""}`, retryable);
     }
     return yield* parseJson(stdout, "GitHub");
-  }, Effect.scoped, Effect.timeout("30 seconds"),
-  Effect.catchTag("TimeoutError", () => Effect.fail(failure("GitHub", "gh timed out after 30 seconds", true))));
+  }, Effect.scoped,
+  Effect.timeoutOrElse({ duration: "30 seconds", orElse: () => Effect.fail(failure("GitHub", "gh timed out after 30 seconds", true)) }));
   const repositoryPath = (repository: string) => repository.split("/").map(encodeURIComponent).join("/");
   const baseSha = Effect.fn("BridgeClient.baseSha")(function* (repository: string, baseRef: string) {
     const branch = baseRef.replace(/^refs\/heads\//, "");
@@ -134,7 +134,13 @@ export const makeBridgeClient = Effect.fn("makeBridgeClient")(function* (options
       Effect.mapError((error) => failure(error.operation, error.detail, true)),
     );
     const expected = yield* decode(JobSpec, job, "submit job");
-    if (JSON.stringify(stored.spec) !== JSON.stringify(expected)) {
+    const storedJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(stored.spec).pipe(
+      Effect.mapError(() => failure("submit job", "coordinator returned an unencodable job")),
+    );
+    const expectedJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(expected).pipe(
+      Effect.mapError(() => failure("submit job", "job is not encodable")),
+    );
+    if (storedJson !== expectedJson) {
       return yield* failure("submit job", "coordinator returned different immutable job input");
     }
     return stored;

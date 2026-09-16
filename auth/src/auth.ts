@@ -1,5 +1,6 @@
 import { cimd } from "@better-auth/cimd";
 import { fetchClientMetadataResource as fetchClientMetadataResourceNode } from "@better-auth/cimd/node";
+import { agentAuth } from "@better-auth/agent-auth";
 import { mcp } from "@better-auth/mcp";
 import { oauthDeviceAuthorization, type ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 import { passkey } from "@better-auth/passkey";
@@ -7,6 +8,9 @@ import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { emailOTP, jwt, organization } from "better-auth/plugins";
 import type { Pool } from "pg";
+
+import { membershipsForUser, sessionTenant, type RunPg } from "./database.js";
+import { postgresSecondaryStorage } from "./secondary-storage.js";
 
 export const SIGIRO_SCOPES = [
   "openid",
@@ -26,11 +30,23 @@ export const SIGIRO_SCOPES = [
   "tenant:admin",
 ] as const;
 
+export const SIGIRO_AGENT_CAPABILITIES = [
+  "telemetry:ingest",
+  "services:read",
+  "diagnose:read",
+  "traces:read",
+  "query:read",
+  "anomalies:read",
+  "alerts:read",
+  "alerts:write",
+] as const;
+
 export interface AuthRuntime {
   baseURL: string;
   secret: string;
   resource: string;
-  database: Pool;
+  betterAuthDatabase: Pool;
+  runPg: RunPg;
   testOTP?: string;
   sendEmail(message: {
     to: string;
@@ -57,7 +73,10 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
     appName: "Sigiro",
     baseURL: runtime.baseURL,
     secret: runtime.secret,
-    database: runtime.database,
+    database: runtime.betterAuthDatabase,
+    secondaryStorage: postgresSecondaryStorage(runtime.runPg),
+    session: { storeSessionInDatabase: true },
+    verification: { storeInDatabase: true },
     disabledPaths: ["/token"],
     telemetry: { enabled: false },
     hooks: {
@@ -101,6 +120,23 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
         },
       }),
       passkey(),
+      agentAuth({
+        providerName: "Sigiro",
+        providerDescription: "Open-source observability for agents",
+        modes: ["delegated"],
+        allowDynamicHostRegistration: true,
+        jtiCacheStorage: "secondary-storage",
+        jwksCacheStorage: "secondary-storage",
+        onEvent(event) {
+          console.info("agent_auth_event", JSON.stringify(event));
+        },
+        capabilities: SIGIRO_AGENT_CAPABILITIES.map((name) => ({
+          name,
+          description: `Use Sigiro ${name}`,
+          location: runtime.resource,
+          approvalStrength: "session" as const,
+        })),
+      }),
       mcp({
         loginPage: "/sign-in",
         consentPage: "/consent",
@@ -125,24 +161,17 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
                 const registeredTenantId = referenceId ?? client.referenceId;
                 if (registeredTenantId) return { tid: registeredTenantId };
                 if (sessionId) {
-                  const session = await runtime.database.query<{ activeOrganizationId: string | null }>(
-                    'SELECT "activeOrganizationId" FROM session WHERE id = $1',
-                    [sessionId],
-                  );
-                  const activeOrganizationId = session.rows[0]?.activeOrganizationId;
+                  const activeOrganizationId = await runtime.runPg(sessionTenant(sessionId));
                   if (!activeOrganizationId) throw new Error("token session has no active organization");
                   return { tid: activeOrganizationId };
                 }
                 if (!user?.id) throw new Error("token issuance has no tenant-bearing user, session, or client");
 
-                const memberships = await runtime.database.query<{ organizationId: string }>(
-                  'SELECT "organizationId" FROM member WHERE "userId" = $1 ORDER BY "createdAt", id',
-                  [user.id],
-                );
-                if (memberships.rows.length !== 1) {
+                const memberships = await runtime.runPg(membershipsForUser(user.id));
+                if (memberships.length !== 1) {
                   throw new Error("device token user must belong to exactly one organization");
                 }
-                return { tid: memberships.rows[0]!.organizationId };
+                return { tid: memberships[0]! };
               },
             },
           },

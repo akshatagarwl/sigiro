@@ -1,23 +1,24 @@
-import { Effect, Fiber, Predicate } from "effect";
-import { createHash } from "node:crypto";
+import { DateTime, Effect, Fiber, Predicate } from "effect";
 import { CoordinatorClient } from "./coordinator.ts";
 import { EveExecution } from "./eve.ts";
 import { JobStore } from "./services.ts";
 import { jobRequestOf, type JobRecord } from "./types.ts";
+import { sha256 } from "../src/signing.ts";
 
 export interface RunOnceOptions { readonly client: CoordinatorClient["Service"]; readonly jobs: JobStore["Service"]; readonly eve: EveExecution["Service"]; }
 const idFor = (request: { jobId: string; generation: number; attempt: number }) => `${request.jobId}:${request.generation}:${request.attempt}`;
-const now = () => new Date().toISOString();
-const failed = (record: JobRecord, cause: unknown): JobRecord => ({ ...record, status: "failed", error: cause instanceof Error ? cause.message : String(cause), updatedAt: now() });
-const reported = (record: JobRecord): JobRecord => ({ ...record, reportedAt: now(), updatedAt: now() });
-const report = Effect.fn("reportJob")(function* (options: RunOnceOptions, record: JobRecord) { yield* options.client.complete(record); yield* options.jobs.put(reported(record)); });
+const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+const failed = (record: JobRecord, cause: unknown, updatedAt: string): JobRecord => ({ ...record, status: "failed", error: cause instanceof Error ? cause.message : String(cause), updatedAt });
+const reported = (record: JobRecord, timestamp: string): JobRecord => ({ ...record, reportedAt: timestamp, updatedAt: timestamp });
+const report = Effect.fn("reportJob")(function* (options: RunOnceOptions, record: JobRecord) {
+  const timestamp = yield* now;
+  yield* options.client.complete(record);
+  yield* options.jobs.put(reported(record, timestamp));
+});
 
 const execute = Effect.fn("executeJob")(function* (options: RunOnceOptions, initial: JobRecord) {
   const request = initial.request;
-  const attributes = {
-    "job.hash": createHash("sha256").update(request.jobId).digest("hex"),
-    "execution.hash": createHash("sha256").update(idFor(request)).digest("hex"),
-  };
+  const attributes = { "job.hash": yield* sha256(request.jobId), "execution.hash": yield* sha256(idFor(request)) };
   yield* Effect.annotateCurrentSpan(attributes);
   yield* Effect.annotateLogsScoped(attributes);
   yield* Effect.logInfo("job claimed");
@@ -25,7 +26,7 @@ const execute = Effect.fn("executeJob")(function* (options: RunOnceOptions, init
     yield* report(options, initial); return;
   }
   let record = initial;
-  yield* options.jobs.put({ ...record, status: "running", updatedAt: now() });
+  yield* options.jobs.put({ ...record, status: "running", updatedAt: yield* now });
   const intervalMs = Math.max(1, Math.floor(request.deadlineSeconds * 1_000 / 3));
   const heartbeat = Effect.forever(Effect.sleep(`${intervalMs} millis`).pipe(Effect.andThen(options.client.heartbeat(request))));
   const heartbeatFiber = yield* Effect.forkScoped(heartbeat);
@@ -43,7 +44,7 @@ const execute = Effect.fn("executeJob")(function* (options: RunOnceOptions, init
         Effect.gen(function* () {
           const current = yield* options.jobs.get(idFor(request));
           if (Predicate.isUndefined(current)) return yield* Effect.die(new Error("local job result disappeared"));
-          const succeeded: JobRecord = { ...current, status: "succeeded", receipt: result, updatedAt: now() };
+          const succeeded: JobRecord = { ...current, status: "succeeded", receipt: result, updatedAt: yield* now };
           yield* options.jobs.put(succeeded);
           return succeeded;
         }),
@@ -54,7 +55,7 @@ const execute = Effect.fn("executeJob")(function* (options: RunOnceOptions, init
           // propagate, leaving the persisted session resumable.
           const current = yield* options.jobs.get(idFor(request));
           if (Predicate.isUndefined(current)) return yield* Effect.die(new Error("local job result disappeared"));
-          let terminalRecord = failed(current, cause);
+          let terminalRecord = failed(current, cause, yield* now);
           if (current.eveSessionId !== undefined) {
             yield* eve.cancel(current.eveSessionId).pipe(Effect.catch((cancellationError) =>
               Effect.gen(function* () {
@@ -64,8 +65,9 @@ const execute = Effect.fn("executeJob")(function* (options: RunOnceOptions, init
             ));
           }
           if (current.eveSessionId !== undefined) {
+            const reconciledAt = yield* now;
             yield* eve.receipt(request, current.eveSessionId).pipe(Effect.match({
-              onSuccess: (receipt) => { if (receipt?.status === "published") terminalRecord = { ...current, status: "succeeded", receipt, updatedAt: now() }; },
+              onSuccess: (receipt) => { if (receipt?.status === "published") terminalRecord = { ...current, status: "succeeded", receipt, updatedAt: reconciledAt }; },
               onFailure: (error) => { terminalRecord = { ...terminalRecord, error: `${terminalRecord.error}; receipt reconciliation failed: ${error.message}` }; },
             }));
           }

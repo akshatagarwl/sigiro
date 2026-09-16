@@ -2,9 +2,12 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { createHash, randomBytes } from "node:crypto";
 import { validateCimdMetadata } from "@better-auth/cimd";
 import { fetchClientMetadataResource as fetchClientMetadataResourceNode } from "@better-auth/cimd/node";
+import { AgentAuthClient } from "@auth/agent";
+import { Redacted } from "effect";
 import { Pool } from "pg";
 
 import { createAuth } from "../src/auth.js";
+import { makePgRuntime } from "../src/database.js";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -122,6 +125,86 @@ async function expectOk(response: Response, operation: string): Promise<Response
   if (crossOriginProvision.status !== 403) {
     throw new Error("personal organization provisioning accepted a cross-origin request");
   }
+
+  const hostEnrollment = (await expectOk(
+    await request("/host/create", {
+      name: "Sigiro auth E2E",
+      default_capabilities: ["telemetry:ingest"],
+    }),
+    "Agent Auth host provisioning",
+  ).then((response) => response.json())) as { enrollmentToken?: string };
+  if (!hostEnrollment.enrollmentToken) throw new Error("Agent Auth host enrollment token was omitted");
+
+  const agentClient = new AgentAuthClient({
+    urls: [env.BETTER_AUTH_URL],
+    allowDirectDiscovery: true,
+    hostName: "Sigiro auth E2E",
+  });
+  await agentClient.init();
+  await agentClient.enrollHost({
+    provider: env.BETTER_AUTH_URL,
+    enrollmentToken: hostEnrollment.enrollmentToken,
+  });
+  const agentConnection = await agentClient.connectAgent({
+    provider: env.BETTER_AUTH_URL,
+    mode: "delegated",
+    name: "Sigiro telemetry agent",
+    capabilities: ["telemetry:ingest"],
+  });
+  if (agentConnection.status !== "active") throw new Error("Agent Auth connection did not become active");
+  const agentToken = await agentClient.signJwt({
+    agentId: agentConnection.agentId,
+    capabilities: ["telemetry:ingest"],
+    audience: env.SIGIRO_RESOURCE,
+  });
+  const agentSession = await expectOk(
+    await fetch(`${env.BETTER_AUTH_URL}/api/auth/sigiro/agent/session`, {
+      headers: { authorization: `Bearer ${agentToken.token}` },
+    }),
+    "Agent Auth Sigiro session",
+  );
+  const agentSessionBody = (await agentSession.json()) as {
+    active?: boolean;
+    tenant_id?: string;
+    agent_capability_grants?: Array<{ capability?: string; status?: string }>;
+  };
+  if (
+    agentSessionBody.active !== true ||
+    agentSessionBody.tenant_id !== firstProvision.organization.id ||
+    !agentSessionBody.agent_capability_grants?.some(
+      (grant) => grant.capability === "telemetry:ingest" && grant.status === "active",
+    )
+  ) {
+    throw new Error(`Agent Auth session omitted tenant or capability binding: ${JSON.stringify(agentSessionBody)}`);
+  }
+  const secondaryAuthURL = process.env.SIGIRO_SECONDARY_AUTH_URL;
+  if (!secondaryAuthURL) throw new Error("SIGIRO_SECONDARY_AUTH_URL is required");
+  const replay = await fetch(`${secondaryAuthURL}/api/auth/sigiro/agent/session`, {
+    headers: { authorization: `Bearer ${agentToken.token}` },
+  });
+  if (
+    replay.status !== 401 ||
+    !replay.headers.get("www-authenticate")?.startsWith("AgentAuth ")
+  ) {
+    throw new Error("Agent Auth replay was not rejected with an AgentAuth challenge");
+  }
+  await agentClient.rotateAgentKey(agentConnection.agentId);
+  const revokedAgentToken = await agentClient.signJwt({
+    agentId: agentConnection.agentId,
+    capabilities: ["telemetry:ingest"],
+    audience: env.SIGIRO_RESOURCE,
+  });
+  await agentClient.disconnectAgent(agentConnection.agentId);
+  const revokedAgentSession = await fetch(`${env.BETTER_AUTH_URL}/api/auth/sigiro/agent/session`, {
+    headers: { authorization: `Bearer ${revokedAgentToken.token}` },
+  });
+  const revokedAgentBody = await revokedAgentSession.text();
+  if (revokedAgentSession.status !== 403 || !revokedAgentBody.includes('"error":"agent_revoked"')) {
+    throw new Error(
+      `Disconnected Agent Auth session was not rejected as revoked: ${revokedAgentSession.status} ${revokedAgentBody}`,
+    );
+  }
+  agentClient.destroy();
 
   const metadataResponse = await expectOk(
     await fetch(`${env.BETTER_AUTH_URL}/api/auth/.well-known/oauth-authorization-server`),
@@ -320,12 +403,23 @@ async function expectOk(response: Response, operation: string): Promise<Response
     scope: "openid profile email offline_access diagnose:read",
   };
   let metadataFetches = 0;
-  const cimdDatabase = new Pool({ connectionString: env.DATABASE_URL, allowExitOnIdle: true });
+  const cimdDatabase = new Pool({
+    connectionString: env.DATABASE_URL,
+    application_name: "sigiro-auth-cimd-e2e",
+    allowExitOnIdle: true,
+  });
+  const cimdPostgres = makePgRuntime({
+    url: Redacted.make(env.DATABASE_URL),
+    connectTimeout: "5 seconds",
+    multiplex: true,
+    applicationName: "sigiro-auth-cimd-e2e",
+  });
   const cimdAuth = createAuth({
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
     resource: env.SIGIRO_RESOURCE,
-    database: cimdDatabase,
+    betterAuthDatabase: cimdDatabase,
+    runPg: cimdPostgres.runPromise,
     testOTP: env.AUTH_TEST_OTP,
     emailFrom: "noreply@sigiro.com",
     async sendEmail() {},
@@ -338,6 +432,7 @@ async function expectOk(response: Response, operation: string): Promise<Response
       });
     },
   });
+  try {
   const publicClient = { client_id: cimdClientId };
   const cimdRequest = (path: string, init?: RequestInit) =>
     cimdAuth.handler(new Request(`${env.BETTER_AUTH_URL}/api/auth${path}`, init));
@@ -594,10 +689,23 @@ async function expectOk(response: Response, operation: string): Promise<Response
     throw new Error("device access token omitted the tenant claim");
   }
 
+  const applicationNameRows = await cimdDatabase.query<{ application_name: string }>(
+    "SELECT DISTINCT application_name FROM pg_stat_activity WHERE datname = current_database()",
+  );
+  const applicationNames = new Set(applicationNameRows.rows.map((row) => row.application_name));
+  for (const expected of ["sigiro-auth", "sigiro-auth-cimd-e2e"]) {
+    if (!applicationNames.has(expected)) {
+      throw new Error(`pg_stat_activity omitted application_name ${expected}`);
+    }
+  }
+
   process.stdout.write(
     "client_credentials, CIMD authorization_code + PKCE, and device JWTs verified\n",
   );
   if (failures.length > 0) {
     throw new Error(`kill-test failed: ${failures.join("; ")}`);
+  }
+  } finally {
+    await Promise.all([cimdDatabase.end(), cimdPostgres.dispose()]);
   }
 }

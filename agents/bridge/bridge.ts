@@ -1,28 +1,21 @@
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
-import { mkdir, realpath } from "node:fs/promises";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-import { DateTime, Effect, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Path, Schema } from "effect";
 import { JobSpec } from "../src/contracts.ts";
 import { celldPayloadOf } from "../executor/types.ts";
 import { parseCelldJobBody } from "../agent/lib/celld-dispatch.ts";
 import { verifiedEvidence } from "../agent/lib/workspace.ts";
+import { sha256 } from "../src/signing.ts";
 import type { BridgeClient } from "./client.ts";
 import { BridgeError } from "./errors.ts";
-import { loadBridgeRecords, saveBridgeRecord, writeAtomicFile } from "./store.ts";
+import { encodeBridgeJson, loadBridgeRecords, saveBridgeRecord, writeAtomicFile } from "./store.ts";
 import { BridgeEvidence, BridgeRecord, type Anomaly, type BridgePolicy } from "./types.ts";
 
 const BUCKET_US = 300 * 1_000_000;
-const hash = (value: string | Uint8Array): string => createHash("sha256").update(value).digest("hex");
 const fail = (operation: string, detail: string) => new BridgeError({ operation, detail, retryable: false });
-const io = <A>(operation: string, action: () => Promise<A>) => Effect.tryPromise({
-  try: action,
-  catch: (cause) => new BridgeError({ operation, detail: cause instanceof Error ? cause.message : String(cause), retryable: !Schema.isSchemaError(cause) }),
-// Native fs promises cannot be aborted. Finish them before releasing the process lock.
-}).pipe(Effect.uninterruptible);
+const isBridgeError = Schema.is(BridgeError);
 const decode = <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S, value: unknown, operation: string) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(Effect.mapError(() => fail(operation, "data does not match the required shape")));
+
 
 export interface BridgeOptions {
   readonly settings: BridgePolicy;
@@ -35,15 +28,31 @@ const Coverage = Schema.Struct({
 });
 
 /** One local owner across processes. SQLite releases its OS lock on process death. */
-const acquireLock = (root: string) => io("lock bridge", async () => {
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const db = new Database(join(root, "ownership.sqlite"));
-  try { db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE"); }
-  catch (cause) { db.close(); throw cause; }
-  return db;
+const acquireLock = Effect.fn("acquireBridgeLock")(function* (root: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(root, { recursive: true, mode: 0o700 }).pipe(Effect.mapError((cause) => fail("lock bridge", String(cause))));
+  return yield* Effect.try({
+    try: () => {
+      const database = new Database(path.join(root, "ownership.sqlite"));
+      try {
+        database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+        return database;
+      } catch (cause) {
+        database.close();
+        throw cause;
+      }
+    },
+    catch: (cause) => fail("lock bridge", cause instanceof Error ? cause.message : String(cause)),
+  });
+});
+
+const hashJson = Effect.fnUntraced(function* (value: unknown) {
+  return yield* sha256(yield* encodeBridgeJson(value));
 });
 
 const prepare = Effect.fn("Bridge.prepare")(function* (record: Extract<BridgeRecord, { status: "detected" }>, options: BridgeOptions, client: BridgeClient) {
+  const path = yield* Path.Path;
   const diagnosis = yield* client.diagnose(record.service, record.fromTs, record.toTs);
   const { coverage } = yield* decode(Coverage, diagnosis, "validate diagnosis coverage");
   for (const anomaly of record.anomalies) {
@@ -58,14 +67,16 @@ const prepare = Effect.fn("Bridge.prepare")(function* (record: Extract<BridgeRec
     captured_at_us: capturedAt * 1_000, incident_id: record.candidateId,
     anomalies: record.anomalies, diagnosis,
   }, "validate evidence");
-  const bytes = new TextEncoder().encode(`${JSON.stringify(evidence)}\n`);
+  const evidenceJson = `${yield* encodeBridgeJson(evidence)}\n`;
+  const bytes = new TextEncoder().encode(evidenceJson);
   if (bytes.byteLength > 1024 * 1024) return yield* fail("prepare evidence", "snapshot exceeds Eve's 1 MiB limit");
-  const evidenceSha256 = hash(bytes);
-  const evidencePath = join(options.evidenceDir, `${evidenceSha256}.json`);
+  const evidenceSha256 = yield* sha256(evidenceJson);
+  const evidencePath = path.join(options.evidenceDir, `${evidenceSha256}.json`);
   const job = yield* decode(JobSpec, {
     jobId: `sigiro-${record.candidateId}`, generation: 1,
     repository: record.repository, baseRef: record.settings.baseRef, baseSha,
-    incidentId: record.candidateId, evidenceUri: pathToFileURL(evidencePath).href, evidenceSha256,
+    incidentId: record.candidateId,
+    evidenceUri: (yield* path.toFileUrl(evidencePath).pipe(Effect.mapError((cause) => fail("prepare evidence", String(cause))))).href,
     prompt: "Investigate the incident in /workspace/sigiro-evidence.json against the pinned checkout. " +
       "Use the original anomaly observations and diagnosis to establish a supported cause before editing. " +
       "Make a justified fix within the supplied policy and run every required test. " +
@@ -74,12 +85,12 @@ const prepare = Effect.fn("Bridge.prepare")(function* (record: Extract<BridgeRec
   }, "validate job");
   // Reserve worst-case JSON escaping for the dispatch schema's 512-character worker ID.
   const dispatch = celldPayloadOf({ ...job, attempt: job.policy.maxAttempts, tests: job.policy.tests, allowedPaths: job.policy.allowedPaths }, "\u0000".repeat(512));
-  if (parseCelldJobBody(new TextEncoder().encode(JSON.stringify(dispatch))) === null) {
+  if (parseCelldJobBody(new TextEncoder().encode(yield* encodeBridgeJson(dispatch))) === null) {
     return yield* fail("validate job", "combined job policy exceeds Eve's dispatch limits");
   }
-  yield* io("write evidence", () => writeAtomicFile(evidencePath, bytes));
+  yield* writeAtomicFile(evidencePath, evidenceJson);
   const ready: BridgeRecord = { ...record, status: "ready", job, updatedAt: capturedAt };
-  yield* io("save prepared job", () => saveBridgeRecord(join(options.stateDir, "records"), ready));
+  yield* saveBridgeRecord(path.join(options.stateDir, "records"), ready);
   return ready;
 });
 
@@ -91,8 +102,9 @@ const submit = Effect.fn("Bridge.submit")(function* (record: Extract<BridgeRecor
   }).pipe(Effect.uninterruptible);
   const remote = yield* client.submit(record.job);
   const submitted: BridgeRecord = { ...record, status: "submitted", updatedAt: DateTime.toEpochMillis(yield* DateTime.now) };
-  yield* io("save submission", () => saveBridgeRecord(join(options.stateDir, "records"), submitted));
-  yield* Effect.logInfo("bridge job submitted").pipe(Effect.annotateLogs({ "job.hash": hash(record.job.jobId) }));
+  const path = yield* Path.Path;
+  yield* saveBridgeRecord(path.join(options.stateDir, "records"), submitted);
+  yield* Effect.logInfo("bridge job submitted").pipe(Effect.annotateLogs({ "job.hash": yield* sha256(record.job.jobId) }));
   return { status: "submitted" as const, candidateId: record.candidateId, jobId: record.job.jobId, jobStatus: remote.status };
 });
 
@@ -100,12 +112,11 @@ const submit = Effect.fn("Bridge.submit")(function* (record: Extract<BridgeRecor
 const occupied = Effect.fn("Bridge.occupied")(function* (record: Extract<BridgeRecord, { status: "submitted" }>, client: BridgeClient) {
   const remote = yield* client.status(record.job.jobId);
   if (remote === undefined) return yield* fail("read submitted job", "coordinator lost an acknowledged job; repository remains reserved");
-  if (JSON.stringify(remote.spec) !== JSON.stringify(record.job)) return yield* fail("read submitted job", "coordinator job input changed");
+  if ((yield* encodeBridgeJson(remote.spec)) !== (yield* encodeBridgeJson(record.job))) return yield* fail("read submitted job", "coordinator job input changed");
   if (remote.status !== "succeeded") return remote.status === "no_fix" ? undefined : remote.status;
-  const parsed = yield* Effect.try({
-    try: () => new URL(remote.result?.pullRequestUrl ?? ""),
-    catch: () => fail("read publication", "successful job has no valid pull request URL"),
-  });
+  const parsed = yield* Schema.decodeUnknownEffect(Schema.URL)(remote.result?.pullRequestUrl ?? "").pipe(
+    Effect.mapError(() => fail("read publication", "successful job has no valid pull request URL")),
+  );
   const prefix = `/${record.repository}/pull/`;
   if (parsed.origin !== "https://github.com" || !parsed.pathname.startsWith(prefix) || !/^[1-9][0-9]*$/.test(parsed.pathname.slice(prefix.length))) {
     return yield* fail("read publication", "pull request does not belong to the configured repository");
@@ -115,11 +126,13 @@ const occupied = Effect.fn("Bridge.occupied")(function* (record: Extract<BridgeR
 });
 
 export const bridgeOnce = Effect.fn("bridgeOnce")(function* (options: BridgeOptions, client: BridgeClient) {
-  yield* Effect.acquireRelease(acquireLock(options.stateDir), (db) => Effect.sync(() => db.close()));
-  yield* io("create evidence directory", () => mkdir(options.evidenceDir, { recursive: true, mode: 0o700 }));
-  options = { ...options, evidenceDir: yield* io("resolve evidence directory", () => realpath(options.evidenceDir)) };
-  const recordsDir = join(options.stateDir, "records");
-  const records = [...yield* io("load bridge records", () => loadBridgeRecords(recordsDir))];
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* Effect.acquireRelease(acquireLock(options.stateDir), (database) => Effect.sync(() => database.close()));
+  yield* fs.makeDirectory(options.evidenceDir, { recursive: true, mode: 0o700 }).pipe(Effect.mapError((cause) => fail("create evidence directory", String(cause))));
+  options = { ...options, evidenceDir: yield* fs.realPath(options.evidenceDir).pipe(Effect.mapError((cause) => fail("resolve evidence directory", String(cause)))) };
+  const recordsDir = path.join(options.stateDir, "records");
+  const records = [...yield* loadBridgeRecords(recordsDir)];
   for (const record of records) {
     if (record.sourceId !== options.settings.sourceId || record.service !== options.settings.service || record.repository !== options.settings.repository) {
       return yield* fail("load bridge records", "state directory belongs to a different source, service, or repository");
@@ -137,18 +150,19 @@ export const bridgeOnce = Effect.fn("bridgeOnce")(function* (options: BridgeOpti
     const anomalies = yield* client.anomalies(options.settings.service);
     const groups = new Map<string, Anomaly[]>();
     for (const anomaly of anomalies) {
-      const key = anomaly.incident_id ?? JSON.stringify([anomaly.service_name, anomaly.operation, anomaly.signal, anomaly.ts_shift_us]);
+      const key = anomaly.incident_id ?? (yield* encodeBridgeJson([anomaly.service_name, anomaly.operation, anomaly.signal, anomaly.ts_shift_us]));
       const members = groups.get(key) ?? [];
       members.push(anomaly); groups.set(key, members);
     }
     for (const anomalies of groups.values()) {
-      const memberKeys = anomalies.map((row) => hash(JSON.stringify([options.settings.sourceId, row.service_name, row.operation, row.signal, row.ts_shift_us]))).sort();
+      const memberKeys = yield* Effect.forEach(anomalies, (row) => hashJson([options.settings.sourceId, row.service_name, row.operation, row.signal, row.ts_shift_us]));
+      memberKeys.sort();
       const handled = records.find((record) => record.memberKeys.some((key) => memberKeys.includes(key)));
       if (handled !== undefined) {
         const keys = [...new Set([...handled.memberKeys, ...memberKeys])].sort();
         if (keys.length !== handled.memberKeys.length) {
           const updated = yield* decode(BridgeRecord, { ...handled, memberKeys: keys, updatedAt: nowMs }, "validate incident members");
-          yield* io("remember incident members", () => saveBridgeRecord(recordsDir, updated));
+          yield* saveBridgeRecord(recordsDir, updated);
           records[records.indexOf(handled)] = updated;
         }
         continue;
@@ -159,11 +173,11 @@ export const bridgeOnce = Effect.fn("bridgeOnce")(function* (options: BridgeOpti
       if (lastShift > nowUs) return yield* fail("select anomaly", "detector returned a future shift timestamp");
       const toTs = Math.max(Math.floor(nowUs / BUCKET_US) * BUCKET_US, Math.floor(lastShift / BUCKET_US) * BUCKET_US + BUCKET_US);
       pending = yield* decode(BridgeRecord, {
-        status: "detected", candidateId: hash(JSON.stringify([options.settings.sourceId, options.settings.repository, memberKeys])),
+        status: "detected", candidateId: yield* hashJson([options.settings.sourceId, options.settings.repository, memberKeys]),
         sourceId: options.settings.sourceId, service: options.settings.service, repository: options.settings.repository,
         anomalies, memberKeys, fromTs, toTs, createdAt: nowMs, updatedAt: nowMs, settings: options.settings,
       }, "validate candidate");
-      yield* io("save detected incident", () => saveBridgeRecord(recordsDir, pending!));
+      yield* saveBridgeRecord(recordsDir, pending!);
       break;
     }
   }
@@ -180,11 +194,12 @@ export const bridgeOnce = Effect.fn("bridgeOnce")(function* (options: BridgeOpti
   });
   return yield* run.pipe(Effect.tapError((error) => Effect.gen(function* () {
     // Reload: preparation may already have frozen a job. Never roll ready back to detected.
-    const latest = (yield* io("reload failed bridge", () => loadBridgeRecords(recordsDir))).find((value) => value.candidateId === record.candidateId);
+    const latest = (yield* loadBridgeRecords(recordsDir)).find((value) => value.candidateId === record.candidateId);
     if (latest === undefined) return yield* fail("save bridge failure", "candidate record disappeared");
-    const failed: BridgeRecord = error.retryable
-      ? { ...latest, lastError: error.message, updatedAt: nowMs }
-      : { ...latest, status: "blocked", lastError: error.message, updatedAt: nowMs };
-    yield* io("save bridge failure", () => saveBridgeRecord(recordsDir, failed));
+    const bridgeError = isBridgeError(error) ? error : fail("bridge pass", String(error));
+    const failed: BridgeRecord = bridgeError.retryable
+      ? { ...latest, lastError: bridgeError.message, updatedAt: nowMs }
+      : { ...latest, status: "blocked", lastError: bridgeError.message, updatedAt: nowMs };
+    yield* saveBridgeRecord(recordsDir, failed);
   })));
 }, Effect.scoped);

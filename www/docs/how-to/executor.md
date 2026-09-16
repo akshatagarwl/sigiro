@@ -19,7 +19,7 @@ import, which works either way.
 The public OpenAPI document is:
 
 ```
-https://api.sigiro.com/openapi.json
+https://sigiro.com/openapi.json
 ```
 
 In the Executor web UI:
@@ -40,9 +40,9 @@ Executor also exposes a CLI. The equivalent import has this shape:
 
 ```bash
 executor call executor openapi addIntegration '{
-  "spec": "https://api.sigiro.com/openapi.json",
+  "spec": "https://sigiro.com/openapi.json",
   "namespace": "sigiro",
-  "baseUrl": "https://api.sigiro.com"
+  "baseUrl": "https://sigiro.com"
 }'
 ```
 

@@ -20,6 +20,23 @@ sidebar:
 所有客户端子命令都会访问 `SIGIRO_ENDPOINT` 指定的服务器，默认值为
 `http://localhost:9999`。
 
+## 托管式代理认证
+
+无需安装或运行单独的 Agent Auth 可执行文件。请使用现有的 Sigiro 接口：
+
+- 使用 `sigiro signup --name "Your Name" --email you@example.com` 创建托管账户；
+- 使用 `sigiro mcp` 向 MCP 客户端提供 Sigiro 运维工具；
+- 使用 `https://sigiro.com/api/auth` 注册并管理代理主机身份。
+
+提供方发现文档位于
+`https://sigiro.com/.well-known/agent-configuration`，受保护的 API 资源是
+`https://sigiro.com`。Agent Auth 生命周期路由包括相对于 API 基地址的
+`/host/enroll`、`/agent/register`、`/agent/status`、`/agent/rotate-key` 和
+`/agent/revoke`。只请求代理实际需要的最小能力集；遥测代理只能获得
+`telemetry:ingest`。
+
+Sigiro 在内部使用官方 Agent Auth 实现处理协议和密钥生命周期，不提供第二个面向用户的 CLI。
+
 ## serve
 
 启动 OTLP gRPC 服务器、OTLP HTTP 服务器和查询 API。
@@ -95,3 +112,9 @@ key。
 
 `sigiro healthcheck` 探测本地 `/health` 端点，只有在服务器就绪时才以 `0` 退出。
 这就是容器的 `HEALTHCHECK`，因为 distroless 镜像既没有 shell 也没有 `curl`。
+
+## mcp
+
+`sigiro mcp` 启动 stdio Model Context Protocol 服务器。它提供
+`list_services`、`list_anomalies`、`diagnose_service` 和 `run_query`，
+让分析代理无需自行构造 HTTP 请求即可检查 Sigiro。

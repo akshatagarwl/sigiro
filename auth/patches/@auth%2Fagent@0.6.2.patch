@@ -1,0 +1,55 @@
+diff --git a/dist/index.js b/dist/index.js
+index ad2b1cf4bf51ce45440ed07d982f1915298fc22b..a240b9857d5d9441fd8d6c0902f5b2f1d5706321 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -919,16 +919,16 @@ var AgentAuthClient = class {
+         audience: config.issuer
+       });
+       const url = this.resolveEndpoint(config, "revoke", "/agent/revoke");
+-      try {
+-        await this.fetchFn(url, {
+-          method: "POST",
+-          headers: {
+-            "content-type": "application/json",
+-            authorization: `Bearer ${hostJWT}`
+-          },
+-          body: JSON.stringify({ agent_id: agentId })
+-        });
+-      } catch {
++      const res = await this.fetchFn(url, {
++        method: "POST",
++        headers: {
++          "content-type": "application/json",
++          authorization: `Bearer ${hostJWT}`
++        },
++        body: JSON.stringify({ agent_id: agentId })
++      });
++      if (!res.ok) {
++        throw await this.toError(res);
+       }
+     }
+     await this.storage.deleteAgentConnection(agentId);
+@@ -1178,16 +1178,20 @@ var AgentAuthClient = class {
+   async rotateAgentKey(agentId) {
+     const conn = await this.requireConnection(agentId);
+     const config = await this.requireConfig(conn.issuer);
++    const host = await this.requireHost();
+     const newKeypair = await generateKeypair();
+-    const token = await this.signJwt({ agentId });
++    const hostJWT = await signHostJWT({
++      hostKeypair: host.keypair,
++      audience: config.issuer
++    });
+     const url = this.resolveEndpoint(config, "rotate_key", "/agent/rotate-key");
+     const res = await this.fetchFn(url, {
+       method: "POST",
+       headers: {
+         "content-type": "application/json",
+-        authorization: `Bearer ${token.token}`
++        authorization: `Bearer ${hostJWT}`
+       },
+-      body: JSON.stringify({ public_key: newKeypair.publicKey })
++      body: JSON.stringify({ agent_id: agentId, public_key: newKeypair.publicKey })
+     });
+     if (!res.ok) {
+       throw await this.toError(res);

@@ -13,7 +13,13 @@
       "@cloudflare/workers-types"
     ],
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": false
+      }
+    ]
   },
   "include": [
     "bridge/**/*.ts",

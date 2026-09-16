@@ -45,13 +45,13 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 `sigiro auth token`은 저장된 세션을 갱신한 뒤 수명이 짧은 액세스 토큰을 출력합니다. 이 방식은 대화형 테스트에만 사용하고 장시간 실행되는 수집기의 비밀 값으로 사용하지 마십시오.
 
 **엔드포인트에는 포트를 붙이지 않습니다.** 호스티드 sigiro는 표준 HTTPS 포트에서
-OTLP를 종료하므로 `https://api.sigiro.com` 자체가 전체 엔드포인트입니다. 셀프 호스팅
+OTLP를 종료하므로 `https://sigiro.com` 자체가 전체 엔드포인트입니다. 셀프 호스팅
 [퀵스타트](/docs/tutorials/quickstart#2-텔레메트리-전송하기)의 `:4318`을 복사하지 마십시오.
-`api.sigiro.com`에서는 해당 포트가 연결을 거부하며, 연결에 실패한 SDK는 그 실패를
+`sigiro.com`에서는 해당 포트가 연결을 거부하며, 연결에 실패한 SDK는 그 실패를
 여기가 아니라 여러분의 서비스 로그에 기록합니다. 호스트가 다른 경우에는
 운영자에게 문의하십시오.
 
-**`api.sigiro.com`에서는 OTLP/gRPC를 사용할 수 없습니다.** 포트 `4317`은 닫혀 있고
+**`sigiro.com`에서는 OTLP/gRPC를 사용할 수 없습니다.** 포트 `4317`은 닫혀 있고
 gRPC 서비스 경로도 라우팅되지 않습니다. HTTP를 사용하시고, 다른 호스트에서 gRPC를
 쓸 수 있다고 가정하기 전에 운영자에게 문의하십시오.
 

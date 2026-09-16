@@ -53,6 +53,30 @@ SIGIRO_ACCESS_TOKEN=<oauth-access-token> sigiro status
 # or: sigiro --token <oauth-access-token> status
 ```
 
+### Hosted agent access
+
+Users stay on Sigiro surfaces. Do not install or invoke a separate Agent Auth
+executable:
+
+- create a hosted account with `sigiro signup --name "Your Name" --email you@example.com`;
+- connect operational MCP clients through `sigiro mcp`;
+- register and manage agent identities through the Sigiro Agent Auth API at
+  `https://sigiro.com/api/auth`.
+
+The canonical provider discovery document is
+`https://sigiro.com/.well-known/agent-configuration`; the protected API
+resource is `https://sigiro.com`. Integrations discover the provider, enroll
+their host, register agents, request the smallest required capability set, rotate
+keys, and revoke agents through that API. The relevant lifecycle routes include
+`/host/enroll`, `/agent/register`, `/agent/status`, `/agent/rotate-key`, and
+`/agent/revoke`, relative to the API base above.
+
+Sigiro uses the official Agent Auth implementation internally for protocol
+behavior, signing, encrypted agent-side state, approval, replay protection,
+rotation, and revocation. It is not a second user-facing CLI. A telemetry agent
+should receive only `telemetry:ingest`; do not grant unrelated capabilities or
+add application-specific key handling.
+
 ## End-to-End Test
 
 Verify the full stack (OpenTelemetry Demo + Sigiro) with one command:

@@ -23,6 +23,26 @@ self-hosted servers configured with static bearer authentication do.
 All client subcommands reach the server at `SIGIRO_ENDPOINT`, which defaults to
 `http://localhost:9999`.
 
+## Hosted agent authentication
+
+Users do not install or invoke a separate Agent Auth executable. Use the existing
+Sigiro surfaces:
+
+- `sigiro signup --name "Your Name" --email you@example.com` creates a hosted account;
+- `sigiro mcp` exposes the operational Sigiro tools to MCP clients;
+- agent hosts register and manage identities through
+  `https://sigiro.com/api/auth`.
+
+Provider discovery is available at
+`https://sigiro.com/.well-known/agent-configuration`, and the protected API
+resource is `https://sigiro.com`. Agent Auth lifecycle routes include
+`/host/enroll`, `/agent/register`, `/agent/status`, `/agent/rotate-key`, and
+`/agent/revoke`, relative to the API base. Request only the capabilities the
+agent needs; a telemetry agent should receive only `telemetry:ingest`.
+
+Sigiro uses the official Agent Auth implementation internally for protocol and
+key lifecycle behavior. It does not expose a second onboarding CLI.
+
 ## serve
 
 Starts the OTLP gRPC server, the OTLP HTTP server, and the query API.

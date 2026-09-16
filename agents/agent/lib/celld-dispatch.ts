@@ -1,5 +1,6 @@
+// oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect Crypto has no timing-safe equality primitive.
 import { timingSafeEqual } from "node:crypto";
-import { z } from "zod";
+import { Config, Effect, Option, Schema } from "effect";
 import type { ChannelSendOptions } from "eve/channels";
 
 export interface CelldAuthContext {
@@ -15,7 +16,6 @@ export interface CelldChannelState {
   error: string | null;
 }
 
-/** Structural DI boundary: the dispatch needs only Eve's address-bound send. */
 type CelldFrom = (address: string) => {
   send(message: string, options: ChannelSendOptions<CelldChannelState>): Promise<{ readonly id: string }>;
 };
@@ -26,42 +26,54 @@ const MAX_SHORT_STRING = 512;
 const MAX_TESTS = 100;
 const MAX_PATHS = 1_000;
 
-const boundedString = (max = MAX_STRING) => z.string().min(1).max(max);
+const boundedString = (max: number = MAX_STRING) => Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(max));
 
-export const celldJobSchema = z.object({
+const sha256 = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/));
+const baseSha = Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/));
+const repository = Schema.String.check(Schema.isPattern(/^[^/\s]+\/[^/\s]+$/), Schema.isMaxLength(MAX_SHORT_STRING));
+
+const CelldTest = Schema.Struct({
+  name: boundedString(MAX_SHORT_STRING),
+  command: boundedString(),
+});
+
+export const celldJobSchema = Schema.Struct({
   executionId: boundedString(MAX_SHORT_STRING),
   incidentId: boundedString(MAX_SHORT_STRING),
-  evidenceUri: boundedString(MAX_STRING),
-  evidenceSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  evidenceUri: boundedString(),
+  evidenceSha256: sha256,
   workerId: boundedString(MAX_SHORT_STRING),
-  repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/).max(MAX_SHORT_STRING),
+  repository,
   baseRef: boundedString(MAX_SHORT_STRING),
-  baseSha: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
-  prompt: boundedString(MAX_STRING),
-  tests: z.array(z.object({ name: boundedString(MAX_SHORT_STRING), command: boundedString(MAX_STRING) }).strict()).min(1).max(MAX_TESTS),
-  allowedPaths: z.array(boundedString(MAX_SHORT_STRING)).min(1).max(MAX_PATHS),
-}).strict();
+  baseSha,
+  prompt: boundedString(),
+  tests: Schema.Array(CelldTest).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_TESTS)),
+  allowedPaths: Schema.Array(boundedString(MAX_SHORT_STRING)).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_PATHS)),
+});
 
-export type CelldJob = z.infer<typeof celldJobSchema>;
+export type CelldJob = typeof celldJobSchema.Type;
 
-/** The result route's request body: one bounded execution id and nothing else. */
-export const celldResultQuerySchema = z.object({
+export const celldResultQuerySchema = Schema.Struct({
   executionId: boundedString(MAX_SHORT_STRING),
-}).strict();
+});
 
-export type CelldResultQuery = z.infer<typeof celldResultQuerySchema>;
+export type CelldResultQuery = typeof celldResultQuerySchema.Type;
+
+const decodeJson = (bytes: Uint8Array): Option.Option<unknown> => {
+  if (bytes.byteLength > MAX_BODY_BYTES) return Option.none();
+  return Schema.decodeOption(Schema.fromJsonString(Schema.Unknown))(new TextDecoder().decode(bytes));
+};
 
 export function parseCelldResultBody(bytes: Uint8Array): CelldResultQuery | null {
-  if (bytes.byteLength > MAX_BODY_BYTES) return null;
-  try {
-    return celldResultQuerySchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
-  } catch {
-    return null;
-  }
+  const json = decodeJson(bytes);
+  if (Option.isNone(json)) return null;
+  const decoded = Schema.decodeUnknownOption(celldResultQuerySchema, { onExcessProperty: "error" })(json.value);
+  return Option.isSome(decoded) ? decoded.value : null;
 }
 
 export function authenticateWorker(authorization: string | null | undefined, expectedToken?: string): boolean {
-  const token = expectedToken ?? process.env.EVE_WORKER_TOKEN;
+  const configured = Effect.runSync(Config.String("EVE_WORKER_TOKEN").pipe(Config.option));
+  const token = expectedToken ?? Option.getOrUndefined(configured);
   if (!token || !authorization?.startsWith("Bearer ")) return false;
   const supplied = authorization.slice("Bearer ".length);
   if (!supplied || supplied.length !== token.length) return false;
@@ -79,11 +91,8 @@ export function authForJob(job: CelldJob): CelldAuthContext {
       evidenceUri: job.evidenceUri,
       evidenceSha256: job.evidenceSha256,
       expectedBaseSha: job.baseSha,
-      // Publication must retain this pinned base ref.
       baseRef: job.baseRef,
       allowedPaths: job.allowedPaths,
-      // Keep the policy data in a bounded scalar attribute so it survives Eve's
-      // forwarded-principal serialization without trusting model prose.
       requiredTests: JSON.stringify(job.tests),
     },
   };
@@ -106,24 +115,30 @@ export function messageForJob(job: CelldJob): string {
 }
 
 export function parseCelldJobBody(bytes: Uint8Array): CelldJob | null {
-  if (bytes.byteLength > MAX_BODY_BYTES) return null;
-  try {
-    return celldJobSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
-  } catch {
-    return null;
-  }
+  const json = decodeJson(bytes);
+  if (Option.isNone(json)) return null;
+  const decoded = Schema.decodeUnknownOption(celldJobSchema, { onExcessProperty: "error" })(json.value);
+  return Option.isSome(decoded) ? decoded.value : null;
 }
 
-export async function dispatchCelldJob(
-  job: CelldJob,
-  from: CelldFrom,
-): Promise<{ readonly sessionId: string }> {
-  const session = await from(job.executionId).send(messageForJob(job), {
-    auth: authForJob(job),
-    turnPolicy: "queue",
-    state: { job, prepared: false, error: null },
+export class CelldDispatchError extends Schema.TaggedError<CelldDispatchError>()("CelldDispatchError", {
+  cause: Schema.Unknown,
+}) {}
+
+const dispatchCelldJobEffect = Effect.fn("dispatchCelldJob")(function* (job: CelldJob, from: CelldFrom) {
+  const session = yield* Effect.tryPromise({
+    try: () => from(job.executionId).send(messageForJob(job), {
+      auth: authForJob(job),
+      turnPolicy: "queue",
+      state: { job, prepared: false, error: null },
+    }),
+    catch: (cause) => new CelldDispatchError({ cause }),
   });
   return { sessionId: session.id };
+});
+
+export function dispatchCelldJob(job: CelldJob, from: CelldFrom): Promise<{ readonly sessionId: string }> {
+  return Effect.runPromise(dispatchCelldJobEffect(job, from));
 }
 
 export { MAX_BODY_BYTES };

@@ -9,10 +9,10 @@ use std::io::IsTerminal;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
-pub(crate) const HOSTED_ENDPOINT: &str = "https://api.sigiro.com";
-const HOSTED_AUTH_ORIGIN: &str = "https://auth.sigiro.com";
-pub(crate) const HOSTED_ISSUER: &str = "https://auth.sigiro.com/api/auth";
-pub(crate) const HOSTED_RESOURCE: &str = "https://api.sigiro.com";
+pub(crate) const HOSTED_ENDPOINT: &str = "https://sigiro.com";
+const HOSTED_AUTH_ORIGIN: &str = "https://sigiro.com";
+pub(crate) const HOSTED_ISSUER: &str = "https://sigiro.com/api/auth";
+pub(crate) const HOSTED_RESOURCE: &str = "https://sigiro.com";
 pub(crate) const CLI_CLIENT_ID: &str = "https://sigiro.com/.well-known/oauth-client.json";
 const KEYRING_SERVICE: &str = "sigiro";
 const KEYRING_USER: &str = "hosted-oauth";

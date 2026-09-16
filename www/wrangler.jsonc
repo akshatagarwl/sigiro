@@ -2,17 +2,15 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "sigiro-www",
   "compatibility_date": "2026-07-24",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
-  // No `main` and no `assets`. Blume finds this file at the project root and hands
-  // it to `@astrojs/cloudflare` as `configPath`; the adapter then writes both keys
-  // into `dist/server/wrangler.json`, and that generated file is what `bun run
-  // deploy` ships. Naming an entrypoint here does not override it, it breaks the
-  // build — the Cloudflare Vite plugin fails to resolve it.
+  "compatibility_flags": ["nodejs_compat"],
+  // No `main` and no assets directory. Blume finds this file at the project root
+  // and hands it to `@astrojs/cloudflare` as `configPath`; the adapter generates
+  // those values under `dist/server`. Naming the Alchemy entrypoint here breaks
+  // the build because it imports that generated Worker.
   //
-  // What belongs here is everything the adapter cannot know: the name, the routes,
-  // and the bindings.
+  // This file is build input, not a deployment entrypoint. Alchemy is the sole
+  // deployment path and deploys `src/worker.ts`, which wraps Blume's generated
+  // Worker with the apex auth and API proxies.
   //
   // The whole site, on one Worker. `sigiro.com/` is the landing page and
   // `sigiro.com/docs/*` is the docs, from one Blume app — so the `sigiro-docs`
@@ -77,13 +75,35 @@
     "run_worker_first": [
       "/",
       "/docs",
-      "/docs/*"
-    ]
+      "/docs/*",
+      "/.well-known/agent-configuration",
+      "/.well-known/oauth-protected-resource",
+      "/api/auth",
+      "/api/auth/*",
+      "/auth-ui.css",
+      "/auth-ui.js",
+      "/consent",
+      "/device",
+      "/health",
+      "/healthz",
+      "/ingest",
+      "/ingest/*",
+      "/openapi.json",
+      "/push.v1.PusherService/Push",
+      "/sign-in",
+      "/sign-up",
+      "/v1/*",
+      "/v1development/profiles",
+    ],
+  },
+  "vars": {
+    "API_ORIGIN_URL": "https://api-origin.sigiro.com",
+    "AUTH_ORIGIN_URL": "https://auth-origin.sigiro.com",
   },
   "workers_dev": false,
   "routes": [
     { "pattern": "sigiro.com/*", "zone_name": "sigiro.com" },
-    { "pattern": "www.sigiro.com/*", "zone_name": "sigiro.com" }
+    { "pattern": "www.sigiro.com/*", "zone_name": "sigiro.com" },
   ],
   // Release artifacts, served by the `/dl/[...key]` route that
   // `blume.config.ts` injects.
@@ -95,5 +115,5 @@
   //
   // The bucket itself stays private. Reads go through the Worker, so there is no
   // public bucket URL and no second hostname to add.
-  "r2_buckets": [{ "binding": "DOWNLOADS", "bucket_name": "sigiro-dl" }]
+  "r2_buckets": [{ "binding": "DOWNLOADS", "bucket_name": "sigiro-dl" }],
 }

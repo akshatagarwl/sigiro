@@ -44,11 +44,11 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 `sigiro auth token` 会先刷新已存储的会话，再输出一个短期访问令牌。此方式仅用于交互式测试，不应作为长期运行的收集器密钥。
 
 **该端点不带端口号。** 托管版 sigiro 在标准 HTTPS 端口上接收 OTLP，
-因此 `https://api.sigiro.com` 就是完整的端点。请不要照搬自托管[快速上手](/docs/tutorials/quickstart#2-向它发送遥测数据)中的
-`:4318`：在 `api.sigiro.com` 上，该端口会拒绝连接，而无法建立连接的 SDK
+因此 `https://sigiro.com` 就是完整的端点。请不要照搬自托管[快速上手](/docs/tutorials/quickstart#2-向它发送遥测数据)中的
+`:4318`：在 `sigiro.com` 上，该端口会拒绝连接，而无法建立连接的 SDK
 只会把这一失败记录在你自己服务的日志里，而不会记录在这里。如果你的主机有所不同，请咨询运维方。
 
-**`api.sigiro.com` 上不提供 OTLP/gRPC。** 端口 `4317` 已关闭，gRPC
+**`sigiro.com` 上不提供 OTLP/gRPC。** 端口 `4317` 已关闭，gRPC
 服务路径也未做路由。请使用 HTTP；对于其他任何主机，也请先咨询运维方，不要想当然地认为 gRPC 可用。
 
 你的 SDK 会将每类信号发送到其标准 OTLP 路径（`/v1/traces`、`/v1/logs`、

@@ -37,15 +37,15 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
-ホスティングサービスを利用する場合は、キーを追加するだけでなく、プロトコルとエンドポイントも変更してください。`api.sigiro.com` は 443 でのみ応答するため、そこに `:4317` や `:4318` のエンドポイントを指定すると接続に失敗し、エージェントは何も報告しません。
+ホスティングサービスを利用する場合は、キーを追加するだけでなく、プロトコルとエンドポイントも変更してください。`sigiro.com` は 443 でのみ応答するため、そこに `:4317` や `:4318` のエンドポイントを指定すると接続に失敗し、エージェントは何も報告しません。
 
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.sigiro.com
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://sigiro.com
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_ACCESS_TOKEN}"
 ```
 
-キーはコミット対象のファイルに一切含めないようにします。使用するエンドポイントとポートはホスティング事業者から案内されるため、そのホストが `api.sigiro.com` でない場合は `https://<your-sigiro-host>` を使用してください。
+キーはコミット対象のファイルに一切含めないようにします。使用するエンドポイントとポートはホスティング事業者から案内されるため、そのホストが `sigiro.com` でない場合は `https://<your-sigiro-host>` を使用してください。
 
 デフォルトでは、失敗したツールは `TelemetrySafeError` や `ShellError` のような一般的なステータスしか報告しないことがあります。失敗の理由をデバッグ中に確認するには、詳細を明示的に有効にします。
 
@@ -84,17 +84,17 @@ environment = "dev"
 log_user_prompt = false
 
 [otel.trace_exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/traces"
+endpoint = "https://sigiro.com/v1/traces"
 protocol = "binary"
 headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.metrics_exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/metrics"
+endpoint = "https://sigiro.com/v1/metrics"
 protocol = "binary"
 headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/logs"
+endpoint = "https://sigiro.com/v1/logs"
 protocol = "binary"
 headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 ```

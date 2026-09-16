@@ -61,11 +61,31 @@ export default Alchemy.Stack(
         ttl: 60,
       }),
     );
+    const authOriginRecord = yield* productionResource(
+      Cloudflare.DNS.Record('AuthOriginRecord', {
+        zoneId: zone.zoneId,
+        name: 'auth-origin.sigiro.com',
+        type: 'A',
+        content: '203.0.113.10',
+        proxied: false,
+        ttl: 60,
+      }),
+    );
+    const apiOriginRecord = yield* productionResource(
+      Cloudflare.DNS.Record('ApiOriginRecord', {
+        zoneId: zone.zoneId,
+        name: 'api-origin.sigiro.com',
+        type: 'A',
+        content: '203.0.113.10',
+        proxied: false,
+        ttl: 60,
+      }),
+    );
 
     const website = yield* productionResource(
       Cloudflare.Worker('Website', {
         name: 'sigiro-www',
-        main: './dist/server/blume-worker.mjs',
+        main: './src/worker.ts',
         compatibility: {
           date: '2026-07-24',
           flags: ['nodejs_compat'],
@@ -74,9 +94,37 @@ export default Alchemy.Stack(
         observability: { enabled: false },
         assets: {
           directory: './dist/client',
-          runWorkerFirst: ['/', '/docs', '/docs/*', '!/docs/*.md', '!/docs/*.mdx'],
+          runWorkerFirst: [
+            '/',
+            '/docs',
+            '/docs/*',
+            '!/docs/*.md',
+            '!/docs/*.mdx',
+            '/.well-known/agent-configuration',
+            '/.well-known/oauth-protected-resource',
+            '/api/auth',
+            '/api/auth/*',
+            '/auth-ui.css',
+            '/auth-ui.js',
+            '/consent',
+            '/device',
+            '/health',
+            '/healthz',
+            '/ingest',
+            '/ingest/*',
+            '/openapi.json',
+            '/push.v1.PusherService/Push',
+            '/sign-in',
+            '/sign-up',
+            '/v1/*',
+            '/v1development/profiles',
+          ],
         },
-        env: { DOWNLOADS: downloads },
+        env: {
+          API_ORIGIN_URL: 'https://api-origin.sigiro.com',
+          AUTH_ORIGIN_URL: 'https://auth-origin.sigiro.com',
+          DOWNLOADS: downloads,
+        },
       }),
     );
     const apexRoute = yield* productionResource(
@@ -101,6 +149,8 @@ export default Alchemy.Stack(
       emailSending,
       authRecord,
       apiRecord,
+      authOriginRecord,
+      apiOriginRecord,
 
       website,
       apexRoute,

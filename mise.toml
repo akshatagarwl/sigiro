@@ -4,7 +4,7 @@ sccache = "0.17.0"
 # digest before installing either tool. Keep exact versions so signer or
 # artifact changes arrive as reviewable mise.lock diffs.
 "packslip:github.com/jdx/hk" = "1.58.1"
-"packslip:github.com/jdx/mr-boxington" = "1.9.0"
+"packslip:github.com/jdx/mr-boxington" = "1.11.1"
 # 2.2.13 is intentionally not selected yet: it is inside mise's 24-hour
 # minimum-release-age window. Do not weaken that supply-chain policy globally.
 "packslip:github.com/aubepkg/aube" = "2.2.12"
@@ -126,10 +126,26 @@ cache = { enabled = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "
 description = "Verify DuckDB archive reuse and a build without C++ compilation."
 run = "scripts/verify-prebuilt-duckdb.sh"
 
-# One sequential, authoritative development gate. A successful result is keyed
-# by source contents, relevant build environment, and exact tool identities.
+# Fast inner-loop gate. The two maintenance tests deliberately wait on real
+# clocks (about 20s together), and the full integration suite starts many real
+# DuckDB instances. CI owns those checks through `full`; local edits keep one
+# representative ingest-to-diagnose E2E plus the rest of the library suite.
 [tasks.gate]
-description = "Authoritative development gate, cached by content."
+description = "Fast development gate, cached by content."
+run = [
+    { task = "quick" },
+    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test --lib -- --skip inserter::tests::real_checkpoint_failure_trips_and_recovers_the_shed_gate --skip inserter::tests::retention_covers_projects_evicted_from_the_pool",
+    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test --test e2e_test",
+]
+sources = ["@group:rust-gate"]
+outputs = []
+cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
+
+# Full deterministic merge gate. Keep this out of the edit-test loop: the
+# complete integration topology and the real-clock maintenance tests dominate
+# local wall time, while CI still fails closed on all of them.
+[tasks.full]
+description = "Full CI gate, cached by content."
 run = [
     { task = "quick" },
     "scripts/run-with-duckdb-static.sh mbx clippy --all-targets --all-features -- -D warnings",
@@ -142,7 +158,7 @@ cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED
 [tasks.release]
 description = "Authoritative release-mode tests, cached separately."
 run = [
-    { task = "gate" },
+    { task = "full" },
     "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test --release",
 ]
 sources = ["@group:rust-gate"]

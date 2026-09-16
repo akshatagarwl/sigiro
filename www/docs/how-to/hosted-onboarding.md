@@ -49,13 +49,13 @@ session before doing so. Use this form for an interactive test, not as a
 long-running collector secret.
 
 **The endpoint carries no port.** A hosted sigiro terminates OTLP on the standard
-HTTPS port, so `https://api.sigiro.com` is the whole endpoint. Do not copy the
+HTTPS port, so `https://sigiro.com` is the whole endpoint. Do not copy the
 `:4318` from the self-hosted [quickstart](/docs/tutorials/quickstart#2-send-it-telemetry):
-on `api.sigiro.com` that port refuses the connection, and an SDK that cannot
+on `sigiro.com` that port refuses the connection, and an SDK that cannot
 connect reports the failure in your own service log rather than here. Ask your
 operator if your host differs.
 
-**OTLP/gRPC is not available on `api.sigiro.com`.** Port `4317` is closed and the
+**OTLP/gRPC is not available on `sigiro.com`.** Port `4317` is closed and the
 gRPC service path is not routed. Use HTTP, and ask your operator before assuming
 gRPC on any other host.
 

@@ -1,5 +1,5 @@
 import { Client, ClientError } from "eve/client";
-import { Context, Effect, Layer, Predicate, Schedule, Schema } from "effect";
+import { Context, DateTime, Effect, Layer, Option, Predicate, Schedule, Schema } from "effect";
 import { JobStore } from "./services.ts";
 import type { JobRecord, JobRequest } from "./types.ts";
 import { celldPayloadOf, executionId } from "./types.ts";
@@ -16,7 +16,9 @@ export class EveFailure extends Schema.TaggedError<EveFailure>()("EveFailure", {
   detail: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {
-  constructor(detail: string, cause?: unknown) { super(cause === undefined ? { detail } : { detail, cause }); }
+  static from(detail: string, cause?: unknown): EveFailure {
+    return new EveFailure(cause === undefined ? { detail } : { detail, cause });
+  }
   override get message(): string { return this.detail; }
 }
 
@@ -29,7 +31,7 @@ export class EveExecution extends Context.Service<EveExecution, {
 }>()("sigiro/agents/EveExecution") {}
 
 export interface EveExecutionOptions { readonly url: string; readonly workerToken: string; readonly workerId: string; }
-const asFailure = (cause: unknown): EveFailure => cause instanceof EveFailure ? cause : new EveFailure(cause instanceof Error && typeof cause.message === "string" ? cause.message : String(cause), cause);
+const asFailure = (cause: unknown): EveFailure => Schema.is(EveFailure)(cause) ? cause : EveFailure.from(cause instanceof Error && typeof cause.message === "string" ? cause.message : String(cause), cause);
 
 export const makeEveExecution = (options: EveExecutionOptions): Layer.Layer<EveExecution, never, JobStore> =>
   Layer.effect(EveExecution, Effect.gen(function* () {
@@ -37,60 +39,73 @@ export const makeEveExecution = (options: EveExecutionOptions): Layer.Layer<EveE
     const client = new Client({ host: options.url, auth: { bearer: options.workerToken }, redirect: "error" });
     const dispatch = Effect.fn("EveExecution.dispatch")(function* (request: JobRequest) {
       const headers = yield* currentTraceHeaders;
+      const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(celldPayloadOf(request, options.workerId)).pipe(Effect.mapError(asFailure));
       return yield* Effect.tryPromise({
-        try: async (signal) => {
-          const response = await client.fetch("/internal/celld/job", {
-            method: "POST", signal, headers: { ...headers, "content-type": "application/json" },
-            body: JSON.stringify(celldPayloadOf(request, options.workerId)),
-          });
-          if (!response.ok) throw new ClientError(response.status, await response.text(), response.headers);
-          return Schema.decodeUnknownSync(Schema.Struct({ sessionId: Schema.NonEmptyString }))(await response.json()).sessionId;
-        }, catch: asFailure,
-      });
+        try: (signal) => client.fetch("/internal/celld/job", {
+          method: "POST", signal, headers: { ...headers, "content-type": "application/json" }, body,
+        }), catch: asFailure,
+      }).pipe(
+        Effect.flatMap((response) => response.ok
+          ? Effect.tryPromise({ try: () => response.json(), catch: asFailure }).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ sessionId: Schema.NonEmptyString }))),
+            Effect.mapError(asFailure),
+            Effect.map(({ sessionId }) => sessionId),
+          )
+          : Effect.tryPromise({ try: () => response.text(), catch: asFailure }).pipe(
+            Effect.flatMap((body) => Effect.fail(asFailure(new ClientError(response.status, body, response.headers)))),
+          )),
+      );
     });
     const sessionFor = Effect.fn("EveExecution.sessionFor")(function* (record: JobRecord) {
       if (record.eveSessionId !== undefined) return record.eveSessionId;
       const sessionId = yield* dispatch(record.request);
-      yield* jobs.put({ ...record, eveSessionId: sessionId, updatedAt: new Date().toISOString() }).pipe(Effect.mapError(asFailure));
+      yield* jobs.put({ ...record, eveSessionId: sessionId, updatedAt: yield* DateTime.now.pipe(Effect.map(DateTime.formatIso)) }).pipe(Effect.mapError(asFailure));
       return sessionId;
     });
     const readReceipt = Effect.fn("EveExecution.readReceipt")(function* (id: string) {
       const headers = yield* currentTraceHeaders;
+      const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))( { executionId: id }).pipe(Effect.mapError(asFailure));
       return yield* Effect.tryPromise({
-        try: async (signal) => {
-          const response = await client.fetch("/internal/celld/job/result", {
-            method: "POST", signal, headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ executionId: id }),
-          });
-          if (response.status === 404) return undefined;
-          if (!response.ok) throw new ClientError(response.status, await response.text(), response.headers);
-          const receipt = Schema.decodeUnknownSync(PublicationReceipt)(await response.json());
-          if (receipt.executionId !== id) throw new EveFailure("Eve returned a receipt for another execution");
-          return receipt;
-        }, catch: asFailure,
-      });
+        try: (signal) => client.fetch("/internal/celld/job/result", {
+          method: "POST", signal, headers: { ...headers, "content-type": "application/json" }, body,
+        }), catch: asFailure,
+      }).pipe(Effect.flatMap((response) => {
+        if (response.status === 404) return Effect.succeed(undefined);
+        return Effect.tryPromise({ try: () => response.ok ? response.json() : response.text(), catch: asFailure }).pipe(
+          Effect.flatMap((value) => response.ok
+            ? Schema.decodeUnknownEffect(PublicationReceipt)(value).pipe(Effect.mapError(asFailure))
+            : Effect.fail(asFailure(new ClientError(response.status, String(value), response.headers)))),
+          Effect.filterOrFail(
+            (receipt) => receipt.executionId === id,
+            () => EveFailure.from("Eve returned a receipt for another execution"),
+          ),
+        );
+      }));
     });
     const receipt = Effect.fn("EveExecution.receipt")(function* (request: JobRequest, sessionId: string) {
       const result = yield* readReceipt(executionId(request)).pipe(Effect.timeout("5 seconds"), Effect.mapError(asFailure));
-      if (result !== undefined && (result.sessionId !== sessionId || result.headSha !== request.baseSha)) return yield* new EveFailure("Eve receipt identity does not match the job");
+      if (result !== undefined && (result.sessionId !== sessionId || result.headSha !== request.baseSha)) return yield* EveFailure.from("Eve receipt identity does not match the job");
       return result;
     });
     const run = Effect.fn("EveExecution.run")(function* (request: JobRequest) {
       const id = executionId(request);
       const record = yield* jobs.get(id).pipe(Effect.mapError(asFailure));
-      if (record === undefined) return yield* new EveFailure("job disappeared");
-      const remaining = Date.parse(record.acceptedAt) + request.deadlineSeconds * 1000 - Date.now();
+      if (record === undefined) return yield* EveFailure.from("job disappeared");
+      const acceptedAt = DateTime.make(record.acceptedAt);
+      if (Option.isNone(acceptedAt)) return yield* EveFailure.from("invalid acceptedAt timestamp");
+      const deadlineAt = DateTime.toEpochMillis(acceptedAt.value) + request.deadlineSeconds * 1000;
+      const remaining = deadlineAt - DateTime.toEpochMillis(yield* DateTime.now);
       if (remaining <= 0) return yield* new EveDeadlineExceeded({ sessionId: record.eveSessionId ?? "not-dispatched" });
       const sessionId = yield* sessionFor(record).pipe(
-        Effect.timeout(`${remaining} millis`),
-        Effect.catchTag("TimeoutError", () => new EveDeadlineExceeded({ sessionId: record.eveSessionId ?? "not-dispatched" })),
+        Effect.timeoutOrElse({ duration: `${remaining} millis`, orElse: () => Effect.fail(new EveDeadlineExceeded({ sessionId: record.eveSessionId ?? "not-dispatched" })) }),
       );
       // Eve owns execution durability. The trusted publisher's receipt is the outcome.
+      const currentTime = yield* DateTime.now;
       const outcome = yield* receipt(request, sessionId).pipe(
         Effect.repeat({ schedule: Schedule.spaced("1 second"), until: Predicate.isNotUndefined<PublicationReceipt | undefined> }),
-        Effect.timeout(`${Math.max(1, Date.parse(record.acceptedAt) + request.deadlineSeconds * 1000 - Date.now())} millis`),
-        Effect.catchTag("TimeoutError", () => new EveDeadlineExceeded({ sessionId })),
+        Effect.timeoutOrElse({ duration: `${Math.max(1, deadlineAt - DateTime.toEpochMillis(currentTime))} millis`, orElse: () => Effect.fail(new EveDeadlineExceeded({ sessionId })) }),
       );
-      if (outcome.status === "failed") return yield* new EveFailure(outcome.error);
+      if (outcome.status === "failed") return yield* EveFailure.from(outcome.error);
       return outcome;
     });
     // The worker owns cancellation, including heartbeat failures and deadlines.

@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 
+import { APIError } from "better-auth/api";
 import { toNodeHandler } from "better-auth/node";
 import Cloudflare from "cloudflare";
+import { Redacted } from "effect";
 import { Pool } from "pg";
 
 import { createAuth } from "./auth.js";
+import { checkDatabase, makePgRuntime, membershipRoles, membershipsForUser } from "./database.js";
 import { sendCloudflareEmail } from "./email.js";
 import { authUIResponse } from "./ui.js";
 
@@ -29,17 +32,27 @@ if (environment === "production" && process.env.AUTH_TEST_OTP !== undefined) {
   throw new Error("AUTH_TEST_OTP must not be configured in production");
 }
 
-const database = new Pool({
-  connectionString: required("DATABASE_URL"),
+const databaseUrl = required("DATABASE_URL");
+const databaseSsl =
+  environment === "production"
+    ? {
+        ca: Buffer.from(required("DATABASE_CA_CERT_B64"), "base64").toString("utf8"),
+        rejectUnauthorized: true,
+      }
+    : undefined;
+const betterAuthDatabase = new Pool({
+  connectionString: databaseUrl,
+  application_name: "sigiro-auth",
   max: 10,
   connectionTimeoutMillis: 5_000,
-  ssl:
-    environment === "production"
-      ? {
-          ca: Buffer.from(required("DATABASE_CA_CERT_B64"), "base64").toString("utf8"),
-          rejectUnauthorized: true,
-        }
-      : undefined,
+  ssl: databaseSsl,
+});
+const postgres = makePgRuntime({
+  url: Redacted.make(databaseUrl),
+  ssl: databaseSsl,
+  connectTimeout: "5 seconds",
+  multiplex: true,
+  applicationName: "sigiro-auth",
 });
 const cloudflare =
   environment === "production"
@@ -51,7 +64,8 @@ const auth = createAuth({
   baseURL,
   secret,
   resource: required("SIGIRO_RESOURCE"),
-  database,
+  betterAuthDatabase,
+  runPg: postgres.runPromise,
   testOTP,
   emailFrom: required("EMAIL_FROM"),
   async sendEmail(message) {
@@ -88,6 +102,22 @@ const ensurePersonalOrganization = async (request: Request): Promise<Response> =
     });
   }
   return Response.json({ organization: { id: organization.id, name: organization.name } });
+};
+
+const introspectSigiroAgent = async (request: Request): Promise<Response> => {
+  const session = await auth.api.getAgentSession({ headers: request.headers });
+  if (!session || typeof session.userId !== "string") return Response.json({ active: false });
+
+  const memberships = await postgres.runPromise(membershipsForUser(session.userId));
+  if (memberships.length !== 1) return Response.json({ active: false });
+  return Response.json({
+    active: true,
+    agent_id: session.agentId,
+    user_id: session.userId,
+    tenant_id: memberships[0]!,
+    mode: session.type,
+    agent_capability_grants: session.agent.capabilityGrants,
+  });
 };
 
 const errorResponse = () => Response.json({ error: "internal_server_error" }, { status: 500 });
@@ -128,12 +158,23 @@ const dispatch = async (request: Request): Promise<Response> => {
       return request.method === "HEAD" ? new Response(null, { status: ui.status, headers: ui.headers }) : ui;
     }
     if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/health") {
-      await database.query("SELECT 1");
+      await postgres.runPromise(checkDatabase);
       return withCors(Response.json({ status: "ok" }), request);
+    }
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/.well-known/agent-configuration") {
+      const configuration = await auth.api.getAgentConfiguration();
+      return withCors(
+        request.method === "HEAD" ? new Response(null) : Response.json(configuration),
+        request,
+      );
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/onboarding/ensure-personal-organization") {
       return withCors(await ensurePersonalOrganization(request), request);
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/auth/sigiro/agent/session") {
+      return withCors(await introspectSigiroAgent(request), request);
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/admin/oauth2/create-client") {
@@ -143,11 +184,7 @@ const dispatch = async (request: Request): Promise<Response> => {
         return withCors(Response.json({ error: "unauthorized" }, { status: 401 }), request);
       }
 
-      const membership = await database.query<{ role: string }>(
-        'SELECT role FROM member WHERE "userId" = $1 AND "organizationId" = $2',
-        [session.user.id, organizationId],
-      );
-      const roles = membership.rows[0]?.role.split(",") ?? [];
+      const roles = await postgres.runPromise(membershipRoles(session.user.id, organizationId));
       if (!roles.some((role) => role === "owner" || role === "admin")) {
         return withCors(Response.json({ error: "forbidden" }, { status: 403 }), request);
       }
@@ -161,6 +198,12 @@ const dispatch = async (request: Request): Promise<Response> => {
 
     return withCors(await auth.handler(request), request);
   } catch (cause) {
+    if (cause instanceof APIError) {
+      return Response.json(cause.body ?? { error: "auth_request_failed" }, {
+        status: cause.statusCode,
+        headers: cause.headers,
+      });
+    }
     console.error("auth request failed", cause);
     return errorResponse();
   }
@@ -181,7 +224,7 @@ const stop = (signal: NodeJS.Signals) => {
   console.log(`received ${signal}; stopping Sigiro auth`);
   server.close(async (serverError) => {
     try {
-      await database.end();
+      await Promise.all([betterAuthDatabase.end(), postgres.dispose()]);
       if (serverError) throw serverError;
       process.exit(0);
     } catch (cause) {

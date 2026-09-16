@@ -1,6 +1,5 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { resolve } from "node:path";
-import { Config, Console, Effect, FileSystem, Schema } from "effect";
+import { Config, Console, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import { secret } from "../src/config.ts";
@@ -9,19 +8,20 @@ import { bridgeOnce } from "./bridge.ts";
 import { makeBridgeClient } from "./client.ts";
 import { BridgeError } from "./errors.ts";
 import { BridgePolicy } from "./types.ts";
+import { encodeBridgeJson } from "./store.ts";
 
 const settings = Config.all({
-  sigiroUrl: Config.nonEmptyString("SIGIRO_URL"),
-  coordinatorUrl: Config.nonEmptyString("COORDINATOR_URL"),
-  repository: Config.nonEmptyString("SIGIRO_REPOSITORY"),
-  evidenceDir: Config.nonEmptyString("SIGIRO_EVIDENCE_DIR"),
-  stateDir: Config.nonEmptyString("BRIDGE_STATE_DIR"),
-  pollSeconds: Config.number("BRIDGE_POLL_SECONDS").pipe(Config.withDefault(300)),
+  sigiroUrl: Config.NonEmptyString("SIGIRO_URL"),
+  coordinatorUrl: Config.NonEmptyString("COORDINATOR_URL"),
+  repository: Config.NonEmptyString("SIGIRO_REPOSITORY"),
+  evidenceDir: Config.NonEmptyString("SIGIRO_EVIDENCE_DIR"),
+  stateDir: Config.NonEmptyString("BRIDGE_STATE_DIR"),
+  pollSeconds: Config.Number("BRIDGE_POLL_SECONDS").pipe(Config.withDefault(300)),
 });
 
 Command.make("bridge", {
-  config: Flag.string("config").pipe(Flag.withDescription("Trusted service/repository policy JSON file")),
-  watch: Flag.boolean("watch").pipe(Flag.withDefault(false), Flag.withDescription("Repeat the bridge pass; default is one pass")),
+  config: Flag.String("config").pipe(Flag.withDescription("Trusted service/repository policy JSON file")),
+  watch: Flag.Boolean("watch").pipe(Flag.withDefault(false), Flag.withDescription("Repeat the bridge pass; default is one pass")),
 }, Effect.fn(function* ({ config: path, watch }) {
   const runtime = yield* settings;
   if (!Number.isFinite(runtime.pollSeconds) || runtime.pollSeconds <= 0) {
@@ -37,7 +37,10 @@ Command.make("bridge", {
     }
   }
   const fs = yield* FileSystem.FileSystem;
-  const policy = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(BridgePolicy))(yield* fs.readFileString(path));
+  const policy = yield* Schema.decodeEffect(Schema.fromJsonString(BridgePolicy))(yield* fs.readFileString(path)).pipe(
+    Effect.mapError(() => new BridgeError({ operation: "configure bridge", detail: "policy file does not match the required schema", retryable: false })),
+  );
+  const pathService = yield* Path.Path;
   if (policy.repository !== runtime.repository) {
     return yield* new BridgeError({ operation: "configure bridge", detail: "policy repository must match Eve's SIGIRO_REPOSITORY", retryable: false });
   }
@@ -45,8 +48,8 @@ Command.make("bridge", {
     sigiroUrl: runtime.sigiroUrl, coordinatorUrl: runtime.coordinatorUrl,
     sigiroAccessToken: yield* secret("SIGIRO_ACCESS_TOKEN"), workerToken: yield* secret("EVE_WORKER_TOKEN"),
   });
-  const pass = bridgeOnce({ settings: policy, evidenceDir: resolve(runtime.evidenceDir), stateDir: resolve(runtime.stateDir) }, client).pipe(
-    Effect.flatMap((result) => Console.log(JSON.stringify(result))),
+  const pass = bridgeOnce({ settings: policy, evidenceDir: pathService.resolve(runtime.evidenceDir), stateDir: pathService.resolve(runtime.stateDir) }, client).pipe(
+    Effect.flatMap((result) => Effect.flatMap(encodeBridgeJson(result), (encoded) => Console.log(encoded))),
   );
   if (!watch) return yield* pass;
   while (true) {
@@ -58,8 +61,6 @@ Command.make("bridge", {
 })).pipe(
   Command.withDescription("Bridge Sigiro anomalies into evidence-backed celld jobs"),
   Command.run({ version: "0.0.0" }),
-  Effect.provide(FetchHttpClient.layer),
-  Effect.provide(BunServices.layer),
-  Effect.provide(bridgeTelemetry),
+  Effect.provide(Layer.mergeAll(FetchHttpClient.layer, BunServices.layer, bridgeTelemetry)),
   BunRuntime.runMain,
 );

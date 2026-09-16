@@ -18,10 +18,10 @@ runs your package manager.
 Install the public skill before you start the agent:
 
 ```bash
-npx skills add sigiroai/skills
+npx skills add Arnav12114/skills
 ```
 
-The [`debug-with-sigiro` skill](https://github.com/sigiroai/skills) teaches the
+The [`debug-with-sigiro` skill](https://github.com/Arnav12114/skills) teaches the
 agent how to use sigiro after telemetry arrives. This guide stays focused on
 instrumentation.
 

@@ -44,18 +44,18 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
-如果使用托管服务，除了添加密钥之外，还要修改协议和端点。`api.sigiro.com` 只在 443
+如果使用托管服务，除了添加密钥之外，还要修改协议和端点。`sigiro.com` 只在 443
 端口响应，因此在那里使用 `:4317` 或 `:4318` 端点会连接失败，agent 也就不会上报任何
 数据：
 
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.sigiro.com
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://sigiro.com
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_ACCESS_TOKEN}"
 ```
 
 切勿将密钥提交到任何文件中。使用哪个端点和端口由你的运营方告知，因此当主机不是
-`api.sigiro.com` 时，请使用 `https://<your-sigiro-host>`。
+`sigiro.com` 时，请使用 `https://<your-sigiro-host>`。
 
 默认情况下，失败的工具可能只报告 `TelemetrySafeError` 或 `ShellError` 之类的通用状态。要在调试时查看工具失败的原因，请显式启用工具详情：
 
@@ -99,17 +99,17 @@ environment = "dev"
 log_user_prompt = false
 
 [otel.trace_exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/traces"
+endpoint = "https://sigiro.com/v1/traces"
 protocol = "binary"
 headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.metrics_exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/metrics"
+endpoint = "https://sigiro.com/v1/metrics"
 protocol = "binary"
 headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/logs"
+endpoint = "https://sigiro.com/v1/logs"
 protocol = "binary"
 headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 ```

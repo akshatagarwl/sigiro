@@ -1,6 +1,7 @@
 FROM oven/bun:1.3.14 AS dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile
 
 FROM dependencies AS build
@@ -11,7 +12,8 @@ RUN bun run build
 FROM oven/bun:1.3.14 AS production-dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+COPY patches ./patches
+RUN bun install --frozen-lockfile --production --ignore-scripts
 
 FROM node:24.20.0-bookworm-slim
 ENV NODE_ENV=production

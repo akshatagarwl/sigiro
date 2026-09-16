@@ -10,13 +10,8 @@ export class ExecutorError extends Schema.TaggedError<ExecutorError>()("Executor
   detail: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {
-  /**
-   * Kept positional so the existing call sites, which read as prose
-   * (`new ExecutorError("read job", String(cause), cause)`), survive the move
-   * to `Schema.TaggedError`.
-   */
-  constructor(operation: string, detail: string, cause?: unknown) {
-    super(cause === undefined ? { operation, detail } : { operation, detail, cause });
+  static from(operation: string, detail: string, cause?: unknown): ExecutorError {
+    return new ExecutorError(cause === undefined ? { operation, detail } : { operation, detail, cause });
   }
 
   override get message(): string {
@@ -27,8 +22,8 @@ export class ExecutorError extends Schema.TaggedError<ExecutorError>()("Executor
 export class RequestConflict extends Schema.TaggedError<RequestConflict>()("RequestConflict", {
   executionId: Schema.String,
 }) {
-  constructor(executionId: string) {
-    super({ executionId });
+  static from(executionId: string): RequestConflict {
+    return new RequestConflict({ executionId });
   }
 
   override get message(): string {

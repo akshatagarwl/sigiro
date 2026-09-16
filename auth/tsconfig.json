@@ -6,6 +6,12 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": false
+      }
+    ],
     "rootDir": ".",
     "types": ["node"]
   },

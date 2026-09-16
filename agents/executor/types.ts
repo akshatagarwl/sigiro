@@ -21,7 +21,7 @@ export const JobRequest = Schema.Struct({
 });
 export type JobRequest = typeof JobRequest.Type;
 
-export const jobRequestOf = (assignment: typeof ClaimAssignment.Type): JobRequest => ({
+export const jobRequestOf = (assignment: ClaimAssignment): JobRequest => ({
   jobId: assignment.job.jobId,
   generation: assignment.job.generation,
   attempt: assignment.attempt,

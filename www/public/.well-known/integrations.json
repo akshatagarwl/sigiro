@@ -13,8 +13,8 @@
       "type": "http",
       "slug": "telemetry-api",
       "name": "sigiro hosted telemetry API",
-      "url": "https://api.sigiro.com",
-      "spec": "https://api.sigiro.com/openapi.json",
+      "url": "https://sigiro.com",
+      "spec": "https://sigiro.com/openapi.json",
       "docs": "https://sigiro.com/docs/reference",
       "basis": {
         "via": "declared",
@@ -48,7 +48,7 @@
       "slug": "self-hosted-api",
       "name": "sigiro self-hosted API (open mode)",
       "url": "https://<your-sigiro-host>:9999",
-      "spec": "https://api.sigiro.com/openapi.json",
+      "spec": "https://sigiro.com/openapi.json",
       "docs": "https://sigiro.com/docs/tutorials/quickstart",
       "basis": {
         "via": "declared",
@@ -93,9 +93,7 @@
                 "mechanics": {
                   "source": "cli",
                   "command": "sigiro anomalies --token <oauth-access-token>",
-                  "env": [
-                    "SIGIRO_ACCESS_TOKEN"
-                  ]
+                  "env": ["SIGIRO_ACCESS_TOKEN"]
                 }
               }
             ],
@@ -112,9 +110,7 @@
       "slug": "sigiro-docs",
       "name": "sigiro documentation MCP server",
       "url": "https://sigiro.com/mcp",
-      "transports": [
-        "streamable-http"
-      ],
+      "transports": ["streamable-http"],
       "docs": "https://sigiro.com/docs",
       "basis": {
         "via": "declared",

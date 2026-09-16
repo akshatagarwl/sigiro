@@ -32,14 +32,13 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          version: 2026.9.4
-          install: false
+          bun-version: 1.4.0
       - if: github.event_name == 'push' || github.event_name == 'pull_request'
-        run: mise exec bun@1.4.0 -- bash scripts/check-skill-distribution.sh local
+        run: bash scripts/check-skill-distribution.sh local
       - if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        run: mise exec bun@1.4.0 -- bash scripts/check-skill-distribution.sh remote
+        run: bash scripts/check-skill-distribution.sh remote

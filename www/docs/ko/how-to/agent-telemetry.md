@@ -47,18 +47,18 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
 호스팅 서비스의 경우 키를 추가하는 것뿐만 아니라 프로토콜과 엔드포인트도
-변경하십시오. `api.sigiro.com` 은 443 포트에서만 응답하므로, 해당 호스트에
+변경하십시오. `sigiro.com` 은 443 포트에서만 응답하므로, 해당 호스트에
 `:4317` 또는 `:4318` 엔드포인트를 지정하면 연결에 실패하고 에이전트는 아무것도
 보고하지 않습니다:
 
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.sigiro.com
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://sigiro.com
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${SIGIRO_ACCESS_TOKEN}"
 ```
 
 키는 커밋되는 모든 파일에서 제외하십시오. 사용할 엔드포인트와 포트는 운영자가
-알려주므로, 해당 호스트가 `api.sigiro.com` 이 아닌 경우
+알려주므로, 해당 호스트가 `sigiro.com` 이 아닌 경우
 `https://<your-sigiro-host>` 를 사용하십시오.
 
 기본적으로 실패한 도구는 `TelemetrySafeError` 또는 `ShellError`와 같은 일반적인
@@ -107,17 +107,17 @@ environment = "dev"
 log_user_prompt = false
 
 [otel.trace_exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/traces"
+endpoint = "https://sigiro.com/v1/traces"
 protocol = "binary"
 headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.metrics_exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/metrics"
+endpoint = "https://sigiro.com/v1/metrics"
 protocol = "binary"
 headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 
 [otel.exporter.otlp-http]
-endpoint = "https://api.sigiro.com/v1/logs"
+endpoint = "https://sigiro.com/v1/logs"
 protocol = "binary"
 headers = { authorization = "Bearer ${SIGIRO_ACCESS_TOKEN}" }
 ```

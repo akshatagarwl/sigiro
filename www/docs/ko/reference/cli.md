@@ -1,7 +1,7 @@
 ---
 title: CLI
 description: >-
-  모든 sigiro 서브커맨드와 그 인자, 그리고 각각이 읽는 환경 변수입니다. sigiro에는 일곱 개의 서브커맨드가 있고, 클라이언트
+  모든 sigiro 서브커맨드와 그 인자, 그리고 각각이 읽는 환경 변수입니다. sigiro에는 아홉 개의 서브커맨드가 있고, 클라이언트
   명령은 들여쓴 JSON을 출력합니다.
 sidebar:
   order: 2
@@ -22,6 +22,24 @@ JSON을 출력합니다. 두 번째 출력 형식은 없으며, TTY 감지도 �
 
 모든 클라이언트 서브커맨드는 `SIGIRO_ENDPOINT`에 지정된 서버에 접속하며, 기본값은
 `http://localhost:9999`입니다.
+
+## 호스팅 에이전트 인증
+
+별도의 Agent Auth 실행 파일을 설치하거나 실행하지 마십시오. 기존 Sigiro 인터페이스를 사용합니다.
+
+- `sigiro signup --name "Your Name" --email you@example.com`로 호스팅 계정을 만듭니다.
+- `sigiro mcp`로 MCP 클라이언트에 Sigiro 운영 도구를 제공합니다.
+- 에이전트 호스트의 ID 등록과 관리는 `https://sigiro.com/api/auth`를 사용합니다.
+
+프로바이더 탐색 문서는
+`https://sigiro.com/.well-known/agent-configuration`이며, 보호되는 API 리소스는
+`https://sigiro.com`입니다. Agent Auth 수명 주기 경로에는 API 기본 경로 기준으로
+`/host/enroll`, `/agent/register`, `/agent/status`, `/agent/rotate-key`, `/agent/revoke`가
+포함됩니다. 에이전트에 필요한 최소 capability만 요청하십시오. 텔레메트리 에이전트에는
+`telemetry:ingest`만 부여합니다.
+
+Sigiro는 프로토콜과 키 수명 주기 처리를 위해 공식 Agent Auth 구현을 내부적으로 사용합니다.
+사용자용 두 번째 CLI는 제공하지 않습니다.
 
 ## serve
 
@@ -104,3 +122,9 @@ tailnet에서 찾아야 합니다. 단일 로컬 서버에 대해 SQL을 실행�
 `sigiro healthcheck`는 로컬 `/health` 엔드포인트를 검사하고, 서버가 준비된 경우에만
 `0`으로 종료합니다. distroless 이미지에는 셸도 `curl`도 없으므로, 이것이 컨테이너의
 `HEALTHCHECK`입니다.
+
+## mcp
+
+`sigiro mcp`는 stdio Model Context Protocol 서버를 시작합니다.
+`list_services`, `list_anomalies`, `diagnose_service`, `run_query`를 제공하므로
+분석 에이전트가 HTTP 요청을 직접 구성하지 않고 Sigiro를 조사할 수 있습니다.

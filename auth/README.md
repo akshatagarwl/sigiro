@@ -18,10 +18,10 @@ Required environment variables:
 
 - `ENVIRONMENT=production`
 - `PORT=3100`
-- `BETTER_AUTH_URL=https://auth.sigiro.com`
+- `BETTER_AUTH_URL=https://sigiro.com`
 - `BETTER_AUTH_SECRET`
 - `DATABASE_URL`
-- `SIGIRO_RESOURCE=https://api.sigiro.com`
+- `SIGIRO_RESOURCE=https://sigiro.com`
 - `EMAIL_FROM=noreply@sigiro.com`
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_EMAIL_API_TOKEN`
@@ -34,7 +34,7 @@ PostgreSQL remains private. The service connects directly to it over the Kamal n
 cp .env.example .env
 bun install --frozen-lockfile
 bun run test
-docker build -t sigiro-auth:test .
+docker buildx bake sigiro-auth --load
 ```
 
 The E2E runner starts PostgreSQL, applies migrations, and exercises the real Node HTTP adapter. It verifies OTP, organization activation, OAuth/OIDC discovery, JWKS, confidential client credentials, native S256 PKCE, refresh rotation and replay rejection, device authorization, MCP metadata, real CIMD discovery and persistence, DNS-pinned transport rejection of loopback targets, DCR absence, audience/scopes, and `tid` propagation.
@@ -45,7 +45,7 @@ The E2E runner starts PostgreSQL, applies migrations, and exercises the real Nod
 bun run check
 bun run build
 bun run migrate
-docker build -t sigiro-auth:test .
+docker buildx bake sigiro-auth --load
 ```
 
 Run migrations from a trusted network path before deployment. The migrator uses Better Auth's programmatic migration API and rejects unsafe schema changes.

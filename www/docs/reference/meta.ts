@@ -3,7 +3,7 @@ import { defineMeta } from 'blume';
 /**
  * Diátaxis mode 3 of 4: informs cognition, serves application of skill.
  *
- * Most of this section is GENERATED from `https://api.sigiro.com/openapi.json` by
+ * Most of this section is GENERATED from `https://sigiro.com/openapi.json` by
  * `openapi.route: '/reference'` in `blume.config.ts`. Those pages arrive through
  * a staged content source, so they are real Blume pages with real routes, and the
  * sidebar group `reference` is built from them. `cli.md` is the one hand-written

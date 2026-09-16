@@ -184,9 +184,9 @@ test("a terminal duplicate assignment is re-reported without invoking Eve", asyn
   const eve: EveExecution["Service"] = {
     run: () => {
       eveCalls += 1;
-      return Effect.fail(new EveFailure("Eve must not run for a terminal duplicate"));
+      return Effect.fail(EveFailure.from("Eve must not run for a terminal duplicate"));
     },
-    cancel: () => Effect.fail(new EveFailure("Eve must not cancel for a terminal duplicate")),
+    cancel: () => Effect.fail(EveFailure.from("Eve must not cancel for a terminal duplicate")),
   };
 
   expect(await run(runOnce({ client, jobs, eve }))).toBe(true);
@@ -246,7 +246,7 @@ test("an Eve failure persists a terminal failed record and reports it", async ()
       },
     };
     const eve: EveExecution["Service"] = {
-      run: () => Effect.fail(new EveFailure("Eve turn did not complete")),
+      run: () => Effect.fail(EveFailure.from("Eve turn did not complete")),
       cancel: () => Effect.succeed(undefined),
     };
 
@@ -290,7 +290,7 @@ test("the heartbeat stops after an Eve failure", async () => {
     };
     const eve: EveExecution["Service"] = {
       // Give the interval a chance to elapse at least once before failing.
-      run: () => Effect.sleep("400 millis").pipe(Effect.andThen(Effect.fail(new EveFailure("Eve step.failed")))),
+      run: () => Effect.sleep("400 millis").pipe(Effect.andThen(Effect.fail(EveFailure.from("Eve step.failed")))),
       cancel: () => Effect.succeed(undefined),
     };
 
@@ -453,7 +453,7 @@ test("a failed attempt reports no passing tests", async () => {
       complete: () => Effect.succeed(undefined),
     };
     const eve: EveExecution["Service"] = {
-      run: () => Effect.fail(new EveFailure("Eve turn.failed")),
+      run: () => Effect.fail(EveFailure.from("Eve turn.failed")),
       cancel: () => Effect.succeed(undefined),
     };
 

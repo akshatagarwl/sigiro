@@ -47,7 +47,7 @@ For hosted sigiro, use the HTTPS origin with no port and add the OAuth access to
 ```rust
 use std::collections::HashMap;
 
-let endpoint = "https://api.sigiro.com";
+let endpoint = "https://sigiro.com";
 let mut headers = HashMap::new();
 headers.insert(
     "Authorization".to_string(),

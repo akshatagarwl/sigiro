@@ -79,6 +79,20 @@ struct AccessTokenClaims {
     scope: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct AgentSessionResponse {
+    active: bool,
+    agent_id: Option<String>,
+    tenant_id: Option<String>,
+    agent_capability_grants: Option<Vec<AgentCapabilityGrant>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentCapabilityGrant {
+    capability: String,
+    status: String,
+}
+
 #[derive(Debug)]
 struct CachedJwks {
     keys: JwkSet,
@@ -91,6 +105,7 @@ pub struct JwtVerifier {
     resource_metadata_url: String,
     resource_metadata_path: String,
     jwks_url: String,
+    agent_session_url: String,
     client: reqwest::Client,
     cache: RwLock<Option<CachedJwks>>,
     refresh: AsyncMutex<()>,
@@ -123,12 +138,14 @@ impl JwtVerifier {
         }
         let resource_metadata_url = protected_resource_metadata_url(&audience)?;
         let resource_metadata_path = resource_metadata_url.path().to_owned();
+        let agent_session_url = format!("{}/sigiro/agent/session", issuer.trim_end_matches('/'));
         let verifier = Self {
             issuer,
             audience,
             resource_metadata_url: resource_metadata_url.to_string(),
             resource_metadata_path,
             jwks_url,
+            agent_session_url,
             client: reqwest::Client::builder()
                 .timeout(JWKS_FETCH_TIMEOUT)
                 .build()
@@ -148,8 +165,16 @@ impl JwtVerifier {
         &self,
         token: &str,
         required_scope: &'static str,
+        scheme: CredentialScheme,
     ) -> Result<AuthContext, AuthError> {
         let header = decode_header(token).map_err(|_| AuthError::InvalidToken)?;
+        let is_agent = header.typ.as_deref() == Some("agent+jwt");
+        if is_agent {
+            return self.verify_agent(token, required_scope).await;
+        }
+        if scheme == CredentialScheme::AgentAuth {
+            return Err(AuthError::InvalidToken);
+        }
         if header.alg != Algorithm::EdDSA {
             return Err(AuthError::InvalidToken);
         }
@@ -178,6 +203,49 @@ impl JwtVerifier {
         Ok(AuthContext {
             tenant_id,
             subject: claims.sub,
+            scopes,
+        })
+    }
+
+    async fn verify_agent(
+        &self,
+        token: &str,
+        required_capability: &'static str,
+    ) -> Result<AuthContext, AuthError> {
+        let response = self
+            .client
+            .get(&self.agent_session_url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|_| AuthError::JwksUnavailable)?;
+        let session = response
+            .json::<AgentSessionResponse>()
+            .await
+            .map_err(|_| AuthError::InvalidToken)?;
+        if !session.active {
+            return Err(AuthError::InvalidToken);
+        }
+        let subject = session
+            .agent_id
+            .filter(|id| !id.trim().is_empty())
+            .ok_or(AuthError::InvalidToken)?;
+        let tenant_id = TenantId::try_new(session.tenant_id.ok_or(AuthError::InvalidToken)?)
+            .map_err(|_| AuthError::InvalidToken)?;
+        let scopes = session
+            .agent_capability_grants
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|grant| grant.status == "active")
+            .map(|grant| grant.capability)
+            .collect::<HashSet<_>>();
+        if !scopes.contains(required_capability) {
+            return Err(AuthError::InsufficientScope(required_capability));
+        }
+        Ok(AuthContext {
+            tenant_id,
+            subject,
             scopes,
         })
     }
@@ -320,6 +388,24 @@ enum BearerChallenge {
     InsufficientScope(&'static str),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CredentialScheme {
+    Bearer,
+    AgentAuth,
+}
+
+pub(crate) struct ApiCredential {
+    pub(crate) scheme: CredentialScheme,
+    pub(crate) token: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CredentialParseError {
+    MissingScheme,
+    UnsupportedScheme,
+    InvalidToken,
+}
+
 /// Explicit auth mode — Open for local self-host/edge, JWT for hosted storage.
 #[derive(Clone, Debug)]
 pub enum AuthMode {
@@ -381,7 +467,11 @@ impl AuthMode {
         }
     }
 
-    fn bearer_challenge(&self, challenge: BearerChallenge) -> Option<HeaderValue> {
+    fn authorization_challenge(
+        &self,
+        scheme: CredentialScheme,
+        challenge: BearerChallenge,
+    ) -> Option<HeaderValue> {
         let AuthMode::Jwt { verifier } = self else {
             return None;
         };
@@ -392,9 +482,13 @@ impl AuthMode {
                 format!(", error=\"insufficient_scope\", scope=\"{scope}\"")
             }
         };
+        let scheme = match scheme {
+            CredentialScheme::Bearer => "Bearer",
+            CredentialScheme::AgentAuth => "AgentAuth",
+        };
         Some(
             HeaderValue::from_str(&format!(
-                "Bearer resource_metadata=\"{}\"{suffix}",
+                "{scheme} resource_metadata=\"{}\"{suffix}",
                 verifier.resource_metadata_url
             ))
             .expect("validated resource metadata URL produces a valid challenge header"),
@@ -405,6 +499,7 @@ impl AuthMode {
         &self,
         token: &str,
         required_scope: &'static str,
+        scheme: CredentialScheme,
     ) -> Result<AuthContext, AuthError> {
         match self {
             AuthMode::Open => Ok(AuthContext {
@@ -413,7 +508,7 @@ impl AuthMode {
                 subject: "local".to_owned(),
                 scopes: HashSet::new(),
             }),
-            AuthMode::Jwt { verifier } => verifier.verify(token, required_scope).await,
+            AuthMode::Jwt { verifier } => verifier.verify(token, required_scope, scheme).await,
         }
     }
 }
@@ -435,6 +530,57 @@ pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
         )
     })?;
     Ok(auth.token().to_string())
+}
+
+pub(crate) fn is_agent_jwt(token: &str) -> bool {
+    decode_header(token)
+        .ok()
+        .and_then(|header| header.typ)
+        .as_deref()
+        == Some("agent+jwt")
+}
+
+pub(crate) fn parse_api_credential(value: &str) -> Result<ApiCredential, CredentialParseError> {
+    let (scheme, token) = value
+        .split_once(' ')
+        .ok_or(CredentialParseError::MissingScheme)?;
+    let mut scheme = if scheme.eq_ignore_ascii_case("Bearer") {
+        CredentialScheme::Bearer
+    } else if scheme.eq_ignore_ascii_case("AgentAuth") {
+        CredentialScheme::AgentAuth
+    } else {
+        return Err(CredentialParseError::UnsupportedScheme);
+    };
+    if token.is_empty() || token.contains(char::is_whitespace) {
+        return Err(CredentialParseError::InvalidToken);
+    }
+    if scheme == CredentialScheme::Bearer && is_agent_jwt(token) {
+        scheme = CredentialScheme::AgentAuth;
+    }
+    Ok(ApiCredential {
+        scheme,
+        token: token.to_owned(),
+    })
+}
+
+pub(crate) fn extract_api_credential(headers: &HeaderMap) -> Result<ApiCredential, ApiError> {
+    let value = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            axum_anyhow::unauthorized(
+                "Missing Authentication",
+                "Missing or malformed Authorization header",
+            )
+        })?;
+    parse_api_credential(value).map_err(|error| {
+        let detail = if error == CredentialParseError::UnsupportedScheme {
+            "Unsupported Authorization scheme"
+        } else {
+            "Missing or malformed Authorization header"
+        };
+        axum_anyhow::unauthorized("Missing Authentication", detail)
+    })
 }
 
 /// axum middleware: verify the configured authentication mode.
@@ -492,22 +638,38 @@ pub(crate) async fn auth_middleware(
             next.run(req).await
         }
         AuthMode::Jwt { .. } => {
-            let token = match extract_bearer_token(req.headers()) {
-                Ok(token) => token,
+            let scheme_hint = req
+                .headers()
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.split_once(' '))
+                .map_or(CredentialScheme::Bearer, |(scheme, _)| {
+                    if scheme.eq_ignore_ascii_case("AgentAuth") {
+                        CredentialScheme::AgentAuth
+                    } else {
+                        CredentialScheme::Bearer
+                    }
+                });
+            let credential = match extract_api_credential(req.headers()) {
+                Ok(credential) => credential,
                 Err(error) => {
                     let challenge = if req.headers().contains_key(header::AUTHORIZATION) {
                         BearerChallenge::InvalidToken
                     } else {
                         BearerChallenge::Missing
                     };
-                    return challenged_response(&state.auth_mode, error, challenge);
+                    return challenged_response(&state.auth_mode, error, scheme_hint, challenge);
                 }
             };
             let required_scope = match required_http_scope(req.method(), req.uri().path()) {
                 Ok(scope) => scope,
                 Err(error) => return error.into_response(),
             };
-            let context = match state.auth_mode.authenticate(&token, required_scope).await {
+            let context = match state
+                .auth_mode
+                .authenticate(&credential.token, required_scope, credential.scheme)
+                .await
+            {
                 Ok(context) => context,
                 Err(error) => {
                     let challenge = match error {
@@ -521,6 +683,7 @@ pub(crate) async fn auth_middleware(
                     return challenged_response(
                         &state.auth_mode,
                         error.into_api_error(),
+                        credential.scheme,
                         challenge,
                     );
                 }
@@ -536,10 +699,11 @@ pub(crate) async fn auth_middleware(
 fn challenged_response(
     auth_mode: &AuthMode,
     error: ApiError,
+    scheme: CredentialScheme,
     challenge: BearerChallenge,
 ) -> Response {
     let mut response = error.into_response();
-    if let Some(value) = auth_mode.bearer_challenge(challenge) {
+    if let Some(value) = auth_mode.authorization_challenge(scheme, challenge) {
         response
             .headers_mut()
             .insert(header::WWW_AUTHENTICATE, value);
@@ -645,6 +809,17 @@ mod jwt_tests {
         Json(keys.read().await.clone())
     }
 
+    async fn serve_agent_session() -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "active": true,
+            "agent_id": "agent-1",
+            "tenant_id": "tenant_a",
+            "agent_capability_grants": [
+                { "capability": "telemetry:ingest", "status": "active" }
+            ]
+        }))
+    }
+
     async fn verifier_result(keys: Arc<RwLock<JwkSet>>) -> anyhow::Result<JwtVerifier> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -653,17 +828,20 @@ mod jwt_tests {
                 listener,
                 Router::new()
                     .route("/jwks", get(serve_jwks))
+                    .route("/agent-session", get(serve_agent_session))
                     .with_state(keys),
             )
             .await
             .unwrap();
         });
-        JwtVerifier::new(
+        let mut verifier = JwtVerifier::new(
             ISSUER.to_owned(),
             AUDIENCE.to_owned(),
             format!("http://{address}/jwks"),
         )
-        .await
+        .await?;
+        verifier.agent_session_url = format!("http://{address}/agent-session");
+        Ok(verifier)
     }
 
     async fn verifier(keys: Arc<RwLock<JwkSet>>) -> JwtVerifier {
@@ -677,6 +855,7 @@ mod jwt_tests {
             .verify(
                 &token("key-1", AUDIENCE, QUERY_READ_SCOPE),
                 QUERY_READ_SCOPE,
+                CredentialScheme::Bearer,
             )
             .await
             .unwrap();
@@ -687,6 +866,7 @@ mod jwt_tests {
             .verify(
                 &token("key-1", AUDIENCE, QUERY_READ_SCOPE),
                 DIAGNOSE_READ_SCOPE,
+                CredentialScheme::Bearer,
             )
             .await
             .unwrap_err();
@@ -697,12 +877,52 @@ mod jwt_tests {
     }
 
     #[tokio::test]
+    async fn verifies_agent_auth_session_and_capability() {
+        let verifier = verifier(Arc::new(RwLock::new(jwks("key-1")))).await;
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.typ = Some("agent+jwt".to_owned());
+        let token = encode(
+            &header,
+            &serde_json::json!({ "sub": "agent-1" }),
+            &EncodingKey::from_ed_der(include_bytes!("../tests/fixtures/auth_ed25519_private.der")),
+        )
+        .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        assert_eq!(
+            extract_api_credential(&headers).unwrap().scheme,
+            CredentialScheme::AgentAuth
+        );
+
+        let context = verifier
+            .verify(&token, TELEMETRY_INGEST_SCOPE, CredentialScheme::AgentAuth)
+            .await
+            .unwrap();
+        assert_eq!(context.tenant_id.as_ref(), "tenant_a");
+        assert_eq!(context.subject, "agent-1");
+
+        let error = verifier
+            .verify(&token, QUERY_READ_SCOPE, CredentialScheme::AgentAuth)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AuthError::InsufficientScope(QUERY_READ_SCOPE)
+        ));
+    }
+
+    #[tokio::test]
     async fn rejects_wrong_audience() {
         let verifier = verifier(Arc::new(RwLock::new(jwks("key-1")))).await;
         let error = verifier
             .verify(
                 &token("key-1", "https://other.example", QUERY_READ_SCOPE),
                 QUERY_READ_SCOPE,
+                CredentialScheme::Bearer,
             )
             .await
             .unwrap_err();
@@ -719,6 +939,7 @@ mod jwt_tests {
             .verify(
                 &token("key-2", AUDIENCE, QUERY_READ_SCOPE),
                 QUERY_READ_SCOPE,
+                CredentialScheme::Bearer,
             )
             .await
             .unwrap();
@@ -734,6 +955,7 @@ mod jwt_tests {
             .verify(
                 &token("bogus", AUDIENCE, QUERY_READ_SCOPE),
                 QUERY_READ_SCOPE,
+                CredentialScheme::Bearer,
             )
             .await
             .unwrap_err();
@@ -744,6 +966,7 @@ mod jwt_tests {
             .verify(
                 &token("key-2", AUDIENCE, QUERY_READ_SCOPE),
                 QUERY_READ_SCOPE,
+                CredentialScheme::Bearer,
             )
             .await
             .unwrap();

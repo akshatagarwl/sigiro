@@ -121,7 +121,7 @@ impl OtlpGrpcService {
 }
 
 /// Extract project_id from gRPC metadata.
-/// Uses the explicit AuthMode — Open mode skips auth, JWT mode validates Bearer token.
+/// Uses the explicit AuthMode — Open mode skips auth, JWT mode validates Bearer or AgentAuth.
 pub async fn extract_project_id_grpc(
     auth_mode: &crate::auth::AuthMode,
     metadata: &tonic::metadata::MetadataMap,
@@ -129,16 +129,28 @@ pub async fn extract_project_id_grpc(
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
         crate::auth::AuthMode::Jwt { .. } => {
-            let token = metadata
+            let authorization = metadata
                 .get("authorization")
                 .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
                 .to_str()
-                .map_err(|_| Status::unauthenticated("Invalid Authorization encoding"))?
-                .strip_prefix("Bearer ")
-                .ok_or_else(|| Status::unauthenticated("Expected: Bearer <access-token>"))?;
+                .map_err(|_| Status::unauthenticated("Invalid Authorization encoding"))?;
+            let credential =
+                crate::auth::parse_api_credential(authorization).map_err(|error| match error {
+                    crate::auth::CredentialParseError::MissingScheme
+                    | crate::auth::CredentialParseError::UnsupportedScheme => {
+                        Status::unauthenticated("Expected Bearer or AgentAuth credential")
+                    }
+                    crate::auth::CredentialParseError::InvalidToken => {
+                        Status::unauthenticated("Invalid Authorization metadata")
+                    }
+                })?;
 
             auth_mode
-                .authenticate(token, crate::auth::TELEMETRY_INGEST_SCOPE)
+                .authenticate(
+                    &credential.token,
+                    crate::auth::TELEMETRY_INGEST_SCOPE,
+                    credential.scheme,
+                )
                 .await
                 .map(|context| context.tenant_id.as_ref().to_owned())
                 .map_err(|error| match error {
@@ -729,7 +741,7 @@ pub fn otlp_http_router(
 }
 
 /// Extract project_id from HTTP Authorization header.
-/// Uses the explicit AuthMode — Open mode skips auth, JWT mode validates Bearer token.
+/// Uses the explicit AuthMode — Open mode skips auth, JWT mode validates Bearer or AgentAuth.
 pub async fn extract_project_id_http(
     auth_mode: &crate::auth::AuthMode,
     headers: &axum::http::HeaderMap,
@@ -737,13 +749,17 @@ pub async fn extract_project_id_http(
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
         crate::auth::AuthMode::Jwt { .. } => {
-            let token = crate::auth::extract_bearer_token(headers).map_err(|_| {
+            let credential = crate::auth::extract_api_credential(headers).map_err(|_| {
                 tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
                 StatusCode::UNAUTHORIZED
             })?;
 
             auth_mode
-                .authenticate(&token, crate::auth::TELEMETRY_INGEST_SCOPE)
+                .authenticate(
+                    &credential.token,
+                    crate::auth::TELEMETRY_INGEST_SCOPE,
+                    credential.scheme,
+                )
                 .await
                 .map(|context| context.tenant_id.as_ref().to_owned())
                 .map_err(|error| match error {
