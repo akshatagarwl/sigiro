@@ -5,6 +5,5 @@
   "application_type": "native",
   "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
   "token_endpoint_auth_method": "none",
-  "scope": "openid profile email offline_access telemetry:ingest services:read diagnose:read traces:read query:read anomalies:read",
-  "resources": ["https://api.sigiro.com"]
+  "scope": "openid profile email offline_access telemetry:ingest services:read diagnose:read traces:read query:read anomalies:read"
 }
