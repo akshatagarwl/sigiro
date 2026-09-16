@@ -419,7 +419,7 @@ pub async fn access_token() -> Result<String> {
     let session = OAuthSession::load()
         .await?
         .context("not signed in; run `sigiro auth login`")?;
-    session.access_token().await
+    session.force_refresh().await
 }
 
 impl OAuthSession {
