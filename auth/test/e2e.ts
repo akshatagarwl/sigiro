@@ -312,6 +312,7 @@ async function expectOk(response: Response, operation: string): Promise<Response
     grant_types: [
       "authorization_code",
       "refresh_token",
+      "urn:ietf:params:oauth:grant-type:device_code",
     ],
     response_types: ["code"],
     token_endpoint_auth_method: "none",
@@ -523,25 +524,12 @@ async function expectOk(response: Response, operation: string): Promise<Response
     }
   }
 
-  const deviceClient = (await (
-    await expectOk(
-      await request("/oauth2/create-client", {
-        client_name: "Sigiro kill-test device client",
-        redirect_uris: [redirectUri],
-        grant_types: ["urn:ietf:params:oauth:grant-type:device_code"],
-        token_endpoint_auth_method: "none",
-        application_type: "native",
-        scope: "diagnose:read",
-      }),
-      "device client pre-registration",
-    )
-  ).json()) as { client_id: string };
   const deviceResponse = await expectOk(
     await cimdRequest("/device/code", {
       method: "POST",
       headers: { "content-type": "application/json", cookie, origin: env.BETTER_AUTH_URL },
       body: JSON.stringify({
-        client_id: deviceClient.client_id,
+        client_id: publicClient.client_id,
         scope: "diagnose:read",
         resource: env.SIGIRO_RESOURCE,
       }),
@@ -584,7 +572,7 @@ async function expectOk(response: Response, operation: string): Promise<Response
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      client_id: deviceClient.client_id,
+      client_id: publicClient.client_id,
       device_code: device.device_code,
       resource: env.SIGIRO_RESOURCE,
     }),

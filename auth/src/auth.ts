@@ -121,18 +121,28 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
         extensions: [
           {
             claims: {
-              accessToken: async ({ client, referenceId, sessionId }) => {
+              accessToken: async ({ client, referenceId, sessionId, user }) => {
                 const registeredTenantId = referenceId ?? client.referenceId;
                 if (registeredTenantId) return { tid: registeredTenantId };
-                if (!sessionId) throw new Error("token issuance has no tenant-bearing session or client");
+                if (sessionId) {
+                  const session = await runtime.database.query<{ activeOrganizationId: string | null }>(
+                    'SELECT "activeOrganizationId" FROM session WHERE id = $1',
+                    [sessionId],
+                  );
+                  const activeOrganizationId = session.rows[0]?.activeOrganizationId;
+                  if (!activeOrganizationId) throw new Error("token session has no active organization");
+                  return { tid: activeOrganizationId };
+                }
+                if (!user?.id) throw new Error("token issuance has no tenant-bearing user, session, or client");
 
-                const session = await runtime.database.query<{ activeOrganizationId: string | null }>(
-                  'SELECT "activeOrganizationId" FROM session WHERE id = $1',
-                  [sessionId],
+                const memberships = await runtime.database.query<{ organizationId: string }>(
+                  'SELECT "organizationId" FROM member WHERE "userId" = $1 ORDER BY "createdAt", id',
+                  [user.id],
                 );
-                const activeOrganizationId = session.rows[0]?.activeOrganizationId;
-                if (!activeOrganizationId) throw new Error("token session has no active organization");
-                return { tid: activeOrganizationId };
+                if (memberships.rows.length !== 1) {
+                  throw new Error("device token user must belong to exactly one organization");
+                }
+                return { tid: memberships.rows[0]!.organizationId };
               },
             },
           },

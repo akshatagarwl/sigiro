@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
 pub(crate) const HOSTED_ENDPOINT: &str = "https://api.sigiro.com";
+const HOSTED_AUTH_ORIGIN: &str = "https://auth.sigiro.com";
 pub(crate) const HOSTED_ISSUER: &str = "https://auth.sigiro.com/api/auth";
 pub(crate) const HOSTED_RESOURCE: &str = "https://api.sigiro.com";
 pub(crate) const CLI_CLIENT_ID: &str = "https://sigiro.com/.well-known/oauth-client.json";
@@ -314,9 +315,15 @@ pub async fn signup(name: String, email: String) -> Result<AuthStatus> {
     let oauth_client = basic_client(&metadata)?;
     let oauth_http = oauth_http_client()?;
     let device = request_device_authorization(&oauth_client, &oauth_http).await?;
+    let mut browser_headers = reqwest::header::HeaderMap::new();
+    browser_headers.insert(
+        reqwest::header::ORIGIN,
+        reqwest::header::HeaderValue::from_static(HOSTED_AUTH_ORIGIN),
+    );
     let browser = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .cookie_store(true)
+        .default_headers(browser_headers)
         .timeout(Duration::from_secs(15))
         .build()
         .context("failed to build signup HTTP client")?;
