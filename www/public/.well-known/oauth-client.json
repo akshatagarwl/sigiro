@@ -3,6 +3,7 @@
   "client_name": "Sigiro CLI",
   "client_uri": "https://sigiro.com/",
   "application_type": "native",
+  "redirect_uris": ["com.sigiro.cli:/oauth/callback"],
   "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
   "token_endpoint_auth_method": "none",
   "scope": "openid profile email offline_access telemetry:ingest services:read diagnose:read traces:read query:read anomalies:read"
