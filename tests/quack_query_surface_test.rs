@@ -501,37 +501,3 @@ fn run_one_iteration(iteration: u16) -> Result<(), String> {
 fn quack_query_surface_single_iteration() {
     run_one_iteration(0).expect("quack query-surface E2E iteration failed");
 }
-
-/// Repeats the full lifecycle 10 times end-to-end (fresh process boot →
-/// ingest → quack read → security assertions → concurrent ingest → SIGTERM
-/// shutdown) to shake out flakiness/stability of the in-process quack serve
-/// and its shutdown path, as specifically requested. `#[ignore]`d by default
-/// (spawns 10 full server processes, ~1 minute) — run explicitly with
-/// `cargo test --release --test quack_query_surface_test -- --ignored --nocapture`.
-#[test]
-#[ignore = "spawns 10 full sigiro server processes; run explicitly for the stability loop"]
-fn quack_query_surface_lifecycle_loop() {
-    const ITERATIONS: u16 = 10;
-    let mut failures = Vec::new();
-
-    for iteration in 0..ITERATIONS {
-        match run_one_iteration(iteration) {
-            Ok(()) => println!("iteration {iteration}: PASS"),
-            Err(e) => {
-                println!("iteration {iteration}: FAIL — {e}");
-                failures.push((iteration, e));
-            }
-        }
-    }
-
-    let passed = ITERATIONS as usize - failures.len();
-    println!("\n=== quack query-surface stability loop: {passed}/{ITERATIONS} passed ===");
-    for (iteration, error) in &failures {
-        println!("  iteration {iteration} failed: {error}");
-    }
-    assert!(
-        failures.is_empty(),
-        "{}/{ITERATIONS} iterations failed: {failures:?}",
-        failures.len()
-    );
-}

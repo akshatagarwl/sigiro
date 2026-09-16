@@ -6,7 +6,6 @@ local rustInputs = List(
   "Cargo.lock",
   "rust-toolchain*",
   ".cargo/**",
-  "hawk.toml",
   "clippy.toml",
   "mise.toml",
   "mise.lock",

@@ -113,10 +113,12 @@ jobs:
         run: |
           set -euo pipefail
           eval "$(scripts/prepare-duckdb-static.sh '${{ matrix.target }}')"
-          echo "DUCKDB_LIB_DIR=$DUCKDB_LIB_DIR" >> "$GITHUB_ENV"
-          echo "DUCKDB_INCLUDE_DIR=$DUCKDB_INCLUDE_DIR" >> "$GITHUB_ENV"
-          echo "DUCKDB_STATIC=1" >> "$GITHUB_ENV"
-          echo "DUCKDB_STATIC_CACHE=$DUCKDB_STATIC_CACHE" >> "$GITHUB_ENV"
+          {
+            echo "DUCKDB_LIB_DIR=$DUCKDB_LIB_DIR"
+            echo "DUCKDB_INCLUDE_DIR=$DUCKDB_INCLUDE_DIR"
+            echo "DUCKDB_STATIC=1"
+            echo "DUCKDB_STATIC_CACHE=$DUCKDB_STATIC_CACHE"
+          } >> "$GITHUB_ENV"
 
       - name: Build
         env:

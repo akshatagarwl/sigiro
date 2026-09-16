@@ -2,97 +2,10 @@
 
 lockfile_version = 1
 
-[[tools.ast-grep]]
-version = "0.45.3"
-backend = "aqua:ast-grep/ast-grep"
-specifiers = ["0.45.3"]
-
-[tools.ast-grep."platforms.linux-arm64"]
-checksum = "sha256:b39cfbc58da4b869a88b8a4bc57bd5deb0d24541e704cf7c257da7b53ec81c8f"
-url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-aarch64-unknown-linux-gnu.zip"
-url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537333400"
-
-[tools.ast-grep."platforms.linux-x64"]
-checksum = "sha256:f8ac830881339d1edee6b2652f54798c0f4da5a827f2db38a08ee31117783ce8"
-url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-x86_64-unknown-linux-gnu.zip"
-url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537332692"
-
-[tools.ast-grep."platforms.macos-arm64"]
-checksum = "sha256:6d2279dea5bea2ad79c66ea93f5fe54ba926e398a8a26de76c56db68fe59eac6"
-url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-aarch64-apple-darwin.zip"
-url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537332514"
-
-[tools.ast-grep."platforms.macos-x64"]
-checksum = "sha256:b2ffd26f42810340326a9e8a084bdc3647a8795c1a3f21fc06bd7bef3c7c5b2c"
-url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-x86_64-apple-darwin.zip"
-url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537333391"
-
-[tools.ast-grep."platforms.windows-x64"]
-checksum = "sha256:3751b7d6be7fd39a80df1180ffe7e053903dcf92d3190e5a8336ff1746af9059"
-url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537334241"
-
-[[tools."cargo:cargo-shear"]]
-version = "1.13.4"
-backend = "cargo:cargo-shear"
-specifiers = ["1.13.4"]
-
 [[tools."cargo:https://github.com/jdx/jdxld"]]
 version = "rev:8ef70b88c7f25da631aa2364076947752ecfa26d"
 backend = "cargo:https://github.com/jdx/jdxld"
 specifiers = ["rev:8ef70b88c7f25da631aa2364076947752ecfa26d"]
-
-[[tools."cargo:similarity-rs"]]
-version = "0.5.0"
-backend = "cargo:similarity-rs"
-specifiers = ["0.5.0"]
-
-[[tools."cargo:tokei"]]
-version = "15.0.0"
-backend = "cargo:tokei"
-specifiers = ["15.0.0"]
-
-[[tools."github:astral-sh/hawk"]]
-version = "0.1.14"
-backend = "github:astral-sh/hawk"
-specifiers = ["0.1.14"]
-
-[tools."github:astral-sh/hawk"."platforms.linux-arm64"]
-checksum = "sha256:2a36ed6244a7b646ada0c7e9bc90cbc1757f17cc4af6675ecb32eec29d7dde23"
-url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384043"
-provenance = "github-attestations"
-
-[tools."github:astral-sh/hawk"."platforms.linux-arm64-musl"]
-checksum = "sha256:2a36ed6244a7b646ada0c7e9bc90cbc1757f17cc4af6675ecb32eec29d7dde23"
-url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384043"
-provenance = "github-attestations"
-
-[tools."github:astral-sh/hawk"."platforms.linux-x64"]
-checksum = "sha256:6cc8b57e0d91edbdf70388254c73e2dcf7653929d83081e47dc2a6d6c85b0369"
-url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384072"
-provenance = "github-attestations"
-
-[tools."github:astral-sh/hawk"."platforms.linux-x64-musl"]
-checksum = "sha256:6cc8b57e0d91edbdf70388254c73e2dcf7653929d83081e47dc2a6d6c85b0369"
-url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384072"
-provenance = "github-attestations"
-
-[tools."github:astral-sh/hawk"."platforms.macos-arm64"]
-checksum = "sha256:a1379620245ba56d53bca3727f57b1db959b6085b4a64dc42a56f12367fd64c6"
-url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384048"
-provenance = "github-attestations"
-provenance_verified = true
-
-[tools."github:astral-sh/hawk"."platforms.macos-x64"]
-checksum = "sha256:73483c42cb80b880d3a407201216aa90df8808546f90ab1cdbe5cd678d891cda"
-url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384063"
-provenance = "github-attestations"
 
 [[tools."http:duckdb"]]
 version = "v2.0.0-alpha41489"

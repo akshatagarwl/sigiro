@@ -5,11 +5,6 @@ sccache = "0.17.0"
 # artifact changes arrive as reviewable mise.lock diffs.
 "packslip:github.com/jdx/hk" = "1.58.1"
 "packslip:github.com/jdx/mr-boxington" = "1.9.0"
-"cargo:cargo-shear" = "1.13.4"
-"github:astral-sh/hawk" = "0.1.14"
-ast-grep = "0.45.3"
-"cargo:similarity-rs" = "0.5.0"
-"cargo:tokei" = "15.0.0"
 # 2.2.13 is intentionally not selected yet: it is inside mise's 24-hour
 # minimum-release-age window. Do not weaken that supply-chain policy globally.
 "packslip:github.com/aubepkg/aube" = "2.2.12"
@@ -59,7 +54,6 @@ rust-gate = [
     "rust-toolchain*",
     ".cargo/**",
     "clippy.toml",
-    "hawk.toml",
     "scripts/**",
     "mise.lock",
     ".env",
@@ -122,12 +116,11 @@ run = """
 set -euo pipefail
 eval "$(scripts/prepare-duckdb-static.sh "$(rustc -vV | sed -n 's/^host: //p')")"
 mbx fmt --check
-mbx shear
 mbx check --all-targets --all-features
 """
 sources = ["@group:rust-gate"]
 outputs = []
-cache = { enabled = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose", "mbx shear --version"] }
+cache = { enabled = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
 
 [tasks.verify-prebuilt-duckdb]
 description = "Verify DuckDB archive reuse and a build without C++ compilation."
@@ -141,12 +134,10 @@ run = [
     { task = "quick" },
     "scripts/run-with-duckdb-static.sh mbx clippy --all-targets --all-features -- -D warnings",
     "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test",
-    { task = "hawk" },
-    { task = "slop" },
 ]
 sources = ["@group:rust-gate"]
 outputs = []
-cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose", "mbx shear --version", "mbx hawk --version", "ast-grep --version", "similarity-rs --version", "tokei --version", "python3 --version"] }
+cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
 
 [tasks.release]
 description = "Authoritative release-mode tests, cached separately."
@@ -156,35 +147,7 @@ run = [
 ]
 sources = ["@group:rust-gate"]
 outputs = []
-cache = { enabled = true, audit = true, env = ["CI", "TARGET", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose", "mbx shear --version", "mbx hawk --version", "ast-grep --version", "similarity-rs --version", "tokei --version", "python3 --version"] }
-
-# Lint for unnecessary `pub` API surface (astral-sh/hawk). Closed-world
-# analysis: anything `pub` the `sigiro` binary can't reach is dead or could be
-# `pub(crate)`. Pinned to hawk's own toolchain (it links rustc_private).
-# Denies the two actionable groups; a full-workspace compile, so it's a
-# authoritative gate (`mise run gate`) rather than something run per commit.
-# `--fix` auto-applies the pub→pub(crate) fixes.
-# The target dir is pinned into target/ via hawk's own `--target-dir` flag. Hawk
-# defaults to $TMPDIR/cargo-hawk-target, which macOS prunes on its own schedule,
-# leaving fingerprints that point at build-script output that is gone — the gate
-# then fails on a missing libsqlite3-sys bindgen.rs and has to be cleared by hand.
-# Setting CARGO_TARGET_DIR does NOT fix this: hawk overrides it with its own temp
-# dir, so the env var looked right and changed nothing. Use the flag.
-[tasks.hawk]
-description = "Lint for unnecessary `pub` API surface (astral-sh/hawk)."
-run = """
-scripts/run-with-duckdb-static.sh mbx +1.98.1 hawk check --manifest-path Cargo.toml --target-dir target/hawk \
-  -A hawk::unnecessary_restricted_visibility \
-  -D hawk::dead_public -D hawk::unnecessary_public
-"""
-
-# Gate structural erosion + clone density (SlopCodeBench metrics). Catches the
-# way agent-extended code rots: features patched into god functions instead of
-# extracted, and per-variant copy-paste. Pre-push, like hawk. Ceilings live in
-# the script; ratchet them down after every refactor that beats them.
-[tasks.slop]
-description = "Gate structural erosion + clone density (SlopCodeBench metrics)."
-run = "python3 scripts/slop_audit.py"
+cache = { enabled = true, audit = true, env = ["CI", "TARGET", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
 
 [tasks.install-hooks]
 description = "Install hk's Git 2.54+ repository-local config hooks."

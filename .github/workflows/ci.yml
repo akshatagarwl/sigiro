@@ -32,7 +32,7 @@ jobs:
           restore-keys: |
             mise-task-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: Install pinned toolchain
-        run: mise install rust sccache "packslip:github.com/jdx/mr-boxington" "cargo:cargo-shear" "github:astral-sh/hawk" ast-grep "cargo:similarity-rs" "cargo:tokei"
+        run: mise install rust sccache "packslip:github.com/jdx/mr-boxington"
       # Linux deliberately uses DuckDB's prebuilt static archive rather than the
       # bundled feature (Cargo.toml). The gate needs it before its first Rust command.
       - name: DuckDB static libs
@@ -54,6 +54,7 @@ jobs:
       run:
         working-directory: auth
     env:
+      ENVIRONMENT: test
       BETTER_AUTH_URL: http://127.0.0.1:3100
       BETTER_AUTH_SECRET: ci-only-better-auth-secret-at-least-32-bytes
       DATABASE_URL: postgresql://sigiro:sigiro-kill-test@127.0.0.1:55432/sigiro_auth
@@ -63,6 +64,9 @@ jobs:
       NO_PROXY: 127.0.0.1,localhost
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.20.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14

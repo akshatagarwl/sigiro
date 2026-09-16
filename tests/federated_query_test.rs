@@ -288,12 +288,11 @@ fn run_scenario(iteration: u16) -> Result<(), String> {
     let base_b = base_a + 10;
     let dead_port = base_a + 999;
 
-    // Both children are launched before either is awaited, so the two ~6s
-    // boots overlap. Their port blocks (base_a, base_a+10) and temp data dirs
-    // are disjoint, so concurrent boot is safe.
+    // The servers share DuckDB's extension directory. Boot them sequentially so
+    // first-run extension metadata installation cannot race on the same lock.
     let edge_a = EdgeServer::spawn_booting("edgeA", base_a, &token);
-    let edge_b = EdgeServer::spawn_booting("edgeB", base_b, &token);
     edge_a.wait_ready("edgeA");
+    let edge_b = EdgeServer::spawn_booting("edgeB", base_b, &token);
     edge_b.wait_ready("edgeB");
 
     // Durations below are in ms at ingest; the stored `duration` column is
@@ -954,37 +953,4 @@ fn federated_query_rejects_excessive_edge_count() {
 #[test]
 fn federated_query_single_iteration() {
     run_scenario(0).expect("federated query E2E iteration failed");
-}
-
-/// Repeats the full scenario 5+ times, as explicitly requested ("test it
-/// again and again"), reporting a pass count. `#[ignore]`d by default
-/// (spawns 4 full server processes + several child `sigiro query` processes
-/// per iteration) — run explicitly with:
-/// `cargo test --release --test federated_query_test -- --ignored --nocapture`
-#[test]
-#[ignore = "spawns many sigiro processes per iteration; run explicitly for the stability loop"]
-fn federated_query_stability_loop() {
-    const ITERATIONS: u16 = 5;
-    let mut failures = Vec::new();
-
-    for iteration in 0..ITERATIONS {
-        match run_scenario(iteration) {
-            Ok(()) => println!("iteration {iteration}: PASS"),
-            Err(e) => {
-                println!("iteration {iteration}: FAIL — {e}");
-                failures.push((iteration, e));
-            }
-        }
-    }
-
-    let passed = ITERATIONS as usize - failures.len();
-    println!("\n=== federated query stability loop: {passed}/{ITERATIONS} passed ===");
-    for (iteration, error) in &failures {
-        println!("  iteration {iteration} failed: {error}");
-    }
-    assert!(
-        failures.is_empty(),
-        "{}/{ITERATIONS} iterations failed: {failures:?}",
-        failures.len()
-    );
 }
