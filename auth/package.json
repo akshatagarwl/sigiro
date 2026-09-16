@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.3.14",
+  "packageManager": "aube@2.2.16",
   "engines": {
     "node": ">=24.20.0"
   },
@@ -19,7 +19,7 @@
     "start": "node dist/server.js",
     "test:email": "node --import tsx test/cloudflare-email-e2e.ts",
     "test:e2e": "node --env-file-if-exists=.env --import tsx test/e2e.ts",
-    "test": "bun run check && bun run test:email && node --env-file-if-exists=.env --import tsx test/run.ts"
+    "test": "aube run check && aube run test:email && node --env-file-if-exists=.env --import tsx test/run.ts"
   },
   "dependencies": {
     "@better-auth/agent-auth": "0.6.2",

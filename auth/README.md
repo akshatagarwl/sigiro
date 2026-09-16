@@ -32,8 +32,8 @@ PostgreSQL remains private. The service connects directly to it over the Kamal n
 
 ```sh
 cp .env.example .env
-bun install --frozen-lockfile
-bun run test
+aube install --frozen-lockfile
+aube run test
 docker buildx bake sigiro-auth --load
 ```
 
@@ -42,9 +42,9 @@ The E2E runner starts PostgreSQL, applies migrations, and exercises the real Nod
 ## Build and migration
 
 ```sh
-bun run check
-bun run build
-bun run migrate
+aube run check
+aube run build
+aube run migrate
 docker buildx bake sigiro-auth --load
 ```
 

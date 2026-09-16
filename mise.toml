@@ -76,6 +76,34 @@ run = "mise tasks ls"
 description = "Install website dependencies from the frozen aube lockfile."
 run = "aube -C www install --frozen-lockfile"
 
+[tasks.auth-install]
+description = "Install auth dependencies from the frozen aube lockfile."
+run = "aube -C auth install --frozen-lockfile"
+
+[tasks.auth-check]
+description = "Typecheck and run the auth UI test."
+run = "aube -C auth run check"
+
+[tasks.auth-test]
+description = "Run the auth test suite."
+run = "aube -C auth run test"
+
+[tasks.auth-lint]
+description = "Lint the auth package with type-aware checks."
+run = "aube -C auth run lint"
+
+[tasks.auth-build]
+description = "Build the auth package."
+run = "aube -C auth run build"
+
+[tasks.auth-audit]
+description = "Audit production auth dependencies."
+run = "aube -C auth audit --prod"
+
+[tasks.auth-image]
+description = "Build the auth image locally without publishing."
+run = "docker buildx bake sigiro-auth --load"
+
 [tasks.alchemy-plan]
 description = "Plan the production Cloudflare stack without applying changes."
 run = "aube -C www run alchemy:plan"
