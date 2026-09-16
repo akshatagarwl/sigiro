@@ -8,11 +8,15 @@ const securityHeaders = {
   "x-frame-options": "DENY",
 } as const;
 
-const page = (kind: "sign-in" | "sign-up" | "device" | "consent"): string => {
+type PageKind = "sign-in" | "sign-up" | "device" | "agent-device" | "consent";
+
+const page = (kind: PageKind): string => {
   const title =
     kind === "sign-up"
       ? "Create your Sigiro account"
-      : kind === "device"
+      : kind === "agent-device"
+        ? "Connect an agent to Sigiro"
+        : kind === "device"
         ? "Connect the Sigiro CLI"
         : kind === "consent"
           ? "Authorize access"
@@ -22,6 +26,8 @@ const page = (kind: "sign-in" | "sign-up" | "device" | "consent"): string => {
       ? "Enter your email. We’ll send a one-time verification code and create your personal workspace."
       : kind === "device"
         ? "Sign in, review the code shown by your terminal, then approve this device."
+        : kind === "agent-device"
+          ? "Sign in, verify the approval code shown by your agent, then approve its requested capabilities."
         : kind === "consent"
           ? "Review and approve the access requested by your OAuth client."
           : "Enter your email. We’ll send a one-time verification code.";
@@ -69,7 +75,7 @@ const page = (kind: "sign-in" | "sign-up" | "device" | "consent"): string => {
           <div><dt>Resource</dt><dd id="resource"></dd></div>
         </dl>
         <div class="actions">
-          <button id="approve" type="button">Approve device</button>
+          <button id="approve" type="button">Approve request</button>
           <button class="secondary" id="deny" type="button">Deny</button>
         </div>
       </div>
@@ -194,6 +200,7 @@ const script = String.raw`(() => {
       await request("/sign-in/email-otp", { method: "POST", body: JSON.stringify(body) });
       await ensureWorkspace();
       if (page === "device") return showDevice();
+      if (page === "agent-device") return showAgentDevice();
       if (await finishOAuthLogin()) return;
       showSuccess("Your Sigiro account and personal workspace are active.");
     } catch (cause) {
@@ -243,8 +250,46 @@ const script = String.raw`(() => {
       setError(cause instanceof Error ? cause.message : "Could not process the device request");
     }
   };
-  document.querySelector("#approve").addEventListener("click", () => decideDevice(true));
-  document.querySelector("#deny").addEventListener("click", () => decideDevice(false));
+  if (page !== "agent-device") {
+    document.querySelector("#approve").addEventListener("click", () => decideDevice(true));
+    document.querySelector("#deny").addEventListener("click", () => decideDevice(false));
+  }
+
+  const agentId = new URLSearchParams(location.search).get("agent_id")?.trim() || "";
+  const agentCode = new URLSearchParams(location.search).get("code")?.trim() || "";
+  const showAgentDevice = async () => {
+    if (!agentId || !agentCode) return setError("This agent approval link is incomplete. Start the connection again.");
+    if (!(await signedIn())) {
+      showAuth();
+      return;
+    }
+    await ensureWorkspace();
+    document.querySelector("#user-code").textContent = agentCode;
+    document.querySelector("#client-id").textContent = agentId;
+    document.querySelector("#scope").textContent = "Capabilities requested by this agent";
+    document.querySelector("#resource").textContent = "https://sigiro.com";
+    document.querySelector("#request-details").hidden = false;
+    authFlow.hidden = true;
+    document.querySelector("#device-flow").hidden = false;
+    setStatus("Confirm this code matches the requesting agent before approving.");
+  };
+
+  const decideAgentDevice = async (approve) => {
+    setStatus(approve ? "Approving…" : "Denying…");
+    try {
+      await request("/agent/approve-capability", {
+        method: "POST",
+        body: JSON.stringify({
+          agent_id: agentId,
+          user_code: agentCode,
+          action: approve ? "approve" : "deny",
+        }),
+      });
+      showSuccess(approve ? "Return to your agent. Access is approved." : "The agent request was denied.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not process the agent request");
+    }
+  };
 
   const decideConsent = async (accept) => {
     if (!oauthQuery) return setError("This authorization request is missing its signed query.");
@@ -265,6 +310,11 @@ const script = String.raw`(() => {
   (async () => {
     try {
       if (page === "device") return await showDevice();
+      if (page === "agent-device") {
+        document.querySelector("#approve").onclick = () => decideAgentDevice(true);
+        document.querySelector("#deny").onclick = () => decideAgentDevice(false);
+        return await showAgentDevice();
+      }
       if (page === "consent") {
         if (!(await signedIn())) {
           location.assign("/sign-in?oauth_query=" + encodeURIComponent(oauthQuery || ""));
@@ -290,9 +340,11 @@ const script = String.raw`(() => {
 const css = `:root{color-scheme:light dark;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0d0f12;color:#f5f7fa}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% 0,#1f2937 0,#0d0f12 48%)}main{width:min(100% - 32px,480px);margin:0 auto;padding:48px 0}.brand{display:inline-block;margin-bottom:24px;color:#f5f7fa;text-decoration:none;font-size:18px;font-weight:700;letter-spacing:-.03em}.card{border:1px solid #303741;border-radius:16px;background:#14181e;padding:28px;box-shadow:0 24px 80px #0008}.eyebrow{margin:0 0 10px;color:#88a6ff;font:600 11px/1.2 ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em}h1{margin:0;font-size:28px;line-height:1.15;letter-spacing:-.035em}h2{font-size:20px}.intro{margin:12px 0 24px;color:#aeb7c4;line-height:1.6}form{display:grid;gap:10px}label,.code-label{color:#cbd2dc;font-size:13px}input{width:100%;border:1px solid #3b4552;border-radius:9px;background:#0d1117;color:#fff;padding:12px 13px;font:inherit;outline:none}input:focus{border-color:#7d9cff;box-shadow:0 0 0 3px #5777df33}button,.card a{display:inline-flex;justify-content:center;border:0;border-radius:9px;background:#e8edff;color:#111827;padding:11px 15px;font:600 14px/1.2 inherit;text-decoration:none;cursor:pointer}button:hover,.card a:hover{background:#fff}.secondary{background:#252c35;color:#d9e0ea}.actions{display:flex;gap:10px;margin-top:20px}.code{display:block;margin:10px 0 20px;font:700 30px/1 ui-monospace,monospace;letter-spacing:.16em}dl{display:grid;gap:10px;margin:0}dl div{border-top:1px solid #303741;padding-top:10px}dt{color:#8792a2;font-size:11px;text-transform:uppercase;letter-spacing:.08em}dd{margin:4px 0 0;overflow-wrap:anywhere;color:#d9e0ea;font-size:13px}#status,#error{min-height:20px;margin:18px 0 0;font-size:13px}#status{color:#9fb0c7}#error{color:#ff9b9b}.fine-print{text-align:center;color:#6f7a89;font-size:12px}@media(max-width:520px){main{padding:24px 0}.card{padding:22px}.actions{flex-direction:column}}`;
 
 export const authUIResponse = (pathname: string): Response | undefined => {
-  const kind = pathname === "/sign-in" || pathname === "/sign-up" || pathname === "/device" || pathname === "/consent"
-    ? pathname.slice(1) as "sign-in" | "sign-up" | "device" | "consent"
-    : undefined;
+  const kind: PageKind | undefined = pathname === "/device/capabilities"
+    ? "agent-device"
+    : pathname === "/sign-in" || pathname === "/sign-up" || pathname === "/device" || pathname === "/consent"
+      ? pathname.slice(1) as Exclude<PageKind, "agent-device">
+      : undefined;
   if (kind) return new Response(page(kind), { headers: { ...securityHeaders, "content-type": "text/html; charset=utf-8" } });
   if (pathname === "/auth-ui.js") {
     return new Response(script, { headers: { ...securityHeaders, "content-type": "text/javascript; charset=utf-8" } });

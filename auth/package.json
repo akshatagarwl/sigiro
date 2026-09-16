@@ -10,7 +10,7 @@
   "scripts": {
     "prepare": "effect-tsgo patch --no-typescript --oxlint",
     "build": "tsc -p tsconfig.build.json",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsx --test test/ui.ts",
     "lint": "oxlint --type-aware .",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down --volumes",
