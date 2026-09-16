@@ -4,7 +4,7 @@ description: >-
   OAuth 액세스 토큰으로 호스티드 sigiro에 OpenTelemetry를 전송한 뒤 SQL로 조회합니다. 운영할 인프라는 없으며, 초대 기반 베타
   기간에는 저희가 각 테넌트를 설정합니다.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 이 가이드는 저희가 운영하는 sigiro 호스트로 OpenTelemetry를 전송하는 방법과
@@ -20,6 +20,8 @@ sigiro auth status
 CLI는 운영체제 자격 증명 저장소에 인증 정보를 저장합니다. 아래의 `<your-sigiro-host>`를 운영자가 제공한 호스트로 바꾸십시오.
 
 ## 1. 가입하고 로그인하기
+
+이 페이지에서는 사람의 가입과 OAuth 로그인을 설명합니다. 소프트웨어에 자체 위임 ID와 키가 필요하면 [Agent Auth 온보딩](/docs/how-to/agent-auth)을 사용하십시오.
 
 호스팅 인증은 Better Auth가 제공합니다. Organizations는 테넌트입니다.
 `sigiro signup`은 6자리 OTP를 이메일로 보내고 터미널에서 안전하게 입력하도록 한 뒤, 개인 워크스페이스를

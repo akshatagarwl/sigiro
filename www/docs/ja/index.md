@@ -34,6 +34,8 @@ OpenTelemetry を読み取ります。そして、自動化されたループが
 - **[エージェントでコードを計装する](/docs/how-to/install-with-ai)** —
   エージェントにプロンプトを 1 つ渡します。エージェントが OpenTelemetry をサービスに接続し、
   sigiro に向けて設定します。
+- **[Agent Auth でエージェントをオンボーディングする](/docs/how-to/agent-auth)** —
+  委任マシン ID を登録し、必要な capability だけを承認してから、鍵をローテーションまたは失効させます。
 - **[ホスト版 sigiro にテレメトリを送信する](/docs/how-to/hosted-onboarding)** —
   `sigiro signup` で新規アカウントを作成するか、`sigiro auth login` で既存アカウントにログインし、当社が運用するホストへ OTLP を送信します。
 - **[エージェント自身のテレメトリを sigiro に送信する](/docs/how-to/agent-telemetry)** —

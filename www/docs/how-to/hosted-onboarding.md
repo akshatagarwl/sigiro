@@ -2,7 +2,7 @@
 title: Send telemetry to hosted sigiro
 description: Create a hosted sigiro account from the terminal, send OpenTelemetry, and query it back with SQL.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 This guide shows you how to send OpenTelemetry to a sigiro host that we operate,
@@ -22,6 +22,8 @@ in your operating system's credential store. It uses the hosted endpoint by defa
 Use `sigiro auth logout` to revoke and remove the stored credentials.
 
 ## 1. Sign up and sign in
+
+Human signup and OAuth login are covered here. If software needs its own delegated identity and keys, use [Agent Auth onboarding](/docs/how-to/agent-auth).
 
 Hosted authentication is provided by Better Auth. Organizations are the tenants.
 Use `sigiro signup` for first-time onboarding rather than provisioning a token

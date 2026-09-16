@@ -28,6 +28,9 @@ need the steps to get it.
 - **[Instrument your code with an agent](/docs/how-to/install-with-ai)** — give
   one prompt to an agent. The agent connects OpenTelemetry to your service and
   points it at sigiro.
+- **[Onboard an agent with Agent Auth](/docs/how-to/agent-auth)** — register a
+  delegated machine identity, approve only the capabilities it needs, then rotate
+  or revoke its keys.
 - **[Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding)** — create a
   new account with `sigiro signup`, or use `sigiro auth login` for an existing
   account, then send OTLP to a host that we operate.

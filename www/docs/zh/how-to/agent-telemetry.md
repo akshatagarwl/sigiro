@@ -4,7 +4,7 @@ description: >-
   Claude Code 和 Codex 都会发出关于自身会话的 OpenTelemetry 数据。将它们指向 sigiro，即可用 SQL 读取 token
   数量、工具调用和会话延迟。
 sidebar:
-  order: 3
+  order: 4
 ---
 
 本指南介绍如何记录 agent 的行为，而不是你的服务的行为。Claude Code 和 Codex

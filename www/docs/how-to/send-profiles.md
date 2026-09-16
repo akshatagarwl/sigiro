@@ -2,7 +2,7 @@
 title: Send Pyroscope profiles to sigiro
 description: Send pprof profiles from the verified Pyroscope Rust SDK to sigiro over Pyroscope-compatible HTTP, then confirm the profile rows with SQL.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 This guide shows you how to send application CPU profiles to sigiro. It uses the

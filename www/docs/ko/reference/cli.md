@@ -25,21 +25,9 @@ JSON을 출력합니다. 두 번째 출력 형식은 없으며, TTY 감지도 �
 
 ## 호스팅 에이전트 인증
 
-별도의 Agent Auth 실행 파일을 설치하거나 실행하지 마십시오. 기존 Sigiro 인터페이스를 사용합니다.
-
-- `sigiro signup --name "Your Name" --email you@example.com`로 호스팅 계정을 만듭니다.
-- `sigiro mcp`로 MCP 클라이언트에 Sigiro 운영 도구를 제공합니다.
-- 에이전트 호스트의 ID 등록과 관리는 `https://sigiro.com/api/auth`를 사용합니다.
-
-프로바이더 탐색 문서는
-`https://sigiro.com/.well-known/agent-configuration`이며, 보호되는 API 리소스는
-`https://sigiro.com`입니다. Agent Auth 수명 주기 경로에는 API 기본 경로 기준으로
-`/host/enroll`, `/agent/register`, `/agent/status`, `/agent/rotate-key`, `/agent/revoke`가
-포함됩니다. 에이전트에 필요한 최소 capability만 요청하십시오. 텔레메트리 에이전트에는
-`telemetry:ingest`만 부여합니다.
-
-Sigiro는 프로토콜과 키 수명 주기 처리를 위해 공식 Agent Auth 구현을 내부적으로 사용합니다.
-사용자용 두 번째 CLI는 제공하지 않습니다.
+Sigiro는 공식 Agent Auth 구현을 내부적으로 사용하며 별도의 온보딩 CLI를 제공하지 않습니다.
+위임 호스트 등록, 일회성 승인, 최소 권한 capability 부여, 토큰 사용, 키 교체 및 폐기에
+대해서는 [Agent Auth로 에이전트 온보딩하기](/docs/how-to/agent-auth)를 참조하십시오.
 
 ## serve
 

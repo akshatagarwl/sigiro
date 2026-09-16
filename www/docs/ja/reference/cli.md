@@ -24,22 +24,10 @@ OS の資格情報ストアに保存します。既存アカウントはブラ�
 
 ## ホスト型エージェント認証
 
-別の Agent Auth 実行ファイルをインストールしたり起動したりする必要はありません。既存の
-Sigiro インターフェースを使用します。
-
-- `sigiro signup --name "Your Name" --email you@example.com` でホスト型アカウントを作成します。
-- `sigiro mcp` で MCP クライアントに Sigiro の運用ツールを公開します。
-- エージェントホストの ID 登録と管理には `https://sigiro.com/api/auth` を使用します。
-
-プロバイダーのディスカバリー文書は
-`https://sigiro.com/.well-known/agent-configuration`、保護対象 API リソースは
-`https://sigiro.com` です。Agent Auth のライフサイクルルートには、API ベースからの相対パスで
-`/host/enroll`、`/agent/register`、`/agent/status`、`/agent/rotate-key`、`/agent/revoke`
-があります。必要最小限の capability だけを要求してください。テレメトリーエージェントには
-`telemetry:ingest` だけを付与します。
-
-Sigiro はプロトコルと鍵のライフサイクル処理に公式 Agent Auth 実装を内部利用します。
-ユーザー向けの別 CLI は公開しません。
+Sigiro は公式 Agent Auth 実装を内部利用し、別のオンボーディング CLI は公開しません。
+委任ホスト登録、1 回限りの承認、最小権限の capability 付与、トークン利用、鍵の
+ローテーション、失効については、
+[Agent Auth でエージェントをオンボーディングする](/docs/how-to/agent-auth)を参照してください。
 
 ## serve
 

@@ -20,15 +20,20 @@
       "ko": "6454ec7b7af4a40a",
       "zh": "6454ec7b7af4a40a"
     },
+    "docs/how-to/agent-auth.md": {
+      "ja": "1b1b42721b930a0b",
+      "ko": "1b1b42721b930a0b",
+      "zh": "1b1b42721b930a0b"
+    },
     "docs/how-to/agent-telemetry.md": {
       "ja": "f9affc5dfb94e621",
       "ko": "f9affc5dfb94e621",
       "zh": "f9affc5dfb94e621"
     },
     "docs/how-to/hosted-onboarding.md": {
-      "ja": "ef08f21bff2704ea",
-      "ko": "ef08f21bff2704ea",
-      "zh": "ef08f21bff2704ea"
+      "ja": "e926108b13995409",
+      "ko": "e926108b13995409",
+      "zh": "e926108b13995409"
     },
     "docs/how-to/install-with-ai.md": {
       "ja": "1a169180021342c2",
@@ -41,14 +46,14 @@
       "zh": "750030a15f3b4c0c"
     },
     "docs/index.md": {
-      "ja": "4a11ec396a837951",
-      "ko": "4a11ec396a837951",
-      "zh": "4a11ec396a837951"
+      "ja": "64aa5a76d28c1426",
+      "ko": "64aa5a76d28c1426",
+      "zh": "64aa5a76d28c1426"
     },
     "docs/reference/cli.md": {
-      "ja": "f88eca758f9dac96",
-      "ko": "f88eca758f9dac96",
-      "zh": "f88eca758f9dac96"
+      "ja": "e829593d7f977232",
+      "ko": "e829593d7f977232",
+      "zh": "e829593d7f977232"
     },
     "docs/tutorials/meta.ts": {
       "ja": "6f0afc1f1c2596d4",

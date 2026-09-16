@@ -34,6 +34,8 @@ OpenTelemetry를 읽습니다. 그리고 자동 루프가 결함을 복구하기
 - **[에이전트로 코드 계측하기](/docs/how-to/install-with-ai)** — 에이전트에게
   프롬프트 하나를 전달하십시오. 에이전트가 OpenTelemetry를 서비스에 연결하고 이를
   sigiro로 향하게 합니다.
+- **[Agent Auth로 에이전트 온보딩하기](/docs/how-to/agent-auth)** — 위임 머신 ID를
+  등록하고 필요한 capability만 승인한 다음 키를 교체하거나 폐기합니다.
 - **[호스팅형 sigiro로 텔레메트리 전송하기](/docs/how-to/hosted-onboarding)** —
   `sigiro signup`으로 새 계정을 만들거나 `sigiro auth login`으로 기존 계정에 로그인한 뒤 당사가 운영하는 호스트로 OTLP를 전송합니다.
 - **[에이전트 자체 텔레메트리를 sigiro로 전송하기](/docs/how-to/agent-telemetry)** —

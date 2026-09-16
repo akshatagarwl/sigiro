@@ -2,7 +2,7 @@
 title: Debug and optimize an agent with sigiro
 description: Record a coding-agent session, find where it spent time and tokens, and turn the evidence into a smaller and faster workflow.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 This guide uses an agent's own OpenTelemetry to answer four questions:

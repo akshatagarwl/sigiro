@@ -4,7 +4,7 @@ description: >-
   使用 OAuth 访问令牌将 OpenTelemetry 数据发送到托管版 sigiro，然后用 SQL 查询回来。你无需运行任何基础设施。在邀请制 Beta
   期间，我们为每个租户手动完成配置。
 sidebar:
-  order: 2
+  order: 3
 ---
 
 本指南介绍如何将 OpenTelemetry 数据发送到由我们运维的 sigiro 主机，
@@ -20,6 +20,8 @@ sigiro auth status
 CLI 会把凭据保存在操作系统的凭据存储中。请把下文中的 `<your-sigiro-host>` 替换为运维方提供给你的主机地址。
 
 ## 1. 注册并登录
+
+本页介绍人员注册和 OAuth 登录。如果软件需要自己的委托身份和密钥，请使用 [Agent Auth 注册指南](/docs/how-to/agent-auth)。
 
 托管认证由 Better Auth 提供。Organizations 就是租户。`sigiro signup` 会发送六位数一次性验证码，
 在终端安全地提示输入，创建并激活唯一的个人工作区，在内部完成无需浏览器的 OAuth 设备授权，

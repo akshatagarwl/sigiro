@@ -24,6 +24,8 @@ sigiro 是面向智能体而非仪表盘的可观测性后端。它读取 OpenTe
 针对单个任务的操作说明。当你已经明确目标、只需要具体步骤时，请阅读这一部分。
 
 - **[用智能体为你的代码埋点](/docs/how-to/install-with-ai)** —— 给智能体一条提示词。智能体会把 OpenTelemetry 接入你的服务，并将其指向 sigiro。
+- **[使用 Agent Auth 为代理完成注册](/docs/how-to/agent-auth)** —— 注册委托机器身份，
+  仅批准所需能力，然后轮换或撤销其密钥。
 - **[向托管版 sigiro 发送遥测数据](/docs/how-to/hosted-onboarding)** —— 使用 `sigiro signup` 创建新账号，或使用 `sigiro auth login` 登录已有账号，再把 OTLP 发送到我们运维的主机。
 - **[将智能体自身的遥测数据发送到 sigiro](/docs/how-to/agent-telemetry)** —— 把 Claude Code 或 Codex 指向 sigiro，然后用 SQL 回读这些会话。
 

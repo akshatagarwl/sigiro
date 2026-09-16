@@ -2,7 +2,7 @@
 title: Send your agent's own telemetry to sigiro
 description: Point Claude Code, Codex, Hermes Agent, or Pi at sigiro to inspect sessions, model latency, tokens, tools, errors, and retries.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 This guide records what your coding agent does, rather than what the application

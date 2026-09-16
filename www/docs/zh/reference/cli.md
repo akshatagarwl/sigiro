@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: sigiro 的每个子命令、参数以及读取的环境变量。sigiro 有七个子命令，客户端命令成功时输出带缩进的 JSON，服务端命令保持连接不退出。
+description: sigiro 的每个子命令、参数以及读取的环境变量。sigiro 有九个子命令，客户端命令成功时输出带缩进的 JSON，服务端命令保持连接不退出。
 sidebar:
   order: 2
 ---
@@ -22,20 +22,9 @@ sidebar:
 
 ## 托管式代理认证
 
-无需安装或运行单独的 Agent Auth 可执行文件。请使用现有的 Sigiro 接口：
-
-- 使用 `sigiro signup --name "Your Name" --email you@example.com` 创建托管账户；
-- 使用 `sigiro mcp` 向 MCP 客户端提供 Sigiro 运维工具；
-- 使用 `https://sigiro.com/api/auth` 注册并管理代理主机身份。
-
-提供方发现文档位于
-`https://sigiro.com/.well-known/agent-configuration`，受保护的 API 资源是
-`https://sigiro.com`。Agent Auth 生命周期路由包括相对于 API 基地址的
-`/host/enroll`、`/agent/register`、`/agent/status`、`/agent/rotate-key` 和
-`/agent/revoke`。只请求代理实际需要的最小能力集；遥测代理只能获得
-`telemetry:ingest`。
-
-Sigiro 在内部使用官方 Agent Auth 实现处理协议和密钥生命周期，不提供第二个面向用户的 CLI。
+Sigiro 在内部使用官方 Agent Auth 实现，且不提供第二个注册 CLI。有关委托主机注册、
+一次性批准、最小权限能力授权、令牌使用、密钥轮换和撤销，请参阅
+[使用 Agent Auth 为代理完成注册](/docs/how-to/agent-auth)。
 
 ## serve
 

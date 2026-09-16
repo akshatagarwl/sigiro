@@ -4,7 +4,7 @@ description: >-
   Claude Code と Codex は自身のセッションの OpenTelemetry を出力します。sigiro
   に向ければ、トークン数やツール呼び出し、レイテンシーを SQL で読み出せます。
 sidebar:
-  order: 3
+  order: 4
 ---
 
 このガイドでは、サービスの動作ではなく、エージェント自身の動作を記録する方法を説明します。Claude Code と Codex はどちらも、自身のセッションに関する OpenTelemetry を出力します。そのテレメトリーを sigiro に向けると、セッションがクエリ可能な行になります。

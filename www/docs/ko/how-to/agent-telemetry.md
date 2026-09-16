@@ -4,7 +4,7 @@ description: >-
   Claude Code와 Codex는 자체 세션에 대한 OpenTelemetry를 내보냅니다. sigiro로 보내면 토큰 수와 도구 호출,
   세션 지연 시간을 SQL로 조회할 수 있습니다.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 이 가이드에서는 서비스가 하는 일이 아니라 에이전트가 하는 일을 기록하는 방법을
