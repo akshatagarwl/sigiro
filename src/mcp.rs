@@ -13,10 +13,15 @@
 //! Tool descriptions are the agent's only documentation, so they carry the
 //! same wording as the `#[utoipa::path]` descriptions in `server.rs`.
 
-use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::router::tool::{ToolRoute, ToolRouter};
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
-use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, ContentBlock, ServerCapabilities, ServerInfo, Tool,
+};
+use rmcp::service::RunningService;
+use rmcp::transport::StreamableHttpClientTransport;
+use rmcp::{ErrorData, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use std::sync::Arc;
 
 use crate::client::SigiroClient;
 
@@ -85,6 +90,27 @@ pub struct SigiroMcp {
     tool_router: ToolRouter<Self>,
 }
 
+type DocsService = RunningService<rmcp::RoleClient, ()>;
+
+/// Connect to Blume's canonical docs MCP and copy only its advertised tool
+/// metadata into the local router. The implementation and schemas remain
+/// upstream-owned; this process is only a protocol adapter.
+pub async fn connect_docs() -> anyhow::Result<(Arc<DocsService>, Vec<Tool>)> {
+    let url = crate::config::DOCS_MCP_URL.value()?;
+    connect_docs_at(url).await
+}
+
+/// Connect to a specific documentation MCP endpoint. Kept separate from the
+/// environment-backed entry point so callers and tests can inject an endpoint.
+pub async fn connect_docs_at(
+    url: impl Into<String>,
+) -> anyhow::Result<(Arc<DocsService>, Vec<Tool>)> {
+    let transport = StreamableHttpClientTransport::from_uri(url.into());
+    let service = ().serve(transport).await?;
+    let tools = service.list_all_tools().await?;
+    Ok((Arc::new(service), tools))
+}
+
 #[tool_router]
 impl SigiroMcp {
     pub fn new(client: SigiroClient) -> Self {
@@ -92,6 +118,36 @@ impl SigiroMcp {
             client,
             tool_router: Self::tool_router(),
         }
+    }
+
+    pub fn with_docs(mut self, docs: Arc<DocsService>, tools: Vec<Tool>) -> anyhow::Result<Self> {
+        for tool in tools {
+            anyhow::ensure!(
+                !self.tool_router.map.contains_key(&tool.name),
+                "documentation MCP tool name collides with an operational tool: {}",
+                tool.name
+            );
+            let name = tool.name.clone();
+            let upstream = Arc::clone(&docs);
+            let route = ToolRoute::new_dyn(tool, move |context| {
+                let upstream = Arc::clone(&upstream);
+                let name = name.clone();
+                Box::pin(async move {
+                    let params = CallToolRequestParams::new(name)
+                        .with_arguments(context.arguments.unwrap_or_default());
+                    match upstream.call_tool(params).await {
+                        Ok(result) => Ok(result.into()),
+                        Err(error) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                            "documentation MCP unavailable: {error}"
+                        ))])
+                        .into()),
+                    }
+                })
+            });
+            let route_name = route.name().to_owned();
+            self.tool_router.map.insert(route_name.into(), route);
+        }
+        Ok(self)
     }
 
     #[tool(

@@ -28,7 +28,7 @@ import { CF_ANALYTICS_TOKEN, SITE } from './src/lib/site';
 const sigiro = (): AstroIntegration => ({
   name: 'sigiro',
   hooks: {
-    'astro:config:setup': ({ injectRoute, updateConfig }) => {
+    'astro:config:setup': ({ injectRoute, injectScript, updateConfig }) => {
       updateConfig({
         vite: {
           resolve: {
@@ -40,6 +40,7 @@ const sigiro = (): AstroIntegration => ({
         pattern: '/dl/[...key]',
         entrypoint: fileURLToPath(new URL('./src/dl.ts', import.meta.url)),
       });
+      injectScript('page', "import '../src/webmcp/browser.ts';");
     },
   },
 });
@@ -484,6 +485,8 @@ export default defineConfig({
      * gated on their own flags, not on this one.
      */
     api: false,
+    /** The site owns one canonical eight-tool WebMCP catalog; do not also emit Blume's four-tool shim. */
+    webmcp: false,
     /**
      * Four read-only tools — search_docs, get_page, list_pages, get_navigation
      * — that Claude Code, Cursor and VS Code read directly. This is the reason
@@ -492,6 +495,7 @@ export default defineConfig({
      */
     mcp: {
       enabled: true,
+      route: '/mcp/docs',
       name: 'sigiro-docs',
       instructions:
         'Documentation for sigiro, an observability data layer. For live telemetry, use the sigiro API at https://sigiro.com — its full surface is described at https://sigiro.com/openapi.json.',

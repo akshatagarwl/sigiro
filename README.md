@@ -53,6 +53,18 @@ SIGIRO_ACCESS_TOKEN=<oauth-access-token> sigiro status
 # or: sigiro --token <oauth-access-token> status
 ```
 
+### MCP
+
+`sigiro mcp` speaks MCP over stdio and always exposes the four operational
+tools. When Blume's documentation MCP is reachable, it also discovers and
+proxies its four documentation tools without copying their schemas or corpus.
+The upstream endpoint defaults to `https://sigiro.com/mcp/docs`; override it
+with `SIGIRO_DOCS_MCP_URL` for a self-hosted docs deployment. Documentation
+connection failures are isolated to documentation tools, and no Sigiro bearer
+token is forwarded to the public documentation endpoint. The hosted Blume
+implementation is currently published at `/mcp/docs`; this does not claim a
+hosted unified `/mcp` endpoint.
+
 ### Hosted agent access
 
 Users stay on Sigiro surfaces. Do not install or invoke a separate Agent Auth

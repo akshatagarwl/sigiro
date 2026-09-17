@@ -102,6 +102,9 @@ export default Alchemy.Stack(
             '!/docs/*.mdx',
             '/.well-known/agent-configuration',
             '/.well-known/oauth-protected-resource',
+
+            '/.well-known/mcp.json',
+            '/.well-known/mcp/*',
             '/api/auth',
             '/api/auth/*',
             '/auth-ui.css',
@@ -121,6 +124,7 @@ export default Alchemy.Stack(
             '/sign-up',
             '/sign-up/*',
             '/v1/*',
+            '/mcp',
             '/v1development/profiles',
           ],
         },

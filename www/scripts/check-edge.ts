@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { access } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createServer,
   type IncomingMessage,
@@ -83,8 +86,16 @@ const requestWithHost = (
     request.end();
   });
 
+const here = dirname(fileURLToPath(import.meta.url));
+const wrangler = resolve(here, '../node_modules/.bin/wrangler');
+await access(resolve(here, '../dist/server/blume-worker.mjs'));
+
 const jsonOrigin = async (origin: string, request: Request): Promise<Response> => {
   const url = new URL(request.url);
+  if (origin === 'api' && url.pathname === '/v1/auth/validate')
+    return Response.json({ authenticated: true });
+  if (origin === 'api' && url.pathname === '/v1/services')
+    return Response.json([{ service: 'edge-fixture' }]);
   if (origin === 'auth' && url.pathname === '/sign-in') {
     return Response.redirect(`${url.origin}/device?from=auth`, 302);
   }
@@ -105,11 +116,11 @@ const workerPort = reservation.port;
 await closeServer(reservation.server);
 
 const worker = spawn(
-  'wrangler',
+  wrangler,
   [
     'dev',
     '--config',
-    'wrangler.preview.jsonc',
+    'wrangler.edge-check.jsonc',
     '--port',
     String(workerPort),
     '--var',
@@ -132,7 +143,7 @@ const base = `http://127.0.0.1:${workerPort}`;
 const stop = async (): Promise<void> => {
   if (worker.exitCode === null) {
     worker.kill();
-    await once(worker, 'exit');
+    if (worker.exitCode === null) await once(worker, 'exit');
   }
   await Promise.all([closeServer(auth.server), closeServer(api.server)]);
 };
@@ -187,7 +198,68 @@ try {
   assert.equal(apiBody.body, 'trace-body');
 
   const metadata = await fetch(`${base}/.well-known/oauth-protected-resource`);
-  assert.equal((await metadata.json()).origin, 'api');
+  assert.deepEqual((await metadata.json()).scopes_supported, [
+    'openid',
+    'services:read',
+    'anomalies:read',
+    'diagnose:read',
+    'query:read',
+  ]);
+
+  const clientMetadata = await fetch(`${base}/.well-known/oauth-client`);
+  assert.equal((await clientMetadata.json()).token_endpoint_auth_method, 'none');
+  for (const path of ['/.well-known/mcp.json', '/.well-known/mcp/server-card.json']) {
+    const card = await fetch(`${base}${path}`);
+    const cardBody = await card.json();
+    assert.equal(cardBody.remotes[0].url, `${base}/mcp`);
+    assert.equal(cardBody.tools.length, 8);
+  }
+  const challenge = await fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'edge-check', version: '1' },
+      },
+    }),
+  });
+  assert.equal(challenge.status, 401);
+  assert.match(challenge.headers.get('www-authenticate') ?? '', /resource_metadata=/);
+  type EdgeMcpParams = {
+    protocolVersion?: string;
+    capabilities?: object;
+    clientInfo?: object;
+    name?: string;
+    arguments?: object;
+  };
+  const mcp = (method: string, params: EdgeMcpParams = {}) =>
+    fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer edge-token',
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+    });
+  const initialized = await mcp('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'edge-check', version: '1' },
+  });
+  assert.equal(initialized.status, 200);
+  const listed = await mcp('tools/list');
+  assert.equal((await listed.json()).result.tools.length, 8);
+  const called = await mcp('tools/call', { name: 'list_services', arguments: {} });
+  assert.deepEqual(
+    (await called.json()).result.content[0].text,
+    JSON.stringify([{ service: 'edge-fixture' }], null, 2),
+  );
 
   const health = await fetch(`${base}/health`);
   assert.equal((await health.json()).origin, 'api');

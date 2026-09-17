@@ -1,5 +1,8 @@
 // Blume creates this module before Alchemy bundles the deployment entrypoint.
 import website from '../dist/server/blume-worker.mjs';
+import { MCP_PROTECTED_RESOURCE_METADATA } from './mcp-handler';
+import { MCP_REQUIRED_SCOPE, MCP_RESOURCE } from './mcp-catalog';
+import { handleDocsMcp, handleMcp, tools } from './mcp';
 
 const AUTH_PATHS = new Set([
   '/.well-known/agent-configuration',
@@ -32,6 +35,9 @@ const isAuthPath = (pathname: string): boolean =>
 
 const isApiPath = (pathname: string): boolean =>
   pathname.startsWith('/v1/') || API_PATHS.has(pathname);
+
+const MCP_METADATA = '/.well-known/oauth-protected-resource';
+const WEBMCP_CLIENT_METADATA = '/.well-known/oauth-client';
 
 const proxyRequest = async (request: Request, upstream: string): Promise<Response> => {
   const url = new URL(request.url);
@@ -77,6 +83,54 @@ export default {
     }
 
     const pathname = url.pathname;
+    if (pathname === '/mcp') return handleMcp(request, env);
+    if (pathname === '/mcp/docs') return handleDocsMcp(request);
+    if (
+      pathname === WEBMCP_CLIENT_METADATA &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      const metadata = {
+        client_id: `${url.origin}${WEBMCP_CLIENT_METADATA}`,
+        client_name: 'Sigiro browser WebMCP',
+        redirect_uris: [`${url.origin}/`],
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        token_endpoint_auth_method: 'none',
+        application_type: 'native',
+        scope: MCP_REQUIRED_SCOPE,
+      };
+      return Promise.resolve(
+        request.method === 'HEAD'
+          ? new Response(null, { headers: { 'content-type': 'application/json' } })
+          : Response.json(metadata),
+      );
+    }
+    if (pathname === MCP_METADATA) {
+      return Promise.resolve(
+        Response.json(MCP_PROTECTED_RESOURCE_METADATA, {
+          headers: { 'access-control-allow-origin': '*' },
+        }),
+      );
+    }
+    if (pathname === '/.well-known/mcp.json' || pathname === '/.well-known/mcp/server-card.json') {
+      return Promise.resolve(
+        Response.json({
+          $schema: 'https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json',
+          name: 'com.sigiro/sigiro',
+          title: 'Sigiro',
+          version: '1.0.0',
+          description: 'Authenticated Sigiro observability and documentation MCP server.',
+          transport: 'streamable-http',
+          url: 'https://sigiro.com/mcp',
+          remotes: [{ type: 'streamable-http', url: 'https://sigiro.com/mcp' }],
+          authorization: {
+            required: true,
+            resource_metadata: `${MCP_RESOURCE}/.well-known/oauth-protected-resource`,
+          },
+          tools,
+        }),
+      );
+    }
     if (isAuthPath(pathname)) return proxyRequest(request, env.AUTH_ORIGIN_URL);
     if (isApiPath(pathname)) return proxyRequest(request, env.API_ORIGIN_URL);
     return website.fetch(request, env, context);

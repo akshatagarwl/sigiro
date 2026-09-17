@@ -390,7 +390,19 @@ async fn main() -> Result<()> {
             use rmcp::ServiceExt;
             let client = sigiro::client::try_build_client().await?;
             tracing::info!(endpoint = client.base_url(), "starting sigiro MCP server");
-            let service = sigiro::mcp::SigiroMcp::new(client)
+            let mut service = sigiro::mcp::SigiroMcp::new(client);
+            match sigiro::mcp::connect_docs().await {
+                Ok((docs, tools)) => {
+                    tracing::info!(count = tools.len(), "connected to documentation MCP");
+                    service = service.with_docs(docs, tools)?;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "documentation MCP unavailable; operational tools remain available: {error:#}"
+                    );
+                }
+            }
+            let service = service
                 .serve((tokio::io::stdin(), tokio::io::stdout()))
                 .await
                 .context("failed to start MCP server on stdio")?;

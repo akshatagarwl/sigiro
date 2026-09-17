@@ -317,6 +317,16 @@ async fn oauth_protected_resource_metadata(
     axum::Json(metadata)
 }
 
+/// GET /v1/auth/validate — verify a bearer token without selecting an API
+/// operation. The Worker uses this as its resource-server boundary.
+async fn validate_auth_token(
+    Extension(_context): Extension<auth::AuthContext>,
+) -> axum::Json<serde_json::Value> {
+    // The Worker only needs a validity signal. Do not reflect tenant or subject
+    // identity across the public resource-server boundary.
+    axum::Json(serde_json::json!({ "authenticated": true }))
+}
+
 /// Build the HTTP Router for the main API (port 9999).
 /// Extracted from `run_servers` so integration tests can build the same
 /// router with test state without starting TCP listeners.
@@ -327,6 +337,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     // bound bogus-token work, then auth injects a trusted TenantId, then the
     // per-tenant limiter runs before the handler.
     let v1 = Router::new()
+        .route("/auth/validate", axum::routing::get(validate_auth_token))
         .typed_post(query_handler)
         .typed_post(diagnose_handler)
         .typed_get(services_handler)

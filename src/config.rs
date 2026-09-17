@@ -342,6 +342,12 @@ pub(crate) static DATA_DIR: Envar<String> =
 pub static ENDPOINT: Envar<String> =
     Envar::on_startup("SIGIRO_ENDPOINT", || EnvarDef::Default(String::new()));
 
+/// Public Blume documentation MCP endpoint. Override this for a self-hosted
+/// docs deployment; no Sigiro credential is sent to this endpoint.
+pub static DOCS_MCP_URL: Envar<String> = Envar::on_demand("SIGIRO_DOCS_MCP_URL", || {
+    EnvarDef::Default("https://sigiro.com/mcp/docs".to_string())
+});
+
 /// Bearer token for a hosted JWT endpoint. Client-only: it is sent
 /// as a bearer token by `client::try_build_client` and never configures
 /// server-side authentication.
