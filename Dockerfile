@@ -4,10 +4,14 @@
 # $BUILDPLATFORM so rustc runs NATIVELY and cross-links to the target arch (no
 # QEMU). Carries both GNU cross toolchains + cargo-chef for dep-layer caching.
 FROM --platform=$BUILDPLATFORM rust:1.98.1-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57 AS chef
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
       pkg-config protobuf-compiler git binutils libssl-dev make mold \
       gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
       gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+    && dpkg --add-architecture "$TARGETARCH" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "libssl-dev:$TARGETARCH" \
     && rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef --locked && \
     rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
@@ -59,7 +63,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
       *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
     esac; \
     V=$(echo "$T" | tr 'a-z-' 'A-Z_'); Tu=$(echo "$T" | tr '-' '_'); \
-    export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
+    export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar" \
+      PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ \
+      PKG_CONFIG_PATH="/usr/lib/${P}/pkgconfig:/usr/share/pkgconfig" \
+      OPENSSL_LIB_DIR="/usr/lib/${P}" OPENSSL_INCLUDE_DIR="/usr/include/${P}"; \
     mold -run cargo chef cook --release --target "$T" --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
@@ -71,7 +78,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
       arm64) T=aarch64-unknown-linux-gnu; P=aarch64-linux-gnu ;; \
     esac; \
     V=$(echo "$T" | tr 'a-z-' 'A-Z_'); Tu=$(echo "$T" | tr '-' '_'); \
-    export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
+    export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar" \
+      PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ \
+      PKG_CONFIG_PATH="/usr/lib/${P}/pkgconfig:/usr/share/pkgconfig" \
+      OPENSSL_LIB_DIR="/usr/lib/${P}" OPENSSL_INCLUDE_DIR="/usr/include/${P}"; \
     mold -run cargo build --release --target "$T" --bin sigiro && \
     cp "target/${T}/release/sigiro" /build/sigiro && \
     mkdir -p /build/data-dir
