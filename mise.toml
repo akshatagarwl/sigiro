@@ -128,12 +128,44 @@ aube -C www run alchemy:hetzner:plan
 """
 
 [tasks.alchemy-workload-plan]
-description = "Plan the production Docker workload through Alchemy."
+description = "Plan the native systemd workload through Alchemy."
 run = "aube -C www run alchemy:workload:plan"
 
 [tasks.alchemy-workload-deploy]
-description = "Deploy the production Docker workload through Alchemy."
+description = "Deploy the native systemd workload through Alchemy."
 run = "aube -C www run alchemy:workload:deploy"
+
+[tasks.native-host-check]
+description = "Validate the adopted-host systemd contract without connecting to production."
+run = "ops/prod/deploy-native-host.sh --check"
+
+[tasks.native-artifact]
+description = "Package a deterministic x86_64 native artifact."
+run = "scripts/package-native-artifact.py --input ${NATIVE_ARTIFACT_INPUT:?set NATIVE_ARTIFACT_INPUT} --service ${NATIVE_ARTIFACT_SERVICE:?set NATIVE_ARTIFACT_SERVICE} --version ${NATIVE_ARTIFACT_VERSION:-0.1.0} --output ${NATIVE_ARTIFACT_DIR:-dist-bin/native}"
+
+[tasks.native-contract-test]
+description = "Run black-box native deployment invariant tests."
+run = "python3 -m unittest tests.deployment.test_native_contract"
+
+[tasks.native-backup]
+description = "Create and structurally verify encrypted off-host pre-cutover backups."
+run = "scripts/backup-native-host.sh"
+
+[tasks.native-stage]
+description = "Stage native packages, artifacts, units, and PostgreSQL 18 without stopping Docker workloads."
+run = "SIGIRO_NATIVE_ACTION=stage aube -C www run alchemy:workload:deploy"
+
+[tasks.native-rehearse]
+description = "Stream and verify a PostgreSQL 17 to 18 rehearsal while Docker remains authoritative."
+run = "SIGIRO_NATIVE_ACTION=rehearse aube -C www run alchemy:workload:deploy"
+
+[tasks.native-cutover]
+description = "Perform the backup-gated host-wide systemd cutover."
+run = "SIGIRO_NATIVE_ACTION=cutover aube -C www run alchemy:workload:deploy"
+
+[tasks.native-verify]
+description = "Verify all native services and assert that no Docker workload is running."
+run = "SIGIRO_NATIVE_ACTION=verify aube -C www run alchemy:workload:deploy"
 
 [tasks.build]
 description = "Release build of the sigiro binary. Set TARGET to cross-compile."
