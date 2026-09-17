@@ -43,16 +43,7 @@ enum Command {
         #[arg(long)]
         otlp_grpc_port: Option<u16>,
     },
-    /// Migrate supported local administrative state into hosted PostgreSQL.
-    /// Refuses to run when local DuckLake metadata would make the cutover partial.
-    Migrate {
-        /// Existing self-hosted data directory containing admin.sqlite.
-        #[arg(long)]
-        source_dir: String,
-        /// Hosted PostgreSQL catalog URL.
-        #[arg(long)]
-        catalog_url: String,
-    },
+
     /// Run a federated SQL query across one or more sigiro edges.
     ///
     /// This is a coordinator: an embedded DuckDB plans the query, pushes a
@@ -243,19 +234,7 @@ async fn main() -> Result<()> {
         None => {
             run_serve().await?;
         }
-        Some(Command::Migrate {
-            source_dir,
-            catalog_url,
-        }) => {
-            let outcome = sigiro::migration::migrate_admin_sqlite(
-                &camino::Utf8PathBuf::from(source_dir),
-                &catalog_url,
-            )?;
-            println!(
-                "{}",
-                format_output(&serde_json::json!({"outcome": format!("{outcome:?}")}))?
-            );
-        }
+
         Some(Command::Query {
             sql: sql_arg,
             edge,
