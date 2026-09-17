@@ -4,7 +4,7 @@ sccache = "0.17.0"
 # digest before installing either tool. Keep exact versions so signer or
 # artifact changes arrive as reviewable mise.lock diffs.
 "packslip:github.com/jdx/hk" = "1.58.1"
-"packslip:github.com/jdx/mr-boxington" = "1.11.1"
+"packslip:github.com/jdx/mr-boxington" = "1.12.0"
 # 2.2.17 is intentionally not selected yet: it is inside mise's 24-hour
 # minimum-release-age window. Do not weaken that supply-chain policy globally.
 "packslip:github.com/aubepkg/aube" = "2.2.16"
