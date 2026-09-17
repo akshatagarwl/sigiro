@@ -256,7 +256,7 @@ impl StorageConfig {
         matches!(self.data, DataLocation::S3(_))
     }
 
-    pub(crate) fn catalog_url(&self) -> &str {
+    pub fn catalog_url(&self) -> &str {
         self.catalog_url.expose_secret()
     }
 }
@@ -538,7 +538,6 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
             return Ok(None);
         }
     };
-
     let data = if s3_bucket.is_empty() {
         anyhow::ensure!(
             configured_s3_fields.is_empty(),
@@ -560,6 +559,7 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         DataLocation::S3(S3Config::new(bucket, region, endpoint, key_id, secret)?)
     };
 
+    validate_hosted_catalog_tls(&catalog_url)?;
     Ok(Some(StorageConfig::new(catalog_url, data)?))
 }
 
@@ -576,6 +576,32 @@ fn resolve_with_aws_fallback(
     } else {
         Ok(primary)
     }
+}
+
+fn validate_hosted_catalog_tls(uri: &str) -> Result<()> {
+    let parsed = Url::parse(uri).context("SIGIRO_CATALOG_URL must be a PostgreSQL URL")?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "postgres" | "postgresql"),
+        "SIGIRO_CATALOG_URL must use postgres:// or postgresql://"
+    );
+    let mut sslmode = None;
+    let mut sslrootcert = None;
+    for (key, value) in parsed.query_pairs() {
+        match key.as_ref() {
+            "sslmode" => sslmode = Some(value.into_owned()),
+            "sslrootcert" => sslrootcert = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+    anyhow::ensure!(
+        sslmode.as_deref() == Some("verify-full"),
+        "hosted PostgreSQL requires sslmode=verify-full"
+    );
+    anyhow::ensure!(
+        sslrootcert.as_deref().is_some_and(|path| !path.is_empty()),
+        "hosted PostgreSQL requires sslrootcert"
+    );
+    Ok(())
 }
 
 /// Convert a `postgresql://user:***@host:port/dbname` URI to a BARE libpq
@@ -614,8 +640,22 @@ pub(crate) fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
                 anyhow::bail!("invalid postgres URI: expected non-empty database name");
             }
 
+            let mut sslmode = None;
+            let mut sslrootcert = None;
+            for (key, value) in parsed.query_pairs() {
+                match key.as_ref() {
+                    "sslmode" => sslmode = Some(value.into_owned()),
+                    "sslrootcert" => sslrootcert = Some(value.into_owned()),
+                    _ => {}
+                }
+            }
+            let tls = match (sslmode, sslrootcert) {
+                (Some(mode), Some(root)) => format!(" sslmode={mode} sslrootcert={root}"),
+                _ => String::new(),
+            };
+
             Ok(format!(
-                "dbname={dbname} host={host} user={user} password={password} port={port}"
+                "dbname={dbname} host={host} user={user} password={password} port={port}{tls}"
             ))
         } else {
             // Already libpq key=value — strip any leading `postgres:` so the
@@ -640,7 +680,13 @@ pub(crate) fn resolve_extension_dir(data_dir: &Utf8Path) -> camino::Utf8PathBuf 
         .ok()
         .filter(|path| !path.is_empty())
         .map(camino::Utf8PathBuf::from)
-        .unwrap_or_else(|| data_dir.join("extensions"))
+        .unwrap_or_else(|| {
+            if matches!(crate::config::CATALOG_URL.value(), Ok(value) if !value.is_empty()) {
+                crate::config::duckdb_cache_dir().expect("validated hosted DuckDB cache path")
+            } else {
+                data_dir.join("extensions")
+            }
+        })
 }
 
 /// Install and load a list of DuckDB extensions, emitting a progress line
@@ -802,5 +848,22 @@ mod redaction_tests {
         );
         // Non-secret fields stay visible.
         assert!(dbg.contains("tenant_acme") && dbg.contains("<redacted>"));
+    }
+
+    #[test]
+    fn hosted_catalog_tls_is_required_and_preserved_for_ducklake() {
+        for uri in [
+            "postgresql://sigiro:secret@db.internal:5432/sigiro",
+            "postgresql://sigiro:secret@db.internal:5432/sigiro?sslmode=require&sslrootcert=/ca.pem",
+            "postgresql://sigiro:secret@db.internal:5432/sigiro?sslmode=verify-full",
+        ] {
+            assert!(validate_hosted_catalog_tls(uri).is_err(), "accepted {uri}");
+        }
+
+        let uri = "postgresql://sigiro:secret@db.internal:5432/sigiro?sslmode=verify-full&sslrootcert=%2Fetc%2Fsigiro%2Fpostgres-ca.crt";
+        validate_hosted_catalog_tls(uri).unwrap();
+        let libpq = postgres_uri_to_libpq(uri).unwrap();
+        assert!(libpq.contains("sslmode=verify-full"));
+        assert!(libpq.contains("sslrootcert=/etc/sigiro/postgres-ca.crt"));
     }
 }

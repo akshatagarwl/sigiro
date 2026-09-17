@@ -12,7 +12,6 @@ use rmcp::{ClientHandler, ServiceExt};
 use serde_json::json;
 
 use parking_lot::Mutex;
-use rusqlite::Connection;
 use sigiro::admin;
 use sigiro::client::{ClientAuth, SigiroClient};
 use sigiro::ingest;
@@ -57,12 +56,9 @@ fn build_context_with_auth(auth_mode: sigiro::auth::AuthMode) -> TestContext {
     pool.create_project("default")
         .expect("failed to init default project connection");
 
-    // In-memory SQLite admin DB with all required tables
-    let admin_conn = Connection::open_in_memory().expect("failed to open in-memory SQLite");
-    admin::create_instance_status_table(&admin_conn)
-        .expect("failed to create instance_status table");
-
-    let admin_conn = Arc::new(Mutex::new(admin_conn));
+    let admin_conn = Arc::new(Mutex::new(
+        admin::test_connection().expect("failed to open in-memory control state"),
+    ));
     let alerts = sigiro::alerts::AlertStore::new(Arc::clone(&admin_conn))
         .expect("failed to initialize alert store");
 
@@ -1430,18 +1426,18 @@ async fn test_otlp_oom_events_drive_alert_lifecycle_once() {
     assert_eq!(resolved["alerts"][0]["status"], "resolved");
     assert_eq!(resolved["alerts"][0]["occurrence_count"], 1);
 
-    let (occurrences, notifications): (i64, i64) = ctx
-        .state
-        .admin_conn
-        .lock()
-        .query_row(
-            "SELECT
+    let (occurrences, notifications): (i64, i64) = match &*ctx.state.admin_conn.lock() {
+        admin::AdminConnection::Local(conn) => conn
+            .query_row(
+                "SELECT
                 (SELECT count(*) FROM alert_occurrences),
                 (SELECT count(*) FROM alert_outbox)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("alert control state should be queryable");
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("alert control state should be queryable"),
+        admin::AdminConnection::Hosted(_) => unreachable!("test control state is local"),
+    };
     assert_eq!(occurrences, 2);
     assert_eq!(notifications, 2);
 
@@ -1456,11 +1452,12 @@ async fn test_otlp_accepts_event_when_alert_state_is_not_durable() {
     let ctx = build_test_context();
     let (otlp_app, router) = build_otlp_app_with_router(&ctx.state);
     let otlp = TestServer::new(otlp_app).expect("failed to build OTLP test server");
-    ctx.state
-        .admin_conn
-        .lock()
-        .execute_batch("DROP TABLE alert_occurrences")
-        .expect("break alert persistence");
+    match &*ctx.state.admin_conn.lock() {
+        admin::AdminConnection::Local(conn) => conn
+            .execute_batch("DROP TABLE alert_occurrences")
+            .expect("break alert persistence"),
+        admin::AdminConnection::Hosted(_) => unreachable!("test control state is local"),
+    }
 
     let response = otlp
         .post("/v1/logs")

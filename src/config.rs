@@ -337,6 +337,28 @@ pub(crate) fn disk_sample_seconds() -> Result<NonZeroU64> {
 pub(crate) static DATA_DIR: Envar<String> =
     Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);
 
+/// Persistent hosted telemetry filesystem. Hosted mode never uses the local
+/// platform data directory: PostgreSQL owns catalog state and this path owns
+/// only local DuckLake data files, crash evidence, and migration evidence.
+pub(crate) static HOSTED_DATA_DIR: Envar<String> =
+    Envar::on_startup("SIGIRO_HOSTED_DATA_DIR", || {
+        EnvarDef::Default("/var/lib/sigiro/telemetry".to_string())
+    });
+
+/// Shared writable DuckDB extension/cache directory for hosted mode.
+pub(crate) static DUCKDB_CACHE_DIR: Envar<String> =
+    Envar::on_startup("SIGIRO_DUCKDB_CACHE_DIR", || {
+        EnvarDef::Default("/var/cache/sigiro/duckdb".to_string())
+    });
+
+pub fn hosted_data_dir() -> Result<camino::Utf8PathBuf> {
+    Ok(camino::Utf8PathBuf::from(HOSTED_DATA_DIR.value()?))
+}
+
+pub(crate) fn duckdb_cache_dir() -> Result<camino::Utf8PathBuf> {
+    Ok(camino::Utf8PathBuf::from(DUCKDB_CACHE_DIR.value()?))
+}
+
 /// Server URL for CLI client and admin commands. An empty value selects the
 /// hosted endpoint after OAuth login and localhost otherwise.
 pub static ENDPOINT: Envar<String> =

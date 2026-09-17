@@ -1,9 +1,10 @@
+use crate::admin::AdminConnection;
 use anyhow::{Context, Result};
 use arrow::array::{Array, StringArray, TimestampMicrosecondArray};
 use arrow::record_batch::RecordBatch;
 use parking_lot::Mutex;
 use prefixed_api_key::sha2::{Digest, Sha256};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
@@ -24,7 +25,7 @@ pub struct AlertWebhookToken(String);
 
 #[derive(Clone)]
 pub struct AlertStore {
-    conn: Arc<Mutex<Connection>>,
+    conn: Arc<Mutex<AdminConnection>>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +109,17 @@ struct StoredAlert {
     occurrence_count: u64,
 }
 
+struct AlertRow {
+    fingerprint: String,
+    rule_id: String,
+    status: String,
+    service_name: String,
+    container_name: String,
+    starts_at_us: i64,
+    ends_at_us: Option<i64>,
+    occurrence_count: i64,
+}
+
 struct AlertTransition<'a> {
     event: &'a AlertEvent,
     fingerprint: &'a str,
@@ -118,12 +130,15 @@ struct AlertTransition<'a> {
 }
 
 impl AlertStore {
-    pub fn new(conn: Arc<Mutex<Connection>>) -> Result<Self> {
-        create_tables(&conn.lock())?;
+    pub fn new(conn: Arc<Mutex<AdminConnection>>) -> Result<Self> {
+        match &mut *conn.lock() {
+            AdminConnection::Local(conn) => create_sqlite_tables(conn)?,
+            AdminConnection::Hosted(client) => create_postgres_tables(client)?,
+        }
         Ok(Self { conn })
     }
 
-    pub(crate) fn admin_connection(&self) -> Arc<Mutex<Connection>> {
+    pub(crate) fn admin_connection(&self) -> Arc<Mutex<AdminConnection>> {
         Arc::clone(&self.conn)
     }
 
@@ -132,58 +147,14 @@ impl AlertStore {
         project_id: &str,
         batch: &RecordBatch,
     ) -> Result<ProcessResult> {
-        let events = events_from_log_batch(project_id, batch)?;
-        self.process_events(&events)
+        self.process_events(&events_from_log_batch(project_id, batch)?)
     }
 
     pub(crate) fn process_events(&self, events: &[AlertEvent]) -> Result<ProcessResult> {
-        let mut conn = self.conn.lock();
-        let tx = conn
-            .transaction()
-            .context("failed to start alert transaction")?;
-        let mut accepted_events = 0;
-        let mut notifications_enqueued = 0;
-
-        for event in events {
-            if event.event_name != OOM_FIRING_EVENT && event.event_name != OOM_RECOVERED_EVENT {
-                continue;
-            }
-            let fingerprint = alert_fingerprint(event);
-            let occurrence = occurrence_key(event);
-            let inserted = tx.execute(
-                "INSERT OR IGNORE INTO alert_occurrences
-                 (project_id, occurrence_key, fingerprint, observed_at_us)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    event.project_id,
-                    occurrence,
-                    fingerprint,
-                    event.timestamp_us
-                ],
-            )?;
-            if inserted == 0 {
-                continue;
-            }
-            accepted_events += 1;
-
-            let stored = read_stored_alert(&tx, &event.project_id, &fingerprint)?;
-            if event.event_name == OOM_FIRING_EVENT {
-                notifications_enqueued +=
-                    process_firing(&tx, event, &fingerprint, stored.as_ref())?;
-            } else if let Some(stored) = stored.as_ref()
-                && stored.status == "firing"
-                && event.timestamp_us >= stored.starts_at_us
-            {
-                process_resolution(&tx, event, &fingerprint, stored)?;
-                notifications_enqueued += 1;
-            }
+        match &mut *self.conn.lock() {
+            AdminConnection::Local(conn) => process_events_sqlite(conn, events),
+            AdminConnection::Hosted(client) => process_events_postgres(client, events),
         }
-
-        tx.commit().context("failed to commit alert transaction")?;
-        Ok(ProcessResult {
-            accepted_events,
-            notifications_enqueued,
-        })
     }
 
     pub(crate) fn list(
@@ -191,85 +162,39 @@ impl AlertStore {
         project_id: &str,
         status: Option<&str>,
     ) -> Result<Vec<AlertInstance>> {
-        let conn = self.conn.lock();
-        let mut sql = String::from(
-            "SELECT fingerprint, rule_id, status, service_name, container_name,
-                    starts_at_us, ends_at_us, occurrence_count
-             FROM alert_instances WHERE project_id = ?1",
-        );
-        if status.is_some() {
-            sql.push_str(" AND status = ?2");
+        match &mut *self.conn.lock() {
+            AdminConnection::Local(conn) => list_sqlite(conn, project_id, status),
+            AdminConnection::Hosted(client) => list_postgres(client, project_id, status),
         }
-        sql.push_str(" ORDER BY updated_at_us DESC");
-        let mut stmt = conn.prepare(&sql)?;
-        let map_row = |row: &rusqlite::Row<'_>| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, Option<i64>>(6)?,
-                row.get::<_, u64>(7)?,
-            ))
-        };
-        let rows = match status {
-            Some(status) => stmt.query_map(params![project_id, status], map_row)?,
-            None => stmt.query_map(params![project_id], map_row)?,
-        };
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(
-                |(
-                    fingerprint,
-                    rule_id,
-                    status,
-                    service_name,
-                    container_name,
-                    starts_at_us,
-                    ends_at_us,
-                    occurrence_count,
-                )| {
-                    Ok(AlertInstance {
-                        fingerprint,
-                        rule_id,
-                        status,
-                        service_name,
-                        container_name,
-                        starts_at: format_timestamp(starts_at_us)?,
-                        ends_at: ends_at_us.map(format_timestamp).transpose()?,
-                        occurrence_count,
-                    })
-                },
-            )
-            .collect()
     }
 
     pub(crate) fn next_due(&self, now_us: i64) -> Result<Option<PendingNotification>> {
-        self.conn
-            .lock()
-            .query_row(
-                "SELECT id, payload_json FROM alert_outbox
-                 WHERE sent_at_us IS NULL AND next_attempt_at_us <= ?1
-                 ORDER BY id LIMIT 1",
+        match &mut *self.conn.lock() {
+            AdminConnection::Local(conn) => conn.query_row(
+                "SELECT id, payload_json FROM alert_outbox WHERE sent_at_us IS NULL AND next_attempt_at_us <= ?1 ORDER BY id LIMIT 1",
                 [now_us],
-                |row| {
-                    Ok(PendingNotification {
-                        id: row.get(0)?,
-                        payload: row.get(1)?,
-                    })
-                },
-            )
-            .optional()
-            .context("failed to read alert outbox")
+                |row| Ok(PendingNotification { id: row.get(0)?, payload: row.get(1)? }),
+            ).optional().context("failed to read alert outbox"),
+            AdminConnection::Hosted(client) => Ok(client.query_opt(
+                "SELECT id, payload_json FROM sigiro_admin.alert_outbox WHERE sent_at_us IS NULL AND next_attempt_at_us <= $1 ORDER BY id LIMIT 1",
+                &[&now_us],
+            ).context("failed to read alert outbox")?.map(|row| PendingNotification {
+                id: row.get(0), payload: row.get(1),
+            })),
+        }
     }
 
     pub(crate) fn mark_sent(&self, id: i64, sent_at_us: i64) -> Result<()> {
-        let changed = self.conn.lock().execute(
-            "UPDATE alert_outbox SET sent_at_us = ?2, last_error = NULL WHERE id = ?1",
-            params![id, sent_at_us],
-        )?;
+        let changed = match &mut *self.conn.lock() {
+            AdminConnection::Local(conn) => conn.execute(
+                "UPDATE alert_outbox SET sent_at_us = ?2, last_error = NULL WHERE id = ?1",
+                params![id, sent_at_us],
+            )? as u64,
+            AdminConnection::Hosted(client) => client.execute(
+                "UPDATE sigiro_admin.alert_outbox SET sent_at_us = $2, last_error = NULL WHERE id = $1",
+                &[&id, &sent_at_us],
+            )?,
+        };
         anyhow::ensure!(changed == 1, "alert outbox row {id} does not exist");
         Ok(())
     }
@@ -282,22 +207,214 @@ impl AlertStore {
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')),
             "alert error class must be a short identifier"
         );
-        let attempts: u32 = self.conn.lock().query_row(
-            "SELECT attempts FROM alert_outbox WHERE id = ?1",
-            [id],
-            |row| row.get(0),
-        )?;
-        let exponent = attempts.min(10);
-        let delay_secs = 5_i64.saturating_mul(1_i64 << exponent).min(3_600);
-        let changed = self.conn.lock().execute(
-            "UPDATE alert_outbox
-             SET attempts = attempts + 1, next_attempt_at_us = ?2, last_error = ?3
-             WHERE id = ?1 AND sent_at_us IS NULL",
-            params![id, now_us + delay_secs * 1_000_000, error_class],
-        )?;
+        let mut conn = self.conn.lock();
+        let attempts: i32 = match &mut *conn {
+            AdminConnection::Local(conn) => conn.query_row(
+                "SELECT attempts FROM alert_outbox WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )?,
+            AdminConnection::Hosted(client) => client
+                .query_one(
+                    "SELECT attempts FROM sigiro_admin.alert_outbox WHERE id = $1",
+                    &[&id],
+                )?
+                .get(0),
+        };
+        let exponent = attempts.clamp(0, 10) as u32;
+        let next_attempt = now_us + 5_i64.saturating_mul(1_i64 << exponent).min(3_600) * 1_000_000;
+        let changed = match &mut *conn {
+            AdminConnection::Local(conn) => conn.execute(
+                "UPDATE alert_outbox SET attempts = attempts + 1, next_attempt_at_us = ?2, last_error = ?3 WHERE id = ?1 AND sent_at_us IS NULL",
+                params![id, next_attempt, error_class],
+            )? as u64,
+            AdminConnection::Hosted(client) => client.execute(
+                "UPDATE sigiro_admin.alert_outbox SET attempts = attempts + 1, next_attempt_at_us = $2, last_error = $3 WHERE id = $1 AND sent_at_us IS NULL",
+                &[&id, &next_attempt, &error_class],
+            )?,
+        };
         anyhow::ensure!(changed == 1, "pending alert outbox row {id} does not exist");
         Ok(())
     }
+}
+
+fn process_events_sqlite(
+    conn: &mut rusqlite::Connection,
+    events: &[AlertEvent],
+) -> Result<ProcessResult> {
+    let tx = conn
+        .transaction()
+        .context("failed to start alert transaction")?;
+    let mut accepted_events = 0;
+    let mut notifications_enqueued = 0;
+    for event in events {
+        if event.event_name != OOM_FIRING_EVENT && event.event_name != OOM_RECOVERED_EVENT {
+            continue;
+        }
+        let fingerprint = alert_fingerprint(event);
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO alert_occurrences (project_id, occurrence_key, fingerprint, observed_at_us) VALUES (?1, ?2, ?3, ?4)",
+            params![event.project_id, occurrence_key(event), fingerprint, event.timestamp_us],
+        )?;
+        if inserted == 0 {
+            continue;
+        }
+        accepted_events += 1;
+        let stored = read_stored_alert(&tx, &event.project_id, &fingerprint)?;
+        if event.event_name == OOM_FIRING_EVENT {
+            notifications_enqueued += process_firing(&tx, event, &fingerprint, stored.as_ref())?;
+        } else if let Some(stored) = stored.as_ref()
+            && stored.status == "firing"
+            && event.timestamp_us >= stored.starts_at_us
+        {
+            process_resolution(&tx, event, &fingerprint, stored)?;
+            notifications_enqueued += 1;
+        }
+    }
+    tx.commit().context("failed to commit alert transaction")?;
+    Ok(ProcessResult {
+        accepted_events,
+        notifications_enqueued,
+    })
+}
+
+fn process_events_postgres(
+    client: &mut postgres::Client,
+    events: &[AlertEvent],
+) -> Result<ProcessResult> {
+    let mut tx = client
+        .transaction()
+        .context("failed to start alert transaction")?;
+    let mut accepted_events = 0;
+    let mut notifications_enqueued = 0;
+    for event in events {
+        if event.event_name != OOM_FIRING_EVENT && event.event_name != OOM_RECOVERED_EVENT {
+            continue;
+        }
+        let fingerprint = alert_fingerprint(event);
+        let inserted = tx.execute(
+            "INSERT INTO sigiro_admin.alert_occurrences (project_id, occurrence_key, fingerprint, observed_at_us) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, occurrence_key) DO NOTHING",
+            &[&event.project_id, &occurrence_key(event), &fingerprint, &event.timestamp_us],
+        )?;
+        if inserted == 0 {
+            continue;
+        }
+        accepted_events += 1;
+        let stored = read_stored_alert_postgres(&mut tx, &event.project_id, &fingerprint)?;
+        if event.event_name == OOM_FIRING_EVENT {
+            notifications_enqueued +=
+                process_firing_postgres(&mut tx, event, &fingerprint, stored.as_ref())?;
+        } else if let Some(stored) = stored.as_ref()
+            && stored.status == "firing"
+            && event.timestamp_us >= stored.starts_at_us
+        {
+            process_resolution_postgres(&mut tx, event, &fingerprint, stored)?;
+            notifications_enqueued += 1;
+        }
+    }
+    tx.commit().context("failed to commit alert transaction")?;
+    Ok(ProcessResult {
+        accepted_events,
+        notifications_enqueued,
+    })
+}
+
+fn alert_instance(row: AlertRow) -> Result<AlertInstance> {
+    Ok(AlertInstance {
+        fingerprint: row.fingerprint,
+        rule_id: row.rule_id,
+        status: row.status,
+        service_name: row.service_name,
+        container_name: row.container_name,
+        starts_at: format_timestamp(row.starts_at_us)?,
+        ends_at: row.ends_at_us.map(format_timestamp).transpose()?,
+        occurrence_count: row
+            .occurrence_count
+            .try_into()
+            .context("negative alert occurrence count")?,
+    })
+}
+
+fn list_sqlite(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    status: Option<&str>,
+) -> Result<Vec<AlertInstance>> {
+    let mut sql = String::from(
+        "SELECT fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count FROM alert_instances WHERE project_id = ?1",
+    );
+    if status.is_some() {
+        sql.push_str(" AND status = ?2");
+    }
+    sql.push_str(" ORDER BY updated_at_us DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let map = |row: &rusqlite::Row<'_>| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+            row.get(7)?,
+        ))
+    };
+    let rows = match status {
+        Some(status) => stmt.query_map(params![project_id, status], map)?,
+        None => stmt.query_map(params![project_id], map)?,
+    };
+    rows.collect::<rusqlite::Result<
+        Vec<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            Option<i64>,
+            i64,
+        )>,
+    >>()?
+    .into_iter()
+    .map(|v| {
+        alert_instance(AlertRow {
+            fingerprint: v.0,
+            rule_id: v.1,
+            status: v.2,
+            service_name: v.3,
+            container_name: v.4,
+            starts_at_us: v.5,
+            ends_at_us: v.6,
+            occurrence_count: v.7,
+        })
+    })
+    .collect()
+}
+
+fn list_postgres(
+    client: &mut postgres::Client,
+    project_id: &str,
+    status: Option<&str>,
+) -> Result<Vec<AlertInstance>> {
+    let rows = match status {
+        Some(status) => client.query("SELECT fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count FROM sigiro_admin.alert_instances WHERE project_id = $1 AND status = $2 ORDER BY updated_at_us DESC", &[&project_id, &status])?,
+        None => client.query("SELECT fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count FROM sigiro_admin.alert_instances WHERE project_id = $1 ORDER BY updated_at_us DESC", &[&project_id])?,
+    };
+    rows.into_iter()
+        .map(|row| {
+            alert_instance(AlertRow {
+                fingerprint: row.get(0),
+                rule_id: row.get(1),
+                status: row.get(2),
+                service_name: row.get(3),
+                container_name: row.get(4),
+                starts_at_us: row.get(5),
+                ends_at_us: row.get(6),
+                occurrence_count: row.get(7),
+            })
+        })
+        .collect()
 }
 
 /// Deliver persisted notifications. A crash after HTTP success and before
@@ -374,7 +491,7 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
     }
 }
 
-pub(crate) fn create_tables(conn: &Connection) -> Result<()> {
+pub(crate) fn create_sqlite_tables(conn: &rusqlite::Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS alert_instances (
             project_id TEXT NOT NULL,
@@ -413,6 +530,25 @@ pub(crate) fn create_tables(conn: &Connection) -> Result<()> {
             ON alert_instances (project_id, status, updated_at_us);",
     )
     .context("failed to create alert tables")
+}
+
+pub(crate) fn create_postgres_tables(client: &mut postgres::Client) -> Result<()> {
+    client.batch_execute(
+        "CREATE TABLE IF NOT EXISTS sigiro_admin.alert_instances (
+           project_id TEXT NOT NULL, fingerprint TEXT NOT NULL, rule_id TEXT NOT NULL,
+           status TEXT NOT NULL, service_name TEXT NOT NULL, container_name TEXT NOT NULL,
+           starts_at_us BIGINT NOT NULL, ends_at_us BIGINT, occurrence_count BIGINT NOT NULL,
+           updated_at_us BIGINT NOT NULL, PRIMARY KEY (project_id, fingerprint));
+         CREATE TABLE IF NOT EXISTS sigiro_admin.alert_occurrences (
+           project_id TEXT NOT NULL, occurrence_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+           observed_at_us BIGINT NOT NULL, PRIMARY KEY (project_id, occurrence_key));
+         CREATE TABLE IF NOT EXISTS sigiro_admin.alert_outbox (
+           id BIGSERIAL PRIMARY KEY, project_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+           transition TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+           next_attempt_at_us BIGINT NOT NULL, sent_at_us BIGINT, last_error TEXT);
+         CREATE INDEX IF NOT EXISTS alert_outbox_due ON sigiro_admin.alert_outbox (sent_at_us, next_attempt_at_us, id);
+         CREATE INDEX IF NOT EXISTS alert_instances_project_status ON sigiro_admin.alert_instances (project_id, status, updated_at_us);",
+    ).context("failed to create hosted alert tables")
 }
 
 pub(crate) fn events_from_log_batch(
@@ -464,6 +600,126 @@ pub(crate) fn events_from_log_batch(
         });
     }
     Ok(events)
+}
+
+fn read_stored_alert_postgres(
+    tx: &mut postgres::Transaction<'_>,
+    project_id: &str,
+    fingerprint: &str,
+) -> Result<Option<StoredAlert>> {
+    Ok(tx.query_opt(
+        "SELECT status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count
+         FROM sigiro_admin.alert_instances WHERE project_id = $1 AND fingerprint = $2",
+        &[&project_id, &fingerprint],
+    )?.map(|row| StoredAlert {
+        status: row.get(0), service_name: row.get(1), container_name: row.get(2),
+        starts_at_us: row.get(3), ends_at_us: row.get(4),
+        occurrence_count: u64::try_from(row.get::<_, i64>(5)).unwrap_or(0),
+    }))
+}
+
+fn enqueue_postgres(
+    tx: &mut postgres::Transaction<'_>,
+    transition: &AlertTransition<'_>,
+) -> Result<()> {
+    let payload = webhook_payload(transition)?;
+    tx.execute(
+        "INSERT INTO sigiro_admin.alert_outbox
+         (project_id, fingerprint, transition, payload_json, next_attempt_at_us) VALUES ($1, $2, $3, $4, $5)",
+        &[&transition.event.project_id, &transition.fingerprint, &transition.status, &payload, &now_us()],
+    )?;
+    Ok(())
+}
+
+fn process_firing_postgres(
+    tx: &mut postgres::Transaction<'_>,
+    event: &AlertEvent,
+    fingerprint: &str,
+    stored: Option<&StoredAlert>,
+) -> Result<usize> {
+    match stored {
+        Some(stored)
+            if stored.status == "resolved"
+                && stored
+                    .ends_at_us
+                    .is_some_and(|ends_at| event.timestamp_us <= ends_at) =>
+        {
+            Ok(0)
+        }
+        Some(stored) if stored.status == "firing" => {
+            tx.execute("UPDATE sigiro_admin.alert_instances SET occurrence_count = occurrence_count + 1, updated_at_us = $3 WHERE project_id = $1 AND fingerprint = $2", &[&event.project_id, &fingerprint, &event.timestamp_us])?;
+            Ok(0)
+        }
+        Some(stored) => {
+            let count = stored.occurrence_count + 1;
+            let count_i64 = i64::try_from(count).context("alert occurrence count overflow")?;
+            tx.execute(
+                "UPDATE sigiro_admin.alert_instances SET status = 'firing', service_name = $3, container_name = $4, starts_at_us = $5, ends_at_us = NULL, occurrence_count = $6, updated_at_us = $5 WHERE project_id = $1 AND fingerprint = $2",
+                &[&event.project_id, &fingerprint, &event.service_name, &event.container_name, &event.timestamp_us, &count_i64],
+            )?;
+            enqueue_postgres(
+                tx,
+                &AlertTransition {
+                    event,
+                    fingerprint,
+                    status: "firing",
+                    starts_at_us: event.timestamp_us,
+                    ends_at_us: None,
+                    occurrence_count: count,
+                },
+            )?;
+            Ok(1)
+        }
+        None => {
+            tx.execute(
+                "INSERT INTO sigiro_admin.alert_instances (project_id, fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count, updated_at_us) VALUES ($1, $2, $3, 'firing', $4, $5, $6, NULL, 1, $6)",
+                &[&event.project_id, &fingerprint, &OOM_RULE_ID, &event.service_name, &event.container_name, &event.timestamp_us],
+            )?;
+            enqueue_postgres(
+                tx,
+                &AlertTransition {
+                    event,
+                    fingerprint,
+                    status: "firing",
+                    starts_at_us: event.timestamp_us,
+                    ends_at_us: None,
+                    occurrence_count: 1,
+                },
+            )?;
+            Ok(1)
+        }
+    }
+}
+
+fn process_resolution_postgres(
+    tx: &mut postgres::Transaction<'_>,
+    event: &AlertEvent,
+    fingerprint: &str,
+    stored: &StoredAlert,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE sigiro_admin.alert_instances SET status = 'resolved', ends_at_us = $3, updated_at_us = $3 WHERE project_id = $1 AND fingerprint = $2",
+        &[&event.project_id, &fingerprint, &event.timestamp_us],
+    )?;
+    let original = AlertEvent {
+        project_id: event.project_id.clone(),
+        event_name: event.event_name.clone(),
+        timestamp_us: event.timestamp_us,
+        service_name: stored.service_name.clone(),
+        container_name: stored.container_name.clone(),
+        container_id: event.container_id.clone(),
+    };
+    enqueue_postgres(
+        tx,
+        &AlertTransition {
+            event: &original,
+            fingerprint,
+            status: "resolved",
+            starts_at_us: stored.starts_at_us,
+            ends_at_us: Some(event.timestamp_us),
+            occurrence_count: stored.occurrence_count,
+        },
+    )
 }
 
 fn process_firing(

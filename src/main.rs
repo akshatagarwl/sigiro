@@ -43,6 +43,16 @@ enum Command {
         #[arg(long)]
         otlp_grpc_port: Option<u16>,
     },
+    /// Migrate supported local administrative state into hosted PostgreSQL.
+    /// Refuses to run when local DuckLake metadata would make the cutover partial.
+    Migrate {
+        /// Existing self-hosted data directory containing admin.sqlite.
+        #[arg(long)]
+        source_dir: String,
+        /// Hosted PostgreSQL catalog URL.
+        #[arg(long)]
+        catalog_url: String,
+    },
     /// Run a federated SQL query across one or more sigiro edges.
     ///
     /// This is a coordinator: an embedded DuckDB plans the query, pushes a
@@ -232,6 +242,19 @@ async fn main() -> Result<()> {
         }
         None => {
             run_serve().await?;
+        }
+        Some(Command::Migrate {
+            source_dir,
+            catalog_url,
+        }) => {
+            let outcome = sigiro::migration::migrate_admin_sqlite(
+                &camino::Utf8PathBuf::from(source_dir),
+                &catalog_url,
+            )?;
+            println!(
+                "{}",
+                format_output(&serde_json::json!({"outcome": format!("{outcome:?}")}))?
+            );
         }
         Some(Command::Query {
             sql: sql_arg,
@@ -430,7 +453,15 @@ fn probe_kernel_release() -> String {
 }
 
 async fn run_serve() -> Result<()> {
-    let dir = data_dir()?;
+    // Hosted mode has an explicit persistent filesystem contract. Do not let
+    // an inherited SIGIRO_DATA_DIR silently put hosted telemetry/admin state in
+    // a developer's home directory.
+    let storage_mode = sigiro::storage::StorageMode::from_env()?;
+    let dir = if storage_mode.is_distributed() {
+        sigiro::config::hosted_data_dir()?
+    } else {
+        data_dir()?
+    };
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create data directory {dir}"))?;
     tracing::info!(%dir, "sigiro starting");
@@ -444,11 +475,12 @@ async fn run_serve() -> Result<()> {
     // coherent axis (fail-loud on incoherence, e.g. S3 bucket without a catalog
     // URL). Threaded into the pool so every per-project attach uses this single
     // decision instead of re-reading the environment.
-    let storage_mode = sigiro::storage::StorageMode::from_env()?;
-
+    let mut admin_conn = match storage_mode.distributed_config() {
+        Some(config) => sigiro::admin::open_hosted_admin_db(config.catalog_url())?,
+        None => sigiro::admin::open_local_admin_db(&dir)?,
+    };
     // MsgRouter: handlers send directly to per-project flusher tasks.
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100, storage_mode));
-    let admin_conn = sigiro::admin::open_admin_db(&dir)?;
 
     let kernel = probe_kernel_release();
 
@@ -523,7 +555,7 @@ async fn run_serve() -> Result<()> {
     };
 
     sigiro::admin::write_instance_status_batch(
-        &admin_conn,
+        &mut admin_conn,
         &[
             ("pyroscope_status", pyroscope_status),
             ("version", env!("CARGO_PKG_VERSION")),

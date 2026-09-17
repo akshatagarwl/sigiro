@@ -5,7 +5,7 @@ use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use axum_valid::Valid;
 use parking_lot::Mutex;
-use rusqlite::Connection;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -217,8 +217,8 @@ pub(crate) fn rate_limit_error_response(
 
 pub struct AppState {
     pub pool: Arc<ProjectPool>,
-    /// Admin SQLite for instance status (and, historically, worker registry).
-    pub admin_conn: Arc<Mutex<Connection>>,
+    /// Local SQLite or hosted PostgreSQL control state.
+    pub admin_conn: Arc<Mutex<admin::AdminConnection>>,
     pub alerts: crate::alerts::AlertStore,
     pub http_client: reqwest::Client,
     pub router: Arc<crate::inserter::MsgRouter>,
@@ -2032,7 +2032,7 @@ async fn diagnose_handler(
     // seconds/millis/nanos), to_ts > from_ts. Invalid input never reaches here.
     Valid(Json(req)): Valid<Json<diagnose::DiagnoseRequest>>,
 ) -> ApiResult<Json<diagnose::DiagnoseResponse>> {
-    let data_dir = crate::data_dir().context_internal("Diagnose", "SIGIRO_DATA_DIR not set")?;
+    let data_dir = state.data_dir.clone();
     let project_data_path = if state.pool.storage_mode().is_distributed() {
         crate::storage::tenant_data_dir(&data_dir, auth.as_ref())
             .context_internal("Diagnose", "invalid tenant id")?
@@ -2092,9 +2092,9 @@ async fn admin_status(
     _path: AdminStatusPath,
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<AdminStatusResponse>> {
-    let guard = state.admin_conn.lock();
+    let mut guard = state.admin_conn.lock();
     let mut map =
-        admin::read_all_status(&guard).context_internal("Admin", "failed to read status")?;
+        admin::read_all_status(&mut guard).context_internal("Admin", "failed to read status")?;
     map.insert(
         "ingest_dropped_messages_total".to_string(),
         state.router.dropped_messages().to_string(),
