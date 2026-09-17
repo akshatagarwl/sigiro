@@ -1,6 +1,8 @@
 name: CI
 on:
   workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -10,7 +12,6 @@ env:
   # libduckdb-sys places its C++ runtime before the static archive. Repeat it at
   # the end of rustc's linker arguments so archive references are resolved.
   RUSTFLAGS: "-C link-arg=-lstdc++"
-  SCCACHE_GHA_ENABLED: "true"
   MISE_TASK_CACHE_DIR: ${{ github.workspace }}/.mise-task-cache
 jobs:
   gate:
@@ -21,9 +22,10 @@ jobs:
         with:
           version: 2026.9.9
           install_args: rust sccache packslip:github.com/jdx/mr-boxington
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Restore mbx build cache
+        uses: jdx/mr-boxington-action@867fc530102eec5b756075d70d850dc8330d2272 # v1.4.0
         with:
-          version: v0.18.0
+          save-on-workflow-dispatch: "true"
       - name: Restore successful gate receipts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -67,7 +69,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.20.0
-      - run: npm install --global aube@2.2.16
+      - uses: jdx/aube-action@f82ca2f6c943dbde1904945d9f0ee1a0faf8e945 # v1.0.0
+        with:
+          version: 2.2.16
       - run: aube install --frozen-lockfile
       - run: aube run db:up
       - run: aube run migrate
