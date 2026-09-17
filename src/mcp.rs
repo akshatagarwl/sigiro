@@ -120,7 +120,7 @@ impl SigiroMcp {
         }
     }
 
-    pub fn with_docs(mut self, docs: Arc<DocsService>, tools: Vec<Tool>) -> anyhow::Result<Self> {
+    pub fn with_docs(mut self, docs: &Arc<DocsService>, tools: Vec<Tool>) -> anyhow::Result<Self> {
         for tool in tools {
             anyhow::ensure!(
                 !self.tool_router.map.contains_key(&tool.name),
@@ -128,7 +128,7 @@ impl SigiroMcp {
                 tool.name
             );
             let name = tool.name.clone();
-            let upstream = Arc::clone(&docs);
+            let upstream = Arc::clone(docs);
             let route = ToolRoute::new_dyn(tool, move |context| {
                 let upstream = Arc::clone(&upstream);
                 let name = name.clone();

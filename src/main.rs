@@ -394,7 +394,7 @@ async fn main() -> Result<()> {
             match sigiro::mcp::connect_docs().await {
                 Ok((docs, tools)) => {
                     tracing::info!(count = tools.len(), "connected to documentation MCP");
-                    service = service.with_docs(docs, tools)?;
+                    service = service.with_docs(&docs, tools)?;
                 }
                 Err(error) => {
                     tracing::warn!(

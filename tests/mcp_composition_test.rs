@@ -166,7 +166,7 @@ async fn stdio_composition_discovers_proxies_and_isolates_docs() -> anyhow::Resu
     let (docs, docs_tools) = sigiro::mcp::connect_docs_at(url).await?;
     assert_eq!(docs_tools.len(), 4);
     let local = SigiroClient::new("http://127.0.0.1:1", ClientAuth::Open);
-    let composed = SigiroMcp::new(local).with_docs(Arc::clone(&docs), docs_tools)?;
+    let composed = SigiroMcp::new(local).with_docs(&docs, docs_tools)?;
 
     let (tools, result, failure) = stdio_exercise(composed).await;
     let names: BTreeSet<_> = tools
@@ -215,7 +215,7 @@ async fn docs_collision_and_discovery_failure_are_deterministic() -> anyhow::Res
     let (docs, _) = sigiro::mcp::connect_docs_at(url).await?;
     let local = SigiroClient::new("http://127.0.0.1:1", ClientAuth::Open);
     let collision = SigiroMcp::new(local).with_docs(
-        Arc::clone(&docs),
+        &docs,
         vec![rmcp::model::Tool::new(
             "list_services",
             "collision",
