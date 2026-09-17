@@ -1,8 +1,7 @@
 // Blume creates this module before Alchemy bundles the deployment entrypoint.
 import website from '../dist/server/blume-worker.mjs';
-import { MCP_PROTECTED_RESOURCE_METADATA } from './mcp-handler';
+import { createMcpHandler, MCP_PROTECTED_RESOURCE_METADATA, tools } from './mcp-handler';
 import { MCP_REQUIRED_SCOPE, MCP_RESOURCE } from './mcp-catalog';
-import { handleDocsMcp, handleMcp, tools } from './mcp';
 
 const AUTH_PATHS = new Set([
   '/.well-known/agent-configuration',
@@ -83,7 +82,8 @@ export default {
     }
 
     const pathname = url.pathname;
-    if (pathname === '/mcp') return handleMcp(request, env);
+    const handleDocsMcp = (docsRequest: Request) => website.fetch(docsRequest, env, context);
+    if (pathname === '/mcp') return createMcpHandler(handleDocsMcp)(request, env);
     if (pathname === '/mcp/docs') return handleDocsMcp(request);
     if (
       pathname === WEBMCP_CLIENT_METADATA &&

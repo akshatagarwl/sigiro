@@ -10,10 +10,9 @@ import * as Schema from 'effect/Schema';
 import { MCP_PROTECTED_RESOURCE_METADATA } from '../src/mcp-handler';
 
 const rust = await readFile(new URL('../../src/mcp.rs', import.meta.url), 'utf8');
-const hosted = await readFile(new URL('../src/mcp.ts', import.meta.url), 'utf8');
 const handler = await readFile(new URL('../src/mcp-handler.ts', import.meta.url), 'utf8');
 const worker = await readFile(new URL('../src/worker.ts', import.meta.url), 'utf8');
-const hostedSource = `${hosted}\n${handler}`;
+const hostedSource = `${worker}\n${handler}`;
 
 const rustTools = [
   ...rust.matchAll(/async fn (list_services|list_anomalies|diagnose_service|run_query)\s*\(/g),
