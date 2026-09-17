@@ -127,6 +127,14 @@ fi
 aube -C www run alchemy:hetzner:plan
 """
 
+[tasks.alchemy-workload-plan]
+description = "Plan the production Docker workload through Alchemy."
+run = "aube -C www run alchemy:workload:plan"
+
+[tasks.alchemy-workload-deploy]
+description = "Deploy the production Docker workload through Alchemy."
+run = "aube -C www run alchemy:workload:deploy"
+
 [tasks.build]
 description = "Release build of the sigiro binary. Set TARGET to cross-compile."
 run = 'scripts/run-with-duckdb-static.sh mbx build --release --locked --bin sigiro ${TARGET:+--target "$TARGET"}'

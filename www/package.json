@@ -8,6 +8,8 @@
     "alchemy:plan": "ALCHEMY_STAGE=prod alchemy plan ./alchemy.run.ts --no-input",
     "alchemy:hetzner:deploy": "ALCHEMY_STAGE=prod alchemy deploy ./alchemy.hetzner.run.ts --yes",
     "alchemy:hetzner:plan": "ALCHEMY_STAGE=prod alchemy plan ./alchemy.hetzner.run.ts --no-input",
+    "alchemy:workload:deploy": "ALCHEMY_STAGE=prod alchemy deploy ./alchemy.workload.run.ts --yes",
+    "alchemy:workload:plan": "ALCHEMY_STAGE=prod alchemy plan ./alchemy.workload.run.ts --no-input",
     "dev": "blume dev",
     "build": "blume build",
     "preview": "wrangler dev --config wrangler.preview.jsonc",

@@ -98,8 +98,8 @@ WORKDIR /var/lib/sigiro
 EXPOSE 4317 4318 9999
 # Shell-free healthcheck: distroless has no curl/sh, so the usual
 # `curl -f /health` can't run. `sigiro healthcheck` exits 0 only when Ready.
-# Deploy configs (e.g. kamal accessory health-cmd) must use this exec form too,
-# not a curl string, or the container is wrongly reported unhealthy.
+# Deployment health checks must use this exec form too, not a curl string, or
+# the container is wrongly reported unhealthy.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=120s --retries=6 \
   CMD ["/usr/local/bin/sigiro", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/sigiro"]

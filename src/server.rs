@@ -452,7 +452,7 @@ pub fn validate_quack_bind_address(bind: std::net::IpAddr) -> Result<()> {
 /// listeners, DB pools, ...).
 ///
 /// Hosted mode's pair is BYTE-IDENTICAL to before this fix: `0.0.0.0` for
-/// HTTP/OTLP (kamal-proxy sits on the docker network — a loopback bind would
+/// HTTP/OTLP (the managed ingress sits on the Docker network — a loopback bind would
 /// break proxy access) and `::` for gRPC (that listener's pre-existing,
 /// unrelated default). Edge mode returns the SAME address for both, so
 /// HTTP/OTLP-HTTP/gRPC all end up bound exactly where quack itself is.
@@ -669,7 +669,7 @@ pub async fn run_servers(
             http_addr,
             http_app,
             // The main HTTP API stays plaintext inside the deployment network;
-            // kamal-proxy terminates public TLS before forwarding to this port.
+            // The managed ingress terminates public TLS before forwarding to this port.
             None,
             http_server_handle,
         )
@@ -840,7 +840,7 @@ fn ensure_rustls_provider() -> Result<()> {
 
 /// `addr`: `run_servers` composes the resolved edge/hosted bind with the port —
 /// a quack edge binds its own private address (`SIGIRO_QUACK_BIND`), hosted mode
-/// keeps the unchanged `0.0.0.0` (it sits behind kamal-proxy on the docker
+/// keeps the unchanged `0.0.0.0` (it sits behind the managed ingress on the Docker
 /// network, where a loopback bind would break proxy access).
 ///
 /// One `SocketAddr` rather than an `IpAddr` plus a `u16`: this function's only
