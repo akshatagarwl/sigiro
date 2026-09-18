@@ -455,7 +455,7 @@ async fn run_serve() -> Result<()> {
     // URL). Threaded into the pool so every per-project attach uses this single
     // decision instead of re-reading the environment.
     let mut admin_conn = match storage_mode.distributed_config() {
-        Some(config) => sigiro::admin::open_hosted_admin_db(config.catalog_url())?,
+        Some(config) => sigiro::admin::open_hosted_admin_db(config.catalog_url()).await?,
         None => sigiro::admin::open_local_admin_db(&dir)?,
     };
     // MsgRouter: handlers send directly to per-project flusher tasks.

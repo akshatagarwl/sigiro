@@ -123,7 +123,20 @@ pub fn open_local_admin_db(dir: &camino::Utf8Path) -> Result<AdminConnection> {
     Ok(AdminConnection::Local(conn))
 }
 
-pub fn open_hosted_admin_db(catalog_url: &str) -> Result<AdminConnection> {
+/// Open the hosted admin database.
+///
+/// The `postgres` crate's sync client drives its own runtime via `block_on`,
+/// which panics with "Cannot start a runtime from within a runtime" when called
+/// on a `#[tokio::main]` thread. Hosted boot goes through exactly that path, so
+/// the blocking connect is moved onto a dedicated blocking thread.
+pub async fn open_hosted_admin_db(catalog_url: &str) -> Result<AdminConnection> {
+    let catalog_url = catalog_url.to_owned();
+    tokio::task::spawn_blocking(move || open_hosted_admin_db_blocking(&catalog_url))
+        .await
+        .context("hosted admin DB connect task panicked")?
+}
+
+fn open_hosted_admin_db_blocking(catalog_url: &str) -> Result<AdminConnection> {
     let mut client = connect_postgres(catalog_url)?;
     client
         .batch_execute(
