@@ -608,7 +608,17 @@ async fn run_serve() -> Result<()> {
         MAX_IDLE_SECS,
     ));
 
-    sigiro::server::run_servers(pool, alert_store, router, dir.clone(), init_complete).await?;
+    // Log the failure here, before it unwinds. Everything between this frame
+    // and `main` drops the boot state on the way out, and a panic in any of
+    // those drops replaces the error with the panic — which is exactly how the
+    // real cause of a production boot failure went unrecorded. The error is
+    // still returned; this only guarantees it is written down first.
+    if let Err(error) =
+        sigiro::server::run_servers(pool, alert_store, router, dir.clone(), init_complete).await
+    {
+        tracing::error!("sigiro serve failed: {error:#}");
+        return Err(error);
+    }
     Ok(())
 }
 

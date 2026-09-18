@@ -84,6 +84,56 @@ class SyncPostgresBoundary(unittest.TestCase):
                     f"{path.name} guards a sync postgres call with block_in_place",
                 )
 
+    def test_the_hosted_client_is_never_held_as_a_bare_postgres_client(self) -> None:
+        # Call-site discipline cannot reach `drop`. `postgres::Client::drop`
+        # closes the connection through `block_on`, so a bare client stored in
+        # long-lived state aborts the process when that state is dropped on a
+        # runtime thread -- no call site is involved and the checks above see
+        # nothing. Production died exactly this way: the drop panic also
+        # replaced the real boot error, so the cause went unlogged.
+        #
+        # `HostedClient` owns that drop, so the invariant is that the sync
+        # client is only ever stored behind it.
+        admin = (SRC / "admin.rs").read_text()
+        self.assertIn(
+            "impl Drop for HostedClient",
+            admin,
+            "HostedClient must own the close so dropping it off-runtime is structural",
+        )
+        self.assertRegex(
+            admin,
+            r"Hosted\(HostedClient\)",
+            "AdminConnection::Hosted must wrap the client in HostedClient",
+        )
+
+        offenders: list[str] = []
+        for path in sorted(SRC.rglob("*.rs")):
+            for number, line in enumerate(path.read_text().splitlines(), start=1):
+                stripped = line.lstrip()
+                if stripped.startswith("//"):
+                    continue
+                # A stored (not borrowed, not returned) bare sync client.
+                if re.search(r"(Box<\s*postgres::Client\s*>|:\s*postgres::Client\b)", line):
+                    offenders.append(f"{path.name}:{number}: {stripped}")
+
+        # HostedClient itself is the one legitimate owner: it is the type whose
+        # Drop moves the close off the runtime. Borrows and constructor returns
+        # do not own the drop, so they cannot cause the abort.
+        allowed = (
+            "client: &mut postgres::Client",
+            "-> Result<postgres::Client>",
+            "pub struct HostedClient(",
+            "fn new(client: postgres::Client)",
+        )
+        offenders = [o for o in offenders if not any(a in o for a in allowed)]
+        self.assertEqual(
+            offenders,
+            [],
+            "sync postgres client stored outside HostedClient; its drop calls "
+            "block_on and aborts the process when dropped on a runtime thread:\n  "
+            + "\n  ".join(offenders),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

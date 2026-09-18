@@ -4,7 +4,59 @@ use std::str::FromStr;
 
 pub enum AdminConnection {
     Local(rusqlite::Connection),
-    Hosted(Box<postgres::Client>),
+    Hosted(HostedClient),
+}
+
+/// A sync `postgres::Client` that is safe to drop from async code.
+///
+/// `postgres::Client::drop` closes the connection through `block_on`, so a drop
+/// on a Tokio worker aborts the process with "Cannot start a runtime from
+/// within a runtime" — the same failure the call sites already guard against,
+/// but reached through `drop_glue` where no call-site discipline can see it.
+/// This bit production: the boot error that `run_serve` was returning unwound
+/// through `Arc<Mutex<AdminConnection>>`, the drop panicked, and the panic
+/// replaced the real error, so the actual startup failure never reached the
+/// journal.
+///
+/// Moving the close onto `spawn_blocking` makes the safety structural: every
+/// `AdminConnection`, wherever it is dropped, closes on a context-free thread.
+/// Outside a runtime the client is dropped inline, which is already correct.
+pub struct HostedClient(Option<Box<postgres::Client>>);
+
+impl HostedClient {
+    fn new(client: postgres::Client) -> Self {
+        Self(Some(Box::new(client)))
+    }
+}
+
+impl std::ops::Deref for HostedClient {
+    type Target = postgres::Client;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("client is taken only in Drop")
+    }
+}
+
+impl std::ops::DerefMut for HostedClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("client is taken only in Drop")
+    }
+}
+
+impl Drop for HostedClient {
+    fn drop(&mut self) {
+        let Some(client) = self.0.take() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                // Dropped on a runtime thread: hand the close to a blocking
+                // thread that carries no runtime context.
+                handle.spawn_blocking(move || drop(client));
+            }
+            Err(_) => drop(client),
+        }
+    }
 }
 
 /// Create instance_status table in admin DB (key-value with timestamps).
@@ -81,7 +133,10 @@ pub fn write_instance_status_batch(
 /// provides a context-free thread, so every sync admin call reached from async
 /// code must go through here. Ownership moves in and back out because the
 /// closure must be `'static`.
-pub async fn with_admin_blocking<T, F>(mut conn: AdminConnection, f: F) -> Result<(AdminConnection, T)>
+pub async fn with_admin_blocking<T, F>(
+    mut conn: AdminConnection,
+    f: F,
+) -> Result<(AdminConnection, T)>
 where
     F: FnOnce(&mut AdminConnection) -> Result<T> + Send + 'static,
     T: Send + 'static,
@@ -171,7 +226,7 @@ fn open_hosted_admin_db_blocking(catalog_url: &str) -> Result<AdminConnection> {
         )
         .context("failed to create hosted instance_status table")?;
     crate::alerts::create_postgres_tables(&mut client)?;
-    Ok(AdminConnection::Hosted(Box::new(client)))
+    Ok(AdminConnection::Hosted(HostedClient::new(client)))
 }
 
 pub(crate) fn connect_postgres(catalog_url: &str) -> Result<postgres::Client> {
