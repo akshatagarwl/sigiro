@@ -106,6 +106,19 @@ fn create_project_persists_safe_ducklake_policy() {
         options,
         vec![
             ("auto_compact".into(), "true".into(), "GLOBAL".into(), None),
+            // Catalog-wide inlining is off. It must be disabled before the
+            // first table is created: DuckLake's inlining path flushes catalog
+            // changes as one multi-statement string, which the postgres
+            // extension sends as a prepared statement, and PostgreSQL rejects
+            // with "cannot insert multiple commands into a prepared
+            // statement". Without this GLOBAL row, a new tenant's first
+            // CREATE TABLE fails and that tenant can never ingest.
+            (
+                "data_inlining_row_limit".into(),
+                "0".into(),
+                "GLOBAL".into(),
+                None,
+            ),
             (
                 "data_inlining_row_limit".into(),
                 "0".into(),
