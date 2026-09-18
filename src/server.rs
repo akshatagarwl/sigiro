@@ -2092,9 +2092,18 @@ async fn admin_status(
     _path: AdminStatusPath,
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<AdminStatusResponse>> {
-    let mut guard = state.admin_conn.lock();
-    let mut map =
-        admin::read_all_status(&mut guard).context_internal("Admin", "failed to read status")?;
+    // The hosted admin client is the sync `postgres` client, whose internal
+    // block_on aborts the process when reached from a runtime thread. Take the
+    // lock inside spawn_blocking so both the wait and the query stay off the
+    // async worker.
+    let admin_conn = Arc::clone(&state.admin_conn);
+    let mut map = tokio::task::spawn_blocking(move || {
+        let mut guard = admin_conn.lock();
+        admin::read_all_status(&mut guard)
+    })
+    .await
+    .context_internal("Admin", "admin status task panicked")?
+    .context_internal("Admin", "failed to read status")?;
     map.insert(
         "ingest_dropped_messages_total".to_string(),
         state.router.dropped_messages().to_string(),

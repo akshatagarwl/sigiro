@@ -72,6 +72,28 @@ pub fn write_instance_status_batch(
     Ok(())
 }
 
+/// Run a blocking admin operation off the async runtime.
+///
+/// The `postgres` crate's sync client drives its own runtime via `block_on`,
+/// which aborts with "Cannot start a runtime from within a runtime" on any
+/// thread that already has a Tokio runtime context. `block_in_place` is not a
+/// fix: it keeps the runtime context on the thread. Only `spawn_blocking`
+/// provides a context-free thread, so every sync admin call reached from async
+/// code must go through here. Ownership moves in and back out because the
+/// closure must be `'static`.
+pub async fn with_admin_blocking<T, F>(mut conn: AdminConnection, f: F) -> Result<(AdminConnection, T)>
+where
+    F: FnOnce(&mut AdminConnection) -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let value = f(&mut conn)?;
+        Ok((conn, value))
+    })
+    .await
+    .context("admin database task panicked")?
+}
+
 /// Read all instance_status rows as a HashMap.
 pub fn read_all_status(
     conn: &mut AdminConnection,

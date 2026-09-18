@@ -454,7 +454,7 @@ async fn run_serve() -> Result<()> {
     // coherent axis (fail-loud on incoherence, e.g. S3 bucket without a catalog
     // URL). Threaded into the pool so every per-project attach uses this single
     // decision instead of re-reading the environment.
-    let mut admin_conn = match storage_mode.distributed_config() {
+    let admin_conn = match storage_mode.distributed_config() {
         Some(config) => sigiro::admin::open_hosted_admin_db(config.catalog_url()).await?,
         None => sigiro::admin::open_local_admin_db(&dir)?,
     };
@@ -533,17 +533,25 @@ async fn run_serve() -> Result<()> {
         None => (None, "disabled"),
     };
 
-    sigiro::admin::write_instance_status_batch(
-        &mut admin_conn,
-        &[
-            ("pyroscope_status", pyroscope_status),
-            ("version", env!("CARGO_PKG_VERSION")),
-            ("mode", "otlp"),
-            ("platform_os", std::env::consts::OS),
-            ("platform_arch", std::env::consts::ARCH),
-            ("platform_kernel", &kernel),
-        ],
-    )?;
+    // Runs on a blocking thread: the sync postgres client aborts the process if
+    // its internal block_on is reached from a runtime thread.
+    let kernel_owned = kernel.clone();
+    let version = env!("CARGO_PKG_VERSION");
+    let (returned_conn, ()) = sigiro::admin::with_admin_blocking(admin_conn, move |conn| {
+        sigiro::admin::write_instance_status_batch(
+            conn,
+            &[
+                ("pyroscope_status", pyroscope_status),
+                ("version", version),
+                ("mode", "otlp"),
+                ("platform_os", std::env::consts::OS),
+                ("platform_arch", std::env::consts::ARCH),
+                ("platform_kernel", &kernel_owned),
+            ],
+        )
+    })
+    .await?;
+    let admin_conn = returned_conn;
 
     tracing::info!("sigiro init complete — data_dir={}", dir);
     // The init-complete flag is NOT flipped here. It used to be, and that made
