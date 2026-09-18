@@ -155,9 +155,6 @@ run = "scripts/backup-native-host.sh"
 description = "Stage native packages, artifacts, units, and PostgreSQL 18 without stopping Docker workloads."
 run = "SIGIRO_NATIVE_ACTION=stage aube -C www run alchemy:workload:deploy"
 
-[tasks.native-rehearse]
-description = "Stream and verify a PostgreSQL 17 to 18 rehearsal while Docker remains authoritative."
-run = "SIGIRO_NATIVE_ACTION=rehearse aube -C www run alchemy:workload:deploy"
 
 [tasks.native-cutover]
 description = "Perform the backup-gated host-wide systemd cutover."

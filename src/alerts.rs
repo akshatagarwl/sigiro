@@ -435,7 +435,21 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
     loop {
         interval.tick().await;
         loop {
-            let notification = match store.next_due(now_us()) {
+            // Every AlertStore call below reaches the sync postgres client,
+            // whose internal block_on ABORTS the process from a runtime thread.
+            // This loop is async, so each call moves to a blocking thread.
+            let due = {
+                let store = store.clone();
+                tokio::task::spawn_blocking(move || store.next_due(now_us())).await
+            };
+            let due = match due {
+                Ok(result) => result,
+                Err(error) => {
+                    tracing::warn!("alert outbox task panicked: {error}");
+                    break;
+                }
+            };
+            let notification = match due {
                 Ok(Some(notification)) => notification,
                 Ok(None) => break,
                 Err(error) => {
@@ -452,7 +466,13 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
             }
             match request.send().await {
                 Ok(response) if response.status().is_success() => {
-                    if let Err(error) = store.mark_sent(notification.id, now_us()) {
+                    let store = store.clone();
+                    let id = notification.id;
+                    let marked = tokio::task::spawn_blocking(move || store.mark_sent(id, now_us()))
+                        .await
+                        .map_err(|error| anyhow::anyhow!("mark_sent task panicked: {error}"))
+                        .and_then(|result| result);
+                    if let Err(error) = marked {
                         tracing::warn!(
                             notification_id = notification.id,
                             "webhook accepted alert but sent state was not persisted: {error:#}"
@@ -462,7 +482,14 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
                 }
                 Ok(response) => {
                     let class = format!("http_{}", response.status().as_u16());
-                    if let Err(error) = store.mark_retry(notification.id, now_us(), &class) {
+                    let store = store.clone();
+                    let id = notification.id;
+                    let marked =
+                        tokio::task::spawn_blocking(move || store.mark_retry(id, now_us(), &class))
+                            .await
+                            .map_err(|error| anyhow::anyhow!("mark_retry task panicked: {error}"))
+                            .and_then(|result| result);
+                    if let Err(error) = marked {
                         tracing::warn!(
                             notification_id = notification.id,
                             "failed to schedule alert retry: {error:#}"
@@ -478,7 +505,15 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
                     } else {
                         "request"
                     };
-                    if let Err(error) = store.mark_retry(notification.id, now_us(), class) {
+                    let store = store.clone();
+                    let id = notification.id;
+                    let class = class.to_string();
+                    let marked =
+                        tokio::task::spawn_blocking(move || store.mark_retry(id, now_us(), &class))
+                            .await
+                            .map_err(|error| anyhow::anyhow!("mark_retry task panicked: {error}"))
+                            .and_then(|result| result);
+                    if let Err(error) = marked {
                         tracing::warn!(
                             notification_id = notification.id,
                             "failed to schedule alert retry: {error:#}"

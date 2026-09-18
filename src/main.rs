@@ -573,7 +573,16 @@ async fn run_serve() -> Result<()> {
 
     // Alert control state is injected into both ingest and query surfaces.
     // Ingest fails when lifecycle state cannot be persisted, forcing OTLP retry.
-    let alert_store = sigiro::alerts::AlertStore::new(Arc::clone(&shared_admin))?;
+    //
+    // `AlertStore::new` runs DDL through the sync postgres client, which aborts
+    // the process from a runtime thread, so it must be constructed off the async
+    // worker like every other sync admin call.
+    let alert_store = {
+        let admin = Arc::clone(&shared_admin);
+        tokio::task::spawn_blocking(move || sigiro::alerts::AlertStore::new(admin))
+            .await
+            .context("alert store initialisation task panicked")??
+    };
     if let Some(delivery) = sigiro::alerts::DeliveryConfig::from_env()? {
         tokio::spawn(sigiro::alerts::run_delivery(alert_store.clone(), delivery));
         tracing::info!("alert webhook delivery enabled");
