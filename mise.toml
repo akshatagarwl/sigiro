@@ -58,6 +58,14 @@ rust-gate = [
     "mise.lock",
     ".env",
 ]
+# The deployment contract is not Rust, so `rust-gate` (src/**, tests/*.rs)
+# never sees it. Without this group a change to the migration script or a
+# deployment test would hit a stale cache and the gate would report success
+# without running them.
+deployment-contract = [
+    "tests/deployment/**",
+    "ops/prod/**",
+]
 
 [env]
 # Keep C/C++ tools available for native dependencies; DuckDB itself is always
@@ -145,7 +153,10 @@ run = "scripts/package-native-artifact.py --input ${NATIVE_ARTIFACT_INPUT:?set N
 
 [tasks.native-contract-test]
 description = "Run black-box native deployment invariant tests."
-run = "python3 -m unittest tests.deployment.test_native_contract"
+# Both suites, not just the contract one. The sync-postgres boundary test was
+# not wired into any gate, so the drop bug that aborted production on every
+# boot could not have been caught by CI.
+run = "python3 -m unittest tests.deployment.test_native_contract tests.deployment.test_sync_postgres_boundary"
 
 [tasks.native-backup]
 description = "Create and structurally verify encrypted off-host pre-cutover backups."
@@ -242,8 +253,13 @@ run = [
     { task = "quick" },
     "scripts/run-with-duckdb-static.sh mbx clippy --all-targets --all-features -- -D warnings",
     "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test",
+    # The deployment invariants guard production boot: the sync-postgres
+    # boundary and the migration contract that must not empty Sigiro's
+    # databases. They were outside every gate, so a cutover could ship a
+    # process-aborting drop and a destructive migration with CI green.
+    { task = "native-contract-test" },
 ]
-sources = ["@group:rust-gate"]
+sources = ["@group:rust-gate", "@group:deployment-contract"]
 outputs = []
 cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
 
