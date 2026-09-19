@@ -39,3 +39,7 @@ www/.source/
 
 # Letta worktree admin state
 .letta/
+
+# Locally issued dev-stack TLS material (scripts/dev-certs.sh). Machine-local
+# by construction — mkcert's root only exists in this machine's trust store.
+.dev/

@@ -300,6 +300,7 @@ description = "Run sigiro locally with dev dependencies (Postgres, RustFS)."
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
+scripts/dev-certs.sh
 docker compose -f docker-compose.dev.yml up -d
 trap 'docker compose -f docker-compose.dev.yml down' EXIT
 scripts/run-with-duckdb-static.sh mbx run --release --bin sigiro
@@ -314,6 +315,7 @@ set -euo pipefail
 # one-shot job that exits 0 once it creates the bucket, which --wait treats
 # as "not running" and fails on if targeted directly. Run it separately,
 # attached, so this task blocks until the bucket actually exists.
+scripts/dev-certs.sh
 docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
 docker compose -f docker-compose.dev.yml up rustfs-setup
 trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
@@ -321,13 +323,16 @@ scripts/run-with-duckdb-static.sh mbx test --test quack_s3_query_surface_test --
 """
 
 # Storage-mode matrix E2E: proves ingest->flush->query->restart-persistence in
-# all three modes (local file / PG+local data / PG+S3). Needs Docker (Postgres +
-# RustFS), like check-s3-e2e.
+# all three modes (local file / PG+local / PG+S3). Needs Docker (Postgres +
+# RustFS), like check-s3-e2e, plus mkcert-issued dev certs — the two PG modes
+# use sslmode=verify-full, which production's validate_hosted_catalog_tls
+# requires and a plaintext Postgres therefore cannot satisfy.
 [tasks.check-storage-matrix-e2e]
 description = "Storage-mode matrix E2E (local file / PG+local / PG+S3). Needs Docker."
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
+scripts/dev-certs.sh
 docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
 docker compose -f docker-compose.dev.yml up rustfs-setup
 trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
@@ -341,6 +346,7 @@ description = "A permanent DuckLake attach failure must fail fast, not wedge the
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
+scripts/dev-certs.sh
 docker compose -f docker-compose.dev.yml up -d --wait postgres
 trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
 scripts/run-with-duckdb-static.sh mbx test --test attach_fail_fast_test -- --ignored --nocapture

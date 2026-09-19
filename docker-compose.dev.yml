@@ -5,10 +5,30 @@ services:
       POSTGRES_DB: ducklake
       POSTGRES_USER: sigiro
       POSTGRES_PASSWORD: sigiro
+    # TLS is not optional dressing: `storage.rs::validate_hosted_catalog_tls`
+    # refuses any hosted catalog URL that is not sslmode=verify-full with an
+    # sslrootcert, so a plaintext dev Postgres cannot exercise the hosted
+    # storage path at all. `scripts/dev-certs.sh` issues .dev/certs from a local
+    # mkcert root; the key has to be 0600 and owned by `postgres` INSIDE the
+    # container, which a read-only host bind cannot provide — hence the copy.
+    # Non-TLS clients still connect: `ssl=on` offers TLS, pg_hba does not force it.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -o postgres -g postgres -m 0750 /certs
+        install -o postgres -g postgres -m 0644 /certs-src/server.crt /certs/server.crt
+        install -o postgres -g postgres -m 0600 /certs-src/server.key /certs/server.key
+        exec docker-entrypoint.sh postgres \
+          -c ssl=on \
+          -c ssl_cert_file=/certs/server.crt \
+          -c ssl_key_file=/certs/server.key
     ports:
       - "5432:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
+      - ./.dev/certs:/certs-src:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sigiro"]
       interval: 5s
