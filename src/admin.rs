@@ -181,7 +181,11 @@ pub fn read_all_status(
     Ok(map)
 }
 
-/// Open or create the admin SQLite database (for instance status).
+/// Open or create the local admin SQLite database.
+///
+/// Runs only in local (non-distributed) self-hosted mode; hosted deployments use
+/// `open_hosted_admin_db` and the PostgreSQL `sigiro_admin` schema instead. Creates
+/// both the instance status table and the local alerts tables.
 ///
 /// Takes the resolved data directory rather than calling `data_dir()` again:
 /// the caller has already resolved and created it, and a second resolution is
