@@ -9,6 +9,14 @@ use tracing::instrument;
 use url::{Position, Url};
 
 const EXPECTED_DUCKDB_VERSION: &str = "v2.0.0-alpha41489";
+
+/// The DuckLake build published for [`EXPECTED_DUCKDB_VERSION`].
+///
+/// This one predates the `prepare=FALSE` fix (ducklake `b93bd97d`), so it fails
+/// every commit against a PostgreSQL catalog — see #317. Running a locally
+/// built extension with that fix is the bridge until upstream publishes a
+/// rebuilt DuckLake for this DuckDB version (#324), and such a build reports a
+/// different version here.
 const EXPECTED_DUCKLAKE_VERSION: &str = "eb7b95df82";
 
 /// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
@@ -713,10 +721,24 @@ fn verify_duckdb_stack(conn: &Connection) -> Result<()> {
         duckdb_version == EXPECTED_DUCKDB_VERSION,
         "DuckDB version mismatch: linked {duckdb_version:?}, expected {EXPECTED_DUCKDB_VERSION:?}"
     );
-    anyhow::ensure!(
-        ducklake_version == EXPECTED_DUCKLAKE_VERSION,
-        "DuckLake version mismatch: loaded {ducklake_version:?}, expected {EXPECTED_DUCKLAKE_VERSION:?}"
-    );
+
+    // Running a locally built extension (see #317/#324) deliberately changes
+    // this version, so accept it when the operator has opted into unsigned
+    // extensions — the same switch that allowed the build to load at all.
+    // Everything else still pins, so an unexpected version cannot slip in
+    // silently on a normal deployment.
+    if ducklake_version != EXPECTED_DUCKLAKE_VERSION {
+        anyhow::ensure!(
+            crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()?,
+            "DuckLake version mismatch: loaded {ducklake_version:?}, expected \
+             {EXPECTED_DUCKLAKE_VERSION:?}"
+        );
+        tracing::warn!(
+            loaded = %ducklake_version,
+            expected = %EXPECTED_DUCKLAKE_VERSION,
+            "running a non-published DuckLake build (SIGIRO_ALLOW_UNSIGNED_EXTENSIONS is set)"
+        );
+    }
     Ok(())
 }
 
