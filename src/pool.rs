@@ -165,6 +165,27 @@ impl Drop for ProjectInitialization<'_> {
     }
 }
 
+/// Open an in-memory DuckDB, honouring `SIGIRO_ALLOW_UNSIGNED_EXTENSIONS`.
+///
+/// `allow_unsigned_extensions` is a Config-time flag: DuckDB rejects it once the
+/// database is open, so every connection that must load a locally built
+/// extension has to be created through here rather than
+/// `Connection::open_in_memory()`.
+pub fn open_duckdb_connection() -> Result<Connection> {
+    if crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()? {
+        tracing::warn!(
+            "SIGIRO_ALLOW_UNSIGNED_EXTENSIONS is set — DuckDB will load extensions \
+             without verifying their signature"
+        );
+        let config = duckdb::Config::default()
+            .allow_unsigned_extensions()
+            .context("failed to enable unsigned DuckDB extensions")?;
+        return Connection::open_in_memory_with_flags(config)
+            .context("failed to open DuckDB with unsigned extensions allowed");
+    }
+    Connection::open_in_memory().context("failed to open in-memory DuckDB")
+}
+
 impl ProjectPool {
     pub fn new(
         data_dir: Utf8PathBuf,
@@ -704,7 +725,7 @@ impl ProjectPool {
         project_id: &str,
         project_dir: &camino::Utf8Path,
     ) -> Result<OpenedProject> {
-        let base = Connection::open_in_memory()
+        let base = open_duckdb_connection()
             .with_context(|| "failed to open in-memory DuckDB".to_string())?;
         tracing::info!("DuckDB: loading extensions during project initialization");
         self.attach_ducklake(&base, project_id, project_dir)?;

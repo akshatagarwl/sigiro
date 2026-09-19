@@ -92,6 +92,18 @@ pub(crate) static EXTENSION_DIR: Envar<String> = Envar::on_startup("SIGIRO_EXTEN
     })
 });
 
+/// Allow DuckDB to load extensions without a valid signature.
+///
+/// DuckDB refuses unsigned `.duckdb_extension` files unless this is set at
+/// Config time — it cannot be changed once the database is open. Needed only to
+/// run a locally built extension, e.g. carrying an upstream fix that has not
+/// been published for the pinned DuckDB version. Defaults to false: signature
+/// checking stays on unless an operator opts out deliberately.
+pub(crate) static ALLOW_UNSIGNED_EXTENSIONS: Envar<bool> =
+    Envar::on_startup("SIGIRO_ALLOW_UNSIGNED_EXTENSIONS", || {
+        EnvarDef::Default(false)
+    });
+
 /// DuckDB worker threads per shared project database. Default: host parallelism.
 static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS", || {
     EnvarDef::Default(
