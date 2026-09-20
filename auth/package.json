@@ -12,17 +12,13 @@
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit && tsx --test test/ui.ts",
     "lint": "oxlint --type-aware .",
-    "db:up": "docker compose up -d --wait",
-    "db:down": "docker compose down --volumes",
-    "migrate": "node --env-file-if-exists=.env --import tsx src/migrate.ts",
     "schema:sql": "tsx scripts/generate-d1-sql.ts",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy",
-    "dev": "node --env-file-if-exists=.env --import tsx --watch src/server.ts",
-    "start": "node dist/server.js",
+    "dev": "wrangler dev",
     "test:email": "node --import tsx test/cloudflare-email-e2e.ts",
-    "test:e2e": "node --env-file-if-exists=.env --import tsx test/e2e.ts",
-    "test": "aube run check && aube run test:email && node --env-file-if-exists=.env --import tsx test/run.ts"
+    "test:agent-e2e": "node --import tsx test/worker-agent-e2e.ts",
+    "test": "aube run check && aube run test:email"
   },
   "dependencies": {
     "@better-auth/agent-auth": "0.6.2",
@@ -31,13 +27,10 @@
     "@better-auth/mcp": "1.7.5",
     "@better-auth/oauth-provider": "1.7.5",
     "@better-auth/passkey": "1.7.5",
-    "@effect/platform-node": "4.0.0-rc.115",
-    "@effect/sql-pg": "4.0.0-rc.115",
     "better-auth": "1.7.5",
     "cloudflare": "7.1.0",
     "drizzle-orm": "0.45.2",
-    "effect": "4.0.0-rc.115",
-    "pg": "8.16.3"
+    "effect": "4.0.0-rc.115"
   },
   "devDependencies": {
     "@auth/agent": "0.6.2",
@@ -45,7 +38,6 @@
     "@effect/tsgo": "0.45.0",
     "@effect/vitest": "4.0.0-rc.115",
     "@types/node": "24.10.1",
-    "@types/pg": "8.15.6",
     "jose": "6.2.3",
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",

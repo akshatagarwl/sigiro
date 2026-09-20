@@ -100,9 +100,13 @@
       "/v1development/profiles",
     ],
   },
+  // No AUTH_ORIGIN_URL. `src/worker.ts` reaches auth through the `AUTH` service
+  // binding that `alchemy.run.ts` wires to the auth Worker on D1; the
+  // auth-origin.sigiro.com hostname and its tunnel are retired. Only
+  // `src/worker-edge.ts` still takes a URL, and `scripts/check-edge.ts` passes
+  // it with `--var` against `wrangler.edge-check.jsonc`.
   "vars": {
     "API_ORIGIN_URL": "https://api-origin.sigiro.com",
-    "AUTH_ORIGIN_URL": "https://auth-origin.sigiro.com",
   },
   "workers_dev": false,
   "routes": [

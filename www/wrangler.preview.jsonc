@@ -9,8 +9,9 @@
     "directory": "dist/client",
     "run_worker_first": true,
   },
+  // This config's `main` is `src/worker.ts`, which uses the `AUTH` service
+  // binding rather than a URL, so AUTH_ORIGIN_URL would be dead here.
   "vars": {
     "API_ORIGIN_URL": "https://api-origin.sigiro.com",
-    "AUTH_ORIGIN_URL": "https://auth-origin.sigiro.com",
   },
 }

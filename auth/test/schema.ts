@@ -14,8 +14,6 @@ import test from "node:test";
 
 import { getTableColumns, is, Table } from "drizzle-orm";
 import { integer, sqliteTable, text, type SQLiteColumn } from "drizzle-orm/sqlite-core";
-import type { Pool } from "pg";
-
 import { createAuthOptions, type AuthRuntime } from "../src/auth.js";
 import { assertAuthSchemaMatches, schema } from "../src/schema/check.js";
 import * as authSchema from "../src/schema/auth-schema.js";
