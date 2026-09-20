@@ -28,10 +28,21 @@ const schemaOnlyRuntime: AuthRuntime = {
   baseURL: "https://auth.invalid",
   secret: "schema-test-only",
   resource: "https://api.invalid",
-  betterAuthDatabase: {} as Pool,
-  runPg: (() => {
+  database: {} as AuthRuntime["database"],
+  secondaryStorage: new Proxy({} as AuthRuntime["secondaryStorage"], {
+    get() {
+      throw new Error("schema tests must not touch secondary storage");
+    },
+  }),
+  sessionTenant: () => {
     throw new Error("schema tests must not touch the database");
-  }) as AuthRuntime["runPg"],
+  },
+  membershipsForUser: () => {
+    throw new Error("schema tests must not touch the database");
+  },
+  fetchClientMetadataResource: () => {
+    throw new Error("schema tests must not reach the network");
+  },
   emailFrom: "schema@invalid",
   sendEmail: () => {
     throw new Error("schema tests must not send email");

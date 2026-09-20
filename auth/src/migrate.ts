@@ -2,9 +2,11 @@ import { getMigrations } from "better-auth/db/migration";
 import { Redacted } from "effect";
 import { Pool } from "pg";
 
+import { fetchClientMetadataResource } from "@better-auth/cimd/node";
+
 import { createAuthOptions } from "./auth.js";
-import { makePgRuntime } from "./database.js";
-import { migrateSecondaryStorage } from "./secondary-storage.js";
+import { makePgRuntime, membershipsForUser, sessionTenant } from "./database.js";
+import { migrateSecondaryStorage, postgresSecondaryStorage } from "./secondary-storage.js";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -45,8 +47,11 @@ try {
       baseURL: required("BETTER_AUTH_URL"),
       secret: required("BETTER_AUTH_SECRET"),
       resource: required("SIGIRO_RESOURCE"),
-      betterAuthDatabase,
-      runPg: postgres.runPromise,
+      database: betterAuthDatabase,
+      secondaryStorage: postgresSecondaryStorage(postgres.runPromise),
+      sessionTenant: (sessionId) => postgres.runPromise(sessionTenant(sessionId)),
+      membershipsForUser: (userId) => postgres.runPromise(membershipsForUser(userId)),
+      fetchClientMetadataResource,
       emailFrom: process.env.EMAIL_FROM ?? "noreply@sigiro.com",
       async sendEmail() {
         throw new Error("Email sending is unavailable during migrations");

@@ -7,7 +7,8 @@ import { Redacted } from "effect";
 import { Pool } from "pg";
 
 import { createAuth } from "../src/auth.js";
-import { makePgRuntime } from "../src/database.js";
+import { makePgRuntime, membershipsForUser, sessionTenant } from "../src/database.js";
+import { postgresSecondaryStorage } from "../src/secondary-storage.js";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -418,8 +419,10 @@ async function expectOk(response: Response, operation: string): Promise<Response
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
     resource: env.SIGIRO_RESOURCE,
-    betterAuthDatabase: cimdDatabase,
-    runPg: cimdPostgres.runPromise,
+    database: cimdDatabase,
+    secondaryStorage: postgresSecondaryStorage(cimdPostgres.runPromise),
+    sessionTenant: (sessionId) => cimdPostgres.runPromise(sessionTenant(sessionId)),
+    membershipsForUser: (userId) => cimdPostgres.runPromise(membershipsForUser(userId)),
     testOTP: env.AUTH_TEST_OTP,
     emailFrom: "noreply@sigiro.com",
     async sendEmail() {},

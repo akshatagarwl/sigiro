@@ -3,13 +3,21 @@ import { createServer } from "node:http";
 
 import { APIError } from "better-auth/api";
 import { toNodeHandler } from "better-auth/node";
+import { fetchClientMetadataResource } from "@better-auth/cimd/node";
 import Cloudflare from "cloudflare";
 import { Redacted } from "effect";
 import { Pool } from "pg";
 
 import { createAuth } from "./auth.js";
-import { checkDatabase, makePgRuntime, membershipRoles, membershipsForUser } from "./database.js";
+import {
+  checkDatabase,
+  makePgRuntime,
+  membershipRoles,
+  membershipsForUser,
+  sessionTenant,
+} from "./database.js";
 import { sendCloudflareEmail } from "./email.js";
+import { postgresSecondaryStorage } from "./secondary-storage.js";
 import { authUIResponse } from "./ui.js";
 
 const required = (name: string): string => {
@@ -64,8 +72,14 @@ const auth = createAuth({
   baseURL,
   secret,
   resource: required("SIGIRO_RESOURCE"),
-  betterAuthDatabase,
-  runPg: postgres.runPromise,
+  // The runtime-specific plumbing. Everything else (plugins, PKCE
+  // enforcement, the `tid` claim) lives in createAuthOptions and is shared
+  // verbatim with the Worker.
+  database: betterAuthDatabase,
+  secondaryStorage: postgresSecondaryStorage(postgres.runPromise),
+  sessionTenant: (sessionId) => postgres.runPromise(sessionTenant(sessionId)),
+  membershipsForUser: (userId) => postgres.runPromise(membershipsForUser(userId)),
+  fetchClientMetadataResource,
   testOTP,
   emailFrom: required("EMAIL_FROM"),
   async sendEmail(message) {

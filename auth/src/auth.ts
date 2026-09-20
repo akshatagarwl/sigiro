@@ -1,5 +1,4 @@
 import { cimd } from "@better-auth/cimd";
-import { fetchClientMetadataResource as fetchClientMetadataResourceNode } from "@better-auth/cimd/node";
 import { agentAuth } from "@better-auth/agent-auth";
 import { mcp } from "@better-auth/mcp";
 import { oauthDeviceAuthorization, type ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
@@ -7,10 +6,7 @@ import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { emailOTP, jwt, organization } from "better-auth/plugins";
-import type { Pool } from "pg";
-
-import { membershipsForUser, sessionTenant, type RunPg } from "./database.js";
-import { postgresSecondaryStorage } from "./secondary-storage.js";
+import type { SecondaryStorage } from "@better-auth/core/db";
 
 export const SIGIRO_SCOPES = [
   "openid",
@@ -45,8 +41,19 @@ export interface AuthRuntime {
   baseURL: string;
   secret: string;
   resource: string;
-  betterAuthDatabase: Pool;
-  runPg: RunPg;
+  /**
+   * Whatever better-auth should use as its primary store: a `pg` Pool on the
+   * Node host, a drizzle D1 adapter on Workers. Typed loosely on purpose —
+   * narrowing it to one of the two is what would force a second copy of this
+   * config to exist, and a forked copy is how PKCE enforcement or the `tid`
+   * claim quietly diverges between runtimes.
+   */
+  database: Parameters<typeof betterAuth>[0]["database"];
+  secondaryStorage: SecondaryStorage;
+  /** Resolves a session's active organization. Backed by pg or D1. */
+  sessionTenant(sessionId: string): Promise<string | null>;
+  /** Every organization a user belongs to, oldest first. Backed by pg or D1. */
+  membershipsForUser(userId: string): Promise<ReadonlyArray<string>>;
   testOTP?: string;
   sendEmail(message: {
     to: string;
@@ -55,7 +62,12 @@ export interface AuthRuntime {
     text: string;
   }): Promise<void>;
   emailFrom: string;
-  fetchClientMetadataResource?: ClientMetadataResourceFetch;
+  /**
+   * Required, with no default. The Node transport (`@better-auth/cimd/node`)
+   * uses node:dns and cannot load on Workers, so importing it here to provide
+   * a fallback would break the Worker build at module scope.
+   */
+  fetchClientMetadataResource: ClientMetadataResourceFetch;
 }
 
 const requireResource = (value: unknown, expected: string): void => {
@@ -73,8 +85,8 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
     appName: "Sigiro",
     baseURL: runtime.baseURL,
     secret: runtime.secret,
-    database: runtime.betterAuthDatabase,
-    secondaryStorage: postgresSecondaryStorage(runtime.runPg),
+    database: runtime.database,
+    secondaryStorage: runtime.secondaryStorage,
     session: { storeSessionInDatabase: true },
     verification: { storeInDatabase: true },
     disabledPaths: ["/token"],
@@ -161,13 +173,13 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
                 const registeredTenantId = referenceId ?? client.referenceId;
                 if (registeredTenantId) return { tid: registeredTenantId };
                 if (sessionId) {
-                  const activeOrganizationId = await runtime.runPg(sessionTenant(sessionId));
+                  const activeOrganizationId = await runtime.sessionTenant(sessionId);
                   if (!activeOrganizationId) throw new Error("token session has no active organization");
                   return { tid: activeOrganizationId };
                 }
                 if (!user?.id) throw new Error("token issuance has no tenant-bearing user, session, or client");
 
-                const memberships = await runtime.runPg(membershipsForUser(user.id));
+                const memberships = await runtime.membershipsForUser(user.id);
                 if (memberships.length !== 1) {
                   throw new Error("device token user must belong to exactly one organization");
                 }
@@ -182,7 +194,7 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
       }),
       oauthDeviceAuthorization({ verificationUri: `${new URL(runtime.baseURL).origin}/device` }),
       cimd({
-        fetchClientMetadataResource: runtime.fetchClientMetadataResource ?? fetchClientMetadataResourceNode,
+        fetchClientMetadataResource: runtime.fetchClientMetadataResource,
         metadataProfile: "mcp-2026-07-28",
       }),
     ],

@@ -134,8 +134,11 @@ export default {
           tools,
         }),
       );
+    // worker-edge is the preview/local variant: check-edge.ts boots auth as a
+    // plain process on a port, so this path stays a URL proxy. Production uses
+    // the service binding in worker.ts.
     if (isAuthPath(url.pathname)) return proxyRequest(request, env.AUTH_ORIGIN_URL);
     if (isApiPath(url.pathname)) return proxyRequest(request, env.API_ORIGIN_URL);
     return website.fetch(request, env, context);
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<EdgeEnv>;

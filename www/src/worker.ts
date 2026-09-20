@@ -131,7 +131,10 @@ export default {
         }),
       );
     }
-    if (isAuthPath(pathname)) return proxyRequest(request, env.AUTH_ORIGIN_URL);
+    // A service binding: the auth worker is invoked directly, so the request
+    // never leaves Cloudflare and no redirect rewriting is needed (the auth
+    // worker already sees the public sigiro.com URL).
+    if (isAuthPath(pathname)) return env.AUTH.fetch(request);
     if (isApiPath(pathname)) return proxyRequest(request, env.API_ORIGIN_URL);
     return website.fetch(request, env, context);
   },

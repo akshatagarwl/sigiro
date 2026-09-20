@@ -15,6 +15,9 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down --volumes",
     "migrate": "node --env-file-if-exists=.env --import tsx src/migrate.ts",
+    "schema:sql": "tsx scripts/generate-d1-sql.ts",
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy",
     "dev": "node --env-file-if-exists=.env --import tsx --watch src/server.ts",
     "start": "node dist/server.js",
     "test:email": "node --import tsx test/cloudflare-email-e2e.ts",
@@ -38,6 +41,7 @@
   },
   "devDependencies": {
     "@auth/agent": "0.6.2",
+    "@cloudflare/workers-types": "^5.20260919.1",
     "@effect/tsgo": "0.45.0",
     "@effect/vitest": "4.0.0-rc.115",
     "@types/node": "24.10.1",
@@ -46,7 +50,8 @@
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
     "tsx": "4.23.13",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "wrangler": "^4.135.0"
   },
   "patchedDependencies": {
     "@auth/agent@0.6.2": "patches/@auth%2Fagent@0.6.2.patch"

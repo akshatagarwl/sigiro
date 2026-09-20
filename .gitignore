@@ -43,3 +43,14 @@ www/.source/
 # Locally issued dev-stack TLS material (scripts/dev-certs.sh). Machine-local
 # by construction — mkcert's root only exists in this machine's trust store.
 .dev/
+
+# Local Worker secrets and env overrides (wrangler/celld convention). These
+# carry BETTER_AUTH_SECRET and must never be committed.
+.dev.vars
+.dev.vars.*
+
+# celld's local runtime state (D1 sqlite, replication working dir).
+.celld/
+
+# Alchemy's local state and bundled worker output.
+**/.alchemy/

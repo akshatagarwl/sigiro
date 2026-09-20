@@ -2,6 +2,7 @@ import * as Alchemy from 'alchemy';
 import { adopt } from 'alchemy/AdoptPolicy';
 import * as Cloudflare from 'alchemy/Cloudflare';
 import { retain } from 'alchemy/RemovalPolicy';
+import * as Config from 'effect/Config';
 import * as Effect from 'effect/Effect';
 import * as Schema from 'effect/Schema';
 
@@ -20,6 +21,11 @@ export default Alchemy.Stack(
     const stage = yield* Schema.decodeUnknownEffect(productionStage)(
       (yield* Alchemy.Stack).stage,
     ).pipe(Effect.orDie);
+
+    // The same secret the Node service used. A rotated BETTER_AUTH_SECRET is
+    // indistinguishable from a key re-mint and would invalidate every token.
+    const authSecret = yield* Config.Redacted('BETTER_AUTH_SECRET');
+    const emailToken = yield* Config.Redacted('CLOUDFLARE_EMAIL_API_TOKEN');
 
     const zone = yield* productionResource(
       Cloudflare.Zone.Zone('ProductionZone', {
@@ -61,14 +67,35 @@ export default Alchemy.Stack(
         ttl: 60,
       }),
     );
-    const authOriginRecord = yield* productionResource(
-      Cloudflare.DNS.Record('AuthOriginRecord', {
-        zoneId: zone.zoneId,
-        name: 'auth-origin.sigiro.com',
-        type: 'A',
-        content: '203.0.113.10',
-        proxied: false,
-        ttl: 60,
+    // The auth service runs as a Worker on D1. The website reaches it through a
+    // service binding below, so there is no auth-origin DNS record, no tunnel,
+    // and no public hop: auth is no longer addressable from the internet except
+    // through sigiro.com/api/auth.
+    const authDatabase = yield* productionResource(
+      Cloudflare.D1.Database('AuthDatabase', {
+        name: 'sigiro-auth',
+      }),
+    );
+    const authWorker = yield* productionResource(
+      Cloudflare.Workers.Worker('AuthWorker', {
+        name: 'sigiro-auth',
+        main: '../auth/src/d1/worker.ts',
+        compatibility: {
+          date: '2026-09-01',
+          flags: ['nodejs_compat'],
+        },
+        workersDev: false,
+        observability: { enabled: true },
+        env: {
+          DB: authDatabase,
+          ENVIRONMENT: 'production',
+          BETTER_AUTH_URL: 'https://sigiro.com',
+          SIGIRO_RESOURCE: 'https://sigiro.com',
+          EMAIL_FROM: 'noreply@sigiro.com',
+          CLOUDFLARE_ACCOUNT_ID: '73035685fa8536f5c07b55b168868c71',
+          BETTER_AUTH_SECRET: authSecret,
+          CLOUDFLARE_EMAIL_API_TOKEN: emailToken,
+        },
       }),
     );
     const apiOriginRecord = yield* productionResource(
@@ -130,7 +157,10 @@ export default Alchemy.Stack(
         },
         env: {
           API_ORIGIN_URL: 'https://api-origin.sigiro.com',
-          AUTH_ORIGIN_URL: 'https://auth-origin.sigiro.com',
+          // A service binding, not a URL: the request goes worker-to-worker
+          // without leaving Cloudflare, so auth has no public origin to attack
+          // and no tunnel to keep alive.
+          AUTH: authWorker,
           DOWNLOADS: downloads,
         },
       }),
@@ -157,8 +187,9 @@ export default Alchemy.Stack(
       emailSending,
       authRecord,
       apiRecord,
-      authOriginRecord,
       apiOriginRecord,
+      authDatabase,
+      authWorker,
 
       website,
       apexRoute,
