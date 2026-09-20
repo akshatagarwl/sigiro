@@ -34,7 +34,7 @@ void test("returns a 304 to the caller instead of treating it as a redirect", as
   await withStubbedFetch(
     () => Promise.resolve(new Response(null, { status: 304 })),
     async () => {
-      const response = await fetchClientMetadataResource("https://sigiro.com/.well-known/oauth-client.json", {
+      const response = await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json", {
         headers: new Headers({ "If-None-Match": '"abc"' }),
       });
       assert.equal(response.status, 304);
@@ -47,7 +47,7 @@ void test("refuses a real redirect", async () => {
     () => Promise.resolve(new Response(null, { status: 302, headers: { location: "https://evil.example/" } })),
     async () => {
       await assert.rejects(
-        async () => void (await fetchClientMetadataResource("https://sigiro.com/.well-known/oauth-client.json")),
+        async () => void (await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json")),
         /must not redirect \(got 302\)/,
       );
     },
@@ -65,7 +65,7 @@ void test("never requests redirect:'error', which Workers does not implement", a
       return Promise.resolve(new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
     },
     async () => {
-      await fetchClientMetadataResource("https://sigiro.com/.well-known/oauth-client.json", {
+      await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json", {
         redirect: "error",
         headers: new Headers({ Accept: "application/json" }),
       });
@@ -87,7 +87,7 @@ void test("forwards the caller's conditional headers and abort signal", async ()
       return Promise.resolve(new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
     },
     async () => {
-      await fetchClientMetadataResource("https://sigiro.com/.well-known/oauth-client.json", {
+      await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json", {
         headers: new Headers({ "If-None-Match": '"etag-value"' }),
         signal: controller.signal,
       });
@@ -109,7 +109,7 @@ void test("leaves the body unread for the caller to stream", async () => {
         }),
       ),
     async () => {
-      const response = await fetchClientMetadataResource("https://sigiro.com/.well-known/oauth-client.json");
+      const response = await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json");
       assert.equal(response.bodyUsed, false);
       const body = (await response.json()) as { client_id: string };
       assert.equal(body.client_id, "https://sigiro.com/.well-known/oauth-client.json");
@@ -122,6 +122,48 @@ void test("rejects a non-https client_id", async () => {
     async () => void (await fetchClientMetadataResource("http://sigiro.com/.well-known/oauth-client.json")),
     /https/,
   );
+});
+
+void test("serves the first-party client_id from memory without a network fetch", async () => {
+  // Cloudflare refuses a Worker fetching its own zone with 403 error code 1014
+  // ("CNAME Cross-User Banned"), which broke the OAuth device flow in
+  // production. The first-party document must be answered in-isolate.
+  let fetched = false;
+  await withStubbedFetch(
+    () => {
+      fetched = true;
+      return Promise.resolve(new Response(null, { status: 403 }));
+    },
+    async () => {
+      const response = await fetchClientMetadataResource("https://sigiro.com/.well-known/oauth-client.json");
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as { client_id: string; scope: string };
+      assert.equal(body.client_id, "https://sigiro.com/.well-known/oauth-client.json");
+      assert.match(body.scope, /telemetry:ingest/);
+    },
+  );
+  assert.equal(fetched, false, "the first-party document must not be fetched over the network");
+});
+
+void test("a different URL on the same origin still goes over the network", async () => {
+  // The shortcut is an exact match, not an origin match: a third-party client
+  // registering some other path must not be served our document.
+  let requested: string | undefined;
+  await withStubbedFetch(
+    (input) => {
+      requested = String(input);
+      return Promise.resolve(
+        new Response('{"client_id":"https://sigiro.com/other.json"}', {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    },
+    async () => {
+      await fetchClientMetadataResource("https://sigiro.com/other.json");
+    },
+  );
+  assert.equal(requested, "https://sigiro.com/other.json");
 });
 
 void test("rejects a private or reserved host", async () => {

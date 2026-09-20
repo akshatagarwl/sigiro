@@ -18,6 +18,7 @@
     "preview": "wrangler dev --config wrangler.preview.jsonc",
     "check:edge": "tsx scripts/check-edge.ts",
     "check:signup": "tsx scripts/check-signup-browser.ts",
+    "check:device": "tsx scripts/check-device-flow.ts",
     "check:mcp": "tsx scripts/check-mcp-contract.ts",
     "check:mcp:hosted": "tsx scripts/check-mcp-hosted.ts",
     "check:webmcp:browser": "aube run build && node scripts/check-webmcp-oauth.mjs",
