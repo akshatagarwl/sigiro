@@ -41,22 +41,67 @@ const isBlockedHost = (hostname: string): boolean => {
 
 const MAX_BYTES = 256 * 1024;
 
-export const fetchClientMetadataResource: ClientMetadataResourceFetch = async (url) => {
+/**
+ * The caller (`@better-auth/cimd`) passes its own `RequestInit` as a second
+ * argument, carrying conditional-revalidation headers (`If-None-Match`,
+ * `If-Modified-Since`), an abort signal for its 5s budget, and
+ * `redirect: "error"`.
+ *
+ * Two of those must be honoured and one must not:
+ *
+ *   - The headers and signal MUST be forwarded. Dropping the headers turns
+ *     every revalidation into a full refetch; dropping the signal means the
+ *     library's timeout cannot cancel the request.
+ *   - `redirect: "error"` MUST be overridden. Workers does not implement it and
+ *     throws `TypeError: Invalid redirect value` before the request is issued.
+ *     The library wraps the call in `catch {}` and reports the generic
+ *     `invalid_client` / "Failed to fetch metadata document", so the real error
+ *     never surfaces — which is exactly how this stayed invisible.
+ *
+ * `manual` preserves the intent: a redirect comes back as an opaque 3xx that we
+ * reject, instead of being followed to an unchecked second destination.
+ */
+export const fetchClientMetadataResource: ClientMetadataResourceFetch = async (url, init) => {
   const target = new URL(typeof url === "string" ? url : url.toString());
   if (target.protocol !== "https:") throw new Error("client metadata must be served over https");
   if (isBlockedHost(target.hostname)) throw new Error("client metadata host is not permitted");
 
+  const headers = new Headers(init?.headers);
+  if (!headers.has("accept")) headers.set("accept", "application/json");
+
   const response = await fetch(target, {
     method: "GET",
-    headers: { accept: "application/json" },
-    redirect: "error", // a followed redirect is an unchecked second destination
-    signal: AbortSignal.timeout(10_000),
+    headers,
+    redirect: "manual",
+    signal: init?.signal ?? AbortSignal.timeout(10_000),
   });
+  // 304 MUST be checked before the redirect range. It is a conditional
+  // response, not a redirect: the caller sends `If-None-Match` from its cache
+  // entry and joins the 304 back onto it. Checking `>= 300` first swallowed
+  // every revalidation and reported it as a blocked redirect, which is the
+  // generic `invalid_client` the plugin surfaces.
+  if (response.status === 304) return response;
+  // A real redirect (301/302/307/308), or an opaque one on runtimes that
+  // report `manual` that way, is refused: following it would fetch client
+  // metadata from an unchecked second destination.
+  if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+    throw new Error(`client metadata must not redirect (got ${response.status})`);
+  }
   if (!response.ok) throw new Error(`client metadata fetch failed: ${response.status}`);
 
-  // Bound the body. An unbounded read of an attacker-influenced URL is a memory
-  // exhaustion vector, and the Node transport capped this too.
-  const body = await response.text();
-  if (body.length > MAX_BYTES) throw new Error("client metadata document is too large");
-  return JSON.parse(body) as never;
+  // Do NOT read the body here. The caller streams it itself with its own byte
+  // limit (`readBodyWithLimit`), and an earlier version of this function read
+  // the text and returned `new Response(body, { headers: response.headers })`.
+  // That copies `content-length` (and any `content-encoding`) from the
+  // compressed upstream response onto a body that has already been decoded, so
+  // the caller's reader disagreed with the declared length and threw — which
+  // the plugin reports as the same generic "failed to fetch" as a network
+  // error. Enforce the size limit from the declared length and hand back the
+  // untouched response.
+  const declared = response.headers.get("content-length");
+  if (declared !== null && Number.parseInt(declared, 10) > MAX_BYTES) {
+    await response.body?.cancel();
+    throw new Error("client metadata document is too large");
+  }
+  return response;
 };

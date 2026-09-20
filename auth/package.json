@@ -10,7 +10,7 @@
   "scripts": {
     "prepare": "effect-tsgo patch --no-typescript --oxlint",
     "build": "tsc -p tsconfig.build.json",
-    "check": "tsc --noEmit && tsx --test test/ui.ts",
+    "check": "tsc --noEmit && tsx --test test/ui.ts test/cimd-fetch.ts",
     "lint": "oxlint --type-aware .",
     "schema:sql": "tsx scripts/generate-d1-sql.ts",
     "worker:dev": "wrangler dev",
