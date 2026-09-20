@@ -10,7 +10,6 @@ import * as schema from "../schema/auth-schema.js";
 import { d1SecondaryStorage } from "./secondary-storage.js";
 import { checkDatabase, membershipRoles, membershipsForUser, sessionTenant } from "./queries.js";
 import { fetchClientMetadataResource } from "./cimd-fetch.js";
-import { authUIResponse } from "../ui.js";
 import { sendCloudflareEmail } from "../email.js";
 
 /**
@@ -232,16 +231,6 @@ const dispatch = async (env: Env, request: Request): Promise<Response> => {
         applied += 1;
       }
       return Response.json({ applied });
-    }
-
-    // The sign-in / sign-up / consent / device pages and their assets. These
-    // are routed to auth by www's isAuthPath, so dropping them here 404s the
-    // entire interactive sign-in flow.
-    const ui = authUIResponse(url.pathname);
-    if (ui && (request.method === "GET" || request.method === "HEAD")) {
-      return request.method === "HEAD"
-        ? new Response(null, { status: ui.status, headers: ui.headers })
-        : ui;
     }
 
     if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/health") {

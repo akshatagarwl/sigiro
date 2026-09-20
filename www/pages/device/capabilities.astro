@@ -1,0 +1,22 @@
+---
+import AuthShell from '@/components/auth/AuthShell.astro';
+
+/**
+ * `/device/capabilities` — served by the website, not by the auth Worker.
+ *
+ * These pages were HTML strings in `auth/src/ui.ts`. They are Astro pages now so
+ * they wear the site's header, footer, fonts and theme instead of a second
+ * hand-rolled stylesheet. The flow still calls `/api/auth/*`, which the Website
+ * Worker routes to the auth Worker over the service binding — same origin, no
+ * redirect, no separate surface.
+ *
+ * The agent approval page. Reached from `@better-auth/agent-auth`, not from
+ * the CLI device flow, and it approves capabilities rather than a device code.
+ */
+---
+
+<AuthShell
+  page="agent-device"
+  title="Connect an agent to Sigiro"
+  intro="Sign in, verify the approval code shown by your agent, then approve its requested capabilities."
+/>

@@ -61,11 +61,31 @@ interface Props {
    * was localized had to change.
    */
   locale?: Locale;
+  /**
+   * Overrides for pages that are not the landing page.
+   *
+   * The auth pages are the first mounts that are not `/` or a locale variant of
+   * it, and a sign-in page titled with the site's marketing tagline is wrong in
+   * the tab, in search results and in a shared link. Both default to the site
+   * copy, so every existing mount is unchanged.
+   */
+  title?: string;
+  description?: string;
+  /** Keep a page out of the index — auth screens have no business in search. */
+  noindex?: boolean;
 }
 
-const { canonical = new URL(Astro.url.pathname, SITE.url).href, locale = 'en' } = Astro.props;
+const {
+  canonical = new URL(Astro.url.pathname, SITE.url).href,
+  locale = 'en',
+  title: titleOverride,
+  description: descriptionOverride,
+  noindex = false,
+} = Astro.props;
 
 const copy = getCopy(locale);
+const pageTitle = titleOverride ?? copy.site.title;
+const pageDescription = descriptionOverride ?? copy.site.description;
 
 /**
  * `hreflang` for the four landing pages.
@@ -142,8 +162,9 @@ const og = new URL(SITE.ogImage, SITE.url).href;
     {alternates.map((alt) => <link rel="alternate" hreflang={alt.hreflang} href={alt.href} />)}
     <link rel="alternate" hreflang="x-default" href={SITE.url} />
 
-    <title>{copy.site.title}</title>
-    <meta name="description" content={copy.site.description} />
+    <title>{pageTitle}</title>
+    {noindex && <meta name="robots" content="noindex, nofollow" />}
+    <meta name="description" content={pageDescription} />
     <meta name="application-name" content={SITE.name} />
     <meta name="robots" content="index, follow" />
 
@@ -167,8 +188,8 @@ const og = new URL(SITE.ogImage, SITE.url).href;
     */}
     <meta property="og:url" content={canonical} />
     <meta property="og:site_name" content={SITE.name} />
-    <meta property="og:title" content={copy.site.title} />
-    <meta property="og:description" content={copy.site.description} />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={pageDescription} />
     <meta property="og:image" content={og} />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
@@ -177,8 +198,8 @@ const og = new URL(SITE.ogImage, SITE.url).href;
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@SigiroAI" />
-    <meta name="twitter:title" content={copy.site.title} />
-    <meta name="twitter:description" content={copy.site.description} />
+    <meta name="twitter:title" content={pageTitle} />
+    <meta name="twitter:description" content={pageDescription} />
     <meta name="twitter:image" content={og} />
 
     <Fonts cssVars={data.fontCssVars} />

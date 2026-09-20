@@ -3,17 +3,17 @@ import website from '../dist/server/blume-worker.mjs';
 import { createMcpHandler, MCP_PROTECTED_RESOURCE_METADATA, tools } from './mcp-handler';
 import { MCP_REQUIRED_SCOPE, MCP_RESOURCE } from './mcp-catalog';
 
-const AUTH_PATHS = new Set([
-  '/.well-known/agent-configuration',
-  '/auth-ui.css',
-  '/auth-ui.js',
-  '/consent',
-  '/device',
-  '/sign-in',
-  '/sign-up',
-]);
-
-const AUTH_PAGE_PREFIXES = ['/consent/', '/device/', '/sign-in/', '/sign-up/'];
+/**
+ * Paths the auth Worker owns.
+ *
+ * The auth PAGES are no longer in this set. `/sign-in`, `/sign-up`, `/consent`,
+ * `/device` and `/device/capabilities` are Astro pages in this site now, so the
+ * website renders them with its own header, footer and theme; only the `/api/auth/*`
+ * endpoints they call still cross the service binding. `/auth-ui.css` and
+ * `/auth-ui.js` are gone entirely — the stylesheet is Blume's and the script is
+ * bundled into the page.
+ */
+const AUTH_PATHS = new Set(['/.well-known/agent-configuration']);
 
 const API_PATHS = new Set([
   '/.well-known/oauth-protected-resource',
@@ -27,10 +27,7 @@ const API_PATHS = new Set([
 ]);
 
 const isAuthPath = (pathname: string): boolean =>
-  pathname === '/api/auth' ||
-  pathname.startsWith('/api/auth/') ||
-  AUTH_PATHS.has(pathname) ||
-  AUTH_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+  pathname === '/api/auth' || pathname.startsWith('/api/auth/') || AUTH_PATHS.has(pathname);
 
 const isApiPath = (pathname: string): boolean =>
   pathname.startsWith('/v1/') || API_PATHS.has(pathname);

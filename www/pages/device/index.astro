@@ -1,0 +1,23 @@
+---
+import AuthShell from '@/components/auth/AuthShell.astro';
+
+/**
+ * `/device` — served by the website, not by the auth Worker.
+ *
+ * These pages were HTML strings in `auth/src/ui.ts`. They are Astro pages now so
+ * they wear the site's header, footer, fonts and theme instead of a second
+ * hand-rolled stylesheet. The flow still calls `/api/auth/*`, which the Website
+ * Worker routes to the auth Worker over the service binding — same origin, no
+ * redirect, no separate surface.
+ *
+ * Mounted as `device/index.astro` rather than `device.astro` so that
+ * `/device/capabilities` can be a sibling file; Astro cannot have both
+ * `device.astro` and a `device/` directory.
+ */
+---
+
+<AuthShell
+  page="device"
+  title="Connect the Sigiro CLI"
+  intro="Sign in, review the code shown by your terminal, then approve this device."
+/>

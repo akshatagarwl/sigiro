@@ -1,0 +1,19 @@
+---
+import AuthShell from '@/components/auth/AuthShell.astro';
+
+/**
+ * `/consent` — served by the website, not by the auth Worker.
+ *
+ * These pages were HTML strings in `auth/src/ui.ts`. They are Astro pages now so
+ * they wear the site's header, footer, fonts and theme instead of a second
+ * hand-rolled stylesheet. The flow still calls `/api/auth/*`, which the Website
+ * Worker routes to the auth Worker over the service binding — same origin, no
+ * redirect, no separate surface.
+ * */
+---
+
+<AuthShell
+  page="consent"
+  title="Authorize access"
+  intro="Review and approve the access requested by your OAuth client."
+/>
