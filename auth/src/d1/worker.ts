@@ -1,4 +1,5 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import Cloudflare from "cloudflare";
 import { APIError } from "better-auth/api";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -10,6 +11,7 @@ import { d1SecondaryStorage } from "./secondary-storage.js";
 import { checkDatabase, membershipRoles, membershipsForUser, sessionTenant } from "./queries.js";
 import { fetchClientMetadataResource } from "./cimd-fetch.js";
 import { authUIResponse } from "../ui.js";
+import { sendCloudflareEmail } from "../email.js";
 
 /**
  * Worker entrypoint for the sigiro auth service.
@@ -57,17 +59,18 @@ const sendEmail = async (
   const accountId = env.CLOUDFLARE_ACCOUNT_ID;
   const token = env.CLOUDFLARE_EMAIL_API_TOKEN;
   if (!accountId || !token) throw new Error("email delivery is unavailable without Cloudflare credentials");
-  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/email/routing/send`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      personalizations: [{ to: [{ email: message.to }] }],
-      from: { email: message.from },
-      subject: message.subject,
-      content: [{ type: "text/plain", value: message.text }],
-    }),
-  });
-  if (!response.ok) throw new Error(`email delivery failed: ${response.status}`);
+  // Use the SDK rather than a hand-rolled fetch. The hand-rolled version posted
+  // to `/email/routing/send` with a SendGrid-shaped `personalizations` body;
+  // that route does not exist (400, code 7000 "No route for that URI"), so every
+  // verification code was silently dropped while the endpoint still returned
+  // `{"success":true}` to the caller. Email Sending is `/email/sending/send`
+  // with a flat `{from, to[], subject, text}` body, which is exactly what
+  // `client.emailSending.send` builds.
+  await sendCloudflareEmail(
+    new Cloudflare({ apiToken: token }),
+    accountId,
+    message,
+  );
 };
 
 const buildAuth = (env: Env) => {
