@@ -68,6 +68,37 @@ export const SITE_SHARED = {
 } as const;
 
 /**
+ * The install command, defined once.
+ *
+ * It appears on the landing page's Start section, in the `connect` session
+ * below, and in the quickstart — and it is a copy target, so the string a
+ * reader copies has to be the string the docs show. One constant is the only
+ * way that stays true.
+ */
+export const INSTALL_COMMAND = 'curl -fsSL https://sigiro.com/install | sh' as const;
+
+/**
+ * The paragraph a reader hands to a coding agent instead of running the command
+ * themselves.
+ *
+ * Every claim in it is checked against the live site rather than written from
+ * memory: `/install` is a static asset that serves a real shell script, `/mcp`
+ * answers 401 until authorized, and `/.well-known/agent-configuration` is
+ * served and documents the issuer. An install prompt that names an endpoint
+ * which does not exist wastes a reader's agent run and their trust.
+ *
+ * Deliberately imperative and short. It is read by a model, not a person, and a
+ * prompt that opens with marketing gives the model nothing to act on.
+ */
+export const AGENT_PROMPT =
+  ('Install and run sigiro, the open-source observability data layer, on this machine. ' +
+    'Run: curl -fsSL https://sigiro.com/install | sh — then start it with: sigiro serve. ' +
+    'It listens on 4317 and 4318 for OTLP and on 9999 for its HTTP API. ' +
+    'Point this project\u2019s OpenTelemetry exporter at http://localhost:4318. ' +
+    'Then add https://sigiro.com/mcp as an MCP server so you can query the telemetry ' +
+    'directly; it uses OAuth device flow, so open the URL it prints to authorize.') as const;
+
+/**
  * Everything after "start it" is the same whichever way you started it, so the
  * two variants differ only in their first command or two. Written once and
  * spread into both, because a reader who toggles between them must see one line
@@ -106,7 +137,7 @@ export const HOW_SESSIONS = {
         label: 'binary',
         run: [
           {
-            cmd: 'curl -fsSL https://sigiro.com/install | sh',
+            cmd: INSTALL_COMMAND,
             out: 'installed ~/.local/bin/sigiro',
           },
           { cmd: 'sigiro serve &', out: '[1] 41802\nlistening on 4317, 4318, 9999' },

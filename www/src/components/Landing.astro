@@ -2,6 +2,7 @@
 import Artifact from '@/components/Artifact.astro';
 import FactoryLoop from '@/components/FactoryLoop.astro';
 import HowItWorks from '@/components/HowItWorks.astro';
+import Start from '@/components/Start.astro';
 import { Integrations } from '@/components/integrations';
 import { PRIMARY, SECONDARY } from '@/components/site/action';
 import Base from '@/layouts/Base.astro';
@@ -116,6 +117,8 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
   {/* The header stays inside the island so it remains beside the pinned frame. */}
   <section aria-labelledby="how" class={SECTION_PINNED}>
     <HowItWorks locale={locale} />
+
+    <Start />
   </section>
 
   {
