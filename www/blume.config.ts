@@ -34,6 +34,45 @@ const sigiro = (): AstroIntegration => ({
           resolve: {
             alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
           },
+          /**
+           * `blume dev` crashed on startup with
+           *
+           *   Error: The file does not exist at ".blume/.cache/vite/deps_ssr/
+           *   sequence-<hash>.js" which is in the optimize deps directory.
+           *
+           * `sequence-*.js` is not a package — it is a chunk Vite's SSR
+           * dependency optimizer emits. The log line before the crash names the
+           * trigger:
+           *
+           *   [vite] dependency optimized: astro/app/manifest
+           *   [vite] optimized dependencies changed. reloading
+           *
+           * Astro's Cloudflare adapter runs SSR inside workerd. The optimizer
+           * discovers `astro/app/manifest` late, re-optimizes, and rewrites
+           * `deps_ssr/` with fresh hashes while the workerd runner still holds a
+           * handle to the previous chunk. The runner asks for a file that was
+           * just replaced and the dev server dies instead of reloading.
+           *
+           * Naming it up front makes the first optimizer pass the only pass, so
+           * nothing is invalidated underneath the runner. The React packages are
+           * listed for the same reason: the auth island pulls them in through a
+           * `client:load` component, which is also late discovery.
+           *
+           * `astro build` optimizes once by construction, which is why the site
+           * deployed fine the whole time the dev server could not start.
+           */
+          ssr: {
+            optimizeDeps: {
+              include: [
+                'astro/app/manifest',
+                'motion',
+                'motion/react',
+                'react',
+                'react-dom',
+                'react-dom/server',
+              ],
+            },
+          },
         },
       });
       injectRoute({
