@@ -112,8 +112,10 @@ const main = async (): Promise<void> => {
     await page.click('#email-form button[type="submit"]');
     await page.waitForSelector('#otp-form', { state: 'visible', timeout: 30_000 });
     const code = await awaitEmailedCode(requestedAt);
-    await page.fill('#otp-form input[name="otp"]', code);
-    await page.click('#otp-form button[type="submit"]');
+    // Six cells, not one input. Filling the first cell with the whole code is
+    // what a paste does; the component spreads it across the row and submits
+    // on completion, so there is no button to press.
+    await page.locator('#otp-form input').first().fill(code);
     // Wait for the PAGE to finish signing in, then confirm the session once.
     //
     // Two wrong ways to do this, both of which produced failures blamed on the
@@ -126,11 +128,9 @@ const main = async (): Promise<void> => {
     //
     // The form hiding is the page's own signal that sign-in resolved; one
     // assertion after it confirms the session without hammering anything.
-    await page.waitForFunction(
-      () => !document.querySelector('#otp-form')?.checkVisibility?.(),
-      undefined,
-      { timeout: 30_000 },
-    );
+    await page.waitForFunction(() => document.querySelector('#otp-form') === null, undefined, {
+      timeout: 30_000,
+    });
     const sessionUser = await page.evaluate(async (): Promise<string | null> => {
       const response = await fetch('/api/auth/get-session', { credentials: 'include' });
       // SAFETY: signed-out responses are the JSON literal `null`, which parses

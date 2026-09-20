@@ -54,3 +54,6 @@ www/.source/
 
 # Alchemy's local state and bundled worker output.
 **/.alchemy/
+
+# Local design-review screenshots (www/scripts/shoot-auth.ts)
+.shots/

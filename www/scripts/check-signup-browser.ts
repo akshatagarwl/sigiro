@@ -156,14 +156,15 @@ const main = async () => {
     const code = await waitForOTP(requestedAt);
     step('code received by email', code.replace(/\d/g, '*'));
 
-    await page.fill('#otp-form input[name="otp"]', code);
-    await page.click('#otp-form button[type="submit"]');
+    // The code field is six cells now, not one input. Filling the first cell
+    // with the whole code is exactly what a paste does, and the component
+    // spreads it across the row — so this still does what a user does.
+    await page.locator('#otp-form input').first().fill(code);
 
-    await page.waitForFunction(
-      () => !document.querySelector('#otp-form')?.checkVisibility?.(),
-      undefined,
-      { timeout: 20000 },
-    );
+    // The island replaces the form outright on success rather than hiding it.
+    await page.waitForFunction(() => document.querySelector('#otp-form') === null, undefined, {
+      timeout: 20000,
+    });
     step('OTP accepted, signed in');
 
     const session = await page.evaluate(async (): Promise<SessionPayload> => {

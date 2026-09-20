@@ -1,25 +1,30 @@
 ---
+import { AuthCard } from '@/components/auth/auth-form';
 import Base from '@/layouts/Base.astro';
 
 /**
  * The shell every auth page wears.
  *
  * These pages used to be HTML strings built in `auth/src/ui.ts` and served by
- * the auth Worker, with their own stylesheet and their own dark palette. They
- * were a second website living at the same origin: different type, different
- * surfaces, no header, no footer, no theme toggle. This mounts them on `Base`
- * instead, so they inherit the site header, the footer, Blume's fonts and the
- * `blume:theme` tokens — the same document as `/` and `/docs/*`.
+ * the auth Worker, with their own stylesheet and their own dark palette — a
+ * second website living at the same origin. This mounts them on `Base`, so they
+ * inherit the site header, the footer, Blume's fonts and the `blume:theme`
+ * tokens: the same document as `/` and `/docs/*`.
  *
- * The element IDs below are load-bearing. `www/scripts/check-signup-browser.ts`
- * and `check-device-flow.ts` drive these pages against production by selector
- * (`#email-form`, `#otp-form`, `#approve`), and `auth/test/ui.ts` asserts the
- * agent page's markup. Renaming one silently turns an end-to-end check into a
- * test of nothing, so the contract is: keep the IDs, restyle freely.
+ * Everything inside the card is `AuthCard`, one React island built from the
+ * interior.dev components vendored under `src/components/interior/`. It is a
+ * single component because the flow is a single state machine. An earlier cut
+ * split it — a vanilla module toggling `hidden` on five `<div>`s, with a React
+ * field bolted on top — which gave one flow two owners and two sources of truth
+ * for which step the user is on.
  *
- * Fields follow DESIGN.md §3b verbatim — the well at rest, white and blue at
- * focus, `h-10`, `rounded-[10px]`, and the dark branch using the card's own
- * interior colour so the field recedes by shadow rather than by tint.
+ * `client:load`, not `client:visible`: the card asks `/get-session` on mount to
+ * decide what to render, and it is the only thing above the fold. Waiting for
+ * an intersection would show an empty card to a reader who is already signed in.
+ *
+ * The element IDs inside `AuthCard` are load-bearing — `check-signup-browser.ts`
+ * and `check-device-flow.ts` drive production by selector. Keeping them is what
+ * lets those checks prove this port rather than be rewritten to match it.
  */
 
 type AuthPage = 'sign-in' | 'sign-up' | 'device' | 'agent-device' | 'consent';
@@ -31,125 +36,35 @@ interface Props {
 }
 
 const { page, title, intro } = Astro.props;
-
-const field =
-  'h-10 w-full rounded-[10px] border-2 border-stone-200 bg-stone-100/70 px-3 ' +
-  'text-[15px] text-stone-900 shadow-[inset_0_1px_2px_rgba(28,25,23,0.07)] ' +
-  'outline-none transition-[background-color,border-color,box-shadow] duration-150 ' +
-  'placeholder:text-stone-400 ' +
-  'focus:border-[#4568FF] focus:bg-white focus:shadow-none ' +
-  'dark:border-white/[0.08] dark:bg-[#1D1D1A] dark:text-stone-100 ' +
-  'dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.45)] ' +
-  'dark:focus:border-[#93B0FF] dark:focus:bg-[#252522]';
-
-const primaryButton =
-  'inline-flex h-10 items-center justify-center rounded-[10px] bg-stone-900 px-4 ' +
-  'text-[14px] font-semibold text-white transition-colors duration-150 ' +
-  'hover:bg-stone-800 focus-visible:outline-2 focus-visible:outline-offset-2 ' +
-  'focus-visible:outline-[#4568FF] disabled:opacity-60 ' +
-  'dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white';
-
-const secondaryButton =
-  'inline-flex h-10 items-center justify-center rounded-[10px] border-2 ' +
-  'border-stone-200 bg-transparent px-4 text-[14px] font-semibold text-stone-700 ' +
-  'transition-colors duration-150 hover:bg-stone-100 ' +
-  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] ' +
-  'dark:border-white/[0.08] dark:text-stone-300 dark:hover:bg-white/[0.04]';
-
-const label = 'text-[13px] font-medium text-stone-600 dark:text-stone-400';
 ---
 
 <Base title={`${title} · Sigiro`} description={intro} noindex>
-  <main
-    class="mx-auto flex w-full max-w-[26rem] flex-1 flex-col justify-center px-4 py-16"
+  {/*
+    A section, not a <main>: Base already renders `<main id="main">` around this
+    slot, and a nested one is both invalid and inert — its `flex-1` resolved
+    against a parent that was not a flex container, so the card could not
+    stretch and the panel ended ~280px short of the viewport with dead space
+    under the footer. `min-h-[calc(100dvh-13rem)]` is the panel height less the
+    header, footer and the bezel gutter, which is what actually centres the card.
+  */}
+  <section
+    class="mx-auto flex w-full max-w-[26rem] min-h-[calc(100dvh-13rem)] flex-col justify-center px-4 py-12"
     data-page={page}
   >
     <section
       class="rounded-[14px] border border-stone-200/80 bg-white p-7 shadow-[0_1px_2px_rgba(28,25,23,0.04)] dark:border-white/[0.08] dark:bg-[#1D1D1A]"
       aria-labelledby="title"
     >
-      <p class="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-[#4568FF] dark:text-[#93B0FF]">
-        hosted sigiro
-      </p>
-      <h1 id="title" class="mt-2.5 text-[26px] font-semibold leading-[1.15] tracking-[-0.035em] text-stone-900 dark:text-stone-50">
-        {title}
-      </h1>
-      <p class="mt-3 text-[15px] leading-relaxed text-stone-600 dark:text-stone-400">{intro}</p>
-
-      <div id="auth-flow" hidden class="mt-6">
-        <form id="email-form" class="grid gap-2.5">
-          <label id="name-label" for="name" class={label}>Name</label>
-          <input id="name" name="name" autocomplete="name" maxlength="100" class={field} />
-          <label for="email" class={label}>Email</label>
-          <input id="email" name="email" type="email" autocomplete="email" required class={field} />
-          <button type="submit" class={`${primaryButton} mt-1.5`}>Send verification code</button>
-        </form>
-        <form id="otp-form" hidden class="grid gap-2.5">
-          <label for="otp" class={label}>Verification code</label>
-          <input
-            id="otp"
-            name="otp"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            pattern="[0-9]{6}"
-            maxlength="6"
-            required
-            class={`${field} font-mono text-[18px] tracking-[0.3em]`}
-          />
-          <button type="submit" class={`${primaryButton} mt-1.5`}>Verify and continue</button>
-          <button class={secondaryButton} id="restart" type="button">Use another email</button>
-        </form>
-      </div>
-
-      <div id="device-flow" hidden class="mt-6">
-        <p class={label}>Confirm this code matches your terminal</p>
-        <output id="user-code" class="mt-2 block font-mono text-[30px] font-bold leading-none tracking-[0.16em] text-stone-900 dark:text-stone-50"
-        ></output>
-        <dl id="request-details" hidden class="mt-5 grid gap-2.5">
-          <div class="border-t border-stone-200 pt-2.5 dark:border-white/[0.08]">
-            <dt class="text-[11px] uppercase tracking-[0.08em] text-stone-500">Client</dt>
-            <dd id="client-id" class="mt-1 break-words text-[13px] text-stone-700 dark:text-stone-300"></dd>
-          </div>
-          <div class="border-t border-stone-200 pt-2.5 dark:border-white/[0.08]">
-            <dt class="text-[11px] uppercase tracking-[0.08em] text-stone-500">Access</dt>
-            <dd id="scope" class="mt-1 break-words text-[13px] text-stone-700 dark:text-stone-300"></dd>
-          </div>
-          <div class="border-t border-stone-200 pt-2.5 dark:border-white/[0.08]">
-            <dt class="text-[11px] uppercase tracking-[0.08em] text-stone-500">Resource</dt>
-            <dd id="resource" class="mt-1 break-words text-[13px] text-stone-700 dark:text-stone-300"></dd>
-          </div>
-        </dl>
-        <div class="mt-5 flex gap-2.5">
-          <button id="approve" type="button" class={primaryButton}>Approve request</button>
-          <button id="deny" type="button" class={secondaryButton}>Deny</button>
-        </div>
-      </div>
-
-      <div id="consent-flow" hidden class="mt-6">
-        <p class="text-[15px] leading-relaxed text-stone-600 dark:text-stone-400">
-          The requesting client will receive only the scopes in its signed authorization request.
-        </p>
-        <div class="mt-5 flex gap-2.5">
-          <button id="accept-consent" type="button" class={primaryButton}>Approve access</button>
-          <button id="deny-consent" type="button" class={secondaryButton}>Deny</button>
-        </div>
-      </div>
-
-      <div id="success" hidden class="mt-6">
-        <h2 class="text-[20px] font-semibold tracking-[-0.02em] text-stone-900 dark:text-stone-50">You're ready.</h2>
-        <p id="success-message" class="mt-2 text-[15px] leading-relaxed text-stone-600 dark:text-stone-400"></p>
-        <a href="/docs/how-to/hosted-onboarding" class={`${primaryButton} mt-5`}>Continue to hosted setup</a>
-      </div>
-
-      <p id="status" role="status" aria-live="polite" class="mt-4 min-h-5 text-[13px] text-stone-500 dark:text-stone-400"></p>
-      <p id="error" role="alert" hidden class="mt-4 min-h-5 text-[13px] text-red-600 dark:text-red-400"></p>
+      {/*
+        The heading lives inside the island, not here: the intro is
+        phase-dependent copy, and leaving "Enter your email" above six code
+        cells reads as broken. `title` and `intro` are still passed so the
+        server renders the first step's heading and hydration does not swap it.
+      */}
+      <AuthCard page={page} title={title} intro={intro} client:load />
     </section>
     <p class="mt-5 text-center text-[12px] text-stone-500 dark:text-stone-500">
       Passwordless sign-in · 6-digit codes expire after five minutes
     </p>
-  </main>
+  </section>
 </Base>
-
-<script>
-  import '@/lib/auth-ui';
-</script>
