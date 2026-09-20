@@ -10,7 +10,7 @@ import * as Layer from 'effect/Layer';
  * The LOCAL development stack: PostgreSQL (with TLS), RustFS, and the `sigiro`
  * bucket the S3-backed storage mode writes to.
  *
- * This replaces the hand-rolled `docker-compose.dev.yml`. Production is already
+ * This replaced the hand-rolled `docker-compose.dev.yml`, now deleted. Production is already
  * Alchemy (`alchemy.run.ts`, `alchemy.hetzner.run.ts`,
  * `alchemy.workload.run.ts`); local dev was the last hand-written surface, and
  * because it was written in a different language it drifted from production
@@ -113,7 +113,7 @@ export default Alchemy.Stack(
 
     const rustfs = yield* Docker.Container('Rustfs', {
       name: rustfsName,
-      // Pinned by digest, exactly as `docker-compose.dev.yml` pinned it.
+      // Pinned by digest, exactly as the retired compose file pinned it.
       image:
         'rustfs/rustfs:1.0.0-rc.5@sha256:c36b3efea3d1e503f1a2581abd0e7611e0e5820dd30e1850a52384b3fc52bda4',
       command: ['/data'],

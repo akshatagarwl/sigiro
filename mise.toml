@@ -108,9 +108,6 @@ run = "aube -C auth run build"
 description = "Audit production auth dependencies."
 run = "aube -C auth audit --prod"
 
-[tasks.auth-image]
-description = "Build the auth image locally without publishing."
-run = "docker buildx bake sigiro-auth --load"
 
 [tasks.alchemy-plan]
 description = "Plan the production Cloudflare stack without applying changes."
