@@ -4,10 +4,9 @@
 //! catalog created against S3 could never re-attach under a local-Parquet config
 //! and every request piled up behind ~30s of `thread::sleep`.
 //!
-//! `#[ignore]`d — needs Docker (Postgres). Run via:
-//!   docker compose -f docker-compose.dev.yml up -d --wait postgres
-//!   cargo test --test attach_fail_fast_test -- --ignored --nocapture
-//!   docker compose -f docker-compose.dev.yml down -v
+//! `#[ignore]`d — needs Docker (Postgres). Run via
+//! `mise run check-attach-fail-fast-e2e`, which brings the Alchemy local dev
+//! stack (`www/alchemy.dev.run.ts`) up and tears it down again.
 
 #![allow(clippy::disallowed_methods)]
 // This isolated E2E process points production startup at the cache populated by
@@ -18,7 +17,7 @@ use std::time::{Duration, Instant};
 use sigiro::pool::ProjectPool;
 use sigiro::storage::{DataLocation, StorageConfig, StorageMode};
 
-// Matches docker-compose.dev.yml.
+// Matches the `Postgres` container in `www/alchemy.dev.run.ts`.
 const CATALOG_URL: &str = "postgresql://sigiro:sigiro@127.0.0.1:5432/ducklake";
 const CATALOG_LIBPQ: &str = "dbname=ducklake host=127.0.0.1 user=sigiro password=sigiro port=5432";
 const TENANT: &str = "faulttest";
@@ -71,7 +70,7 @@ fn poison_with_s3_data_path() {
 }
 
 #[test]
-#[ignore = "needs Docker Postgres (docker-compose.dev.yml)"]
+#[ignore = "needs the Alchemy local dev Postgres (mise run dev-up)"]
 fn poisoned_catalog_fails_fast_not_wedged() {
     let tmp = tempfile::tempdir().expect("create temp data dir");
     let data_dir =

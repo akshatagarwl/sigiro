@@ -2,7 +2,7 @@
 //! query surface (#12b — GPT-5.6's "Option A": reuse the existing
 //! distributed ATTACH path for a single project literally named `default`,
 //! no new storage mode). Requires Docker (Postgres catalog + RustFS S3 — see
-//! `docker-compose.dev.yml`).
+//! the `SigiroLocalDev` Alchemy stack in `www/alchemy.dev.run.ts`).
 //!
 //! Proves the S3/quack refusal previously in `src/server.rs`
 //! (`ensure_quack_config_safe`) was safe to remove: with `SIGIRO_S3_BUCKET`
@@ -23,9 +23,9 @@
 //! `#[ignore]`d by default (needs Docker). Run via `mise run check-s3-e2e`, or
 //! directly:
 //! ```text
-//! docker compose -f docker-compose.dev.yml up -d --wait
+//! mise run dev-up
 //! cargo test --test quack_s3_query_surface_test -- --ignored --nocapture
-//! docker compose -f docker-compose.dev.yml down -v
+//! mise run dev-down
 //! ```
 
 #![allow(clippy::disallowed_methods)]
@@ -44,10 +44,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-/// Matches `docker-compose.dev.yml` exactly: `postgres` service
+/// Matches `www/alchemy.dev.run.ts` exactly: the `Postgres` container
 /// (`POSTGRES_USER=sigiro`, `POSTGRES_PASSWORD=sigiro`, `POSTGRES_DB=ducklake`,
-/// published on `5432`) and `rustfs` service (access key/secret `rustfsadmin`,
-/// S3 API on `9000`, bucket `sigiro` pre-created by the `rustfs-setup` job).
+/// published on `5432`) and the `Rustfs` container (access key/secret
+/// `rustfsadmin`, S3 API on `9000`, bucket `sigiro` pre-created by the
+/// `Bucket` command resource).
 const CATALOG_URL: &str = "postgresql://sigiro:sigiro@127.0.0.1:5432/ducklake";
 const S3_BUCKET: &str = "sigiro";
 const S3_REGION: &str = "us-east-1";

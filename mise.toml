@@ -295,14 +295,47 @@ fi
 PATH="$(dirname "$git_bin"):$PATH" hk install --mise
 """
 
-[tasks.run]
-description = "Run sigiro locally with dev dependencies (Postgres, RustFS)."
+# The local dev stack (network, volumes, PostgreSQL 17 with mkcert TLS, RustFS,
+# and the `sigiro` bucket) is an ALCHEMY stack — `www/alchemy.dev.run.ts`,
+# stack `SigiroLocalDev` — not a hand-written compose file. Production was
+# already Alchemy; local dev was the last surface written in a different
+# language, so it drifted silently.
+#
+# The Alchemy CLI MUST be reached through `aube -C www run <script>`. Invoking
+# `node_modules/.bin/alchemy` directly dies with
+# `[TSCONFIG_ERROR] Failed to load tsconfig 'astro/tsconfigs/strict'`:
+# `www/tsconfig.json` extends an Astro config and astro is not hoisted under
+# aube's virtual store, so only aube's run resolution finds it.
+#
+# `scripts/dev-certs.sh` must run BEFORE the stack: the Postgres container
+# bind-mounts `.dev/certs` and will not start without it.
+[tasks.dev-up]
+description = "Bring up the Alchemy local dev stack (Postgres + TLS, RustFS, bucket)."
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
 scripts/dev-certs.sh
-docker compose -f docker-compose.dev.yml up -d
-trap 'docker compose -f docker-compose.dev.yml down' EXIT
+aube -C www run alchemy:dev:deploy
+"""
+
+[tasks.dev-down]
+description = "Destroy the Alchemy local dev stack, including its named volumes."
+run = "aube -C www run alchemy:dev:destroy"
+
+[tasks.dev-plan]
+description = "Plan the Alchemy local dev stack without applying changes."
+run = "aube -C www run alchemy:dev:plan"
+
+[tasks.run]
+description = "Run sigiro locally with dev dependencies (Postgres, RustFS)."
+# The stack is deliberately left UP on exit. `alchemy destroy` is the only
+# teardown verb and it also removes the named volumes, which is not what the
+# old `docker compose down` (containers only, data kept) did. Leaving it
+# running preserves the catalog between runs; `mise run dev-down` tears it down.
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run dev-up
 scripts/run-with-duckdb-static.sh mbx run --release --bin sigiro
 """
 
@@ -311,14 +344,8 @@ description = 'S3-backed distributed "default" project quack E2E (needs Docker: 
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-# --wait only on postgres/rustfs (they have healthchecks); rustfs-setup is a
-# one-shot job that exits 0 once it creates the bucket, which --wait treats
-# as "not running" and fails on if targeted directly. Run it separately,
-# attached, so this task blocks until the bucket actually exists.
-scripts/dev-certs.sh
-docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
-docker compose -f docker-compose.dev.yml up rustfs-setup
-trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+mise run dev-up
+trap 'mise run dev-down' EXIT
 scripts/run-with-duckdb-static.sh mbx test --test quack_s3_query_surface_test -- --ignored --nocapture
 """
 
@@ -326,16 +353,15 @@ scripts/run-with-duckdb-static.sh mbx test --test quack_s3_query_surface_test --
 # all three modes (local file / PG+local / PG+S3). Needs Docker (Postgres +
 # RustFS), like check-s3-e2e, plus mkcert-issued dev certs — the two PG modes
 # use sslmode=verify-full, which production's validate_hosted_catalog_tls
-# requires and a plaintext Postgres therefore cannot satisfy.
+# requires and a plaintext Postgres therefore cannot satisfy. `dev-up` issues
+# the certs before the stack starts.
 [tasks.check-storage-matrix-e2e]
 description = "Storage-mode matrix E2E (local file / PG+local / PG+S3). Needs Docker."
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-scripts/dev-certs.sh
-docker compose -f docker-compose.dev.yml up -d --wait postgres rustfs
-docker compose -f docker-compose.dev.yml up rustfs-setup
-trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+mise run dev-up
+trap 'mise run dev-down' EXIT
 scripts/run-with-duckdb-static.sh mbx test --test storage_mode_matrix_test -- --ignored --nocapture
 """
 
@@ -346,9 +372,8 @@ description = "A permanent DuckLake attach failure must fail fast, not wedge the
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-scripts/dev-certs.sh
-docker compose -f docker-compose.dev.yml up -d --wait postgres
-trap 'docker compose -f docker-compose.dev.yml down -v' EXIT
+mise run dev-up
+trap 'mise run dev-down' EXIT
 scripts/run-with-duckdb-static.sh mbx test --test attach_fail_fast_test -- --ignored --nocapture
 """
 
@@ -386,12 +411,12 @@ file "$SIGIRO_LIMA_SIGIRO_BIN"
 """
 
 [tasks.clean]
-description = "Drop the managed target dir and the dev compose stack."
+description = "Drop the managed target dir and the dev stack."
 # `mbx clean`, not `cargo clean`: target/ is a link into mbx's shared cache,
 # so `cargo clean` deletes the link and the next build restores from cache.
 run = [
     "mbx clean",
-    "docker compose -f docker-compose.dev.yml down -v --remove-orphans",
+    { task = "dev-down" },
 ]
 
 # Refresh www/openapi.json — the snapshot the API reference is generated from.
