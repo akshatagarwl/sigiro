@@ -613,6 +613,109 @@ async fn test_services_returns_empty_list_for_empty_project() {
 }
 
 #[tokio::test]
+async fn test_services_result_cap_http_mcp_parity() {
+    // The cap is read once at startup; isolate this test in a child process so
+    // it cannot change the cap of concurrently running integration tests.
+    if std::env::var_os("SIGIRO_SERVICES_CAP_TEST_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .arg("--exact")
+            .arg("test_services_result_cap_http_mcp_parity")
+            .arg("--nocapture")
+            .env("SIGIRO_SERVICES_CAP_TEST_CHILD", "1")
+            .env("SIGIRO_MAX_RESULT_ROWS", "3")
+            .output()
+            .expect("run isolated service cap test");
+        assert!(
+            output.status.success(),
+            "isolated service cap test failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let ctx = build_test_context();
+    let readers = ctx.state.pool.get_project("default").expect("project");
+    let conn = readers.get();
+    let server = TestServer::builder()
+        .http_transport()
+        .build(build_http_router(Arc::clone(&ctx.state)))
+        .expect("HTTP server");
+    let client = SigiroClient::new(
+        server.server_url("/").expect("test server URL").as_str(),
+        ClientAuth::Open,
+    );
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let mcp_server = tokio::spawn(async move {
+        SigiroMcp::new(client)
+            .serve(server_transport)
+            .await?
+            .waiting()
+            .await?;
+        anyhow::Ok(())
+    });
+    let mcp_client = TestMcpClient
+        .serve(client_transport)
+        .await
+        .expect("start MCP client");
+
+    // Below, exactly at, and beyond SIGIRO_MAX_RESULT_ROWS=3.
+    for count in 1..=4 {
+        conn.execute(
+            "INSERT INTO lake.sigiro_logs
+                (timestamp, observed_timestamp, service_name, severity_number, severity_text)
+             VALUES ('2026-01-01 00:00:00', 1, ?, 9, 'INFO')",
+            [format!("service-{count}")],
+        )
+        .expect("seed service");
+        let http = server.get("/v1/services").await;
+        let mcp = mcp_client
+            .call_tool(CallToolRequestParams::new("list_services"))
+            .await;
+        if count <= 3 {
+            http.assert_status_ok();
+            let body: serde_json::Value = serde_json::from_str(&http.text()).expect("HTTP JSON");
+            assert_eq!(body["services"].as_array().expect("services").len(), count);
+            let mcp = mcp.expect("MCP call succeeds");
+            assert_ne!(mcp.is_error, Some(true));
+            let text = mcp.content[0].as_text().expect("MCP text");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&text.text).unwrap(),
+                body
+            );
+        } else {
+            assert_eq!(http.status_code(), axum::http::StatusCode::BAD_REQUEST);
+            assert!(http.text().contains("cannot return a partial list"));
+            match mcp {
+                Err(error) => assert!(
+                    error.to_string().contains("list_services failed"),
+                    "unexpected MCP error: {error}"
+                ),
+                Ok(result) => {
+                    assert_eq!(
+                        result.is_error,
+                        Some(true),
+                        "MCP must not return a partial list"
+                    );
+                    assert!(
+                        result.content[0]
+                            .as_text()
+                            .expect("error text")
+                            .text
+                            .contains("list_services failed")
+                    );
+                }
+            }
+        }
+    }
+    mcp_client.cancel().await.expect("stop MCP client");
+    mcp_server
+        .await
+        .expect("join MCP server")
+        .expect("stop MCP server");
+}
+
+#[tokio::test]
 async fn test_services_discovers_every_supported_signal() {
     let ctx = build_test_context();
     let readers = ctx

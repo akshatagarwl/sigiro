@@ -1383,9 +1383,11 @@ struct ServiceQueryRow {
     summary = "List services",
     description = "Every service that has reported telemetry, with the first and \
 last timestamp seen for each (microseconds since the Unix epoch). The entry point \
-of an agent loop: pick a service here, then diagnose it.",
+of an agent loop: pick a service here, then diagnose it. Returns an error, never \
+a partial list, if the number of services exceeds SIGIRO_MAX_RESULT_ROWS.",
     responses(
-        (status = 200, description = "List of services", body = ServicesResponse)
+        (status = 200, description = "Complete list of services", body = ServicesResponse),
+        (status = 400, description = "Service count exceeds SIGIRO_MAX_RESULT_ROWS")
     ),
 )]
 #[instrument(skip_all)]
@@ -1430,9 +1432,15 @@ async fn services_handler(
          GROUP BY service_name \
          ORDER BY total_count DESC, service_name ASC"
     );
-    let (results, _truncated) = execute_sql(&state, &auth, &sql)
+    let (results, truncated) = execute_sql(&state, &auth, &sql)
         .await
         .map_err(|e| query_api_error("services query failed", &e))?;
+    if truncated {
+        return Err(bad_request(
+            "services query exceeded result limit",
+            "service discovery cannot return a partial list; increase SIGIRO_MAX_RESULT_ROWS",
+        ));
+    }
 
     let mut services = Vec::new();
     for row in results {

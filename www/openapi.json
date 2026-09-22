@@ -498,11 +498,11 @@
       "get": {
         "tags": [],
         "summary": "List services",
-        "description": "Every service that has reported telemetry, with the first and last timestamp seen for each (microseconds since the Unix epoch). The entry point of an agent loop: pick a service here, then diagnose it.",
+        "description": "Every service that has reported telemetry, with the first and last timestamp seen for each (microseconds since the Unix epoch). The entry point of an agent loop: pick a service here, then diagnose it. Returns an error, never a partial list, if the number of services exceeds SIGIRO_MAX_RESULT_ROWS.",
         "operationId": "list-services",
         "responses": {
           "200": {
-            "description": "List of services",
+            "description": "Complete list of services",
             "content": {
               "application/json": {
                 "schema": {
@@ -510,6 +510,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Service count exceeds SIGIRO_MAX_RESULT_ROWS"
           }
         }
       }

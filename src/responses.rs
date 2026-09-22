@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
-/// GET /v1/services
+/// GET /v1/services — complete result only; exceeding SIGIRO_MAX_RESULT_ROWS
+/// returns an error rather than a partial list.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServicesResponse {

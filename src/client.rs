@@ -148,7 +148,8 @@ impl SigiroClient {
     }
 
     /// GET /v1/services — every service that has reported telemetry, with
-    /// per-signal counts and the first and last timestamps seen.
+    /// per-signal counts and the first and last timestamps seen. Returns an
+    /// error rather than an incomplete list if SIGIRO_MAX_RESULT_ROWS is exceeded.
     pub async fn services(&self) -> Result<crate::responses::ServicesResponse> {
         let req = self.http.get(format!("{}/v1/services", self.base_url));
         let resp = self.send(req).await?;

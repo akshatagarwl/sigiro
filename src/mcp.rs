@@ -153,7 +153,8 @@ impl SigiroMcp {
     #[tool(
         description = "Every service that has reported telemetry, with the first and last \
 timestamp seen for each (microseconds since the Unix epoch). The entry point of an agent \
-loop: pick a service here, then diagnose it."
+loop: pick a service here, then diagnose it. Fails rather than returning a partial list \
+if service count exceeds SIGIRO_MAX_RESULT_ROWS."
     )]
     async fn list_services(&self) -> Result<CallToolResult, ErrorData> {
         let response = self
