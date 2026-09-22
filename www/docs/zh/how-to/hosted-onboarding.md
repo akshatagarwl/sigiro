@@ -10,23 +10,49 @@ sidebar:
 本指南介绍如何将 OpenTelemetry 数据发送到由我们运维的 sigiro 主机，
 以及如何把数据查询回来。你无需运行任何基础设施。
 
-sigiro 可读取链路追踪、日志、指标和性能剖析数据。新用户请直接在终端运行：
+sigiro 可读取链路追踪、日志、指标和性能剖析数据。请先安装 CLI —— 在 macOS、Linux 和 WSL 上都是同一条命令：
+
+```bash
+curl -fsSL https://sigiro.com/install | sh
+```
+
+然后把 CLI 连接到你的账号。具体运行哪条命令，取决于你是从哪里开始的；下面的
+[连接 CLI](#1-连接-cli) 两种情况都有说明。
+
+## 1. 连接 CLI
+
+**你已经在网页端完成注册。** 让已安装的 CLI 登录到你现有的账号：
+
+```bash
+sigiro auth login
+sigiro auth status
+```
+
+`sigiro auth login` 会发起 OAuth 设备授权，并打开浏览器显示确认页面。如果这台机器无法打开浏览器，
+请加上 `--no-browser`：无论哪种方式，CLI 都会打印出 URL 和需要确认的验证码。
+
+**你还没有账号，完全从终端开始。** 不离开命令行即可创建账号：
 
 ```bash
 sigiro signup --name "Your Name" --email you@example.com
 sigiro auth status
 ```
 
-CLI 会把凭据保存在操作系统的凭据存储中。请把下文中的 `<your-sigiro-host>` 替换为运维方提供给你的主机地址。
+`sigiro signup` 会发送六位数一次性验证码到邮箱，并在终端安全地提示输入，创建并激活唯一的个人工作区，
+在内部完成无需浏览器的 OAuth 设备授权，并将刷新令牌和访问令牌存入操作系统凭据存储。
 
-## 1. 注册并登录
+**两条路径都会把 CLI 绑定到同一个、唯一的个人工作区。** 网页注册和 `sigiro signup` 调用的是同一个
+预配步骤，而该步骤只在账号还没有任何工作区时才创建个人工作区。因此对已存在的账号来说，
+`sigiro signup` 是幂等的：对一个已注册的邮箱执行它，只会让该账号登录，不会再创建一个账号或
+第二个工作区。
+
+`sigiro auth status` 会打印 CLI 当前绑定的账号和工作区。`sigiro auth logout` 会吊销并删除已保存的凭据。
+两条路径都不会把凭据留在 shell 历史中，也都不需要你手动调用 OAuth API 或复制令牌。
 
 本页介绍人员注册和 OAuth 登录。如果软件需要自己的委托身份和密钥，请使用 [Agent Auth 注册指南](/docs/how-to/agent-auth)。
 
-托管认证由 Better Auth 提供。Organizations 就是租户。`sigiro signup` 会发送六位数一次性验证码，
-在终端安全地提示输入，创建并激活唯一的个人工作区，在内部完成无需浏览器的 OAuth 设备授权，
-并将刷新令牌和访问令牌存入操作系统凭据存储。已有账号请使用浏览器登录 `sigiro auth login`；
-不要手动调用 OAuth API 或复制令牌。
+托管认证由 Better Auth 提供。Organizations 就是租户。这两条命令默认都指向托管服务
+`https://sigiro.com`。
 
 同一个令牌同时用于 OTLP 数据摄取和 API 查询的身份认证。
 
@@ -38,7 +64,7 @@ CLI 会把凭据保存在操作系统的凭据存储中。请把下文中的 `<y
 **OTLP/HTTP：**
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://sigiro.com"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $(sigiro auth token)"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
@@ -48,10 +74,16 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 **该端点不带端口号。** 托管版 sigiro 在标准 HTTPS 端口上接收 OTLP，
 因此 `https://sigiro.com` 就是完整的端点。请不要照搬自托管[快速上手](/docs/tutorials/quickstart#2-向它发送遥测数据)中的
 `:4318`：在 `sigiro.com` 上，该端口会拒绝连接，而无法建立连接的 SDK
-只会把这一失败记录在你自己服务的日志里，而不会记录在这里。如果你的主机有所不同，请咨询运维方。
+只会把这一失败记录在你自己服务的日志里，而不会记录在这里。
 
 **`sigiro.com` 上不提供 OTLP/gRPC。** 端口 `4317` 已关闭，gRPC
-服务路径也未做路由。请使用 HTTP；对于其他任何主机，也请先咨询运维方，不要想当然地认为 gRPC 可用。
+服务路径也未做路由。请使用 HTTP。
+
+**注意 —— 自定义主机或自托管。** 本页上下文所描述的都是 `https://sigiro.com`，也就是由我们运维、
+并且是 CLI 默认使用的主机。如果你或运维方把 sigiro 部署在别处，请把示例中的主机替换成那个地址，
+并设置 `SIGIRO_ENDPOINT` 让 CLI 指向它；此时端口、是否支持 gRPC 以及数据留存都取决于那套部署的
+配置，因此请咨询它的运维方，而不要以本页为准。`sigiro signup` 和 `sigiro auth login` 仍然是对托管
+服务 `https://sigiro.com` 进行认证。
 
 你的 SDK 会将每类信号发送到其标准 OTLP 路径（`/v1/traces`、`/v1/logs`、
 `/v1/metrics`、`/v1development/profiles`），并将该路径追加到上面的端点之后。如果你的
@@ -65,7 +97,7 @@ SDK 的默认批处理大小远低于此上限。
 然后执行以下查询：
 
 ```bash
-curl -s "https://<your-sigiro-host>/v1/query" \
+curl -s "https://sigiro.com/v1/query" \
   -H "Authorization: Bearer <oauth-access-token>" \
   --data 'SELECT count(*) AS n FROM sigiro_spans'
 ```

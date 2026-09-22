@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { FloatingLabelInput } from '@/components/interior/floating-label';
 import { OtpInput, type OtpInputHandle } from '@/components/interior/otp-input';
+import { CopySource } from '@/components/site/copy-source';
+import { INSTALL_COMMAND } from '@/lib/site.shared';
 
 /**
  * The entire auth card: email, one-time code, device approval, consent, done.
@@ -42,6 +44,7 @@ interface Props {
 type Phase = 'loading' | 'email' | 'code' | 'request' | 'consent' | 'done';
 
 const api = '/api/auth';
+const LOGIN_COMMAND = 'sigiro auth login' as const;
 
 interface ErrorBody {
   readonly message?: string;
@@ -193,7 +196,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     }
 
     if (await finishOAuthLogin()) return;
-    setSuccess('Your Sigiro account and personal workspace are active.');
+    setSuccess('Your Sigiro account and personal workspace are ready.');
     setStatus('');
     setPhase('done');
   }, [agentCode, agentId, ensureWorkspace, finishOAuthLogin, page, userCode]);
@@ -403,6 +406,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   }
 
   if (phase === 'done') {
+    const accountSetup = page === 'sign-in' || page === 'sign-up';
     return (
       <>
         {header}
@@ -416,9 +420,35 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           >
             {success}
           </p>
-          <a href="/docs/how-to/hosted-onboarding" className={`${primary} mt-2 justify-self-start`}>
-            Continue to hosted setup
-          </a>
+          {accountSetup && (
+            <div className="mt-2 grid gap-3">
+              <p className="text-[14px] leading-relaxed text-stone-600 dark:text-stone-400">
+                Install the CLI, then connect it to this same workspace.
+              </p>
+              {(
+                [
+                  ['install command', INSTALL_COMMAND],
+                  ['login command', LOGIN_COMMAND],
+                ] as const
+              ).map(([label, command]) => (
+                <figure key={label} className="mat-panel min-w-0 rounded-[10px] p-[4px]">
+                  <figcaption className="flex h-8 items-center gap-2 pr-1 pl-2.5">
+                    <span className="meta min-w-0 flex-1 truncate text-ink-3">{label}</span>
+                    <CopySource code={command} label={label} />
+                  </figcaption>
+                  <code className="mat-well block rounded-[7px] px-3 py-2.5 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-normal text-stone-700 dark:text-stone-300">
+                    {command}
+                  </code>
+                </figure>
+              ))}
+              <a
+                href="/docs/how-to/hosted-onboarding#1-connect-the-cli"
+                className={`${secondary} justify-self-start`}
+              >
+                Read the CLI guide
+              </a>
+            </div>
+          )}
         </div>
       </>
     );

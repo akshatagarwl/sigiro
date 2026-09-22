@@ -9,23 +9,41 @@ sidebar:
 
 このガイドでは、当社が運用する sigiro ホストへ OpenTelemetry を送信する方法と、そのデータを照会する方法を説明します。インフラの運用は不要です。
 
-sigiro はトレース、ログ、メトリクス、プロファイルを読み取ります。新規ユーザーは次をターミナルで実行します。
+sigiro はトレース、ログ、メトリクス、プロファイルを読み取ります。まず CLI をインストールします。macOS、Linux、WSL のいずれでも次の 1 コマンドです。
+
+```bash
+curl -fsSL https://sigiro.com/install | sh
+```
+
+次に CLI をアカウントへ接続します。実行するコマンドはどこから始めたかによって変わります。両方を下の [CLI を接続する](#1-cli-を接続する) で説明します。
+
+## 1. CLI を接続する
+
+**すでに Web でサインアップを完了している場合。** インストール済みの CLI を、既存のアカウントにサインインさせます。
+
+```bash
+sigiro auth login
+sigiro auth status
+```
+
+`sigiro auth login` は OAuth デバイス認証を開始し、確認ページをブラウザーで開きます。ブラウザーを開けないマシンでは `--no-browser` を指定してください。いずれの場合も、CLI は URL と確認用コードを表示します。
+
+**アカウントがまだなく、ターミナルから始める場合。** シェルから離れずにアカウントを作成します。
 
 ```bash
 sigiro signup --name "Your Name" --email you@example.com
 sigiro auth status
 ```
 
-CLI は認証情報を OS の資格情報ストアに保存します。以下の `<your-sigiro-host>` は、運用担当者から提供されたホストに置き換えてください。
+`sigiro signup` は 6 桁の OTP をメールで送り、ターミナルで安全に入力を求めます。個人用ワークスペースを 1 つだけ作成・有効化し、ブラウザーなしで OAuth デバイス認証を内部で完了して、リフレッシュ／アクセス資格情報を OS の資格情報ストアに保存します。
 
-## 1. 登録してサインインする
+**どちらの経路でも、CLI は同一の単一の個人用ワークスペースに紐づきます。** Web のサインアップと `sigiro signup` は同じプロビジョニング処理を呼び出し、その処理はアカウントにワークスペースが 1 つもない場合にのみ個人用ワークスペースを作成します。したがって `sigiro signup` は既存アカウントに対して冪等です。すでに登録済みのメールアドレスに対して実行しても、そのアカウントにサインインするだけで、アカウントもワークスペースも二重には作成されません。
+
+`sigiro auth status` は CLI が紐づいているアカウントとワークスペースを表示します。`sigiro auth logout` は保存済みの資格情報を失効させて削除します。どちらの経路も資格情報をシェル履歴に残さず、OAuth API を手動で呼び出したりトークンをコピーしたりする必要もありません。
 
 このページでは人のサインアップと OAuth ログインを扱います。ソフトウェア固有の委任 ID と鍵が必要な場合は、[Agent Auth オンボーディング](/docs/how-to/agent-auth)を使用してください。
 
-ホステッド環境の認証は Better Auth が提供します。Organizations はテナントです。新規登録では 6 桁の
-OTP をメールで受け取り、ターミナルで安全に入力します。個人用ワークスペースを 1 つだけ作成・有効化し、
-ブラウザーなしで OAuth デバイス認証を完了して、資格情報を OS の資格情報ストアに保存します。
-既存アカウントはブラウザーベースの `sigiro auth login` を使い、OAuth API を手動で呼び出したり、トークンをコピーしたりしないでください。
+ホステッド環境の認証は Better Auth が提供します。Organizations はテナントです。どちらのコマンドも、既定でホスト型サービス `https://sigiro.com` を対象とします。
 
 同じトークンで OTLP の取り込みと API クエリを認証します。
 
@@ -36,16 +54,18 @@ OTP をメールで受け取り、ターミナルで安全に入力します。�
 **OTLP/HTTP:**
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://sigiro.com"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $(sigiro auth token)"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
 `sigiro auth token` は保存済みセッションを更新してから、短期間有効なアクセストークンを出力します。この方法は対話的なテスト専用であり、長時間動作するコレクターのシークレットには使用しないでください。
 
-**エンドポイントにポートは含まれません。** ホスト型 sigiro は標準の HTTPS ポートで OTLP を終端するため、`https://sigiro.com` がエンドポイントの全体です。セルフホストの[クイックスタート](/docs/tutorials/quickstart#2-テレメトリを送信する)から `:4318` をコピーしないでください。`sigiro.com` ではそのポートは接続を拒否し、接続できなかった SDK は、その失敗をここではなく自身のサービスログに報告します。ホストが異なる場合は運用担当者にお問い合わせください。
+**エンドポイントにポートは含まれません。** ホスト型 sigiro は標準の HTTPS ポートで OTLP を終端するため、`https://sigiro.com` がエンドポイントの全体です。セルフホストの[クイックスタート](/docs/tutorials/quickstart#2-テレメトリを送信する)から `:4318` をコピーしないでください。`sigiro.com` ではそのポートは接続を拒否し、接続できなかった SDK は、その失敗をここではなく自身のサービスログに報告します。
 
-**`sigiro.com` では OTLP/gRPC は利用できません。** ポート `4317` は閉じており、gRPC のサービスパスはルーティングされていません。HTTP を使用してください。また、他のホストで gRPC が使えると想定する前に、運用担当者に確認してください。
+**`sigiro.com` では OTLP/gRPC は利用できません。** ポート `4317` は閉じており、gRPC のサービスパスはルーティングされていません。HTTP を使用してください。
+
+**注 — カスタムホストやセルフホストの場合。** 本ページの内容は、当社が運用し CLI が既定で使用するホスト `https://sigiro.com` を前提としています。あなたや運用担当者が別の場所で sigiro を運用している場合は、各例のホストを置き換え、CLI がそこを対象とするように `SIGIRO_ENDPOINT` を設定してください。その場合、ポート、gRPC の可否、データ保持はそのデプロイの設定次第ですので、本ページを前提にせず運用担当者にご確認ください。なお `sigiro signup` と `sigiro auth login` は、引き続きホスト型サービス `https://sigiro.com` に対して認証します。
 
 SDK は各シグナルを標準の OTLP パス（`/v1/traces`、`/v1/logs`、`/v1/metrics`、`/v1development/profiles`）に送信し、そのパスは上記のエンドポイントに付加されます。エクスポーターがシグナルごとのエンドポイントを受け取る形式の場合は、フルパスを指定してください。HTTP は gzip をサポートし、エンドポイントは TLS を使用します。1 リクエストは展開後のサイズで **8 MB 以下**である必要があります。SDK のデフォルトのバッチサイズは、この上限を十分に下回ります。
 
@@ -54,7 +74,7 @@ SDK は各シグナルを標準の OTLP パス（`/v1/traces`、`/v1/logs`、`/v
 テレメトリを送信します。フラッシュ間隔は約 1 秒のため、数秒待ってください。その後、次のクエリを実行します。
 
 ```bash
-curl -s "https://<your-sigiro-host>/v1/query" \
+curl -s "https://sigiro.com/v1/query" \
   -H "Authorization: Bearer <oauth-access-token>" \
   --data 'SELECT count(*) AS n FROM sigiro_spans'
 ```

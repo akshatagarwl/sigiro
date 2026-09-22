@@ -108,12 +108,17 @@ mv "$DIR/sigiro.new" "$DIR/sigiro"
 say "installed $DIR/sigiro"
 
 case ":${PATH}:" in
-  *":${DIR}:"*) say 'run: sigiro serve' ;;
+  *":${DIR}:"*)
+    say ''
+    say 'Hosted at sigiro.com: sigiro auth login'
+    say 'Self-hosted: sigiro serve'
+    ;;
   *)
     say ''
     say "$DIR is not on your PATH. Add it:"
     say "  export PATH=\"$DIR:\$PATH\""
     say ''
-    say "Or run it directly: $DIR/sigiro serve"
+    say "Hosted at sigiro.com: $DIR/sigiro auth login"
+    say "Self-hosted: $DIR/sigiro serve"
     ;;
 esac

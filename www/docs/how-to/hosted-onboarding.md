@@ -8,28 +8,58 @@ sidebar:
 This guide shows you how to send OpenTelemetry to a sigiro host that we operate,
 and how to query the data back. You run no infrastructure.
 
-sigiro reads traces, logs, metrics and profiles. For a new hosted account, run:
+sigiro reads traces, logs, metrics and profiles. Install the CLI first — one
+command on macOS, Linux and WSL:
+
+```bash
+curl -fsSL https://sigiro.com/install | sh
+```
+
+Then connect the CLI to your account. Which command you run depends on where you
+started, and [Connect the CLI](#1-connect-the-cli) below has both.
+
+## 1. Connect the CLI
+
+**You already finished signup on the web.** Sign the installed CLI in to the
+account you have:
+
+```bash
+sigiro auth login
+sigiro auth status
+```
+
+`sigiro auth login` starts OAuth device authorization and opens a browser for the
+confirmation page. Pass `--no-browser` when that machine cannot open one: the CLI
+prints the URL and the code to confirm either way.
+
+**You are starting in the terminal, with no account yet.** Create the account
+without leaving the shell:
 
 ```bash
 sigiro signup --name "Your Name" --email you@example.com
 sigiro auth status
 ```
 
-The command emails a six-digit OTP and prompts for it securely in the terminal.
-It creates and activates exactly one personal workspace, completes OAuth device
-authorization internally without a browser, and stores refresh/access credentials
-in your operating system's credential store. It uses the hosted endpoint by default.
-Use `sigiro auth logout` to revoke and remove the stored credentials.
+`sigiro signup` emails a six-digit OTP and prompts for it securely in the
+terminal. It creates and activates exactly one personal workspace, completes
+OAuth device authorization internally without a browser, and stores
+refresh/access credentials in your operating system's credential store.
 
-## 1. Sign up and sign in
+**Both paths bind the CLI to the same single personal workspace.** Web signup and
+`sigiro signup` call the same provisioning step, and that step creates a personal
+workspace only when the account has none. So `sigiro signup` is idempotent for an
+account that already exists: run against an email that is already registered, it
+signs that account in and does not create a second account or a second workspace.
+
+`sigiro auth status` prints the account and workspace the CLI is bound to.
+`sigiro auth logout` revokes and removes the stored credentials. Both flows keep
+credentials out of shell history, and neither needs you to call an OAuth API or
+copy a token by hand.
 
 Human signup and OAuth login are covered here. If software needs its own delegated identity and keys, use [Agent Auth onboarding](/docs/how-to/agent-auth).
 
 Hosted authentication is provided by Better Auth. Organizations are the tenants.
-Use `sigiro signup` for first-time onboarding rather than provisioning a token
-manually. For an existing account, use browser-based `sigiro auth login`; use
-`--no-browser` when that machine cannot open a browser. Both flows keep credentials
-out of shell history.
+Both commands target the hosted service at `https://sigiro.com` by default.
 
 The same token authenticates OTLP ingest and API queries.
 
@@ -41,7 +71,7 @@ Use standard OTLP over HTTP. For authentication, use the standard
 **OTLP/HTTP:**
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-sigiro-host>"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://sigiro.com"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $(sigiro auth token)"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
@@ -54,12 +84,18 @@ long-running collector secret.
 HTTPS port, so `https://sigiro.com` is the whole endpoint. Do not copy the
 `:4318` from the self-hosted [quickstart](/docs/tutorials/quickstart#2-send-it-telemetry):
 on `sigiro.com` that port refuses the connection, and an SDK that cannot
-connect reports the failure in your own service log rather than here. Ask your
-operator if your host differs.
+connect reports the failure in your own service log rather than here.
 
 **OTLP/gRPC is not available on `sigiro.com`.** Port `4317` is closed and the
-gRPC service path is not routed. Use HTTP, and ask your operator before assuming
-gRPC on any other host.
+gRPC service path is not routed. Use HTTP.
+
+**Note — a custom or self-hosted host.** Everything above and below describes
+`https://sigiro.com`, the host we operate and the CLI's default. If you or an
+operator runs sigiro elsewhere, substitute that host in these examples and set
+`SIGIRO_ENDPOINT` so the CLI targets it; ports, gRPC availability and retention
+are then whatever that deployment configures, so ask its operator rather than
+assuming this page. `sigiro signup` and `sigiro auth login` still authenticate
+against the hosted service at `https://sigiro.com`.
 
 Your SDK posts each signal to its standard OTLP path (`/v1/traces`, `/v1/logs`,
 `/v1/metrics`, `/v1development/profiles`), which it appends to the endpoint above.
@@ -78,7 +114,7 @@ Send some telemetry. Wait a few seconds, because the flush interval is about 1 s
 Then run this query:
 
 ```bash
-curl -s "https://<your-sigiro-host>/v1/query" \
+curl -s "https://sigiro.com/v1/query" \
   -H "Authorization: Bearer <oauth-access-token>" \
   --data 'SELECT count(*) AS n FROM sigiro_spans'
 ```

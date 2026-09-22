@@ -406,9 +406,8 @@ export const SOCIAL = [
  *
  * The division of labour on this page: **the site sells self-hosted and local
  * development**, which a reader can have running in five minutes with no
- * account and no conversation. Hosted is an invited beta that an operator sets
- * up by hand (docs/how-to/hosted-onboarding.md), so it has no signup to link to
- * and a call is the honest route rather than a placeholder form.
+ * account and no conversation. The call remains the route for teams that need
+ * help evaluating or operating Sigiro; self-service hosted signup is separate.
  *
  * The href is shared; the label is copy.
  */

@@ -16,7 +16,10 @@
  * Requires the `agentmail` CLI to be authenticated for INBOX.
  */
 import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
 import { chromium, type Page } from 'playwright';
+
+import { INSTALL_COMMAND } from '../src/lib/site.shared';
 
 const BASE = process.env.SIGIRO_SIGNUP_BASE ?? 'https://sigiro.com';
 const INBOX = process.env.SIGIRO_SIGNUP_INBOX ?? 'akshat@agentmail.to';
@@ -137,14 +140,15 @@ const main = async () => {
   try {
     console.log(`browser sign-up against ${BASE}`);
 
-    await page.goto(`${BASE}/sign-in`, { waitUntil: 'domcontentloaded' });
-    step('/sign-in rendered', await page.title());
+    await page.goto(`${BASE}/sign-up`, { waitUntil: 'domcontentloaded' });
+    step('/sign-up rendered', await page.title());
 
     const emailForm = page.locator('#email-form');
     await emailForm.waitFor({ state: 'visible', timeout: 15000 });
     step('email form visible');
 
     const requestedAt = new Date(Date.now() - 5000);
+    await page.fill('#email-form input[name="name"]', 'Browser check');
     await page.fill('#email-form input[name="email"]', INBOX);
     await page.click('#email-form button[type="submit"]');
     step('code requested', INBOX);
@@ -199,6 +203,17 @@ const main = async () => {
     });
     if (!settled) throw new Error('session has no activeOrganizationId after onboarding');
     step('tenant bound to session', settled);
+
+    const success = page.locator('#success');
+    await success.waitFor({ state: 'visible', timeout: 15000 });
+    const setup = await success.textContent();
+    assert.match(setup ?? '', /same workspace/i);
+    assert.match(setup ?? '', new RegExp(INSTALL_COMMAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(setup ?? '', /sigiro auth login/);
+    assert.doesNotMatch(setup ?? '', /sigiro signup/);
+    const guide = success.locator('a[href="/docs/how-to/hosted-onboarding#1-connect-the-cli"]');
+    assert.equal(await guide.count(), 1);
+    step('success screen hands the existing workspace to the CLI');
 
     if (failures.length > 0)
       throw new Error(`browser reported failures:\n  ${failures.join('\n  ')}`);
