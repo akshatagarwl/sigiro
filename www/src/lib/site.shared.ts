@@ -149,7 +149,7 @@ export const HOW_SESSIONS = {
         label: 'docker',
         run: [
           {
-            cmd: 'docker run -d -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro',
+            cmd: 'docker run -d --name sigiro --restart unless-stopped -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro',
             out: 'a3f1c9e2d7b4',
           },
           ...CONNECT_REST,

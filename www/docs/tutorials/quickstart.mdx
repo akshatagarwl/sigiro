@@ -43,15 +43,27 @@ of the download against the published checksum. It writes the binary to
 Builds exist for Linux and macOS on arm64, and for Linux on x86-64. On another
 platform, use the container.
 
+On a first run with a fresh data directory, the binary may download query
+extensions before it is ready. Check the startup logs rather than assuming a
+fixed wait time.
+
 </Tab>
 
 <Tab title="docker">
 
 ```bash
-docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
+docker run -d --name sigiro --restart unless-stopped \
+  -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 \
+  -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro
 ```
 
-Add `-v sigiro-data:/var/lib/sigiro` to keep the data across container restarts.
+The named volume keeps data across container restarts; the restart policy starts
+the server after a reboot. Docker publishes these ports only on this host. If
+Jaeger or another service already uses `4317` and `4318`, replace the first two
+`-p` flags with `-p 127.0.0.1:14317:4317 -p 127.0.0.1:14318:4318`
+before running the command. Point OTLP HTTP at `http://localhost:14318` (or
+gRPC at `localhost:14317`). Host port `9999` must also be free; if you remap
+it, use the new host port for the API requests below.
 
 </Tab>
 
@@ -65,14 +77,20 @@ Each of the three ports has one function:
 | `4318` | OTLP over HTTP |
 | `9999` | the query and diagnose API |
 
-At the first start, sigiro downloads its query extensions. This can take 30–90
-seconds, so expect a pause before the server accepts a request. Each later start
-is immediate. sigiro writes the data to `SIGIRO_DATA_DIR`. That directory is
-`~/.local/share/sigiro` for the binary, and `/var/lib/sigiro` in the image.
+Wait for the server to be ready before sending telemetry:
+
+```bash
+curl --fail http://localhost:9999/health
+```
+
+For Docker, `docker inspect --format '{{.State.Health.Status}}' sigiro` reports
+`healthy` when ready; if it does not, check `docker logs sigiro`. The data
+directory is `~/.local/share/sigiro` for the binary and `/var/lib/sigiro` in
+the image.
 
 Notice that the server asks you for no key. A self-hosted server authenticates
-no request, so keep it on a private network. The network is the security
-boundary.
+no request. The Docker command limits access to the local host; do not expose
+these ports on an untrusted network. The network is the security boundary.
 
 ## 2. Send it telemetry
 

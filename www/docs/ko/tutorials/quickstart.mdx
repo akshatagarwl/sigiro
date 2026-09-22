@@ -44,16 +44,26 @@ sigiro serve
 빌드는 arm64용 Linux와 macOS, 그리고 x86-64용 Linux에 대해 제공됩니다. 다른
 플랫폼에서는 컨테이너를 사용하십시오.
 
+새 데이터 디렉터리에서 바이너리를 처음 실행하면 준비되기 전에 쿼리 확장 기능을
+다운로드할 수 있습니다. 정해진 시간만 기다리지 말고 시작 로그를 확인하십시오.
+
 </Tab>
 
 <Tab title="docker">
 
 ```bash
-docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
+docker run -d --name sigiro --restart unless-stopped \
+  -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 \
+  -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro
 ```
 
-컨테이너를 재시작해도 데이터를 유지하려면 `-v sigiro-data:/var/lib/sigiro`를
-추가하십시오.
+이름이 지정된 볼륨에 데이터가 저장되므로 컨테이너를 재시작해도 유지됩니다. 재시작
+정책은 호스트 재부팅 후 서버를 다시 시작합니다. Docker가 게시한 포트는 이 호스트에서만
+접근할 수 있습니다. Jaeger 등이 `4317`과 `4318`을 사용 중이라면 명령을 실행하기 전에
+처음 두 `-p` 플래그를 `-p 127.0.0.1:14317:4317 -p 127.0.0.1:14318:4318`로
+바꾸십시오. OTLP HTTP 전송 대상은 `http://localhost:14318`(gRPC는
+`localhost:14317`)로 변경하십시오. 호스트의 `9999` 포트도 비어 있어야 합니다.
+이를 변경한 경우 아래 API 요청에도 변경된 호스트 포트를 사용하십시오.
 
 </Tab>
 
@@ -67,15 +77,20 @@ docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
 | `4318` | HTTP를 통한 OTLP |
 | `9999` | 쿼리 및 진단 API |
 
-최초 시작 시 sigiro는 쿼리 확장 기능을 다운로드합니다. 여기에는 30~90초가
-걸릴 수 있으므로, 서버가 요청을 받아들이기 전에 잠시 대기 시간이 발생합니다.
-이후의 시작은 즉시 이루어집니다. sigiro는 데이터를 `SIGIRO_DATA_DIR`에
-기록합니다. 이 디렉터리는 바이너리의 경우 `~/.local/share/sigiro`이며, 이미지의
-경우 `/var/lib/sigiro`입니다.
+텔레메트리를 전송하기 전에 서버가 준비되었는지 확인하십시오:
+
+```bash
+curl --fail http://localhost:9999/health
+```
+
+Docker에서는 `docker inspect --format '{{.State.Health.Status}}' sigiro`가 준비되면
+`healthy`를 반환합니다. 그렇지 않다면 `docker logs sigiro`를 확인하십시오. 데이터
+디렉터리는 바이너리의 경우 `~/.local/share/sigiro`, 이미지의 경우
+`/var/lib/sigiro`입니다.
 
 서버가 키를 요구하지 않는다는 점에 유의하십시오. 자체 호스팅 서버는 어떤
-요청도 인증하지 않으므로, 사설 네트워크 내에 두십시오. 네트워크가 보안
-경계입니다.
+요청도 인증하지 않습니다. 위 Docker 명령은 접근을 이 호스트로 제한합니다.
+신뢰할 수 없는 네트워크에 포트를 공개하지 마십시오. 네트워크가 보안 경계입니다.
 
 ## 2. 텔레메트리 전송하기
 

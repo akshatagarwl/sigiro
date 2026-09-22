@@ -37,15 +37,19 @@ sigiro serve
 
 我们为 arm64 架构的 Linux 和 macOS，以及 x86-64 架构的 Linux 提供了构建版本。在其他平台上，请使用容器。
 
+首次在新的数据目录中运行二进制文件时，可能需要先下载查询扩展。请查看启动日志，不要依赖固定的等待时间。
+
 </Tab>
 
 <Tab title="docker">
 
 ```bash
-docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
+docker run -d --name sigiro --restart unless-stopped \
+  -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 \
+  -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro
 ```
 
-添加 `-v sigiro-data:/var/lib/sigiro` 可以在容器重启后保留数据。
+命名卷会在容器重启后保留数据；重启策略会在主机重启后启动服务。Docker 发布的端口只能从本机访问。如果 Jaeger 等服务占用了 `4317` 和 `4318`，请在运行命令前将前两个 `-p` 参数替换为 `-p 127.0.0.1:14317:4317 -p 127.0.0.1:14318:4318`。随后把 OTLP HTTP 导出目标改为 `http://localhost:14318`（gRPC 使用 `localhost:14317`）。主机的 `9999` 端口也必须空闲；如果重映射它，下面的 API 请求也要使用新的主机端口。
 
 </Tab>
 
@@ -59,9 +63,15 @@ docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
 | `4318` | 基于 HTTP 的 OTLP |
 | `9999` | 查询与诊断 API |
 
-首次启动时，sigiro 会下载它的查询扩展。这可能需要 30–90 秒，因此服务端接受请求前会有一段停顿。之后每次启动都是即时的。sigiro 把数据写入 `SIGIRO_DATA_DIR`。对于二进制文件，该目录是 `~/.local/share/sigiro`；在镜像中则是 `/var/lib/sigiro`。
+发送遥测数据前，请确认服务端已准备就绪：
 
-请注意，服务端不会向你索要密钥。自托管的服务端不对任何请求做鉴权，所以请把它放在私有网络中。网络就是安全边界。
+```bash
+curl --fail http://localhost:9999/health
+```
+
+使用 Docker 时，`docker inspect --format '{{.State.Health.Status}}' sigiro` 会在准备就绪后返回 `healthy`；否则请查看 `docker logs sigiro`。数据目录对于二进制文件是 `~/.local/share/sigiro`，在镜像中是 `/var/lib/sigiro`。
+
+请注意，服务端不会向你索要密钥。自托管的服务端不对任何请求做鉴权。上述 Docker 命令将访问限制在本机；不要将这些端口暴露在不可信的网络中。网络就是安全边界。
 
 ## 2. 向它发送遥测数据
 
