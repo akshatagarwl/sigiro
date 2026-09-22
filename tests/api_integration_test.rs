@@ -1195,6 +1195,52 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
               "timeUnixNano": "1700000000500000000",
               "asDouble": 42.5
             }]}
+          }, {
+            "name": "json.request.count",
+            "unit": "{request}",
+            "sum": {
+              "aggregationTemporality": 2,
+              "isMonotonic": true,
+              "dataPoints": [{
+                "timeUnixNano": "1700000000500000000",
+                "asInt": "7"
+              }]
+            }
+          }, {
+            "name": "json.request.delta",
+            "sum": {
+              "aggregationTemporality": 1,
+              "dataPoints": [{
+                "timeUnixNano": "1700000000500000000",
+                "asDouble": 2.5,
+                "exemplars": [{
+                  "timeUnixNano": "1700000000400000000",
+                  "asDouble": 1.5
+                }]
+              }]
+            }
+          }, {
+            "name": "json.request.size",
+            "histogram": {
+              "aggregationTemporality": 2,
+              "dataPoints": [{
+                "timeUnixNano": "1700000000500000000",
+                "count": "1",
+                "sum": 5.5,
+                "bucketCounts": ["1"]
+              }]
+            }
+          }, {
+            "name": "json.request.exp_size",
+            "exponentialHistogram": {
+              "aggregationTemporality": 1,
+              "dataPoints": [{
+                "timeUnixNano": "1700000000500000000",
+                "count": "1",
+                "sum": 3.5,
+                "positive": {"bucketCounts": ["1"]}
+              }]
+            }
           }]
         }]
       }]
@@ -1212,6 +1258,18 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
             .content_type("application/json")
             .await;
         resp.assert_status(axum::http::StatusCode::OK);
+        if path == "/v1/metrics" {
+            assert_eq!(
+                resp.headers()[axum::http::header::CONTENT_TYPE],
+                "application/json"
+            );
+            let body: serde_json::Value =
+                serde_json::from_str(&resp.text()).expect("metrics response should be JSON");
+            assert!(
+                body.get("partialSuccess").is_none(),
+                "unexpected metrics partial success: {body}"
+            );
+        }
     }
 
     router
@@ -1246,11 +1304,36 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
             |r| r.get(0),
         )
         .expect("gauge count query should succeed");
+    let (sums, sum_value): (i64, i64) = guard
+        .query_row(
+            "SELECT count(*), CAST(max(value) AS BIGINT) FROM lake.sigiro_metrics_sum WHERE metric_name IN ('json.request.count', 'json.request.delta') AND service_name = 'json-svc'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("sum count query should succeed");
+    let histograms: i64 = guard
+        .query_row(
+            "SELECT count(*) FROM lake.sigiro_metrics_histogram WHERE metric_name = 'json.request.size'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("histogram count query should succeed");
+    let exponential_histograms: i64 = guard
+        .query_row(
+            "SELECT count(*) FROM lake.sigiro_metrics_exp_histogram WHERE metric_name = 'json.request.exp_size'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("exponential histogram count query should succeed");
 
     assert_eq!(spans, 1);
     assert_eq!(logs, 1);
     assert_eq!(event_name, "deployment.failed");
     assert_eq!(gauges, 1);
+    assert_eq!(sums, 2);
+    assert_eq!(sum_value, 7);
+    assert_eq!(histograms, 1);
+    assert_eq!(exponential_histograms, 1);
 
     // Duration/timestamp units: the span spans exactly 1s (end - start = 1e9 ns).
     // Every stored column must be MICROSECONDS — this guards the 1000x bug where
@@ -1272,6 +1355,233 @@ async fn test_otlp_json_payloads_ingest_all_signal_types() {
         1_000_000,
         "end_timestamp and timestamp must share the µs unit"
     );
+}
+
+#[tokio::test]
+async fn test_otlp_json_metrics_reject_unsupported_or_invalid_points() {
+    let ctx = build_test_context();
+    let (app, router) = build_otlp_app_with_router(&ctx.state);
+    let server = TestServer::new(app).expect("failed to build test server");
+    let payload = r#"{
+      "resourceMetrics": [{"scopeMetrics": [{"metrics": [{
+        "name": "partial.valid.sum",
+        "sum": {"aggregationTemporality": 2, "isMonotonic": true, "dataPoints": [{
+          "timeUnixNano": "1700000000500000000", "asInt": "9"
+        }]}
+      }, {
+        "name": "partial.unsupported.summary",
+        "summary": {"dataPoints": [{
+          "timeUnixNano": "1700000000500000000", "count": "1", "sum": 1.0,
+          "quantileValues": [{}]
+        }]}
+      }, {
+        "name": "partial.missing.gauge",
+        "gauge": {"dataPoints": [{
+          "timeUnixNano": "1700000000500000000"
+        }]}
+      }, {
+        "name": "partial.nan.gauge",
+        "gauge": {"dataPoints": [{
+          "timeUnixNano": "1700000000500000000", "asDouble": "NaN"
+        }]}
+      }, {
+        "name": "partial.infinity.sum",
+        "sum": {"aggregationTemporality": 2, "dataPoints": [{
+          "timeUnixNano": "1700000000500000000", "asDouble": "Infinity"
+        }]}
+      }]}]}]
+    }"#;
+
+    let response = server
+        .post("/v1/metrics")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .bytes(payload.into())
+        .content_type("application/json")
+        .await;
+    response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value =
+        serde_json::from_str(&response.text()).expect("error response should be JSON");
+    assert_eq!(body["code"], 3);
+    assert_eq!(
+        body["message"],
+        "rejected 4 metric data points: 1 unsupported summary data points; 1 NaN values; 1 infinite values; 1 data points missing a value"
+    );
+
+    router
+        .shutdown_and_wait()
+        .await
+        .expect("flusher should persist valid sibling");
+    let conn = ctx
+        .state
+        .pool
+        .get_project("default")
+        .expect("default project connection should exist");
+    let rows: i64 = conn
+        .get()
+        .query_row(
+            "SELECT count(*) FROM lake.sigiro_metrics_sum WHERE metric_name = 'partial.valid.sum'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("rejected sibling sum count should be queryable");
+    assert_eq!(rows, 0);
+}
+
+#[tokio::test]
+async fn otlp_metrics_errors_use_the_requested_wire_encoding() {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::{Metric, ResourceMetrics, ScopeMetrics};
+    use prost::Message;
+
+    let ctx = build_test_context();
+    let server = TestServer::new(build_otlp_app(&ctx.state)).expect("build OTLP test server");
+
+    let json_response = server
+        .post("/v1/metrics")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/json")
+        .bytes(
+            r#"{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"missing-data"}]}]}]}"#
+                .into(),
+        )
+        .await;
+    json_response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json"
+    );
+    let json_status: serde_json::Value = json_response.json();
+    assert_eq!(json_status["code"], 3);
+    assert_eq!(
+        json_status["message"],
+        "parse error: metric \"missing-data\" is missing or has malformed metric data; expected exactly one of gauge, sum, histogram, exponentialHistogram, or summary"
+    );
+
+    let malformed_json_response = server
+        .post("/v1/metrics")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/json")
+        .bytes(
+            r#"{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"malformed-sum","sum":{"aggregationTemporality":2,"isMonotonic":"yes","dataPoints":[]}}]}]}]}"#
+                .into(),
+        )
+        .await;
+    malformed_json_response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    let malformed_status: serde_json::Value = malformed_json_response.json();
+    assert_eq!(
+        malformed_status["message"],
+        "parse error: metric \"malformed-sum\" is missing or has malformed metric data; expected exactly one of gauge, sum, histogram, exponentialHistogram, or summary"
+    );
+
+    let charset_json_response = server
+        .post("/v1/metrics")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .add_header("Content-Type", "application/json; charset=utf-8")
+        .bytes("{}".into())
+        .await;
+    charset_json_response.assert_status_ok();
+    assert_eq!(
+        charset_json_response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json"
+    );
+
+    let protobuf_response = server
+        .post("/v1/metrics")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/x-protobuf")
+        .bytes(vec![0xff].into())
+        .await;
+    protobuf_response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        protobuf_response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/x-protobuf"
+    );
+    let status = tonic_types::pb::Status::decode(protobuf_response.as_bytes().as_ref())
+        .expect("protobuf error response should be google.rpc.Status");
+    assert_eq!(status.code, tonic::Code::InvalidArgument as i32);
+    assert!(!status.message.is_empty());
+
+    let success_response = server
+        .post("/v1/metrics")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/x-protobuf")
+        .bytes(
+            ExportMetricsServiceRequest {
+                resource_metrics: vec![ResourceMetrics {
+                    scope_metrics: vec![ScopeMetrics {
+                        metrics: vec![Metric {
+                            name: "unknown-protobuf-metric".to_string(),
+                            data: None,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+            }
+            .encode_to_vec()
+            .into(),
+        )
+        .await;
+    success_response.assert_status_ok();
+    assert_eq!(
+        success_response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/x-protobuf"
+    );
+    let success =
+        opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceResponse::decode(
+            success_response.as_bytes().as_ref(),
+        )
+        .expect("protobuf success response should decode");
+    assert!(success.partial_success.is_none());
+}
+
+#[tokio::test]
+async fn otlp_protobuf_metrics_preserve_partial_success_accounting() {
+    use opentelemetry_proto::tonic::collector::metrics::v1::{
+        ExportMetricsServiceRequest, ExportMetricsServiceResponse,
+    };
+    use opentelemetry_proto::tonic::metrics::v1::{
+        Metric, ResourceMetrics, ScopeMetrics, Summary, SummaryDataPoint, metric::Data,
+    };
+    use prost::Message;
+
+    let ctx = build_test_context();
+    let server = TestServer::new(build_otlp_app(&ctx.state)).expect("build OTLP test server");
+    let request = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            scope_metrics: vec![ScopeMetrics {
+                metrics: vec![Metric {
+                    name: "protobuf.unsupported.summary".to_string(),
+                    data: Some(Data::Summary(Summary {
+                        data_points: vec![SummaryDataPoint::default()],
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    };
+
+    let response = server
+        .post("/v1/metrics")
+        .add_header("Authorization", "Bearer sigiro_dev_test")
+        .content_type("application/x-protobuf")
+        .bytes(request.encode_to_vec().into())
+        .await;
+    response.assert_status_ok();
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/x-protobuf"
+    );
+    let response = ExportMetricsServiceResponse::decode(response.as_bytes().as_ref())
+        .expect("partial success response should decode");
+    let partial = response
+        .partial_success
+        .expect("summary should produce partial success");
+    assert_eq!(partial.rejected_data_points, 1);
+    assert_eq!(partial.error_message, "1 unsupported summary data points");
 }
 
 #[tokio::test]

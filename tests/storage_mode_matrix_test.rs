@@ -276,7 +276,9 @@ impl MatrixEdge {
                 .env("SIGIRO_S3_SECRET", S3_SECRET);
         }
 
-        let mut child = cmd.spawn().map_err(|e| format!("spawn `sigiro serve`: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("spawn `sigiro serve`: {e}"))?;
         let log = ChildLog::default();
         let mut readers = Vec::new();
         if let Some(stdout) = child.stdout.take() {

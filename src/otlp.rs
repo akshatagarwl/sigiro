@@ -70,6 +70,35 @@ pub struct SkippedMetrics {
     pub(crate) missing_values: usize,
 }
 
+impl SkippedMetrics {
+    pub fn total(&self) -> usize {
+        self.summaries + self.nan_values + self.infinity_values + self.missing_values
+    }
+
+    pub fn message(&self) -> String {
+        let mut reasons = Vec::new();
+        if self.summaries > 0 {
+            reasons.push(format!(
+                "{} unsupported summary data points",
+                self.summaries
+            ));
+        }
+        if self.nan_values > 0 {
+            reasons.push(format!("{} NaN values", self.nan_values));
+        }
+        if self.infinity_values > 0 {
+            reasons.push(format!("{} infinite values", self.infinity_values));
+        }
+        if self.missing_values > 0 {
+            reasons.push(format!(
+                "{} data points missing a value",
+                self.missing_values
+            ));
+        }
+        reasons.join("; ")
+    }
+}
+
 // ============================================================================
 // Trace direct builders
 // ============================================================================
@@ -411,18 +440,22 @@ fn decode_metrics_protobuf(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
     use prost::Message;
 
     let request = ExportMetricsServiceRequest::decode(bytes)?;
-    decode_metrics_request(request)
+    decode_metrics_request(request, false)
 }
 
 fn decode_metrics_json(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
     use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto_json::tonic::collector::metrics::v1::ExportMetricsServiceRequest as JsonExportMetricsServiceRequest;
+    use prost::Message;
 
-    let request: ExportMetricsServiceRequest = serde_json::from_slice(bytes)?;
-    decode_metrics_request(request)
+    let json_request: JsonExportMetricsServiceRequest = serde_json::from_slice(bytes)?;
+    let request = ExportMetricsServiceRequest::decode(json_request.encode_to_vec().as_slice())?;
+    decode_metrics_request(request, true)
 }
 
 fn decode_metrics_request(
     request: opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest,
+    reject_missing_data: bool,
 ) -> Result<MetricBatches, DecodeError> {
     use opentelemetry_proto::tonic::metrics::v1::metric::Data;
 
@@ -476,6 +509,12 @@ fn decode_metrics_request(
                     }
                     Some(Data::Summary(s)) => {
                         skipped.summaries += s.data_points.len();
+                    }
+                    None if reject_missing_data => {
+                        return Err(DecodeError::Parse(format!(
+                            "metric {:?} is missing or has malformed metric data; expected exactly one of gauge, sum, histogram, exponentialHistogram, or summary",
+                            metric.name
+                        )));
                     }
                     None => {}
                 }

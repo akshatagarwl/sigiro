@@ -8,7 +8,8 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Query, State},
-    http::StatusCode,
+    http::{StatusCode, header::CONTENT_TYPE},
+    response::{IntoResponse, Response as AxumResponse},
     routing::post,
 };
 use headers::HeaderMapExt;
@@ -172,7 +173,8 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
     headers
         .typed_get::<headers::ContentType>()
         .map(|ct| {
-            if ct == headers::ContentType::json() {
+            let mime: mime::Mime = ct.into();
+            if mime.type_() == mime::APPLICATION && mime.subtype() == mime::JSON {
                 InputFormat::Json
             } else {
                 InputFormat::Protobuf
@@ -796,6 +798,60 @@ fn transform_http_status(status: &Status) -> StatusCode {
     }
 }
 
+fn metrics_http_response(
+    format: InputFormat,
+    status: StatusCode,
+    partial_success: Option<ExportMetricsPartialSuccess>,
+) -> AxumResponse {
+    let response = ExportMetricsServiceResponse { partial_success };
+    let (content_type, body) = match format {
+        InputFormat::Json => {
+            let body = match &response.partial_success {
+                Some(partial) => serde_json::to_vec(&serde_json::json!({
+                    "partialSuccess": {
+                        "rejectedDataPoints": partial.rejected_data_points.to_string(),
+                        "errorMessage": partial.error_message,
+                    }
+                }))
+                .expect("OTLP metrics response must serialize"),
+                None => b"{}".to_vec(),
+            };
+            ("application/json", body)
+        }
+        InputFormat::Protobuf => ("application/x-protobuf", response.encode_to_vec()),
+    };
+    (status, [(CONTENT_TYPE, content_type)], body).into_response()
+}
+
+fn metrics_http_error_response(
+    format: InputFormat,
+    status: StatusCode,
+    code: tonic::Code,
+    message: &str,
+) -> AxumResponse {
+    let code = code as i32;
+    let (content_type, body) = match format {
+        InputFormat::Json => (
+            "application/json",
+            serde_json::to_vec(&serde_json::json!({
+                "code": code,
+                "message": message,
+            }))
+            .expect("OTLP error response must serialize"),
+        ),
+        InputFormat::Protobuf => (
+            "application/x-protobuf",
+            tonic_types::pb::Status {
+                code,
+                message: message.to_string(),
+                details: Vec::new(),
+            }
+            .encode_to_vec(),
+        ),
+    };
+    (status, [(CONTENT_TYPE, content_type)], body).into_response()
+}
+
 #[instrument(skip_all, fields(endpoint = "/v1/traces"))]
 async fn otlp_http_traces(
     State(state): State<Arc<OtlpHttpState>>,
@@ -858,17 +914,29 @@ async fn otlp_http_metrics(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> StatusCode {
+) -> AxumResponse {
+    let fmt = detect_format(&headers);
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(status) => return status,
+        Err(status) => {
+            let code = match status {
+                StatusCode::UNAUTHORIZED => tonic::Code::Unauthenticated,
+                StatusCode::FORBIDDEN => tonic::Code::PermissionDenied,
+                _ => tonic::Code::Internal,
+            };
+            return metrics_http_error_response(fmt, status, code, "authentication failed");
+        }
     };
-    let fmt = detect_format(&headers);
     let batches = match transform_metrics(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform metrics: {e}");
-            return transform_http_status(&e);
+            return metrics_http_error_response(
+                fmt,
+                transform_http_status(&e),
+                e.code(),
+                e.message(),
+            );
         }
     };
     let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -878,18 +946,45 @@ async fn otlp_http_metrics(
             .exp_histogram
             .as_ref()
             .is_some_and(|b| b.num_rows() > 0);
+    let rejected = batches.skipped.total();
+    if fmt == InputFormat::Json && rejected > 0 {
+        return metrics_http_error_response(
+            fmt,
+            StatusCode::BAD_REQUEST,
+            tonic::Code::InvalidArgument,
+            &format!(
+                "rejected {rejected} metric data points: {}",
+                batches.skipped.message()
+            ),
+        );
+    }
+    let partial_success = (rejected > 0).then(|| ExportMetricsPartialSuccess {
+        rejected_data_points: rejected as i64,
+        error_message: batches.skipped.message(),
+    });
     if !has_data {
         // F-05: empty batch is a valid no-op (see otlp_http_traces).
-        return StatusCode::OK;
+        return metrics_http_response(fmt, StatusCode::OK, partial_success);
     }
-    route_ingest_msg(
+    let status = route_ingest_msg(
         &state,
         IngestMsg::Metrics {
             project_id,
             batches,
         },
     )
-    .await
+    .await;
+    if status != StatusCode::OK {
+        let code = if status == StatusCode::TOO_MANY_REQUESTS
+            || status == StatusCode::INSUFFICIENT_STORAGE
+        {
+            tonic::Code::ResourceExhausted
+        } else {
+            tonic::Code::Internal
+        };
+        return metrics_http_error_response(fmt, status, code, "failed to ingest metrics");
+    }
+    metrics_http_response(fmt, status, partial_success)
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1development/profiles"))]

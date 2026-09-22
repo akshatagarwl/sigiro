@@ -31,9 +31,14 @@ native-tls = "0.2"
 
 # OTLP ingest
 tonic = { version = "0.14", features = ["tls-aws-lc"] }
+tonic-types = "0.14"
 prost = "0.14"
 arrow = "58"
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
+# Temporary ProtoJSON decoder until the message-level serde defaults land in a
+# released opentelemetry-proto. The decoded request crosses back over protobuf,
+# keeping the existing 0.31 ingest and gRPC types untouched.
+opentelemetry-proto-json = { package = "opentelemetry-proto", version = "0.33", git = "https://github.com/Arnav12114/opentelemetry-rust.git", rev = "7b70ecc68e68a1e0ea5c343caf8e37c68adaa356", default-features = false, features = ["gen-tonic-messages", "metrics", "with-serde"] }
 axum = "0.8"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
