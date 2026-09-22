@@ -112,10 +112,9 @@ const main = async (): Promise<void> => {
     await page.click('#email-form button[type="submit"]');
     await page.waitForSelector('#otp-form', { state: 'visible', timeout: 30_000 });
     const code = await awaitEmailedCode(requestedAt);
-    // Six cells, not one input. Filling the first cell with the whole code is
-    // what a paste does; the component spreads it across the row and submits
-    // on completion, so there is no button to press.
-    await page.locator('#otp-form input').first().fill(code);
+    // The visual slots share one native input, so this mirrors mobile autofill
+    // and password-manager input while retaining ordinary form semantics.
+    await page.locator('#otp-form input[name="verification-code"]').fill(code);
     // Wait for the PAGE to finish signing in, then confirm the session once.
     //
     // Two wrong ways to do this, both of which produced failures blamed on the

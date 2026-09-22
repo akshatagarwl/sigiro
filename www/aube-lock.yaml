@@ -42,6 +42,9 @@ importers:
       effect:
         specifier: 4.0.0-rc.115
         version: 4.0.0-rc.115
+      input-otp:
+        specifier: 1.5.0
+        version: 1.5.0(react@19.3.0-canary-28cd4bb0-20260723)(react-dom@19.3.0-canary-28cd4bb0-20260723(react@19.3.0-canary-28cd4bb0-20260723))
       motion:
         specifier: 12.43.0
         version: 12.43.0
@@ -8073,6 +8076,15 @@ packages:
       {
         integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==,
       }
+
+  input-otp@1.5.0:
+    resolution:
+      {
+        integrity: sha512-3AcfdW1sNG0FmSA5hHMBXG7jNW5CdcdKs8ln8JOmn6S2SRkoXoJx+2UwC+ZvjflfnOdHJx0SfQ9/YjlxVYLtGQ==,
+      }
+    peerDependencies:
+      react: ^16.8 || ^17.0 || ^18.0 || ^19.0.0 || ^19.0.0-rc
+      react-dom: ^16.8 || ^17.0 || ^18.0 || ^19.0.0 || ^19.0.0-rc
 
   internal-slot@1.1.0:
     resolution:
@@ -16728,6 +16740,11 @@ snapshots:
   inherits@2.0.3: {}
 
   inherits@2.0.4: {}
+
+  input-otp@1.5.0(react@19.3.0-canary-28cd4bb0-20260723)(react-dom@19.3.0-canary-28cd4bb0-20260723(react@19.3.0-canary-28cd4bb0-20260723)):
+    dependencies:
+      react: 19.3.0-canary-28cd4bb0-20260723
+      react-dom: 19.3.0-canary-28cd4bb0-20260723(react@19.3.0-canary-28cd4bb0-20260723)
 
   internal-slot@1.1.0:
     dependencies:

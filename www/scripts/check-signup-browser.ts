@@ -56,12 +56,17 @@ interface InboxBody {
   readonly preview?: string;
 }
 
+interface OTPReceipt {
+  readonly code: string;
+  readonly text: string;
+}
+
 /**
  * The newest verification code that arrived after `since`. Anchoring to a
  * timestamp matters: this inbox accumulates codes from earlier runs, and
  * reading a stale one would make a broken mailer look healthy.
  */
-const latestOTP = async (since: Date): Promise<string | undefined> => {
+const latestOTP = async (since: Date): Promise<OTPReceipt | undefined> => {
   const listed = await run('agentmail', [
     'inboxes',
     'messages',
@@ -98,13 +103,14 @@ const latestOTP = async (since: Date): Promise<string | undefined> => {
     ]);
     // SAFETY: same JSON contract as the listing above.
     const text = JSON.parse(body) as InboxBody;
-    const code = /\b(\d{6})\b/.exec(text.text ?? text.preview ?? '');
-    if (code) return code[1];
+    const content = text.text ?? text.preview ?? '';
+    const code = /\b(\d{6})\b/.exec(content);
+    if (code) return { code: code[1], text: content };
   }
   return undefined;
 };
 
-const waitForOTP = async (since: Date): Promise<string> => {
+const waitForOTP = async (since: Date): Promise<OTPReceipt> => {
   for (let attempt = 0; attempt < 24; attempt += 1) {
     const code = await latestOTP(since);
     if (code) return code;
@@ -157,13 +163,16 @@ const main = async () => {
     await otpForm.waitFor({ state: 'visible', timeout: 20000 });
     step('OTP form revealed');
 
-    const code = await waitForOTP(requestedAt);
-    step('code received by email', code.replace(/\d/g, '*'));
+    const receipt = await waitForOTP(requestedAt);
+    assert.match(receipt.text, /expires in five minutes/i);
+    assert.match(receipt.text, /if you didn't request this code/i);
+    step('code received by email', receipt.code.replace(/\d/g, '*'));
+    step('email explains expiry and unsolicited-code handling');
 
-    // The code field is six cells now, not one input. Filling the first cell
-    // with the whole code is exactly what a paste does, and the component
-    // spreads it across the row — so this still does what a user does.
-    await page.locator('#otp-form input').first().fill(code);
+    // There is one native input behind the six visual slots. Filling it mirrors
+    // mobile autofill and password-manager input without moving focus between
+    // six competing controls.
+    await page.locator('#otp-form input[name="verification-code"]').fill(receipt.code);
 
     // The island replaces the form outright on success rather than hiding it.
     await page.waitForFunction(() => document.querySelector('#otp-form') === null, undefined, {

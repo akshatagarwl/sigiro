@@ -17,14 +17,14 @@ import { INSTALL_COMMAND } from '@/lib/site.shared';
  * `src/components/interior/`. DESIGN.md §3b names the OTP cell as the reference
  * every other field copies, so the screen where that field actually appears
  * should be the component itself rather than an imitation in Tailwind classes.
- * That brings the per-cell error and success branches, paste-into-any-cell,
- * arrow-key navigation and the §5 spring motion for free.
+ * The visual cells share one real input through `input-otp`, so rapid typing,
+ * paste, mobile autofill, password managers, undo and screen readers all use
+ * the browser's native text-field behavior instead of focus-shuffling handlers.
  *
  * IDs are load-bearing: `check-signup-browser.ts` and `check-device-flow.ts`
  * drive production by selector, so `#email-form`, `#otp-form`, `#approve` and
- * `input[name="email"]` survive the rewrite. The code is six cells now rather
- * than one input — filling the first cell with all six digits is a paste, which
- * the component spreads across the row, so the checks still do what a user does.
+ * `input[name="email"]` survive the rewrite. The verification input is named
+ * `verification-code`; the checks fill that one native field just as autofill does.
  */
 
 export type AuthPage = 'sign-in' | 'sign-up' | 'device' | 'agent-device' | 'consent';
@@ -44,6 +44,7 @@ interface Props {
 type Phase = 'loading' | 'email' | 'code' | 'request' | 'consent' | 'done';
 
 const api = '/api/auth';
+const resendCooldownSeconds = 30;
 const LOGIN_COMMAND = 'sigiro auth login' as const;
 
 interface ErrorBody {
@@ -92,6 +93,15 @@ const request = async <T,>(path: string, options: RequestInit = {}): Promise<T> 
 const message = (cause: unknown, fallback: string): string =>
   cause instanceof Error ? cause.message : fallback;
 
+const verificationMessage = (cause: unknown): string => {
+  const detail = message(cause, 'Verification failed');
+  if (/expired/i.test(detail)) return 'That verification code has expired. Request a new code.';
+  if (/invalid otp|invalid.*code/i.test(detail)) {
+    return 'That verification code is incorrect. Try again or request a new code.';
+  }
+  return detail.replace(/\bOTP\b/gi, 'verification code');
+};
+
 const primary =
   'inline-flex h-10 items-center justify-center rounded-[10px] bg-stone-900 px-4 text-[14px] ' +
   'font-semibold text-white transition-colors duration-150 hover:bg-stone-800 ' +
@@ -127,7 +137,10 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState('');
   const [details, setDetails] = useState<DeviceDetails | null>(null);
+  const [resendAvailableIn, setResendAvailableIn] = useState(0);
+  const [otpValue, setOtpValue] = useState('');
   const otpRef = useRef<OtpInputHandle>(null);
+  const verifyInFlight = useRef(false);
 
   // `import.meta.env.SSR` is replaced at build time, so the server render gets
   // an empty query and the browser gets the real one without sniffing globals.
@@ -136,6 +149,14 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   const userCode = params.get('user_code')?.trim() ?? '';
   const agentId = params.get('agent_id')?.trim() ?? '';
   const agentCode = params.get('code')?.trim() ?? '';
+
+  useEffect(() => {
+    if (phase !== 'code' || resendAvailableIn <= 0) return;
+    const timeout = window.setTimeout(() => {
+      setResendAvailableIn((seconds) => Math.max(0, seconds - 1));
+    }, 1000);
+    return () => window.clearTimeout(timeout);
+  }, [phase, resendAvailableIn]);
 
   const ensureWorkspace = useCallback(async (): Promise<void> => {
     await request('/onboarding/ensure-personal-organization', { method: 'POST', body: '{}' });
@@ -220,42 +241,48 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     })();
   }, [afterSignIn, oauthQuery, page, signedIn]);
 
+  const deliverCode = useCallback((address: string, resend: boolean): void => {
+    setBusy(true);
+    setError('');
+    setStatus(resend ? 'Sending a new code…' : 'Sending your code…');
+    void request('/email-otp/send-verification-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email: address, type: 'sign-in' }),
+    })
+      .then(() => {
+        setEmail(address);
+        setPhase('code');
+        setResendAvailableIn(resendCooldownSeconds);
+        if (resend) {
+          setStatus('A new verification code was sent.');
+          window.requestAnimationFrame(() => otpRef.current?.clear());
+        } else {
+          setOtpValue('');
+          setStatus('');
+        }
+      })
+      .catch((cause: unknown) => {
+        setStatus('');
+        setError(message(cause, 'Could not send the verification code'));
+      })
+      .finally(() => {
+        setBusy(false);
+      });
+  }, []);
+
   const sendCode = useCallback(
     (event: React.FormEvent) => {
       event.preventDefault();
-      const address = email.trim().toLowerCase();
-      setBusy(true);
-      setError('');
-      setStatus('Sending your code…');
-      void request('/email-otp/send-verification-otp', {
-        method: 'POST',
-        body: JSON.stringify({ email: address, type: 'sign-in' }),
-      })
-        .then(() => {
-          setEmail(address);
-          setPhase('code');
-          // No status here: the OTP field's own hint already says where the
-          // code went, and two lines saying the same thing is noise.
-          setStatus('');
-        })
-        .catch((cause: unknown) => {
-          setStatus('');
-          setError(message(cause, 'Could not send the code'));
-        })
-        .finally(() => {
-          setBusy(false);
-        });
+      deliverCode(email.trim().toLowerCase(), false);
     },
-    [email],
+    [deliverCode, email],
   );
 
-  /**
-   * Verification fires when the sixth cell fills, not on a button press. The
-   * code is fixed-length, so a second gesture after the last digit carries no
-   * information the form does not already have.
-   */
+  /** Verify automatically at six digits or explicitly through the form submit button. */
   const verify = useCallback(
     (code: string) => {
+      if (verifyInFlight.current) return;
+      verifyInFlight.current = true;
       setBusy(true);
       setError('');
       setStatus('Verifying…');
@@ -265,10 +292,11 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         .then(afterSignIn)
         .catch((cause: unknown) => {
           setStatus('');
-          setError(message(cause, 'Verification failed'));
-          otpRef.current?.clear();
+          setError(verificationMessage(cause));
+          window.requestAnimationFrame(() => otpRef.current?.select());
         })
         .finally(() => {
+          verifyInFlight.current = false;
           setBusy(false);
         });
     },
@@ -559,35 +587,58 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         <form
           id="otp-form"
           className="grid gap-4"
+          aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
+            if (otpValue.length === 6) verify(otpValue);
           }}
         >
           <OtpInput
             length={6}
             autoFocus
-            disabled={busy}
             status={error ? 'error' : 'idle'}
             errorMessage={error}
-            hint="Paste the whole code into any cell."
-            onChange={() => {
+            hint="Enter or paste the six-digit code."
+            onChange={(value) => {
+              setOtpValue(value);
               if (error) setError('');
             }}
             onComplete={verify}
             ref={otpRef}
           />
           <button
-            id="restart"
-            type="button"
-            onClick={() => {
-              setPhase('email');
-              setStatus('');
-              setError('');
-            }}
-            className="mt-2 justify-self-start text-[13px] font-medium text-stone-500 underline-offset-4 hover:text-stone-800 hover:underline dark:text-stone-400 dark:hover:text-stone-100"
+            type="submit"
+            disabled={busy || otpValue.length !== 6}
+            className={`${primary} w-full`}
           >
-            Use another email
+            {busy ? 'Verifying…' : 'Verify code'}
           </button>
+          <div className="flex flex-wrap items-center gap-1">
+            <button
+              id="resend"
+              type="button"
+              disabled={busy || resendAvailableIn > 0}
+              onClick={() => deliverCode(email, true)}
+              className="inline-flex h-10 items-center rounded-[8px] px-2 text-[13px] font-medium text-stone-600 underline-offset-4 hover:text-stone-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] disabled:cursor-not-allowed disabled:text-stone-400 dark:text-stone-300 dark:hover:text-white dark:disabled:text-stone-600"
+            >
+              {resendAvailableIn > 0 ? `Resend code in ${resendAvailableIn}s` : 'Resend code'}
+            </button>
+            <button
+              id="restart"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setPhase('email');
+                setStatus('');
+                setError('');
+                setResendAvailableIn(0);
+                setOtpValue('');
+              }}
+              className="inline-flex h-10 items-center rounded-[8px] px-2 text-[13px] font-medium text-stone-500 underline-offset-4 hover:text-stone-800 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] disabled:opacity-60 dark:text-stone-400 dark:hover:text-stone-100"
+            >
+              Use another email
+            </button>
+          </div>
           {statusLine}
         </form>
       </>

@@ -119,6 +119,7 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
       }),
       emailOTP({
         storeOTP: "hashed",
+        expiresIn: 300,
         sendVerificationOnSignUp: true,
         ...(runtime.testOTP ? { generateOTP: () => runtime.testOTP! } : {}),
         async sendVerificationOTP({ email: recipient, otp }) {
@@ -127,7 +128,7 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
             to: recipient,
             from: runtime.emailFrom,
             subject: "Your Sigiro verification code",
-            text: `Your Sigiro verification code is ${otp}.`,
+            text: `Your Sigiro verification code is ${otp}. It expires in five minutes. If you didn't request this code, you can ignore this email.`,
           });
         },
       }),
