@@ -1372,6 +1372,7 @@ struct ServiceQueryRow {
     span_count: i64,
     log_count: i64,
     metric_count: i64,
+    profile_count: i64,
     total_count: i64,
 }
 
@@ -1401,26 +1402,30 @@ async fn services_handler(
                 sum(span_count)::BIGINT AS span_count, \
                 sum(log_count)::BIGINT AS log_count, \
                 sum(metric_count)::BIGINT AS metric_count, \
-                sum(span_count + log_count + metric_count)::BIGINT AS total_count \
+                sum(profile_count)::BIGINT AS profile_count, \
+                sum(span_count + log_count + metric_count + profile_count)::BIGINT AS total_count \
          FROM ( \
              SELECT service_name, min(timestamp) AS first_seen, max(timestamp) AS last_seen, \
-                    count(*) AS span_count, 0::BIGINT AS log_count, 0::BIGINT AS metric_count \
+                    count(*) AS span_count, 0::BIGINT AS log_count, 0::BIGINT AS metric_count, 0::BIGINT AS profile_count \
              FROM {prefix}sigiro_spans GROUP BY service_name \
              UNION ALL \
-             SELECT service_name, min(timestamp), max(timestamp), 0, count(*), 0 \
+             SELECT service_name, min(timestamp), max(timestamp), 0, count(*), 0, 0 \
              FROM {prefix}sigiro_logs GROUP BY service_name \
              UNION ALL \
-             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) \
+             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*), 0 \
              FROM {prefix}sigiro_metrics_gauge GROUP BY service_name \
              UNION ALL \
-             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) \
+             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*), 0 \
              FROM {prefix}sigiro_metrics_sum GROUP BY service_name \
              UNION ALL \
-             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) \
+             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*), 0 \
              FROM {prefix}sigiro_metrics_histogram GROUP BY service_name \
              UNION ALL \
-             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) \
+             SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*), 0 \
              FROM {prefix}sigiro_metrics_exp_histogram GROUP BY service_name \
+             UNION ALL \
+             SELECT service_name, min(timestamp), max(timestamp), 0, 0, 0, count(*) \
+             FROM {prefix}sigiro_profiles GROUP BY service_name \
          ) AS per_signal \
          GROUP BY service_name \
          ORDER BY total_count DESC, service_name ASC"
@@ -1441,6 +1446,7 @@ async fn services_handler(
                 spans: row.span_count,
                 logs: row.log_count,
                 metrics: row.metric_count,
+                profiles: row.profile_count,
             },
             total_count: row.total_count,
         });

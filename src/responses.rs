@@ -36,6 +36,7 @@ pub struct ServiceSignals {
     pub spans: i64,
     pub logs: i64,
     pub metrics: i64,
+    pub profiles: i64,
 }
 
 /// GET /v1/anomalies — precomputed regime shifts of every signal from the

@@ -2054,7 +2054,8 @@
         "required": [
           "spans",
           "logs",
-          "metrics"
+          "metrics",
+          "profiles"
         ],
         "properties": {
           "logs": {
@@ -2062,6 +2063,10 @@
             "format": "int64"
           },
           "metrics": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "profiles": {
             "type": "integer",
             "format": "int64"
           },

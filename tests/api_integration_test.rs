@@ -660,7 +660,15 @@ async fn test_services_discovers_every_supported_signal() {
                   aggregation_temporality)
              VALUES
                  ('2026-01-07 00:00:00', 'latency', 999, 0, 0,
-                  'exp-histogram-only', 2);",
+                  'exp-histogram-only', 2);
+
+             INSERT INTO lake.sigiro_profiles
+                 (profile_id, service_name, timestamp, profile_type, stack_trace, value, unit)
+             VALUES
+                 ('p1', 'mixed', '2026-01-06 00:00:00', 'cpu', ['main'], 1, 'samples'),
+                 ('p2', 'mixed', '2026-01-12 00:00:00', 'cpu', ['main'], 1, 'samples'),
+                 ('p3', 'profile-only', '2026-01-13 00:00:00', 'cpu', ['main'], 1, 'samples'),
+                 ('p4', 'profile-only', '2026-01-14 00:00:00', 'cpu', ['main'], 1, 'samples');",
         )
         .expect("seed cross-signal telemetry");
 
@@ -682,6 +690,7 @@ async fn test_services_discovers_every_supported_signal() {
         vec![
             "mixed",
             "log-only",
+            "profile-only",
             "exp-histogram-only",
             "gauge-only",
             "histogram-only",
@@ -699,18 +708,25 @@ async fn test_services_discovers_every_supported_signal() {
     };
     assert_eq!(
         service("mixed")["signals"],
-        json!({"spans": 1, "logs": 1, "metrics": 2})
+        json!({"spans": 1, "logs": 1, "metrics": 2, "profiles": 2})
     );
-    assert_eq!(service("mixed")["totalCount"], 4);
-    assert_eq!(service("mixed")["firstSeen"], "2026-01-08 00:00:00");
-    assert_eq!(service("mixed")["lastSeen"], "2026-01-11 00:00:00");
+    assert_eq!(service("mixed")["totalCount"], 6);
+    assert_eq!(service("mixed")["firstSeen"], "2026-01-06 00:00:00");
+    assert_eq!(service("mixed")["lastSeen"], "2026-01-12 00:00:00");
+    assert_eq!(
+        service("profile-only")["signals"],
+        json!({"spans": 0, "logs": 0, "metrics": 0, "profiles": 2})
+    );
+    assert_eq!(service("profile-only")["totalCount"], 2);
+    assert_eq!(service("profile-only")["firstSeen"], "2026-01-13 00:00:00");
+    assert_eq!(service("profile-only")["lastSeen"], "2026-01-14 00:00:00");
     assert_eq!(
         service("log-only")["signals"],
-        json!({"spans": 0, "logs": 2, "metrics": 0})
+        json!({"spans": 0, "logs": 2, "metrics": 0, "profiles": 0})
     );
     assert_eq!(
         service("span-only")["signals"],
-        json!({"spans": 1, "logs": 0, "metrics": 0})
+        json!({"spans": 1, "logs": 0, "metrics": 0, "profiles": 0})
     );
     for name in [
         "gauge-only",
@@ -720,7 +736,7 @@ async fn test_services_discovers_every_supported_signal() {
     ] {
         assert_eq!(
             service(name)["signals"],
-            json!({"spans": 0, "logs": 0, "metrics": 1}),
+            json!({"spans": 0, "logs": 0, "metrics": 1, "profiles": 0}),
             "metric-family-only service {name}"
         );
         assert_eq!(service(name)["totalCount"], 1);
@@ -731,7 +747,7 @@ async fn test_services_discovers_every_supported_signal() {
         ClientAuth::Open,
     );
     let typed = client.services().await.expect("typed services response");
-    assert_eq!(typed.services.len(), 7);
+    assert_eq!(typed.services.len(), 8);
     let typed_log_only = typed
         .services
         .iter()
@@ -748,6 +764,7 @@ async fn test_services_discovers_every_supported_signal() {
     assert_eq!(typed_log_only.signals.spans, 0);
     assert_eq!(typed_log_only.signals.logs, 2);
     assert_eq!(typed_log_only.signals.metrics, 0);
+    assert_eq!(typed_log_only.signals.profiles, 0);
     assert_eq!(typed_log_only.total_count, 2);
     let expected = serde_json::to_value(typed).expect("serialize typed services response");
 
