@@ -17,7 +17,7 @@ sidebar:
 
 sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイックスタート](/docs/tutorials/quickstart#1-実行する)にある Docker コマンドで起動してください。
 
-以下の設定では、どちらのエージェントもポート `4317` の OTLP gRPC 経由でエクスポートします。セルフホストのサーバーではキーは不要です。
+以下の設定では、Claude Code はポート `4318` の OTLP HTTP、Codex はポート `4317` の OTLP gRPC 経由でエクスポートします。セルフホストのサーバーではキーは不要です。
 
 ホスト版を使う場合、新規ユーザーは `sigiro signup --name "Your Name" --email you@example.com`、既存アカウントは `sigiro auth login` を実行してください。
 
@@ -25,19 +25,26 @@ sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイ
 
 ## Claude Code
 
-Claude Code はテレメトリー設定を環境変数から読み取ります。Claude Code を起動する環境で、次の変数を設定してください。シェルのプロファイル、`.envrc` ファイル、またはラッパースクリプトを使用します。
+`~/.claude/settings.json` の `env` に次の設定を追加します。既存の `env` がある場合はキーを統合してください。IDE から起動したセッションにも適用されます。シェルから起動する場合は同じ変数を `export` しても構いません。
 
-```bash
-export CLAUDE_CODE_ENABLE_TELEMETRY=1
-export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1
-export OTEL_METRICS_EXPORTER=otlp
-export OTEL_LOGS_EXPORTER=otlp
-export OTEL_TRACES_EXPORTER=otlp
-export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+```json
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+    "OTEL_TRACES_EXPORTER": "otlp",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318",
+    "OTEL_METRIC_EXPORT_INTERVAL": "10000"
+  }
+}
 ```
 
-ホスティングサービスを利用する場合は、キーを追加するだけでなく、プロトコルとエンドポイントも変更してください。`sigiro.com` は 443 でのみ応答するため、そこに `:4317` や `:4318` のエンドポイントを指定すると接続に失敗し、エージェントは何も報告しません。
+Claude Code のトレースはベータ機能です。`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` と `OTEL_TRACES_EXPORTER=otlp` で有効になります。設定の詳細は[公式の監視ガイド](https://code.claude.com/docs/en/monitoring-usage)を参照してください。新しいセッションでプロンプトを 1 回実行してから、下の手順で確認してください。
+
+ホスティングサービスを利用する場合は、`env` の `OTEL_EXPORTER_OTLP_ENDPOINT` を `https://sigiro.com` に変更し、認証ヘッダーを設定してください。`sigiro.com` は 443 でのみ応答するため、`:4317` や `:4318` を指定しないでください。シェルから起動する場合は、上記すべての変数を `export` した上で次の値を使用します。
 
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
@@ -116,7 +123,7 @@ Codex は自身を `codex` ではなく `codex_exec` として報告するため
 curl http://localhost:9999/v1/services
 ```
 
-エージェントは自身を 1 つのサービスとして報告します。表示されたら、セッションをクエリします。
+サービスの `signals.spans`、`signals.logs`、`signals.metrics` を確認してください。スパンが 0 でもログやメトリクスがあれば受信できています。`gen_ai` や `operation_summaries` の診断結果にはスパンが必要です。トレースを有効にしたのにスパンが 0 ならエクスポーター設定を確認してください。件数が 0 でないシグナルのテーブルだけをクエリします。スパンがある場合:
 
 ```bash
 curl -X POST http://localhost:9999/v1/query \
@@ -126,7 +133,17 @@ curl -X POST http://localhost:9999/v1/query \
           GROUP BY 1, 2 ORDER BY n DESC"
 ```
 
-エージェントはカウンターやゲージも報告します。これらは `sigiro_spans` ではなく `sigiro_metrics_*` テーブルに格納されます。どのファミリーが何を保持し、それぞれのファミリーがどのマシンを表しているかについては、[テーブルについて](/docs/explanation/tables)を参照してください。
+ログがあれば `sigiro_logs` を確認します:
+
+```bash
+curl -X POST http://localhost:9999/v1/query \
+  --data "SELECT service_name, count(*) AS records
+          FROM sigiro_logs
+          WHERE timestamp > now() - INTERVAL '1 hour'
+          GROUP BY service_name ORDER BY records DESC"
+```
+
+メトリクスがあれば `sigiro_metrics_gauge`、`sigiro_metrics_sum`、`sigiro_metrics_histogram`、`sigiro_metrics_exp_histogram` を確認します。格納内容は[テーブルについて](/docs/explanation/tables)を参照してください。
 
 ## 次のステップ
 

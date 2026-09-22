@@ -69,9 +69,9 @@ If the file already has an `env` object, merge the keys into it. The same
 variables also work as `export` statements in the shell that starts `claude`.
 
 Tracing is beta in Claude Code. `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` and
-`OTEL_TRACES_EXPORTER=otlp` turn it on. Do not remove them: `/v1/services` and the
-`gen_ai` and `operation_summaries` sections of a diagnosis come from spans, so a
-setup without traces looks empty. See
+`OTEL_TRACES_EXPORTER=otlp` turn it on. Without traces, the `gen_ai` and
+`operation_summaries` sections of a diagnosis are empty, but `/v1/services`
+still lists a service that sent logs or metrics. See
 [Claude Code monitoring](https://code.claude.com/docs/en/monitoring-usage) for the
 version you run.
 
@@ -381,8 +381,14 @@ Run one real prompt in the configured agent, then discover the service name:
 curl http://127.0.0.1:9999/v1/services
 ```
 
-Do not guess the emitted vocabulary. Inspect span and metric names first. Replace
-the two timestamps with literal UTC bounds around your test session:
+Find the agent's entry and inspect `signals.spans`, `signals.logs`, and
+`signals.metrics`. A service with zero spans but nonzero logs or metrics is
+sending telemetry; it is not a failed install. Only expect span-based diagnosis
+(`gen_ai` and `operation_summaries`) when `signals.spans` is nonzero. If you
+enabled traces but see zero spans, check the agent's trace exporter settings.
+Do not guess the emitted vocabulary: query only the signal tables with nonzero
+counts. Replace the two timestamps with literal UTC bounds around your test
+session. For spans:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:9999/v1/query \
@@ -395,7 +401,20 @@ curl -sS -X POST http://127.0.0.1:9999/v1/query \
           ORDER BY occurrences DESC"
 ```
 
-Metrics can use several OpenTelemetry table types, so discover all of them:
+If `signals.logs` is nonzero, inspect the logs:
+
+```bash
+curl -sS -X POST http://127.0.0.1:9999/v1/query \
+  -H 'content-type: text/plain' \
+  --data "SELECT service_name, count(*) AS records
+          FROM sigiro_logs
+          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
+          GROUP BY service_name ORDER BY records DESC"
+```
+
+If `signals.metrics` is nonzero, discover metric names across the OpenTelemetry
+table types:
 
 ```bash
 for table in gauge sum histogram exp_histogram; do
