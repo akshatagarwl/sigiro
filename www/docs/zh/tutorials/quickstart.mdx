@@ -117,7 +117,7 @@ sigiro diagnose checkout --from $(date -v-1H +%s)
 
 该命令会打印带缩进的 JSON。先读 `findings` 数组：它按严重程度从高到低排序，每一项都带有可供阅读的 `summary`。独立 finding 带有可运行的 `drill_down_sql`；incident 则在每个 member shift 上提供该字段。
 
-agent 通过 HTTP 提出同样的问题。HTTP 请求需要显式指定时间窗口，且两个时间戳都是自 Unix 纪元以来的**微秒**数：
+agent 通过 HTTP 提出同样的问题。若需精确限定时间窗口，请以 Unix 纪元以来的**微秒**数传入 `from_ts` 和 `to_ts`：
 
 ```bash
 curl -X POST http://localhost:9999/v1/diagnose \
@@ -127,7 +127,7 @@ curl -X POST http://localhost:9999/v1/diagnose \
        \"to_ts\":$(date +%s)000000}"
 ```
 
-CLI 上的 `--from`/`--to` 标志接受纪元**秒**数，且 CLI 默认使用最近 15 分钟的窗口。HTTP 请求体接受微秒数，且没有任何默认值。如果在 HTTP 路径上传入秒数值，sigiro 会拒绝该请求并在消息中指明单位，这样单位错误会显式失败，而不是返回一个空窗口。
+CLI 的 `--from`/`--to` 标志接受纪元**秒**数，HTTP 字段则接受**微秒**数。两者都在省略时间边界时默认使用最近 15 分钟的窗口。若在 HTTP 字段中传入秒数值，请求会返回 422，而非静默得到空窗口；当前错误指出微秒类型及其下限，但不会明确识别“误用秒数”。
 
 ## 5. 运行某一行背后的查询
 

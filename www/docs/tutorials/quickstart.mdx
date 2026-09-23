@@ -154,8 +154,8 @@ The command prints indented JSON. Read the `findings` array first: it is sorted
 critical first, and each item carries a `summary` you can read. Standalone
 findings carry a `drill_down_sql`; incidents carry one on every member shift.
 
-An agent asks the same question over HTTP. The HTTP request needs an explicit
-window, and both timestamps are **microseconds** since the Unix epoch:
+An agent asks the same question over HTTP. For a precisely bounded run, send
+`from_ts` and `to_ts` as **microseconds** since the Unix epoch:
 
 ```bash
 curl -X POST http://localhost:9999/v1/diagnose \
@@ -165,11 +165,11 @@ curl -X POST http://localhost:9999/v1/diagnose \
        \"to_ts\":$(date +%s)000000}"
 ```
 
-The `--from`/`--to` flags on the CLI take epoch **seconds**, and the CLI
-defaults the window to the last 15 minutes. The HTTP body takes microseconds and
-defaults nothing. sigiro rejects a seconds value on the HTTP path with a message
-that names the unit, so a wrong unit fails loudly rather than returns an empty
-window.
+The `--from`/`--to` flags on the CLI take epoch **seconds**; HTTP fields take
+microseconds. Both CLI and HTTP default to the last 15 minutes if you omit the
+bounds. A seconds value in an HTTP field fails validation rather than silently
+selecting an empty window; the current 422 names the microsecond type and its
+lower bound, not the likely mistaken unit.
 
 ## 5. Run the query behind a row
 
