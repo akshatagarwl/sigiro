@@ -480,8 +480,8 @@ async fn run_serve() -> Result<()> {
     //   failed minutes later with the misleading "connection not found for
     //   project default — call create_project() first" instead of this, its
     //   real cause. Fail loud here instead.
-    // - Quack disabled + local storage: pre-create so ad-hoc local queries
-    //   work without ingest first; non-fatal on failure (existing behavior).
+    // - Quack disabled + local storage: pre-create before binding so a broken
+    //   default project cannot report ready while queries and ingest fail.
     // - Quack disabled + distributed storage: skip — tenants (including one
     //   that might happen to be named "default") are created explicitly
     //   through the control plane; there is no single edge here that needs
@@ -514,16 +514,9 @@ async fn run_serve() -> Result<()> {
     } else if distributed {
         tracing::info!("distributed storage configured — skipping default project pre-create");
     } else {
-        match pool.create_project("default") {
-            Ok(_) => tracing::info!("default project initialized"),
-            Err(e) => {
-                let mut chain = format!("{e}");
-                for cause in e.chain().skip(1) {
-                    chain.push_str(&format!("\n  Caused by: {cause}"));
-                }
-                tracing::warn!("default project init failed (non-fatal): {chain}");
-            }
-        }
+        pool.create_project("default")
+            .context("default project init failed")?;
+        tracing::info!("default project initialized");
     }
 
     // backtrace snapshots the loaded shared-library list once. Start profiling

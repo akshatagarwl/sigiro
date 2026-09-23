@@ -1,12 +1,9 @@
-//! Boot-failure tests for the storage config axis. These spawn a real
-//! `sigiro serve` child process and assert it REFUSES TO BOOT (non-zero exit +
-//! a clear stderr message) on an incoherent storage configuration, proving the
-//! `StorageMode::from_env` coherence gate is actually wired into startup — not
-//! just unit-tested in isolation.
+//! Boot-failure tests spawn a real `sigiro serve` process and assert it
+//! refuses to boot (non-zero exit + a clear stderr message) for incoherent
+//! storage configuration or a failed local default-project initialization.
 //!
-//! Deliberately NOT `#[ignore]`d and needs NO Docker: every case here fails at
-//! config-resolution time, BEFORE any Postgres/S3 connection is attempted, so
-//! it runs in the normal `cargo test` gate.
+//! Deliberately NOT `#[ignore]`d and needs NO Docker: these cases fail
+//! before any Postgres/S3 connection is attempted.
 
 #![allow(clippy::disallowed_methods)]
 // Test harnesses read and write the process environment directly to drive
@@ -15,23 +12,26 @@
 // typed-env would add a production config entry production never reads.
 
 use std::io::Read;
+use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Spawn `sigiro serve` with a clean, fully-specified env (only the vars passed
-/// in, plus a throwaway data dir and empty OTEL endpoint), wait for it to exit
-/// within `deadline`, and return `(exited_success, stderr)`. Fail-loud if it
-/// does not exit on its own — a boot-failure case that HANGS is itself a bug.
+/// Spawn `sigiro serve` with a clean env, a throwaway data dir and empty
+/// OTEL endpoint, then require it to exit before accepting traffic.
 fn run_serve_expecting_fast_exit(extra_env: &[(&str, &str)]) -> (bool, String) {
     let data_dir = tempfile::tempdir().expect("failed to create temp data dir");
+    run_serve_with_data_dir(data_dir.path(), extra_env)
+}
 
+fn run_serve_with_data_dir(data_dir: &Path, extra_env: &[(&str, &str)]) -> (bool, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sigiro"));
     cmd.arg("serve")
         .env_clear()
         // Preserve PATH/HOME so the binary and any platform dirs resolve.
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("HOME", std::env::var("HOME").unwrap_or_default())
-        .env("SIGIRO_DATA_DIR", data_dir.path())
+        .env("SIGIRO_DATA_DIR", data_dir)
         // Empty (not unset) so an ambient endpoint can't redirect telemetry.
         .env("OTEL_EXPORTER_OTLP_ENDPOINT", "")
         .env("RUST_LOG", "error")
@@ -66,6 +66,40 @@ fn run_serve_expecting_fast_exit(extra_env: &[(&str, &str)]) -> (bool, String) {
         pipe.read_to_string(&mut stderr).ok();
     }
     (status.success(), stderr)
+}
+
+#[test]
+fn local_default_project_init_failure_refuses_to_serve() {
+    let data_dir = tempfile::tempdir().expect("failed to create temp data dir");
+    // A regular file at the project path makes initialization fail without
+    // depending on extension downloads or filesystem permissions.
+    std::fs::write(data_dir.path().join("default"), b"not a directory")
+        .expect("failed to block default project directory");
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("reserve test HTTP port");
+    let port = listener.local_addr().expect("test HTTP address").port();
+    drop(listener);
+    let port_str = port.to_string();
+    let (success, stderr) = run_serve_with_data_dir(
+        data_dir.path(),
+        &[
+            ("SIGIRO_HTTP_PORT", &port_str),
+            ("SIGIRO_OTLP_HTTP_PORT", "0"),
+            ("SIGIRO_GRPC_PORT", "0"),
+        ],
+    );
+    assert!(
+        !success,
+        "serve must exit non-zero on default project init failure"
+    );
+    assert!(
+        stderr.contains("Error: default project init failed"),
+        "boot error must identify default project init; got stderr:\n{stderr}"
+    );
+    assert!(
+        TcpStream::connect(("127.0.0.1", port)).is_err(),
+        "HTTP listener must not be ready after failed initialization"
+    );
 }
 
 #[test]
