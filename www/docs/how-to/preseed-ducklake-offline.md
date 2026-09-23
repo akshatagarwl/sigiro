@@ -92,12 +92,15 @@ Inspect startup logs for `loaded DuckDB extension: ducklake` and
 it (allow for the ingest flush interval before expecting a nonzero count):
 
 ```bash
+SINCE="$(date -u +'%Y-%m-%d %H:%M:%S')"
+START_NS="$(date +%s)000000000"
+END_NS="$(( $(date +%s) + 1 ))000000000"
 curl -fsS -X POST http://127.0.0.1:4318/v1/traces \
   -H 'Content-Type: application/json' \
-  --data '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"offline-probe"}}]},"scopeSpans":[{"spans":[{"traceId":"33333333333333333333333333333333","spanId":"4444444444444444","name":"offline-probe","kind":1,"startTimeUnixNano":"1788415000000000000","endTimeUnixNano":"1788415000100000000"}]}]}]}'
+  --data "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"offline-probe\"}}]},\"scopeSpans\":[{\"spans\":[{\"traceId\":\"33333333333333333333333333333333\",\"spanId\":\"4444444444444444\",\"name\":\"offline-probe\",\"kind\":1,\"startTimeUnixNano\":\"${START_NS}\",\"endTimeUnixNano\":\"${END_NS}\"}]}]}]}"
 curl -fsS -X POST http://127.0.0.1:9999/v1/query \
   -H 'Content-Type: text/plain' \
-  --data 'SELECT count(*) AS n FROM lake.sigiro_spans'
+  --data "SELECT count(*) AS n FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '${SINCE}' AND service_name = 'offline-probe'"
 ```
 
 `/health` returning `ready` on current main **does not prove storage or ingest

@@ -53,12 +53,15 @@ sigiro serve
 查看启动日志，确认包含 `loaded DuckDB extension: ducklake` 和 `default project initialized`。向端口 `4318` 发送 OTLP 样本后运行查询（等待写入刷新周期，再期待计数大于零）：
 
 ```bash
+SINCE="$(date -u +'%Y-%m-%d %H:%M:%S')"
+START_NS="$(date +%s)000000000"
+END_NS="$(( $(date +%s) + 1 ))000000000"
 curl -fsS -X POST http://127.0.0.1:4318/v1/traces \
   -H 'Content-Type: application/json' \
-  --data '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"offline-probe"}}]},"scopeSpans":[{"spans":[{"traceId":"33333333333333333333333333333333","spanId":"4444444444444444","name":"offline-probe","kind":1,"startTimeUnixNano":"1788415000000000000","endTimeUnixNano":"1788415000100000000"}]}]}]}'
+  --data "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"offline-probe\"}}]},\"scopeSpans\":[{\"spans\":[{\"traceId\":\"33333333333333333333333333333333\",\"spanId\":\"4444444444444444\",\"name\":\"offline-probe\",\"kind\":1,\"startTimeUnixNano\":\"${START_NS}\",\"endTimeUnixNano\":\"${END_NS}\"}]}]}]}"
 curl -fsS -X POST http://127.0.0.1:9999/v1/query \
   -H 'Content-Type: text/plain' \
-  --data 'SELECT count(*) AS n FROM lake.sigiro_spans'
+  --data "SELECT count(*) AS n FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '${SINCE}' AND service_name = 'offline-probe'"
 ```
 
 在当前 main 中，`/health` 返回 `ready` **并不能证明存储或写入可用**。启动失败时在报告 ready 前退出的修复仍在 [#359](https://github.com/akshatagarwl/sigiro/pull/359) 审核中；不要假设当前二进制已包含此修复。检查日志并测试写入和查询。缺少扩展、版本或平台不匹配、签名无效或缓存不可写都是部署失败：修正制品或挂载后重启，而不是接受看似健康的监听端口。本文仅是运维绕过方案；扩展并未打包进镜像，也没有修复 DuckDB 的代理重定向。缓存布局参见 [DuckDB 扩展安装位置](https://duckdb.org/docs/current/extensions/installing_extensions.html)。

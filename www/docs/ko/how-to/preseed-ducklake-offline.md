@@ -53,12 +53,15 @@ sigiro serve
 시작 로그에서 `loaded DuckDB extension: ducklake`와 `default project initialized`를 확인하십시오. 포트 `4318`에 OTLP 샘플을 보낸 뒤 쿼리하십시오(0보다 큰 행 수를 기대하기 전 수집 플러시 간격을 기다리십시오):
 
 ```bash
+SINCE="$(date -u +'%Y-%m-%d %H:%M:%S')"
+START_NS="$(date +%s)000000000"
+END_NS="$(( $(date +%s) + 1 ))000000000"
 curl -fsS -X POST http://127.0.0.1:4318/v1/traces \
   -H 'Content-Type: application/json' \
-  --data '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"offline-probe"}}]},"scopeSpans":[{"spans":[{"traceId":"33333333333333333333333333333333","spanId":"4444444444444444","name":"offline-probe","kind":1,"startTimeUnixNano":"1788415000000000000","endTimeUnixNano":"1788415000100000000"}]}]}]}'
+  --data "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"offline-probe\"}}]},\"scopeSpans\":[{\"spans\":[{\"traceId\":\"33333333333333333333333333333333\",\"spanId\":\"4444444444444444\",\"name\":\"offline-probe\",\"kind\":1,\"startTimeUnixNano\":\"${START_NS}\",\"endTimeUnixNano\":\"${END_NS}\"}]}]}]}"
 curl -fsS -X POST http://127.0.0.1:9999/v1/query \
   -H 'Content-Type: text/plain' \
-  --data 'SELECT count(*) AS n FROM lake.sigiro_spans'
+  --data "SELECT count(*) AS n FROM lake.sigiro_spans WHERE timestamp >= TIMESTAMP '${SINCE}' AND service_name = 'offline-probe'"
 ```
 
 현재 main에서는 `/health`의 `ready` **응답만으로 스토리지 및 수집 동작을 증명할 수 없습니다**. 시작 실패 시 ready 이전에 종료하는 수정은 [#359](https://github.com/akshatagarwl/sigiro/pull/359)에서 검토 중입니다. 사용 중인 바이너리에 포함되었다고 가정하지 마십시오. 로그와 두 경로를 직접 확인하십시오. 확장 누락, 버전/플랫폼 불일치, 서명 오류 또는 쓰기 불가능한 캐시는 배포 실패입니다. 아티팩트나 마운트를 수정하고 재시작하십시오. 이 문서는 운영자 우회 절차이지 이미지에 확장을 포함하거나 DuckDB 프록시 리디렉션을 수정하는 기능이 아닙니다. 경로 규칙은 [DuckDB 확장 설치 위치](https://duckdb.org/docs/current/extensions/installing_extensions.html)를 참조하십시오.
