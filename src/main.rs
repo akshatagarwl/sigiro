@@ -432,6 +432,9 @@ fn probe_kernel_release() -> String {
 }
 
 async fn run_serve() -> Result<()> {
+    // A static self-hosted token cannot protect the distributed tenant surface.
+    // Reject this combination before opening the hosted PostgreSQL admin database.
+    sigiro::auth::preflight_static_storage()?;
     // Hosted mode has an explicit persistent filesystem contract. Do not let
     // an inherited SIGIRO_DATA_DIR silently put hosted telemetry/admin state in
     // a developer's home directory.

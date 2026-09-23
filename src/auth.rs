@@ -9,12 +9,14 @@ use axum::{
 use axum_anyhow::ApiError;
 use headers::{Authorization, HeaderMapExt, authorization::Bearer};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     sync::Arc,
     time::{Duration, Instant},
 };
+use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
 pub(crate) const TELEMETRY_INGEST_SCOPE: &str = "telemetry:ingest";
@@ -413,6 +415,8 @@ pub(crate) enum CredentialParseError {
 pub enum AuthMode {
     /// No auth required. Any request is accepted.
     Open,
+    /// One self-hosted bearer secret shared by ingest and query.
+    StaticBearer { token: Arc<SecretString> },
     /// Hosted mode: Better Auth OAuth access tokens verified against its JWKS.
     Jwt { verifier: Arc<JwtVerifier> },
 }
@@ -427,6 +431,37 @@ impl AuthMode {
         query_surface: crate::config::QuerySurface,
         storage_mode: &crate::storage::StorageMode,
     ) -> anyhow::Result<Self> {
+        if let Some(raw) = std::env::var_os("SIGIRO_STATIC_BEARER_TOKEN") {
+            anyhow::ensure!(
+                query_surface != crate::config::QuerySurface::Quack
+                    && !storage_mode.is_distributed(),
+                "SIGIRO_STATIC_BEARER_TOKEN requires local storage and SIGIRO_QUERY_SURFACE=none"
+            );
+            anyhow::ensure!(
+                [
+                    "SIGIRO_AUTH_ISSUER",
+                    "SIGIRO_AUTH_AUDIENCE",
+                    "SIGIRO_AUTH_JWKS_URL"
+                ]
+                .iter()
+                .all(|name| std::env::var_os(name).is_none()),
+                "SIGIRO_STATIC_BEARER_TOKEN cannot be combined with JWT auth settings"
+            );
+            let token = raw
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("SIGIRO_STATIC_BEARER_TOKEN must be valid UTF-8"))?;
+            anyhow::ensure!(
+                token.len() >= 32
+                    && token
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-._~+/=".contains(&b)),
+                "SIGIRO_STATIC_BEARER_TOKEN must be at least 32 ASCII bytes using bearer-token characters"
+            );
+            tracing::info!("auth_mode=static_bearer — self-hosted bearer token required");
+            return Ok(AuthMode::StaticBearer {
+                token: Arc::new(SecretString::from(token)),
+            });
+        }
         if query_surface == crate::config::QuerySurface::Quack {
             tracing::info!("auth_mode=open — quack edge, protected by the network perimeter");
             return Ok(AuthMode::Open);
@@ -452,14 +487,14 @@ impl AuthMode {
 
     pub(crate) fn protected_resource_metadata_path(&self) -> Option<&str> {
         match self {
-            AuthMode::Open => None,
+            AuthMode::Open | AuthMode::StaticBearer { .. } => None,
             AuthMode::Jwt { verifier } => Some(&verifier.resource_metadata_path),
         }
     }
 
     pub(crate) fn protected_resource_metadata(&self) -> Option<ProtectedResourceMetadata> {
         match self {
-            AuthMode::Open => None,
+            AuthMode::Open | AuthMode::StaticBearer { .. } => None,
             AuthMode::Jwt { verifier } => Some(ProtectedResourceMetadata {
                 resource: verifier.audience.clone(),
                 authorization_servers: [verifier.issuer.clone()],
@@ -510,9 +545,40 @@ impl AuthMode {
                 subject: "local".to_owned(),
                 scopes: HashSet::new(),
             }),
+            AuthMode::StaticBearer { token: expected } => {
+                let secret = expected.expose_secret().as_bytes();
+                if scheme != CredentialScheme::Bearer
+                    || token.len() != secret.len()
+                    || !bool::from(token.as_bytes().ct_eq(secret))
+                {
+                    return Err(AuthError::InvalidToken);
+                }
+                Ok(AuthContext {
+                    tenant_id: TenantId::try_new("default".to_owned())
+                        .expect("default is a valid tenant id"),
+                    subject: "local".to_owned(),
+                    scopes: HashSet::new(),
+                })
+            }
             AuthMode::Jwt { verifier } => verifier.verify(token, required_scope, scheme).await,
         }
     }
+}
+
+pub fn preflight_static_storage() -> anyhow::Result<()> {
+    if std::env::var_os("SIGIRO_STATIC_BEARER_TOKEN").is_some() {
+        anyhow::ensure!(
+            std::env::var_os("SIGIRO_CATALOG_URL").is_none(),
+            "SIGIRO_STATIC_BEARER_TOKEN requires local storage; SIGIRO_CATALOG_URL is incompatible"
+        );
+        anyhow::ensure!(
+            std::env::var_os("SIGIRO_QUERY_SURFACE")
+                .as_deref()
+                .is_none_or(|v| v != "quack"),
+            "SIGIRO_STATIC_BEARER_TOKEN requires SIGIRO_QUERY_SURFACE=none"
+        );
+    }
+    Ok(())
 }
 
 fn ensure_open_mode_allowed(storage_mode: &crate::storage::StorageMode) -> anyhow::Result<()> {
@@ -561,6 +627,20 @@ pub(crate) fn parse_api_credential(value: &str) -> Result<ApiCredential, Credent
     }
     Ok(ApiCredential {
         scheme,
+        token: token.to_owned(),
+    })
+}
+
+/// Static mode accepts only literal `Bearer`, never AgentAuth or JWT reinterpretation.
+pub(crate) fn parse_static_credential(value: &str) -> Result<ApiCredential, CredentialParseError> {
+    let token = value
+        .strip_prefix("Bearer ")
+        .ok_or(CredentialParseError::UnsupportedScheme)?;
+    if token.is_empty() || token.contains(char::is_whitespace) {
+        return Err(CredentialParseError::InvalidToken);
+    }
+    Ok(ApiCredential {
+        scheme: CredentialScheme::Bearer,
         token: token.to_owned(),
     })
 }
@@ -639,7 +719,7 @@ pub(crate) async fn auth_middleware(
             );
             next.run(req).await
         }
-        AuthMode::Jwt { .. } => {
+        AuthMode::Jwt { .. } | AuthMode::StaticBearer { .. } => {
             let scheme_hint = req
                 .headers()
                 .get(header::AUTHORIZATION)
@@ -652,7 +732,21 @@ pub(crate) async fn auth_middleware(
                         CredentialScheme::Bearer
                     }
                 });
-            let credential = match extract_api_credential(req.headers()) {
+            let credential = match if matches!(state.auth_mode, AuthMode::StaticBearer { .. }) {
+                req.headers()
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or(CredentialParseError::MissingScheme)
+                    .and_then(parse_static_credential)
+                    .map_err(|_| {
+                        axum_anyhow::unauthorized(
+                            "Missing Authentication",
+                            "Missing or malformed Authorization header",
+                        )
+                    })
+            } else {
+                extract_api_credential(req.headers())
+            } {
                 Ok(credential) => credential,
                 Err(error) => {
                     let challenge = if req.headers().contains_key(header::AUTHORIZATION) {
