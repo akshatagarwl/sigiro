@@ -17,7 +17,7 @@ OS の資格情報ストアに保存します。既存アカウントはブラ�
 `sigiro auth status`、`sigiro auth token`、`sigiro auth logout` でログイン状態を管理します。
 
 グローバルフラグ `--token <TOKEN>` は、自動化用のベアラートークンを明示的に設定します。
-このフラグはクライアント専用の `SIGIRO_ACCESS_TOKEN` を上書きします。Open モードはトークン不要です。JWT モードでは有効な OAuth/JWT アクセストークンが必要です。単純な静的ベアラートークンのサーバーモードはありません。
+このフラグはクライアント専用の `SIGIRO_ACCESS_TOKEN` を上書きします。Open モードはトークン不要です。ローカルの静的ベアラーモードにはサーバーで設定した `SIGIRO_STATIC_BEARER_TOKEN` が必要です。JWT モードでは有効な OAuth/JWT アクセストークンが必要です。[静的ベアラー認証ガイド](/docs/ja/how-to/self-hosted-static-bearer)を参照してください。
 
 すべてのクライアントサブコマンドは、`SIGIRO_ENDPOINT` に指定されたサーバーに接続します。
 デフォルトは `http://localhost:9999` です。

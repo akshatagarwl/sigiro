@@ -199,9 +199,9 @@ the fault at boot.
 
 On the hosted service, confirm the `Authorization: Bearer TOKEN` header. An Open-mode self-hosted server does not
 authenticate requests; a JWT-mode self-hosted server validates bearer JWTs and
-rejects invalid tokens. There is no simple static bearer-token mode. See
-[Self-hosted configuration](/docs/reference/self-hosted-configuration) for JWT and
-OTLP TLS settings.
+rejects invalid tokens. Local static-bearer mode requires the configured secret
+on query and OTLP listeners. See [self-hosted static bearer](/docs/how-to/self-hosted-static-bearer)
+and [self-hosted configuration](/docs/reference/self-hosted-configuration) for auth and OTLP TLS.
 
 ## Next
 

@@ -17,7 +17,7 @@ JSON을 출력합니다. 두 번째 출력 형식은 없으며, TTY 감지도 �
 사용하십시오. `sigiro auth status`, `sigiro auth token`, `sigiro auth logout`으로 로그인 상태를 관리합니다.
 
 전역 플래그 `--token <TOKEN>`은 자동화용 베어러 토큰을 명시적으로 설정합니다. 이 플래그는
-클라이언트 전용 `SIGIRO_ACCESS_TOKEN`를 재정의합니다. Open 모드에는 토큰이 필요하지 않습니다. JWT 모드에는 유효한 OAuth/JWT 액세스 토큰이 필요합니다. 단순 정적 베어러 토큰 서버 모드는 없습니다.
+클라이언트 전용 `SIGIRO_ACCESS_TOKEN`를 재정의합니다. Open 모드에는 토큰이 필요하지 않습니다. 로컬 정적 베어러 모드에는 서버에 설정한 `SIGIRO_STATIC_BEARER_TOKEN`이 필요하고, JWT 모드에는 유효한 OAuth/JWT 액세스 토큰이 필요합니다. [정적 베어러 가이드](/docs/ko/how-to/self-hosted-static-bearer)를 참조하십시오.
 
 모든 클라이언트 서브커맨드는 `SIGIRO_ENDPOINT`에 지정된 서버에 접속하며, 기본값은
 `http://localhost:9999`입니다.

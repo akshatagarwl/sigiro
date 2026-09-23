@@ -18,8 +18,9 @@ credential store. For an existing account, use browser-based `sigiro auth login`
 
 The global flag `--token <TOKEN>` is an explicit override for automation. It
 overrides `SIGIRO_ACCESS_TOKEN`. Both are **client-only**. Open-mode self-hosted
-servers do not require a token; JWT-mode servers require a valid OAuth/JWT access
-token. There is no simple static bearer-token mode on the server.
+servers do not require a token; static-bearer self-hosted servers require the
+configured `SIGIRO_STATIC_BEARER_TOKEN`, while JWT-mode servers require a valid
+OAuth/JWT access token. See the [static bearer guide](/docs/how-to/self-hosted-static-bearer).
 
 All client subcommands reach the server at `SIGIRO_ENDPOINT`, which defaults to
 `http://localhost:9999`.
