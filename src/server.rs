@@ -531,7 +531,7 @@ pub async fn run_servers(
             anyhow::bail!("SIGIRO_TLS_KEY is set but SIGIRO_TLS_CERT is missing");
         }
         (Err(_), Err(_)) => {
-            tracing::info!("TLS not configured — serving plain TCP");
+            tracing::info!("TLS not configured — set SIGIRO_TLS_CERT and SIGIRO_TLS_KEY for OTLP TLS; serving plain TCP");
             (None, None)
         }
     };

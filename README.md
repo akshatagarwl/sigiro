@@ -16,9 +16,11 @@ sigiro auth status
 
 For an existing account, use browser-based `sigiro auth login` instead. Use
 `sigiro auth logout` to revoke the refresh token and remove credentials.
-Self-hosting requires no account;
-Open mode requires no token, while production deployments can require one static
-bearer token:
+Self-hosting requires no account. Open mode requires no token; the only other
+server authentication mode validates JWTs using an issuer, audience, and JWKS URL.
+There is no simple static bearer-token mode. See the
+[self-hosted configuration reference](www/docs/reference/self-hosted-configuration.md)
+for retention, disk limits, JWT settings, and OTLP TLS.
 
 ## Quick Start
 

@@ -17,7 +17,7 @@ OS の資格情報ストアに保存します。既存アカウントはブラ�
 `sigiro auth status`、`sigiro auth token`、`sigiro auth logout` でログイン状態を管理します。
 
 グローバルフラグ `--token <TOKEN>` は、自動化用のベアラートークンを明示的に設定します。
-このフラグは `SIGIRO_ACCESS_TOKEN` を上書きします。Open モードのセルフホスト型サーバーには不要ですが、静的ベアラー認証を設定したサーバーには必要です。
+このフラグはクライアント専用の `SIGIRO_ACCESS_TOKEN` を上書きします。Open モードはトークン不要です。JWT モードでは有効な OAuth/JWT アクセストークンが必要です。単純な静的ベアラートークンのサーバーモードはありません。
 
 すべてのクライアントサブコマンドは、`SIGIRO_ENDPOINT` に指定されたサーバーに接続します。
 デフォルトは `http://localhost:9999` です。
@@ -39,6 +39,8 @@ OTLP gRPC サーバー、OTLP HTTP サーバー、およびクエリ API を起�
 | `--http-port <PORT>`      | `SIGIRO_HTTP_PORT`      | `9999`                  |
 | `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318`                  |
 | `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT`      | `4317`                  |
+
+その他の `serve` 設定は環境変数のみです。[セルフホスト設定](/docs/ja/reference/self-hosted-configuration)に保持期間、ディスク上限、JWT 認証、OTLP TLS を記載しています。
 
 初回起動時には、クエリ拡張機能がデータディレクトリにダウンロードされます。このダウンロードには
 30〜90 秒かかり、その間は起動がブロックされます。

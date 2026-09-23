@@ -138,7 +138,7 @@ curl http://localhost:9999/v1/services
 
 如果服务没有出现，请做以下检查。在自托管服务端上，确认端口：HTTP 用 `:4318`，gRPC 用 `:4317`。在托管服务上则相反，确认 endpoint **不带**端口，并且使用访问令牌查询 `https://<your-sigiro-host>/v1/services`，而不是 localhost。运行 `sigiro status` 确认服务端健康。查看你自己服务的日志，看是否有 OTel 启动错误，因为导出器配置错误会在启动时报告故障。
 
-在托管服务上，确认请求头严格为 `Authorization: Bearer <oauth-access-token>`。自托管服务端会忽略所有认证头。因此令牌错误时不会有任何提示，也不会返回 401。
+托管服务需要正确的 OAuth/JWT bearer 令牌。自托管 Open 模式不验证请求，但 JWT 模式会拒绝无效令牌。服务端不支持简单的静态 bearer 令牌模式。请参阅[自托管配置](/docs/zh/reference/self-hosted-configuration)。
 
 ## 下一步
 

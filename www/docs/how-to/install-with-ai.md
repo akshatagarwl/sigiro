@@ -197,10 +197,11 @@ confirm the opposite, that the endpoint carries **no** port, and query
 service for OTel startup errors, because a wrong exporter configuration reports
 the fault at boot.
 
-On the hosted service, confirm that the header is exactly
-`Authorization: Bearer <oauth-access-token>`. A self-hosted server ignores all
-authentication headers. Therefore a wrong key fails there without a message and
-without a 401 response.
+On the hosted service, confirm the `Authorization: Bearer TOKEN` header. An Open-mode self-hosted server does not
+authenticate requests; a JWT-mode self-hosted server validates bearer JWTs and
+rejects invalid tokens. There is no simple static bearer-token mode. See
+[Self-hosted configuration](/docs/reference/self-hosted-configuration) for JWT and
+OTLP TLS settings.
 
 ## Next
 

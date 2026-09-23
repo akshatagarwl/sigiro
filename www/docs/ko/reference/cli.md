@@ -17,8 +17,7 @@ JSON을 출력합니다. 두 번째 출력 형식은 없으며, TTY 감지도 �
 사용하십시오. `sigiro auth status`, `sigiro auth token`, `sigiro auth logout`으로 로그인 상태를 관리합니다.
 
 전역 플래그 `--token <TOKEN>`은 자동화용 베어러 토큰을 명시적으로 설정합니다. 이 플래그는
-`SIGIRO_ACCESS_TOKEN`를 재정의합니다. Open 모드의 자체 호스팅 서버에는 필요하지 않지만,
-정적 베어러 인증을 설정한 서버에는 필요합니다.
+클라이언트 전용 `SIGIRO_ACCESS_TOKEN`를 재정의합니다. Open 모드에는 토큰이 필요하지 않습니다. JWT 모드에는 유효한 OAuth/JWT 액세스 토큰이 필요합니다. 단순 정적 베어러 토큰 서버 모드는 없습니다.
 
 모든 클라이언트 서브커맨드는 `SIGIRO_ENDPOINT`에 지정된 서버에 접속하며, 기본값은
 `http://localhost:9999`입니다.
@@ -39,6 +38,8 @@ OTLP gRPC 서버, OTLP HTTP 서버, 그리고 쿼리 API를 시작합니다.
 | `--http-port <PORT>`      | `SIGIRO_HTTP_PORT`      | `9999`                  |
 | `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318`                  |
 | `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT`      | `4317`                  |
+
+나머지 `serve` 설정은 환경 변수 전용입니다. 보존 기간, 디스크 한도, JWT 인증 및 OTLP TLS는 [자체 호스팅 설정](/docs/ko/reference/self-hosted-configuration)을 참조하십시오.
 
 최초 시작 시 쿼리 확장을 데이터 디렉터리로 다운로드합니다. 이 다운로드는
 30~90초가 소요되며, 그동안 시작이 차단됩니다.

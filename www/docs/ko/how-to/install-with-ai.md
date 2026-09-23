@@ -138,7 +138,7 @@ curl http://localhost:9999/v1/services
 
 서비스가 나타나지 않으면 다음 사항을 확인하십시오. 자체 호스팅 서버에서는 포트를 확인하십시오. HTTP는 `:4318`, gRPC는 `:4317`입니다. 호스팅 서비스에서는 그 반대로, 엔드포인트에 포트가 **없는지** 확인하고, localhost가 아니라 `https://<your-sigiro-host>/v1/services`를 액세스 토큰과 함께 조회하십시오. `sigiro status`를 실행하여 서버가 정상 상태인지 확인하십시오. 잘못된 익스포터 설정은 부팅 시점에 오류를 보고하므로, 서비스 자체의 로그에서 OTel 시작 오류를 확인하십시오.
 
-호스팅 서비스에서는 헤더가 정확히 `Authorization: Bearer <oauth-access-token>` 형식인지 확인하십시오. 자체 호스팅 서버는 모든 인증 헤더를 무시합니다. 따라서 토큰이 잘못되어도 메시지나 401 응답 없이 실패합니다.
+호스팅 서비스에서는 올바른 OAuth/JWT bearer 토큰을 사용하십시오. 자체 호스팅 Open 모드는 요청을 인증하지 않지만 JWT 모드는 잘못된 토큰을 거부합니다. 단순 정적 베어러 토큰 모드는 없습니다. [자체 호스팅 설정](/docs/ko/reference/self-hosted-configuration)을 참조하십시오.
 
 ## 다음 단계
 

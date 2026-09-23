@@ -17,8 +17,9 @@ credential store. For an existing account, use browser-based `sigiro auth login`
 `sigiro auth token`, and `sigiro auth logout` manage the stored session.
 
 The global flag `--token <TOKEN>` is an explicit override for automation. It
-overrides `SIGIRO_ACCESS_TOKEN`. Open-mode self-hosted servers do not require it;
-self-hosted servers configured with static bearer authentication do.
+overrides `SIGIRO_ACCESS_TOKEN`. Both are **client-only**. Open-mode self-hosted
+servers do not require a token; JWT-mode servers require a valid OAuth/JWT access
+token. There is no simple static bearer-token mode on the server.
 
 All client subcommands reach the server at `SIGIRO_ENDPOINT`, which defaults to
 `http://localhost:9999`.
@@ -40,6 +41,10 @@ Starts the OTLP gRPC server, the OTLP HTTP server, and the query API.
 | `--http-port <PORT>`      | `SIGIRO_HTTP_PORT`      | `9999`                  |
 | `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318`                  |
 | `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT`      | `4317`                  |
+
+All other `serve` settings are environment-variable-only. See
+[Self-hosted configuration](/docs/reference/self-hosted-configuration) for every
+server setting, defaults, retention/disk behavior, JWT auth, and OTLP TLS.
 
 The first start downloads the query extensions into the data directory. That
 download takes 30–90 seconds and blocks the start.
