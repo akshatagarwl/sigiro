@@ -75,6 +75,10 @@ for rollback. For the Docker quickstart, after the backup:
 
 ```bash
 docker rm sigiro # removes the stopped container, not sigiro-data
+if docker volume inspect sigiro-fresh >/dev/null 2>&1; then
+  echo 'sigiro-fresh already exists; choose a new volume name' >&2
+  exit 1
+fi
 docker volume create sigiro-fresh
 IMAGE='ghcr.io/sigiroai/sigiro@sha256:REPLACE_WITH_VERIFIED_DIGEST'
 docker run -d --name sigiro --restart unless-stopped \

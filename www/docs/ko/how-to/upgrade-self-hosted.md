@@ -71,7 +71,11 @@ Unix에서는 보통 `~/.local/share/sigiro`)를 보관하세요. 준비되지 �
 두고 **새 빈** 볼륨을 사용합니다. 백업 후 Docker에서는:
 
 ```bash
-docker rm sigiro # 중지된 컨테이너만 제거하며 sigiro-data는 유지
+docker rm sigiro # 중지된 컨테이너만 삭제하고 sigiro-data는 보존
+if docker volume inspect sigiro-fresh >/dev/null 2>&1; then
+  echo 'sigiro-fresh 볼륨이 이미 있습니다. 새 이름을 선택하세요' >&2
+  exit 1
+fi
 docker volume create sigiro-fresh
 IMAGE='ghcr.io/sigiroai/sigiro@sha256:REPLACE_WITH_VERIFIED_DIGEST'
 docker run -d --name sigiro --restart unless-stopped \

@@ -73,6 +73,10 @@ tar -tf sigiro-backups/sigiro-data.tar > /dev/null
 
 ```bash
 docker rm sigiro # 停止済みコンテナのみ削除。sigiro-data は残る
+if docker volume inspect sigiro-fresh >/dev/null 2>&1; then
+  echo 'sigiro-fresh は既存です。別のボリューム名を選んでください' >&2
+  exit 1
+fi
 docker volume create sigiro-fresh
 IMAGE='ghcr.io/sigiroai/sigiro@sha256:REPLACE_WITH_VERIFIED_DIGEST'
 docker run -d --name sigiro --restart unless-stopped \
