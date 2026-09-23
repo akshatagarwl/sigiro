@@ -25,6 +25,8 @@ sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイ
 
 ## Claude Code
 
+**スパンに基づく診断にはベータ版トレースが必要です。** `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` と `OTEL_TRACES_EXPORTER=otlp` の両方を設定しないと、ログやメトリクスが届いていてもスパンは届かず、診断の `gen_ai` と `operation_summaries` は空になります。まず `/v1/services` のシグナル別件数を確認してください。[Claude Code の公式監視ガイド](https://code.claude.com/docs/en/monitoring-usage)を参照してください。
+
 `~/.claude/settings.json` の `env` に次の設定を追加します。既存の `env` がある場合はキーを統合してください。IDE から起動したセッションにも適用されます。シェルから起動する場合は同じ変数を `export` しても構いません。
 
 ```json
@@ -42,7 +44,19 @@ sigiro サーバーが必要です。`sigiro serve` で起動するか、[クイ
 }
 ```
 
-Claude Code のトレースはベータ機能です。`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` と `OTEL_TRACES_EXPORTER=otlp` で有効になります。設定の詳細は[公式の監視ガイド](https://code.claude.com/docs/en/monitoring-usage)を参照してください。新しいセッションでプロンプトを 1 回実行してから、下の手順で確認してください。
+新しいセッションでプロンプトを 1 回実行してから、下の手順で確認してください。
+
+### 子プロセスとタスク ID を関連付ける
+
+1 タスクにつき 1 プロセスを起動する場合は、起動側から **子プロセスだけに** アプリケーション所有のタスク ID を渡します。共有の `~/.claude/settings.json` や親ワーカー全体には設定しません。
+
+```bash
+OTEL_RESOURCE_ATTRIBUTES="app.task.id=task-123" claude -p 'Summarize this repository'
+```
+
+既存の `OTEL_RESOURCE_ATTRIBUTES` がある場合は、他のキーを消さずに `,app.task.id=task-123` を追記してください。環境変数を除外するランチャーでは子プロセスへの明示的な転送が必要です。継承や Claude Code のエクスポートを保証するものではないので、実際の行で確認してください。リソース属性はプロセス単位です。複数タスクを処理する常駐ワーカーでは共有リソースを書き換えず、個々のスパンにタスク属性を付けるか、baggage を伝搬してスパン属性に反映してください。
+
+`app.task.id` は外部ワークフローのタスク ID、`gen_ai.conversation.id` は Sigiro が目指す正規のセッション ID です。Claude Code 固有の `session.id` が自動的に正規化されるとは限りません。`sigiro_task_id` やトレース ID をセッション ID の代用にしないでください。タスク ID には秘密情報を入れず、テレメトリーのアクセス権も確認してください。次の[タスク別の検証クエリ（英語）](/docs/how-to/agent-telemetry#correlate-a-spawned-agent-with-an-external-task)は `/v1/query` にそのまま送信できます。実行前に UTC の時間範囲を実際の実行時刻に変更し、`/v1/services` でスパンとメトリクスの件数を確認してください。空の結果は使用量ゼロの証明ではありません。
 
 ホスティングサービスを利用する場合は、`env` の `OTEL_EXPORTER_OTLP_ENDPOINT` を `https://sigiro.com` に変更し、認証ヘッダーを設定してください。`sigiro.com` は 443 でのみ応答するため、`:4317` や `:4318` を指定しないでください。シェルから起動する場合は、上記すべての変数を `export` した上で次の値を使用します。
 

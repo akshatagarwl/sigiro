@@ -32,6 +32,8 @@ gRPC 포트를 항상 노출하지는 않으므로, 먼저 [호스팅 sigiro로 
 
 ## Claude Code
 
+**스팬 기반 진단에는 베타 트레이싱이 필요합니다.** `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`과 `OTEL_TRACES_EXPORTER=otlp`을 모두 설정하지 않으면 로그와 메트릭이 도착해도 스팬이 없어 진단의 `gen_ai`와 `operation_summaries`는 비어 있습니다. 먼저 `/v1/services`의 신호별 건수를 확인하십시오. [Claude Code 공식 모니터링 문서](https://code.claude.com/docs/en/monitoring-usage)를 참고하십시오.
+
 `~/.claude/settings.json`의 `env`에 다음 키를 추가하십시오. 기존 `env`가 있다면 키를 병합하십시오. IDE에서 시작한 세션에도 적용됩니다. 셸에서 `claude`를 실행한다면 동일한 변수를 `export`해도 됩니다:
 
 ```json
@@ -49,7 +51,19 @@ gRPC 포트를 항상 노출하지는 않으므로, 먼저 [호스팅 sigiro로 
 }
 ```
 
-Claude Code의 트레이싱은 베타 기능입니다. `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`과 `OTEL_TRACES_EXPORTER=otlp`으로 활성화합니다. 자세한 내용은 [공식 모니터링 가이드](https://code.claude.com/docs/en/monitoring-usage)를 참고하십시오. 새 세션에서 프롬프트를 한 번 실행한 뒤 아래 절차로 확인하십시오.
+새 세션에서 프롬프트를 한 번 실행한 뒤 아래 절차로 확인하십시오.
+
+### 자식 프로세스를 외부 작업 ID와 연결하기
+
+작업마다 Claude Code 프로세스를 하나씩 시작한다면 실행기에서 **해당 자식 프로세스에만** 애플리케이션 소유의 작업 ID를 전달하십시오. 공용 `~/.claude/settings.json`이나 부모 워커 전체에 설정하지 마십시오:
+
+```bash
+OTEL_RESOURCE_ATTRIBUTES="app.task.id=task-123" claude -p 'Summarize this repository'
+```
+
+이미 `OTEL_RESOURCE_ATTRIBUTES`를 사용한다면 다른 키를 지우지 말고 `,app.task.id=task-123`을 추가하십시오. 자식 환경을 정리하는 실행기는 변수를 명시적으로 전달해야 합니다. 상속 또는 Claude Code의 내보내기를 가정하지 말고 실제 텔레메트리 행으로 확인하십시오. 리소스 속성은 프로세스 전체에 적용됩니다. 여러 작업을 처리하는 장기 실행 워커에서는 작업마다 공용 리소스를 변경하지 말고 개별 스팬에 속성을 넣거나 baggage를 전파하여 스팬 속성에 반영하십시오.
+
+`app.task.id`는 외부 작업 ID이고 `gen_ai.conversation.id`는 Sigiro가 정의한 정규 세션 ID입니다. Claude Code의 고유 `session.id`가 자동으로 정규화된다고 가정하지 마십시오. `sigiro_task_id`를 만들거나 trace ID를 세션 ID로 사용하지 마십시오. 작업 ID에 비밀을 넣지 말고 텔레메트리의 접근 권한을 검토하십시오. [작업별 검증 쿼리(영어)](/docs/how-to/agent-telemetry#correlate-a-spawned-agent-with-an-external-task)는 `/v1/query`로 실행할 수 있습니다. 실제 실행을 포함하는 유한한 UTC 시간 범위로 바꾸고 먼저 `/v1/services`의 스팬과 메트릭 건수를 확인하십시오. 빈 결과는 토큰이나 비용이 0이라는 증거가 아닙니다.
 
 호스팅 서비스의 경우 `env`의 `OTEL_EXPORTER_OTLP_ENDPOINT`를 `https://sigiro.com`으로 변경하고 인증 헤더를 설정하십시오. `sigiro.com`은 443 포트에서만 응답하므로 `:4317`이나 `:4318`을 지정하지 마십시오. 셸에서 시작한다면 위 설정의 모든 변수를 `export`하고 다음 값을 사용합니다:
 

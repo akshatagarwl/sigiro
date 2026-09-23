@@ -19,7 +19,7 @@ sidebar:
 你需要一台 sigiro 服务器。用 `sigiro serve` 启动，或使用
 [快速上手](/docs/tutorials/quickstart#1-运行它)中的 Docker 命令启动。
 
-在下面的配置中，两个 agent 都通过 OTLP gRPC 从 `4317` 端口导出数据。自托管服务器
+在下面的配置中，Claude Code 通过 `4317` 端口的 OTLP gRPC 导出数据，Codex 也使用该端口。自托管服务器
 不需要密钥。
 
 使用托管服务时，新用户请运行 `sigiro signup --name "Your Name" --email you@example.com`；已有账号请运行 `sigiro auth login`。
@@ -30,6 +30,8 @@ sigiro](/docs/how-to/hosted-onboarding#2-将-opentelemetry-导出器指向-sigir
 配置。
 
 ## Claude Code
+
+**基于 span 的诊断依赖测试版追踪。** 如果没有同时设置 `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` 和 `OTEL_TRACES_EXPORTER=otlp`，即使日志和指标已到达，也没有 span，诊断中的 `gen_ai` 和 `operation_summaries` 会为空。请先检查 `/v1/services` 的各信号数量。参见 [Claude Code 官方监控文档](https://code.claude.com/docs/en/monitoring-usage)。
 
 Claude Code 从环境变量中读取遥测配置。请在启动 Claude Code 的环境中设置这些
 变量。可以使用 shell 配置文件、`.envrc` 文件或包装脚本：
@@ -43,6 +45,18 @@ export OTEL_TRACES_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
+
+### 将子进程与外部任务关联
+
+如果每个任务启动一个 Claude Code 进程，请由启动器**只向该子进程**传入应用自有的任务 ID，不要写入共享的 `~/.claude/settings.json` 或父工作进程的全局环境：
+
+```bash
+OTEL_RESOURCE_ATTRIBUTES="app.task.id=task-123" claude -p 'Summarize this repository'
+```
+
+如果已有 `OTEL_RESOURCE_ATTRIBUTES`，请保留原有键并追加 `,app.task.id=task-123`。会清理子进程环境的启动器必须显式传递此变量；不要假定 Claude Code 一定导出它，请检查实际数据行。资源属性属于整个进程。一个常驻进程处理多个任务时，应为各个 span 添加任务属性，或传播 baggage 并将其写入 span 属性；不要逐个请求修改共享资源。
+
+`app.task.id` 是外部工作流的任务 ID，`gen_ai.conversation.id` 是 Sigiro 规划的规范会话身份。Claude Code 自身的 `session.id` 不保证自动映射为规范身份。不要创造 `sigiro_task_id`，也不要把 trace ID 当成会话 ID。任务 ID 不应包含秘密信息，还应控制遥测查询权限。[按任务验证的查询（英文）](/docs/how-to/agent-telemetry#correlate-a-spawned-agent-with-an-external-task)可以直接发往 `/v1/query`；先把其中的 UTC 时间范围改为实际运行时段，并通过 `/v1/services` 确认 span 和指标的数量。空结果不代表 token 用量或费用为零。
 
 如果使用托管服务，除了添加密钥之外，还要修改协议和端点。`sigiro.com` 只在 443
 端口响应，因此在那里使用 `:4317` 或 `:4318` 端点会连接失败，agent 也就不会上报任何

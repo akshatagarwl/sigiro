@@ -46,6 +46,12 @@ capture settings. Review every exporter before enabling richer payloads.
 
 ## Claude Code
 
+**Beta tracing is required for span-based diagnosis.** Without both
+`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` and `OTEL_TRACES_EXPORTER=otlp`,
+Claude Code sends no spans: `gen_ai` and `operation_summaries` are empty even
+when its logs and metrics arrive. Check `/v1/services` signal counts before
+interpreting an empty diagnosis. See [Claude Code monitoring](https://code.claude.com/docs/en/monitoring-usage).
+
 Claude Code has built-in OpenTelemetry export. Add these keys to the `env` object
 in `~/.claude/settings.json`. Then every session sends telemetry, including
 sessions that an IDE starts:
@@ -68,15 +74,71 @@ sessions that an IDE starts:
 If the file already has an `env` object, merge the keys into it. The same
 variables also work as `export` statements in the shell that starts `claude`.
 
-Tracing is beta in Claude Code. `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` and
-`OTEL_TRACES_EXPORTER=otlp` turn it on. Without traces, the `gen_ai` and
-`operation_summaries` sections of a diagnosis are empty, but `/v1/services`
-still lists a service that sent logs or metrics. See
-[Claude Code monitoring](https://code.claude.com/docs/en/monitoring-usage) for the
-version you run.
-
 Start a new Claude Code session, run one prompt, wait ten seconds, then use the
 verification steps below.
+
+### Correlate a spawned agent with an external task
+
+For one task per Claude Code process, put an **application-owned** task ID in the
+child's environment, not in a shared `~/.claude/settings.json` or the parent
+worker's global environment. For example, from the launcher that starts `claude`:
+
+```bash
+OTEL_RESOURCE_ATTRIBUTES="app.task.id=task-123" claude -p 'Summarize this repository'
+```
+
+If you already set `OTEL_RESOURCE_ATTRIBUTES`, append `,app.task.id=task-123`
+to the existing value rather than replacing other resource keys. An ordinary
+child process inherits its launcher's environment; launchers that filter the
+child environment must explicitly pass this variable through. Check the
+emitted rows rather than assuming your launcher or Claude Code forwarded it.
+[OpenTelemetry resources](https://opentelemetry.io/docs/specs/otel/resource/sdk/)
+are process-wide string attributes. Use a new process per task; a long-lived
+worker handling multiple tasks must instrument individual spans (or propagate
+baggage into span attributes), not change a shared resource per request. Do not
+put secrets or sensitive task names in IDs: the ID is exported with telemetry
+and may be visible to other query users.
+
+`app.task.id` identifies your **workflow task**, not an agent session.
+`gen_ai.conversation.id` is Sigiro's intended canonical session identity;
+Claude Code's native `session.id` is producer-specific, not a guaranteed
+`gen_ai.conversation.id` projection. Do not invent a `sigiro_task_id`, infer a
+session from a trace ID, or assume every usage point carries a session ID.
+
+After a real run, check `/v1/services` for `claude-code` spans and metrics, then
+replace the UTC timestamps below with a finite half-open window covering that
+run. This single read-only query correlates span trace IDs and raw token/cost
+metric points by **the same task resource attribute**; it deliberately does not
+sum cumulative metric snapshots or cross-join unrelated spans and points:
+
+```bash
+curl -sS -X POST http://127.0.0.1:9999/v1/query \
+  -H 'content-type: text/plain' \
+  --data "SELECT timestamp, 'span' AS signal, span_name AS name,
+                 trace_id, CAST(NULL AS DOUBLE) AS value, CAST(NULL AS VARCHAR) AS unit
+          FROM sigiro_spans
+          WHERE service_name = 'claude-code'
+            AND json_extract_string(resource_attributes, 'app.task.id') = 'task-123'
+            AND timestamp >= TIMESTAMP '2026-09-23 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-23 13:00:00'
+          UNION ALL
+          SELECT timestamp, 'metric' AS signal, metric_name AS name,
+                 CAST(NULL AS VARCHAR) AS trace_id, value, metric_unit AS unit
+          FROM sigiro_metrics_sum
+          WHERE service_name = 'claude-code'
+            AND metric_name IN ('claude_code.token.usage', 'claude_code.cost.usage')
+            AND json_extract_string(resource_attributes, 'app.task.id') = 'task-123'
+            AND timestamp >= TIMESTAMP '2026-09-23 12:00:00'
+            AND timestamp <  TIMESTAMP '2026-09-23 13:00:00'
+          ORDER BY timestamp DESC LIMIT 100"
+```
+
+If either signal has no matching rows, check the actual metric shape and the
+`resource_attributes` on its rows before attributing usage; an empty result is
+not proof that the task used zero tokens or cost. For one known trace, inspect
+`/v1/traces/{trace_id}`. This is a task-scoped correlation query, **not** a
+session-detail API or a trace-ID join onto metrics. Respect access controls on
+`/v1/query`; telemetry may include prompts, identities, file paths, and costs.
 
 ### What Claude Code sends by default
 
