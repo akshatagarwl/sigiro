@@ -1241,7 +1241,7 @@ async fn fetch_edge(
     let mut task = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<RecordBatch>> {
         let conn = duckdb::Connection::open_in_memory()
             .context("failed to open embedded DuckDB connection for edge fetch")?;
-        conn.execute_batch("LOAD quack;")
+        crate::storage::load_static_extensions(&conn, &["quack"])
             .context("failed to load the quack extension for the edge fetch connection")?;
         if handle_tx.send(conn.interrupt_handle()).is_err() {
             tracing::debug!(edge = %log_name, "edge fetch timeout watchdog receiver dropped before send");
@@ -1323,8 +1323,7 @@ pub async fn run_federated_query(
 
     let coord = duckdb::Connection::open_in_memory()
         .context("failed to open the embedded coordinator connection")?;
-    coord
-        .execute_batch("INSTALL json; LOAD json;")
+    crate::storage::load_static_extensions(&coord, &["json"])
         .context("failed to load the json extension needed to plan the federated query")?;
 
     let parsed = plan_query(&coord, sql)?;

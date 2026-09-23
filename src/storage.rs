@@ -35,11 +35,9 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     // for `ducklake:sqlite:` catalog backends — is NOT required here. It used to
     // be installed "for compatibility" but that pulled an unnecessary runtime
     // download into the extension cache in local mode.
-    // Emit a progress line before each step so cold starts don't look like
-    // a hang (F-01/F-29). With a fresh extension dir, DuckDB synchronously
-    // downloads ~5MB of .duckdb_extension files over HTTP and emits no
-    // output of its own; users see nothing for 30-90s.
-    install_extensions_with_progress(conn, &["ducklake"])?;
+    // INSTALL even on a statically linked extension fetches a repository copy.
+    // Local storage must work on first boot without an extension repository.
+    load_static_extensions(conn, &["ducklake"])?;
     verify_duckdb_stack(conn)?;
 
     // Attach DuckLake with DuckDB file catalog + local Parquet.
@@ -100,9 +98,9 @@ pub(crate) fn init_distributed(
     tenant_id: &str,
 ) -> Result<()> {
     if config.uses_s3() {
-        install_extensions_with_progress(conn, &["ducklake", "postgres", "httpfs"])?;
+        load_static_extensions(conn, &["ducklake", "postgres_scanner", "httpfs"])?;
     } else {
-        install_extensions_with_progress(conn, &["ducklake", "postgres"])?;
+        load_static_extensions(conn, &["ducklake", "postgres_scanner"])?;
     }
     verify_duckdb_stack(conn)?;
 
@@ -697,17 +695,6 @@ pub(crate) fn resolve_extension_dir(data_dir: &Utf8Path) -> camino::Utf8PathBuf 
         })
 }
 
-/// Install and load a list of DuckDB extensions, emitting a progress line
-/// before and after each so cold starts don't appear to hang (F-01/F-29).
-///
-/// DuckDB's `INSTALL` command silently downloads ~5MB of `.duckdb_extension`
-/// files on first use. The download is synchronous and can take 30-90s
-/// on a fresh data dir, with no progress output. The user sees nothing
-/// and concludes the process has died.
-pub(crate) fn install_extensions_with_progress(conn: &Connection, names: &[&str]) -> Result<()> {
-    install_extensions_from(conn, names)
-}
-
 fn verify_duckdb_stack(conn: &Connection) -> Result<()> {
     let (duckdb_version, ducklake_version): (String, String) = conn
         .query_row(
@@ -742,62 +729,46 @@ fn verify_duckdb_stack(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// The extensions [`crate::pool::Pool::lock_filesystem`] `LOAD`s immediately
-/// before it turns `enable_external_access` off for good.
+/// Extensions preloaded by [`crate::pool::Pool::lock_filesystem`] before it
+/// turns `enable_external_access` off for good.
 ///
 /// This list and that `LOAD` batch must agree: anything named there but not
 /// satisfiable at that moment fails the connection, and because the lockdown is
 /// irreversible and instance-global there is no recovery.
 pub(crate) const LOCKDOWN_PRELOADED_EXTENSIONS: &[&str] = &["parquet", "json", "icu"];
 
-/// Which of `names` this binary does NOT have statically linked, and therefore
-/// has to cache as a file before the filesystem lockdown. The runtime query
-/// keeps extension loading correct if an upstream bundle changes its contents.
-///
-/// Asking DuckDB is exact and costs one query. **`INSTALL` is not a no-op on a
-/// statically linked extension** — verified: it downloads from the repository,
-/// writes a `.duckdb_extension` file and flips `install_mode` from
-/// `STATICALLY_LINKED` to `REPOSITORY`. On the distroless image that write
-/// targets the writable persistent data-dir cache, so installing unconditionally
-/// would cause needless downloads.
-pub(crate) fn extensions_needing_install(conn: &Connection, names: &[&str]) -> Result<Vec<String>> {
-    let mut needed = Vec::new();
-    for name in names {
-        // `install_mode` is NULL for an extension that is neither loaded nor
-        // installed, so treat "not statically linked" as the condition rather
-        // than testing for any particular non-static value.
-        let is_static: bool = conn
+/// Load only extensions carried by this binary; a cache entry is not enough.
+/// INSTALL fetches even when an extension is already linked, so never use it
+/// on a storage or query connection.
+pub(crate) fn load_static_extensions(conn: &Connection, names: &[&str]) -> Result<()> {
+    for &name in names {
+        let install_mode: Option<String> = conn
             .query_row(
-                "SELECT coalesce(install_mode = 'STATICALLY_LINKED', false)
-                 FROM duckdb_extensions() WHERE extension_name = ?",
+                "SELECT install_mode FROM duckdb_extensions() WHERE extension_name = ?",
                 [name],
                 |row| row.get(0),
             )
-            .unwrap_or(false);
-        if is_static {
-            tracing::debug!("extension {name} is statically linked — no file needed");
-        } else {
-            needed.push((*name).to_string());
-        }
-    }
-    Ok(needed)
-}
-
-/// Install + load each core extension in `names`, logging progress.
-pub(crate) fn install_extensions_from(conn: &Connection, names: &[&str]) -> Result<()> {
-    let total = names.len();
-    for (i, name) in names.iter().enumerate() {
-        tracing::info!(
-            "installing DuckDB extension {name} ({}/{}) — first run may download \
-             ~5MB, please wait",
-            i + 1,
-            total,
+            .with_context(|| format!("DuckDB extension {name} is not registered"))?;
+        anyhow::ensure!(
+            install_mode.as_deref() == Some("STATICALLY_LINKED"),
+            "DuckDB extension {name} is not statically linked; this binary cannot run offline"
         );
-        conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
-            .with_context(|| format!("failed to install/load extension {name}"))?;
-        tracing::info!("loaded DuckDB extension: {name}");
+        conn.execute_batch(&format!("LOAD {name};"))
+            .with_context(|| format!("failed to load statically linked DuckDB extension {name}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod static_extension_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_unlinked_extension_without_installing_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        let error = load_static_extensions(&conn, &["extension_not_in_binary"]).unwrap_err();
+        assert!(error.to_string().contains("not registered"));
+    }
 }
 
 #[cfg(test)]

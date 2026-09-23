@@ -605,28 +605,15 @@ impl ProjectPool {
                         // directly via duckdb_logs(): "Failed to load
                         // extension 'httpfs'" on every request once access is
                         // locked down, even though `quack_serve` itself
-                        // "succeeds") — local/default mode never installs
+                        // "succeeds") — local/default mode does not load
                         // httpfs otherwise (only the S3-backed distributed
                         // path does), so it must be preloaded here too.
                         if crate::config::query_surface()? == crate::config::QuerySurface::Quack {
-                            conn.execute_batch("INSTALL httpfs; LOAD httpfs;").context(
-                                "failed to preload httpfs (required internally by quack) before \
-                                 locking down filesystem access",
-                            )?;
+                            crate::storage::load_static_extensions(conn, &["httpfs"])
+                                .context("failed to preload httpfs required by quack")?;
                             crate::quack::load_and_pin(conn).context(
                                 "failed to load/pin the quack extension before locking down \
                                  filesystem access",
-                            )?;
-                        }
-                        let missing = crate::storage::extensions_needing_install(
-                            conn,
-                            crate::storage::LOCKDOWN_PRELOADED_EXTENSIONS,
-                        )?;
-                        if !missing.is_empty() {
-                            let refs: Vec<&str> = missing.iter().map(String::as_str).collect();
-                            crate::storage::install_extensions_with_progress(conn, &refs).context(
-                                "failed to install lockdown-preloaded DuckDB extensions \
-                                     before locking filesystem access",
                             )?;
                         }
                         self.lock_filesystem(conn, &ext_dir)?;
@@ -697,20 +684,13 @@ impl ProjectPool {
     /// extension with no filesystem or network access at query time, so pre-loading
     /// it does not widen the lockdown surface.
     ///
-    /// Install missing extensions into the writable persistent data-dir cache,
-    /// then LOAD them. This all happens before the irreversible lockdown.
-    ///
     /// The names live in `storage::LOCKDOWN_PRELOADED_EXTENSIONS` so the
     /// production initialization and this batch cannot drift apart.
     fn lock_filesystem(&self, conn: &Connection, ext_dir: &camino::Utf8Path) -> Result<()> {
         let data_dir = self.data_dir.as_str().replace('\'', "''");
         let ext = ext_dir.as_str().replace('\'', "''");
-        let preload: String = crate::storage::LOCKDOWN_PRELOADED_EXTENSIONS
-            .iter()
-            .map(|name| format!("LOAD {name};"))
-            .collect();
-        conn.execute_batch(&preload)
-            .context("failed to preload DuckDB extensions before locking filesystem access")?;
+        crate::storage::load_static_extensions(conn, crate::storage::LOCKDOWN_PRELOADED_EXTENSIONS)
+            .context("failed to preload statically linked extensions before filesystem lockdown")?;
         conn.execute_batch(&format!(
             "SET allowed_directories = ['{data_dir}', '{ext}']; SET enable_external_access = false;"
         ))
@@ -893,11 +873,8 @@ mod tests {
         );
     }
 
-    /// Every extension `lock_filesystem` preloads is satisfiable on THIS build,
-    /// either statically linked or present as a cached file.
-    ///
-    /// Regression guard: production project initialization must install any
-    /// lockdown extensions that are not statically linked before the lockdown.
+    /// Regression guard: every extension needed during local initialization
+    /// must be linked and loaded before DuckDB disables external access.
     #[test]
     fn project_initialization_loads_extensions_before_lockdown() {
         let dir = tempfile::tempdir().unwrap();

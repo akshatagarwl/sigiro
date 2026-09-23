@@ -1395,8 +1395,8 @@ mod tests {
             .expect("set home_directory");
         conn.execute_batch(&format!("SET extension_directory='{}';", extension_dir()))
             .expect("set extension_directory");
-        conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
-            .expect("install/load ducklake");
+        crate::storage::load_static_extensions(conn, &["ducklake"])
+            .expect("load statically linked ducklake");
         conn.execute_batch(&format!(
             "ATTACH 'ducklake:{data_path}/catalog.ducklake' AS lake"
         ))
@@ -1580,8 +1580,8 @@ mod tests {
             .expect("set home_directory");
         conn.execute_batch(&format!("SET extension_directory='{}';", extension_dir()))
             .expect("set extension_directory");
-        conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
-            .expect("install/load ducklake");
+        crate::storage::load_static_extensions(&conn, &["ducklake"])
+            .expect("load statically linked ducklake");
         conn.execute_batch(&format!(
             "ATTACH 'ducklake:{hp}/catalog.ducklake' AS lake (DATA_PATH '{dp}/')"
         ))
