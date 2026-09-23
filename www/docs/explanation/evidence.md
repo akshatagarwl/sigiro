@@ -190,7 +190,7 @@ server. Unset or empty means delivery is disabled; alerts still accumulate in
 the persistent outbox. The URL must be HTTPS; plain HTTP is accepted only when
 the URL host is `localhost`, `127.0.0.1`, or `::1`. Credentials in the URL are
 rejected. Optionally set `SIGIRO_ALERT_WEBHOOK_TOKEN` to send
-`Authorization: Bearer RECEIVER_TOKEN` with each POST. This token authenticates the
+`Authorization: Bearer <token>` with each POST. This token authenticates the
 **outgoing receiver request**, not callers of Sigiro's API. The JSON POST uses
 the Alertmanager webhook shape (`version: "4"`) and contains one alert:
 
