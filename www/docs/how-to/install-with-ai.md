@@ -88,7 +88,9 @@ An agent does more than you want here. State these limits before the agent start
 - Do not install an OTel Collector. sigiro is the collector.
 - Do not add manual spans for each endpoint. Auto-instrumentation covers them.
 - Do not change database connection strings or business logic.
-- Do not set up dashboards or alert configuration. sigiro has neither.
+- Do not set up dashboards or user-defined alert rules. This task only installs
+  instrumentation; sigiro's existing OOM-only webhook is configured separately
+  with `SIGIRO_ALERT_WEBHOOK_URL`. Anomaly incidents do not trigger it yet.
 
 The full task is this: detect the framework, install auto-instrumentation, and point
 it at sigiro.

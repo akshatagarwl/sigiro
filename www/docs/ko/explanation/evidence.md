@@ -156,9 +156,19 @@ SQL인 이유가 바로 이것입니다.
 
 정직한 목록입니다. 이 각각은 원할 만한 합리적인 것이기 때문입니다.
 
-**알림을 보내지 않습니다.** 알림 경로도, 사람에게 이르는 에스컬레이션도 없습니다.
-`GET /v1/anomalies`는 폴링하는 테이블입니다. 예약된 에이전트나 cron 작업이 의도된
-호출자입니다.
+**이상 징후 인시던트는 아직 알림을 보내지 않습니다.** 탐지기는 인시던트를 저장하지만 웹훅 전송 대기열에는 넣지 않습니다. 예약된 에이전트나 cron 작업으로 `GET /v1/anomalies`를 폴링하십시오. 새 이상 징후가 에이전트를 깨우는 기능은 [#218](https://github.com/akshatagarwl/sigiro/issues/218)의 남은 작업입니다. 아래의 기존 OOM 전용 알림과는 다릅니다. 사용자 정의 알림 규칙, 에스컬레이션 정책, 사람에게 호출하는 기능은 없습니다.
+
+### 기존 컨테이너 OOM 알림
+
+수집한 로그의 `event_name`이 `container.oom_killed`이고 속성에 `container.name`과 `container.id`가 있으면 프로젝트·서비스·컨테이너 이름별 `firing` 알림을 만듭니다. 같은 알림에 대한 다른 OOM 이벤트는 `occurrence_count`만 늘리고 firing 알림을 다시 보내지 않습니다. `container.oom_recovered`는 같은 대상의 firing 알림이 있고 이벤트 시각이 시작 시각보다 빠르지 않을 때만 `resolved`로 바꿉니다. 해결 후 새 OOM이 오면 다시 firing이 됩니다. 중복 수집된 이벤트는 무시하고 대응되는 firing 없이 복구만 수집되면 알림이나 통지를 만들지 않습니다. 알림 상태와 전송 대기 통지는 웹훅 전송을 꺼도 관리 저장소에 보존됩니다.
+
+`GET /v1/alerts`는 인증된 프로젝트(인증이 없는 모드에서는 현재 프로젝트)의 `{"alerts": [...]}`를 반환합니다. `?status=firing` 또는 `?status=resolved`로 필터링하며 다른 값은 거부됩니다. 각 항목에는 `fingerprint`, `rule_id`(`container-oom`), `status`, `service_name`, `container_name`, `starts_at`(RFC 3339), `ends_at`(RFC 3339 또는 `null`), `occurrence_count`가 있습니다. 이는 **OOM 상태** 목록이지 이상 징후 인시던트나 웹훅 전송 시도 목록이 아닙니다. 탐지 결과는 `GET /v1/anomalies`를 사용하십시오.
+
+OOM 상태 전이를 수신자에게 보내려면 서버에 `SIGIRO_ALERT_WEBHOOK_URL`을 설정하십시오. 비어 있거나 설정하지 않으면 전송하지 않지만 통지는 영속 outbox에 쌓입니다. HTTPS가 필요하며 HTTP는 URL의 호스트가 `localhost`, `127.0.0.1`, `::1`일 때만 허용됩니다. URL에 들어 있는 인증 정보는 거부합니다. 선택적인 `SIGIRO_ALERT_WEBHOOK_TOKEN`은 POST에 `Authorization: Bearer RECEIVER_TOKEN`을 붙입니다. 이 토큰은 **수신자로 나가는 요청용**이지 Sigiro API 호출자를 인증하지 않습니다.
+
+POST는 Alertmanager 호환 JSON(`version: "4"`)이며 `receiver: "sigiro"`, `status`(`firing` 또는 `resolved`), 항목 하나를 담은 `alerts`, `groupLabels`, `commonLabels`, `commonAnnotations: {}`, `externalURL: ""`, `groupKey`, `truncatedAlerts: 0`을 포함합니다. 항목에는 `status`, `labels`(`alertname: "ContainerOOMKilled"`, `project`, `service`, `container`, `severity: "critical"`), `annotations`(`summary`, **문자열** `occurrence_count`), `startsAt`, `endsAt`, `generatorURL: ""`, `fingerprint`가 있습니다. `groupLabels`에는 alertname만, `commonLabels`에는 항목의 labels와 같은 값이 들어갑니다. `groupKey` 형식은 `{}:{alertname="ContainerOOMKilled",fingerprint="<fingerprint>"}`입니다. firing의 `endsAt`은 `0001-01-01T00:00:00Z`, resolved의 `endsAt`은 복구 시각입니다. 타임스탬프는 RFC 3339입니다. `fingerprint`는 프로젝트·OOM 규칙·서비스·컨테이너 이름에 대해 일정하지만 전송별 ID는 아닙니다. 이상 징후 incident ID나 증거는 포함되지 않습니다. OOM 발생 시 에이전트를 깨우는 수신자는 프로젝트와 서비스 레이블로 Sigiro의 인증된 API에 다시 질의하여 추가 증거를 얻을 수 있습니다.
+
+전송기는 약 1초마다 영속 outbox를 확인합니다. 요청 제한 시간은 10초이고 2xx만 전송 완료로 기록하며 리디렉션을 따르지 않습니다. 실패(2xx 이외 응답 및 시간 초과 포함)는 5초, 10초, 20초… 간격으로 재시도하며 최대 간격은 1시간입니다. 재시도 횟수 제한이 없고 재시작 후에도 outbox가 남습니다. 전송은 **최소 한 번**으로, 수신 성공 후 전송 완료 기록 전에 프로세스가 중단되면 POST가 중복될 수 있습니다. 수신자는 `fingerprint`, `status`, `startsAt` 조합으로 중복을 제거하십시오. 같은 fingerprint도 해결 후 다시 firing할 수 있습니다.
 
 **비즈니스 영향으로 순위를 매기지 않습니다.** 순위는 통계적입니다. sigiro는
 여러분의 서비스 중 어느 것이 결제를 처리하는지 알지 못하므로, 백그라운드 워커의 큰

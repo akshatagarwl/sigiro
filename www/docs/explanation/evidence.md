@@ -156,9 +156,98 @@ built for the first reader.
 
 An honest list, because each of these is a reasonable thing to want.
 
-**It does not alert you.** There is no notification path and no escalation to a
-person. `GET /v1/anomalies` is a table you poll. A scheduled agent or a cron job is
-the intended caller.
+**Anomaly incidents do not send notifications yet.** Poll `GET /v1/anomalies`
+with a scheduled agent or cron job. The detector persists incidents but does not
+enqueue them for webhook delivery; waking an agent on a new anomaly remains work
+in [#218](https://github.com/akshatagarwl/sigiro/issues/218). This is different
+from the existing, OOM-only alert path below. There are no user-defined alert
+rules, escalation policies, or human paging integrations.
+
+### Existing container OOM alerts
+
+Ingested logs with `event_name` set to `container.oom_killed` create a **firing**
+alert for a project, service, and container name. The log must include
+`container.name` and `container.id` in its attributes. Further distinct OOM
+events for that alert increase `occurrence_count` without another firing
+notification. A `container.oom_recovered` event resolves an existing firing
+alert for the same project, service, and container name (if its timestamp is not
+older than the firing event). A later OOM after resolution reopens it. Replayed
+occurrences are ignored; recovery without a matching firing alert creates no
+alert or notification. Alert state and notifications are persisted in the
+administrative store, independently of webhook delivery.
+
+`GET /v1/alerts` returns `{"alerts": [...]}` for the authenticated project (or
+the active project in open-auth mode). Use `?status=firing` or
+`?status=resolved` to filter; any other status is rejected. Each entry has
+`fingerprint`, `rule_id` (`container-oom`), `status`, `service_name`,
+`container_name`, `starts_at` (RFC 3339), `ends_at` (RFC 3339 or `null`), and
+`occurrence_count`. This endpoint lists **OOM alert state**, not anomaly
+incidents or webhook delivery attempts. Use `GET /v1/anomalies` for detector
+results.
+
+To deliver OOM transitions to a receiver, set `SIGIRO_ALERT_WEBHOOK_URL` on the
+server. Unset or empty means delivery is disabled; alerts still accumulate in
+the persistent outbox. The URL must be HTTPS; plain HTTP is accepted only when
+the URL host is `localhost`, `127.0.0.1`, or `::1`. Credentials in the URL are
+rejected. Optionally set `SIGIRO_ALERT_WEBHOOK_TOKEN` to send
+`Authorization: Bearer RECEIVER_TOKEN` with each POST. This token authenticates the
+**outgoing receiver request**, not callers of Sigiro's API. The JSON POST uses
+the Alertmanager webhook shape (`version: "4"`) and contains one alert:
+
+```json
+{
+  "receiver": "sigiro",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "ContainerOOMKilled",
+        "project": "default",
+        "service": "api",
+        "container": "api-1",
+        "severity": "critical"
+      },
+      "annotations": {
+        "summary": "api-1 was killed because it ran out of memory",
+        "occurrence_count": "1"
+      },
+      "startsAt": "2026-09-23T10:00:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "",
+      "fingerprint": "<stable alert fingerprint>"
+    }
+  ],
+  "groupLabels": { "alertname": "ContainerOOMKilled" },
+  "commonLabels": {
+    "alertname": "ContainerOOMKilled",
+    "project": "default",
+    "service": "api",
+    "container": "api-1",
+    "severity": "critical"
+  },
+  "commonAnnotations": {},
+  "externalURL": "",
+  "version": "4",
+  "groupKey": "{}:{alertname=\"ContainerOOMKilled\",fingerprint=\"<stable alert fingerprint>\"}",
+  "truncatedAlerts": 0
+}
+```
+
+For resolution, both `status` fields become `resolved` and `endsAt` is the
+recovery timestamp. `fingerprint` is stable for the project, OOM rule, service,
+and container name; it is not a unique delivery ID. No incident ID or anomaly
+evidence is included. A receiver that wakes an agent for OOM can use the project
+and service labels to call Sigiro's authenticated APIs for further evidence.
+
+Delivery checks the durable outbox about once per second. Each request has a
+10-second timeout; only 2xx marks it sent, and redirects are not followed.
+Failures (including non-2xx and timeouts) retry after 5, 10, 20, ... seconds,
+with delays capped at one hour; there is no attempt limit. The outbox survives
+restart. Delivery is **at least once**: a crash after receiver success but before
+sent-state persistence can repeat the POST. Deduplicate by `fingerprint`,
+`status`, and `startsAt` (the same fingerprint can fire again after recovery);
+do not treat a repeated POST as a new incident.
 
 **It does not rank by business impact.** The rank order is statistical. sigiro does
 not know which of your services takes payments, so a large shift in a background

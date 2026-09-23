@@ -90,7 +90,19 @@ sigiro はそのギャップを埋める部分です。ダッシュボードの�
 
 正直なリストです。どれも望むのが妥当なことだからです。
 
-**アラートは通知しません。** 通知経路も、人へのエスカレーションもありません。`GET /v1/anomalies` はポーリングするテーブルです。スケジュールされたエージェントや cron ジョブが想定される呼び出し元です。
+**異常インシデントはまだ通知されません。** 検出器はインシデントを保存しますが、Webhook 配信キューには登録しません。`GET /v1/anomalies` を定期実行のエージェントや cron からポーリングしてください。新しい異常でエージェントを起動する機能は [#218](https://github.com/akshatagarwl/sigiro/issues/218) の残作業です。以下の OOM 専用アラートとは別物です。ユーザー定義のアラートルール、エスカレーション、人へのページングはありません。
+
+### 既存のコンテナ OOM アラート
+
+取り込んだログの `event_name` が `container.oom_killed` で、属性に `container.name` と `container.id` があると、プロジェクト・サービス・コンテナ名に対して `firing` のアラートが作られます。同じアラートへの別の OOM イベントは `occurrence_count` を増やしますが、新しい firing 通知は出しません。`container.oom_recovered` は、同じ対象の firing アラートがあり、その開始時刻より古くない場合だけ `resolved` にします。解決後の新しい OOM は再度 firing にします。同一イベントの再取り込みは無視され、対応する firing がない回復イベントはアラートも通知も作りません。アラートの状態と配信待ち通知は、Webhook を無効にしていても管理ストアに保存されます。
+
+`GET /v1/alerts` は認証されたプロジェクト（オープン認証モードでは現在のプロジェクト）の `{"alerts": [...]}` を返します。`?status=firing` または `?status=resolved` で絞り込み、それ以外の値は拒否されます。各要素には `fingerprint`、`rule_id`（`container-oom`）、`status`、`service_name`、`container_name`、`starts_at`（RFC 3339）、`ends_at`（RFC 3339 または `null`）、`occurrence_count` が入ります。これは **OOM の状態** の一覧であり、異常インシデントや Webhook 配信試行の一覧ではありません。異常には `GET /v1/anomalies` を使います。
+
+OOM の状態遷移を外部へ送るにはサーバー側で `SIGIRO_ALERT_WEBHOOK_URL` を設定します。未設定または空の場合は配信しませんが、通知は永続 outbox に残ります。URL は HTTPS 必須で、HTTP が許されるのはホストが `localhost`、`127.0.0.1`、`::1` の場合だけです。URL 内の認証情報は拒否されます。任意の `SIGIRO_ALERT_WEBHOOK_TOKEN` は送信する POST に `Authorization: Bearer RECEIVER_TOKEN` を付けます。**Sigiro API へのアクセスを認証するトークンではありません。**
+
+POST は Alertmanager 互換の JSON（`version: "4"`）で、`receiver: "sigiro"`、`status`（`firing` または `resolved`）、要素 1 件の `alerts`、`groupLabels`、`commonLabels`、`commonAnnotations: {}`、`externalURL: ""`、`groupKey`、`truncatedAlerts: 0` を含みます。要素には `status`、`labels`（`alertname: "ContainerOOMKilled"`、`project`、`service`、`container`、`severity: "critical"`）、`annotations`（`summary` と**文字列**の `occurrence_count`）、`startsAt`、`endsAt`、`generatorURL: ""`、`fingerprint` が入ります。`groupLabels` は alertname、`commonLabels` は要素の labels と同じです。`groupKey` は `{}:{alertname="ContainerOOMKilled",fingerprint="<fingerprint>"}` 形式です。firing の `endsAt` は `0001-01-01T00:00:00Z`、resolved の `endsAt` は回復時刻です。タイムスタンプは RFC 3339 です。`fingerprint` はプロジェクト・OOM ルール・サービス・コンテナ名について安定しており、配信ごとの ID ではありません。異常の incident ID や証拠は送られません。OOM でエージェントを起動する受信側は、ラベルのプロジェクトとサービスを使って Sigiro の認証付き API から追加の証拠を取得できます。
+
+配信処理は約 1 秒ごとに永続 outbox を確認します。リクエストのタイムアウトは 10 秒、2xx 応答だけを送信済みとして記録し、リダイレクトは追いません。失敗（2xx 以外やタイムアウトを含む）は 5 秒、10 秒、20 秒…と指数的に再試行し、間隔は最大 1 時間です。試行回数の上限はなく、再起動しても outbox は残ります。配信は**少なくとも 1 回**であり、受信成功後、送信済み状態の保存前にクラッシュすると POST が重複します。受信側は `fingerprint`、`status`、`startsAt` の組で重複排除してください。同じ fingerprint が解決後に再び firing になり得ます。
 
 **ビジネスインパクトによるランク付けはしません。** ランク順は統計的なものです。sigiro はあなたのどのサービスが決済を扱っているかを知らないため、バックグラウンドワーカーの大きなシフトが、チェックアウトの小さなシフトより上位になることがあります。どのサービスが重要かはあなたが知っており、sigiro はどの系列が動いたかを知っています。
 

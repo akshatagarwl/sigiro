@@ -125,8 +125,19 @@ Rust 里用这些查询已经返回的数据组装出来的，因此不额外花
 
 一份诚实的清单，因为其中每一项都是合理的期待。
 
-**它不会告警。**没有通知通道，也没有向人升级的路径。`GET /v1/anomalies` 是一张供你
-轮询的表。预期的调用方是定时 agent 或 cron 作业。
+**异常事件目前不会发送通知。**检测器会存储事件，但不会把它们放进 webhook 发送队列。请让定时 agent 或 cron 作业轮询 `GET /v1/anomalies`。发现新异常后唤醒 agent 的功能仍是 [#218](https://github.com/akshatagarwl/sigiro/issues/218) 的待办事项，与下面已有的 OOM 专用告警不同。sigiro 没有用户自定义告警规则、升级策略或人工值班呼叫集成。
+
+### 已有的容器 OOM 告警
+
+摄入日志中 `event_name` 为 `container.oom_killed`，且属性包含 `container.name` 和 `container.id` 时，会按项目、服务和容器名创建 `firing` 告警。同一告警的其他 OOM 事件会增加 `occurrence_count`，不会再发 firing 通知。`container.oom_recovered` 仅在同一对象存在 firing 告警且恢复事件时间不早于开始时间时将其置为 `resolved`。解决后的新 OOM 会重新置为 firing。重复摄入的事件会被忽略；没有对应 firing 告警的恢复事件不会创建告警或通知。告警状态和待发通知存于管理存储中，即便关闭 webhook 发送也会保存。
+
+`GET /v1/alerts` 返回已认证项目（开放认证模式下为当前项目）的 `{"alerts": [...]}`。可用 `?status=firing` 或 `?status=resolved` 筛选，其他值会被拒绝。每条记录包含 `fingerprint`、`rule_id`（`container-oom`）、`status`、`service_name`、`container_name`、`starts_at`（RFC 3339）、`ends_at`（RFC 3339 或 `null`）和 `occurrence_count`。这个接口列出的是 **OOM 告警状态**，不是异常事件，也不是 webhook 发送尝试。检测结果请查询 `GET /v1/anomalies`。
+
+如需把 OOM 状态变化推送到接收端，在服务器上设置 `SIGIRO_ALERT_WEBHOOK_URL`。未设置或设为空会关闭发送，但通知仍进入持久 outbox。URL 必须使用 HTTPS；只有主机名为 `localhost`、`127.0.0.1` 或 `::1` 时才允许 HTTP。URL 内嵌凭据会被拒绝。可选的 `SIGIRO_ALERT_WEBHOOK_TOKEN` 会在 POST 中发送 `Authorization: Bearer RECEIVER_TOKEN`；此令牌用于**发往接收端的请求**，不用于认证调用 Sigiro API 的客户端。
+
+POST 是兼容 Alertmanager 的 JSON（`version: "4"`），包含 `receiver: "sigiro"`、`status`（`firing` 或 `resolved`）、只有一项的 `alerts`、`groupLabels`、`commonLabels`、`commonAnnotations: {}`、`externalURL: ""`、`groupKey`、`truncatedAlerts: 0`。告警项包含 `status`、`labels`（`alertname: "ContainerOOMKilled"`、`project`、`service`、`container`、`severity: "critical"`）、`annotations`（`summary` 和**字符串** `occurrence_count`）、`startsAt`、`endsAt`、`generatorURL: ""`、`fingerprint`。`groupLabels` 只有 alertname，`commonLabels` 与告警项的 labels 相同。`groupKey` 格式为 `{}:{alertname="ContainerOOMKilled",fingerprint="<fingerprint>"}`。firing 时 `endsAt` 为 `0001-01-01T00:00:00Z`，resolved 时为恢复时间；时间戳使用 RFC 3339。`fingerprint` 对项目、OOM 规则、服务和容器名保持稳定，不是每次发送的唯一 ID。负载不包含异常事件 ID 或证据。因 OOM 被唤醒的 agent 可根据项目与服务标签，再调用 Sigiro 需要认证的 API 获取更多证据。
+
+发送程序约每秒检查一次持久 outbox。每次请求超时为 10 秒；仅 2xx 视为成功，也不跟随重定向。失败（包括非 2xx 和超时）按 5 秒、10 秒、20 秒……指数退避重试，间隔上限一小时；没有重试次数上限，重启后 outbox 仍在。发送语义为**至少一次**：接收成功后、写入已发送状态前若进程崩溃，POST 可能重复。接收端应以 `fingerprint`、`status`、`startsAt` 的组合去重；同一 fingerprint 在恢复后仍可能再次 firing。
 
 **它不按业务影响排序。**排序是统计意义上的。sigiro 不知道你哪个服务在收款，所以后台
 worker 的一次大幅偏移可能排在结账链路的一次小幅偏移之前。哪个服务重要由你知道；哪条

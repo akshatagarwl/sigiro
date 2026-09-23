@@ -63,7 +63,7 @@ Framework: <fastapi|express|spring-boot|rails|...>
 - 不要安装 OTel Collector。sigiro 本身就是 collector。
 - 不要为每个接口手写 span。自动检测已经覆盖它们。
 - 不要修改数据库连接串或业务逻辑。
-- 不要配置仪表盘或告警。sigiro 两者都没有。
+- 不要配置仪表盘或用户自定义告警规则。本任务只安装检测。已有的 OOM 专用 webhook 由 `SIGIRO_ALERT_WEBHOOK_URL` 单独配置；异常事件目前不会触发它。
 
 完整的任务就是：检测框架、安装自动检测、把它指向 sigiro。
 
