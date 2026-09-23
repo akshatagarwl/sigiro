@@ -65,6 +65,8 @@ docker run -d --name sigiro --restart unless-stopped \
 `localhost:14317`）に変更します。ホスト側の `9999` も空いている必要があります。
 変更した場合は、以降の API リクエストでも変更後のホスト側ポートを使用してください。
 
+Jaeger v2 の既存の受信先を維持してトレースを複製する場合は、[Jaeger と並行して sigiro を試す](/docs/how-to/jaeger-fanout)を参照してください。アプリの送信先は変更しません。
+
 </Tab>
 
 </Tabs>

@@ -65,6 +65,9 @@ before running the command. Point OTLP HTTP at `http://localhost:14318` (or
 gRPC at `localhost:14317`). Host port `9999` must also be free; if you remap
 it, use the new host port for the API requests below.
 
+To keep an existing Jaeger v2 receiver and mirror its traces instead of
+repointing applications, follow [Try sigiro beside Jaeger](/docs/how-to/jaeger-fanout).
+
 </Tab>
 
 </Tabs>
@@ -205,6 +208,8 @@ that an agent runs on its own.
 
 ## Next
 
+- [Try sigiro beside Jaeger](/docs/how-to/jaeger-fanout) — mirror existing
+  OTLP traces without changing application endpoints
 - [Instrument your code with an agent](/docs/how-to/install-with-ai) — if your
   service still has no OpenTelemetry
 - [Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding) — if you do

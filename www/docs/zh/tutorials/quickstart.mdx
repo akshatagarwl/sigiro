@@ -51,6 +51,8 @@ docker run -d --name sigiro --restart unless-stopped \
 
 命名卷会在容器重启后保留数据；重启策略会在主机重启后启动服务。Docker 发布的端口只能从本机访问。如果 Jaeger 等服务占用了 `4317` 和 `4318`，请在运行命令前将前两个 `-p` 参数替换为 `-p 127.0.0.1:14317:4317 -p 127.0.0.1:14318:4318`。随后把 OTLP HTTP 导出目标改为 `http://localhost:14318`（gRPC 使用 `localhost:14317`）。主机的 `9999` 端口也必须空闲；如果重映射它，下面的 API 请求也要使用新的主机端口。
 
+如果要保留原有 Jaeger v2 接收器并镜像链路追踪，而不修改应用的目标地址，请参阅[与 Jaeger 并行试用 sigiro](/docs/how-to/jaeger-fanout)。
+
 </Tab>
 
 </Tabs>
