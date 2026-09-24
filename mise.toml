@@ -176,6 +176,10 @@ run = "SIGIRO_NATIVE_ACTION=verify aube -C www run alchemy:workload:deploy"
 description = "Release build of the sigiro binary. Set TARGET to cross-compile."
 run = 'scripts/run-with-duckdb-static.sh mbx build --release --locked --bin sigiro ${TARGET:+--target "$TARGET"}'
 
+[tasks.bench]
+description = "Run the registered in-process Criterion benchmarks."
+run = "scripts/run-with-duckdb-static.sh mbx bench --locked --bench appender_bench --bench diagnose_bench"
+
 [tasks.build-dev]
 description = "Build a debug binary with Apple ld on macOS or pinned jdxld on Linux."
 run = """
