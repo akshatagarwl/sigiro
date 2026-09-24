@@ -178,7 +178,7 @@ run = 'scripts/run-with-duckdb-static.sh mbx build --release --locked --bin sigi
 
 [tasks.bench]
 description = "Run the registered in-process Criterion benchmarks."
-run = "scripts/run-with-duckdb-static.sh mbx bench --locked --bench appender_bench --bench diagnose_bench"
+run = "scripts/run-with-duckdb-static.sh mbx bench --locked --bench diagnose_bench"
 
 [tasks.build-dev]
 description = "Build a debug binary with Apple ld on macOS or pinned jdxld on Linux."

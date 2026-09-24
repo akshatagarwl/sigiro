@@ -121,11 +121,6 @@ name = "diagnose_bench"
 harness = false
 test = false
 
-[[bench]]
-name = "appender_bench"
-harness = false
-test = false
-
 [lints.clippy]
 # Disallowed patterns (configured in clippy.toml)
 disallowed-methods = "deny"
