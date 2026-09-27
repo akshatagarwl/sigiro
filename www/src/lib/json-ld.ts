@@ -5,10 +5,10 @@
  * JSON, so parsers read it unchanged.
  */
 export type JsonLdDocument = {
-  readonly '@context': string;
-  readonly '@graph': readonly object[];
+  readonly "@context": string;
+  readonly "@graph": readonly object[];
 };
 
 export function jsonLd(data: JsonLdDocument): string {
-  return JSON.stringify(data).replace(/</g, '\\u003c');
+  return JSON.stringify(data).replace(/</g, "\\u003c");
 }

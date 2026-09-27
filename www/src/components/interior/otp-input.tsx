@@ -1,14 +1,26 @@
-'use client';
+"use client";
 
-import { useId, useImperativeHandle, useRef, useState, type ReactElement, type Ref } from 'react';
-import { OTPInput as NativeOtpInput, type SlotProps } from 'input-otp';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { OTPInput as NativeOtpInput, type SlotProps } from "input-otp";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import {
+  useId,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactElement,
+  type Ref,
+} from "react";
 
-const CROSSFADE = { type: 'spring', stiffness: 260, damping: 34, mass: 0.8 } as const;
+const CROSSFADE = {
+  type: "spring",
+  stiffness: 260,
+  damping: 34,
+  mass: 0.8,
+} as const;
 const EASE = [0.23, 1, 0.32, 1] as const;
 
-export type OtpMode = 'numeric' | 'alphanumeric';
-export type OtpStatus = 'idle' | 'error' | 'success';
+export type OtpMode = "numeric" | "alphanumeric";
+export type OtpStatus = "idle" | "error" | "success";
 
 export type OtpInputHandle = {
   clear: () => void;
@@ -34,11 +46,12 @@ export type OtpInputProps = {
   ref?: Ref<OtpInputHandle>;
 };
 
-const allowed = (mode: OtpMode): RegExp => (mode === 'numeric' ? /^[0-9]*$/ : /^[0-9a-zA-Z]*$/);
+const allowed = (mode: OtpMode): RegExp =>
+  mode === "numeric" ? /^[0-9]*$/ : /^[0-9a-zA-Z]*$/;
 
 const sanitize = (value: string, mode: OtpMode, length: number): string => {
-  const pattern = mode === 'numeric' ? /[^0-9]/g : /[^0-9a-zA-Z]/g;
-  return value.replace(pattern, '').slice(0, length);
+  const pattern = mode === "numeric" ? /[^0-9]/g : /[^0-9a-zA-Z]/g;
+  return value.replace(pattern, "").slice(0, length);
 };
 
 interface CellProps extends SlotProps {
@@ -71,31 +84,37 @@ function Cell({
       data-slot={index + 1}
       data-slot-count={length}
       className={`relative h-11 w-8 shrink-0 rounded-[10px] border-2 transition-[background-color,border-color,box-shadow] duration-150 sm:h-12 sm:w-10 ${
-        gap ? 'ml-1 sm:ml-3' : ''
+        gap ? "ml-1 sm:ml-3" : ""
       } ${
         error
-          ? 'border-red-500 bg-white dark:border-red-400 dark:bg-[#252522]'
+          ? "border-red-500 bg-white dark:border-red-400 dark:bg-[#252522]"
           : success
-            ? 'border-emerald-500 bg-white dark:border-emerald-400 dark:bg-[#252522]'
+            ? "border-emerald-500 bg-white dark:border-emerald-400 dark:bg-[#252522]"
             : isActive
-              ? 'border-[#4568FF] bg-white dark:border-[#93B0FF] dark:bg-[#252522]'
+              ? "border-[#4568FF] bg-white dark:border-[#93B0FF] dark:bg-[#252522]"
               : char
-                ? 'border-stone-300 bg-white dark:border-white/20 dark:bg-[#252522]'
-                : 'border-stone-200 bg-stone-100/70 shadow-[inset_0_1px_2px_rgba(28,25,23,0.07)] dark:border-white/[0.08] dark:bg-[#1D1D1A] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.45)]'
-      } ${disabled ? 'opacity-50' : ''}`}
+                ? "border-stone-300 bg-white dark:border-white/20 dark:bg-[#252522]"
+                : "border-stone-200 bg-stone-100/70 shadow-[inset_0_1px_2px_rgba(28,25,23,0.07)] dark:border-white/[0.08] dark:bg-[#1D1D1A] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.45)]"
+      } ${disabled ? "opacity-50" : ""}`}
     >
       <span className="pointer-events-none absolute inset-0 grid place-items-center">
         <AnimatePresence initial={false} mode="popLayout">
           {char ? (
             <motion.span
               key={`${index}-${char}`}
-              initial={reduced ? false : { opacity: 0, scale: 0.97, y: 10, filter: 'blur(6px)' }}
-              animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+              initial={
+                reduced
+                  ? false
+                  : { opacity: 0, scale: 0.97, y: 10, filter: "blur(6px)" }
+              }
+              animate={{ opacity: 1, scale: 1, y: 0, filter: "blur(0px)" }}
               exit={
-                reduced ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: -6, filter: 'blur(3px)' }
+                reduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, scale: 0.98, y: -6, filter: "blur(3px)" }
               }
               transition={enter}
-              className="col-start-1 row-start-1 font-mono text-[15px] tabular-nums text-stone-700 dark:text-stone-200"
+              className="col-start-1 row-start-1 font-mono text-[15px] text-stone-700 tabular-nums dark:text-stone-200"
             >
               {char}
             </motion.span>
@@ -114,7 +133,7 @@ function Cell({
                     duration: 1.06,
                     times: [0, 0.5, 0.5, 1],
                     repeat: Infinity,
-                    ease: 'linear',
+                    ease: "linear",
                   }
             }
           />
@@ -126,33 +145,35 @@ function Cell({
 
 export function OtpInput({
   length = 6,
-  mode = 'numeric',
-  defaultValue = '',
+  mode = "numeric",
+  defaultValue = "",
   onChange,
   onComplete,
-  status = 'idle',
-  errorMessage = '',
-  successMessage = '',
-  hint = '',
-  label = 'Verification code',
+  status = "idle",
+  errorMessage = "",
+  successMessage = "",
+  hint = "",
+  label = "Verification code",
   groupEvery = 3,
   disabled = false,
   autoFocus = false,
-  className = '',
+  className = "",
   ref,
 }: OtpInputProps): ReactElement {
   const reduced = useReducedMotion();
   const statusId = useId();
   const input = useRef<HTMLInputElement>(null);
-  const [value, setValue] = useState(() => sanitize(defaultValue, mode, length));
-  const error = status === 'error';
-  const success = status === 'success';
+  const [value, setValue] = useState(() =>
+    sanitize(defaultValue, mode, length)
+  );
+  const error = status === "error";
+  const success = status === "success";
   useImperativeHandle(
     ref,
     () => ({
       clear: () => {
-        setValue('');
-        onChange?.('');
+        setValue("");
+        onChange?.("");
         input.current?.focus();
       },
       focus: () => input.current?.focus(),
@@ -161,16 +182,16 @@ export function OtpInput({
         input.current?.select();
       },
     }),
-    [onChange],
+    [onChange]
   );
 
   const message = error ? errorMessage : success ? successMessage : hint;
   const hasMessage = message.length > 0;
   const messageTone = error
-    ? 'text-red-600 dark:text-red-400'
+    ? "text-red-600 dark:text-red-400"
     : success
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : 'text-stone-500 dark:text-stone-400';
+      ? "text-emerald-600 dark:text-emerald-400"
+      : "text-stone-500 dark:text-stone-400";
   const swap = reduced ? { duration: 0 } : CROSSFADE;
 
   return (
@@ -181,7 +202,7 @@ export function OtpInput({
         value={value}
         maxLength={length}
         pattern={allowed(mode).source}
-        inputMode={mode === 'numeric' ? 'numeric' : 'text'}
+        inputMode={mode === "numeric" ? "numeric" : "text"}
         autoComplete="one-time-code"
         autoFocus={autoFocus}
         disabled={disabled}
@@ -203,7 +224,7 @@ export function OtpInput({
             className="relative flex gap-1 sm:gap-2"
             initial={false}
             variants={{ idle: { x: 0 }, wrong: { x: [0, -5, 4, -3, 0] } }}
-            animate={error && !reduced ? 'wrong' : 'idle'}
+            animate={error && !reduced ? "wrong" : "idle"}
             transition={{ duration: 0.32, ease: EASE }}
           >
             {slots.map((slot, index) => (

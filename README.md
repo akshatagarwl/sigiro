@@ -89,17 +89,6 @@ rotation, and revocation. It is not a second user-facing CLI. A telemetry agent
 should receive only `telemetry:ingest`; do not grant unrelated capabilities or
 add application-specific key handling.
 
-## End-to-End Test
-
-Verify the full stack (OpenTelemetry Demo + Sigiro) with one command:
-
-```bash
-cd tests/e2e/k8s
-./run.sh
-```
-
-This starts the complete demo environment and verifies telemetry flows from collectors through to queries.
-
 ## Output
 
 Every command prints pretty JSON. One format, so a human and a pipeline read the
@@ -117,16 +106,16 @@ Full documentation is available at [docs.sigiro.com](https://docs.sigiro.com) (o
 
 ## Development
 
+From the repository root, install the shared JavaScript tooling and run the same
+format and lint configuration across auth and the website:
+
 ```bash
-# Build
-cargo build --release
-
-# Run with custom data directory
-SIGIRO_DATA_DIR=./data cargo run -- serve
-
-# Run tests
-cargo test --release
-
-# Run E2E test
-cd tests/e2e/k8s && ./run.sh
+aube install --frozen-lockfile
+aube run fmt
+aube run fmt:check
+aube run lint
 ```
+
+Install package dependencies from each package directory with its frozen Aube
+lockfile. Build Sigiro with `mise run build`; format Rust with `mbx fmt` and run
+the full Rust gate with `mise run full`.

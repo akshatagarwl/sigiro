@@ -22,42 +22,70 @@ const request = async (path: string, body?: unknown, init?: RequestInit) => {
 };
 
 const expectOk = async (response: Response, label: string) => {
-  if (!response.ok) throw new Error(`${label} failed: ${response.status} ${await response.text()}`);
+  if (!response.ok)
+    throw new Error(
+      `${label} failed: ${response.status} ${await response.text()}`
+    );
   return response;
 };
 
 // 1. sign in
 const email = `agent-e2e-${Date.now()}@sigiro.local`;
-await expectOk(await request("/email-otp/send-verification-otp", { email, type: "sign-in" }), "OTP send");
-await expectOk(await request("/sign-in/email-otp", { email, otp: "123456", name: "Agent Owner" }), "sign-in");
+await expectOk(
+  await request("/email-otp/send-verification-otp", { email, type: "sign-in" }),
+  "OTP send"
+);
+await expectOk(
+  await request("/sign-in/email-otp", {
+    email,
+    otp: "123456",
+    name: "Agent Owner",
+  }),
+  "sign-in"
+);
 
 // 2. personal org (the tenant the agent must bind to)
-const org = (await (await expectOk(
-  await fetch(`${BASE}/api/auth/onboarding/ensure-personal-organization`, {
-    method: "POST",
-    headers: { origin: BASE, cookie: jar.join("; ") },
-  }),
-  "org provisioning",
-)).json()) as { organization: { id: string } };
+const org = (await (
+  await expectOk(
+    await fetch(`${BASE}/api/auth/onboarding/ensure-personal-organization`, {
+      method: "POST",
+      headers: { origin: BASE, cookie: jar.join("; ") },
+    }),
+    "org provisioning"
+  )
+).json()) as { organization: { id: string } };
 console.log("tenant:", org.organization.id);
 
 // 3. enroll a host, connect an agent, mint an agent+jwt
-const hostEnrollment = (await (await expectOk(
-  await request("/host/create", { name: "Worker E2E", default_capabilities: ["telemetry:ingest"] }),
-  "host provisioning",
-)).json()) as { enrollmentToken?: string };
+const hostEnrollment = (await (
+  await expectOk(
+    await request("/host/create", {
+      name: "Worker E2E",
+      default_capabilities: ["telemetry:ingest"],
+    }),
+    "host provisioning"
+  )
+).json()) as { enrollmentToken?: string };
 if (!hostEnrollment.enrollmentToken) throw new Error("no enrollment token");
 
-const agentClient = new AgentAuthClient({ urls: [BASE], allowDirectDiscovery: true, hostName: "Worker E2E" });
+const agentClient = new AgentAuthClient({
+  urls: [BASE],
+  allowDirectDiscovery: true,
+  hostName: "Worker E2E",
+});
 await agentClient.init();
-await agentClient.enrollHost({ provider: BASE, enrollmentToken: hostEnrollment.enrollmentToken });
+await agentClient.enrollHost({
+  provider: BASE,
+  enrollmentToken: hostEnrollment.enrollmentToken,
+});
 const connection = await agentClient.connectAgent({
   provider: BASE,
   mode: "delegated",
   name: "Worker telemetry agent",
   capabilities: ["telemetry:ingest"],
 });
-if (connection.status !== "active") throw new Error(`agent not active: ${connection.status}`);
+if (connection.status !== "active")
+  throw new Error(`agent not active: ${connection.status}`);
 
 const agentToken = await agentClient.signJwt({
   agentId: connection.agentId,
@@ -73,19 +101,36 @@ const body = (await session.json()) as Record<string, unknown>;
 console.log("agent session:", session.status, JSON.stringify(body));
 
 if (body.active !== true) throw new Error("agent session not active");
-if (body.tenant_id !== org.organization.id) throw new Error(`tenant mismatch: ${body.tenant_id}`);
-const grants = body.agent_capability_grants as Array<{ capability?: string; status?: string }> | undefined;
-if (!grants?.some((g) => g.capability === "telemetry:ingest" && g.status === "active")) {
+if (body.tenant_id !== org.organization.id)
+  throw new Error(`tenant mismatch: ${body.tenant_id}`);
+const grants = body.agent_capability_grants as
+  | Array<{ capability?: string; status?: string }>
+  | undefined;
+if (
+  !grants?.some(
+    (g) => g.capability === "telemetry:ingest" && g.status === "active"
+  )
+) {
   throw new Error("capability grant missing");
 }
 console.log("PASS: active + tenant bound + capability granted");
 
 // 5. REPLAY — the security property. Same token, second presentation.
-const replay = await fetch(`${SECONDARY ?? BASE}/api/auth/sigiro/agent/session`, {
-  headers: { authorization: `Bearer ${agentToken.token}` },
-});
-console.log(`replay against ${SECONDARY ? "SECOND instance" : "same instance"}:`, replay.status, (await replay.text()).slice(0, 120));
-if (replay.status !== 401) throw new Error(`REPLAY ACCEPTED (${replay.status}) -- jti cache is failing open`);
+const replay = await fetch(
+  `${SECONDARY ?? BASE}/api/auth/sigiro/agent/session`,
+  {
+    headers: { authorization: `Bearer ${agentToken.token}` },
+  }
+);
+console.log(
+  `replay against ${SECONDARY ? "SECOND instance" : "same instance"}:`,
+  replay.status,
+  (await replay.text()).slice(0, 120)
+);
+if (replay.status !== 401)
+  throw new Error(
+    `REPLAY ACCEPTED (${replay.status}) -- jti cache is failing open`
+  );
 console.log("PASS: replay rejected 401");
 
 // 6. revocation

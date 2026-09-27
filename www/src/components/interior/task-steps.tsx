@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 /**
  * `useTaskSteps` — the step-status state machine, vendored from interior.dev.
@@ -28,7 +28,7 @@ export type TaskStep = {
   meta?: string;
 };
 
-export type TaskStepStatus = 'pending' | 'active' | 'done' | 'error';
+export type TaskStepStatus = "pending" | "active" | "done" | "error";
 
 export type UseTaskStepsOptions = {
   steps: TaskStep[];
@@ -42,15 +42,19 @@ function taskStepStatus(
   index: number,
   current: number,
   failed: boolean,
-  complete: boolean,
+  complete: boolean
 ): TaskStepStatus {
-  if (index < current) return 'done';
-  if (index !== current) return 'pending';
-  if (failed) return 'error';
-  return complete ? 'pending' : 'active';
+  if (index < current) return "done";
+  if (index !== current) return "pending";
+  if (failed) return "error";
+  return complete ? "pending" : "active";
 }
 
-export function useTaskSteps({ steps, current, failed = false }: UseTaskStepsOptions) {
+export function useTaskSteps({
+  steps,
+  current,
+  failed = false,
+}: UseTaskStepsOptions) {
   const complete = !failed && current >= steps.length;
 
   const rows = steps.map((step, i) => ({
@@ -58,14 +62,14 @@ export function useTaskSteps({ steps, current, failed = false }: UseTaskStepsOpt
     status: taskStepStatus(i, current, failed, complete),
   }));
 
-  const active = rows.find((r) => r.status === 'active');
+  const active = rows.find((r) => r.status === "active");
   const sentence = failed
-    ? `Failed at ${steps[Math.min(current, steps.length - 1)]?.label ?? 'step'}`
+    ? `Failed at ${steps[Math.min(current, steps.length - 1)]?.label ?? "step"}`
     : complete
       ? `All ${steps.length} steps complete`
       : active
         ? `${active.label}, step ${current + 1} of ${steps.length}`
-        : '';
+        : "";
 
   return { rows, complete, failed, sentence };
 }

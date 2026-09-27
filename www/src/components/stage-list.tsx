@@ -1,7 +1,8 @@
-'use client';
+"use client";
 
-import { motion, useReducedMotion } from 'motion/react';
-import { useTaskSteps } from '@/components/interior/task-steps';
+import { motion, useReducedMotion } from "motion/react";
+
+import { useTaskSteps } from "@/components/interior/task-steps";
 
 /**
  * The stepped terminal's stage rail, as buttons.
@@ -56,11 +57,11 @@ export function StageList({
       <ol aria-label={label} className="space-y-0.5">
         {rows.map((row, i) => {
           const tone =
-            row.status === 'done'
-              ? 'text-ink-2'
-              : row.status === 'active'
-                ? 'font-medium text-ink'
-                : 'text-ink-3';
+            row.status === "done"
+              ? "text-ink-2"
+              : row.status === "active"
+                ? "font-medium text-ink"
+                : "text-ink-3";
 
           return (
             <li key={row.id}>
@@ -75,14 +76,20 @@ export function StageList({
               */}
               <button
                 type="button"
-                aria-current={row.status === 'active' ? 'step' : undefined}
+                aria-current={row.status === "active" ? "step" : undefined}
                 onClick={() => onSelect(i)}
-                className="press flex h-7 w-full items-center gap-2.5 rounded-[6px] px-1 text-left hover:bg-well focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+                className="press hover:bg-well focus-visible:outline-accent flex h-7 w-full items-center gap-2.5 rounded-[6px] px-1 text-left focus-visible:outline-2 focus-visible:outline-offset-1"
               >
                 <span className="relative grid size-4 shrink-0 place-items-center">
-                  {row.status === 'done' ? (
-                    <span className="grid size-4 place-items-center rounded-[5px] bg-[color-mix(in_oklab,var(--moss)_16%,transparent)] text-moss">
-                      <svg viewBox="0 0 256 256" width="11" height="11" fill="none" aria-hidden>
+                  {row.status === "done" ? (
+                    <span className="text-moss grid size-4 place-items-center rounded-[5px] bg-[color-mix(in_oklab,var(--moss)_16%,transparent)]">
+                      <svg
+                        viewBox="0 0 256 256"
+                        width="11"
+                        height="11"
+                        fill="none"
+                        aria-hidden
+                      >
                         <polyline
                           points="216 72 104 184 48 128"
                           stroke="currentColor"
@@ -92,16 +99,16 @@ export function StageList({
                         />
                       </svg>
                     </span>
-                  ) : row.status === 'active' ? (
+                  ) : row.status === "active" ? (
                     <motion.svg
                       viewBox="0 0 16 16"
-                      className="size-3 text-ink-3"
+                      className="text-ink-3 size-3"
                       aria-hidden
                       animate={reduced ? { rotate: 0 } : { rotate: 360 }}
                       transition={
                         reduced
                           ? { duration: 0 }
-                          : { duration: 0.8, ease: 'linear', repeat: Infinity }
+                          : { duration: 0.8, ease: "linear", repeat: Infinity }
                       }
                     >
                       <circle
@@ -122,18 +129,22 @@ export function StageList({
                       />
                     </motion.svg>
                   ) : (
-                    <span className="size-[5px] rounded-[2px] bg-hairline-strong" />
+                    <span className="bg-hairline-strong size-[5px] rounded-[2px]" />
                   )}
                 </span>
 
-                {row.status === 'active' && !reduced ? (
+                {row.status === "active" && !reduced ? (
                   /* The sweep marks which stage is running. Our ink ramp rather
                      than the vendored literal stones, so it flips with the theme
                      instead of being tuned for one. */
                   <motion.span
-                    className="min-w-0 flex-1 truncate bg-[linear-gradient(90deg,var(--ink-3)_38%,var(--ink)_50%,var(--ink-3)_62%)] bg-clip-text text-[12.5px] font-medium text-transparent [background-size:220%_100%]"
-                    animate={{ backgroundPosition: ['120% 0', '-120% 0'] }}
-                    transition={{ duration: 1.6, ease: 'linear', repeat: Infinity }}
+                    className="min-w-0 flex-1 truncate bg-[linear-gradient(90deg,var(--ink-3)_38%,var(--ink)_50%,var(--ink-3)_62%)] [background-size:220%_100%] bg-clip-text text-[12.5px] font-medium text-transparent"
+                    animate={{ backgroundPosition: ["120% 0", "-120% 0"] }}
+                    transition={{
+                      duration: 1.6,
+                      ease: "linear",
+                      repeat: Infinity,
+                    }}
                   >
                     {row.label}
                   </motion.span>
@@ -160,9 +171,9 @@ export function StageList({
                     once the stage is done and just "Detect" before that.
                   */
                   <span
-                    aria-hidden={row.status !== 'done'}
+                    aria-hidden={row.status !== "done"}
                     className={`shrink-0 transition-opacity duration-200 ${
-                      row.status === 'done' ? 'opacity-100' : 'opacity-0'
+                      row.status === "done" ? "opacity-100" : "opacity-0"
                     }`}
                   >
                     <span className="sr-only">, </span>
@@ -179,7 +190,7 @@ export function StageList({
           every step of a scroll; the terminal only re-renders once per stage, so
           this is already one announcement per stage. */}
       <span role="status" className="sr-only">
-        {complete ? 'All stages complete' : sentence}
+        {complete ? "All stages complete" : sentence}
       </span>
     </div>
   );

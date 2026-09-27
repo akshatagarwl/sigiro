@@ -1,3 +1,4 @@
+import { schemaCheckFor } from "@better-auth/core/db/internal";
 /**
  * Startup schema-parity guard for the D1 auth database.
  *
@@ -20,7 +21,6 @@
  * request.
  */
 import { drizzleAdapter, type DB } from "@better-auth/drizzle-adapter";
-import { schemaCheckFor } from "@better-auth/core/db/internal";
 import type { BetterAuthOptions } from "better-auth";
 
 import * as authSchema from "./auth-schema.js";
@@ -40,7 +40,7 @@ export const schema = authSchema;
  */
 export const authDrizzleAdapter = (
   database: DB,
-  schemaOverride: Record<string, unknown> = schema,
+  schemaOverride: Record<string, unknown> = schema
 ) =>
   drizzleAdapter(database, {
     provider: "sqlite",
@@ -58,14 +58,14 @@ export const authDrizzleAdapter = (
 export const assertAuthSchemaMatches = async (
   options: BetterAuthOptions,
   database: DB = {},
-  schemaOverride: Record<string, unknown> = schema,
+  schemaOverride: Record<string, unknown> = schema
 ): Promise<void> => {
   const adapter = authDrizzleAdapter(database, schemaOverride)(options);
   const check = schemaCheckFor(adapter);
   if (!check) {
     throw new Error(
       "drizzle adapter registered no schema check — the guard is not armed; " +
-        "confirm advanced.database.validateSchema is not disabled",
+        "confirm advanced.database.validateSchema is not disabled"
     );
   }
   await check();

@@ -1,4 +1,4 @@
-import type { LandingCopy } from './site.en';
+import type { LandingCopy } from "./site.en";
 
 /**
  * Simplified Chinese (zh) landing-page copy.
@@ -44,10 +44,10 @@ export const ZH: LandingCopy = {
   /** Keeps "observability" (可观测性) in the title: the h1 is a category bet
       with no search intent behind it, and this is the one place the category
       word still earns its keep for search and for citation. */
-  title: 'sigiro — 自我修复软件的可观测性数据层',
+  title: "sigiro — 自我修复软件的可观测性数据层",
 
   /** The h1: the category claim. Short, because the h1 is capped at 24ch. */
-  tagline: '面向自我修复软件的数据层。',
+  tagline: "面向自我修复软件的数据层。",
 
   /** Also the meta description, the OG description and the Twitter card, so it
       has to stay under ~155 rendered characters or search results cut it
@@ -60,7 +60,7 @@ export const ZH: LandingCopy = {
       so you can check the result or disprove it. Do not put 原因, 导致 or 证明
       back into this string. */
   description:
-    '把 OpenTelemetry 发送到 sigiro。服务出故障时，你会拿到排序后的结果、可疑的那次部署，以及每条结果背后的查询语句。',
+    "把 OpenTelemetry 发送到 sigiro。服务出故障时，你会拿到排序后的结果、可疑的那次部署，以及每条结果背后的查询语句。",
 
   /** Nav labels. The hrefs are in site.shared.ts.
 
@@ -68,14 +68,14 @@ export const ZH: LandingCopy = {
       link in a footer row, and 接口文档 would be both longer and vaguer than
       the word every Chinese-speaking developer already uses. */
   nav: {
-    docs: '文档',
-    reference: 'API',
+    docs: "文档",
+    reference: "API",
   },
 
   /** The hero's second action. "Talk to us", not "book a demo": there is no
       demo, since the product is a binary you run in one command, and 预约演示
       promises a sales call that nobody here is staffed to give. */
-  callLabel: '联系我们',
+  callLabel: "联系我们",
 
   /**
    * Strings that were hardcoded in the markup before the landing page was
@@ -84,29 +84,30 @@ export const ZH: LandingCopy = {
    */
   ui: {
     /** The hero's primary action, and the same label in the header. */
-    getStarted: '开始使用',
-    signUp: '注册',
-    installCli: '安装 CLI',
+    getStarted: "开始使用",
+    signUp: "注册",
+    installCli: "安装 CLI",
     /** The line under the hero loop. Restates the two claims that decide
         whether a reader keeps reading: it is free self-hosted, and nothing
         leaves their infrastructure. Same wording as `promises[3]`, and it must
         not imply a hosted signup — there is none. */
-    heroNote: '自己部署就免费。sigiro 不会把任何数据发给我们。',
+    heroNote: "自己部署就免费。sigiro 不会把任何数据发给我们。",
     /** The stepped-terminal section. `stepsAria` labels the step list for
         screen readers; `shellAria` names the transcript region. `howTail`
         repeats the four `how.*` titles in order, so the two must stay in
         step. */
-    howLabel: '怎么用',
-    howTitle: '四个步骤。',
-    howTail: '你依次完成接入、提问、关联和核验。',
-    howLede: '你把 OpenTelemetry 发送到 sigiro，然后问一个问题。下面每一步都是一次真实的终端会话。',
-    stepsAria: '四个步骤',
-    shellAria: '你的终端',
+    howLabel: "怎么用",
+    howTitle: "四个步骤。",
+    howTail: "你依次完成接入、提问、关联和核验。",
+    howLede:
+      "你把 OpenTelemetry 发送到 sigiro，然后问一个问题。下面每一步都是一次真实的终端会话。",
+    stepsAria: "四个步骤",
+    shellAria: "你的终端",
     /** The integrations section. 不用迁移 is a claim: sigiro speaks OTLP, so
         the reader keeps the instrumentation they already have. */
-    integrationsLabel: '你能得到什么',
-    integrationsTitle: '不用迁移。',
-    integrationsTail: 'sigiro 能对接你正在用的工具。',
+    integrationsLabel: "你能得到什么",
+    integrationsTitle: "不用迁移。",
+    integrationsTail: "sigiro 能对接你正在用的工具。",
   },
 
   /**
@@ -117,26 +118,26 @@ export const ZH: LandingCopy = {
    */
   how: {
     connect: {
-      title: '接入',
-      say: 'sigiro 使用标准 OTLP，监听标准端口。',
+      title: "接入",
+      say: "sigiro 使用标准 OTLP，监听标准端口。",
     },
     ask: {
-      title: '提问',
+      title: "提问",
       /* 可疑的那次部署, not 导致故障的那次部署. The payload says `"suspect"`,
          and the prose has to say what the payload says. sigiro finds a deploy
          near the shift in time; a person or an agent decides whether that
          deploy is the cause. */
-      say: 'sigiro 会给结果排序，并指出可疑的那次部署。',
+      say: "sigiro 会给结果排序，并指出可疑的那次部署。",
     },
     correlate: {
-      title: '关联',
-      say: '智能体就是一个会调用模型的服务。同一条链路里两者都在。',
+      title: "关联",
+      say: "智能体就是一个会调用模型的服务。同一条链路里两者都在。",
     },
     prove: {
       /* 核验, not 证明: the check is the reader's to run, and 证明 is a
          conclusion word this page does not get to use. */
-      title: '核验',
-      say: '把那条查询再跑一遍。把范围放宽。试着推翻这个结果。',
+      title: "核验",
+      say: "把那条查询再跑一遍。把范围放宽。试着推翻这个结果。",
     },
   },
 
@@ -151,12 +152,12 @@ export const ZH: LandingCopy = {
    * `GET /openapi.json` is a real request line.
    */
   discover: {
-    n: '01',
-    lead: '自动发现。',
-    rest: '你的智能体不用人帮忙就能读懂 API 描述。',
-    say: '一份公开文档描述了全部接口。',
-    artifactTitle: 'GET /openapi.json',
-    artifactMeta: '公开，无需密钥',
+    n: "01",
+    lead: "自动发现。",
+    rest: "你的智能体不用人帮忙就能读懂 API 描述。",
+    say: "一份公开文档描述了全部接口。",
+    artifactTitle: "GET /openapi.json",
+    artifactMeta: "公开，无需密钥",
   },
 
   /**
@@ -169,33 +170,33 @@ export const ZH: LandingCopy = {
    */
   loop: {
     detect: {
-      title: '检测',
-      owner: 'sigiro',
-      say: 'sigiro 拿每个服务和它自己的历史作比较。阈值你一个都不用设。',
+      title: "检测",
+      owner: "sigiro",
+      say: "sigiro 拿每个服务和它自己的历史作比较。阈值你一个都不用设。",
     },
     diagnose: {
-      title: '诊断',
-      owner: 'sigiro',
-      say: '一次调用就给出排序后的结果、可疑的那次部署，以及每条结果对应的查询语句。',
+      title: "诊断",
+      owner: "sigiro",
+      say: "一次调用就给出排序后的结果、可疑的那次部署，以及每条结果对应的查询语句。",
     },
     fix: {
-      title: '修复',
-      owner: '你的智能体',
-      say: '补丁由你的智能体来写。这一步 sigiro 不做。',
+      title: "修复",
+      owner: "你的智能体",
+      say: "补丁由你的智能体来写。这一步 sigiro 不做。",
     },
     verify: {
-      title: '验证',
-      owner: '你的流水线，用我们的证据',
-      say: '测试通过不等于服务恢复。再问一次，看看哪些异常已经不见了。',
+      title: "验证",
+      owner: "你的流水线，用我们的证据",
+      say: "测试通过不等于服务恢复。再问一次，看看哪些异常已经不见了。",
     },
     learn: {
       /* The one stage where a conclusion word is allowed: the playbook is a
          file YOU wrote after you read the evidence and fixed the service, and
          `LOOP_SESSIONS.learn` prints a `cause` line to match. Do not copy that
          register into any string that describes sigiro's own output. */
-      title: '沉淀',
-      owner: '你的记忆库',
-      say: '把修复方案和证据一起存下来。同样的故障再出现时就直接拿来用。',
+      title: "沉淀",
+      owner: "你的记忆库",
+      say: "把修复方案和证据一起存下来。同样的故障再出现时就直接拿来用。",
     },
   },
 
@@ -212,34 +213,34 @@ export const ZH: LandingCopy = {
          on us, and sigiro proves nothing: it measures a shift and names a
          deploy near it in time. What you get is a result you can check, and the
          check is yours to run. */
-      title: '你自己就能核验',
-      body: '每条结果都附带生成它的那条查询语句。',
+      title: "你自己就能核验",
+      body: "每条结果都附带生成它的那条查询语句。",
     },
     {
-      title: '没有需要维护的东西',
-      body: '你不用设阈值，也不用写规则。sigiro 用的是每个服务自己的历史数据。',
+      title: "没有需要维护的东西",
+      body: "你不用设阈值，也不用写规则。sigiro 用的是每个服务自己的历史数据。",
     },
     {
       /* 一条命令, not 一个容器: the binary is the lead install path now that
          `/install` works. */
-      title: '五分钟装好',
-      body: '一条命令，两个环境变量。代码一行都不用改。',
+      title: "五分钟装好",
+      body: "一条命令，两个环境变量。代码一行都不用改。",
     },
     {
       /* The site sells the self-hosted product. Hosted is a hand-built invited
          beta, so it gets a conversation rather than a price: a number here
          would promise a self-serve signup that does not exist. Do not add one,
          and do not write 注册 or 免费试用 in this tile. */
-      title: '自己部署就免费',
-      body: '不按主机、席位或数据量收费。想让我们替你运行，就来聊聊。',
+      title: "自己部署就免费",
+      body: "不按主机、席位或数据量收费。想让我们替你运行，就来聊聊。",
     },
     {
-      title: '数据留在你手里',
-      body: '你把 sigiro 装在自己的服务器上。sigiro 不会把任何数据发给我们。',
+      title: "数据留在你手里",
+      body: "你把 sigiro 装在自己的服务器上。sigiro 不会把任何数据发给我们。",
     },
     {
-      title: 'sigiro 监控 sigiro',
-      body: 'sigiro 把自己的遥测数据发给 sigiro。我们就是这样发现自己的故障的。',
+      title: "sigiro 监控 sigiro",
+      body: "sigiro 把自己的遥测数据发给 sigiro。我们就是这样发现自己的故障的。",
     },
   ],
 
@@ -249,10 +250,10 @@ export const ZH: LandingCopy = {
    * lives in site.shared.ts, untranslated.
    */
   integrations: {
-    emitLabel: '从这些地方发送遥测数据',
-    runLabel: '在这些平台上运行',
-    readLabel: '这些工具可以读取',
-    readAnySql: '任何会说 SQL 的工具',
+    emitLabel: "从这些地方发送遥测数据",
+    runLabel: "在这些平台上运行",
+    readLabel: "这些工具可以读取",
+    readAnySql: "任何会说 SQL 的工具",
   },
 
   /**
@@ -287,33 +288,33 @@ export const ZH: LandingCopy = {
    */
   askAi: [
     // Coding agent in a loop — the primary use case in product-marketing.md.
-    '我的编程智能体看不到生产环境，只能盲写补丁。sigiro 能把这个闭环补上吗？',
-    '我想让我的智能体发现故障、打上补丁，再确认修复是否生效。sigiro 在这个闭环里能做哪一段？',
-    '有哪些证据是 sigiro 能交给智能体、而仪表盘给不了的？',
+    "我的编程智能体看不到生产环境，只能盲写补丁。sigiro 能把这个闭环补上吗？",
+    "我想让我的智能体发现故障、打上补丁，再确认修复是否生效。sigiro 在这个闭环里能做哪一段？",
+    "有哪些证据是 sigiro 能交给智能体、而仪表盘给不了的？",
 
     // Language and stack entry points — the "I have an X app" shape.
-    '我有一个 Go 服务，完全没做埋点。想用 sigiro 排查它，我要先做什么？',
-    '我的 Node 应用已经把 OpenTelemetry 发到别的地方了。改成发给 sigiro 会有什么变化？',
-    '我在一台机器上跑着几个服务。用 sigiro 是不是太重了，还是正合适？',
+    "我有一个 Go 服务，完全没做埋点。想用 sigiro 排查它，我要先做什么？",
+    "我的 Node 应用已经把 OpenTelemetry 发到别的地方了。改成发给 sigiro 会有什么变化？",
+    "我在一台机器上跑着几个服务。用 sigiro 是不是太重了，还是正合适？",
 
     // LLM app debugging — a named use case.
-    '我的大模型应用会卡住，但我看不出是哪一次模型调用拖住了它。sigiro 能看出来吗？',
+    "我的大模型应用会卡住，但我看不出是哪一次模型调用拖住了它。sigiro 能看出来吗？",
 
     // 3am incident with an agent on call.
-    '生产环境凌晨三点出了问题，当时没人醒着。sigiro 会告诉一个定时运行的智能体什么？',
+    "生产环境凌晨三点出了问题，当时没人醒着。sigiro 会告诉一个定时运行的智能体什么？",
 
     // Solo founder persona: price and setup time.
-    '我一个人做产品，实在没法承担按席位计费的可观测性账单。用 sigiro 我要花多少钱？',
-    'sigiro 装起来要多久？装完之后我还要维护什么？',
+    "我一个人做产品，实在没法承担按席位计费的可观测性账单。用 sigiro 我要花多少钱？",
+    "sigiro 装起来要多久？装完之后我还要维护什么？",
 
     // Privacy-conscious persona: data ownership.
-    '我不想让客户的遥测数据离开我自己的基础设施。sigiro 会把数据存在哪里？',
+    "我不想让客户的遥测数据离开我自己的基础设施。sigiro 会把数据存在哪里？",
 
     // Small platform team: dashboard rot.
-    '我每周要花好几个小时维护根本没人看的仪表盘。sigiro 能替掉其中的哪些？',
+    "我每周要花好几个小时维护根本没人看的仪表盘。sigiro 能替掉其中的哪些？",
 
     // The honest one. A reader who asks this and gets a straight answer trusts
     // the rest.
-    'sigiro 在什么情况下并不合适？它目前还做不到什么？',
+    "sigiro 在什么情况下并不合适？它目前还做不到什么？",
   ],
 } as const;

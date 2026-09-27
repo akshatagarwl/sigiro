@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import {
   motion,
@@ -6,10 +6,17 @@ import {
   useMotionValueEvent,
   useScroll,
   useTransform,
-} from 'motion/react';
-import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { StageList } from '@/components/stage-list';
-import type { SessionLine } from '@/lib/highlight';
+} from "motion/react";
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+
+import { StageList } from "@/components/stage-list";
+import type { SessionLine } from "@/lib/highlight";
 
 /**
  * One terminal per step, stepped by scroll, with a task list beside it.
@@ -103,7 +110,11 @@ export type TerminalStep = {
    * highlighter must not. When present, `lines` is whichever the reader picked
    * and this is the pair the picker offers.
    */
-  choices?: readonly { id: string; label: string; lines: readonly SessionLine[] }[];
+  choices?: readonly {
+    id: string;
+    label: string;
+    lines: readonly SessionLine[];
+  }[];
 };
 
 /**
@@ -119,7 +130,7 @@ export type TerminalStep = {
  * `localStorage` can throw — Safari in private mode, storage blocked. A missing
  * preference is just the default, so failing soft is right.
  */
-const PREF = 'sigiro-install';
+const PREF = "sigiro-install";
 
 function readPref(): string | null {
   try {
@@ -148,10 +159,10 @@ function subscribe(notify: () => void) {
   watchers.add(notify);
   // Another tab changing the preference. Free, and correct: the reader set it
   // once and means it everywhere.
-  window.addEventListener('storage', notify);
+  window.addEventListener("storage", notify);
   return () => {
     watchers.delete(notify);
-    window.removeEventListener('storage', notify);
+    window.removeEventListener("storage", notify);
   };
 }
 
@@ -214,7 +225,8 @@ function locate(v: number, count: number) {
   const scaled = Math.min(Math.max(v, 0), 0.9999) * count;
   const index = Math.floor(scaled);
   const frac = scaled - index;
-  const handoff = index >= count - 1 || frac <= HOLD ? 0 : (frac - HOLD) / (1 - HOLD);
+  const handoff =
+    index >= count - 1 || frac <= HOLD ? 0 : (frac - HOLD) / (1 - HOLD);
   return { index, handoff };
 }
 
@@ -265,7 +277,13 @@ export function SteppedTerminal({
    * of a 720px viewport; the header adds roughly 130px more. See the note at the
    * sticky container for what gives way, and where it stops fitting.
    */
-  heading?: { id: string; label: string; title: string; tail?: string; lede?: string };
+  heading?: {
+    id: string;
+    label: string;
+    title: string;
+    tail?: string;
+    lede?: string;
+  };
   /**
    * Scroll distance the whole sequence occupies. Defaults to one viewport for
    * the pin plus 45vh of travel per step.
@@ -281,13 +299,16 @@ export function SteppedTerminal({
 
   const pick = useInstallPref();
   const frames = useMemo(() => plan(steps, pick), [steps, pick]);
-  const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end end'] });
+  const { scrollYProgress } = useScroll({
+    target: ref,
+    offset: ["start start", "end end"],
+  });
 
   // The discrete half: which frame's text is mounted. One render per step —
   // `setShown` is handed the same index on most scroll frames and React bails out.
   const [shown, setShown] = useState(0);
 
-  useMotionValueEvent(scrollYProgress, 'change', (v) => {
+  useMotionValueEvent(scrollYProgress, "change", (v) => {
     const { index, handoff } = locate(v, steps.length);
     setShown(handoff >= 0.5 ? index + 1 : index);
   });
@@ -322,8 +343,13 @@ export function SteppedTerminal({
   const frame = frames[shown];
 
   const tasks = useMemo(
-    () => steps.map((s) => ({ id: s.label, label: s.label, meta: s.badgeShort ?? s.badge })),
-    [steps],
+    () =>
+      steps.map((s) => ({
+        id: s.label,
+        label: s.label,
+        meta: s.badgeShort ?? s.badge,
+      })),
+    [steps]
   );
 
   /**
@@ -353,10 +379,12 @@ export function SteppedTerminal({
         top: top + span * progress,
         // A jump this long is disorienting without the sweep, but "smooth" is
         // exactly what a reduced-motion preference is asking us not to do.
-        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
       });
     },
-    [steps.length],
+    [steps.length]
   );
 
   return (
@@ -386,7 +414,7 @@ export function SteppedTerminal({
               <p className="label">{heading.label}</p>
               <h2
                 id={heading.id}
-                className="mt-2.5 max-w-[34ch] text-[22px] leading-[1.2] font-medium tracking-[-0.03em] text-ink sm:text-[27px]"
+                className="text-ink mt-2.5 max-w-[34ch] text-[22px] leading-[1.2] font-medium tracking-[-0.03em] sm:text-[27px]"
               >
                 {heading.title}
                 {/* `{' '}` and not a space inside the span or a newline between
@@ -396,13 +424,13 @@ export function SteppedTerminal({
                     explicit expression cannot be reformatted away. */}
                 {heading.tail ? (
                   <>
-                    {' '}
+                    {" "}
                     <span className="text-ink-3">{heading.tail}</span>
                   </>
                 ) : null}
               </h2>
               {heading.lede ? (
-                <p className="mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed text-ink-2 sm:text-[15px]">
+                <p className="text-ink-2 mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed sm:text-[15px]">
                   {heading.lede}
                 </p>
               ) : null}
@@ -412,20 +440,25 @@ export function SteppedTerminal({
           <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[190px_1fr] lg:items-center">
             {/* The rail says which stage you are on, and now moves you to any
                 other one. The heading above says which section they belong to. */}
-            <StageList stages={tasks} current={shown} label={label} onSelect={goToStage} />
+            <StageList
+              stages={tasks}
+              current={shown}
+              label={label}
+              onSelect={goToStage}
+            />
 
             <figure className="mat-panel w-full min-w-0 rounded-[14px] p-[5px]">
               <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
                 {step.badge ? (
                   <span
                     className={`mat-cap inline-flex h-[22px] shrink-0 items-center rounded-[6px] px-2 text-[11.5px] font-medium ${
-                      step.badgeStrong ? 'text-ink' : 'text-ink-3'
+                      step.badgeStrong ? "text-ink" : "text-ink-3"
                     }`}
                   >
                     {step.badge}
                   </span>
                 ) : null}
-                <span className="text-[13px] font-medium tracking-[-0.01em] text-ink">
+                <span className="text-ink text-[13px] font-medium tracking-[-0.01em]">
                   {step.label}
                 </span>
 
@@ -457,7 +490,9 @@ export function SteppedTerminal({
                           aria-pressed={on}
                           onClick={() => writePref(choice.id)}
                           className={`press meta rounded-[5px] px-2 py-[5px] ${
-                            on ? 'bg-ink text-panel' : 'text-ink-3 hover:text-ink'
+                            on
+                              ? "bg-ink text-panel"
+                              : "text-ink-3 hover:text-ink"
                           }`}
                         >
                           {choice.label}
@@ -467,7 +502,9 @@ export function SteppedTerminal({
                   </span>
                 ) : null}
 
-                <span className={`meta shrink-0 text-ink-3 ${step.choices ? 'pl-2.5' : 'ml-auto'}`}>
+                <span
+                  className={`meta text-ink-3 shrink-0 ${step.choices ? "pl-2.5" : "ml-auto"}`}
+                >
                   {shown + 1} of {steps.length}
                 </span>
               </figcaption>
@@ -514,14 +551,14 @@ export function SteppedTerminal({
                     />
                   ))}
                   <div className="text-ink-3" style={{ height: LINE }}>
-                    {'$ '}
-                    <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
+                    {"$ "}
+                    <span className="bg-ink ml-px inline-block h-[13px] w-[7px] align-[-1px]" />
                   </div>
                 </motion.div>
               </motion.div>
 
               {step.note ? (
-                <p className="mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed text-ink-2">
+                <p className="text-ink-2 mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed">
                   {step.note}
                 </p>
               ) : null}
@@ -533,7 +570,7 @@ export function SteppedTerminal({
       {/* Which frame is on screen depends on scroll position, and a screen reader
           has no scroll position. This is every session, whole, once. */}
       <pre className="sr-only">
-        {frames.map((f) => f.lines.map((l) => l.text).join('\n')).join('\n\n')}
+        {frames.map((f) => f.lines.map((l) => l.text).join("\n")).join("\n\n")}
       </pre>
     </>
   );

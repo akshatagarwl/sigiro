@@ -1,0 +1,23 @@
+{
+  "name": "@sigiro/tooling",
+  "private": true,
+  "type": "module",
+  "packageManager": "aube@2.2.16",
+  "engines": {
+    "node": ">=24.20.0"
+  },
+  "scripts": {
+    "prepare": "effect-tsgo patch --no-typescript --oxlint",
+    "fmt": "oxfmt --config oxfmt.config.ts --disable-nested-config \"**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}\"",
+    "fmt:check": "oxfmt --config oxfmt.config.ts --disable-nested-config --check \"**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}\"",
+    "lint": "oxlint --config oxlint.config.ts --disable-nested-config --type-aware auth && oxlint --config oxlint.config.ts --disable-nested-config --ignore-pattern 'auth/**' ."
+  },
+  "devDependencies": {
+    "@effect/tsgo": "0.45.0",
+    "@oxlint/plugins": "1.82.0",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.82.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "ultracite": "7.12.0"
+  }
+}

@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 /**
  * Adapted from Assistant UI's TerminalBlock:
@@ -27,10 +27,11 @@
  * SOFTWARE.
  */
 
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StageList } from '@/components/stage-list';
-import type { SessionLine } from '@/lib/highlight';
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { StageList } from "@/components/stage-list";
+import type { SessionLine } from "@/lib/highlight";
 
 const FIRST_LINE_DELAY = 650;
 const LINE_DELAY = 320;
@@ -53,7 +54,9 @@ type FactoryLine = {
 
 /** Trusted Shiki markup produced by `highlightSession` on the server. */
 function HighlightedLine({ line }: { line: SessionLine }) {
-  return <span className="shiki" dangerouslySetInnerHTML={{ __html: line.html }} />;
+  return (
+    <span className="shiki" dangerouslySetInnerHTML={{ __html: line.html }} />
+  );
 }
 
 function TerminalBlock({
@@ -81,27 +84,30 @@ function TerminalBlock({
         label: stage.title,
         meta: stage.ownerShort,
       })),
-    [stages],
+    [stages]
   );
 
   useEffect(() => {
     const viewport = viewportRef.current;
     if (viewport) {
       viewport.scrollTo({
-        behavior: reduced ? 'auto' : 'smooth',
+        behavior: reduced ? "auto" : "smooth",
         top: viewport.scrollHeight,
       });
     }
   }, [visibleCount, reduced]);
 
-  const statusKey = done ? 'complete' : (stages[activeStage]?.title ?? 'empty');
+  const statusKey = done ? "complete" : (stages[activeStage]?.title ?? "empty");
   const selectStage = (index: number) => {
     if (reduced) {
       const viewport = viewportRef.current;
-      const target = viewport?.querySelector<HTMLElement>(`[data-stage="${index}"]`);
+      const target = viewport?.querySelector<HTMLElement>(
+        `[data-stage="${index}"]`
+      );
       if (viewport && target) {
         viewport.scrollTop +=
-          target.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+          target.getBoundingClientRect().top -
+          viewport.getBoundingClientRect().top;
       }
       return;
     }
@@ -111,12 +117,14 @@ function TerminalBlock({
   return (
     <figure className="mat-panel rounded-[14px] p-[5px]">
       <figcaption className="flex min-h-8 items-center gap-3 pr-[3px] pl-2.5 font-mono text-[11.5px]">
-        <span className="meta min-w-0 flex-1 text-ink-3">factory loop · five stages</span>
+        <span className="meta text-ink-3 min-w-0 flex-1">
+          factory loop · five stages
+        </span>
         <AnimatePresence initial={false} mode="wait">
           <motion.span
             animate={{ opacity: 1, y: 0 }}
             aria-hidden="true"
-            className="meta flex shrink-0 items-center gap-1.5 text-ink-3"
+            className="meta text-ink-3 flex shrink-0 items-center gap-1.5"
             exit={reduced ? { opacity: 0 } : { opacity: 0, y: -2 }}
             initial={reduced ? false : { opacity: 0, y: 2 }}
             key={statusKey}
@@ -128,7 +136,7 @@ function TerminalBlock({
               </>
             ) : (
               <>
-                <span className="size-[6px] rounded-[1.5px] bg-accent" />
+                <span className="bg-accent size-[6px] rounded-[1.5px]" />
                 {activeStage + 1}/{stages.length} · {stages[activeStage]?.title}
               </>
             )}
@@ -148,7 +156,7 @@ function TerminalBlock({
 
         <div
           aria-label="Factory loop transcript, scrollable"
-          className="mat-well scroll-inset h-[208px] overflow-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px] text-ink-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent sm:h-[264px]"
+          className="mat-well scroll-inset text-ink-2 focus-visible:ring-accent h-[208px] overflow-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px] focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset sm:h-[264px]"
           ref={viewportRef}
           role="group"
           tabIndex={0}
@@ -166,7 +174,9 @@ function TerminalBlock({
                   transition={reduced ? { duration: 0 } : ENTER}
                 >
                   {entry.lineIndex === 0 && (
-                    <p className={`meta mb-1 text-ink-3 ${entry.stageIndex === 0 ? '' : 'mt-2'}`}>
+                    <p
+                      className={`meta text-ink-3 mb-1 ${entry.stageIndex === 0 ? "" : "mt-2"}`}
+                    >
                       {entry.stage.title} · {entry.stage.owner}
                     </p>
                   )}
@@ -180,11 +190,16 @@ function TerminalBlock({
             {!done && (
               <motion.span
                 animate={reduced ? { opacity: 1 } : { opacity: [1, 1, 0, 0] }}
-                className="mt-1 inline-block h-[14px] w-[6px] bg-accent"
+                className="bg-accent mt-1 inline-block h-[14px] w-[6px]"
                 transition={
                   reduced
                     ? { duration: 0 }
-                    : { duration: 1.06, ease: 'linear', repeat: Infinity, times: [0, 0.5, 0.5, 1] }
+                    : {
+                        duration: 1.06,
+                        ease: "linear",
+                        repeat: Infinity,
+                        times: [0, 0.5, 0.5, 1],
+                      }
                 }
               />
             )}
@@ -208,16 +223,25 @@ function TerminalBlock({
   );
 }
 
-export function FactoryLoopPlayer({ stages }: { stages: readonly FactoryStage[] }) {
+export function FactoryLoopPlayer({
+  stages,
+}: {
+  stages: readonly FactoryStage[];
+}) {
   const reduced = useReducedMotion() === true;
   const [visibleCount, setVisibleCount] = useState(0);
   const [playback, setPlayback] = useState({ epoch: 0, start: 0 });
   const lines = useMemo(
     () =>
       stages.flatMap((stage, stageIndex) =>
-        stage.lines.map((line, lineIndex) => ({ stage, stageIndex, line, lineIndex })),
+        stage.lines.map((line, lineIndex) => ({
+          stage,
+          stageIndex,
+          line,
+          lineIndex,
+        }))
       ),
-    [stages],
+    [stages]
   );
   const stageStarts = useMemo(() => {
     let offset = 0;
@@ -232,9 +256,12 @@ export function FactoryLoopPlayer({ stages }: { stages: readonly FactoryStage[] 
     (index: number) => {
       const start = stageStarts[index];
       if (start === undefined) return;
-      setPlayback((current) => ({ epoch: current.epoch + 1, start: start + 1 }));
+      setPlayback((current) => ({
+        epoch: current.epoch + 1,
+        start: start + 1,
+      }));
     },
-    [stageStarts],
+    [stageStarts]
   );
 
   useEffect(() => {

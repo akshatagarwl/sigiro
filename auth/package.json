@@ -8,10 +8,8 @@
     "node": ">=24.20.0"
   },
   "scripts": {
-    "prepare": "effect-tsgo patch --no-typescript --oxlint",
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
-    "lint": "oxlint --type-aware .",
     "schema:sql": "tsx scripts/generate-d1-sql.ts",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy",
@@ -33,10 +31,7 @@
   "devDependencies": {
     "@auth/agent": "0.6.2",
     "@cloudflare/workers-types": "^5.20260919.1",
-    "@effect/tsgo": "0.45.0",
     "@types/node": "24.10.1",
-    "oxlint": "1.82.0",
-    "oxlint-tsgolint": "7.0.2001",
     "tsx": "4.23.13",
     "typescript": "7.0.2",
     "wrangler": "^4.135.0"

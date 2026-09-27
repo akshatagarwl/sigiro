@@ -12,7 +12,8 @@
  * served file and asserts it is deep-equal to this one. Edit either and the
  * test fails, so they cannot silently drift.
  */
-export const FIRST_PARTY_CLIENT_ID = "https://sigiro.com/.well-known/oauth-client.json";
+export const FIRST_PARTY_CLIENT_ID =
+  "https://sigiro.com/.well-known/oauth-client.json";
 
 export const FIRST_PARTY_CLIENT_METADATA = {
   client_id: FIRST_PARTY_CLIENT_ID,
@@ -20,10 +21,15 @@ export const FIRST_PARTY_CLIENT_METADATA = {
   client_uri: "https://sigiro.com/",
   application_type: "native",
   redirect_uris: ["com.sigiro.cli:/oauth/callback"],
-  grant_types: ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
+  grant_types: [
+    "urn:ietf:params:oauth:grant-type:device_code",
+    "refresh_token",
+  ],
   token_endpoint_auth_method: "none",
   scope:
     "openid profile email offline_access telemetry:ingest services:read diagnose:read traces:read query:read anomalies:read",
 } as const;
 
-export const FIRST_PARTY_CLIENT_METADATA_JSON = JSON.stringify(FIRST_PARTY_CLIENT_METADATA);
+export const FIRST_PARTY_CLIENT_METADATA_JSON = JSON.stringify(
+  FIRST_PARTY_CLIENT_METADATA
+);

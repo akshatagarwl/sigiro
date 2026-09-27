@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { FloatingLabelInput } from '@/components/interior/floating-label';
-import { OtpInput, type OtpInputHandle } from '@/components/interior/otp-input';
-import { CopySource } from '@/components/site/copy-source';
-import { INSTALL_COMMAND } from '@/lib/site.shared';
+import { FloatingLabelInput } from "@/components/interior/floating-label";
+import { OtpInput, type OtpInputHandle } from "@/components/interior/otp-input";
+import { CopySource } from "@/components/site/copy-source";
+import { INSTALL_COMMAND } from "@/lib/site.shared";
 
 /**
  * The entire auth card: email, one-time code, device approval, consent, done.
@@ -27,7 +27,12 @@ import { INSTALL_COMMAND } from '@/lib/site.shared';
  * `verification-code`; the checks fill that one native field just as autofill does.
  */
 
-export type AuthPage = 'sign-in' | 'sign-up' | 'device' | 'agent-device' | 'consent';
+export type AuthPage =
+  | "sign-in"
+  | "sign-up"
+  | "device"
+  | "agent-device"
+  | "consent";
 
 interface Props {
   readonly page: AuthPage;
@@ -41,11 +46,11 @@ interface Props {
   readonly intro: string;
 }
 
-type Phase = 'loading' | 'email' | 'code' | 'request' | 'consent' | 'done';
+type Phase = "loading" | "email" | "code" | "request" | "consent" | "done";
 
-const api = '/api/auth';
+const api = "/api/auth";
 const resendCooldownSeconds = 30;
-const LOGIN_COMMAND = 'sigiro auth login' as const;
+const LOGIN_COMMAND = "sigiro auth login" as const;
 
 interface ErrorBody {
   readonly message?: string;
@@ -64,7 +69,11 @@ interface RedirectBody {
 /** The body of a device or agent approval decision. */
 type DecisionBody =
   | { readonly userCode: string }
-  | { readonly agent_id: string; readonly user_code: string; readonly action: 'approve' | 'deny' };
+  | {
+      readonly agent_id: string;
+      readonly user_code: string;
+      readonly action: "approve" | "deny";
+    };
 
 interface DeviceDetails {
   readonly client_id?: string;
@@ -72,20 +81,25 @@ interface DeviceDetails {
   readonly resource?: string | readonly string[];
 }
 
-const request = async <T,>(path: string, options: RequestInit = {}): Promise<T> => {
+const request = async <T,>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> => {
   const response = await fetch(api + path, {
-    credentials: 'same-origin',
+    credentials: "same-origin",
     ...options,
     headers:
       options.body === undefined
         ? options.headers
-        : { 'content-type': 'application/json', ...options.headers },
+        : { "content-type": "application/json", ...options.headers },
   });
   // SAFETY: every auth endpoint answers JSON; an unparseable body becomes an
   // empty object and surfaces as the generic failure below.
   const body = (await response.json().catch(() => ({}))) as T & ErrorBody;
   if (!response.ok) {
-    throw new Error(body.message ?? body.error_description ?? body.error ?? 'Request failed');
+    throw new Error(
+      body.message ?? body.error_description ?? body.error ?? "Request failed"
+    );
   }
   return body;
 };
@@ -94,25 +108,26 @@ const message = (cause: unknown, fallback: string): string =>
   cause instanceof Error ? cause.message : fallback;
 
 const verificationMessage = (cause: unknown): string => {
-  const detail = message(cause, 'Verification failed');
-  if (/expired/i.test(detail)) return 'That verification code has expired. Request a new code.';
+  const detail = message(cause, "Verification failed");
+  if (/expired/i.test(detail))
+    return "That verification code has expired. Request a new code.";
   if (/invalid otp|invalid.*code/i.test(detail)) {
-    return 'That verification code is incorrect. Try again or request a new code.';
+    return "That verification code is incorrect. Try again or request a new code.";
   }
-  return detail.replace(/\bOTP\b/gi, 'verification code');
+  return detail.replace(/\bOTP\b/gi, "verification code");
 };
 
 const primary =
-  'inline-flex h-10 items-center justify-center rounded-[10px] bg-stone-900 px-4 text-[14px] ' +
-  'font-semibold text-white transition-colors duration-150 hover:bg-stone-800 ' +
-  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] ' +
-  'disabled:opacity-60 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white';
+  "inline-flex h-10 items-center justify-center rounded-[10px] bg-stone-900 px-4 text-[14px] " +
+  "font-semibold text-white transition-colors duration-150 hover:bg-stone-800 " +
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] " +
+  "disabled:opacity-60 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white";
 
 const secondary =
-  'inline-flex h-10 items-center justify-center rounded-[10px] border-2 border-stone-200 px-4 ' +
-  'text-[14px] font-semibold text-stone-700 transition-colors duration-150 hover:bg-stone-100 ' +
-  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] ' +
-  'disabled:opacity-60 dark:border-white/[0.08] dark:text-stone-300 dark:hover:bg-white/[0.04]';
+  "inline-flex h-10 items-center justify-center rounded-[10px] border-2 border-stone-200 px-4 " +
+  "text-[14px] font-semibold text-stone-700 transition-colors duration-150 hover:bg-stone-100 " +
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] " +
+  "disabled:opacity-60 dark:border-white/[0.08] dark:text-stone-300 dark:hover:bg-white/[0.04]";
 
 export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   /**
@@ -128,30 +143,32 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
    * trade there.
    */
   const [phase, setPhase] = useState<Phase>(
-    page === 'sign-in' || page === 'sign-up' ? 'email' : 'loading',
+    page === "sign-in" || page === "sign-up" ? "email" : "loading"
   );
-  const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState('');
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [success, setSuccess] = useState('');
+  const [success, setSuccess] = useState("");
   const [details, setDetails] = useState<DeviceDetails | null>(null);
   const [resendAvailableIn, setResendAvailableIn] = useState(0);
-  const [otpValue, setOtpValue] = useState('');
+  const [otpValue, setOtpValue] = useState("");
   const otpRef = useRef<OtpInputHandle>(null);
   const verifyInFlight = useRef(false);
 
   // `import.meta.env.SSR` is replaced at build time, so the server render gets
   // an empty query and the browser gets the real one without sniffing globals.
-  const params = new URLSearchParams(import.meta.env.SSR ? '' : location.search);
-  const oauthQuery = params.get('oauth_query');
-  const userCode = params.get('user_code')?.trim() ?? '';
-  const agentId = params.get('agent_id')?.trim() ?? '';
-  const agentCode = params.get('code')?.trim() ?? '';
+  const params = new URLSearchParams(
+    import.meta.env.SSR ? "" : location.search
+  );
+  const oauthQuery = params.get("oauth_query");
+  const userCode = params.get("user_code")?.trim() ?? "";
+  const agentId = params.get("agent_id")?.trim() ?? "";
+  const agentCode = params.get("code")?.trim() ?? "";
 
   useEffect(() => {
-    if (phase !== 'code' || resendAvailableIn <= 0) return;
+    if (phase !== "code" || resendAvailableIn <= 0) return;
     const timeout = window.setTimeout(() => {
       setResendAvailableIn((seconds) => Math.max(0, seconds - 1));
     }, 1000);
@@ -159,22 +176,27 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   }, [phase, resendAvailableIn]);
 
   const ensureWorkspace = useCallback(async (): Promise<void> => {
-    await request('/onboarding/ensure-personal-organization', { method: 'POST', body: '{}' });
+    await request("/onboarding/ensure-personal-organization", {
+      method: "POST",
+      body: "{}",
+    });
   }, []);
 
   const signedIn = useCallback(async (): Promise<boolean> => {
     // Signed-out responses are the JSON literal `null`, NOT a 401, so the status
     // code alone cannot answer this question.
-    const body = await request<SessionBody | null>('/get-session');
+    const body = await request<SessionBody | null>("/get-session");
     return Boolean(body?.session);
   }, []);
 
   const finishOAuthLogin = useCallback(async (): Promise<boolean> => {
     if (!oauthQuery) return false;
     const body =
-      page === 'sign-up' ? { oauth_query: oauthQuery, created: true } : { oauth_query: oauthQuery };
-    const result = await request<RedirectBody>('/oauth2/continue', {
-      method: 'POST',
+      page === "sign-up"
+        ? { oauth_query: oauthQuery, created: true }
+        : { oauth_query: oauthQuery };
+    const result = await request<RedirectBody>("/oauth2/continue", {
+      method: "POST",
       body: JSON.stringify(body),
     });
     location.assign(result.redirect_uri);
@@ -185,41 +207,51 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   const afterSignIn = useCallback(async (): Promise<void> => {
     await ensureWorkspace();
 
-    if (page === 'device') {
+    if (page === "device") {
       if (!userCode) {
-        setError('This device link is missing its user code. Run sigiro auth login again.');
+        setError(
+          "This device link is missing its user code. Run sigiro auth login again."
+        );
         return;
       }
-      setDetails(await request<DeviceDetails>(`/device?user_code=${encodeURIComponent(userCode)}`));
-      setStatus('Review the request before approving it.');
-      setPhase('request');
+      setDetails(
+        await request<DeviceDetails>(
+          `/device?user_code=${encodeURIComponent(userCode)}`
+        )
+      );
+      setStatus("Review the request before approving it.");
+      setPhase("request");
       return;
     }
 
-    if (page === 'agent-device') {
+    if (page === "agent-device") {
       if (!agentId || !agentCode) {
-        setError('This agent approval link is incomplete. Start the connection again.');
+        setError(
+          "This agent approval link is incomplete. Start the connection again."
+        );
         return;
       }
       setDetails({
         client_id: agentId,
-        scope: 'Capabilities requested by this agent',
+        scope: "Capabilities requested by this agent",
         resource: location.origin,
       });
-      setStatus('Confirm this code matches the requesting agent before approving.');
-      setPhase('request');
+      setStatus(
+        "Confirm this code matches the requesting agent before approving."
+      );
+      setPhase("request");
       return;
     }
 
-    if (page === 'consent') {
-      setPhase('consent');
+    if (page === "consent") {
+      setPhase("consent");
       return;
     }
 
     if (await finishOAuthLogin()) return;
-    setSuccess('Your Sigiro account and personal workspace are ready.');
-    setStatus('');
-    setPhase('done');
+    setSuccess("Your Sigiro account and personal workspace are ready.");
+    setStatus("");
+    setPhase("done");
   }, [agentCode, agentId, ensureWorkspace, finishOAuthLogin, page, userCode]);
 
   useEffect(() => {
@@ -229,41 +261,43 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           await afterSignIn();
           return;
         }
-        if (page === 'consent') {
-          location.assign(`/sign-in?oauth_query=${encodeURIComponent(oauthQuery ?? '')}`);
+        if (page === "consent") {
+          location.assign(
+            `/sign-in?oauth_query=${encodeURIComponent(oauthQuery ?? "")}`
+          );
           return;
         }
-        setPhase('email');
+        setPhase("email");
       } catch (cause) {
-        setError(message(cause, 'Authentication failed'));
-        setPhase('email');
+        setError(message(cause, "Authentication failed"));
+        setPhase("email");
       }
     })();
   }, [afterSignIn, oauthQuery, page, signedIn]);
 
   const deliverCode = useCallback((address: string, resend: boolean): void => {
     setBusy(true);
-    setError('');
-    setStatus(resend ? 'Sending a new code…' : 'Sending your code…');
-    void request('/email-otp/send-verification-otp', {
-      method: 'POST',
-      body: JSON.stringify({ email: address, type: 'sign-in' }),
+    setError("");
+    setStatus(resend ? "Sending a new code…" : "Sending your code…");
+    void request("/email-otp/send-verification-otp", {
+      method: "POST",
+      body: JSON.stringify({ email: address, type: "sign-in" }),
     })
       .then(() => {
         setEmail(address);
-        setPhase('code');
+        setPhase("code");
         setResendAvailableIn(resendCooldownSeconds);
         if (resend) {
-          setStatus('A new verification code was sent.');
+          setStatus("A new verification code was sent.");
           window.requestAnimationFrame(() => otpRef.current?.clear());
         } else {
-          setOtpValue('');
-          setStatus('');
+          setOtpValue("");
+          setStatus("");
         }
       })
       .catch((cause: unknown) => {
-        setStatus('');
-        setError(message(cause, 'Could not send the verification code'));
+        setStatus("");
+        setError(message(cause, "Could not send the verification code"));
       })
       .finally(() => {
         setBusy(false);
@@ -275,7 +309,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
       event.preventDefault();
       deliverCode(email.trim().toLowerCase(), false);
     },
-    [deliverCode, email],
+    [deliverCode, email]
   );
 
   /** Verify automatically at six digits or explicitly through the form submit button. */
@@ -284,14 +318,19 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
       if (verifyInFlight.current) return;
       verifyInFlight.current = true;
       setBusy(true);
-      setError('');
-      setStatus('Verifying…');
+      setError("");
+      setStatus("Verifying…");
       const body =
-        page === 'sign-up' ? { email, otp: code, name: name.trim() } : { email, otp: code };
-      void request('/sign-in/email-otp', { method: 'POST', body: JSON.stringify(body) })
+        page === "sign-up"
+          ? { email, otp: code, name: name.trim() }
+          : { email, otp: code };
+      void request("/sign-in/email-otp", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
         .then(afterSignIn)
         .catch((cause: unknown) => {
-          setStatus('');
+          setStatus("");
           setError(verificationMessage(cause));
           window.requestAnimationFrame(() => otpRef.current?.select());
         })
@@ -300,76 +339,86 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           setBusy(false);
         });
     },
-    [afterSignIn, email, name, page],
+    [afterSignIn, email, name, page]
   );
 
   const decide = useCallback(
-    (approve: boolean, path: string, body: DecisionBody, approved: string, denied: string) => {
+    (
+      approve: boolean,
+      path: string,
+      body: DecisionBody,
+      approved: string,
+      denied: string
+    ) => {
       setBusy(true);
-      setError('');
-      setStatus(approve ? 'Approving…' : 'Denying…');
-      void request(path, { method: 'POST', body: JSON.stringify(body) })
+      setError("");
+      setStatus(approve ? "Approving…" : "Denying…");
+      void request(path, { method: "POST", body: JSON.stringify(body) })
         .then(() => {
           setSuccess(approve ? approved : denied);
-          setStatus('');
-          setPhase('done');
+          setStatus("");
+          setPhase("done");
         })
         .catch((cause: unknown) => {
-          setStatus('');
-          setError(message(cause, 'Could not process the request'));
+          setStatus("");
+          setError(message(cause, "Could not process the request"));
         })
         .finally(() => {
           setBusy(false);
         });
     },
-    [],
+    []
   );
 
   const decideRequest = useCallback(
     (approve: boolean) => {
-      if (page === 'agent-device') {
+      if (page === "agent-device") {
         decide(
           approve,
-          '/agent/approve-capability',
-          { agent_id: agentId, user_code: agentCode, action: approve ? 'approve' : 'deny' },
-          'Return to your agent. Access is approved.',
-          'The agent request was denied.',
+          "/agent/approve-capability",
+          {
+            agent_id: agentId,
+            user_code: agentCode,
+            action: approve ? "approve" : "deny",
+          },
+          "Return to your agent. Access is approved.",
+          "The agent request was denied."
         );
         return;
       }
       decide(
         approve,
-        approve ? '/device/approve' : '/device/deny',
+        approve ? "/device/approve" : "/device/deny",
         { userCode },
-        'Return to your terminal. The CLI is connected.',
-        'The device request was denied.',
+        "Return to your terminal. The CLI is connected.",
+        "The device request was denied."
       );
     },
-    [agentCode, agentId, decide, page, userCode],
+    [agentCode, agentId, decide, page, userCode]
   );
 
   const decideConsent = useCallback(
     (accept: boolean) => {
       if (!oauthQuery) {
-        setError('This authorization request is missing its signed query.');
+        setError("This authorization request is missing its signed query.");
         return;
       }
       setBusy(true);
-      setStatus(accept ? 'Approving…' : 'Denying…');
-      void request<RedirectBody>('/oauth2/consent', {
-        method: 'POST',
+      setStatus(accept ? "Approving…" : "Denying…");
+      void request<RedirectBody>("/oauth2/consent", {
+        method: "POST",
         body: JSON.stringify({ accept, oauth_query: oauthQuery }),
       })
         .then((result) => {
           location.assign(result.redirect_uri);
         })
         .catch((cause: unknown) => {
-          setStatus('');
-          setError(message(cause, 'Could not process consent'));
+          setStatus("");
+          setError(message(cause, "Could not process consent"));
           setBusy(false);
         });
     },
-    [oauthQuery],
+    [oauthQuery]
   );
 
   /**
@@ -383,20 +432,23 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
    * swap it; only a later step overrides the intro.
    */
   const heading =
-    phase === 'code'
+    phase === "code"
       ? { title, intro: `Enter the six-digit code we sent to ${email}.` }
-      : phase === 'request'
-        ? { title, intro: 'Confirm this request came from you before approving it.' }
+      : phase === "request"
+        ? {
+            title,
+            intro: "Confirm this request came from you before approving it.",
+          }
         : { title, intro };
 
   const header = (
     <div className="mb-6">
-      <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-[#4568FF] dark:text-[#93B0FF]">
+      <p className="font-mono text-[11px] font-semibold tracking-[0.12em] text-[#4568FF] uppercase dark:text-[#93B0FF]">
         hosted sigiro
       </p>
       <h1
         id="title"
-        className="mt-2.5 text-[26px] font-semibold leading-[1.15] tracking-[-0.035em] text-stone-900 dark:text-stone-50"
+        className="mt-2.5 text-[26px] leading-[1.15] font-semibold tracking-[-0.035em] text-stone-900 dark:text-stone-50"
       >
         {heading.title}
       </h1>
@@ -412,19 +464,23 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         id="status"
         role="status"
         aria-live="polite"
-        className={`text-[13px] text-stone-500 dark:text-stone-400 ${status ? '' : 'sr-only'}`}
+        className={`text-[13px] text-stone-500 dark:text-stone-400 ${status ? "" : "sr-only"}`}
       >
         {status}
       </p>
-      {error && phase !== 'code' && phase !== 'email' && (
-        <p id="error" role="alert" className="text-[13px] text-red-600 dark:text-red-400">
+      {error && phase !== "code" && phase !== "email" && (
+        <p
+          id="error"
+          role="alert"
+          className="text-[13px] text-red-600 dark:text-red-400"
+        >
           {error}
         </p>
       )}
     </>
   );
 
-  if (phase === 'loading') {
+  if (phase === "loading") {
     return (
       <>
         {header}
@@ -433,8 +489,8 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     );
   }
 
-  if (phase === 'done') {
-    const accountSetup = page === 'sign-in' || page === 'sign-up';
+  if (phase === "done") {
+    const accountSetup = page === "sign-in" || page === "sign-up";
     return (
       <>
         {header}
@@ -455,16 +511,21 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               </p>
               {(
                 [
-                  ['install command', INSTALL_COMMAND],
-                  ['login command', LOGIN_COMMAND],
+                  ["install command", INSTALL_COMMAND],
+                  ["login command", LOGIN_COMMAND],
                 ] as const
               ).map(([label, command]) => (
-                <figure key={label} className="mat-panel min-w-0 rounded-[10px] p-[4px]">
+                <figure
+                  key={label}
+                  className="mat-panel min-w-0 rounded-[10px] p-[4px]"
+                >
                   <figcaption className="flex h-8 items-center gap-2 pr-1 pl-2.5">
-                    <span className="meta min-w-0 flex-1 truncate text-ink-3">{label}</span>
+                    <span className="meta text-ink-3 min-w-0 flex-1 truncate">
+                      {label}
+                    </span>
                     <CopySource code={command} label={label} />
                   </figcaption>
-                  <code className="mat-well block rounded-[7px] px-3 py-2.5 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-normal text-stone-700 dark:text-stone-300">
+                  <code className="mat-well block rounded-[7px] px-3 py-2.5 font-mono text-[12px] leading-relaxed break-normal whitespace-pre-wrap text-stone-700 dark:text-stone-300">
                     {command}
                   </code>
                 </figure>
@@ -482,13 +543,14 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     );
   }
 
-  if (phase === 'consent') {
+  if (phase === "consent") {
     return (
       <>
         {header}
         <div id="consent-flow" className="grid gap-4">
           <p className="text-[15px] leading-relaxed text-stone-600 dark:text-stone-400">
-            The requesting client will receive only the scopes in its signed authorization request.
+            The requesting client will receive only the scopes in its signed
+            authorization request.
           </p>
           <div className="flex gap-2.5">
             <button
@@ -516,10 +578,10 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     );
   }
 
-  if (phase === 'request') {
+  if (phase === "request") {
     const resource = Array.isArray(details?.resource)
-      ? details.resource.join(', ')
-      : (details?.resource ?? 'No resource requested');
+      ? details.resource.join(", ")
+      : (details?.resource ?? "No resource requested");
     return (
       <>
         {header}
@@ -530,24 +592,29 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
             </p>
             <output
               id="user-code"
-              className="mt-2 block font-mono text-[30px] font-bold leading-none tracking-[0.16em] text-stone-900 dark:text-stone-50"
+              className="mt-2 block font-mono text-[30px] leading-none font-bold tracking-[0.16em] text-stone-900 dark:text-stone-50"
             >
-              {page === 'agent-device' ? agentCode : userCode}
+              {page === "agent-device" ? agentCode : userCode}
             </output>
           </div>
           <dl id="request-details" className="grid gap-2.5">
             {(
               [
-                ['client-id', 'Client', details?.client_id ?? 'Unknown client'],
-                ['scope', 'Access', details?.scope ?? 'No scopes requested'],
-                ['resource', 'Resource', resource],
+                ["client-id", "Client", details?.client_id ?? "Unknown client"],
+                ["scope", "Access", details?.scope ?? "No scopes requested"],
+                ["resource", "Resource", resource],
               ] as const
             ).map(([id, term, value]) => (
-              <div key={id} className="border-t border-stone-200 pt-2.5 dark:border-white/[0.08]">
-                <dt className="text-[11px] uppercase tracking-[0.08em] text-stone-500">{term}</dt>
+              <div
+                key={id}
+                className="border-t border-stone-200 pt-2.5 dark:border-white/[0.08]"
+              >
+                <dt className="text-[11px] tracking-[0.08em] text-stone-500 uppercase">
+                  {term}
+                </dt>
                 <dd
                   id={id}
-                  className="mt-1 break-words text-[13px] text-stone-700 dark:text-stone-300"
+                  className="mt-1 text-[13px] break-words text-stone-700 dark:text-stone-300"
                 >
                   {value}
                 </dd>
@@ -580,7 +647,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     );
   }
 
-  if (phase === 'code') {
+  if (phase === "code") {
     return (
       <>
         {header}
@@ -596,12 +663,12 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           <OtpInput
             length={6}
             autoFocus
-            status={error ? 'error' : 'idle'}
+            status={error ? "error" : "idle"}
             errorMessage={error}
             hint="Enter or paste the six-digit code."
             onChange={(value) => {
               setOtpValue(value);
-              if (error) setError('');
+              if (error) setError("");
             }}
             onComplete={verify}
             ref={otpRef}
@@ -611,7 +678,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
             disabled={busy || otpValue.length !== 6}
             className={`${primary} w-full`}
           >
-            {busy ? 'Verifying…' : 'Verify code'}
+            {busy ? "Verifying…" : "Verify code"}
           </button>
           <div className="flex flex-wrap items-center gap-1">
             <button
@@ -621,18 +688,20 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               onClick={() => deliverCode(email, true)}
               className="inline-flex h-10 items-center rounded-[8px] px-2 text-[13px] font-medium text-stone-600 underline-offset-4 hover:text-stone-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] disabled:cursor-not-allowed disabled:text-stone-400 dark:text-stone-300 dark:hover:text-white dark:disabled:text-stone-600"
             >
-              {resendAvailableIn > 0 ? `Resend code in ${resendAvailableIn}s` : 'Resend code'}
+              {resendAvailableIn > 0
+                ? `Resend code in ${resendAvailableIn}s`
+                : "Resend code"}
             </button>
             <button
               id="restart"
               type="button"
               disabled={busy}
               onClick={() => {
-                setPhase('email');
-                setStatus('');
-                setError('');
+                setPhase("email");
+                setStatus("");
+                setError("");
                 setResendAvailableIn(0);
-                setOtpValue('');
+                setOtpValue("");
               }}
               className="inline-flex h-10 items-center rounded-[8px] px-2 text-[13px] font-medium text-stone-500 underline-offset-4 hover:text-stone-800 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] disabled:opacity-60 dark:text-stone-400 dark:hover:text-stone-100"
             >
@@ -654,7 +723,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           `0 / 100` counter when given one, and a character budget on an
           optional display name is noise on the first screen of a sign-up.
         */}
-        {page === 'sign-up' && (
+        {page === "sign-up" && (
           <FloatingLabelInput
             id="name"
             name="name"

@@ -96,10 +96,6 @@ run = "aube -C auth run check"
 description = "Run the auth test suite."
 run = "aube -C auth run test"
 
-[tasks.auth-lint]
-description = "Lint the auth package with type-aware checks."
-run = "aube -C auth run lint"
-
 [tasks.auth-build]
 description = "Build the auth package."
 run = "aube -C auth run build"
@@ -349,7 +345,7 @@ run = [
 # Refresh www/openapi.json — the snapshot the API reference is generated from.
 # Boots the binary, reads its own /openapi.json, and drops the /admin paths: key
 # minting and tenant creation are deliberately not part of the published surface.
-# Run this whenever a #[utoipa::path] changes, then `cd www && bun run api:docs`.
+# Run this whenever a #[utoipa::path] changes, then `aube -C www run api:docs`.
 [tasks.api-spec]
 description = "Refresh www/openapi.json from the binary's own /openapi.json."
 run = """

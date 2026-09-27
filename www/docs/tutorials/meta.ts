@@ -1,4 +1,4 @@
-import { defineMeta } from 'blume';
+import { defineMeta } from "blume";
 
 /**
  * Diátaxis mode 1 of 4: informs action, serves acquisition of skill.
@@ -28,5 +28,5 @@ import { defineMeta } from 'blume';
  */
 export default defineMeta({
   order: 1,
-  title: 'Tutorials',
+  title: "Tutorials",
 });

@@ -10,7 +10,7 @@ export interface TransactionalEmail {
 export const sendCloudflareEmail = async (
   client: Cloudflare,
   accountId: string,
-  message: TransactionalEmail,
+  message: TransactionalEmail
 ): Promise<void> => {
   const result = await client.emailSending.send({
     account_id: accountId,
@@ -19,7 +19,10 @@ export const sendCloudflareEmail = async (
     subject: message.subject,
     text: message.text,
   });
-  if (!result.delivered.includes(message.to) && !result.queued.includes(message.to)) {
+  if (
+    !result.delivered.includes(message.to) &&
+    !result.queued.includes(message.to)
+  ) {
     throw new Error(`Cloudflare did not accept email for ${message.to}`);
   }
 };

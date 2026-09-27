@@ -46,9 +46,11 @@ export const d1SecondaryStorage = (db: D1Database): SecondaryStorage => ({
   get: async (key) =>
     liveValue(
       await db
-        .prepare(`SELECT value FROM ${TABLE} WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)`)
+        .prepare(
+          `SELECT value FROM ${TABLE} WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)`
+        )
         .bind(key, nowMs())
-        .first(),
+        .first()
     ),
 
   /**
@@ -62,17 +64,17 @@ export const d1SecondaryStorage = (db: D1Database): SecondaryStorage => ({
         .prepare(
           `DELETE FROM ${TABLE}
            WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)
-           RETURNING value`,
+           RETURNING value`
         )
         .bind(key, nowMs())
-        .first(),
+        .first()
     ),
 
   set: async (key, value, ttl) => {
     await db
       .prepare(
         `INSERT INTO ${TABLE} (key, value, expires_at) VALUES (?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at`,
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at`
       )
       .bind(key, value, ttl === undefined ? null : nowMs() + ttl * 1000)
       .run();
@@ -107,7 +109,7 @@ export const d1SecondaryStorage = (db: D1Database): SecondaryStorage => ({
                THEN excluded.expires_at
              ELSE ${TABLE}.expires_at
            END
-         RETURNING value`,
+         RETURNING value`
       )
       .bind(key, now + ttl * 1000, now, now)
       .first<{ value: string }>();
@@ -116,7 +118,9 @@ export const d1SecondaryStorage = (db: D1Database): SecondaryStorage => ({
     // Fail loudly. A silent 0 here reads as "under the limit" to the rate
     // limiter and as a usable counter to every other caller.
     if (!Number.isSafeInteger(value)) {
-      throw new Error(`secondary-storage increment returned no usable value for ${key}`);
+      throw new Error(
+        `secondary-storage increment returned no usable value for ${key}`
+      );
     }
     return value;
   },

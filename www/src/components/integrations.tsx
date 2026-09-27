@@ -20,9 +20,10 @@ import {
   siVercel,
   // `simple-icons` under an alias — see the note in `site/ask-ai.tsx` for why the
   // bare specifier has to stay Blume's.
-} from 'sigiro-icons';
-import { LogoMarquee } from '@/components/interior/logo-marquee';
-import { getCopy, type Locale } from '@/lib/site';
+} from "sigiro-icons";
+
+import { LogoMarquee } from "@/components/interior/logo-marquee";
+import { getCopy, type Locale } from "@/lib/site";
 
 /**
  * Three belts: what emits the telemetry, where sigiro runs, and what reads the
@@ -70,13 +71,19 @@ const ICONS = {
 
 function Mark({ path }: { path: string }) {
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden>
+    <svg
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
+      fill="currentColor"
+      aria-hidden
+    >
       <path d={path} />
     </svg>
   );
 }
 
-export function Integrations({ locale = 'en' }: { locale?: Locale }) {
+export function Integrations({ locale = "en" }: { locale?: Locale }) {
   const INTEGRATIONS = getCopy(locale).integrations;
   return (
     <div className="mt-6 flex flex-col gap-5">
@@ -85,7 +92,7 @@ export function Integrations({ locale = 'en' }: { locale?: Locale }) {
           <p className="label mb-2.5">{group.label}</p>
           <LogoMarquee
             label={group.label}
-            direction={i % 2 === 0 ? 'left' : 'right'}
+            direction={i % 2 === 0 ? "left" : "right"}
             items={group.items.map((item) => {
               const icon = item.icon ? ICONS[item.icon] : undefined;
               return {

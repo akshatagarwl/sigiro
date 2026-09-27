@@ -1,11 +1,23 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { motion, useReducedMotion } from "motion/react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 const INSTANT = { duration: 0 } as const;
 
-const LIFT = { type: 'spring', stiffness: 760, damping: 46, mass: 0.5 } as const;
+const LIFT = {
+  type: "spring",
+  stiffness: 760,
+  damping: 46,
+  mass: 0.5,
+} as const;
 
 const RAISE = -32;
 const SLIDE = -12;
@@ -16,7 +28,9 @@ const SHRINK = 0.92;
  * `import.meta.env.SSR` at build time, so this is a compile-time branch on the
  * build target rather than a runtime check of what `window` happens to be.
  */
-const useIsomorphicLayoutEffect = import.meta.env.SSR ? useEffect : useLayoutEffect;
+const useIsomorphicLayoutEffect = import.meta.env.SSR
+  ? useEffect
+  : useLayoutEffect;
 
 export type UseFloatingLabelOptions = {
   value?: string;
@@ -50,13 +64,15 @@ export function useFloatingLabel({
 
   const [focused, setFocused] = useState(false);
   const [fill, setFill] = useState<Fill>({
-    length: (value ?? defaultValue ?? '').length,
+    length: (value ?? defaultValue ?? "").length,
     instant: true,
   });
 
   const settle = useCallback((next: number, instant: boolean) => {
     setFill((prev) =>
-      prev.length === next && prev.instant === instant ? prev : { length: next, instant },
+      prev.length === next && prev.instant === instant
+        ? prev
+        : { length: next, instant }
     );
   }, []);
 
@@ -75,11 +91,11 @@ export function useFloatingLabel({
     const el = ref.current;
     if (!el || value !== undefined) return;
     const read = () => settle(el.value.length, false);
-    el.addEventListener('input', read);
-    el.addEventListener('change', read);
+    el.addEventListener("input", read);
+    el.addEventListener("change", read);
     return () => {
-      el.removeEventListener('input', read);
-      el.removeEventListener('change', read);
+      el.removeEventListener("input", read);
+      el.removeEventListener("change", read);
     };
   }, [value, settle]);
 
@@ -90,8 +106,9 @@ export function useFloatingLabel({
   const onFocus = useCallback(() => setFocused(true), []);
   const onBlur = useCallback(() => setFocused(false), []);
   const onChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => settle(event.currentTarget.value.length, false),
-    [settle],
+    (event: React.ChangeEvent<HTMLInputElement>) =>
+      settle(event.currentTarget.value.length, false),
+    [settle]
   );
 
   return {
@@ -109,16 +126,19 @@ export type FloatingLabelInputProps = {
   label: string;
   value?: string;
   defaultValue?: string;
-  onChange?: (value: string, event: React.ChangeEvent<HTMLInputElement>) => void;
+  onChange?: (
+    value: string,
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => void;
   onFocus?: () => void;
   onBlur?: () => void;
   hint?: string;
   invalid?: boolean;
   id?: string;
   name?: string;
-  type?: 'text' | 'email' | 'password' | 'search' | 'tel' | 'url';
+  type?: "text" | "email" | "password" | "search" | "tel" | "url";
   autoComplete?: string;
-  inputMode?: React.ComponentProps<'input'>['inputMode'];
+  inputMode?: React.ComponentProps<"input">["inputMode"];
   maxLength?: number;
   required?: boolean;
   disabled?: boolean;
@@ -143,7 +163,7 @@ export function FloatingLabelInput({
   invalid = false,
   id,
   name,
-  type = 'text',
+  type = "text",
   autoComplete,
   inputMode,
   maxLength,
@@ -151,18 +171,19 @@ export function FloatingLabelInput({
   disabled = false,
   readOnly = false,
   inputRef,
-  className = '',
+  className = "",
 }: FloatingLabelInputProps) {
   const auto = useId();
   const fieldId = id ?? `${auto}-field`;
   const hintId = `${auto}-hint`;
 
   const reduced = useReducedMotion();
-  const { ref, raised, focused, length, instant, fieldProps } = useFloatingLabel({
-    value,
-    defaultValue,
-    disabled,
-  });
+  const { ref, raised, focused, length, instant, fieldProps } =
+    useFloatingLabel({
+      value,
+      defaultValue,
+      disabled,
+    });
 
   const move = reduced || instant ? INSTANT : LIFT;
 
@@ -171,7 +192,7 @@ export function FloatingLabelInput({
       ref.current = node;
       if (inputRef) inputRef.current = node;
     },
-    [ref, inputRef],
+    [ref, inputRef]
   );
 
   return (
@@ -180,11 +201,11 @@ export function FloatingLabelInput({
         <div
           className={`relative h-10 rounded-[10px] border-2 transition-[background-color,border-color,box-shadow] duration-150 ${
             invalid
-              ? 'border-red-500 bg-white dark:border-red-400 dark:bg-[#252522]'
+              ? "border-red-500 bg-white dark:border-red-400 dark:bg-[#252522]"
               : focused
-                ? 'border-[#4568FF] bg-white dark:border-[#93B0FF] dark:bg-[#252522]'
-                : 'border-stone-200 bg-stone-100/70 shadow-[inset_0_1px_2px_rgba(28,25,23,0.07)] dark:border-white/[0.08] dark:bg-[#1D1D1A] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.45)]'
-          } ${disabled ? 'opacity-55' : ''}`}
+                ? "border-[#4568FF] bg-white dark:border-[#93B0FF] dark:bg-[#252522]"
+                : "border-stone-200 bg-stone-100/70 shadow-[inset_0_1px_2px_rgba(28,25,23,0.07)] dark:border-white/[0.08] dark:bg-[#1D1D1A] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.45)]"
+          } ${disabled ? "opacity-55" : ""}`}
         >
           <input
             ref={attach}
@@ -227,18 +248,21 @@ export function FloatingLabelInput({
             scale: raised ? SHRINK : 1,
           }}
           transition={move}
-          style={{ originX: 0, originY: 0, willChange: 'transform' }}
-          className={`absolute left-3 top-[32px] block cursor-text select-none text-[13px] leading-[16px] ${
+          style={{ originX: 0, originY: 0, willChange: "transform" }}
+          className={`absolute top-[32px] left-3 block cursor-text text-[13px] leading-[16px] select-none ${
             invalid
-              ? 'text-red-600 dark:text-red-400'
+              ? "text-red-600 dark:text-red-400"
               : raised
-                ? 'text-stone-600 dark:text-stone-300'
-                : 'text-stone-400 dark:text-stone-500'
+                ? "text-stone-600 dark:text-stone-300"
+                : "text-stone-400 dark:text-stone-500"
           }`}
         >
           {label}
           {required ? (
-            <span aria-hidden className="ml-0.5 text-stone-400 dark:text-stone-500">
+            <span
+              aria-hidden
+              className="ml-0.5 text-stone-400 dark:text-stone-500"
+            >
               *
             </span>
           ) : null}
@@ -249,7 +273,9 @@ export function FloatingLabelInput({
         <p
           aria-hidden
           className={`min-w-0 flex-1 truncate text-[11.5px] leading-[16px] ${
-            invalid ? 'text-red-600 dark:text-red-400' : 'text-stone-500 dark:text-stone-400'
+            invalid
+              ? "text-red-600 dark:text-red-400"
+              : "text-stone-500 dark:text-stone-400"
           }`}
         >
           {hint}
@@ -258,7 +284,7 @@ export function FloatingLabelInput({
         {maxLength !== undefined ? (
           <span
             aria-hidden
-            className="grid shrink-0 justify-items-end font-mono text-[10.5px] leading-[16px] tabular-nums text-stone-400 dark:text-stone-500"
+            className="grid shrink-0 justify-items-end font-mono text-[10.5px] leading-[16px] text-stone-400 tabular-nums dark:text-stone-500"
           >
             <span className="invisible col-start-1 row-start-1">
               {maxLength} / {maxLength}

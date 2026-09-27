@@ -10,7 +10,7 @@
 export function Logo({ size = 14 }: { size?: number }) {
   return (
     <span
-      className="inline-block whitespace-nowrap font-semibold text-ink tracking-[-0.02em]"
+      className="text-ink inline-block font-semibold tracking-[-0.02em] whitespace-nowrap"
       style={{ fontSize: size }}
     >
       sigiro

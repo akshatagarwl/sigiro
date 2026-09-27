@@ -1,4 +1,4 @@
-import { defineMeta } from 'blume';
+import { defineMeta } from "blume";
 
 /**
  * Diátaxis mode 3 of 4: informs cognition, serves application of skill.

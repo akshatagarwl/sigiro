@@ -1,4 +1,4 @@
-import { defineComponents } from 'blume';
+import { defineComponents } from "blume";
 
 /**
  * Blume layout slots for the docs pages.
@@ -22,6 +22,6 @@ import { defineComponents } from 'blume';
  */
 export default defineComponents({
   layout: {
-    Footer: './src/components/site/Footer.astro',
+    Footer: "./src/components/site/Footer.astro",
   },
 });

@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /** How long the check stays up. */
 const HELD_MS = 1500;
@@ -68,7 +68,7 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
       await navigator.clipboard.writeText(code);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
-      console.error('sigiro: could not write to the clipboard', error);
+      console.error("sigiro: could not write to the clipboard", error);
       throw error;
     }
   });
@@ -77,8 +77,8 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
     <button
       type="button"
       onClick={copy}
-      aria-label={label ? `Copy ${label}` : 'Copy code'}
-      className="mat-cap press grid h-[22px] shrink-0 place-items-center rounded-[6px] px-2 text-[10.5px] font-medium text-ink-2 hover:text-ink"
+      aria-label={label ? `Copy ${label}` : "Copy code"}
+      className="mat-cap press text-ink-2 hover:text-ink grid h-[22px] shrink-0 place-items-center rounded-[6px] px-2 text-[10.5px] font-medium"
     >
       <span
         className="col-start-1 row-start-1 transition-opacity duration-100"
@@ -88,7 +88,7 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
       </span>
       <span
         aria-hidden
-        className="col-start-1 row-start-1 inline-flex items-center text-moss transition-opacity duration-100"
+        className="text-moss col-start-1 row-start-1 inline-flex items-center transition-opacity duration-100"
         style={{ opacity: copied ? 1 : 0 }}
       >
         <svg
@@ -106,7 +106,7 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
         </svg>
       </span>
       <span className="sr-only" role="status">
-        {copied ? 'Copied' : ''}
+        {copied ? "Copied" : ""}
       </span>
     </button>
   );

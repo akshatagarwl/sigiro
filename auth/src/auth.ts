@@ -1,12 +1,15 @@
-import { cimd } from "@better-auth/cimd";
 import { agentAuth } from "@better-auth/agent-auth";
+import { cimd } from "@better-auth/cimd";
+import type { SecondaryStorage } from "@better-auth/core/db";
 import { mcp } from "@better-auth/mcp";
-import { oauthDeviceAuthorization, type ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
+import {
+  oauthDeviceAuthorization,
+  type ClientMetadataResourceFetch,
+} from "@better-auth/oauth-provider";
 import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { emailOTP, jwt, organization } from "better-auth/plugins";
-import type { SecondaryStorage } from "@better-auth/core/db";
 
 export const SIGIRO_SCOPES = [
   "openid",
@@ -102,11 +105,15 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
           ) {
             throw new APIError("BAD_REQUEST", {
               error: "invalid_request",
-              message: "authorization requires PKCE with code_challenge_method S256",
+              message:
+                "authorization requires PKCE with code_challenge_method S256",
             });
           }
         }
-        if (context.path === "/oauth2/token" || context.path === "/device/code") {
+        if (
+          context.path === "/oauth2/token" ||
+          context.path === "/device/code"
+        ) {
           requireResource(context.body?.resource, runtime.resource);
         }
       }),
@@ -174,15 +181,22 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
                 const registeredTenantId = referenceId ?? client.referenceId;
                 if (registeredTenantId) return { tid: registeredTenantId };
                 if (sessionId) {
-                  const activeOrganizationId = await runtime.sessionTenant(sessionId);
-                  if (!activeOrganizationId) throw new Error("token session has no active organization");
+                  const activeOrganizationId =
+                    await runtime.sessionTenant(sessionId);
+                  if (!activeOrganizationId)
+                    throw new Error("token session has no active organization");
                   return { tid: activeOrganizationId };
                 }
-                if (!user?.id) throw new Error("token issuance has no tenant-bearing user, session, or client");
+                if (!user?.id)
+                  throw new Error(
+                    "token issuance has no tenant-bearing user, session, or client"
+                  );
 
                 const memberships = await runtime.membershipsForUser(user.id);
                 if (memberships.length !== 1) {
-                  throw new Error("device token user must belong to exactly one organization");
+                  throw new Error(
+                    "device token user must belong to exactly one organization"
+                  );
                 }
                 return { tid: memberships[0]! };
               },
@@ -190,10 +204,15 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
           },
         ],
         clientReference: ({ session }) =>
-          typeof session?.activeOrganizationId === "string" ? session.activeOrganizationId : undefined,
-        clientPrivileges: ({ session }) => typeof session?.activeOrganizationId === "string",
+          typeof session?.activeOrganizationId === "string"
+            ? session.activeOrganizationId
+            : undefined,
+        clientPrivileges: ({ session }) =>
+          typeof session?.activeOrganizationId === "string",
       }),
-      oauthDeviceAuthorization({ verificationUri: `${new URL(runtime.baseURL).origin}/device` }),
+      oauthDeviceAuthorization({
+        verificationUri: `${new URL(runtime.baseURL).origin}/device`,
+      }),
       cimd({
         fetchClientMetadataResource: runtime.fetchClientMetadataResource,
         metadataProfile: "mcp-2026-07-28",
@@ -201,4 +220,5 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
     ],
   }) satisfies Parameters<typeof betterAuth>[0];
 
-export const createAuth = (runtime: AuthRuntime) => betterAuth(createAuthOptions(runtime));
+export const createAuth = (runtime: AuthRuntime) =>
+  betterAuth(createAuthOptions(runtime));

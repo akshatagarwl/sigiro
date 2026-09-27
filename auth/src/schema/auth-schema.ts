@@ -58,9 +58,14 @@
  * Table count: 21. emailOTP and cimd contribute zero tables.
  */
 
-
 import { sql } from "drizzle-orm";
-import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 // --------------------------------------------------------------------------
 // Core — better-auth core tables (betterAuth() itself)
@@ -70,391 +75,539 @@ import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqli
 // --------------------------------------------------------------------------
 
 export const user = sqliteTable("user", {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  email: text('email').notNull().unique(),
-  emailVerified: integer('emailVerified', { mode: 'boolean' }).default(false).notNull(),
-  image: text('image'),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`).notNull(),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }).default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`).$onUpdate(() => /* @__PURE__ */ new Date()).notNull()
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  emailVerified: integer("emailVerified", { mode: "boolean" })
+    .default(false)
+    .notNull(),
+  image: text("image"),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .notNull(),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .$onUpdate(() => /* @__PURE__ */ new Date())
+    .notNull(),
 });
 
-export const session = sqliteTable("session", {
-  id: text('id').primaryKey(),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }).notNull(),
-  token: text('token').notNull().unique(),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`).notNull(),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }).$onUpdate(() => /* @__PURE__ */ new Date()).notNull(),
-  ipAddress: text('ipAddress'),
-  userAgent: text('userAgent'),
-  userId: text('userId').notNull().references(()=> user.id, { onDelete: 'cascade' }),
-  activeOrganizationId: text('activeOrganizationId')
-}, (table) => [
-  index("session_userId_idx").on(table.userId),
-]);
+export const session = sqliteTable(
+  "session",
+  {
+    id: text("id").primaryKey(),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }).notNull(),
+    token: text("token").notNull().unique(),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    ipAddress: text("ipAddress"),
+    userAgent: text("userAgent"),
+    userId: text("userId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    activeOrganizationId: text("activeOrganizationId"),
+  },
+  (table) => [index("session_userId_idx").on(table.userId)]
+);
 
-export const account = sqliteTable("account", {
-  id: text('id').primaryKey(),
-  accountId: text('accountId').notNull(),
-  providerId: text('providerId').notNull(),
-  userId: text('userId').notNull().references(()=> user.id, { onDelete: 'cascade' }),
-  accessToken: text('accessToken'),
-  refreshToken: text('refreshToken'),
-  idToken: text('idToken'),
-  accessTokenExpiresAt: integer('accessTokenExpiresAt', { mode: 'timestamp_ms' }),
-  refreshTokenExpiresAt: integer('refreshTokenExpiresAt', { mode: 'timestamp_ms' }),
-  scope: text('scope'),
-  password: text('password'),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`).notNull(),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }).$onUpdate(() => /* @__PURE__ */ new Date()).notNull()
-}, (table) => [
-  index("account_userId_idx").on(table.userId),
-]);
+export const account = sqliteTable(
+  "account",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("accountId").notNull(),
+    providerId: text("providerId").notNull(),
+    userId: text("userId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    accessToken: text("accessToken"),
+    refreshToken: text("refreshToken"),
+    idToken: text("idToken"),
+    accessTokenExpiresAt: integer("accessTokenExpiresAt", {
+      mode: "timestamp_ms",
+    }),
+    refreshTokenExpiresAt: integer("refreshTokenExpiresAt", {
+      mode: "timestamp_ms",
+    }),
+    scope: text("scope"),
+    password: text("password"),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [index("account_userId_idx").on(table.userId)]
+);
 
-export const verification = sqliteTable("verification", {
-  id: text('id').primaryKey(),
-  identifier: text('identifier').notNull(),
-  value: text('value').notNull(),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }).notNull(),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`).notNull(),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }).default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`).$onUpdate(() => /* @__PURE__ */ new Date()).notNull()
-}, (table) => [
-  index("verification_identifier_idx").on(table.identifier),
-]);
+export const verification = sqliteTable(
+  "verification",
+  {
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    value: text("value").notNull(),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [index("verification_identifier_idx").on(table.identifier)]
+);
 
 // --------------------------------------------------------------------------
 // organization({ organizationLimit: 1 })
 // --------------------------------------------------------------------------
 
-export const organization = sqliteTable("organization", {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  slug: text('slug').notNull().unique(),
-  logo: text('logo'),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).notNull(),
-  metadata: text('metadata')
-}, (table) => [
-  uniqueIndex("organization_slug_uidx").on(table.slug),
-]);
+export const organization = sqliteTable(
+  "organization",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull().unique(),
+    logo: text("logo"),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull(),
+    metadata: text("metadata"),
+  },
+  (table) => [uniqueIndex("organization_slug_uidx").on(table.slug)]
+);
 
-export const member = sqliteTable("member", {
-  id: text('id').primaryKey(),
-  organizationId: text('organizationId').notNull().references(()=> organization.id, { onDelete: 'cascade' }),
-  userId: text('userId').notNull().references(()=> user.id, { onDelete: 'cascade' }),
-  role: text('role').default("member").notNull(),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).notNull()
-}, (table) => [
-  index("member_organizationId_idx").on(table.organizationId),
-  index("member_userId_idx").on(table.userId),
-]);
+export const member = sqliteTable(
+  "member",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organizationId")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    userId: text("userId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    role: text("role").default("member").notNull(),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("member_organizationId_idx").on(table.organizationId),
+    index("member_userId_idx").on(table.userId),
+  ]
+);
 
-export const invitation = sqliteTable("invitation", {
-  id: text('id').primaryKey(),
-  organizationId: text('organizationId').notNull().references(()=> organization.id, { onDelete: 'cascade' }),
-  email: text('email').notNull(),
-  role: text('role'),
-  status: text('status').default("pending").notNull(),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }).notNull(),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`).notNull(),
-  inviterId: text('inviterId').notNull().references(()=> user.id, { onDelete: 'cascade' })
-}, (table) => [
-  index("invitation_organizationId_idx").on(table.organizationId),
-  index("invitation_email_idx").on(table.email),
-]);
+export const invitation = sqliteTable(
+  "invitation",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organizationId")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    role: text("role"),
+    status: text("status").default("pending").notNull(),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    inviterId: text("inviterId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    index("invitation_organizationId_idx").on(table.organizationId),
+    index("invitation_email_idx").on(table.email),
+  ]
+);
 
 // --------------------------------------------------------------------------
 // jwt({ jwks: { keyPairConfig: { alg: 'EdDSA', crv: 'Ed25519' } } })
 // --------------------------------------------------------------------------
 
 export const jwks = sqliteTable("jwks", {
-  id: text('id').primaryKey(),
-  publicKey: text('publicKey').notNull(),
-  privateKey: text('privateKey').notNull(),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).notNull(),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }),
-  alg: text('alg'),
-  crv: text('crv')
+  id: text("id").primaryKey(),
+  publicKey: text("publicKey").notNull(),
+  privateKey: text("privateKey").notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull(),
+  expiresAt: integer("expiresAt", { mode: "timestamp_ms" }),
+  alg: text("alg"),
+  crv: text("crv"),
 });
 
 // --------------------------------------------------------------------------
 // passkey()
 // --------------------------------------------------------------------------
 
-export const passkey = sqliteTable("passkey", {
-  id: text('id').primaryKey(),
-  name: text('name'),
-  publicKey: text('publicKey').notNull(),
-  userId: text('userId').notNull().references(()=> user.id, { onDelete: 'cascade' }),
-  credentialID: text('credentialID').notNull(),
-  counter: integer('counter').notNull(),
-  deviceType: text('deviceType').notNull(),
-  backedUp: integer('backedUp', { mode: 'boolean' }).notNull(),
-  transports: text('transports'),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }),
-  aaguid: text('aaguid')
-}, (table) => [
-  index("passkey_userId_idx").on(table.userId),
-  index("passkey_credentialID_idx").on(table.credentialID),
-]);
+export const passkey = sqliteTable(
+  "passkey",
+  {
+    id: text("id").primaryKey(),
+    name: text("name"),
+    publicKey: text("publicKey").notNull(),
+    userId: text("userId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    credentialID: text("credentialID").notNull(),
+    counter: integer("counter").notNull(),
+    deviceType: text("deviceType").notNull(),
+    backedUp: integer("backedUp", { mode: "boolean" }).notNull(),
+    transports: text("transports"),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }),
+    aaguid: text("aaguid"),
+  },
+  (table) => [
+    index("passkey_userId_idx").on(table.userId),
+    index("passkey_credentialID_idx").on(table.credentialID),
+  ]
+);
 
 // --------------------------------------------------------------------------
 // agentAuth({ modes: ['delegated'], ... })
 // --------------------------------------------------------------------------
 
-export const agentHost = sqliteTable("agentHost", {
-  id: text('id').primaryKey(),
-  name: text('name'),
-  userId: text('userId').references(()=> user.id, { onDelete: 'cascade' }),
-  defaultCapabilities: text('defaultCapabilities'),
-  publicKey: text('publicKey'),
-  kid: text('kid'),
-  jwksUrl: text('jwksUrl'),
-  enrollmentTokenHash: text('enrollmentTokenHash'),
-  enrollmentTokenExpiresAt: integer('enrollmentTokenExpiresAt', { mode: 'timestamp_ms' }),
-  status: text('status').default("active").notNull(),
-  activatedAt: integer('activatedAt', { mode: 'timestamp_ms' }),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }),
-  lastUsedAt: integer('lastUsedAt', { mode: 'timestamp_ms' }),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).notNull(),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }).notNull()
-}, (table) => [
-  index("agentHost_userId_idx").on(table.userId),
-  index("agentHost_kid_idx").on(table.kid),
-  index("agentHost_enrollmentTokenHash_idx").on(table.enrollmentTokenHash),
-  index("agentHost_status_idx").on(table.status),
-]);
+export const agentHost = sqliteTable(
+  "agentHost",
+  {
+    id: text("id").primaryKey(),
+    name: text("name"),
+    userId: text("userId").references(() => user.id, { onDelete: "cascade" }),
+    defaultCapabilities: text("defaultCapabilities"),
+    publicKey: text("publicKey"),
+    kid: text("kid"),
+    jwksUrl: text("jwksUrl"),
+    enrollmentTokenHash: text("enrollmentTokenHash"),
+    enrollmentTokenExpiresAt: integer("enrollmentTokenExpiresAt", {
+      mode: "timestamp_ms",
+    }),
+    status: text("status").default("active").notNull(),
+    activatedAt: integer("activatedAt", { mode: "timestamp_ms" }),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }),
+    lastUsedAt: integer("lastUsedAt", { mode: "timestamp_ms" }),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("agentHost_userId_idx").on(table.userId),
+    index("agentHost_kid_idx").on(table.kid),
+    index("agentHost_enrollmentTokenHash_idx").on(table.enrollmentTokenHash),
+    index("agentHost_status_idx").on(table.status),
+  ]
+);
 
-export const agent = sqliteTable("agent", {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  userId: text('userId').references(()=> user.id, { onDelete: 'cascade' }),
-  hostId: text('hostId').notNull().references(()=> agentHost.id, { onDelete: 'cascade' }),
-  status: text('status').default("active").notNull(),
-  mode: text('mode').default("delegated").notNull(),
-  publicKey: text('publicKey').notNull(),
-  kid: text('kid'),
-  jwksUrl: text('jwksUrl'),
-  lastUsedAt: integer('lastUsedAt', { mode: 'timestamp_ms' }),
-  activatedAt: integer('activatedAt', { mode: 'timestamp_ms' }),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }),
-  metadata: text('metadata'),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).notNull(),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }).notNull()
-}, (table) => [
-  index("agent_userId_idx").on(table.userId),
-  index("agent_hostId_idx").on(table.hostId),
-  index("agent_status_idx").on(table.status),
-  index("agent_kid_idx").on(table.kid),
-]);
+export const agent = sqliteTable(
+  "agent",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    userId: text("userId").references(() => user.id, { onDelete: "cascade" }),
+    hostId: text("hostId")
+      .notNull()
+      .references(() => agentHost.id, { onDelete: "cascade" }),
+    status: text("status").default("active").notNull(),
+    mode: text("mode").default("delegated").notNull(),
+    publicKey: text("publicKey").notNull(),
+    kid: text("kid"),
+    jwksUrl: text("jwksUrl"),
+    lastUsedAt: integer("lastUsedAt", { mode: "timestamp_ms" }),
+    activatedAt: integer("activatedAt", { mode: "timestamp_ms" }),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }),
+    metadata: text("metadata"),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("agent_userId_idx").on(table.userId),
+    index("agent_hostId_idx").on(table.hostId),
+    index("agent_status_idx").on(table.status),
+    index("agent_kid_idx").on(table.kid),
+  ]
+);
 
-export const agentCapabilityGrant = sqliteTable("agentCapabilityGrant", {
-  id: text('id').primaryKey(),
-  agentId: text('agentId').notNull().references(()=> agent.id, { onDelete: 'cascade' }),
-  capability: text('capability').notNull(),
-  deniedBy: text('deniedBy').references(()=> user.id, { onDelete: 'cascade' }),
-  grantedBy: text('grantedBy').references(()=> user.id, { onDelete: 'cascade' }),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).notNull(),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }).notNull(),
-  status: text('status').default("active").notNull(),
-  reason: text('reason'),
-  constraints: text('constraints')
-}, (table) => [
-  index("agentCapabilityGrant_agentId_idx").on(table.agentId),
-  index("agentCapabilityGrant_capability_idx").on(table.capability),
-  index("agentCapabilityGrant_grantedBy_idx").on(table.grantedBy),
-  index("agentCapabilityGrant_status_idx").on(table.status),
-]);
+export const agentCapabilityGrant = sqliteTable(
+  "agentCapabilityGrant",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agentId")
+      .notNull()
+      .references(() => agent.id, { onDelete: "cascade" }),
+    capability: text("capability").notNull(),
+    deniedBy: text("deniedBy").references(() => user.id, {
+      onDelete: "cascade",
+    }),
+    grantedBy: text("grantedBy").references(() => user.id, {
+      onDelete: "cascade",
+    }),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull(),
+    status: text("status").default("active").notNull(),
+    reason: text("reason"),
+    constraints: text("constraints"),
+  },
+  (table) => [
+    index("agentCapabilityGrant_agentId_idx").on(table.agentId),
+    index("agentCapabilityGrant_capability_idx").on(table.capability),
+    index("agentCapabilityGrant_grantedBy_idx").on(table.grantedBy),
+    index("agentCapabilityGrant_status_idx").on(table.status),
+  ]
+);
 
-export const approvalRequest = sqliteTable("approvalRequest", {
-  id: text('id').primaryKey(),
-  method: text('method').notNull(),
-  agentId: text('agentId').references(()=> agent.id, { onDelete: 'cascade' }),
-  hostId: text('hostId').references(()=> agentHost.id, { onDelete: 'cascade' }),
-  userId: text('userId').references(()=> user.id, { onDelete: 'cascade' }),
-  capabilities: text('capabilities'),
-  status: text('status').default("pending").notNull(),
-  userCodeHash: text('userCodeHash'),
-  loginHint: text('loginHint'),
-  bindingMessage: text('bindingMessage'),
-  clientNotificationToken: text('clientNotificationToken'),
-  clientNotificationEndpoint: text('clientNotificationEndpoint'),
-  deliveryMode: text('deliveryMode'),
-  interval: integer('interval').notNull(),
-  lastPolledAt: integer('lastPolledAt', { mode: 'timestamp_ms' }),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }).notNull(),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }).notNull(),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }).notNull()
-}, (table) => [
-  index("approvalRequest_agentId_idx").on(table.agentId),
-  index("approvalRequest_hostId_idx").on(table.hostId),
-  index("approvalRequest_userId_idx").on(table.userId),
-  index("approvalRequest_status_idx").on(table.status),
-]);
+export const approvalRequest = sqliteTable(
+  "approvalRequest",
+  {
+    id: text("id").primaryKey(),
+    method: text("method").notNull(),
+    agentId: text("agentId").references(() => agent.id, {
+      onDelete: "cascade",
+    }),
+    hostId: text("hostId").references(() => agentHost.id, {
+      onDelete: "cascade",
+    }),
+    userId: text("userId").references(() => user.id, { onDelete: "cascade" }),
+    capabilities: text("capabilities"),
+    status: text("status").default("pending").notNull(),
+    userCodeHash: text("userCodeHash"),
+    loginHint: text("loginHint"),
+    bindingMessage: text("bindingMessage"),
+    clientNotificationToken: text("clientNotificationToken"),
+    clientNotificationEndpoint: text("clientNotificationEndpoint"),
+    deliveryMode: text("deliveryMode"),
+    interval: integer("interval").notNull(),
+    lastPolledAt: integer("lastPolledAt", { mode: "timestamp_ms" }),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("approvalRequest_agentId_idx").on(table.agentId),
+    index("approvalRequest_hostId_idx").on(table.hostId),
+    index("approvalRequest_userId_idx").on(table.userId),
+    index("approvalRequest_status_idx").on(table.status),
+  ]
+);
 
 // --------------------------------------------------------------------------
 // mcp({ ... }) — via @better-auth/oauth-provider
 // --------------------------------------------------------------------------
 
-export const oauthClient = sqliteTable("oauthClient", {
-  id: text('id').primaryKey(),
-  clientId: text('clientId').notNull().unique(),
-  clientSecret: text('clientSecret'),
-  clientDiscoveryId: text('clientDiscoveryId'),
-  disabled: integer('disabled', { mode: 'boolean' }).default(false),
-  skipConsent: integer('skipConsent', { mode: 'boolean' }),
-  enableEndSession: integer('enableEndSession', { mode: 'boolean' }),
-  subjectType: text('subjectType'),
-  scopes: text('scopes', { mode: "json" }),
-  clientCredentialsScopes: text('clientCredentialsScopes', { mode: "json" }).default([]),
-  userId: text('userId').references(()=> user.id, { onDelete: 'cascade' }),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }),
-  name: text('name'),
-  uri: text('uri'),
-  icon: text('icon'),
-  contacts: text('contacts', { mode: "json" }),
-  tos: text('tos'),
-  policy: text('policy'),
-  softwareId: text('softwareId'),
-  softwareVersion: text('softwareVersion'),
-  softwareStatement: text('softwareStatement'),
-  redirectUris: text('redirectUris', { mode: "json" }).notNull(),
-  postLogoutRedirectUris: text('postLogoutRedirectUris', { mode: "json" }),
-  backchannelLogoutUri: text('backchannelLogoutUri'),
-  backchannelLogoutSessionRequired: integer('backchannelLogoutSessionRequired', { mode: 'boolean' }),
-  tokenEndpointAuthMethod: text('tokenEndpointAuthMethod'),
-  applicationType: text('applicationType'),
-  jwks: text('jwks'),
-  jwksUri: text('jwksUri'),
-  grantTypes: text('grantTypes', { mode: "json" }),
-  responseTypes: text('responseTypes', { mode: "json" }),
-  requirePKCE: integer('requirePKCE', { mode: 'boolean' }),
-  dpopBoundAccessTokens: integer('dpopBoundAccessTokens', { mode: 'boolean' }).default(false),
-  referenceId: text('referenceId'),
-  metadata: text('metadata', { mode: "json" })
-}, (table) => [
-  index("oauthClient_userId_idx").on(table.userId),
-]);
+export const oauthClient = sqliteTable(
+  "oauthClient",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("clientId").notNull().unique(),
+    clientSecret: text("clientSecret"),
+    clientDiscoveryId: text("clientDiscoveryId"),
+    disabled: integer("disabled", { mode: "boolean" }).default(false),
+    skipConsent: integer("skipConsent", { mode: "boolean" }),
+    enableEndSession: integer("enableEndSession", { mode: "boolean" }),
+    subjectType: text("subjectType"),
+    scopes: text("scopes", { mode: "json" }),
+    clientCredentialsScopes: text("clientCredentialsScopes", {
+      mode: "json",
+    }).default([]),
+    userId: text("userId").references(() => user.id, { onDelete: "cascade" }),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }),
+    updatedAt: integer("updatedAt", { mode: "timestamp_ms" }),
+    name: text("name"),
+    uri: text("uri"),
+    icon: text("icon"),
+    contacts: text("contacts", { mode: "json" }),
+    tos: text("tos"),
+    policy: text("policy"),
+    softwareId: text("softwareId"),
+    softwareVersion: text("softwareVersion"),
+    softwareStatement: text("softwareStatement"),
+    redirectUris: text("redirectUris", { mode: "json" }).notNull(),
+    postLogoutRedirectUris: text("postLogoutRedirectUris", { mode: "json" }),
+    backchannelLogoutUri: text("backchannelLogoutUri"),
+    backchannelLogoutSessionRequired: integer(
+      "backchannelLogoutSessionRequired",
+      { mode: "boolean" }
+    ),
+    tokenEndpointAuthMethod: text("tokenEndpointAuthMethod"),
+    applicationType: text("applicationType"),
+    jwks: text("jwks"),
+    jwksUri: text("jwksUri"),
+    grantTypes: text("grantTypes", { mode: "json" }),
+    responseTypes: text("responseTypes", { mode: "json" }),
+    requirePKCE: integer("requirePKCE", { mode: "boolean" }),
+    dpopBoundAccessTokens: integer("dpopBoundAccessTokens", {
+      mode: "boolean",
+    }).default(false),
+    referenceId: text("referenceId"),
+    metadata: text("metadata", { mode: "json" }),
+  },
+  (table) => [index("oauthClient_userId_idx").on(table.userId)]
+);
 
 export const oauthResource = sqliteTable("oauthResource", {
-  id: text('id').primaryKey(),
-  identifier: text('identifier').notNull().unique(),
-  name: text('name').notNull(),
-  accessTokenTtl: integer('accessTokenTtl'),
-  refreshTokenTtl: integer('refreshTokenTtl'),
-  signingAlgorithm: text('signingAlgorithm'),
-  signingKeyId: text('signingKeyId'),
-  allowedScopes: text('allowedScopes', { mode: "json" }),
-  customClaims: text('customClaims', { mode: "json" }),
-  dpopBoundAccessTokensRequired: integer('dpopBoundAccessTokensRequired', { mode: 'boolean' }).default(false),
-  disabled: integer('disabled', { mode: 'boolean' }).default(false),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' }),
-  policyVersion: integer('policyVersion').default(1),
-  metadata: text('metadata', { mode: "json" })
+  id: text("id").primaryKey(),
+  identifier: text("identifier").notNull().unique(),
+  name: text("name").notNull(),
+  accessTokenTtl: integer("accessTokenTtl"),
+  refreshTokenTtl: integer("refreshTokenTtl"),
+  signingAlgorithm: text("signingAlgorithm"),
+  signingKeyId: text("signingKeyId"),
+  allowedScopes: text("allowedScopes", { mode: "json" }),
+  customClaims: text("customClaims", { mode: "json" }),
+  dpopBoundAccessTokensRequired: integer("dpopBoundAccessTokensRequired", {
+    mode: "boolean",
+  }).default(false),
+  disabled: integer("disabled", { mode: "boolean" }).default(false),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" }),
+  policyVersion: integer("policyVersion").default(1),
+  metadata: text("metadata", { mode: "json" }),
 });
 
-export const oauthClientResource = sqliteTable("oauthClientResource", {
-  id: text('id').primaryKey(),
-  clientId: text('clientId').notNull().references(()=> oauthClient.clientId, { onDelete: 'cascade' }),
-  resourceId: text('resourceId').notNull().references(()=> oauthResource.identifier, { onDelete: 'cascade' }),
-  metadata: text('metadata', { mode: "json" }),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' })
-}, (table) => [
-  uniqueIndex("oauthClientResource_clientId_resourceId_uidx").on(table.clientId, table.resourceId),
-  index("oauthClientResource_clientId_idx").on(table.clientId),
-  index("oauthClientResource_resourceId_idx").on(table.resourceId),
-]);
+export const oauthClientResource = sqliteTable(
+  "oauthClientResource",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("clientId")
+      .notNull()
+      .references(() => oauthClient.clientId, { onDelete: "cascade" }),
+    resourceId: text("resourceId")
+      .notNull()
+      .references(() => oauthResource.identifier, { onDelete: "cascade" }),
+    metadata: text("metadata", { mode: "json" }),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    uniqueIndex("oauthClientResource_clientId_resourceId_uidx").on(
+      table.clientId,
+      table.resourceId
+    ),
+    index("oauthClientResource_clientId_idx").on(table.clientId),
+    index("oauthClientResource_resourceId_idx").on(table.resourceId),
+  ]
+);
 
-export const oauthRefreshToken = sqliteTable("oauthRefreshToken", {
-  id: text('id').primaryKey(),
-  token: text('token').notNull().unique(),
-  clientId: text('clientId').notNull().references(()=> oauthClient.clientId, { onDelete: 'cascade' }),
-  sessionId: text('sessionId').references(()=> session.id, { onDelete: 'set null' }),
-  userId: text('userId').notNull().references(()=> user.id, { onDelete: 'cascade' }),
-  referenceId: text('referenceId'),
-  authorizationCodeId: text('authorizationCodeId'),
-  resources: text('resources', { mode: "json" }),
-  requestedUserInfoClaims: text('requestedUserInfoClaims', { mode: "json" }),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }),
-  revoked: integer('revoked', { mode: 'timestamp_ms' }),
-  rotatedAt: integer('rotatedAt', { mode: 'timestamp_ms' }),
-  rotationReplayResponse: text('rotationReplayResponse'),
-  rotationReplayExpiresAt: integer('rotationReplayExpiresAt', { mode: 'timestamp_ms' }),
-  authTime: integer('authTime', { mode: 'timestamp_ms' }),
-  confirmation: text('confirmation', { mode: "json" }),
-  scopes: text('scopes', { mode: "json" }).notNull()
-}, (table) => [
-  index("oauthRefreshToken_clientId_idx").on(table.clientId),
-  index("oauthRefreshToken_sessionId_idx").on(table.sessionId),
-  index("oauthRefreshToken_userId_idx").on(table.userId),
-  index("oauthRefreshToken_authorizationCodeId_idx").on(table.authorizationCodeId),
-]);
+export const oauthRefreshToken = sqliteTable(
+  "oauthRefreshToken",
+  {
+    id: text("id").primaryKey(),
+    token: text("token").notNull().unique(),
+    clientId: text("clientId")
+      .notNull()
+      .references(() => oauthClient.clientId, { onDelete: "cascade" }),
+    sessionId: text("sessionId").references(() => session.id, {
+      onDelete: "set null",
+    }),
+    userId: text("userId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    referenceId: text("referenceId"),
+    authorizationCodeId: text("authorizationCodeId"),
+    resources: text("resources", { mode: "json" }),
+    requestedUserInfoClaims: text("requestedUserInfoClaims", { mode: "json" }),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }),
+    revoked: integer("revoked", { mode: "timestamp_ms" }),
+    rotatedAt: integer("rotatedAt", { mode: "timestamp_ms" }),
+    rotationReplayResponse: text("rotationReplayResponse"),
+    rotationReplayExpiresAt: integer("rotationReplayExpiresAt", {
+      mode: "timestamp_ms",
+    }),
+    authTime: integer("authTime", { mode: "timestamp_ms" }),
+    confirmation: text("confirmation", { mode: "json" }),
+    scopes: text("scopes", { mode: "json" }).notNull(),
+  },
+  (table) => [
+    index("oauthRefreshToken_clientId_idx").on(table.clientId),
+    index("oauthRefreshToken_sessionId_idx").on(table.sessionId),
+    index("oauthRefreshToken_userId_idx").on(table.userId),
+    index("oauthRefreshToken_authorizationCodeId_idx").on(
+      table.authorizationCodeId
+    ),
+  ]
+);
 
-export const oauthAccessToken = sqliteTable("oauthAccessToken", {
-  id: text('id').primaryKey(),
-  token: text('token').unique(),
-  clientId: text('clientId').notNull().references(()=> oauthClient.clientId, { onDelete: 'cascade' }),
-  sessionId: text('sessionId').references(()=> session.id, { onDelete: 'set null' }),
-  userId: text('userId').references(()=> user.id, { onDelete: 'cascade' }),
-  referenceId: text('referenceId'),
-  authorizationCodeId: text('authorizationCodeId'),
-  resources: text('resources', { mode: "json" }),
-  requestedUserInfoClaims: text('requestedUserInfoClaims', { mode: "json" }),
-  refreshId: text('refreshId').references(()=> oauthRefreshToken.id, { onDelete: 'cascade' }),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }),
-  revoked: integer('revoked', { mode: 'timestamp_ms' }),
-  confirmation: text('confirmation', { mode: "json" }),
-  scopes: text('scopes', { mode: "json" }).notNull()
-}, (table) => [
-  index("oauthAccessToken_clientId_idx").on(table.clientId),
-  index("oauthAccessToken_sessionId_idx").on(table.sessionId),
-  index("oauthAccessToken_userId_idx").on(table.userId),
-  index("oauthAccessToken_authorizationCodeId_idx").on(table.authorizationCodeId),
-  index("oauthAccessToken_refreshId_idx").on(table.refreshId),
-]);
+export const oauthAccessToken = sqliteTable(
+  "oauthAccessToken",
+  {
+    id: text("id").primaryKey(),
+    token: text("token").unique(),
+    clientId: text("clientId")
+      .notNull()
+      .references(() => oauthClient.clientId, { onDelete: "cascade" }),
+    sessionId: text("sessionId").references(() => session.id, {
+      onDelete: "set null",
+    }),
+    userId: text("userId").references(() => user.id, { onDelete: "cascade" }),
+    referenceId: text("referenceId"),
+    authorizationCodeId: text("authorizationCodeId"),
+    resources: text("resources", { mode: "json" }),
+    requestedUserInfoClaims: text("requestedUserInfoClaims", { mode: "json" }),
+    refreshId: text("refreshId").references(() => oauthRefreshToken.id, {
+      onDelete: "cascade",
+    }),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }),
+    revoked: integer("revoked", { mode: "timestamp_ms" }),
+    confirmation: text("confirmation", { mode: "json" }),
+    scopes: text("scopes", { mode: "json" }).notNull(),
+  },
+  (table) => [
+    index("oauthAccessToken_clientId_idx").on(table.clientId),
+    index("oauthAccessToken_sessionId_idx").on(table.sessionId),
+    index("oauthAccessToken_userId_idx").on(table.userId),
+    index("oauthAccessToken_authorizationCodeId_idx").on(
+      table.authorizationCodeId
+    ),
+    index("oauthAccessToken_refreshId_idx").on(table.refreshId),
+  ]
+);
 
-export const oauthConsent = sqliteTable("oauthConsent", {
-  id: text('id').primaryKey(),
-  clientId: text('clientId').notNull().references(()=> oauthClient.clientId, { onDelete: 'cascade' }),
-  userId: text('userId').references(()=> user.id, { onDelete: 'cascade' }),
-  referenceId: text('referenceId'),
-  resources: text('resources', { mode: "json" }),
-  requestedUserInfoClaims: text('requestedUserInfoClaims', { mode: "json" }),
-  scopes: text('scopes', { mode: "json" }).notNull(),
-  createdAt: integer('createdAt', { mode: 'timestamp_ms' }),
-  updatedAt: integer('updatedAt', { mode: 'timestamp_ms' })
-}, (table) => [
-  index("oauthConsent_clientId_idx").on(table.clientId),
-  index("oauthConsent_userId_idx").on(table.userId),
-]);
+export const oauthConsent = sqliteTable(
+  "oauthConsent",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("clientId")
+      .notNull()
+      .references(() => oauthClient.clientId, { onDelete: "cascade" }),
+    userId: text("userId").references(() => user.id, { onDelete: "cascade" }),
+    referenceId: text("referenceId"),
+    resources: text("resources", { mode: "json" }),
+    requestedUserInfoClaims: text("requestedUserInfoClaims", { mode: "json" }),
+    scopes: text("scopes", { mode: "json" }).notNull(),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }),
+    updatedAt: integer("updatedAt", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    index("oauthConsent_clientId_idx").on(table.clientId),
+    index("oauthConsent_userId_idx").on(table.userId),
+  ]
+);
 
 export const oauthClientAssertion = sqliteTable("oauthClientAssertion", {
-  id: text('id').primaryKey(),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }).notNull()
+  id: text("id").primaryKey(),
+  expiresAt: integer("expiresAt", { mode: "timestamp_ms" }).notNull(),
 });
 
 // --------------------------------------------------------------------------
 // oauthDeviceAuthorization({ verificationUri })
 // --------------------------------------------------------------------------
 
-export const deviceCode = sqliteTable("deviceCode", {
-  id: text('id').primaryKey(),
-  deviceCode: text('deviceCode').notNull(),
-  userCode: text('userCode').notNull(),
-  userId: text('userId'),
-  expiresAt: integer('expiresAt', { mode: 'timestamp_ms' }).notNull(),
-  status: text('status').notNull(),
-  lastPolledAt: integer('lastPolledAt', { mode: 'timestamp_ms' }),
-  pollingInterval: integer('pollingInterval'),
-  clientId: text('clientId'),
-  scope: text('scope'),
-  resources: text('resources', { mode: "json" }),
-  oauthClientId: text('oauthClientId')
-}, (table) => [
-  uniqueIndex("deviceCode_deviceCode_uidx").on(table.deviceCode),
-  uniqueIndex("deviceCode_userCode_uidx").on(table.userCode),
-]);
+export const deviceCode = sqliteTable(
+  "deviceCode",
+  {
+    id: text("id").primaryKey(),
+    deviceCode: text("deviceCode").notNull(),
+    userCode: text("userCode").notNull(),
+    userId: text("userId"),
+    expiresAt: integer("expiresAt", { mode: "timestamp_ms" }).notNull(),
+    status: text("status").notNull(),
+    lastPolledAt: integer("lastPolledAt", { mode: "timestamp_ms" }),
+    pollingInterval: integer("pollingInterval"),
+    clientId: text("clientId"),
+    scope: text("scope"),
+    resources: text("resources", { mode: "json" }),
+    oauthClientId: text("oauthClientId"),
+  },
+  (table) => [
+    uniqueIndex("deviceCode_deviceCode_uidx").on(table.deviceCode),
+    uniqueIndex("deviceCode_userCode_uidx").on(table.userCode),
+  ]
+);

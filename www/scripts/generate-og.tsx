@@ -24,21 +24,23 @@
  * renderer looks like it cannot do something.
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { ImageResponse } from '@vercel/og';
-import { SITE } from '../src/lib/site';
+import { readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+
+import { ImageResponse } from "@vercel/og";
+
+import { SITE } from "../src/lib/site";
 
 /** The card, per the OG spec and what every scraper crops to. */
 const WIDTH = 1200;
 const HEIGHT = 630;
 
 /** From globals.css. Literals, because satori resolves no CSS custom property. */
-const BEZEL = '#EFEEEA';
-const INK = '#1b1b19';
-const INK_3 = '#6e6e66';
-const ACCENT = '#4568ff';
+const BEZEL = "#EFEEEA";
+const INK = "#1b1b19";
+const INK_3 = "#6e6e66";
+const ACCENT = "#4568ff";
 
 const require = createRequire(import.meta.url);
 
@@ -46,9 +48,13 @@ const require = createRequire(import.meta.url);
  * Resolved through the package rather than by a hand-written node_modules path,
  * so a hoist or a version bump cannot silently point this at nothing.
  */
-const FONTS = join(dirname(require.resolve('geist/package.json')), 'dist', 'fonts');
+const FONTS = join(
+  dirname(require.resolve("geist/package.json")),
+  "dist",
+  "fonts"
+);
 
-const font = (family: 'geist-sans' | 'geist-mono', file: string) =>
+const font = (family: "geist-sans" | "geist-mono", file: string) =>
   readFile(join(FONTS, family, file));
 
 const card = (
@@ -59,16 +65,20 @@ const card = (
       padding: 72,
       background: BEZEL,
       color: INK,
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'space-between',
-      fontFamily: 'Geist',
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "space-between",
+      fontFamily: "Geist",
     }}
   >
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       {/* §6: a cell, not a dot. There are no pills in this palette. */}
-      <div style={{ width: 14, height: 14, borderRadius: 1.5, background: ACCENT }} />
-      <div style={{ fontSize: 30, fontWeight: 500, letterSpacing: '-0.03em' }}>sigiro</div>
+      <div
+        style={{ width: 14, height: 14, borderRadius: 1.5, background: ACCENT }}
+      />
+      <div style={{ fontSize: 30, fontWeight: 500, letterSpacing: "-0.03em" }}>
+        sigiro
+      </div>
     </div>
 
     {/* -0.04em, per §8, and it renders cleanly.
@@ -88,7 +98,7 @@ const card = (
         fontSize: 68,
         fontWeight: 500,
         lineHeight: 1.08,
-        letterSpacing: '-0.04em',
+        letterSpacing: "-0.04em",
         maxWidth: 880,
       }}
     >
@@ -97,7 +107,7 @@ const card = (
 
     {/* Mono, matching every `.meta` line on the site: metadata and numbers, never
         prose (§8). It was sans while only the sans regular was in the tree. */}
-    <div style={{ fontFamily: 'Geist Mono', fontSize: 22, color: INK_3 }}>
+    <div style={{ fontFamily: "Geist Mono", fontSize: 22, color: INK_3 }}>
       sigiro.com · free when you install it
     </div>
   </div>
@@ -108,15 +118,30 @@ const png = Buffer.from(
     width: WIDTH,
     height: HEIGHT,
     fonts: [
-      { name: 'Geist', data: await font('geist-sans', 'Geist-Medium.ttf'), weight: 500 },
-      { name: 'Geist Mono', data: await font('geist-mono', 'GeistMono-Regular.ttf'), weight: 400 },
+      {
+        name: "Geist",
+        data: await font("geist-sans", "Geist-Medium.ttf"),
+        weight: 500,
+      },
+      {
+        name: "Geist Mono",
+        data: await font("geist-mono", "GeistMono-Regular.ttf"),
+        weight: 400,
+      },
     ],
-  }).arrayBuffer(),
+  }).arrayBuffer()
 );
 
 // `SITE.ogImage` is the path the meta tags publish, so writing to it is what
 // keeps the asset and the tag from drifting apart.
-const out = join(import.meta.dirname, '..', 'public', SITE.ogImage.replace(/^\//, ''));
+const out = join(
+  import.meta.dirname,
+  "..",
+  "public",
+  SITE.ogImage.replace(/^\//, "")
+);
 await writeFile(out, png);
 
-console.log(`og: ${out} (${WIDTH}x${HEIGHT}, ${Math.round(png.byteLength / 1024)} KB)`);
+console.log(
+  `og: ${out} (${WIDTH}x${HEIGHT}, ${Math.round(png.byteLength / 1024)} KB)`
+);

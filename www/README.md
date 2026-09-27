@@ -10,20 +10,25 @@ app on Vite via vinext, and now Astro.
 ## Commands
 
 ```bash
+# Run from the repository root
 aube install --frozen-lockfile
-aube run dev           # astro dev
-aube run build         # astro build → dist/client (assets) + dist/server (the Worker)
-aube run preview       # local workerd preview of the wrapper Worker
-aube run deploy        # Alchemy deploys the wrapper Worker and infrastructure
-aube run lint          # oxlint
-aube run fmt           # Vite+ formatter using vite.config.ts
-aube run check         # formatting, linting, and type checks
-aube run og            # regenerate the Open Graph card into public/
+aube run fmt
+aube run fmt:check
+aube run lint
+
+aube -C www install --frozen-lockfile
+aube -C www run dev       # astro dev
+aube -C www run build     # astro build → dist/client (assets) + dist/server (the Worker)
+aube -C www run preview  # local workerd preview of the wrapper Worker
+aube -C www run deploy   # Alchemy deploys the wrapper Worker and infrastructure
+aube -C www run check    # repository formatting and linting
+aube -C www run og       # regenerate the Open Graph card into public/
 ```
 
-`aube run` installs missing or stale dependencies before starting the script and
-uses the committed `aube-lock.yaml`; do not add a second lockfile. `aube run dev` is
-for page development only. Validate routing by driving the running Worker with a
+The repository-root `oxfmt.config.ts` and `oxlint.config.ts` are shared by auth
+and the website. `aube run` installs missing or stale dependencies
+before starting a package script and uses that package's committed `aube-lock.yaml`;
+do not add a second lockfile. `aube -C www run dev` is for page development only. Validate routing by driving the running Worker with a
 real agent and inspecting traces and call-stack diffs. The sole production
 deployment path is Alchemy, which deploys `src/worker.ts`; do not deploy the
 generated `dist/server/wrangler.json` directly because it contains only Blume's

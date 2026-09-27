@@ -14,7 +14,7 @@ import { fetchClientMetadataResource } from "../src/d1/cimd-fetch.js";
 
 const withStubbedFetch = async (
   stub: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
-  run: () => Promise<void>,
+  run: () => Promise<void>
 ): Promise<void> => {
   const original = globalThis.fetch;
   globalThis.fetch = stub as typeof globalThis.fetch;
@@ -34,23 +34,35 @@ void test("returns a 304 to the caller instead of treating it as a redirect", as
   await withStubbedFetch(
     () => Promise.resolve(new Response(null, { status: 304 })),
     async () => {
-      const response = await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json", {
-        headers: new Headers({ "If-None-Match": '"abc"' }),
-      });
+      const response = await fetchClientMetadataResource(
+        "https://client.example/.well-known/oauth-client.json",
+        {
+          headers: new Headers({ "If-None-Match": '"abc"' }),
+        }
+      );
       assert.equal(response.status, 304);
-    },
+    }
   );
 });
 
 void test("refuses a real redirect", async () => {
   await withStubbedFetch(
-    () => Promise.resolve(new Response(null, { status: 302, headers: { location: "https://evil.example/" } })),
+    () =>
+      Promise.resolve(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://evil.example/" },
+        })
+      ),
     async () => {
       await assert.rejects(
-        async () => void (await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json")),
-        /must not redirect \(got 302\)/,
+        async () =>
+          void (await fetchClientMetadataResource(
+            "https://client.example/.well-known/oauth-client.json"
+          )),
+        /must not redirect \(got 302\)/
       );
-    },
+    }
   );
 });
 
@@ -62,14 +74,22 @@ void test("never requests redirect:'error', which Workers does not implement", a
   await withStubbedFetch(
     (_input, init) => {
       seen = init?.redirect;
-      return Promise.resolve(new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
+      return Promise.resolve(
+        new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      );
     },
     async () => {
-      await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json", {
-        redirect: "error",
-        headers: new Headers({ Accept: "application/json" }),
-      });
-    },
+      await fetchClientMetadataResource(
+        "https://client.example/.well-known/oauth-client.json",
+        {
+          redirect: "error",
+          headers: new Headers({ Accept: "application/json" }),
+        }
+      );
+    }
   );
   assert.equal(seen, "manual");
 });
@@ -84,14 +104,22 @@ void test("forwards the caller's conditional headers and abort signal", async ()
     (_input, init) => {
       seenEtag = new Headers(init?.headers).get("If-None-Match");
       seenSignal = init?.signal;
-      return Promise.resolve(new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
+      return Promise.resolve(
+        new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      );
     },
     async () => {
-      await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json", {
-        headers: new Headers({ "If-None-Match": '"etag-value"' }),
-        signal: controller.signal,
-      });
-    },
+      await fetchClientMetadataResource(
+        "https://client.example/.well-known/oauth-client.json",
+        {
+          headers: new Headers({ "If-None-Match": '"etag-value"' }),
+          signal: controller.signal,
+        }
+      );
+    }
   );
   assert.equal(seenEtag, '"etag-value"');
   assert.equal(seenSignal, controller.signal);
@@ -103,24 +131,35 @@ void test("leaves the body unread for the caller to stream", async () => {
   await withStubbedFetch(
     () =>
       Promise.resolve(
-        new Response('{"client_id":"https://sigiro.com/.well-known/oauth-client.json"}', {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          '{"client_id":"https://sigiro.com/.well-known/oauth-client.json"}',
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        )
       ),
     async () => {
-      const response = await fetchClientMetadataResource("https://client.example/.well-known/oauth-client.json");
+      const response = await fetchClientMetadataResource(
+        "https://client.example/.well-known/oauth-client.json"
+      );
       assert.equal(response.bodyUsed, false);
       const body = (await response.json()) as { client_id: string };
-      assert.equal(body.client_id, "https://sigiro.com/.well-known/oauth-client.json");
-    },
+      assert.equal(
+        body.client_id,
+        "https://sigiro.com/.well-known/oauth-client.json"
+      );
+    }
   );
 });
 
 void test("rejects a non-https client_id", async () => {
   await assert.rejects(
-    async () => void (await fetchClientMetadataResource("http://sigiro.com/.well-known/oauth-client.json")),
-    /https/,
+    async () =>
+      void (await fetchClientMetadataResource(
+        "http://sigiro.com/.well-known/oauth-client.json"
+      )),
+    /https/
   );
 });
 
@@ -135,14 +174,26 @@ void test("serves the first-party client_id from memory without a network fetch"
       return Promise.resolve(new Response(null, { status: 403 }));
     },
     async () => {
-      const response = await fetchClientMetadataResource("https://sigiro.com/.well-known/oauth-client.json");
+      const response = await fetchClientMetadataResource(
+        "https://sigiro.com/.well-known/oauth-client.json"
+      );
       assert.equal(response.status, 200);
-      const body = (await response.json()) as { client_id: string; scope: string };
-      assert.equal(body.client_id, "https://sigiro.com/.well-known/oauth-client.json");
+      const body = (await response.json()) as {
+        client_id: string;
+        scope: string;
+      };
+      assert.equal(
+        body.client_id,
+        "https://sigiro.com/.well-known/oauth-client.json"
+      );
       assert.match(body.scope, /telemetry:ingest/);
-    },
+    }
   );
-  assert.equal(fetched, false, "the first-party document must not be fetched over the network");
+  assert.equal(
+    fetched,
+    false,
+    "the first-party document must not be fetched over the network"
+  );
 });
 
 void test("a different URL on the same origin still goes over the network", async () => {
@@ -156,17 +207,29 @@ void test("a different URL on the same origin still goes over the network", asyn
         new Response('{"client_id":"https://sigiro.com/other.json"}', {
           status: 200,
           headers: { "content-type": "application/json" },
-        }),
+        })
       );
     },
     async () => {
       await fetchClientMetadataResource("https://sigiro.com/other.json");
-    },
+    }
   );
   assert.equal(requested, "https://sigiro.com/other.json");
 });
 
 void test("rejects a private or reserved host", async () => {
-  await assert.rejects(async () => void (await fetchClientMetadataResource("https://127.0.0.1/.well-known/oauth-client.json")), /not permitted/);
-  await assert.rejects(async () => void (await fetchClientMetadataResource("https://localhost/.well-known/oauth-client.json")), /not permitted/);
+  await assert.rejects(
+    async () =>
+      void (await fetchClientMetadataResource(
+        "https://127.0.0.1/.well-known/oauth-client.json"
+      )),
+    /not permitted/
+  );
+  await assert.rejects(
+    async () =>
+      void (await fetchClientMetadataResource(
+        "https://localhost/.well-known/oauth-client.json"
+      )),
+    /not permitted/
+  );
 });

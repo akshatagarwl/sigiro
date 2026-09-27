@@ -13,10 +13,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { getTableColumns, is, Table } from "drizzle-orm";
-import { integer, sqliteTable, text, type SQLiteColumn } from "drizzle-orm/sqlite-core";
+import {
+  integer,
+  sqliteTable,
+  text,
+  type SQLiteColumn,
+} from "drizzle-orm/sqlite-core";
+
 import { createAuthOptions, type AuthRuntime } from "../src/auth.js";
-import { assertAuthSchemaMatches, schema } from "../src/schema/check.js";
 import * as authSchema from "../src/schema/auth-schema.js";
+import { assertAuthSchemaMatches, schema } from "../src/schema/check.js";
 
 /**
  * Schema comparison only reads plugin table declarations off the options object,
@@ -51,7 +57,7 @@ const options = createAuthOptions(schemaOnlyRuntime);
 
 /** Every table exported by the schema artifact, keyed by export name. */
 const tables = Object.fromEntries(
-  Object.entries(authSchema).filter(([, value]) => is(value, Table)),
+  Object.entries(authSchema).filter(([, value]) => is(value, Table))
 );
 
 /**
@@ -110,7 +116,7 @@ void test("startup check rejects a schema that is missing a table", async () => 
       assert.match(error.message, /agentHost/);
       return true;
     },
-    "removing agentHost must fail the schema check",
+    "removing agentHost must fail the schema check"
   );
 
   // The unmodified schema still passes, so the failure above was the removal
@@ -141,13 +147,18 @@ void test("startup check rejects a schema that is missing a column", async () =>
   });
 
   await assert.rejects(
-    () => assertAuthSchemaMatches(options, {}, { ...schema, agent: agentWithoutMetadata }),
+    () =>
+      assertAuthSchemaMatches(
+        options,
+        {},
+        { ...schema, agent: agentWithoutMetadata }
+      ),
     (error: Error) => {
       assert.match(error.message, /mismatch/i);
       assert.match(error.message, /metadata/);
       return true;
     },
-    "removing agent.metadata must fail the schema check",
+    "removing agent.metadata must fail the schema check"
   );
 
   await assertAuthSchemaMatches(options);
@@ -175,7 +186,9 @@ for (const [tableName, columnName] of PLAIN_TEXT_TRANSFORM_COLUMNS) {
     const table = tables[tableName];
     assert.ok(table, `${tableName} is missing from the schema`);
 
-    const column = getTableColumns(table as Table)[columnName] as SQLiteColumn | undefined;
+    const column = getTableColumns(table as Table)[columnName] as
+      | SQLiteColumn
+      | undefined;
     assert.ok(column, `${tableName}.${columnName} is missing from the schema`);
 
     // Drizzle reports `SQLiteTextJson` for `text(..., { mode: "json" })` and
@@ -185,7 +198,7 @@ for (const [tableName, columnName] of PLAIN_TEXT_TRANSFORM_COLUMNS) {
       column.columnType,
       "SQLiteText",
       `${tableName}.${columnName} must be plain text, not { mode: "json" } — the plugin ` +
-        "already JSON-encodes it, so json mode double-encodes and silently breaks it",
+        "already JSON-encodes it, so json mode double-encodes and silently breaks it"
     );
 
     // Behavioural proof of the same thing: the driver value must pass through
@@ -194,7 +207,7 @@ for (const [tableName, columnName] of PLAIN_TEXT_TRANSFORM_COLUMNS) {
     assert.equal(
       column.mapToDriverValue(encoded),
       encoded,
-      `${tableName}.${columnName} must not re-serialize an already-encoded value`,
+      `${tableName}.${columnName} must not re-serialize an already-encoded value`
     );
   });
 }
