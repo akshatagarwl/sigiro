@@ -14,8 +14,6 @@ aube install --frozen-lockfile
 aube run dev           # astro dev
 aube run build         # astro build → dist/client (assets) + dist/server (the Worker)
 aube run preview       # local workerd preview of the wrapper Worker
-aube run check:edge    # sub-second auth/API routing smoke test against the current build
-aube run check:edge:full # rebuild, then run the routing smoke test
 aube run deploy        # Alchemy deploys the wrapper Worker and infrastructure
 aube run lint          # oxlint
 aube run fmt           # Vite+ formatter using vite.config.ts
@@ -25,10 +23,8 @@ aube run og            # regenerate the Open Graph card into public/
 
 `aube run` installs missing or stale dependencies before starting the script and
 uses the committed `aube-lock.yaml`; do not add a second lockfile. `aube run dev` is
-for page development only. Use `aube run check:edge` while editing the wrapper;
-it starts isolated mock origins and checks the complete route split, request
-forwarding, redirect rewriting, and canonical-host redirect. Use
-`check:edge:full` after changing Blume or static assets. The sole production
+for page development only. Validate routing by driving the running Worker with a
+real agent and inspecting traces and call-stack diffs. The sole production
 deployment path is Alchemy, which deploys `src/worker.ts`; do not deploy the
 generated `dist/server/wrangler.json` directly because it contains only Blume's
 inner Worker and bypasses the apex auth and API proxies.
