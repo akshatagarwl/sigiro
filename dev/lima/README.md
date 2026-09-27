@@ -1,6 +1,6 @@
 # Sigiro Development VMs (Lima)
 
-Lima VM configs for local E2E testing on macOS (Apple Silicon).
+Lima VM configs for running Sigiro on macOS (Apple Silicon).
 
 ## Prerequisites
 
@@ -32,7 +32,7 @@ export CXX="ccache ${CXX_aarch64_unknown_linux_gnu}"
 export CC_aarch64_unknown_linux_gnu="$CC"
 export CXX_aarch64_unknown_linux_gnu="$CXX"
 
-cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro
+TARGET=aarch64-unknown-linux-gnu mise run build
 ```
 
 See `.cargo/config.toml` for details on the cross-compile workaround.
@@ -57,34 +57,14 @@ limactl start --name=sigiro-local dev/lima/sigiro-local.yaml
 # 3. Cross-compile and copy binary
 source scripts/lima-cross-env.sh
 ulimit -n 65536
-cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro
+TARGET=aarch64-unknown-linux-gnu mise run build
 limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-local:~/sigiro/bin/sigiro-latest
 
-# 4. Run E2E test
-limactl copy tests/vm/lima-e2e-test.sh sigiro-local:/tmp/lima-e2e-test.sh
-limactl shell sigiro-local bash -c \
-  'SIGIRO_BIN=~/sigiro/bin/sigiro-latest MODE=local \
-   SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'
 ```
 
-## Federation E2E Test
+## Federation setup
 
 Multi-node k3s cluster with quack-based federation:
-
-```bash
-# Run the full federation E2E test (3 VMs, k8s, OnlineBoutique)
-./dev/lima/sigiro-fed-test.sh
-```
-
-The test script:
-1. Starts 3 Lima VMs — `fed-central` (k3s server), `fed-collector-1/2` (k3s workers)
-2. Cross-compiles sigiro and copies to all VMs
-3. Builds Docker image and loads into k3s
-4. Deploys k8s manifests: PostgreSQL, RustFS, sigiro-central, sigiro-collector DaemonSet
-5. Deploys OnlineBoutique demo services
-6. Verifies federation via `/v1/federation/workers` and `/v1/diagnose`
-
-Manual steps (if not using the script):
 
 ```bash
 # 1. Start central VM (k3s server)

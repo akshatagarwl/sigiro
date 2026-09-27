@@ -1,18 +1,12 @@
-# Sigiro local storage E2E test VM
+# Sigiro local storage VM
 #
 # Usage:
 #   limactl start --name=sigiro-local dev/lima/sigiro-local.yaml
 #
 # Cross-compile and copy binary:
 #   source scripts/lima-cross-env.sh
-#   cargo build --release --target aarch64-unknown-linux-gnu --bin sigiro
+#   TARGET=aarch64-unknown-linux-gnu mise run build
 #   limactl copy target/aarch64-unknown-linux-gnu/release/sigiro sigiro-local:~/sigiro/bin/sigiro
-#
-# Run E2E test:
-#   limactl copy tests/vm/lima-e2e-test.sh sigiro-local:/tmp/lima-e2e-test.sh
-#   limactl shell sigiro-local bash -c \
-#     'SIGIRO_BIN=~/sigiro/bin/sigiro MODE=local \
-#      SIGIRO_DATA=/tmp/sigiro-e2e-test bash /tmp/lima-e2e-test.sh'
 
 images:
 - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
