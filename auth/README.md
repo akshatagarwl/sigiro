@@ -28,16 +28,17 @@ Required environment variables:
 
 PostgreSQL remains private. The service connects directly to it over the Alchemy-managed `sigiro` network; there is no Hyperdrive or VPC bridge in the steady-state application path. Cloudflare Email Sending's REST API delivers verification email for the existing `sigiro.com` sender domain; the Worker-only email binding is not required.
 
-## Local verification
+## Local development
 
 ```sh
 cp .env.example .env
 aube install --frozen-lockfile
-aube run test
+aube run check
+aube run lint
 docker buildx bake sigiro-auth --load
 ```
 
-The E2E runner starts PostgreSQL, applies migrations, and exercises the real Node HTTP adapter. It verifies OTP, organization activation, OAuth/OIDC discovery, JWKS, confidential client credentials, native S256 PKCE, refresh rotation and replay rejection, device authorization, MCP metadata, real CIMD discovery and persistence, DNS-pinned transport rejection of loopback targets, DCR absence, audience/scopes, and `tid` propagation.
+The automated email-delivery test has been retired. Validate authorization flows by driving the running service with a real agent and inspecting traces and call-stack diffs. The Worker test environment remains available for local and agent-driven E2E workflows.
 
 ## Build and migration
 

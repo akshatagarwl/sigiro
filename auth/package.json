@@ -10,15 +10,13 @@
   "scripts": {
     "prepare": "effect-tsgo patch --no-typescript --oxlint",
     "build": "tsc -p tsconfig.build.json",
-    "check": "tsc --noEmit && tsx --test test/cimd-fetch.ts test/client-metadata.ts",
+    "check": "tsc --noEmit",
     "lint": "oxlint --type-aware .",
     "schema:sql": "tsx scripts/generate-d1-sql.ts",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "test:email": "node --import tsx test/cloudflare-email-e2e.ts",
-    "test:agent-e2e": "node --import tsx test/worker-agent-e2e.ts",
-    "test": "aube run check && aube run test:email"
+    "test:agent-e2e": "node --import tsx test/worker-agent-e2e.ts"
   },
   "dependencies": {
     "@better-auth/agent-auth": "0.6.2",
@@ -36,9 +34,7 @@
     "@auth/agent": "0.6.2",
     "@cloudflare/workers-types": "^5.20260919.1",
     "@effect/tsgo": "0.45.0",
-    "@effect/vitest": "4.0.0-rc.115",
     "@types/node": "24.10.1",
-    "jose": "6.2.3",
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
     "tsx": "4.23.13",

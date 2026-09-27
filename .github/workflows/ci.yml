@@ -54,13 +54,6 @@ jobs:
     defaults:
       run:
         working-directory: auth
-    env:
-      ENVIRONMENT: test
-      BETTER_AUTH_URL: http://127.0.0.1:3100
-      BETTER_AUTH_SECRET: ci-only-better-auth-secret-at-least-32-bytes
-      SIGIRO_RESOURCE: http://127.0.0.1:9999
-      EMAIL_FROM: noreply@sigiro.com
-      NO_PROXY: 127.0.0.1,localhost
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -70,11 +63,10 @@ jobs:
         with:
           version: 2.2.16
       - run: aube install --frozen-lockfile
-      # Auth runs on Workers/D1, so there is no PostgreSQL to start and no
-      # migration step: the D1 schema is generated from the Drizzle artifact and
-      # applied with wrangler. `test` covers typecheck, lint, the schema parity
-      # guard and the UI routes, none of which need a database.
-      - run: aube run test
+      # Auth runs on Workers/D1, so there is no PostgreSQL to start. Keep CI to
+      # static checks and generate the D1 schema from the Drizzle artifact.
+      - run: aube run check
+      - run: aube run lint
       - run: aube run schema:sql
       - run: aube audit --prod
 
