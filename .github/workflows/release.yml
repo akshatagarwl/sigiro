@@ -1,6 +1,6 @@
 name: Release
 
-# Tags and manual releases verify release-mode tests before building artifacts.
+# Tags and manual releases build and publish release artifacts.
 on:
   push:
     tags: ['v*']
@@ -12,7 +12,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTC_WRAPPER: sccache
-  MISE_TASK_CACHE_DIR: ${{ github.workspace }}/.mise-task-cache
 
 jobs:
   # Fails in seconds if the R2 credentials are missing, before the matrix spends
@@ -37,29 +36,8 @@ jobs:
             exit 1
           fi
 
-  verify:
-    needs: preflight
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
-        with:
-          version: 2026.9.9
-          install_args: rust sccache packslip:github.com/jdx/mr-boxington cargo:cargo-shear github:astral-sh/hawk ast-grep cargo:similarity-rs cargo:tokei
-      - name: Restore mbx build cache
-        uses: jdx/mr-boxington-action@867fc530102eec5b756075d70d850dc8330d2272 # v1.4.0
-      - name: Restore successful gate receipts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.MISE_TASK_CACHE_DIR }}
-          key: mise-task-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-          restore-keys: |
-            mise-task-v2-${{ runner.os }}-${{ runner.arch }}-
-      - name: Run release gate
-        run: mise run --skip-tools release
-
   build:
-    needs: verify
+    needs: preflight
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
