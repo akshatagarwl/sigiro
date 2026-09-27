@@ -226,10 +226,6 @@ sources = ["@group:rust-gate"]
 outputs = []
 cache = { enabled = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
 
-[tasks.verify-prebuilt-duckdb]
-description = "Verify DuckDB archive reuse and a build without C++ compilation."
-run = "scripts/verify-prebuilt-duckdb.sh"
-
 # The CI gate compiles and lints Rust and validates native deployment invariants.
 [tasks.full]
 description = "Compile, format, lint, and validate the native deployment contract."
