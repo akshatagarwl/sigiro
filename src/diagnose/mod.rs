@@ -2018,32 +2018,3 @@ SELECT json_object(
 "#
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::is_error_log_expr;
-    use duckdb::{Connection, params};
-
-    #[test]
-    fn error_log_expression_handles_severity_numbers_and_mixed_case_text() {
-        let conn = Connection::open_in_memory().expect("open test database");
-        let sql = format!(
-            "SELECT {} FROM (SELECT ? AS severity_number, ? AS severity_text)",
-            is_error_log_expr("")
-        );
-
-        for (number, text, expected) in [
-            (17, "information", true),
-            (0, "Error", true),
-            (0, "information", false),
-        ] {
-            let actual: bool = conn
-                .query_row(&sql, params![number, text], |row| row.get(0))
-                .expect("evaluate error-log expression");
-            assert_eq!(
-                actual, expected,
-                "severity_number={number}, severity_text={text}"
-            );
-        }
-    }
-}

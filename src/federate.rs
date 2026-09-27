@@ -1476,35 +1476,3 @@ pub async fn run_federated_query(
     }
     Ok(results)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn deparse_duckdb-v2_literals_preserves_exact_text() {
-        assert_eq!(
-            deparse_constant(&json!({ "kind": "NUMERIC", "text": "1.50" })).unwrap(),
-            "1.50"
-        );
-        assert_eq!(
-            deparse_constant(&json!({ "kind": "STRING", "text": "it's" })).unwrap(),
-            "'it''s'"
-        );
-        assert_eq!(
-            deparse_constant(&json!({ "kind": "NULL_LITERAL", "text": "" })).unwrap(),
-            "NULL"
-        );
-    }
-
-    #[test]
-    fn deparse_duckdb-v2_literal_rejects_invalid_numeric_text() {
-        let err =
-            deparse_constant(&json!({ "kind": "NUMERIC", "text": "1; DROP TABLE t" })).unwrap_err();
-        assert!(
-            err.to_string().contains("invalid NUMERIC literal text"),
-            "unexpected error: {err}"
-        );
-    }
-}

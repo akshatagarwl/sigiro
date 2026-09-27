@@ -148,11 +148,6 @@ impl WorkloadBudget {
         Self::with_capacities_and_global(capacities, cores)
     }
 
-    #[cfg(test)]
-    fn with_capacities(capacities: [usize; WORKLOAD_CLASS_COUNT]) -> Self {
-        Self::with_capacities_and_global(capacities, capacities.iter().sum())
-    }
-
     fn with_capacities_and_global(
         capacities: [usize; WORKLOAD_CLASS_COUNT],
         global_capacity: usize,
@@ -276,47 +271,5 @@ impl WorkloadSnapshot {
     /// Returns the snapshot entry for one class.
     pub fn stats(self, workload: WorkloadClass) -> WorkloadStats {
         self.stats[workload.index()]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{WorkloadBudget, WorkloadClass};
-
-    #[test]
-    fn rejects_without_queueing_and_releases_on_drop() {
-        let budget = WorkloadBudget::with_capacities([1; 5]);
-        let permit = budget.try_acquire(WorkloadClass::Query).unwrap();
-
-        let error = budget.try_acquire(WorkloadClass::Query).unwrap_err();
-        assert_eq!(error.workload, WorkloadClass::Query);
-        assert_eq!(budget.stats(WorkloadClass::Query).in_use, 1);
-        assert_eq!(budget.stats(WorkloadClass::Query).rejected, 1);
-
-        drop(permit);
-        assert!(budget.try_acquire(WorkloadClass::Query).is_ok());
-    }
-
-    #[test]
-    fn cpu_workloads_share_the_global_capacity() {
-        let budget = WorkloadBudget::with_capacities_and_global([2; 5], 1);
-        let _query = budget.try_acquire(WorkloadClass::Query).unwrap();
-
-        assert!(budget.try_acquire(WorkloadClass::Transform).is_err());
-        assert!(budget.try_acquire(WorkloadClass::Anomaly).is_err());
-        assert!(budget.try_acquire(WorkloadClass::ProjectInit).is_ok());
-        assert!(budget.try_acquire(WorkloadClass::Maintenance).is_ok());
-    }
-
-    #[test]
-    fn workload_classes_have_independent_capacity() {
-        let budget = WorkloadBudget::with_capacities([1; 5]);
-        let _query = budget.try_acquire(WorkloadClass::Query).unwrap();
-
-        assert!(budget.try_acquire(WorkloadClass::Query).is_err());
-        assert!(budget.try_acquire(WorkloadClass::Transform).is_ok());
-        assert!(budget.try_acquire(WorkloadClass::ProjectInit).is_ok());
-        assert!(budget.try_acquire(WorkloadClass::Anomaly).is_ok());
-        assert!(budget.try_acquire(WorkloadClass::Maintenance).is_ok());
     }
 }

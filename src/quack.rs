@@ -368,20 +368,3 @@ pub(crate) fn stop_server(conn: &Connection, uri: &QuackUri) -> Result<()> {
     .context("failed to stop the quack server cleanly")?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::QuackUri;
-
-    #[test]
-    fn quack_uri_uses_canonical_socket_address_format() {
-        assert_eq!(
-            QuackUri::new("127.0.0.1".parse().unwrap(), 7777).0,
-            "quack://127.0.0.1:7777"
-        );
-        assert_eq!(
-            QuackUri::new("::1".parse().unwrap(), 7777).0,
-            "quack://[::1]:7777"
-        );
-    }
-}

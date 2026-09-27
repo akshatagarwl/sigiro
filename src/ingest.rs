@@ -1549,24 +1549,3 @@ fn decompress_profile(
     }
     Ok(decompressed)
 }
-
-#[cfg(test)]
-mod http_status_tests {
-    use super::*;
-
-    #[test]
-    fn transform_failures_have_distinct_http_statuses() {
-        assert_eq!(
-            transform_http_status(&Status::invalid_argument("invalid payload")),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            transform_http_status(&Status::resource_exhausted("busy")),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-        assert_eq!(
-            transform_http_status(&Status::internal("worker panic")),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
-}

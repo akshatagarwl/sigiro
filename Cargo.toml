@@ -110,9 +110,6 @@ duckdb = { version = "=1.10505.0", default-features = false, features = ["append
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-axum-test = "17"
-temp-env = "0.3"
-insta = { version = "1.47.2", features = ["yaml", "json"] }
 schemars = "1"
 tokio-util = "0.7"
 
@@ -149,13 +146,6 @@ debug = 1
 # shrinks target/ (the bulk of the old 66 GB debug dir was dep debuginfo) and
 # speeds dep compile+link. Our own crate keeps debug = 1 above.
 [profile.dev.package."*"]
-debug = false
-
-[profile.test]
-split-debuginfo = "unpacked"
-debug = 1
-
-[profile.test.package."*"]
 debug = false
 
 [profile.release]

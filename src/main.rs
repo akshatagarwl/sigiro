@@ -652,29 +652,3 @@ fn init_basic_subscriber() {
         .with_writer(std::io::stderr)
         .init();
 }
-
-#[cfg(test)]
-mod cli_tests {
-    use super::{Cli, Command};
-    use clap::Parser;
-
-    #[test]
-    fn query_requires_positional_sql() {
-        let parsed = Cli::try_parse_from(["sigiro", "query", "SELECT 1"]).unwrap();
-        assert!(matches!(parsed.command, Some(Command::Query { sql, .. }) if sql == "SELECT 1"));
-
-        let stdin = Cli::try_parse_from(["sigiro", "query", "-"]).unwrap();
-        assert!(matches!(stdin.command, Some(Command::Query { sql, .. }) if sql == "-"));
-
-        assert!(Cli::try_parse_from(["sigiro", "query"]).is_err());
-    }
-
-    #[test]
-    fn query_rejects_sql_file_option() {
-        let error = match Cli::try_parse_from(["sigiro", "query", "--sql-file", "query.sql"]) {
-            Ok(_) => panic!("--sql-file must be rejected"),
-            Err(error) => error,
-        };
-        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-    }
-}

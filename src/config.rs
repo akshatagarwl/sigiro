@@ -20,7 +20,6 @@ pub(crate) static OTLP_HTTP_PORT: Envar<u16> =
     Envar::on_startup("SIGIRO_OTLP_HTTP_PORT", || EnvarDef::Default(4318));
 
 /// S3 cold storage config. Empty/unset means no S3.
-/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static S3_BUCKET: Envar<String> =
     Envar::on_demand("SIGIRO_S3_BUCKET", || EnvarDef::Default(String::new()));
 pub(crate) static S3_REGION: Envar<String> =
@@ -30,19 +29,15 @@ pub(crate) static S3_REGION: Envar<String> =
 /// `SIGIRO_S3_BUCKET` is set — R2/most S3-compatible stores are unreachable via
 /// DuckDB's default AWS endpoint resolution. The scheme determines DuckDB's
 /// `USE_SSL` setting.
-/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static S3_ENDPOINT: Envar<String> =
     Envar::on_demand("SIGIRO_S3_ENDPOINT", || EnvarDef::Default(String::new()));
 /// S3 access key ID. Falls back to the conventional `AWS_ACCESS_KEY_ID` when unset.
-/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static S3_KEY_ID: Envar<String> =
     Envar::on_demand("SIGIRO_S3_KEY_ID", || EnvarDef::Default(String::new()));
 /// S3 secret access key. Falls back to the conventional `AWS_SECRET_ACCESS_KEY` when unset.
-/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static S3_SECRET: Envar<String> =
     Envar::on_demand("SIGIRO_S3_SECRET", || EnvarDef::Default(String::new()));
 /// Conventional AWS credential env vars — fallback source for S3_KEY_ID/S3_SECRET.
-/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static AWS_ACCESS_KEY_ID: Envar<String> =
     Envar::on_demand("AWS_ACCESS_KEY_ID", || EnvarDef::Default(String::new()));
 pub(crate) static AWS_SECRET_ACCESS_KEY: Envar<String> =
@@ -83,14 +78,9 @@ pub(crate) fn alert_webhook_token() -> Result<Option<crate::alerts::AlertWebhook
         .map_err(|error| anyhow::anyhow!("invalid SIGIRO_ALERT_WEBHOOK_TOKEN: {error}"))
 }
 /// Optional DuckDB extension-cache override. Normal deployments use
-/// `<SIGIRO_DATA_DIR>/extensions`; tests may share a cache across isolated data dirs.
-pub(crate) static EXTENSION_DIR: Envar<String> = Envar::on_startup("SIGIRO_EXTENSION_DIR", || {
-    EnvarDef::Default(if cfg!(test) {
-        "/tmp/sigiro-test-extensions".to_string()
-    } else {
-        String::new()
-    })
-});
+/// `<SIGIRO_DATA_DIR>/extensions`.
+pub(crate) static EXTENSION_DIR: Envar<String> =
+    Envar::on_startup("SIGIRO_EXTENSION_DIR", || EnvarDef::Default(String::new()));
 
 /// Allow DuckDB to load extensions without a valid signature.
 ///
@@ -179,9 +169,7 @@ pub(crate) static FLUSH_ROW_THRESHOLD: Envar<usize> =
 /// competes for CPU and disk with everything else on the box. Five seconds is a
 /// sound production budget — raising it globally would make a real shutdown hang
 /// slower to detect — but a loaded machine can exceed it for reasons unrelated
-/// to the code under test. The test suite raises it via the environment (see
-/// the `check` task in mise.toml) so a busy laptop does not produce a
-/// failure that teaches people to re-run the gate until it passes.
+/// to the code under test.
 ///
 /// Operators draining a large buffer onto slow disk have the same problem and
 /// the same lever.
@@ -478,8 +466,7 @@ pub(crate) static QUACK_PORT: Envar<u16> =
 /// Optional bearer token quack clients must present. Empty (the default)
 /// means no token — an acceptable choice only because the bind address
 /// above defaults to loopback and any wider exposure is the operator's own,
-/// explicit choice. on_demand (not on_startup) so temp_env::with_vars works
-/// in tests, matching the S3_* secret pattern above.
+/// explicit choice.
 static QUACK_TOKEN: Envar<String> =
     Envar::on_demand("SIGIRO_QUACK_TOKEN", || EnvarDef::Default(String::new()));
 
@@ -497,7 +484,6 @@ pub(crate) fn quack_token() -> Result<Option<crate::quack::QuackToken>> {
 /// `name=host:port` entries. When set (together with any `--edge` CLI flags),
 /// used verbatim and tailnet discovery (peers tagged `tag:sigiro-edge`) is
 /// skipped entirely. Empty (the default) means: discover from the tailnet.
-/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static EDGES: Envar<String> =
     Envar::on_demand("SIGIRO_EDGES", || EnvarDef::Default(String::new()));
 

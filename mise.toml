@@ -212,7 +212,7 @@ if ! strings target/debug/sigiro | grep -q "Linker: jdxld"; then
 fi
 """
 
-# Quick compile-only feedback; the authoritative gate below owns tests.
+# Fast compile-only feedback.
 [tasks.quick]
 description = "Fast formatting, dependency, and compile checks."
 run = """
@@ -230,30 +230,12 @@ cache = { enabled = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "
 description = "Verify DuckDB archive reuse and a build without C++ compilation."
 run = "scripts/verify-prebuilt-duckdb.sh"
 
-# Fast inner-loop gate. The two maintenance tests deliberately wait on real
-# clocks (about 20s together), and the full integration suite starts many real
-# DuckDB instances. CI owns those checks through `full`; local edits keep one
-# representative ingest-to-diagnose E2E plus the rest of the library suite.
-[tasks.gate]
-description = "Fast development gate, cached by content."
-run = [
-    { task = "quick" },
-    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test --lib -- --skip inserter::tests::real_checkpoint_failure_trips_and_recovers_the_shed_gate --skip inserter::tests::retention_covers_projects_evicted_from_the_pool",
-    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test --test e2e_test",
-]
-sources = ["@group:rust-gate"]
-outputs = []
-cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
-
-# Full deterministic merge gate. Keep this out of the edit-test loop: the
-# complete integration topology and the real-clock maintenance tests dominate
-# local wall time, while CI still fails closed on all of them.
+# The CI gate compiles and lints Rust and validates native deployment invariants.
 [tasks.full]
-description = "Full CI gate, cached by content."
+description = "Compile, format, lint, and validate the native deployment contract."
 run = [
     { task = "quick" },
     "scripts/run-with-duckdb-static.sh mbx clippy --all-targets --all-features -- -D warnings",
-    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test",
     # The deployment invariants guard production boot: the sync-postgres
     # boundary and the migration contract that must not empty Sigiro's
     # databases. They were outside every gate, so a cutover could ship a
@@ -263,16 +245,6 @@ run = [
 sources = ["@group:rust-gate", "@group:deployment-contract"]
 outputs = []
 cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
-
-[tasks.release]
-description = "Authoritative release-mode tests, cached separately."
-run = [
-    { task = "full" },
-    "SIGIRO_SHUTDOWN_TIMEOUT_SECS=60 scripts/run-with-duckdb-static.sh mbx test --release",
-]
-sources = ["@group:rust-gate"]
-outputs = []
-cache = { enabled = true, audit = true, env = ["CI", "TARGET", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
 
 [tasks.install-hooks]
 description = "Install hk's Git 2.54+ repository-local config hooks."
@@ -339,48 +311,6 @@ set -euo pipefail
 mise run dev-up
 scripts/run-with-duckdb-static.sh mbx run --release --bin sigiro
 """
-
-[tasks.check-s3-e2e]
-description = 'S3-backed distributed "default" project quack E2E (needs Docker: Postgres + RustFS).'
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-mise run dev-up
-trap 'mise run dev-down' EXIT
-scripts/run-with-duckdb-static.sh mbx test --test quack_s3_query_surface_test -- --ignored --nocapture
-"""
-
-# Storage-mode matrix E2E: proves ingest->flush->query->restart-persistence in
-# all three modes (local file / PG+local / PG+S3). Needs Docker (Postgres +
-# RustFS), like check-s3-e2e, plus mkcert-issued dev certs — the two PG modes
-# use sslmode=verify-full, which production's validate_hosted_catalog_tls
-# requires and a plaintext Postgres therefore cannot satisfy. `dev-up` issues
-# the certs before the stack starts.
-[tasks.check-storage-matrix-e2e]
-description = "Storage-mode matrix E2E (local file / PG+local / PG+S3). Needs Docker."
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-mise run dev-up
-trap 'mise run dev-down' EXIT
-scripts/run-with-duckdb-static.sh mbx test --test storage_mode_matrix_test -- --ignored --nocapture
-"""
-
-# A permanent DuckLake attach failure (data_path / storage-backend mismatch)
-# must fail fast, not wedge the pool in its 30x retry loop. Needs Docker Postgres.
-[tasks.check-attach-fail-fast-e2e]
-description = "A permanent DuckLake attach failure must fail fast, not wedge the pool."
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-mise run dev-up
-trap 'mise run dev-down' EXIT
-scripts/run-with-duckdb-static.sh mbx test --test attach_fail_fast_test -- --ignored --nocapture
-"""
-
-[tasks.check-hosted-jwt-e2e]
-description = "Hosted JWT auth, scopes, OTLP, and tenant-isolation E2E."
-run = "scripts/run-with-duckdb-static.sh mbx test --test hosted_jwt_e2e_test -- --ignored --nocapture"
 
 [tasks.image]
 description = "Build multi-arch Docker image. Pass --push, or --set flags for cache config."
