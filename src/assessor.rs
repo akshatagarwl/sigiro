@@ -121,7 +121,20 @@ pub(crate) async fn assess(
         "baseline_window_minutes": 30, "signals": evidence});
     let endpoint = std::env::var("SIGIRO_ASSESSOR_API_URL")
         .unwrap_or_else(|_| "https://assessor.example.com/v1/assess".into());
-    let url = reqwest::Url::parse(&endpoint).context("invalid Assessor endpoint")?;
+    let probability = ask_assessor(&state.http_client, &endpoint, &key, &evidence).await?;
+    Ok(Decision {
+        probability,
+        evidence,
+    })
+}
+
+async fn ask_assessor(
+    client: &reqwest::Client,
+    endpoint: &str,
+    key: &str,
+    evidence: &Value,
+) -> Result<f64> {
+    let url = reqwest::Url::parse(endpoint).context("invalid Assessor endpoint")?;
     if url.username() != ""
         || url.password().is_some()
         || (url.scheme() != "https"
@@ -130,7 +143,7 @@ pub(crate) async fn assess(
     {
         bail!("Assessor endpoint must use TLS or loopback without URL credentials");
     }
-    let reply = state.http_client.post(url)
+    let reply = client.post(url)
         .bearer_auth(key)
         .timeout(Duration::from_secs(15))
         .json(&json!({"model":"assessor-latest","state":evidence,"questions":{"investigate":{
@@ -146,16 +159,47 @@ pub(crate) async fn assess(
         .json()
         .await
         .context("model assessment response was malformed")?;
-    let probability = checked_probability(answer)?;
-    Ok(Decision {
-        probability,
-        evidence,
-    })
+    checked_probability(answer)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bounded_state_and_typed_question_reach_a_mock_assessor_without_raw_telemetry() {
+        use axum::{Json, Router, http::HeaderMap, routing::post};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/v1/assess",
+            post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                assert_eq!(
+                    headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("Bearer test-only-assessor-token")
+                );
+                assert_eq!(body["model"], "assessor-latest");
+                assert_eq!(body["questions"]["investigate"]["type"], "noul");
+                assert_eq!(body["state"]["signals"]["logs"]["recent"], 4);
+                assert!(body.to_string().len() < 2_000);
+                Json(json!({"answers":{"investigate":{"type":"noul","noul":0.91}}}))
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let evidence = json!({"service":"worker","signals":{"logs":{"recent":4,"baseline":3}}});
+        let probability = ask_assessor(
+            &reqwest::Client::new(),
+            &format!("http://{address}/v1/assess"),
+            "test-only-assessor-token",
+            &evidence,
+        )
+        .await
+        .unwrap();
+        assert_eq!(probability, 0.91);
+        server.abort();
+    }
 
     #[test]
     fn summary_is_read_only_and_excludes_replays() {
