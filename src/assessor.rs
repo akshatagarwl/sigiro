@@ -77,7 +77,24 @@ pub(crate) async fn assess(
     tenant: &TenantId,
     service: &str,
 ) -> Result<Decision> {
-    let key = std::env::var("SIGIRO_ASSESSOR_API_KEY").unwrap_or_default();
+    let gateway_key = std::env::var("SIGIRO_ASSESSOR_GATEWAY_API_KEY").unwrap_or_default();
+    let direct_key = std::env::var("SIGIRO_ASSESSOR_API_KEY").unwrap_or_default();
+    if !gateway_key.is_empty() && !direct_key.is_empty() {
+        bail!("configure exactly one Assessor credential: Gateway or direct TypeSafe");
+    }
+    let (key, default_endpoint, model) = if !gateway_key.is_empty() {
+        (
+            &gateway_key,
+            "https://ai-gateway.vercel.sh/typesafe/v1/assess",
+            "example/assessor",
+        )
+    } else {
+        (
+            &direct_key,
+            "https://assessor.example.com/v1/assess",
+            "assessor-latest",
+        )
+    };
     if key.len() < 32 {
         bail!("trusted model assessment is not configured");
     }
@@ -119,9 +136,8 @@ pub(crate) async fn assess(
     }
     let evidence = json!({"service": service, "recent_window_minutes": 30,
         "baseline_window_minutes": 30, "signals": evidence});
-    let endpoint = std::env::var("SIGIRO_ASSESSOR_API_URL")
-        .unwrap_or_else(|_| "https://assessor.example.com/v1/assess".into());
-    let probability = ask_assessor(&state.http_client, &endpoint, &key, &evidence).await?;
+    let endpoint = std::env::var("SIGIRO_ASSESSOR_API_URL").unwrap_or_else(|_| default_endpoint.into());
+    let probability = ask_assessor(&state.http_client, &endpoint, key, model, &evidence).await?;
     Ok(Decision {
         probability,
         evidence,
@@ -132,9 +148,18 @@ async fn ask_assessor(
     client: &reqwest::Client,
     endpoint: &str,
     key: &str,
+    model: &str,
     evidence: &Value,
 ) -> Result<f64> {
     let url = reqwest::Url::parse(endpoint).context("invalid Assessor endpoint")?;
+    if model == "example/assessor"
+        && !matches!(
+            url.host_str(),
+            Some("ai-gateway.vercel.sh" | "127.0.0.1" | "localhost")
+        )
+    {
+        bail!("Gateway credentials require the Vercel Gateway origin");
+    }
     if url.username() != ""
         || url.password().is_some()
         || (url.scheme() != "https"
@@ -146,7 +171,7 @@ async fn ask_assessor(
     let reply = client.post(url)
         .bearer_auth(key)
         .timeout(Duration::from_secs(15))
-        .json(&json!({"model":"assessor-latest","state":evidence,"questions":{"investigate":{
+        .json(&json!({"model":model,"state":evidence,"questions":{"investigate":{
             "type":"noul",
             "instructions":"Do the recent 30 minutes show a credible, actionable degradation compared with the preceding 30 minutes for this one service? Abstain when the evidence does not support a causal investigation. A change in raw log count alone is not proof of a problem.",
             "criteria":{"true":"Fresh, comparable evidence warrants investigation, not an automatic change","false":"Insufficient evidence or normal expected activity"}
@@ -180,7 +205,7 @@ mod tests {
                         .and_then(|value| value.to_str().ok()),
                     Some("Bearer test-only-assessor-token")
                 );
-                assert_eq!(body["model"], "assessor-latest");
+                assert_eq!(body["model"], "example/assessor");
                 assert_eq!(body["questions"]["investigate"]["type"], "noul");
                 assert_eq!(body["state"]["signals"]["logs"]["recent"], 4);
                 assert!(body.to_string().len() < 2_000);
@@ -193,11 +218,23 @@ mod tests {
             &reqwest::Client::new(),
             &format!("http://{address}/v1/assess"),
             "test-only-assessor-token",
+            "example/assessor",
             &evidence,
         )
         .await
         .unwrap();
         assert_eq!(probability, 0.91);
+        assert!(
+            ask_assessor(
+                &reqwest::Client::new(),
+                "https://not-the-gateway.example/v1/assess",
+                "test-only-assessor-token",
+                "example/assessor",
+                &evidence
+            )
+            .await
+            .is_err()
+        );
         server.abort();
     }
 
