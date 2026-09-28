@@ -26,6 +26,17 @@ struct AssessorNoul {
     noul: f64,
 }
 
+fn checked_probability(reply: AssessorAnswer) -> Result<f64> {
+    let answer = reply.answers.investigate;
+    if answer.answer_type != "noul"
+        || !answer.noul.is_finite()
+        || !(0.0..=1.0).contains(&answer.noul)
+    {
+        bail!("model assessment did not provide a valid probability");
+    }
+    Ok(answer.noul)
+}
+
 const SCANS: [(&str, &str, &str); 3] = [
     ("spans", "sigiro_spans", "status_code=2"),
     ("logs", "sigiro_logs", "severity_number>=17"),
@@ -135,13 +146,7 @@ pub(crate) async fn assess(
         .json()
         .await
         .context("model assessment response was malformed")?;
-    let probability = answer.answers.investigate.noul;
-    if answer.answers.investigate.answer_type != "noul"
-        || !probability.is_finite()
-        || !(0.0..=1.0).contains(&probability)
-    {
-        bail!("model assessment did not provide a valid probability");
-    }
+    let probability = checked_probability(answer)?;
     Ok(Decision {
         probability,
         evidence,
@@ -166,6 +171,34 @@ mod tests {
             assert!(crate::sql::validate_read_only(&sql).is_ok(), "{sql}");
             assert!(sql.contains("service_name='tenant''s-service'"));
             assert!(sql.contains("resource_attributes NOT LIKE '%production-journald-backfill%'"));
+        }
+    }
+
+    #[test]
+    fn only_typed_finite_probabilities_can_authorize_an_investigation() {
+        for (payload, accepted) in [
+            (
+                json!({"answers":{"investigate":{"type":"noul","noul":0.9}}}),
+                true,
+            ),
+            (
+                json!({"answers":{"investigate":{"type":"choice","noul":0.9}}}),
+                false,
+            ),
+            (
+                json!({"answers":{"investigate":{"type":"noul","noul":1.2}}}),
+                false,
+            ),
+            (
+                json!({"answers":{"investigate":{"type":"noul","noul":-0.1}}}),
+                false,
+            ),
+            (json!({"answers":{}}), false),
+        ] {
+            let decision = serde_json::from_value::<AssessorAnswer>(payload)
+                .map_err(anyhow::Error::from)
+                .and_then(checked_probability);
+            assert_eq!(decision.is_ok(), accepted);
         }
     }
 }
