@@ -1,13 +1,13 @@
 ---
 title: CLI
 description: >-
-  모든 sigiro 서브커맨드와 그 인자, 그리고 각각이 읽는 환경 변수입니다. sigiro에는 아홉 개의 서브커맨드가 있고, 클라이언트
+  모든 sigiro 서브커맨드와 그 인자, 그리고 각각이 읽는 환경 변수입니다. sigiro에는 일곱 개의 서브커맨드가 있고, 클라이언트
   명령은 들여쓴 JSON을 출력합니다.
 sidebar:
   order: 2
 ---
 
-`sigiro`에는 아홉 개의 서브커맨드가 있습니다. 모든 서브커맨드는 성공 시 들여쓰기된
+`sigiro`에는 일곱 개의 서브커맨드가 있습니다. 모든 서브커맨드는 성공 시 들여쓰기된
 JSON을 출력합니다. 두 번째 출력 형식은 없으며, TTY 감지도 수행하지 않습니다.
 
 신규 사용자는 `sigiro signup --name "Your Name" --email you@example.com`을 실행하십시오.
@@ -42,37 +42,6 @@ OTLP gRPC 서버, OTLP HTTP 서버, 그리고 쿼리 API를 시작합니다.
 
 최초 시작 시 쿼리 확장을 데이터 디렉터리로 다운로드합니다. 이 다운로드는
 30~90초가 소요되며, 그동안 시작이 차단됩니다.
-
-## diagnose
-
-`sigiro diagnose <SERVICE>`는 하나의 서비스에 대해 하나의 진단 블록을 반환합니다.
-
-| 플래그                   | 타입 | 기본값                    |
-| ------------------------ | ---- | ------------------------- |
-| `--from <EPOCH_SECONDS>` | 정수 | 현재 시각으로부터 15분 전 |
-| `--to <EPOCH_SECONDS>`   | 정수 | 현재 시각                 |
-
-`--from`과 `--to`는 에포크 **초** 단위입니다. 이에 대응하는 HTTP 필드 이름은
-`from_ts`와 `to_ts`이며, 이들은 에포크 **마이크로초** 단위입니다. 두 HTTP 필드는
-모두 선택 사항입니다. 둘 다 생략하면 서버는 최근 15분을 읽으며, 이는 CLI가
-사용하는 것과 동일한 구간입니다.
-
-이 명령은 JSON을 출력합니다. 출력을 좁히려면 `jq`로 파이프하십시오. CLI는 자체적으로
-어떠한 필터도 적용하지 않으므로, CLI와 API는 동일한 문서를 반환합니다.
-
-## anomalies
-
-`sigiro anomalies`는 감지된 체제 변화(regime shift)를 변화 폭이 큰 순서대로 나열하며,
-각 행에는 신호 간 공통 `incident_id`가 포함됩니다.
-
-| 플래그                   | 타입   | 기본값      |
-| ------------------------ | ------ | ----------- |
-| `--service <NAME>`       | 문자열 | 모든 서비스 |
-| `--from <EPOCH_SECONDS>` | 정수   | 하한 없음   |
-| `--to <EPOCH_SECONDS>`   | 정수   | 상한 없음   |
-
-각 행은 예약된 처리 과정이 기록하는 `sigiro_anomalies` 테이블에서 가져옵니다.
-요청 시점에 계산되는 것은 없습니다.
 
 ## query
 
@@ -114,5 +83,5 @@ tailnet에서 찾아야 합니다. 단일 로컬 서버에 대해 SQL을 실행�
 ## mcp
 
 `sigiro mcp`는 stdio Model Context Protocol 서버를 시작합니다.
-`list_services`, `list_anomalies`, `diagnose_service`, `run_query`를 제공하므로
+`list_services`, `run_query`를 제공하므로
 분석 에이전트가 HTTP 요청을 직접 구성하지 않고 Sigiro를 조사할 수 있습니다.

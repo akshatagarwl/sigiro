@@ -119,93 +119,36 @@ curl http://localhost:9999/v1/services
 배열에 사용자 서비스가 나타납니다. 배열이 비어 있다면, HTTP를 통한 OTLP의
 경우 포트가 `4318`인지, gRPC를 통한 OTLP의 경우 `4317`인지 확인하십시오.
 
-## 3. 무엇이 변했는지 묻기
+## 3. 최근 오류 조회
 
-`anomalies`는 이 루프의 진입점입니다. 각 서비스의 최근 기준선에서 벗어난
-변화를 가장 큰 변화 순으로 반환합니다.
-
-```bash
-sigiro anomalies
-sigiro anomalies --service checkout
-```
-
-여기서는 아무것도 설정하지 않습니다. 선택해야 할 임계값이 없으며, 항상 느리지만
-*안정적인* 서비스는 이상 징후가 아닙니다. sigiro가 이를 어떻게 판단하는지
-읽으려면 [대시보드 대신 증거에
-대하여](/docs/explanation/evidence#임계값이-아닌-베이스라인)를 참조하십시오.
-
-시작한 지 얼마 되지 않은 서버에서는 목록이 비어 있을 수 있다는 점에 유의하십시오.
-sigiro는 무엇이든 비교하기 전에 5분 단위 버킷의 이력이 어느 정도 필요하므로,
-서비스를 잠시 실행한 후 다시 질의하십시오.
-
-## 4. 이유를 묻기
-
-`diagnose`는 하나의 서비스와 시간 범위에 대해 구조화된 증거 블록 하나를
-반환합니다. 이 블록은 주의를 기울일 만한 항목의 순위 목록으로 시작합니다. 그
-아래에는 오류 수, 각 작업별 오류 분류, 각 모델별 LLM 통계, 샘플링된 스팬,
-그리고 중복이 제거된 로그 패턴이 담겨 있습니다. 모든 행에는 바로 실행할 수 있는
-SQL 쿼리도 함께 포함됩니다.
+첫 쿼리는 지정한 기간의 작업 수와 실패 수를 보여 줍니다. 원인을 단정하지 않습니다.
 
 ```bash
-sigiro diagnose checkout
-sigiro diagnose checkout --from $(date -v-1H +%s)
+curl -sS -X POST http://localhost:9999/v1/query \
+  --data-binary "SELECT span_name, count(*) AS calls,
+                   sum(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) AS errors
+                 FROM sigiro_spans
+                 WHERE service_name = 'checkout'
+                   AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+                 GROUP BY span_name ORDER BY errors DESC LIMIT 10"
 ```
 
-이 명령은 들여쓰기된 JSON을 출력합니다. 먼저 `findings` 배열을 읽으십시오. 이
-배열은 심각한 항목이 먼저 오도록 정렬되어 있으며, 각 항목에는 읽을 수 있는
-`summary`가 있습니다. 단독 finding에는 `drill_down_sql`이 있고, incident에서는
-각 member shift에 있습니다.
+## 4. 원본 스팬 확인
 
-에이전트는 HTTP를 통해 동일한 질문을 던집니다. HTTP 요청에는 명시적인 시간
-범위가 필요하며, 두 타임스탬프 모두 Unix 에포크 이후의 **마이크로초**입니다:
+두 번째 쿼리는 원본 스팬을 반환합니다. 수정하기 전에 관련 트레이스와 배포를 확인하세요. 저장된 이상 징후 테이블이나 진단 엔드포인트를 사용하지 않습니다.
 
 ```bash
-curl -X POST http://localhost:9999/v1/diagnose \
-  -H 'content-type: application/json' \
-  -d "{\"services\":[\"checkout\"],
-       \"from_ts\":$(( $(date +%s) - 900 ))000000,
-       \"to_ts\":$(date +%s)000000}"
+curl -sS -X POST http://localhost:9999/v1/query \
+  --data-binary "SELECT trace_id, duration, status_message
+                 FROM sigiro_spans
+                 WHERE service_name = 'checkout' AND status_code = 2
+                   AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+                 ORDER BY timestamp DESC LIMIT 20"
 ```
-
-CLI의 `--from`/`--to` 플래그는 에포크 **초**를 받으며, CLI는 시간 범위를
-기본적으로 최근 15분으로 설정합니다. HTTP 본문은 마이크로초를 받으며 어떤
-기본값도 적용하지 않습니다. sigiro는 HTTP 경로에서 초 단위 값이 전달되면 단위를
-명시한 메시지와 함께 이를 거부하므로, 잘못된 단위는 빈 범위를 반환하는 대신
-명확하게 실패합니다.
-
-## 5. 행의 근거가 되는 쿼리 실행하기
-
-증거 블록이 질문에 답하지 못한다면, 해당 행이 제공한 SQL을 실행하십시오.
-텔레메트리는 여러 테이블의 집합이며, 쿼리 요청의 본문은 JSON이 아니라 원시
-SQL입니다:
-
-```bash
-curl -X POST http://localhost:9999/v1/query \
-  --data "SELECT service_name, count(*) AS errors
-          FROM sigiro_spans
-          WHERE status_code = 2 AND timestamp > now() - INTERVAL '1 hour'
-          GROUP BY 1 ORDER BY errors DESC"
-```
-
-응답은 행 객체의 JSON 배열입니다. `status_code`는 OTLP 열거형이므로 `2`는
-오류를 의미합니다.
-
-이 쿼리가 `timestamp`의 범위를 한정한다는 점에 유의하십시오. 모든 쿼리에서
-`timestamp`의 범위를 한정하십시오. sigiro는 보조 인덱스를 유지하지 않으므로,
-범위가 한정된 쿼리는 소수의 파일만 읽고 범위가 한정되지 않은 쿼리는 모든 파일을
-읽습니다.
-
-`sigiro_spans`는 아홉 개 테이블 중 하나입니다.
-[호스팅 가이드](/docs/how-to/hosted-onboarding#4-데이터-쿼리하기-sql-api)는 아홉
-개 테이블 전체와 각 테이블에 적용되는 규칙을 나열하며, [테이블에
-대하여](/docs/explanation/tables)는 각 테이블 계열이 무엇을 측정하는지
-설명합니다.
 
 ## 지금까지 한 일
 
-서버를 시작하고, OpenTelemetry를 전송하고, 무엇이 변했는지 묻고, 그 이유를 묻고,
-그 답변 중 하나를 입증하는 쿼리를 실행했습니다. 이것이 에이전트가 스스로
-실행하는 루프 전체입니다.
+서버를 시작하고 OpenTelemetry를 보낸 다음 기간이 제한된 원본 텔레메트리를 조회했습니다. 결과는 증거이지 자동 원인 판정이 아닙니다.
 
 ## 다음 단계
 

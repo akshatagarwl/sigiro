@@ -16,8 +16,6 @@ license = "Apache-2.0"
 members = []
 
 [dependencies]
-# BOCPD changepoint detection for /diagnose anomaly flags (pure Rust, no Stan)
-augurs-changepoint = "0.10.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
@@ -84,8 +82,6 @@ opentelemetry-appender-tracing = "0.31"
 tracing-opentelemetry = "0.32"
 typed-env = "0.3.0"
 utoipa = "5"
-validator = { version = "0.20", features = ["derive"] }
-axum-valid = "0.23" # default features = basic (json/form/query) + validator
 camino = "1.2.2"
 itertools = "0.14.0"
 rmcp = { version = "3.1.2", features = ["client", "server", "macros", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "transport-io", "schemars"] }
@@ -112,11 +108,6 @@ duckdb = { version = "=1.10505.0", default-features = false, features = ["append
 criterion = { version = "0.5", features = ["html_reports"] }
 schemars = "1"
 tokio-util = "0.7"
-
-[[bench]]
-name = "diagnose_bench"
-harness = false
-test = false
 
 [lints.clippy]
 # Disallowed patterns (configured in clippy.toml)

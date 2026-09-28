@@ -1,14 +1,8 @@
-//! MCP (Model Context Protocol) server — exposes sigiro's agent loop as tools.
+//! MCP (Model Context Protocol) server — exposes service discovery and
+//! tenant-scoped, read-only telemetry queries to agent clients.
 //!
-//! This is the same surface `/v1` already publishes, spoken over MCP so any
-//! agent client (Claude Desktop, Cursor, Letta, a benchmark harness like
-//! SREGym) can drive the detect→diagnose→drill loop without a bespoke
-//! adapter.
-//!
-//! Every tool delegates to [`SigiroClient`], the same HTTP client the CLI
-//! uses. There is no second copy of the query logic, the window defaulting,
-//! or the correlation rules: a tool call and a `sigiro` subcommand hit the
-//! identical server code path.
+//! Every operational tool delegates to [`SigiroClient`], the same HTTP
+//! client the CLI uses.
 //!
 //! Tool descriptions are the agent's only documentation, so they carry the
 //! same wording as the `#[utoipa::path]` descriptions in `server.rs`.
@@ -34,8 +28,7 @@ fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, ErrorDa
     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
 
-/// An upstream failure is reported as a tool error, never swallowed: the
-/// agent must be able to tell "no anomalies" from "the server is down".
+/// An upstream failure is reported as a tool error, never swallowed.
 fn upstream_error(context: &str, e: &anyhow::Error) -> ErrorData {
     ErrorData::internal_error(format!("{context}: {e:#}"), None)
 }
@@ -51,35 +44,8 @@ fn upstream_error(context: &str, e: &anyhow::Error) -> ErrorData {
 /// versioned copy from drifting away from the one rmcp actually uses.
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct AnomaliesArgs {
-    /// Optional service name to filter to. Omit for every service.
-    pub(crate) service: Option<String>,
-    /// Only shifts at or after this time, MICROSECONDS since the Unix epoch
-    /// (a 16-digit value, e.g. 1780000000000000).
-    pub(crate) from_ts: Option<i64>,
-    /// Only shifts at or before this time, microseconds since the Unix epoch.
-    pub(crate) to_ts: Option<i64>,
-}
-
-#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-pub struct DiagnoseArgs {
-    /// Service to diagnose. Call `list_services` first to discover valid names.
-    pub(crate) service: String,
-    /// Window start, MICROSECONDS since the Unix epoch (a 16-digit value,
-    /// e.g. 1780000000000000). Seconds, millis, and nanos are rejected.
-    /// Omit both bounds for the last 15 minutes.
-    pub(crate) from_ts: Option<i64>,
-    /// Window end, microseconds since the Unix epoch. Must be > `from_ts`.
-    /// Providing this without `from_ts` is rejected.
-    pub(crate) to_ts: Option<i64>,
-}
-
-#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
 pub struct QueryArgs {
-    /// The SQL to execute. Paste a `drill_down_sql` or `drill_all_sql` string
-    /// VERBATIM from a `list_anomalies` or `diagnose_service` response.
+    /// Read-only SQL against allowlisted raw telemetry tables.
     pub(crate) sql: String,
 }
 
@@ -153,7 +119,7 @@ impl SigiroMcp {
     #[tool(
         description = "Every service that has reported telemetry, with the first and last \
 timestamp seen for each (microseconds since the Unix epoch). The entry point of an agent \
-loop: pick a service here, then diagnose it. Fails rather than returning a partial list \
+loop: pick a service here, then query its telemetry. Fails rather than returning a partial list \
 if service count exceeds SIGIRO_MAX_RESULT_ROWS."
     )]
     async fn list_services(&self) -> Result<CallToolResult, ErrorData> {
@@ -166,57 +132,8 @@ if service count exceeds SIGIRO_MAX_RESULT_ROWS."
     }
 
     #[tool(
-        description = "Precomputed anomalies: worsening regime shifts (BOCPD changepoints, \
-threshold-free) detected continuously over persisted 5-minute series of every signal — \
-error_rate and latency_p95 per operation, log_volume, error_log_rate and profile_cost per \
-service. Ordered by the unit-free shift magnitude (after - before) / (after + before) \
-descending (1.0 = appeared from a zero baseline, 1/3 = doubled), so the most significant \
-shifts lead regardless of the signal's units — nothing is filtered out; judge significance \
-from `before`/`after` (raw signal units: %, µs, logs, profile cost). Each row carries a \
-ready-to-run `drill_down_sql` for the `run_query` tool. Rows whose shifts fall in the same \
-or adjacent 5-minute detection bucket on the same service share an `incident_id` — one \
-incident across signals, not N independent anomalies; `incident_id` is null for \
-uncorrelated rows."
-    )]
-    async fn list_anomalies(
-        &self,
-        Parameters(args): Parameters<AnomaliesArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let resp = self
-            .client
-            .anomalies(args.service.as_deref(), args.from_ts, args.to_ts)
-            .await
-            .map_err(|e| upstream_error("list_anomalies failed", &e))?;
-        json_result(&resp)
-    }
-
-    #[tool(
-        description = "Root-cause an incident for one service over a time window. Returns a \
-triage summary — NOT raw telemetry: a ranked `findings` array (read this first), \
-per-operation anomaly flags, and bounded samples of spans/logs. Every lead carries a \
-ready-to-run SQL string (`drill_down_sql` on findings, operations, spans, and log patterns; \
-`drill_all_sql` on the spans/logs sections) that you paste VERBATIM into the `run_query` \
-tool to fetch the underlying rows and go deeper. Typical agent loop: `list_services` → \
-`diagnose_service` → for any finding or anomalous operation, run its `drill_down_sql` via \
-`run_query`. Timestamps are microseconds since the Unix epoch."
-    )]
-    async fn diagnose_service(
-        &self,
-        Parameters(args): Parameters<DiagnoseArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let block = self
-            .client
-            .diagnose(&args.service, args.from_ts, args.to_ts)
-            .await
-            .map_err(|e| upstream_error("diagnose_service failed", &e))?;
-        json_result(&block)
-    }
-
-    #[tool(
-        description = "Execute SQL against the telemetry store and return the rows. This is \
-the drill-down step: pass a `drill_down_sql` or `drill_all_sql` string VERBATIM from a \
-`list_anomalies` or `diagnose_service` response to fetch the underlying rows behind a \
-finding. Timestamps in the data are microseconds since the Unix epoch."
+        description = "Execute read-only SQL against allowlisted telemetry tables. \
+Timestamps in the data are microseconds since the Unix epoch."
     )]
     async fn run_query(
         &self,
@@ -238,10 +155,9 @@ impl ServerHandler for SigiroMcp {
         // so an added upstream field is a recompile rather than a break.
         let mut info = ServerInfo::default();
         info.instructions = Some(
-            "Observability tools over a sigiro server. Start with `list_anomalies` to \
-find what changed, then `diagnose_service` on the affected service, then `run_query` with \
-the `drill_down_sql` each response hands you. All timestamps are MICROSECONDS since the \
-Unix epoch."
+            "Observability tools over a sigiro server. Use `list_services` to find a \
+service, then `run_query` to inspect its raw telemetry. All timestamps are \
+MICROSECONDS since the Unix epoch."
                 .to_string(),
         );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();

@@ -41,7 +41,7 @@ try {
     CREATE TABLE sigiro_admin.optimizer_connection (tenant_id TEXT NOT NULL,id TEXT NOT NULL,installation_id BIGINT NOT NULL,
       repository_id BIGINT NOT NULL,owner TEXT NOT NULL,repo TEXT NOT NULL,enabled BOOLEAN NOT NULL,PRIMARY KEY(tenant_id,id));
     CREATE TABLE sigiro_admin.optimizer_run (tenant_id TEXT NOT NULL,id TEXT NOT NULL,service TEXT NOT NULL,connection_id TEXT NOT NULL,
-      finding_id TEXT NOT NULL,branch TEXT NOT NULL,actor TEXT NOT NULL,status TEXT NOT NULL,
+      decision_context TEXT NOT NULL DEFAULT '{"source":"assessor-live","yes_probability":0.99,"evidence":{}}',branch TEXT NOT NULL,actor TEXT NOT NULL,status TEXT NOT NULL,
       lease_owner TEXT,lease_until_ms BIGINT,attempts INTEGER NOT NULL DEFAULT 0,session_id TEXT,
       failure_summary TEXT,github_pull_request_id BIGINT,target_ref TEXT,target_commit_sha TEXT,PRIMARY KEY(tenant_id,id));`);
   const emulator = await createEmulator({ service: "github", port: 0, seed: { github: {
@@ -59,8 +59,8 @@ try {
   await pool.query("INSERT INTO sigiro_admin.optimizer_connection VALUES ('tenant-a','repo-a',100,$1,'octocat','sample',TRUE)", [repo.id]);
   const id = randomUUID();
   await pool.query(`INSERT INTO sigiro_admin.optimizer_run
-    (tenant_id,id,service,connection_id,finding_id,branch,actor,status)
-    VALUES ('tenant-a',$1,'checkout','repo-a','finding-a',$2,'actor-a','pending')`, [id, `sigiro/optimizer-${id}`]);
+    (tenant_id,id,service,connection_id,branch,actor,status)
+    VALUES ('tenant-a',$1,'checkout','repo-a',$2,'actor-a','pending')`, [id, `sigiro/optimizer-${id}`]);
   sandbox = await backend.create(sandboxInput);
   let io = sandbox.session;
   const store = new LeaseStore(pool);

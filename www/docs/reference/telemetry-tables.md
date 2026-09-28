@@ -5,13 +5,13 @@ sidebar:
   order: 4
 ---
 
-These are the eight queryable `sigiro_*` tables created by `src/schema.rs`. Types are DuckDB SQL types; `NOT NULL` is shown where declared. `lake.` qualification and bare table names are both used in queries. This is a reference for the **current** schema, not an API for discovering columns at runtime.
+These are the seven queryable `sigiro_*` tables created by `src/schema.rs`. Types are DuckDB SQL types; `NOT NULL` is shown where declared. `lake.` qualification and bare table names are both used in queries. This is a reference for the **current** schema, not an API for discovering columns at runtime.
 
 **Pre-1.0 compatibility:** column names, types, and JSON shapes may change before 1.0. This page does not promise stable on-disk DuckLake/Parquet formats, automatic in-place upgrades, or downgrade support. Storage-format validation and upgrade policy are separate work ([#200](https://github.com/akshatagarwl/sigiro/issues/200)); runtime schema discovery remains open in [#13](https://github.com/akshatagarwl/sigiro/issues/13).
 
 `TIMESTAMP` columns are DuckDB timestamps at microsecond precision. Numeric epoch timestamps (`end_timestamp`, `observed_timestamp`, and metric `start_timestamp`) and span `duration` use **microseconds**, converted from OTLP nanoseconds. `events_json` and `exemplars_json` contain nested `time_unix_nano` fields that remain **nanoseconds**. Metric values and histogram bounds use the producer's `metric_unit`, not a fixed Sigiro unit; profile values use `unit`. A blank/zero epoch from a producer is not a guarantee that its start time is meaningful.
 
-Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not native JSON columns; use `json_extract_string(column, 'key')` for attribute keys. Keys depend on the sender and are not enumerated here. A nullable DDL declaration does not mean every current ingest path writes null. `sigiro_anomalies` is derived telemetry: `before`/`after` are raw series means (`error_rate` and `error_log_rate`: percent; `latency_p95`: µs; `log_volume`: logs per 5-minute bucket; `profile_cost`: sum of profile sample values per bucket, whose units depend on samples). Do not add means from different signals or profile units.
+Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not native JSON columns; use `json_extract_string(column, 'key')` for attribute keys. Keys depend on the sender and are not enumerated here. A nullable DDL declaration does not mean every current ingest path writes null.
 
 ## `sigiro_spans`
 
@@ -184,18 +184,3 @@ Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not nati
 | `value`               | `BIGINT`             | unit         | Sample value for this value type. |
 | `unit`                | `VARCHAR`            | —            | Unit of the profile sample type.  |
 | `resource_attributes` | `VARCHAR`            | —            | Resource attributes as JSON text. |
-
-## `sigiro_anomalies`
-
-| Column           | Type                 | Unit             | Meaning                                                                    |
-| ---------------- | -------------------- | ---------------- | -------------------------------------------------------------------------- |
-| `detected_at`    | `TIMESTAMP NOT NULL` | µs precision     | Time the change was detected.                                              |
-| `service_name`   | `VARCHAR NOT NULL`   | —                | OTel resource service.name.                                                |
-| `operation`      | `VARCHAR NOT NULL`   | —                | Operation identity for span signals; service name for log/profile signals. |
-| `signal`         | `VARCHAR NOT NULL`   | —                | Shifted series name.                                                       |
-| `kind`           | `VARCHAR NOT NULL`   | —                | Detection kind (changepoint).                                              |
-| `direction`      | `VARCHAR NOT NULL`   | —                | Shift direction (persisted: worsening).                                    |
-| `ts_shift`       | `TIMESTAMP NOT NULL` | µs precision     | First bucket in the new regime.                                            |
-| `before`         | `DOUBLE NOT NULL`    | signal-dependent | Mean before the shift.                                                     |
-| `after`          | `DOUBLE NOT NULL`    | signal-dependent | Mean after the shift.                                                      |
-| `drill_down_sql` | `VARCHAR NOT NULL`   | —                | SQL to inspect the raw telemetry behind the shift.                         |

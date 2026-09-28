@@ -287,20 +287,6 @@ const executeCatalogTool = async (
   const decoded = Schema.decodeUnknownSync(entry.runtimeSchema)(
     input
   ) as JsonObject;
-  if (entry.name === "list_anomalies") {
-    const q = new URLSearchParams();
-    if (decoded.service) q.set("service", String(decoded.service));
-    if (decoded.from_ts !== undefined)
-      q.set("from_ts", String(decoded.from_ts));
-    if (decoded.to_ts !== undefined) q.set("to_ts", String(decoded.to_ts));
-    return callApi(`${entry.route}?${q}`);
-  }
-  if (entry.name === "diagnose_service")
-    return callApi(entry.route!, {
-      method: entry.method,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(decoded),
-    });
   if (entry.name === "run_query")
     return callApi(entry.route!, {
       method: entry.method,

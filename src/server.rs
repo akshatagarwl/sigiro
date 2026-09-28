@@ -3,7 +3,6 @@ use axum::{Extension, Json, Router, extract::State, middleware as axum_mw};
 use axum_anyhow::{ApiError, ApiResult, ResultExt, bad_request, internal_error, too_many_requests};
 use axum_extra::routing::RouterExt;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
-use axum_valid::Valid;
 use parking_lot::Mutex;
 
 use std::net::SocketAddr;
@@ -18,7 +17,6 @@ use utoipa::OpenApi;
 
 use crate::admin;
 use crate::auth;
-use crate::diagnose;
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::{DiskCapacityState, MsgRouter};
 use crate::pool::ProjectPool;
@@ -42,15 +40,13 @@ use tracing_attributes::instrument;
      * and what a sidebar entry can hold. */
     info(
         title = "sigiro API Reference",
-        description = "Send OpenTelemetry to sigiro. Ask what changed. Get ranked findings and the SQL that proves them."
+        description = "Send OpenTelemetry to sigiro and query tenant-scoped raw telemetry."
     ),
     paths(
         query_handler,
         services_handler,
         alerts_handler,
-        anomalies_handler,
         trace_detail_handler,
-        diagnose_handler,
         crate::ingest::pyroscope_root,
         crate::ingest::pyroscope_push,
         crate::ingest::pyroscope_ingest,
@@ -63,36 +59,10 @@ use tracing_attributes::instrument;
             ServiceEntry,
             AlertsResponse,
             crate::alerts::AlertInstance,
-            AnomaliesResponse,
-            AnomalyEntry,
             TraceDetailResponse,
             SpanDetail,
             ServiceBreakdownEntry,
             AdminStatusResponse,
-            diagnose::DiagnoseRequest,
-            diagnose::DiagnoseResponse,
-            diagnose::DiagnosisBlock,
-            diagnose::Finding,
-            diagnose::FindingKind,
-            diagnose::FindingSeverity,
-            diagnose::Incident,
-            diagnose::IncidentShift,
-            diagnose::AnomalySignal,
-            diagnose::OperationSummary,
-            diagnose::ErrorTypeCount,
-            diagnose::GenAiModelSummary,
-            diagnose::FinishReasonCount,
-            diagnose::MetricBucket,
-            diagnose::SpanRecord,
-            diagnose::LogRecord,
-            diagnose::LogPattern,
-            diagnose::ProfileSummary,
-            diagnose::DerivedEvent,
-            diagnose::ServiceContext,
-            diagnose::Coverage,
-            diagnose::SignalCoverage,
-            diagnose::ServiceDependency,
-            diagnose::Window,
         )
     ),
     modifiers(&SecurityAddon),
@@ -339,10 +309,8 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     let v1 = Router::new()
         .route("/auth/validate", axum::routing::get(validate_auth_token))
         .typed_post(query_handler)
-        .typed_post(diagnose_handler)
         .typed_get(services_handler)
         .typed_get(alerts_handler)
-        .typed_get(anomalies_handler)
         .typed_get(trace_detail_handler)
         .route(
             "/optimizer/connections",
@@ -1252,9 +1220,6 @@ fn query_sql_contract() -> String {
 
 /// Ask a question of your telemetry in SQL. Read-only.
 ///
-/// Every `drill_down_sql` that `/v1/diagnose` returns can be pasted here
-/// verbatim.
-///
 /// Readable tables, optionally qualified `lake.*` or `main.*`:
 ///
 /// - `sigiro_spans`
@@ -1264,7 +1229,6 @@ fn query_sql_contract() -> String {
 /// - `sigiro_metrics_histogram`
 /// - `sigiro_metrics_exp_histogram`
 /// - `sigiro_profiles`
-/// - `sigiro_anomalies`
 ///
 /// ## Bound `timestamp` with a literal, not `now()`
 ///
@@ -1387,7 +1351,7 @@ async fn query_handler(
 }
 
 /// GET /v1/services — discover what services are sending telemetry.
-/// Agents call this before /diagnose to know what services exist.
+/// Agents call this before tenant-scoped telemetry queries to find services.
 #[derive(serde::Deserialize)]
 struct ServiceQueryRow {
     service_name: String,
@@ -1407,7 +1371,7 @@ struct ServiceQueryRow {
     summary = "List services",
     description = "Every service that has reported telemetry, with the first and \
 last timestamp seen for each (microseconds since the Unix epoch). The entry point \
-of an agent loop: pick a service here, then diagnose it. Returns an error, never \
+of an agent loop: pick a service here, then query its telemetry. Returns an error, never \
 a partial list, if the number of services exceeds SIGIRO_MAX_RESULT_ROWS.",
     responses(
         (status = 200, description = "Complete list of services", body = ServicesResponse),
@@ -1546,148 +1510,6 @@ async fn alerts_handler(
     Ok(Json(AlertsResponse { alerts }))
 }
 
-/// Query parameters for GET /v1/anomalies.
-///
-/// `parameter_in = Query` is not the default: without it utoipa documents these as
-/// PATH parameters, which made the published spec claim `/v1/anomalies` takes three
-/// required path segments. They are optional filters on the query string.
-#[derive(serde::Deserialize, utoipa::IntoParams)]
-#[into_params(parameter_in = Query)]
-pub(crate) struct AnomaliesQuery {
-    /// Filter to one service.
-    service: Option<String>,
-    /// Only shifts at or after this time (microseconds since the Unix epoch).
-    #[param(value_type = i64)]
-    from_ts: Option<TimestampMicros>,
-    /// Only shifts at or before this time (microseconds since the Unix epoch).
-    #[param(value_type = i64)]
-    to_ts: Option<TimestampMicros>,
-}
-
-/// GET /v1/anomalies — the precomputed anomalies table, ALL signals,
-/// biggest shift first by the UNIT-FREE magnitude
-/// (after − before) / (after + before), computed at read, raw
-/// |after − before| breaking zero-baseline ties. Unit-free so shifts of
-/// different signals are comparable — raw deltas would let a µs latency
-/// shift dwarf every percentage shift. Ranking, not a threshold — every
-/// detected shift is returned. Rows are written continuously by the
-/// scheduled anomaly pass (BOCPD changepoints over each entity's persisted
-/// series — no thresholds), so reading here costs one table scan, never a
-/// detection run. The same rows drive `is_anomalous` and the anomaly
-/// findings in /v1/diagnose.
-#[utoipa::path(
-    get,
-    path = "/v1/anomalies",
-    operation_id = "list-anomalies",
-    summary = "List anomalies",
-    params(AnomaliesQuery),
-    description = "\
-Precomputed anomalies: worsening regime shifts (BOCPD changepoints, \
-threshold-free) detected continuously over persisted 5-minute series of \
-every signal — error_rate and latency_p95 per operation, log_volume, \
-error_log_rate and profile_cost (the service's total profiled cost) per \
-service (the `operation` field holds the entity) — and persisted to the \
-`sigiro_anomalies` table. Ordered by the unit-free shift magnitude \
-(after - before) / (after + before) descending (1.0 = appeared from a zero \
-baseline, 1/3 = doubled), so the most significant shifts lead regardless \
-of the signal's units — nothing is filtered out; judge significance from \
-`before`/`after` (raw signal units: %, µs, logs, profile cost). Optionally \
-filter by `service` and a `from_ts`/`to_ts` window (microseconds since the \
-Unix epoch) over the shift time. Each row carries a ready-to-run \
-`drill_down_sql` for POST /v1/query. Rows whose shifts fall in the same or \
-adjacent 5-minute detection bucket on the same service share an \
-`incident_id` — one incident across signals, not N independent anomalies \
-(the correlation window is the detection pass's own bucket resolution, \
-never a tuned threshold); `incident_id` is null for uncorrelated rows. \
-`truncated` is true when the query row cap omitted shifts: this is an \
-incomplete candidate snapshot and automatic submission must wait for a \
-complete response.",
-    responses(
-        (status = 200, description = "Anomaly rows, biggest shift first", body = AnomaliesResponse),
-        (status = 401, description = "Missing or invalid bearer token")
-    ),
-    security(("bearer" = [])),
-)]
-#[instrument(skip_all)]
-async fn anomalies_handler(
-    _path: AnomaliesPath,
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<TenantId>,
-    axum::extract::Query(q): axum::extract::Query<AnomaliesQuery>,
-) -> ApiResult<Json<AnomaliesResponse>> {
-    let prefix = ProjectPool::prefix();
-    let mut filters = vec!["1 = 1".to_string()];
-    if let Some(service) = &q.service {
-        filters.push(format!("service_name = '{}'", escape_sql_string(service)));
-    }
-    if let Some(from_ts) = q.from_ts {
-        let from_ts: i64 = from_ts.into();
-        filters.push(format!("ts_shift >= make_timestamp({from_ts})"));
-    }
-    if let Some(to_ts) = q.to_ts {
-        let to_ts: i64 = to_ts.into();
-        filters.push(format!("ts_shift <= make_timestamp({to_ts})"));
-    }
-    let sql = format!(
-        "SELECT detected_at::VARCHAR AS detected_at, service_name, operation, signal, kind, \
-                direction, ts_shift::VARCHAR AS ts_shift, epoch_us(ts_shift) AS ts_shift_us, \
-                \"before\", \"after\", drill_down_sql \
-         FROM {prefix}sigiro_anomalies \
-         WHERE {} \
-         ORDER BY abs(\"after\" - \"before\") / nullif(abs(\"before\") + abs(\"after\"), 0) DESC, \
-                  abs(\"after\" - \"before\") DESC, ts_shift DESC",
-        filters.join(" AND ")
-    );
-    let (results, truncated) = execute_sql(&state, &auth, &sql)
-        .await
-        .map_err(|e| query_api_error("anomalies query failed", &e))?;
-
-    let mut anomalies = Vec::with_capacity(results.len());
-    for row in results {
-        anomalies.push(serde_json::from_value::<AnomalyEntry>(row).map_err(|e| {
-            bad_request(
-                "anomalies query failed",
-                &format!("unexpected sigiro_anomalies row shape: {e}"),
-            )
-        })?);
-    }
-
-    // Cross-signal correlation over the returned rows: per service, shifts
-    // in the same or adjacent detection bucket share an incident_id (see
-    // crate::anomaly::correlate_shifts — the window is the detection pass's
-    // own bucket resolution, not a threshold). Lone rows keep incident_id
-    // null. Raw rows are always ALL returned; the id only says which of
-    // them travel together.
-    let mut by_service: std::collections::BTreeMap<String, Vec<usize>> =
-        std::collections::BTreeMap::new();
-    for (i, a) in anomalies.iter().enumerate() {
-        by_service
-            .entry(a.service_name.clone())
-            .or_default()
-            .push(i);
-    }
-    for (service, idxs) in by_service {
-        let ts: Vec<i64> = idxs.iter().map(|&i| anomalies[i].ts_shift_us).collect();
-        for group in crate::anomaly::correlate_shifts(&ts) {
-            if group.len() < 2 {
-                continue;
-            }
-            let started_at = group.iter().map(|&g| ts[g]).min().expect("non-empty group");
-            let started_iso = crate::diagnose::us_to_iso(started_at).map_err(|e| {
-                bad_request("anomalies query failed", &format!("bad ts_shift: {e:#}"))
-            })?;
-            let id = format!("{service}@{started_iso}");
-            for &g in &group {
-                anomalies[idxs[g]].incident_id = Some(id.clone());
-            }
-        }
-    }
-    Ok(Json(AnomaliesResponse {
-        anomalies,
-        truncated,
-    }))
-}
-
 /// GET /v1/traces/{trace_id} -- return a single trace with full detail including critical path and service breakdown.
 #[utoipa::path(
      get,
@@ -1695,8 +1517,7 @@ async fn anomalies_handler(
      operation_id = "get-trace",
      summary = "Fetch one whole trace",
      description = "Every span of one trace, parent links included, so a caller \
-can rebuild the tree. Trace IDs come from the sampled spans in a diagnosis, \
-or from any SQL query over `sigiro_spans`.",
+can rebuild the tree. Trace IDs come from any SQL query over `sigiro_spans`.",
      params(
          ("trace_id" = String, Path, description = "Trace ID")
      ),
@@ -2031,89 +1852,6 @@ fn compute_service_breakdown(
     breakdown
 }
 
-#[utoipa::path(
-    post,
-    path = "/v1/diagnose",
-    operation_id = "diagnose-services",
-    summary = "Diagnose services",
-    request_body = diagnose::DiagnoseRequest,
-    description = "\
-Root-cause an incident for one or more services over a time window. Returns a \
-triage summary — NOT raw telemetry: a ranked `findings` array (read this \
-first), per-operation anomaly flags, and bounded samples of spans/logs. \
-Every lead carries a ready-to-run SQL string (`drill_down_sql` on standalone \
-findings, each incident member shift, operations, spans, and log patterns; \
-`drill_all_sql` on the spans/logs \
-sections) that you paste VERBATIM into `POST /v1/query` to fetch the \
-underlying rows and go deeper. \
-Typical agent loop: `GET /v1/services` → `POST /v1/diagnose` → for any \
-standalone finding, incident member shift, or anomalous operation, run its \
-`drill_down_sql` via `/v1/query`. \
-Timestamps are microseconds since the Unix epoch. The response is a map \
-`{results: {service: block}, errors: {service: message}}` — partial results \
-survive a single failing service.",
-    responses(
-        (status = 200, description = "Per-service diagnosis blocks", body = diagnose::DiagnoseResponse),
-        (status = 400, description = "Invalid request (e.g. timestamps not in microseconds, or to_ts <= from_ts)"),
-        (status = 401, description = "Missing or invalid bearer token")
-    ),
-    security(("bearer" = [])),
-)]
-#[instrument(skip_all)]
-async fn diagnose_handler(
-    _path: DiagnosePath,
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<TenantId>,
-    // `Valid<Json<..>>` runs the `validator` derives on DiagnoseRequest at
-    // EXTRACTION time (axum's validating-extractor equivalent of middleware) —
-    // from_ts/to_ts must be plausible MICROSECOND timestamps (fail loud on
-    // seconds/millis/nanos), to_ts > from_ts. Invalid input never reaches here.
-    Valid(Json(req)): Valid<Json<diagnose::DiagnoseRequest>>,
-) -> ApiResult<Json<diagnose::DiagnoseResponse>> {
-    let data_dir = state.data_dir.clone();
-    let project_data_path = if state.pool.storage_mode().is_distributed() {
-        crate::storage::tenant_data_dir(&data_dir, auth.as_ref())
-            .context_internal("Diagnose", "invalid tenant id")?
-    } else {
-        data_dir.join(auth.as_ref())
-    };
-    if !project_data_path.exists()
-        || project_data_path
-            .read_dir()
-            .map(|mut i| i.next().is_none())
-            .unwrap_or(true)
-    {
-        return Err(axum_anyhow::not_found(
-            "No Data Found",
-            &format!(
-                "No data found for project {}. Please ingest data before calling diagnose.",
-                auth
-            ),
-        ));
-    }
-    let pool = Arc::clone(&state.pool);
-    let project_id = auth.as_ref().to_owned();
-    let permit = state
-        .router
-        .workloads()
-        .try_acquire(crate::workload::WorkloadClass::Query)
-        .map_err(anyhow::Error::from)
-        .map_err(|error| query_api_error("Diagnosis busy", &error))?;
-    let blocks = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let readers = pool
-            .create_project(&project_id)
-            .with_context(|| format!("failed to initialize project {project_id}"))?;
-        let conn = readers.get();
-        diagnose::diagnose(&conn, &req, ProjectPool::prefix())
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("diagnosis task failed: {e}"))
-    .context_internal("Diagnose", "diagnosis task failed")?
-    .context_internal("Diagnose", "diagnosis failed")?;
-    Ok(Json(blocks))
-}
-
 // --- Admin endpoints ---
 // All endpoints, including status, are admin-token gated by the
 // admin_auth_middleware LAYER on the /admin router (see build_router).
@@ -2147,4 +1885,17 @@ async fn admin_status(
         state.router.dropped_messages().to_string(),
     );
     Ok(Json(AdminStatusResponse { status: map }))
+}
+
+#[cfg(test)]
+mod legacy_removal_tests {
+    use super::*;
+
+    #[test]
+    fn public_openapi_has_no_diagnose_or_anomaly_routes() {
+        assert!(!PUBLIC_SPEC.paths.paths.contains_key("/v1/diagnose"));
+        assert!(!PUBLIC_SPEC.paths.paths.contains_key("/v1/anomalies"));
+        assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/query"));
+        assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/services"));
+    }
 }

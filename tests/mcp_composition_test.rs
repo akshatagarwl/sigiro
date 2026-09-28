@@ -181,8 +181,6 @@ async fn stdio_composition_discovers_proxies_and_isolates_docs() -> anyhow::Resu
             "list_pages".to_string(),
             "get_navigation".to_string(),
             "list_services".to_string(),
-            "list_anomalies".to_string(),
-            "diagnose_service".to_string(),
             "run_query".to_string(),
         ])
     );

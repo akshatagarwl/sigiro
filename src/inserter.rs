@@ -225,13 +225,6 @@ const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
 // not a flush mechanism.
 const DUCKLAKE_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-/// Cadence of the continuous anomaly pass (`crate::anomaly`) — how often
-/// each project's persisted error-rate series are re-scanned for regime
-/// shifts. An operational scheduling knob (like DuckLake maintenance and the
-/// hourly retention timers), NOT a detection threshold: detection itself is
-/// BOCPD with no tunables.
-const ANOMALY_PASS_INTERVAL: Duration = Duration::from_secs(300);
-
 /// Flusher configuration derived from env vars at startup.
 #[derive(Debug, Clone)]
 pub struct FlushConfig {
@@ -295,12 +288,6 @@ enum WriterCommand {
         days: u32,
         ack: oneshot::Sender<Result<(), String>>,
     },
-    /// Persist one anomaly detection run's results (`crate::anomaly::persist`)
-    /// — a brief DELETE+INSERT. The expensive detection already ran on a
-    /// READER connection (see `spawn_anomaly_detection`); the writer never
-    /// runs the scan. Fire-and-forget: failures are logged in the writer
-    /// thread and NEVER affect ingest.
-    PersistAnomalies(Vec<crate::anomaly::AnomalyInsert>),
     Shutdown,
 }
 
@@ -483,12 +470,11 @@ impl MsgRouter {
         let pool = Arc::clone(&self.pool);
         let cfg = self.flush_config.clone();
         let maintenance = Arc::clone(&self.maintenance);
-        let workloads = self.workloads.clone();
         let (tx, rx) = mpsc::channel::<FlusherCommand>(PROJECT_CHANNEL_CAPACITY);
         let pid_spawn = pid.clone();
         tracing::info!(project_id = %pid, "ensure_flusher: spawning new flusher task");
         let handle = tokio::spawn(async move {
-            run_flusher(pid_spawn, writer, rx, pool, cfg, maintenance, workloads).await;
+            run_flusher(pid_spawn, writer, rx, pool, cfg, maintenance).await;
         });
         self.project_senders.insert(pid.clone(), (tx, handle));
         self.project_initializers.remove(&pid);
@@ -961,28 +947,6 @@ impl ProjectFlusher {
         Ok(())
     }
 
-    /// Persist one anomaly detection run's results (see
-    /// `crate::anomaly::persist`) — the writer's ONLY involvement in the
-    /// anomaly pass: one brief DELETE+INSERT transaction. The scan + BOCPD
-    /// already ran on a reader (`spawn_anomaly_detection`). ISOLATION
-    /// CONTRACT: this shares the writer thread with flush/retention, so
-    /// every failure mode is contained here — errors surface as `Err` and
-    /// are logged (warn); nothing can propagate out and take ingest down.
-    #[tracing::instrument(skip_all, fields(project_id = %project_id))]
-    fn persist_anomalies(&self, project_id: &str, inserts: &[crate::anomaly::AnomalyInsert]) {
-        match crate::anomaly::persist(&self.conn, ProjectPool::prefix(), inserts) {
-            Ok(anomalies) => {
-                tracing::debug!(project_id, anomalies, "anomaly pass persisted");
-            }
-            Err(e) => {
-                tracing::warn!(
-                    project_id,
-                    "anomaly persist failed — ingest/flush/retention unaffected: {e:#}"
-                );
-            }
-        }
-    }
-
     fn into_connection(self) -> Connection {
         self.conn
     }
@@ -1048,7 +1012,6 @@ async fn run_flusher(
     pool: Arc<ProjectPool>,
     cfg: FlushConfig,
     maintenance: Arc<MaintenanceHealth>,
-    workloads: crate::workload::WorkloadBudget,
 ) {
     let flush_interval = cfg.interval;
     let (writer_tx, writer_rx) = mpsc::channel::<WriterCommand>(PROJECT_CHANNEL_CAPACITY);
@@ -1088,18 +1051,6 @@ async fn run_flusher(
     );
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     checkpoint_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // First anomaly pass one full period AFTER startup (interval_at skips the
-    // immediate tick a plain `interval` fires) — a pass at t=0 would scan
-    // before the first flush ever lands and find nothing.
-    let mut anomaly_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + ANOMALY_PASS_INTERVAL,
-        ANOMALY_PASS_INTERVAL,
-    );
-    // Single-flight guard for the detached anomaly detection task: a tick
-    // that fires while the previous detection is still scanning is skipped
-    // (never queued), so slow detections can't pile up.
-    let mut anomaly_detection: Option<TokioJoinHandle<()>> = None;
-
     loop {
         tokio::select! {
             biased;
@@ -1125,19 +1076,6 @@ async fn run_flusher(
                         tracing::error!(project_id, "writer thread stopped before checkpoint");
                         break;
                     }
-                }
-            }
-
-            _ = anomaly_interval.tick() => {
-                pool.touch_project(&project_id);
-                if anomaly_detection.as_ref().is_some_and(|h| !h.is_finished()) {
-                    tracing::warn!(
-                        project_id,
-                        "previous anomaly detection still running — skipping this tick"
-                    );
-                } else {
-                    anomaly_detection =
-                        spawn_anomaly_detection(&project_id, &pool, &writer_tx, &workloads);
                 }
             }
 
@@ -1182,69 +1120,6 @@ async fn run_flusher(
             tracing::error!(project_id, "writer join task failed: {error}");
         }
     }
-}
-
-/// One scheduled anomaly pass, structured so the single DuckLake writer is
-/// never held during the expensive part: BOCPD detection (a multi-day span
-/// scan, seconds of work) runs here on a READER connection from the
-/// project's `ReaderPool`, and only the resulting rows are handed to the
-/// writer thread for the brief DELETE+INSERT
-/// (`WriterCommand::PersistAnomalies`). Detached (`tokio::spawn`) so the
-/// flusher loop keeps forwarding ingest while the scan runs.
-///
-/// ISOLATION CONTRACT: every failure mode is contained here and logged —
-/// detection errors (`Err`), detection panics (augurs runs under
-/// `catch_unwind` inside the pass, and `spawn_blocking` catches the rest as
-/// a `JoinError`), and a writer that stopped during shutdown. Nothing can
-/// propagate out and affect ingest/flush/retention.
-fn spawn_anomaly_detection(
-    project_id: &str,
-    pool: &Arc<ProjectPool>,
-    writer_tx: &mpsc::Sender<WriterCommand>,
-    workloads: &crate::workload::WorkloadBudget,
-) -> Option<TokioJoinHandle<()>> {
-    let permit = match workloads.try_acquire(crate::workload::WorkloadClass::Anomaly) {
-        Ok(permit) => permit,
-        Err(error) => {
-            tracing::warn!(project_id, "{error}; skipping anomaly pass");
-            return None;
-        }
-    };
-    let project_id = project_id.to_string();
-    let pool = Arc::clone(pool);
-    let writer_tx = writer_tx.clone();
-    Some(tokio::spawn(async move {
-        let reader_project_id = project_id.clone();
-        let detected = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            // `readers.get()` blocks until a reader is free — fine on the
-            // blocking pool, and it competes with queries, never with the
-            // writer.
-            let readers = pool.get_project(&reader_project_id)?;
-            let reader = readers.get();
-            crate::anomaly::detect(&reader, ProjectPool::prefix())
-        })
-        .await;
-        match detected {
-            Ok(Ok(inserts)) => {
-                if writer_tx
-                    .send(WriterCommand::PersistAnomalies(inserts))
-                    .await
-                    .is_err()
-                {
-                    tracing::debug!(project_id, "writer thread stopped before anomaly persist");
-                }
-            }
-            Ok(Err(e)) => tracing::warn!(
-                project_id,
-                "anomaly detection failed — ingest/flush/retention unaffected: {e:#}"
-            ),
-            Err(e) => tracing::warn!(
-                project_id,
-                "anomaly detection panicked — ingest/flush/retention unaffected: {e}"
-            ),
-        }
-    }))
 }
 
 fn run_writer_thread(
@@ -1317,12 +1192,6 @@ fn run_writer_thread(
                         }
                     }
                 }
-            }
-            WriterCommand::PersistAnomalies(inserts) => {
-                // Isolated by construction: persist_anomalies never returns
-                // an error and never panics (see its doc comment) — the
-                // loop, and therefore ingest, always continues.
-                flusher.persist_anomalies(project_id, &inserts);
             }
             WriterCommand::RetentionCleanup { days, ack } => {
                 let result = flusher

@@ -40,65 +40,6 @@ pub struct ServiceSignals {
     pub profiles: i64,
 }
 
-/// GET /v1/anomalies — precomputed regime shifts of every signal from the
-/// continuous anomaly pass (the `sigiro_anomalies` table), biggest shift
-/// first by the unit-free magnitude (after − before) / (after + before)
-/// (comparable across signals; raw |after − before| breaks zero-baseline
-/// ties, then newest first). Ranking, not filtering: the reader judges
-/// significance from `before`/`after`. `truncated` reports the query row cap.
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct AnomaliesResponse {
-    pub anomalies: Vec<AnomalyEntry>,
-    /// True when the query row cap omitted shifts. This is an incomplete
-    /// candidate snapshot: automatic submission must wait for a complete one.
-    pub truncated: bool,
-}
-
-/// One row of the `sigiro_anomalies` table: a worsening regime shift found
-/// by BOCPD changepoint detection over an entity's continuous 5-minute
-/// series. No thresholds are involved anywhere — `direction` is always
-/// "worsening" because only shifts whose mean after exceeds the mean
-/// before are persisted.
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct AnomalyEntry {
-    /// When the scheduled pass wrote this row (ISO timestamp).
-    pub detected_at: String,
-    pub service_name: String,
-    /// The entity the shifted series is keyed by: the derived operation
-    /// identity (error_rate / latency_p95 — matches
-    /// `operation_summaries[].operation` in /v1/diagnose) or the service
-    /// name (log_volume / error_log_rate / profile_cost).
-    pub operation: String,
-    /// Which health series shifted: "error_rate", "latency_p95",
-    /// "log_volume", "error_log_rate", or "profile_cost".
-    pub signal: String,
-    /// Detection kind, e.g. "changepoint" (BOCPD).
-    pub kind: String,
-    /// Always "worsening" — improvements are never persisted.
-    pub direction: String,
-    /// First bucket of the NEW regime (ISO timestamp).
-    pub ts_shift: String,
-    /// `ts_shift` as µs since the Unix epoch — the value incident
-    /// correlation buckets on.
-    pub ts_shift_us: i64,
-    /// Cross-signal correlation id. Rows sharing an id shifted in the same
-    /// or adjacent 5-minute detection bucket on the same service — one
-    /// incident, not N independent anomalies (the window is the detection
-    /// pass's own bucket resolution, not a threshold). `null` when the row
-    /// correlates with no other returned row. Computed over the rows this
-    /// request returns, so `service`/window filters scope the grouping.
-    #[serde(default)]
-    pub incident_id: Option<String>,
-    /// Series mean before the shift, raw signal units (error %, p95 µs,
-    /// logs per bucket, summed profile cost per bucket).
-    pub before: f64,
-    /// Series mean from the shift onward.
-    pub after: f64,
-    /// Ready-to-run SQL for POST /v1/query: the raw telemetry behind the
-    /// shift (spans, logs, or profile samples, per the signal).
-    pub drill_down_sql: Option<String>,
-}
-
 /// GET /admin/status
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AdminStatusResponse {

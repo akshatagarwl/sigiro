@@ -1,6 +1,5 @@
 pub mod admin;
 pub mod alerts;
-pub mod anomaly;
 pub mod auth;
 pub mod client;
 pub mod config;
@@ -8,9 +7,9 @@ pub mod drain;
 pub mod federate;
 mod optimizer;
 
-pub mod diagnose;
 pub mod ingest;
 pub mod inserter;
+mod assessor;
 pub mod mcp;
 
 pub mod oauth;
@@ -38,7 +37,6 @@ use camino::Utf8PathBuf;
 // root so consumers can use `sigiro::IngestMsg` instead of digging through
 // `sigiro::ingest` or `sigiro::inserter`.
 
-pub use diagnose::{DiagnosisBlock, Window};
 pub use types::{IngestMsg, SignalTable, TenantId, TimestampMicros};
 // Re-export MsgRouter from inserter (not in types — it's a runtime router, not a data type)
 pub use inserter::MsgRouter;

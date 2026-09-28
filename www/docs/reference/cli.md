@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`sigiro` has nine subcommands. Client commands print indented JSON on success;
+`sigiro` has seven subcommands. Client commands print indented JSON on success;
 server commands remain attached to their protocol or listener.
 
 For a new hosted account, run `sigiro signup --name "Your Name" --email
@@ -43,37 +43,6 @@ Starts the OTLP gRPC server, the OTLP HTTP server, and the query API.
 
 The first start downloads the query extensions into the data directory. That
 download takes 30–90 seconds and blocks the start.
-
-## diagnose
-
-`sigiro diagnose <SERVICE>` returns one diagnosis block for one service.
-
-| Flag                     | Type    | Default               |
-| ------------------------ | ------- | --------------------- |
-| `--from <EPOCH_SECONDS>` | integer | 15 minutes before now |
-| `--to <EPOCH_SECONDS>`   | integer | now                   |
-
-`--from` and `--to` are epoch **seconds**. The equivalent HTTP field names are
-`from_ts` and `to_ts`, and those are epoch **microseconds**. Both HTTP fields
-are optional. If you omit both, the server reads the last 15 minutes, which is
-the same window the CLI uses.
-
-The command prints JSON. To narrow the output, pipe it to `jq`. The CLI applies
-no filter of its own, so the CLI and the API return the same document.
-
-## anomalies
-
-`sigiro anomalies` lists the detected regime shifts, biggest shift first, with a
-cross-signal `incident_id` on each row.
-
-| Flag                     | Type    | Default        |
-| ------------------------ | ------- | -------------- |
-| `--service <NAME>`       | string  | all services   |
-| `--from <EPOCH_SECONDS>` | integer | no lower bound |
-| `--to <EPOCH_SECONDS>`   | integer | no upper bound |
-
-The rows come from the `sigiro_anomalies` table, which a scheduled pass writes.
-Nothing is computed for the request.
 
 ## query
 
@@ -115,5 +84,5 @@ image has no shell and no `curl`.
 ## mcp
 
 `sigiro mcp` starts a stdio Model Context Protocol server. It exposes
-`list_services`, `list_anomalies`, `diagnose_service`, and `run_query` so an
+`list_services`, and `run_query` so an
 analysis agent can inspect sigiro without constructing HTTP requests itself.

@@ -164,15 +164,11 @@ export const HOW_SESSIONS = {
   ask: {
     run: [
       {
-        cmd: `curl -sX POST localhost:9999/v1/diagnose -d '{"services":["checkout"]}'`,
-        out: `{
-  "summary": "two signals moved together on checkout at 18:35",
-  "suspect": "deploy 9f2c1ab, landed 18:33",
-  "failing": "POST /api/orders",
-  "how": { "timeout": 246, "server_error": 6 },
-  "errors_total": 1284,
-  "query": "SELECT * FROM spans WHERE service = 'checkout' AND ..."
-}`,
+        cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT span_name, count(*) AS calls FROM sigiro_spans WHERE service_name = 'checkout' AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes' GROUP BY span_name ORDER BY calls DESC LIMIT 5"`,
+        out: `[
+  { "span_name": "POST /api/orders", "calls": 1284 },
+  { "span_name": "GET /api/cart", "calls": 342 }
+]`,
       },
     ],
   },
@@ -186,7 +182,7 @@ WHERE service = 'checkout' AND status = 'error'
 GROUP BY model ORDER BY slowest DESC`,
       },
       {
-        cmd: 'sigiro query "$(cat models.sql)"',
+        cmd: 'curl -sS -X POST localhost:9999/v1/query --data-binary "$(cat models.sql)"',
         out: `MODEL           CALLS  SLOWEST
 gpt-5.2-mini      246    30.0s
 claude-haiku-4.6   31     2.1s`,
@@ -196,28 +192,11 @@ claude-haiku-4.6   31     2.1s`,
   prove: {
     run: [
       {
-        cmd: `curl -s localhost:9999/v1/diagnose -d '{"services":["checkout"]}' > answer.json`,
-        out: "",
-      },
-      {
-        cmd: "jq .operation_summaries[0] answer.json",
-        out: `{
-  "operation": "POST /api/orders",
-  "errors": 246,
-  "error_rate": 0.19,
-  "drill_down_sql": "SELECT trace_id, duration, status_message FROM …"
-}`,
-      },
-      {
-        cmd: "jq -r .operation_summaries[0].drill_down_sql answer.json > drill.sql",
-        out: "",
-      },
-      {
-        cmd: 'sigiro query "$(cat drill.sql)"',
-        out: `TRACE_ID       DURATION  STATUS_MESSAGE
-9f2c1ab4e77d      30012  context deadline exceeded
-3b81fe0a2c56      30004  context deadline exceeded
-c40d9e73aa18      29997  context deadline exceeded`,
+        cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT trace_id, duration, status_message FROM sigiro_spans WHERE service_name = 'checkout' AND status_code = 2 AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes' ORDER BY timestamp DESC LIMIT 3"`,
+        out: `[
+  { "trace_id": "9f2c1ab4e77d", "duration": 30012, "status_message": "context deadline exceeded" },
+  { "trace_id": "3b81fe0a2c56", "duration": 30004, "status_message": "context deadline exceeded" }
+]`,
       },
     ],
   },
@@ -226,16 +205,12 @@ c40d9e73aa18      29997  context deadline exceeded`,
 /**
  * The artifact under section 01. `lang` drives Shiki, so it is an identifier.
  *
- * The real path set, checked against www/openapi.json. This used to list
- * /v1/health, which the spec does not publish, and omitted /v1/anomalies, which
- * it does — a section whose whole claim is "the document describes every
- * endpoint" was printing a document that did neither.
+ * Example public telemetry endpoints, matching the Rust OpenAPI paths. The
+ * public spec lives at /openapi.json and is not checked into this package.
  */
 export const DISCOVER_ARTIFACT = {
   lang: "json" as const,
   code: `[
-  "/v1/anomalies",
-  "/v1/diagnose",
   "/v1/query",
   "/v1/services",
   "/v1/traces/{trace_id}"
@@ -250,31 +225,19 @@ export const DISCOVER_ARTIFACT = {
  * "we are two of these five" is a thing you watch rather than a thing you are
  * told.
  *
- * `SHIFT` is the unit-free magnitude the API returns, (after − before) /
- * (after + before), bounded at 1.0 — see `src/server.rs`. An earlier draft
- * printed `+48σ`, and no sigma is computed anywhere in the product. Keep these
- * numbers derivable from the BASELINE and NOW columns beside them, so a reader
- * can check the arithmetic and get the same answer.
+ * These examples query raw telemetry. No saved anomaly detector or root-cause
+ * verdict is implied by an illustrative error count.
  */
 export const LOOP_SESSIONS = {
   detect: {
     ours: true,
-    cmd: "sigiro anomalies",
-    out: `SERVICE   SIGNAL       BASELINE   NOW      SHIFT    INCIDENT
-checkout  error_rate   0.4%       19.2%    +0.96    checkout@18:35
-checkout  latency_p95  180ms      30.0s    +0.99    checkout@18:35
-
-2 shifts · 1 incident · since 18:35`,
+    cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT count(*) AS failed_spans FROM sigiro_spans WHERE service_name = 'checkout' AND status_code = 2 AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'"`,
+    out: `[{ "failed_spans": 246 }]`,
   },
   diagnose: {
     ours: true,
-    cmd: "sigiro diagnose checkout",
-    out: `suspect        deploy 9f2c1ab, landed 18:33
-failing        POST /api/orders
-failure mode   timeout 246 · server_error 6
-errors_total   1284
-drill_down_sql SELECT trace_id, duration, status_message
-               FROM sigiro_spans WHERE service_name = 'checkout' …`,
+    cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT span_name, count(*) AS failures FROM sigiro_spans WHERE service_name = 'checkout' AND status_code = 2 AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes' GROUP BY span_name ORDER BY failures DESC LIMIT 5"`,
+    out: `[{ "span_name": "POST /api/orders", "failures": 246 }]`,
   },
   fix: {
     ours: false,
@@ -284,36 +247,15 @@ edit   src/orders/upstream.ts   +4 −1
 test   42 passed
 push   fix: bound the orders upstream call at 5s`,
   },
-  /**
-   * This block prints an empty result on purpose, and the copy names the absence
-   * rather than a closure. The detector reports worsening shifts only
-   * (`src/anomaly.rs` discards a shift whose mean improves), and each pass
-   * replaces the whole table. So a service that recovers does not get a row
-   * marked "closed" or a recovery timestamp — its shift stops being reported.
-   * An earlier draft printed `recovered 19:07` and `inc_4a1c closed · 34 min
-   * open`. Neither value exists: there is no status column and no duration, so
-   * the frame sold a workflow the product cannot perform. Do not reintroduce a
-   * lifecycle word until the detector has one. Open item #74 in
-   * docs/notes/roadmap.md.
-   *
-   * `ours: 'partly'` is a third state, not a boolean — this stage runs on your
-   * pipeline using our evidence, and the component renders it differently from
-   * both `true` and `false`.
-   */
+  /** A fresh query, not a detector claiming the incident is resolved. */
   verify: {
     ours: "partly",
-    cmd: "sigiro anomalies --service checkout",
-    out: `SERVICE   SIGNAL       BASELINE   NOW      SHIFT    INCIDENT
-
-no shifts · checkout · last 7d`,
+    cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT count(*) AS errors_last_5m FROM sigiro_spans WHERE service_name = 'checkout' AND status_code = 2 AND timestamp > CURRENT_TIMESTAMP - INTERVAL '5 minutes'"`,
+    out: `[{ "errors_last_5m": 0 }]`,
   },
   /**
-   * The `cause` line in this block stays, and it is the only place on the page
-   * that says the word. This stage is not sigiro: the command reads a file you
-   * wrote after you read the evidence and fixed the service, so the conclusion
-   * is yours. sigiro says `suspect` in every block above, and the two words
-   * sitting one screen apart are the distinction the page is making. Do not copy
-   * this line into a block that prints sigiro output.
+   * The `cause` line belongs to the user's playbook, not a Sigiro inference.
+   * A raw query supplies evidence, not a causal explanation.
    *
    * The playbook body is shared rather than translated: it is a file the reader
    * wrote, shown verbatim, and its field names line up in a fixed-width column
@@ -324,7 +266,7 @@ no shifts · checkout · last 7d`,
     cmd: "cat playbooks/checkout-upstream-timeout.md",
     out: `## checkout · upstream timeout
 
-detected   error_rate +0.96, latency_p95 +0.99
+observed   246 failed checkout spans in a 30-minute window
 cause      unbounded upstream call, shipped in 9f2c1ab
 fix        5s deadline on the orders client
 watch      the same shape on any service calling orders`,

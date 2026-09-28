@@ -120,12 +120,7 @@ curl -s "https://sigiro.com/v1/query" \
 
 각 테넌트는 격리된 카탈로그를 가지므로 **자신의** 데이터만 볼 수 있습니다.
 
-**테이블:** `sigiro_spans`, `sigiro_logs`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`,
-`sigiro_metrics_exp_histogram`, `sigiro_profiles`, 그리고 `sigiro_anomalies`
-테이블. `sigiro_anomalies` 테이블은 미리 계산된 국면 전환(regime shift)을 담고 있습니다. 이상 탐지 패스가
-이 전환을 지속적으로 기록합니다. `GET /v1/anomalies`는 동일한 전환을 타입이 지정된
-JSON으로 제공합니다. 속성 컬럼(`*_attributes`, `events_json` 등)은 JSON 텍스트를 담습니다.
-필드를 읽으려면 `json_extract(col, '$.key')` 또는 `col ->> 'key'`를 사용하십시오.
+**테이블:** `sigiro_spans`, `sigiro_logs`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`, `sigiro_metrics_exp_histogram`, `sigiro_profiles`. 속성 열에는 JSON 텍스트가 저장되므로 `json_extract(col, '$.key')`로 확인하세요.
 
 각 계열이 무엇을 측정하는지, 그리고 확신에 찬 오답을 만들어내는 한 가지 이름 충돌에 대해서는
 [테이블 소개](/docs/explanation/tables)를 참고하십시오.
@@ -185,5 +180,3 @@ sigiro에는 보조 인덱스가 없습니다. 따라서 **모든 쿼리를 `tim
   아직 OpenTelemetry가 없는 경우
 - [API 참조](/docs/reference) — 다섯 개의 엔드포인트, 각각에 요청
   플레이그라운드 포함
-- [대시보드 대신 증거를 제공하는 이유](/docs/explanation/evidence) —
-  `/v1/diagnose`가 차트가 아니라 순위가 매겨진 목록을 반환하는 이유

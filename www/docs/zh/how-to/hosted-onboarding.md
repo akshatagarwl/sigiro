@@ -115,13 +115,7 @@ curl -s "https://sigiro.com/v1/query" \
 
 你只能看到**自己的**数据，因为每个租户都拥有独立的目录（catalog）。
 
-**数据表：** `sigiro_spans`、`sigiro_logs`、
-`sigiro_metrics_gauge`、`sigiro_metrics_sum`、`sigiro_metrics_histogram`、
-`sigiro_metrics_exp_histogram`、`sigiro_profiles`，以及 `sigiro_anomalies`
-表。`sigiro_anomalies` 表保存预先计算好的状态突变（regime shift）。异常检测过程
-会持续写入这些突变。`GET /v1/anomalies` 以带类型的 JSON 形式提供同样的突变数据。
-属性列（`*_attributes`、`events_json` 等）保存的是 JSON 文本。
-可通过 `json_extract(col, '$.key')` 或 `col ->> 'key'` 读取其中的字段。
+**数据表：** `sigiro_spans`、`sigiro_logs`、`sigiro_metrics_gauge`、`sigiro_metrics_sum`、`sigiro_metrics_histogram`、`sigiro_metrics_exp_histogram`、`sigiro_profiles`。属性列保存 JSON 文本，可用 `json_extract(col, '$.key')` 查询。
 
 关于每个指标族各自度量的内容，以及那个会导致「看似正确其实错误」的同名冲突，
 请阅读[关于数据表](/docs/explanation/tables)。
@@ -177,6 +171,4 @@ sigiro 没有二级索引。因此**请为每个查询都加上 `timestamp` 范�
 
 - [用智能体为你的代码埋点](/docs/how-to/install-with-ai) —— 如果你的
   服务尚未接入 OpenTelemetry
-- [API 参考](/docs/reference) —— 五个端点，每个都配有请求调试台
-- [关于「证据」而非仪表盘](/docs/explanation/evidence) —— 为什么
-  `/v1/diagnose` 返回的是一个排序列表而不是图表
+- [API 参考](/docs/reference) —— 当前可用的端点与请求调试台

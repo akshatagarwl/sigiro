@@ -18,7 +18,6 @@ machine running the server.
 - `sigiro_metrics_histogram` — explicit-bucket histograms
 - `sigiro_metrics_exp_histogram` — exponential histograms
 - `sigiro_profiles` — profile samples
-- `sigiro_anomalies` — detected regime shifts
 
 Metrics use four tables because OTLP defines four different metric shapes.
 Keeping them separate avoids null-heavy rows and write-time projections. Use

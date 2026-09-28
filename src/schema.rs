@@ -194,45 +194,32 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_profiles")?;
 
-    // Anomalies — written by the scheduled anomaly pass (src/anomaly.rs,
-    // driven from the per-project inserter timer), read by /v1/diagnose
-    // and /v1/anomalies. Detection is BOCPD changepoints (augurs) over
-    // continuous 5-minute series of every signal — NO arbitrary thresholds
-    // anywhere (docs/plans/01-continuous-anomaly-subsystem.md). Lives in the
-    // DuckLake catalog alongside the telemetry it derives from, so it gets
-    // the same per-tenant isolation for free.
-    conn.execute_batch(&format!(
-        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_anomalies (
-            detected_at           TIMESTAMP NOT NULL,
-            service_name          VARCHAR NOT NULL,
-            -- The entity the shifted series is keyed by: the derived
-            -- operation identity (error_rate / latency_p95) or the service
-            -- name (log_volume / error_log_rate / profile_cost).
-            operation             VARCHAR NOT NULL,
-            -- Which health series shifted: 'error_rate', 'latency_p95',
-            -- 'log_volume', 'error_log_rate', or 'profile_cost'.
-            signal                VARCHAR NOT NULL,
-            -- Detection kind; BOCPD emits 'changepoint'.
-            kind                  VARCHAR NOT NULL,
-            -- Only 'worsening' shifts are persisted (mean after > mean
-            -- before — a direction comparison, not a threshold).
-            direction             VARCHAR NOT NULL,
-            -- First bucket of the NEW regime.
-            ts_shift              TIMESTAMP NOT NULL,
-            -- Series mean before/after the shift, in raw signal units
-            -- (error %, p95 µs, logs per bucket, profile cost per bucket).
-            \"before\"            DOUBLE NOT NULL,
-            \"after\"             DOUBLE NOT NULL,
-            -- Ready-to-run /v1/query SQL for the raw telemetry behind the
-            -- shift (spans, logs, or profile samples, per the signal).
-            drill_down_sql        VARCHAR NOT NULL
-        )"
-    ))
-    .context("failed to create sigiro_anomalies")?;
     // NOTE: DuckLake (Parquet-backed catalog) does not support CREATE INDEX.
     // Query performance relies on Parquet row group pruning and column statistics.
     // For heavy query workloads, consider partitioning by timestamp or using
     // DuckDB's native tables (non-DuckLake) for hot data.
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_schema_has_raw_telemetry_but_no_saved_anomalies() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_tables(&conn, "").unwrap();
+        let tables: Vec<String> = conn
+            .prepare("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert!(tables.iter().any(|name| name == "sigiro_spans"));
+        assert!(tables.iter().any(|name| name == "sigiro_logs"));
+        assert!(tables.iter().any(|name| name == "sigiro_profiles"));
+        assert!(!tables.iter().any(|name| name == "sigiro_anomalies"));
+    }
 }

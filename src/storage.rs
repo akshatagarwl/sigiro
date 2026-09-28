@@ -438,8 +438,8 @@ pub fn tenant_metadata_schema(tenant_id: &str) -> Result<String> {
 /// Nesting under `tenants/` (rather than `<data_dir>/<tenant_id>` directly) keeps
 /// per-tenant dirs from ever colliding with sibling top-level dirs (the default
 /// project's `default/`, the shared `extensions/` dir). Shared by `ProjectPool`
-/// (the actual per-tenant connection) and the diagnose handler's data-existence
-/// check so the two can never disagree on layout.
+/// (the actual per-tenant connection); catalog maintenance must use the same
+/// tenant layout.
 pub fn tenant_data_dir(data_dir: &Utf8Path, tenant_id: &str) -> Result<camino::Utf8PathBuf> {
     let tenant_id = sanitize_tenant_id(tenant_id)?;
     Ok(data_dir.join("tenants").join(tenant_id.as_ref()))

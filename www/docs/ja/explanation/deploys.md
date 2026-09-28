@@ -1,11 +1,13 @@
 ---
-title: デプロイ検出の仕組みと、スパンに必要な情報
+title: 廃止された診断内のデプロイ検出
 description: >-
   sigiro がデプロイのために読み取る属性は service.version
   だけです。バージョンがデプロイイベントになる仕組みと、送信されない場合に何が得られるのかを説明します。
 sidebar:
   order: 4
 ---
+
+> **過去の設計資料:** 診断 API 内の自動デプロイ検出は廃止されました。スパンの `service.version` は生のテレメトリとして `POST /v1/query` から参照できます。
 
 診断は容疑デプロイを名指しできます: _incident ~14:30 on service 'checkout':
 … ; suspect deploy: version 1.4.2 first seen at 14:29_。これは強い主張であり、

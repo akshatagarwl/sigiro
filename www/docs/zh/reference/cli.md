@@ -1,11 +1,11 @@
 ---
 title: CLI
-description: sigiro 的每个子命令、参数以及读取的环境变量。sigiro 有九个子命令，客户端命令成功时输出带缩进的 JSON，服务端命令保持连接不退出。
+description: sigiro 的每个子命令、参数以及读取的环境变量。sigiro 有七个子命令，客户端命令成功时输出带缩进的 JSON，服务端命令保持连接不退出。
 sidebar:
   order: 2
 ---
 
-`sigiro` 有九个子命令。每个子命令在执行成功时都会输出带缩进的 JSON。没有第二种
+`sigiro` 有七个子命令。每个子命令在执行成功时都会输出带缩进的 JSON。没有第二种
 输出格式，也不做 TTY 检测。
 
 新用户请运行 `sigiro signup --name "Your Name" --email you@example.com`。命令会发送六位数
@@ -38,35 +38,6 @@ Sigiro 在内部使用官方 Agent Auth 实现，且不提供第二个注册 CLI
 | `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT`      | `4317`                  |
 
 首次启动时会将查询扩展下载到数据目录中。该下载耗时 30–90 秒，并会阻塞启动过程。
-
-## diagnose
-
-`sigiro diagnose <SERVICE>` 针对一个服务返回一个诊断块。
-
-| 标志                     | 类型 | 默认值               |
-| ------------------------ | ---- | -------------------- |
-| `--from <EPOCH_SECONDS>` | 整数 | 当前时间之前 15 分钟 |
-| `--to <EPOCH_SECONDS>`   | 整数 | 当前时间             |
-
-`--from` 和 `--to` 的单位是 Unix 纪元**秒**。对应的 HTTP 字段名为 `from_ts` 和
-`to_ts`，它们的单位是 Unix 纪元**微秒**。这两个 HTTP 字段都是可选的。如果两者都
-省略，服务器会读取最近 15 分钟的数据，与 CLI 使用的时间窗口一致。
-
-该命令输出 JSON。若要缩小输出范围，可通过管道传给 `jq`。CLI 自身不做任何过滤，
-因此 CLI 和 API 返回的是同一份文档。
-
-## anomalies
-
-`sigiro anomalies` 列出检测到的状态突变（regime shift），按突变幅度从大到小排列，
-每一行都带有跨信号的 `incident_id`。
-
-| 标志                     | 类型   | 默认值   |
-| ------------------------ | ------ | -------- |
-| `--service <NAME>`       | 字符串 | 所有服务 |
-| `--from <EPOCH_SECONDS>` | 整数   | 无下界   |
-| `--to <EPOCH_SECONDS>`   | 整数   | 无上界   |
-
-这些行来自 `sigiro_anomalies` 表，由一个定时任务写入。请求时不会进行任何计算。
 
 ## query
 
@@ -105,5 +76,5 @@ key。
 ## mcp
 
 `sigiro mcp` 启动 stdio Model Context Protocol 服务器。它提供
-`list_services`、`list_anomalies`、`diagnose_service` 和 `run_query`，
+`list_services` 和 `run_query`，
 让分析代理无需自行构造 HTTP 请求即可检查 Sigiro。

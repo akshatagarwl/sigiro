@@ -1,11 +1,13 @@
 ---
-title: 关于部署检测，以及你的 span 必须携带的信息
+title: 已退役的诊断部署检测设计
 description: >-
   sigiro 只读取一个属性来判断部署——span
   资源上的 service.version。本页说明版本号如何变成部署事件，以及服务不发送版本号时会得到什么。
 sidebar:
   order: 4
 ---
+
+> **历史设计文档：**诊断 API 中的自动部署检测已退役。Span 的 `service.version` 资源属性仍可通过 `POST /v1/query` 查询原始遥测数据。
 
 诊断结果可以点出一个可疑部署：_incident ~14:30 on service 'checkout':
 … ; suspect deploy: version 1.4.2 first seen at 14:29_。这是一个很强的论断，

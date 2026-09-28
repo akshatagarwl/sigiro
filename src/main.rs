@@ -66,32 +66,6 @@ enum Command {
     },
     /// Show server health
     Status,
-    /// Diagnose a service — returns structured metrics, spans, logs, linked traces
-    Diagnose {
-        /// Service name to diagnose
-        service: String,
-        /// Start of range in epoch seconds. Defaults to 15 minutes ago if omitted.
-        #[arg(long)]
-        from: Option<i64>,
-        /// End of range in epoch seconds. Defaults to now if omitted.
-        #[arg(long)]
-        to: Option<i64>,
-    },
-    /// List detected anomalies (the precomputed anomaly table, all signals,
-    /// ranked biggest shift first, cross-signal `incident_id` grouping). The
-    /// entry point for a detect→diagnose→fix loop: poll this, act on new
-    /// incidents.
-    Anomalies {
-        /// Filter to one service.
-        #[arg(long)]
-        service: Option<String>,
-        /// Only shifts at or after this time (epoch seconds).
-        #[arg(long)]
-        from: Option<i64>,
-        /// Only shifts at or before this time (epoch seconds).
-        #[arg(long)]
-        to: Option<i64>,
-    },
     /// Probe the local /health endpoint and exit 0 if ready, non-zero
     /// otherwise. This is the container HEALTHCHECK for the distroless image,
     /// which has no shell or curl for the usual `curl -f /health` probe.
@@ -111,8 +85,7 @@ enum Command {
         email: String,
     },
     /// Serve the MCP (Model Context Protocol) tool surface over stdio, so any
-    /// MCP client (Claude Desktop, Cursor, a benchmark harness) can drive the
-    /// detect→diagnose→drill loop. Talks to a running `sigiro serve` over
+    /// MCP client can list services and query raw telemetry. Talks to a running `sigiro serve` over
     /// HTTP, so point SIGIRO_ENDPOINT at it if it is not on localhost.
     Mcp,
 }
@@ -314,30 +287,6 @@ async fn main() -> Result<()> {
                 "detail": detail,
                 "recent_ingest": recent_ingest,
             });
-            println!("{}", format_output(&value)?);
-        }
-        Some(Command::Diagnose { service, from, to }) => {
-            let client = require_client().await?;
-            // Epoch-seconds args → µs, matching the API. `None` stays `None`:
-            // the 15-minute default lives in `DiagnoseRequest::window()` and
-            // nowhere else, so the CLI and the API cannot disagree about what
-            // "no window given" means. See roadmap #72.
-            let from_ts = from.map(|s| s * 1_000_000);
-            let to_ts = to.map(|s| s * 1_000_000);
-            let block = client.diagnose(&service, from_ts, to_ts).await?;
-            // No ad-hoc trace hint anymore: every span carries its own
-            // `drill_down_sql` (the full trace) and each sampled section its
-            // `drill_all_sql`, so the response is self-describing.
-            let value = serde_json::to_value(&block)?;
-            println!("{}", format_output(&value)?);
-        }
-        Some(Command::Anomalies { service, from, to }) => {
-            let client = require_client().await?;
-            // Epoch-seconds args → µs, matching the API (Option = no filter).
-            let from_ts = from.map(|s| s * 1_000_000);
-            let to_ts = to.map(|s| s * 1_000_000);
-            let resp = client.anomalies(service.as_deref(), from_ts, to_ts).await?;
-            let value = serde_json::to_value(&resp)?;
             println!("{}", format_output(&value)?);
         }
         Some(Command::Healthcheck) => {
@@ -636,11 +585,6 @@ async fn run_evictor(pool: Arc<ProjectPool>, interval_secs: u64, max_idle_secs: 
             tracing::error!("idle eviction task failed: {error}");
         }
     }
-}
-
-/// Build an HTTP client from explicit configuration or the stored OAuth login.
-async fn require_client() -> Result<sigiro::client::SigiroClient> {
-    sigiro::client::try_build_client().await
 }
 
 fn init_basic_subscriber() {

@@ -87,10 +87,10 @@ pub(crate) fn alert_webhook_token() -> Result<Option<crate::alerts::AlertWebhook
 pub(crate) static EXTENSION_DIR: Envar<String> =
     Envar::on_startup("SIGIRO_EXTENSION_DIR", || EnvarDef::Default(String::new()));
 
-pub(crate) static SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY: Envar<String> = Envar::on_startup(
-    "SIGIRO_SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY",
-    || EnvarDef::Default(String::new()),
-);
+pub(crate) static SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY: Envar<String> =
+    Envar::on_startup("SIGIRO_SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY", || {
+        EnvarDef::Default(String::new())
+    });
 
 /// Allow DuckDB to load extensions without a valid signature.
 ///

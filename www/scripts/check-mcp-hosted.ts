@@ -131,8 +131,6 @@ try {
       scopes_supported: [
         "openid",
         "services:read",
-        "anomalies:read",
-        "diagnose:read",
         "query:read",
       ],
     },
@@ -161,7 +159,7 @@ try {
   globalThis.fetch = outageFetch;
   assert(
     MCP_REQUIRED_SCOPE ===
-      "openid services:read anomalies:read diagnose:read query:read",
+      "openid services:read query:read",
     "canonical scope set"
   );
 
@@ -187,7 +185,7 @@ try {
     clientInfo: { name: "deterministic-test", version: "1.0" },
   });
   const listed = await rpc("tools/list");
-  equal(listed.result?.tools?.length, 8, "unified tool count");
+  equal(listed.result?.tools?.length, 6, "unified tool count");
   equal(
     listed.result?.tools?.map((tool) => tool.name),
     [...docsTools, ...operationTools].map((tool) => tool.name),
@@ -215,14 +213,6 @@ try {
 
   await rpc("tools/call", { name: "list_services", arguments: {} });
   await rpc("tools/call", {
-    name: "list_anomalies",
-    arguments: { service: "api", from_ts: 10, to_ts: 20 },
-  });
-  await rpc("tools/call", {
-    name: "diagnose_service",
-    arguments: { service: "api" },
-  });
-  await rpc("tools/call", {
     name: "run_query",
     arguments: { sql: "SELECT 1" },
   });
@@ -230,8 +220,6 @@ try {
     calls.map(({ url }) => url),
     [
       `${apiOrigin}/v1/services`,
-      `${apiOrigin}/v1/anomalies?service=api&from_ts=10&to_ts=20`,
-      `${apiOrigin}/v1/diagnose`,
       `${apiOrigin}/v1/query`,
     ],
     "operational route mapping"
@@ -258,7 +246,7 @@ try {
   );
   globalThis.fetch = failingFetch;
   console.log(
-    "Hosted MCP behavioral contract verified: auth, metadata challenge, 8 tools, docs isolation, 4 API routes, errors, negotiation"
+    "Hosted MCP behavioral contract verified: auth, metadata challenge, 6 tools, docs isolation, 2 API routes, errors, negotiation"
   );
 } finally {
   globalThis.fetch = originalFetch;

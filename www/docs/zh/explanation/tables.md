@@ -16,7 +16,6 @@ sigiro 存储通过 OTLP 发送的遥测数据。每一行描述发送该遥测�
 - `sigiro_metrics_histogram` — 显式桶直方图
 - `sigiro_metrics_exp_histogram` — 指数直方图
 - `sigiro_profiles` — 性能剖析样本
-- `sigiro_anomalies` — 检测到的状态变化
 
 OTLP 定义了四种不同的指标形态，因此指标保存在四张表中。查询多个指标类型时使用 `UNION ALL`。
 

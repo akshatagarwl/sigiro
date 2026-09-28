@@ -19,10 +19,8 @@ export const SIGIRO_SCOPES = [
   "offline_access",
   "telemetry:ingest",
   "services:read",
-  "diagnose:read",
   "traces:read",
   "query:read",
-  "anomalies:read",
   "alerts:read",
   "alerts:write",
   "tenant:members",
@@ -34,10 +32,8 @@ export const SIGIRO_SCOPES = [
 export const SIGIRO_AGENT_CAPABILITIES = [
   "telemetry:ingest",
   "services:read",
-  "diagnose:read",
   "traces:read",
   "query:read",
-  "anomalies:read",
   "alerts:read",
   "alerts:write",
 ] as const;

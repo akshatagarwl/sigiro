@@ -40,7 +40,7 @@ async function execute(run: ClaimedRun, target: { baseRef: string; targetCommitS
     let response;
     try {
       response = await session.send({
-        message: `Optimize the authorized finding ${run.finding_id} for service ${run.service} in /workspace/repo. First call prepare_optimizer_repo; then query telemetry, make one focused change, validate and call submit_optimizer_draft.`,
+        message: `Assess fresh tenant telemetry for ${run.service} before changing anything. Assessor decision context: ${run.decision_context}. Query the live evidence window first; abstain if the data is inadequate. Only then prepare /workspace/repo, make one focused change, validate and call submit_optimizer_draft.`,
         signal,
       });
     } catch {

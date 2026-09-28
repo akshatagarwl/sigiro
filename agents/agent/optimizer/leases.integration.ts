@@ -55,15 +55,18 @@ try {
       owner TEXT NOT NULL,repo TEXT NOT NULL,enabled BOOLEAN NOT NULL,PRIMARY KEY(tenant_id,id));
     CREATE TABLE sigiro_admin.optimizer_run (
       tenant_id TEXT NOT NULL,id TEXT NOT NULL,service TEXT NOT NULL,connection_id TEXT NOT NULL,
-      finding_id TEXT NOT NULL,branch TEXT NOT NULL,actor TEXT NOT NULL,status TEXT NOT NULL,
+      decision_context TEXT NOT NULL DEFAULT '{"source":"assessor-live","yes_probability":0.99,"evidence":{}}',branch TEXT NOT NULL,actor TEXT NOT NULL,status TEXT NOT NULL,
       lease_owner TEXT,lease_until_ms BIGINT,attempts INTEGER NOT NULL DEFAULT 0,
       session_id TEXT,failure_summary TEXT,github_pull_request_id BIGINT,
       target_ref TEXT,target_commit_sha TEXT,finding_before DOUBLE PRECISION,finding_after DOUBLE PRECISION,
       telemetry_window_start_us BIGINT,telemetry_window_end_us BIGINT,PRIMARY KEY(tenant_id,id));
     INSERT INTO sigiro_admin.optimizer_connection VALUES ('tenant-a','repo-a',100,123,'octocat','shop',TRUE),('tenant-b','repo-b',200,234,'octocat','other',FALSE);
-    INSERT INTO sigiro_admin.optimizer_run (tenant_id,id,service,connection_id,finding_id,branch,actor,status) VALUES
-      ('tenant-a','run-a','checkout','repo-a','finding-a','sigiro/optimizer-run-a','actor-a','pending'),
-      ('tenant-b','run-b','checkout','repo-b','finding-b','sigiro/optimizer-run-b','actor-b','pending');`);
+    INSERT INTO sigiro_admin.optimizer_run (tenant_id,id,service,connection_id,branch,actor,status) VALUES
+      ('tenant-a','run-a','checkout','repo-a','sigiro/optimizer-run-a','actor-a','pending'),
+      ('tenant-b','run-b','checkout','repo-b','sigiro/optimizer-run-b','actor-b','pending'),
+      ('tenant-a','run-abstained','checkout','repo-a','sigiro/optimizer-run-abstained','actor-a','abstained');
+    INSERT INTO sigiro_admin.optimizer_run (tenant_id,id,service,connection_id,decision_context,branch,actor,status)
+      VALUES ('tenant-a','run-old','checkout','repo-a','["old-finding"]','legacy-branch','actor-a','pending');`);
   const store = new LeaseStore(pool);
   const first = await Effect.runPromise(store.claim());
   assert.ok(first);
@@ -85,7 +88,7 @@ try {
   await Effect.runPromise(store.recordSession(first, "eve-session-a"));
   await Effect.runPromise(store.renew(first));
   await pool.query(
-    "UPDATE sigiro_admin.optimizer_run SET lease_until_ms=0 WHERE tenant_id='tenant-a'"
+    "UPDATE sigiro_admin.optimizer_run SET lease_until_ms=0 WHERE tenant_id='tenant-a' AND id='run-a'"
   );
   const second = await Effect.runPromise(store.claim());
   assert.ok(second);
@@ -101,13 +104,13 @@ try {
   await Effect.runPromise(store.complete(second, 999));
   assert.equal(await Effect.runPromise(store.claim()), null);
   const result = await pool.query(
-    "SELECT status,github_pull_request_id FROM sigiro_admin.optimizer_run WHERE tenant_id='tenant-a'"
+    "SELECT status,github_pull_request_id FROM sigiro_admin.optimizer_run WHERE tenant_id='tenant-a' AND id='run-a'"
   );
   assert.equal(result.rows[0].status, "completed");
   assert.equal(result.rows[0].github_pull_request_id, "999");
   await pool.query(`INSERT INTO sigiro_admin.optimizer_run
-    (tenant_id,id,service,connection_id,finding_id,branch,actor,status)
-    VALUES ('tenant-a','run-c','checkout','repo-a','finding-c','branch-c','actor-a','pending')`);
+    (tenant_id,id,service,connection_id,branch,actor,status)
+    VALUES ('tenant-a','run-c','checkout','repo-a','branch-c','actor-a','pending')`);
   for (let attempt = 1; attempt <= 3; attempt++) {
     const expired = await Effect.runPromise(store.claim());
     assert.ok(expired);
@@ -126,8 +129,8 @@ try {
     "needs_attention"
   );
   await pool.query(`INSERT INTO sigiro_admin.optimizer_run
-    (tenant_id,id,service,connection_id,finding_id,branch,actor,status)
-    VALUES ('tenant-a','run-d','checkout','repo-a','finding-d','branch-d','actor-a','pending')`);
+    (tenant_id,id,service,connection_id,branch,actor,status)
+    VALUES ('tenant-a','run-d','checkout','repo-a','branch-d','actor-a','pending')`);
   await assert.rejects(
     Effect.runPromise(
       runOnce(store, async () => {
@@ -211,8 +214,8 @@ try {
     );
     await pool.query(
       `INSERT INTO sigiro_admin.optimizer_run
-      (tenant_id,id,service,connection_id,finding_id,branch,actor,status,target_ref,target_commit_sha)
-      VALUES ('tenant-a',$1,'checkout','repo-gh','finding-gh',$2,'actor-a','pending',$3,$4)`,
+      (tenant_id,id,service,connection_id,branch,actor,status,target_ref,target_commit_sha)
+      VALUES ('tenant-a',$1,'checkout','repo-gh',$2,'actor-a','pending',$3,$4)`,
       [id, published.branch, target.baseRef, target.targetCommitSha]
     );
     await Effect.runPromise(
@@ -245,8 +248,8 @@ try {
     const newId = randomUUID();
     await pool.query(
       `INSERT INTO sigiro_admin.optimizer_run
-      (tenant_id,id,service,connection_id,finding_id,branch,actor,status)
-      VALUES ('tenant-a',$1,'checkout','repo-gh','finding-new',$2,'actor-a','pending')`,
+      (tenant_id,id,service,connection_id,branch,actor,status)
+      VALUES ('tenant-a',$1,'checkout','repo-gh',$2,'actor-a','pending')`,
       [newId, `sigiro/optimizer-${newId}`]
     );
     const publishedNew = await Effect.runPromise(
@@ -287,9 +290,9 @@ try {
     );
     const guardedId = randomUUID();
     await pool.query(`INSERT INTO sigiro_admin.optimizer_run
-      (tenant_id,id,service,connection_id,finding_id,branch,actor,status,
-       finding_before,finding_after,telemetry_window_start_us,telemetry_window_end_us)
-      VALUES ('tenant-a',$1,'checkout','repo-gh','finding-guarded',$2,'actor-a','pending',123,98,1779999000000000,1780001000000000)`,
+      (tenant_id,id,service,connection_id,branch,actor,status,
+       telemetry_window_start_us,telemetry_window_end_us)
+      VALUES ('tenant-a',$1,'checkout','repo-gh',$2,'actor-a','pending',1779999000000000,1780001000000000)`,
       [guardedId, `sigiro/optimizer-${guardedId}`]);
     const guarded = await Effect.runPromise(store.claim());
     assert.ok(guarded);
@@ -304,7 +307,7 @@ try {
     const authorized = await runtime.forSession("eve-guarded", identity.sessionAuth);
     assert.equal(authorized.tenantId, "tenant-a");
     assert.equal(authorized.connection.repositoryId, repo.id);
-    assert.equal(authorized.findingBefore, 123);
+    assert.equal(authorized.decisionContext.source, "assessor-live");
     assert.equal(authorized.windowStartUs, 1779999000000000);
     await assert.rejects(runtime.forSession("eve-guarded", {
       ...identity.sessionAuth, subject: "other-tenant-run",

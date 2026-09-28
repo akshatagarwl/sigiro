@@ -16,7 +16,6 @@ sigiro는 OTLP로 전송된 텔레메트리를 저장합니다. 각 행은 해�
 - `sigiro_metrics_histogram` — 명시적 버킷 히스토그램
 - `sigiro_metrics_exp_histogram` — 지수 히스토그램
 - `sigiro_profiles` — 프로파일 샘플
-- `sigiro_anomalies` — 감지된 체제 변화
 
 OTLP가 서로 다른 네 가지 메트릭 형태를 정의하므로 메트릭은 네 테이블에 저장됩니다. 여러 메트릭 유형이 필요하면 `UNION ALL`을 사용합니다.
 

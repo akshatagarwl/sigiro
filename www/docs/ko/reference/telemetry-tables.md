@@ -5,13 +5,13 @@ sidebar:
   order: 4
 ---
 
-다음은 `src/schema.rs`에서 생성하는 쿼리 가능한 8개 `sigiro_*` 테이블입니다. 유형은 DuckDB SQL 유형이며 선언된 `NOT NULL`을 표시합니다. 쿼리에서는 `lake.` 접두사와 짧은 테이블 이름을 모두 사용합니다. 이는 **현재** 스키마의 참고 자료이며 런타임 스키마 검색 API가 아닙니다.
+다음은 `src/schema.rs`에서 생성하는 쿼리 가능한 7개 `sigiro_*` 테이블입니다. 유형은 DuckDB SQL 유형이며 선언된 `NOT NULL`을 표시합니다. 쿼리에서는 `lake.` 접두사와 짧은 테이블 이름을 모두 사용합니다. 이는 **현재** 스키마의 참고 자료이며 런타임 스키마 검색 API가 아닙니다.
 
 **1.0 이전 호환성:** 열 이름, 유형, JSON 형태는 1.0 이전에 바뀔 수 있습니다. 이 문서는 DuckLake/Parquet 디스크 형식의 안정성, 자동 인플레이스 업그레이드 또는 다운그레이드 지원을 보장하지 않습니다. 저장소 형식 검증과 업그레이드 정책은 별도 작업 [#200](https://github.com/akshatagarwl/sigiro/issues/200), 런타임 스키마 검색은 [#13](https://github.com/akshatagarwl/sigiro/issues/13)에서 다룹니다.
 
 `TIMESTAMP`는 마이크로초 정밀도의 DuckDB 타임스탬프입니다. 숫자 에폭 시각(`end_timestamp`, `observed_timestamp`, 메트릭 `start_timestamp`)과 스팬 `duration`은 OTLP 나노초를 변환한 **마이크로초**입니다. 반면 `events_json` 및 `exemplars_json` 내부의 `time_unix_nano`는 **나노초** 그대로입니다. 메트릭 값과 히스토그램 경계의 단위는 전송자의 `metric_unit`, 프로파일 값은 `unit`에 따릅니다.
 
-속성과 JSON 배열은 네이티브 JSON 열이 아닌 **JSON을 담은 `VARCHAR`**입니다. 속성 키는 `json_extract_string(column, 'key')`로 읽으세요. 키는 전송자마다 달라 이 목록에 포함되지 않습니다. DDL에서 nullable이라도 현재 수집 경로가 반드시 null을 쓰는 것은 아닙니다. `sigiro_anomalies`의 `before`/`after`는 원본 시계열의 평균입니다(`error_rate`/`error_log_rate`: %, `latency_p95`: µs, `log_volume`: 5분 버킷당 로그 수, `profile_cost`: 버킷당 프로파일 샘플 값의 합이며 단위는 샘플에 따라 다름). 서로 다른 시계열 또는 프로파일 단위의 평균을 더하지 마세요.
+속성과 JSON 배열은 네이티브 JSON 열이 아닌 **JSON을 담은 `VARCHAR`**입니다. 속성 키는 `json_extract_string(column, 'key')`로 읽으세요. 키는 전송자마다 달라 이 목록에 포함되지 않습니다. DDL에서 nullable이라도 현재 수집 경로가 반드시 null을 쓰는 것은 아닙니다.
 
 ## `sigiro_spans`
 
@@ -184,18 +184,3 @@ sidebar:
 | `value`               | `BIGINT`             | unit         | 이 값 유형의 샘플 값.           |
 | `unit`                | `VARCHAR`            | —            | 프로파일 샘플 유형의 단위.      |
 | `resource_attributes` | `VARCHAR`            | —            | 리소스 속성의 JSON 문자열.      |
-
-## `sigiro_anomalies`
-
-| 열               | 유형                 | 단위             | 의미                                                   |
-| ---------------- | -------------------- | ---------------- | ------------------------------------------------------ |
-| `detected_at`    | `TIMESTAMP NOT NULL` | µs precision     | 변화를 감지한 시각.                                    |
-| `service_name`   | `VARCHAR NOT NULL`   | —                | OTel 리소스의 service.name.                            |
-| `operation`      | `VARCHAR NOT NULL`   | —                | 스팬 신호는 작업 ID, 로그/프로파일 신호는 서비스 이름. |
-| `signal`         | `VARCHAR NOT NULL`   | —                | 변화한 시계열 이름.                                    |
-| `kind`           | `VARCHAR NOT NULL`   | —                | 감지 종류(changepoint).                                |
-| `direction`      | `VARCHAR NOT NULL`   | —                | 변화 방향(저장되는 값: worsening).                     |
-| `ts_shift`       | `TIMESTAMP NOT NULL` | µs precision     | 새 구간의 첫 버킷.                                     |
-| `before`         | `DOUBLE NOT NULL`    | signal-dependent | 변화 전 평균.                                          |
-| `after`          | `DOUBLE NOT NULL`    | signal-dependent | 변화 후 평균.                                          |
-| `drill_down_sql` | `VARCHAR NOT NULL`   | —                | 변화의 원본 텔레메트리를 확인하는 SQL.                 |

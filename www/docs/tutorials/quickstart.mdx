@@ -6,8 +6,8 @@ sidebar:
 ---
 
 In this tutorial you start a sigiro server, send it telemetry from your own
-service, and ask it two questions. At the end you read a diagnosis and run the
-SQL behind it. This takes five minutes.
+service, and run two bounded raw-telemetry queries. The results do not assert a cause.
+This takes five minutes.
 
 sigiro is one process. You deploy no collector and you write no configuration
 file.
@@ -78,7 +78,7 @@ Each of the three ports has one function:
 | --- | --- |
 | `4317` | OTLP over gRPC |
 | `4318` | OTLP over HTTP |
-| `9999` | the query and diagnose API |
+| `9999` | the telemetry query API |
 
 Wait for the server to be ready before sending telemetry:
 
@@ -121,90 +121,36 @@ The response is a JSON object with a `services` array. Your service appears in
 that array within a few seconds of the first request. If the array is empty,
 check that the port is `4318` for OTLP over HTTP and `4317` for OTLP over gRPC.
 
-## 3. Ask what changed
+## 3. Query recent errors
 
-`anomalies` is the entry point of the loop. It returns the shifts that deviate
-from the recent baseline of each service, biggest shift first.
-
-```bash
-sigiro anomalies
-sigiro anomalies --service checkout
-```
-
-You configure nothing here. There are no thresholds to choose, and a service
-that is always slow but *stable* is not an anomaly. To read how sigiro decides
-that, see [About evidence instead of a
-dashboard](/docs/explanation/evidence#a-baseline-not-a-threshold).
-
-Notice that the list can be empty on a young server. sigiro needs a few
-5-minute buckets of history before it can compare anything, so run your service
-for a while and then ask again.
-
-## 4. Ask why
-
-`diagnose` returns one structured evidence block for a service and a time
-window. The block starts with a ranked list of what deserves attention. Under
-that, it holds error counts, error breakdowns for each operation, LLM statistics
-for each model, sampled spans, and deduplicated log patterns. Every row also
-carries a ready-to-run SQL query.
+The first query compares operation volumes and failures in your chosen window. It does not claim a cause.
 
 ```bash
-sigiro diagnose checkout
-sigiro diagnose checkout --from $(date -v-1H +%s)
+curl -sS -X POST http://localhost:9999/v1/query \
+  --data-binary "SELECT span_name, count(*) AS calls,
+                   sum(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) AS errors
+                 FROM sigiro_spans
+                 WHERE service_name = 'checkout'
+                   AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+                 GROUP BY span_name ORDER BY errors DESC LIMIT 10"
 ```
 
-The command prints indented JSON. Read the `findings` array first: it is sorted
-critical first, and each item carries a `summary` you can read. Standalone
-findings carry a `drill_down_sql`; incidents carry one on every member shift.
+## 4. Inspect the underlying spans
 
-An agent asks the same question over HTTP. The HTTP request needs an explicit
-window, and both timestamps are **microseconds** since the Unix epoch:
+The second returns raw span evidence. Check related traces and deployments yourself before deciding what to fix. No scheduled anomaly table or diagnosis endpoint is involved.
 
 ```bash
-curl -X POST http://localhost:9999/v1/diagnose \
-  -H 'content-type: application/json' \
-  -d "{\"services\":[\"checkout\"],
-       \"from_ts\":$(( $(date +%s) - 900 ))000000,
-       \"to_ts\":$(date +%s)000000}"
+curl -sS -X POST http://localhost:9999/v1/query \
+  --data-binary "SELECT trace_id, duration, status_message
+                 FROM sigiro_spans
+                 WHERE service_name = 'checkout' AND status_code = 2
+                   AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+                 ORDER BY timestamp DESC LIMIT 20"
 ```
-
-The `--from`/`--to` flags on the CLI take epoch **seconds**, and the CLI
-defaults the window to the last 15 minutes. The HTTP body takes microseconds and
-defaults nothing. sigiro rejects a seconds value on the HTTP path with a message
-that names the unit, so a wrong unit fails loudly rather than returns an empty
-window.
-
-## 5. Run the query behind a row
-
-When the evidence block does not answer your question, run the SQL that a row
-gave you. Your telemetry is a set of tables, and the body of a query request is
-the raw SQL rather than JSON:
-
-```bash
-curl -X POST http://localhost:9999/v1/query \
-  --data "SELECT service_name, count(*) AS errors
-          FROM sigiro_spans
-          WHERE status_code = 2 AND timestamp > now() - INTERVAL '1 hour'
-          GROUP BY 1 ORDER BY errors DESC"
-```
-
-The response is a JSON array of row objects. `status_code` is the OTLP enum, so
-`2` is an error.
-
-Notice that the query bounds `timestamp`. Bound `timestamp` in every query:
-sigiro keeps no secondary index, so a bounded query reads a small number of
-files and an unbounded query reads every file.
-
-`sigiro_spans` is one of nine tables. The
-[hosted guide](/docs/how-to/hosted-onboarding#4-query-your-data-sql-api) lists
-all nine with the rules that apply to them, and [About the
-tables](/docs/explanation/tables) explains what each family measures.
 
 ## What you did
 
-You started a server, sent it OpenTelemetry, asked it what changed, asked it
-why, and ran the query that proves one of its answers. That is the whole loop
-that an agent runs on its own.
+You started a server, sent it OpenTelemetry, and queried bounded raw telemetry. The results are evidence, not an automated root-cause verdict.
 
 ## Next
 
@@ -214,6 +160,6 @@ that an agent runs on its own.
   service still has no OpenTelemetry
 - [Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding) — if you do
   not want to run the server yourself
-- [CLI reference](/docs/reference/cli) — the other four subcommands, and every
+- [CLI reference](/docs/reference/cli) — the remaining subcommands, and every
   flag and environment variable
 - `GET /openapi.json` — the full API, machine-readable, and no key is necessary

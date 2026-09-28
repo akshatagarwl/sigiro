@@ -213,7 +213,7 @@ export default defineConfig({
      * set from a different cause, so it is listed separately rather than appended
      * here, which would have made this paragraph false.
      *
-     * The four `/admin/*` operations are absent deliberately. They are filtered
+     * The `/admin/*` operations are absent deliberately. They are filtered
      * out of the public `/openapi.json`, so there is no page to send anyone to,
      * and a redirect would be the one place still advertising that they exist.
      *
@@ -222,12 +222,8 @@ export default defineConfig({
      * in the footer of every page this site has served. */
     { from: "/api", to: "/reference", status: 302 },
     { from: "/api/get-trace", to: "/reference", status: 302 },
-    { from: "/api/investigate-services", to: "/reference", status: 302 },
-    { from: "/api/list-anomalies", to: "/reference", status: 302 },
     { from: "/api/list-services", to: "/reference", status: 302 },
     { from: "/api/run-query", to: "/reference", status: 302 },
-    { from: "/api/v1/anomalies/get", to: "/reference", status: 302 },
-    { from: "/api/v1/investigate/post", to: "/reference", status: 302 },
     { from: "/api/v1/query/post", to: "/reference", status: 302 },
     { from: "/api/v1/services/get", to: "/reference", status: 302 },
     { from: "/api/v1/traces/trace_id/get", to: "/reference", status: 302 },

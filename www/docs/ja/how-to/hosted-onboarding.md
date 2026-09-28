@@ -90,7 +90,7 @@ curl -s "https://sigiro.com/v1/query" \
 
 各テナントは分離されたカタログを持つため、参照できるのは**自分自身の**データのみです。
 
-**テーブル:** `sigiro_spans`、`sigiro_logs`、`sigiro_metrics_gauge`、`sigiro_metrics_sum`、`sigiro_metrics_histogram`、`sigiro_metrics_exp_histogram`、`sigiro_profiles`、および `sigiro_anomalies` テーブル。`sigiro_anomalies` テーブルには、事前計算されたレジームシフトが格納されます。異常検出パスがこれらのシフトを継続的に書き込みます。`GET /v1/anomalies` は同じシフトを型付き JSON として提供します。属性カラム（`*_attributes`、`events_json` など）には JSON テキストが格納されます。フィールドを読み取るには `json_extract(col, '$.key')` または `col ->> 'key'` を使用してください。
+**テーブル:** `sigiro_spans`、`sigiro_logs`、`sigiro_metrics_gauge`、`sigiro_metrics_sum`、`sigiro_metrics_histogram`、`sigiro_metrics_exp_histogram`、`sigiro_profiles`。属性列は JSON テキストなので、`json_extract(col, '$.key')` で参照できます。
 
 各ファミリーが何を測定しているか、また自信に満ちた誤答を生む唯一の名前の衝突については、[テーブルについて](/docs/explanation/tables) をお読みください。
 
@@ -137,5 +137,4 @@ sigiro にはセカンダリインデックスがありません。そのため�
 ## 次のステップ
 
 - [エージェントでコードを計測する](/docs/how-to/install-with-ai) — サービスにまだ OpenTelemetry がない場合
-- [API リファレンス](/docs/reference) — 5 つのエンドポイントと、それぞれのリクエストプレイグラウンド
-- [ダッシュボードではなくエビデンスについて](/docs/explanation/evidence) — `/v1/diagnose` がチャートではなくランク付けされたリストを返す理由
+- [API リファレンス](/docs/reference) — 現在利用できるエンドポイントとリクエストプレイグラウンド

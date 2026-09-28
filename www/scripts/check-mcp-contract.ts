@@ -27,18 +27,13 @@ const hostedSource = `${worker}\n${handler}`;
 
 const rustTools = [
   ...rust.matchAll(
-    /async fn (list_services|list_anomalies|diagnose_service|run_query)\s*\(/g
+    /async fn (list_services|run_query)\s*\(/g
   ),
 ].map(([, name]) => name);
 const hostedTools = MCP_CATALOG.filter(
   (entry) => entry.kind === "operation"
 ).map(({ name }) => name);
-const expected = [
-  "list_services",
-  "list_anomalies",
-  "diagnose_service",
-  "run_query",
-];
+const expected = ["list_services", "run_query"];
 
 if (JSON.stringify(rustTools) !== JSON.stringify(expected)) {
   throw new Error(
@@ -50,7 +45,7 @@ if (JSON.stringify(hostedTools) !== JSON.stringify(expected)) {
     `Hosted MCP catalog drifted: ${JSON.stringify(hostedTools)} !== ${JSON.stringify(expected)}`
   );
 }
-for (const field of ["service", "from_ts", "to_ts", "sql"]) {
+for (const field of ["service", "sql"]) {
   if (!rust.includes(field) || !hostedSource.includes(field)) {
     throw new Error(`MCP catalog is missing shared field ${field}`);
   }
@@ -59,7 +54,7 @@ if (/from ['"]zod['"]|from ['"]zod\//.test(hostedSource)) {
   throw new Error("Hosted MCP adapter must not add a direct Zod dependency");
 }
 if (
-  (hostedSource.match(/new Request\('https:\/\/sigiro\.com\/mcp\/docs'/g) ?? [])
+  (hostedSource.match(/new Request\(["']https:\/\/sigiro\.com\/mcp\/docs["']/g) ?? [])
     .length !== 1
 ) {
   throw new Error(
@@ -69,7 +64,7 @@ if (
 if (
   /headers\.set\(['"]authorization['"]/.test(
     hostedSource.match(
-      /new Request\('https:\/\/sigiro\.com\/mcp\/docs'[\s\S]*?\);/
+      /new Request\(["']https:\/\/sigiro\.com\/mcp\/docs["'][\s\S]*?\);/
     )?.[0] ?? ""
   )
 ) {
@@ -78,7 +73,7 @@ if (
 if (
   /cookie/i.test(
     hostedSource.match(
-      /new Request\('https:\/\/sigiro\.com\/mcp\/docs'[\s\S]*?\);/
+      /new Request\(["']https:\/\/sigiro\.com\/mcp\/docs["'][\s\S]*?\);/
     )?.[0] ?? ""
   )
 ) {
@@ -97,8 +92,6 @@ for (const entry of MCP_CATALOG.filter(
 }
 const validInputs = {
   list_services: {},
-  list_anomalies: { service: "checkout", from_ts: 1, to_ts: 2 },
-  diagnose_service: { service: "checkout", from_ts: 1, to_ts: 2 },
   run_query: { sql: "select 1" },
 };
 for (const entry of MCP_CATALOG.filter(
@@ -108,16 +101,8 @@ for (const entry of MCP_CATALOG.filter(
     // SAFETY: every operation catalog name is represented in validInputs above.
     validInputs[entry.name as keyof typeof validInputs]
   );
-  const invalid: null | {
-    unexpected?: boolean;
-    sql?: unknown;
-    from_ts?: unknown;
-  } =
-    entry.name === "list_services"
-      ? null
-      : entry.name === "diagnose_service"
-        ? {}
-        : { unexpected: true };
+  const invalid: null | { unexpected?: boolean; sql?: unknown } =
+    entry.name === "list_services" ? null : { unexpected: true };
   let rejected = false;
   if (invalid === null) {
     try {
@@ -127,8 +112,6 @@ for (const entry of MCP_CATALOG.filter(
     }
   }
   if (invalid !== null && entry.name === "run_query") invalid.sql = 42;
-  if (invalid !== null && entry.name === "list_anomalies")
-    invalid.from_ts = "not-an-int";
   if (invalid !== null) {
     try {
       Schema.decodeUnknownSync(entry.runtimeSchema)(invalid);
@@ -150,9 +133,9 @@ for (const marker of [
   "status: 401",
   "www-authenticate",
   'resource_metadata="https://sigiro.com/.well-known/oauth-protected-resource"',
-  "pathname === '/mcp'",
-  "pathname === '/.well-known/mcp.json'",
-  "const MCP_METADATA = '/.well-known/oauth-protected-resource'",
+  'pathname === "/mcp"',
+  'pathname === "/.well-known/mcp.json"',
+  'const MCP_METADATA = "/.well-known/oauth-protected-resource"',
   "https://sigiro.com/mcp/docs",
 ]) {
   if (!hostedSource.includes(marker) && !worker.includes(marker)) {

@@ -91,10 +91,8 @@ static TIME_TRAVEL_AT_LITERAL: std::sync::LazyLock<regex::Regex> = std::sync::La
         .expect("valid time-travel literal regex")
 });
 
-/// The entire allowed FROM-target surface for user queries: every table
-/// sigiro itself creates (src/schema.rs CREATE TABLE names), including
-/// `sigiro_anomalies` — the table the scheduled anomaly pass
-/// (`crate::anomaly`) writes and /v1/diagnose + /v1/anomalies read.
+/// The entire allowed FROM-target surface for user queries: the raw telemetry
+/// tables sigiro creates in src/schema.rs.
 /// Matched case-insensitively against the FINAL identifier — see
 /// `is_allowed_table` for how the schema-qualifier prefix (`lake.` /
 /// `main.`) is handled.
@@ -106,7 +104,6 @@ pub(crate) const ALLOWED_TABLES: &[&str] = &[
     "SIGIRO_METRICS_HISTOGRAM",
     "SIGIRO_METRICS_EXP_HISTOGRAM",
     "SIGIRO_PROFILES",
-    "SIGIRO_ANOMALIES",
 ];
 
 /// Table-valued / pragma functions reachable through this same `/v1/query`
@@ -625,5 +622,16 @@ fn decimal_to_json(exact: &str) -> serde_json::Value {
         serde_json::json!(f)
     } else {
         serde_json::Value::String(exact.to_string())
+    }
+}
+
+#[cfg(test)]
+mod legacy_removal_tests {
+    use super::*;
+
+    #[test]
+    fn saved_anomaly_table_is_not_queryable() {
+        assert!(validate_read_only("SELECT * FROM sigiro_anomalies").is_err());
+        assert!(validate_read_only("SELECT * FROM sigiro_spans").is_ok());
     }
 }

@@ -1,8 +1,5 @@
 use anyhow::{Context, Result, bail};
 
-use crate::TimestampMicros;
-use crate::diagnose::{DiagnoseRequest, DiagnoseResponse, DiagnoseServices, DiagnosisBlock};
-
 /// Explicit client auth mode — mirrors server-side AuthMode.
 #[derive(Clone)]
 pub enum ClientAuth {
@@ -106,24 +103,6 @@ impl SigiroClient {
             .context("failed to retry request after refreshing the access token")
     }
 
-    pub async fn diagnose(
-        &self,
-        service: &str,
-        from: Option<i64>,
-        to: Option<i64>,
-    ) -> Result<DiagnosisBlock> {
-        let mut resp = self
-            .diagnose_multi(vec![service.to_string()], from, to)
-            .await?;
-        if let Some(block) = resp.results.remove(service) {
-            return Ok(block);
-        }
-        if let Some(err) = resp.errors.get(service) {
-            bail!("diagnosis failed for {service}: {err}");
-        }
-        bail!("no diagnosis block returned for service {service}")
-    }
-
     async fn expect_ok(&self, resp: reqwest::Response) -> Result<reqwest::Response> {
         match resp.status().as_u16() {
             200 => Ok(resp),
@@ -160,38 +139,6 @@ impl SigiroClient {
             .context("failed to parse services response")
     }
 
-    /// GET /v1/anomalies — the precomputed anomaly table (all signals, ranked
-    /// biggest shift first, with cross-signal `incident_id` grouping). The
-    /// entry point for the detect→diagnose loop: poll this, act on new
-    /// incidents. Optional service + µs-window filters.
-    pub async fn anomalies(
-        &self,
-        service: Option<&str>,
-        from: Option<i64>,
-        to: Option<i64>,
-    ) -> Result<crate::responses::AnomaliesResponse> {
-        let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(s) = service {
-            params.push(("service", s.to_string()));
-        }
-        if let Some(f) = from {
-            params.push(("from_ts", f.to_string()));
-        }
-        if let Some(t) = to {
-            params.push(("to_ts", t.to_string()));
-        }
-        let req = self
-            .http
-            .get(format!("{}/v1/anomalies", self.base_url))
-            .query(&params);
-        let resp = self.send(req).await?;
-
-        let resp = self.expect_ok(resp).await?;
-        resp.json()
-            .await
-            .context("failed to parse anomalies response")
-    }
-
     /// GET /health — typed response. Returns the parsed `HealthResponse` for
     /// both 200 (Ready) and 503 (Starting/Degraded) so callers can branch on
     /// the variant. Auth is not required (health is public).
@@ -210,36 +157,6 @@ impl SigiroClient {
                 bail!("Server error ({s}): {body}")
             }
         }
-    }
-
-    /// Diagnose one or more services.
-    /// Returns partial results: successful blocks in `results`, per-service
-    /// failures in `errors`.
-    pub(crate) async fn diagnose_multi(
-        &self,
-        services: Vec<String>,
-        from: Option<i64>,
-        to: Option<i64>,
-    ) -> Result<DiagnoseResponse> {
-        let body = DiagnoseRequest {
-            services: DiagnoseServices::try_new(services)?,
-            // Passed through, NOT defaulted. `None` means the caller gave no
-            // bound, and the server applies the single default in
-            // `DiagnoseRequest::window()`. The CLI must not own a second copy
-            // of that rule — see roadmap #72.
-            from_ts: from.map(TimestampMicros::try_new).transpose()?,
-            to_ts: to.map(TimestampMicros::try_new).transpose()?,
-        };
-        let req = self
-            .http
-            .post(format!("{}/v1/diagnose", self.base_url))
-            .json(&body);
-        let resp = self.send(req).await?;
-
-        let resp = self.expect_ok(resp).await?;
-        resp.json()
-            .await
-            .context("failed to parse diagnosis response")
     }
 }
 

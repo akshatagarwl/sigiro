@@ -132,12 +132,7 @@ tenant that never sent data has no storage.
 
 You see **your own** data only, because each tenant has an isolated catalog.
 
-**Tables:** `sigiro_spans`, `sigiro_logs`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`,
-`sigiro_metrics_exp_histogram`, `sigiro_profiles`, and the `sigiro_anomalies`
-table. The `sigiro_anomalies` table holds precomputed regime shifts. The anomaly pass
-writes these shifts continuously. `GET /v1/anomalies` serves the same shifts as typed
-JSON. Attribute columns (`*_attributes`, `events_json`, and similar) hold JSON text.
-Read a field with `json_extract(col, '$.key')` or `col ->> 'key'`.
+**Tables:** `sigiro_spans`, `sigiro_logs`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`, `sigiro_metrics_exp_histogram`, and `sigiro_profiles`. Attribute columns contain JSON text; use `json_extract(col, '$.key')` or `col ->> 'key'` to inspect them.
 
 For what each family measures, and for the one name collision that produces a
 confident wrong answer, read [About the tables](/docs/explanation/tables).
@@ -197,5 +192,3 @@ for a long time.
   service still has no OpenTelemetry
 - [API reference](/docs/reference) — the HTTP operations currently described by
   the server's `/openapi.json`
-- [About evidence instead of a dashboard](/docs/explanation/evidence) — why
-  `/v1/diagnose` returns a ranked list rather than a chart

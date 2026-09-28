@@ -185,23 +185,6 @@ export const createMcpHandler =
           );
         }
         const decoded = decode(entry.name, args);
-        if (entry.name === "list_anomalies") {
-          const q = new URLSearchParams();
-          if (decoded.service) q.set("service", String(decoded.service));
-          if (decoded.from_ts !== undefined)
-            q.set("from_ts", String(decoded.from_ts));
-          if (decoded.to_ts !== undefined)
-            q.set("to_ts", String(decoded.to_ts));
-          return json(await readApi(env, authorization, `${entry.route}?${q}`));
-        }
-        if (entry.name === "diagnose_service")
-          return json(
-            await readApi(env, authorization, entry.route!, {
-              method: entry.method,
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify(decoded),
-            })
-          );
         if (entry.name === "run_query")
           return json(
             await readApi(env, authorization, entry.route!, {

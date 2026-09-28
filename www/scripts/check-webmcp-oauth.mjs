@@ -14,7 +14,7 @@ const polyfill =
   resolve(here, "../node_modules/@mcp-b/webmcp-polyfill/dist/index.iife.js");
 const issuer = "https://sigiro.com/api/auth";
 const resource = "https://sigiro.com";
-const scope = "openid services:read anomalies:read diagnose:read query:read";
+const scope = "openid services:read query:read";
 const token = "in-memory-browser-token";
 const mimeTypes = {
   ".css": "text/css",

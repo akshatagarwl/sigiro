@@ -19,10 +19,8 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
 pub(crate) const TELEMETRY_INGEST_SCOPE: &str = "telemetry:ingest";
 pub(crate) const QUERY_READ_SCOPE: &str = "query:read";
-pub(crate) const DIAGNOSE_READ_SCOPE: &str = "diagnose:read";
 pub(crate) const SERVICES_READ_SCOPE: &str = "services:read";
 pub(crate) const TRACES_READ_SCOPE: &str = "traces:read";
-pub(crate) const ANOMALIES_READ_SCOPE: &str = "anomalies:read";
 pub(crate) const ALERTS_READ_SCOPE: &str = "alerts:read";
 pub(crate) const OPTIMIZER_WRITE_SCOPE: &str = "optimizer:write";
 pub(crate) const TENANT_ADMIN_SCOPE: &str = "tenant:admin";
@@ -31,10 +29,8 @@ pub(crate) const AUTHENTICATED_SCOPE: &str = "";
 const SUPPORTED_SCOPES: &[&str] = &[
     TELEMETRY_INGEST_SCOPE,
     SERVICES_READ_SCOPE,
-    DIAGNOSE_READ_SCOPE,
     TRACES_READ_SCOPE,
     QUERY_READ_SCOPE,
-    ANOMALIES_READ_SCOPE,
     ALERTS_READ_SCOPE,
     OPTIMIZER_WRITE_SCOPE,
     TENANT_ADMIN_SCOPE,
@@ -721,7 +717,6 @@ fn required_http_scope(method: &axum::http::Method, path: &str) -> Result<&'stat
     use axum::http::Method;
     match (method, path) {
         (&Method::POST, "/v1/query" | "/query") => Ok(QUERY_READ_SCOPE),
-        (&Method::POST, "/v1/diagnose" | "/diagnose") => Ok(DIAGNOSE_READ_SCOPE),
         (&Method::GET, "/v1/services" | "/services") => Ok(SERVICES_READ_SCOPE),
         (&Method::GET, "/v1/auth/validate" | "/auth/validate") => Ok(AUTHENTICATED_SCOPE),
         (&Method::POST, "/v1/optimizer/connections" | "/optimizer/connections") => {
@@ -741,7 +736,6 @@ fn required_http_scope(method: &axum::http::Method, path: &str) -> Result<&'stat
             Ok(OPTIMIZER_WRITE_SCOPE)
         }
         (&Method::GET, "/v1/alerts" | "/alerts") => Ok(ALERTS_READ_SCOPE),
-        (&Method::GET, "/v1/anomalies" | "/anomalies") => Ok(ANOMALIES_READ_SCOPE),
         (&Method::GET, path) if path.starts_with("/v1/traces/") || path.starts_with("/traces/") => {
             Ok(TRACES_READ_SCOPE)
         }
@@ -749,5 +743,25 @@ fn required_http_scope(method: &axum::http::Method, path: &str) -> Result<&'stat
             "No authorization policy",
             "The requested API route has no configured OAuth scope",
         )),
+    }
+}
+
+#[cfg(test)]
+mod legacy_removal_tests {
+    use super::*;
+    use axum::http::Method;
+
+    #[test]
+    fn retired_routes_have_no_oauth_policy() {
+        for (method, path) in [
+            (Method::POST, "/v1/diagnose"),
+            (Method::GET, "/v1/anomalies"),
+        ] {
+            assert!(required_http_scope(&method, path).is_err(), "{path}");
+        }
+        assert_eq!(
+            required_http_scope(&Method::POST, "/v1/query").unwrap(),
+            QUERY_READ_SCOPE
+        );
     }
 }

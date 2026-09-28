@@ -72,37 +72,17 @@ curl http://127.0.0.1:9999/v1/services
 The service name is exporter-defined. Discover it here rather than assuming that
 it equals the agent's product name.
 
-## 3. Start with diagnosis
+## 3. Query a bounded session window
 
-For a run in the last 15 minutes:
-
-```bash
-sigiro diagnose <service-name>
-```
-
-For an older or precisely bounded run, pass epoch **seconds**:
-
-```bash
-sigiro diagnose <service-name> --from <start-epoch-seconds> --to <end-epoch-seconds>
-```
-
-Read the result in this order:
-
-1. `findings` — ranked shifts and coverage gaps;
-2. `operation_summaries` — call count, error count, p50, p95, and p99 latency;
-3. `gen_ai` — calls, model/provider, p95 latency, tokens, errors, and finish reasons;
-4. `spans` and `logs` — errors first, then the slowest examples;
-5. `drill_down_sql` or `drill_all_sql` — the complete rows supporting a claim.
-
-A sampled section says how many rows exist and how many it returned. Do not treat
-a sample as the complete session. Post its supplied SQL verbatim to
-`/v1/query` when `total` exceeds the sample length.
+Use `/v1/query` with literal UTC timestamps covering the run. Aggregate the
+operation counts and error spans first, then inspect the matching trace IDs.
+The result is raw evidence, not a diagnosis or causal verdict. Check the
+`x-sigiro-truncated` response header before treating returned rows as complete.
 
 ## 4. Rank wall-clock cost
 
-The diagnosis operation summaries are the safest first ranking because they
-already group generic HTTP spans by useful route or address. Inspect these
-patterns:
+Group spans by `span_name` (or a route/address attribute where available),
+then inspect these patterns:
 
 - one model call dominates p95 and total duration;
 - many sequential tool spans could have run independently;
@@ -176,16 +156,15 @@ conditions. Compare equal UTC windows and report:
 - failed and retried operation counts;
 - whether the requested artifact passed the same verification command.
 
-A faster run that fails the task is not an optimization. Preserve both diagnosis
-outputs and the drill-down SQL used for the comparison.
+A faster run that fails the task is not an optimization. Preserve the bounded
+SQL and query results used for the comparison.
 
 ## Give an analysis agent direct access
 
 Sigiro exposes two machine interfaces:
 
 - `GET http://127.0.0.1:9999/openapi.json` for the HTTP API;
-- `sigiro mcp` for stdio MCP tools: `list_services`, `list_anomalies`,
-  `diagnose_service`, and `run_query`.
+- `sigiro mcp` for stdio MCP tools: `list_services` and `run_query`.
 
 For Hermes Agent, add this to `~/.hermes/config.yaml`, ensure the Python `mcp`
 package is installed in Hermes's environment, and restart Hermes:
@@ -207,10 +186,10 @@ a narrower `PATH` than your interactive shell.
 
 ```text
 Use Sigiro to analyze service <service-name> from <UTC start> to <UTC end>.
-Start with diagnose_service. Rank where the session spent wall-clock time by
-operation and model. Distinguish inclusive parent duration from child duration,
-and do not double-count nested spans. For every conclusion, cite the returned
-field or run the supplied drill-down SQL. Check samples and truncation before
+Use list_services, then run_query with literal UTC bounds to rank where the
+session spent wall-clock time by operation and model. Distinguish inclusive
+parent duration from child duration; do not double-count nested spans. Cite
+trace IDs or SQL results for every conclusion. Check truncation before
 claiming completeness. End with the three smallest changes most likely to reduce
 end-to-end latency without weakening the task's verification.
 ```
@@ -221,8 +200,8 @@ end-to-end latency without weakening the task's verification.
 Audit service <service-name> from <UTC start> to <UTC end> for work that did not
 advance the task: repeated file or URL reads, unchanged retries, failed setup or
 authentication calls, duplicate parent/child discovery, oversized tool results,
-and serial calls that were independent. Use Sigiro diagnosis first, then inspect
-the complete drill-down rows for suspicious operations. Report counts, duration,
+and serial calls that were independent. Query bounded raw telemetry, then inspect
+complete rows for suspicious operations. Report counts, duration,
 and trace IDs. Separate evidence from inference.
 ```
 

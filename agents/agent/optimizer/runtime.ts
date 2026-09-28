@@ -1,14 +1,13 @@
 import { readFileSync } from "node:fs";
 import pg from "pg";
+import { z } from "zod";
 import { TrustedGitHub, type Connection } from "./github.ts";
 
 export type AuthorizedRun = {
   id: string;
   tenantId: string;
   service: string;
-  findingId: string;
-  findingBefore: number | null;
-  findingAfter: number | null;
+  decisionContext: { source: "assessor-live"; yes_probability: number; evidence: unknown };
   windowStartUs: number | null;
   windowEndUs: number | null;
   leaseOwner: string;
@@ -35,6 +34,8 @@ export class OptimizerRuntime {
   }
 
   async telemetry(run: AuthorizedRun, sql: string) {
+    if (/\bsigiro_anomalies\b/i.test(sql))
+      throw new Error("Historical derived findings cannot support a live optimizer investigation");
     const token = process.env.SIGIRO_OPTIMIZER_INTERNAL_TOKEN;
     const apiUrl = process.env.SIGIRO_INTERNAL_API_URL;
     if (!token || token.length < 32 || !apiUrl) throw new Error("Tenant telemetry bridge is not configured");
@@ -51,8 +52,8 @@ export class OptimizerRuntime {
     if (!auth || auth.authenticator !== "jwt-hmac" || auth.principalType !== "service") {
       throw new Error("Optimizer session is not authenticated");
     }
-    const result = await this.pool.query(`SELECT r.id,r.tenant_id,r.service,r.finding_id,r.branch,r.target_ref,r.target_commit_sha,
-      r.lease_owner,r.attempts,r.finding_before,r.finding_after,r.telemetry_window_start_us,
+    const result = await this.pool.query(`SELECT r.id,r.tenant_id,r.service,r.decision_context,r.branch,r.target_ref,r.target_commit_sha,
+      r.lease_owner,r.attempts,r.telemetry_window_start_us,
       r.telemetry_window_end_us,c.installation_id::text AS installation_id,c.repository_id::text AS repository_id,c.owner,c.repo
       FROM sigiro_admin.optimizer_run r JOIN sigiro_admin.optimizer_connection c
         ON c.tenant_id=r.tenant_id AND c.id=r.connection_id
@@ -72,10 +73,12 @@ export class OptimizerRuntime {
     if (!Number.isSafeInteger(repositoryId) || !Number.isSafeInteger(installationId)) {
       throw new Error("GitHub identifiers exceed JavaScript's safe integer range");
     }
+    const decisionContext = z.object({
+      source: z.literal("assessor-live"), yes_probability: z.number().min(0.85).max(1), evidence: z.unknown(),
+    }).parse(JSON.parse(row.decision_context as string));
     return {
       id: row.id as string, tenantId: row.tenant_id as string, service: row.service as string,
-      findingId: row.finding_id as string, leaseOwner: row.lease_owner as string,
-      findingBefore: row.finding_before as number | null, findingAfter: row.finding_after as number | null,
+      decisionContext, leaseOwner: row.lease_owner as string,
       windowStartUs: row.telemetry_window_start_us === null ? null : Number(row.telemetry_window_start_us),
       windowEndUs: row.telemetry_window_end_us === null ? null : Number(row.telemetry_window_end_us),
       attempts: row.attempts as number, branch: row.branch as string,

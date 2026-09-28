@@ -134,7 +134,7 @@ OTEL_SERVICE_NAME=my-service \
 curl http://localhost:9999/v1/services
 ```
 
-在有真实流量后的几秒钟内，你的服务就会出现。它出现之后，`sigiro diagnose my-service` 就有数据可读了。
+在有真实流量后的几秒钟内，你的服务就会出现。它出现之后，就可以通过限定时间范围的 `POST /v1/query` 查看 Span 和日志。
 
 如果服务没有出现，请做以下检查。在自托管服务端上，确认端口：HTTP 用 `:4318`，gRPC 用 `:4317`。在托管服务上则相反，确认 endpoint **不带**端口，并且使用访问令牌查询 `https://<your-sigiro-host>/v1/services`，而不是 localhost。运行 `sigiro status` 确认服务端健康。查看你自己服务的日志，看是否有 OTel 启动错误，因为导出器配置错误会在启动时报告故障。
 

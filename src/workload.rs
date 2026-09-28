@@ -7,7 +7,7 @@ use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, UpDownCounter};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-const WORKLOAD_CLASS_COUNT: usize = 5;
+const WORKLOAD_CLASS_COUNT: usize = 4;
 
 /// A bounded class of expensive work.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -15,7 +15,6 @@ pub enum WorkloadClass {
     Query,
     Transform,
     ProjectInit,
-    Anomaly,
     Maintenance,
 }
 
@@ -25,13 +24,12 @@ impl WorkloadClass {
             Self::Query => 0,
             Self::Transform => 1,
             Self::ProjectInit => 2,
-            Self::Anomaly => 3,
-            Self::Maintenance => 4,
+            Self::Maintenance => 3,
         }
     }
 
     const fn uses_global_cpu_budget(self) -> bool {
-        matches!(self, Self::Query | Self::Transform | Self::Anomaly)
+        matches!(self, Self::Query | Self::Transform)
     }
 
     const fn name(self) -> &'static str {
@@ -39,7 +37,6 @@ impl WorkloadClass {
             Self::Query => "query",
             Self::Transform => "transform",
             Self::ProjectInit => "project_init",
-            Self::Anomaly => "anomaly",
             Self::Maintenance => "maintenance",
         }
     }
@@ -51,7 +48,6 @@ impl fmt::Display for WorkloadClass {
             Self::Query => "query",
             Self::Transform => "transform",
             Self::ProjectInit => "project init",
-            Self::Anomaly => "anomaly",
             Self::Maintenance => "maintenance",
         };
         formatter.write_str(name)
@@ -137,13 +133,7 @@ impl WorkloadBudget {
         let cores = std::thread::available_parallelism()
             .unwrap_or(NonZeroUsize::MIN)
             .get();
-        let capacities = [
-            cores.min(8),
-            cores,
-            (cores / 2).clamp(1, 4),
-            (cores / 4).clamp(1, 2),
-            1,
-        ];
+        let capacities = [cores.min(8), cores, (cores / 2).clamp(1, 4), 1];
 
         Self::with_capacities_and_global(capacities, cores)
     }
@@ -242,8 +232,7 @@ impl WorkloadBudget {
                     0 => WorkloadClass::Query,
                     1 => WorkloadClass::Transform,
                     2 => WorkloadClass::ProjectInit,
-                    3 => WorkloadClass::Anomaly,
-                    4 => WorkloadClass::Maintenance,
+                    3 => WorkloadClass::Maintenance,
                     _ => unreachable!("workload class index is bounded by the class count"),
                 };
                 WorkloadStats {

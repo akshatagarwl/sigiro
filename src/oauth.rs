@@ -24,10 +24,8 @@ const REQUESTED_SCOPES: &[&str] = &[
     "offline_access",
     "telemetry:ingest",
     "services:read",
-    "diagnose:read",
     "traces:read",
     "query:read",
-    "anomalies:read",
 ];
 
 #[derive(Clone, Deserialize)]

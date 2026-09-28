@@ -16,7 +16,6 @@ sigiro は OTLP で送信されたテレメトリを保存します。各行が�
 - `sigiro_metrics_histogram` — 明示的バケットのヒストグラム
 - `sigiro_metrics_exp_histogram` — 指数ヒストグラム
 - `sigiro_profiles` — プロファイルサンプル
-- `sigiro_anomalies` — 検出されたレジームシフト
 
 OTLP が異なる 4 種類のメトリクス形状を定義するため、メトリクスは 4 テーブルに分かれています。複数種類を同時に読む場合は `UNION ALL` を使います。
 

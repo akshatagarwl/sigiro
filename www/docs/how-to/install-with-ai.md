@@ -187,7 +187,7 @@ curl http://localhost:9999/v1/services
 ```
 
 Your service appears within a few seconds of real traffic. After it appears,
-`sigiro diagnose my-service` has data to read.
+a bounded `POST /v1/query` can inspect its spans and logs.
 
 If the service does not appear, make these checks. On a self-hosted server,
 confirm the port: `:4318` for HTTP and `:4317` for gRPC. On the hosted service,

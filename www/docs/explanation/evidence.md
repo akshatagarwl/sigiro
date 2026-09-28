@@ -1,9 +1,13 @@
 ---
-title: About evidence instead of a dashboard
-description: Why sigiro answers with a ranked list and a runnable query on every row, rather than a chart. What a baseline is, and what this design refuses to do.
+title: Retired anomaly and diagnosis design
+description: Historical design note; use bounded raw telemetry queries for active analysis.
 sidebar:
   order: 3
 ---
+
+> **Historical design only.** The scheduled anomaly detector and diagnose API
+> described below have been removed. Use bounded `POST /v1/query` calls over
+> raw telemetry instead; the descriptions below are not supported interfaces.
 
 Ask sigiro why a service is unwell, and it returns one block of structured
 evidence. The block opens with a ranked list of what deserves attention. Each item

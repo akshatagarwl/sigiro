@@ -27,7 +27,7 @@ export const FIRST_PARTY_CLIENT_METADATA = {
   ],
   token_endpoint_auth_method: "none",
   scope:
-    "openid profile email offline_access telemetry:ingest services:read diagnose:read traces:read query:read anomalies:read",
+    "openid profile email offline_access telemetry:ingest services:read traces:read query:read",
 } as const;
 
 export const FIRST_PARTY_CLIENT_METADATA_JSON = JSON.stringify(

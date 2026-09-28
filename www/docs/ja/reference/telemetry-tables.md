@@ -5,13 +5,13 @@ sidebar:
   order: 4
 ---
 
-以下は `src/schema.rs` が作成する、問い合わせ可能な 8 個の `sigiro_*` テーブルです。型は DuckDB SQL 型で、宣言された `NOT NULL` を表示します。クエリでは `lake.` 修飾名と短いテーブル名の両方を使用できます。これは**現在**のスキーマの説明であり、実行時のスキーマ検出 API ではありません。
+以下は `src/schema.rs` が作成する、問い合わせ可能な 7 個の `sigiro_*` テーブルです。型は DuckDB SQL 型で、宣言された `NOT NULL` を表示します。クエリでは `lake.` 修飾名と短いテーブル名の両方を使用できます。これは**現在**のスキーマの説明であり、実行時のスキーマ検出 API ではありません。
 
 **1.0 前の互換性:** 列名・型・JSON の形は 1.0 までに変更される可能性があります。このページは DuckLake/Parquet のディスク形式の安定性、自動インプレース更新、ダウングレード対応を保証しません。ストレージ形式の検証と更新方針は別課題の [#200](https://github.com/akshatagarwl/sigiro/issues/200) で、実行時のスキーマ検出は [#13](https://github.com/akshatagarwl/sigiro/issues/13) で扱います。
 
 `TIMESTAMP` はマイクロ秒精度の DuckDB 時刻です。数値エポック時刻（`end_timestamp`、`observed_timestamp`、メトリクスの `start_timestamp`）とスパンの `duration` は OTLP のナノ秒から変換した**マイクロ秒**です。一方、`events_json` と `exemplars_json` 内の `time_unix_nano` は**ナノ秒**のままです。メトリクス値とヒストグラム境界の単位は送信元の `metric_unit`、プロファイル値は `unit` に従います。
 
-属性と JSON 配列はネイティブ JSON 型ではなく、**JSON を含む `VARCHAR`** です。属性キーは `json_extract_string(column, 'key')` で参照してください。キーの集合は送信元ごとに異なります。DDL で nullable と宣言されていても、現在の取り込み処理が常に null を書くわけではありません。`sigiro_anomalies` の `before`/`after` は系列ごとの生の平均です（`error_rate`/`error_log_rate`: %、`latency_p95`: µs、`log_volume`: 5 分バケットあたりのログ件数、`profile_cost`: バケットあたりのプロファイルサンプル値の合計で、単位はサンプルに依存）。異なる系列やプロファイル単位の平均は加算しないでください。
+属性と JSON 配列はネイティブ JSON 型ではなく、**JSON を含む `VARCHAR`** です。属性キーは `json_extract_string(column, 'key')` で参照してください。キーの集合は送信元ごとに異なります。DDL で nullable と宣言されていても、現在の取り込み処理が常に null を書くわけではありません。
 
 ## `sigiro_spans`
 
@@ -184,18 +184,3 @@ sidebar:
 | `value`               | `BIGINT`             | unit         | この値種別のサンプル値。                 |
 | `unit`                | `VARCHAR`            | —            | プロファイルのサンプル種別の単位。       |
 | `resource_attributes` | `VARCHAR`            | —            | リソース属性の JSON 文字列。             |
-
-## `sigiro_anomalies`
-
-| 列               | 型                   | 単位             | 意味                                                  |
-| ---------------- | -------------------- | ---------------- | ----------------------------------------------------- |
-| `detected_at`    | `TIMESTAMP NOT NULL` | µs precision     | 変化を検出した時刻。                                  |
-| `service_name`   | `VARCHAR NOT NULL`   | —                | OTel リソースの service.name。                        |
-| `operation`      | `VARCHAR NOT NULL`   | —                | スパンでは操作 ID、ログとプロファイルではサービス名。 |
-| `signal`         | `VARCHAR NOT NULL`   | —                | 変化した系列名。                                      |
-| `kind`           | `VARCHAR NOT NULL`   | —                | 検出種別（changepoint）。                             |
-| `direction`      | `VARCHAR NOT NULL`   | —                | 変化方向（保存対象は worsening）。                    |
-| `ts_shift`       | `TIMESTAMP NOT NULL` | µs precision     | 新しい状態の最初のバケット。                          |
-| `before`         | `DOUBLE NOT NULL`    | signal-dependent | 変化前の平均。                                        |
-| `after`          | `DOUBLE NOT NULL`    | signal-dependent | 変化後の平均。                                        |
-| `drill_down_sql` | `VARCHAR NOT NULL`   | —                | 変化の元データを調べる SQL。                          |

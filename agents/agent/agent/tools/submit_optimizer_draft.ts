@@ -4,7 +4,6 @@ import { z } from "zod";
 import { optimizerRuntime } from "../../optimizer/runtime.ts";
 import { collectChanges } from "../../optimizer/workspace.ts";
 
-const Finding = z.tuple([z.string(), z.string(), z.string(), z.number().int()]);
 const quoteSql = (value: string) => value.replaceAll("'", "''");
 
 export default defineTool({
@@ -29,21 +28,24 @@ export default defineTool({
       }
     }
     const changes = await collectChanges(sandbox);
-    const [service, operation, signal, shiftedAt] = Finding.parse(JSON.parse(run.findingId));
-    const evidence = await runtime.telemetry(run, `SELECT "before", "after" FROM sigiro_anomalies
-      WHERE service_name='${quoteSql(service)}' AND operation='${quoteSql(operation)}'
-      AND signal='${quoteSql(signal)}' AND epoch_us(ts_shift)=${shiftedAt}`);
-    if (evidence.rows.length !== 1 || run.findingBefore === null || run.findingAfter === null)
-      throw new Error("Original finding evidence is unavailable or ambiguous");
-    const row = z.object({ before: z.number(), after: z.number() }).parse(evidence.rows[0]);
-    if (row.before !== run.findingBefore || row.after !== run.findingAfter)
-      throw new Error("Finding baseline changed since the run was requested");
+    if (run.windowStartUs === null || run.windowEndUs === null ||
+      !Number.isSafeInteger(run.windowStartUs) || !Number.isSafeInteger(run.windowEndUs))
+      throw new Error("A bounded live evidence window is required before publication");
+    const timestamp = (micros: number) => new Date(micros / 1000).toISOString().replace("T", " ").replace("Z", "");
+    const evidence = await Promise.all(["sigiro_spans", "sigiro_logs"].map((table) =>
+      runtime.telemetry(run, `SELECT COUNT(*) AS events FROM ${table}
+        WHERE service_name='${quoteSql(run.service)}'
+        AND timestamp>=TIMESTAMP '${timestamp(run.windowStartUs!)}'
+        AND timestamp<TIMESTAMP '${timestamp(run.windowEndUs!)}'
+        AND (resource_attributes IS NULL OR resource_attributes NOT LIKE '%production-journald-backfill%')`)));
+    const liveEvents = evidence.reduce((total, result) => total + z.object({ events: z.number().int().nonnegative() }).parse(result.rows[0]).events, 0);
+    if (liveEvents === 0) throw new Error("No naturally emitted production telemetry supports this change");
     const summary = validation.length === 0 ? "NOT RUN: no validation commands provided" : validation
       .map((item) => `Command ${item.number}: ${item.status.toUpperCase()}${item.exitCode === undefined ? "" : ` (exit ${item.exitCode})`}`)
       .join("\n");
     const body = [
-      "## Why", `Sigiro observed a ${signal.replace(/[^a-z_]/g, "")} shift at ${new Date(shiftedAt / 1000).toISOString()} (UTC).`,
-      `Before: ${run.findingBefore}; after: ${run.findingAfter}.`,
+      "## Why", "Assessor recommended investigating recent live Sigiro telemetry; its probability is a routing signal, not proof of the proposed fix.",
+      `At least ${liveEvents} naturally emitted events were verified for the mapped service in the bounded evidence window.`,
       "## Change", `${changes.length} changed paths. Inspect the diff before merging.`,
       "## Validation", summary,
       "Command output is withheld from this public-facing PR to avoid disclosing repository or telemetry secrets.",
