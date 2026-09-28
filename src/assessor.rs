@@ -37,6 +37,10 @@ fn checked_probability(reply: AssessorAnswer) -> Result<f64> {
     Ok(answer.noul)
 }
 
+fn sufficient_coverage(previous: i64, current: i64, newest: i64) -> bool {
+    previous >= 20 && current >= 20 && newest > 0
+}
+
 const SCANS: [(&str, &str, &str); 3] = [
     ("spans", "sigiro_spans", "status_code=2"),
     ("logs", "sigiro_logs", "severity_number>=17"),
@@ -77,25 +81,32 @@ pub(crate) async fn assess(
     tenant: &TenantId,
     service: &str,
 ) -> Result<Decision> {
+    let provider = std::env::var("SIGIRO_ASSESSOR_PROVIDER").unwrap_or_default();
     let gateway_key = std::env::var("SIGIRO_ASSESSOR_GATEWAY_API_KEY").unwrap_or_default();
     let direct_key = std::env::var("SIGIRO_ASSESSOR_API_KEY").unwrap_or_default();
-    if !gateway_key.is_empty() && !direct_key.is_empty() {
-        bail!("configure exactly one Assessor credential: Gateway or direct TypeSafe");
-    }
-    let (key, default_endpoint, model) = if !gateway_key.is_empty() {
-        (
-            &gateway_key,
-            "https://ai-gateway.vercel.sh/typesafe/v1/assess",
-            "example/assessor",
-        )
-    } else {
-        (
-            &direct_key,
-            "https://assessor.example.com/v1/assess",
-            "assessor-latest",
-        )
+    let (key, default_endpoint, model) = match provider.as_str() {
+        // Explicitly opting into anonymous free inference never sends either
+        // configured credential to classifier.example, even if SOPS contains one.
+        "classifier-example" => (None, "https://classifier.example/v1/assess", "assessor-latest"),
+        "" if gateway_key.is_empty() || direct_key.is_empty() => {
+            if !gateway_key.is_empty() {
+                (
+                    Some(gateway_key.as_str()),
+                    "https://ai-gateway.vercel.sh/typesafe/v1/assess",
+                    "example/assessor",
+                )
+            } else {
+                (
+                    Some(direct_key.as_str()),
+                    "https://assessor.example.com/v1/assess",
+                    "assessor-latest",
+                )
+            }
+        }
+        "" => bail!("configure exactly one Assessor credential: Gateway or direct TypeSafe"),
+        _ => bail!("unsupported Assessor provider"),
     };
-    if key.len() < 32 {
+    if key.is_some_and(|value| value.len() < 32) {
         bail!("trusted model assessment is not configured");
     }
     let prefix = ProjectPool::prefix();
@@ -125,7 +136,10 @@ pub(crate) async fn assess(
                 .context("invalid live telemetry count")
         };
         let (previous, current, newest) = (count("baseline")?, count("recent")?, count("fresh")?);
-        comparable |= previous > 0 && current > 0 && newest > 0;
+        // A newly enabled exporter can make one half-hour look like an
+        // incident. Require enough samples on both sides to distinguish a
+        // real change from a cold-start or a handful of incidental records.
+        comparable |= sufficient_coverage(previous, current, newest);
         for field in ["recent_failures", "baseline_failures"] {
             count(field)?;
         }
@@ -147,7 +161,7 @@ pub(crate) async fn assess(
 async fn ask_assessor(
     client: &reqwest::Client,
     endpoint: &str,
-    key: &str,
+    key: Option<&str>,
     model: &str,
     evidence: &Value,
 ) -> Result<f64> {
@@ -160,6 +174,14 @@ async fn ask_assessor(
     {
         bail!("Gateway credentials require the Vercel Gateway origin");
     }
+    if key.is_none()
+        && !matches!(
+            url.host_str(),
+            Some("classifier.example" | "127.0.0.1" | "localhost")
+        )
+    {
+        bail!("anonymous classification requires the allowlisted endpoint");
+    }
     if url.username() != ""
         || url.password().is_some()
         || (url.scheme() != "https"
@@ -168,15 +190,22 @@ async fn ask_assessor(
     {
         bail!("Assessor endpoint must use TLS or loopback without URL credentials");
     }
-    let reply = client.post(url)
-        .bearer_auth(key)
+    let request = client.post(url)
         .timeout(Duration::from_secs(15))
         .json(&json!({"model":model,"state":evidence,"questions":{"investigate":{
             "type":"noul",
             "instructions":"Do the recent 30 minutes show a credible, actionable degradation compared with the preceding 30 minutes for this one service? Abstain when the evidence does not support a causal investigation. A change in raw log count alone is not proof of a problem.",
             "criteria":{"true":"Fresh, comparable evidence warrants investigation, not an automatic change","false":"Insufficient evidence or normal expected activity"}
-        }}}))
-        .send().await.context("model assessment request failed")?;
+        }}}));
+    let request = if let Some(key) = key {
+        request.bearer_auth(key)
+    } else {
+        request
+    };
+    let reply = request
+        .send()
+        .await
+        .context("model assessment request failed")?;
     if !reply.status().is_success() {
         bail!("model assessment rejected the request ({})", reply.status());
     }
@@ -211,24 +240,50 @@ mod tests {
                 assert!(body.to_string().len() < 2_000);
                 Json(json!({"answers":{"investigate":{"type":"noul","noul":0.91}}}))
             }),
-        );
+        ).route("/v1/free", post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+            assert!(headers.get("authorization").is_none());
+            assert_eq!(body["model"], "assessor-latest");
+            assert_eq!(body["questions"]["investigate"]["type"], "noul");
+            Json(json!({"model":"assessor-1.13.0","answers":{"investigate":{"type":"noul","noul":0.09}}}))
+        }));
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let evidence = json!({"service":"worker","signals":{"logs":{"recent":4,"baseline":3}}});
         let probability = ask_assessor(
             &reqwest::Client::new(),
             &format!("http://{address}/v1/assess"),
-            "test-only-assessor-token",
+            Some("test-only-assessor-token"),
             "example/assessor",
             &evidence,
         )
         .await
         .unwrap();
         assert_eq!(probability, 0.91);
+        let free_probability = ask_assessor(
+            &reqwest::Client::new(),
+            &format!("http://{address}/v1/free"),
+            None,
+            "assessor-latest",
+            &evidence,
+        )
+        .await
+        .unwrap();
+        assert_eq!(free_probability, 0.09);
+        assert!(
+            ask_assessor(
+                &reqwest::Client::new(),
+                "https://unapproved.example/v1/assess",
+                None,
+                "assessor-latest",
+                &evidence
+            )
+            .await
+            .is_err()
+        );
         assert!(
             ask_assessor(
                 &reqwest::Client::new(),
                 "https://not-the-gateway.example/v1/assess",
-                "test-only-assessor-token",
+                Some("test-only-assessor-token"),
                 "example/assessor",
                 &evidence
             )
@@ -236,6 +291,15 @@ mod tests {
             .is_err()
         );
         server.abort();
+    }
+
+    #[test]
+    fn cold_start_and_sparse_windows_abstain() {
+        assert!(!sufficient_coverage(0, 100, 15));
+        assert!(!sufficient_coverage(19, 100, 15));
+        assert!(!sufficient_coverage(100, 19, 15));
+        assert!(!sufficient_coverage(100, 100, 0));
+        assert!(sufficient_coverage(20, 20, 1));
     }
 
     #[test]
