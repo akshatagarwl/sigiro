@@ -44,6 +44,9 @@ const schemaOnlyRuntime: AuthRuntime = {
   membershipsForUser: () => {
     throw new Error("schema tests must not touch the database");
   },
+  membershipRoles: () => {
+    throw new Error("schema tests must not touch the database");
+  },
   fetchClientMetadataResource: () => {
     throw new Error("schema tests must not reach the network");
   },

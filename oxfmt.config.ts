@@ -6,6 +6,7 @@ export default defineConfig({
   ignorePatterns: [
     ...(core.ignorePatterns ?? []),
     "auth/src/ui.ts",
+    "agents/agent/patches/**",
     "www/.astro/**",
     "www/.blume/**",
     "www/dist/**",

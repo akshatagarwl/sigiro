@@ -184,6 +184,7 @@ const SCALAR_FUNCTIONS: &[&str] = &[
     "DATEPART",
     "EPOCH",
     "EPOCH_MS",
+    "EPOCH_US",
     "STRFTIME",
     "STRPTIME",
     "TO_TIMESTAMP",

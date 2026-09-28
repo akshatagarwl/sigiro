@@ -201,6 +201,7 @@ pub fn open_local_admin_db(dir: &camino::Utf8Path) -> Result<AdminConnection> {
 
     create_instance_status_table(&conn)?;
     crate::alerts::create_sqlite_tables(&conn)?;
+    crate::optimizer::create_local(&conn)?;
     Ok(AdminConnection::Local(conn))
 }
 
@@ -230,6 +231,7 @@ fn open_hosted_admin_db_blocking(catalog_url: &str) -> Result<AdminConnection> {
         )
         .context("failed to create hosted instance_status table")?;
     crate::alerts::create_postgres_tables(&mut client)?;
+    crate::optimizer::create_hosted(&mut client)?;
     Ok(AdminConnection::Hosted(HostedClient::new(client)))
 }
 
@@ -284,5 +286,6 @@ pub fn test_connection() -> Result<AdminConnection> {
         rusqlite::Connection::open_in_memory().context("failed to open in-memory admin DB")?;
     create_instance_status_table(&conn)?;
     crate::alerts::create_sqlite_tables(&conn)?;
+    crate::optimizer::create_local(&conn)?;
     Ok(AdminConnection::Local(conn))
 }

@@ -25,8 +25,8 @@ aube -C www run check    # repository formatting and linting
 aube -C www run og       # regenerate the Open Graph card into public/
 ```
 
-The repository-root `oxfmt.config.ts` and `oxlint.config.ts` are shared by auth
-and the website. `aube run` installs missing or stale dependencies
+The repository-root `oxfmt.config.ts` and `oxlint.config.ts` are shared by auth,
+the website, and the agent. `aube run` installs missing or stale dependencies
 before starting a package script and uses that package's committed `aube-lock.yaml`;
 do not add a second lockfile. `aube -C www run dev` is for page development only. Validate routing by driving the running Worker with a
 real agent and inspecting traces and call-stack diffs. The sole production

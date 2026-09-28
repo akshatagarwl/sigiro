@@ -107,7 +107,7 @@ Full documentation is available at [docs.sigiro.com](https://docs.sigiro.com) (o
 ## Development
 
 From the repository root, install the shared JavaScript tooling and run the same
-format and lint configuration across auth and the website:
+format and lint configuration across auth, the website, and the agent:
 
 ```bash
 aube install --frozen-lockfile

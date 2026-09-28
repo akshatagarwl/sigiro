@@ -1,0 +1,52 @@
+name: sigiro-optimizer
+
+# Linux host networking keeps Eve bound to loopback for the separately supervised
+# worker. The remote Rivet runtime must still have a secure callback route.
+x-agent: &agent
+  build: .
+  image: sigiro-optimizer-agent:local
+  network_mode: host
+  extra_hosts:
+    - auth-db.sigiro.com:127.0.0.1
+  init: true
+  user: "1000:1000"
+  restart: unless-stopped
+  stop_grace_period: 90s
+  read_only: true
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,size=128m
+    # Eve compiles authored modules into this cache when it starts.
+    - /app/node_modules/.cache:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  volumes:
+    - /etc/sigiro/postgres-ca.crt:/etc/sigiro/postgres-ca.crt:ro
+    - /var/lib/sigiro-optimizer/checkpoints:/var/lib/sigiro-optimizer/checkpoints:rw
+
+services:
+  eve:
+    <<: *agent
+    env_file: /etc/sigiro/optimizer/eve.env
+    command: ["/app/node_modules/.bin/eve", "start", "--host", "127.0.0.1"]
+    environment:
+      CODEX_HOME: /var/lib/sigiro-optimizer/codex
+    volumes:
+      - /etc/sigiro/postgres-ca.crt:/etc/sigiro/postgres-ca.crt:ro
+      - /var/lib/sigiro-optimizer/checkpoints:/var/lib/sigiro-optimizer/checkpoints:rw
+      - /var/lib/sigiro-optimizer/codex:/var/lib/sigiro-optimizer/codex:rw
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/eve/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 90s
+
+  worker:
+    <<: *agent
+    command: ["node", "--experimental-strip-types", "optimizer/main.ts"]
+    env_file: /etc/sigiro/optimizer/worker.env
+    depends_on:
+      eve:
+        condition: service_healthy

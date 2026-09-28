@@ -9,6 +9,7 @@ import {
 import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
+import { assertTenantScopeAccess, tenantForDeviceClient } from "./tenant-scope.js";
 import { emailOTP, jwt, organization } from "better-auth/plugins";
 
 export const SIGIRO_SCOPES = [
@@ -27,6 +28,7 @@ export const SIGIRO_SCOPES = [
   "tenant:members",
   "tenant:agents",
   "tenant:admin",
+  "optimizer:write",
 ] as const;
 
 export const SIGIRO_AGENT_CAPABILITIES = [
@@ -57,6 +59,8 @@ export interface AuthRuntime {
   sessionTenant(sessionId: string): Promise<string | null>;
   /** Every organization a user belongs to, oldest first. Backed by pg or D1. */
   membershipsForUser(userId: string): Promise<ReadonlyArray<string>>;
+  /** Organization roles for elevated tenant write scopes. */
+  membershipRoles(userId: string, tenantId: string): Promise<ReadonlyArray<string>>;
   testOTP?: string;
   sendEmail(message: {
     to: string;
@@ -177,28 +181,24 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
         extensions: [
           {
             claims: {
-              accessToken: async ({ client, referenceId, sessionId, user }) => {
+              accessToken: async ({ client, referenceId, sessionId, user, scopes }) => {
                 const registeredTenantId = referenceId ?? client.referenceId;
-                if (registeredTenantId) return { tid: registeredTenantId };
-                if (sessionId) {
-                  const activeOrganizationId =
-                    await runtime.sessionTenant(sessionId);
+                let tenantId: string;
+                if (registeredTenantId) {
+                  tenantId = registeredTenantId;
+                } else if (sessionId) {
+                  const activeOrganizationId = await runtime.sessionTenant(sessionId);
                   if (!activeOrganizationId)
                     throw new Error("token session has no active organization");
-                  return { tid: activeOrganizationId };
+                  tenantId = activeOrganizationId;
+                } else {
+                  if (!user?.id)
+                    throw new Error("token issuance has no tenant-bearing user, session, or client");
+                  const memberships = await runtime.membershipsForUser(user.id);
+                  tenantId = tenantForDeviceClient(client.clientId, memberships);
                 }
-                if (!user?.id)
-                  throw new Error(
-                    "token issuance has no tenant-bearing user, session, or client"
-                  );
-
-                const memberships = await runtime.membershipsForUser(user.id);
-                if (memberships.length !== 1) {
-                  throw new Error(
-                    "device token user must belong to exactly one organization"
-                  );
-                }
-                return { tid: memberships[0]! };
+                await assertTenantScopeAccess(scopes, user?.id, tenantId, runtime.membershipRoles);
+                return { tid: tenantId };
               },
             },
           },

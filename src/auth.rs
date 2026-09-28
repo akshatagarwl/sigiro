@@ -24,6 +24,8 @@ pub(crate) const SERVICES_READ_SCOPE: &str = "services:read";
 pub(crate) const TRACES_READ_SCOPE: &str = "traces:read";
 pub(crate) const ANOMALIES_READ_SCOPE: &str = "anomalies:read";
 pub(crate) const ALERTS_READ_SCOPE: &str = "alerts:read";
+pub(crate) const OPTIMIZER_WRITE_SCOPE: &str = "optimizer:write";
+pub(crate) const TENANT_ADMIN_SCOPE: &str = "tenant:admin";
 /// Verified-token-only routes use no operation-specific permission.
 pub(crate) const AUTHENTICATED_SCOPE: &str = "";
 const SUPPORTED_SCOPES: &[&str] = &[
@@ -34,6 +36,8 @@ const SUPPORTED_SCOPES: &[&str] = &[
     QUERY_READ_SCOPE,
     ANOMALIES_READ_SCOPE,
     ALERTS_READ_SCOPE,
+    OPTIMIZER_WRITE_SCOPE,
+    TENANT_ADMIN_SCOPE,
 ];
 
 const JWKS_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -720,6 +724,22 @@ fn required_http_scope(method: &axum::http::Method, path: &str) -> Result<&'stat
         (&Method::POST, "/v1/diagnose" | "/diagnose") => Ok(DIAGNOSE_READ_SCOPE),
         (&Method::GET, "/v1/services" | "/services") => Ok(SERVICES_READ_SCOPE),
         (&Method::GET, "/v1/auth/validate" | "/auth/validate") => Ok(AUTHENTICATED_SCOPE),
+        (&Method::POST, "/v1/optimizer/connections" | "/optimizer/connections") => {
+            Ok(TENANT_ADMIN_SCOPE)
+        }
+        (&Method::POST, "/v1/optimizer/mappings" | "/optimizer/mappings") => Ok(TENANT_ADMIN_SCOPE),
+        (&Method::PATCH, path)
+            if path.starts_with("/v1/optimizer/connections/")
+                || path.starts_with("/optimizer/connections/") =>
+        {
+            Ok(TENANT_ADMIN_SCOPE)
+        }
+        (&Method::POST, "/v1/optimizer/runs" | "/optimizer/runs") => Ok(OPTIMIZER_WRITE_SCOPE),
+        (&Method::GET, path)
+            if path.starts_with("/v1/optimizer/runs/") || path.starts_with("/optimizer/runs/") =>
+        {
+            Ok(OPTIMIZER_WRITE_SCOPE)
+        }
         (&Method::GET, "/v1/alerts" | "/alerts") => Ok(ALERTS_READ_SCOPE),
         (&Method::GET, "/v1/anomalies" | "/anomalies") => Ok(ANOMALIES_READ_SCOPE),
         (&Method::GET, path) if path.starts_with("/v1/traces/") || path.starts_with("/traces/") => {

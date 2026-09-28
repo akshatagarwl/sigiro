@@ -172,6 +172,20 @@ impl Drop for ProjectInitialization<'_> {
 /// extension has to be created through here rather than
 /// `Connection::open_in_memory()`.
 pub fn open_duckdb_connection() -> Result<Connection> {
+    let repository = crate::config::SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY.value()?;
+    if !repository.is_empty() {
+        anyhow::ensure!(
+            !crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()?,
+            "a signed DuckLake repository must not disable extension signature verification"
+        );
+        let config = duckdb::Config::default()
+            .with("extension_repository_directory", repository)
+            .context("failed to configure pinned DuckLake repository directory")?
+            .with("allow_extension_repositories", "allowed")
+            .context("failed to trust pinned DuckLake extension repository")?;
+        return Connection::open_in_memory_with_flags(config)
+            .context("failed to open DuckDB with pinned signed extension trust");
+    }
     if crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()? {
         tracing::warn!(
             "SIGIRO_ALLOW_UNSIGNED_EXTENSIONS is set — DuckDB will load extensions \

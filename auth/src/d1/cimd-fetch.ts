@@ -4,6 +4,7 @@ import {
   FIRST_PARTY_CLIENT_ID,
   FIRST_PARTY_CLIENT_METADATA_JSON,
 } from "../client-metadata.js";
+import { OPTIMIZER_CLIENT_ID, OPTIMIZER_CLIENT_METADATA_JSON } from "../optimizer-client.js";
 
 /**
  * Workers-native CIMD (client metadata document) fetch.
@@ -91,8 +92,9 @@ export const fetchClientMetadataResource: ClientMetadataResourceFetch = async (
     // Deliberately an exact match on the canonical first-party client_id. Any
     // other URL, including another path on the same origin, still goes through
     // the full validated network path below.
-    if (String(url) === FIRST_PARTY_CLIENT_ID) {
-      return new Response(FIRST_PARTY_CLIENT_METADATA_JSON, {
+    if (String(url) === FIRST_PARTY_CLIENT_ID || String(url) === OPTIMIZER_CLIENT_ID) {
+      return new Response(String(url) === FIRST_PARTY_CLIENT_ID
+        ? FIRST_PARTY_CLIENT_METADATA_JSON : OPTIMIZER_CLIENT_METADATA_JSON, {
         status: 200,
         headers: { "content-type": "application/json" },
       });

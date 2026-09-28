@@ -29,6 +29,7 @@ export default defineConfig({
     "**/.git/**",
     "target/**",
     "auth/src/ui.ts",
+    "agents/agent/patches/**",
     "www/.agent/**",
     "www/.agents/**",
     "www/.claude/**",
@@ -48,6 +49,10 @@ export default defineConfig({
       name: "anti-slop",
       specifier: "./www/tools/oxlint/anti-slop/index.ts",
     },
+    {
+      name: "policy",
+      specifier: "./agents/agent/tools/policy.mjs",
+    },
   ],
   overrides: [
     {
@@ -58,6 +63,13 @@ export default defineConfig({
     {
       files: ["www/**"],
       rules: antiSlopRules,
+    },
+    {
+      files: ["agents/agent/**"],
+      rules: {
+        "policy/no-comments": "error",
+        "policy/no-synthetic-tests": "error",
+      },
     },
   ],
 });

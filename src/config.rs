@@ -12,6 +12,11 @@ use typed_env::{Envar, EnvarDef};
 // ---------------------------------------------------------------------------
 
 /// Server ports. Default to well-known OTLP ports when unset.
+pub(crate) static OPTIMIZER_INTERNAL_TOKEN: Envar<String> =
+    Envar::on_demand("SIGIRO_OPTIMIZER_INTERNAL_TOKEN", || {
+        EnvarDef::Default(String::new())
+    });
+
 pub(crate) static HTTP_PORT: Envar<u16> =
     Envar::on_startup("SIGIRO_HTTP_PORT", || EnvarDef::Default(9999));
 pub(crate) static GRPC_PORT: Envar<u16> =
@@ -81,6 +86,11 @@ pub(crate) fn alert_webhook_token() -> Result<Option<crate::alerts::AlertWebhook
 /// `<SIGIRO_DATA_DIR>/extensions`.
 pub(crate) static EXTENSION_DIR: Envar<String> =
     Envar::on_startup("SIGIRO_EXTENSION_DIR", || EnvarDef::Default(String::new()));
+
+pub(crate) static SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY: Envar<String> = Envar::on_startup(
+    "SIGIRO_SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY",
+    || EnvarDef::Default(String::new()),
+);
 
 /// Allow DuckDB to load extensions without a valid signature.
 ///

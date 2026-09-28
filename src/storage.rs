@@ -10,14 +10,8 @@ use url::{Position, Url};
 
 const EXPECTED_DUCKDB_VERSION: &str = "v2.0.0-alpha41489";
 
-/// The DuckLake build published for [`EXPECTED_DUCKDB_VERSION`].
-///
-/// This one predates the `prepare=FALSE` fix (ducklake `b93bd97d`), so it fails
-/// every commit against a PostgreSQL catalog — see #317. Running a locally
-/// built extension with that fix is the bridge until upstream publishes a
-/// rebuilt DuckLake for this DuckDB version (#324), and such a build reports a
-/// different version here.
 const EXPECTED_DUCKLAKE_VERSION: &str = "eb7b95df82";
+const EXPECTED_SIGNED_DUCKLAKE_VERSION: &str = "620150b147";
 
 /// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
 /// config). Tables accessible as `lake.sigiro_*`.
@@ -722,20 +716,23 @@ fn verify_duckdb_stack(conn: &Connection) -> Result<()> {
         "DuckDB version mismatch: linked {duckdb_version:?}, expected {EXPECTED_DUCKDB_VERSION:?}"
     );
 
-    // Running a locally built extension (see #317/#324) deliberately changes
-    // this version, so accept it when the operator has opted into unsigned
-    // extensions — the same switch that allowed the build to load at all.
-    // Everything else still pins, so an unexpected version cannot slip in
-    // silently on a normal deployment.
-    if ducklake_version != EXPECTED_DUCKLAKE_VERSION {
+    let signed_repository = !crate::config::SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY
+        .value()?
+        .is_empty();
+    let expected_version = if signed_repository {
+        EXPECTED_SIGNED_DUCKLAKE_VERSION
+    } else {
+        EXPECTED_DUCKLAKE_VERSION
+    };
+    if ducklake_version != expected_version {
         anyhow::ensure!(
-            crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()?,
+            !signed_repository && crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()?,
             "DuckLake version mismatch: loaded {ducklake_version:?}, expected \
-             {EXPECTED_DUCKLAKE_VERSION:?}"
+             {expected_version:?}"
         );
         tracing::warn!(
             loaded = %ducklake_version,
-            expected = %EXPECTED_DUCKLAKE_VERSION,
+            expected = %expected_version,
             "running a non-published DuckLake build (SIGIRO_ALLOW_UNSIGNED_EXTENSIONS is set)"
         );
     }
@@ -793,8 +790,27 @@ pub(crate) fn install_extensions_from(conn: &Connection, names: &[&str]) -> Resu
             i + 1,
             total,
         );
-        conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
-            .with_context(|| format!("failed to install/load extension {name}"))?;
+        let signed_ducklake = name == &"ducklake"
+            && !crate::config::SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY
+                .value()?
+                .is_empty();
+        if signed_ducklake {
+            if let Err(first_load) = conn.execute_batch("LOAD ducklake FROM sigiro_pinned;") {
+                anyhow::ensure!(
+                    first_load
+                        .to_string()
+                        .contains("was not installed from repository 'sigiro_pinned'"),
+                    "failed to load signed ducklake from pinned repository: {first_load}"
+                );
+                conn.execute_batch(
+                    "FORCE INSTALL ducklake FROM sigiro_pinned; LOAD ducklake FROM sigiro_pinned;",
+                )
+                .with_context(|| format!("failed to install signed DuckLake after {first_load}"))?;
+            }
+        } else {
+            conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
+                .with_context(|| format!("failed to install/load extension {name}"))?;
+        }
         tracing::info!("loaded DuckDB extension: {name}");
     }
     Ok(())

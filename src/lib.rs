@@ -6,6 +6,7 @@ pub mod client;
 pub mod config;
 pub mod drain;
 pub mod federate;
+mod optimizer;
 
 pub mod diagnose;
 pub mod ingest;
