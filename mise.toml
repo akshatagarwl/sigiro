@@ -321,17 +321,6 @@ docker buildx bake sigiro \
   --load
 """
 
-[tasks.lima-build]
-description = "Cross-compile sigiro for Linux ARM64 Lima VMs."
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-source scripts/lima-cross-env.sh
-ulimit -n 65536 2>/dev/null || true
-eval "$(scripts/prepare-duckdb-static.sh "$SIGIRO_LIMA_TARGET")"
-mbx build --release --target "$SIGIRO_LIMA_TARGET" --bin sigiro
-file "$SIGIRO_LIMA_SIGIRO_BIN"
-"""
 
 [tasks.clean]
 description = "Drop the managed target dir and the dev stack."
