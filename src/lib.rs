@@ -11,6 +11,7 @@ mod optimizer;
 pub mod diagnose;
 pub mod ingest;
 pub mod inserter;
+mod assessor;
 pub mod mcp;
 
 pub mod oauth;

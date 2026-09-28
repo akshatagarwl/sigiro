@@ -113,11 +113,6 @@ criterion = { version = "0.5", features = ["html_reports"] }
 schemars = "1"
 tokio-util = "0.7"
 
-[[bench]]
-name = "diagnose_bench"
-harness = false
-test = false
-
 [lints.clippy]
 # Disallowed patterns (configured in clippy.toml)
 disallowed-methods = "deny"

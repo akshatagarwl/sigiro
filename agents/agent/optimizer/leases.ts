@@ -15,7 +15,7 @@ const Claimed = Schema.Struct({
   id: Schema.String,
   service: Schema.String,
   connection_id: Schema.String,
-  finding_id: Schema.String,
+  decision_context: Schema.String,
   branch: Schema.String,
   actor: Schema.String,
   attempts: Schema.Number,
@@ -49,11 +49,12 @@ export class LeaseStore {
             WHERE status='running' AND attempts>=3
             AND lease_until_ms < (extract(epoch FROM clock_timestamp()) * 1000)::bigint`);
           const result = await client.query(`
-            SELECT r.tenant_id,r.id,r.service,r.connection_id,r.finding_id,r.branch,r.actor,r.attempts,r.session_id,r.target_ref,r.target_commit_sha,
+            SELECT r.tenant_id,r.id,r.service,r.connection_id,r.decision_context,r.branch,r.actor,r.attempts,r.session_id,r.target_ref,r.target_commit_sha,
                    c.installation_id::text AS installation_id,c.repository_id::text AS repository_id,c.owner,c.repo
             FROM sigiro_admin.optimizer_run r
             JOIN sigiro_admin.optimizer_connection c ON c.tenant_id=r.tenant_id AND c.id=r.connection_id
-            WHERE c.enabled=TRUE AND (r.status='pending' OR
+            WHERE c.enabled=TRUE AND r.decision_context::jsonb->>'source'='assessor-live'
+              AND (r.status='pending' OR
               (r.status='running' AND r.lease_until_ms < (extract(epoch FROM clock_timestamp()) * 1000)::bigint))
               AND r.attempts < 3
             ORDER BY r.tenant_id,r.id LIMIT 1 FOR UPDATE OF r SKIP LOCKED`);

@@ -14,7 +14,7 @@ export default defineTool({
     await provisionWorkspace(await ctx.getSandbox(), files);
     return {
       workspace: "/workspace/repo", fileCount: files.length, baseRef: run.baseRef,
-      findingId: run.findingId, originalBaseline: { before: run.findingBefore, after: run.findingAfter },
+      assessorDecision: { yesProbability: run.decisionContext.yes_probability },
       evidenceWindowUs: { start: run.windowStartUs, end: run.windowEndUs },
     };
   },

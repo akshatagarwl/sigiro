@@ -37,9 +37,6 @@ pub(crate) struct ConnectionStateInput {
 pub(crate) struct TriggerInput {
     id: String,
     service: String,
-    operation: String,
-    signal: String,
-    ts_shift_us: i64,
 }
 
 #[derive(Serialize)]
@@ -48,7 +45,7 @@ pub(crate) struct RunOutput {
     status: String,
     service: String,
     connection_id: String,
-    finding_id: String,
+    decision_context: String,
     branch: String,
     actor: String,
     github_pull_request_id: Option<i64>,
@@ -114,7 +111,7 @@ pub(crate) fn create_local(conn: &rusqlite::Connection) -> anyhow::Result<()> {
         PRIMARY KEY (tenant_id, service, connection_id));
         CREATE TABLE IF NOT EXISTS optimizer_run (
         tenant_id TEXT NOT NULL, id TEXT NOT NULL, service TEXT NOT NULL,
-        connection_id TEXT NOT NULL, finding_id TEXT NOT NULL, branch TEXT NOT NULL,
+        connection_id TEXT NOT NULL, decision_context TEXT NOT NULL, branch TEXT NOT NULL,
         actor TEXT NOT NULL, status TEXT NOT NULL,
         lease_owner TEXT, lease_until_ms INTEGER, attempts INTEGER NOT NULL DEFAULT 0,
         session_id TEXT, failure_summary TEXT, github_pull_request_id INTEGER,
@@ -144,12 +141,38 @@ pub(crate) fn create_local(conn: &rusqlite::Connection) -> anyhow::Result<()> {
     let existing = stmt
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    if existing.contains("finding_id") && !existing.contains("decision_context") {
+        conn.execute_batch("ALTER TABLE optimizer_run RENAME COLUMN finding_id TO decision_context")?;
+    }
     for (name, ty) in fields {
         if !existing.contains(name) {
             conn.execute_batch(&format!("ALTER TABLE optimizer_run ADD COLUMN {name} {ty}"))?;
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    #[test]
+    fn keeps_historical_run_audit_without_turning_it_into_a_live_decision() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE optimizer_run (
+            tenant_id TEXT NOT NULL, id TEXT NOT NULL, service TEXT NOT NULL,
+            connection_id TEXT NOT NULL, finding_id TEXT NOT NULL, branch TEXT NOT NULL,
+            actor TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY(tenant_id,id));
+            INSERT INTO optimizer_run VALUES ('tenant','old','service','repo','[\"old-finding\"]','branch','actor','completed');").unwrap();
+        create_local(&conn).unwrap();
+        create_local(&conn).unwrap();
+        let (decision, status): (String, String) = conn.query_row(
+            "SELECT decision_context,status FROM optimizer_run WHERE id='old'", [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(decision, "[\"old-finding\"]");
+        assert_eq!(status, "completed");
+    }
 }
 
 pub(crate) fn create_hosted(conn: &mut postgres::Client) -> anyhow::Result<()> {
@@ -163,7 +186,7 @@ pub(crate) fn create_hosted(conn: &mut postgres::Client) -> anyhow::Result<()> {
         PRIMARY KEY (tenant_id, service, connection_id));
         CREATE TABLE IF NOT EXISTS sigiro_admin.optimizer_run (
         tenant_id TEXT NOT NULL, id TEXT NOT NULL, service TEXT NOT NULL,
-        connection_id TEXT NOT NULL, finding_id TEXT NOT NULL, branch TEXT NOT NULL,
+        connection_id TEXT NOT NULL, decision_context TEXT NOT NULL, branch TEXT NOT NULL,
         actor TEXT NOT NULL, status TEXT NOT NULL,
         lease_owner TEXT, lease_until_ms BIGINT, attempts INTEGER NOT NULL DEFAULT 0,
         session_id TEXT, failure_summary TEXT, github_pull_request_id BIGINT,
@@ -171,6 +194,12 @@ pub(crate) fn create_hosted(conn: &mut postgres::Client) -> anyhow::Result<()> {
         finding_before DOUBLE PRECISION, finding_after DOUBLE PRECISION,
         telemetry_window_start_us BIGINT, telemetry_window_end_us BIGINT,
         PRIMARY KEY (tenant_id, id));
+        DO $migration$ BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='sigiro_admin' AND table_name='optimizer_run' AND column_name='finding_id')
+            AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='sigiro_admin' AND table_name='optimizer_run' AND column_name='decision_context') THEN
+                ALTER TABLE sigiro_admin.optimizer_run RENAME COLUMN finding_id TO decision_context;
+            END IF;
+        END $migration$;
         ALTER TABLE sigiro_admin.optimizer_run ADD COLUMN IF NOT EXISTS lease_owner TEXT;
         ALTER TABLE sigiro_admin.optimizer_run ADD COLUMN IF NOT EXISTS lease_until_ms BIGINT;
         ALTER TABLE sigiro_admin.optimizer_run ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
@@ -195,7 +224,7 @@ fn read_run(
     tenant: &str,
     id: &str,
 ) -> anyhow::Result<Option<RunOutput>> {
-    let columns = "service,connection_id,finding_id,branch,actor,status,github_pull_request_id,session_id,attempts,failure_summary,target_ref,target_commit_sha,hypothesis,change_summary,validation_status,finding_before,finding_after,telemetry_window_start_us,telemetry_window_end_us";
+    let columns = "service,connection_id,decision_context,branch,actor,status,github_pull_request_id,session_id,attempts,failure_summary,target_ref,target_commit_sha,hypothesis,change_summary,validation_status,finding_before,finding_after,telemetry_window_start_us,telemetry_window_end_us";
     let record = match conn {
         AdminConnection::Local(conn) => {
             use rusqlite::OptionalExtension;
@@ -263,7 +292,7 @@ fn read_run(
         |(
             service,
             connection_id,
-            finding_id,
+            decision_context,
             branch,
             actor,
             status,
@@ -284,7 +313,7 @@ fn read_run(
             id: id.to_owned(),
             service,
             connection_id,
-            finding_id,
+            decision_context,
             branch,
             actor,
             status,
@@ -496,10 +525,6 @@ pub(crate) async fn mapping(
     Ok(StatusCode::CREATED)
 }
 
-fn escape_sql(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
 pub(crate) async fn trigger(
     State(state): State<Arc<AppState>>,
     context: Option<Extension<AuthContext>>,
@@ -509,24 +534,14 @@ pub(crate) async fn trigger(
     if !valid_id(&input.id)
         || input.service.is_empty()
         || input.service.len() > 256
-        || input.operation.len() > 256
-        || input.signal.len() > 64
-        || !(1_000_000_000_000_000..10_000_000_000_000_000).contains(&input.ts_shift_us)
     {
         return Err(bad_request(
-            "Invalid finding",
-            "invalid id, service, operation, signal or shift time",
+            "Invalid assessment request",
+            "expected a UUID and a bounded service name",
         ));
     }
     let tenant = context.tenant_id.clone();
     let actor = context.subject;
-    let finding_id = serde_json::to_string(&(
-        &input.service,
-        &input.operation,
-        &input.signal,
-        input.ts_shift_us,
-    ))
-    .expect("strings and integers are JSON serializable");
     let existing_state = Arc::clone(&state);
     let existing_tenant = tenant.to_string();
     let existing_id = input.id.clone();
@@ -538,7 +553,7 @@ pub(crate) async fn trigger(
     .map_err(|_| db_error())?
     .map_err(|_| db_error())?;
     if let Some(run) = previous {
-        if run.finding_id != finding_id || run.actor != actor {
+        if run.service != input.service || run.actor != actor {
             return Err(bad_request(
                 "Run identifier conflict",
                 "this run ID belongs to a different request",
@@ -546,36 +561,26 @@ pub(crate) async fn trigger(
         }
         return Ok(Json(run));
     }
-    let sql = format!(
-        "SELECT \"before\", \"after\" FROM {}sigiro_anomalies WHERE service_name='{}' AND operation='{}' AND signal='{}' AND epoch_us(ts_shift)={} LIMIT 2",
-        crate::pool::ProjectPool::prefix(),
-        escape_sql(&input.service),
-        escape_sql(&input.operation),
-        escape_sql(&input.signal),
-        input.ts_shift_us
-    );
-    let (rows, _) = crate::server::execute_sql(&state, &tenant, &sql)
-        .await
-        .map_err(|_| db_error())?;
-    if rows.len() != 1 {
-        return Err(bad_request(
-            "Finding unavailable",
-            "the requested finding is not uniquely present in this tenant's telemetry",
-        ));
-    }
-    let finding_before = rows[0]
-        .get("before")
-        .and_then(serde_json::Value::as_f64)
-        .ok_or_else(|| bad_request("Finding unavailable", "invalid original telemetry baseline"))?;
-    let finding_after = rows[0]
-        .get("after")
-        .and_then(serde_json::Value::as_f64)
-        .ok_or_else(|| bad_request("Finding unavailable", "invalid original telemetry baseline"))?;
-    let telemetry_window_start_us = input.ts_shift_us - 900_000_000;
-    let telemetry_window_end_us = input.ts_shift_us + 900_000_000;
+    // Record abstentions too. An unavailable Assessor service or missing baseline
+    // cannot authorize an investigation, but remains a durable decision audit.
+    let assessment = crate::assessor::assess(&state, &tenant, &input.service).await;
+    let status = if assessment.as_ref().is_ok_and(|d| d.probability >= 0.85) {
+        "pending"
+    } else {
+        "abstained"
+    };
+    let telemetry_window_end_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| db_error())?
+        .as_micros() as i64;
+    let telemetry_window_start_us = telemetry_window_end_us - 1_800_000_000;
+    let decision_context = match assessment {
+        Ok(decision) => serde_json::json!({"source":"assessor-live","yes_probability":decision.probability,"evidence":decision.evidence}).to_string(),
+        Err(_) => serde_json::json!({"source":"assessment-unavailable","reason":"live telemetry or Assessor was unavailable"}).to_string(),
+    };
     let branch = format!("sigiro/optimizer-{}", input.id);
     let tenant = tenant.to_string();
-    let expected_finding_id = finding_id.clone();
+    let expected_service = input.service.clone();
     let expected_actor = actor.clone();
     let run = tokio::task::spawn_blocking(move || {
         let mut guard = state.admin_conn.lock();
@@ -590,18 +595,18 @@ pub(crate) async fn trigger(
         if connections.len() != 1 { return Ok::<_,anyhow::Error>(None); }
         let connection_id = connections[0].clone();
         match &mut *guard {
-            AdminConnection::Local(conn) => { conn.execute("INSERT OR IGNORE INTO optimizer_run (tenant_id,id,service,connection_id,finding_id,branch,actor,status,finding_before,finding_after,telemetry_window_start_us,telemetry_window_end_us) VALUES (?1,?2,?3,?4,?5,?6,?7,'pending',?8,?9,?10,?11)", rusqlite::params![tenant,input.id,input.service,connection_id,finding_id,branch,actor,finding_before,finding_after,telemetry_window_start_us,telemetry_window_end_us])?; },
-            AdminConnection::Hosted(conn) => { conn.execute("INSERT INTO sigiro_admin.optimizer_run (tenant_id,id,service,connection_id,finding_id,branch,actor,status,finding_before,finding_after,telemetry_window_start_us,telemetry_window_end_us) VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,$10,$11) ON CONFLICT DO NOTHING", &[&tenant,&input.id,&input.service,&connection_id,&finding_id,&branch,&actor,&finding_before,&finding_after,&telemetry_window_start_us,&telemetry_window_end_us])?; },
+            AdminConnection::Local(conn) => { conn.execute("INSERT OR IGNORE INTO optimizer_run (tenant_id,id,service,connection_id,decision_context,branch,actor,status,telemetry_window_start_us,telemetry_window_end_us) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", rusqlite::params![tenant,input.id,input.service,connection_id,decision_context,branch,actor,status,telemetry_window_start_us,telemetry_window_end_us])?; },
+            AdminConnection::Hosted(conn) => { conn.execute("INSERT INTO sigiro_admin.optimizer_run (tenant_id,id,service,connection_id,decision_context,branch,actor,status,telemetry_window_start_us,telemetry_window_end_us) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING", &[&tenant,&input.id,&input.service,&connection_id,&decision_context,&branch,&actor,&status,&telemetry_window_start_us,&telemetry_window_end_us])?; },
         }
         read_run(&mut guard, &tenant, &input.id)
     }).await.map_err(|_| db_error())?.map_err(|_| db_error())?;
     let Some(run) = run else {
         return Err(bad_request(
             "Repository mapping missing or ambiguous",
-            "map the finding's service to exactly one enabled connection",
+            "map the assessed service to exactly one enabled connection",
         ));
     };
-    if run.finding_id != expected_finding_id || run.actor != expected_actor {
+    if run.service != expected_service || run.actor != expected_actor {
         return Err(bad_request(
             "Run identifier conflict",
             "this run ID belongs to a different request",
