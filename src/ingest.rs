@@ -1,5 +1,3 @@
-use crate::otlp::{InputFormat, MetricBatches};
-use crate::types::{SpanId, TraceId};
 use anyhow::Result;
 use arrow::array::{Int64Array, ListArray, ListBuilder, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -34,6 +32,8 @@ use opentelemetry_proto::tonic::collector::{
 };
 use prost::Message;
 use serde::Deserialize;
+use sigiro_core::ids::{SpanId, TraceId};
+use sigiro_core::otlp::{InputFormat, MetricBatches};
 use std::io::Read;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -216,7 +216,7 @@ async fn transform_traces(
     fmt: InputFormat,
 ) -> Result<RecordBatch, Status> {
     spawn_transform(workloads, "transform traces", move || {
-        crate::otlp::transform_traces(&bytes, fmt)
+        sigiro_core::otlp::transform_traces(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
@@ -229,7 +229,7 @@ async fn transform_logs(
     fmt: InputFormat,
 ) -> Result<(RecordBatch, u64), Status> {
     spawn_transform(workloads, "transform logs", move || {
-        crate::otlp::transform_logs(&bytes, fmt)
+        sigiro_core::otlp::transform_logs(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
@@ -242,7 +242,7 @@ async fn transform_metrics(
     fmt: InputFormat,
 ) -> Result<MetricBatches, Status> {
     spawn_transform(workloads, "transform metrics", move || {
-        crate::otlp::transform_metrics(&bytes, fmt)
+        sigiro_core::otlp::transform_metrics(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await

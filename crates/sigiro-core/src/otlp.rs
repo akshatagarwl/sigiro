@@ -5,15 +5,16 @@
 
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, Float64Builder, Int32Builder, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
+use arrow_array::Array;
+use arrow_array::RecordBatch;
+use arrow_array::builder::{
+    Float64Builder, Int32Builder, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
 };
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
+use arrow_schema::ArrowError;
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use serde_json::Value as JsonValue;
 
-use crate::types::{SpanId, TraceId};
+use crate::ids::{SpanId, TraceId};
 
 /// Convert a nanosecond count — every OTLP `*_unix_nano` timestamp and any
 /// span duration — to microseconds, the unit every sigiro table stores.
@@ -283,7 +284,7 @@ impl TraceBuilders {
 
     pub(crate) fn finish(mut self) -> Result<RecordBatch, ArrowError> {
         let schema = traces_schema();
-        let arrays: Vec<arrow::array::ArrayRef> = vec![
+        let arrays: Vec<arrow_array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.end_timestamp.finish()),
             Arc::new(self.duration.finish()),
@@ -324,10 +325,7 @@ impl Default for TraceBuilders {
 // Public decode functions
 // ============================================================================
 
-pub(crate) fn transform_traces(
-    bytes: &[u8],
-    format: InputFormat,
-) -> Result<RecordBatch, DecodeError> {
+pub fn transform_traces(bytes: &[u8], format: InputFormat) -> Result<RecordBatch, DecodeError> {
     match format {
         InputFormat::Protobuf => decode_traces_protobuf(bytes),
         InputFormat::Json => decode_traces_json(bytes),
@@ -338,7 +336,7 @@ pub(crate) fn transform_traces(
 /// count of records skipped for an unusable `service.name` (or other per-record
 /// decode error) so the caller can report OTLP `partialSuccess` instead of
 /// failing the whole batch on one bad sibling record.
-pub(crate) fn transform_logs(
+pub fn transform_logs(
     bytes: &[u8],
     format: InputFormat,
 ) -> Result<(RecordBatch, u64), DecodeError> {
@@ -348,10 +346,7 @@ pub(crate) fn transform_logs(
     }
 }
 
-pub(crate) fn transform_metrics(
-    bytes: &[u8],
-    format: InputFormat,
-) -> Result<MetricBatches, DecodeError> {
+pub fn transform_metrics(bytes: &[u8], format: InputFormat) -> Result<MetricBatches, DecodeError> {
     match format {
         InputFormat::Protobuf => decode_metrics_protobuf(bytes),
         InputFormat::Json => decode_metrics_json(bytes),
@@ -1041,7 +1036,7 @@ impl LogBuilders {
 
     pub(crate) fn finish(mut self) -> Result<RecordBatch, ArrowError> {
         let schema = logs_schema();
-        let arrays: Vec<arrow::array::ArrayRef> = vec![
+        let arrays: Vec<arrow_array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.observed_timestamp.finish()),
             Arc::new(self.trace_id.finish()),
@@ -1209,7 +1204,7 @@ impl GaugeBuilders {
             return Ok(None);
         }
         let schema = gauge_schema();
-        let arrays: Vec<arrow::array::ArrayRef> = vec![
+        let arrays: Vec<arrow_array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.start_timestamp.finish()),
             Arc::new(metric_name),
@@ -1249,7 +1244,7 @@ struct SumBuilders {
     flags: Int32Builder,
     exemplars_json: StringBuilder,
     aggregation_temporality: Int32Builder,
-    is_monotonic: arrow::array::BooleanBuilder,
+    is_monotonic: arrow_array::builder::BooleanBuilder,
 }
 
 impl SumBuilders {
@@ -1272,7 +1267,7 @@ impl SumBuilders {
             flags: Int32Builder::new(),
             exemplars_json: StringBuilder::new(),
             aggregation_temporality: Int32Builder::new(),
-            is_monotonic: arrow::array::BooleanBuilder::new(),
+            is_monotonic: arrow_array::builder::BooleanBuilder::new(),
         }
     }
 
@@ -1352,7 +1347,7 @@ impl SumBuilders {
             return Ok(None);
         }
         let schema = sum_schema();
-        let arrays: Vec<arrow::array::ArrayRef> = vec![
+        let arrays: Vec<arrow_array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.start_timestamp.finish()),
             Arc::new(metric_name),
@@ -1511,7 +1506,7 @@ impl HistogramBuilders {
             return Ok(None);
         }
         let schema = histogram_schema();
-        let arrays: Vec<arrow::array::ArrayRef> = vec![
+        let arrays: Vec<arrow_array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.start_timestamp.finish()),
             Arc::new(metric_name),
@@ -1701,7 +1696,7 @@ impl ExpHistogramBuilders {
             return Ok(None);
         }
         let schema = exp_histogram_schema();
-        let arrays: Vec<arrow::array::ArrayRef> = vec![
+        let arrays: Vec<arrow_array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.start_timestamp.finish()),
             Arc::new(metric_name),

@@ -335,7 +335,7 @@ impl ParsedQuery {
 /// that shape — never silently degrades (e.g. never falls back to
 /// avg-of-avgs for an unsupported case).
 fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
-    let escaped = crate::sql::escape_sql_string(sql);
+    let escaped = sigiro_core::sql::escape_sql_string(sql);
     let json_text: String = conn
         .query_row(
             &format!("SELECT json_serialize_sql('{escaped}')"),
@@ -865,7 +865,7 @@ fn deparse_constant(literal: &Value) -> Result<String> {
     let text = field_str(literal, "text")?;
     match kind {
         "NULL_LITERAL" => Ok("NULL".to_string()),
-        "STRING" => Ok(format!("'{}'", crate::sql::escape_sql_string(text))),
+        "STRING" => Ok(format!("'{}'", sigiro_core::sql::escape_sql_string(text))),
         "BOOLEAN" => match text {
             "true" => Ok("TRUE".to_string()),
             "false" => Ok("FALSE".to_string()),
@@ -1208,12 +1208,12 @@ fn wrap_quack_query(
         "SELECT * FROM quack_query('quack://{}:{}', '{}'",
         edge.host,
         edge.port,
-        crate::sql::escape_sql_string(inner_sql)
+        sigiro_core::sql::escape_sql_string(inner_sql)
     );
     if let Some(t) = token {
         sql.push_str(&format!(
             ", token := '{}'",
-            crate::sql::escape_sql_string(t.as_ref())
+            sigiro_core::sql::escape_sql_string(t.as_ref())
         ));
     }
     sql.push_str(", disable_ssl := true);");
@@ -1468,7 +1468,7 @@ pub async fn run_federated_query(
     {
         let mut obj = serde_json::Map::new();
         for (i, name) in column_names.iter().enumerate() {
-            let val = crate::sql::duckdb_row_value_to_json(row, i, &column_types[i])
+            let val = crate::duckdb_json::duckdb_row_value_to_json(row, i, &column_types[i])
                 .context("failed to read a coordinator fold result column")?;
             obj.insert(name.clone(), val);
         }

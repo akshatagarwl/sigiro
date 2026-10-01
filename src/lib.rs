@@ -3,7 +3,6 @@ pub mod alerts;
 pub mod auth;
 pub mod client;
 pub mod config;
-pub mod drain;
 pub mod federate;
 mod optimizer;
 
@@ -12,9 +11,9 @@ pub mod inserter;
 mod assessor;
 pub mod mcp;
 
+pub mod duckdb_json;
 pub mod oauth;
 pub mod otel;
-pub mod otlp;
 pub mod pool;
 pub mod profiling;
 pub(crate) mod quack;
@@ -22,7 +21,6 @@ pub mod responses;
 pub mod runtime_metrics;
 pub mod schema;
 pub mod server;
-pub mod sql;
 pub mod storage;
 pub mod types;
 pub mod workload;

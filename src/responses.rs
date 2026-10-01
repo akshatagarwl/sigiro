@@ -3,8 +3,8 @@
 //! Replaces `serde_json::Value` return types with compile-time verified structs,
 //! enabling accurate OpenAPI schema generation via utoipa.
 
-use crate::types::{SpanId, TraceId};
 use serde::{Deserialize, Serialize};
+use sigiro_core::ids::{SpanId, TraceId};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 

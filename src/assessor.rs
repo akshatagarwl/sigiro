@@ -313,7 +313,7 @@ mod tests {
             ]
             .map(str::to_owned);
             let sql = summary_sql("", table, "tenant's-service", failure, &bounds);
-            assert!(crate::sql::validate_read_only(&sql).is_ok(), "{sql}");
+            assert!(sigiro_core::sql::validate_read_only(&sql).is_ok(), "{sql}");
             assert!(sql.contains("service_name='tenant''s-service'"));
             assert!(sql.contains("resource_attributes NOT LIKE '%production-journald-backfill%'"));
         }

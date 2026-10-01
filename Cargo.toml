@@ -13,9 +13,30 @@ rust-version = "1.88"
 license = "Apache-2.0"
 
 [workspace]
-members = []
+members = ["crates/sigiro-core"]
+
+[workspace.lints.clippy]
+# Disallowed patterns (configured in clippy.toml)
+disallowed-methods = "deny"
+disallowed-macros = "deny"
+
+# Silent error drops via `let _ = expr_returning_result`
+let-underscore-must-use = "deny"
+
+# General quality
+needless-pass-by-value = "warn"
+cloned-instead-of-copied = "warn"
+redundant-closure-for-method-calls = "warn"
+manual-string-new = "warn"
+inefficient-to-string = "warn"
+
+[workspace.lints.rust]
+unused-must-use = "deny"
+dead_code = "warn"
+unused_imports = "warn"
 
 [dependencies]
+sigiro-core = { path = "crates/sigiro-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
@@ -33,10 +54,6 @@ tonic-types = "0.14"
 prost = "0.14"
 arrow = "58"
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
-# Temporary ProtoJSON decoder until the message-level serde defaults land in a
-# released opentelemetry-proto. The decoded request crosses back over protobuf,
-# keeping the existing 0.31 ingest and gRPC types untouched.
-opentelemetry-proto-json = { package = "opentelemetry-proto", version = "0.33", git = "https://github.com/Arnav12114/opentelemetry-rust.git", rev = "7b70ecc68e68a1e0ea5c343caf8e37c68adaa356", default-features = false, features = ["gen-tonic-messages", "metrics", "with-serde"] }
 axum = "0.8"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
@@ -59,7 +76,6 @@ pyroscope = { version = "=2.0.4", features = ["backend-jemalloc", "backend-pprof
 tikv-jemallocator = { version = "0.6.1", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 regex = "1"
-drain3 = "0.3.0"
 hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
@@ -69,7 +85,6 @@ url = "2"
 tempfile = "3"
 headers = "0.4"
 mime = "0.3"
-sqlparser = { version = "0.53", features = ["visitor"] }
 axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
 multer = "3"
 futures-util = "0.3"
@@ -83,7 +98,6 @@ tracing-opentelemetry = "0.32"
 typed-env = "0.3.0"
 utoipa = "5"
 camino = "1.2.2"
-itertools = "0.14.0"
 rmcp = { version = "3.1.2", features = ["client", "server", "macros", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "transport-io", "schemars"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 tokio-metrics = "0.5.1"
@@ -109,25 +123,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 schemars = "1"
 tokio-util = "0.7"
 
-[lints.clippy]
-# Disallowed patterns (configured in clippy.toml)
-disallowed-methods = "deny"
-disallowed-macros = "deny"
-
-# Silent error drops via `let _ = expr_returning_result`
-let-underscore-must-use = "deny"
-
-# General quality
-needless-pass-by-value = "warn"
-cloned-instead-of-copied = "warn"
-redundant-closure-for-method-calls = "warn"
-manual-string-new = "warn"
-inefficient-to-string = "warn"
-
-[lints.rust]
-unused-must-use = "deny"
-dead_code = "warn"
-unused_imports = "warn"
+[lints]
+workspace = true
 
 [profile.dev]
 split-debuginfo = "unpacked"
