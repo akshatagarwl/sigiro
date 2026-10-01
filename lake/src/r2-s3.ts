@@ -91,14 +91,12 @@ export async function r2S3Handle(
               : { offset, length: end - offset + 1 },
         });
         if (!obj) return xml("<Error><Code>NoSuchKey</Code></Error>", 404);
-        const len =
-          (obj.range as { length?: number })?.length ?? obj.size - offset;
         const buf = await obj.arrayBuffer();
         return new Response(buf, {
           status: 206,
           headers: {
             "content-length": String(buf.byteLength),
-            "content-range": `bytes ${offset}-${offset + len - 1}/${obj.size}`,
+            "content-range": `bytes ${offset}-${offset + buf.byteLength - 1}/${obj.size}`,
             etag: `"${obj.etag}"`,
             "last-modified": obj.uploaded.toUTCString(),
           },

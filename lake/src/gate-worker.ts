@@ -1,7 +1,9 @@
 // Runtime-gate Worker: runs an ordered list of steps (SQL, catalog publish, catalog restore)
 // inside ONE request, because Workers isolates are not sticky between requests.
 // Deployed only by test/runtime-gate-e2e.ts and deleted afterwards.
-import { discardIfFatal, fileSystem, lakeConnection } from "./runtime";
+import { fileSystem } from "@ducklings/workers-ducklake";
+
+import { lakeConnection } from "./runtime";
 
 interface Env {
   LAKE: R2Bucket;
@@ -36,13 +38,29 @@ async function runStep(env: Env, step: Step): Promise<unknown[] | undefined> {
     );
     return undefined;
   }
-  const object = await env.LAKE.get(step.restore.key);
-  if (!object) throw new Error(`no catalog at ${step.restore.key}`);
-  fileSystem().writeFile(
-    step.restore.catalog,
-    new Uint8Array(await object.arrayBuffer())
-  );
-  return undefined;
+  if ("restore" in step) {
+    const object = await env.LAKE.get(step.restore.key);
+    if (!object) throw new Error(`no catalog at ${step.restore.key}`);
+    fileSystem().writeFile(
+      step.restore.catalog,
+      new Uint8Array(await object.arrayBuffer())
+    );
+    return undefined;
+  }
+  throw new Error(`unknown step ${JSON.stringify(step)}`);
+}
+
+const STEP_KINDS = ["sql", "publish", "restore"];
+
+/** Parse the request body at the boundary: an array of objects with exactly one known step kind. */
+function parseSteps(body: unknown): Step[] {
+  if (!Array.isArray(body)) throw new Error("steps must be a JSON array");
+  for (const step of body) {
+    const kinds = typeof step === "object" && step !== null ? Object.keys(step) : [];
+    if (kinds.length !== 1 || !STEP_KINDS.includes(kinds[0]))
+      throw new Error(`each step needs exactly one of ${STEP_KINDS.join(", ")}: ${JSON.stringify(step)}`);
+  }
+  return body as Step[];
 }
 
 export default {
@@ -51,13 +69,17 @@ export default {
       return json({ error: "unauthorized" }, 401);
     if (new URL(req.url).pathname !== "/steps" || req.method !== "POST")
       return json({ error: "not found" }, 404);
-    const steps = (await req.json()) as Step[];
+    let steps: Step[];
+    try {
+      steps = parseSteps(await req.json());
+    } catch (e) {
+      return json({ error: String(e) }, 400);
+    }
     const outcomes: Outcome[] = [];
     for (const step of steps) {
       try {
         outcomes.push({ step, ok: true, rows: await runStep(env, step) });
       } catch (e) {
-        discardIfFatal(e);
         outcomes.push({ step, ok: false, error: String(e) });
       }
     }

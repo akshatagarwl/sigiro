@@ -239,6 +239,14 @@ try {
     failed.length === 0 && spans === 1,
     failed.join("\n      ") || `restored lake returned ${spans} spans`
   );
+
+  // Harness self-check: a malformed step is rejected at the boundary, not run as a restore.
+  const malformed = await fetch(`${url}/steps`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify([{ bogus: 1 }]),
+  });
+  check("Gate Worker rejects a malformed step", malformed.status === 400, `HTTP ${malformed.status}: ${(await malformed.text()).slice(0, 200)}`);
 } catch (e) {
   if (failures.length === 0) failures.push(String(e));
   console.error(String(e));

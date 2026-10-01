@@ -9,7 +9,7 @@ Feature: DuckDB-WASM runtime gate for the Workers tenant lake
 
   Scenario: Every documented SQL example runs on the Workers runtime
     Given a tenant lake created from Sigiro's table definitions
-    And one span, one log and one gauge row with JSON attributes
+    And seeded span, log and gauge rows with JSON attributes inside each example's time window
     When each SQL example from the English docs is run
     Then every example returns rows without an error
 
