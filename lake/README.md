@@ -5,9 +5,10 @@ Workers runtime for the hosted tenant lake ([ADR-002](../docs/notes/decisions/00
 
 ## Runtime
 
-`runtime/build.sh` builds `@ducklings/workers-ducklake` at a pinned commit with
-`runtime/ducklings.patch` applied. The patch adds the `json` and `icu` extensions
-and exports `fileSystem()`. The first build takes about 30 minutes; later builds
+`runtime/build.sh` builds `@ducklings/workers-ducklake` from Sigiro's fork
+([`akshatagarwl/ducklings@sigiro/lake-runtime`](https://github.com/akshatagarwl/ducklings/tree/sigiro/lake-runtime))
+at a pinned commit. The fork adds the `json` and `icu` extensions and exports
+`fileSystem()`. Whether to upstream it is undecided. The first build takes about 30 minutes; later builds
 are incremental.
 
 ```sh
