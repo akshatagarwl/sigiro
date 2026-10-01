@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@ducklings/workers-ducklake':
-        specifier: 1.5.5
-        version: 1.5.5
+        specifier: file:runtime/dist/ducklings-workers-ducklake-1.5.5.tgz
+        version: file:runtime/dist/ducklings-workers-ducklake-1.5.5.tgz
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260919.1
@@ -80,14 +80,8 @@ packages:
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
 
-  '@ducklings/workers-ducklake@1.5.5':
-    resolution: {integrity: sha512-HvBAr/np5NbSj5iNVBOStQWYO1C7W5jugWWPBPWeij+LvgF0SxvhNy4VXoP34hF+gbM9g/4YbGLUhBk8Trydaw==}
-    engines: {node: '>=22.0.0'}
-    peerDependencies:
-      vite: ^5.0.0 || ^6.0.0 || ^7.0.0
-    peerDependenciesMeta:
-      vite:
-        optional: true
+  '@ducklings/workers-ducklake@file:runtime/dist/ducklings-workers-ducklake-1.5.5.tgz':
+    resolution: {tarball: file:runtime/dist/ducklings-workers-ducklake-1.5.5.tgz}
 
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
@@ -865,7 +859,7 @@ snapshots:
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
 
-  '@ducklings/workers-ducklake@1.5.5':
+  '@ducklings/workers-ducklake@file:runtime/dist/ducklings-workers-ducklake-1.5.5.tgz':
     dependencies:
       '@uwdata/flechette': 2.5.0
 
