@@ -393,7 +393,7 @@ pub(crate) async fn internal_query(
             "invalid run, lease, or SQL length",
         ));
     }
-    crate::sql::validate_read_only_with(&input.sql, false)
+    sigiro_core::sql::validate_read_only_with(&input.sql, false)
         .map_err(|_| bad_request("Query rejected", "SQL must be a permitted read-only query"))?;
     let control = Arc::clone(&state);
     let run_id = input.run_id.clone();

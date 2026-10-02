@@ -17,14 +17,13 @@ use utoipa::OpenApi;
 
 use crate::admin;
 use crate::auth;
+use crate::duckdb_json::duckdb_row_value_to_json;
 use crate::ingest::OtlpGrpcService;
 use crate::inserter::{DiskCapacityState, MsgRouter};
 use crate::pool::ProjectPool;
 use crate::responses::*;
-use crate::sql::{
-    ALLOWED_TABLES, duckdb_row_value_to_json, escape_sql_string, validate_read_only_with,
-};
 use crate::types::*;
+use sigiro_core::sql::{ALLOWED_TABLES, escape_sql_string, validate_read_only_with};
 use tracing_attributes::instrument;
 
 #[derive(OpenApi)]
@@ -230,7 +229,7 @@ impl AppState {
 //   Therefore we use AST-based SQL validation (sqlparser) + `prepare()` single-statement guarantee.
 //   `conn.prepare()` only handles one statement — multi-statement injection via semicolons
 //   is already prevented by DuckDB itself. The firewall itself lives in
-//   `crate::sql` — see `crate::sql::validate_read_only`.
+//   `sigiro_core::sql` — see `sigiro_core::sql::validate_read_only`.
 
 /// The public spec: everything `ApiDoc` describes, minus `/admin`.
 ///
@@ -1556,13 +1555,13 @@ async fn trace_detail_handler(
         .map_err(|e| query_api_error("trace detail query failed", &e))?;
 
     let mut spans: Vec<SpanDetail> = Vec::new();
-    let mut span_map: std::collections::HashMap<crate::types::SpanId, SpanDetail> =
+    let mut span_map: std::collections::HashMap<sigiro_core::ids::SpanId, SpanDetail> =
         std::collections::HashMap::new();
     let mut parent_to_children: std::collections::HashMap<
-        crate::types::SpanId,
-        Vec<crate::types::SpanId>,
+        sigiro_core::ids::SpanId,
+        Vec<sigiro_core::ids::SpanId>,
     > = std::collections::HashMap::new();
-    let mut root_span_id: Option<crate::types::SpanId> = None;
+    let mut root_span_id: Option<sigiro_core::ids::SpanId> = None;
     let mut earliest_start_us: Option<i64> = None;
     let mut latest_end_us: Option<i64> = None;
     let mut inclusive_duration_us: i64 = 0;
@@ -1578,7 +1577,7 @@ async fn trace_detail_handler(
             )
         })?;
 
-        let span_id = crate::types::SpanId::try_new(
+        let span_id = sigiro_core::ids::SpanId::try_new(
             obj.get("span_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -1594,7 +1593,7 @@ async fn trace_detail_handler(
             .get("parent_span_id")
             .and_then(|v| v.as_str())
             .filter(|id| !id.is_empty())
-            .map(|id| crate::types::SpanId::try_new(id.to_string()))
+            .map(|id| sigiro_core::ids::SpanId::try_new(id.to_string()))
             .transpose()
             .map_err(|e| {
                 bad_request(
@@ -1761,21 +1760,24 @@ async fn trace_detail_handler(
 
 /// Compute the critical path: longest duration-sum path from root to any leaf.
 fn compute_critical_path(
-    root_id: &crate::types::SpanId,
-    parent_to_children: &std::collections::HashMap<crate::types::SpanId, Vec<crate::types::SpanId>>,
-    span_map: &std::collections::HashMap<crate::types::SpanId, SpanDetail>,
-) -> Vec<crate::types::SpanId> {
+    root_id: &sigiro_core::ids::SpanId,
+    parent_to_children: &std::collections::HashMap<
+        sigiro_core::ids::SpanId,
+        Vec<sigiro_core::ids::SpanId>,
+    >,
+    span_map: &std::collections::HashMap<sigiro_core::ids::SpanId, SpanDetail>,
+) -> Vec<sigiro_core::ids::SpanId> {
     #[allow(clippy::too_many_arguments)]
     fn dfs(
-        span_id: &crate::types::SpanId,
+        span_id: &sigiro_core::ids::SpanId,
         parent_to_children: &std::collections::HashMap<
-            crate::types::SpanId,
-            Vec<crate::types::SpanId>,
+            sigiro_core::ids::SpanId,
+            Vec<sigiro_core::ids::SpanId>,
         >,
-        span_map: &std::collections::HashMap<crate::types::SpanId, SpanDetail>,
-        current_path: &[crate::types::SpanId],
+        span_map: &std::collections::HashMap<sigiro_core::ids::SpanId, SpanDetail>,
+        current_path: &[sigiro_core::ids::SpanId],
         current_duration: i64,
-        best_path: &mut Vec<crate::types::SpanId>,
+        best_path: &mut Vec<sigiro_core::ids::SpanId>,
         best_duration: &mut i64,
     ) {
         let span = match span_map.get(span_id) {

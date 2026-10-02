@@ -1,10 +1,10 @@
-use crate::sql::escape_sql_string;
 use crate::types::TenantId;
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use duckdb::Connection;
 use nutype::nutype;
 use secrecy::{ExposeSecret, SecretString};
+use sigiro_core::sql::escape_sql_string;
 use tracing::instrument;
 use url::{Position, Url};
 

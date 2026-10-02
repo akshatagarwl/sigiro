@@ -1,9 +1,9 @@
-use crate::otlp::MetricBatches;
 use anyhow::{Context, Result};
 use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use dashmap::DashMap;
 use duckdb::Connection;
+use sigiro_core::otlp::MetricBatches;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -13,9 +13,9 @@ use tokio::task::JoinHandle as TokioJoinHandle;
 use tracing_attributes::instrument;
 
 use crate::config::BackpressurePolicy;
-use crate::drain::DrainTree;
 use crate::pool::ProjectPool;
 use crate::types::{IngestMsg, SignalTable};
+use sigiro_core::drain::DrainTree;
 
 /// Errors from the ingest router.
 #[derive(Debug, thiserror::Error)]

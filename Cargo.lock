@@ -5162,13 +5162,11 @@ dependencies = [
  "criterion",
  "dashmap",
  "dirs",
- "drain3",
  "duckdb",
  "flate2",
  "futures-util",
  "headers",
  "hex",
- "itertools 0.14.0",
  "jsonwebtoken",
  "keyring",
  "libc",
@@ -5181,7 +5179,6 @@ dependencies = [
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
  "opentelemetry-proto 0.31.0",
- "opentelemetry-proto 0.33.0",
  "opentelemetry_sdk 0.31.0",
  "parking_lot",
  "postgres",
@@ -5200,7 +5197,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sqlparser",
+ "sigiro-core",
  "tempfile",
  "thiserror 2.0.18",
  "tikv-jemallocator",
@@ -5221,6 +5218,30 @@ dependencies = [
  "utoipa",
  "walkdir",
  "webbrowser",
+]
+
+[[package]]
+name = "sigiro-core"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "drain3",
+ "getrandom 0.3.4",
+ "hex",
+ "itertools 0.14.0",
+ "nutype",
+ "opentelemetry-proto 0.31.0",
+ "opentelemetry-proto 0.33.0",
+ "prost",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlparser",
+ "thiserror 2.0.18",
+ "time",
+ "tracing",
 ]
 
 [[package]]
