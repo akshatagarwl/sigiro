@@ -228,6 +228,11 @@ sources = ["@group:rust-gate", "@group:deployment-contract"]
 outputs = []
 cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
 
+[tasks.nightly-release]
+description = "Publish and deploy origin/main to production (pass -- --dry-run to plan only)."
+env = { SIGIRO_RELEASE_ALLOW_WRITES = "1", DUCKDB_STATIC_CACHE = "{{env.HOME}}/Library/Caches/sigiro/duckdb-static" }
+run = "python3 deploy/nightly_release.py"
+
 [tasks.install-hooks]
 description = "Install hk's Git 2.54+ repository-local config hooks."
 run = """
