@@ -1,0 +1,25 @@
+{
+  "name": "@sigiro/lake",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "aube@2.2.16",
+  "engines": {
+    "node": ">=24.20.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test:runtime-gate-e2e": "node --import tsx test/runtime-gate-e2e.ts",
+    "runtime:build": "runtime/build.sh"
+  },
+  "dependencies": {
+    "@ducklings/workers-ducklake": "file:runtime/dist/ducklings-workers-ducklake-1.5.5.tgz"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260919.1",
+    "@types/node": "24.10.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "wrangler": "4.145.0"
+  }
+}
