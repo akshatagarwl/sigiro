@@ -46,7 +46,9 @@ dashmap = "6"
 rusqlite = { version = "0.32", features = ["bundled"] }
 postgres = "0.19"
 postgres-native-tls = "0.5"
-native-tls = "0.2"
+# Vendored so Linux release binaries cross-compile from macOS without a
+# target OpenSSL install; macOS and Windows use their platform TLS instead.
+native-tls = { version = "0.2", features = ["vendored"] }
 
 # OTLP ingest
 tonic = { version = "0.14", features = ["tls-aws-lc"] }

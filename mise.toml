@@ -72,6 +72,14 @@ deployment-contract = [
 # supplied by scripts/prepare-duckdb-static.sh and never compiled here.
 CC = "sccache {% if os() == 'macos' %}clang{% else %}cc{% endif %}"
 CXX = "sccache {% if os() == 'macos' %}clang++{% else %}c++{% endif %}"
+# Linux release targets need their own C toolchain: cc-rs prefers
+# CC_<target> over CC, and the generic CC above cannot see a Linux sysroot.
+CC_x86_64_unknown_linux_gnu = "x86_64-linux-gnu-gcc"
+CXX_x86_64_unknown_linux_gnu = "x86_64-linux-gnu-g++"
+AR_x86_64_unknown_linux_gnu = "x86_64-linux-gnu-ar"
+CC_aarch64_unknown_linux_gnu = "aarch64-linux-gnu-gcc"
+CXX_aarch64_unknown_linux_gnu = "aarch64-linux-gnu-g++"
+AR_aarch64_unknown_linux_gnu = "aarch64-linux-gnu-ar"
 # Was `set dotenv-load` in the justfile. Optional: `.env` is gitignored and a
 # clone does not have one, and a missing file must not fail every task.
 _.file = { path = ".env", optional = true }
