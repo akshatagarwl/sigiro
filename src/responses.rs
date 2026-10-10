@@ -4,7 +4,7 @@
 //! enabling accurate OpenAPI schema generation via utoipa.
 
 use serde::{Deserialize, Serialize};
-use sigiro_core::ids::{SpanId, TraceId};
+use sigiro_segments::{SpanId, TraceId};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 

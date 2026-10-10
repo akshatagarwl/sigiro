@@ -1,45 +1,26 @@
-//! Zero-copy OTLP to Arrow transformation.
-//!
-//! Replaces the vendored otlp2records crate with direct builder append —
-//! no VRL interpreter, no intermediate representation.
-
 use std::sync::Arc;
 
-use arrow_array::Array;
-use arrow_array::RecordBatch;
-use arrow_array::builder::{
-    Float64Builder, Int32Builder, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
+use arrow::array::{
+    Array, Float64Builder, Int32Builder, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
 };
-use arrow_schema::ArrowError;
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
 use serde_json::Value as JsonValue;
 
-use crate::ids::{SpanId, TraceId};
+use crate::{SpanId, TraceId};
 
-/// Convert a nanosecond count — every OTLP `*_unix_nano` timestamp and any
-/// span duration — to microseconds, the unit every sigiro table stores.
-///
-/// Routed through `time::Duration` so the conversion is a named domain
-/// operation, never a bare divisor: a stray `/1_000_000` (instead of `/1_000`)
-/// on the span path is exactly what silently made every latency 1000x too
-/// small. There is now one obvious way to do this, and it cannot be wrong.
 #[inline]
 fn nanos_to_micros(nanos: i64) -> i64 {
     time::Duration::nanoseconds(nanos).whole_microseconds() as i64
 }
 
-// ============================================================================
-// Public types
-// ============================================================================
-
-/// Input format for OTLP decoding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputFormat {
     Protobuf,
     Json,
 }
 
-/// Errors that can occur during OTLP decoding.
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
     #[error("protobuf decode error: {0}")]
@@ -52,7 +33,6 @@ pub enum DecodeError {
     Unsupported(String),
 }
 
-/// Result of transforming OTLP metrics to Arrow RecordBatches.
 #[derive(Debug)]
 pub struct MetricBatches {
     pub gauge: Option<RecordBatch>,
@@ -62,7 +42,6 @@ pub struct MetricBatches {
     pub skipped: SkippedMetrics,
 }
 
-/// Metrics that were skipped during processing.
 #[derive(Debug, Default)]
 pub struct SkippedMetrics {
     pub(crate) summaries: usize,
@@ -100,11 +79,6 @@ impl SkippedMetrics {
     }
 }
 
-// ============================================================================
-// Trace direct builders
-// ============================================================================
-
-/// Arrow builders for the flat trace span schema.
 pub struct TraceBuilders {
     timestamp: TimestampMicrosecondBuilder,
     end_timestamp: Int64Builder,
@@ -166,9 +140,9 @@ impl TraceBuilders {
 
     pub(crate) fn append_span(
         &mut self,
-        span: &opentelemetry_proto::tonic::trace::v1::Span,
-        resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,
-        scope: Option<&opentelemetry_proto::tonic::common::v1::InstrumentationScope>,
+        span: &crate::otel_proto::tonic::trace::v1::Span,
+        resource: Option<&crate::otel_proto::tonic::resource::v1::Resource>,
+        scope: Option<&crate::otel_proto::tonic::common::v1::InstrumentationScope>,
     ) -> Result<(), DecodeError> {
         let start = i64::try_from(span.start_time_unix_nano).map_err(|_| {
             DecodeError::Unsupported(format!(
@@ -226,7 +200,7 @@ impl TraceBuilders {
             || service_name.starts_with("unknown_service:")
         {
             return Err(DecodeError::Parse(
-                "span with unusable service_name detected — set OTEL_SERVICE_NAME (or service.name resource attribute) on the sending application".into(),
+                "span with unusable service_name detected; set OTEL_SERVICE_NAME or the service.name resource attribute on the sending application".into(),
             ));
         }
         self.service_name.append_value(&service_name);
@@ -237,7 +211,7 @@ impl TraceBuilders {
 
         if span.name.is_empty() {
             return Err(DecodeError::Parse(
-                "span name is empty — every span must have a name describing the operation".into(),
+                "span name is empty; every span must have a name describing the operation".into(),
             ));
         }
         self.span_name.append_value(&span.name);
@@ -284,7 +258,7 @@ impl TraceBuilders {
 
     pub(crate) fn finish(mut self) -> Result<RecordBatch, ArrowError> {
         let schema = traces_schema();
-        let arrays: Vec<arrow_array::ArrayRef> = vec![
+        let arrays: Vec<arrow::array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.end_timestamp.finish()),
             Arc::new(self.duration.finish()),
@@ -321,10 +295,6 @@ impl Default for TraceBuilders {
     }
 }
 
-// ============================================================================
-// Public decode functions
-// ============================================================================
-
 pub fn transform_traces(bytes: &[u8], format: InputFormat) -> Result<RecordBatch, DecodeError> {
     match format {
         InputFormat::Protobuf => decode_traces_protobuf(bytes),
@@ -332,10 +302,6 @@ pub fn transform_traces(bytes: &[u8], format: InputFormat) -> Result<RecordBatch
     }
 }
 
-/// Transform OTLP logs. Returns the RecordBatch of accepted rows plus the
-/// count of records skipped for an unusable `service.name` (or other per-record
-/// decode error) so the caller can report OTLP `partialSuccess` instead of
-/// failing the whole batch on one bad sibling record.
 pub fn transform_logs(
     bytes: &[u8],
     format: InputFormat,
@@ -354,7 +320,7 @@ pub fn transform_metrics(bytes: &[u8], format: InputFormat) -> Result<MetricBatc
 }
 
 fn decode_traces_protobuf(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
-    use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+    use crate::otel_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
     use prost::Message;
 
     let request = ExportTraceServiceRequest::decode(bytes)?;
@@ -362,14 +328,14 @@ fn decode_traces_protobuf(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
 }
 
 fn decode_traces_json(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
-    use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+    use crate::otel_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 
     let request: ExportTraceServiceRequest = serde_json::from_slice(bytes)?;
     decode_traces_request(request)
 }
 
 fn decode_traces_request(
-    request: opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest,
+    request: crate::otel_proto::tonic::collector::trace::v1::ExportTraceServiceRequest,
 ) -> Result<RecordBatch, DecodeError> {
     let mut builders = TraceBuilders::new();
 
@@ -389,7 +355,7 @@ fn decode_traces_request(
 }
 
 fn decode_logs_protobuf(bytes: &[u8]) -> Result<(RecordBatch, u64), DecodeError> {
-    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+    use crate::otel_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use prost::Message;
 
     let request = ExportLogsServiceRequest::decode(bytes)?;
@@ -397,14 +363,14 @@ fn decode_logs_protobuf(bytes: &[u8]) -> Result<(RecordBatch, u64), DecodeError>
 }
 
 fn decode_logs_json(bytes: &[u8]) -> Result<(RecordBatch, u64), DecodeError> {
-    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+    use crate::otel_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 
     let request: ExportLogsServiceRequest = serde_json::from_slice(bytes)?;
     decode_logs_request(request)
 }
 
 fn decode_logs_request(
-    request: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest,
+    request: crate::otel_proto::tonic::collector::logs::v1::ExportLogsServiceRequest,
 ) -> Result<(RecordBatch, u64), DecodeError> {
     let mut builders = LogBuilders::new();
     let mut rejected: u64 = 0;
@@ -414,8 +380,6 @@ fn decode_logs_request(
         for scope_logs in resource_logs.scope_logs {
             let scope = scope_logs.scope.as_ref();
             for log in scope_logs.log_records {
-                // Skip + count an unusable record instead of aborting the whole
-                // batch; the append is atomic so no partial columns are written.
                 if let Err(e) = builders.append_log(&log, resource, scope) {
                     rejected += 1;
                     tracing::debug!("skipping unusable log record: {e}");
@@ -431,7 +395,7 @@ fn decode_logs_request(
 }
 
 fn decode_metrics_protobuf(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
-    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use crate::otel_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
     use prost::Message;
 
     let request = ExportMetricsServiceRequest::decode(bytes)?;
@@ -439,20 +403,17 @@ fn decode_metrics_protobuf(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
 }
 
 fn decode_metrics_json(bytes: &[u8]) -> Result<MetricBatches, DecodeError> {
-    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
-    use opentelemetry_proto_json::tonic::collector::metrics::v1::ExportMetricsServiceRequest as JsonExportMetricsServiceRequest;
-    use prost::Message;
+    use crate::otel_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 
-    let json_request: JsonExportMetricsServiceRequest = serde_json::from_slice(bytes)?;
-    let request = ExportMetricsServiceRequest::decode(json_request.encode_to_vec().as_slice())?;
+    let request: ExportMetricsServiceRequest = serde_json::from_slice(bytes)?;
     decode_metrics_request(request, true)
 }
 
 fn decode_metrics_request(
-    request: opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest,
+    request: crate::otel_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest,
     reject_missing_data: bool,
 ) -> Result<MetricBatches, DecodeError> {
-    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+    use crate::otel_proto::tonic::metrics::v1::metric::Data;
 
     let mut gauge = GaugeBuilders::new();
     let mut sum = SumBuilders::new();
@@ -535,16 +496,16 @@ fn decode_metrics_request(
 }
 
 fn track_skipped_value(
-    value: &Option<opentelemetry_proto::tonic::metrics::v1::number_data_point::Value>,
+    value: &Option<crate::otel_proto::tonic::metrics::v1::number_data_point::Value>,
     skipped: &mut SkippedMetrics,
 ) {
     match value {
-        Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d))
+        Some(crate::otel_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d))
             if d.is_nan() =>
         {
             skipped.nan_values += 1
         }
-        Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d))
+        Some(crate::otel_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d))
             if d.is_infinite() =>
         {
             skipped.infinity_values += 1
@@ -553,10 +514,6 @@ fn track_skipped_value(
         _ => {}
     }
 }
-
-// ============================================================================
-// Schema
-// ============================================================================
 
 fn traces_schema() -> Schema {
     Schema::new(vec![
@@ -736,21 +693,17 @@ fn exp_histogram_schema() -> Schema {
     ])
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 fn extract_string_attr(
-    resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,
+    resource: Option<&crate::otel_proto::tonic::resource::v1::Resource>,
     key: &str,
 ) -> Option<String> {
     resource.and_then(|r| {
         r.attributes.iter().find_map(|kv| {
             if kv.key == key {
                 kv.value.as_ref().and_then(|v| match &v.value {
-                    Some(
-                        opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s),
-                    ) if !s.is_empty() => Some(s.clone()),
+                    Some(crate::otel_proto::tonic::common::v1::any_value::Value::StringValue(
+                        s,
+                    )) if !s.is_empty() => Some(s.clone()),
                     _ => None,
                 })
             } else {
@@ -760,7 +713,7 @@ fn extract_string_attr(
     })
 }
 
-fn attrs_to_json(attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue]) -> String {
+fn attrs_to_json(attrs: &[crate::otel_proto::tonic::common::v1::KeyValue]) -> String {
     if attrs.is_empty() {
         return "{}".to_string();
     }
@@ -775,10 +728,11 @@ fn attrs_to_json(attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue]) -> 
     serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn any_value_to_json(av: &opentelemetry_proto::tonic::common::v1::AnyValue) -> Option<JsonValue> {
-    use opentelemetry_proto::tonic::common::v1::any_value::Value;
+fn any_value_to_json(av: &crate::otel_proto::tonic::common::v1::AnyValue) -> Option<JsonValue> {
+    use crate::otel_proto::tonic::common::v1::any_value::Value;
     match &av.value {
         Some(Value::StringValue(s)) => Some(JsonValue::String(s.clone())),
+        Some(Value::StringValueStrindex(i)) => Some(JsonValue::Number((*i).into())),
         Some(Value::BoolValue(b)) => Some(JsonValue::Bool(*b)),
         Some(Value::IntValue(i)) => Some(JsonValue::Number((*i).into())),
         Some(Value::DoubleValue(d)) => serde_json::Number::from_f64(*d).map(JsonValue::Number),
@@ -802,7 +756,7 @@ fn any_value_to_json(av: &opentelemetry_proto::tonic::common::v1::AnyValue) -> O
     }
 }
 
-fn events_to_json(events: &[opentelemetry_proto::tonic::trace::v1::span::Event]) -> String {
+fn events_to_json(events: &[crate::otel_proto::tonic::trace::v1::span::Event]) -> String {
     if events.is_empty() {
         return "[]".to_string();
     }
@@ -820,7 +774,7 @@ fn events_to_json(events: &[opentelemetry_proto::tonic::trace::v1::span::Event])
     serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string())
 }
 
-fn links_to_json(links: &[opentelemetry_proto::tonic::trace::v1::span::Link]) -> String {
+fn links_to_json(links: &[crate::otel_proto::tonic::trace::v1::span::Link]) -> String {
     if links.is_empty() {
         return "[]".to_string();
     }
@@ -839,7 +793,7 @@ fn links_to_json(links: &[opentelemetry_proto::tonic::trace::v1::span::Link]) ->
     serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string())
 }
 
-fn exemplars_to_json(exemplars: &[opentelemetry_proto::tonic::metrics::v1::Exemplar]) -> String {
+fn exemplars_to_json(exemplars: &[crate::otel_proto::tonic::metrics::v1::Exemplar]) -> String {
     if exemplars.is_empty() {
         return "[]".to_string();
     }
@@ -860,10 +814,10 @@ fn exemplars_to_json(exemplars: &[opentelemetry_proto::tonic::metrics::v1::Exemp
                 JsonValue::Number(e.time_unix_nano.into()),
             );
             if let Some(filtered_attrs) =
-                any_value_to_json(&opentelemetry_proto::tonic::common::v1::AnyValue {
+                any_value_to_json(&crate::otel_proto::tonic::common::v1::AnyValue {
                     value: Some(
-                        opentelemetry_proto::tonic::common::v1::any_value::Value::KvlistValue(
-                            opentelemetry_proto::tonic::common::v1::KeyValueList {
+                        crate::otel_proto::tonic::common::v1::any_value::Value::KvlistValue(
+                            crate::otel_proto::tonic::common::v1::KeyValueList {
                                 values: e.filtered_attributes.clone(),
                             },
                         ),
@@ -873,10 +827,10 @@ fn exemplars_to_json(exemplars: &[opentelemetry_proto::tonic::metrics::v1::Exemp
                 map.insert("filtered_attributes".to_string(), filtered_attrs);
             }
             let val = match &e.value {
-                Some(opentelemetry_proto::tonic::metrics::v1::exemplar::Value::AsDouble(d)) => {
+                Some(crate::otel_proto::tonic::metrics::v1::exemplar::Value::AsDouble(d)) => {
                     JsonValue::Number(serde_json::Number::from_f64(*d).unwrap_or(0.into()))
                 }
-                Some(opentelemetry_proto::tonic::metrics::v1::exemplar::Value::AsInt(i)) => {
+                Some(crate::otel_proto::tonic::metrics::v1::exemplar::Value::AsInt(i)) => {
                     JsonValue::Number((*i).into())
                 }
                 None => JsonValue::Null,
@@ -888,11 +842,6 @@ fn exemplars_to_json(exemplars: &[opentelemetry_proto::tonic::metrics::v1::Exemp
     serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string())
 }
 
-// ============================================================================
-// Log direct builders
-// ============================================================================
-
-/// Arrow builders for the flat log record schema.
 pub struct LogBuilders {
     timestamp: TimestampMicrosecondBuilder,
     observed_timestamp: Int64Builder,
@@ -936,9 +885,9 @@ impl LogBuilders {
 
     pub(crate) fn append_log(
         &mut self,
-        log: &opentelemetry_proto::tonic::logs::v1::LogRecord,
-        resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,
-        scope: Option<&opentelemetry_proto::tonic::common::v1::InstrumentationScope>,
+        log: &crate::otel_proto::tonic::logs::v1::LogRecord,
+        resource: Option<&crate::otel_proto::tonic::resource::v1::Resource>,
+        scope: Option<&crate::otel_proto::tonic::common::v1::InstrumentationScope>,
     ) -> Result<(), DecodeError> {
         let time = i64::try_from(log.time_unix_nano).map_err(|_| {
             DecodeError::Unsupported(format!(
@@ -958,10 +907,6 @@ impl LogBuilders {
             time
         };
 
-        // Validate the service_name BEFORE mutating any builder so a rejected
-        // record leaves every column untouched (atomic append — no column
-        // desync). The caller skips + counts the record for partialSuccess
-        // rather than dropping the whole batch.
         let service_name = extract_string_attr(resource, "service.name").unwrap_or_default();
         if service_name.is_empty()
             || service_name == "unknown"
@@ -969,7 +914,7 @@ impl LogBuilders {
             || service_name.starts_with("unknown_service:")
         {
             return Err(DecodeError::Parse(
-                "log with unusable service_name detected — set OTEL_SERVICE_NAME (or service.name resource attribute) on the sending application".into(),
+                "log with unusable service_name detected; set OTEL_SERVICE_NAME or the service.name resource attribute on the sending application".into(),
             ));
         }
 
@@ -1036,7 +981,7 @@ impl LogBuilders {
 
     pub(crate) fn finish(mut self) -> Result<RecordBatch, ArrowError> {
         let schema = logs_schema();
-        let arrays: Vec<arrow_array::ArrayRef> = vec![
+        let arrays: Vec<arrow::array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.observed_timestamp.finish()),
             Arc::new(self.trace_id.finish()),
@@ -1064,12 +1009,12 @@ impl Default for LogBuilders {
     }
 }
 
-fn body_to_string(body: &opentelemetry_proto::tonic::common::v1::AnyValue) -> String {
-    use opentelemetry_proto::tonic::common::v1::any_value::Value;
+fn body_to_string(body: &crate::otel_proto::tonic::common::v1::AnyValue) -> String {
+    use crate::otel_proto::tonic::common::v1::any_value::Value;
     match &body.value {
         Some(Value::StringValue(s)) => s.clone(),
         Some(other) => {
-            let av = opentelemetry_proto::tonic::common::v1::AnyValue {
+            let av = crate::otel_proto::tonic::common::v1::AnyValue {
                 value: Some(other.clone()),
             };
             serde_json::to_string(&any_value_to_json(&av).unwrap_or(JsonValue::Null))
@@ -1079,16 +1024,12 @@ fn body_to_string(body: &opentelemetry_proto::tonic::common::v1::AnyValue) -> St
     }
 }
 
-// ============================================================================
-// Metric direct builders
-// ============================================================================
-
 struct MetricContext<'a> {
     name: &'a str,
     description: &'a str,
     unit: &'a str,
-    resource: Option<&'a opentelemetry_proto::tonic::resource::v1::Resource>,
-    scope: Option<&'a opentelemetry_proto::tonic::common::v1::InstrumentationScope>,
+    resource: Option<&'a crate::otel_proto::tonic::resource::v1::Resource>,
+    scope: Option<&'a crate::otel_proto::tonic::common::v1::InstrumentationScope>,
 }
 
 struct GaugeBuilders {
@@ -1134,16 +1075,14 @@ impl GaugeBuilders {
 
     fn append(
         &mut self,
-        point: &opentelemetry_proto::tonic::metrics::v1::NumberDataPoint,
+        point: &crate::otel_proto::tonic::metrics::v1::NumberDataPoint,
         ctx: &MetricContext<'_>,
     ) -> Result<bool, DecodeError> {
         let val = match &point.value {
-            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(i)) => {
+            Some(crate::otel_proto::tonic::metrics::v1::number_data_point::Value::AsInt(i)) => {
                 *i as f64
             }
-            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(
-                d,
-            )) => {
+            Some(crate::otel_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d)) => {
                 if d.is_nan() || d.is_infinite() {
                     return Ok(false);
                 }
@@ -1204,7 +1143,7 @@ impl GaugeBuilders {
             return Ok(None);
         }
         let schema = gauge_schema();
-        let arrays: Vec<arrow_array::ArrayRef> = vec![
+        let arrays: Vec<arrow::array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.start_timestamp.finish()),
             Arc::new(metric_name),
@@ -1244,7 +1183,7 @@ struct SumBuilders {
     flags: Int32Builder,
     exemplars_json: StringBuilder,
     aggregation_temporality: Int32Builder,
-    is_monotonic: arrow_array::builder::BooleanBuilder,
+    is_monotonic: arrow::array::BooleanBuilder,
 }
 
 impl SumBuilders {
@@ -1267,24 +1206,22 @@ impl SumBuilders {
             flags: Int32Builder::new(),
             exemplars_json: StringBuilder::new(),
             aggregation_temporality: Int32Builder::new(),
-            is_monotonic: arrow_array::builder::BooleanBuilder::new(),
+            is_monotonic: arrow::array::BooleanBuilder::new(),
         }
     }
 
     fn append(
         &mut self,
-        point: &opentelemetry_proto::tonic::metrics::v1::NumberDataPoint,
+        point: &crate::otel_proto::tonic::metrics::v1::NumberDataPoint,
         ctx: &MetricContext<'_>,
         temporality: i32,
         monotonic: bool,
     ) -> Result<bool, DecodeError> {
         let val = match &point.value {
-            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(i)) => {
+            Some(crate::otel_proto::tonic::metrics::v1::number_data_point::Value::AsInt(i)) => {
                 *i as f64
             }
-            Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(
-                d,
-            )) => {
+            Some(crate::otel_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(d)) => {
                 if d.is_nan() || d.is_infinite() {
                     return Ok(false);
                 }
@@ -1347,7 +1284,7 @@ impl SumBuilders {
             return Ok(None);
         }
         let schema = sum_schema();
-        let arrays: Vec<arrow_array::ArrayRef> = vec![
+        let arrays: Vec<arrow::array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.start_timestamp.finish()),
             Arc::new(metric_name),
@@ -1426,7 +1363,7 @@ impl HistogramBuilders {
 
     fn append(
         &mut self,
-        point: &opentelemetry_proto::tonic::metrics::v1::HistogramDataPoint,
+        point: &crate::otel_proto::tonic::metrics::v1::HistogramDataPoint,
         ctx: &MetricContext<'_>,
         temporality: i32,
     ) -> Result<(), DecodeError> {
@@ -1506,7 +1443,7 @@ impl HistogramBuilders {
             return Ok(None);
         }
         let schema = histogram_schema();
-        let arrays: Vec<arrow_array::ArrayRef> = vec![
+        let arrays: Vec<arrow::array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.start_timestamp.finish()),
             Arc::new(metric_name),
@@ -1599,7 +1536,7 @@ impl ExpHistogramBuilders {
 
     fn append(
         &mut self,
-        point: &opentelemetry_proto::tonic::metrics::v1::ExponentialHistogramDataPoint,
+        point: &crate::otel_proto::tonic::metrics::v1::ExponentialHistogramDataPoint,
         ctx: &MetricContext<'_>,
         temporality: i32,
     ) -> Result<(), DecodeError> {
@@ -1696,7 +1633,7 @@ impl ExpHistogramBuilders {
             return Ok(None);
         }
         let schema = exp_histogram_schema();
-        let arrays: Vec<arrow_array::ArrayRef> = vec![
+        let arrays: Vec<arrow::array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.start_timestamp.finish()),
             Arc::new(metric_name),

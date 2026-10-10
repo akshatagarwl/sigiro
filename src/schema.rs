@@ -4,13 +4,12 @@ use duckdb::Connection;
 /// Create all sigiro tables and views.
 /// `prefix` is always "lake." (DuckLake catalog-qualified tables).
 pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
-    // Traces — 25 columns, direct Arrow builder (src/otlp.rs)
+    // Traces: 25 columns matching sigiro-segments.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_spans (
             timestamp             TIMESTAMP NOT NULL,
             -- end_timestamp and duration are microseconds, matching `timestamp`.
-            -- The ingest path converts OTLP nanoseconds via `nanos_to_micros`
-            -- (one named helper — never a bare divisor; see otlp.rs).
+            -- Ingest stores OTLP nanoseconds as microseconds.
             end_timestamp         BIGINT NOT NULL,
             duration              BIGINT NOT NULL,
             trace_id              VARCHAR,
@@ -65,7 +64,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_logs")?;
 
-    // Gauge — 16 columns, direct Arrow builder (src/otlp.rs)
+    // Gauge: 16 columns matching sigiro-segments.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_gauge (
             timestamp             TIMESTAMP NOT NULL,
@@ -88,7 +87,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_gauge")?;
 
-    // Sum — 18 columns, direct Arrow builder (src/otlp.rs)
+    // Sum: 18 columns matching sigiro-segments.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_sum (
             timestamp                  TIMESTAMP NOT NULL,
@@ -113,7 +112,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_sum")?;
 
-    // Histogram — 22 columns, direct Arrow builder (src/otlp.rs)
+    // Histogram: 22 columns matching sigiro-segments.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_histogram (
             timestamp                  TIMESTAMP NOT NULL,
@@ -142,7 +141,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_histogram")?;
 
-    // ExpHistogram — 27 columns, direct Arrow builder (src/otlp.rs)
+    // ExpHistogram: 27 columns matching sigiro-segments.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_exp_histogram (
             timestamp                  TIMESTAMP NOT NULL,

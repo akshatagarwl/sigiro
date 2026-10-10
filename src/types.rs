@@ -1,8 +1,7 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
 
 use arrow::record_batch::RecordBatch;
-use sigiro_core::ids::TraceId;
-use sigiro_core::otlp::MetricBatches;
+use sigiro_segments::{MetricBatches, TraceId};
 
 // --------------------------------------------------------------------------
 // IngestMsg — carried across modules for routing
@@ -158,8 +157,6 @@ pub struct TimestampMicros(i64);
 // ---------------------------------------------------------------------------
 // Typed path structs — compile-time route checking for axum router
 // ---------------------------------------------------------------------------
-
-// Used with axum_extra::routing::TypedPath for compile-time route verification.
 
 use axum_extra::routing::TypedPath;
 use serde::{Deserialize, Serialize};

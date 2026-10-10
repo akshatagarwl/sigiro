@@ -3,7 +3,7 @@ use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use dashmap::DashMap;
 use duckdb::Connection;
-use sigiro_core::otlp::MetricBatches;
+use sigiro_segments::MetricBatches;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};

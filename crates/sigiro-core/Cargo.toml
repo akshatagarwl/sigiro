@@ -6,34 +6,15 @@ rust-version = "1.88"
 license = "Apache-2.0"
 publish = false
 
-# Must build for both the native binary and wasm32-unknown-unknown (the Workers
-# lake), so only wasm-safe crates belong here: no tokio, tonic, axum or duckdb.
+# Must build for both the native binary and wasm32-unknown-unknown, so only
+# wasm-safe crates belong here: no tokio, tonic, axum or duckdb.
 [dependencies]
-arrow-array = "58"
-arrow-schema = "58"
 drain3 = "0.3.0"
-hex = "0.4.3"
 itertools = "0.14.0"
-nutype = { version = ">=0.7,<0.8", features = ["serde"] }
-opentelemetry-proto = { version = "0.31", default-features = false, features = ["gen-tonic-messages", "logs", "trace", "metrics", "with-serde"] }
-# Temporary ProtoJSON decoder until the message-level serde defaults land in a
-# released opentelemetry-proto. The decoded request crosses back over protobuf,
-# keeping the existing 0.31 ingest and gRPC types untouched.
-opentelemetry-proto-json = { package = "opentelemetry-proto", version = "0.33", git = "https://github.com/Arnav12114/opentelemetry-rust.git", rev = "7b70ecc68e68a1e0ea5c343caf8e37c68adaa356", default-features = false, features = ["gen-tonic-messages", "metrics", "with-serde"] }
-prost = "0.14"
 regex = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 sha2 = "0.10"
 sqlparser = { version = "0.53", features = ["visitor"] }
-thiserror = "2"
-time = "0.3"
 tracing = "0.1"
-
-# opentelemetry-proto's signal features pull opentelemetry_sdk, whose rand
-# needs getrandom's browser backend on wasm (selected in .cargo/config.toml).
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [lints]
 workspace = true

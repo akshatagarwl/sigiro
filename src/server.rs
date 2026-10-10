@@ -1531,13 +1531,13 @@ async fn trace_detail_handler(
         .map_err(|e| query_api_error("trace detail query failed", &e))?;
 
     let mut spans: Vec<SpanDetail> = Vec::new();
-    let mut span_map: std::collections::HashMap<sigiro_core::ids::SpanId, SpanDetail> =
+    let mut span_map: std::collections::HashMap<sigiro_segments::SpanId, SpanDetail> =
         std::collections::HashMap::new();
     let mut parent_to_children: std::collections::HashMap<
-        sigiro_core::ids::SpanId,
-        Vec<sigiro_core::ids::SpanId>,
+        sigiro_segments::SpanId,
+        Vec<sigiro_segments::SpanId>,
     > = std::collections::HashMap::new();
-    let mut root_span_id: Option<sigiro_core::ids::SpanId> = None;
+    let mut root_span_id: Option<sigiro_segments::SpanId> = None;
     let mut earliest_start_us: Option<i64> = None;
     let mut latest_end_us: Option<i64> = None;
     let mut inclusive_duration_us: i64 = 0;
@@ -1553,7 +1553,7 @@ async fn trace_detail_handler(
             )
         })?;
 
-        let span_id = sigiro_core::ids::SpanId::try_new(
+        let span_id = sigiro_segments::SpanId::try_new(
             obj.get("span_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -1569,7 +1569,7 @@ async fn trace_detail_handler(
             .get("parent_span_id")
             .and_then(|v| v.as_str())
             .filter(|id| !id.is_empty())
-            .map(|id| sigiro_core::ids::SpanId::try_new(id.to_string()))
+            .map(|id| sigiro_segments::SpanId::try_new(id.to_string()))
             .transpose()
             .map_err(|e| {
                 bad_request(
@@ -1736,24 +1736,24 @@ async fn trace_detail_handler(
 
 /// Compute the critical path: longest duration-sum path from root to any leaf.
 fn compute_critical_path(
-    root_id: &sigiro_core::ids::SpanId,
+    root_id: &sigiro_segments::SpanId,
     parent_to_children: &std::collections::HashMap<
-        sigiro_core::ids::SpanId,
-        Vec<sigiro_core::ids::SpanId>,
+        sigiro_segments::SpanId,
+        Vec<sigiro_segments::SpanId>,
     >,
-    span_map: &std::collections::HashMap<sigiro_core::ids::SpanId, SpanDetail>,
-) -> Vec<sigiro_core::ids::SpanId> {
+    span_map: &std::collections::HashMap<sigiro_segments::SpanId, SpanDetail>,
+) -> Vec<sigiro_segments::SpanId> {
     #[allow(clippy::too_many_arguments)]
     fn dfs(
-        span_id: &sigiro_core::ids::SpanId,
+        span_id: &sigiro_segments::SpanId,
         parent_to_children: &std::collections::HashMap<
-            sigiro_core::ids::SpanId,
-            Vec<sigiro_core::ids::SpanId>,
+            sigiro_segments::SpanId,
+            Vec<sigiro_segments::SpanId>,
         >,
-        span_map: &std::collections::HashMap<sigiro_core::ids::SpanId, SpanDetail>,
-        current_path: &[sigiro_core::ids::SpanId],
+        span_map: &std::collections::HashMap<sigiro_segments::SpanId, SpanDetail>,
+        current_path: &[sigiro_segments::SpanId],
         current_duration: i64,
-        best_path: &mut Vec<sigiro_core::ids::SpanId>,
+        best_path: &mut Vec<sigiro_segments::SpanId>,
         best_duration: &mut i64,
     ) {
         let span = match span_map.get(span_id) {

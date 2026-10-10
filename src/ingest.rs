@@ -32,8 +32,7 @@ use opentelemetry_proto::tonic::collector::{
 };
 use prost::Message;
 use serde::Deserialize;
-use sigiro_core::ids::{SpanId, TraceId};
-use sigiro_core::otlp::{InputFormat, MetricBatches};
+use sigiro_segments::{InputFormat, MetricBatches, SpanId, TraceId};
 use std::io::Read;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -216,7 +215,7 @@ async fn transform_traces(
     fmt: InputFormat,
 ) -> Result<RecordBatch, Status> {
     spawn_transform(workloads, "transform traces", move || {
-        sigiro_core::otlp::transform_traces(&bytes, fmt)
+        sigiro_segments::transform_traces(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
@@ -229,7 +228,7 @@ async fn transform_logs(
     fmt: InputFormat,
 ) -> Result<(RecordBatch, u64), Status> {
     spawn_transform(workloads, "transform logs", move || {
-        sigiro_core::otlp::transform_logs(&bytes, fmt)
+        sigiro_segments::transform_logs(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
@@ -242,7 +241,7 @@ async fn transform_metrics(
     fmt: InputFormat,
 ) -> Result<MetricBatches, Status> {
     spawn_transform(workloads, "transform metrics", move || {
-        sigiro_core::otlp::transform_metrics(&bytes, fmt)
+        sigiro_segments::transform_metrics(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
@@ -257,7 +256,6 @@ impl TraceService for OtlpGrpcService {
     ) -> Result<Response<ExportTraceServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         // Transform on tokio blocking pool — no double decode.
-        // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let batch = transform_traces(self.router.workloads(), bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {

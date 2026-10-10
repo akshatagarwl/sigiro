@@ -37,6 +37,7 @@ unused_imports = "warn"
 
 [dependencies]
 sigiro-core = { path = "crates/sigiro-core" }
+sigiro-segments = { path = "crates/segments" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
