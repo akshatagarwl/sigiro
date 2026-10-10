@@ -310,27 +310,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_post(query_handler)
         .typed_get(services_handler)
         .typed_get(alerts_handler)
-        .typed_get(trace_detail_handler)
-        .route(
-            "/optimizer/connections",
-            axum::routing::post(crate::optimizer::connection),
-        )
-        .route(
-            "/optimizer/connections/{id}",
-            axum::routing::patch(crate::optimizer::set_connection),
-        )
-        .route(
-            "/optimizer/mappings",
-            axum::routing::post(crate::optimizer::mapping),
-        )
-        .route(
-            "/optimizer/runs",
-            axum::routing::post(crate::optimizer::trigger),
-        )
-        .route(
-            "/optimizer/runs/{id}",
-            axum::routing::get(crate::optimizer::get_run),
-        );
+        .typed_get(trace_detail_handler);
 
     let v1 = if rate_limit_v1 {
         let tenant_governor = GovernorConfigBuilder::default()
@@ -373,11 +353,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     let public = Router::new()
         .typed_get(health)
         .typed_get(healthz)
-        .route("/openapi.json", axum::routing::get(openapi_json))
-        .route(
-            "/internal/optimizer/query",
-            axum::routing::post(crate::optimizer::internal_query),
-        );
+        .route("/openapi.json", axum::routing::get(openapi_json));
     let public = match app_state.auth_mode.protected_resource_metadata_path() {
         Some(path) => public.route(path, axum::routing::get(oauth_protected_resource_metadata)),
         None => public,

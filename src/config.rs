@@ -12,11 +12,6 @@ use typed_env::{Envar, EnvarDef};
 // ---------------------------------------------------------------------------
 
 /// Server ports. Default to well-known OTLP ports when unset.
-pub(crate) static OPTIMIZER_INTERNAL_TOKEN: Envar<String> =
-    Envar::on_demand("SIGIRO_OPTIMIZER_INTERNAL_TOKEN", || {
-        EnvarDef::Default(String::new())
-    });
-
 pub(crate) static HTTP_PORT: Envar<u16> =
     Envar::on_startup("SIGIRO_HTTP_PORT", || EnvarDef::Default(9999));
 pub(crate) static GRPC_PORT: Envar<u16> =

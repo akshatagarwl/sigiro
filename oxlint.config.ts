@@ -29,7 +29,6 @@ export default defineConfig({
     "**/.git/**",
     "target/**",
     "auth/src/ui.ts",
-    "agents/agent/patches/**",
     "www/.agent/**",
     "www/.agents/**",
     "www/.claude/**",
@@ -51,7 +50,7 @@ export default defineConfig({
     },
     {
       name: "policy",
-      specifier: "./agents/agent/tools/policy.mjs",
+      specifier: "./tools/oxlint/policy.mjs",
     },
   ],
   overrides: [
@@ -65,7 +64,7 @@ export default defineConfig({
       rules: antiSlopRules,
     },
     {
-      files: ["agents/agent/**"],
+      files: ["cloud/**"],
       rules: {
         "policy/no-comments": "error",
         "policy/no-synthetic-tests": "error",

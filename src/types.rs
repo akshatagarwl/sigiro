@@ -106,13 +106,6 @@ pub enum StatusCode {
     Error = 2,
 }
 
-impl StatusCode {
-    /// Convert back to i32 for SQL queries.
-    pub(crate) fn as_i32(self) -> i32 {
-        self as i32
-    }
-}
-
 // ---------------------------------------------------------------------------
 // TenantId — prevents invalid identifiers reaching storage and SQL boundaries
 // ---------------------------------------------------------------------------

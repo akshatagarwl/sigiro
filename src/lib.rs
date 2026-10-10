@@ -4,11 +4,9 @@ pub mod auth;
 pub mod client;
 pub mod config;
 pub mod federate;
-mod optimizer;
 
 pub mod ingest;
 pub mod inserter;
-mod assessor;
 pub mod mcp;
 
 pub mod duckdb_json;
