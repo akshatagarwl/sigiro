@@ -22,6 +22,14 @@ _Avoid_: actor, shard, instance
 The Cloudflare bindings that both Cloudflare and celld implement, and the only ones the hosted application may use.
 _Avoid_: supported services
 
+**Plan**:
+A tenant's fixed-price hosted subscription (Ping, Trace, Span, or Fleet) that sets its caps and retention.
+_Avoid_: tier, SKU, package
+
+**Cap**:
+A plan's hard monthly ingest volume or request-rate limit; reaching it stops ingest rather than adding charges.
+_Avoid_: quota, overage, allowance
+
 ### Telemetry storage
 
 **Tenant**:
