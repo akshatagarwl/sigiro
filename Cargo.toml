@@ -13,7 +13,7 @@ rust-version = "1.88"
 license = "Apache-2.0"
 
 [workspace]
-members = ["crates/sigiro-core"]
+members = ["crates/sigiro-core", "crates/segments"]
 
 [workspace.lints.clippy]
 # Disallowed patterns (configured in clippy.toml)
