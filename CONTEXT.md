@@ -23,7 +23,7 @@ The Cloudflare bindings that both Cloudflare and celld implement, and the only o
 _Avoid_: supported services
 
 **Plan**:
-A tenant's fixed-price hosted subscription (Ping, Trace, Span, or Fleet) that sets its caps and retention.
+A tenant's fixed-price hosted subscription (Hobby, Pro, Team, or Enterprise) that sets its caps and retention.
 _Avoid_: tier, SKU, package
 
 **Cap**:
