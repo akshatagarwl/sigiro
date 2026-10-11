@@ -1,0 +1,6 @@
+vendor/
+dist/
+.wrangler/
+node_modules/
+.celld/
+.dev.vars
