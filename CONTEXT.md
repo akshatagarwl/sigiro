@@ -40,16 +40,20 @@ _Avoid_: project, workspace, account
 One OpenTelemetry data kind: spans, logs, metrics, or profiles.
 _Avoid_: telemetry type, stream
 
+**Table**:
+One fixed column layout that a signal is stored in; logs and spans have one table each, metrics have one per metric kind.
+_Avoid_: stream, dataset, collection
+
 **Ingest cell**:
-The cell that accepts one tenant's signal writes, groups them, and commits them as segments.
+The cell that accepts one tenant's writes for one signal, groups them, and commits them as segments of that signal's tables.
 _Avoid_: writer, buffer, flusher
 
 **Segment**:
-One immutable Parquet object holding a committed batch of one tenant's signal rows.
+One immutable Parquet object holding a committed batch of rows from one tenant's table.
 _Avoid_: file, chunk, part
 
 **Manifest**:
-The authoritative list of a tenant's live segments; a segment that is not in the manifest does not exist for queries.
+The authoritative list of a tenant's live segments per table; a segment that is not in the manifest does not exist for queries.
 _Avoid_: catalog, index, file list
 
 **Flush**:
