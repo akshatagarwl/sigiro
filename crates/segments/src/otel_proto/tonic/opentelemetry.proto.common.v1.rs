@@ -2,7 +2,6 @@
 /// Represents any type of attribute value. AnyValue may contain a
 /// primitive value such as a string or integer or it may contain an arbitrary nested
 /// object containing arrays, key-value lists and primitives.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -24,7 +23,6 @@ pub struct AnyValue {
 pub mod any_value {
     /// The value is one of the listed fields. It is valid for all values to be unspecified
     /// in which case this AnyValue is considered to be "empty".
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
@@ -59,7 +57,6 @@ pub mod any_value {
 }
 /// ArrayValue is a list of AnyValue messages. We need ArrayValue as a message
 /// since oneof in AnyValue does not allow repeated fields.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -73,7 +70,6 @@ pub struct ArrayValue {
 /// a list of KeyValue messages (e.g. in Span) we use `repeated KeyValue` directly to
 /// avoid unnecessary extra wrapping (which slows down the protocol). The 2 approaches
 /// are semantically equivalent.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -89,7 +85,6 @@ pub struct KeyValueList {
 }
 /// Represents a key-value pair that is used to store Span attributes, Link
 /// attributes, etc.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -121,7 +116,6 @@ pub struct KeyValue {
 }
 /// InstrumentationScope is a message representing the instrumentation scope information
 /// such as the fully qualified name and version.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -151,7 +145,6 @@ pub struct InstrumentationScope {
 /// Entity represents an object of interest associated with produced telemetry: e.g spans, metrics, profiles, or logs.
 ///
 /// Status: \[Development\]
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

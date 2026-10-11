@@ -9,7 +9,6 @@
 ///
 /// When new fields are added into this message, the OTLP request MUST be updated
 /// as well.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -23,7 +22,6 @@ pub struct TracesData {
     pub resource_spans: ::prost::alloc::vec::Vec<ResourceSpans>,
 }
 /// A collection of ScopeSpans from a Resource.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -46,7 +44,6 @@ pub struct ResourceSpans {
     pub schema_url: ::prost::alloc::string::String,
 }
 /// A collection of Spans produced by an InstrumentationScope.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -72,7 +69,6 @@ pub struct ScopeSpans {
 /// A Span represents a single operation performed by a single component of the system.
 ///
 /// The next available field id is 17.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -239,7 +235,6 @@ pub struct Span {
 pub mod span {
     /// Event is a time-stamped annotation of the span, consisting of user-supplied
     /// text description and key-value pairs.
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[cfg_attr(feature = "with-serde", serde(default))]
@@ -276,7 +271,6 @@ pub mod span {
     /// different trace. For example, this can be used in batching operations,
     /// where a single batch handler processes multiple requests from different
     /// traces or when the handler receives a request from a different project.
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[cfg_attr(feature = "with-serde", serde(default))]
@@ -340,7 +334,6 @@ pub mod span {
     }
     /// SpanKind is the type of span. Can be used to specify additional relationships between spans
     /// in addition to a parent/child relationship.
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[derive(
@@ -408,7 +401,6 @@ pub mod span {
 }
 /// The Status type defines a logical error model that is suitable for different
 /// programming environments, including REST APIs and RPC APIs.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -425,7 +417,6 @@ pub struct Status {
 pub mod status {
     /// For the semantics of status codes see
     /// <https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/api.md#set-status>
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[derive(
@@ -486,7 +477,6 @@ pub mod status {
 /// OpenTelemetry protocol.  Older Span producers do not set this
 /// field, consequently consumers should not rely on the absence of a
 /// particular flag bit to indicate the presence of a particular feature.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

@@ -91,7 +91,7 @@ pub enum SegmentWriteError {
 pub fn empty_segment(table: Table) -> Option<Vec<u8>> {
     let schema = Arc::new(otlp::table_schema(table)?);
     let mut parquet = Vec::new();
-    let mut writer = ArrowWriter::try_new(&mut parquet, schema, None).ok()?;
+    let writer = ArrowWriter::try_new(&mut parquet, schema, None).ok()?;
     writer.close().ok()?;
     Some(parquet)
 }

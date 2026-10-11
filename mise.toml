@@ -45,6 +45,7 @@ experimental = true
 [task_config.input_groups]
 rust-gate = [
     "src/**",
+    "crates/**",
     "tests/*.rs",
     "tests/snapshots/**",
     "benches/**",
@@ -224,7 +225,7 @@ run = """
 set -euo pipefail
 eval "$(scripts/prepare-duckdb-static.sh "$(rustc -vV | sed -n 's/^host: //p')")"
 mbx fmt --check
-mbx check --all-targets --all-features
+mbx check --workspace --all-targets --all-features
 """
 sources = ["@group:rust-gate"]
 outputs = []
@@ -235,7 +236,7 @@ cache = { enabled = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "
 description = "Compile, format, lint, and validate the native deployment contract."
 run = [
     { task = "quick" },
-    "scripts/run-with-duckdb-static.sh mbx clippy --all-targets --all-features -- -D warnings",
+    "scripts/run-with-duckdb-static.sh mbx clippy --workspace --all-targets --all-features -- -D warnings",
     # The deployment invariants guard production boot: the sync-postgres
     # boundary and the migration contract that must not empty Sigiro's
     # databases. They were outside every gate, so a cutover could ship a

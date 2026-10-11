@@ -9,7 +9,6 @@
 ///
 /// When new fields are added into this message, the OTLP request MUST be updated
 /// as well.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -23,7 +22,6 @@ pub struct LogsData {
     pub resource_logs: ::prost::alloc::vec::Vec<ResourceLogs>,
 }
 /// A collection of ScopeLogs from a Resource.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -46,7 +44,6 @@ pub struct ResourceLogs {
     pub schema_url: ::prost::alloc::string::String,
 }
 /// A collection of Logs produced by a Scope.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -71,7 +68,6 @@ pub struct ScopeLogs {
 }
 /// A log record according to OpenTelemetry Log Data Model:
 /// <https://github.com/open-telemetry/oteps/blob/main/text/logs/0097-log-data-model.md>
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -199,7 +195,6 @@ pub struct LogRecord {
     pub event_name: ::prost::alloc::string::String,
 }
 /// Possible values for LogRecord.SeverityNumber.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -304,7 +299,6 @@ impl SeverityNumber {
 /// expression like:
 ///
 /// (logRecord.flags & LOG_RECORD_FLAGS_TRACE_FLAGS_MASK)
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

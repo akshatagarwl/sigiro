@@ -27,7 +27,6 @@
 ///
 /// When new fields are added into this message, the OTLP request MUST be updated
 /// as well.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -41,7 +40,6 @@ pub struct MetricsData {
     pub resource_metrics: ::prost::alloc::vec::Vec<ResourceMetrics>,
 }
 /// A collection of ScopeMetrics from a Resource.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -64,7 +62,6 @@ pub struct ResourceMetrics {
     pub schema_url: ::prost::alloc::string::String,
 }
 /// A collection of Metrics produced by an Scope.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -175,7 +172,6 @@ pub struct ScopeMetrics {
 /// to support correct rate calculation.  Although it may be omitted
 /// when the start time is truly unknown, setting StartTimeUnixNano is
 /// strongly encouraged.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -213,7 +209,6 @@ pub mod metric {
     /// Data determines the aggregation type (if any) of the metric, what is the
     /// reported value type for the data points, as well as the relatationship to
     /// the time interval over which they are reported.
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
@@ -239,7 +234,6 @@ pub mod metric {
 /// aggregation, regardless of aggregation temporalities. Therefore,
 /// AggregationTemporality is not included. Consequently, this also means
 /// "StartTimeUnixNano" is ignored for all data points.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -252,7 +246,6 @@ pub struct Gauge {
 }
 /// Sum represents the type of a scalar metric that is calculated as a sum of all
 /// reported measurements over a time interval.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -272,7 +265,6 @@ pub struct Sum {
 }
 /// Histogram represents the type of a metric that is calculated by aggregating
 /// as a Histogram of all reported measurements over a time interval.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -289,7 +281,6 @@ pub struct Histogram {
 }
 /// ExponentialHistogram represents the type of a metric that is calculated by aggregating
 /// as a ExponentialHistogram of all reported double measurements over a time interval.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -313,7 +304,6 @@ pub struct ExponentialHistogram {
 /// Summary metrics do not have an aggregation temporality field. This is
 /// because the count and sum fields of a SummaryDataPoint are assumed to be
 /// cumulative values.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -326,7 +316,6 @@ pub struct Summary {
 }
 /// NumberDataPoint is a single data point in a timeseries that describes the
 /// time-varying scalar value of a metric.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -384,7 +373,6 @@ pub struct NumberDataPoint {
 pub mod number_data_point {
     /// The value itself.  A point is considered invalid when one of the recognized
     /// value fields is not present inside this oneof.
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
@@ -419,7 +407,6 @@ pub mod number_data_point {
 /// If the histogram does not contain the distribution of values, then both
 /// "explicit_bounds" and "bucket_counts" must be omitted and only "count" and
 /// "sum" are known.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -536,7 +523,6 @@ pub struct HistogramDataPoint {
 /// time-varying values of a ExponentialHistogram of double values. A ExponentialHistogram contains
 /// summary statistics for a population of values, it may optionally contain the
 /// distribution of those values across a set of buckets.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -665,7 +651,6 @@ pub struct ExponentialHistogramDataPoint {
 pub mod exponential_histogram_data_point {
     /// Buckets are a set of bucket counts, encoded in a contiguous array
     /// of counts.
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[cfg_attr(feature = "with-serde", serde(default))]
@@ -699,7 +684,6 @@ pub mod exponential_histogram_data_point {
 /// SummaryDataPoint is a single data point in a timeseries that describes the
 /// time-varying values of a Summary metric. The count and sum fields represent
 /// cumulative values.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -779,7 +763,6 @@ pub mod summary_data_point {
     ///
     /// See the following issue for more context:
     /// <https://github.com/open-telemetry/opentelemetry-proto/issues/125>
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[cfg_attr(feature = "with-serde", serde(default))]
@@ -814,7 +797,6 @@ pub mod summary_data_point {
 /// Exemplars also hold information about the environment when the measurement
 /// was recorded, for example the span and trace ID of the active span when the
 /// exemplar was recorded.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "with-serde", serde(default))]
@@ -876,7 +858,6 @@ pub mod exemplar {
     /// The value of the measurement that was recorded. An exemplar is
     /// considered invalid when one of the recognized value fields is not present
     /// inside this oneof.
-    #[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
     #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
@@ -904,7 +885,6 @@ pub mod exemplar {
 /// AggregationTemporality defines how a metric aggregator reports aggregated
 /// values. It describes how those values relate to the time interval over
 /// which they are aggregated.
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -1002,7 +982,6 @@ impl AggregationTemporality {
 /// a data point, for example, use an expression like:
 ///
 /// (point.flags & DATA_POINT_FLAGS_NO_RECORDED_VALUE_MASK) == DATA_POINT_FLAGS_NO_RECORDED_VALUE_MASK
-#[cfg_attr(feature = "with-schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "with-serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

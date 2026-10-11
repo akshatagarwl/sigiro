@@ -9,7 +9,6 @@ license = "Apache-2.0"
 default = ["with-serde", "gen-tonic-messages"]
 with-serde = []
 gen-tonic-messages = []
-with-schemars = []
 
 [dependencies]
 arrow = { version = "58", default-features = false }
