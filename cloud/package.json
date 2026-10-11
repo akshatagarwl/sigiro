@@ -1,1 +1,30 @@
-{"name":"@sigiro/cloud","version":"0.1.0","private":true,"type":"module","packageManager":"aube@2.2.16","engines":{"node":">=24.20.0"},"scripts":{"build:wasm":"../scripts/build-segments-wasm.sh","check":"tsc --noEmit","lint":"../node_modules/.bin/oxlint --config ../oxlint.config.ts --disable-nested-config .","deploy:dry-run":"wrangler deploy --dry-run","test:e2e":"node --import tsx ../tests/cloud-ingest-e2e.ts"},"dependencies":{},"devDependencies":{"@cloudflare/workers-types":"5.20260919.1","@types/node":"24.10.1","tsx":"4.23.13","typescript":"7.0.2","wrangler":"4.135.0"}}
+{
+  "name": "@sigiro/cloud",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "aube@2.2.16",
+  "engines": {
+    "node": ">=24.20.0"
+  },
+  "scripts": {
+    "build:wasm": "../scripts/build-segments-wasm.sh",
+    "check": "tsc --noEmit",
+    "lint": "../node_modules/.bin/oxlint --config ../oxlint.config.ts --disable-nested-config .",
+    "deploy:dry-run": "wrangler deploy --dry-run && wrangler deploy --dry-run --config query/wrangler.jsonc",
+    "test:e2e": "node --import tsx ../tests/cloud/ingest.e2e.ts && node --import tsx ../tests/cloud/query.e2e.ts",
+    "build:query": "mkdir -p query/vendor && cp node_modules/@ducklings/workers/dist/wasm/duckdb-workers.wasm query/vendor/",
+    "test:e2e:ingest": "node --import tsx ../tests/cloud/ingest.e2e.ts",
+    "test:e2e:query": "node --import tsx ../tests/cloud/query.e2e.ts"
+  },
+  "dependencies": {
+    "@ducklings/workers": "1.5.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260919.1",
+    "@types/node": "24.10.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "wrangler": "4.135.0"
+  }
+}

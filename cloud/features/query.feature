@@ -36,8 +36,8 @@ Feature: Hosted telemetry query
     Then the response is 403
 
   Scenario: An over-memory query fails with a typed error and the next query succeeds
-    When "acme" runs a query that exceeds the query memory limit
-    Then the response is 422 with title "query exceeded memory limit"
+    When "acme" queries "SELECT median(i) AS m FROM range(100000000) t(i)"
+    Then the response is 400 with title "query rejected" and a detail naming the memory limit
     And the next query "SELECT count(*) AS n FROM sigiro_spans" returns [{"n":3}]
 
   Scenario: Services lists every service that reported telemetry

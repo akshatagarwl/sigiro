@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@ducklings/workers':
+        specifier: 1.5.5
+        version: 1.5.5
     devDependencies:
       '@cloudflare/workers-types':
         specifier: 5.20260919.1
@@ -75,6 +79,15 @@ packages:
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
+
+  '@ducklings/workers@1.5.5':
+    resolution: {integrity: sha512-Ee3JfOJNtAijqwH2k6ZCgOtKYz4hdyi/tRS3GPpl22jSB/3ZKDTZDHQ5isprzJ+hAUrAJO1jcaatRriJkoftwQ==}
+    engines: {node: '>=22.0.0'}
+    peerDependencies:
+      vite: ^5.0.0 || ^6.0.0 || ^7.0.0
+    peerDependenciesMeta:
+      vite:
+        optional: true
 
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
@@ -702,6 +715,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@uwdata/flechette@2.6.0':
+    resolution: {integrity: sha512-DOQYsAmAjYhwAdTCgsBYuD7lCiW/kQSIyrBuz7yt2A6fF6sLaVp74QZPUWJJ20MB6mWghP5X7xU46QUlEChPMg==}
+
   blake3-wasm@2.1.5:
     resolution: {integrity: sha512-F1+K8EbfOZE49dtoPtmxUQrpXaBIl3ICvasLh+nJta0xkz+9kF/7uet9fLnwKqhDrmj6g+6K3Tw9yQPUg2ka5g==}
 
@@ -848,6 +864,10 @@ snapshots:
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
+
+  '@ducklings/workers@1.5.5':
+    dependencies:
+      '@uwdata/flechette': 2.6.0
 
   '@emnapi/runtime@1.11.3':
     dependencies:
@@ -1204,6 +1224,8 @@ snapshots:
 
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
+
+  '@uwdata/flechette@2.6.0': {}
 
   blake3-wasm@2.1.5: {}
 

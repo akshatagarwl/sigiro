@@ -6,9 +6,11 @@ declare module "../vendor/segments-wasm/sigiro_segments_wasm.js" {
   export function manifest_commit(manifest: string, segment: string): string;
   export function manifest_live(manifest: string, table: string, fromUs: bigint | number, toUs: bigint | number): string;
   export function manifest_orphans(manifest: string, stored: string[]): string[];
+  export function empty_segment(table: string): Uint8Array;
+  export function validate_read_only(sql: string): void;
 }
 
-declare module "../vendor/segments-wasm/sigiro_segments_wasm_bg.wasm" {
+declare module "*.wasm" {
   const module: WebAssembly.Module;
   export default module;
 }

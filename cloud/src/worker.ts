@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { createPublicKey, verify as verifySignature } from "node:crypto";
-import initWasm, { decode_otlp, manifest_commit, manifest_empty, manifest_register } from "../vendor/segments-wasm/sigiro_segments_wasm.js";
+import initWasm, { decode_otlp, empty_segment, manifest_commit, manifest_empty, manifest_live, manifest_register, validate_read_only } from "../vendor/segments-wasm/sigiro_segments_wasm.js";
+import type { Query, QueryOutcome, ViewSource } from "../query/src/query.ts";
 import wasmModule from "../vendor/segments-wasm/sigiro_segments_wasm_bg.wasm";
 
 await initWasm(wasmModule);
@@ -11,6 +12,8 @@ type Table = "spans" | "logs" | "metrics_gauge" | "metrics_sum" | "metrics_histo
 
 type Env = {
   INGEST_CELL: DurableObjectNamespace<IngestCell>;
+  QUERY: Service<Query>;
+  SIGIRO_MAX_RESULT_ROWS?: string;
   SEGMENTS: R2Bucket;
   SIGIRO_AUTH_ISSUER: string;
   SIGIRO_AUTH_AUDIENCE: string;
@@ -39,6 +42,28 @@ type SegmentMetadata = { table: Table; min_time_us: number; max_time_us: number;
 type ManifestShape = { pending: Record<string, Table>; live: Record<string, { table: Table }> };
 
 const ingestScope = "telemetry:ingest";
+const queryScope = "query:read";
+const servicesScope = "services:read";
+const defaultMaxResultRows = 10_000;
+const views: Record<string, { table: Table; signal: Signal }> = {
+  sigiro_spans: { table: "spans", signal: "traces" },
+  sigiro_logs: { table: "logs", signal: "logs" },
+  sigiro_metrics_gauge: { table: "metrics_gauge", signal: "metrics" },
+  sigiro_metrics_sum: { table: "metrics_sum", signal: "metrics" },
+  sigiro_metrics_histogram: { table: "metrics_histogram", signal: "metrics" },
+  sigiro_metrics_exp_histogram: { table: "metrics_exp_histogram", signal: "metrics" },
+};
+const servicesSql = `SELECT service_name, min(first_seen)::VARCHAR AS first_seen, max(last_seen)::VARCHAR AS last_seen,
+  sum(span_count)::BIGINT AS span_count, sum(log_count)::BIGINT AS log_count, sum(metric_count)::BIGINT AS metric_count,
+  sum(span_count + log_count + metric_count)::BIGINT AS total_count
+FROM (
+  SELECT service_name, min(timestamp) AS first_seen, max(timestamp) AS last_seen, count(*) AS span_count, 0::BIGINT AS log_count, 0::BIGINT AS metric_count FROM sigiro_spans GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, count(*), 0 FROM sigiro_logs GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) FROM sigiro_metrics_gauge GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) FROM sigiro_metrics_sum GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) FROM sigiro_metrics_histogram GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) FROM sigiro_metrics_exp_histogram GROUP BY service_name
+) GROUP BY service_name ORDER BY total_count DESC, service_name ASC`;
 const defaultBodyLimit = 8_388_608;
 const defaultFlushSeconds = 60;
 const defaultFlushBytes = 4_194_304;
@@ -74,6 +99,11 @@ export class IngestCell extends DurableObject<Env> {
     await this.ctx.storage.sync?.();
     await this.scheduleIfNeeded();
     return new Response(null, { status: 202 });
+  }
+
+  liveKeys(table: Table): string[] {
+    const segments = JSON.parse(manifest_live(readManifest(this.ctx.storage.sql), table, -(2n ** 63n), 2n ** 63n - 1n)) as { key: string }[];
+    return segments.map((segment) => segment.key);
   }
 
   async alarm(): Promise<void> {
@@ -121,6 +151,12 @@ export class IngestCell extends DurableObject<Env> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/v1/query") {
+      return queryRoute(request, env);
+    }
+    if (request.method === "GET" && url.pathname === "/v1/services") {
+      return servicesRoute(request, env);
+    }
     const route = routeSignal(url.pathname);
     if (request.method !== "POST" || route === undefined) {
       return new Response("not found", { status: 404 });
@@ -134,7 +170,7 @@ export default {
     if (format === undefined) {
       return new Response("unsupported content type", { status: 415 });
     }
-    const auth = await authenticate(request, env);
+    const auth = await authenticate(request, env, ingestScope);
     if (auth.status !== 200) {
       return new Response(auth.body, { status: auth.status });
     }
@@ -144,9 +180,72 @@ export default {
     }
     const id = env.INGEST_CELL.idFromName(cellName(auth.tenant, route));
     const stub = env.INGEST_CELL.get(id);
-    return stub.fetch(`https://cell.invalid/ingest?signal=${route}&tenant=${encodeURIComponent(auth.tenant)}`, { method: "POST", headers: { "content-type": format }, body });
+    try {
+      return await stub.fetch(`https://cell.invalid/ingest?signal=${route}&tenant=${encodeURIComponent(auth.tenant)}`, { method: "POST", headers: { "content-type": format }, body });
+    } catch (error) {
+      return new Response(`ingest cell unavailable: ${String(error)}`, { status: 503, headers: { "retry-after": "1" } });
+    }
   },
 };
+
+async function queryRoute(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env, queryScope);
+  if (auth.status !== 200) {
+    return problem(auth.status, auth.status === 401 ? "unauthorized" : "forbidden", auth.body);
+  }
+  const sql = await request.text();
+  try {
+    validate_read_only(sql);
+  } catch (error) {
+    return problem(400, "query rejected", String(error));
+  }
+  const outcome = await runQuery(env, auth.tenant, sql, referencedViews(sql));
+  if (!outcome.ok) {
+    return problem(400, "query rejected", outcome.detail);
+  }
+  return Response.json(outcome.rows, { headers: { "x-sigiro-truncated": String(outcome.truncated) } });
+}
+
+async function servicesRoute(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env, servicesScope);
+  if (auth.status !== 200) {
+    return problem(auth.status, auth.status === 401 ? "unauthorized" : "forbidden", auth.body);
+  }
+  const outcome = await runQuery(env, auth.tenant, servicesSql, Object.keys(views));
+  if (!outcome.ok) {
+    return problem(500, "services unavailable", outcome.detail);
+  }
+  if (outcome.truncated) {
+    return problem(400, "too many services", "the number of services exceeds SIGIRO_MAX_RESULT_ROWS");
+  }
+  const services = outcome.rows.map((row) => ({
+    name: row.service_name,
+    firstSeen: row.first_seen ?? null,
+    lastSeen: row.last_seen ?? null,
+    signals: { spans: row.span_count, logs: row.log_count, metrics: row.metric_count, profiles: 0 },
+    totalCount: row.total_count,
+  }));
+  return Response.json({ services });
+}
+
+async function runQuery(env: Env, tenant: TenantId, sql: string, names: string[]): Promise<QueryOutcome> {
+  const sources: Record<string, ViewSource> = {};
+  await Promise.all(names.map(async (name) => {
+    const { table, signal } = views[name];
+    const cell = env.INGEST_CELL.get(env.INGEST_CELL.idFromName(cellName(tenant, signal)));
+    sources[name] = { keys: await cell.liveKeys(table), empty: empty_segment(table) };
+  }));
+  return env.QUERY.run({ sql, maxRows: numberVar(env.SIGIRO_MAX_RESULT_ROWS, defaultMaxResultRows), views: sources });
+}
+
+function referencedViews(sql: string): string[] {
+  const lowered = sql.toLowerCase();
+  return Object.keys(views).filter((name) => new RegExp(`\\b${name}\\b`, "u").test(lowered));
+}
+
+function problem(status: number, title: string, detail: string): Response {
+  return Response.json({ status, title, detail }, { status });
+}
 
 function routeSignal(pathname: string): Signal | undefined {
   if (pathname === "/v1/traces") {
@@ -176,7 +275,7 @@ function parseFormat(contentType: string | null): Format | undefined {
   return undefined;
 }
 
-async function authenticate(request: Request, env: Env): Promise<{ status: 200; tenant: TenantId } | { status: 401 | 403; body: string }> {
+async function authenticate(request: Request, env: Env, scope: string): Promise<{ status: 200; tenant: TenantId } | { status: 401 | 403; body: string }> {
   const header = request.headers.get("authorization");
   if (header === null || !header.startsWith("Bearer ")) {
     return { status: 401, body: "missing bearer token" };
@@ -206,8 +305,8 @@ async function authenticate(request: Request, env: Env): Promise<{ status: 200; 
   if (tenant === undefined) {
     return { status: 401, body: "invalid bearer token" };
   }
-  if (!claims.scope.split(/\s+/u).includes(ingestScope)) {
-    return { status: 403, body: "missing telemetry ingest scope" };
+  if (!claims.scope.split(/\s+/u).includes(scope)) {
+    return { status: 403, body: `missing ${scope} scope` };
   }
   return { status: 200, tenant };
 }

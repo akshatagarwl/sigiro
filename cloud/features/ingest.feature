@@ -37,3 +37,9 @@ Feature: Hosted telemetry ingest
   Scenario: An oversized request is rejected without retry
     When the SDK exports a request larger than the ingest body limit
     Then the export fails with status 413
+
+  Scenario: Ingest during an ingest cell takeover is retryable
+    Given the node owning "acme"'s spans cell crashed
+    When the SDK exports a span before another node has taken the cell over
+    Then the export fails with status 503 and a Retry-After header
+    And a retried export succeeds once the cell is taken over
