@@ -156,3 +156,8 @@ fn to_js_error(error: &impl ToString) -> JsValue {
 fn error(message: &str) -> JsValue {
     JsValue::from_str(message)
 }
+
+#[wasm_bindgen]
+pub fn validate_read_only(sql: &str) -> Result<(), JsValue> {
+    sigiro_segments::validate_read_only_with(sql, false).map_err(|error| JsValue::from_str(&error))
+}

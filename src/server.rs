@@ -23,7 +23,8 @@ use crate::inserter::{DiskCapacityState, MsgRouter};
 use crate::pool::ProjectPool;
 use crate::responses::*;
 use crate::types::*;
-use sigiro_core::sql::{ALLOWED_TABLES, escape_sql_string, validate_read_only_with};
+use sigiro_core::sql::escape_sql_string;
+use sigiro_segments::{ALLOWED_TABLES, validate_read_only_with};
 use tracing_attributes::instrument;
 
 #[derive(OpenApi)]
@@ -229,7 +230,7 @@ impl AppState {
 //   Therefore we use AST-based SQL validation (sqlparser) + `prepare()` single-statement guarantee.
 //   `conn.prepare()` only handles one statement — multi-statement injection via semicolons
 //   is already prevented by DuckDB itself. The firewall itself lives in
-//   `sigiro_core::sql` — see `sigiro_core::sql::validate_read_only`.
+//   `sigiro_segments::read_only_sql` — see `sigiro_segments::validate_read_only`.
 
 /// The public spec: everything `ApiDoc` describes, minus `/admin`.
 ///

@@ -7,7 +7,7 @@
 //! Two independent guards, both required:
 //! - [`load_and_pin`]: refuses to serve an unpinned/unexpected quack build.
 //! - [`install_authorization_gate`]: the actual security boundary — a Rust
-//!   scalar UDF that runs the SAME [`sigiro_core::sql::validate_read_only`]
+//!   scalar UDF that runs the SAME [`sigiro_segments::validate_read_only`]
 //!   firewall `/v1/query` enforces (SELECT-only + `sigiro_*` table allowlist
 //!   + reader-function denylist), fail-closed.
 
@@ -98,7 +98,7 @@ pub(crate) fn load_and_pin(conn: &Connection) -> Result<()> {
 /// Signature: `sigiro_quack_authorize(connection_id VARCHAR, query VARCHAR) ->
 /// BOOLEAN` — matches quack's authorization-callback contract exactly.
 /// `connection_id` is ignored: sigiro's guard is per-query, not
-/// per-connection. Returns `true` iff [`sigiro_core::sql::validate_read_only`]
+/// per-connection. Returns `true` iff [`sigiro_segments::validate_read_only`]
 /// — the SAME firewall `/v1/query` enforces — accepts `query`: SELECT-only,
 /// `sigiro_*` table allowlist, reader-function denylist.
 ///
@@ -148,7 +148,7 @@ impl VScalar for QuackAuthorizeScalar {
                 false
             } else {
                 let query = DuckString::new(&mut { *ptr }).as_str().to_string();
-                std::panic::catch_unwind(|| sigiro_core::sql::validate_read_only(&query).is_ok())
+                std::panic::catch_unwind(|| sigiro_segments::validate_read_only(&query).is_ok())
                     .unwrap_or(false)
             };
         }

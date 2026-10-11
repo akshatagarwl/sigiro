@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 mod otel_proto;
 pub mod otlp;
+pub mod read_only_sql;
+pub use read_only_sql::{ALLOWED_TABLES, validate_read_only, validate_read_only_with};
 mod proto;
 
 pub use otlp::{

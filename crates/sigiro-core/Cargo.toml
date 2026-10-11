@@ -13,7 +13,6 @@ drain3 = "0.3.0"
 itertools = "0.14.0"
 regex = "1"
 sha2 = "0.10"
-sqlparser = { version = "0.53", features = ["visitor"] }
 tracing = "0.1"
 
 [lints]

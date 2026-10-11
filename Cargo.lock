@@ -5294,7 +5294,6 @@ dependencies = [
  "itertools 0.14.0",
  "regex",
  "sha2 0.10.9",
- "sqlparser",
  "tracing",
 ]
 
@@ -5311,8 +5310,10 @@ dependencies = [
  "opentelemetry-proto 0.33.0",
  "parquet",
  "prost",
+ "regex",
  "serde",
  "serde_json",
+ "sqlparser",
  "tempfile",
  "thiserror 2.0.18",
  "time",
