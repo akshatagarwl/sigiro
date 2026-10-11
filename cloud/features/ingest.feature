@@ -11,8 +11,9 @@ Feature: Hosted telemetry ingest
 
   Scenario: An acknowledged span survives an ingest cell restart before its flush
     When the SDK exports a span named "POST /checkout" and the export succeeds
+    And no spans segment contains that span before the runtime stops
     And the runtime restarts before the flush window ends
-    Then after the flush window a spans segment for "acme" contains that span exactly once
+    Then after the flush window all spans segments for "acme" contain that span exactly once
 
   Scenario: Each metric kind is stored in its own table
     When the SDK exports one gauge and one sum metric
@@ -21,7 +22,13 @@ Feature: Hosted telemetry ingest
   Scenario: Tenants are isolated
     Given tenant "globex" holds a token with scope "telemetry:ingest"
     When "acme" exports a span named "acme-only"
-    Then no segment for "globex" contains "acme-only"
+    And "globex" exports a span named "globex-only"
+    Then segments for "acme" contain "acme-only" and not "globex-only"
+    And segments for "globex" contain "globex-only" and not "acme-only"
+
+  Scenario: A token with a malformed tenant is rejected
+    When a token for tenant "../globex" exports a span
+    Then the export fails with status 401 and no escaped tenant object is stored
 
   Scenario: A request without the ingest scope is rejected
     When a token with scope "query:read" exports a span

@@ -23,7 +23,7 @@ let celld: ChildProcess | undefined;
 
 try {
   jwksServer = await serveJwks();
-  writeFileSync(join(cloud, ".dev.vars"), `SIGIRO_AUTH_ISSUER=${issuer}\nSIGIRO_AUTH_AUDIENCE=${audience}\nSIGIRO_AUTH_JWKS_URL=${jwksUrl}\nFLUSH_SECONDS=1\nFLUSH_BYTES=10485760\nSIGIRO_MAX_INGEST_BODY_BYTES=1024\n`);
+  writeDevVars(1);
   celld = await startCelld(true);
   await assertPost("/v1/traces", traceBody("POST /checkout", "checkout"), token("acme", "telemetry:ingest"), 202, "application/x-protobuf");
   const first = await waitForParquet("tenants/acme/spans/");
@@ -31,9 +31,16 @@ try {
   await assertPost("/v1/metrics", metricsBody(), token("acme", "telemetry:ingest"), 202, "application/json");
   await waitForParquet("tenants/acme/metrics_gauge/");
   await waitForParquet("tenants/acme/metrics_sum/");
-  await assertPost("/v1/traces", traceBody("acme-only", "checkout"), token("acme", "telemetry:ingest"), 202, "application/x-protobuf");
+  await assertPost("/v1/traces", traceBody("path-tenant", "globex"), token("../globex", "telemetry:ingest"), 401, "application/x-protobuf");
+  assertNoEscapedTenantObjects();
+  await assertPost("/v1/traces", traceBody("acme-only", "acme"), token("acme", "telemetry:ingest"), 202, "application/x-protobuf");
+  await assertPost("/v1/traces", traceBody("globex-only", "globex"), token("globex", "telemetry:ingest"), 202, "application/x-protobuf");
   await waitForParquet("tenants/acme/spans/", "acme-only");
-  assert.equal(listObjects("tenants/globex/spans/").length, 0);
+  await waitForParquet("tenants/globex/spans/", "globex-only");
+  assert.equal(countTenantSpan("tenants/acme/spans/", "globex-only"), 0);
+  assert.equal(countTenantSpan("tenants/globex/spans/", "acme-only"), 0);
+  assert.equal(countTenantSpan("tenants/acme/spans/", "acme-only"), 1);
+  assert.equal(countTenantSpan("tenants/globex/spans/", "globex-only"), 1);
   const beforeBlocked = listObjects("tenants/acme/spans/").length;
   await assertPost("/v1/traces", traceBody("blocked", "checkout"), token("acme", "query:read"), 403, "application/x-protobuf");
   assert.equal(listObjects("tenants/acme/spans/").length, beforeBlocked);
@@ -42,12 +49,17 @@ try {
   const beforeOversize = listObjects("tenants/acme/spans/").length;
   await assertPost("/v1/traces", new Uint8Array(1_025), token("acme", "telemetry:ingest"), 413, "application/x-protobuf");
   assert.equal(listObjects("tenants/acme/spans/").length, beforeOversize);
-  await assertPost("/v1/traces", traceBody("restart-survivor", "checkout"), token("acme", "telemetry:ingest"), 202, "application/x-protobuf");
+  writeDevVars(10);
   celld.kill();
   await waitExit(celld);
   celld = await startCelld(false);
-  const restarted = await waitForParquet("tenants/acme/spans/", "restart-survivor");
-  assertDuckdb(restarted, "select count(*) as rows from read_parquet(?) where span_name = 'restart-survivor'", "rows\n1\n");
+  await assertPost("/v1/traces", traceBody("restart-survivor", "checkout"), token("acme", "telemetry:ingest"), 202, "application/x-protobuf");
+  assert.equal(countTenantSpan("tenants/acme/spans/", "restart-survivor"), 0);
+  celld.kill();
+  await waitExit(celld);
+  celld = await startCelld(false);
+  await waitForParquet("tenants/acme/spans/", "restart-survivor");
+  assert.equal(countTenantSpan("tenants/acme/spans/", "restart-survivor"), 1);
   console.log("cloud ingest e2e passed");
 } finally {
   celld?.kill();
@@ -124,23 +136,41 @@ async function waitForParquet(prefix: string, contains?: string): Promise<string
   throw new Error(`missing object ${prefix}`);
 }
 
+function writeDevVars(flushSeconds: number): void {
+  writeFileSync(join(cloud, ".dev.vars"), `SIGIRO_AUTH_ISSUER=${issuer}\nSIGIRO_AUTH_AUDIENCE=${audience}\nSIGIRO_AUTH_JWKS_URL=${jwksUrl}\nFLUSH_SECONDS=${flushSeconds}\nFLUSH_BYTES=10485760\nSIGIRO_MAX_INGEST_BODY_BYTES=1024\n`);
+}
+
 function listObjects(prefix: string): string[] {
+  return queryObjectKeys(`r2/sigiro-segments-dev/${prefix}`);
+}
+
+function queryObjectKeys(prefix: string): string[] {
   const db = join(cloud, ".celld/dev/objects.sqlite3");
-  const storedPrefix = `r2/sigiro-segments-dev/${prefix}`;
-  const sql = `select key from objects where key like '${storedPrefix.replaceAll("'", "''")}%' order by key`;
+  const sql = `select key from objects where key like '${prefix.replaceAll("'", "''")}%' order by key`;
   const result = spawnSync("sqlite3", ["-cmd", ".timeout 10000", db, sql], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim() === "" ? [] : result.stdout.trim().split("\n");
 }
 
+function assertNoEscapedTenantObjects(): void {
+  for (const key of queryObjectKeys("r2/sigiro-segments-dev/")) {
+    assert.equal(key.includes(".."), false, key);
+    assert.equal(key.startsWith("r2/sigiro-segments-dev/tenants/acme/"), true, key);
+  }
+}
+
 function readObject(key: string): string {
-  const db = join(cloud, ".celld/dev/objects.sqlite3");
   const dir = mkdtempSync(join(tmpdir(), "sigiro-parquet-"));
   const file = join(dir, "segment.parquet");
+  writeObject(key, file);
+  return file;
+}
+
+function writeObject(key: string, file: string): void {
+  const db = join(cloud, ".celld/dev/objects.sqlite3");
   const sql = `select writefile('${file.replaceAll("'", "''")}', body) from objects where key = '${key.replaceAll("'", "''")}';\n`;
   const result = spawnSync("sqlite3", ["-bail", "-cmd", ".timeout 10000", db], { input: sql, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  return file;
 }
 
 function assertDuckdb(file: string, sql: string, expected: string): void {
@@ -148,6 +178,23 @@ function assertDuckdb(file: string, sql: string, expected: string): void {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, expected);
   rmSync(new URL(".", `file://${file}`).pathname, { recursive: true, force: true });
+}
+
+function countTenantSpan(prefix: string, spanName: string): number {
+  const keys = listObjects(prefix);
+  if (keys.length === 0) {
+    return 0;
+  }
+  const dir = mkdtempSync(join(tmpdir(), "sigiro-parquet-"));
+  for (const [index, key] of keys.entries()) {
+    writeObject(key, join(dir, `${index}.parquet`));
+  }
+  const sql = `select count(*) as rows from read_parquet('${dir.replaceAll("'", "''")}/*.parquet') where span_name = '${spanName.replaceAll("'", "''")}'`;
+  const result = spawnSync("duckdb", ["-csv", "-c", sql], { encoding: "utf8" });
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.status, 0, result.stderr);
+  const rows = result.stdout.trim().split("\n");
+  return Number(rows[1]);
 }
 
 function duckdbContains(file: string, value: string): boolean {

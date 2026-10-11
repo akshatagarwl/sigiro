@@ -20,6 +20,8 @@ type Env = {
   FLUSH_BYTES?: string;
 };
 
+type TenantId = string & { readonly TenantId: unique symbol };
+
 type Claims = {
   iss: string;
   aud: string | string[];
@@ -32,7 +34,7 @@ type Claims = {
 
 type Jwk = JsonWebKey & { kid?: string; alg?: string };
 type Jwks = { keys: Jwk[] };
-type WalRow = { id: number; tenant: string; signal: Signal; format: Format; body: ArrayBuffer; bytes: number };
+type WalRow = { id: number; tenant: TenantId; signal: Signal; format: Format; body: ArrayBuffer; bytes: number };
 type SegmentMetadata = { table: Table; min_time_us: number; max_time_us: number; rows: number; bytes: number };
 type ManifestShape = { pending: Record<string, Table>; live: Record<string, { table: Table }> };
 
@@ -57,9 +59,9 @@ export class IngestCell extends DurableObject<Env> {
     }
     const params = new URL(request.url).searchParams;
     const signal = parseSignal(params.get("signal"));
-    const tenant = params.get("tenant");
+    const tenant = parseTenantId(params.get("tenant"));
     const format = parseFormat(request.headers.get("content-type"));
-    if (signal === undefined || format === undefined || tenant === null || tenant.trim() === "") {
+    if (signal === undefined || format === undefined || tenant === undefined) {
       return new Response("bad ingest cell request", { status: 400 });
     }
     const body = await request.arrayBuffer();
@@ -140,7 +142,7 @@ export default {
     if (body === undefined) {
       return new Response("request body exceeds ingest limit", { status: 413 });
     }
-    const id = env.INGEST_CELL.idFromName(`${auth.tenant}:${route}`);
+    const id = env.INGEST_CELL.idFromName(cellName(auth.tenant, route));
     const stub = env.INGEST_CELL.get(id);
     return stub.fetch(`https://cell.invalid/ingest?signal=${route}&tenant=${encodeURIComponent(auth.tenant)}`, { method: "POST", headers: { "content-type": format }, body });
   },
@@ -174,7 +176,7 @@ function parseFormat(contentType: string | null): Format | undefined {
   return undefined;
 }
 
-async function authenticate(request: Request, env: Env): Promise<{ status: 200; tenant: string } | { status: 401 | 403; body: string }> {
+async function authenticate(request: Request, env: Env): Promise<{ status: 200; tenant: TenantId } | { status: 401 | 403; body: string }> {
   const header = request.headers.get("authorization");
   if (header === null || !header.startsWith("Bearer ")) {
     return { status: 401, body: "missing bearer token" };
@@ -200,10 +202,14 @@ async function authenticate(request: Request, env: Env): Promise<{ status: 200; 
   if (claims === undefined || !validClaims(claims, env)) {
     return { status: 401, body: "invalid bearer token" };
   }
+  const tenant = parseTenantId(claims.tid);
+  if (tenant === undefined) {
+    return { status: 401, body: "invalid bearer token" };
+  }
   if (!claims.scope.split(/\s+/u).includes(ingestScope)) {
     return { status: 403, body: "missing telemetry ingest scope" };
   }
-  return { status: 200, tenant: claims.tid };
+  return { status: 200, tenant };
 }
 
 async function verifyEdDsa(jwk: Jwk, signature: Uint8Array<ArrayBuffer>, payload: Uint8Array<ArrayBuffer>): Promise<boolean> {
@@ -232,7 +238,18 @@ async function fetchJwks(env: Env): Promise<Jwk[]> {
 function validClaims(claims: Claims, env: Env): boolean {
   const now = Math.floor(Date.now() / 1000);
   const audience = Array.isArray(claims.aud) ? claims.aud.includes(env.SIGIRO_AUTH_AUDIENCE) : claims.aud === env.SIGIRO_AUTH_AUDIENCE;
-  return claims.iss === env.SIGIRO_AUTH_ISSUER && audience && claims.exp > now && (claims.nbf === undefined || claims.nbf <= now) && claims.sub.trim() !== "" && claims.tid.trim() !== "";
+  return claims.iss === env.SIGIRO_AUTH_ISSUER && audience && claims.exp > now && (claims.nbf === undefined || claims.nbf <= now) && claims.sub.trim() !== "";
+}
+
+function parseTenantId(value: string | null): TenantId | undefined {
+  if (value === null || !/^[A-Za-z0-9_]{1,56}$/u.test(value) || value === "extensions" || value === "tenants") {
+    return undefined;
+  }
+  return value as TenantId;
+}
+
+function cellName(tenant: TenantId, signal: Signal): string {
+  return `${tenant}:${signal}`;
 }
 
 async function boundedBody(request: Request, limit: number): Promise<ArrayBuffer | undefined> {
@@ -270,7 +287,7 @@ function sumWalBytes(sql: SqlStorage): number {
   return row.total;
 }
 
-function objectKey(tenant: string, id: number, index: number, table: Table): string {
+function objectKey(tenant: TenantId, id: number, index: number, table: Table): string {
   return `tenants/${tenant}/${table}/${id}-${index}.parquet`;
 }
 
