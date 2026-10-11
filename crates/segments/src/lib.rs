@@ -5,9 +5,10 @@ use arrow::array::{Array, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
-use parquet::basic::{Compression, Encoding};
+use parquet::basic::Compression;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
+use serde::{Deserialize, Serialize};
 
 mod otel_proto;
 pub mod otlp;
@@ -20,27 +21,31 @@ pub use otlp::{
 
 const ROW_GROUP_SIZE: usize = 100_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Signal {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Table {
     Spans,
     Logs,
-    Metrics,
+    MetricsGauge,
+    MetricsSum,
+    MetricsHistogram,
+    MetricsExpHistogram,
     Profiles,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Segment {
     pub key: String,
-    pub signal: Signal,
+    pub table: Table,
     pub min_time_us: i64,
     pub max_time_us: i64,
     pub rows: u64,
     pub bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SegmentMetadata {
-    pub signal: Signal,
+    pub table: Table,
     pub min_time_us: i64,
     pub max_time_us: i64,
     pub rows: u64,
@@ -51,7 +56,7 @@ impl SegmentMetadata {
     pub fn with_key(self, key: impl Into<String>) -> Segment {
         Segment {
             key: key.into(),
-            signal: self.signal,
+            table: self.table,
             min_time_us: self.min_time_us,
             max_time_us: self.max_time_us,
             rows: self.rows,
@@ -80,17 +85,18 @@ pub enum SegmentWriteError {
     Parquet(#[from] ParquetError),
 }
 
-pub fn write_segment(batch: &RecordBatch) -> Result<WrittenSegment, SegmentWriteError> {
+pub fn write_segment(
+    table: Table,
+    batch: &RecordBatch,
+) -> Result<WrittenSegment, SegmentWriteError> {
     if batch.num_rows() == 0 {
         return Err(SegmentWriteError::EmptyBatch);
     }
 
-    let signal = signal_for_schema(batch)?;
     let (min_time_us, max_time_us) = time_bounds_us(batch)?;
     let mut parquet = Vec::new();
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
-        .set_encoding(Encoding::PLAIN)
         .set_max_row_group_row_count(Some(ROW_GROUP_SIZE))
         .build();
     let mut writer = ArrowWriter::try_new(&mut parquet, batch.schema(), Some(props))?;
@@ -100,7 +106,7 @@ pub fn write_segment(batch: &RecordBatch) -> Result<WrittenSegment, SegmentWrite
 
     Ok(WrittenSegment {
         metadata: SegmentMetadata {
-            signal,
+            table,
             min_time_us,
             max_time_us,
             rows: batch.num_rows() as u64,
@@ -138,28 +144,6 @@ fn time_bounds_us(batch: &RecordBatch) -> Result<(i64, i64), SegmentWriteError> 
     Ok(bounds)
 }
 
-fn signal_for_schema(batch: &RecordBatch) -> Result<Signal, SegmentWriteError> {
-    let schema = batch.schema();
-    let names = schema
-        .fields()
-        .iter()
-        .map(|field| field.name().as_str())
-        .collect::<Vec<_>>();
-    if names.contains(&"span_name") && names.contains(&"trace_id") {
-        return Ok(Signal::Spans);
-    }
-    if names.contains(&"severity_number") && names.contains(&"body") {
-        return Ok(Signal::Logs);
-    }
-    if names.contains(&"metric_name") {
-        return Ok(Signal::Metrics);
-    }
-    if names.contains(&"profile_type") && names.contains(&"stack_trace") {
-        return Ok(Signal::Profiles);
-    }
-    Err(SegmentWriteError::UnsupportedSchema)
-}
-
 #[nutype::nutype(
     validate(predicate = |id: &str| {
         id.len() == 32
@@ -192,19 +176,40 @@ impl fmt::Display for SpanId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ManifestError {
+    #[error("manifest key is already in use: {0}")]
     KeyInUse(String),
+    #[error("segment is not pending: {0}")]
     NotPending(String),
+    #[error("segment is not live: {0}")]
     NotLive(String),
-    SignalMismatch(String),
+    #[error("segment table does not match manifest entry: {0}")]
+    TableMismatch(String),
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
+    #[serde(default = "manifest_version")]
+    version: u32,
     generation: u64,
-    pending: BTreeMap<String, Signal>,
+    pending: BTreeMap<String, Table>,
     live: BTreeMap<String, Segment>,
+}
+
+const fn manifest_version() -> u32 {
+    1
+}
+
+impl Default for Manifest {
+    fn default() -> Self {
+        Self {
+            version: manifest_version(),
+            generation: 0,
+            pending: BTreeMap::new(),
+            live: BTreeMap::new(),
+        }
+    }
 }
 
 impl Manifest {
@@ -212,11 +217,11 @@ impl Manifest {
         self.generation
     }
 
-    pub fn register(&mut self, key: &str, signal: Signal) -> Result<(), ManifestError> {
+    pub fn register(&mut self, key: &str, table: Table) -> Result<(), ManifestError> {
         if self.pending.contains_key(key) || self.live.contains_key(key) {
             return Err(ManifestError::KeyInUse(key.into()));
         }
-        self.pending.insert(key.into(), signal);
+        self.pending.insert(key.into(), table);
         self.generation += 1;
         Ok(())
     }
@@ -232,8 +237,8 @@ impl Manifest {
         for key in inputs {
             match self.live.get(*key) {
                 None => return Err(ManifestError::NotLive((*key).into())),
-                Some(input) if input.signal != output.signal => {
-                    return Err(ManifestError::SignalMismatch((*key).into()));
+                Some(input) if input.table != output.table => {
+                    return Err(ManifestError::TableMismatch((*key).into()));
                 }
                 Some(_) => {}
             }
@@ -253,11 +258,11 @@ impl Manifest {
         }
     }
 
-    pub fn expire(&mut self, signal: Signal, cutoff_us: i64) -> Vec<String> {
+    pub fn expire(&mut self, table: Table, cutoff_us: i64) -> Vec<String> {
         let expired: Vec<String> = self
             .live
             .values()
-            .filter(|s| s.signal == signal && s.max_time_us < cutoff_us)
+            .filter(|s| s.table == table && s.max_time_us < cutoff_us)
             .map(|s| s.key.clone())
             .collect();
         if !expired.is_empty() {
@@ -269,10 +274,10 @@ impl Manifest {
         expired
     }
 
-    pub fn live(&self, signal: Signal, from_us: i64, to_us: i64) -> Vec<&Segment> {
+    pub fn live(&self, table: Table, from_us: i64, to_us: i64) -> Vec<&Segment> {
         self.live
             .values()
-            .filter(|s| s.signal == signal && s.min_time_us <= to_us && s.max_time_us >= from_us)
+            .filter(|s| s.table == table && s.min_time_us <= to_us && s.max_time_us >= from_us)
             .collect()
     }
 
@@ -289,8 +294,8 @@ impl Manifest {
     fn take_pending(&mut self, segment: &Segment) -> Result<(), ManifestError> {
         match self.pending.get(&segment.key) {
             None => Err(ManifestError::NotPending(segment.key.clone())),
-            Some(signal) if *signal != segment.signal => {
-                Err(ManifestError::SignalMismatch(segment.key.clone()))
+            Some(table) if *table != segment.table => {
+                Err(ManifestError::TableMismatch(segment.key.clone()))
             }
             Some(_) => {
                 self.pending.remove(&segment.key);

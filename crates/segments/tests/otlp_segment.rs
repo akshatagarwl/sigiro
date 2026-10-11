@@ -3,17 +3,26 @@ use std::process::Command;
 use arrow::array::{StringArray, TimestampMicrosecondArray};
 use bytes::Bytes;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::LogRecord;
+use opentelemetry_proto::tonic::metrics::v1::exponential_histogram_data_point::Buckets;
+use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as NumberValue;
+use opentelemetry_proto::tonic::metrics::v1::{
+    AggregationTemporality, ExponentialHistogram, ExponentialHistogramDataPoint, Gauge, Histogram,
+    HistogramDataPoint, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, Sum,
+};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use opentelemetry_proto::tonic::trace::v1::span::SpanKind;
 use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use prost::Message;
 use sigiro_segments::{
-    InputFormat, SegmentMetadata, Signal, transform_logs, transform_traces, write_segment,
+    InputFormat, SegmentMetadata, Table, transform_logs, transform_metrics, transform_traces,
+    write_segment,
 };
 
 const TRACE_ID: [u8; 16] = [
@@ -31,15 +40,26 @@ fn protobuf_traces_decode_to_arrow_and_parquet_segment() {
             resource: Some(resource("checkout")),
             scope_spans: vec![ScopeSpans {
                 scope: Some(scope()),
-                spans: vec![Span {
-                    trace_id: TRACE_ID.to_vec(),
-                    span_id: SPAN_ID.to_vec(),
-                    name: "POST /checkout".to_string(),
-                    kind: SpanKind::Server as i32,
-                    start_time_unix_nano: TRACE_START_NS,
-                    end_time_unix_nano: TRACE_END_NS,
-                    ..Default::default()
-                }],
+                spans: vec![
+                    Span {
+                        trace_id: TRACE_ID.to_vec(),
+                        span_id: SPAN_ID.to_vec(),
+                        name: "POST /checkout".to_string(),
+                        kind: SpanKind::Server as i32,
+                        start_time_unix_nano: TRACE_START_NS + 4_000,
+                        end_time_unix_nano: TRACE_END_NS + 4_000,
+                        ..Default::default()
+                    },
+                    Span {
+                        trace_id: TRACE_ID.to_vec(),
+                        span_id: [0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10].to_vec(),
+                        name: "SELECT inventory".to_string(),
+                        kind: SpanKind::Client as i32,
+                        start_time_unix_nano: TRACE_START_NS,
+                        end_time_unix_nano: TRACE_END_NS,
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             }],
             ..Default::default()
@@ -48,27 +68,30 @@ fn protobuf_traces_decode_to_arrow_and_parquet_segment() {
     let bytes = request.encode_to_vec();
 
     let batch = transform_traces(&bytes, InputFormat::Protobuf).unwrap();
-    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(batch.num_rows(), 2);
     assert_string(&batch, "span_name", 0, "POST /checkout");
+    assert_string(&batch, "span_name", 1, "SELECT inventory");
     assert_string(&batch, "trace_id", 0, "1032547698badcfe1032547698badcfe");
 
-    let segment = write_segment(&batch).unwrap();
+    let segment = write_segment(Table::Spans, &batch).unwrap();
     assert_eq!(
         segment.metadata,
         SegmentMetadata {
-            signal: Signal::Spans,
+            table: Table::Spans,
             min_time_us: 1_700_000_000_000_001,
-            max_time_us: 1_700_000_000_000_001,
-            rows: 1,
+            max_time_us: 1_700_000_000_000_005,
+            rows: 2,
             bytes: segment.parquet.len() as u64,
         }
     );
 
     let read = read_parquet(&segment.parquet);
-    assert_eq!(read.num_rows(), 1);
+    assert_eq!(read.num_rows(), 2);
     assert_string(&read, "span_name", 0, "POST /checkout");
+    assert_string(&read, "span_name", 1, "SELECT inventory");
     assert_string(&read, "trace_id", 0, "1032547698badcfe1032547698badcfe");
-    assert_timestamp(&read, "timestamp", 0, 1_700_000_000_000_001);
+    assert_timestamp(&read, "timestamp", 0, 1_700_000_000_000_005);
+    assert_timestamp(&read, "timestamp", 1, 1_700_000_000_000_001);
 }
 
 #[test]
@@ -78,19 +101,34 @@ fn json_logs_decode_to_arrow_and_parquet_segment() {
             resource: Some(resource("worker")),
             scope_logs: vec![opentelemetry_proto::tonic::logs::v1::ScopeLogs {
                 scope: Some(scope()),
-                log_records: vec![LogRecord {
-                    time_unix_nano: LOG_TIME_NS,
-                    observed_time_unix_nano: LOG_TIME_NS + 2_000,
-                    trace_id: TRACE_ID.to_vec(),
-                    span_id: SPAN_ID.to_vec(),
-                    event_name: "checkout.failed".to_string(),
-                    severity_number: 17,
-                    severity_text: "ERROR".to_string(),
-                    body: Some(AnyValue {
-                        value: Some(Value::StringValue("card declined".to_string())),
-                    }),
-                    ..Default::default()
-                }],
+                log_records: vec![
+                    LogRecord {
+                        time_unix_nano: LOG_TIME_NS + 6_000,
+                        observed_time_unix_nano: LOG_TIME_NS + 8_000,
+                        trace_id: TRACE_ID.to_vec(),
+                        span_id: SPAN_ID.to_vec(),
+                        event_name: "checkout.failed".to_string(),
+                        severity_number: 17,
+                        severity_text: "ERROR".to_string(),
+                        body: Some(AnyValue {
+                            value: Some(Value::StringValue("card declined".to_string())),
+                        }),
+                        ..Default::default()
+                    },
+                    LogRecord {
+                        time_unix_nano: LOG_TIME_NS,
+                        observed_time_unix_nano: LOG_TIME_NS + 2_000,
+                        trace_id: TRACE_ID.to_vec(),
+                        span_id: SPAN_ID.to_vec(),
+                        event_name: "checkout.retry".to_string(),
+                        severity_number: 9,
+                        severity_text: "INFO".to_string(),
+                        body: Some(AnyValue {
+                            value: Some(Value::StringValue("retrying".to_string())),
+                        }),
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             }],
             ..Default::default()
@@ -100,22 +138,128 @@ fn json_logs_decode_to_arrow_and_parquet_segment() {
 
     let (batch, rejected) = transform_logs(&bytes, InputFormat::Json).unwrap();
     assert_eq!(rejected, 0);
-    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(batch.num_rows(), 2);
     assert_string(&batch, "body", 0, "card declined");
+    assert_string(&batch, "body", 1, "retrying");
     assert_string(&batch, "service_name", 0, "worker");
 
-    let segment = write_segment(&batch).unwrap();
-    assert_eq!(segment.metadata.signal, Signal::Logs);
+    let segment = write_segment(Table::Logs, &batch).unwrap();
+    assert_eq!(segment.metadata.table, Table::Logs);
     assert_eq!(segment.metadata.min_time_us, 1_700_000_000_123_456);
-    assert_eq!(segment.metadata.max_time_us, 1_700_000_000_123_456);
-    assert_eq!(segment.metadata.rows, 1);
+    assert_eq!(segment.metadata.max_time_us, 1_700_000_000_123_462);
+    assert_eq!(segment.metadata.rows, 2);
     assert_eq!(segment.metadata.bytes, segment.parquet.len() as u64);
 
     let read = read_parquet(&segment.parquet);
-    assert_eq!(read.num_rows(), 1);
+    assert_eq!(read.num_rows(), 2);
     assert_string(&read, "body", 0, "card declined");
+    assert_string(&read, "body", 1, "retrying");
     assert_string(&read, "service_name", 0, "worker");
-    assert_timestamp(&read, "timestamp", 0, 1_700_000_000_123_456);
+    assert_timestamp(&read, "timestamp", 0, 1_700_000_000_123_462);
+    assert_timestamp(&read, "timestamp", 1, 1_700_000_000_123_456);
+}
+
+#[test]
+fn protobuf_metrics_decode_into_distinct_table_segments() {
+    let request = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(resource("checkout")),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(scope()),
+                metrics: vec![
+                    Metric {
+                        name: "cart.items".to_string(),
+                        data: Some(Data::Gauge(Gauge {
+                            data_points: vec![number_point(TRACE_START_NS + 4_000, 12.0)],
+                        })),
+                        ..Default::default()
+                    },
+                    Metric {
+                        name: "checkout.total".to_string(),
+                        data: Some(Data::Sum(Sum {
+                            data_points: vec![number_point(TRACE_START_NS, 99.0)],
+                            aggregation_temporality: AggregationTemporality::Delta as i32,
+                            is_monotonic: true,
+                        })),
+                        ..Default::default()
+                    },
+                    Metric {
+                        name: "request.duration".to_string(),
+                        data: Some(Data::Histogram(Histogram {
+                            data_points: vec![HistogramDataPoint {
+                                time_unix_nano: TRACE_START_NS + 8_000,
+                                start_time_unix_nano: TRACE_START_NS,
+                                count: 2,
+                                sum: Some(42.0),
+                                min: Some(10.0),
+                                max: Some(32.0),
+                                bucket_counts: vec![1, 1],
+                                explicit_bounds: vec![20.0],
+                                ..Default::default()
+                            }],
+                            aggregation_temporality: AggregationTemporality::Cumulative as i32,
+                        })),
+                        ..Default::default()
+                    },
+                    Metric {
+                        name: "payload.size".to_string(),
+                        data: Some(Data::ExponentialHistogram(ExponentialHistogram {
+                            data_points: vec![ExponentialHistogramDataPoint {
+                                time_unix_nano: TRACE_START_NS + 12_000,
+                                start_time_unix_nano: TRACE_START_NS,
+                                count: 3,
+                                sum: Some(30.0),
+                                min: Some(5.0),
+                                max: Some(15.0),
+                                scale: 1,
+                                zero_count: 0,
+                                zero_threshold: 0.0,
+                                positive: Some(Buckets {
+                                    offset: 0,
+                                    bucket_counts: vec![1, 2],
+                                }),
+                                ..Default::default()
+                            }],
+                            aggregation_temporality: AggregationTemporality::Delta as i32,
+                        })),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    };
+
+    let batches = transform_metrics(&request.encode_to_vec(), InputFormat::Protobuf).unwrap();
+    let gauge = write_segment(Table::MetricsGauge, &batches.gauge.unwrap()).unwrap();
+    let sum = write_segment(Table::MetricsSum, &batches.sum.unwrap()).unwrap();
+    let histogram = write_segment(Table::MetricsHistogram, &batches.histogram.unwrap()).unwrap();
+    let exp_histogram =
+        write_segment(Table::MetricsExpHistogram, &batches.exp_histogram.unwrap()).unwrap();
+
+    assert_eq!(gauge.metadata.table, Table::MetricsGauge);
+    assert_eq!(sum.metadata.table, Table::MetricsSum);
+    assert_eq!(histogram.metadata.table, Table::MetricsHistogram);
+    assert_eq!(exp_histogram.metadata.table, Table::MetricsExpHistogram);
+    assert_eq!(gauge.metadata.min_time_us, 1_700_000_000_000_005);
+    assert_eq!(sum.metadata.min_time_us, 1_700_000_000_000_001);
+    assert_eq!(histogram.metadata.min_time_us, 1_700_000_000_000_009);
+    assert_eq!(exp_histogram.metadata.min_time_us, 1_700_000_000_000_013);
+
+    let gauge_read = read_parquet(&gauge.parquet);
+    let sum_read = read_parquet(&sum.parquet);
+    let histogram_read = read_parquet(&histogram.parquet);
+    let exp_histogram_read = read_parquet(&exp_histogram.parquet);
+    assert!(gauge_read.schema().index_of("value").is_ok());
+    assert!(sum_read.schema().index_of("is_monotonic").is_ok());
+    assert!(histogram_read.schema().index_of("explicit_bounds").is_ok());
+    assert!(
+        exp_histogram_read
+            .schema()
+            .index_of("positive_bucket_counts")
+            .is_ok()
+    );
 }
 
 #[test]
@@ -157,7 +301,7 @@ fn duckdb_reads_written_trace_segment() {
         }],
     };
     let batch = transform_traces(&request.encode_to_vec(), InputFormat::Protobuf).unwrap();
-    let segment = write_segment(&batch).unwrap();
+    let segment = write_segment(Table::Spans, &batch).unwrap();
     let mut file = tempfile::Builder::new()
         .suffix(".parquet")
         .tempfile()
@@ -209,6 +353,15 @@ fn scope() -> InstrumentationScope {
     InstrumentationScope {
         name: "sigiro-test".to_string(),
         version: "1.0.0".to_string(),
+        ..Default::default()
+    }
+}
+
+fn number_point(time_unix_nano: u64, value: f64) -> NumberDataPoint {
+    NumberDataPoint {
+        time_unix_nano,
+        start_time_unix_nano: TRACE_START_NS,
+        value: Some(NumberValue::AsDouble(value)),
         ..Default::default()
     }
 }
