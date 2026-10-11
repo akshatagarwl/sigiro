@@ -12,26 +12,26 @@ pub fn decode_otlp(signal: &str, format: &str, body: &[u8]) -> Result<Array, JsV
     let segments = match signal {
         "traces" => write_batch(
             Table::Spans,
-            transform_traces(body, format).map_err(to_js_error)?,
+            &transform_traces(body, format).map_err(|error| to_js_error(&error))?,
         )?,
         "logs" => {
-            let (batch, _) = transform_logs(body, format).map_err(to_js_error)?;
-            write_batch(Table::Logs, batch)?
+            let (batch, _) = transform_logs(body, format).map_err(|error| to_js_error(&error))?;
+            write_batch(Table::Logs, &batch)?
         }
         "metrics" => {
-            let batches = transform_metrics(body, format).map_err(to_js_error)?;
+            let batches = transform_metrics(body, format).map_err(|error| to_js_error(&error))?;
             let out = Array::new();
             if let Some(batch) = batches.gauge {
-                push_segments(&out, write_batch(Table::MetricsGauge, batch)?);
+                push_segments(&out, &write_batch(Table::MetricsGauge, &batch)?);
             }
             if let Some(batch) = batches.sum {
-                push_segments(&out, write_batch(Table::MetricsSum, batch)?);
+                push_segments(&out, &write_batch(Table::MetricsSum, &batch)?);
             }
             if let Some(batch) = batches.histogram {
-                push_segments(&out, write_batch(Table::MetricsHistogram, batch)?);
+                push_segments(&out, &write_batch(Table::MetricsHistogram, &batch)?);
             }
             if let Some(batch) = batches.exp_histogram {
-                push_segments(&out, write_batch(Table::MetricsExpHistogram, batch)?);
+                push_segments(&out, &write_batch(Table::MetricsExpHistogram, &batch)?);
             }
             out
         }
@@ -42,7 +42,7 @@ pub fn decode_otlp(signal: &str, format: &str, body: &[u8]) -> Result<Array, JsV
 
 #[wasm_bindgen]
 pub fn manifest_empty() -> Result<String, JsValue> {
-    serde_json::to_string(&Manifest::default()).map_err(to_js_error)
+    serde_json::to_string(&Manifest::default()).map_err(|error| to_js_error(&error))
 }
 
 #[wasm_bindgen]
@@ -57,7 +57,7 @@ pub fn manifest_register(manifest: &str, key: &str, table: &str) -> Result<Strin
 #[wasm_bindgen]
 pub fn manifest_commit(manifest: &str, segment: &str) -> Result<String, JsValue> {
     let mut manifest = read_manifest(manifest)?;
-    let segment = serde_json::from_str::<Segment>(segment).map_err(to_js_error)?;
+    let segment = serde_json::from_str::<Segment>(segment).map_err(|error| to_js_error(&error))?;
     manifest
         .commit(segment)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
@@ -72,11 +72,12 @@ pub fn manifest_live(
     to_us: i64,
 ) -> Result<String, JsValue> {
     let manifest = read_manifest(manifest)?;
-    serde_json::to_string(&manifest.live(parse_table(table)?, from_us, to_us)).map_err(to_js_error)
+    serde_json::to_string(&manifest.live(parse_table(table)?, from_us, to_us))
+        .map_err(|error| to_js_error(&error))
 }
 
 #[wasm_bindgen]
-pub fn manifest_orphans(manifest: &str, stored: Array) -> Result<Array, JsValue> {
+pub fn manifest_orphans(manifest: &str, stored: &Array) -> Result<Array, JsValue> {
     let manifest = read_manifest(manifest)?;
     let keys = stored
         .iter()
@@ -93,15 +94,15 @@ pub fn manifest_orphans(manifest: &str, stored: Array) -> Result<Array, JsValue>
     Ok(out)
 }
 
-fn write_batch(table: Table, batch: RecordBatch) -> Result<Array, JsValue> {
+fn write_batch(table: Table, batch: &RecordBatch) -> Result<Array, JsValue> {
     if batch.num_rows() == 0 {
         return Ok(Array::new());
     }
     let segment =
-        write_segment(table, &batch).map_err(|error| JsValue::from_str(&error.to_string()))?;
+        write_segment(table, batch).map_err(|error| JsValue::from_str(&error.to_string()))?;
     let out = Array::new();
     let entry = Object::new();
-    let metadata = serde_json::to_string(&segment.metadata).map_err(to_js_error)?;
+    let metadata = serde_json::to_string(&segment.metadata).map_err(|error| to_js_error(&error))?;
     let parquet = Uint8Array::from(segment.parquet.as_slice());
     Reflect::set(
         &entry,
@@ -113,7 +114,7 @@ fn write_batch(table: Table, batch: RecordBatch) -> Result<Array, JsValue> {
     Ok(out)
 }
 
-fn push_segments(out: &Array, segments: Array) {
+fn push_segments(out: &Array, segments: &Array) {
     for segment in segments.iter() {
         out.push(&segment);
     }
@@ -141,14 +142,14 @@ fn parse_table(table: &str) -> Result<Table, JsValue> {
 }
 
 fn read_manifest(manifest: &str) -> Result<Manifest, JsValue> {
-    serde_json::from_str(manifest).map_err(to_js_error)
+    serde_json::from_str(manifest).map_err(|error| to_js_error(&error))
 }
 
 fn write_manifest(manifest: &Manifest) -> Result<String, JsValue> {
-    serde_json::to_string(manifest).map_err(to_js_error)
+    serde_json::to_string(manifest).map_err(|error| to_js_error(&error))
 }
 
-fn to_js_error(error: impl ToString) -> JsValue {
+fn to_js_error(error: &impl ToString) -> JsValue {
     JsValue::from_str(&error.to_string())
 }
 
