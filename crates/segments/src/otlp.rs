@@ -1665,3 +1665,16 @@ impl ExpHistogramBuilders {
         Ok(Some(RecordBatch::try_new(Arc::new(schema), arrays)?))
     }
 }
+
+pub(crate) fn table_schema(table: crate::Table) -> Option<Schema> {
+    use crate::Table;
+    match table {
+        Table::Spans => Some(traces_schema()),
+        Table::Logs => Some(logs_schema()),
+        Table::MetricsGauge => Some(gauge_schema()),
+        Table::MetricsSum => Some(sum_schema()),
+        Table::MetricsHistogram => Some(histogram_schema()),
+        Table::MetricsExpHistogram => Some(exp_histogram_schema()),
+        Table::Profiles => None,
+    }
+}

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use arrow::array::{Array, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, TimeUnit};
@@ -85,6 +86,14 @@ pub enum SegmentWriteError {
     UnsupportedSchema,
     #[error("parquet write error: {0}")]
     Parquet(#[from] ParquetError),
+}
+
+pub fn empty_segment(table: Table) -> Option<Vec<u8>> {
+    let schema = Arc::new(otlp::table_schema(table)?);
+    let mut parquet = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut parquet, schema, None).ok()?;
+    writer.close().ok()?;
+    Some(parquet)
 }
 
 pub fn write_segment(

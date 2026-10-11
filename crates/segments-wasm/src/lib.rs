@@ -161,3 +161,9 @@ fn error(message: &str) -> JsValue {
 pub fn validate_read_only(sql: &str) -> Result<(), JsValue> {
     sigiro_segments::validate_read_only_with(sql, false).map_err(|error| JsValue::from_str(&error))
 }
+
+#[wasm_bindgen]
+pub fn empty_segment(table: &str) -> Result<Vec<u8>, JsValue> {
+    sigiro_segments::empty_segment(parse_table(table)?)
+        .ok_or_else(|| JsValue::from_str(&format!("table {table} has no hosted schema")))
+}
