@@ -31,6 +31,10 @@ pub enum DecodeError {
     Parse(String),
     #[error("unsupported payload: {0}")]
     Unsupported(String),
+    #[error("{0}")]
+    TooLarge(String),
+    #[error("arrow error: {0}")]
+    Arrow(#[from] arrow::error::ArrowError),
 }
 
 #[derive(Debug)]
@@ -1675,6 +1679,6 @@ pub(crate) fn table_schema(table: crate::Table) -> Option<Schema> {
         Table::MetricsSum => Some(sum_schema()),
         Table::MetricsHistogram => Some(histogram_schema()),
         Table::MetricsExpHistogram => Some(exp_histogram_schema()),
-        Table::Profiles => None,
+        Table::Profiles => Some(crate::profiles::profile_schema().as_ref().clone()),
     }
 }

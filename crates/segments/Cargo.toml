@@ -25,8 +25,12 @@ serde_json = "1"
 thiserror = "2"
 time = "0.3"
 tracing = "0.1"
+flate2 = "1"
 
 [dev-dependencies]
+otlp031 = { package = "opentelemetry-proto", version = "=0.31.0", default-features = false, features = ["gen-tonic-messages", "profiles"] }
+pyroscope = { version = "=2.0.4", default-features = false }
+flate2 = "1"
 bytes = "1"
 opentelemetry-proto = { version = "0.33", git = "https://github.com/Arnav12114/opentelemetry-rust.git", rev = "7b70ecc68e68a1e0ea5c343caf8e37c68adaa356", default-features = false, features = ["gen-tonic-messages", "logs", "metrics", "trace", "with-serde"] }
 tempfile = "3"

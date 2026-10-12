@@ -34,6 +34,13 @@ pub mod tonic {
         }
     }
 
+    pub mod profiles {
+        pub mod v1development {
+            #![allow(dead_code, clippy::all)]
+            include!("tonic/opentelemetry.proto.profiles.v1development.rs");
+        }
+    }
+
     pub mod collector {
         pub mod trace {
             pub mod v1 {
@@ -53,6 +60,13 @@ pub mod tonic {
             pub mod v1 {
                 #![allow(dead_code, clippy::all)]
                 include!("tonic/opentelemetry.proto.collector.metrics.v1.rs");
+            }
+        }
+
+        pub mod profiles {
+            pub mod v1development {
+                #![allow(dead_code, clippy::all)]
+                include!("tonic/opentelemetry.proto.collector.profiles.v1development.rs");
             }
         }
     }

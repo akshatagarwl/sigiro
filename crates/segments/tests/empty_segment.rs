@@ -40,6 +40,22 @@ fn every_metric_table_has_an_empty_segment() {
 }
 
 #[test]
-fn profiles_have_no_hosted_schema_yet() {
-    assert!(empty_segment(Table::Profiles).is_none());
+fn an_empty_profiles_segment_has_the_profiles_columns() {
+    let (names, rows) = columns(empty_segment(Table::Profiles).unwrap());
+    assert_eq!(rows, 0);
+    assert_eq!(
+        names,
+        [
+            "profile_id",
+            "trace_id",
+            "span_id",
+            "service_name",
+            "timestamp",
+            "profile_type",
+            "stack_trace",
+            "value",
+            "unit",
+            "resource_attributes"
+        ]
+    );
 }
