@@ -1,3 +1,4 @@
+use crate::declared_schema::{DeclaredTable, PostgresSchema, SqliteSchema, reconcile};
 use anyhow::{Context, Result};
 use postgres_native_tls::MakeTlsConnector;
 use std::str::FromStr;
@@ -59,17 +60,54 @@ impl Drop for HostedClient {
     }
 }
 
-/// Create instance_status table in admin DB (key-value with timestamps).
-pub fn create_instance_status_table(conn: &rusqlite::Connection) -> Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS instance_status (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at TEXT DEFAULT (datetime('now'))
-        );",
-    )
-    .context("failed to create instance_status table")?;
-    Ok(())
+const SQLITE_INSTANCE_STATUS: DeclaredTable = DeclaredTable {
+    name: "instance_status",
+    create: "CREATE TABLE {table} (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now')))",
+    indexes: &[],
+};
+
+const POSTGRES_INSTANCE_STATUS: DeclaredTable = DeclaredTable {
+    name: "instance_status",
+    create: "CREATE TABLE {table} (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    indexes: &[],
+};
+
+fn reconcile_sqlite(conn: &mut rusqlite::Connection) -> Result<()> {
+    let tables: Vec<DeclaredTable> = std::iter::once(SQLITE_INSTANCE_STATUS)
+        .chain(crate::alerts::SQLITE_TABLES.iter().copied())
+        .collect();
+    let transaction = conn
+        .transaction()
+        .context("failed to start admin schema reconcile")?;
+    reconcile(&mut SqliteSchema(&transaction), &tables)?;
+    transaction
+        .commit()
+        .context("failed to commit admin schema reconcile")
+}
+
+fn reconcile_postgres(client: &mut postgres::Client) -> Result<()> {
+    let tables: Vec<DeclaredTable> = std::iter::once(POSTGRES_INSTANCE_STATUS)
+        .chain(crate::alerts::POSTGRES_TABLES.iter().copied())
+        .collect();
+    let mut transaction = client
+        .transaction()
+        .context("failed to start hosted admin schema reconcile")?;
+    reconcile(
+        &mut PostgresSchema {
+            transaction: &mut transaction,
+            schema: "sigiro_admin",
+        },
+        &tables,
+    )?;
+    transaction
+        .commit()
+        .context("failed to commit hosted admin schema reconcile")
 }
 
 /// Write (upsert) a single key-value pair into instance_status.
@@ -193,14 +231,13 @@ pub fn read_all_status(
 pub fn open_local_admin_db(dir: &camino::Utf8Path) -> Result<AdminConnection> {
     std::fs::create_dir_all(dir).context("failed to create data directory")?;
     let path = dir.join("admin.sqlite");
-    let conn = rusqlite::Connection::open(&path)
+    let mut conn = rusqlite::Connection::open(&path)
         .with_context(|| format!("failed to open admin DB at {path}"))?;
 
     conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0))
         .context("failed to enable WAL mode")?;
 
-    create_instance_status_table(&conn)?;
-    crate::alerts::create_sqlite_tables(&conn)?;
+    reconcile_sqlite(&mut conn)?;
     Ok(AdminConnection::Local(conn))
 }
 
@@ -219,21 +256,11 @@ pub async fn open_hosted_admin_db(catalog_url: &str) -> Result<AdminConnection> 
 
 fn open_hosted_admin_db_blocking(catalog_url: &str) -> Result<AdminConnection> {
     let mut client = connect_postgres(catalog_url)?;
-    client
-        .batch_execute(
-            "CREATE SCHEMA IF NOT EXISTS sigiro_admin;
-         CREATE TABLE IF NOT EXISTS sigiro_admin.instance_status (
-           key TEXT PRIMARY KEY,
-           value TEXT NOT NULL,
-           updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-         );",
-        )
-        .context("failed to create hosted instance_status table")?;
-    crate::alerts::create_postgres_tables(&mut client)?;
+    reconcile_postgres(&mut client)?;
     Ok(AdminConnection::Hosted(HostedClient::new(client)))
 }
 
-pub(crate) fn connect_postgres(catalog_url: &str) -> Result<postgres::Client> {
+pub fn connect_postgres(catalog_url: &str) -> Result<postgres::Client> {
     let mut url = url::Url::parse(catalog_url).context("catalog URL is invalid")?;
     anyhow::ensure!(
         matches!(url.scheme(), "postgres" | "postgresql"),
@@ -280,9 +307,8 @@ pub(crate) fn connect_postgres(catalog_url: &str) -> Result<postgres::Client> {
 }
 
 pub fn test_connection() -> Result<AdminConnection> {
-    let conn =
+    let mut conn =
         rusqlite::Connection::open_in_memory().context("failed to open in-memory admin DB")?;
-    create_instance_status_table(&conn)?;
-    crate::alerts::create_sqlite_tables(&conn)?;
+    reconcile_sqlite(&mut conn)?;
     Ok(AdminConnection::Local(conn))
 }

@@ -1,4 +1,5 @@
 use crate::admin::AdminConnection;
+use crate::declared_schema::DeclaredTable;
 use anyhow::{Context, Result};
 use arrow::array::{Array, StringArray, TimestampMicrosecondArray};
 use arrow::record_batch::RecordBatch;
@@ -131,10 +132,6 @@ struct AlertTransition<'a> {
 
 impl AlertStore {
     pub fn new(conn: Arc<Mutex<AdminConnection>>) -> Result<Self> {
-        match &mut *conn.lock() {
-            AdminConnection::Local(conn) => create_sqlite_tables(conn)?,
-            AdminConnection::Hosted(client) => create_postgres_tables(client)?,
-        }
         Ok(Self { conn })
     }
 
@@ -526,9 +523,10 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
     }
 }
 
-pub(crate) fn create_sqlite_tables(conn: &rusqlite::Connection) -> Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS alert_instances (
+pub(crate) const SQLITE_TABLES: &[DeclaredTable] = &[
+    DeclaredTable {
+        name: "alert_instances",
+        create: "CREATE TABLE {table} (
             project_id TEXT NOT NULL,
             fingerprint TEXT NOT NULL,
             rule_id TEXT NOT NULL,
@@ -539,16 +537,24 @@ pub(crate) fn create_sqlite_tables(conn: &rusqlite::Connection) -> Result<()> {
             ends_at_us INTEGER,
             occurrence_count INTEGER NOT NULL,
             updated_at_us INTEGER NOT NULL,
-            PRIMARY KEY (project_id, fingerprint)
-         );
-         CREATE TABLE IF NOT EXISTS alert_occurrences (
+            PRIMARY KEY (project_id, fingerprint))",
+        indexes: &[
+            "CREATE INDEX alert_instances_project_status ON {table} (project_id, status, updated_at_us)",
+        ],
+    },
+    DeclaredTable {
+        name: "alert_occurrences",
+        create: "CREATE TABLE {table} (
             project_id TEXT NOT NULL,
             occurrence_key TEXT NOT NULL,
             fingerprint TEXT NOT NULL,
             observed_at_us INTEGER NOT NULL,
-            PRIMARY KEY (project_id, occurrence_key)
-         );
-         CREATE TABLE IF NOT EXISTS alert_outbox (
+            PRIMARY KEY (project_id, occurrence_key))",
+        indexes: &[],
+    },
+    DeclaredTable {
+        name: "alert_outbox",
+        create: "CREATE TABLE {table} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id TEXT NOT NULL,
             fingerprint TEXT NOT NULL,
@@ -557,34 +563,37 @@ pub(crate) fn create_sqlite_tables(conn: &rusqlite::Connection) -> Result<()> {
             attempts INTEGER NOT NULL DEFAULT 0,
             next_attempt_at_us INTEGER NOT NULL,
             sent_at_us INTEGER,
-            last_error TEXT
-         );
-         CREATE INDEX IF NOT EXISTS alert_outbox_due
-            ON alert_outbox (sent_at_us, next_attempt_at_us, id);
-         CREATE INDEX IF NOT EXISTS alert_instances_project_status
-            ON alert_instances (project_id, status, updated_at_us);",
-    )
-    .context("failed to create alert tables")
-}
+            last_error TEXT)",
+        indexes: &["CREATE INDEX alert_outbox_due ON {table} (sent_at_us, next_attempt_at_us, id)"],
+    },
+];
 
-pub(crate) fn create_postgres_tables(client: &mut postgres::Client) -> Result<()> {
-    client.batch_execute(
-        "CREATE TABLE IF NOT EXISTS sigiro_admin.alert_instances (
-           project_id TEXT NOT NULL, fingerprint TEXT NOT NULL, rule_id TEXT NOT NULL,
-           status TEXT NOT NULL, service_name TEXT NOT NULL, container_name TEXT NOT NULL,
-           starts_at_us BIGINT NOT NULL, ends_at_us BIGINT, occurrence_count BIGINT NOT NULL,
-           updated_at_us BIGINT NOT NULL, PRIMARY KEY (project_id, fingerprint));
-         CREATE TABLE IF NOT EXISTS sigiro_admin.alert_occurrences (
-           project_id TEXT NOT NULL, occurrence_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
-           observed_at_us BIGINT NOT NULL, PRIMARY KEY (project_id, occurrence_key));
-         CREATE TABLE IF NOT EXISTS sigiro_admin.alert_outbox (
-           id BIGSERIAL PRIMARY KEY, project_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
-           transition TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-           next_attempt_at_us BIGINT NOT NULL, sent_at_us BIGINT, last_error TEXT);
-         CREATE INDEX IF NOT EXISTS alert_outbox_due ON sigiro_admin.alert_outbox (sent_at_us, next_attempt_at_us, id);
-         CREATE INDEX IF NOT EXISTS alert_instances_project_status ON sigiro_admin.alert_instances (project_id, status, updated_at_us);",
-    ).context("failed to create hosted alert tables")
-}
+pub(crate) const POSTGRES_TABLES: &[DeclaredTable] = &[
+    DeclaredTable {
+        name: "alert_instances",
+        create: "CREATE TABLE {table} (
+            project_id TEXT NOT NULL, fingerprint TEXT NOT NULL, rule_id TEXT NOT NULL,
+            status TEXT NOT NULL, service_name TEXT NOT NULL, container_name TEXT NOT NULL,
+            starts_at_us BIGINT NOT NULL, ends_at_us BIGINT, occurrence_count BIGINT NOT NULL,
+            updated_at_us BIGINT NOT NULL, PRIMARY KEY (project_id, fingerprint))",
+        indexes: &["CREATE INDEX alert_instances_project_status ON {table} (project_id, status, updated_at_us)"],
+    },
+    DeclaredTable {
+        name: "alert_occurrences",
+        create: "CREATE TABLE {table} (
+            project_id TEXT NOT NULL, occurrence_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            observed_at_us BIGINT NOT NULL, PRIMARY KEY (project_id, occurrence_key))",
+        indexes: &[],
+    },
+    DeclaredTable {
+        name: "alert_outbox",
+        create: "CREATE TABLE {table} (
+            id BIGSERIAL PRIMARY KEY, project_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            transition TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at_us BIGINT NOT NULL, sent_at_us BIGINT, last_error TEXT)",
+        indexes: &["CREATE INDEX alert_outbox_due ON {table} (sent_at_us, next_attempt_at_us, id)"],
+    },
+];
 
 pub(crate) fn events_from_log_batch(
     project_id: &str,

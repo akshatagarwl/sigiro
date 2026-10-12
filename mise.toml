@@ -160,6 +160,10 @@ description = "Run black-box native deployment invariant tests."
 # boot could not have been caught by CI.
 run = "python3 -m unittest tests.deployment.test_native_contract tests.deployment.test_sync_postgres_boundary"
 
+[tasks.admin-postgres-test]
+description = "Reconcile the hosted admin schema against a TLS PostgreSQL 17 container (needs Docker)."
+run = "scripts/test-admin-postgres.sh"
+
 [tasks.native-backup]
 description = "Create and structurally verify encrypted off-host pre-cutover backups."
 run = "scripts/backup-native-host.sh"

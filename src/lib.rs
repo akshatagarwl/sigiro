@@ -3,6 +3,7 @@ pub mod alerts;
 pub mod auth;
 pub mod client;
 pub mod config;
+mod declared_schema;
 pub mod federate;
 
 pub mod ingest;
