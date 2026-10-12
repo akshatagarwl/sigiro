@@ -43,3 +43,26 @@ Feature: Hosted telemetry ingest
     When the SDK exports a span before another node has taken the cell over
     Then the export fails with status 503 and a Retry-After header
     And a retried export succeeds once the cell is taken over
+
+  Scenario: A gzip-encoded export is accepted
+    When the SDK exports a span with Content-Encoding gzip
+    Then the span is committed in a spans segment
+
+  Scenario: An OTLP profile is stored with root-first stacks
+    When the SDK exports an OTLP profile whose leaf frame is "work" under "main"
+    Then a profiles segment holds the stack "main;work" with its sample value
+
+  Scenario Outline: Pyroscope SDK pushes are stored as profiles
+    When a Pyroscope SDK sends <payload> to <path>
+    Then a profiles segment holds rows for that SDK's service
+
+    Examples:
+      | path                        | payload                                  |
+      | /push.v1.PusherService/Push | a PushRequest                            |
+      | /ingest                     | a gzipped raw pprof named by ?name=      |
+      | /ingest/pyroscope           | a multipart form with a profile field    |
+      | /                           | a PushRequest with no content type       |
+
+  Scenario: A Pyroscope push with an unsupported content type is rejected
+    When a Pyroscope SDK sends a profile as text/plain
+    Then the export fails with status 400

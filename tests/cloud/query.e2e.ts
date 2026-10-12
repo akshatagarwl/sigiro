@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { Fleet, duckdb, expectStatus, logsBody, origin, post, token, traceBody } from "./harness.ts";
+import { Fleet, duckdb, expectStatus, logsBody, origin, otlpProfileBody, post, token, traceBody } from "./harness.ts";
 
 const fleet = new Fleet();
 const protobuf = "application/x-protobuf";
@@ -14,10 +14,12 @@ try {
   const acme = token("acme", "telemetry:ingest");
   await expectStatus(await post("/v1/traces", traceBody([{ name: "POST /checkout", service: "checkout" }, { name: "POST /checkout", service: "checkout" }, { name: "GET /cart", service: "checkout" }]), acme, protobuf), 202);
   await expectStatus(await post("/v1/logs", logsBody("worker", "card declined"), acme, "application/json"), 202);
+  await expectStatus(await post("/v1development/profiles", otlpProfileBody("profiler"), acme, protobuf), 202);
   await expectStatus(await post("/v1/traces", traceBody([{ name: "globex-only", service: "billing" }]), token("globex", "telemetry:ingest"), protobuf), 202);
   await fleet.waitForRow("tenants/acme/spans/", "span_name", "GET /cart");
   await fleet.waitForRow("tenants/acme/logs/", "service_name", "worker");
   await fleet.waitForRow("tenants/globex/spans/", "span_name", "globex-only");
+  await fleet.waitForRow("tenants/acme/profiles/", "service_name", "profiler");
 
   const grouped = await query("acme", "SELECT span_name, count(*) AS n FROM sigiro_spans GROUP BY 1 ORDER BY 1");
   const groupedBody = await expectStatus(grouped, 200);
@@ -51,8 +53,11 @@ try {
   const body = JSON.parse(await expectStatus(services, 200)) as { services: { name: string; totalCount: number; signals: Record<string, number> }[] };
   assert.deepEqual(body.services.map(({ name, totalCount, signals }) => ({ name, totalCount, signals })), [
     { name: "checkout", totalCount: 3, signals: { spans: 3, logs: 0, metrics: 0, profiles: 0 } },
+    { name: "profiler", totalCount: 2, signals: { spans: 0, logs: 0, metrics: 0, profiles: 2 } },
     { name: "worker", totalCount: 1, signals: { spans: 0, logs: 1, metrics: 0, profiles: 0 } },
   ]);
+
+  assert.deepEqual(JSON.parse(await expectStatus(await query("acme", "SELECT service_name, sum(value) AS total FROM sigiro_profiles GROUP BY 1"), 200)), [{ service_name: "profiler", total: 15 }]);
 
   console.log("cloud query e2e passed");
 } finally {

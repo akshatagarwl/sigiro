@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { Fleet, expectStatus, metricsBody, post, postUntilAccepted, token, traceBody } from "./harness.ts";
+import { rmSync } from "node:fs";
+import { Fleet, duckdb, expectStatus, gzip, metricsBody, otlpProfileBody, post, postUntilAccepted, pprofBody, pushRequestBody, token, traceBody } from "./harness.ts";
 
 const fleet = new Fleet();
 const ingest = token("acme", "telemetry:ingest");
@@ -14,6 +15,28 @@ try {
   await expectStatus(await post("/v1/metrics", metricsBody("checkout"), ingest, "application/json"), 202);
   await fleet.waitForRow("tenants/acme/metrics_gauge/", "metric_name", "cart.items");
   await fleet.waitForRow("tenants/acme/metrics_sum/", "metric_name", "checkout.total");
+
+  await expectStatus(await post("/v1/traces", gzip(traceBody([{ name: "gzipped", service: "checkout" }])), ingest, protobuf, { "content-encoding": "gzip" }), 202);
+  await fleet.waitForRow("tenants/acme/spans/", "span_name", "gzipped");
+
+  await expectStatus(await post("/v1development/profiles", otlpProfileBody("otlp-profiled"), ingest, protobuf), 202);
+  await fleet.waitForRow("tenants/acme/profiles/", "service_name", "otlp-profiled");
+  const profiles = fleet.download(fleet.keys("tenants/acme/profiles/"));
+  try {
+    assert.equal(duckdb(`select array_to_string(stack_trace, ';') as stack, value from read_parquet('${profiles}/*.parquet') order by value desc`), "stack,value\nmain;work,10\nmain,5");
+  } finally {
+    rmSync(profiles, { recursive: true, force: true });
+  }
+  await expectStatus(await post("/push.v1.PusherService/Push", pushRequestBody("push-profiled"), ingest, "application/proto"), 202);
+  await expectStatus(await post("/ingest?name=pprof-profiled%7Benv%3Dprod%7D", gzip(pprofBody()), ingest, "application/octet-stream"), 202);
+  const form = new FormData();
+  form.append("profile", new Blob([pushRequestBody("multipart-profiled")]), "profile.pb");
+  await expectStatus(await post("/ingest/pyroscope", form, ingest), 202);
+  await expectStatus(await post("/", pushRequestBody("root-profiled"), ingest), 202);
+  for (const service of ["push-profiled", "pprof-profiled", "multipart-profiled", "root-profiled"]) {
+    await fleet.waitForRow("tenants/acme/profiles/", "service_name", service);
+  }
+  await expectStatus(await post("/ingest", pushRequestBody("text"), ingest, "text/plain"), 400);
 
   await expectStatus(await post("/v1/traces", traceBody([{ name: "path-tenant", service: "globex" }]), token("../globex", "telemetry:ingest"), protobuf), 401);
   for (const key of fleet.keys("")) {

@@ -1,13 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { createPublicKey, verify as verifySignature } from "node:crypto";
-import initWasm, { decode_otlp, empty_segment, manifest_commit, manifest_empty, manifest_live, manifest_register, validate_read_only } from "../vendor/segments-wasm/sigiro_segments_wasm.js";
+import initWasm, { decode_otlp, decode_pyroscope, empty_segment, manifest_commit, manifest_empty, manifest_live, manifest_register, validate_read_only } from "../vendor/segments-wasm/sigiro_segments_wasm.js";
 import type { Query, QueryOutcome, ViewSource } from "../query/src/query.ts";
 import wasmModule from "../vendor/segments-wasm/sigiro_segments_wasm_bg.wasm";
 
 await initWasm(wasmModule);
 
-type Signal = "traces" | "logs" | "metrics";
-type Format = "protobuf" | "json";
+type Signal = "traces" | "logs" | "metrics" | "profiles";
+type Format = "protobuf" | "json" | "pyroscope";
 type Table = "spans" | "logs" | "metrics_gauge" | "metrics_sum" | "metrics_histogram" | "metrics_exp_histogram" | "profiles";
 
 type Env = {
@@ -37,7 +37,7 @@ type Claims = {
 
 type Jwk = JsonWebKey & { kid?: string; alg?: string };
 type Jwks = { keys: Jwk[] };
-type WalRow = { id: number; tenant: TenantId; signal: Signal; format: Format; body: ArrayBuffer; bytes: number };
+type WalRow = { id: number; tenant: TenantId; signal: Signal; format: Format; sdk_name: string | null; body: ArrayBuffer; bytes: number };
 type SegmentMetadata = { table: Table; min_time_us: number; max_time_us: number; rows: number; bytes: number };
 type ManifestShape = { pending: Record<string, Table>; live: Record<string, { table: Table }> };
 
@@ -52,17 +52,21 @@ const views: Record<string, { table: Table; signal: Signal }> = {
   sigiro_metrics_sum: { table: "metrics_sum", signal: "metrics" },
   sigiro_metrics_histogram: { table: "metrics_histogram", signal: "metrics" },
   sigiro_metrics_exp_histogram: { table: "metrics_exp_histogram", signal: "metrics" },
+  sigiro_profiles: { table: "profiles", signal: "profiles" },
 };
+const pyroscopePaths = new Set(["/", "/push.v1.PusherService/Push", "/ingest", "/ingest/pyroscope"]);
+const pyroscopeContentTypes = ["", "application/proto", "application/octet-stream", "binary/octet-stream"];
 const servicesSql = `SELECT service_name, min(first_seen)::VARCHAR AS first_seen, max(last_seen)::VARCHAR AS last_seen,
   sum(span_count)::BIGINT AS span_count, sum(log_count)::BIGINT AS log_count, sum(metric_count)::BIGINT AS metric_count,
-  sum(span_count + log_count + metric_count)::BIGINT AS total_count
+  sum(profile_count)::BIGINT AS profile_count, sum(span_count + log_count + metric_count + profile_count)::BIGINT AS total_count
 FROM (
-  SELECT service_name, min(timestamp) AS first_seen, max(timestamp) AS last_seen, count(*) AS span_count, 0::BIGINT AS log_count, 0::BIGINT AS metric_count FROM sigiro_spans GROUP BY service_name
-  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, count(*), 0 FROM sigiro_logs GROUP BY service_name
-  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) FROM sigiro_metrics_gauge GROUP BY service_name
-  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) FROM sigiro_metrics_sum GROUP BY service_name
-  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) FROM sigiro_metrics_histogram GROUP BY service_name
-  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*) FROM sigiro_metrics_exp_histogram GROUP BY service_name
+  SELECT service_name, min(timestamp) AS first_seen, max(timestamp) AS last_seen, count(*) AS span_count, 0::BIGINT AS log_count, 0::BIGINT AS metric_count, 0::BIGINT AS profile_count FROM sigiro_spans GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, count(*), 0, 0 FROM sigiro_logs GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*), 0 FROM sigiro_metrics_gauge GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*), 0 FROM sigiro_metrics_sum GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*), 0 FROM sigiro_metrics_histogram GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*), 0 FROM sigiro_metrics_exp_histogram GROUP BY service_name
+  UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, 0, count(*) FROM sigiro_profiles GROUP BY service_name
 ) GROUP BY service_name ORDER BY total_count DESC, service_name ASC`;
 const defaultBodyLimit = 8_388_608;
 const defaultFlushSeconds = 60;
@@ -73,7 +77,7 @@ let jwksCache: { url: string; keys: Jwk[]; expiresAt: number } | undefined;
 export class IngestCell extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS wal (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, body BLOB NOT NULL, bytes INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS wal (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, body BLOB NOT NULL, bytes INTEGER NOT NULL, sdk_name TEXT)");
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS manifest (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL)");
     this.ctx.storage.sql.exec("INSERT OR IGNORE INTO manifest (id, json) VALUES (1, ?)", manifest_empty());
   }
@@ -85,20 +89,28 @@ export class IngestCell extends DurableObject<Env> {
     const params = new URL(request.url).searchParams;
     const signal = parseSignal(params.get("signal"));
     const tenant = parseTenantId(params.get("tenant"));
-    const format = parseFormat(request.headers.get("content-type"));
+    const format = parseCellFormat(params.get("format"));
+    const sdkName = params.get("name");
     if (signal === undefined || format === undefined || tenant === undefined) {
       return new Response("bad ingest cell request", { status: 400 });
     }
     const body = await request.arrayBuffer();
     try {
-      decode_otlp(signal, format, new Uint8Array(body));
+      this.decode(signal, format, sdkName, body);
     } catch (error) {
       return new Response(String(error), { status: 400 });
     }
-    this.ctx.storage.sql.exec("INSERT INTO wal (tenant, signal, format, body, bytes) VALUES (?, ?, ?, ?, ?)", tenant, signal, format, body, body.byteLength);
+    this.ctx.storage.sql.exec("INSERT INTO wal (tenant, signal, format, sdk_name, body, bytes) VALUES (?, ?, ?, ?, ?, ?)", tenant, signal, format, sdkName, body, body.byteLength);
     await this.ctx.storage.sync?.();
     await this.scheduleIfNeeded();
     return new Response(null, { status: 202 });
+  }
+
+  private decode(signal: Signal, format: Format, sdkName: string | null, body: ArrayBuffer): Array<{ metadata: string; parquet: Uint8Array }> {
+    if (format === "pyroscope") {
+      return decode_pyroscope(new Uint8Array(body), sdkName, numberVar(this.env.SIGIRO_MAX_INGEST_BODY_BYTES, defaultBodyLimit));
+    }
+    return decode_otlp(signal, format, new Uint8Array(body));
   }
 
   liveKeys(table: Table): string[] {
@@ -123,13 +135,13 @@ export class IngestCell extends DurableObject<Env> {
   }
 
   private async flush(): Promise<void> {
-    const rows = this.ctx.storage.sql.exec<WalRow>("SELECT id, tenant, signal, format, body, bytes FROM wal ORDER BY id").toArray();
+    const rows = this.ctx.storage.sql.exec<WalRow>("SELECT id, tenant, signal, format, sdk_name, body, bytes FROM wal ORDER BY id").toArray();
     if (rows.length === 0) {
       return;
     }
     let manifest = readManifest(this.ctx.storage.sql);
     for (const row of rows) {
-      const outputs = decode_otlp(row.signal, row.format, new Uint8Array(row.body));
+      const outputs = this.decode(row.signal, row.format, row.sdk_name, row.body);
       for (const [index, output] of outputs.entries()) {
         const metadata = JSON.parse(output.metadata) as SegmentMetadata;
         const key = objectKey(row.tenant, row.id, index, metadata.table);
@@ -157,7 +169,8 @@ export default {
     if (request.method === "GET" && url.pathname === "/v1/services") {
       return servicesRoute(request, env);
     }
-    const route = routeSignal(url.pathname);
+    const pyroscope = pyroscopePaths.has(url.pathname);
+    const route = pyroscope ? "profiles" : routeSignal(url.pathname);
     if (request.method !== "POST" || route === undefined) {
       return new Response("not found", { status: 404 });
     }
@@ -166,22 +179,35 @@ export default {
     if (length !== null && Number(length) > limit) {
       return new Response("request body exceeds ingest limit", { status: 413 });
     }
-    const format = parseFormat(request.headers.get("content-type"));
+    const contentType = mediaType(request.headers.get("content-type"));
+    const format = pyroscope ? "pyroscope" : parseFormat(contentType);
     if (format === undefined) {
       return new Response("unsupported content type", { status: 415 });
+    }
+    if (pyroscope && contentType !== "multipart/form-data" && !pyroscopeContentTypes.includes(contentType)) {
+      return new Response("unsupported Pyroscope content type", { status: 400 });
     }
     const auth = await authenticate(request, env, ingestScope);
     if (auth.status !== 200) {
       return new Response(auth.body, { status: auth.status });
     }
-    const body = await boundedBody(request, limit);
+    const decoded = await decodedBody(request, limit);
+    if (decoded.status !== 200) {
+      return new Response(decoded.detail, { status: decoded.status });
+    }
+    const body = pyroscope && contentType === "multipart/form-data" ? await profileField(decoded.body, request.headers.get("content-type") ?? "") : decoded.body;
     if (body === undefined) {
-      return new Response("request body exceeds ingest limit", { status: 413 });
+      return new Response("profile form field not found in multipart body", { status: 400 });
     }
     const id = env.INGEST_CELL.idFromName(cellName(auth.tenant, route));
     const stub = env.INGEST_CELL.get(id);
+    const params = new URLSearchParams({ signal: route, tenant: auth.tenant, format });
+    const name = url.searchParams.get("name");
+    if (pyroscope && name !== null) {
+      params.set("name", name);
+    }
     try {
-      return await stub.fetch(`https://cell.invalid/ingest?signal=${route}&tenant=${encodeURIComponent(auth.tenant)}`, { method: "POST", headers: { "content-type": format }, body });
+      return await stub.fetch(`https://cell.invalid/ingest?${params}`, { method: "POST", body });
     } catch (error) {
       return new Response(`ingest cell unavailable: ${String(error)}`, { status: 503, headers: { "retry-after": "1" } });
     }
@@ -222,7 +248,7 @@ async function servicesRoute(request: Request, env: Env): Promise<Response> {
     name: row.service_name,
     firstSeen: row.first_seen ?? null,
     lastSeen: row.last_seen ?? null,
-    signals: { spans: row.span_count, logs: row.log_count, metrics: row.metric_count, profiles: 0 },
+    signals: { spans: row.span_count, logs: row.log_count, metrics: row.metric_count, profiles: row.profile_count },
     totalCount: row.total_count,
   }));
   return Response.json({ services });
@@ -247,6 +273,50 @@ function problem(status: number, title: string, detail: string): Response {
   return Response.json({ status, title, detail }, { status });
 }
 
+function mediaType(contentType: string | null): string {
+  return contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+function parseCellFormat(value: string | null): Format | undefined {
+  return value === "protobuf" || value === "json" || value === "pyroscope" ? value : undefined;
+}
+
+async function decodedBody(request: Request, limit: number): Promise<{ status: 200; body: ArrayBuffer } | { status: 413 | 415; detail: string }> {
+  const encoding = request.headers.get("content-encoding")?.trim().toLowerCase() ?? "identity";
+  if (encoding !== "identity" && encoding !== "gzip") {
+    return { status: 415, detail: `unsupported content encoding ${encoding}` };
+  }
+  if (request.body === null) {
+    return { status: 200, body: new ArrayBuffer(0) };
+  }
+  const stream = encoding === "gzip" ? request.body.pipeThrough(new DecompressionStream("gzip")) : request.body;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    size += chunk.byteLength;
+    if (size > limit) {
+      return { status: 413, detail: "request body exceeds ingest limit" };
+    }
+    chunks.push(chunk);
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { status: 200, body: body.buffer };
+}
+
+async function profileField(body: ArrayBuffer, contentType: string): Promise<ArrayBuffer | undefined> {
+  const form = await new Response(body, { headers: { "content-type": contentType } }).formData();
+  const field = form.get("profile");
+  if (field === null) {
+    return undefined;
+  }
+  return typeof field === "string" ? new TextEncoder().encode(field).buffer : await field.arrayBuffer();
+}
+
 function routeSignal(pathname: string): Signal | undefined {
   if (pathname === "/v1/traces") {
     return "traces";
@@ -257,19 +327,21 @@ function routeSignal(pathname: string): Signal | undefined {
   if (pathname === "/v1/metrics") {
     return "metrics";
   }
+  if (pathname === "/v1development/profiles") {
+    return "profiles";
+  }
   return undefined;
 }
 
 function parseSignal(value: string | null): Signal | undefined {
-  return value === "traces" || value === "logs" || value === "metrics" ? value : undefined;
+  return value === "traces" || value === "logs" || value === "metrics" || value === "profiles" ? value : undefined;
 }
 
-function parseFormat(contentType: string | null): Format | undefined {
-  const value = contentType?.split(";", 1)[0]?.trim().toLowerCase();
-  if (value === "application/json" || value === "json") {
+function parseFormat(mediaType: string): "protobuf" | "json" | undefined {
+  if (mediaType === "application/json") {
     return "json";
   }
-  if (value === "application/x-protobuf" || value === "application/protobuf" || value === "application/octet-stream" || value === "protobuf") {
+  if (mediaType === "application/x-protobuf" || mediaType === "application/protobuf" || mediaType === "application/octet-stream") {
     return "protobuf";
   }
   return undefined;
@@ -349,11 +421,6 @@ function parseTenantId(value: string | null): TenantId | undefined {
 
 function cellName(tenant: TenantId, signal: Signal): string {
   return `${tenant}:${signal}`;
-}
-
-async function boundedBody(request: Request, limit: number): Promise<ArrayBuffer | undefined> {
-  const body = await request.arrayBuffer();
-  return body.byteLength > limit ? undefined : body;
 }
 
 function registerPending(manifest: string, key: string, table: Table): string {

@@ -4,6 +4,7 @@ Feature: Hosted telemetry query
     Given a hosted Sigiro running under celld dev
     And tenant "acme" exported spans "POST /checkout" twice and "GET /cart" once for service "checkout"
     And tenant "acme" exported one log for service "worker"
+    And tenant "acme" exported one OTLP profile for service "profiler" with two samples
     And tenant "globex" exported one span "globex-only" for service "billing"
     And every export has been flushed
 
@@ -42,4 +43,8 @@ Feature: Hosted telemetry query
 
   Scenario: Services lists every service that reported telemetry
     When "acme" requests /v1/services with scope "services:read"
-    Then the services are "checkout" with 3 spans and "worker" with 1 log, in that order
+    Then the services are "checkout" with 3 spans, "profiler" with 2 profiles and "worker" with 1 log, in that order
+
+  Scenario: Profiles are queryable like every other table
+    When "acme" queries "SELECT service_name, sum(value) AS total FROM sigiro_profiles GROUP BY 1"
+    Then the response body is [{"service_name":"profiler","total":15}]

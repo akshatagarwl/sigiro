@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import assert from "node:assert/strict";
 import { createPrivateKey, generateKeyPairSync, randomBytes, sign } from "node:crypto";
+import { gzipSync } from "node:zlib";
 
 const root = new URL("../..", import.meta.url).pathname;
 const cloud = join(root, "cloud");
@@ -138,8 +139,12 @@ export function token(tenant: string, scope: string): string {
   return `${signingInput}.${b64(signature)}`;
 }
 
-export async function post(path: string, body: Uint8Array | string, jwt: string, contentType: string): Promise<Response> {
-  return fetch(`${origin}${path}`, { method: "POST", headers: { authorization: `Bearer ${jwt}`, "content-type": contentType }, body });
+export async function post(path: string, body: Uint8Array | string | FormData, jwt: string, contentType?: string, extra: Record<string, string> = {}): Promise<Response> {
+  const headers: Record<string, string> = { authorization: `Bearer ${jwt}`, ...extra };
+  if (contentType !== undefined) {
+    headers["content-type"] = contentType;
+  }
+  return fetch(`${origin}${path}`, { method: "POST", headers, body });
 }
 
 export async function expectStatus(response: Response, status: number): Promise<string> {
@@ -190,6 +195,51 @@ export function metricsBody(service: string): string {
   const time = "1700000000000001000";
   const resource = { attributes: [{ key: "service.name", value: { stringValue: service } }] };
   return JSON.stringify({ resourceMetrics: [{ resource, scopeMetrics: [{ metrics: [{ name: "cart.items", gauge: { dataPoints: [{ timeUnixNano: time, startTimeUnixNano: time, asDouble: 2 }] } }, { name: "checkout.total", sum: { dataPoints: [{ timeUnixNano: time, startTimeUnixNano: time, asDouble: 4 }], aggregationTemporality: 1, isMonotonic: true } }] }] }] });
+}
+
+export function otlpProfileBody(service: string): Uint8Array {
+  const strings = ["", "cpu", "nanoseconds", "main", "work"];
+  const fn = (name: number) => message([varintField(1, BigInt(name))]);
+  const location = (fnIndex: number) => message([messageField(3, message([varintField(1, BigInt(fnIndex))]))]);
+  const stack = (indices: number[]) => message(indices.map((index) => varintField(1, BigInt(index))));
+  const dictionary = message([
+    ...[message([]), location(1), location(2)].map((entry) => messageField(2, entry)),
+    ...[fn(0), fn(3), fn(4)].map((entry) => messageField(3, entry)),
+    ...strings.map((value) => stringField(5, value)),
+    ...[stack([]), stack([2, 1]), stack([1])].map((entry) => messageField(7, entry)),
+  ]);
+  const sample = (stackIndex: number, value: number) => message([varintField(1, BigInt(stackIndex)), varintField(2, BigInt(value))]);
+  const profile = message([messageField(1, message([varintField(1, 1n), varintField(2, 2n)])), messageField(2, sample(1, 10)), messageField(2, sample(2, 5)), fixed64Field(3, 1_700_000_000_000_000_000n)]);
+  const resource = message([messageField(1, keyValue("service.name", service))]);
+  const resourceProfiles = message([messageField(1, resource), messageField(2, message([messageField(2, profile)]))]);
+  return message([messageField(1, resourceProfiles), messageField(2, dictionary)]);
+}
+
+export function pprofBody(): Uint8Array {
+  const strings = ["", "cpu", "nanoseconds", "main", "work"];
+  const location = (id: number, fnId: number) => message([varintField(1, BigInt(id)), messageField(4, message([varintField(1, BigInt(fnId))]))]);
+  const fn = (id: number, name: number) => message([varintField(1, BigInt(id)), varintField(2, BigInt(name))]);
+  const sample = (ids: number[], value: number) => message([...ids.map((id) => varintField(1, BigInt(id))), varintField(2, BigInt(value))]);
+  return message([
+    messageField(1, message([varintField(1, 1n), varintField(2, 2n)])),
+    messageField(2, sample([2, 1], 10)),
+    messageField(2, sample([1], 5)),
+    messageField(4, location(1, 1)),
+    messageField(4, location(2, 2)),
+    messageField(5, fn(1, 3)),
+    messageField(5, fn(2, 4)),
+    ...strings.map((value) => stringField(6, value)),
+    varintField(9, 1_700_000_000_000_000_000n),
+  ]);
+}
+
+export function pushRequestBody(service: string): Uint8Array {
+  const label = message([stringField(1, "service_name"), stringField(2, service)]);
+  return message([messageField(1, message([messageField(1, label), messageField(2, message([bytesField(1, pprofBody())]))]))]);
+}
+
+export function gzip(body: Uint8Array | string): Uint8Array {
+  return new Uint8Array(gzipSync(body));
 }
 
 export async function waitFor(check: () => Promise<boolean>, what: string, seconds = 60): Promise<void> {
