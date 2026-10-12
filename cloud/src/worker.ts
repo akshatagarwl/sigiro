@@ -2,6 +2,20 @@ import { DurableObject } from "cloudflare:workers";
 import { createPublicKey, verify as verifySignature } from "node:crypto";
 import initWasm, { decode_otlp, decode_pyroscope, empty_segment, manifest_commit, manifest_empty, manifest_live, manifest_register, validate_read_only } from "../vendor/segments-wasm/sigiro_segments_wasm.js";
 import type { Query, QueryOutcome, ViewSource } from "../query/src/query.ts";
+import { reconcile, type Schema, type SchemaStore } from "./schema";
+
+const ingestCellSchema: Schema = {
+  wal: "CREATE TABLE wal (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, sdk_name TEXT, body BLOB NOT NULL, bytes INTEGER NOT NULL)",
+  manifest: "CREATE TABLE manifest (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL)",
+};
+
+function sqlStore(storage: DurableObjectStorage): SchemaStore {
+  return {
+    all: (sql, ...params) => storage.sql.exec(sql, ...params).toArray() as Record<string, unknown>[],
+    run: (sql, ...params) => void storage.sql.exec(sql, ...params),
+    transaction: (fn) => storage.transactionSync(fn),
+  };
+}
 import wasmModule from "../vendor/segments-wasm/sigiro_segments_wasm_bg.wasm";
 
 await initWasm(wasmModule);
@@ -77,9 +91,7 @@ let jwksCache: { url: string; keys: Jwk[]; expiresAt: number } | undefined;
 export class IngestCell extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS wal (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, body BLOB NOT NULL, bytes INTEGER NOT NULL, sdk_name TEXT)");
-    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS manifest (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL)");
-    this.ctx.storage.sql.exec("INSERT OR IGNORE INTO manifest (id, json) VALUES (1, ?)", manifest_empty());
+    reconcile(sqlStore(ctx.storage), ingestCellSchema);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -440,12 +452,12 @@ function commitLive(manifest: string, key: string, metadata: SegmentMetadata): s
 }
 
 function readManifest(sql: SqlStorage): string {
-  const row = sql.exec<{ json: string }>("SELECT json FROM manifest WHERE id = 1").one();
-  return row.json;
+  const row = sql.exec<{ json: string }>("SELECT json FROM manifest WHERE id = 1").toArray()[0];
+  return row?.json ?? manifest_empty();
 }
 
 function writeManifest(sql: SqlStorage, manifest: string): void {
-  sql.exec("UPDATE manifest SET json = ? WHERE id = 1", manifest);
+  sql.exec("INSERT INTO manifest (id, json) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET json = excluded.json", manifest);
 }
 
 function sumWalBytes(sql: SqlStorage): number {

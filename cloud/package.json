@@ -12,10 +12,11 @@
     "check": "tsc --noEmit",
     "lint": "../node_modules/.bin/oxlint --config ../oxlint.config.ts --disable-nested-config .",
     "deploy:dry-run": "wrangler deploy --dry-run && wrangler deploy --dry-run --config query/wrangler.jsonc",
-    "test:e2e": "node --import tsx ../tests/cloud/ingest.e2e.ts && node --import tsx ../tests/cloud/query.e2e.ts",
+    "test:e2e": "node --import tsx ../tests/cloud/ingest.e2e.ts && node --import tsx ../tests/cloud/query.e2e.ts && node --import tsx ../tests/cloud/upgrade.e2e.ts",
     "build:query": "mkdir -p query/vendor && cp node_modules/@ducklings/workers/dist/wasm/duckdb-workers.wasm query/vendor/",
     "test:e2e:ingest": "node --import tsx ../tests/cloud/ingest.e2e.ts",
-    "test:e2e:query": "node --import tsx ../tests/cloud/query.e2e.ts"
+    "test:e2e:query": "node --import tsx ../tests/cloud/query.e2e.ts",
+    "test:e2e:upgrade": "node --import tsx ../tests/cloud/upgrade.e2e.ts"
   },
   "dependencies": {
     "@ducklings/workers": "1.5.5"

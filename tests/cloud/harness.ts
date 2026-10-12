@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -38,20 +38,38 @@ export class Fleet {
     await this.boot();
   }
 
+  deployApiRevision(revision: string, vars: FleetVars): void {
+    const project = join(cloud, `.e2e-${revision}`);
+    rmSync(project, { recursive: true, force: true });
+    mkdirSync(join(project, "src"), { recursive: true });
+    writeFileSync(join(project, "src/worker.ts"), run("git", ["-C", root, "show", `${revision}:cloud/src/worker.ts`], true));
+    for (const shared of ["vendor", "query", "types", "node_modules"]) {
+      symlinkSync(join(cloud, shared), join(project, shared));
+    }
+    try {
+      this.deployProject(project, "src/worker.ts", vars);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  }
+
   deploy(vars: FleetVars): void {
+    this.deployProject(join(cloud, "query"), "src/query.ts", vars);
+    this.deployProject(cloud, "src/worker.ts", vars);
+  }
+
+  private deployProject(dir: string, main: string, vars: FleetVars): void {
     const base = { SIGIRO_AUTH_ISSUER: issuer, SIGIRO_AUTH_AUDIENCE: origin, SIGIRO_AUTH_JWKS_URL: `${issuer}/jwks`, FLUSH_BYTES: "10485760" };
-    for (const [project, main] of [["query", "src/query.ts"], [".", "src/worker.ts"]] as const) {
-      const dir = join(cloud, project);
-      const config = JSON.parse(readFileSync(join(dir, "wrangler.jsonc"), "utf8"));
-      config.main = main;
-      config.vars = { ...config.vars, ...base, ...vars };
-      const path = join(dir, "wrangler.e2e.json");
-      writeFileSync(path, JSON.stringify(config));
-      try {
-        run("celld", ["deploy", "--config", path, ...fleetArgs], true);
-      } finally {
-        rmSync(path, { force: true });
-      }
+    const source = dir.includes(".e2e-") ? cloud : dir;
+    const config = JSON.parse(readFileSync(join(source, "wrangler.jsonc"), "utf8"));
+    config.main = main;
+    config.vars = { ...config.vars, ...base, ...vars };
+    const path = join(dir, "wrangler.e2e.json");
+    writeFileSync(path, JSON.stringify(config));
+    try {
+      run("celld", ["deploy", "--config", path, ...fleetArgs], true);
+    } finally {
+      rmSync(path, { force: true });
     }
   }
 
@@ -155,9 +173,11 @@ export async function expectStatus(response: Response, status: number): Promise<
 
 export async function postUntilAccepted(path: string, body: Uint8Array | string, jwt: string, contentType: string): Promise<number> {
   const seen: number[] = [];
+  let last = "";
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const response = await post(path, body, jwt, contentType);
     const text = await response.text();
+    last = text;
     seen.push(response.status);
     assert.ok(response.status === 202 || response.status === 503, `status ${response.status} is neither accepted nor retryable: ${text}`);
     if (response.status === 503) {
@@ -168,7 +188,7 @@ export async function postUntilAccepted(path: string, body: Uint8Array | string,
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  throw new Error(`export never accepted: ${seen.join(",")}`);
+  throw new Error(`export never accepted after ${seen.length} attempts (${[...new Set(seen)].join(",")}): ${last}`);
 }
 
 export function duckdb(sql: string): string {
