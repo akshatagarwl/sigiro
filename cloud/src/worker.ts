@@ -5,8 +5,8 @@ import type { Query, QueryOutcome, ViewSource } from "../query/src/query.ts";
 import { reconcile, type Schema, type SchemaStore } from "./schema";
 
 const ingestCellSchema: Schema = {
-  wal: "CREATE TABLE wal (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, sdk_name TEXT, body BLOB NOT NULL, bytes INTEGER NOT NULL)",
-  manifest: "CREATE TABLE manifest (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL)",
+  wal: "CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, sdk_name TEXT, body BLOB NOT NULL, bytes INTEGER NOT NULL)",
+  manifest: "CREATE TABLE {table} (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL)",
 };
 
 function sqlStore(storage: DurableObjectStorage): SchemaStore {

@@ -6,45 +6,37 @@ export type SchemaStore = {
   transaction(fn: () => void): void;
 };
 
-const applicationTable = /^[a-z][a-z0-9_]*$/u;
-
 export function reconcile(store: SchemaStore, schema: Schema): void {
-  for (const name of Object.keys(schema)) {
-    if (!applicationTable.test(name) || name.startsWith("sqlite_")) {
-      throw new Error(`declared table ${name} must start with a lowercase letter; underscore and sqlite_ names belong to the runtime`);
-    }
-  }
-  const actual = new Map(
-    store
-      .all("SELECT name, sql FROM sqlite_master WHERE type = 'table'")
-      .map((row) => [String(row.name), String(row.sql)] as const)
-      .filter(([name]) => applicationTable.test(name) && !name.startsWith("sqlite_")),
-  );
+  store.run("CREATE TABLE IF NOT EXISTS schema_declaration (table_name TEXT PRIMARY KEY, declaration TEXT NOT NULL)");
+  const recorded = new Map(store.all("SELECT table_name, declaration FROM schema_declaration").map((row) => [String(row.table_name), String(row.declaration)] as const));
   store.transaction(() => {
-    for (const [name] of actual) {
+    for (const name of recorded.keys()) {
       if (!(name in schema)) {
-        store.run(`DROP TABLE "${name}"`);
+        store.run(`DROP TABLE IF EXISTS "${name}"`);
+        store.run("DELETE FROM schema_declaration WHERE table_name = ?", name);
       }
     }
-    for (const [name, declared] of Object.entries(schema)) {
-      const current = actual.get(name);
-      if (current === undefined) {
-        store.run(declared);
-      } else if (normalize(current) !== normalize(declared)) {
-        rebuild(store, name, declared);
+    for (const [name, declaration] of Object.entries(schema)) {
+      if (recorded.get(name) === declaration) {
+        continue;
       }
+      const existing = columns(store, name);
+      if (existing.length === 0) {
+        store.run(declaration.replaceAll("{table}", `"${name}"`));
+      } else {
+        rebuild(store, name, declaration, existing);
+      }
+      store.run("INSERT INTO schema_declaration (table_name, declaration) VALUES (?, ?) ON CONFLICT (table_name) DO UPDATE SET declaration = excluded.declaration", name, declaration);
     }
   });
 }
 
-function rebuild(store: SchemaStore, name: string, declared: string): void {
+function rebuild(store: SchemaStore, name: string, declaration: string, existing: string[]): void {
   const staging = `${name}_reconciling`;
-  const before = columns(store, name);
-  store.run(declared.replace(new RegExp(`^\\s*CREATE TABLE\\s+"?${name}"?`, "iu"), `CREATE TABLE "${staging}"`));
-  const shared = columns(store, staging).filter((column) => before.includes(column));
-  const list = shared.map((column) => `"${column}"`).join(", ");
+  store.run(declaration.replaceAll("{table}", `"${staging}"`));
+  const list = columns(store, staging).filter((column) => existing.includes(column)).map((column) => `"${column}"`).join(", ");
   try {
-    if (shared.length > 0) {
+    if (list !== "") {
       store.run(`INSERT INTO "${staging}" (${list}) SELECT ${list} FROM "${name}"`);
     }
   } catch (error) {
@@ -56,8 +48,4 @@ function rebuild(store: SchemaStore, name: string, declared: string): void {
 
 function columns(store: SchemaStore, table: string): string[] {
   return store.all(`PRAGMA table_info("${table}")`).map((row) => String(row.name));
-}
-
-function normalize(sql: string): string {
-  return sql.replace(/\s+/gu, " ").replace(/\s*([(),])\s*/gu, "$1").replace(/"/gu, "").trim().toLowerCase();
 }
