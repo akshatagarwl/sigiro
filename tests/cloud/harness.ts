@@ -63,6 +63,7 @@ export class Fleet {
     const source = dir.includes(".e2e-") ? cloud : dir;
     const config = JSON.parse(readFileSync(join(source, "wrangler.jsonc"), "utf8"));
     config.main = main;
+    delete config.workers_dev;
     config.vars = { ...config.vars, ...base, ...vars };
     config.r2_buckets = config.r2_buckets.map((bucket: { binding: string }) => ({ ...bucket, bucket_name: segmentsBucket }));
     const path = join(dir, "wrangler.e2e.json");
