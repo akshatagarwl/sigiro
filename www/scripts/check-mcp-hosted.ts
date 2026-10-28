@@ -128,11 +128,7 @@ try {
     {
       resource: MCP_RESOURCE,
       authorization_servers: [MCP_ISSUER],
-      scopes_supported: [
-        "openid",
-        "services:read",
-        "query:read",
-      ],
+      scopes_supported: ["openid", "services:read", "query:read"],
     },
     "protected resource metadata"
   );
@@ -158,8 +154,7 @@ try {
   equal(outage.status, 401, "validation outage fails closed");
   globalThis.fetch = outageFetch;
   assert(
-    MCP_REQUIRED_SCOPE ===
-      "openid services:read query:read",
+    MCP_REQUIRED_SCOPE === "openid services:read query:read",
     "canonical scope set"
   );
 
@@ -218,10 +213,7 @@ try {
   });
   equal(
     calls.map(({ url }) => url),
-    [
-      `${apiOrigin}/v1/services`,
-      `${apiOrigin}/v1/query`,
-    ],
+    [`${apiOrigin}/v1/services`, `${apiOrigin}/v1/query`],
     "operational route mapping"
   );
 

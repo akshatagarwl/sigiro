@@ -6,8 +6,8 @@ import Cloudflare from "cloudflare";
 import { drizzle } from "drizzle-orm/d1";
 
 import { createAuthOptions } from "../auth.js";
-import { OPTIMIZER_CLIENT_METADATA_JSON } from "../optimizer-client.js";
 import { sendCloudflareEmail } from "../email.js";
+import { OPTIMIZER_CLIENT_METADATA_JSON } from "../optimizer-client.js";
 import * as schema from "../schema/auth-schema.js";
 import { fetchClientMetadataResource } from "./cimd-fetch.js";
 import {
@@ -114,7 +114,8 @@ const buildAuth = (env: Env) => {
     secondaryStorage: d1SecondaryStorage(env.DB),
     sessionTenant: (sessionId) => sessionTenant(env.DB, sessionId),
     membershipsForUser: (userId) => membershipsForUser(env.DB, userId),
-    membershipRoles: (userId, tenantId) => membershipRoles(env.DB, userId, tenantId),
+    membershipRoles: (userId, tenantId) =>
+      membershipRoles(env.DB, userId, tenantId),
     fetchClientMetadataResource,
     testOTP,
     sendEmail: (message) => sendEmail(env, message),
@@ -271,9 +272,15 @@ const dispatch = async (env: Env, request: Request): Promise<Response> => {
       return Response.json({ error: "forbidden" }, { status: 403 });
     }
 
-    if (request.method === "GET" && url.pathname === "/api/auth/optimizer-client.json") {
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/auth/optimizer-client.json"
+    ) {
       return new Response(OPTIMIZER_CLIENT_METADATA_JSON, {
-        headers: { "content-type": "application/json", "cache-control": "public, max-age=300" },
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "public, max-age=300",
+        },
       });
     }
 

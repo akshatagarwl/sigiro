@@ -26,9 +26,7 @@ const worker = await readFile(
 const hostedSource = `${worker}\n${handler}`;
 
 const rustTools = [
-  ...rust.matchAll(
-    /async fn (list_services|run_query)\s*\(/g
-  ),
+  ...rust.matchAll(/async fn (list_services|run_query)\s*\(/g),
 ].map(([, name]) => name);
 const hostedTools = MCP_CATALOG.filter(
   (entry) => entry.kind === "operation"
@@ -54,8 +52,11 @@ if (/from ['"]zod['"]|from ['"]zod\//.test(hostedSource)) {
   throw new Error("Hosted MCP adapter must not add a direct Zod dependency");
 }
 if (
-  (hostedSource.match(/new Request\(["']https:\/\/sigiro\.com\/mcp\/docs["']/g) ?? [])
-    .length !== 1
+  (
+    hostedSource.match(
+      /new Request\(["']https:\/\/sigiro\.com\/mcp\/docs["']/g
+    ) ?? []
+  ).length !== 1
 ) {
   throw new Error(
     "All documentation tools must use the single Blume MCP handler"

@@ -9,7 +9,9 @@ export default Alchemy.Stack(
   { providers: Command.providers(), state: CloudflareState.state() },
   Effect.gen(function* () {
     if ((yield* Alchemy.Stack).stage !== "prod") {
-      return yield* Effect.die(new Error("Signed DuckLake repair requires prod"));
+      return yield* Effect.die(
+        new Error("Signed DuckLake repair requires prod")
+      );
     }
     const host = yield* Config.String("SIGIRO_OPTIMIZER_HOST");
     const sshKey = yield* Config.String("SIGIRO_OPTIMIZER_SSH_KEY");
@@ -21,5 +23,5 @@ export default Alchemy.Stack(
       timeout: "4 minutes",
     });
     return { host, repairHash: repair.hash.input };
-  }),
+  })
 );
