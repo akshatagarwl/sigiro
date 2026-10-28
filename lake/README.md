@@ -1,5 +1,10 @@
 # lake
 
+**Superseded:** the tenant lake was replaced by Parquet segments and a manifest
+([ADR-0002](../docs/adr/0002-segments-and-manifest-replace-ducklake.md)). The
+DuckDB runtime build here (json, icu, fileSystem) is still the reference for
+what the query Worker's DuckDB lacks.
+
 Workers runtime for the hosted tenant lake ([ADR-002](../docs/notes/decisions/002-hosted-sigiro-runs-only-on-workers.md),
 [design](../docs/notes/designs/workers-tenant-lake.md)).
 
