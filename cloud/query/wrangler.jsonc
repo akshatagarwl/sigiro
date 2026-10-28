@@ -2,6 +2,7 @@
   "name": "sigiro-query",
   "main": "src/query.ts",
   "compatibility_date": "2026-09-01",
+  "workers_dev": false,
   "r2_buckets": [{ "binding": "SEGMENTS", "bucket_name": "sigiro-segments" }],
   "vars": { "QUERY_MAX_SCAN_BYTES": "25165824", "QUERY_MEMORY_LIMIT": "64MB" }
 }
