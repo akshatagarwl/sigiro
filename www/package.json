@@ -85,7 +85,9 @@
     "@effect/sql-d1": "4.0.0-rc.115",
     "@effect/sql-sqlite-do": "4.0.0-rc.115",
     "@effect/vitest": "4.0.0-rc.115",
-    "astro": "7.3.2"
+    "astro": "7.3.2",
+    "react": "19.3.0-canary-28cd4bb0-20260723",
+    "react-dom": "19.3.0-canary-28cd4bb0-20260723"
   },
   "packageManager": "aube@2.2.16",
   "ignoreScripts": [
