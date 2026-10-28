@@ -1,14 +1,15 @@
 [tools]
-sccache = "0.17.0"
+sccache = "0.19.0"
 # The packslip backend verifies the vendor's Sigstore identity and artifact
 # digest before installing either tool. Keep exact versions so signer or
 # artifact changes arrive as reviewable mise.lock diffs.
-"packslip:github.com/jdx/hk" = "1.58.1"
-"packslip:github.com/jdx/mr-boxington" = "1.12.0"
-# 2.2.17 is intentionally not selected yet: it is inside mise's 24-hour
-# minimum-release-age window. Do not weaken that supply-chain policy globally.
-"packslip:github.com/aubepkg/aube" = "2.2.16"
-# Stable, matching the Dockerfile's pinned Rust 1.98.1 image. Nothing here needs
+"packslip:github.com/jdx/hk" = "2.9.0"
+"packslip:github.com/jdx/mr-boxington" = "1.28.0"
+# Releases from 2.2.17 on are signed by aube's release.yml instead of
+# release-plz.yml (same repository and maintainer), so the packslip signer pin
+# was reset once with `mise packslip forget github.com/aubepkg/aube`.
+"packslip:github.com/aubepkg/aube" = "2.8.4"
+# Stable, matching the Dockerfile's pinned Rust 1.99.1 image. Nothing here needs
 # nightly: no `#![feature]`, no `cargo-features`, no `[unstable]`, no `-Z`, and
 # edition 2024 is stable. The previous `nightly-2026-09-05` pin existed only to
 # carry `rustc-codegen-cranelift-preview`, which macOS cannot actually use
@@ -18,7 +19,7 @@ sccache = "0.17.0"
 # task (nightly) shared nothing and each paid a cold
 # build. The content-addressed gates below also include the resolved compiler
 # and mbx identities, so every invocation uses the same cache namespace.
-rust = { version = "1.98.1", components = ["rustfmt", "clippy"], targets = ["aarch64-unknown-linux-gnu"] }
+rust = { version = "1.99.1", components = ["rustfmt", "clippy"], targets = ["aarch64-unknown-linux-gnu"] }
 
 # DuckDB v2 is not published through DuckDB's stable release channel yet.
 # Install its exact upstream staging CLI through mise's built-in HTTP backend.

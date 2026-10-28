@@ -85,7 +85,7 @@
     "react": "19.3.0-canary-28cd4bb0-20260723",
     "react-dom": "19.3.0-canary-28cd4bb0-20260723"
   },
-  "packageManager": "aube@2.2.16",
+  "packageManager": "aube@2.8.4",
   "ignoreScripts": [
     "sharp",
     "unrs-resolver"

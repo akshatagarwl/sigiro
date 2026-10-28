@@ -16,16 +16,16 @@ sigiro-segments = { path = "../segments" }
 wasm-bindgen = "0.2.114"
 
 [lints.clippy]
-disallowed-methods = "deny"
-disallowed-macros = "deny"
-let-underscore-must-use = "deny"
-needless-pass-by-value = "warn"
-cloned-instead-of-copied = "warn"
-redundant-closure-for-method-calls = "warn"
-manual-string-new = "warn"
-inefficient-to-string = "warn"
+disallowed_methods = "deny"
+disallowed_macros = "deny"
+let_underscore_must_use = "deny"
+needless_pass_by_value = "warn"
+cloned_instead_of_copied = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_string_new = "warn"
+inefficient_to_string = "warn"
 
 [lints.rust]
-unused-must-use = "deny"
+unused_must_use = "deny"
 dead_code = "warn"
 unused_imports = "warn"

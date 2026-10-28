@@ -17,21 +17,21 @@ members = ["crates/sigiro-core", "crates/segments", "crates/segments-wasm"]
 
 [workspace.lints.clippy]
 # Disallowed patterns (configured in clippy.toml)
-disallowed-methods = "deny"
-disallowed-macros = "deny"
+disallowed_methods = "deny"
+disallowed_macros = "deny"
 
 # Silent error drops via `let _ = expr_returning_result`
-let-underscore-must-use = "deny"
+let_underscore_must_use = "deny"
 
 # General quality
-needless-pass-by-value = "warn"
-cloned-instead-of-copied = "warn"
-redundant-closure-for-method-calls = "warn"
-manual-string-new = "warn"
-inefficient-to-string = "warn"
+needless_pass_by_value = "warn"
+cloned_instead_of_copied = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_string_new = "warn"
+inefficient_to_string = "warn"
 
 [workspace.lints.rust]
-unused-must-use = "deny"
+unused_must_use = "deny"
 dead_code = "warn"
 unused_imports = "warn"
 

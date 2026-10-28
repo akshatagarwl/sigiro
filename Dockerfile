@@ -3,7 +3,7 @@
 # Toolchain image, bookworm/glibc 2.36 to match the distroless runtime. Pinned to
 # $BUILDPLATFORM so rustc runs NATIVELY and cross-links to the target arch (no
 # QEMU). Carries both GNU cross toolchains + cargo-chef for dep-layer caching.
-FROM --platform=$BUILDPLATFORM rust:1.98.1-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57 AS chef
+FROM --platform=$BUILDPLATFORM rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS chef
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
       pkg-config protobuf-compiler git binutils libssl-dev make mold \

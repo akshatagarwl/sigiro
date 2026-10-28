@@ -61,7 +61,7 @@ jobs:
           node-version: 24.20.0
       - uses: jdx/aube-action@f82ca2f6c943dbde1904945d9f0ee1a0faf8e945 # v1.0.0
         with:
-          version: 2.2.16
+          version: 2.8.4
       - run: aube install --frozen-lockfile
       # Auth runs on Workers/D1, so there is no PostgreSQL to start. Keep CI to
       # static checks and generate the D1 schema from the Drizzle artifact.
