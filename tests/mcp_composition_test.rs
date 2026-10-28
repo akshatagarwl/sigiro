@@ -3,7 +3,7 @@ use parking_lot::Mutex;
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
+    model::{ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router,
     transport::{
         StreamableHttpServerConfig,
@@ -66,8 +66,8 @@ impl DocsFixture {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for DocsFixture {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 }
 

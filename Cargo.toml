@@ -41,10 +41,10 @@ sigiro-segments = { path = "crates/segments" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-dirs = "6"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "cookies"] }
+dirs = "7"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking", "cookies"] }
 dashmap = "6"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 postgres = "0.19"
 postgres-native-tls = "0.5"
 # Vendored so Linux release binaries cross-compile from macOS without a
@@ -56,19 +56,19 @@ tonic = { version = "0.14", features = ["tls-aws-lc"] }
 tonic-types = "0.14"
 prost = "0.14"
 arrow = "58"
-opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
+opentelemetry-proto = { version = "0.33", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
 axum = "0.8"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
-tower-http = { version = "0.6", features = ["compression-full", "decompression-full", "cors", "trace"] }
-axum-anyhow = "0.10"
+tower-http = { version = "0.7", features = ["compression-full", "decompression-full", "cors", "trace"] }
+axum-anyhow = "0.11"
 prefixed-api-key = { version = "0.3", features = ["sha2"] }
 tower_governor = { version = "0.8", features = ["axum"] }
 serde = { version = "1", features = ["derive"] }
-nutype = { version = ">=0.7,<0.8", features = ["regex", "serde"] }
+nutype = { version = "0.8", features = ["regex", "serde"] }
 secrecy = "0.10"
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 tracing = "0.1"
 tracing-attributes = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
@@ -82,7 +82,7 @@ regex = "1"
 hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
-parking_lot = "0.12"
+parking_lot = "0.13"
 thiserror = "2"
 url = "2"
 tempfile = "3"
@@ -93,16 +93,16 @@ multer = "3"
 futures-util = "0.3"
 walkdir = "2"
 
-opentelemetry = "0.31"
-opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "logs"] }
-opentelemetry-otlp = { version = "0.31.1", features = ["http-proto", "reqwest-blocking-client", "logs", "metrics"] }
-opentelemetry-appender-tracing = "0.31"
-tracing-opentelemetry = "0.32"
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio", "logs"] }
+opentelemetry-otlp = { version = "0.33.1", features = ["http-proto", "reqwest-blocking-client", "logs", "metrics"] }
+opentelemetry-appender-tracing = "0.33"
+tracing-opentelemetry = "0.34"
 typed-env = "0.3.0"
-utoipa = "5"
+utoipa = "6"
 camino = "1.2.2"
 rmcp = { version = "3.1.2", features = ["client", "server", "macros", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "transport-io", "schemars"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
 tokio-metrics = "0.5.1"
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 keyring = "4.2.0"
@@ -122,7 +122,7 @@ duckdb = { version = "=1.10505.0", default-features = false, features = ["append
 duckdb = { version = "=1.10505.0", default-features = false, features = ["appender-arrow", "vscalar"] }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 schemars = "1"
 tokio-util = "0.7"
 

@@ -10,7 +10,7 @@
 use rmcp::handler::server::router::tool::{ToolRoute, ToolRouter};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResult, ContentBlock, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RunningService;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -150,10 +150,10 @@ Timestamps in the data are microseconds since the Unix epoch."
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SigiroMcp {
-    fn get_info(&self) -> ServerInfo {
-        // ServerInfo is #[non_exhaustive]: build from Default and set fields,
+    fn get_info(&self) -> ServerConfig {
+        // ServerConfig is #[non_exhaustive]: build from Default and set fields,
         // so an added upstream field is a recompile rather than a break.
-        let mut info = ServerInfo::default();
+        let mut info = ServerConfig::default();
         info.instructions = Some(
             "Observability tools over a sigiro server. Use `list_services` to find a \
 service, then `run_query` to inspect its raw telemetry. All timestamps are \

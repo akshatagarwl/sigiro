@@ -1857,8 +1857,8 @@ async fn admin_status(
         admin::read_all_status(&mut guard)
     })
     .await
-    .context_internal("Admin", "admin status task panicked")?
-    .context_internal("Admin", "failed to read status")?;
+    .context_internal(("Admin", "admin status task panicked"))?
+    .context_internal(("Admin", "failed to read status"))?;
     map.insert(
         "ingest_dropped_messages_total".to_string(),
         state.router.dropped_messages().to_string(),

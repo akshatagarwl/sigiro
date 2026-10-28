@@ -1,7 +1,8 @@
 //! The read-only SQL firewall shared by the native binary and the Workers.
 
 use sqlparser::ast::{
-    Expr, ObjectName, Query as SqlQuery, SetExpr, Statement, TableFactor, Visit, Visitor,
+    Expr, ObjectName, ObjectNamePart, Query as SqlQuery, SetExpr, Statement, TableFactor, Visit,
+    Visitor,
 };
 use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
@@ -257,12 +258,19 @@ const SCALAR_FUNCTIONS: &[&str] = &[
 /// is DuckDB's static, file-system-free catalog metadata — inherently safe to
 /// expose in full (used by the same e2e script to detect the schema above).
 fn is_allowed_table(name: &ObjectName, allow_information_schema: bool) -> bool {
-    let idents = &name.0;
-    match idents.len() {
-        1 => ALLOWED_TABLES.contains(&idents[0].value.to_uppercase().as_str()),
-        2 => {
-            let schema = idents[0].value.to_uppercase();
-            let table = idents[1].value.to_uppercase();
+    // Fail closed: a name part computed by a function (`IDENTIFIER('...')`)
+    // cannot be checked against the allowlist.
+    let Some(idents) = name
+        .0
+        .iter()
+        .map(upper_identifier)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    match idents.as_slice() {
+        [table] => ALLOWED_TABLES.contains(&table.as_str()),
+        [schema, table] => {
             if schema == "INFORMATION_SCHEMA" {
                 return allow_information_schema;
             }
@@ -274,10 +282,14 @@ fn is_allowed_table(name: &ObjectName, allow_information_schema: bool) -> bool {
 }
 
 fn is_safe_function(name: &ObjectName) -> bool {
-    name.0.last().is_some_and(|ident| {
-        let upper = ident.value.to_uppercase();
-        SAFE_FUNCTIONS.contains(&upper.as_str())
-    })
+    name.0
+        .last()
+        .and_then(upper_identifier)
+        .is_some_and(|upper| SAFE_FUNCTIONS.contains(&upper.as_str()))
+}
+
+fn upper_identifier(part: &ObjectNamePart) -> Option<String> {
+    part.as_ident().map(|ident| ident.value.to_uppercase())
 }
 
 /// A SCALAR function call (`Expr::Function`, appearing anywhere in the
@@ -287,7 +299,8 @@ fn is_safe_function(name: &ObjectName) -> bool {
 fn is_allowed_scalar_function(name: &ObjectName) -> bool {
     name.0
         .last()
-        .is_some_and(|ident| SCALAR_FUNCTIONS.contains(&ident.value.to_uppercase().as_str()))
+        .and_then(upper_identifier)
+        .is_some_and(|upper| SCALAR_FUNCTIONS.contains(&upper.as_str()))
 }
 
 /// Reject the Postgres/DuckDB `TABLE <name>` query-shorthand (equivalent to

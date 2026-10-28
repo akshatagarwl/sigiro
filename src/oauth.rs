@@ -159,9 +159,11 @@ async fn discover() -> Result<AuthorizationServerMetadata> {
         .context("failed to fetch Sigiro authorization-server metadata")?
         .error_for_status()
         .context("Sigiro authorization-server metadata request failed")?;
-    let metadata = response
-        .json::<AuthorizationServerMetadata>()
+    let body = response
+        .bytes()
         .await
+        .context("failed to read Sigiro authorization-server metadata")?;
+    let metadata = serde_json::from_slice::<AuthorizationServerMetadata>(&body)
         .context("failed to parse Sigiro authorization-server metadata")?;
     ensure!(
         metadata.issuer == HOSTED_ISSUER,
