@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Paths below are repo-relative; `aube run build:wasm` starts in cloud/.
+cd "$(dirname "$0")/.."
 version=0.2.114
 root="target/wasm-bindgen-cli-$version"
 bin="$root/bin/wasm-bindgen"
