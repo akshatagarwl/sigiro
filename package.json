@@ -13,11 +13,11 @@
     "lint": "oxlint --config oxlint.config.ts --disable-nested-config --type-aware auth && oxlint --config oxlint.config.ts --disable-nested-config --ignore-pattern 'auth/**' ."
   },
   "devDependencies": {
-    "@effect/tsgo": "0.45.0",
-    "@oxlint/plugins": "1.82.0",
-    "oxfmt": "0.70.0",
-    "oxlint": "1.82.0",
-    "oxlint-tsgolint": "7.0.2001",
-    "ultracite": "7.12.0"
+    "@effect/tsgo": "0.61.0",
+    "@oxlint/plugins": "1.89.0",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.89.0",
+    "oxlint-tsgolint": "7.0.2005",
+    "ultracite": "8.1.0"
   }
 }
