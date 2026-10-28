@@ -19,13 +19,13 @@
     "test:e2e:upgrade": "node --import tsx ../tests/cloud/upgrade.e2e.ts"
   },
   "dependencies": {
-    "@ducklings/workers": "1.5.5"
+    "@ducklings/workers": "2.0.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260919.1",
-    "@types/node": "24.10.1",
-    "tsx": "4.23.13",
+    "@cloudflare/workers-types": "5.20261027.1",
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
-    "wrangler": "4.135.0"
+    "wrangler": "4.153.0"
   }
 }
