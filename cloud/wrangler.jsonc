@@ -24,14 +24,17 @@
   "r2_buckets": [
     {
       "binding": "SEGMENTS",
-      "bucket_name": "sigiro-segments-dev"
+      "bucket_name": "sigiro-segments"
     }
   ],
   "vars": {
     "FLUSH_SECONDS": "60",
     "FLUSH_BYTES": "4194304",
     "SIGIRO_MAX_INGEST_BODY_BYTES": "8388608",
-    "SIGIRO_MAX_RESULT_ROWS": "10000"
+    "SIGIRO_MAX_RESULT_ROWS": "10000",
+    "SIGIRO_AUTH_ISSUER": "https://sigiro.com/api/auth",
+    "SIGIRO_AUTH_AUDIENCE": "https://sigiro.com",
+    "SIGIRO_AUTH_JWKS_URL": "https://sigiro.com/api/auth/jwks"
   },
   "services": [
     {
