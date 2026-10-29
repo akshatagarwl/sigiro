@@ -34,56 +34,38 @@
     "indexnow": "tsx scripts/indexnow.ts"
   },
   "dependencies": {
-    "@astrojs/cloudflare": "14.1.7",
-    "@astrojs/sitemap": "3.7.3",
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "@nekuda/webmcp-sdk": "0.5.0",
-    "blume": "1.6.4",
-    "effect": "4.0.0-rc.115",
+    "@astrojs/cloudflare": "14.4.2",
+    "@astrojs/sitemap": "3.7.4",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@nekuda/webmcp-sdk": "0.8.0",
+    "astro": "7.4.4",
+    "blume": "2.2.6",
+    "effect": "4.0.6",
     "input-otp": "1.5.0",
-    "motion": "12.43.0",
+    "motion": "14.7.1",
     "oauth4webapi": "3.8.8",
-    "react": "19.3.0-canary-28cd4bb0-20260723",
-    "react-dom": "19.3.0-canary-28cd4bb0-20260723",
-    "shiki": "4.4.1",
-    "sigiro-icons": "npm:simple-icons@16.28.0"
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "shiki": "4.5.0",
+    "sigiro-icons": "npm:simple-icons@16.36.0"
   },
   "devDependencies": {
-    "@alchemy.run/cloudflare-runtime": "file:./vendor/alchemy-c83b4542/alchemy.run-cloudflare-runtime-2.0.0-beta.77-effect4-node.tgz",
-    "@alchemy.run/frontend-frameworks": "2.0.0-beta.77",
-    "@distilled.cloud/cloudflare": "file:./vendor/alchemy-c83b4542/distilled.cloud-cloudflare-1.0.0-rc.9.tgz",
-    "@distilled.cloud/core": "file:./vendor/alchemy-c83b4542/distilled.cloud-core-1.0.0-rc.9.tgz",
-    "@effect/platform-node": "4.0.0-rc.115",
-    "@mcp-b/webmcp-polyfill": "5.1.0",
-    "@types/node": "26.1.2",
-    "@types/react": "19.2.18",
-    "@types/react-dom": "19.2.4",
-    "@vercel/og": "0.11.1",
-    "alchemy": "file:./vendor/alchemy-c83b4542/alchemy-2.0.0-beta.77-c83b4542.tgz",
-    "geist": "1.7.2",
-    "playwright": "1.63.0",
-    "tsx": "4.23.13",
+    "@alchemy.run/cloudflare": "2.0.0-beta.84",
+    "@alchemy.run/docker": "2.0.0-beta.84",
+    "@alchemy.run/frontend-frameworks": "2.0.0-beta.84",
+    "@alchemy.run/hetzner": "2.0.0-beta.84",
+    "@effect/platform-node": "4.0.6",
+    "@mcp-b/webmcp-polyfill": "6.0.3",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vercel/og": "1.0.3",
+    "alchemy": "2.0.0-beta.84",
+    "geist": "1.8.2",
+    "playwright": "1.64.1",
+    "tsx": "4.23.15",
     "typescript": "7.1.0-dev.20260803.1",
-    "wrangler": "4.118.0"
-  },
-  "overrides": {
-    "@alchemy.run/cloudflare-runtime": "file:./vendor/alchemy-c83b4542/alchemy.run-cloudflare-runtime-2.0.0-beta.77-effect4-node.tgz",
-    "@distilled.cloud/aws": "file:./vendor/alchemy-c83b4542/distilled.cloud-aws-1.0.0-rc.9.tgz",
-    "@distilled.cloud/axiom": "file:./vendor/alchemy-c83b4542/distilled.cloud-axiom-1.0.0-rc.9.tgz",
-    "@distilled.cloud/cloudflare": "file:./vendor/alchemy-c83b4542/distilled.cloud-cloudflare-1.0.0-rc.9.tgz",
-    "@distilled.cloud/core": "file:./vendor/alchemy-c83b4542/distilled.cloud-core-1.0.0-rc.9.tgz",
-    "@distilled.cloud/fly-io": "file:./vendor/alchemy-c83b4542/distilled.cloud-fly-io-1.0.0-rc.9.tgz",
-    "@distilled.cloud/hetzner": "file:./vendor/alchemy-c83b4542/distilled.cloud-hetzner-1.0.0-rc.9.tgz",
-    "@distilled.cloud/neon": "file:./vendor/alchemy-c83b4542/distilled.cloud-neon-1.0.0-rc.9.tgz",
-    "@distilled.cloud/planetscale": "file:./vendor/alchemy-c83b4542/distilled.cloud-planetscale-1.0.0-rc.9.tgz",
-    "@distilled.cloud/railway": "file:./vendor/alchemy-c83b4542/distilled.cloud-railway-1.0.0-rc.9.tgz",
-    "@effect/platform-node-shared": "4.0.0-rc.115",
-    "@effect/sql-d1": "4.0.0-rc.115",
-    "@effect/sql-sqlite-do": "4.0.0-rc.115",
-    "@effect/vitest": "4.0.0-rc.115",
-    "astro": "7.3.2",
-    "react": "19.3.0-canary-28cd4bb0-20260723",
-    "react-dom": "19.3.0-canary-28cd4bb0-20260723"
+    "wrangler": "4.154.0"
   },
   "packageManager": "aube@2.8.4",
   "ignoreScripts": [
@@ -96,7 +78,7 @@
   ],
   "aube": {
     "patchedDependencies": {
-      "astro@7.3.2": "patches/astro@7.3.2.patch"
+      "astro@7.4.4": "patches/astro@7.4.4.patch"
     }
   }
 }

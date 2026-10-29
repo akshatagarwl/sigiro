@@ -1,6 +1,6 @@
 import * as Alchemy from "alchemy";
 import * as Command from "alchemy/Command";
-import * as Docker from "alchemy/Docker";
+import * as Docker from "@alchemy.run/docker";
 import { localState } from "alchemy/State/LocalState";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";

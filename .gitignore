@@ -11,11 +11,6 @@ fuzz/corpus/otlp_traces_fuzz/*
 mutants.out/
 mutants.out.old/
 vendor/
-# Temporary Alchemy package set from alchemy-run/alchemy@c83b4542.
-!www/vendor/
-!www/vendor/alchemy-c83b4542/
-!www/vendor/alchemy-c83b4542/*.tgz
-!www/vendor/alchemy-c83b4542/manifest.json
 .cargo-home/
 TASKS.md
 .DS_Store

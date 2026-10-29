@@ -3,6 +3,10 @@ import { fileURLToPath } from "node:url";
 import sitemap from "@astrojs/sitemap";
 import type { AstroIntegration } from "astro";
 import { defineConfig } from "blume";
+import { script } from "blume/analytics";
+import { cloudflare } from "blume/deploy";
+import { openapi } from "blume/reference";
+import { orama } from "blume/search";
 
 import { CF_ANALYTICS_TOKEN, SITE } from "./src/lib/site";
 
@@ -403,26 +407,23 @@ export default defineConfig({
    * plan the RUM beacon excludes visitors served from EU/EEA data centres by
    * default, so EU locales are the ones this will under-report.
    */
-  analytics: {
-    scripts: [
-      {
-        src: "https://static.cloudflareinsights.com/beacon.min.js",
-        strategy: "defer",
-        attributes: {
-          "data-cf-beacon": `{"token": "${CF_ANALYTICS_TOKEN}"}`,
-        },
+  analytics: [
+    script({
+      src: "https://static.cloudflareinsights.com/beacon.min.js",
+      strategy: "defer",
+      attributes: {
+        "data-cf-beacon": `{"token": "${CF_ANALYTICS_TOKEN}"}`,
       },
-    ],
-  },
+    }),
+  ],
 
-  deployment: {
+  deployment: cloudflare({
     site: "https://sigiro.com",
     // Named rather than left to auto-detection, which keys off CI environment
     // variables and would pick nothing on a laptop — the dev server warned that
     // there was no adapter and a build would fail.
     //
     // `server` and not `static` because the MCP route below is request-time.
-    adapter: "cloudflare",
     output: "server",
 
     /**
@@ -432,7 +433,7 @@ export default defineConfig({
      * On the artifact-location defect this combination has, and what is and is not
      * done about it, see the `integrations` note above.
      */
-  },
+  }),
 
   /**
    * The three ink/accent values from www/DESIGN.md, and nothing else.
@@ -462,8 +463,8 @@ export default defineConfig({
    * design — `/openapi.json` is the entire discoverability surface — so it is
    * read from the live API rather than copied into this repo, and cannot drift.
    */
-  openapi: {
-    enabled: true,
+  reference: [
+    openapi({
     /**
      * `/reference`, not `/api`, and the reason is the label rather than the URL.
      *
@@ -506,9 +507,10 @@ export default defineConfig({
      * a token. Revisit if the API ever declares `servers`.
      */
     playground: false,
-  },
+    }),
+  ],
 
-  ai: {
+  agents: {
     /**
      * OFF, and this is the one setting on this site that a Blume upgrade forced
      * rather than offered.
@@ -603,7 +605,7 @@ export default defineConfig({
   },
 
   /** Orama, local, no hosted service and no key. */
-  search: { provider: "orama" },
+  search: orama(),
 
   /**
    * No `github` key, deliberately. It drove two surfaces and both were wrong:
