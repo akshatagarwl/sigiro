@@ -2,7 +2,9 @@
 set -euo pipefail
 # Paths below are repo-relative; `aube run build:wasm` starts in cloud/.
 cd "$(dirname "$0")/.."
-version=0.2.114
+# wasm-bindgen-cli must match the locked wasm-bindgen crate exactly.
+version=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/"/, "", $3); print $3 }' Cargo.lock)
+[[ -n "$version" ]] || { echo "wasm-bindgen is missing from Cargo.lock" >&2; exit 1; }
 root="target/wasm-bindgen-cli-$version"
 bin="$root/bin/wasm-bindgen"
 if [[ ! -x "$bin" ]]; then
