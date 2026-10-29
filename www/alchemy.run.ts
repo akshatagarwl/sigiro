@@ -47,26 +47,6 @@ export default Alchemy.Stack(
         name: "sigiro.com",
       })
     );
-    const authRecord = yield* productionResource(
-      Cloudflare.DNS.Record("AuthRecord", {
-        zoneId: zone.zoneId,
-        name: "auth.sigiro.com",
-        type: "A",
-        content: "203.0.113.10",
-        proxied: false,
-        ttl: 60,
-      })
-    );
-    const apiRecord = yield* productionResource(
-      Cloudflare.DNS.Record("ApiRecord", {
-        zoneId: zone.zoneId,
-        name: "api.sigiro.com",
-        type: "A",
-        content: "203.0.113.10",
-        proxied: false,
-        ttl: 60,
-      })
-    );
     // The auth service runs as a Worker on D1. The website reaches it through a
     // service binding below, so there is no auth-origin DNS record, no tunnel,
     // and no public hop: auth is no longer addressable from the internet except
@@ -185,8 +165,6 @@ export default Alchemy.Stack(
       zone,
       downloads,
       emailSending,
-      authRecord,
-      apiRecord,
       apiOriginRecord,
       authDatabase,
       authWorker,
