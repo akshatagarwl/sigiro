@@ -103,8 +103,8 @@ description = "Typecheck and run the auth UI test."
 run = "aube -C auth run check"
 
 [tasks.auth-test]
-description = "Run the auth test suite."
-run = "aube -C auth run test"
+description = "Run the agent-auth E2E against a local auth Worker on a fresh D1."
+run = "aube -C auth run test:agent-e2e"
 
 [tasks.auth-build]
 description = "Build the auth package."

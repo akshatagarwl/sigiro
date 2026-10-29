@@ -67,6 +67,7 @@ jobs:
       # static checks and generate the D1 schema from the Drizzle artifact.
       - run: aube run check
       - run: aube run schema:sql
+      - run: aube run test:agent-e2e
       - run: aube audit --prod
 
   image:

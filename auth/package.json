@@ -14,27 +14,27 @@
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "test:agent-e2e": "node --import tsx test/worker-agent-e2e.ts"
+    "test:agent-e2e": "scripts/agent-e2e.sh"
   },
   "dependencies": {
     "@better-auth/agent-auth": "0.6.2",
-    "@better-auth/cimd": "1.7.5",
-    "@better-auth/drizzle-adapter": "1.7.5",
-    "@better-auth/mcp": "1.7.5",
-    "@better-auth/oauth-provider": "1.7.5",
-    "@better-auth/passkey": "1.7.5",
-    "better-auth": "1.7.5",
-    "cloudflare": "7.1.0",
-    "drizzle-orm": "0.45.2",
-    "effect": "4.0.0-rc.115"
+    "@better-auth/cimd": "1.7.14",
+    "@better-auth/drizzle-adapter": "1.7.14",
+    "@better-auth/mcp": "1.7.14",
+    "@better-auth/oauth-provider": "1.7.14",
+    "@better-auth/passkey": "1.7.14",
+    "better-auth": "1.7.14",
+    "cloudflare": "7.3.0",
+    "drizzle-orm": "0.45.4",
+    "effect": "4.0.7"
   },
   "devDependencies": {
     "@auth/agent": "0.6.2",
-    "@cloudflare/workers-types": "^5.20260919.1",
-    "@types/node": "24.10.1",
-    "tsx": "4.23.13",
+    "@cloudflare/workers-types": "^5.20261028.1",
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
-    "wrangler": "^4.135.0"
+    "wrangler": "^4.154.0"
   },
   "patchedDependencies": {
     "@auth/agent@0.6.2": "patches/@auth%2Fagent@0.6.2.patch"

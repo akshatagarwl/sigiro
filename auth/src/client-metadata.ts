@@ -8,9 +8,7 @@
  * `403 error code: 1014` ("CNAME Cross-User Banned") from Cloudflare, which
  * broke the OAuth device flow in production.
  *
- * The two copies are kept honest by `test/client-metadata.ts`, which parses the
- * served file and asserts it is deep-equal to this one. Edit either and the
- * test fails, so they cannot silently drift.
+ * DUPLICATION: nothing checks that the two copies agree, so edit both together.
  */
 export const FIRST_PARTY_CLIENT_ID =
   "https://sigiro.com/.well-known/oauth-client.json";

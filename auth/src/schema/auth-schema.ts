@@ -52,8 +52,9 @@
  * plain `text()`. Other columns that genuinely are `{ mode: "json" }` (the
  * oauth* scope/resource arrays) are correct as generated.
  *
- * test/schema.ts pins all four columns, and the startup schema check in
- * src/schema/check.ts turns a missing table or column into a boot-time error.
+ * `mise run auth-test` fails at "capability granted" if they are
+ * double-encoded, and the startup schema check in src/schema/check.ts turns a
+ * missing table or column into a boot-time error.
  *
  * Table count: 21. emailOTP and cimd contribute zero tables.
  */
