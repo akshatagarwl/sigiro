@@ -465,48 +465,48 @@ export default defineConfig({
    */
   reference: [
     openapi({
-    /**
-     * `/reference`, not `/api`, and the reason is the label rather than the URL.
-     *
-     * Blume humanizes the route segment when it has nothing better, and it cannot
-     * know `api` is an initialism — the same code renders `sql` as `Sql`, so the
-     * sidebar and breadcrumb both read "Api". `openapi.sources[].label` is
-     * documented as the nav label for a source and changes neither, so it was
-     * tried and reverted. Renaming the segment is the fix that works: `reference`
-     * humanizes to "Reference" with nothing to special-case.
-     *
-     * Checked against what mature references do before picking it. Stripe and
-     * Resend both label this section "API Reference"; Resend's slug is literally
-     * `api-reference`. Neither exposes the word "OpenAPI" in navigation — that
-     * names the file format, which is the publisher's concern and not the
-     * reader's.
-     *
-     * `/docs/api` and every operation path under it keep working: see the
-     * `redirects` block above, which now sends the old section root and the ten
-     * legacy per-operation URLs here.
-     */
-    route: "/reference",
-    spec: "https://sigiro.com/openapi.json",
-    codeSamples: ["curl", "javascript", "python"],
+      /**
+       * `/reference`, not `/api`, and the reason is the label rather than the URL.
+       *
+       * Blume humanizes the route segment when it has nothing better, and it cannot
+       * know `api` is an initialism — the same code renders `sql` as `Sql`, so the
+       * sidebar and breadcrumb both read "Api". `openapi.sources[].label` is
+       * documented as the nav label for a source and changes neither, so it was
+       * tried and reverted. Renaming the segment is the fix that works: `reference`
+       * humanizes to "Reference" with nothing to special-case.
+       *
+       * Checked against what mature references do before picking it. Stripe and
+       * Resend both label this section "API Reference"; Resend's slug is literally
+       * `api-reference`. Neither exposes the word "OpenAPI" in navigation — that
+       * names the file format, which is the publisher's concern and not the
+       * reader's.
+       *
+       * `/docs/api` and every operation path under it keep working: see the
+       * `redirects` block above, which now sends the old section root and the ten
+       * legacy per-operation URLs here.
+       */
+      route: "/reference",
+      spec: "https://sigiro.com/openapi.json",
+      codeSamples: ["curl", "javascript", "python"],
 
-    /**
-     * OFF. 1.5.2 added a "Try it" panel to every operation page and defaulted it
-     * on with the Blume renderer; on this spec it cannot complete a single
-     * request, so it is an affordance that fails for every reader.
-     *
-     * The live spec at `sigiro.com/openapi.json` declares no `servers`
-     *      block, and Blume's playground model is `servers: args.servers.map(…)`
-     *      with `server: model.servers[0] ?? ""`. The built page carries
-     *      `"servers":[]`, so the panel renders only its "Custom base URL"
-     *      field — placeholder `https://api.example.com` — and a reader who
-     *      presses Send without typing one sends to nothing.
-     *
-     * Nothing is lost against 1.4.3, which had no playground at all. The
-     * per-operation `codeSamples` above are unchanged and remain copy-pasteable,
-     * which is the affordance that actually works against an API that requires
-     * a token. Revisit if the API ever declares `servers`.
-     */
-    playground: false,
+      /**
+       * OFF. 1.5.2 added a "Try it" panel to every operation page and defaulted it
+       * on with the Blume renderer; on this spec it cannot complete a single
+       * request, so it is an affordance that fails for every reader.
+       *
+       * The live spec at `sigiro.com/openapi.json` declares no `servers`
+       *      block, and Blume's playground model is `servers: args.servers.map(…)`
+       *      with `server: model.servers[0] ?? ""`. The built page carries
+       *      `"servers":[]`, so the panel renders only its "Custom base URL"
+       *      field — placeholder `https://api.example.com` — and a reader who
+       *      presses Send without typing one sends to nothing.
+       *
+       * Nothing is lost against 1.4.3, which had no playground at all. The
+       * per-operation `codeSamples` above are unchanged and remain copy-pasteable,
+       * which is the affordance that actually works against an API that requires
+       * a token. Revisit if the API ever declares `servers`.
+       */
+      playground: false,
     }),
   ],
 

@@ -113,10 +113,14 @@ const tool = async (page, name, input = {}) =>
         (item) => item.name === name
       );
       if (!candidate) throw new Error(`missing WebMCP tool: ${name}`);
-      return document.modelContext.executeTool(
-        candidate,
-        JSON.stringify(input)
-      );
+      // @mcp-b/webmcp-polyfill 6 resolves a thrown tool error as a serialized
+      // `isError` result; surface it as a rejection like a direct call.
+      const result = await document.modelContext.executeTool(candidate, input);
+      const parsed = typeof result === "string" ? JSON.parse(result) : result;
+      if (parsed?.isError === true) {
+        throw new Error(parsed.content?.map((part) => part.text).join("\n"));
+      }
+      return result;
     },
     { name, input }
   );
