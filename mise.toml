@@ -165,21 +165,8 @@ run = "python3 -m unittest tests.deployment.test_native_contract tests.deploymen
 description = "Reconcile the hosted admin schema against a TLS PostgreSQL 17 container (needs Docker)."
 run = "scripts/test-admin-postgres.sh"
 
-[tasks.native-backup]
-description = "Create and structurally verify encrypted off-host pre-cutover backups."
-run = "scripts/backup-native-host.sh"
-
-[tasks.native-stage]
-description = "Stage native packages, artifacts, units, and PostgreSQL 18 without stopping Docker workloads."
-run = "SIGIRO_NATIVE_ACTION=stage aube -C www run alchemy:workload:deploy"
-
-
-[tasks.native-cutover]
-description = "Perform the backup-gated host-wide systemd cutover."
-run = "SIGIRO_NATIVE_ACTION=cutover aube -C www run alchemy:workload:deploy"
-
 [tasks.native-verify]
-description = "Verify all native services and assert that no Docker workload is running."
+description = "Verify all native services and assert that no container engine is installed."
 run = "SIGIRO_NATIVE_ACTION=verify aube -C www run alchemy:workload:deploy"
 
 [tasks.build]
