@@ -230,9 +230,8 @@ run = [
     { task = "quick" },
     "scripts/run-with-duckdb-static.sh mbx clippy --workspace --all-targets --all-features -- -D warnings",
     # The deployment invariants guard production boot: the sync-postgres
-    # boundary and the migration contract that must not empty Sigiro's
-    # databases. They were outside every gate, so a cutover could ship a
-    # process-aborting drop and a destructive migration with CI green.
+    # boundary and the native host contract. They were outside every gate,
+    # so a deploy could ship a process-aborting drop with CI green.
     { task = "native-contract-test" },
 ]
 sources = ["@group:rust-gate", "@group:deployment-contract"]

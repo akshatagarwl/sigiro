@@ -1,9 +1,9 @@
 [package]
 name = "sigiro-core"
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.88"
-license = "Apache-2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 publish = false
 
 # Must build for both the native binary and wasm32-unknown-unknown, so only

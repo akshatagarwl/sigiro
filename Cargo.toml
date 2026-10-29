@@ -1,6 +1,14 @@
 [package]
 name = "sigiro"
 version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[workspace]
+members = ["crates/sigiro-core", "crates/segments", "crates/segments-wasm"]
+
+[workspace.package]
 edition = "2024"
 # The real floor, not an aspiration: `rusqlite` 0.41.1 requires 1.89,
 # so a lower number here does not buy compatibility — it silently costs it.
@@ -11,9 +19,6 @@ edition = "2024"
 # forces it, and never leave it below what the tree already demands.
 rust-version = "1.89"
 license = "Apache-2.0"
-
-[workspace]
-members = ["crates/sigiro-core", "crates/segments", "crates/segments-wasm"]
 
 [workspace.lints.clippy]
 # Disallowed patterns (configured in clippy.toml)
