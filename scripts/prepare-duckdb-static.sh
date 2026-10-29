@@ -3,28 +3,31 @@
 # Usage: eval "$(scripts/prepare-duckdb-static.sh TARGET_TRIPLE)"
 set -euo pipefail
 
-version="v2.0.0-alpha41489"
-commit="10de9573794001c649621013bdd93553b54e00c9"
+version="v2.0.0"
 target="${1:-$(rustc -vV | sed -n 's/^host: //p')}"
-cache_root="${DUCKDB_STATIC_CACHE:-${CARGO_TARGET_DIR:-target}/duckdb-static}"
-if [[ "$cache_root" != /* ]]; then
-  cache_root="$(cd "$(dirname "$0")/.." && pwd)/$cache_root"
+# Never under target/: mbx's GC deletes managed targets mid-build when disk runs
+# low, which surfaced as "cannot find -lduckdb" at link time.
+if [[ "$(uname -s)" == Darwin ]]; then
+  default_cache="$HOME/Library/Caches/sigiro/duckdb-static"
+else
+  default_cache="${XDG_CACHE_HOME:-$HOME/.cache}/sigiro/duckdb-static"
 fi
-cache_dir="${cache_root}/${version}-${commit:0:10}/${target}"
+cache_root="${DUCKDB_STATIC_CACHE:-$default_cache}"
+cache_dir="${cache_root}/${version}/${target}"
 archive="${cache_dir}/static-libs.tar.gz"
 lib="${cache_dir}/libduckdb_static.a"
 header="${cache_dir}/duckdb.h"
 
 case "$target" in
-  x86_64-unknown-linux-gnu) platform=linux-amd64; checksum=f4997440399d63d789c7e85924f2a63ef4c5e54421cd50d397e06a561e7052ad ;;
-  aarch64-unknown-linux-gnu) platform=linux-arm64; checksum=227cecab7a00fa2e2da1577f30af6a43b465e0ff5a82afc75ae1803e9951fd0b ;;
-  x86_64-apple-darwin) platform=osx-amd64; checksum=c1657abf48c3c58180393c6e05dabdb91cd5d24dc8c45f98c4a91f487fb9031e ;;
-  aarch64-apple-darwin) platform=osx-arm64; checksum=cf19469791067f6f6855debc8054f35802c8c091c4fe9b1009245b1e7263ccec ;;
+  x86_64-unknown-linux-gnu) platform=linux-amd64; checksum=112d62c980f5447cd303a70b3dacbc09acd41ccb4ef6d154e8629f543a0f8568 ;;
+  aarch64-unknown-linux-gnu) platform=linux-arm64; checksum=8171b4842e68a85b2e82b342d3bf7b542a88fd6666e0c18438d7b459012494ee ;;
+  x86_64-apple-darwin) platform=osx-amd64; checksum=7e6101ddc8de73e8dcc66f790e658e07891165d026992b40ceba20e50b01f8ec ;;
+  aarch64-apple-darwin) platform=osx-arm64; checksum=c3a571e6d4a0da97534c631df463ab13c07f8cf78049625f5df936b7beaab9ce ;;
   *) echo "prepare-duckdb-static: unsupported target: $target" >&2; exit 2 ;;
 esac
 
 mkdir -p "$cache_dir"
-url="https://duckdb-staging.duckdb.org/${commit:0:10}/${version}/duckdb/duckdb/github_release/duckdb-static-libs-${platform}.tar.gz"
+url="https://github.com/duckdb/duckdb/releases/download/${version}/duckdb-static-libs-${platform}.tar.gz"
 if command -v sha256sum >/dev/null 2>&1; then
   checksum_cmd=(sha256sum)
 else

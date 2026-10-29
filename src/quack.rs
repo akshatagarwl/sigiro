@@ -24,7 +24,7 @@ use duckdb::vtab::arrow::WritableVector;
 /// authorization semantics underneath this gate without a deliberate,
 /// re-verified bump here.
 ///
-/// Empirically, against the pinned DuckDB v2.0 DuckDB v2 alpha: quack is NOT in
+/// Empirically, against the pinned DuckDB v2.0.0: quack is NOT in
 /// DuckDB's autoloadable "known extensions" list, so a bare `LOAD quack;`
 /// always fails with "Extension \"quack\" is an existing extension. Install
 /// it first" — [`load_and_pin`] must always `INSTALL` it explicitly. The
@@ -37,7 +37,7 @@ use duckdb::vtab::arrow::WritableVector;
 /// exactly the drift this pin exists to catch — re-verify the authorization
 /// gate against the new build and bump this constant deliberately, rather
 /// than widening the install source.
-pub(crate) const EXPECTED_QUACK_VERSION: &str = "50bd1913e4";
+pub(crate) const EXPECTED_QUACK_VERSION: &str = "f96420ed46";
 
 /// Scalar UDF name installed as the quack authorization gate. Re-registered
 /// from this Rust source on every server boot (see
@@ -175,7 +175,7 @@ impl VScalar for QuackAuthorizeScalar {
 ///
 /// Uses a non-NULL placeholder for `connection_id` (never literal SQL
 /// `NULL`, and never something a real quack call would send): the
-/// `duckdb = "1.10505.0"` crate's `VScalar` API has no hook for DuckDB's
+/// `duckdb` crate's `VScalar` API has no hook for DuckDB's
 /// "special" null handling, so a registered scalar UDF gets DEFAULT null
 /// handling — DuckDB substitutes SQL NULL as the *whole row's output*
 /// whenever ANY argument is NULL, without ever calling into

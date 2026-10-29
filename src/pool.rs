@@ -165,38 +165,63 @@ impl Drop for ProjectInitialization<'_> {
     }
 }
 
-/// Open an in-memory DuckDB, honouring `SIGIRO_ALLOW_UNSIGNED_EXTENSIONS`.
+/// Opaque `duckdb_extension_descriptor` from `duckdb_static_extension.h`.
+#[repr(C)]
+struct ExtensionDescriptor {
+    _opaque: [u8; 0],
+}
+
+type DescribeExtension = unsafe extern "C" fn(*mut ExtensionDescriptor) -> i32;
+
+unsafe extern "C" {
+    fn duckdb_register_static_extension(describe: DescribeExtension) -> i32;
+    fn duckdb_extension_loadable_extensions_describe(descriptor: *mut ExtensionDescriptor) -> i32;
+    fn duckdb_extension_httplib_describe(descriptor: *mut ExtensionDescriptor) -> i32;
+    fn duckdb_extension_core_functions_describe(descriptor: *mut ExtensionDescriptor) -> i32;
+    fn duckdb_extension_parquet_describe(descriptor: *mut ExtensionDescriptor) -> i32;
+    fn duckdb_extension_json_describe(descriptor: *mut ExtensionDescriptor) -> i32;
+    fn duckdb_extension_icu_describe(descriptor: *mut ExtensionDescriptor) -> i32;
+}
+
+/// Open an in-memory DuckDB. The only way to open one: clippy bans
+/// `Connection::open_in_memory` everywhere else.
 ///
-/// `allow_unsigned_extensions` is a Config-time flag: DuckDB rejects it once the
-/// database is open, so every connection that must load a locally built
-/// extension has to be created through here rather than
-/// `Connection::open_in_memory()`.
-pub fn open_duckdb_connection() -> Result<Connection> {
-    let repository = crate::config::SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY.value()?;
-    if !repository.is_empty() {
-        anyhow::ensure!(
-            !crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()?,
-            "a signed DuckLake repository must not disable extension signature verification"
-        );
-        let config = duckdb::Config::default()
-            .with("extension_repository_directory", repository)
-            .context("failed to configure pinned DuckLake repository directory")?
-            .with("allow_extension_repositories", "allowed")
-            .context("failed to trust pinned DuckLake extension repository")?;
-        return Connection::open_in_memory_with_flags(config)
-            .context("failed to open DuckDB with pinned signed extension trust");
-    }
-    if crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()? {
-        tracing::warn!(
-            "SIGIRO_ALLOW_UNSIGNED_EXTENSIONS is set — DuckDB will load extensions \
-             without verifying their signature"
-        );
-        let config = duckdb::Config::default()
-            .allow_unsigned_extensions()
-            .context("failed to enable unsigned DuckDB extensions")?;
-        return Connection::open_in_memory_with_flags(config)
-            .context("failed to open DuckDB with unsigned extensions allowed");
-    }
+/// DuckDB 2.0's static bundle registers nothing by itself. Every statically
+/// linked extension, `httplib` (extension downloads) and `loadable_extensions`
+/// (any `INSTALL`/`LOAD` at all) must be registered before the first database
+/// opens, or `INSTALL ducklake` fails with "this build does not link the
+/// loadable_extensions library".
+pub fn open_duckdb() -> Result<Connection> {
+    static REGISTERED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    REGISTERED
+        .get_or_init(|| {
+            let extensions: [(&str, DescribeExtension); 6] = [
+                (
+                    "loadable_extensions",
+                    duckdb_extension_loadable_extensions_describe,
+                ),
+                ("httplib", duckdb_extension_httplib_describe),
+                ("core_functions", duckdb_extension_core_functions_describe),
+                ("parquet", duckdb_extension_parquet_describe),
+                ("json", duckdb_extension_json_describe),
+                ("icu", duckdb_extension_icu_describe),
+            ];
+            for (name, describe) in extensions {
+                // SAFETY: each describe function is DuckDB's own, linked from
+                // the static bundle, with the signature duckdb_static_extension.h
+                // declares; registration copies what it describes.
+                let status = unsafe { duckdb_register_static_extension(describe) };
+                if status != 0 {
+                    return Err(format!(
+                        "failed to register DuckDB static extension {name}: status {status}"
+                    ));
+                }
+            }
+            Ok(())
+        })
+        .clone()
+        .map_err(anyhow::Error::msg)?;
+    #[allow(clippy::disallowed_methods)]
     Connection::open_in_memory().context("failed to open in-memory DuckDB")
 }
 
@@ -739,8 +764,7 @@ impl ProjectPool {
         project_id: &str,
         project_dir: &camino::Utf8Path,
     ) -> Result<OpenedProject> {
-        let base = open_duckdb_connection()
-            .with_context(|| "failed to open in-memory DuckDB".to_string())?;
+        let base = open_duckdb()?;
         tracing::info!("DuckDB: loading extensions during project initialization");
         self.attach_ducklake(&base, project_id, project_dir)?;
         // Ensure DuckLake tables are discoverable without schema prefix.

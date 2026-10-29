@@ -11,12 +11,12 @@ with-serde = []
 gen-tonic-messages = []
 
 [dependencies]
-arrow = { version = "58", default-features = false }
+arrow = { version = "60", default-features = false }
 base64 = "0.23"
 const-hex = "1.14"
 hex = "0.4.3"
 nutype = { version = "0.8", features = ["serde"] }
-parquet = { version = "58", default-features = false, features = ["arrow", "snap"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "snap"] }
 prost = "0.14"
 regex = "1"
 sqlparser = { version = "0.63", features = ["visitor"] }

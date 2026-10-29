@@ -60,7 +60,11 @@ native-tls = { version = "0.2", features = ["vendored"] }
 tonic = { version = "0.14", features = ["tls-aws-lc"] }
 tonic-types = "0.14"
 prost = "0.14"
-arrow = "58"
+arrow = "60"
+# Linked against the upstream static bundle from scripts/prepare-duckdb-static.sh.
+# Keep it feature-free beyond these two: `bundled`, `parquet` and `json` would
+# compile DuckDB locally.
+duckdb = { version = "=1.20000.1", default-features = false, features = ["appender-arrow", "vscalar"] }
 opentelemetry-proto = { version = "0.33", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
 axum = "0.8"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
@@ -113,18 +117,6 @@ oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "
 keyring = "4.2.0"
 webbrowser = { version = "1.2.4", features = ["hardened"] }
 rpassword = "7.4.0"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# Keep the mature v1 ergonomic API while linking DuckDB v2's compatibility C
-# API from scripts/prepare-duckdb-static.sh. duckdb-rs's DuckDB v2 branch has
-# not restored appender-arrow or vscalar yet; both are required by Sigiro.
-duckdb = { version = "=1.10505.0", default-features = false, features = ["appender-arrow", "vscalar"] }
-
-# All supported targets use the pinned upstream static bundle prepared by
-# scripts/prepare-duckdb-static.sh. Keeping this dependency feature-free is
-# intentional: `bundled`, `parquet`, and `json` would compile DuckDB locally.
-[target.'cfg(target_os = "macos")'.dependencies]
-duckdb = { version = "=1.10505.0", default-features = false, features = ["appender-arrow", "vscalar"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }

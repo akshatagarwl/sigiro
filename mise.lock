@@ -7,34 +7,51 @@ version = "rev:8ef70b88c7f25da631aa2364076947752ecfa26d"
 backend = "cargo:https://github.com/jdx/jdxld"
 specifiers = ["rev:8ef70b88c7f25da631aa2364076947752ecfa26d"]
 
-[[tools."http:duckdb"]]
-version = "v2.0.0-alpha41489"
-backend = "http:duckdb"
-specifiers = ["v2.0.0-alpha41489"]
+[[tools.duckdb]]
+version = "2.0.0"
+backend = "aqua:duckdb/duckdb"
+specifiers = ["2.0.0"]
 
-[tools."http:duckdb"."platforms.linux-arm64"]
-checksum = "sha256:e92f0ec283c983ec9b36f5abadeb03127b32ce360e2c3051fef9b1bdf331af9c"
-url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-arm64.tar.gz"
+[tools.duckdb."platforms.linux-arm64"]
+checksum = "sha256:859e1875d2a9515fbb4bf8871061437a14af82320da68c753f094c4b776348fe"
+checksum_source = "mise-versions"
+url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-arm64.tar.gz"
+url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550868"
 
-[tools."http:duckdb"."platforms.linux-arm64-musl"]
-checksum = "sha256:e92f0ec283c983ec9b36f5abadeb03127b32ce360e2c3051fef9b1bdf331af9c"
-url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-arm64.tar.gz"
+[tools.duckdb."platforms.linux-arm64-musl"]
+checksum = "sha256:859e1875d2a9515fbb4bf8871061437a14af82320da68c753f094c4b776348fe"
+checksum_source = "mise-versions"
+url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-arm64.tar.gz"
+url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550868"
 
-[tools."http:duckdb"."platforms.linux-x64"]
-checksum = "sha256:57215243cde3a00b3f64f7bceb4f3a972b4f45f0770a8418b7977a65abba9290"
-url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz"
+[tools.duckdb."platforms.linux-x64"]
+checksum = "sha256:c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc"
+checksum_source = "mise-versions"
+url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz"
+url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550663"
 
-[tools."http:duckdb"."platforms.linux-x64-musl"]
-checksum = "sha256:57215243cde3a00b3f64f7bceb4f3a972b4f45f0770a8418b7977a65abba9290"
-url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz"
+[tools.duckdb."platforms.linux-x64-musl"]
+checksum = "sha256:c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc"
+checksum_source = "mise-versions"
+url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz"
+url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550663"
 
-[tools."http:duckdb"."platforms.macos-arm64"]
-checksum = "sha256:d71af9d28992a03f811792a56e2bb9b8776f3820455aa0006cedc2eda254d8f5"
-url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-osx-arm64.tar.gz"
+[tools.duckdb."platforms.macos-arm64"]
+checksum = "sha256:188a36fe8883ef52e69165a0cbb6031ef679c8e6c448a1ce22951964149b7f96"
+url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-osx-arm64.tar.gz"
+url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662551052"
 
-[tools."http:duckdb"."platforms.macos-x64"]
-checksum = "sha256:63d90c09c58f5ad788341859c18d62e6ba2d9fecf3c3035cbadde56257ed055a"
-url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-osx-amd64.tar.gz"
+[tools.duckdb."platforms.macos-x64"]
+checksum = "sha256:fbc7013ba09d117396dabf16783281c2add47fc01cdac4855464a03526dc96ee"
+checksum_source = "mise-versions"
+url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-osx-amd64.tar.gz"
+url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550955"
+
+[tools.duckdb."platforms.windows-x64"]
+checksum = "sha256:91663c2f36c2a334b0e5e639006d8c29c29e013af0c477d80bb931df68870312"
+checksum_source = "mise-versions"
+url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-windows-amd64.tar.gz"
+url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662551276"
 
 [[tools."packslip:github.com/aubepkg/aube"]]
 version = "2.8.4"

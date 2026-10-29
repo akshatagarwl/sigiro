@@ -101,4 +101,7 @@ disallowed-methods = [
     "std::env::var_os",
     "std::env::set_var",
     "std::env::remove_var",
+    # DuckDB 2.0's static bundle needs its extensions registered before the
+    # first database opens; `sigiro::pool::open_duckdb` does that.
+    { path = "duckdb::Connection::open_in_memory", reason = "use sigiro::pool::open_duckdb" },
 ]

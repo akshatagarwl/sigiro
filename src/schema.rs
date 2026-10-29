@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn fresh_schema_has_raw_telemetry_but_no_saved_anomalies() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = crate::pool::open_duckdb().unwrap();
         create_tables(&conn, "").unwrap();
         let tables: Vec<String> = conn
             .prepare("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'")

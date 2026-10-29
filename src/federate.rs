@@ -1239,7 +1239,7 @@ async fn fetch_edge(
     let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
 
     let mut task = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<RecordBatch>> {
-        let conn = duckdb::Connection::open_in_memory()
+        let conn = crate::pool::open_duckdb()
             .context("failed to open embedded DuckDB connection for edge fetch")?;
         conn.execute_batch("LOAD quack;")
             .context("failed to load the quack extension for the edge fetch connection")?;
@@ -1321,8 +1321,8 @@ pub async fn run_federated_query(
         "resolved federated query edges"
     );
 
-    let coord = duckdb::Connection::open_in_memory()
-        .context("failed to open the embedded coordinator connection")?;
+    let coord =
+        crate::pool::open_duckdb().context("failed to open the embedded coordinator connection")?;
     coord
         .execute_batch("INSTALL json; LOAD json;")
         .context("failed to load the json extension needed to plan the federated query")?;
@@ -1426,14 +1426,14 @@ pub async fn run_federated_query(
     let mut part_tables = Vec::new();
     for (idx, (edge_name, batch)) in edge_batches.into_iter().enumerate() {
         let table = format!("part_{idx}_{}", sanitize_ident(&edge_name));
-        let params = duckdb::vtab::arrow::arrow_recordbatch_to_query_params(batch);
+        let registration = duckdb::vtab::arrow::ArrowBatchRegistration::new(batch);
         coord
             .execute(
                 &format!(
-                    "CREATE TEMP TABLE {} AS SELECT * FROM arrow(?, ?)",
+                    "CREATE TEMP TABLE {} AS SELECT * FROM arrow(?)",
                     quote_ident(&table)
                 ),
-                params,
+                [&registration],
             )
             .with_context(|| {
                 format!("failed to materialize edge {edge_name}'s result into the coordinator")

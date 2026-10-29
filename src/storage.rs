@@ -8,10 +8,13 @@ use sigiro_core::sql::escape_sql_string;
 use tracing::instrument;
 use url::{Position, Url};
 
-const EXPECTED_DUCKDB_VERSION: &str = "v2.0.0-alpha41489";
+const EXPECTED_DUCKDB_VERSION: &str = "v2.0.0";
 
-const EXPECTED_DUCKLAKE_VERSION: &str = "eb7b95df82";
-const EXPECTED_SIGNED_DUCKLAKE_VERSION: &str = "620150b147";
+/// Every DuckLake attach sets AUTOMATIC_MIGRATION, so bumping this pin migrates
+/// existing catalogs forward on first attach (v2.0.0 moved `1.1-dev1` to `1.1`)
+/// and the previous binary can no longer read them. Back up hosted catalogs
+/// before deploying a bump.
+const EXPECTED_DUCKLAKE_VERSION: &str = "417a9117f5";
 
 /// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
 /// config). Tables accessible as `lake.sigiro_*`.
@@ -40,7 +43,9 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     // Uses catalog.ducklake (DuckDB native catalog) instead of SQLite
     // because the appender API is tested and verified to work with
     // DuckDB file catalogs (see tests/ducklake_appender_test.rs).
-    let attach_sql = format!("ATTACH 'ducklake:{project_dir_str}/catalog.ducklake' AS lake");
+    let attach_sql = format!(
+        "ATTACH 'ducklake:{project_dir_str}/catalog.ducklake' AS lake (AUTOMATIC_MIGRATION true)"
+    );
     conn.execute_batch(&attach_sql)
         .context("failed to attach DuckLake catalog")?;
     tracing::info!("DuckLake attached — catalog: DuckDB file, data: local Parquet");
@@ -485,7 +490,8 @@ pub fn distributed_attach_sql(
 
     let attach_sql = format!(
         "ATTACH 'ducklake:postgres:{catalog_path_sql}' AS lake \
-         (METADATA_SCHEMA '{metadata_schema_sql}', DATA_PATH '{}', CREATE_IF_NOT_EXISTS true)",
+         (METADATA_SCHEMA '{metadata_schema_sql}', DATA_PATH '{}', CREATE_IF_NOT_EXISTS true, \
+         AUTOMATIC_MIGRATION true)",
         escape_sql_string(&data_path)
     );
 
@@ -716,26 +722,11 @@ fn verify_duckdb_stack(conn: &Connection) -> Result<()> {
         "DuckDB version mismatch: linked {duckdb_version:?}, expected {EXPECTED_DUCKDB_VERSION:?}"
     );
 
-    let signed_repository = !crate::config::SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY
-        .value()?
-        .is_empty();
-    let expected_version = if signed_repository {
-        EXPECTED_SIGNED_DUCKLAKE_VERSION
-    } else {
-        EXPECTED_DUCKLAKE_VERSION
-    };
-    if ducklake_version != expected_version {
-        anyhow::ensure!(
-            !signed_repository && crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()?,
-            "DuckLake version mismatch: loaded {ducklake_version:?}, expected \
-             {expected_version:?}"
-        );
-        tracing::warn!(
-            loaded = %ducklake_version,
-            expected = %expected_version,
-            "running a non-published DuckLake build (SIGIRO_ALLOW_UNSIGNED_EXTENSIONS is set)"
-        );
-    }
+    anyhow::ensure!(
+        ducklake_version == EXPECTED_DUCKLAKE_VERSION,
+        "DuckLake version mismatch: loaded {ducklake_version:?}, expected \
+         {EXPECTED_DUCKLAKE_VERSION:?}"
+    );
     Ok(())
 }
 
@@ -790,27 +781,8 @@ pub(crate) fn install_extensions_from(conn: &Connection, names: &[&str]) -> Resu
             i + 1,
             total,
         );
-        let signed_ducklake = name == &"ducklake"
-            && !crate::config::SIGNED_DUCKLAKE_REPOSITORY_DIRECTORY
-                .value()?
-                .is_empty();
-        if signed_ducklake {
-            if let Err(first_load) = conn.execute_batch("LOAD ducklake FROM sigiro_pinned;") {
-                anyhow::ensure!(
-                    first_load
-                        .to_string()
-                        .contains("was not installed from repository 'sigiro_pinned'"),
-                    "failed to load signed ducklake from pinned repository: {first_load}"
-                );
-                conn.execute_batch(
-                    "FORCE INSTALL ducklake FROM sigiro_pinned; LOAD ducklake FROM sigiro_pinned;",
-                )
-                .with_context(|| format!("failed to install signed DuckLake after {first_load}"))?;
-            }
-        } else {
-            conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
-                .with_context(|| format!("failed to install/load extension {name}"))?;
-        }
+        conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
+            .with_context(|| format!("failed to install/load extension {name}"))?;
         tracing::info!("loaded DuckDB extension: {name}");
     }
     Ok(())
