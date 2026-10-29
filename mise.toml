@@ -20,7 +20,7 @@ duckdb = "2.0.0"
 # task (nightly) shared nothing and each paid a cold
 # build. The content-addressed gates below also include the resolved compiler
 # and mbx identities, so every invocation uses the same cache namespace.
-rust = { version = "1.99.1", components = ["rustfmt", "clippy"], targets = ["aarch64-unknown-linux-gnu"] }
+rust = { version = "1.99.1", components = ["rustfmt", "clippy"], targets = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "wasm32-unknown-unknown"] }
 
 # Keep Cargo as Rust's package/build engine, but route every repository-local
 # `cargo …` invocation through mbx so no command silently bypasses the shared

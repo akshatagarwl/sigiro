@@ -8,9 +8,9 @@ version=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/"/, "", $3); print $3 
 root="target/wasm-bindgen-cli-$version"
 bin="$root/bin/wasm-bindgen"
 if [[ ! -x "$bin" ]]; then
-  cargo +stable install wasm-bindgen-cli --version "$version" --locked --root "$root"
+  cargo install wasm-bindgen-cli --version "$version" --locked --root "$root"
 fi
-cargo +stable build -p sigiro-segments-wasm --target wasm32-unknown-unknown --release --locked
+cargo build -p sigiro-segments-wasm --target wasm32-unknown-unknown --release --locked
 rm -rf cloud/vendor/segments-wasm
 mkdir -p cloud/vendor/segments-wasm
 "$bin" --target web --out-dir cloud/vendor/segments-wasm target/wasm32-unknown-unknown/release/sigiro_segments_wasm.wasm
