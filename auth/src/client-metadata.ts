@@ -31,3 +31,26 @@ export const FIRST_PARTY_CLIENT_METADATA = {
 export const FIRST_PARTY_CLIENT_METADATA_JSON = JSON.stringify(
   FIRST_PARTY_CLIENT_METADATA
 );
+
+/**
+ * The sigiro.com browser client: WebMCP on `/` and the telemetry dashboard on
+ * `/dashboard/`, authorization code + PKCE.
+ *
+ * The website Worker serves this document at the client_id URL, but this Worker
+ * cannot fetch it there (the same `1014` as the CLI document above), so
+ * `cimd-fetch.ts` answers from this copy. DUPLICATION: it must equal
+ * `browserClientMetadata("https://sigiro.com")` in
+ * `www/src/lib/browser-client.ts`; edit both together.
+ */
+export const BROWSER_CLIENT_ID = "https://sigiro.com/.well-known/oauth-client";
+
+export const BROWSER_CLIENT_METADATA_JSON = JSON.stringify({
+  client_id: BROWSER_CLIENT_ID,
+  client_name: "Sigiro browser",
+  redirect_uris: ["https://sigiro.com/", "https://sigiro.com/dashboard/"],
+  grant_types: ["authorization_code", "refresh_token"],
+  response_types: ["code"],
+  token_endpoint_auth_method: "none",
+  application_type: "native",
+  scope: "openid services:read query:read traces:read",
+});
