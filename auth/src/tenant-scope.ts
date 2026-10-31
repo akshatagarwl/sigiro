@@ -5,7 +5,27 @@ import {
   OPTIMIZER_CLIENT_TENANT_ID,
 } from "./optimizer-client.js";
 
-/** A device client may select only its fixed tenant, never an arbitrary membership. */
+/**
+ * The tenants a device-login user may grant to `clientId`: the optimizer
+ * client's fixed tenant, or any of the user's memberships for everyone else.
+ */
+export function deviceTenantsForClient(
+  clientId: string,
+  memberships: ReadonlyArray<string>
+): string[] {
+  if (clientId === OPTIMIZER_CLIENT_ID) {
+    return memberships.includes(OPTIMIZER_CLIENT_TENANT_ID)
+      ? [OPTIMIZER_CLIENT_TENANT_ID]
+      : [];
+  }
+  return [...memberships];
+}
+
+/**
+ * Tenant for a device token issued without a workspace bound at approval
+ * (codes approved before `deviceTenant()` existed). A device client may select
+ * only its fixed tenant, never an arbitrary membership.
+ */
 export function tenantForDeviceClient(
   clientId: string,
   memberships: ReadonlyArray<string>
@@ -19,8 +39,13 @@ export function tenantForDeviceClient(
     return OPTIMIZER_CLIENT_TENANT_ID;
   }
   if (memberships.length !== 1) {
-    throw new APIError("FORBIDDEN", {
-      message: "device token user must belong to exactly one organization",
+    // Only tokens from before workspace binding reach this, for a user who
+    // has since joined a second workspace. Guessing would be wrong, so end the
+    // session the OAuth way: `invalid_grant` makes clients ask for a new login.
+    throw new APIError("BAD_REQUEST", {
+      error: "invalid_grant",
+      error_description:
+        "this login predates workspace selection and you now belong to several workspaces; run `sigiro auth login` and choose one",
     });
   }
   return memberships[0]!;

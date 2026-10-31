@@ -45,11 +45,19 @@ terminal. It creates and activates exactly one personal workspace, completes
 OAuth device authorization internally without a browser, and stores
 refresh/access credentials in your operating system's credential store.
 
-**Both paths bind the CLI to the same single personal workspace.** Web signup and
-`sigiro signup` call the same provisioning step, and that step creates a personal
-workspace only when the account has none. So `sigiro signup` is idempotent for an
-account that already exists: run against an email that is already registered, it
-signs that account in and does not create a second account or a second workspace.
+**Every login is bound to one workspace, and the browser names it.** The
+approval page shows which workspace the CLI will use. If your account belongs to
+more than one, you choose it there, and nothing is approved until you do. The
+choice is part of the login: refreshing the session keeps the same workspace even
+if you join another one later, and it ends if you are removed from that
+workspace. Run `sigiro auth login` again to switch.
+
+Web signup and `sigiro signup` call the same provisioning step, which creates a
+personal workspace only when the account has none. So `sigiro signup` is
+idempotent for an account that already exists: it signs that account in and does
+not create a second account or a second workspace. For an account that already
+belongs to several workspaces it stops and asks you to run `sigiro auth login`, so
+it never chooses one for you.
 
 `sigiro auth status` prints the account and workspace the CLI is bound to.
 `sigiro auth logout` revokes and removes the stored credentials. Both flows keep

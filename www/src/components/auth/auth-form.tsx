@@ -60,7 +60,55 @@ interface ErrorBody {
 
 interface SessionBody {
   readonly session?: unknown;
+  readonly user?: { readonly email?: string };
 }
+
+interface WorkspaceBody {
+  readonly organization: { readonly id: string; readonly name: string };
+  readonly created: boolean;
+}
+
+interface Workspace {
+  readonly id: string;
+  readonly name: string;
+  readonly role: string;
+  readonly personal: boolean;
+}
+
+interface DeviceWorkspaces {
+  readonly client_name: string | null;
+  readonly expires_at: string;
+  readonly workspaces: readonly Workspace[];
+  readonly suggested: string | null;
+}
+
+/** Plain-language descriptions for the scopes a device request can carry. */
+const SCOPE_WORDS = new Map([
+  ["openid", "Know who you are"],
+  ["profile", "Know who you are"],
+  ["email", "Know who you are"],
+  ["offline_access", "Stay signed in until you log out"],
+  ["telemetry:ingest", "Send telemetry"],
+  ["services:read", "Read services and traces"],
+  ["traces:read", "Read services and traces"],
+  ["query:read", "Run SQL queries"],
+  ["alerts:read", "Read alerts"],
+  ["alerts:write", "Change alerts"],
+  ["tenant:members", "Manage members"],
+  ["tenant:agents", "Manage agents"],
+  ["tenant:admin", "Administer the workspace"],
+  ["optimizer:write", "Run the optimizer"],
+]);
+
+const describeScopes = (scope: string | undefined): string => {
+  const words = new Set(
+    (scope ?? "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((name) => SCOPE_WORDS.get(name) ?? name)
+  );
+  return words.size > 0 ? [...words].join(" · ") : "No access requested";
+};
 
 interface RedirectBody {
   readonly redirect_uri: string;
@@ -68,7 +116,7 @@ interface RedirectBody {
 
 /** The body of a device or agent approval decision. */
 type DecisionBody =
-  | { readonly userCode: string }
+  | { readonly userCode: string; readonly organizationId?: string }
   | {
       readonly agent_id: string;
       readonly user_code: string;
@@ -152,6 +200,10 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState("");
   const [details, setDetails] = useState<DeviceDetails | null>(null);
+  const [account, setAccount] = useState("");
+  const [workspace, setWorkspace] = useState<WorkspaceBody | null>(null);
+  const [grantable, setGrantable] = useState<DeviceWorkspaces | null>(null);
+  const [chosen, setChosen] = useState<string | null>(null);
   const [resendAvailableIn, setResendAvailableIn] = useState(0);
   const [otpValue, setOtpValue] = useState("");
   const otpRef = useRef<OtpInputHandle>(null);
@@ -175,18 +227,26 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     return () => window.clearTimeout(timeout);
   }, [phase, resendAvailableIn]);
 
-  const ensureWorkspace = useCallback(async (): Promise<void> => {
-    await request("/onboarding/ensure-personal-organization", {
-      method: "POST",
-      body: "{}",
-    });
+  const ensureWorkspace = useCallback(async (): Promise<WorkspaceBody> => {
+    const body = await request<WorkspaceBody>(
+      "/onboarding/ensure-personal-organization",
+      { method: "POST", body: "{}" }
+    );
+    setWorkspace(body);
+    return body;
   }, []);
 
   const signedIn = useCallback(async (): Promise<boolean> => {
     // Signed-out responses are the JSON literal `null`, NOT a 401, so the status
     // code alone cannot answer this question.
     const body = await request<SessionBody | null>("/get-session");
+    setAccount(body?.user?.email ?? "");
     return Boolean(body?.session);
+  }, []);
+
+  const signOut = useCallback(async (): Promise<void> => {
+    await request("/sign-out", { method: "POST", body: "{}" });
+    location.reload();
   }, []);
 
   const finishOAuthLogin = useCallback(async (): Promise<boolean> => {
@@ -205,7 +265,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
 
   /** Everything that happens once a session exists, for each page. */
   const afterSignIn = useCallback(async (): Promise<void> => {
-    await ensureWorkspace();
+    const { organization, created } = await ensureWorkspace();
 
     if (page === "device") {
       if (!userCode) {
@@ -219,7 +279,12 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           `/device?user_code=${encodeURIComponent(userCode)}`
         )
       );
-      setStatus("Review the request before approving it.");
+      const options = await request<DeviceWorkspaces>(
+        `/device/workspaces?user_code=${encodeURIComponent(userCode)}`
+      );
+      setGrantable(options);
+      setChosen(options.suggested);
+      setStatus("");
       setPhase("request");
       return;
     }
@@ -249,7 +314,11 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     }
 
     if (await finishOAuthLogin()) return;
-    setSuccess("Your Sigiro account and personal workspace are ready.");
+    setSuccess(
+      created
+        ? `Your Sigiro account and workspace “${organization.name}” are ready.`
+        : `Signed in to ${organization.name}.`
+    );
     setStatus("");
     setPhase("done");
   }, [agentCode, agentId, ensureWorkspace, finishOAuthLogin, page, userCode]);
@@ -328,7 +397,10 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         method: "POST",
         body: JSON.stringify(body),
       })
-        .then(afterSignIn)
+        .then(() => {
+          setAccount(email);
+          return afterSignIn();
+        })
         .catch((cause: unknown) => {
           setStatus("");
           setError(verificationMessage(cause));
@@ -386,15 +458,22 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         );
         return;
       }
+      const target = grantable?.workspaces.find(
+        (option) => option.id === chosen
+      );
+      if (approve && !target) {
+        setError("Choose the workspace to connect first.");
+        return;
+      }
       decide(
         approve,
         approve ? "/device/approve" : "/device/deny",
-        { userCode },
-        "Return to your terminal. The CLI is connected.",
+        approve ? { userCode, organizationId: target!.id } : { userCode },
+        `Return to your terminal. The CLI is connected to ${target?.name ?? "your workspace"}.`,
         "The device request was denied."
       );
     },
-    [agentCode, agentId, decide, page, userCode]
+    [agentCode, agentId, chosen, decide, grantable, page, userCode]
   );
 
   const decideConsent = useCallback(
@@ -507,8 +586,20 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           {accountSetup && (
             <div className="mt-2 grid gap-3">
               <p className="text-[14px] leading-relaxed text-stone-600 dark:text-stone-400">
-                Install the CLI, then connect it to this same workspace.
+                {workspace?.created
+                  ? "Your workspace is empty until something sends it telemetry. Next: install the CLI, connect it to this same workspace, and point an OpenTelemetry exporter at it."
+                  : "Install the CLI, then connect it to the same workspace."}
               </p>
+              {workspace?.created && (
+                <p
+                  id="join-hint"
+                  className="text-[13px] leading-relaxed text-stone-500 dark:text-stone-400"
+                >
+                  Joining a team that already uses Sigiro? Ask one of its owners
+                  to add {account || "your email"}. You choose the workspace
+                  when you connect the CLI.
+                </p>
+              )}
               {(
                 [
                   ["install command", INSTALL_COMMAND],
@@ -579,13 +670,55 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   }
 
   if (phase === "request") {
-    const resource = Array.isArray(details?.resource)
-      ? details.resource.join(", ")
-      : (details?.resource ?? "No resource requested");
+    const isDevice = page === "device";
+    const workspaces = grantable?.workspaces ?? [];
+    const target = workspaces.find((option) => option.id === chosen);
+    const expires = grantable?.expires_at
+      ? new Date(grantable.expires_at).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : null;
+    const rows: ReadonlyArray<readonly [string, string, string]> = isDevice
+      ? [
+          [
+            "client-id",
+            "Client",
+            grantable?.client_name ?? details?.client_id ?? "Unknown client",
+          ],
+          ["scope", "Access", describeScopes(details?.scope)],
+          ...(expires
+            ? [["expires", "Code expires", `at ${expires}`] as const]
+            : []),
+        ]
+      : [
+          ["client-id", "Agent", details?.client_id ?? "Unknown agent"],
+          ["scope", "Access", details?.scope ?? "No scopes requested"],
+        ];
     return (
       <>
         {header}
         <div id="device-flow" className="grid gap-4">
+          {account && (
+            <p
+              id="signed-in-as"
+              className="text-[13px] text-stone-600 dark:text-stone-400"
+            >
+              Signed in as{" "}
+              <span className="font-medium text-stone-900 dark:text-stone-100">
+                {account}
+              </span>
+              .{" "}
+              <button
+                id="sign-out"
+                type="button"
+                onClick={() => void signOut()}
+                className="font-medium underline underline-offset-4 hover:text-stone-900 dark:hover:text-white"
+              >
+                Not you? Sign out
+              </button>
+            </p>
+          )}
           <div>
             <p className="text-[13px] font-medium text-stone-600 dark:text-stone-400">
               Confirm this code matches your terminal
@@ -597,14 +730,60 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               {page === "agent-device" ? agentCode : userCode}
             </output>
           </div>
+          {isDevice && (
+            <fieldset
+              id="workspace"
+              className="grid gap-2 border-t border-stone-200 pt-2.5 dark:border-white/[0.08]"
+            >
+              <legend className="text-[11px] tracking-[0.08em] text-stone-500 uppercase">
+                Workspace this CLI will use
+              </legend>
+              {workspaces.length === 0 && (
+                <p className="text-[13px] text-red-600 dark:text-red-400">
+                  Your account has no workspace this client can use. Ask a
+                  workspace owner to add {account || "you"}.
+                </p>
+              )}
+              {workspaces.length === 1 && (
+                <p
+                  id="workspace-name"
+                  className="text-[15px] font-semibold text-stone-900 dark:text-stone-50"
+                >
+                  {workspaces[0]!.name}
+                </p>
+              )}
+              {workspaces.length > 1 &&
+                workspaces.map((option) => (
+                  <label
+                    key={option.id}
+                    className="flex cursor-pointer items-center gap-2.5 rounded-[8px] px-1 py-1 text-[14px] text-stone-800 hover:bg-stone-100 dark:text-stone-200 dark:hover:bg-white/[0.04]"
+                  >
+                    <input
+                      type="radio"
+                      name="workspace"
+                      value={option.id}
+                      checked={chosen === option.id}
+                      onChange={() => {
+                        setChosen(option.id);
+                        setError("");
+                      }}
+                    />
+                    <span className="font-medium">{option.name}</span>
+                    <span className="text-[12px] text-stone-500">
+                      {option.personal ? "personal" : option.role}
+                    </span>
+                  </label>
+                ))}
+              {workspaces.length > 1 && (
+                <p className="text-[12px] text-stone-500">
+                  Everything the CLI sends and reads goes to this workspace
+                  only. Run sigiro auth login again to switch.
+                </p>
+              )}
+            </fieldset>
+          )}
           <dl id="request-details" className="grid gap-2.5">
-            {(
-              [
-                ["client-id", "Client", details?.client_id ?? "Unknown client"],
-                ["scope", "Access", details?.scope ?? "No scopes requested"],
-                ["resource", "Resource", resource],
-              ] as const
-            ).map(([id, term, value]) => (
+            {rows.map(([id, term, value]) => (
               <div
                 key={id}
                 className="border-t border-stone-200 pt-2.5 dark:border-white/[0.08]"
@@ -621,15 +800,19 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               </div>
             ))}
           </dl>
-          <div className="flex gap-2.5">
+          <div className="flex flex-wrap gap-2.5">
             <button
               id="approve"
               type="button"
-              disabled={busy}
+              disabled={busy || (isDevice && !target)}
               onClick={() => decideRequest(true)}
               className={primary}
             >
-              Approve request
+              {isDevice
+                ? target
+                  ? `Connect to ${target.name}`
+                  : "Choose a workspace"
+                : "Approve request"}
             </button>
             <button
               id="deny"

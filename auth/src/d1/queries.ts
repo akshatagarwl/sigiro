@@ -78,3 +78,15 @@ export const membershipRoles = async (
 export const checkDatabase = async (db: D1Database): Promise<void> => {
   await db.prepare("SELECT 1").first();
 };
+
+/** An organization's display name, or null when it does not exist. */
+export const organizationName = async (
+  db: D1Database,
+  organizationId: string
+): Promise<string | null> => {
+  const row = await db
+    .prepare("SELECT name FROM organization WHERE id = ?")
+    .bind(organizationId)
+    .first<{ name: string }>();
+  return row?.name ?? null;
+};

@@ -14,6 +14,7 @@ import {
   checkDatabase,
   membershipRoles,
   membershipsForUser,
+  organizationName,
   sessionTenant,
 } from "./queries.js";
 import { d1SecondaryStorage } from "./secondary-storage.js";
@@ -116,6 +117,7 @@ const buildAuth = (env: Env) => {
     membershipsForUser: (userId) => membershipsForUser(env.DB, userId),
     membershipRoles: (userId, tenantId) =>
       membershipRoles(env.DB, userId, tenantId),
+    organizationName: (tenantId) => organizationName(env.DB, tenantId),
     fetchClientMetadataResource,
     testOTP,
     sendEmail: (message) => sendEmail(env, message),
@@ -189,6 +191,14 @@ const introspectSigiroAgent = async (
   });
 };
 
+/**
+ * Make sure a signed-in user has a workspace, and an active one.
+ *
+ * A user with no membership gets a personal workspace. The session's active
+ * workspace is kept whenever the user is still a member of it: forcing it back
+ * to the oldest membership on every page load silently switched invited users
+ * to their empty personal workspace.
+ */
 const ensurePersonalOrganization = async (
   env: Env,
   request: Request
@@ -201,6 +211,7 @@ const ensurePersonalOrganization = async (
   let organizations = await auth.api.listOrganizations({
     headers: request.headers,
   });
+  let created = false;
   if (organizations.length === 0) {
     // SubtleCrypto, not node:crypto createHash \u2014 the Node builtin is absent here.
     const digest = await crypto.subtle.digest(
@@ -218,6 +229,7 @@ const ensurePersonalOrganization = async (
           slug: `personal-${hex.slice(0, 20)}`,
         },
       });
+      created = true;
     } catch (cause) {
       organizations = await auth.api.listOrganizations({
         headers: request.headers,
@@ -229,12 +241,15 @@ const ensurePersonalOrganization = async (
     });
   }
 
-  const organization = organizations[0];
+  const active = organizations.find(
+    (organization) => organization.id === session.session.activeOrganizationId
+  );
+  const organization = active ?? organizations[0];
   if (!organization)
     throw new Error(
       "personal organization provisioning returned no organization"
     );
-  if (session.session.activeOrganizationId !== organization.id) {
+  if (!active) {
     await auth.api.setActiveOrganization({
       headers: request.headers,
       body: { organizationId: organization.id },
@@ -242,6 +257,8 @@ const ensurePersonalOrganization = async (
   }
   return Response.json({
     organization: { id: organization.id, name: organization.name },
+    created,
+    organizations: organizations.length,
   });
 };
 
