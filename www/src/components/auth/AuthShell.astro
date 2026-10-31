@@ -52,7 +52,7 @@ const { page, title, intro } = Astro.props;
     data-page={page}
   >
     <section
-      class="rounded-[14px] border border-stone-200/80 bg-white p-7 shadow-[0_1px_2px_rgba(28,25,23,0.04)] dark:border-white/[0.08] dark:bg-[#1D1D1A]"
+      class="mat-panel rounded-[14px] p-7"
       aria-labelledby="title"
     >
       {/*
@@ -63,7 +63,7 @@ const { page, title, intro } = Astro.props;
       */}
       <AuthCard page={page} title={title} intro={intro} client:load />
     </section>
-    <p class="mt-5 text-center text-[12px] text-stone-500 dark:text-stone-500">
+    <p class="mt-5 text-center text-[12px] text-stone-500 dark:text-stone-400">
       Passwordless sign-in · 6-digit codes expire after five minutes
     </p>
   </section>

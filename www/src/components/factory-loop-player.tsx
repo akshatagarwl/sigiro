@@ -144,7 +144,13 @@ function TerminalBlock({
         </AnimatePresence>
       </figcaption>
 
-      <div className="grid gap-2 sm:grid-cols-[170px_minmax(0,1fr)]">
+      {/*
+        `grid-cols-[minmax(0,1fr)]` below sm, not the implicit `auto` column: an
+        auto column grows to the widest `whitespace-pre` transcript row, which
+        pushed the whole frame (and the "1/5 · Detect" status) past the right
+        edge of a phone instead of letting the well scroll.
+      */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-2 sm:grid-cols-[170px_minmax(0,1fr)]">
         <div className="px-1 py-1 sm:py-3">
           <StageList
             current={done ? stages.length : activeStage}
@@ -156,7 +162,7 @@ function TerminalBlock({
 
         <div
           aria-label="Factory loop transcript, scrollable"
-          className="mat-well scroll-inset text-ink-2 focus-visible:ring-accent h-[208px] overflow-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px] focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset sm:h-[264px]"
+          className="mat-well scroll-inset text-ink-2 h-[208px] overflow-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px] focus-visible:bg-[#4568FF]/[0.06] focus-visible:shadow-[inset_0_0_0_1px_var(--accent)] focus-visible:outline-none sm:h-[264px] dark:focus-visible:bg-[#93B0FF]/[0.1]"
           ref={viewportRef}
           role="group"
           tabIndex={0}
@@ -210,9 +216,9 @@ function TerminalBlock({
       <div className="sr-only">
         {stages.map((stage) => (
           <section key={stage.title}>
-            <h3>
+            <h2>
               {stage.title} · {stage.owner}
-            </h3>
+            </h2>
             {stage.lines.map((line, index) => (
               <p key={`${index}-${line.text}`}>{line.text}</p>
             ))}
@@ -243,13 +249,17 @@ export function FactoryLoopPlayer({
       ),
     [stages]
   );
+  // A loop, not a `map` closing over a running total: the React Compiler
+  // refuses a closure that reassigns an outer variable, and skipped this
+  // whole component for it.
   const stageStarts = useMemo(() => {
+    const starts: number[] = [];
     let offset = 0;
-    return stages.map((stage) => {
-      const start = offset;
+    for (const stage of stages) {
+      starts.push(offset);
       offset += stage.lines.length;
-      return start;
-    });
+    }
+    return starts;
   }, [stages]);
 
   const selectStage = useCallback(

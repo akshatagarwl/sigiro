@@ -254,14 +254,16 @@ export function FloatingLabelInput({
               ? "text-red-600 dark:text-red-400"
               : raised
                 ? "text-stone-600 dark:text-stone-300"
-                : "text-stone-400 dark:text-stone-500"
+                : // stone-500/400, not 400/500: a resting label is the field's
+                  // only name, and 400 on the well measured 2.43:1 (axe serious).
+                  "text-stone-500 dark:text-stone-400"
           }`}
         >
           {label}
           {required ? (
             <span
               aria-hidden
-              className="ml-0.5 text-stone-400 dark:text-stone-500"
+              className="ml-0.5 text-stone-500 dark:text-stone-400"
             >
               *
             </span>

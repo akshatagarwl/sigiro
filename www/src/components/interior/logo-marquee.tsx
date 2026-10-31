@@ -43,9 +43,14 @@ export function useLogoMarquee({
   const stopped = held || paused;
 
   const reducedRef = useRef(reduced);
-  reducedRef.current = reduced;
   const movingRef = useRef(false);
-  movingRef.current = !stopped && !reduced;
+  // Synced in a layout effect, not during render: a ref written while rendering
+  // made the React Compiler skip this hook. Declared before the measuring
+  // effect below, which reads `reducedRef` through `paint`, so it runs first.
+  useIsomorphicLayoutEffect(() => {
+    reducedRef.current = reduced;
+    movingRef.current = !stopped && !reduced;
+  });
 
   const offset = useRef(0);
   const nudge = useRef(0);

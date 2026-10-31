@@ -20,8 +20,13 @@ function useCopyButton(onCopy: () => Promise<void>): [boolean, () => void] {
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
   // A ref, so the callback identity below stays stable while `code` changes.
+  // Updated in an effect, not during render: writing a ref while rendering made
+  // the React Compiler skip this whole component. A click always lands after
+  // the commit, so the ref is current by then.
   const latest = useRef(onCopy);
-  latest.current = onCopy;
+  useEffect(() => {
+    latest.current = onCopy;
+  });
 
   useEffect(() => () => window.clearTimeout(timer.current ?? undefined), []);
 
@@ -39,7 +44,7 @@ function useCopyButton(onCopy: () => Promise<void>): [boolean, () => void] {
 }
 
 /**
- * The copy affordance a code fence gets: a 22px cap in the caption row, labelled
+ * The copy affordance a code fence gets: a 24px cap in the caption row, labelled
  * `copy` in mono, that swaps for a moss check on success.
  *
  * Both faces sit in the same grid cell and only opacity moves, so the cap keeps
@@ -78,7 +83,7 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
       type="button"
       onClick={copy}
       aria-label={label ? `Copy ${label}` : "Copy code"}
-      className="mat-cap press text-ink-2 hover:text-ink grid h-[22px] shrink-0 place-items-center rounded-[6px] px-2 text-[10.5px] font-medium"
+      className="mat-cap press text-ink-2 hover:text-ink grid h-6 shrink-0 place-items-center rounded-[6px] px-2 text-[10.5px] font-medium"
     >
       <span
         className="col-start-1 row-start-1 transition-opacity duration-100"

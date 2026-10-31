@@ -522,12 +522,9 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
 
   const header = (
     <div className="mb-6">
-      <p className="font-mono text-[11px] font-semibold tracking-[0.12em] text-[#4568FF] uppercase dark:text-[#93B0FF]">
-        hosted sigiro
-      </p>
       <h1
         id="title"
-        className="mt-2.5 text-[26px] leading-[1.15] font-semibold tracking-[-0.035em] text-stone-900 dark:text-stone-50"
+        className="text-[26px] leading-[1.15] font-semibold tracking-[-0.035em] text-stone-900 dark:text-stone-50"
       >
         {heading.title}
       </h1>

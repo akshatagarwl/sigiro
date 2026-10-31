@@ -16,8 +16,14 @@ import { INSTALL_COMMAND, AGENT_PROMPT } from '@/lib/site.shared';
  */
 ---
 
-<section id="start" class="mx-auto w-full max-w-[996px] px-4 py-14 sm:px-6">
-  <h2 class="text-[22px] font-semibold tracking-[-0.03em] text-ink">Start</h2>
+{/*
+  No horizontal padding of its own: it renders inside the How section, which
+  already carries the page's gutter, so its own `px-6` put "Start" 24px right of
+  every other section's left edge. The heading uses the page's section-title
+  ramp — medium, never semibold.
+*/}
+<section id="start" class="w-full py-14">
+  <h2 class="text-[22px] leading-[1.2] font-medium tracking-[-0.03em] text-ink sm:text-[27px]">Start</h2>
 
   {/*
     `items-start`: the two panels hold different amounts of text, and a grid

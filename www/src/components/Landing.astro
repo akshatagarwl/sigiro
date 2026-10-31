@@ -40,15 +40,6 @@ const { site: SITE, sections: SECTIONS, promises: PROMISES, signup: SIGNUP, inst
  */
 const canonical = locale === 'en' ? SITE.url : `${SITE.url}/${locale}/`;
 
-/**
- * The quickstart stays on the docs' own locale path, so a Chinese reader who
- * presses the hero button lands in Chinese docs rather than English ones. Blume
- * mounts `/docs/<locale>/...` for every configured locale, and these three are
- * exactly the locales it was configured with.
- */
-const quickstart
-  = locale === 'en' ? '/docs/tutorials/quickstart' : `/docs/${locale}/tutorials/quickstart`;
-
 /* The type ramp, from the design language and not invented here: 27px medium at
    -0.03em for a page or section title, 15px for a lede, 13.5px for body.
    Headings are medium, never bold — the negative tracking does the work that
@@ -87,10 +78,14 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
           <p class="max-w-[52ch] text-[13.5px] leading-[1.7] text-ink-2 sm:text-[15px]">
             {SITE.description}
           </p>
+          {/*
+            Two actions. A third, a mono "Get started" link to the quickstart,
+            read as a stray label after two buttons and was an 11px-tall target.
+            The quickstart is the first entry in Docs.
+          */}
           <div class="flex flex-wrap items-center gap-3">
             <a href={SIGNUP.href} class={PRIMARY}>{SIGNUP.label}</a>
             <a href={INSTALL.href} class={SECONDARY}>{INSTALL.label}</a>
-            <a href={quickstart} class="meta text-ink-3 hover:text-ink">{copy.ui.getStarted}</a>
           </div>
         </div>
       </div>
@@ -123,8 +118,10 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
 
   {
     SECTIONS.map((s) => (
+      /* `s.n` names the section for `aria-labelledby` and is not printed: a
+         lone "01" over the only numbered section left starts a sequence that
+         never continues. */
       <section aria-labelledby={`s-${s.n}`} class={SECTION}>
-        <p class="meta text-ink-3">{s.n}</p>
         <h2 id={`s-${s.n}`} class={H2}>
           {s.lead} <span class="text-ink-3">{s.rest}</span>
         </h2>

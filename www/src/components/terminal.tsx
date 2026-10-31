@@ -410,7 +410,9 @@ export function SteppedTerminal({
               five stages are FOR while watching them run, instead of having read
               it two screens ago. */}
           {heading ? (
-            <div className="px-1">
+            // No `px-1`: the header sat 4px right of every other section's
+            // left edge on the page.
+            <div>
               <p className="label">{heading.label}</p>
               <h2
                 id={heading.id}
