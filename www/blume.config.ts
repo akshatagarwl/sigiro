@@ -1,4 +1,9 @@
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlib } from "node:zlib";
 
 import sitemap from "@astrojs/sitemap";
 import type { AstroIntegration } from "astro";
@@ -7,6 +12,7 @@ import { script } from "blume/analytics";
 import { cloudflare } from "blume/deploy";
 import { openapi } from "blume/reference";
 import { orama } from "blume/search";
+import * as Schema from "effect/Schema";
 
 import { CF_ANALYTICS_TOKEN, SITE } from "./src/lib/site";
 
@@ -86,6 +92,39 @@ const sigiro = (): AstroIntegration => ({
         entrypoint: fileURLToPath(new URL("./src/dl.ts", import.meta.url)),
       });
       injectScript("page", "import '../src/webmcp/browser.ts';");
+    },
+    /**
+     * DuckDB-WASM for `/dashboard/`, self-hosted under
+     * `/duckdb/<version>/`. Only the exception-handling build ships: every
+     * browser the site supports has Wasm exceptions, and the module is 36 MB —
+     * over the 25 MiB Workers asset cap — so it is stored brotli-compressed and
+     * `src/worker.ts` serves it with `content-encoding: br`.
+     */
+    "astro:build:done": async ({ dir }) => {
+      const require = createRequire(import.meta.url);
+      const dist = dirname(
+        require.resolve("@duckdb/duckdb-wasm/dist/duckdb-eh.wasm")
+      );
+      const { version } = Schema.decodeUnknownSync(
+        Schema.fromJsonString(Schema.Struct({ version: Schema.String }))
+      )(await readFile(join(dist, "..", "package.json"), "utf8"));
+      const out = fileURLToPath(new URL(`duckdb/${version}/`, dir));
+      await mkdir(out, { recursive: true });
+      for (const file of [
+        "duckdb-browser-eh.worker.js",
+        "duckdb-browser-eh.worker.js.map",
+      ])
+        await copyFile(join(dist, file), join(out, file));
+      const wasm = await readFile(join(dist, "duckdb-eh.wasm"));
+      await writeFile(
+        join(out, "duckdb-eh.wasm.br"),
+        await promisify(brotliCompress)(wasm, {
+          params: {
+            [zlib.BROTLI_PARAM_QUALITY]: 9,
+            [zlib.BROTLI_PARAM_SIZE_HINT]: wasm.length,
+          },
+        })
+      );
     },
   },
 });

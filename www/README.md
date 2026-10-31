@@ -80,7 +80,11 @@ says so at the point it is used:
 - `faq.tsx` — `client:visible`
 - `integrations.tsx` — `client:visible`
 
-Nothing else does. A React component rendered from `.astro` with no `client:*`
+`/dashboard/` is the one app route. `dashboard/dashboard.tsx` is `client:only` and
+loads DuckDB-WASM from `/duckdb/<version>/` (see `blume.config.ts` and
+`src/worker.ts`); `aube run check:dashboard` drives it against a running Worker.
+
+Nothing else on the landing page does. A React component rendered from `.astro` with no `client:*`
 directive is static markup, including the ones still marked `'use client'` — that
 directive is a Next convention and Astro ignores it.
 
