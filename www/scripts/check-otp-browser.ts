@@ -89,7 +89,7 @@ try {
     return json(route, 400, { message: "Unexpected verification code" });
   });
 
-  await page.goto(`${BASE}/sign-up`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE}/sign-in`, { waitUntil: "domcontentloaded" });
   await page.locator("#name").fill("OTP check");
   await page.locator("#email").fill("reader@example.com");
   await page.locator('#email-form button[type="submit"]').click();

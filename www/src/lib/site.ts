@@ -37,7 +37,7 @@ import {
   type Locale,
   LOOP_SESSIONS,
   NAV_HREFS,
-  SIGNUP_HREF,
+  SIGN_IN_HREF,
   INSTALL_HREF,
   READ_ALL_THREE,
   SITE_SHARED,
@@ -133,7 +133,8 @@ export const getCopy = (locale: Locale) => {
       { href: NAV_HREFS.reference, label: c.nav.reference },
     ],
     call: { href: CALL_HREF, label: c.callLabel },
-    signup: { href: SIGNUP_HREF, label: c.ui.signUp },
+    signup: { href: SIGN_IN_HREF, label: c.ui.signUp },
+    signin: { href: SIGN_IN_HREF, label: c.ui.signIn },
     install: { href: INSTALL_HREF, label: c.ui.installCli },
     /* The three URLs are prepended from the shared constant rather than written
        into any locale file, so a translation cannot corrupt a path. The

@@ -363,8 +363,14 @@ export const NAV_HREFS = {
   reference: "/docs/reference",
 } as const;
 
-/** Hosted onboarding and the self-hosted CLI install entry points. */
-export const SIGNUP_HREF = "https://sigiro.com/sign-up";
+/**
+ * Hosted onboarding and the self-hosted CLI install entry points.
+ *
+ * Sign-up and sign-in are one page: a one-time code creates the account the
+ * first time an address uses it, so `/sign-up` only redirects here. "Sign up"
+ * and "Sign in" are two labels for the same door.
+ */
+export const SIGN_IN_HREF = "https://sigiro.com/sign-in";
 export const INSTALL_HREF = "https://sigiro.com/install";
 
 /** Social links. The labels are brand names, so nothing here is translated. */

@@ -82,8 +82,8 @@ export const JA: LandingCopy = {
    * the file uses.
    */
   ui: {
-    /** The hero's primary action, and the same label in the header. */
-    getStarted: "はじめる",
+    /** The header's way back in for a reader who already has an account. */
+    signIn: "ログイン",
     signUp: "登録する",
     installCli: "CLI をインストール",
     /** The line under the hero loop. Restates the two claims that decide

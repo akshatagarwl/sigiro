@@ -389,10 +389,12 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
       setBusy(true);
       setError("");
       setStatus("Verifying…");
-      const body =
-        page === "sign-up"
-          ? { email, otp: code, name: name.trim() }
-          : { email, otp: code };
+      // The name is optional and only used if this code creates the account:
+      // better-auth ignores it for an address that already has one.
+      const trimmedName = name.trim();
+      const body = trimmedName
+        ? { email, otp: code, name: trimmedName }
+        : { email, otp: code };
       void request("/sign-in/email-otp", {
         method: "POST",
         body: JSON.stringify(body),
@@ -897,17 +899,26 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   return (
     <>
       {header}
-      <form id="email-form" className="grid gap-3" onSubmit={sendCode}>
+      {/*
+        `gap-1`, not `gap-3`: each field already reserves room above it for the
+        raised label and below it for a hint, so a 12px gap on top of that left
+        ~54px of air between Name and Email.
+      */}
+      <form id="email-form" className="grid gap-1" onSubmit={sendCode}>
         {/*
+          One card for both sign-in and sign-up: a one-time code creates the
+          account the first time an address uses it, so there is nothing a
+          separate sign-up page could ask that this one cannot.
+
           No `maxLength` on the name field: the component renders a live
           `0 / 100` counter when given one, and a character budget on an
           optional display name is noise on the first screen of a sign-up.
         */}
-        {page === "sign-up" && (
+        {(page === "sign-in" || page === "sign-up") && (
           <FloatingLabelInput
             id="name"
             name="name"
-            label="Name"
+            label="Name (optional)"
             autoComplete="name"
             value={name}
             onChange={setName}
@@ -927,8 +938,8 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           hint={error}
           disabled={busy}
         />
-        <button type="submit" disabled={busy} className={`${primary} mt-1`}>
-          Send verification code
+        <button type="submit" disabled={busy} className={`${primary} mt-2`}>
+          Continue with email
         </button>
         {statusLine}
       </form>

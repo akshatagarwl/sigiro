@@ -68,16 +68,20 @@ const localize = (href: string) =>
   <ThemeToggle />
 
   {/*
-    Below sm the hero's own action is one screen away at most, and this row has no
-    width to spare for a second copy of it.
+    "Sign in" shows at every width: it is the only way back in for someone who
+    already has an account, and the hero's "Sign up" goes to the same page. The
+    CLI install is the hero's second action, one screen away at most, so below sm
+    this row has no width to spare for a copy of it.
 
     The wrapper carries the breakpoint, not the link: COMPACT already sets
     `inline-flex`, and two unprefixed display utilities on one element are decided
     by their order in the generated stylesheet rather than by which one you wrote
     last — so `hidden` lost and the button showed on a phone anyway.
   */}
-  <div class="hidden sm:block">
-    <a href={copy.signup.href} class={COMPACT}>{copy.signup.label}</a>
-    <a href={copy.install.href} class={`${COMPACT} ml-1`}>{copy.install.label}</a>
+  <div class="flex items-center gap-1">
+    <a href={copy.signin.href} class={COMPACT}>{copy.signin.label}</a>
+    <span class="hidden sm:block">
+      <a href={copy.install.href} class={COMPACT}>{copy.install.label}</a>
+    </span>
   </div>
 </header>

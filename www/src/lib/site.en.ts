@@ -107,8 +107,8 @@ export const EN = {
    * reader sees belongs here, not in the markup.
    */
   ui: {
-    /** The hero's primary action, and the same label in the header. */
-    getStarted: "Get started",
+    /** The header's way back in for a reader who already has an account. */
+    signIn: "Sign in",
     signUp: "Sign up",
     installCli: "Install CLI",
     /** The line under the hero loop. Restates the two claims that decide

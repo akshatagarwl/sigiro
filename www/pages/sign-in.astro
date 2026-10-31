@@ -9,11 +9,15 @@ import AuthShell from '@/components/auth/AuthShell.astro';
  * hand-rolled stylesheet. The flow still calls `/api/auth/*`, which the Website
  * Worker routes to the auth Worker over the service binding — same origin, no
  * redirect, no separate surface.
+ *
+ * It is also the sign-up page. A one-time code creates the account the first
+ * time an address uses it, so `/sign-up` is a redirect here (`src/worker.ts`)
+ * rather than a second card with the same field and different copy.
  * */
 ---
 
 <AuthShell
   page="sign-in"
   title="Sign in to Sigiro"
-  intro="Enter your email. We’ll send a one-time verification code."
+  intro="Enter your email and we’ll send a one-time code. New here? The same code creates your account."
 />

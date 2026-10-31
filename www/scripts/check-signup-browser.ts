@@ -154,8 +154,8 @@ const main = async () => {
   try {
     console.log(`browser sign-up against ${BASE}`);
 
-    await page.goto(`${BASE}/sign-up`, { waitUntil: "domcontentloaded" });
-    step("/sign-up rendered", await page.title());
+    await page.goto(`${BASE}/sign-in`, { waitUntil: "domcontentloaded" });
+    step("/sign-in rendered", await page.title());
 
     const emailForm = page.locator("#email-form");
     await emailForm.waitFor({ state: "visible", timeout: 15000 });

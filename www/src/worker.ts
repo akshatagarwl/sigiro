@@ -110,6 +110,14 @@ export default {
     }
 
     const pathname = url.pathname;
+    // Sign-up and sign-in are one card: a one-time code creates the account the
+    // first time an address uses it. 302, not 301, so the page can come back
+    // without browsers having cached it away; the query (an `oauth_query`, UTM
+    // tags) rides along.
+    if (pathname === "/sign-up" || pathname === "/sign-up/") {
+      url.pathname = "/sign-in";
+      return Promise.resolve(Response.redirect(url, 302));
+    }
     const handleDocsMcp = (docsRequest: Request) =>
       website.fetch(docsRequest, env, context);
     if (pathname === "/mcp")

@@ -103,8 +103,8 @@ export const KO: LandingCopy = {
    * change it here too.
    */
   ui: {
-    /** The hero's primary action, and the same label in the header. */
-    getStarted: "시작하기",
+    /** The header's way back in for a reader who already has an account. */
+    signIn: "로그인",
     signUp: "가입하기",
     installCli: "CLI 설치",
     /** The line under the hero loop. Restates the two claims that decide

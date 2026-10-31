@@ -83,8 +83,8 @@ export const ZH: LandingCopy = {
    * reader sees belongs here, not in the markup.
    */
   ui: {
-    /** The hero's primary action, and the same label in the header. */
-    getStarted: "开始使用",
+    /** The header's way back in for a reader who already has an account. */
+    signIn: "登录",
     signUp: "注册",
     installCli: "安装 CLI",
     /** The line under the hero loop. Restates the two claims that decide
