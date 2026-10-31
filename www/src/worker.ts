@@ -30,6 +30,24 @@ const API_PATHS = new Set([
   "/v1development/profiles",
 ]);
 
+/**
+ * RFC 8414 §3 and OIDC discovery for the issuer `https://sigiro.com/api/auth`.
+ *
+ * A path-bearing issuer's metadata lives at `/.well-known/<suffix>/api/auth`,
+ * which generic OAuth clients derive from the issuer and which answered 404.
+ * Better Auth serves the document under the issuer path, so rewrite to it.
+ */
+const ISSUER_METADATA = new Map([
+  [
+    "/.well-known/oauth-authorization-server/api/auth",
+    "/api/auth/.well-known/oauth-authorization-server",
+  ],
+  [
+    "/.well-known/openid-configuration/api/auth",
+    "/api/auth/.well-known/openid-configuration",
+  ],
+]);
+
 const isAuthPath = (pathname: string): boolean =>
   pathname === "/api/auth" ||
   pathname.startsWith("/api/auth/") ||
@@ -153,6 +171,11 @@ export default {
     // A service binding: the auth worker is invoked directly, so the request
     // never leaves Cloudflare and no redirect rewriting is needed (the auth
     // worker already sees the public sigiro.com URL).
+    const issuerMetadata = ISSUER_METADATA.get(pathname);
+    if (issuerMetadata) {
+      url.pathname = issuerMetadata;
+      return env.AUTH.fetch(new Request(url, request));
+    }
     if (isAuthPath(pathname)) return env.AUTH.fetch(request);
     if (isApiPath(pathname)) return proxyRequest(request, env.API_ORIGIN_URL);
     return website.fetch(request, env, context);
