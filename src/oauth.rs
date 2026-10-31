@@ -53,12 +53,38 @@ pub struct StoredCredentials {
 #[derive(Serialize)]
 pub struct AuthStatus {
     authenticated: bool,
+    /// The workspace (Sigiro tenant) every request from this CLI is scoped to.
+    workspace: Option<Workspace>,
     issuer: Option<String>,
     resource: Option<String>,
     endpoint: Option<String>,
     scopes: Vec<String>,
     access_token_expires_at: Option<u64>,
     refresh_token_present: bool,
+}
+
+#[derive(Serialize)]
+struct Workspace {
+    id: String,
+    name: Option<String>,
+}
+
+/// Claims the CLI reads from its own access token for display.
+#[derive(Deserialize)]
+struct WorkspaceClaims {
+    tid: String,
+    tenant_name: Option<String>,
+}
+
+/// The workspace named in a stored access token. Display only: the server
+/// verifies the signature on every request, so the CLI does not need to.
+fn workspace_of(access_token: &str) -> Option<Workspace> {
+    jsonwebtoken::dangerous::insecure_decode_claims::<WorkspaceClaims>(access_token)
+        .ok()
+        .map(|claims| Workspace {
+            id: claims.tid,
+            name: claims.tenant_name,
+        })
 }
 
 pub struct OAuthSession {
@@ -270,6 +296,18 @@ async fn expect_success(response: reqwest::Response, operation: &str) -> Result<
     bail!("{operation} failed ({status}): {body}")
 }
 
+#[derive(Deserialize)]
+struct ProvisionedWorkspace {
+    organization: ProvisionedOrganization,
+    #[serde(default)]
+    organizations: usize,
+}
+
+#[derive(Deserialize)]
+struct ProvisionedOrganization {
+    id: String,
+}
+
 fn read_verification_code() -> Result<String> {
     if std::io::stdin().is_terminal() {
         return rpassword::prompt_password("Verification code: ")
@@ -351,7 +389,7 @@ pub async fn signup(name: String, email: String) -> Result<AuthStatus> {
         "email verification",
     )
     .await?;
-    expect_success(
+    let provisioned: ProvisionedWorkspace = expect_success(
         browser
             .post(format!(
                 "{HOSTED_ISSUER}/onboarding/ensure-personal-organization"
@@ -362,7 +400,15 @@ pub async fn signup(name: String, email: String) -> Result<AuthStatus> {
             .context("failed to provision the personal workspace")?,
         "personal workspace provisioning",
     )
-    .await?;
+    .await?
+    .json()
+    .await
+    .context("failed to read the provisioned workspace")?;
+    // Signup never picks between workspaces on the user's behalf.
+    ensure!(
+        provisioned.organizations <= 1,
+        "{email} already belongs to several workspaces; run `sigiro auth login` and choose one"
+    );
     let user_code = device.user_code().secret();
     expect_success(
         browser
@@ -377,7 +423,10 @@ pub async fn signup(name: String, email: String) -> Result<AuthStatus> {
     expect_success(
         browser
             .post(format!("{HOSTED_ISSUER}/device/approve"))
-            .json(&serde_json::json!({ "userCode": user_code }))
+            .json(&serde_json::json!({
+                "userCode": user_code,
+                "organizationId": provisioned.organization.id,
+            }))
             .send()
             .await
             .context("failed to approve the CLI device request")?,
@@ -392,6 +441,7 @@ fn status_from(credentials: Option<&StoredCredentials>) -> AuthStatus {
     match credentials {
         Some(credentials) => AuthStatus {
             authenticated: true,
+            workspace: workspace_of(&credentials.access_token),
             issuer: Some(credentials.issuer.clone()),
             resource: Some(credentials.resource.clone()),
             endpoint: Some(credentials.endpoint.clone()),
@@ -401,6 +451,7 @@ fn status_from(credentials: Option<&StoredCredentials>) -> AuthStatus {
         },
         None => AuthStatus {
             authenticated: false,
+            workspace: None,
             issuer: None,
             resource: None,
             endpoint: None,
@@ -457,7 +508,10 @@ impl OAuthSession {
                 if response.error() == &BasicErrorResponseType::InvalidGrant =>
             {
                 delete_credentials().await?;
-                bail!("stored OAuth session was rejected; run `sigiro auth login`");
+                let reason = response
+                    .error_description()
+                    .map_or("it expired or was revoked", String::as_str);
+                bail!("your Sigiro login ended ({reason}); run `sigiro auth login`");
             }
             Err(error) => return Err(error).context("failed to refresh Sigiro access token"),
         };
