@@ -280,6 +280,12 @@ const PROMPT =
   '<span style="--shiki-light:var(--ink-3);--shiki-dark:var(--ink-3)">$ </span>';
 
 /**
+ * What a continuation row of a multi-line command starts with: blank space the
+ * width of the prompt, so the command's own indentation lines up under it.
+ */
+const CONTINUATION = "<span>  </span>";
+
+/**
  * A `$ command` + output transcript, highlighted line by line.
  *
  * Two grammars rather than the one shellsession looks like it should be. Its
@@ -301,6 +307,10 @@ export function highlightSession(
   out: string
 ): Effect.Effect<SessionLine[], TranscriptMismatch> {
   return Effect.gen(function* () {
+    // A long command is written across lines (a `\` continuation, or a quoted
+    // SQL string broken at its clauses), so its payoff is on screen instead of
+    // past the right edge of the well. Each row gets its own line here.
+    const cmdTexts = cmd.split("\n");
     const texts = out.split("\n");
     const [cmdHtml, outHtml] = yield* Effect.all(
       [
@@ -317,9 +327,9 @@ export function highlightSession(
     // the count, so a line that went missing would silently shift the transcript.
     // A typed failure rather than a `throw`: it still takes the render down, which
     // is the point, but the shape of the mistake is now in the function's type.
-    if (cmdHtml.length !== 1) {
+    if (cmdHtml.length !== cmdTexts.length) {
       return yield* new TranscriptMismatch({
-        reason: `transcript command is not one line: ${cmd}`,
+        reason: `highlighted ${cmdHtml.length} of ${cmdTexts.length} command lines`,
       });
     }
     if (outHtml.length !== texts.length) {
@@ -329,7 +339,11 @@ export function highlightSession(
     }
 
     return [
-      { text: `$ ${cmd}`, html: PROMPT + cmdHtml[0] },
+      ...cmdTexts.map((text, i) =>
+        i === 0
+          ? { text: `$ ${text}`, html: PROMPT + cmdHtml[i] }
+          : { text: `  ${text}`, html: CONTINUATION + cmdHtml[i] }
+      ),
       ...texts.map((text, i) => ({ text, html: outHtml[i] })),
     ];
   });

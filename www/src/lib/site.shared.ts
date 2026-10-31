@@ -121,8 +121,10 @@ const CONNECT_REST = [
  * These are the artifacts the page's whole claim rests on: a reader watches the
  * command and its answer rather than being told. Every line has to fit the well,
  * which holds about 86 characters at 12.5px and clips the rest — that is why the
- * two environment variables are two `export` lines, and why the query is read
- * from a file.
+ * two environment variables are two `export` lines, why the query is read from a
+ * file, and why a long command is written across lines (a `\\` continuation, or
+ * SQL broken at its clauses inside the quotes) with no row past ~70 columns.
+ * A one-line query ended at "…FRO" with the answer scrolled out of sight.
  *
  * `variants` on `connect` because how you start sigiro is the one thing on this
  * page a reader has an opinion about. The ids match the tab values in
@@ -153,7 +155,10 @@ export const HOW_SESSIONS = {
         label: "docker",
         run: [
           {
-            cmd: "docker run -d --name sigiro --restart unless-stopped -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro",
+            cmd: `docker run -d --name sigiro --restart unless-stopped \\
+  -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 \\
+  -p 127.0.0.1:9999:9999 -v sigiro-data:/var/lib/sigiro \\
+  ghcr.io/sigiroai/sigiro`,
             out: "a3f1c9e2d7b4",
           },
           ...CONNECT_REST,
@@ -164,7 +169,11 @@ export const HOW_SESSIONS = {
   ask: {
     run: [
       {
-        cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT span_name, count(*) AS calls FROM sigiro_spans WHERE service_name = 'checkout' AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes' GROUP BY span_name ORDER BY calls DESC LIMIT 5"`,
+        cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary \\
+  "SELECT span_name, count(*) AS calls FROM sigiro_spans
+   WHERE service_name = 'checkout'
+     AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+   GROUP BY span_name ORDER BY calls DESC LIMIT 5"`,
         out: `[
   { "span_name": "POST /api/orders", "calls": 1284 },
   { "span_name": "GET /api/cart", "calls": 342 }
@@ -182,7 +191,8 @@ WHERE service = 'checkout' AND status = 'error'
 GROUP BY model ORDER BY slowest DESC`,
       },
       {
-        cmd: 'curl -sS -X POST localhost:9999/v1/query --data-binary "$(cat models.sql)"',
+        cmd: `curl -sS -X POST localhost:9999/v1/query \\
+  --data-binary "$(cat models.sql)"`,
         out: `MODEL           CALLS  SLOWEST
 gpt-5.2-mini      246    30.0s
 claude-haiku-4.6   31     2.1s`,
@@ -192,10 +202,16 @@ claude-haiku-4.6   31     2.1s`,
   prove: {
     run: [
       {
-        cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT trace_id, duration, status_message FROM sigiro_spans WHERE service_name = 'checkout' AND status_code = 2 AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes' ORDER BY timestamp DESC LIMIT 3"`,
+        cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary \\
+  "SELECT trace_id, duration, status_message FROM sigiro_spans
+   WHERE service_name = 'checkout' AND status_code = 2
+     AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+   ORDER BY timestamp DESC LIMIT 3"`,
         out: `[
-  { "trace_id": "9f2c1ab4e77d", "duration": 30012, "status_message": "context deadline exceeded" },
-  { "trace_id": "3b81fe0a2c56", "duration": 30004, "status_message": "context deadline exceeded" }
+  { "trace_id": "9f2c1ab4e77d", "duration": 30012,
+    "status_message": "context deadline exceeded" },
+  { "trace_id": "3b81fe0a2c56", "duration": 30004,
+    "status_message": "context deadline exceeded" }
 ]`,
       },
     ],
@@ -231,12 +247,19 @@ export const DISCOVER_ARTIFACT = {
 export const LOOP_SESSIONS = {
   detect: {
     ours: true,
-    cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT count(*) AS failed_spans FROM sigiro_spans WHERE service_name = 'checkout' AND status_code = 2 AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'"`,
+    cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary \\
+  "SELECT count(*) AS failed_spans FROM sigiro_spans
+   WHERE service_name = 'checkout' AND status_code = 2
+     AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'"`,
     out: `[{ "failed_spans": 246 }]`,
   },
   diagnose: {
     ours: true,
-    cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT span_name, count(*) AS failures FROM sigiro_spans WHERE service_name = 'checkout' AND status_code = 2 AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes' GROUP BY span_name ORDER BY failures DESC LIMIT 5"`,
+    cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary \\
+  "SELECT span_name, count(*) AS failures FROM sigiro_spans
+   WHERE service_name = 'checkout' AND status_code = 2
+     AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+   GROUP BY span_name ORDER BY failures DESC LIMIT 5"`,
     out: `[{ "span_name": "POST /api/orders", "failures": 246 }]`,
   },
   fix: {
@@ -250,7 +273,10 @@ push   fix: bound the orders upstream call at 5s`,
   /** A fresh query, not a detector claiming the incident is resolved. */
   verify: {
     ours: "partly",
-    cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary "SELECT count(*) AS errors_last_5m FROM sigiro_spans WHERE service_name = 'checkout' AND status_code = 2 AND timestamp > CURRENT_TIMESTAMP - INTERVAL '5 minutes'"`,
+    cmd: `curl -sS -X POST localhost:9999/v1/query --data-binary \\
+  "SELECT count(*) AS errors_last_5m FROM sigiro_spans
+   WHERE service_name = 'checkout' AND status_code = 2
+     AND timestamp > CURRENT_TIMESTAMP - INTERVAL '5 minutes'"`,
     out: `[{ "errors_last_5m": 0 }]`,
   },
   /**
