@@ -1,6 +1,7 @@
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Alchemy from "alchemy";
 import { adopt } from "alchemy/AdoptPolicy";
+import * as Output from "alchemy/Output";
 import { retain } from "alchemy/RemovalPolicy";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
@@ -78,14 +79,42 @@ export default Alchemy.Stack(
         },
       })
     );
+    // The Hetzner host takes no inbound web traffic: cloudflared on the host
+    // dials out, and kamal-proxy serves plain HTTP on 127.0.0.1:80 behind it.
+    const originTunnel = yield* productionResource(
+      Cloudflare.Tunnel.Tunnel("OriginTunnel", {
+        name: "sigiro-benchapp",
+        ingress: [
+          { hostname: "api-origin.sigiro.com", service: "http://127.0.0.1:80" },
+          {
+            hostname: "benchapp-origin.akshat.dev",
+            service: "http://127.0.0.1:80",
+          },
+          { service: "http_status:404" },
+        ],
+      })
+    );
+
+    const tunnelTarget = Output.interpolate`${originTunnel.tunnelId}.cfargotunnel.com`;
     const apiOriginRecord = yield* productionResource(
-      Cloudflare.DNS.Record("ApiOriginRecord", {
+      Cloudflare.DNS.Record("ApiOriginTunnelRecord", {
         zoneId: zone.zoneId,
         name: "api-origin.sigiro.com",
-        type: "A",
-        content: "203.0.113.10",
-        proxied: false,
-        ttl: 60,
+        type: "CNAME",
+        content: tunnelTarget,
+        proxied: true,
+        ttl: 1,
+      })
+    );
+    const benchappOriginRecord = yield* productionResource(
+      Cloudflare.DNS.Record("BenchappOriginTunnelRecord", {
+        zoneId: "2803be07e3d170506d8546bed58eb437",
+        name: "benchapp-origin.akshat.dev",
+        type: "CNAME",
+        content: tunnelTarget,
+        proxied: true,
+        ttl: 1,
+        comment: "BenchApp API origin; the benchapp Worker forwards /api/* here",
       })
     );
 
@@ -166,6 +195,8 @@ export default Alchemy.Stack(
       downloads,
       emailSending,
       apiOriginRecord,
+      benchappOriginRecord,
+      originTunnel,
       authDatabase,
       authWorker,
 
