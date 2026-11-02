@@ -21,7 +21,8 @@ const STYLES: styling::Styles = styling::Styles::styled()
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
-    /// OAuth access token for a hosted endpoint (overrides SIGIRO_ACCESS_TOKEN).
+    /// Bearer token to send instead of the stored `sigiro auth login` session
+    /// (overrides SIGIRO_ACCESS_TOKEN).
     #[arg(long, global = true)]
     token: Option<String>,
 }
@@ -44,7 +45,10 @@ enum Command {
         otlp_grpc_port: Option<u16>,
     },
 
-    /// Run a federated SQL query across one or more sigiro edges.
+    /// Run a federated SQL query across one or more self-hosted sigiro edges.
+    ///
+    /// Not for hosted sigiro.com: there, query with `sigiro mcp` (its
+    /// `run_query` tool) or POST SQL to /v1/query with `sigiro auth token`.
     ///
     /// This is a coordinator: an embedded DuckDB plans the query, pushes a
     /// per-edge partial to each resolved edge over the `quack` wire protocol
@@ -64,7 +68,11 @@ enum Command {
         #[arg(long)]
         full_scan: bool,
     },
-    /// Show server health
+    /// Show the health of the server the client commands use, and recent ingest.
+    ///
+    /// That server is sigiro.com after `sigiro auth login`, otherwise
+    /// http://localhost:9999; SIGIRO_ENDPOINT overrides both. The output names
+    /// the endpoint it probed.
     Status,
     /// Probe the local /health endpoint and exit 0 if ready, non-zero
     /// otherwise. This is the container HEALTHCHECK for the distroless image,
@@ -85,8 +93,13 @@ enum Command {
         email: String,
     },
     /// Serve the MCP (Model Context Protocol) tool surface over stdio, so any
-    /// MCP client can list services and query raw telemetry. Talks to a running `sigiro serve` over
-    /// HTTP, so point SIGIRO_ENDPOINT at it if it is not on localhost.
+    /// MCP client can list services and query raw telemetry.
+    ///
+    /// It talks to the same server as every other client command: sigiro.com
+    /// after `sigiro auth login` or `sigiro signup`, otherwise a local
+    /// `sigiro serve` on http://localhost:9999. SIGIRO_ENDPOINT overrides both.
+    /// Register it with an agent as a stdio server, for example
+    /// `claude mcp add sigiro -- sigiro mcp`.
     Mcp,
 }
 
@@ -228,18 +241,27 @@ async fn main() -> Result<()> {
             println!("{}", format_output(&value)?);
         }
         Some(Command::Status) => {
-            // Health is public — no auth needed. The /health endpoint is the
-            // single source of truth for "ready" vs "starting" vs "degraded";
-            // the CLI does not read the .ready file directly (would be a
-            // second path that can drift from the server's view).
-            let configured_endpoint = sigiro::config::ENDPOINT.value().unwrap_or_default();
-            let base_url = if configured_endpoint.is_empty() {
-                "http://localhost:9999"
-            } else {
-                &configured_endpoint
-            };
+            // Health is public, but it must come from the server the other
+            // client commands use. Resolving the endpoint separately (always
+            // localhost unless SIGIRO_ENDPOINT was set) made a signed-in hosted
+            // user read the health of whatever happened to listen on :9999,
+            // next to ingest counts fetched from sigiro.com. The /health
+            // endpoint is the single source of truth for "ready" vs "starting"
+            // vs "degraded"; the CLI does not read the .ready file directly.
+            let client = sigiro::client::try_build_client().await;
+            let base_url = client.as_ref().map_or_else(
+                |_| {
+                    let configured = sigiro::config::ENDPOINT.value().unwrap_or_default();
+                    if configured.is_empty() {
+                        "http://localhost:9999".to_string()
+                    } else {
+                        configured
+                    }
+                },
+                |client| client.base_url().to_string(),
+            );
             let health_client =
-                sigiro::client::SigiroClient::new(base_url, sigiro::client::ClientAuth::Open);
+                sigiro::client::SigiroClient::new(&base_url, sigiro::client::ClientAuth::Open);
             let (state, detail) = match health_client.health().await {
                 Ok(HealthResponse::Ready) => ("ready".to_string(), "ok".to_string()),
                 Ok(HealthResponse::Starting) => (
@@ -254,7 +276,7 @@ async fn main() -> Result<()> {
             // query setup fails, report the exact failure instead of silently
             // collapsing it to null.
             let recent_ingest = if matches!(state.as_str(), "ready" | "starting") {
-                match sigiro::client::try_build_client().await {
+                match &client {
                     Ok(client) => match client.query(
                         "SELECT (SELECT count(*) FROM lake.sigiro_spans WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS spans_5m, (SELECT count(*) FROM lake.sigiro_logs WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS logs_5m, CAST((SELECT max(timestamp) FROM lake.sigiro_spans) AS VARCHAR) AS last_span_ts, CAST((SELECT max(timestamp) FROM lake.sigiro_logs) AS VARCHAR) AS last_log_ts",
                     ).await {
@@ -283,6 +305,7 @@ async fn main() -> Result<()> {
                 None
             };
             let value = serde_json::json!({
+                "endpoint": base_url,
                 "status": state,
                 "detail": detail,
                 "recent_ingest": recent_ingest,

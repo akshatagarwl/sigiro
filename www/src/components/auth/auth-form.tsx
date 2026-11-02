@@ -648,7 +648,9 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               title,
               intro: "Confirm this request came from you before approving it.",
             }
-          : { title, intro };
+          : phase === "done" && (page === "device" || page === "agent-device")
+            ? { title, intro: "This request has been answered." }
+            : { title, intro };
 
   const header = (
     <div className="mb-6">

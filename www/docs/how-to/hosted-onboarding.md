@@ -76,7 +76,10 @@ copy a token by hand.
 
 Human signup and OAuth login are covered here. If software needs its own delegated identity and keys, use [Agent Auth onboarding](/docs/how-to/agent-auth).
 
-Hosted authentication is provided by Better Auth. Organizations are the tenants.
+Hosted authentication is provided by Better Auth. A workspace is the unit of
+isolation: its data, its members and its queries are separate from every other
+workspace. Some API fields and error messages call it a tenant or an
+organization; all three words name the same thing.
 Both commands target the hosted service at `https://sigiro.com` by default.
 
 The same token authenticates OTLP ingest and API queries.
@@ -178,6 +181,31 @@ it is missing, look in your app's own log for the exporter error: `401` means th
 token expired or is missing, and a connection error usually means a `:4318` was
 left on the endpoint.
 
+**No app instrumented yet?** Post one test span by hand to prove the path;
+OTLP/HTTP accepts JSON as well as protobuf:
+
+```bash
+now=$(date +%s)000000000
+curl -s -w '%{http_code}\n' https://sigiro.com/v1/traces \
+  -H "Authorization: Bearer $(sigiro auth token)" \
+  -H "content-type: application/json" \
+  --data '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"hello-sigiro"}}]},
+    "scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174",
+    "name":"GET /hello","kind":2,"startTimeUnixNano":"'"$now"'","endTimeUnixNano":"'"$now"'"}]}]}]}'
+```
+
+`200` means that sigiro accepted the span; `hello-sigiro` then appears in
+`/v1/services` a few seconds later.
+
+`sigiro query` is not the command for this: it federates self-hosted edges and
+fails against `sigiro.com`. To query from the terminal or from an agent, use
+`curl` as above or [`sigiro mcp`](/docs/reference/cli#mcp), which reads the same
+workspace with your stored login:
+
+```bash
+claude mcp add sigiro -- sigiro mcp
+```
+
 ## 4. Query your data (SQL API)
 
 - **Endpoint:** `POST /v1/query` on the main HTTPS port.
@@ -186,7 +214,7 @@ left on the endpoint.
 - **Response:** a JSON array of row objects. The header
   `x-sigiro-truncated: true|false` reports whether sigiro capped the results.
 
-You see **your own** data only, because each tenant has an isolated catalog.
+You see **your own** workspace's data only, because each workspace has an isolated catalog.
 
 **Tables:** `sigiro_spans`, `sigiro_logs`, `sigiro_metrics_gauge`, `sigiro_metrics_sum`, `sigiro_metrics_histogram`, `sigiro_metrics_exp_histogram`, and `sigiro_profiles`. Attribute columns contain JSON text; use `json_extract(col, '$.key')` or `col ->> 'key'` to inspect them.
 

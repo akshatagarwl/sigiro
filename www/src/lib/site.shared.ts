@@ -83,9 +83,11 @@ export const INSTALL_COMMAND =
  * themselves.
  *
  * Every claim in it is checked against the live site rather than written from
- * memory: `/install` is a static asset that serves a real shell script, `/mcp`
- * answers 401 until authorized, and `/.well-known/agent-configuration` is
- * served and documents the issuer. An install prompt that names an endpoint
+ * memory: `/install` is a static asset that serves a real shell script, and
+ * `sigiro mcp` is a stdio MCP server in that same binary. It must be the local
+ * one: the prompt starts a local server, and the hosted `https://sigiro.com/mcp`
+ * reads a hosted workspace, which would answer "no services" about telemetry
+ * that only ever reached localhost. An install prompt that names an endpoint
  * which does not exist wastes a reader's agent run and their trust.
  *
  * Deliberately imperative and short. It is read by a model, not a person, and a
@@ -96,8 +98,9 @@ export const AGENT_PROMPT =
     "Run: curl -fsSL https://sigiro.com/install | sh — then start it with: sigiro serve. " +
     "It listens on 4317 and 4318 for OTLP and on 9999 for its HTTP API. " +
     "Point this project\u2019s OpenTelemetry exporter at http://localhost:4318. " +
-    "Then add https://sigiro.com/mcp as an MCP server so you can query the telemetry " +
-    "directly; it uses OAuth device flow, so open the URL it prints to authorize.") as const;
+    "Then register `sigiro mcp` as a stdio MCP server (for Claude Code: " +
+    "claude mcp add sigiro -- sigiro mcp) so you can query the telemetry directly " +
+    "with its list_services and run_query tools.") as const;
 
 /**
  * Everything after "start it" is the same whichever way you started it, so the
@@ -185,9 +188,11 @@ export const HOW_SESSIONS = {
     run: [
       {
         cmd: "cat models.sql",
-        out: `SELECT model, count(*) AS calls, max(duration) AS slowest
-FROM spans JOIN logs USING (trace_id)
-WHERE service = 'checkout' AND status = 'error'
+        out: `SELECT s.span_attributes ->> 'gen_ai.request.model' AS model,
+       count(DISTINCT s.span_id) AS calls, max(s.duration) AS slowest
+FROM sigiro_spans s JOIN sigiro_logs l USING (trace_id)
+WHERE s.service_name = 'checkout' AND l.severity_number >= 17
+  AND s.timestamp > now() - INTERVAL '30 minutes'
 GROUP BY model ORDER BY slowest DESC`,
       },
       {

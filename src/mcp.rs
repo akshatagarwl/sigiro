@@ -118,7 +118,7 @@ impl SigiroMcp {
 
     #[tool(
         description = "Every service that has reported telemetry, with the first and last \
-timestamp seen for each (microseconds since the Unix epoch). The entry point of an agent \
+timestamp seen for each (UTC text such as `2026-01-01 12:00:00.123`). The entry point of an agent \
 loop: pick a service here, then query its telemetry. Fails rather than returning a partial list \
 if service count exceeds SIGIRO_MAX_RESULT_ROWS."
     )]
@@ -133,7 +133,9 @@ if service count exceeds SIGIRO_MAX_RESULT_ROWS."
 
     #[tool(
         description = "Execute read-only SQL against allowlisted telemetry tables. \
-Timestamps in the data are microseconds since the Unix epoch."
+`timestamp` is a TIMESTAMP column (UTC): bound it with `timestamp > now() - INTERVAL '1 hour'` \
+or `TIMESTAMP '2026-01-01 00:00:00'`, never an integer. Result rows render timestamps as \
+microseconds since the Unix epoch, and `duration` is in microseconds."
     )]
     async fn run_query(
         &self,
@@ -156,8 +158,9 @@ impl ServerHandler for SigiroMcp {
         let mut info = ServerConfig::default();
         info.instructions = Some(
             "Observability tools over a sigiro server. Use `list_services` to find a \
-service, then `run_query` to inspect its raw telemetry. All timestamps are \
-MICROSECONDS since the Unix epoch."
+service, then `run_query` to inspect its raw telemetry. Bound every query by \
+`timestamp` with TIMESTAMP values (`now() - INTERVAL '1 hour'`); comparing it to an \
+integer fails. Query results render timestamps, and `duration`, in MICROSECONDS."
                 .to_string(),
         );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();

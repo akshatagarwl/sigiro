@@ -1360,7 +1360,7 @@ struct ServiceQueryRow {
     operation_id = "list-services",
     summary = "List services",
     description = "Every service that has reported telemetry, with the first and \
-last timestamp seen for each (microseconds since the Unix epoch). The entry point \
+last timestamp seen for each (UTC text such as `2026-01-01 12:00:00.123`). The entry point \
 of an agent loop: pick a service here, then query its telemetry. Returns an error, never \
 a partial list, if the number of services exceeds SIGIRO_MAX_RESULT_ROWS.",
     responses(

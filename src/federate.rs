@@ -87,7 +87,9 @@ pub(crate) fn resolve_edges(cli_edges: &[String]) -> Result<Vec<Edge>> {
         "no edges resolved for the federated query: no --edge/SIGIRO_EDGES override was \
          given, and tailnet discovery found no peer tagged tag:sigiro-edge. Refusing to run \
          a federated query against zero edges — pass --edge name=host:port, set SIGIRO_EDGES, \
-         or tag a tailnet peer tag:sigiro-edge."
+         or tag a tailnet peer tag:sigiro-edge. `sigiro query` only federates self-hosted \
+         edges; to query hosted sigiro.com or one local server, use `sigiro mcp` or POST \
+         the SQL to /v1/query (see https://sigiro.com/docs/reference/cli#query)."
     );
 
     // ponytail: best-effort textual normalization only (lowercase +
