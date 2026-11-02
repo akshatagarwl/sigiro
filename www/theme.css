@@ -184,6 +184,52 @@
      `.shiki code` below resolves to its Geist Mono. One pipeline, one download. */
 }
 
+/* ── /dashboard/: shadcn/ui tokens ─────────────────────────────
+   The dashboard is built from stock shadcn/ui components (src/components/ui,
+   copied from the registry). These are the names those components read,
+   pointed at the materials above so the dashboard is the same site. Global
+   rather than scoped, because Select and Sheet portal into <body>. The ui files
+   swap `bg-accent` for `bg-muted`: our accent is interaction colour, not a
+   hover surface. */
+:root,
+:root[data-theme='dark'] {
+  --card: var(--panel);
+  --card-foreground: var(--ink);
+  --popover: var(--panel);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--panel);
+  --secondary: var(--well);
+  --secondary-foreground: var(--ink);
+  --destructive: var(--flag);
+  --input: var(--hairline-strong);
+  --ring: var(--accent);
+  --chart-1: var(--accent);
+  --chart-2: var(--flag);
+  --chart-3: var(--moss);
+  --chart-4: #c98a1b;
+  --chart-5: var(--ink-3);
+}
+
+@theme inline {
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-destructive: var(--destructive);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}
+
 /* ── the landing page's own document rules ─────────────────────
    Scoped, because this file is global. `[data-home]` is set by our document
    shell and by nothing else, so none of this reaches a docs page — where Blume

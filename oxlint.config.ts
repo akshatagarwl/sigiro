@@ -29,6 +29,9 @@ export default defineConfig({
     "**/.git/**",
     "target/**",
     "auth/src/ui.ts",
+    // shadcn/ui components, copied from the registry and kept as upstream wrote
+    // them so `shadcn diff` stays meaningful.
+    "www/src/components/ui/**",
     "www/.agent/**",
     "www/.agents/**",
     "www/.claude/**",

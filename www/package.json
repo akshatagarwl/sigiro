@@ -39,15 +39,20 @@
     "apache-arrow": "17.0.0",
     "astro": "7.4.4",
     "blume": "2.2.6",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
     "effect": "4.0.7",
     "input-otp": "1.5.0",
+    "lucide-react": "1.66.0",
     "motion": "14.7.1",
     "oauth4webapi": "3.8.8",
+    "radix-ui": "1.8.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "recharts": "3.10.1",
     "shiki": "4.5.0",
     "sigiro-icons": "npm:simple-icons@16.36.0",
-    "uplot": "1.6.32"
+    "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
     "@alchemy.run/cloudflare": "2.0.0-beta.84",

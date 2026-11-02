@@ -146,13 +146,29 @@ try {
       );
       assert.doesNotMatch(sql, /now\(\)/i);
     }
-    await page.waitForSelector('[data-table="templates"][data-rows]');
-    for (const table of ["templates", "failed", "latency", "logs"])
-      assert.ok((await rows(page, table)) > 0, `${table} has rows`);
-    assert.equal(await page.locator(".uplot").count(), 2, "two charts");
+    const tab = (name) => page.getByRole("tab", { name }).click();
+    const pick = async (label, option) => {
+      await page.getByLabel(label).click();
+      await page.getByRole("option", { name: option }).click();
+    };
+    await page.waitForSelector('[data-table="services"][data-rows]');
+    assert.equal(
+      await page.locator('[data-slot="chart"]').count(),
+      2,
+      "two overview charts"
+    );
     await screenshot(page, "fixture");
+    await tab("Services");
+    assert.ok((await rows(page, "operations")) > 0, "operations has rows");
+    await tab("Traces");
+    await page.waitForSelector('[data-table="failed"][data-rows]');
+    assert.ok((await rows(page, "failed")) > 0, "failed has rows");
+    await tab("Logs");
+    await page.waitForSelector('[data-table="logs"][data-rows]');
+    for (const table of ["templates", "logs"])
+      assert.ok((await rows(page, table)) > 0, `${table} has rows`);
 
-    await page.getByLabel("Minimum severity").selectOption("17");
+    await pick("Minimum severity", "Error and above");
     await page.waitForFunction(() =>
       [
         ...document.querySelectorAll(
@@ -160,20 +176,11 @@ try {
         ),
       ].every((cell) => cell.textContent === "ERROR")
     );
-    const severities = await page
-      .locator('[data-table="logs"] tbody td:nth-child(3)')
-      .allTextContents();
-    assert.ok(
-      severities.every((value) => value === "ERROR"),
-      "severity filter is applied locally"
-    );
 
-    const service = await page
-      .getByLabel("Service")
-      .locator("option")
-      .nth(1)
-      .getAttribute("value");
-    await page.getByLabel("Service").selectOption(service);
+    await page.getByLabel("Service").click();
+    const service = await page.getByRole("option").nth(1).textContent();
+    await page.getByRole("option", { name: service }).click();
+    await tab("Traces");
     await page.waitForTimeout(500);
     const services = await page
       .locator('[data-table="failed"] tbody td:nth-child(1)')
@@ -183,6 +190,7 @@ try {
       "service filter"
     );
 
+    await tab("Logs");
     await page.getByLabel("Search").fill("timeout");
     await page.waitForTimeout(500);
     const bodies = await page
@@ -193,15 +201,8 @@ try {
       "text search"
     );
 
-    const chart = page.locator(".uplot .u-over").first();
-    const box = await chart.boundingBox();
-    await page.mouse.move(box.x + box.width * 0.5, box.y + 40);
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width * 0.9, box.y + 40, { steps: 8 });
-    await page.mouse.up();
-    await page.getByRole("button", { name: "Clear time selection" }).waitFor();
-
     const queriesBefore = queries.length;
+    await tab("SQL");
     await page
       .getByLabel("SQL query")
       .fill(
@@ -218,9 +219,7 @@ try {
     await page.getByLabel("SQL query").fill("SELECT * FROM nope");
     await page.locator('[data-action="run-sql"]').click();
     await page.getByRole("alert").filter({ hasText: "nope" }).waitFor();
-    await page.getByLabel("Minimum severity").selectOption("0");
     await page.getByLabel("Search").fill("");
-    await page.getByRole("button", { name: "Clear time selection" }).click();
     await screenshot(page, "fixture-filtered");
   });
 
@@ -243,6 +242,7 @@ try {
       await page.locator('[data-state="empty"]').innerText(),
       /sH75IV0W3H1fvXR30EASeAAHm7RuuLoT/
     );
+    await page.getByRole("tab", { name: "SQL" }).click();
     await page
       .getByLabel("SQL query")
       .fill("SELECT count(*) AS n FROM sigiro_logs");

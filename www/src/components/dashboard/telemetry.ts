@@ -140,6 +140,9 @@ export const SERVER_TABLES: ServerTable[] = [
       status_code: "INTEGER",
       status_message: "VARCHAR",
       trace_id: "VARCHAR",
+      span_id: "VARCHAR",
+      parent_span_id: "VARCHAR",
+      span_kind: "INTEGER",
     },
     sql: (w, { spanTotal }) => {
       const keep = spanSampleThreshold(spanTotal);
@@ -147,7 +150,7 @@ export const SERVER_TABLES: ServerTable[] = [
         keep < 256
           ? ` AND substr(span_id, 15, 2) < '${keep.toString(16).padStart(2, "0")}'`
           : "";
-      return `SELECT timestamp, service_name, span_name, duration, status_code, status_message, trace_id FROM sigiro_spans WHERE ${range(w)}${sample} LIMIT ${SPAN_SAMPLE_CAP}`;
+      return `SELECT timestamp, service_name, span_name, duration, status_code, status_message, trace_id, span_id, parent_span_id, span_kind FROM sigiro_spans WHERE ${range(w)}${sample} LIMIT ${SPAN_SAMPLE_CAP}`;
     },
   },
   {
@@ -209,7 +212,7 @@ export type LoadReport = {
 
 const fetchTable = async (
   token: string,
-  table: ServerTable,
+  table: { name: string },
   sql: string
 ): Promise<{ text: string; truncated: boolean }> => {
   const response = await fetch("/v1/query", {
@@ -449,3 +452,28 @@ export const runLocal = async (sql: string): Promise<Result> => {
 };
 
 export const sqlString = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+/**
+ * One trace, read from the server rather than the local sample: the sample
+ * keeps a fraction of spans, so a waterfall built from it would have holes.
+ */
+export const fetchTrace = async (token: string, traceId: string) => {
+  if (!/^[0-9a-f]{32}$/i.test(traceId)) throw new Error("Not a trace id.");
+  const id = sqlString(traceId.toLowerCase());
+  // One at a time: the query API admits one query per tenant at once (429).
+  const spans = await fetchTable(
+    token,
+    { name: "trace" },
+    `SELECT timestamp AS start_us, duration, service_name, span_name, span_id, parent_span_id, span_kind, status_code, status_message, span_attributes FROM sigiro_spans WHERE trace_id = ${id} ORDER BY timestamp LIMIT 2000`
+  );
+  const logs = await fetchTable(
+    token,
+    { name: "trace logs" },
+    `SELECT timestamp AS ts_us, service_name, severity_text, body, span_id FROM sigiro_logs WHERE trace_id = ${id} ORDER BY timestamp LIMIT 500`
+  );
+  return {
+    spans: Schema.decodeUnknownSync(Rows)(spans.text),
+    logs: Schema.decodeUnknownSync(Rows)(logs.text),
+  };
+};
+export type TraceData = Awaited<ReturnType<typeof fetchTrace>>;
