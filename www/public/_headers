@@ -1,0 +1,5 @@
+# The installer is a shell script the landing page invites you to read before
+# piping it to `sh`. As application/octet-stream a browser downloaded it
+# instead of showing it; text/plain shows it and changes nothing for curl.
+/install
+  Content-Type: text/plain; charset=utf-8

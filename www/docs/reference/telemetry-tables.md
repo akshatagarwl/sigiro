@@ -7,7 +7,7 @@ sidebar:
 
 These are the seven queryable `sigiro_*` tables created by `src/schema.rs`. Types are DuckDB SQL types; `NOT NULL` is shown where declared. `lake.` qualification and bare table names are both used in queries. This is a reference for the **current** schema, not an API for discovering columns at runtime.
 
-**Pre-1.0 compatibility:** column names, types, and JSON shapes may change before 1.0. This page does not promise stable on-disk DuckLake/Parquet formats, automatic in-place upgrades, or downgrade support. Storage-format validation and upgrade policy are separate work ([#200](https://github.com/akshatagarwl/sigiro/issues/200)); runtime schema discovery remains open in [#13](https://github.com/akshatagarwl/sigiro/issues/13).
+**Pre-1.0 compatibility:** column names, types, and JSON shapes may change before 1.0. This page does not promise stable on-disk DuckLake/Parquet formats, automatic in-place upgrades, or downgrade support. Storage-format validation and upgrade policy are not defined yet, and runtime schema discovery is not available yet.
 
 `TIMESTAMP` columns are DuckDB timestamps at microsecond precision. Numeric epoch timestamps (`end_timestamp`, `observed_timestamp`, and metric `start_timestamp`) and span `duration` use **microseconds**, converted from OTLP nanoseconds. `events_json` and `exemplars_json` contain nested `time_unix_nano` fields that remain **nanoseconds**. Metric values and histogram bounds use the producer's `metric_unit`, not a fixed Sigiro unit; profile values use `unit`. A blank/zero epoch from a producer is not a guarantee that its start time is meaningful.
 

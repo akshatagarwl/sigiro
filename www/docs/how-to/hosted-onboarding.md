@@ -181,7 +181,7 @@ GROUP BY 1, 2 ORDER BY errors DESC;
 | Query timeout          | 10 s                           | sigiro rejects the query (400)                                       |
 | Result rows            | 100,000                        | sigiro truncates the response and sets `x-sigiro-truncated: true`    |
 | Query memory           | ~400 MB                        | the query fails (400)                                                |
-| Ingest body            | 8 MB (decompressed)            | 413 (HTTP) / RESOURCE_EXHAUSTED (gRPC)                               |
+| Ingest body            | 8 MB (decompressed)            | 413                                                                  |
 | Concurrent queries     | 4 per tenant                   | extra queries wait up to 5 s for a slot, then 429 with `Retry-After` |
 | SQL/API request rate   | 5 req/s per tenant, burst 20   | 429                                                                  |
 | OTLP/HTTP request rate | 50 req/s per source, burst 100 | 429                                                                  |
@@ -191,9 +191,9 @@ bound gives you speed. A bound also prevents timeouts and truncation.
 
 ## 6. Data retention
 
-During the beta, treat sigiro as a live query service, not as a system of record. Ask
-your operator for the current retention window. Export any data that you must keep
-for a long time.
+During the beta, treat sigiro as a live query service, not as a system of record. `sigiro.com`
+does not publish a retention window yet; [talk to us](https://cal.com/akshatagarwl/30-minutes) for the
+current one. Export any data that you must keep for a long time.
 
 ## Next
 

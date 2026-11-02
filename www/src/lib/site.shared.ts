@@ -92,7 +92,7 @@ export const INSTALL_COMMAND =
  * prompt that opens with marketing gives the model nothing to act on.
  */
 export const AGENT_PROMPT =
-  ("Install and run sigiro, the open-source observability data layer, on this machine. " +
+  ("Install and run sigiro, the observability data layer, on this machine. " +
     "Run: curl -fsSL https://sigiro.com/install | sh — then start it with: sigiro serve. " +
     "It listens on 4317 and 4318 for OTLP and on 9999 for its HTTP API. " +
     "Point this project\u2019s OpenTelemetry exporter at http://localhost:4318. " +
@@ -361,6 +361,11 @@ export const NAV_HREFS = {
    * `openapi.route` in blume.config.ts. `/docs/api` still redirects here.
    */
   reference: "/docs/reference",
+  /**
+   * The hosted workspace's dashboard. Nothing else on the site linked to it,
+   * so a reader who signed up had to know the URL to see their data.
+   */
+  dashboard: "/dashboard/",
 } as const;
 
 /**

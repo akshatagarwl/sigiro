@@ -70,6 +70,7 @@ export const ZH: LandingCopy = {
   nav: {
     docs: "文档",
     reference: "API",
+    dashboard: "仪表板",
   },
 
   /** The hero's second action. "Talk to us", not "book a demo": there is no
@@ -91,7 +92,8 @@ export const ZH: LandingCopy = {
         whether a reader keeps reading: it is free self-hosted, and nothing
         leaves their infrastructure. Same wording as `promises[3]`, and it must
         not imply a hosted signup — there is none. */
-    heroNote: "自己部署就免费。sigiro 不会把任何数据发给我们。",
+    heroNote:
+      "部署在你自己的服务器上就免费，sigiro 不会把任何数据发给我们。注册则使用托管测试版，遥测数据存放在我们运行的服务器上。",
     /** The stepped-terminal section. `stepsAria` labels the step list for
         screen readers; `shellAria` names the transcript region. `howTail`
         repeats the four `how.*` titles in order, so the two must stay in
@@ -232,11 +234,11 @@ export const ZH: LandingCopy = {
          would promise a self-serve signup that does not exist. Do not add one,
          and do not write 注册 or 免费试用 in this tile. */
       title: "自己部署就免费",
-      body: "不按主机、席位或数据量收费。想让我们替你运行，就来聊聊。",
+      body: "不按主机、席位或数据量收费。托管测试版尚未公布价格，欢迎来聊。",
     },
     {
       title: "数据留在你手里",
-      body: "你把 sigiro 装在自己的服务器上。sigiro 不会把任何数据发给我们。",
+      body: "你把 sigiro 装在自己的服务器上。sigiro 不会把任何数据发给我们。托管测试版例外：遥测数据存放在我们这里。",
     },
     {
       title: "sigiro 监控 sigiro",

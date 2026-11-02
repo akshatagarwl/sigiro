@@ -7,7 +7,7 @@ sidebar:
 
 다음은 `src/schema.rs`에서 생성하는 쿼리 가능한 7개 `sigiro_*` 테이블입니다. 유형은 DuckDB SQL 유형이며 선언된 `NOT NULL`을 표시합니다. 쿼리에서는 `lake.` 접두사와 짧은 테이블 이름을 모두 사용합니다. 이는 **현재** 스키마의 참고 자료이며 런타임 스키마 검색 API가 아닙니다.
 
-**1.0 이전 호환성:** 열 이름, 유형, JSON 형태는 1.0 이전에 바뀔 수 있습니다. 이 문서는 DuckLake/Parquet 디스크 형식의 안정성, 자동 인플레이스 업그레이드 또는 다운그레이드 지원을 보장하지 않습니다. 저장소 형식 검증과 업그레이드 정책은 별도 작업 [#200](https://github.com/akshatagarwl/sigiro/issues/200), 런타임 스키마 검색은 [#13](https://github.com/akshatagarwl/sigiro/issues/13)에서 다룹니다.
+**1.0 이전 호환성:** 열 이름, 유형, JSON 형태는 1.0 이전에 바뀔 수 있습니다. 이 문서는 DuckLake/Parquet 디스크 형식의 안정성, 자동 인플레이스 업그레이드 또는 다운그레이드 지원을 보장하지 않습니다. 저장소 형식 검증과 업그레이드 정책은 아직 정해지지 않았고, 런타임 스키마 검색도 아직 제공하지 않습니다.
 
 `TIMESTAMP`는 마이크로초 정밀도의 DuckDB 타임스탬프입니다. 숫자 에폭 시각(`end_timestamp`, `observed_timestamp`, 메트릭 `start_timestamp`)과 스팬 `duration`은 OTLP 나노초를 변환한 **마이크로초**입니다. 반면 `events_json` 및 `exemplars_json` 내부의 `time_unix_nano`는 **나노초** 그대로입니다. 메트릭 값과 히스토그램 경계의 단위는 전송자의 `metric_unit`, 프로파일 값은 `unit`에 따릅니다.
 

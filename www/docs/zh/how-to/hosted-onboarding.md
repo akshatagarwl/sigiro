@@ -155,7 +155,7 @@ GROUP BY 1, 2 ORDER BY errors DESC;
 | 查询超时           | 10 秒                     | sigiro 拒绝该查询（400）                                      |
 | 结果行数           | 100,000                   | sigiro 截断响应并设置 `x-sigiro-truncated: true`              |
 | 查询内存           | 约 400 MB                 | 查询失败（400）                                               |
-| 摄取请求体         | 8 MB（解压后）            | 413（HTTP）/ RESOURCE_EXHAUSTED（gRPC）                       |
+| 摄取请求体         | 8 MB（解压后）            | 413                        |
 | 并发查询           | 每租户 4                  | 超出的查询最多等待 5 秒空位，然后返回 429（带 `Retry-After`） |
 | SQL/API 请求速率   | 每租户 5 req/s，突发 20   | 429                                                           |
 | OTLP/HTTP 请求速率 | 每来源 50 req/s，突发 100 | 429                                                           |
@@ -166,7 +166,7 @@ sigiro 没有二级索引。因此**请为每个查询都加上 `timestamp` 范�
 ## 6. 数据留存
 
 在 Beta 期间，请把 sigiro 当作实时查询服务，而不是记录系统（system of record）。
-请向运维方询问当前的留存窗口。需要长期保存的数据请自行导出。
+`sigiro.com` 尚未公布留存窗口，当前窗口请[联系我们](https://cal.com/akshatagarwl/30-minutes)。需要长期保存的数据请自行导出。
 
 ## 下一步
 

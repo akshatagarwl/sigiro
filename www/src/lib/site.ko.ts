@@ -80,6 +80,7 @@ export const KO: LandingCopy = {
   nav: {
     docs: "문서",
     reference: "API",
+    dashboard: "대시보드",
   },
 
   /** The hero's second action. 문의하기 ("get in touch"), not 데모 신청
@@ -112,7 +113,7 @@ export const KO: LandingCopy = {
         leaves their infrastructure. Wording matches `promises[3]`, and it
         promises no signup — there isn't one. */
     heroNote:
-      "직접 설치하면 무료입니다. sigiro는 저희에게 어떤 데이터도 보내지 않습니다.",
+      "직접 설치하면 무료이며 sigiro는 저희에게 어떤 데이터도 보내지 않습니다. 가입하면 호스팅 베타를 쓰게 되고, 텔레메트리는 저희가 운영하는 서버에 저장됩니다.",
     /** The stepped-terminal section. `stepsAria` labels the step list for
         screen readers; `shellAria` names the transcript region. */
     howLabel: "사용 방법",
@@ -253,11 +254,11 @@ export const KO: LandingCopy = {
          invited a reader to sign up for something with no signup. Keep the
          second sentence an invitation to talk — no number, no 가입, no 무료 체험. */
       title: "직접 설치하면 무료입니다",
-      body: "호스트 수, 사용자 수, 데이터 양에 따른 요금이 없습니다. 저희가 대신 운영하기를 원하시면 문의해 주십시오.",
+      body: "호스트 수, 사용자 수, 데이터 양에 따른 요금이 없습니다. 호스팅 베타의 가격은 아직 공개하지 않았습니다. 문의해 주십시오.",
     },
     {
       title: "데이터는 사용자 환경에 남습니다",
-      body: "sigiro는 사용자의 서버에 설치합니다. sigiro는 저희에게 어떤 데이터도 보내지 않습니다.",
+      body: "sigiro는 사용자의 서버에 설치합니다. sigiro는 저희에게 어떤 데이터도 보내지 않습니다. 예외는 호스팅 베타로, 텔레메트리가 저희 쪽에 저장됩니다.",
     },
     {
       title: "sigiro가 sigiro를 모니터링합니다",

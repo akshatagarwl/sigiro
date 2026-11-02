@@ -89,6 +89,7 @@ export const EN = {
   nav: {
     docs: "Docs",
     reference: "API",
+    dashboard: "Dashboard",
   },
 
   /** The hero's second action. "Talk to us", not "book a demo": there is no
@@ -114,7 +115,8 @@ export const EN = {
     /** The line under the hero loop. Restates the two claims that decide
         whether a reader keeps reading: it is free self-hosted, and nothing
         leaves their infrastructure. */
-    heroNote: "Free when you install it. sigiro sends no data to us.",
+    heroNote:
+      "Installed on your servers: free, and sigiro sends no data to us. Signed up: the hosted beta, which stores your telemetry on servers we run.",
     /** The stepped-terminal section. `stepsAria` labels the step list for
         screen readers; `shellAria` names the transcript region. */
     howLabel: "how you use it",
@@ -239,15 +241,16 @@ export const EN = {
       body: "One command and two environment variables. You change no code.",
     },
     {
-      /* The site sells the self-hosted product. Hosted is a hand-built beta, so
-         it gets a conversation rather than a price: quoting ~$14/mo invited a
-         reader to sign up for something with no signup. */
+      /* The self-hosted product is free. Hosted is a beta with a real sign-up
+         now (the hero's "Sign up") but no published price, so the body says
+         exactly that and points to a conversation. Do not quote a number here
+         until one is decided. */
       title: "Free when you install it",
-      body: "No fees for hosts, seats or data. Talk to us if you want us to run it for you.",
+      body: "No fees for hosts, seats or data when you run it. The hosted beta has no published price yet; talk to us.",
     },
     {
       title: "Your data stays with you",
-      body: "You install sigiro on your servers. sigiro sends no data to us.",
+      body: "You install sigiro on your servers. sigiro sends no data to us. The hosted beta is the exception: it stores your telemetry with us.",
     },
     {
       title: "sigiro monitors sigiro",

@@ -65,6 +65,7 @@ export const JA: LandingCopy = {
   nav: {
     docs: "ドキュメント",
     reference: "API",
+    dashboard: "ダッシュボード",
   },
 
   /** The hero's second action. 相談する ("talk to us"), not デモを予約 ("book a
@@ -91,7 +92,7 @@ export const JA: LandingCopy = {
         leaves their infrastructure. Must not imply a hosted signup — there is
         none, so no 無料トライアル and no number. */
     heroNote:
-      "自分で動かせば無料です。sigiro がデータを当社に送ることはありません。",
+      "ご自身のサーバーで動かせば無料で、sigiro がデータを当社に送ることはありません。サインアップするとホスト版ベータになり、テレメトリーは当社が運用するサーバーに保存されます。",
     /** The stepped-terminal section. `howTail` repeats the four `how.*` titles
         in order (接続・質問・相関・検証), so the two must stay in step.
         `stepsAria` labels the step list for screen readers; `shellAria` names
@@ -229,11 +230,11 @@ export const JA: LandingCopy = {
          invited a reader to sign up for something with no signup. Do not add a
          number or a 無料トライアル to this tile. */
       title: "自分で動かせば無料です",
-      body: "ホスト単位、ユーザー単位、データ量のいずれにも料金はかかりません。運用を任せたい場合はご相談ください。",
+      body: "ホスト単位、ユーザー単位、データ量のいずれにも料金はかかりません。ホスト版ベータの料金はまだ公開していません。ご相談ください。",
     },
     {
       title: "データは手元に残ります",
-      body: "sigiro はご自身のサーバーにインストールします。sigiro が開発元へデータを送ることはありません。",
+      body: "sigiro はご自身のサーバーにインストールします。sigiro が開発元へデータを送ることはありません。例外はホスト版ベータで、テレメトリーは当社に保存されます。",
     },
     {
       title: "sigiro は sigiro を監視します",

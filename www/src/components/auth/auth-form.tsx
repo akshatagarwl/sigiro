@@ -681,13 +681,18 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
 
   if (phase === "done") {
     const accountSetup = page === "sign-in" || page === "sign-up";
+    // The step's own heading, not the page's: "Sign in to Sigiro" and
+    // "Enter your email" above a signed-in confirmation read as a form that
+    // did not submit.
     return (
       <>
-        {header}
         <div id="success" className="grid gap-3">
-          <h2 className="text-foreground text-[20px] font-semibold tracking-[-0.02em]">
-            You&rsquo;re ready.
-          </h2>
+          <h1
+            id="title"
+            className="text-foreground text-[26px] leading-[1.15] font-semibold tracking-[-0.035em]"
+          >
+            {accountSetup ? "You\u2019re ready." : title}
+          </h1>
           <p
             id="success-message"
             className="text-muted-foreground text-[15px] leading-relaxed"
@@ -732,12 +737,24 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
                   </code>
                 </figure>
               ))}
-              <a
-                href="/docs/how-to/hosted-onboarding#1-connect-the-cli"
-                className={`${secondary} justify-self-start`}
-              >
-                Read the CLI guide
-              </a>
+              <p className="text-muted-foreground text-[13px] leading-relaxed">
+                Telemetry goes to{" "}
+                <code className="font-mono">https://sigiro.com</code> over
+                OTLP/HTTP, with the token from{" "}
+                <code className="font-mono">sigiro auth token</code>. The guide
+                has the exporter settings and a first query.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <a
+                  href="/docs/how-to/hosted-onboarding#1-connect-the-cli"
+                  className={secondary}
+                >
+                  Read the setup guide
+                </a>
+                <a href="/dashboard/" className={secondary}>
+                  Open the dashboard
+                </a>
+              </div>
             </div>
           )}
         </div>

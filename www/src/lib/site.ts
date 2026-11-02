@@ -131,6 +131,7 @@ export const getCopy = (locale: Locale) => {
     nav: [
       { href: NAV_HREFS.docs, label: c.nav.docs },
       { href: NAV_HREFS.reference, label: c.nav.reference },
+      { href: NAV_HREFS.dashboard, label: c.nav.dashboard },
     ],
     call: { href: CALL_HREF, label: c.callLabel },
     signup: { href: SIGN_IN_HREF, label: c.ui.signUp },

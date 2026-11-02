@@ -7,7 +7,7 @@ sidebar:
 
 以下は `src/schema.rs` が作成する、問い合わせ可能な 7 個の `sigiro_*` テーブルです。型は DuckDB SQL 型で、宣言された `NOT NULL` を表示します。クエリでは `lake.` 修飾名と短いテーブル名の両方を使用できます。これは**現在**のスキーマの説明であり、実行時のスキーマ検出 API ではありません。
 
-**1.0 前の互換性:** 列名・型・JSON の形は 1.0 までに変更される可能性があります。このページは DuckLake/Parquet のディスク形式の安定性、自動インプレース更新、ダウングレード対応を保証しません。ストレージ形式の検証と更新方針は別課題の [#200](https://github.com/akshatagarwl/sigiro/issues/200) で、実行時のスキーマ検出は [#13](https://github.com/akshatagarwl/sigiro/issues/13) で扱います。
+**1.0 前の互換性:** 列名・型・JSON の形は 1.0 までに変更される可能性があります。このページは DuckLake/Parquet のディスク形式の安定性、自動インプレース更新、ダウングレード対応を保証しません。ストレージ形式の検証と更新方針はまだ決まっておらず、実行時のスキーマ検出もまだ提供していません。
 
 `TIMESTAMP` はマイクロ秒精度の DuckDB 時刻です。数値エポック時刻（`end_timestamp`、`observed_timestamp`、メトリクスの `start_timestamp`）とスパンの `duration` は OTLP のナノ秒から変換した**マイクロ秒**です。一方、`events_json` と `exemplars_json` 内の `time_unix_nano` は**ナノ秒**のままです。メトリクス値とヒストグラム境界の単位は送信元の `metric_unit`、プロファイル値は `unit` に従います。
 
