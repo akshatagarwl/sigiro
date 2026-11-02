@@ -146,6 +146,18 @@ impl KeyExtractor for TenantRateLimitKeyExtractor {
     }
 }
 
+/// A 429 from a `/v1` handler means query admission stayed full for its whole
+/// wait; tell the client when to retry, as the rate limiter's 429s do.
+async fn retry_after_on_busy(mut response: axum::response::Response) -> axum::response::Response {
+    if response.status() == axum::http::StatusCode::TOO_MANY_REQUESTS {
+        response
+            .headers_mut()
+            .entry(axum::http::header::RETRY_AFTER)
+            .or_insert(axum::http::HeaderValue::from_static("1"));
+    }
+    response
+}
+
 /// Render a `GovernorError` as a JSON body matching the shape of every other
 /// API error (`{status, title, detail}`) so a rate-limited client cannot
 /// mistake the plain-text default ("Too Many Requests!") for query output.
@@ -311,7 +323,8 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_post(query_handler)
         .typed_get(services_handler)
         .typed_get(alerts_handler)
-        .typed_get(trace_detail_handler);
+        .typed_get(trace_detail_handler)
+        .layer(axum_mw::map_response(retry_after_on_busy));
 
     let v1 = if rate_limit_v1 {
         let tenant_governor = GovernorConfigBuilder::default()
@@ -1070,7 +1083,8 @@ pub(crate) async fn execute_sql(
     let permit = state
         .router
         .workloads()
-        .try_acquire(crate::workload::WorkloadClass::Query)?;
+        .acquire_query(auth.as_ref())
+        .await?;
     let (handle_tx, mut handle_rx) =
         tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
 
@@ -1876,5 +1890,41 @@ mod legacy_removal_tests {
         assert!(!PUBLIC_SPEC.paths.paths.contains_key("/v1/anomalies"));
         assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/query"));
         assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/services"));
+    }
+}
+
+#[cfg(test)]
+mod admission_response_tests {
+    use super::*;
+    use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
+    use axum::response::IntoResponse;
+
+    #[tokio::test]
+    async fn busy_query_tells_the_client_when_to_retry() {
+        let busy = retry_after_on_busy(
+            too_many_requests("query rejected", "capacity in use").into_response(),
+        )
+        .await;
+        assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            busy.headers().get(RETRY_AFTER),
+            Some(&HeaderValue::from_static("1"))
+        );
+
+        let ok = retry_after_on_busy(StatusCode::OK.into_response()).await;
+        assert!(ok.headers().get(RETRY_AFTER).is_none());
+    }
+
+    #[test]
+    fn admission_rejection_maps_to_429() {
+        let error = anyhow::Error::new(crate::workload::AdmissionError {
+            workload: crate::workload::WorkloadClass::Query,
+            scope: crate::workload::AdmissionScope::Tenant,
+            capacity: crate::workload::QUERIES_PER_TENANT,
+        });
+        assert_eq!(
+            query_api_error("query rejected", &error).status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
     }
 }

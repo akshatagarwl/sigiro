@@ -125,6 +125,7 @@ GROUP BY 1, 2 ORDER BY errors DESC;
 | 結果行数                   | 100,000                             | sigiro がレスポンスを打ち切り、`x-sigiro-truncated: true` を設定します |
 | クエリメモリ               | 約 400 MB                           | クエリが失敗します（400）                                              |
 | 取り込みボディ             | 8 MB（展開後）                      | 413（HTTP）/ RESOURCE_EXHAUSTED（gRPC）                                |
+| 同時実行クエリ             | テナントあたり 4                    | 超過分は空きを最大 5 秒待ち、その後 429（`Retry-After` 付き）          |
 | SQL/API リクエストレート   | テナントあたり 5 req/s、バースト 20 | 429                                                                    |
 | OTLP/HTTP リクエストレート | ソースあたり 50 req/s、バースト 100 | 429                                                                    |
 

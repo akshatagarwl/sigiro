@@ -776,8 +776,14 @@ impl ProjectPool {
         writer
             .execute_batch("USE lake;")
             .context("failed to set writer default schema")?;
-        let readers = ReaderPool::new(&base, crate::config::duckdb_threads()?)
-            .context("failed to create DuckDB reader pool")?;
+        // At least one reader per admitted query, so a tenant's queries run
+        // side by side instead of queueing again for a connection.
+        let reader_count = crate::config::duckdb_threads()?.max(
+            NonZeroUsize::new(crate::workload::QUERIES_PER_TENANT)
+                .expect("per-tenant query capacity is non-zero"),
+        );
+        let readers =
+            ReaderPool::new(&base, reader_count).context("failed to create DuckDB reader pool")?;
         Ok(OpenedProject { writer, readers })
     }
 

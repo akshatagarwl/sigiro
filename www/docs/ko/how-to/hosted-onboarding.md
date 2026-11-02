@@ -162,6 +162,7 @@ GROUP BY 1, 2 ORDER BY errors DESC;
 | 결과 행 수          | 100,000                     | sigiro가 응답을 절단하고 `x-sigiro-truncated: true`를 설정합니다 |
 | 쿼리 메모리         | 약 400 MB                   | 쿼리가 실패합니다 (400)                                          |
 | 인제스트 본문       | 8 MB (압축 해제 기준)       | 413 (HTTP) / RESOURCE_EXHAUSTED (gRPC)                           |
+| 동시 쿼리           | 테넌트당 4                  | 초과 쿼리는 최대 5초간 슬롯을 기다린 뒤 429 (`Retry-After` 포함) |
 | SQL/API 요청 속도   | 테넌트당 5 req/s, 버스트 20 | 429                                                              |
 | OTLP/HTTP 요청 속도 | 소스당 50 req/s, 버스트 100 | 429                                                              |
 

@@ -176,14 +176,15 @@ GROUP BY 1, 2 ORDER BY errors DESC;
 
 ## 5. Limits
 
-| Limit                  | Value                          | What sigiro does when you exceed it                               |
-| ---------------------- | ------------------------------ | ----------------------------------------------------------------- |
-| Query timeout          | 10 s                           | sigiro rejects the query (400)                                    |
-| Result rows            | 100,000                        | sigiro truncates the response and sets `x-sigiro-truncated: true` |
-| Query memory           | ~400 MB                        | the query fails (400)                                             |
-| Ingest body            | 8 MB (decompressed)            | 413 (HTTP) / RESOURCE_EXHAUSTED (gRPC)                            |
-| SQL/API request rate   | 5 req/s per tenant, burst 20   | 429                                                               |
-| OTLP/HTTP request rate | 50 req/s per source, burst 100 | 429                                                               |
+| Limit                  | Value                          | What sigiro does when you exceed it                                  |
+| ---------------------- | ------------------------------ | -------------------------------------------------------------------- |
+| Query timeout          | 10 s                           | sigiro rejects the query (400)                                       |
+| Result rows            | 100,000                        | sigiro truncates the response and sets `x-sigiro-truncated: true`    |
+| Query memory           | ~400 MB                        | the query fails (400)                                                |
+| Ingest body            | 8 MB (decompressed)            | 413 (HTTP) / RESOURCE_EXHAUSTED (gRPC)                               |
+| Concurrent queries     | 4 per tenant                   | extra queries wait up to 5 s for a slot, then 429 with `Retry-After` |
+| SQL/API request rate   | 5 req/s per tenant, burst 20   | 429                                                                  |
+| OTLP/HTTP request rate | 50 req/s per source, burst 100 | 429                                                                  |
 
 sigiro has no secondary indexes. Therefore **bound every query by `timestamp`**. A
 bound gives you speed. A bound also prevents timeouts and truncation.
