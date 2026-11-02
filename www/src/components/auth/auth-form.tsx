@@ -258,6 +258,16 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
 
+  // The shell's "codes expire after five minutes" footnote is about the email
+  // and code steps only. On approval, consent and success screens it read as
+  // if another code were coming. It lives outside this island, so it is found
+  // by id.
+  useEffect(() => {
+    document
+      .getElementById("auth-footnote")
+      ?.toggleAttribute("hidden", phase !== "email" && phase !== "code");
+  }, [phase]);
+
   // `import.meta.env.SSR` is replaced at build time, so the server render gets
   // an empty query and the browser gets the real one without sniffing globals.
   const params = new URLSearchParams(

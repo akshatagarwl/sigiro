@@ -1,25 +1,18 @@
 "use client";
 
-import {
-  motion,
-  useMotionTemplate,
-  useMotionValueEvent,
-  useScroll,
-  useTransform,
-} from "motion/react";
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 import { StageList } from "@/components/stage-list";
 import type { SessionLine } from "@/lib/highlight";
 
 /**
- * One terminal per step, stepped by scroll, with a task list beside it.
+ * One terminal per step, with a task list beside it. Clicking a step shows it.
+ *
+ * It used to be stepped by scroll: a pinned frame on a track of one viewport
+ * plus 30vh per step. Readers saw a screen and a half of empty page while the
+ * frame stayed put (and a full-page screenshot showed exactly that gap), so the
+ * pin is gone and the rail drives the frame directly, like the hero's loop.
+ * The notes below are the history of the scroll-driven version.
  *
  * An earlier version typed the transcript out character by character, bound to
  * scroll position. It was a good demo of scrubbing and a bad terminal: real
@@ -185,13 +178,6 @@ const LINE = 22;
 const PAD = 24;
 
 /**
- * Fraction of a step's scroll spent holding still before the handoff begins.
- * The remainder is the handoff: frame out over the first half, in over the
- * second.
- */
-const HOLD = 0.72;
-
-/**
  * The transcript a step shows, given what the reader picked.
  *
  * `pick` is read from storage and so can be anything at all — a stale id, a
@@ -214,16 +200,6 @@ function plan(steps: readonly TerminalStep[], pick: string | null) {
   });
 }
 
-/** Where a scroll position falls: which step, and how far into its handoff. */
-function locate(v: number, count: number) {
-  const scaled = Math.min(Math.max(v, 0), 0.9999) * count;
-  const index = Math.floor(scaled);
-  const frac = scaled - index;
-  const handoff =
-    index >= count - 1 || frac <= HOLD ? 0 : (frac - HOLD) / (1 - HOLD);
-  return { index, handoff };
-}
-
 /*
  * An XState machine stood here. It had two states, `running` and `ready`, a 300ms
  * delayed transition between them, and a `STEP` event that re-entered `running` so
@@ -239,7 +215,6 @@ export function SteppedTerminal({
   steps,
   label,
   heading,
-  track,
 }: {
   steps: readonly TerminalStep[];
   /**
@@ -278,60 +253,12 @@ export function SteppedTerminal({
     tail?: string;
     lede?: string;
   };
-  /**
-   * Scroll distance the whole sequence occupies. Defaults to one viewport for
-   * the pin plus 45vh of travel per step.
-   *
-   * It was 55vh while the transcript typed itself, because the reader was
-   * waiting on the machine. Nothing waits now beyond the run beat, so the only
-   * thing the travel has to cover is reading, which the reader paces by
-   * stopping.
-   */
-  track?: string;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-
   const pick = useInstallPref();
   const frames = useMemo(() => plan(steps, pick), [steps, pick]);
-  const { scrollYProgress } = useScroll({
-    target: ref,
-    offset: ["start start", "end end"],
-  });
 
-  // The discrete half: which frame's text is mounted. One render per step —
-  // `setShown` is handed the same index on most scroll frames and React bails out.
+  // Which frame is shown. The rail sets it; nothing else does.
   const [shown, setShown] = useState(0);
-
-  useMotionValueEvent(scrollYProgress, "change", (v) => {
-    const { index, handoff } = locate(v, steps.length);
-    setShown(handoff >= 0.5 ? index + 1 : index);
-  });
-
-  // The continuous half: never React state, so it runs at frame rate.
-  const opacity = useTransform(scrollYProgress, (v) => {
-    const { handoff: h } = locate(v, steps.length);
-    if (!h) return 1;
-    return h < 0.5 ? 1 - h / 0.5 : (h - 0.5) / 0.5;
-  });
-  const y = useTransform(scrollYProgress, (v) => {
-    const { handoff: h } = locate(v, steps.length);
-    if (!h) return 0;
-    return h < 0.5 ? -6 * (h / 0.5) : 10 * (1 - (h - 0.5) / 0.5);
-  });
-  const blur = useTransform(scrollYProgress, (v) => {
-    const { handoff: h } = locate(v, steps.length);
-    if (!h) return 0;
-    return h < 0.5 ? 3 * (h / 0.5) : 6 * (1 - (h - 0.5) / 0.5);
-  });
-  const filter = useMotionTemplate`blur(${blur}px)`;
-
-  // Resizing rides the handoff too, where the content it would jump is faded.
-  const height = useTransform(scrollYProgress, (v) => {
-    const { index, handoff: h } = locate(v, steps.length);
-    const a = frames[index].height;
-    const b = frames[Math.min(index + 1, frames.length - 1)].height;
-    return a + (b - a) * h;
-  });
 
   const step = steps[shown];
   const frame = frames[shown];
@@ -346,63 +273,12 @@ export function SteppedTerminal({
     [steps]
   );
 
-  /**
-   * Jump to a stage, by scrolling to where that stage is at rest.
-   *
-   * The rail cannot set the step directly, and that is not a limitation to work
-   * around — scroll position IS the state here. Setting `shown` would put the
-   * frame out of agreement with the scrollbar, and the next scroll event would
-   * snap it back. So the click moves the page and the existing listener does the
-   * rest, which means clicking and scrolling can never disagree.
-   *
-   * The arithmetic inverts `locate()`. `useScroll` with `offset: ['start start',
-   * 'end end']` runs progress 0 → 1 as the track's top reaches the viewport top
-   * and its bottom reaches the viewport bottom, so the scrollable span is
-   * `trackHeight - viewportHeight`. Step `i` holds still while its fraction is
-   * below HOLD, so `HOLD / 2` lands mid-hold — clear of the handoff at either end,
-   * where the frame is mid-fade.
-   */
-  const goToStage = useCallback(
-    (index: number) => {
-      const track = ref.current;
-      if (!track) return;
-      const top = track.getBoundingClientRect().top + window.scrollY;
-      const span = Math.max(0, track.offsetHeight - window.innerHeight);
-      const progress = (index + HOLD / 2) / steps.length;
-      window.scrollTo({
-        top: top + span * progress,
-        // A jump this long is disorienting without the sweep, but "smooth" is
-        // exactly what a reduced-motion preference is asking us not to do.
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-          ? "auto"
-          : "smooth",
-      });
-    },
-    [steps.length]
-  );
-
   return (
     <>
-      <div
-        ref={ref}
-        className="relative"
-        style={{ height: track ?? `calc(100vh + ${steps.length * 45}vh)` }}
-      >
-        {/* `min-h-screen`, not `h-screen`. The header and the frame together are
-            close to a short viewport's whole height, and a fixed `h-screen` box
-            whose content exceeds it centres the overflow out of both ends — the
-            lede clipped at the top, the note at the bottom, with no way to scroll
-            to either because the scrollport is the page. `min-h-screen` lets the
-            box grow instead; past that point the section scrolls as a tall block
-            rather than pinning, which degrades honestly.
-
-            The gap tightens from 5 to 4 below `sm` for the same reason: on a phone
-            every 4px is a line of the transcript. */}
-        <div className="sticky top-0 flex min-h-screen flex-col justify-center gap-4 sm:gap-5">
-          {/* The section's header, on screen for as long as the frame is pinned —
-              which is the point. A reader arriving mid-scroll can see what the
-              five stages are FOR while watching them run, instead of having read
-              it two screens ago. */}
+      <div className="relative">
+        {/* Not pinned any more, so the section takes its own padding. */}
+        <div className="flex flex-col gap-4 pt-14 sm:gap-5">
+          {/* The section's header, above the frame it describes. */}
           {heading ? (
             // No `px-1`: the header sat 4px right of every other section's
             // left edge on the page.
@@ -444,7 +320,7 @@ export function SteppedTerminal({
               stages={tasks}
               current={shown}
               label={label}
-              onSelect={goToStage}
+              onSelect={setShown}
             />
 
             <figure className="bg-card w-full min-w-0 rounded-xl border p-[5px] shadow-sm">
@@ -508,9 +384,9 @@ export function SteppedTerminal({
                 here because the div inside is itself the scroll container. Putting
                 `overflow-x-auto` here as well was tried and is dead config —
                 scrollWidth equals clientWidth, so it can never scroll. */}
-              <motion.div
+              <div
                 className="bg-muted overflow-hidden rounded-lg px-3.5 py-3"
-                style={{ height }}
+                style={{ height: frame.height }}
               >
                 {/* The x scroller. At a 390px viewport this well is 324px while
                   the widest transcript row is 495px, so something has to scroll
@@ -525,10 +401,9 @@ export function SteppedTerminal({
                   vertical case — so the clipped end of a line was unreachable by
                   keyboard. A tab stop on a scrollable region is what makes it
                   reachable, and it is cheaper than measuring. */}
-                <motion.div
+                <div
                   tabIndex={0}
                   className="overflow-x-auto overscroll-contain font-mono text-[12.5px] leading-[22px] whitespace-pre"
-                  style={{ opacity, y, filter }}
                 >
                   {/* One box per line, so the frame height stays integer. The
                     `shiki` class is on the line rather than on the well: its
@@ -551,8 +426,8 @@ export function SteppedTerminal({
                     {"$ "}
                     <span className="bg-foreground ml-px inline-block h-[13px] w-[7px] align-[-1px]" />
                   </div>
-                </motion.div>
-              </motion.div>
+                </div>
+              </div>
 
               {step.note ? (
                 <p className="text-muted-foreground mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed">
@@ -564,8 +439,8 @@ export function SteppedTerminal({
         </div>
       </div>
 
-      {/* Which frame is on screen depends on scroll position, and a screen reader
-          has no scroll position. This is every session, whole, once. */}
+      {/* Only one frame is on screen at a time. A screen reader gets every
+          session, whole, once. */}
       <pre className="sr-only">
         {frames.map((f) => f.lines.map((l) => l.text).join("\n")).join("\n\n")}
       </pre>

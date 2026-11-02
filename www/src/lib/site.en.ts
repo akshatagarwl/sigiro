@@ -61,25 +61,27 @@ type Widen<T> = T extends string
 export type LandingCopy = Widen<typeof EN>;
 
 export const EN = {
-  /** Keeps "observability" in the title: the h1 is a category bet with no search
-      intent behind it, and this is the one place the category word still earns
-      its keep for search and for citation. */
-  title: "sigiro — observability data layer for software that repairs itself",
+  /** Keeps "observability" and "OpenTelemetry" in the title: they are the words
+      a reader searches for, and the h1 is written for the reader already here. */
+  title: "sigiro — OpenTelemetry observability you query with SQL",
 
-  /** The h1: the category claim. */
-  tagline: "The data layer for software that repairs itself.",
+  /** The h1: what the product does, in the words a reader would use.
+
+      It was "The data layer for software that repairs itself.", a category bet
+      that leaned on the retired anomaly-ranking design (ranked results, the
+      suspect deploy). What ships today is storage and a query API, so the h1
+      says that. */
+  tagline: "Send OpenTelemetry. Query it with SQL.",
 
   /** Also the meta description, the OG description and the Twitter card, so it
       has to stay under ~155 characters or search results cut it mid-sentence.
 
-      It says "suspect deploy" and not "cause". sigiro correlates a deploy in
-      time with a shift, and correlation in time is not cause — see
-      docs/explanation/evidence.md, "What this design refuses to do". The claim
-      the product can keep is that each result carries the query that made it,
-      so you can check the result or disprove it. Do not put "cause", "proves"
-      or "proven" back in this string. */
+      Names only what ships: the four signals, the SQL API, the agent tools and
+      the dashboard. The ranked-results and suspect-deploy design is retired
+      (docs/explanation/evidence.md is kept as history), so do not bring
+      "ranked", "suspect deploy", "what changed and why" or "cause" back. */
   description:
-    "Send OpenTelemetry to sigiro. When a service fails, you get ranked results, the suspect deploy, and the query for each result.",
+    "sigiro stores your traces, logs, metrics and profiles. Query them with SQL over one HTTP API, from your agent through the CLI and MCP, or in the dashboard.",
 
   /** Nav labels. The hrefs are in site.shared.ts.
 
@@ -110,6 +112,8 @@ export const EN = {
   ui: {
     /** The header's way back in for a reader who already has an account. */
     signIn: "Sign in",
+    /** The header link's tooltip once signed in, before the account's email. */
+    signedInAs: "Signed in as",
     signUp: "Sign up",
     installCli: "Install CLI",
     /** The line under the hero loop. Restates the two claims that decide
@@ -121,9 +125,9 @@ export const EN = {
         screen readers; `shellAria` names the transcript region. */
     howLabel: "how you use it",
     howTitle: "Four steps.",
-    howTail: "You connect, ask, correlate, and prove.",
+    howTail: "You connect, ask, correlate, and drill down.",
     howLede:
-      "You send OpenTelemetry to sigiro. You ask one question. Each step below is one shell session.",
+      "Point your OpenTelemetry exporter at sigiro, then ask in SQL. Each step below is one shell session.",
     stepsAria: "The four steps",
     shellAria: "your shell",
     /** The integrations section. "No migration" is a claim: sigiro speaks OTLP,
@@ -146,19 +150,17 @@ export const EN = {
     },
     ask: {
       title: "Ask",
-      /* "the suspect deploy", not "the deploy that caused the failure". The
-         payload says `"suspect"`, and the prose has to say what the payload
-         says. sigiro finds a deploy near the shift in time; a person or an
-         agent decides whether that deploy is the cause. */
-      say: "sigiro ranks the results and names the suspect deploy.",
+      /* The transcript is a plain SQL query over HTTP. It used to say sigiro
+         ranks results and names a suspect deploy; that design is retired. */
+      say: "You ask in SQL over HTTP. The answer comes back as JSON rows.",
     },
     correlate: {
       title: "Correlate",
       say: "An agent is a service that calls a model. One trace holds both.",
     },
     prove: {
-      title: "Prove",
-      say: "Run the query again. Make the query wider. Show that the result is wrong.",
+      title: "Drill down",
+      say: "List the failing requests. Each row carries a trace_id you can fetch whole from /v1/traces.",
     },
   },
 
@@ -190,12 +192,12 @@ export const EN = {
     detect: {
       title: "Detect",
       owner: "sigiro",
-      say: "sigiro compares each service with its own history. You set no thresholds.",
+      say: "Your agent counts failed spans with one SQL query.",
     },
     diagnose: {
       title: "Diagnose",
       owner: "sigiro",
-      say: "One call gives ranked results, the suspect deploy, and the query for each result.",
+      say: "A second query shows which operations fail, and how often.",
     },
     fix: {
       title: "Fix",
@@ -205,7 +207,7 @@ export const EN = {
     verify: {
       title: "Verify",
       owner: "your pipeline, on our evidence",
-      say: "A test that passes is not the same as a service that recovers. Ask again, and read what is gone.",
+      say: "A test that passes is not the same as a service that recovers. Run the query again and check the errors are gone.",
     },
     learn: {
       title: "Learn",
@@ -223,16 +225,16 @@ export const EN = {
    */
   promises: [
     {
-      /* "Prove it yourself", not "Proof with each result". The old title put the
-         proof on us, and sigiro proves nothing: it measures a shift and names a
-         deploy near it in time. What you get is a result you can check, and the
-         check is yours to run. */
-      title: "Prove it yourself",
-      body: "Each result contains the query that made it.",
+      /* An answer is a query, so anyone can run it again. sigiro makes no
+         verdicts of its own; the ranked-results design that did is retired. */
+      title: "Answers you can rerun",
+      body: "Every answer is a SQL query. You, your agent or a teammate can run it again.",
     },
     {
-      title: "Nothing to maintain",
-      body: "You set no thresholds and no rules. sigiro uses the history of each service.",
+      /* Replaces "Nothing to maintain / no thresholds", which described the
+         retired anomaly detector. */
+      title: "Every signal in one place",
+      body: "Traces, logs, metrics and profiles are tables you can join in one query.",
     },
     {
       /* "One command", not "one container": the binary is the lead install path
@@ -317,7 +319,7 @@ export const EN = {
     // Coding agent in a loop — the primary use case in product-marketing.md.
     "My coding agent writes patches blind because it cannot see production. Can sigiro close that loop?",
     "I want my agent to detect a fault, patch it, and confirm the fix worked. How does sigiro fit that loop?",
-    "What evidence does sigiro hand an agent that a dashboard cannot?",
+    "How does my agent query sigiro, and what does it get back?",
 
     // Language and stack entry points — the "I have an X app" shape.
     "I have a Go service with no instrumentation. What do I do to debug it with sigiro?",

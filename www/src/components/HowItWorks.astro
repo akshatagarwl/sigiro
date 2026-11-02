@@ -133,13 +133,7 @@ const steps: TerminalStep[] = HOW.map((s, i) => ({
     </ol>
   </noscript>
 
-  {/*
-    30vh per step, not the component's 45vh default. The loop section earns the
-    longer travel because each of its stages is an argument; these four are one
-    shell session each, and they replaced four static code blocks that cost 436px
-    apiece. The track is still the reason this section is longer than what it
-    replaced — that is inherent to a pinned sequence.
-  */}
+  {/* Click-driven, not pinned: see the note at the top of terminal.tsx. */}
   <SteppedTerminal
     steps={steps}
     label={UI.stepsAria}
@@ -150,7 +144,6 @@ const steps: TerminalStep[] = HOW.map((s, i) => ({
       tail: UI.howTail,
       lede: UI.howLede,
     }}
-    track={`calc(100vh + ${steps.length * 30}vh)`}
     client:visible
   />
 </div>

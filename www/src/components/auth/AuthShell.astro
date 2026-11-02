@@ -62,7 +62,17 @@ const { page, title, intro } = Astro.props;
       */}
       <AuthCard page={page} title={title} intro={intro} client:load />
     </section>
-    <p class="mt-5 text-center text-[12px] text-muted-foreground">
+    {/*
+      Only about the email and code steps, so `AuthCard` shows it on those two
+      phases and hides it on approval, consent and success screens (it toggles
+      `hidden` by id). The server renders it visible only where the card starts
+      on the email step, so a device page never flashes it.
+    */}
+    <p
+      id="auth-footnote"
+      class="mt-5 text-center text-[12px] text-muted-foreground"
+      hidden={page !== 'sign-in' && page !== 'sign-up'}
+    >
       Passwordless sign-in · 6-digit codes expire after five minutes
     </p>
   </section>

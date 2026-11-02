@@ -3,6 +3,7 @@ import { Logo } from '@/components/site/logo';
 import ThemeToggle from '@/components/site/ThemeToggle.astro';
 import { COMPACT } from '@/components/site/action';
 import { getCopy, type Locale } from '@/lib/site';
+import { NAV_HREFS } from '@/lib/site.shared';
 
 /**
  * Both compartments of the page panel are divided from the content with a
@@ -79,9 +80,37 @@ const localize = (href: string) =>
     last — so `hidden` lost and the button showed on a phone anyway.
   */}
   <div class="flex items-center gap-1">
-    <a href={copy.signin.href} class={COMPACT}>{copy.signin.label}</a>
+    <a
+      id="header-account"
+      href={copy.signin.href}
+      class={`${COMPACT} max-w-[14rem]`}
+      data-signed-in-as={copy.ui.signedInAs}
+      data-dashboard-href={NAV_HREFS.dashboard}
+    >
+      <span class="truncate">{copy.signin.label}</span>
+    </a>
     <span class="hidden sm:block">
       <a href={copy.install.href} class={COMPACT}>{copy.install.label}</a>
     </span>
   </div>
 </header>
+
+{/*
+  Signed in, the header names the account and links to the dashboard instead of
+  offering "Sign in" again. The page is static, so this asks the auth API once
+  after load; signed out (or on any error) the link stays "Sign in". The session
+  cookie is HttpOnly, so there is no cheaper local check.
+*/}
+<script is:inline>
+  fetch('/api/auth/get-session', { credentials: 'same-origin' })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((s) => {
+      const who = s && s.user && (s.user.email || s.user.name);
+      const a = document.getElementById('header-account');
+      if (!who || !a) return;
+      a.href = a.dataset.dashboardHref;
+      a.title = `${a.dataset.signedInAs} ${who}`;
+      a.firstElementChild.textContent = who;
+    })
+    .catch(() => {});
+</script>

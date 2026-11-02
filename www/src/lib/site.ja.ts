@@ -39,24 +39,16 @@ export const JA: LandingCopy = {
   /** Keeps the category word in the title: the h1 is a category bet with no
       search intent behind it, and this is the one place オブザーバビリティ still
       earns its keep for search and for citation. */
-  title:
-    "sigiro — 自らを修復するソフトウェアのためのオブザーバビリティ データレイヤー",
+  title: "sigiro — SQL でクエリできる OpenTelemetry オブザーバビリティ",
 
-  /** The h1: the category claim. */
-  tagline: "自らを修復するソフトウェアのためのデータレイヤー。",
+  /** The h1: what the product does. See site.en.ts. */
+  tagline: "OpenTelemetry を送り、SQL でクエリする。",
 
   /** Also the meta description, the OG description and the Twitter card, so it
-      has to stay under ~155 characters or search results cut it mid-sentence.
-      The Japanese runs about 90.
-
-      It says 疑わしいデプロイ ("suspect deploy") and not 原因 ("cause"). sigiro
-      correlates a deploy in time with a shift, and correlation in time is not
-      cause — see docs/explanation/evidence.md, "What this design refuses to do".
-      The claim the product can keep is that each result carries the query that
-      made it, so a reader can check the result or disprove it. Do not put 原因,
-      証明 or 実証 into this string. */
+      has to stay under ~155 characters. Names only what ships; the ranked-results
+      and suspect-deploy design is retired. See site.en.ts. */
   description:
-    "OpenTelemetry を sigiro に送るだけです。サービスに障害が起きると、順位付けされた結果、疑わしいデプロイ、そして各結果の元になったクエリが返ります。",
+    "sigiro はトレース、ログ、メトリクス、プロファイルを保存します。1 つの HTTP API で SQL を使ってクエリでき、エージェントからは CLI と MCP で、人はダッシュボードで読めます。",
 
   /** Nav labels. The hrefs are in site.shared.ts.
 
@@ -85,6 +77,7 @@ export const JA: LandingCopy = {
   ui: {
     /** The header's way back in for a reader who already has an account. */
     signIn: "ログイン",
+    signedInAs: "ログイン中:",
     signUp: "登録する",
     installCli: "CLI をインストール",
     /** The line under the hero loop. Restates the two claims that decide
@@ -99,9 +92,9 @@ export const JA: LandingCopy = {
         the transcript region. */
     howLabel: "使い方",
     howTitle: "4 つのステップ。",
-    howTail: "接続し、質問し、相関させ、検証します。",
+    howTail: "接続し、質問し、相関させ、掘り下げます。",
     howLede:
-      "OpenTelemetry を sigiro に送ります。質問は 1 つです。以下の各ステップは 1 つのシェルセッションです。",
+      "OpenTelemetry のエクスポーターを sigiro に向け、SQL で質問します。以下の各ステップは 1 つのシェルセッションです。",
     stepsAria: "4 つのステップ",
     shellAria: "あなたのシェル",
     /** The integrations section. "No migration" is a claim: sigiro speaks OTLP,
@@ -124,21 +117,15 @@ export const JA: LandingCopy = {
     },
     ask: {
       title: "質問",
-      /* 疑わしいデプロイ, not 障害の原因になったデプロイ. The payload says
-         `"suspect"`, and the prose has to say what the payload says. sigiro
-         finds a deploy near the shift in time; a person or an agent decides
-         whether that deploy is the cause. */
-      say: "sigiro は結果を順位付けし、疑わしいデプロイを示します。",
+      say: "HTTP 経由で SQL を送ると、答えが JSON の行として返ります。",
     },
     correlate: {
       title: "相関",
       say: "エージェントとは、モデルを呼び出すサービスです。1 つのトレースがその両方を収めます。",
     },
     prove: {
-      /* 検証 rather than 証明. The reader checks the result; sigiro proves
-         nothing. `loop.verify` uses 確認 so the two headings stay distinct. */
-      title: "検証",
-      say: "クエリをもう一度実行します。クエリの範囲を広げます。結果が誤っていることを示します。",
+      title: "掘り下げ",
+      say: "失敗したリクエストを一覧にします。各行の trace_id を使えば、/v1/traces からトレース全体を取得できます。",
     },
   },
 
@@ -174,12 +161,12 @@ export const JA: LandingCopy = {
     detect: {
       title: "検出",
       owner: "sigiro",
-      say: "sigiro は各サービスをそのサービス自身の履歴と比べます。しきい値の設定は不要です。",
+      say: "エージェントが SQL クエリ 1 つで失敗したスパンを数えます。",
     },
     diagnose: {
       title: "診断",
       owner: "sigiro",
-      say: "1 回の呼び出しで、順位付けされた結果、疑わしいデプロイ、そして各結果の元になったクエリが返ります。",
+      say: "2 つ目のクエリで、どの処理がどれだけ失敗しているかが分かります。",
     },
     fix: {
       title: "修正",
@@ -189,7 +176,7 @@ export const JA: LandingCopy = {
     verify: {
       title: "確認",
       owner: "あなたのパイプライン（sigiro の根拠を使用）",
-      say: "テストが通ることと、サービスが回復することは同じではありません。もう一度尋ねて、何が消えたかを読み取ります。",
+      say: "テストが通ることと、サービスが回復することは同じではありません。クエリをもう一度実行し、エラーが消えたことを確かめます。",
     },
     learn: {
       title: "学習",
@@ -207,16 +194,12 @@ export const JA: LandingCopy = {
    */
   promises: [
     {
-      /* 自分で検証できます ("prove it yourself"), not "proof with each result".
-         The proof is not ours: sigiro measures a shift and names a deploy near
-         it in time. What the reader gets is a result they can check, and the
-         check is theirs to run. */
-      title: "自分で検証できます",
-      body: "各結果には、その結果を生んだクエリが含まれます。",
+      title: "答えは再実行できます",
+      body: "すべての答えは SQL クエリです。ご自身でも、エージェントでも、チームの誰でも同じクエリを再実行できます。",
     },
     {
-      title: "メンテナンスは不要です",
-      body: "しきい値もルールも設定しません。sigiro は各サービスの履歴を使います。",
+      title: "すべてのシグナルを 1 か所に",
+      body: "トレース、ログ、メトリクス、プロファイルはテーブルとして保存され、1 つのクエリで結合できます。",
     },
     {
       /* コマンド 1 つ, not "one container": the binary is the lead install path
@@ -289,7 +272,7 @@ export const JA: LandingCopy = {
     // Coding agent in a loop — the primary use case in product-marketing.md.
     "コーディングエージェントが本番環境を見られないため、手探りでパッチを書いています。sigiro はこのループを閉じられますか？",
     "エージェントに障害を検出させ、パッチを当てさせ、修正が効いたことまで確認させたいです。sigiro はこのループのどこに入りますか？",
-    "ダッシュボードでは渡せない、どのような根拠を sigiro はエージェントに渡せますか？",
+    "エージェントは sigiro にどうやってクエリし、何が返ってきますか？",
 
     // Language and stack entry points — the "I have an X app" shape.
     "計装をまったく入れていない Go のサービスがあります。sigiro でデバッグするには何をすればよいですか？",
