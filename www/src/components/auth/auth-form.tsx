@@ -749,7 +749,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
                     </span>
                     <CopySource code={command} label={label} />
                   </figcaption>
-                  <code className="bg-muted text-muted-foreground block rounded-md px-3 py-2.5 font-mono text-[12px] leading-relaxed break-normal whitespace-pre-wrap">
+                  <code className="bg-muted text-muted-foreground block rounded-md px-3 py-2.5 font-mono text-[12px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap">
                     {command}
                   </code>
                 </figure>
