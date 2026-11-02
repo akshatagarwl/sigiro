@@ -68,6 +68,16 @@ interface OrganizationRow {
 const api = "/api/auth";
 const resendCooldownSeconds = 30;
 const LOGIN_COMMAND = "sigiro auth login" as const;
+/**
+ * Where a new user's app sends, as lines they can paste. Same lines, same order,
+ * as step 2 of the hosted guide: the header goes first because the CLI warns
+ * about its own self-telemetry once the endpoint is already exported.
+ */
+const EXPORTER_COMMAND =
+  `export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $(sigiro auth token)"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://sigiro.com"
+export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
+export OTEL_SERVICE_NAME="my-service"` as const;
 
 interface ErrorBody {
   readonly message?: string;
@@ -720,6 +730,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
                 [
                   ["install command", INSTALL_COMMAND],
                   ["login command", LOGIN_COMMAND],
+                  ["then start your app with", EXPORTER_COMMAND],
                 ] as const
               ).map(([label, command]) => (
                 <figure
@@ -740,9 +751,10 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               <p className="text-muted-foreground text-[13px] leading-relaxed">
                 Telemetry goes to{" "}
                 <code className="font-mono">https://sigiro.com</code> over
-                OTLP/HTTP, with the token from{" "}
-                <code className="font-mono">sigiro auth token</code>. The guide
-                has the exporter settings and a first query.
+                OTLP/HTTP. The token from{" "}
+                <code className="font-mono">sigiro auth token</code> lasts 15
+                minutes, enough to try it out. The guide covers long-running
+                services and apps with no OpenTelemetry yet.
               </p>
               <div className="flex flex-wrap gap-2">
                 <a

@@ -1,13 +1,18 @@
 ---
 title: sigiro docs
-description: sigiro is the detect and diagnose layer for software that repairs itself. OpenTelemetry goes in; ranked results and runnable SQL come out, for agents.
+description: sigiro stores OpenTelemetry traces, logs, metrics and profiles and answers SQL over them. Built for agents first, with a dashboard for people on hosted workspaces.
 sidebar:
   order: 0
 ---
 
-sigiro is an observability backend for agents, not for dashboards. It reads
-OpenTelemetry. It answers the two questions that an automatic loop must answer
-before the loop repairs a fault: **what changed**, and **why**.
+sigiro stores OpenTelemetry traces, logs, metrics and profiles, and answers SQL
+over them. It is built for agents first: every answer is a query that an agent or
+a person can run again. Hosted workspaces also have a read-only
+[dashboard](https://sigiro.com/dashboard/) for people.
+
+New here and want your own app's data in sigiro.com? Start with [Send telemetry
+to hosted sigiro](/docs/how-to/hosted-onboarding). Want to run it on your own
+machine instead? Start with the [Quickstart](/docs/tutorials/quickstart).
 
 These docs have four parts. Each part answers a different kind of question, so
 go to the part that matches the question you have now.
@@ -17,8 +22,9 @@ go to the part that matches the question you have now.
 A lesson. Read this part first, because it assumes no sigiro knowledge. You
 follow each step, and you see a result at each step.
 
-- **[Quickstart](/docs/tutorials/quickstart)** — run the server, send telemetry
-  to it, and ask it what changed and why. This takes five minutes.
+- **[Quickstart](/docs/tutorials/quickstart)** — run the server on your own
+  machine, send telemetry to it, and query recent failures with SQL. This takes
+  five minutes.
 
 ## How-to guides
 
@@ -31,9 +37,9 @@ need the steps to get it.
 - **[Onboard an agent with Agent Auth](/docs/how-to/agent-auth)** — register a
   delegated machine identity, approve only the capabilities it needs, then rotate
   or revoke its keys.
-- **[Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding)** — create a
-  new account with `sigiro signup`, or use `sigiro auth login` for an existing
-  account, then send OTLP to a host that we operate.
+- **[Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding)** — sign up
+  on the web or with `sigiro signup`, send OTLP from your app to a host that we
+  operate, and see it in the dashboard.
 - **[Send your agent's own telemetry to sigiro](/docs/how-to/agent-telemetry)** —
   point Claude Code, Codex, Hermes Agent, or Pi at sigiro.
 - **[Debug and optimize an agent](/docs/how-to/debug-agent-performance)** — find
@@ -65,8 +71,8 @@ the costs and the alternatives. You do not need a terminal.
 
 - **[About the tables, and which machine they describe](/docs/explanation/tables)**
   — the stored signals and how to avoid answering with data from the wrong machine.
-- **[About evidence instead of a dashboard](/docs/explanation/evidence)** — why
-  the answer is a ranked list with a runnable query on every row.
-- **[About deploy detection, and what your spans must
-  carry](/docs/explanation/deploys)** — sigiro reads one attribute to find a
-  deploy, and it says nothing when that attribute is absent.
+- **[Retired anomaly and diagnosis design](/docs/explanation/evidence)** —
+  historical: the ranked-results design, which has been removed. Use SQL instead.
+- **[Retired deploy diagnosis design](/docs/explanation/deploys)** — historical:
+  automatic deploy detection, which has been removed. `service.version` is still
+  queryable.

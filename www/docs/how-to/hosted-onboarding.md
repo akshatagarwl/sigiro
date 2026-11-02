@@ -8,6 +8,16 @@ sidebar:
 This guide shows you how to send OpenTelemetry to a sigiro host that we operate,
 and how to query the data back. You run no infrastructure.
 
+The whole path, start to finish:
+
+1. Sign up at [sigiro.com/sign-in](https://sigiro.com/sign-in), or with
+   `sigiro signup` in a terminal. Either way you get one personal workspace.
+2. Install the CLI and connect it to that workspace (`sigiro auth login`).
+3. Export the `OTEL_*` variables below and start your app. Your app sends to
+   `https://sigiro.com`; there is no separate ingest host.
+4. See the data at [sigiro.com/dashboard](https://sigiro.com/dashboard/), or
+   query it with SQL.
+
 sigiro reads traces, logs, metrics and profiles. Install the CLI first — one
 command on macOS, Linux and WSL:
 
@@ -79,14 +89,47 @@ Use standard OTLP over HTTP. For authentication, use the standard
 **OTLP/HTTP:**
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://sigiro.com"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $(sigiro auth token)"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://sigiro.com"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
+export OTEL_SERVICE_NAME="checkout"   # the name your service shows up under
 ```
 
-`sigiro auth token` prints a short-lived access token and refreshes the stored
-session before doing so. Use this form for an interactive test, not as a
-long-running collector secret.
+Set the header first. With `OTEL_EXPORTER_OTLP_ENDPOINT` already exported, the
+`sigiro` CLI tries to send its own telemetry there and prints a
+`SIGIRO_OTEL_AUTH_KEY is required` warning. The warning is harmless, and the
+token is still printed.
+
+**The token expires after 15 minutes.** `sigiro auth token` prints a short-lived
+access token and refreshes the stored session before doing so. An app started
+with it sends data for 15 minutes; after that its exporter gets HTTP `401`, which
+appears only in your app's own log. Restart the app with a fresh token to keep
+going. That is enough to try sigiro out.
+
+**A long-running service has no static ingest key yet.** The two options today
+are [Agent Auth](/docs/how-to/agent-auth), where your service signs a fresh token
+for each export, or [running sigiro yourself](/docs/tutorials/quickstart), where
+a local server needs no key at all.
+
+**No OpenTelemetry in your app yet?** Zero-code instrumentation sends traces,
+logs and metrics using the variables above, with no code change. Node.js:
+
+```bash
+npm install @opentelemetry/api @opentelemetry/auto-instrumentations-node
+node --require @opentelemetry/auto-instrumentations-node/register app.js
+```
+
+Python:
+
+```bash
+pip install opentelemetry-distro opentelemetry-exporter-otlp-proto-http
+opentelemetry-bootstrap -a install
+export OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true  # also send logs
+opentelemetry-instrument python app.py
+```
+
+For other languages, or to have an agent wire it up, follow [Instrument your code
+with an agent](/docs/how-to/install-with-ai).
 
 **The endpoint carries no port.** A hosted sigiro terminates OTLP on the standard
 HTTPS port, so `https://sigiro.com` is the whole endpoint. Do not copy the
@@ -118,22 +161,27 @@ and service-name rules.
 
 ## 3. Confirm that the data arrives
 
-Send some telemetry. Wait a few seconds, because the flush interval is about 1 s.
-Then run this query:
+Send some requests through your app. Wait a few seconds, because the flush
+interval is about 1 s. Then open [sigiro.com/dashboard](https://sigiro.com/dashboard/)
+and sign in with the same email: your service is listed under its
+`OTEL_SERVICE_NAME`, with its traces and logs.
+
+To check from the terminal instead:
 
 ```bash
-curl -s "https://sigiro.com/v1/query" \
-  -H "Authorization: Bearer <oauth-access-token>" \
-  --data 'SELECT count(*) AS n FROM sigiro_spans'
+curl -s "https://sigiro.com/v1/services" \
+  -H "Authorization: Bearer $(sigiro auth token)"
 ```
 
-A non-zero `n` means that traces arrive. Query only _after_ your first batch. A new
-tenant that never sent data has no storage.
+Your service appears in the `services` array, with a count for each signal. If
+it is missing, look in your app's own log for the exporter error: `401` means the
+token expired or is missing, and a connection error usually means a `:4318` was
+left on the endpoint.
 
 ## 4. Query your data (SQL API)
 
 - **Endpoint:** `POST /v1/query` on the main HTTPS port.
-- **Auth:** `Authorization: Bearer <oauth-access-token>`.
+- **Auth:** `Authorization: Bearer $(sigiro auth token)`.
 - **Body:** the raw SQL string, not JSON.
 - **Response:** a JSON array of row objects. The header
   `x-sigiro-truncated: true|false` reports whether sigiro capped the results.
@@ -197,6 +245,8 @@ current one. Export any data that you must keep for a long time.
 
 ## Next
 
+- [Dashboard](https://sigiro.com/dashboard/) — services, traces and logs in the
+  browser, for the workspace you signed in to
 - [Instrument your code with an agent](/docs/how-to/install-with-ai) — if your
   service still has no OpenTelemetry
 - [API reference](/docs/reference) — the HTTP operations currently described by
