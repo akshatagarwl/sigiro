@@ -57,6 +57,10 @@ const authorizationServer = (): oauth.AuthorizationServer => ({
     .href,
   token_endpoint: new URL("/api/auth/oauth2/token", location.origin).href,
   code_challenge_methods_supported: ["S256"],
+  // Better Auth signs ID tokens with Ed25519 (see the issuer's metadata).
+  // Without this, oauth4webapi assumes RS256 and rejects every ID token with
+  // `unexpected JWT "alg" header parameter`.
+  id_token_signing_alg_values_supported: ["EdDSA"],
 });
 
 export const createBrowserOAuth = (options: BrowserOAuthOptions) => {

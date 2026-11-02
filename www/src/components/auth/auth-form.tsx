@@ -46,7 +46,21 @@ interface Props {
   readonly intro: string;
 }
 
-type Phase = "loading" | "email" | "code" | "request" | "consent" | "done";
+type Phase =
+  | "loading"
+  | "email"
+  | "code"
+  | "request"
+  | "workspace"
+  | "consent"
+  | "done";
+
+/** One row of better-auth's `/organization/list`. */
+interface OrganizationRow {
+  readonly id: string;
+  readonly name: string;
+  readonly slug?: string | null;
+}
 
 const api = "/api/auth";
 const resendCooldownSeconds = 30;
@@ -110,8 +124,29 @@ const describeScopes = (scope: string | undefined): string => {
   return words.size > 0 ? [...words].join(" · ") : "No access requested";
 };
 
+/**
+ * The signed authorization request this page was opened with, in the form
+ * `/oauth2/continue` and `/oauth2/consent` verify. The OAuth provider redirects
+ * here with its signed parameters spread over the URL (`…&ba_param=…&sig=…`),
+ * so keep exactly the parameters it signed, as `buildSignedOAuthQuery` in
+ * `@better-auth/oauth-provider` does; anything else would fail the signature.
+ */
+const signedOAuthQuery = (params: URLSearchParams): string | null => {
+  const wrapped = params.get("oauth_query");
+  if (wrapped) return wrapped;
+  if (!params.has("sig")) return null;
+  const names = new Set(params.getAll("ba_param"));
+  if (names.size === 0) return null;
+  const signed = new URLSearchParams();
+  for (const [key, value] of params.entries())
+    if (key === "sig" || key === "ba_param" || names.has(key))
+      signed.append(key, value);
+  return signed.toString();
+};
+
+/** `/oauth2/continue` and `/oauth2/consent` answer `{ redirect: true, url }`. */
 interface RedirectBody {
-  readonly redirect_uri: string;
+  readonly url: string;
 }
 
 /** The body of a device or agent approval decision. */
@@ -204,6 +239,9 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   const [workspace, setWorkspace] = useState<WorkspaceBody | null>(null);
   const [grantable, setGrantable] = useState<DeviceWorkspaces | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
+  const [oauthWorkspaces, setOauthWorkspaces] = useState<readonly Workspace[]>(
+    []
+  );
   const [resendAvailableIn, setResendAvailableIn] = useState(0);
   const [otpValue, setOtpValue] = useState("");
   const otpRef = useRef<OtpInputHandle>(null);
@@ -214,7 +252,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   const params = new URLSearchParams(
     import.meta.env.SSR ? "" : location.search
   );
-  const oauthQuery = params.get("oauth_query");
+  const oauthQuery = signedOAuthQuery(params);
   const userCode = params.get("user_code")?.trim() ?? "";
   const agentId = params.get("agent_id")?.trim() ?? "";
   const agentCode = params.get("code")?.trim() ?? "";
@@ -251,17 +289,79 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
 
   const finishOAuthLogin = useCallback(async (): Promise<boolean> => {
     if (!oauthQuery) return false;
+    // `/oauth2/continue` rejects a body without one of `selected`, `created`
+    // or `postLogin` ("Missing parameters"). `selected` resumes authorization
+    // for the account that just signed in; `created` does the same for one
+    // that was just registered.
     const body =
       page === "sign-up"
         ? { oauth_query: oauthQuery, created: true }
-        : { oauth_query: oauthQuery };
+        : { oauth_query: oauthQuery, selected: true };
     const result = await request<RedirectBody>("/oauth2/continue", {
       method: "POST",
       body: JSON.stringify(body),
     });
-    location.assign(result.redirect_uri);
+    location.assign(result.url);
     return true;
   }, [oauthQuery, page]);
+
+  const confirmWorkspace = useCallback(() => {
+    if (!chosen) {
+      setError("Choose a workspace first.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setStatus("Switching workspace…");
+    void request("/organization/set-active", {
+      method: "POST",
+      body: JSON.stringify({ organizationId: chosen }),
+    })
+      .then(async () => {
+        if (page === "consent") {
+          setStatus("");
+          setBusy(false);
+          setPhase("consent");
+          return;
+        }
+        await finishOAuthLogin();
+      })
+      .catch((cause: unknown) => {
+        setStatus("");
+        setError(message(cause, "Could not switch workspace"));
+        setBusy(false);
+      });
+  }, [chosen, finishOAuthLogin, page]);
+
+  /**
+   * Show the workspace step when the account belongs to more than one
+   * workspace. Preselects like the device flow: the only shared workspace,
+   * else the one already active. Resolves `false` when there is no choice.
+   */
+  const askForWorkspace = useCallback(async (): Promise<boolean> => {
+    const rows =
+      await request<readonly OrganizationRow[]>("/organization/list");
+    if (rows.length < 2) return false;
+    const session = await request<{
+      readonly session?: { readonly activeOrganizationId?: string | null };
+    } | null>("/get-session");
+    const options = rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      role: "",
+      personal: (row.slug ?? "").startsWith("personal-"),
+    }));
+    const shared = options.filter((option) => !option.personal);
+    setOauthWorkspaces(options);
+    setChosen(
+      shared.length === 1
+        ? shared[0]!.id
+        : (session?.session?.activeOrganizationId ?? null)
+    );
+    setStatus("");
+    setPhase("workspace");
+    return true;
+  }, []);
 
   /** Everything that happens once a session exists, for each page. */
   const afterSignIn = useCallback(async (): Promise<void> => {
@@ -308,6 +408,11 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
       return;
     }
 
+    // A browser OAuth client gets a token for the session's active workspace.
+    // Sign-in always activates the personal one, so a member of several must
+    // be asked, or a shared workspace's dashboard silently opens empty.
+    if (oauthQuery && (await askForWorkspace())) return;
+
     if (page === "consent") {
       setPhase("consent");
       return;
@@ -321,7 +426,16 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     );
     setStatus("");
     setPhase("done");
-  }, [agentCode, agentId, ensureWorkspace, finishOAuthLogin, page, userCode]);
+  }, [
+    agentCode,
+    agentId,
+    askForWorkspace,
+    ensureWorkspace,
+    finishOAuthLogin,
+    oauthQuery,
+    page,
+    userCode,
+  ]);
 
   useEffect(() => {
     void (async () => {
@@ -331,9 +445,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           return;
         }
         if (page === "consent") {
-          location.assign(
-            `/sign-in?oauth_query=${encodeURIComponent(oauthQuery ?? "")}`
-          );
+          location.assign(`/sign-in?${oauthQuery ?? ""}`);
           return;
         }
         setPhase("email");
@@ -491,7 +603,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         body: JSON.stringify({ accept, oauth_query: oauthQuery }),
       })
         .then((result) => {
-          location.assign(result.redirect_uri);
+          location.assign(result.url);
         })
         .catch((cause: unknown) => {
           setStatus("");
@@ -515,12 +627,17 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   const heading =
     phase === "code"
       ? { title, intro: `Enter the six-digit code we sent to ${email}.` }
-      : phase === "request"
+      : phase === "workspace"
         ? {
             title,
-            intro: "Confirm this request came from you before approving it.",
+            intro: "Choose the workspace this app will read.",
           }
-        : { title, intro };
+        : phase === "request"
+          ? {
+              title,
+              intro: "Confirm this request came from you before approving it.",
+            }
+          : { title, intro };
 
   const header = (
     <div className="mb-6">
@@ -628,6 +745,54 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               </a>
             </div>
           )}
+        </div>
+      </>
+    );
+  }
+
+  if (phase === "workspace") {
+    return (
+      <>
+        {header}
+        <div id="workspace-flow" className="grid gap-4">
+          <fieldset className="grid gap-1.5">
+            <legend className="text-[11px] tracking-[0.08em] text-stone-500 uppercase">
+              Workspace
+            </legend>
+            {oauthWorkspaces.map((option) => (
+              <label
+                key={option.id}
+                className="flex cursor-pointer items-center gap-2.5 rounded-[8px] px-1 py-1 text-[14px] text-stone-800 hover:bg-stone-100 dark:text-stone-200 dark:hover:bg-white/[0.04]"
+              >
+                <input
+                  type="radio"
+                  name="workspace"
+                  value={option.id}
+                  checked={chosen === option.id}
+                  onChange={() => {
+                    setChosen(option.id);
+                    setError("");
+                  }}
+                />
+                <span className="font-medium">{option.name}</span>
+                {option.personal && (
+                  <span className="text-[12px] text-stone-500">personal</span>
+                )}
+              </label>
+            ))}
+          </fieldset>
+          <div className="flex gap-2.5">
+            <button
+              id="confirm-workspace"
+              type="button"
+              disabled={busy || !chosen}
+              onClick={confirmWorkspace}
+              className={primary}
+            >
+              Continue
+            </button>
+          </div>
+          {statusLine}
         </div>
       </>
     );
