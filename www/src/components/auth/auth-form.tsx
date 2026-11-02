@@ -251,6 +251,12 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   const [otpValue, setOtpValue] = useState("");
   const otpRef = useRef<HTMLInputElement>(null);
   const verifyInFlight = useRef(false);
+  // The email form is server-rendered, so it is visible and clickable before
+  // this island hydrates. A submit in that window was a native GET: the page
+  // reloaded with the address in the URL and no code was sent. The button
+  // stays disabled until `onSubmit` is attached.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
 
   // `import.meta.env.SSR` is replaced at build time, so the server render gets
   // an empty query and the browser gets the real one without sniffing globals.
@@ -1151,7 +1157,11 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
             </p>
           )}
         </div>
-        <button type="submit" disabled={busy} className={`${primary} mt-2`}>
+        <button
+          type="submit"
+          disabled={busy || !hydrated}
+          className={`${primary} mt-2`}
+        >
           Continue with email
         </button>
         {statusLine}
