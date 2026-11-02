@@ -238,8 +238,14 @@ description = "Install the launchd job that runs `nightly-release -- --cli-only`
 run = """
 set -eu
 agent="$HOME/Library/LaunchAgents/com.sigiro.nightly-release.plist"
-mkdir -p "$HOME/.local/state/sigiro/nightly-release" "$HOME/Library/LaunchAgents"
-sed -e "s|@HOME@|$HOME|g" -e "s|@REPO@|$PWD|g" deploy/com.sigiro.nightly-release.plist > "$agent"
+# The job runs from the driver's own release worktree, which every run resets
+# to origin/main, so the schedule never depends on what a primary checkout has
+# checked out. A first `mise run nightly-release` creates it.
+worktree="${XDG_STATE_HOME:-$HOME/.local/state}/sigiro/nightly-release/worktree"
+test -f "$worktree/mise.toml" || { echo "run 'mise run nightly-release -- --cli-only' once first: $worktree is missing" >&2; exit 1; }
+mise trust "$worktree/mise.toml"
+mkdir -p "$HOME/Library/LaunchAgents"
+sed -e "s|@HOME@|$HOME|g" -e "s|@REPO@|$worktree|g" deploy/com.sigiro.nightly-release.plist > "$agent"
 plutil -lint "$agent"
 launchctl bootout "gui/$(id -u)/com.sigiro.nightly-release" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$agent"
