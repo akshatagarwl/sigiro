@@ -151,7 +151,8 @@ function escapeHtml(text: string): string {
  * should be in either material. Nested `var()` is fine; `OUTPUT_INK` already
  * relies on it.
  */
-const PLAIN_INK = "--shiki-light:var(--ink);--shiki-dark:var(--ink)";
+const PLAIN_INK =
+  "--shiki-light:var(--foreground);--shiki-dark:var(--foreground)";
 
 /**
  * `highlight`'s output, minus the colour: the same `pre.shiki > code > span.line`
@@ -269,15 +270,18 @@ function inlineLines(
  * shellsession paints every output line one colour — `meta.output` — and the
  * theme's is a loud blue. Output is not syntax and should not read as any, so
  * both themes' output colour is remapped onto the ink the well already used for
- * it (§3: no decorative colour). Nested `var()` is fine: globals.css resolves
- * `color: var(--shiki-light)` to `var(--ink-2)`, which flips with the theme by
+ * it. Nested `var()` is fine: globals.css resolves
+ * `color: var(--shiki-light)` to `var(--muted-foreground)`, which flips with the theme by
  * itself, so one value serves both sides.
  */
-const OUTPUT_INK = { "#0550ae": "var(--ink-2)", "#79c0ff": "var(--ink-2)" };
+const OUTPUT_INK = {
+  "#0550ae": "var(--muted-foreground)",
+  "#79c0ff": "var(--muted-foreground)",
+};
 
 /** The prompt, in the muted ink the stacked fallback has always given it. */
 const PROMPT =
-  '<span style="--shiki-light:var(--ink-3);--shiki-dark:var(--ink-3)">$ </span>';
+  '<span style="--shiki-light:var(--muted-foreground);--shiki-dark:var(--muted-foreground)">$ </span>';
 
 /**
  * What a continuation row of a multi-line command starts with: blank space the

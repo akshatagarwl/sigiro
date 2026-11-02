@@ -1,217 +1,100 @@
 /* ─────────────────────────────────────────────────────────────
-   Blume reads this file as `theme.css` and inlines it at the end of its
-   generated Tailwind entry, which is the last layer in its cascade. So there is
-   no `@import "tailwindcss"` and no `@custom-variant dark` here — Blume declares
-   both, and a second copy of either would fight the first.
+   Blume inlines this file at the end of its Tailwind entry, so there is no
+   `@import "tailwindcss"` and no dark variant here: Blume declares both, and its
+   dark mode is `[data-theme="dark"]` on <html>, not shadcn's `.dark`.
 
-   Blume's dark variant is `[data-theme="dark"]` on `<html>`, not the `.dark`
-   class this file used under Next. Every selector below was converted, and the
-   theme toggle writes Blume's attribute and Blume's storage key. That is the
-   thing one origin buys: a reader who picks dark on the landing page has picked
-   it in the docs, because there is one attribute and one key rather than two of
-   each on two hostnames.
+   The look is stock shadcn/ui (neutral base color). The tokens below are
+   shadcn's, copied unchanged, so the components in src/components/ui read them
+   with no edits.
 
-   IMPORTANT: this file is global, so it reaches the docs as well as the landing
-   page, and every rule in it has to say which surface it is for.
-
-   Global is the default now, and most of the file is: the tokens, the `--blume-*`
-   aliases below them, the materials, the prose scale, selection, scrollbars,
-   reduced motion. That is what makes the docs and the landing page read as one
-   site rather than as two properties that happen to share a domain.
-
-   `:root[data-home]` is the exception, and it is narrow: it is set by our own
-   document shell and by nothing else, so it is where a rule goes that would be
-   wrong on a docs page. Three things are still scoped that way — the body
-   background and its 13.5px type (Blume's prose sets its own size, and a bare
-   `body { font-size }` would fight it), `color-scheme`, and the Shiki block
-   rules (Blume renders its own fences with its own dual-theme variables, and the
-   `background-color: transparent !important` here would win against them).
-
-   Anything added has to pick a side deliberately. The question to ask is not
-   "does this belong to the landing page" but "would this be wrong in the docs".
-   ─────────────────────────────────────────────────────────────
-
-   The interior.dev design language, adopted whole.
-   https://github.com/ddoemonn/interior/blob/main/DESIGN.md
-
-   Everything on screen is one of three materials:
-     bezel  — the frame things sit in      (the page)
-     panel  — the lifted card              (where content lives)
-     well   — the recessed slot            (inputs, code, previews)
-
-   Depth is real: a well is cut into the surface, a panel is lifted
-   out of it, a cap has a bottom lip you could press. A plain border
-   never carries elevation — use `border-hairline` when you are
-   dividing one compartment from another, and a material when you
-   mean one thing is above or below another.
+   One clash: Blume's docs chrome uses `accent` for its brand colour (the active
+   link, primary buttons), and shadcn uses `accent` for a light hover surface. The
+   docs keep Blume's meaning. Our own pages (`data-home` on <html>, set by
+   src/layouts/Base.astro) get shadcn's.
    ───────────────────────────────────────────────────────────── */
 
 :root {
-  --bezel: #efeeea;
-  --panel: #ffffff;
-  --well: #f6f6f4;
-  --sub: #fafafa;
-
-  --hairline: rgba(27, 27, 25, 0.17);
-  --hairline-strong: rgba(27, 27, 25, 0.3);
-
-  --ink: #1b1b19;
-  --ink-2: #46463f;
-  --ink-3: #6e6e66;
-
-  --accent: #4568ff;
-  --accent-soft: #edf1ff;
-  --moss: #3d7a4e;
-  --flag: #c0442f;
-
-  /* rgba(28,25,23,·) is the ink shadow, never a neutral black: a black shadow
-     on a warm surface reads as dirt. */
-  --shadow-float: 0 28px 56px -24px rgba(24, 22, 20, 0.45), 0 0 0 1px rgba(28, 25, 23, 0.06);
-  --shadow-lift:
-    0 1px 2px rgba(28, 25, 23, 0.06), 0 4px 10px -8px rgba(28, 25, 23, 0.45),
-    0 0 0 1px rgba(28, 25, 23, 0.08);
-  --shadow-well: inset 0 1px 2px rgba(28, 25, 23, 0.07), inset 0 0 0 1px rgba(28, 25, 23, 0.06);
-  --shadow-cap: 0 1.5px 0 rgba(28, 25, 23, 0.08), inset 0 0 0 1px rgba(28, 25, 23, 0.12);
-  --shadow-row: inset 0 0 0 1px rgba(28, 25, 23, 0.07), 0 1px 2px rgba(28, 25, 23, 0.05);
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: var(--blume-accent);
+  --accent-foreground: var(--blume-accent-foreground, oklch(0.985 0 0));
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
 }
 
-:root[data-theme='dark'] {
-  --bezel: #141312;
-  --panel: #1d1d1a;
-  --well: #252522;
-  --sub: #1a1a17;
-
-  --hairline: rgba(255, 255, 255, 0.16);
-  --hairline-strong: rgba(255, 255, 255, 0.28);
-
-  --ink: #f3f3ef;
-  --ink-2: #c2c2ba;
-  --ink-3: #93938b;
-
-  --accent: #93b0ff;
-  --accent-soft: rgba(147, 176, 255, 0.14);
-  --moss: #5bd79c;
-  --flag: #f5897f;
-
-  /* Dark mode uses plain black: there a shadow is an absence of light rather
-     than a tint. `mat-panel` and `mat-cap` also carry a white top-edge
-     highlight — that top light is what makes a dark surface read as lifted
-     rather than as a hole. */
-  --shadow-float: 0 28px 56px -22px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  --shadow-lift:
-    0 1px 6px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 0 0 1px rgba(255, 255, 255, 0.06);
-  --shadow-well: inset 0 1px 2px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-cap:
-    0 1.5px 0 rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.1);
-  --shadow-row: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.25);
+:root[data-theme="dark"] {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
 }
 
-/* ── Blume's tokens, pointed at ours ────────────────────────────
-   Blume's chrome — the docs header, the sidebar, prose, code frames, tables —
-   is written against `--blume-*`. This is the whole reason the two surfaces can
-   look like one site without a second stylesheet: the docs keep Blume's markup
-   and take our materials, and a token added to the ink ramp above reaches both.
+:root[data-home] {
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  color-scheme: light;
+}
 
-   The selector list is not decoration. Blume declares each of these twice — once
-   in `:root` and again in `:root[data-theme="dark"]` — and that second block is
-   specificity 0,2,0. A plain `:root` alias here wins in light and silently loses
-   in dark, which reads as "the docs are nearly right until you flip the theme".
-   Listing both selectors matches that specificity, and this file is inlined last,
-   so order decides.
+:root[data-home][data-theme="dark"] {
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  color-scheme: dark;
+}
 
-   Two tokens are deliberately absent: `--blume-accent` and `--blume-background`.
-   Those are set from `theme` in `blume.config.ts`, already to the accent and the
-   bezel, and declaring them again here would be a second place to change one
-   colour. Blume's "accent" is our accent in the DESIGN.md sense — interaction
-   only: the active tab, a card's hover edge, the focus ring. */
-
+/* Blume's chrome reads `--blume-*`. Both selectors, because Blume sets each
+   token in `:root` and again in `:root[data-theme="dark"]`. Accent and
+   background come from `theme` in blume.config.ts. */
 :root,
-:root[data-theme='dark'] {
-  --blume-foreground: var(--ink);
-  /* Prose is the panel copy of the docs, so it takes the same ink as the landing
-     page's body — one step down from a heading, not two. */
-  --blume-muted-foreground: var(--ink-2);
-  /* Blume reaches for `muted` as a surface: a hovered nav row, the current page.
-     That is a row picked out of a list, which is the well. */
-  --blume-muted: var(--well);
-  --blume-border: var(--hairline);
-  --blume-code-background: var(--well);
-
-  /* §4: 14 is the card/section radius, and a code block or a table in prose is a
-     section of one. Blume's own scale only offers sm/md/lg, hence the token. */
-  --blume-radius: 14px;
-
-  /* Shiki's notation transformers. `moss` and `flag` are the two status colours
-     this language has, so a diff in the docs is the same green and red as a
-     passing or failing row on the landing page. */
-  --blume-code-add: color-mix(in oklab, var(--moss) 18%, transparent);
-  --blume-code-add-border: var(--moss);
-  --blume-code-remove: color-mix(in oklab, var(--flag) 18%, transparent);
-  --blume-code-remove-border: var(--flag);
-  --blume-code-highlight: var(--accent-soft);
-  --blume-code-highlight-border: var(--accent);
-  --blume-code-word: var(--accent-soft);
-  --blume-code-word-border: var(--accent);
+:root[data-theme="dark"] {
+  --blume-foreground: var(--foreground);
+  --blume-muted-foreground: var(--muted-foreground);
+  --blume-muted: var(--muted);
+  --blume-border: var(--border);
+  --blume-radius: var(--radius);
 }
 
 @theme inline {
-  --color-bezel: var(--bezel);
-  --color-panel: var(--panel);
-  --color-well: var(--well);
-  --color-sub: var(--sub);
-  --color-hairline: var(--hairline);
-  --color-hairline-strong: var(--hairline-strong);
-  --color-ink: var(--ink);
-  --color-ink-2: var(--ink-2);
-  --color-ink-3: var(--ink-3);
-  --color-accent: var(--accent);
-  --color-accent-soft: var(--accent-soft);
-  --color-moss: var(--moss);
-  --color-flag: var(--flag);
-
-  /* No `--font-sans`/`--font-mono` remap here, and that is deliberate.
-
-     This file used to point both at `--font-geist-sans`/`--font-geist-mono`,
-     loaded by Astro's Fonts API from the `geist` package. Blume already loads
-     Geist and Geist Mono and maps Tailwind's `--font-sans`/`--font-mono` onto
-     them — the same two typefaces. Remapping here would win (this is the last
-     layer) and would point every docs page at variables nothing defines, so the
-     docs would fall back to the system stack.
-
-     So the font pipeline is Blume's, and `var(--font-mono)` in `.meta` and
-     `.shiki code` below resolves to its Geist Mono. One pipeline, one download. */
-}
-
-/* ── /dashboard/: shadcn/ui tokens ─────────────────────────────
-   The dashboard is built from stock shadcn/ui components (src/components/ui,
-   copied from the registry). These are the names those components read,
-   pointed at the materials above so the dashboard is the same site. Global
-   rather than scoped, because Select and Sheet portal into <body>. The ui files
-   swap `bg-accent` for `bg-muted`: our accent is interaction colour, not a
-   hover surface. */
-:root,
-:root[data-theme='dark'] {
-  --card: var(--panel);
-  --card-foreground: var(--ink);
-  --popover: var(--panel);
-  --popover-foreground: var(--ink);
-  --primary: var(--ink);
-  --primary-foreground: var(--panel);
-  --secondary: var(--well);
-  --secondary-foreground: var(--ink);
-  --destructive: var(--flag);
-  --input: var(--hairline-strong);
-  --ring: var(--accent);
-  --chart-1: var(--accent);
-  --chart-2: var(--flag);
-  --chart-3: var(--moss);
-  --chart-4: #c98a1b;
-  --chart-5: var(--ink-3);
-}
-
-@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -220,7 +103,12 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-chart-1: var(--chart-1);
@@ -230,277 +118,24 @@
   --color-chart-5: var(--chart-5);
 }
 
-/* ── the landing page's own document rules ─────────────────────
-   Scoped, because this file is global. `[data-home]` is set by our document
-   shell and by nothing else, so none of this reaches a docs page — where Blume
-   owns the background, the type scale and the selection colour. */
-
-:root[data-home] {
-  color-scheme: light;
-}
-
-:root[data-home][data-theme='dark'] {
-  color-scheme: dark;
-}
-
-:root[data-home] body {
-  background-color: var(--bezel);
-  color: var(--ink);
-  /* 13.5px regular, relaxed leading, is the body of this language. */
-  font-size: 13.5px;
-  line-height: 1.7;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-
-/* Global, unlike the rules above it: selecting text is the same gesture on both
-   surfaces, and two selection colours on one origin is the kind of seam a reader
-   notices without being able to name. */
-::selection {
-  background: var(--accent-soft);
-  color: var(--ink);
-}
-
-/* ── the three materials ───────────────────────────────────── */
-
-/* lifted out of the bezel */
-.mat-panel {
-  background: var(--panel);
-  box-shadow: var(--shadow-lift);
-}
-
-/* lifted far out — floating over everything */
-.mat-float {
-  background: var(--panel);
-  box-shadow: var(--shadow-float);
-}
-
-/* cut into the panel */
-.mat-well {
-  background: var(--well);
-  box-shadow: var(--shadow-well);
-}
-
-/* a key you could press: bottom lip, hairline all round */
-.mat-cap {
-  background: var(--panel);
-  box-shadow: var(--shadow-cap);
-}
-
-/* a row that has been picked out of a list */
-.mat-row {
-  background: var(--well);
-  box-shadow: var(--shadow-row);
-}
-
-/* ── the docs page shell ───────────────────────────────────────
-   §2 does not describe the landing page, it describes this site: "the bezel
-   gutter, on both the landing and the docs", and "the sidebar sits directly on
-   the bezel, unlifted — it is furniture, not content". Blume's docs arrived
-   full-bleed, which is why the tokens alone still left them reading as a
-   different property: the colours matched and the shape did not.
-
-   So the middle column becomes the panel and the two rails stay on the bezel.
-   Content is lifted, navigation is not — which is the same sentence the landing
-   page's header and footer are already an instance of.
-
-   `[data-blume-doc-grid]` and `#blume-content` are Blume's own hooks, and this is
-   the whole of the reach into its markup: no layout is replaced, so the search
-   modal, the nav drawer and the TOC scrollspy all keep working. §2's other half —
-   a sidebar with its own `h-12` header lining up with the panel's — is NOT built
-   here. That needs two headers, and this site now has one on purpose.
-
-   Not clipped to the radius. `overflow-clip` would be the obvious way to keep a
-   wide child inside the curve, and it would also clip every Twoslash popup, which
-   is documented as needing to escape its container. Blume already wraps a wide
-   table in its own scroller, so there is nothing left to contain. */
-
-[data-blume-doc-grid] {
-  gap: 12px;
-  padding-inline: 12px;
-  padding-bottom: 12px;
-}
-
-#blume-content {
-  background: var(--panel);
-  border-radius: 20px;
-  box-shadow: var(--shadow-lift);
-  /* Not grid padding-top: the rails are `sticky top-16` against a `h-16` header,
-     so padding above them would drop them 12px and then jump back on first
-     scroll. A margin on the panel alone leaves them flush where they belong. */
-  margin-top: 12px;
-}
-
-@media (min-width: 640px) {
-  [data-blume-doc-grid] {
-    gap: 16px;
-    padding-inline: 20px;
-    padding-bottom: 20px;
+@layer base {
+  :root[data-home] * {
+    @apply border-border outline-ring/50;
   }
-
-  #blume-content {
-    margin-top: 20px;
+  :root[data-home] body {
+    @apply bg-background text-foreground antialiased;
   }
 }
 
-/* The two rails are furniture, and §8 puts a sidebar row at 12.5px — the same
-   size as the landing page's own nav links. Blume writes them at `text-sm`, which
-   is the one place the docs chrome was still a step louder than the page it sits
-   beside.
-
-   Scoped to the two containers rather than to Blume's utility classes: the class
-   strings on those rows are Blume's internals and change between releases, but
-   `data-blume-nav-drawer` and `data-blume-toc` are the hooks its own layout and
-   scripts are written against.
-
-   The group labels ("Operations") are left alone. §8 would draw them as 11px
-   uppercase, and doing that here would also make the sidebar's "Api" read as
-   "API" — which is the bug reported on that entry, and dodging it with
-   `text-transform` would leave the breadcrumb and the page title still wrong. It
-   has a real fix, noted in `blume.config.ts`: rename `openapi.route` so the
-   segment humanizes correctly. */
-[data-blume-nav-drawer] :is(a, button, summary),
-[data-blume-toc] a {
-  font-size: 12.5px;
-}
-
-/* ── typography ────────────────────────────────────────────── */
-
-/* the instrument voice. metadata and numbers only, never prose. */
-.meta {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 10.5px;
-  line-height: 1;
-  letter-spacing: 0.06em;
-  font-variant-numeric: tabular-nums;
-}
-
-.tnum {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum' 1;
-}
-
-/* Section labels and column headers. Uppercase is never at default tracking —
-   at default it is a wall. */
-.label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-3);
-}
-
-/* ── scroll containers fade at both ends, never hard-cut ───── */
-
-.fade-y {
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent,
-    black 14px,
-    black calc(100% - 22px),
-    transparent
-  );
-  mask-image: linear-gradient(
-    to bottom,
-    transparent,
-    black 14px,
-    black calc(100% - 22px),
-    transparent
-  );
-}
-
-.no-bar::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-.no-bar {
-  scrollbar-width: none;
-}
-
-/* ── scrollbar: a 4px mark in a gutter, nothing else ───────── */
-
-/*
- * Only one of these two standards can be in charge. Chromium 121+ implements
- * `scrollbar-width`, and the moment it is set the whole ::-webkit-scrollbar
- * family is ignored. Webkit gets the pseudo-elements; Firefox, which has none,
- * gets the standard properties and only there.
- */
-/*
- * Global. The docs have three scroll panes of their own — the sidebar, the table
- * of contents, and every code fence — and a default 15px scrollbar on any of them
- * is the single most obvious place the docs stopped looking like the landing page.
- */
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
-
-::-webkit-scrollbar-track,
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  /* Faint at rest, readable when you reach for it: a scrollbar is a position
-     readout first and a control second. */
-  background-color: color-mix(in oklab, var(--ink) 16%, transparent);
-  border-radius: 2px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background-color: color-mix(in oklab, var(--ink) 28%, transparent);
-}
-
-/*
- * A scrollbar is painted in the padding box and border-radius does not clip it,
- * so on a heavily rounded container the mark runs into the curve. Opt in on the
- * containers that are actually round.
- */
-.scroll-inset::-webkit-scrollbar-track {
-  margin-block: 20px;
-}
-
-/*
- * Firefox 153+ parses ::-webkit-scrollbar without implementing it, so a
- * `not selector(...)` gate is false there and the fallback never fires. Only
- * Gecko parses -moz-appearance, so this reaches Firefox and nothing else.
- */
-@supports (-moz-appearance: none) {
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: color-mix(in oklab, var(--ink) 16%, transparent) transparent;
-  }
-}
-
-/* ── press: 0.12s, translateY(1px) ─────────────────────────── */
-
-.press {
-  transition:
-    transform 0.12s cubic-bezier(0.23, 1, 0.32, 1),
-    background-color 0.15s ease,
-    box-shadow 0.15s ease,
-    color 0.15s ease;
-}
-.press:active {
-  transform: translateY(1px);
-}
-
-/* ── shiki ─────────────────────────────────────────────────── */
-
-/* Shiki emits a colour per token inline; this styles only the block.
-
-   Scoped to the landing page. Blume renders its own fences with its own Shiki
-   themes and `defaultColor: false`, so it already switches `--shiki-light` and
-   `--shiki-dark` itself. Left global, the `background-color: transparent
-   !important` below would win against Blume's code surface on every docs page. */
+/* Shiki on our pages (the docs render their own fences). */
 :root[data-home] .shiki,
 :root[data-home] .shiki span {
   color: var(--shiki-light);
   background-color: transparent !important;
 }
 
-:root[data-home][data-theme='dark'] .shiki,
-:root[data-home][data-theme='dark'] .shiki span {
+:root[data-home][data-theme="dark"] .shiki,
+:root[data-home][data-theme="dark"] .shiki span {
   color: var(--shiki-dark);
 }
 
@@ -511,102 +146,7 @@
   font-family: var(--font-mono);
 }
 
-/* ── focus ─────────────────────────────────────────────────── */
-
-/* In @layer base so a component that draws its own focus can opt out with a
-   plain `focus-visible:outline-none`. Unlayered rules beat every layered
-   utility whatever the specificity, so this must not leave its layer — if it
-   does, every component's own focus styling silently dies. */
-@layer base {
-  :root[data-home] :where(a, button, input, [tabindex]):focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-  }
-}
-
-/* ── the docs prose, on this language's type scale ──────────────
-   §8 is a scale, not a set of suggestions, and Blume's prose is on a different
-   one: a 48px h1 over 14px body, where this language has a 27px page title over
-   13.5px. Colour alone would not have made the two surfaces read as one site —
-   the headings were the loudest thing telling you that you had left it.
-
-   `:where()` keeps every selector at 0,1,0, the same weight Blume writes its
-   prose rules at, so these win on order rather than by escalating. Cheap to
-   check: nothing here needs `!important`, and if a rule stops applying it is
-   because Blume moved its own out of `:where()`.
-
-   Headings stay medium — the negative tracking does the work weight would do
-   badly — and font-weight is Blume's already, so only size and tracking are set.
-
-   Deliberately not repeated: Blume's `max-width: 640px` block, which drops its
-   h1 to 36px and h2 to 26px. Both of those are larger than what this scale uses
-   at any width, so there is nothing to shrink, and these unmediated rules are
-   later in the sheet and win there too. */
-
-.prose {
-  font-size: 13.5px;
-  --tw-prose-body: var(--ink-2);
-}
-
-/* 27px medium tracking-[-0.03em] — the page title. */
-.prose :where(h1) {
-  font-size: 27px;
-  letter-spacing: -0.03em;
-  line-height: 1.25;
-}
-
-.prose :where(h2) {
-  font-size: 20px;
-  letter-spacing: -0.03em;
-  line-height: 1.3;
-}
-
-.prose :where(h3) {
-  font-size: 15px;
-  letter-spacing: -0.02em;
-  line-height: 1.4;
-}
-
-/* 13px medium, the card-title size. Blume already draws h4 in muted ink, which
-   is what makes it read as a label rather than as another heading. */
-.prose :where(h4) {
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-/* The lede — a page's `description`, which Blume's page template emits as
-   `<p class="text-lg">`. 18px next to a 27px title inverts the scale: §8 puts the
-   lede at 15px, below the title and above the body.
-
-   Targeted as a direct child of `.prose` because `text-lg` is also on the
-   request-body and response headings of an API page, which are headings and
-   should not be re-sized as if they were prose. Unlayered, so it beats the
-   utility whatever the specificity — a layered utility always loses to an
-   unlayered rule. */
-.prose > p.text-lg {
-  font-size: 15px;
-}
-
-/* Code sits one step below prose, as it does on the landing page: a fence is
-   scanned, not read, and at body size it crowds the paragraph above it. */
-.prose :where(pre) {
-  font-size: 12.5px;
-}
-
-/* 11.5px is the caption size, and a table is columns of metadata. */
-.prose :where(table) {
-  font-size: 12.5px;
-}
-
-/* ── reduced motion ────────────────────────────────────────── */
-
-/* Global. A reader who asks for less motion is asking the site, not a page of it —
-   and Blume's chrome has its own transitions (the nav drawer, the theme toggle,
-   every hover) that this is the only thing turning off. */
 @media (prefers-reduced-motion: reduce) {
-  :root {
-    scroll-behavior: auto;
-  }
   *,
   *::before,
   *::after {

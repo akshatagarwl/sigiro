@@ -29,7 +29,7 @@
 ---
 
 <div
-  class="mat-well relative flex h-[30px] w-[54px] items-center rounded-[8px] p-[3px]"
+  class="bg-muted relative flex h-[30px] w-[54px] items-center rounded-md p-[3px]"
   role="group"
   aria-label="Theme"
   data-theme-toggle
@@ -37,7 +37,7 @@
   {/* The cap. Reserved from the start, so nothing moves on first paint. */}
   <span
     aria-hidden="true"
-    class="mat-cap absolute top-[3px] left-[3px] h-6 w-6 rounded-[5px] transition-transform duration-[220ms] ease-[cubic-bezier(0.23,1,0.32,1)]"
+    class="border bg-background shadow-xs absolute top-[3px] left-[3px] h-6 w-6 rounded-md transition-transform duration-[220ms] ease-[cubic-bezier(0.23,1,0.32,1)]"
     data-cap
   ></span>
 
@@ -45,7 +45,7 @@
     type="button"
     aria-label="Light"
     data-set="light"
-    class="relative z-10 grid h-6 w-6 place-items-center rounded-[5px]"
+    class="relative z-10 grid h-6 w-6 place-items-center rounded-md"
   >
     <svg
       width="13"
@@ -69,7 +69,7 @@
     type="button"
     aria-label="Dark"
     data-set="dark"
-    class="relative z-10 grid h-6 w-6 place-items-center rounded-[5px]"
+    class="relative z-10 grid h-6 w-6 place-items-center rounded-md"
   >
     <svg
       width="13"
@@ -98,16 +98,16 @@
 
   /* The active key is ink, the other is muted ink. */
   [data-theme-toggle] button {
-    color: var(--ink-3);
+    color: var(--muted-foreground);
   }
   [data-theme-toggle] button[data-set='light'] {
-    color: var(--ink);
+    color: var(--foreground);
   }
   :root[data-theme='dark'] [data-theme-toggle] button[data-set='light'] {
-    color: var(--ink-3);
+    color: var(--muted-foreground);
   }
   :root[data-theme='dark'] [data-theme-toggle] button[data-set='dark'] {
-    color: var(--ink);
+    color: var(--foreground);
   }
 </style>
 

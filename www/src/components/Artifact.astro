@@ -13,13 +13,7 @@ import { highlight, type Lang } from '@/lib/highlight';
  * left for Blume and took every other caller with them, so the shell was one
  * indirection with one user.
  *
- * The shape is the design language's: a `mat-panel` frame at radius 14 with
- * `p-[5px]`, holding a caption row and a `mat-well` at radius 9 — the code is cut
- * into the card, not bordered on it. 14 = 9 + 5, which is the whole reason those
- * two numbers are those two numbers.
- *
- * The caption is `.meta`: mono, 10.5px, the instrument voice. It is metadata about
- * the block, never prose.
+ * A card holding a mono caption row and a muted code area.
  *
  * `highlight` returns an effect, so this is where it runs. It cannot fail — a
  * highlighter that will not start is caught inside `highlight`, logged, and
@@ -40,9 +34,9 @@ const html = await Effect.runPromise(highlight(code, lang));
 const caption = [title, meta].filter(Boolean).join(' · ') || lang;
 ---
 
-<figure class="mat-panel my-6 rounded-[14px] p-[5px]">
+<figure class="border bg-card shadow-sm my-6 rounded-xl p-[5px]">
   <figcaption class="flex h-8 items-center gap-2.5 pr-[3px] pl-2.5">
-    <span class="meta min-w-0 flex-1 truncate text-ink-3">{caption}</span>
+    <span class="font-mono text-xs tabular-nums min-w-0 flex-1 truncate text-muted-foreground">{caption}</span>
     <CopySource code={code} label={title} client:visible />
   </figcaption>
 
@@ -51,7 +45,7 @@ const caption = [title, meta].filter(Boolean).join(' · ') || lang;
     this repo.
   */}
   <div
-    class="mat-well scroll-inset overflow-x-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[1.7]"
+    class="bg-muted overflow-x-auto rounded-lg px-3.5 py-3 font-mono text-[12.5px] leading-[1.7]"
     set:html={html}
   />
 </figure>

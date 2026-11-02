@@ -113,13 +113,13 @@ const steps: TerminalStep[] = HOW.map((s, i) => ({
     <ol class="mt-8">
       {
         HOW.map((s, i) => (
-          <li class="border-t border-hairline py-9 first:border-t-0">
-            <h3 class="text-[20px] font-medium tracking-[-0.03em] text-ink">{s.title}</h3>
-            <p class="mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed text-ink-2">{s.say}</p>
-            <figure class="mat-panel mt-5 rounded-[14px] p-[5px]">
-              <figcaption class="meta flex h-8 items-center pl-2.5 text-ink-3">{UI.shellAria}</figcaption>
+          <li class="border-t border-border py-9 first:border-t-0">
+            <h3 class="text-[20px] font-medium tracking-[-0.03em] text-foreground">{s.title}</h3>
+            <p class="mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed text-muted-foreground">{s.say}</p>
+            <figure class="border bg-card shadow-sm mt-5 rounded-xl p-[5px]">
+              <figcaption class="font-mono text-xs tabular-nums flex h-8 items-center pl-2.5 text-muted-foreground">{UI.shellAria}</figcaption>
               <div
-                class="mat-well scroll-inset overflow-x-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px]"
+                class="bg-muted overflow-x-auto rounded-lg px-3.5 py-3 font-mono text-[12.5px] leading-[22px]"
               >
                 <pre
                   class="shiki whitespace-pre"

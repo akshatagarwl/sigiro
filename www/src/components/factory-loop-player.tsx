@@ -115,16 +115,16 @@ function TerminalBlock({
   };
 
   return (
-    <figure className="mat-panel rounded-[14px] p-[5px]">
+    <figure className="bg-card rounded-xl border p-[5px] shadow-sm">
       <figcaption className="flex min-h-8 items-center gap-3 pr-[3px] pl-2.5 font-mono text-[11.5px]">
-        <span className="meta text-ink-3 min-w-0 flex-1">
+        <span className="text-muted-foreground min-w-0 flex-1 font-mono text-xs tabular-nums">
           factory loop · five stages
         </span>
         <AnimatePresence initial={false} mode="wait">
           <motion.span
             animate={{ opacity: 1, y: 0 }}
             aria-hidden="true"
-            className="meta text-ink-3 flex shrink-0 items-center gap-1.5"
+            className="text-muted-foreground flex shrink-0 items-center gap-1.5 font-mono text-xs tabular-nums"
             exit={reduced ? { opacity: 0 } : { opacity: 0, y: -2 }}
             initial={reduced ? false : { opacity: 0, y: 2 }}
             key={statusKey}
@@ -136,7 +136,7 @@ function TerminalBlock({
               </>
             ) : (
               <>
-                <span className="bg-accent size-[6px] rounded-[1.5px]" />
+                <span className="bg-primary size-[6px] rounded-sm" />
                 {activeStage + 1}/{stages.length} · {stages[activeStage]?.title}
               </>
             )}
@@ -162,7 +162,7 @@ function TerminalBlock({
 
         <div
           aria-label="Factory loop transcript, scrollable"
-          className="mat-well scroll-inset text-ink-2 h-[208px] overflow-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px] focus-visible:bg-[#4568FF]/[0.06] focus-visible:shadow-[inset_0_0_0_1px_var(--accent)] focus-visible:outline-none sm:h-[264px] dark:focus-visible:bg-[#93B0FF]/[0.1]"
+          className="bg-muted text-muted-foreground h-[208px] overflow-auto rounded-lg px-3.5 py-3 font-mono text-[12.5px] leading-[22px] focus-visible:bg-[#4568FF]/[0.06] focus-visible:shadow-[inset_0_0_0_1px_var(--primary)] focus-visible:outline-none sm:h-[264px] dark:focus-visible:bg-[#93B0FF]/[0.1]"
           ref={viewportRef}
           role="group"
           tabIndex={0}
@@ -181,7 +181,7 @@ function TerminalBlock({
                 >
                   {entry.lineIndex === 0 && (
                     <p
-                      className={`meta text-ink-3 mb-1 ${entry.stageIndex === 0 ? "" : "mt-2"}`}
+                      className={`text-muted-foreground mb-1 font-mono text-xs tabular-nums ${entry.stageIndex === 0 ? "" : "mt-2"}`}
                     >
                       {entry.stage.title} · {entry.stage.owner}
                     </p>
@@ -196,7 +196,7 @@ function TerminalBlock({
             {!done && (
               <motion.span
                 animate={reduced ? { opacity: 1 } : { opacity: [1, 1, 0, 0] }}
-                className="bg-accent mt-1 inline-block h-[14px] w-[6px]"
+                className="bg-primary mt-1 inline-block h-[14px] w-[6px]"
                 transition={
                   reduced
                     ? { duration: 0 }

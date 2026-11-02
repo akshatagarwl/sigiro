@@ -175,7 +175,9 @@ export function AskAI() {
       {/* `.meta` and not `.label`: this sits beside the footer's own text links,
           which are all `.meta` lowercase. An uppercase 600 section label here
           would announce itself louder than the nav it stands next to. */}
-      <span className="meta text-ink-3">ask ai</span>
+      <span className="text-muted-foreground font-mono text-xs tabular-nums">
+        ask ai
+      </span>
       <ul className="flex items-center gap-0.5">
         {PROVIDERS.map((provider, index) => (
           <li key={provider.name}>
@@ -196,7 +198,7 @@ export function AskAI() {
                  the footer's text links already get. */
               aria-label={`Ask ${provider.name} about ${SITE.name}`}
               title={`Ask ${provider.name} about ${SITE.name}`}
-              className="press text-ink-3 hover:text-ink inline-flex size-6 items-center justify-center rounded-[5px]"
+              className="text-muted-foreground hover:text-foreground inline-flex size-6 items-center justify-center rounded-md transition-colors"
             >
               <svg
                 viewBox={provider.mark.viewBox}

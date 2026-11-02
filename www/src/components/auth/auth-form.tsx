@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { FloatingLabelInput } from "@/components/interior/floating-label";
-import { OtpInput, type OtpInputHandle } from "@/components/interior/otp-input";
 import { CopySource } from "@/components/site/copy-source";
+import { buttonVariants } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  InputOTP,
+  InputOTPGroup,
+  InputOTPSlot,
+} from "@/components/ui/input-otp";
+import { Label } from "@/components/ui/label";
 import { INSTALL_COMMAND } from "@/lib/site.shared";
 
 /**
@@ -13,11 +19,8 @@ import { INSTALL_COMMAND } from "@/lib/site.shared";
  * which left two owners for one flow — the island holding the email and code,
  * the module deciding what happened after. Phase is state; this owns it.
  *
- * Built from the interior.dev components the site already vendors under
- * `src/components/interior/`. DESIGN.md §3b names the OTP cell as the reference
- * every other field copies, so the screen where that field actually appears
- * should be the component itself rather than an imitation in Tailwind classes.
- * The visual cells share one real input through `input-otp`, so rapid typing,
+ * Built from stock shadcn/ui components (`src/components/ui`). The code cells
+ * share one real input through `input-otp`, so rapid typing,
  * paste, mobile autofill, password managers, undo and screen readers all use
  * the browser's native text-field behavior instead of focus-shuffling handlers.
  *
@@ -200,17 +203,9 @@ const verificationMessage = (cause: unknown): string => {
   return detail.replace(/\bOTP\b/gi, "verification code");
 };
 
-const primary =
-  "inline-flex h-10 items-center justify-center rounded-[10px] bg-stone-900 px-4 text-[14px] " +
-  "font-semibold text-white transition-colors duration-150 hover:bg-stone-800 " +
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] " +
-  "disabled:opacity-60 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white";
+const primary = buttonVariants({ size: "lg" });
 
-const secondary =
-  "inline-flex h-10 items-center justify-center rounded-[10px] border-2 border-stone-200 px-4 " +
-  "text-[14px] font-semibold text-stone-700 transition-colors duration-150 hover:bg-stone-100 " +
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] " +
-  "disabled:opacity-60 dark:border-white/[0.08] dark:text-stone-300 dark:hover:bg-white/[0.04]";
+const secondary = buttonVariants({ variant: "outline", size: "lg" });
 
 export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   /**
@@ -244,7 +239,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
   );
   const [resendAvailableIn, setResendAvailableIn] = useState(0);
   const [otpValue, setOtpValue] = useState("");
-  const otpRef = useRef<OtpInputHandle>(null);
+  const otpRef = useRef<HTMLInputElement>(null);
   const verifyInFlight = useRef(false);
 
   // `import.meta.env.SSR` is replaced at build time, so the server render gets
@@ -470,7 +465,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         setResendAvailableIn(resendCooldownSeconds);
         if (resend) {
           setStatus("A new verification code was sent.");
-          window.requestAnimationFrame(() => otpRef.current?.clear());
+          setOtpValue("");
         } else {
           setOtpValue("");
           setStatus("");
@@ -643,11 +638,11 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
     <div className="mb-6">
       <h1
         id="title"
-        className="text-[26px] leading-[1.15] font-semibold tracking-[-0.035em] text-stone-900 dark:text-stone-50"
+        className="text-foreground text-[26px] leading-[1.15] font-semibold tracking-[-0.035em]"
       >
         {heading.title}
       </h1>
-      <p className="mt-3 text-[15px] leading-relaxed text-stone-600 dark:text-stone-400">
+      <p className="text-muted-foreground mt-3 text-[15px] leading-relaxed">
         {heading.intro}
       </p>
     </div>
@@ -659,7 +654,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         id="status"
         role="status"
         aria-live="polite"
-        className={`text-[13px] text-stone-500 dark:text-stone-400 ${status ? "" : "sr-only"}`}
+        className={`text-muted-foreground text-[13px] ${status ? "" : "sr-only"}`}
       >
         {status}
       </p>
@@ -690,18 +685,18 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
       <>
         {header}
         <div id="success" className="grid gap-3">
-          <h2 className="text-[20px] font-semibold tracking-[-0.02em] text-stone-900 dark:text-stone-50">
+          <h2 className="text-foreground text-[20px] font-semibold tracking-[-0.02em]">
             You&rsquo;re ready.
           </h2>
           <p
             id="success-message"
-            className="text-[15px] leading-relaxed text-stone-600 dark:text-stone-400"
+            className="text-muted-foreground text-[15px] leading-relaxed"
           >
             {success}
           </p>
           {accountSetup && (
             <div className="mt-2 grid gap-3">
-              <p className="text-[14px] leading-relaxed text-stone-600 dark:text-stone-400">
+              <p className="text-muted-foreground text-[14px] leading-relaxed">
                 {workspace?.created
                   ? "Your workspace is empty until something sends it telemetry. Next: install the CLI, connect it to this same workspace, and point an OpenTelemetry exporter at it."
                   : "Install the CLI, then connect it to the same workspace."}
@@ -709,7 +704,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               {workspace?.created && (
                 <p
                   id="join-hint"
-                  className="text-[13px] leading-relaxed text-stone-500 dark:text-stone-400"
+                  className="text-muted-foreground text-[13px] leading-relaxed"
                 >
                   Joining a team that already uses Sigiro? Ask one of its owners
                   to add {account || "your email"}. You choose the workspace
@@ -724,15 +719,15 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               ).map(([label, command]) => (
                 <figure
                   key={label}
-                  className="mat-panel min-w-0 rounded-[10px] p-[4px]"
+                  className="bg-card min-w-0 rounded-lg border p-[4px] shadow-sm"
                 >
                   <figcaption className="flex h-8 items-center gap-2 pr-1 pl-2.5">
-                    <span className="meta text-ink-3 min-w-0 flex-1 truncate">
+                    <span className="text-muted-foreground min-w-0 flex-1 truncate font-mono text-xs tabular-nums">
                       {label}
                     </span>
                     <CopySource code={command} label={label} />
                   </figcaption>
-                  <code className="mat-well block rounded-[7px] px-3 py-2.5 font-mono text-[12px] leading-relaxed break-normal whitespace-pre-wrap text-stone-700 dark:text-stone-300">
+                  <code className="bg-muted text-muted-foreground block rounded-md px-3 py-2.5 font-mono text-[12px] leading-relaxed break-normal whitespace-pre-wrap">
                     {command}
                   </code>
                 </figure>
@@ -756,13 +751,13 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         {header}
         <div id="workspace-flow" className="grid gap-4">
           <fieldset className="grid gap-1.5">
-            <legend className="text-[11px] tracking-[0.08em] text-stone-500 uppercase">
+            <legend className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
               Workspace
             </legend>
             {oauthWorkspaces.map((option) => (
               <label
                 key={option.id}
-                className="flex cursor-pointer items-center gap-2.5 rounded-[8px] px-1 py-1 text-[14px] text-stone-800 hover:bg-stone-100 dark:text-stone-200 dark:hover:bg-white/[0.04]"
+                className="text-foreground hover:bg-muted flex cursor-pointer items-center gap-2.5 rounded-md px-1 py-1 text-[14px]"
               >
                 <input
                   type="radio"
@@ -776,7 +771,9 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
                 />
                 <span className="font-medium">{option.name}</span>
                 {option.personal && (
-                  <span className="text-[12px] text-stone-500">personal</span>
+                  <span className="text-muted-foreground text-[12px]">
+                    personal
+                  </span>
                 )}
               </label>
             ))}
@@ -803,7 +800,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
       <>
         {header}
         <div id="consent-flow" className="grid gap-4">
-          <p className="text-[15px] leading-relaxed text-stone-600 dark:text-stone-400">
+          <p className="text-muted-foreground text-[15px] leading-relaxed">
             The requesting client will receive only the scopes in its signed
             authorization request.
           </p>
@@ -864,32 +861,26 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
         {header}
         <div id="device-flow" className="grid gap-4">
           {account && (
-            <p
-              id="signed-in-as"
-              className="text-[13px] text-stone-600 dark:text-stone-400"
-            >
+            <p id="signed-in-as" className="text-muted-foreground text-[13px]">
               Signed in as{" "}
-              <span className="font-medium text-stone-900 dark:text-stone-100">
-                {account}
-              </span>
-              .{" "}
+              <span className="text-foreground font-medium">{account}</span>.{" "}
               <button
                 id="sign-out"
                 type="button"
                 onClick={() => void signOut()}
-                className="font-medium underline underline-offset-4 hover:text-stone-900 dark:hover:text-white"
+                className="hover:text-foreground font-medium underline underline-offset-4"
               >
                 Not you? Sign out
               </button>
             </p>
           )}
           <div>
-            <p className="text-[13px] font-medium text-stone-600 dark:text-stone-400">
+            <p className="text-muted-foreground text-[13px] font-medium">
               Confirm this code matches your terminal
             </p>
             <output
               id="user-code"
-              className="mt-2 block font-mono text-[30px] leading-none font-bold tracking-[0.16em] text-stone-900 dark:text-stone-50"
+              className="text-foreground mt-2 block font-mono text-[30px] leading-none font-bold tracking-[0.16em]"
             >
               {page === "agent-device" ? agentCode : userCode}
             </output>
@@ -897,9 +888,9 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           {isDevice && (
             <fieldset
               id="workspace"
-              className="grid gap-2 border-t border-stone-200 pt-2.5 dark:border-white/[0.08]"
+              className="border-border grid gap-2 border-t pt-2.5"
             >
-              <legend className="text-[11px] tracking-[0.08em] text-stone-500 uppercase">
+              <legend className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
                 Workspace this CLI will use
               </legend>
               {workspaces.length === 0 && (
@@ -911,7 +902,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               {workspaces.length === 1 && (
                 <p
                   id="workspace-name"
-                  className="text-[15px] font-semibold text-stone-900 dark:text-stone-50"
+                  className="text-foreground text-[15px] font-semibold"
                 >
                   {workspaces[0]!.name}
                 </p>
@@ -920,7 +911,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
                 workspaces.map((option) => (
                   <label
                     key={option.id}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-[8px] px-1 py-1 text-[14px] text-stone-800 hover:bg-stone-100 dark:text-stone-200 dark:hover:bg-white/[0.04]"
+                    className="text-foreground hover:bg-muted flex cursor-pointer items-center gap-2.5 rounded-md px-1 py-1 text-[14px]"
                   >
                     <input
                       type="radio"
@@ -933,13 +924,13 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
                       }}
                     />
                     <span className="font-medium">{option.name}</span>
-                    <span className="text-[12px] text-stone-500">
+                    <span className="text-muted-foreground text-[12px]">
                       {option.personal ? "personal" : option.role}
                     </span>
                   </label>
                 ))}
               {workspaces.length > 1 && (
-                <p className="text-[12px] text-stone-500">
+                <p className="text-muted-foreground text-[12px]">
                   Everything the CLI sends and reads goes to this workspace
                   only. Run sigiro auth login again to switch.
                 </p>
@@ -948,16 +939,13 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           )}
           <dl id="request-details" className="grid gap-2.5">
             {rows.map(([id, term, value]) => (
-              <div
-                key={id}
-                className="border-t border-stone-200 pt-2.5 dark:border-white/[0.08]"
-              >
-                <dt className="text-[11px] tracking-[0.08em] text-stone-500 uppercase">
+              <div key={id} className="border-border border-t pt-2.5">
+                <dt className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
                   {term}
                 </dt>
                 <dd
                   id={id}
-                  className="mt-1 text-[13px] break-words text-stone-700 dark:text-stone-300"
+                  className="text-muted-foreground mt-1 text-[13px] break-words"
                 >
                   {value}
                 </dd>
@@ -1007,19 +995,41 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
             if (otpValue.length === 6) verify(otpValue);
           }}
         >
-          <OtpInput
-            length={6}
-            autoFocus
-            status={error ? "error" : "idle"}
-            errorMessage={error}
-            hint="Enter or paste the six-digit code."
-            onChange={(value) => {
-              setOtpValue(value);
-              if (error) setError("");
-            }}
-            onComplete={verify}
-            ref={otpRef}
-          />
+          <div className="grid justify-items-center gap-2">
+            <InputOTP
+              ref={otpRef}
+              name="verification-code"
+              maxLength={6}
+              inputMode="numeric"
+              pattern="^[0-9]*$"
+              autoComplete="one-time-code"
+              autoFocus
+              aria-label="Verification code"
+              aria-invalid={error ? true : undefined}
+              value={otpValue}
+              onChange={(value) => {
+                setOtpValue(value);
+                if (error) setError("");
+              }}
+              onComplete={verify}
+            >
+              <InputOTPGroup>
+                {[0, 1, 2, 3, 4, 5].map((index) => (
+                  <InputOTPSlot key={index} index={index} />
+                ))}
+              </InputOTPGroup>
+            </InputOTP>
+            <p
+              role={error ? "alert" : undefined}
+              className={
+                error
+                  ? "text-destructive text-sm"
+                  : "text-muted-foreground text-sm"
+              }
+            >
+              {error || "Enter or paste the six-digit code."}
+            </p>
+          </div>
           <button
             type="submit"
             disabled={busy || otpValue.length !== 6}
@@ -1033,7 +1043,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
               type="button"
               disabled={busy || resendAvailableIn > 0}
               onClick={() => deliverCode(email, true)}
-              className="inline-flex h-10 items-center rounded-[8px] px-2 text-[13px] font-medium text-stone-600 underline-offset-4 hover:text-stone-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] disabled:cursor-not-allowed disabled:text-stone-400 dark:text-stone-300 dark:hover:text-white dark:disabled:text-stone-600"
+              className="text-muted-foreground hover:text-foreground disabled:text-muted-foreground dark:disabled:text-muted-foreground inline-flex h-10 items-center rounded-md px-2 text-[13px] font-medium underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] disabled:cursor-not-allowed"
             >
               {resendAvailableIn > 0
                 ? `Resend code in ${resendAvailableIn}s`
@@ -1050,7 +1060,7 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
                 setResendAvailableIn(0);
                 setOtpValue("");
               }}
-              className="inline-flex h-10 items-center rounded-[8px] px-2 text-[13px] font-medium text-stone-500 underline-offset-4 hover:text-stone-800 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] disabled:opacity-60 dark:text-stone-400 dark:hover:text-stone-100"
+              className="text-muted-foreground hover:text-foreground inline-flex h-10 items-center rounded-md px-2 text-[13px] font-medium underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4568FF] disabled:opacity-60"
             >
               Use another email
             </button>
@@ -1074,35 +1084,44 @@ export function AuthCard({ page, title, intro }: Props): React.ReactElement {
           One card for both sign-in and sign-up: a one-time code creates the
           account the first time an address uses it, so there is nothing a
           separate sign-up page could ask that this one cannot.
-
-          No `maxLength` on the name field: the component renders a live
-          `0 / 100` counter when given one, and a character budget on an
-          optional display name is noise on the first screen of a sign-up.
         */}
         {(page === "sign-in" || page === "sign-up") && (
-          <FloatingLabelInput
-            id="name"
-            name="name"
-            label="Name (optional)"
-            autoComplete="name"
-            value={name}
-            onChange={setName}
+          <div className="grid gap-2">
+            <Label htmlFor="name">Name (optional)</Label>
+            <Input
+              id="name"
+              name="name"
+              autoComplete="name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              disabled={busy}
+            />
+          </div>
+        )}
+        <div className="grid gap-2">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "email-error" : undefined}
             disabled={busy}
           />
-        )}
-        <FloatingLabelInput
-          id="email"
-          name="email"
-          type="email"
-          label="Email"
-          autoComplete="email"
-          required
-          value={email}
-          onChange={setEmail}
-          invalid={Boolean(error)}
-          hint={error}
-          disabled={busy}
-        />
+          {error && (
+            <p
+              id="email-error"
+              role="alert"
+              className="text-destructive text-sm"
+            >
+              {error}
+            </p>
+          )}
+        </div>
         <button type="submit" disabled={busy} className={`${primary} mt-2`}>
           Continue with email
         </button>

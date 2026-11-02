@@ -69,12 +69,12 @@ const stages: FactoryStage[] = LOOP.map((stage, index) => ({
     {
       LOOP.map((stage, index) => (
         <li>
-          <figure class="mat-panel rounded-[14px] p-[5px]">
-            <figcaption class="meta flex h-8 items-center pl-2.5 text-ink-3">
+          <figure class="border bg-card shadow-sm rounded-xl p-[5px]">
+            <figcaption class="font-mono text-xs tabular-nums flex h-8 items-center pl-2.5 text-muted-foreground">
               {stage.title} · {stage.owner}
             </figcaption>
             <div
-              class="mat-well scroll-inset overflow-x-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[22px]"
+              class="bg-muted overflow-x-auto rounded-lg px-3.5 py-3 font-mono text-[12.5px] leading-[22px]"
             >
               <pre
                 class="shiki whitespace-pre"

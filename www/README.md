@@ -61,11 +61,10 @@ Both scripts fix Alchemy's stage to production. Planning does not apply, deploy,
 | `src/layouts/Base.astro`               | the document, the panel, the header and the footer                                                                                                                                                                         |
 | `src/lib/site.ts`                      | every word the site says. Copy lives here, not in markup                                                                                                                                                                   |
 | `src/lib/highlight.ts`                 | Shiki, configured for the Workers runtime                                                                                                                                                                                  |
-| `src/components/interior/`             | vendored from interior.dev — see DESIGN.md §1b. `task-steps.tsx` is no longer verbatim: its `TaskSteps` view was replaced by `stage-list.tsx` and the dead half was removed, so re-syncing that one file is a manual merge |
+| `src/components/ui/` | stock shadcn/ui components, copied from the registry. Keep them unedited; the theme is `theme.css` |
 | `src/pages/dl/[...key].ts`             | release downloads out of R2. The one route that is not prerendered                                                                                                                                                         |
 | `public/install`                       | the script `curl -fsSL sigiro.com/install \| sh` fetches                                                                                                                                                                   |
 | `public/_headers`, `public/_redirects` | caching, and the published short links                                                                                                                                                                                     |
-| `DESIGN.md`                            | the design language. Read it before changing anything visual                                                                                                                                                               |
 
 Copy and positioning are governed by `.agents/product-marketing.md` at the repo
 root, and all user-facing text follows ASD-STE100 Simplified Technical English.

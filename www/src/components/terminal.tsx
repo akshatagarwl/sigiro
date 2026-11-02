@@ -49,30 +49,24 @@ import type { SessionLine } from "@/lib/highlight";
  * a button: `goToStage` below turns a click into a scroll position, so the rail
  * navigates the sequence instead of only reporting on it.
  *
- * It renders the vendored `useTaskSteps` hook's rows with our own markup. The
- * vendored `TaskSteps` view could not take a click handler and is kept verbatim
- * under §1b, so the hook/view split is where this parts company from it — see the
- * note in `stage-list.tsx`.
- *
- * Design constraints, from DESIGN.md (now vendored at www/DESIGN.md):
- * - §5h  React does not re-render at 60fps. The step index is React state; the
+ * Design constraints:
+ * - React does not re-render at 60fps. The step index is React state; the
  *        handoff is MotionValues off `scrollYProgress` and never touches React at
  *        all. A previous version quantised progress to two decimals and drove the
- *        fade from state, leaving the handoff ~6 frames long — §6a: "quantising
- *        the sweep would make the fill look like it was stuttering".
- * - §6a  `setShown` is called on every scroll frame and passed the same index most
+ *        fade from state, leaving the handoff ~6 frames long.
+ * - `setShown` is called on every scroll frame and passed the same index most
  *        of them. React compares with `Object.is` and bails out, so the listener
  *        can fire at frame rate and this still renders once per step. No guard is
  *        written for it because the guard is the hook's own behaviour.
- * - §5   the handoff uses the specified displacements — out at `y 6, blur(3px)`,
+ * - the handoff uses the specified displacements — out at `y 6, blur(3px)`,
  *        in at `y 10, blur(6px)`.
- * - §3   no `rounded-full`, so no traffic-light chrome. This is the same
- *        `mat-well` cut into a `mat-panel` as every code block on the site —
+ * - no `rounded-full`, so no traffic-light chrome. This is the same
+ *        muted area inside a card as every code block on the site —
  *        and, since `highlightSession`, wearing the same Shiki colours. The
  *        markup arrives already highlighted: this component is a client
  *        component and Shiki is a server-side dependency, so what crosses is
  *        one string of HTML per line, never a highlighter.
- * - §5h  a scroll-driven component needs no reduced-motion branch — every value
+ * - a scroll-driven component needs no reduced-motion branch — every value
  *        resolves on the frame it is scrolled to. The no-JS fallback is a
  *        `<noscript>` in the calling `.astro` file, deliberately outside this
  *        component: it used to be a `fallback` prop, which meant the whole stacked
@@ -238,7 +232,7 @@ function locate(v: number, count: number) {
  *
  * What is left of the discrete half is one number: which frame is mounted. That is
  * `useState` below. Everything continuous — opacity, y, blur, height — is a
- * MotionValue and never was state (§5h).
+ * MotionValue and never was state.
  */
 
 export function SteppedTerminal({
@@ -356,7 +350,7 @@ export function SteppedTerminal({
    * Jump to a stage, by scrolling to where that stage is at rest.
    *
    * The rail cannot set the step directly, and that is not a limitation to work
-   * around — scroll position IS the state here (§5h). Setting `shown` would put the
+   * around — scroll position IS the state here. Setting `shown` would put the
    * frame out of agreement with the scrollbar, and the next scroll event would
    * snap it back. So the click moves the page and the existing listener does the
    * rest, which means clicking and scrolling can never disagree.
@@ -413,10 +407,12 @@ export function SteppedTerminal({
             // No `px-1`: the header sat 4px right of every other section's
             // left edge on the page.
             <div>
-              <p className="label">{heading.label}</p>
+              <p className="text-muted-foreground text-xs font-medium">
+                {heading.label}
+              </p>
               <h2
                 id={heading.id}
-                className="text-ink mt-2.5 max-w-[34ch] text-[22px] leading-[1.2] font-medium tracking-[-0.03em] sm:text-[27px]"
+                className="text-foreground mt-2.5 max-w-[34ch] text-[22px] leading-[1.2] font-medium tracking-[-0.03em] sm:text-[27px]"
               >
                 {heading.title}
                 {/* `{' '}` and not a space inside the span or a newline between
@@ -427,12 +423,14 @@ export function SteppedTerminal({
                 {heading.tail ? (
                   <>
                     {" "}
-                    <span className="text-ink-3">{heading.tail}</span>
+                    <span className="text-muted-foreground">
+                      {heading.tail}
+                    </span>
                   </>
                 ) : null}
               </h2>
               {heading.lede ? (
-                <p className="text-ink-2 mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed sm:text-[15px]">
+                <p className="text-muted-foreground mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed sm:text-[15px]">
                   {heading.lede}
                 </p>
               ) : null}
@@ -449,39 +447,33 @@ export function SteppedTerminal({
               onSelect={goToStage}
             />
 
-            <figure className="mat-panel w-full min-w-0 rounded-[14px] p-[5px]">
+            <figure className="bg-card w-full min-w-0 rounded-xl border p-[5px] shadow-sm">
               <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
                 {step.badge ? (
                   <span
-                    className={`mat-cap inline-flex h-[22px] shrink-0 items-center rounded-[6px] px-2 text-[11.5px] font-medium ${
-                      step.badgeStrong ? "text-ink" : "text-ink-3"
+                    className={`bg-background inline-flex h-[22px] shrink-0 items-center rounded-md border px-2 text-[11.5px] font-medium shadow-xs ${
+                      step.badgeStrong
+                        ? "text-foreground"
+                        : "text-muted-foreground"
                     }`}
                   >
                     {step.badge}
                   </span>
                 ) : null}
-                <span className="text-ink text-[13px] font-medium tracking-[-0.01em]">
+                <span className="text-foreground text-[13px] font-medium tracking-[-0.01em]">
                   {step.label}
                 </span>
 
                 {/* The picker sits in the chrome rather than above the section,
                     because what it changes is inside this well and nowhere else.
-                    §3 rules out a pill, so it is two cells in a tray; radii nest,
-                    5 inside 7.
-
-                    Ink for the selected cell, not accent. §7c lists "segmented
-                    thumb" among the controls that mark selection with ink and
-                    depth, and says why: accent means "the system is responding
-                    to you right now", and if every selected thing were blue,
-                    focus would stop meaning anything. This was `bg-accent` until
-                    that section was re-read. It also matches the docs tabs, which
+                    Two cells in a tray. It matches the docs tabs, which
                     fumadocs draws in ink — one preference, two controls, one
                     idiom. */}
                 {step.choices ? (
                   <span
                     role="group"
                     aria-label={`How to run ${step.label.toLowerCase()}`}
-                    className="mat-cap ml-auto flex shrink-0 items-center gap-px rounded-[7px] p-px"
+                    className="bg-background ml-auto flex shrink-0 items-center gap-px rounded-md border p-px shadow-xs"
                   >
                     {step.choices.map((choice) => {
                       const on = chosen(step, pick) === choice.lines;
@@ -491,10 +483,10 @@ export function SteppedTerminal({
                           type="button"
                           aria-pressed={on}
                           onClick={() => writePref(choice.id)}
-                          className={`press meta rounded-[5px] px-2 py-[5px] ${
+                          className={`rounded-md px-2 py-[5px] font-mono text-xs tabular-nums transition-colors ${
                             on
-                              ? "bg-ink text-panel"
-                              : "text-ink-3 hover:text-ink"
+                              ? "bg-foreground text-card"
+                              : "text-muted-foreground hover:text-foreground"
                           }`}
                         >
                           {choice.label}
@@ -505,7 +497,7 @@ export function SteppedTerminal({
                 ) : null}
 
                 <span
-                  className={`meta text-ink-3 shrink-0 ${step.choices ? "pl-2.5" : "ml-auto"}`}
+                  className={`text-muted-foreground shrink-0 font-mono text-xs tabular-nums ${step.choices ? "pl-2.5" : "ml-auto"}`}
                 >
                   {shown + 1} of {steps.length}
                 </span>
@@ -517,7 +509,7 @@ export function SteppedTerminal({
                 `overflow-x-auto` here as well was tried and is dead config —
                 scrollWidth equals clientWidth, so it can never scroll. */}
               <motion.div
-                className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3"
+                className="bg-muted overflow-hidden rounded-lg px-3.5 py-3"
                 style={{ height }}
               >
                 {/* The x scroller. At a 390px viewport this well is 324px while
@@ -552,15 +544,18 @@ export function SteppedTerminal({
                       dangerouslySetInnerHTML={{ __html: line.html }}
                     />
                   ))}
-                  <div className="text-ink-3" style={{ height: LINE }}>
+                  <div
+                    className="text-muted-foreground"
+                    style={{ height: LINE }}
+                  >
                     {"$ "}
-                    <span className="bg-ink ml-px inline-block h-[13px] w-[7px] align-[-1px]" />
+                    <span className="bg-foreground ml-px inline-block h-[13px] w-[7px] align-[-1px]" />
                   </div>
                 </motion.div>
               </motion.div>
 
               {step.note ? (
-                <p className="text-ink-2 mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed">
+                <p className="text-muted-foreground mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed">
                   {step.note}
                 </p>
               ) : null}

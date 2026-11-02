@@ -23,7 +23,7 @@ import { INSTALL_COMMAND, AGENT_PROMPT } from '@/lib/site.shared';
   ramp — medium, never semibold.
 */}
 <section id="start" class="w-full py-14">
-  <h2 class="text-[22px] leading-[1.2] font-medium tracking-[-0.03em] text-ink sm:text-[27px]">Start</h2>
+  <h2 class="text-[22px] leading-[1.2] font-medium tracking-[-0.03em] text-foreground sm:text-[27px]">Start</h2>
 
   {/*
     `items-start`: the two panels hold different amounts of text, and a grid
@@ -31,36 +31,36 @@ import { INSTALL_COMMAND, AGENT_PROMPT } from '@/lib/site.shared';
     panel under the install command. Each panel is now as tall as its contents.
   */}
   <div class="mt-5 grid items-start gap-4 md:grid-cols-2">
-    <figure class="mat-panel rounded-[14px] p-[5px]">
+    <figure class="border bg-card shadow-sm rounded-xl p-[5px]">
       <figcaption class="flex h-8 items-center gap-2.5 pr-[3px] pl-2.5">
-        <span class="meta min-w-0 flex-1 truncate text-ink-3">install the CLI</span>
+        <span class="font-mono text-xs tabular-nums min-w-0 flex-1 truncate text-muted-foreground">install the CLI</span>
         <CopySource code={INSTALL_COMMAND} label="install command" client:visible />
       </figcaption>
       <div
-        class="mat-well scroll-inset overflow-x-auto rounded-[9px] px-3.5 py-3 font-mono text-[12.5px] leading-[1.7] text-ink-2"
+        class="bg-muted overflow-x-auto rounded-lg px-3.5 py-3 font-mono text-[12.5px] leading-[1.7] text-muted-foreground"
       >
         {INSTALL_COMMAND}
       </div>
-      <p class="px-2.5 pt-2.5 pb-1 text-[12.5px] leading-relaxed text-ink-3">
+      <p class="px-2.5 pt-2.5 pb-1 text-[12.5px] leading-relaxed text-muted-foreground">
         Installs a single binary to <code class="font-mono">~/.local/bin/sigiro</code>. Reads the
         script first if you would rather: <a
-          class="underline underline-offset-4 hover:text-ink"
+          class="underline underline-offset-4 hover:text-foreground"
           href="/install">sigiro.com/install</a
         >.
       </p>
     </figure>
 
-    <figure class="mat-panel rounded-[14px] p-[5px]">
+    <figure class="border bg-card shadow-sm rounded-xl p-[5px]">
       <figcaption class="flex h-8 items-center gap-2.5 pr-[3px] pl-2.5">
-        <span class="meta min-w-0 flex-1 truncate text-ink-3">or give this to your agent</span>
+        <span class="font-mono text-xs tabular-nums min-w-0 flex-1 truncate text-muted-foreground">or give this to your agent</span>
         <CopySource code={AGENT_PROMPT} label="agent prompt" client:visible />
       </figcaption>
       <div
-        class="mat-well scroll-inset rounded-[9px] px-3.5 py-3 text-[12.5px] leading-[1.7] text-ink-2"
+        class="bg-muted rounded-lg px-3.5 py-3 text-[12.5px] leading-[1.7] text-muted-foreground"
       >
         {AGENT_PROMPT}
       </div>
-      <p class="px-2.5 pt-2.5 pb-1 text-[12.5px] leading-relaxed text-ink-3">
+      <p class="px-2.5 pt-2.5 pb-1 text-[12.5px] leading-relaxed text-muted-foreground">
         Paste into Claude Code, Codex, Cursor or any MCP-capable agent. It installs sigiro, starts
         it, and connects over <code class="font-mono">/mcp</code>.
       </p>

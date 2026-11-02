@@ -83,7 +83,7 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
       type="button"
       onClick={copy}
       aria-label={label ? `Copy ${label}` : "Copy code"}
-      className="mat-cap press text-ink-2 hover:text-ink grid h-6 shrink-0 place-items-center rounded-[6px] px-2 text-[10.5px] font-medium"
+      className="bg-background text-muted-foreground hover:text-foreground grid h-6 shrink-0 place-items-center rounded-md border px-2 text-[10.5px] font-medium shadow-xs transition-colors"
     >
       <span
         className="col-start-1 row-start-1 transition-opacity duration-100"
@@ -93,7 +93,7 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
       </span>
       <span
         aria-hidden
-        className="text-moss col-start-1 row-start-1 inline-flex items-center transition-opacity duration-100"
+        className="col-start-1 row-start-1 inline-flex items-center text-emerald-600 transition-opacity duration-100"
         style={{ opacity: copied ? 1 : 0 }}
       >
         <svg

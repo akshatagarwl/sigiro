@@ -475,20 +475,12 @@ export default defineConfig({
   }),
 
   /**
-   * The three ink/accent values from www/DESIGN.md, and nothing else.
-   *
-   * The accent is the one colour that means anything on this brand — §7 — and
-   * it flips with the theme. Geist is the pairing the design language is written
-   * for. Everything past this is Blume's own theme, on purpose: matching the
-   * landing page pixel for pixel was what the 182-line stylesheet did, and it is
-   * exactly the custom code this move is meant to delete.
+   * shadcn/ui's neutral palette, so the docs match the rest of the site
+   * (theme.css). Geist is shadcn's default typeface too.
    */
   theme: {
-    accent: { light: "#4568FF", dark: "#93B0FF" },
-    background: { light: "#EFEEEA", dark: "#141312" },
-    // The roles are display/body/mono, and both Geist faces are in Blume's
-    // curated set — so the pairing the design language is written for comes
-    // across with no self-hosting to arrange.
+    accent: { light: "#171717", dark: "#E5E5E5" },
+    background: { light: "#FFFFFF", dark: "#0A0A0A" },
     fonts: { display: "geist", body: "geist", mono: "geist-mono" },
     mode: "system",
   },

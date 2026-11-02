@@ -11,9 +11,8 @@ import Base from '@/layouts/Base.astro';
  * inherit the site header, the footer, Blume's fonts and the `blume:theme`
  * tokens: the same document as `/` and `/docs/*`.
  *
- * Everything inside the card is `AuthCard`, one React island built from the
- * interior.dev components vendored under `src/components/interior/`. It is a
- * single component because the flow is a single state machine. An earlier cut
+ * Everything inside the card is `AuthCard`, one React island built from stock
+ * shadcn/ui components. It is a single component because the flow is a single state machine. An earlier cut
  * split it — a vanilla module toggling `hidden` on five `<div>`s, with a React
  * field bolted on top — which gave one flow two owners and two sources of truth
  * for which step the user is on.
@@ -52,7 +51,7 @@ const { page, title, intro } = Astro.props;
     data-page={page}
   >
     <section
-      class="mat-panel rounded-[14px] p-7"
+      class="border bg-card shadow-sm rounded-xl p-7"
       aria-labelledby="title"
     >
       {/*
@@ -63,7 +62,7 @@ const { page, title, intro } = Astro.props;
       */}
       <AuthCard page={page} title={title} intro={intro} client:load />
     </section>
-    <p class="mt-5 text-center text-[12px] text-stone-500 dark:text-stone-400">
+    <p class="mt-5 text-center text-[12px] text-muted-foreground">
       Passwordless sign-in · 6-digit codes expire after five minutes
     </p>
   </section>

@@ -22,22 +22,14 @@ import {
   // bare specifier has to stay Blume's.
 } from "sigiro-icons";
 
-import { LogoMarquee } from "@/components/interior/logo-marquee";
+import { Badge } from "@/components/ui/badge";
 import { getCopy, type Locale } from "@/lib/site";
 
 /**
  * Three belts: what emits the telemetry, where sigiro runs, and what reads the
  * answers.
  *
- * `interior/logo-marquee` is the component for this, and a marquee is the one
- * place the design language allows an infinite loop — the loop *is* the component.
- * It also stops looping under `prefers-reduced-motion` and becomes a real scroll
- * container with a tab stop, which a static wrapped grid could not do and a
- * hand-rolled belt would not have done.
- *
- * The three run in alternating directions so the eye reads them as three separate
- * claims rather than one long list that happens to wrap.
- *
+
  * Brand marks come straight from `simple-icons` — the upstream data package, path
  * strings only. The React wrapper (@icons-pack/react-simple-icons) scored 31/100
  * on Socket's supply-chain axis, and all it did was turn these same paths into
@@ -87,28 +79,29 @@ export function Integrations({ locale = "en" }: { locale?: Locale }) {
   const INTEGRATIONS = getCopy(locale).integrations;
   return (
     <div className="mt-6 flex flex-col gap-5">
-      {INTEGRATIONS.map((group, i) => (
+      {INTEGRATIONS.map((group) => (
         <div key={group.label}>
-          <p className="label mb-2.5">{group.label}</p>
-          <LogoMarquee
-            label={group.label}
-            direction={i % 2 === 0 ? "left" : "right"}
-            items={group.items.map((item) => {
+          <p className="text-muted-foreground mb-2.5 text-xs font-medium">
+            {group.label}
+          </p>
+          <ul aria-label={group.label} className="flex flex-wrap gap-2">
+            {group.items.map((item) => {
+              /* No mark means the label alone. A wrong logo is worse than a
+                 name, and four of these brands have no mark in the set. */
               const icon = item.icon ? ICONS[item.icon] : undefined;
-              return {
-                id: item.name,
-                label: item.name,
-                /* No mark means the belt shows the label. A wrong logo is worse
-                   than a name, and four of these brands have no mark in the set. */
-                mark: icon ? (
-                  <span className="inline-flex items-center gap-2">
-                    <Mark path={icon.path} />
+              return (
+                <li key={item.name}>
+                  <Badge
+                    variant="outline"
+                    className="gap-1.5 px-2.5 py-1 text-sm font-normal"
+                  >
+                    {icon && <Mark path={icon.path} />}
                     {item.name}
-                  </span>
-                ) : undefined,
-              };
+                  </Badge>
+                </li>
+              );
             })}
-          />
+          </ul>
         </div>
       ))}
     </div>

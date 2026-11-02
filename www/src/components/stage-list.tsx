@@ -2,32 +2,27 @@
 
 import { motion, useReducedMotion } from "motion/react";
 
-import { useTaskSteps } from "@/components/interior/task-steps";
-
 /**
- * The stepped terminal's stage rail, as buttons.
- *
- * This replaces the vendored `TaskSteps` *view* and keeps its `useTaskSteps`
- * *hook*, which is exactly the seam that split exists for: the hook owns the
- * pending/active/done/error derivation and the live-region sentence, and nothing
- * about that needed changing.
- *
- * Two reasons the view had to be ours rather than a prop on the vendored one:
- *
- * 1. **Each stage has to be clickable.** `TaskSteps` renders plain `<li>` rows and
- *    takes no selection callback, so the affordance cannot be passed in — the
- *    element that must become a button is inside the component. Editing it in
- *    place would fork a file DESIGN.md §1b keeps verbatim.
- * 2. **`textContent` read "Detectsigiro".** The label and meta were adjacent spans
- *    with no separator between them. Flex laid them out correctly, so it was
- *    invisible on screen and wrong everywhere text is extracted rather than
- *    rendered — copy-paste, and anything reading the page as text.
- *
- * A side benefit of owning it: the vendored version writes literal `stone-*` and
- * `emerald-*` values, which §1b requires of a copied component and which have
- * never quite been this site's greys. These rows use the ink ramp and `--moss`, so
- * they follow the theme like everything else.
+ * The stepped terminal's stage rail, as buttons: each stage is clickable, and
+ * the label and owner are separate text nodes so copied text reads correctly.
  */
+
+type StageStatus = "pending" | "active" | "done";
+
+/** Each stage's status, and the sentence the live region announces. */
+function stageRows(stages: Stage[], current: number) {
+  const complete = current >= stages.length;
+  const status = (i: number): StageStatus =>
+    i < current ? "done" : i === current && !complete ? "active" : "pending";
+  const rows = stages.map((stage, i) => ({ ...stage, status: status(i) }));
+  const active = rows.find((row) => row.status === "active");
+  const sentence = complete
+    ? `All ${stages.length} steps complete`
+    : active
+      ? `${active.label}, step ${current + 1} of ${stages.length}`
+      : "";
+  return { rows, complete, sentence };
+}
 
 export type Stage = {
   id: string;
@@ -49,7 +44,7 @@ export function StageList({
   /** Called with the stage index to move to. */
   onSelect: (index: number) => void;
 }) {
-  const { rows, complete, sentence } = useTaskSteps({ steps: stages, current });
+  const { rows, complete, sentence } = stageRows(stages, current);
   const reduced = useReducedMotion() === true;
 
   return (
@@ -58,10 +53,10 @@ export function StageList({
         {rows.map((row, i) => {
           const tone =
             row.status === "done"
-              ? "text-ink-2"
+              ? "text-muted-foreground"
               : row.status === "active"
-                ? "font-medium text-ink"
-                : "text-ink-3";
+                ? "font-medium text-foreground"
+                : "text-muted-foreground";
 
           return (
             <li key={row.id}>
@@ -78,11 +73,11 @@ export function StageList({
                 type="button"
                 aria-current={row.status === "active" ? "step" : undefined}
                 onClick={() => onSelect(i)}
-                className="press hover:bg-well focus-visible:outline-accent flex h-7 w-full items-center gap-2.5 rounded-[6px] px-1 text-left focus-visible:outline-2 focus-visible:outline-offset-1"
+                className="hover:bg-muted focus-visible:outline-primary flex h-7 w-full items-center gap-2.5 rounded-md px-1 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-1"
               >
                 <span className="relative grid size-4 shrink-0 place-items-center">
                   {row.status === "done" ? (
-                    <span className="text-moss grid size-4 place-items-center rounded-[5px] bg-[color-mix(in_oklab,var(--moss)_16%,transparent)]">
+                    <span className="grid size-4 place-items-center rounded-md bg-[color-mix(in_oklab,var(--color-emerald-600)_16%,transparent)] text-emerald-600">
                       <svg
                         viewBox="0 0 256 256"
                         width="11"
@@ -102,7 +97,7 @@ export function StageList({
                   ) : row.status === "active" ? (
                     <motion.svg
                       viewBox="0 0 16 16"
-                      className="text-ink-3 size-3"
+                      className="text-muted-foreground size-3"
                       aria-hidden
                       animate={reduced ? { rotate: 0 } : { rotate: 360 }}
                       transition={
@@ -129,16 +124,14 @@ export function StageList({
                       />
                     </motion.svg>
                   ) : (
-                    <span className="bg-hairline-strong size-[5px] rounded-[2px]" />
+                    <span className="bg-input size-[5px] rounded-sm" />
                   )}
                 </span>
 
                 {row.status === "active" && !reduced ? (
-                  /* The sweep marks which stage is running. Our ink ramp rather
-                     than the vendored literal stones, so it flips with the theme
-                     instead of being tuned for one. */
+                  /* The sweep marks which stage is running. */
                   <motion.span
-                    className="min-w-0 flex-1 truncate bg-[linear-gradient(90deg,var(--ink-3)_38%,var(--ink)_50%,var(--ink-3)_62%)] [background-size:220%_100%] bg-clip-text text-[12.5px] font-medium text-transparent"
+                    className="min-w-0 flex-1 truncate bg-[linear-gradient(90deg,var(--muted-foreground)_38%,var(--foreground)_50%,var(--muted-foreground)_62%)] [background-size:220%_100%] bg-clip-text text-[12.5px] font-medium text-transparent"
                     animate={{ backgroundPosition: ["120% 0", "-120% 0"] }}
                     transition={{
                       duration: 1.6,
@@ -177,7 +170,9 @@ export function StageList({
                     }`}
                   >
                     <span className="sr-only">, </span>
-                    <span className="meta text-ink-3">{row.meta}</span>
+                    <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                      {row.meta}
+                    </span>
                   </span>
                 ) : null}
               </button>

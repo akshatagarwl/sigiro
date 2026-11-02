@@ -40,16 +40,13 @@ const { site: SITE, sections: SECTIONS, promises: PROMISES, signup: SIGNUP, inst
  */
 const canonical = locale === 'en' ? SITE.url : `${SITE.url}/${locale}/`;
 
-/* The type ramp, from the design language and not invented here: 27px medium at
-   -0.03em for a page or section title, 15px for a lede, 13.5px for body.
-   Headings are medium, never bold — the negative tracking does the work that
-   weight would do badly. */
-const H2 = 'mt-3 max-w-[34ch] text-[27px] leading-[1.2] font-medium tracking-[-0.03em] text-ink';
-const LEDE = 'mt-3 max-w-[62ch] text-[15px] leading-relaxed text-ink-2';
-const SECTION = 'border-t border-hairline px-4 py-14 sm:px-8 lg:px-12';
+/* Section title, lede and section frame. */
+const H2 = 'mt-3 max-w-[34ch] text-[27px] leading-[1.2] font-medium tracking-[-0.03em] text-foreground';
+const LEDE = 'mt-3 max-w-[62ch] text-[15px] leading-relaxed text-muted-foreground';
+const SECTION = 'border-t border-border px-4 py-14 sm:px-8 lg:px-12';
 
 /** The stepped How section owns its vertical space, so outer padding would delay its pin. */
-const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
+const SECTION_PINNED = 'border-t border-border px-4 sm:px-8 lg:px-12';
 ---
 
 
@@ -70,12 +67,12 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
     >
       <div>
         <h1
-          class="max-w-[24ch] text-[clamp(30px,6vw,44px)] leading-[1.08] font-medium tracking-[-0.04em] text-balance text-ink"
+          class="max-w-[24ch] text-[clamp(30px,6vw,44px)] leading-[1.08] font-medium tracking-[-0.04em] text-balance text-foreground"
         >
           {SITE.tagline}
         </h1>
         <div class="mt-5 grid gap-6 sm:mt-6 sm:grid-cols-[1fr_auto] sm:items-end sm:gap-10">
-          <p class="max-w-[52ch] text-[13.5px] leading-[1.7] text-ink-2 sm:text-[15px]">
+          <p class="max-w-[52ch] text-[13.5px] leading-[1.7] text-muted-foreground sm:text-[15px]">
             {SITE.description}
           </p>
           {/*
@@ -94,8 +91,8 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
         <FactoryLoop locale={locale} />
       </div>
 
-      <p class="meta mt-1 flex items-center gap-2 text-ink-3">
-        <span aria-hidden="true" class="size-[5px] rounded-[1.5px] bg-accent"></span>
+      <p class="font-mono text-xs tabular-nums mt-1 flex items-center gap-2 text-muted-foreground">
+        <span aria-hidden="true" class="size-[5px] rounded-sm bg-primary"></span>
         {copy.ui.heroNote}
       </p>
     </div>
@@ -123,7 +120,7 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
          never continues. */
       <section aria-labelledby={`s-${s.n}`} class={SECTION}>
         <h2 id={`s-${s.n}`} class={H2}>
-          {s.lead} <span class="text-ink-3">{s.rest}</span>
+          {s.lead} <span class="text-muted-foreground">{s.rest}</span>
         </h2>
         <p class={LEDE}>{s.say}</p>
 
@@ -148,9 +145,9 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
     which was making one claim at the length of six.
   */}
   <section aria-labelledby="signing-up" class={SECTION}>
-    <p class="label">{copy.ui.integrationsLabel}</p>
+    <p class="text-xs font-medium text-muted-foreground">{copy.ui.integrationsLabel}</p>
     <h2 id="signing-up" class={H2}>
-      {copy.ui.integrationsTitle} <span class="text-ink-3">{copy.ui.integrationsTail}</span>
+      {copy.ui.integrationsTitle} <span class="text-muted-foreground">{copy.ui.integrationsTail}</span>
     </h2>
     <Integrations locale={locale} client:visible />
 
@@ -161,9 +158,9 @@ const SECTION_PINNED = 'border-t border-hairline px-4 sm:px-8 lg:px-12';
     <dl class="mt-10 grid gap-2.5 sm:grid-cols-3">
       {
         PROMISES.map((p) => (
-          <div class="mat-well rounded-[11px] p-3.5">
-            <dt class="text-[13px] font-medium tracking-[-0.01em] text-ink">{p.title}</dt>
-            <dd class="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">{p.body}</dd>
+          <div class="bg-muted rounded-lg p-3.5">
+            <dt class="text-[13px] font-medium tracking-[-0.01em] text-foreground">{p.title}</dt>
+            <dd class="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">{p.body}</dd>
           </div>
         ))
       }
