@@ -114,7 +114,8 @@ export default Alchemy.Stack(
         content: tunnelTarget,
         proxied: true,
         ttl: 1,
-        comment: "BenchApp API origin; the benchapp Worker forwards /api/* here",
+        comment:
+          "BenchApp API origin; the benchapp Worker forwards /api/* here",
       })
     );
 
@@ -174,6 +175,32 @@ export default Alchemy.Stack(
         },
       })
     );
+    // sigiro.com/dashboard: its own app (../dashboard, a Next static export)
+    // on an assets-only Worker. No Worker code runs; the route below sends
+    // /dashboard* here instead of to the website, and the export is laid out
+    // under dist/dashboard so asset paths match the URL. Same origin, so the
+    // app reaches /api/auth and /v1/query on the website Worker with no CORS.
+    const dashboard = yield* productionResource(
+      Cloudflare.Website.StaticSite("Dashboard", {
+        name: "sigiro-dashboard",
+        command: "aube run build",
+        cwd: "../dashboard",
+        outdir: "dist",
+        compatibility: { date: "2026-07-24" },
+        workersDev: false,
+        assets: {
+          htmlHandling: "auto-trailing-slash",
+          notFoundHandling: "404-page",
+        },
+      })
+    );
+    const dashboardRoute = yield* productionResource(
+      Cloudflare.Workers.WorkerRoute("DashboardRoute", {
+        zoneId: zone.zoneId,
+        pattern: "sigiro.com/dashboard*",
+        script: dashboard.workerName,
+      })
+    );
     const apexRoute = yield* productionResource(
       Cloudflare.Workers.WorkerRoute("ApexRoute", {
         zoneId: zone.zoneId,
@@ -201,6 +228,8 @@ export default Alchemy.Stack(
       authWorker,
 
       website,
+      dashboard,
+      dashboardRoute,
       apexRoute,
       wwwRoute,
     };

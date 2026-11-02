@@ -62,36 +62,6 @@ const isApiPath = (pathname: string): boolean =>
 
 const MCP_METADATA = "/.well-known/oauth-protected-resource";
 
-/**
- * DuckDB-WASM for `/dashboard/`. The module is ~36 MB, over the 25 MiB Workers
- * static-asset cap, so the build stores it brotli-compressed as `<name>.wasm.br`
- * (see `blume.config.ts`) and this answers `<name>.wasm` with that body and
- * `content-encoding: br`, which the browser decodes before
- * `WebAssembly.instantiateStreaming` sees it.
- */
-const DUCKDB_PREFIX = "/duckdb/";
-
-const serveCompressedWasm = async (
-  request: Request,
-  env: Env
-): Promise<Response> => {
-  if (request.method !== "GET" && request.method !== "HEAD")
-    return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
-  const url = new URL(request.url);
-  url.pathname = `${url.pathname}.br`;
-  url.search = "";
-  const asset = await env.ASSETS.fetch(new Request(url, { method: "GET" }));
-  if (!asset.ok) return new Response("Not found", { status: 404 });
-  return new Response(request.method === "HEAD" ? null : asset.body, {
-    headers: {
-      "content-type": "application/wasm",
-      "content-encoding": "br",
-      "cache-control": "public, max-age=31536000, immutable",
-    },
-    encodeBody: "manual",
-  });
-};
-
 const proxyRequest = async (
   request: Request,
   upstream: string
@@ -168,8 +138,6 @@ export default {
           : Response.json(browserClientMetadata(url.origin))
       );
     }
-    if (pathname.startsWith(DUCKDB_PREFIX) && pathname.endsWith(".wasm"))
-      return serveCompressedWasm(request, env);
     if (pathname === MCP_METADATA) {
       return Promise.resolve(
         Response.json(MCP_PROTECTED_RESOURCE_METADATA, {

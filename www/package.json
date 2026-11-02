@@ -33,10 +33,8 @@
   "dependencies": {
     "@astrojs/cloudflare": "14.4.2",
     "@astrojs/sitemap": "3.7.4",
-    "@duckdb/duckdb-wasm": "1.33.1-dev57.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@nekuda/webmcp-sdk": "0.8.0",
-    "apache-arrow": "17.0.0",
     "astro": "7.4.4",
     "blume": "2.2.6",
     "class-variance-authority": "0.7.1",
@@ -49,7 +47,6 @@
     "radix-ui": "1.8.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "recharts": "3.10.1",
     "shiki": "4.5.0",
     "sigiro-icons": "npm:simple-icons@16.36.0",
     "tailwind-merge": "3.7.0"

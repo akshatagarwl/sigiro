@@ -32,6 +32,28 @@ export default defineConfig({
     // shadcn/ui components, copied from the registry and kept as upstream wrote
     // them so `shadcn diff` stays meaningful.
     "www/src/components/ui/**",
+    // ../dashboard: code installed from shadcn registries (shadcn/ui,
+    // dashboard-01, openstatus data-table-filters, EvilCharts, assistant-ui),
+    // kept as the registries ship it so `shadcn add --diff` stays meaningful.
+    // Our own code there is dashboard/app, components/sigiro and lib/sigiro.
+    "dashboard/.next/**",
+    "dashboard/next-env.d.ts",
+    "dashboard/components/ui/**",
+    "dashboard/components/custom/**",
+    "dashboard/components/data-table/**",
+    "dashboard/components/evilcharts/**",
+    "dashboard/components/assistant-ui/**",
+    "dashboard/components/*.tsx",
+    "dashboard/hooks/**",
+    "dashboard/lib/*.ts",
+    "dashboard/lib/actions/**",
+    "dashboard/lib/constants/**",
+    "dashboard/lib/data-table/**",
+    "dashboard/lib/filters/**",
+    "dashboard/lib/request/**",
+    "dashboard/lib/store/**",
+    "dashboard/lib/table/**",
+    "dashboard/lib/table-schema/**",
     "www/.agent/**",
     "www/.agents/**",
     "www/.claude/**",

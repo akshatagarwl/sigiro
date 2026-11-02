@@ -84,6 +84,14 @@ run = "mise tasks ls"
 description = "Install website dependencies from the frozen aube lockfile."
 run = "aube -C www install --frozen-lockfile"
 
+[tasks.dashboard-install]
+description = "Install dashboard (sigiro.com/dashboard) dependencies from the frozen aube lockfile."
+run = "aube -C dashboard install --frozen-lockfile"
+
+[tasks.dashboard-build]
+description = "Build the dashboard's static export into dashboard/dist/dashboard."
+run = "aube -C dashboard run build"
+
 [tasks.auth-install]
 description = "Install auth dependencies from the frozen aube lockfile."
 run = "aube -C auth install --frozen-lockfile"

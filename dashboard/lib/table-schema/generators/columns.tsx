@@ -1,0 +1,364 @@
+"use client";
+
+import {
+  DataTableCellBadge,
+  DataTableCellBar,
+  DataTableCellBoolean,
+  DataTableCellCode,
+  DataTableCellGauge,
+  DataTableCellHeatmap,
+  DataTableCellLevelIndicator,
+  DataTableCellNumber,
+  DataTableCellStar,
+  DataTableCellStatusCode,
+  DataTableCellText,
+  DataTableCellTimestamp,
+} from "@/components/data-table/data-table-cell";
+import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header";
+import { Checkbox } from "@/components/ui/checkbox";
+import { defineFilters } from "@/lib/filters";
+import type { DataTableFeatures } from "@/lib/table/features";
+import type { ColumnDef, RowData } from "@tanstack/react-table";
+import type { ComponentProps, JSX } from "react";
+import { resolveColumns } from "../col";
+import type { DisplayDescriptor, TableSchemaDefinition } from "../types";
+
+/**
+ * Render the cell based on the display config.
+ */
+function renderCell(
+  display: DisplayDescriptor,
+  value: unknown,
+  context?: { min: number; max: number },
+): JSX.Element | null {
+  const fallback = <DataTableCellText value={String(value ?? "")} />;
+  const colorMap = "colorMap" in display ? display.colorMap : undefined;
+  switch (display.type) {
+    case "text": {
+      const hex = colorMap?.[String(value)];
+      return typeof value === "string" || typeof value === "number" ? (
+        <DataTableCellText value={value} color={hex} />
+      ) : (
+        fallback
+      );
+    }
+    case "code": {
+      const hex = colorMap?.[String(value)];
+      return typeof value === "string" || typeof value === "number" ? (
+        <DataTableCellCode value={value} color={hex} />
+      ) : (
+        fallback
+      );
+    }
+    case "number": {
+      const hex = colorMap?.[String(value)];
+      return typeof value === "number" ? (
+        <DataTableCellNumber value={value} unit={display.unit} color={hex} />
+      ) : (
+        fallback
+      );
+    }
+    case "timestamp": {
+      const hex = colorMap?.[String(value)];
+      return value instanceof Date ||
+        typeof value === "string" ||
+        typeof value === "number" ? (
+        <DataTableCellTimestamp date={value} color={hex} />
+      ) : (
+        fallback
+      );
+    }
+    case "badge": {
+      if (Array.isArray(value)) {
+        return (
+          <div className="flex-no-wrap flex gap-1">
+            {value.map((item, i) => (
+              <DataTableCellBadge
+                key={i}
+                value={item}
+                color={colorMap?.[String(item)]}
+              />
+            ))}
+          </div>
+        );
+      }
+      const hex = colorMap?.[String(value)];
+      return typeof value === "string" || typeof value === "number" ? (
+        <DataTableCellBadge value={value} color={hex} />
+      ) : (
+        fallback
+      );
+    }
+    case "boolean": {
+      const hex = colorMap?.[String(value)];
+      return typeof value === "boolean" ? (
+        <DataTableCellBoolean value={value} color={hex} />
+      ) : (
+        fallback
+      );
+    }
+    case "star": {
+      return typeof value === "boolean" ? (
+        <DataTableCellStar value={value} />
+      ) : (
+        fallback
+      );
+    }
+    case "status-code": {
+      const hex = colorMap?.[String(value)];
+      return typeof value === "number" ? (
+        <DataTableCellStatusCode value={value} color={hex} />
+      ) : (
+        fallback
+      );
+    }
+    case "level-indicator": {
+      const hex = colorMap?.[String(value)];
+      return typeof value === "string" ? (
+        <DataTableCellLevelIndicator value={value} color={hex} />
+      ) : (
+        fallback
+      );
+    }
+    case "heatmap": {
+      const { min = 0, max = 100 } = context ?? {};
+      return typeof value === "number" ? (
+        <DataTableCellHeatmap
+          value={value}
+          min={min}
+          max={max}
+          unit={display.unit}
+          color={display.color}
+        />
+      ) : (
+        fallback
+      );
+    }
+    case "bar": {
+      const { min = 0, max = 100 } = context ?? {};
+      return typeof value === "number" ? (
+        <DataTableCellBar
+          value={value}
+          min={min}
+          max={max}
+          unit={display.unit}
+          color={display.color}
+        />
+      ) : (
+        fallback
+      );
+    }
+    case "gauge": {
+      const { min = 0, max = 100 } = context ?? {};
+      return typeof value === "number" ? (
+        <DataTableCellGauge
+          value={value}
+          min={min}
+          max={max}
+          unit={display.unit}
+          color={display.color}
+        />
+      ) : (
+        fallback
+      );
+    }
+  }
+}
+
+/**
+ * The one interpretation of `.size()` / `.minSize()` / `.resizable()`:
+ *
+ * - `.minSize(px)` — a flexing column with a floor: it absorbs the table's
+ *   leftover width but never compresses below `px`.
+ * - `.size(px)` without `.resizable()` — locked: min/max pin the rendered
+ *   width, so only an unsized column can flex.
+ * - `.size(px)` with `.resizable()` — `px` is the initial width only.
+ */
+function sizingFor(config: {
+  size?: number;
+  minSize?: number;
+  resizable: boolean;
+}): { size?: number; minSize?: number; maxSize?: number } {
+  if (config.minSize !== undefined) {
+    return {
+      minSize: config.minSize,
+      ...(config.size !== undefined ? { size: config.size } : {}),
+    };
+  }
+  if (config.size === undefined) return {};
+  if (config.resizable) return { size: config.size };
+  return { size: config.size, minSize: config.size, maxSize: config.size };
+}
+
+/**
+ * The header checkbox's third state, spelled for both libraries.
+ *
+ * `ui/checkbox` resolves from whichever library the project was initialized
+ * with, and they disagree: Radix takes `checked="indeterminate"`, Base UI
+ * types `checked` as a boolean and takes a separate `indeterminate` flag.
+ * Setting both is the only form that compiles and renders on either — hence
+ * the cast, the one place this file steps around a props type. In the partial
+ * state Radix does receive the extra `indeterminate` and forwards it to its
+ * `<button>` as `indeterminate="true"`, which is inert; setting it only when
+ * it applies is what avoids `indeterminate="false"`, which React warns about
+ * on a non-boolean attribute.
+ */
+function selectionState(allSelected: boolean, someSelected: boolean) {
+  const indeterminate = !allSelected && someSelected;
+  return {
+    checked: allSelected || (someSelected && "indeterminate"),
+    ...(indeterminate ? { indeterminate: true } : {}),
+  } as ComponentProps<typeof Checkbox>;
+}
+
+/**
+ * Generate ColumnDef[] from a table schema definition.
+ *
+ * Rules:
+ * - Dotted keys (e.g. "timing.dns") → id + accessorFn
+ * - Non-dotted keys → accessorKey
+ * - Sortable columns get DataTableColumnHeader; others get a plain string header
+ * - filterFn comes from the shared filter-semantics module
+ * - Cell renders via built-in display components or the "custom" cell function
+ * - meta.label is always set; meta.hidden reflects .hidden() calls
+ *
+ * Composite/virtual columns that span multiple fields must be appended manually:
+ * @example
+ * ```ts
+ * const columns = [
+ *   ...generateColumns(tableSchema),
+ *   { id: "timing", header: ..., cell: ..., size: 130 },
+ * ];
+ * ```
+ */
+export function generateColumns<TData extends RowData>(
+  schema: TableSchemaDefinition,
+): ColumnDef<DataTableFeatures, TData>[] {
+  // One interpretation of filter semantics, shared with the SQL and in-memory
+  // engines. `filterFn` returns a *function*, so the consuming table no longer
+  // has to register `filterFns: { inDateRange, arrSome }` — a contract that was
+  // undocumented outside a comment and silently broke filtering when missed.
+  const filters = defineFilters(schema);
+
+  return resolveColumns(schema).map((config) => {
+    const { key } = config;
+
+    // Select column — checkbox header + cell
+    if (config.kind === "select") {
+      return {
+        id: key,
+        header: ({ table }) => (
+          <div className="flex items-center justify-center">
+            <Checkbox
+              {...selectionState(
+                table.getIsAllPageRowsSelected(),
+                table.getIsSomePageRowsSelected(),
+              )}
+              onCheckedChange={(value: unknown) =>
+                table.toggleAllPageRowsSelected(!!value)
+              }
+              aria-label="Select all"
+              className="shadow-none"
+            />
+          </div>
+        ),
+        cell: ({ row }) => (
+          <div
+            className="flex items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Checkbox
+              checked={row.getIsSelected()}
+              onCheckedChange={(value) => row.toggleSelected(!!value)}
+              aria-label="Select row"
+              className="shadow-none"
+            />
+          </div>
+        ),
+        enableSorting: false,
+        enableHiding: false,
+        enableResizing: false,
+        ...sizingFor(config),
+        meta: { label: config.label, kind: "select", hidden: config.hidden },
+      } as ColumnDef<DataTableFeatures, TData>;
+    }
+
+    const isDotted = key.includes(".");
+    const filterFn = filters.filterFn(key);
+
+    const header = config.hideHeader
+      ? () => <span className="sr-only">{config.label}</span>
+      : config.sortable
+        ? ({
+            column,
+          }: {
+            column: Parameters<typeof DataTableColumnHeader>[0]["column"];
+          }) => <DataTableColumnHeader column={column} title={config.label} />
+        : config.label;
+
+    const needsMinMax =
+      config.display.type === "heatmap" ||
+      config.display.type === "bar" ||
+      config.display.type === "gauge";
+
+    const customCell = config.renderers.cell;
+
+    const cell = ({
+      getValue,
+      row,
+      column,
+    }: {
+      getValue: () => unknown;
+      row: { original: TData };
+      column: { getFacetedMinMaxValues?: () => [number, number] | undefined };
+    }) => {
+      // A custom renderer overrides the descriptor's display. The descriptor
+      // still carries a real display type, which is what the sheet and
+      // `toJSON()` fall back to.
+      if (customCell) return customCell(getValue(), row.original);
+      if (needsMinMax) {
+        const display = config.display as {
+          min?: number;
+          max?: number;
+        };
+        const faceted = column.getFacetedMinMaxValues?.();
+        const min = faceted?.[0] ?? display.min ?? 0;
+        const max = faceted?.[1] ?? display.max ?? 100;
+        return renderCell(config.display, getValue(), { min, max });
+      }
+      return renderCell(config.display, getValue());
+    };
+
+    const meta = {
+      label: config.label,
+      hidden: config.hidden,
+      kind: config.kind,
+    };
+
+    const base = {
+      header,
+      cell,
+      enableResizing: config.resizable,
+      // Not just the header: with the default (`true`) a column that never
+      // opted in could still be sorted through state, e.g. a URL param.
+      enableSorting: config.sortable,
+      ...(config.enableHiding === false ? { enableHiding: false } : {}),
+      ...(filterFn ? { filterFn } : {}),
+      ...sizingFor(config),
+      meta,
+    };
+
+    if (isDotted) {
+      return {
+        ...base,
+        id: key,
+        accessorFn: (row: TData) => (row as Record<string, unknown>)[key],
+      } as ColumnDef<DataTableFeatures, TData>;
+    }
+
+    return {
+      ...base,
+      accessorKey: key,
+    } as ColumnDef<DataTableFeatures, TData>;
+  });
+}

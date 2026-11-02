@@ -20,5 +20,7 @@ jobs:
       - run: aube install --frozen-lockfile
       - run: aube -C auth install --frozen-lockfile
       - run: aube -C www install --frozen-lockfile
+      - run: aube -C dashboard install --frozen-lockfile
+      - run: aube -C dashboard run typecheck
       - run: aube run fmt:check
       - run: aube run lint
