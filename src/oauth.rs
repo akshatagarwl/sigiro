@@ -87,8 +87,74 @@ fn workspace_of(access_token: &str) -> Option<Workspace> {
         })
 }
 
+/// Where a session's credentials live between processes.
+///
+/// Every `sigiro` process (a shell's `sigiro auth token`, an agent's
+/// long-running `sigiro mcp`) holds its own in-memory copy of one shared entry.
+/// The authorization server rotates the refresh token on every refresh, so this
+/// store, not the in-memory copy, is the only place the current refresh token
+/// is known. A trait only so a test can share one store between two sessions.
+pub(crate) trait CredentialStore: Send + Sync {
+    fn read(&self) -> Result<Option<StoredCredentials>>;
+    fn write(&self, credentials: &StoredCredentials) -> Result<()>;
+    fn delete(&self) -> Result<bool>;
+}
+
+/// The operating-system credential store (Keychain, Credential Manager,
+/// Secret Service).
+struct KeyringStore;
+
+impl CredentialStore for KeyringStore {
+    fn read(&self) -> Result<Option<StoredCredentials>> {
+        let entry = keyring_entry()?;
+        match entry.get_password() {
+            Ok(encoded) => serde_json::from_str(&encoded)
+                .context("stored Sigiro credentials are malformed")
+                .map(Some),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => {
+                Err(anyhow::Error::new(error).context("failed to read Sigiro credentials"))
+            }
+        }
+    }
+
+    fn write(&self, credentials: &StoredCredentials) -> Result<()> {
+        let encoded =
+            serde_json::to_string(credentials).context("failed to encode Sigiro credentials")?;
+        keyring_entry()?
+            .set_password(&encoded)
+            .context("failed to store Sigiro credentials in the OS credential store")
+    }
+
+    fn delete(&self) -> Result<bool> {
+        let entry = keyring_entry()?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(error) => {
+                Err(anyhow::Error::new(error).context("failed to delete Sigiro credentials"))
+            }
+        }
+    }
+}
+
+async fn blocking<T: Send + 'static>(
+    store: &std::sync::Arc<dyn CredentialStore>,
+    operation: impl FnOnce(&dyn CredentialStore) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let store = std::sync::Arc::clone(store);
+    tokio::task::spawn_blocking(move || operation(store.as_ref()))
+        .await
+        .context("credential-store task failed")?
+}
+
+/// How long to wait for a concurrent refresh in another process to finish
+/// writing its rotated token before treating a rejected refresh token as dead.
+const ROTATION_SETTLE: Duration = Duration::from_millis(750);
+
 pub struct OAuthSession {
     credentials: Mutex<StoredCredentials>,
+    store: std::sync::Arc<dyn CredentialStore>,
 }
 
 type HostedOAuthClient = BasicClient<
@@ -110,48 +176,20 @@ fn keyring_entry() -> Result<keyring::Entry> {
     keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).context("OS credential store is unavailable")
 }
 
+fn keyring_store() -> std::sync::Arc<dyn CredentialStore> {
+    std::sync::Arc::new(KeyringStore)
+}
+
 async fn read_credentials() -> Result<Option<StoredCredentials>> {
-    tokio::task::spawn_blocking(|| {
-        let entry = keyring_entry()?;
-        match entry.get_password() {
-            Ok(encoded) => serde_json::from_str(&encoded)
-                .context("stored Sigiro credentials are malformed")
-                .map(Some),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => {
-                Err(anyhow::Error::new(error).context("failed to read Sigiro credentials"))
-            }
-        }
-    })
-    .await
-    .context("credential-store task failed")?
+    blocking(&keyring_store(), |store| store.read()).await
 }
 
 async fn write_credentials(credentials: StoredCredentials) -> Result<()> {
-    tokio::task::spawn_blocking(move || {
-        let encoded =
-            serde_json::to_string(&credentials).context("failed to encode Sigiro credentials")?;
-        keyring_entry()?
-            .set_password(&encoded)
-            .context("failed to store Sigiro credentials in the OS credential store")
-    })
-    .await
-    .context("credential-store task failed")?
+    blocking(&keyring_store(), move |store| store.write(&credentials)).await
 }
 
 async fn delete_credentials() -> Result<bool> {
-    tokio::task::spawn_blocking(|| {
-        let entry = keyring_entry()?;
-        match entry.delete_credential() {
-            Ok(()) => Ok(true),
-            Err(keyring::Error::NoEntry) => Ok(false),
-            Err(error) => {
-                Err(anyhow::Error::new(error).context("failed to delete Sigiro credentials"))
-            }
-        }
-    })
-    .await
-    .context("credential-store task failed")?
+    blocking(&keyring_store(), |store| store.delete()).await
 }
 
 fn oauth_http_client() -> Result<oauth2::reqwest::Client> {
@@ -475,16 +513,47 @@ pub async fn access_token() -> Result<String> {
 
 impl OAuthSession {
     pub(crate) async fn load() -> Result<Option<Self>> {
-        Ok(read_credentials().await?.map(|credentials| Self {
-            credentials: Mutex::new(credentials),
-        }))
+        Self::load_from(keyring_store()).await
+    }
+
+    pub(crate) async fn load_from(
+        store: std::sync::Arc<dyn CredentialStore>,
+    ) -> Result<Option<Self>> {
+        Ok(blocking(&store, |store| store.read())
+            .await?
+            .map(|credentials| Self {
+                credentials: Mutex::new(credentials),
+                store,
+            }))
     }
 
     pub(crate) async fn endpoint(&self) -> String {
         self.credentials.lock().await.endpoint.clone()
     }
 
-    async fn refresh(credentials: &mut StoredCredentials) -> Result<()> {
+    /// The stored entry, when another process has rotated the refresh token
+    /// away from `held` since this session last read or wrote it.
+    async fn rotated_elsewhere(&self, held: &Option<String>) -> Result<Option<StoredCredentials>> {
+        Ok(blocking(&self.store, |store| store.read())
+            .await?
+            .filter(|stored| stored.refresh_token.is_some() && &stored.refresh_token != held))
+    }
+
+    /// Refresh the access token.
+    ///
+    /// Rotation makes a refresh token single-use, and several processes share
+    /// one stored entry. So this re-reads the store first and adopts a token
+    /// another process already rotated to, and it deletes the entry only when
+    /// the token the server rejected is still the stored one. Before, the
+    /// second process to refresh sent the already-rotated token, got
+    /// `invalid_grant`, and wiped the first process's fresh login.
+    async fn refresh(&self, credentials: &mut StoredCredentials) -> Result<()> {
+        if let Some(stored) = self.rotated_elsewhere(&credentials.refresh_token).await? {
+            *credentials = stored;
+            if credentials.expires_at > now()?.saturating_add(REFRESH_SKEW_SECONDS) {
+                return Ok(());
+            }
+        }
         let refresh_token = credentials
             .refresh_token
             .clone()
@@ -507,7 +576,18 @@ impl OAuthSession {
             Err(RequestTokenError::ServerResponse(response))
                 if response.error() == &BasicErrorResponseType::InvalidGrant =>
             {
-                delete_credentials().await?;
+                // A process that refreshed at the same moment may still be
+                // writing the token it rotated to. Give it a moment, and keep
+                // its login rather than deleting it.
+                for wait in [Duration::ZERO, ROTATION_SETTLE] {
+                    tokio::time::sleep(wait).await;
+                    if let Some(stored) = self.rotated_elsewhere(&credentials.refresh_token).await?
+                    {
+                        *credentials = stored;
+                        return Ok(());
+                    }
+                }
+                blocking(&self.store, |store| store.delete()).await?;
                 let reason = response
                     .error_description()
                     .map_or("it expired or was revoked", String::as_str);
@@ -516,7 +596,8 @@ impl OAuthSession {
             Err(error) => return Err(error).context("failed to refresh Sigiro access token"),
         };
         let rotated = credentials_from_token(&token, &metadata)?;
-        write_credentials(rotated.clone()).await?;
+        let written = rotated.clone();
+        blocking(&self.store, move |store| store.write(&written)).await?;
         *credentials = rotated;
         Ok(())
     }
@@ -524,14 +605,14 @@ impl OAuthSession {
     pub(crate) async fn access_token(&self) -> Result<String> {
         let mut credentials = self.credentials.lock().await;
         if credentials.expires_at <= now()?.saturating_add(REFRESH_SKEW_SECONDS) {
-            Self::refresh(&mut credentials).await?;
+            self.refresh(&mut credentials).await?;
         }
         Ok(credentials.access_token.clone())
     }
 
     pub(crate) async fn force_refresh(&self) -> Result<String> {
         let mut credentials = self.credentials.lock().await;
-        Self::refresh(&mut credentials).await?;
+        self.refresh(&mut credentials).await?;
         Ok(credentials.access_token.clone())
     }
 }
@@ -564,4 +645,131 @@ pub async fn logout() -> Result<bool> {
         bail!("{error}; local credentials were deleted");
     }
     Ok(deleted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// One shared entry, like the OS credential store two processes see.
+    #[derive(Default)]
+    struct MemoryStore(parking_lot::Mutex<Option<StoredCredentials>>);
+
+    impl CredentialStore for MemoryStore {
+        fn read(&self) -> Result<Option<StoredCredentials>> {
+            Ok(self.0.lock().clone())
+        }
+        fn write(&self, credentials: &StoredCredentials) -> Result<()> {
+            *self.0.lock() = Some(credentials.clone());
+            Ok(())
+        }
+        fn delete(&self) -> Result<bool> {
+            Ok(self.0.lock().take().is_some())
+        }
+    }
+
+    /// A token endpoint that rotates: each refresh token works once, and the
+    /// one it replaced answers `invalid_grant`, as Better Auth does.
+    async fn rotating_token_endpoint(first: &str) -> (String, Arc<parking_lot::Mutex<u32>>) {
+        let current = Arc::new(parking_lot::Mutex::new((first.to_string(), 0_u32)));
+        let exchanges = Arc::new(parking_lot::Mutex::new(0_u32));
+        let counter = Arc::clone(&exchanges);
+        let app = axum::Router::new().route(
+            "/token",
+            axum::routing::post(
+                move |axum::Form(form): axum::Form<std::collections::HashMap<String, String>>| {
+                    let current = Arc::clone(&current);
+                    let counter = Arc::clone(&counter);
+                    async move {
+                        let mut state = current.lock();
+                        if form.get("refresh_token") != Some(&state.0) {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                axum::Json(serde_json::json!({ "error": "invalid_grant" })),
+                            );
+                        }
+                        state.1 += 1;
+                        *counter.lock() += 1;
+                        state.0 = format!("refresh-{}", state.1);
+                        (
+                            axum::http::StatusCode::OK,
+                            axum::Json(serde_json::json!({
+                                "access_token": format!("access-{}", state.1),
+                                "token_type": "Bearer",
+                                "expires_in": 900,
+                                "refresh_token": state.0,
+                            })),
+                        )
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{address}/token"), exchanges)
+    }
+
+    fn expired(token_endpoint: &str, refresh_token: &str) -> StoredCredentials {
+        StoredCredentials {
+            access_token: "access-0".to_string(),
+            refresh_token: Some(refresh_token.to_string()),
+            expires_at: 0,
+            scopes: Vec::new(),
+            issuer: HOSTED_ISSUER.to_string(),
+            resource: HOSTED_RESOURCE.to_string(),
+            endpoint: HOSTED_ENDPOINT.to_string(),
+            client_id: CLI_CLIENT_ID.to_string(),
+            token_endpoint: token_endpoint.to_string(),
+            revocation_endpoint: format!("{HOSTED_ISSUER}/oauth2/revoke"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_holder_adopts_a_rotated_token_instead_of_wiping_the_login() {
+        let (token_endpoint, exchanges) = rotating_token_endpoint("refresh-0").await;
+        let store: Arc<dyn CredentialStore> = Arc::new(MemoryStore::default());
+        store.write(&expired(&token_endpoint, "refresh-0")).unwrap();
+
+        // Two processes, say an agent's `sigiro mcp` and a shell's
+        // `sigiro auth token`, load the same refresh token.
+        let mcp = OAuthSession::load_from(Arc::clone(&store))
+            .await
+            .unwrap()
+            .unwrap();
+        let shell = OAuthSession::load_from(Arc::clone(&store))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(shell.access_token().await.unwrap(), "access-1");
+        // `mcp` still holds the rotated-away refresh-0 in memory.
+        assert_eq!(mcp.access_token().await.unwrap(), "access-1");
+        assert_eq!(*exchanges.lock(), 1, "the fresh stored token is reused");
+        let stored = store.read().unwrap().expect("the login must survive");
+        assert_eq!(stored.refresh_token.as_deref(), Some("refresh-1"));
+
+        // After a 401 the session forces a refresh; the adopted token works.
+        assert_eq!(mcp.force_refresh().await.unwrap(), "access-2");
+        assert_eq!(shell.force_refresh().await.unwrap(), "access-2");
+        assert!(store.read().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_token_the_server_rejects_and_nobody_replaced_is_deleted() {
+        let (token_endpoint, _) = rotating_token_endpoint("refresh-live").await;
+        let store: Arc<dyn CredentialStore> = Arc::new(MemoryStore::default());
+        store
+            .write(&expired(&token_endpoint, "refresh-revoked"))
+            .unwrap();
+        let session = OAuthSession::load_from(Arc::clone(&store))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let error = session.access_token().await.unwrap_err();
+        assert!(format!("{error:#}").contains("run `sigiro auth login`"));
+        assert!(store.read().unwrap().is_none());
+    }
 }
