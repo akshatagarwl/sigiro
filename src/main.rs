@@ -17,7 +17,7 @@ const STYLES: styling::Styles = styling::Styles::styled()
     .placeholder(styling::AnsiColor::Yellow.on_default());
 
 #[derive(Parser)]
-#[command(name = "sigiro", version, about = "Observability for AI agents", styles = STYLES)]
+#[command(name = "sigiro", version = env!("SIGIRO_VERSION"), about = "Observability for AI agents", styles = STYLES)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -162,25 +162,22 @@ async fn main() -> Result<()> {
         }
     }));
 
-    // OTel self-instrumentation: read config at startup, pass to init_telemetry()
-    let telemetry_config = sigiro::otel::TelemetryConfig::from_env()?;
-    let _telemetry_guard = match sigiro::otel::init_telemetry(telemetry_config) {
-        Ok(Some(guard)) => Some(guard),
-        Ok(None) => {
-            init_basic_subscriber();
-            None
-        }
-        Err(e) => {
-            init_basic_subscriber();
-            tracing::warn!("OTel self-instrumentation failed to initialize: {e:#}");
-            None
-        }
+    let cli = Cli::parse();
+
+    // OTel self-instrumentation belongs to the server only. A user who points
+    // OTEL_EXPORTER_OTLP_ENDPOINT at Sigiro to instrument their own app must
+    // not have every `sigiro auth status` or `sigiro query` try to export the
+    // CLI's own spans, or warn that SIGIRO_OTEL_AUTH_KEY is missing.
+    let serves = matches!(cli.command, None | Some(Command::Serve { .. }));
+    let _telemetry_guard = if serves {
+        init_self_telemetry()?
+    } else {
+        init_basic_subscriber();
+        None
     };
     let _runtime_metrics_guard = _telemetry_guard
         .as_ref()
         .map(|_| sigiro::runtime_metrics::spawn());
-
-    let cli = Cli::parse();
 
     // This is client-only configuration. Apply it before any command resolves
     // endpoint configuration, so `--token` has the same behavior as
@@ -608,6 +605,24 @@ async fn run_evictor(pool: Arc<ProjectPool>, interval_secs: u64, max_idle_secs: 
             tracing::error!("idle eviction task failed: {error}");
         }
     }
+}
+
+/// The server's own traces, logs and metrics, exported only when
+/// OTEL_EXPORTER_OTLP_ENDPOINT is set; otherwise plain stderr logging.
+fn init_self_telemetry() -> Result<Option<sigiro::otel::TelemetryGuard>> {
+    let telemetry_config = sigiro::otel::TelemetryConfig::from_env()?;
+    Ok(match sigiro::otel::init_telemetry(telemetry_config) {
+        Ok(Some(guard)) => Some(guard),
+        Ok(None) => {
+            init_basic_subscriber();
+            None
+        }
+        Err(e) => {
+            init_basic_subscriber();
+            tracing::warn!("OTel self-instrumentation failed to initialize: {e:#}");
+            None
+        }
+    })
 }
 
 fn init_basic_subscriber() {
