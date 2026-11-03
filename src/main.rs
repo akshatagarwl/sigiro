@@ -83,6 +83,16 @@ enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Create, list and revoke ingest keys: fixed keys a long-running service
+    /// sends telemetry with, instead of a 15-minute `sigiro auth token`.
+    ///
+    /// A key belongs to the workspace your login is bound to, can only send
+    /// telemetry (it cannot query), and is shown once, when it is created.
+    #[command(name = "ingest-keys")]
+    IngestKeys {
+        #[command(subcommand)]
+        command: IngestKeysCommand,
+    },
     /// Create a hosted account, verify email, and securely store OAuth credentials.
     Signup {
         /// Name for the hosted account.
@@ -117,6 +127,23 @@ enum AuthCommand {
     Token,
     /// Revoke the refresh token and remove local credentials.
     Logout,
+}
+
+#[derive(Subcommand)]
+enum IngestKeysCommand {
+    /// Create a key and print it. Store it now: it is never shown again.
+    Create {
+        /// A label to tell keys apart, such as the service that will use it.
+        #[arg(long, default_value = "ingest key")]
+        name: String,
+    },
+    /// List the workspace's keys (ids and names, never the secrets).
+    List,
+    /// Revoke a key by its id; senders using it get 401 from then on.
+    Revoke {
+        /// The key id, the middle part of `sigiro_<id>_<secret>`.
+        id: String,
+    },
 }
 
 /// Every command prints pretty JSON. One format, so a pipeline and a human read
@@ -349,6 +376,26 @@ async fn main() -> Result<()> {
                 );
             }
         },
+        Some(Command::IngestKeys { command }) => {
+            let client = sigiro::client::try_build_client().await?;
+            let value = match command {
+                IngestKeysCommand::Create { name } => {
+                    let mut created = client.create_ingest_key(&name).await?;
+                    if let Some(key) = created.get("key").and_then(|k| k.as_str()) {
+                        let headers = format!("Authorization=Bearer {key}");
+                        created["otel_exporter_otlp_headers"] = serde_json::Value::String(headers);
+                    }
+                    eprintln!("Store this key now: it is shown only once.");
+                    created
+                }
+                IngestKeysCommand::List => client.list_ingest_keys().await?,
+                IngestKeysCommand::Revoke { id } => {
+                    client.revoke_ingest_key(&id).await?;
+                    serde_json::json!({ "id": id, "revoked": true })
+                }
+            };
+            println!("{}", format_output(&value)?);
+        }
         Some(Command::Signup { name, email }) => {
             let status = sigiro::oauth::signup(name, email).await?;
             println!("{}", format_output(&serde_json::to_value(status)?)?);

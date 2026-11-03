@@ -43,29 +43,110 @@ pub(crate) struct AuthContext {
     pub(crate) tenant_id: TenantId,
     pub(crate) subject: String,
     pub(crate) scopes: HashSet<String>,
+    pub(crate) kind: CredentialKind,
+}
+
+/// Which kind of credential authenticated a request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CredentialKind {
+    /// A user's OAuth access token.
+    User,
+    /// An Agent Auth token.
+    Agent,
+    /// A fixed ingest key (see `crate::ingest_keys`).
+    IngestKey,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AuthError {
     #[error("invalid access token")]
     InvalidToken,
+    #[error("access token expired")]
+    TokenExpired,
     #[error("access token lacks required scope {0}")]
     InsufficientScope(&'static str),
     #[error("authorization service is unavailable")]
     JwksUnavailable,
+    #[error("malformed ingest key")]
+    IngestKeyMalformed,
+    #[error("unknown ingest key")]
+    IngestKeyUnknown,
+    #[error("revoked ingest key")]
+    IngestKeyRevoked,
+    #[error("ingest keys cannot use scope {0}")]
+    IngestKeyNotAllowed(&'static str),
 }
 
 impl AuthError {
-    pub(crate) fn into_api_error(self) -> ApiError {
+    /// HTTP status for this failure. An unavailable authorization service is
+    /// a 503 so OTLP exporters retry instead of dropping the batch.
+    pub(crate) fn status(&self) -> axum::http::StatusCode {
+        use axum::http::StatusCode;
         match self {
-            AuthError::InsufficientScope(scope) => axum_anyhow::forbidden(
-                "Insufficient scope",
-                &format!("The access token requires scope {scope}"),
-            ),
-            AuthError::InvalidToken | AuthError::JwksUnavailable => axum_anyhow::unauthorized(
-                "Invalid access token",
-                "The bearer access token could not be verified",
-            ),
+            AuthError::InsufficientScope(_) | AuthError::IngestKeyNotAllowed(_) => {
+                StatusCode::FORBIDDEN
+            }
+            AuthError::JwksUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            AuthError::InvalidToken
+            | AuthError::TokenExpired
+            | AuthError::IngestKeyMalformed
+            | AuthError::IngestKeyUnknown
+            | AuthError::IngestKeyRevoked => StatusCode::UNAUTHORIZED,
+        }
+    }
+
+    /// One sentence a person reading an exporter's log can act on.
+    pub(crate) fn reason(&self) -> String {
+        match self {
+            AuthError::InvalidToken => "The bearer access token could not be verified.".to_owned(),
+            AuthError::TokenExpired => "The access token has expired. Tokens from `sigiro auth token` last 15 minutes; a long-running service should send an ingest key instead (`sigiro ingest-keys create`).".to_owned(),
+            AuthError::InsufficientScope(scope) => {
+                format!("The access token requires scope {scope}.")
+            }
+            AuthError::JwksUnavailable => {
+                "The authorization service is unavailable; retry shortly.".to_owned()
+            }
+            AuthError::IngestKeyMalformed => {
+                "The ingest key is malformed; expected sigiro_<id>_<secret>.".to_owned()
+            }
+            AuthError::IngestKeyUnknown => {
+                "The ingest key is not valid: no key with this id and secret exists.".to_owned()
+            }
+            AuthError::IngestKeyRevoked => "The ingest key has been revoked. Create a new one with `sigiro ingest-keys create`.".to_owned(),
+            AuthError::IngestKeyNotAllowed(_) => "Ingest keys can only send telemetry. Read data with `sigiro auth token` or `sigiro mcp`.".to_owned(),
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            AuthError::InvalidToken => "Invalid access token",
+            AuthError::TokenExpired => "Expired access token",
+            AuthError::InsufficientScope(_) => "Insufficient scope",
+            AuthError::JwksUnavailable => "Authorization unavailable",
+            AuthError::IngestKeyMalformed
+            | AuthError::IngestKeyUnknown
+            | AuthError::IngestKeyRevoked => "Invalid ingest key",
+            AuthError::IngestKeyNotAllowed(_) => "Ingest key not allowed",
+        }
+    }
+
+    pub(crate) fn into_api_error(self) -> ApiError {
+        ApiError::builder()
+            .status(self.status())
+            .title(self.title())
+            .detail(self.reason())
+            .build()
+    }
+}
+
+impl From<crate::ingest_keys::KeyRejection> for AuthError {
+    fn from(rejection: crate::ingest_keys::KeyRejection) -> Self {
+        use crate::ingest_keys::KeyRejection;
+        match rejection {
+            KeyRejection::Malformed => AuthError::IngestKeyMalformed,
+            KeyRejection::Unknown => AuthError::IngestKeyUnknown,
+            KeyRejection::Revoked => AuthError::IngestKeyRevoked,
+            KeyRejection::Unavailable => AuthError::JwksUnavailable,
         }
     }
 }
@@ -184,7 +265,10 @@ impl JwtVerifier {
         validation.set_audience(&[&self.audience]);
         validation.validate_nbf = true;
         let claims = decode::<AccessTokenClaims>(token, &key, &validation)
-            .map_err(|_| AuthError::InvalidToken)?
+            .map_err(|error| match error.kind() {
+                jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::TokenExpired,
+                _ => AuthError::InvalidToken,
+            })?
             .claims;
         let tenant_id = TenantId::try_new(claims.tid).map_err(|_| AuthError::InvalidToken)?;
         if claims.sub.trim().is_empty() {
@@ -202,6 +286,7 @@ impl JwtVerifier {
             tenant_id,
             subject: claims.sub,
             scopes,
+            kind: CredentialKind::User,
         })
     }
 
@@ -245,6 +330,7 @@ impl JwtVerifier {
             tenant_id,
             subject,
             scopes,
+            kind: CredentialKind::Agent,
         })
     }
 
@@ -409,8 +495,12 @@ pub(crate) enum CredentialParseError {
 pub enum AuthMode {
     /// No auth required. Any request is accepted.
     Open,
-    /// Hosted mode: Better Auth OAuth access tokens verified against its JWKS.
-    Jwt { verifier: Arc<JwtVerifier> },
+    /// Hosted mode: Better Auth OAuth access tokens verified against its JWKS,
+    /// plus the workspace ingest keys that may send telemetry.
+    Jwt {
+        verifier: Arc<JwtVerifier>,
+        ingest_keys: crate::ingest_keys::IngestKeys,
+    },
 }
 
 impl AuthMode {
@@ -422,6 +512,7 @@ impl AuthMode {
     pub async fn from_runtime_config(
         query_surface: crate::config::QuerySurface,
         storage_mode: &crate::storage::StorageMode,
+        ingest_keys: crate::ingest_keys::IngestKeys,
     ) -> anyhow::Result<Self> {
         if query_surface == crate::config::QuerySurface::Quack {
             tracing::info!("auth_mode=open — quack edge, protected by the network perimeter");
@@ -432,6 +523,7 @@ impl AuthMode {
             tracing::info!("auth_mode=jwt — Better Auth access tokens required");
             return Ok(AuthMode::Jwt {
                 verifier: Arc::new(verifier),
+                ingest_keys,
             });
         }
         ensure_open_mode_allowed(storage_mode)?;
@@ -449,14 +541,14 @@ impl AuthMode {
     pub(crate) fn protected_resource_metadata_path(&self) -> Option<&str> {
         match self {
             AuthMode::Open => None,
-            AuthMode::Jwt { verifier } => Some(&verifier.resource_metadata_path),
+            AuthMode::Jwt { verifier, .. } => Some(&verifier.resource_metadata_path),
         }
     }
 
     pub(crate) fn protected_resource_metadata(&self) -> Option<ProtectedResourceMetadata> {
         match self {
             AuthMode::Open => None,
-            AuthMode::Jwt { verifier } => Some(ProtectedResourceMetadata {
+            AuthMode::Jwt { verifier, .. } => Some(ProtectedResourceMetadata {
                 resource: verifier.audience.clone(),
                 authorization_servers: [verifier.issuer.clone()],
                 scopes_supported: SUPPORTED_SCOPES,
@@ -470,7 +562,7 @@ impl AuthMode {
         scheme: CredentialScheme,
         challenge: BearerChallenge,
     ) -> Option<HeaderValue> {
-        let AuthMode::Jwt { verifier } = self else {
+        let AuthMode::Jwt { verifier, .. } = self else {
             return None;
         };
         let suffix = match challenge {
@@ -505,10 +597,51 @@ impl AuthMode {
                     .expect("default is a valid tenant id"),
                 subject: "local".to_owned(),
                 scopes: HashSet::new(),
+                kind: CredentialKind::User,
             }),
-            AuthMode::Jwt { verifier } => verifier.verify(token, required_scope, scheme).await,
+            AuthMode::Jwt {
+                verifier,
+                ingest_keys,
+            } => {
+                if crate::ingest_keys::is_ingest_key(token) {
+                    return authenticate_ingest_key(ingest_keys, token, required_scope, scheme)
+                        .await;
+                }
+                verifier.verify(token, required_scope, scheme).await
+            }
         }
     }
+
+    /// The ingest-key store, in hosted mode.
+    pub(crate) fn ingest_keys(&self) -> Option<&crate::ingest_keys::IngestKeys> {
+        match self {
+            AuthMode::Open => None,
+            AuthMode::Jwt { ingest_keys, .. } => Some(ingest_keys),
+        }
+    }
+}
+
+/// An ingest key authorizes ingest and nothing else, whatever the route.
+async fn authenticate_ingest_key(
+    ingest_keys: &crate::ingest_keys::IngestKeys,
+    token: &str,
+    required_scope: &'static str,
+    scheme: CredentialScheme,
+) -> Result<AuthContext, AuthError> {
+    if scheme == CredentialScheme::AgentAuth {
+        return Err(AuthError::InvalidToken);
+    }
+    if required_scope != TELEMETRY_INGEST_SCOPE {
+        return Err(AuthError::IngestKeyNotAllowed(required_scope));
+    }
+    let tenant_id = ingest_keys.verify(token).await?;
+    let id = token.split('_').nth(1).unwrap_or_default();
+    Ok(AuthContext {
+        tenant_id,
+        subject: format!("ingest-key:{id}"),
+        scopes: HashSet::from([TELEMETRY_INGEST_SCOPE.to_owned()]),
+        kind: CredentialKind::IngestKey,
+    })
 }
 
 fn ensure_open_mode_allowed(storage_mode: &crate::storage::StorageMode) -> anyhow::Result<()> {
@@ -671,12 +804,16 @@ pub(crate) async fn auth_middleware(
                 Ok(context) => context,
                 Err(error) => {
                     let challenge = match error {
-                        AuthError::InsufficientScope(scope) => {
+                        AuthError::InsufficientScope(scope)
+                        | AuthError::IngestKeyNotAllowed(scope) => {
                             BearerChallenge::InsufficientScope(scope)
                         }
-                        AuthError::InvalidToken | AuthError::JwksUnavailable => {
-                            BearerChallenge::InvalidToken
-                        }
+                        AuthError::InvalidToken
+                        | AuthError::TokenExpired
+                        | AuthError::JwksUnavailable
+                        | AuthError::IngestKeyMalformed
+                        | AuthError::IngestKeyUnknown
+                        | AuthError::IngestKeyRevoked => BearerChallenge::InvalidToken,
                     };
                     return challenged_response(
                         &state.auth_mode,
@@ -716,6 +853,17 @@ fn required_http_scope(method: &axum::http::Method, path: &str) -> Result<&'stat
         (&Method::GET, "/v1/services" | "/services") => Ok(SERVICES_READ_SCOPE),
         (&Method::GET, "/v1/auth/validate" | "/auth/validate") => Ok(AUTHENTICATED_SCOPE),
         (&Method::GET, "/v1/alerts" | "/alerts") => Ok(ALERTS_READ_SCOPE),
+        // Managing ingest keys needs the power the keys grant. The handlers
+        // further require a user's own OAuth token: an agent or an ingest key
+        // must not mint credentials that outlive it.
+        (&Method::GET | &Method::POST, "/v1/ingest-keys" | "/ingest-keys") => {
+            Ok(TELEMETRY_INGEST_SCOPE)
+        }
+        (&Method::DELETE, path)
+            if path.starts_with("/v1/ingest-keys/") || path.starts_with("/ingest-keys/") =>
+        {
+            Ok(TELEMETRY_INGEST_SCOPE)
+        }
         (&Method::GET, path) if path.starts_with("/v1/traces/") || path.starts_with("/traces/") => {
             Ok(TRACES_READ_SCOPE)
         }
@@ -743,5 +891,180 @@ mod legacy_removal_tests {
             required_http_scope(&Method::POST, "/v1/query").unwrap(),
             QUERY_READ_SCOPE
         );
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    /// PKCS#8 DER of an Ed25519 key generated for these tests only.
+    const TEST_PRIVATE_KEY: &[u8] = &[
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20, 0x16, 0xec, 0xa2, 0x03, 0x76, 0xac, 0x44, 0x3f, 0x74, 0xb5, 0x8f, 0x37, 0x61, 0xef,
+        0x9a, 0x6e, 0x20, 0xbb, 0x81, 0x12, 0x57, 0x7f, 0x74, 0xd3, 0xdc, 0xce, 0xe8, 0x56, 0x70,
+        0xa5, 0x4d, 0xc7,
+    ];
+    const TEST_PUBLIC_X: &str = "CLfQSFYvWk4IiB3lnmUB68uGDS8iXg3wlJlFGexY2pI";
+    const ISSUER: &str = "https://issuer.test/api/auth";
+    const AUDIENCE: &str = "https://sigiro.test";
+
+    /// Hosted auth with a pre-loaded JWKS (no network) and an in-memory
+    /// ingest-key store.
+    pub(crate) fn jwt_mode() -> (AuthMode, crate::ingest_keys::IngestKeys) {
+        let keys: JwkSet = serde_json::from_value(serde_json::json!({
+            "keys": [{"kty": "OKP", "crv": "Ed25519", "x": TEST_PUBLIC_X,
+                      "kid": "test", "alg": "EdDSA", "use": "sig"}]
+        }))
+        .unwrap();
+        let verifier = JwtVerifier {
+            issuer: ISSUER.to_owned(),
+            audience: AUDIENCE.to_owned(),
+            resource_metadata_url: format!("{AUDIENCE}/.well-known/oauth-protected-resource"),
+            resource_metadata_path: "/.well-known/oauth-protected-resource".to_owned(),
+            jwks_url: "http://127.0.0.1:9/jwks".to_owned(),
+            agent_session_url: "http://127.0.0.1:9/session".to_owned(),
+            client: reqwest::Client::new(),
+            cache: RwLock::new(Some(CachedJwks {
+                keys,
+                expires_at: Instant::now() + Duration::from_secs(3600),
+            })),
+            refresh: AsyncMutex::new(()),
+            last_unknown_kid_refresh: RwLock::new(None),
+        };
+        let ingest_keys = crate::ingest_keys::IngestKeys::new(Arc::new(parking_lot::Mutex::new(
+            crate::admin::test_connection().unwrap(),
+        )));
+        (
+            AuthMode::Jwt {
+                verifier: Arc::new(verifier),
+                ingest_keys: ingest_keys.clone(),
+            },
+            ingest_keys,
+        )
+    }
+
+    /// A user access token for `tenant`, expiring `expires_in` seconds from now.
+    pub(crate) fn user_token(tenant: &str, scope: &str, expires_in: i64) -> String {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let mut header = jsonwebtoken::Header::new(Algorithm::EdDSA);
+        header.kid = Some("test".to_owned());
+        jsonwebtoken::encode(
+            &header,
+            &serde_json::json!({
+                "sub": "user-1", "tid": tenant, "scope": scope,
+                "iss": ISSUER, "aud": AUDIENCE,
+                "iat": now - 1000, "exp": now + expires_in,
+            }),
+            &jsonwebtoken::EncodingKey::from_ed_der(TEST_PRIVATE_KEY),
+        )
+        .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod ingest_key_auth_tests {
+    use super::test_support::{jwt_mode, user_token};
+    use super::*;
+    use axum::http::{Method, StatusCode};
+
+    fn tenant(id: &str) -> TenantId {
+        TenantId::try_new(id.to_owned()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_ingest_key_sends_telemetry_and_reads_nothing() {
+        let (mode, keys) = jwt_mode();
+        let created = keys.create(&tenant("acme"), "svc", "user-1").await.unwrap();
+        let context = mode
+            .authenticate(
+                &created.key,
+                TELEMETRY_INGEST_SCOPE,
+                CredentialScheme::Bearer,
+            )
+            .await
+            .unwrap();
+        assert_eq!(context.tenant_id, tenant("acme"));
+        assert_eq!(context.kind, CredentialKind::IngestKey);
+
+        for scope in [
+            QUERY_READ_SCOPE,
+            SERVICES_READ_SCOPE,
+            TRACES_READ_SCOPE,
+            AUTHENTICATED_SCOPE,
+        ] {
+            let error = mode
+                .authenticate(&created.key, scope, CredentialScheme::Bearer)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, AuthError::IngestKeyNotAllowed(_)),
+                "{scope}"
+            );
+            assert_eq!(error.status(), StatusCode::FORBIDDEN);
+        }
+        assert!(matches!(
+            mode.authenticate(
+                &created.key,
+                TELEMETRY_INGEST_SCOPE,
+                CredentialScheme::AgentAuth
+            )
+            .await,
+            Err(AuthError::InvalidToken)
+        ));
+
+        keys.revoke(&tenant("acme"), &created.info.id)
+            .await
+            .unwrap();
+        let error = mode
+            .authenticate(
+                &created.key,
+                TELEMETRY_INGEST_SCOPE,
+                CredentialScheme::Bearer,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthError::IngestKeyRevoked));
+        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
+        assert!(error.reason().contains("revoked"));
+    }
+
+    #[tokio::test]
+    async fn an_expired_user_token_says_so_and_points_at_ingest_keys() {
+        let (mode, _) = jwt_mode();
+        let fresh = user_token("acme", "telemetry:ingest query:read", 900);
+        let context = mode
+            .authenticate(&fresh, TELEMETRY_INGEST_SCOPE, CredentialScheme::Bearer)
+            .await
+            .unwrap();
+        assert_eq!(context.kind, CredentialKind::User);
+        assert_eq!(context.tenant_id, tenant("acme"));
+
+        // Past the validator's 60 s leeway.
+        let expired = user_token("acme", "telemetry:ingest", -300);
+        let error = mode
+            .authenticate(&expired, TELEMETRY_INGEST_SCOPE, CredentialScheme::Bearer)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthError::TokenExpired));
+        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
+        assert!(error.reason().contains("15 minutes"));
+        assert!(error.reason().contains("sigiro ingest-keys create"));
+    }
+
+    #[test]
+    fn managing_keys_requires_the_ingest_scope() {
+        for (method, path) in [
+            (Method::GET, "/v1/ingest-keys"),
+            (Method::POST, "/v1/ingest-keys"),
+            (Method::DELETE, "/v1/ingest-keys/abc"),
+        ] {
+            assert_eq!(
+                required_http_scope(&method, path).unwrap(),
+                TELEMETRY_INGEST_SCOPE,
+                "{method} {path}"
+            );
+        }
+        assert!(required_http_scope(&Method::DELETE, "/v1/ingest-keys").is_err());
     }
 }

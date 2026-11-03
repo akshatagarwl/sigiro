@@ -51,6 +51,9 @@ use tracing_attributes::instrument;
         crate::ingest::pyroscope_push,
         crate::ingest::pyroscope_ingest,
         crate::ingest::pyroscope_ingest_pyroscope,
+        list_ingest_keys,
+        create_ingest_key,
+        revoke_ingest_key,
         admin_status,
             ),
     components(
@@ -63,20 +66,27 @@ use tracing_attributes::instrument;
             SpanDetail,
             ServiceBreakdownEntry,
             AdminStatusResponse,
+            crate::ingest_keys::IngestKeyInfo,
+            crate::ingest_keys::CreatedIngestKey,
+            CreateIngestKeyRequest,
+            IngestKeysResponse,
         )
     ),
     modifiers(&SecurityAddon),
-    /* No `tags`, and no `tag` on any operation.
+    /* Every operation carries an explicit `tag`.
      *
-     * There were two — `query` and `admin` — and a renderer groups operations by
-     * tag, so the reference gained a level of nesting for them. Once `/admin` left
-     * the public spec, `query` was one group holding every operation: a heading
-     * that grouped nothing, showing up in the docs sidebar and again as an eyebrow
-     * over each operation's title. Five operations read better as five operations.
+     * An operation without one is not untagged: utoipa falls back to the Rust
+     * module path, so the Pyroscope routes (defined in `crate::ingest`) showed up
+     * in the public reference under a section literally named `crate::ingest`.
      *
-     * Worth tagging again if this API grows a second genuine area. Tagging by
-     * transport ("query") was never that — it described how you reach the endpoint,
-     * not what it is for. */
+     * The tags name what an operation is for, not how it is reached (an earlier
+     * `query` tag described the transport and grouped everything into one
+     * heading). With ingest keys the API has three genuine areas. */
+    tags(
+        (name = "Telemetry", description = "Read the telemetry of your workspace."),
+        (name = "Ingest keys", description = "Fixed, revocable keys that let a long-running service send telemetry."),
+        (name = "Pyroscope ingest", description = "Send profiles in Pyroscope's own wire format."),
+    ),
 )]
 pub(crate) struct ApiDoc;
 
@@ -309,6 +319,175 @@ async fn validate_auth_token(
     axum::Json(serde_json::json!({ "authenticated": true }))
 }
 
+/// Body of `POST /v1/ingest-keys`.
+#[derive(Debug, Default, serde::Deserialize, utoipa::ToSchema)]
+pub(crate) struct CreateIngestKeyRequest {
+    /// A label to tell keys apart, such as the service that uses it. 1 to 64
+    /// characters; defaults to "ingest key".
+    name: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub(crate) struct IngestKeysResponse {
+    keys: Vec<crate::ingest_keys::IngestKeyInfo>,
+}
+
+/// The store and the caller for an ingest-key management request.
+///
+/// Only a person's own OAuth login may manage keys. An agent token or an
+/// ingest key minting a fresh key would hand out a credential that survives
+/// revoking the one it came from.
+fn ingest_key_manager(
+    state: &AppState,
+    context: Option<Extension<auth::AuthContext>>,
+) -> ApiResult<(crate::ingest_keys::IngestKeys, auth::AuthContext)> {
+    let (Some(keys), Some(Extension(context))) = (state.auth_mode.ingest_keys(), context) else {
+        return Err(bad_request(
+            "Ingest keys unavailable",
+            "This server runs without authentication, so it needs no ingest key; send OTLP without an Authorization header.",
+        ));
+    };
+    if context.kind != auth::CredentialKind::User {
+        return Err(axum_anyhow::forbidden(
+            "User login required",
+            "Only a person's own login (`sigiro auth login`) can manage ingest keys; agent tokens and ingest keys cannot.",
+        ));
+    }
+    Ok((keys.clone(), context))
+}
+
+fn ingest_key_storage_error(error: &anyhow::Error) -> ApiError {
+    tracing::error!("ingest key storage failed: {error:#}");
+    internal_error(
+        "Ingest key storage failed",
+        "unable to read or write ingest keys",
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/ingest-keys",
+    tag = "Ingest keys",
+    operation_id = "list-ingest-keys",
+    summary = "List ingest keys",
+    description = "Every ingest key of the workspace, newest first, revoked ones included. The secret is never returned.",
+    responses(
+        (status = 200, description = "The workspace's ingest keys", body = IngestKeysResponse),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 403, description = "Not a user's own OAuth access token")
+    ),
+    security(("bearer" = [])),
+)]
+#[instrument(skip_all)]
+async fn list_ingest_keys(
+    State(state): State<Arc<AppState>>,
+    context: Option<Extension<auth::AuthContext>>,
+) -> ApiResult<Json<IngestKeysResponse>> {
+    let (keys, context) = ingest_key_manager(&state, context)?;
+    let keys = keys
+        .list(&context.tenant_id)
+        .await
+        .map_err(|error| ingest_key_storage_error(&error))?;
+    Ok(Json(IngestKeysResponse { keys }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/ingest-keys",
+    tag = "Ingest keys",
+    operation_id = "create-ingest-key",
+    summary = "Create an ingest key",
+    description = "Create a fixed key for a long-running service. Send it as `Authorization: Bearer <key>` (for example `OTEL_EXPORTER_OTLP_HEADERS=\"Authorization=Bearer <key>\"`). It sends telemetry to this workspace and cannot read anything. The response is the only time the key is shown: only its hash is stored.",
+    request_body(content = CreateIngestKeyRequest, content_type = "application/json"),
+    responses(
+        (status = 201, description = "The new key, shown once", body = crate::ingest_keys::CreatedIngestKey),
+        (status = 400, description = "Invalid name, or the workspace already has 50 active keys"),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 403, description = "Not a user's own OAuth access token")
+    ),
+    security(("bearer" = [])),
+)]
+#[instrument(skip_all)]
+async fn create_ingest_key(
+    State(state): State<Arc<AppState>>,
+    context: Option<Extension<auth::AuthContext>>,
+    body: axum::body::Bytes,
+) -> ApiResult<(
+    axum::http::StatusCode,
+    Json<crate::ingest_keys::CreatedIngestKey>,
+)> {
+    let (keys, context) = ingest_key_manager(&state, context)?;
+    let request: CreateIngestKeyRequest = if body.iter().all(u8::is_ascii_whitespace) {
+        CreateIngestKeyRequest::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|error| {
+            bad_request(
+                "Invalid request body",
+                &format!("expected {{\"name\": \"…\"}}: {error}"),
+            )
+        })?
+    };
+    let name = request.name.unwrap_or_else(|| "ingest key".to_owned());
+    match keys
+        .create(&context.tenant_id, &name, &context.subject)
+        .await
+    {
+        Ok(created) => {
+            tracing::info!(
+                project_id = context.tenant_id.as_ref(),
+                key_id = created.info.id,
+                "ingest key created"
+            );
+            Ok((axum::http::StatusCode::CREATED, Json(created)))
+        }
+        Err(crate::ingest_keys::CreateError::Storage(error)) => {
+            Err(ingest_key_storage_error(&error))
+        }
+        Err(error) => Err(bad_request("Ingest key not created", &error.to_string())),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/ingest-keys/{id}",
+    tag = "Ingest keys",
+    operation_id = "revoke-ingest-key",
+    summary = "Revoke an ingest key",
+    description = "Revoke a key by its id. Senders using it get 401 \"The ingest key has been revoked\" from then on. Revoking a revoked key succeeds again.",
+    params(("id" = String, Path, description = "The key id: the middle part of `sigiro_<id>_<secret>`")),
+    responses(
+        (status = 204, description = "Revoked"),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 403, description = "Not a user's own OAuth access token"),
+        (status = 404, description = "The workspace has no key with this id")
+    ),
+    security(("bearer" = [])),
+)]
+#[instrument(skip_all)]
+async fn revoke_ingest_key(
+    State(state): State<Arc<AppState>>,
+    context: Option<Extension<auth::AuthContext>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> ApiResult<axum::http::StatusCode> {
+    let (keys, context) = ingest_key_manager(&state, context)?;
+    let found = keys
+        .revoke(&context.tenant_id, &id)
+        .await
+        .map_err(|error| ingest_key_storage_error(&error))?;
+    if !found {
+        return Err(axum_anyhow::not_found(
+            "Ingest key not found",
+            "This workspace has no ingest key with that id.",
+        ));
+    }
+    tracing::info!(
+        project_id = context.tenant_id.as_ref(),
+        key_id = id,
+        "ingest key revoked"
+    );
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 /// Build the HTTP Router for the main API (port 9999).
 /// Extracted from `run_servers` so integration tests can build the same
 /// router with test state without starting TCP listeners.
@@ -320,6 +499,14 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     // per-tenant limiter runs before the handler.
     let v1 = Router::new()
         .route("/auth/validate", axum::routing::get(validate_auth_token))
+        .route(
+            "/ingest-keys",
+            axum::routing::get(list_ingest_keys).post(create_ingest_key),
+        )
+        .route(
+            "/ingest-keys/{id}",
+            axum::routing::delete(revoke_ingest_key),
+        )
         .typed_post(query_handler)
         .typed_get(services_handler)
         .typed_get(alerts_handler)
@@ -460,8 +647,10 @@ pub async fn run_servers(
     let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?.get();
 
     let query_surface = crate::config::query_surface()?;
+    let ingest_keys = crate::ingest_keys::IngestKeys::new(alerts.admin_connection());
     let auth_mode =
-        crate::auth::AuthMode::from_runtime_config(query_surface, pool.storage_mode()).await?;
+        crate::auth::AuthMode::from_runtime_config(query_surface, pool.storage_mode(), ingest_keys)
+            .await?;
 
     // The bind address enforced for EVERY listener (HTTP, OTLP-HTTP, gRPC, and
     // quack itself) when this node is a quack edge — resolved once here so
@@ -1255,6 +1444,7 @@ fn query_sql_contract() -> String {
 #[utoipa::path(
     post,
     path = "/v1/query",
+    tag = "Telemetry",
     operation_id = "run-query",
     summary = "Run a SQL query",
     /* `request_body(...)` rather than `request_body = String`, for the two fields
@@ -1357,6 +1547,7 @@ struct ServiceQueryRow {
 #[utoipa::path(
     get,
     path = "/v1/services",
+    tag = "Telemetry",
     operation_id = "list-services",
     summary = "List services",
     description = "Every service that has reported telemetry, with the first and \
@@ -1451,6 +1642,7 @@ struct AlertsQuery {
 #[utoipa::path(
     get,
     path = "/v1/alerts",
+    tag = "Telemetry",
     operation_id = "list-alerts",
     summary = "List alerts",
     params(AlertsQuery),
@@ -1504,6 +1696,7 @@ async fn alerts_handler(
 #[utoipa::path(
      get,
      path = "/v1/traces/{trace_id}",
+     tag = "Telemetry",
      operation_id = "get-trace",
      summary = "Fetch one whole trace",
      description = "Every span of one trace, parent links included, so a caller \
@@ -1853,6 +2046,7 @@ fn compute_service_breakdown(
 #[utoipa::path(
     get,
     path = "/admin/status",
+    tag = "Admin",
     responses(
         (status = 200, description = "Server status", body = AdminStatusResponse)
     ),
@@ -1890,6 +2084,34 @@ mod legacy_removal_tests {
         assert!(!PUBLIC_SPEC.paths.paths.contains_key("/v1/anomalies"));
         assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/query"));
         assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/services"));
+    }
+
+    #[test]
+    fn every_public_operation_has_a_named_tag_and_its_own_summary() {
+        let declared: Vec<String> = PUBLIC_SPEC
+            .tags
+            .iter()
+            .flatten()
+            .map(|tag| tag.name.clone())
+            .collect();
+        let mut summaries = std::collections::BTreeSet::new();
+        for (path, item) in &PUBLIC_SPEC.paths.paths {
+            for operation in [&item.get, &item.post, &item.delete].into_iter().flatten() {
+                let tags = operation.tags.clone().unwrap_or_default();
+                assert_eq!(tags.len(), 1, "{path}: {tags:?}");
+                assert!(
+                    declared.contains(&tags[0]),
+                    "{path}: undeclared tag {tags:?}"
+                );
+                let summary = operation.summary.clone().unwrap_or_default();
+                assert!(
+                    summaries.insert(summary.clone()),
+                    "{path}: repeated summary {summary}"
+                );
+            }
+        }
+        assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/ingest-keys"));
+        assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/ingest-keys/{id}"));
     }
 }
 

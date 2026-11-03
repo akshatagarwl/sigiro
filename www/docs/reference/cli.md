@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`sigiro` has seven subcommands. Client commands print indented JSON on success;
+`sigiro` has eight subcommands. Client commands print indented JSON on success;
 server commands remain attached to their protocol or listener.
 
 For a new hosted account, run `sigiro signup --name "Your Name" --email
@@ -37,6 +37,21 @@ Sigiro uses the official Agent Auth implementation internally and does not expos
 a second onboarding CLI. For delegated host registration, one-time approval,
 least-privilege capability grants, token use, key rotation, and revocation, see
 [Onboard an agent with Agent Auth](/docs/how-to/agent-auth).
+
+## ingest-keys
+
+Fixed keys for long-running services on hosted sigiro, in place of the
+15-minute `sigiro auth token`. A key belongs to the workspace your login is bound
+to, is sent as `Authorization: Bearer <key>`, and can only send telemetry.
+
+| Command                                  | Does                                                    |
+| ---------------------------------------- | ------------------------------------------------------- |
+| `sigiro ingest-keys create --name <NAME>` | Creates a key and prints it once; only its hash is kept |
+| `sigiro ingest-keys list`                | Lists ids, names, last use and revocation, no secrets   |
+| `sigiro ingest-keys revoke <ID>`         | Revokes a key; its senders get `401` from then on        |
+
+Only your own login can manage keys; an Agent Auth token or an ingest key
+cannot.
 
 ## serve
 

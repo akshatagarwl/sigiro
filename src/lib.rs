@@ -7,6 +7,7 @@ mod declared_schema;
 pub mod federate;
 
 pub mod ingest;
+pub mod ingest_keys;
 pub mod inserter;
 pub mod mcp;
 

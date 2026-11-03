@@ -105,14 +105,28 @@ token is still printed.
 
 **The token expires after 15 minutes.** `sigiro auth token` prints a short-lived
 access token and refreshes the stored session before doing so. An app started
-with it sends data for 15 minutes; after that its exporter gets HTTP `401`, which
-appears only in your app's own log. Restart the app with a fresh token to keep
-going. That is enough to try sigiro out.
+with it sends data for 15 minutes; after that its exporter gets HTTP `401` with
+the reason "The access token has expired", which appears only in your app's own
+log. That is enough to try sigiro out.
 
-**A long-running service has no static ingest key yet.** The two options today
-are [Agent Auth](/docs/how-to/agent-auth), where your service signs a fresh token
-for each export, or [running sigiro yourself](/docs/tutorials/quickstart), where
-a local server needs no key at all.
+**A long-running service sends with an ingest key.** Create one for the
+workspace your CLI is signed in to:
+
+```bash
+sigiro ingest-keys create --name checkout
+```
+
+It prints the key, `sigiro_<id>_<secret>`, and the matching
+`otel_exporter_otlp_headers` value. Store the key now: it is shown once, and
+sigiro keeps only its hash. Then use it in place of the token:
+
+```bash
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sigiro_<id>_<secret>"
+```
+
+The key does not expire. It can only send telemetry: queries made with it get
+`403`. `sigiro ingest-keys list` shows each key's id and when it was last used,
+and `sigiro ingest-keys revoke <id>` stops it at once.
 
 **No OpenTelemetry in your app yet?** Zero-code instrumentation sends traces,
 logs and metrics using the variables above, with no code change. Node.js:
@@ -177,9 +191,9 @@ curl -s "https://sigiro.com/v1/services" \
 ```
 
 Your service appears in the `services` array, with a count for each signal. If
-it is missing, look in your app's own log for the exporter error: `401` means the
-token expired or is missing, and a connection error usually means a `:4318` was
-left on the endpoint.
+it is missing, look in your app's own log for the exporter error: a `401` carries
+its reason (token expired, key revoked or unknown, header missing), and a
+connection error usually means a `:4318` was left on the endpoint.
 
 **No app instrumented yet?** Post one test span by hand to prove the path;
 OTLP/HTTP accepts JSON as well as protobuf:

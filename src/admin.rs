@@ -81,6 +81,7 @@ const POSTGRES_INSTANCE_STATUS: DeclaredTable = DeclaredTable {
 fn reconcile_sqlite(conn: &mut rusqlite::Connection) -> Result<()> {
     let tables: Vec<DeclaredTable> = std::iter::once(SQLITE_INSTANCE_STATUS)
         .chain(crate::alerts::SQLITE_TABLES.iter().copied())
+        .chain(crate::ingest_keys::SQLITE_TABLES.iter().copied())
         .collect();
     let transaction = conn
         .transaction()
@@ -94,6 +95,7 @@ fn reconcile_sqlite(conn: &mut rusqlite::Connection) -> Result<()> {
 fn reconcile_postgres(client: &mut postgres::Client) -> Result<()> {
     let tables: Vec<DeclaredTable> = std::iter::once(POSTGRES_INSTANCE_STATUS)
         .chain(crate::alerts::POSTGRES_TABLES.iter().copied())
+        .chain(crate::ingest_keys::POSTGRES_TABLES.iter().copied())
         .collect();
     let mut transaction = client
         .transaction()

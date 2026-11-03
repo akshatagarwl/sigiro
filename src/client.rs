@@ -139,6 +139,58 @@ impl SigiroClient {
             .context("failed to parse services response")
     }
 
+    /// Read a 2xx JSON body, or turn the failure into an error that carries the
+    /// server's own reason.
+    async fn json_or_error(&self, resp: reqwest::Response) -> Result<serde_json::Value> {
+        let status = resp.status();
+        if status == reqwest::StatusCode::NO_CONTENT {
+            return Ok(serde_json::Value::Null);
+        }
+        if status.is_success() {
+            return resp.json().await.context("failed to parse response");
+        }
+        let body = resp.text().await.unwrap_or_default();
+        let detail = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("detail")
+                    .and_then(|d| d.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or(body);
+        match status.as_u16() {
+            401 => bail!("{} {detail}", self.auth.unauthorized_message()),
+            s => bail!("Server error ({s}): {detail}"),
+        }
+    }
+
+    /// GET /v1/ingest-keys — the workspace's ingest keys, without secrets.
+    pub async fn list_ingest_keys(&self) -> Result<serde_json::Value> {
+        let req = self.http.get(format!("{}/v1/ingest-keys", self.base_url));
+        let resp = self.send(req).await?;
+        self.json_or_error(resp).await
+    }
+
+    /// POST /v1/ingest-keys — create a key; the response holds the secret once.
+    pub async fn create_ingest_key(&self, name: &str) -> Result<serde_json::Value> {
+        let req = self
+            .http
+            .post(format!("{}/v1/ingest-keys", self.base_url))
+            .json(&serde_json::json!({ "name": name }));
+        let resp = self.send(req).await?;
+        self.json_or_error(resp).await
+    }
+
+    /// DELETE /v1/ingest-keys/{id}.
+    pub async fn revoke_ingest_key(&self, id: &str) -> Result<()> {
+        let req = self
+            .http
+            .delete(format!("{}/v1/ingest-keys/{id}", self.base_url));
+        let resp = self.send(req).await?;
+        self.json_or_error(resp).await.map(drop)
+    }
+
     /// GET /health — typed response. Returns the parsed `HealthResponse` for
     /// both 200 (Ready) and 503 (Starting/Degraded) so callers can branch on
     /// the variant. Auth is not required (health is public).

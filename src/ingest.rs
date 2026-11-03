@@ -145,14 +145,9 @@ pub async fn extract_project_id_grpc(
                 )
                 .await
                 .map(|context| context.tenant_id.as_ref().to_owned())
-                .map_err(|error| match error {
-                    crate::auth::AuthError::InsufficientScope(_) => {
-                        Status::permission_denied("Access token lacks telemetry:ingest scope")
-                    }
-                    crate::auth::AuthError::InvalidToken
-                    | crate::auth::AuthError::JwksUnavailable => {
-                        Status::unauthenticated("Invalid access token")
-                    }
+                .map_err(|error| {
+                    let failure = IngestAuthFailure::from(error);
+                    Status::new(failure.code, failure.message)
                 })
         }
     }
@@ -434,16 +429,24 @@ pub fn otlp_http_router(
 
 /// Extract project_id from HTTP Authorization header.
 /// Uses the explicit AuthMode — Open mode skips auth, JWT mode validates Bearer or AgentAuth.
-pub async fn extract_project_id_http(
+pub(crate) async fn extract_project_id_http(
     auth_mode: &crate::auth::AuthMode,
     headers: &axum::http::HeaderMap,
-) -> Result<String, StatusCode> {
+) -> Result<String, IngestAuthFailure> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
         crate::auth::AuthMode::Jwt { .. } => {
-            let credential = crate::auth::extract_api_credential(headers).map_err(|_| {
-                tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
-                StatusCode::UNAUTHORIZED
+            let value = headers
+                .get(axum::http::header::AUTHORIZATION)
+                .ok_or_else(|| {
+                    tracing::warn!("OTLP HTTP: missing Authorization header");
+                    IngestAuthFailure::unauthenticated(MISSING_AUTHORIZATION)
+                })?
+                .to_str()
+                .map_err(|_| IngestAuthFailure::unauthenticated(MALFORMED_AUTHORIZATION))?;
+            let credential = crate::auth::parse_api_credential(value).map_err(|_| {
+                tracing::warn!("OTLP HTTP: malformed Authorization header");
+                IngestAuthFailure::unauthenticated(MALFORMED_AUTHORIZATION)
             })?;
 
             auth_mode
@@ -454,11 +457,68 @@ pub async fn extract_project_id_http(
                 )
                 .await
                 .map(|context| context.tenant_id.as_ref().to_owned())
-                .map_err(|error| match error {
-                    crate::auth::AuthError::InsufficientScope(_) => StatusCode::FORBIDDEN,
-                    crate::auth::AuthError::InvalidToken
-                    | crate::auth::AuthError::JwksUnavailable => StatusCode::UNAUTHORIZED,
+                .map_err(|error| {
+                    tracing::warn!("OTLP HTTP: authentication failed: {error}");
+                    IngestAuthFailure::from(error)
                 })
+        }
+    }
+}
+
+const MISSING_AUTHORIZATION: &str = "Missing Authorization header. Send `Authorization: Bearer <ingest key>`; create a key with `sigiro ingest-keys create`.";
+const MALFORMED_AUTHORIZATION: &str = "Malformed Authorization header. Expected `Authorization: Bearer <ingest key or access token>`.";
+
+/// Why an ingest request was not authenticated, in a form the sender can log.
+///
+/// A bare 401 left a service's exporter logging "401" with nothing to act on,
+/// and the most common cause, a 15-minute token that has expired, looked the
+/// same as a typo.
+#[derive(Debug)]
+pub(crate) struct IngestAuthFailure {
+    pub(crate) status: StatusCode,
+    pub(crate) code: tonic::Code,
+    pub(crate) message: String,
+}
+
+impl IngestAuthFailure {
+    fn unauthenticated(message: &str) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code: tonic::Code::Unauthenticated,
+            message: message.to_owned(),
+        }
+    }
+
+    /// OTLP/HTTP failure response: a `google.rpc.Status` in the request's own
+    /// encoding, which SDKs decode and log, so a JSON request reads
+    /// `{"code":16,"message":"…"}`.
+    pub(crate) fn otlp_response(&self, format: InputFormat) -> AxumResponse {
+        metrics_http_error_response(format, self.status, self.code, &self.message)
+    }
+
+    /// Plain-text response for the Pyroscope paths, which have no error schema.
+    fn text_response(&self) -> AxumResponse {
+        (
+            self.status,
+            [(CONTENT_TYPE, "text/plain; charset=utf-8")],
+            format!("{}\n", self.message),
+        )
+            .into_response()
+    }
+}
+
+impl From<crate::auth::AuthError> for IngestAuthFailure {
+    fn from(error: crate::auth::AuthError) -> Self {
+        let status = error.status();
+        let code = match status {
+            StatusCode::FORBIDDEN => tonic::Code::PermissionDenied,
+            StatusCode::SERVICE_UNAVAILABLE => tonic::Code::Unavailable,
+            _ => tonic::Code::Unauthenticated,
+        };
+        Self {
+            status,
+            code,
+            message: error.reason(),
         }
     }
 }
@@ -557,12 +617,23 @@ async fn otlp_http_traces(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> StatusCode {
+) -> AxumResponse {
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(status) => return status,
+        Err(failure) => return failure.otlp_response(detect_format(&headers)),
     };
-    let fmt = detect_format(&headers);
+    ingest_traces(&state, project_id, &headers, body)
+        .await
+        .into_response()
+}
+
+async fn ingest_traces(
+    state: &OtlpHttpState,
+    project_id: String,
+    headers: &axum::http::HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let fmt = detect_format(headers);
     let batch = match transform_traces(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
@@ -576,7 +647,7 @@ async fn otlp_http_traces(
     if batch.num_rows() == 0 {
         return StatusCode::OK;
     }
-    route_ingest_msg(&state, IngestMsg::Traces { project_id, batch }).await
+    route_ingest_msg(state, IngestMsg::Traces { project_id, batch }).await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
@@ -584,12 +655,23 @@ async fn otlp_http_logs(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> StatusCode {
+) -> AxumResponse {
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(status) => return status,
+        Err(failure) => return failure.otlp_response(detect_format(&headers)),
     };
-    let fmt = detect_format(&headers);
+    ingest_logs(&state, project_id, &headers, body)
+        .await
+        .into_response()
+}
+
+async fn ingest_logs(
+    state: &OtlpHttpState,
+    project_id: String,
+    headers: &axum::http::HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let fmt = detect_format(headers);
     let (batch, rejected) = match transform_logs(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
@@ -606,7 +688,7 @@ async fn otlp_http_logs(
     if batch.num_rows() == 0 {
         return StatusCode::OK;
     }
-    route_ingest_msg(&state, IngestMsg::Logs { project_id, batch }).await
+    route_ingest_msg(state, IngestMsg::Logs { project_id, batch }).await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
@@ -618,14 +700,7 @@ async fn otlp_http_metrics(
     let fmt = detect_format(&headers);
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(status) => {
-            let code = match status {
-                StatusCode::UNAUTHORIZED => tonic::Code::Unauthenticated,
-                StatusCode::FORBIDDEN => tonic::Code::PermissionDenied,
-                _ => tonic::Code::Internal,
-            };
-            return metrics_http_error_response(fmt, status, code, "authentication failed");
-        }
+        Err(failure) => return failure.otlp_response(fmt),
     };
     let batches = match transform_metrics(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
@@ -692,11 +767,17 @@ async fn otlp_http_profiles(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> StatusCode {
+) -> AxumResponse {
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(status) => return status,
+        Err(failure) => return failure.otlp_response(detect_format(&headers)),
     };
+    ingest_profiles(&state, project_id, body)
+        .await
+        .into_response()
+}
+
+async fn ingest_profiles(state: &OtlpHttpState, project_id: String, body: Bytes) -> StatusCode {
     let batch = match spawn_transform(state.router.workloads(), "transform profiles", move || {
         sigiro_segments::transform_otlp_profiles(&body).map_err(decode_status)
     })
@@ -715,7 +796,7 @@ async fn otlp_http_profiles(
         );
         return StatusCode::BAD_REQUEST;
     }
-    route_ingest_msg(&state, IngestMsg::Profiles { project_id, batch }).await
+    route_ingest_msg(state, IngestMsg::Profiles { project_id, batch }).await
 }
 
 // ─── Pyroscope native format ingest ──────────────────────────────────────────
@@ -762,12 +843,15 @@ impl utoipa::ToSchema for PyroscopeProfileBody {}
 const PYROSCOPE_INGEST_DESCRIPTION: &str = "Accept a Pyroscope PushRequest or raw pprof profile. With `name`, the payload is raw pprof and the service name is the part before the first `{`; without `name`, the payload is a PushRequest whose series require a `service_name` label. Binary bodies may be gzip-compressed. Multipart bodies must carry the payload in the `profile` field. A missing Content-Type is also accepted as a binary body. See the [profile ingest guide](https://sigiro.com/docs/how-to/send-profiles).";
 
 macro_rules! pyroscope_ingest_handler {
-    ($handler:ident, $path:literal, $operation_id:literal) => {
+    ($handler:ident, $path:literal, $operation_id:literal, $summary:literal) => {
         #[utoipa::path(
             post,
             path = $path,
             operation_id = $operation_id,
-            summary = "Ingest Pyroscope profiles",
+            // Without an explicit tag utoipa uses the module path, and the
+            // public reference showed a section called `crate::ingest`.
+            tag = "Pyroscope ingest",
+            summary = $summary,
             description = PYROSCOPE_INGEST_DESCRIPTION,
             params(PyroscopeIngestQuery),
             request_body(
@@ -782,7 +866,8 @@ macro_rules! pyroscope_ingest_handler {
             responses(
                 (status = 200, description = "Profile accepted"),
                 (status = 400, description = "Unsupported media type, malformed payload, missing service name, or empty profile"),
-                (status = 401, description = "Missing or invalid bearer token"),
+                (status = 401, description = "Missing, expired, revoked or invalid credential; the plain-text body says which"),
+                (status = 403, description = "The credential lacks telemetry:ingest"),
                 (status = 413, description = "Request body exceeds the configured ingest limit"),
                 (status = 429, description = "Ingest rate limit exceeded"),
                 (status = 500, description = "Ingest failed"),
@@ -795,23 +880,35 @@ macro_rules! pyroscope_ingest_handler {
             query: Query<PyroscopeIngestQuery>,
             headers: axum::http::HeaderMap,
             body: Bytes,
-        ) -> StatusCode {
+        ) -> AxumResponse {
             otlp_http_pyroscope(state, query, headers, body).await
         }
     };
 }
 
-pyroscope_ingest_handler!(pyroscope_root, "/", "ingestPyroscopeRoot");
+pyroscope_ingest_handler!(
+    pyroscope_root,
+    "/",
+    "ingestPyroscopeRoot",
+    "Ingest Pyroscope profiles at the server root"
+);
 pyroscope_ingest_handler!(
     pyroscope_push,
     "/push.v1.PusherService/Push",
-    "ingestPyroscopePush"
+    "ingestPyroscopePush",
+    "Ingest Pyroscope profiles over the Push API"
 );
-pyroscope_ingest_handler!(pyroscope_ingest, "/ingest", "ingestPyroscope");
+pyroscope_ingest_handler!(
+    pyroscope_ingest,
+    "/ingest",
+    "ingestPyroscope",
+    "Ingest Pyroscope profiles"
+);
 pyroscope_ingest_handler!(
     pyroscope_ingest_pyroscope,
     "/ingest/pyroscope",
-    "ingestPyroscopeAlias"
+    "ingestPyroscopeAlias",
+    "Ingest Pyroscope profiles at the /ingest/pyroscope alias"
 );
 
 async fn otlp_http_pyroscope(
@@ -819,15 +916,26 @@ async fn otlp_http_pyroscope(
     Query(query): Query<PyroscopeIngestQuery>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> StatusCode {
+) -> AxumResponse {
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(status) => {
-            tracing::warn!("pyroscope: auth failed: {status}");
-            return status;
+        Err(failure) => {
+            tracing::warn!("pyroscope: auth failed: {}", failure.message);
+            return failure.text_response();
         }
     };
+    ingest_pyroscope(&state, project_id, query, &headers, body)
+        .await
+        .into_response()
+}
 
+async fn ingest_pyroscope(
+    state: &OtlpHttpState,
+    project_id: String,
+    query: PyroscopeIngestQuery,
+    headers: &axum::http::HeaderMap,
+    body: Bytes,
+) -> StatusCode {
     let ct = headers
         .typed_get::<headers::ContentType>()
         .map(|c| c.to_string())
@@ -838,7 +946,7 @@ async fn otlp_http_pyroscope(
     );
 
     // Detect format: multipart/form-data (SDK) vs raw protobuf
-    let body_bytes = match parse_pyroscope_multipart(&headers, &body).await {
+    let body_bytes = match parse_pyroscope_multipart(headers, &body).await {
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::error!("pyroscope parse failed: {e}");
@@ -967,5 +1075,80 @@ async fn parse_pyroscope_multipart(
              'application/octet-stream' (binary profile payload)",
             content_type
         ))
+    }
+}
+
+#[cfg(test)]
+mod ingest_auth_reason_tests {
+    use super::*;
+    use crate::auth::test_support::{jwt_mode, user_token};
+    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+
+    fn bearer(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        headers
+    }
+
+    async fn json_body(response: AxumResponse) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn every_401_says_why() {
+        let (mode, keys) = jwt_mode();
+        let acme = crate::types::TenantId::try_new("acme".to_owned()).unwrap();
+        let created = keys.create(&acme, "svc", "user-1").await.unwrap();
+
+        assert_eq!(
+            extract_project_id_http(&mode, &bearer(&created.key))
+                .await
+                .unwrap(),
+            "acme"
+        );
+
+        let cases = [
+            (HeaderMap::new(), "Missing Authorization header"),
+            (
+                bearer(&user_token("acme", "telemetry:ingest", -300)),
+                "expired",
+            ),
+            (bearer("sigiro_abc_def"), "not valid"),
+            (bearer("garbage"), "could not be verified"),
+        ];
+        for (headers, expected) in cases {
+            let failure = extract_project_id_http(&mode, &headers).await.unwrap_err();
+            let (status, body) = json_body(failure.otlp_response(InputFormat::Json)).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{expected}");
+            assert_eq!(body["code"], 16, "{expected}");
+            assert!(
+                body["message"].as_str().unwrap().contains(expected),
+                "{body} lacks {expected}"
+            );
+        }
+
+        keys.revoke(&acme, &created.info.id).await.unwrap();
+        let failure = extract_project_id_http(&mode, &bearer(&created.key))
+            .await
+            .unwrap_err();
+        let (status, body) = json_body(failure.otlp_response(InputFormat::Json)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body["message"].as_str().unwrap().contains("revoked"));
+
+        // Protobuf senders get a google.rpc.Status their SDK decodes.
+        let response = failure.otlp_response(InputFormat::Protobuf);
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let status = tonic_types::pb::Status::decode(bytes).unwrap();
+        assert_eq!(status.code, tonic::Code::Unauthenticated as i32);
+        assert!(status.message.contains("revoked"));
     }
 }
