@@ -1,69 +1,104 @@
 {
   "files": {
     "docs/explanation/deploys.md": {
-      "ja": "32fe4c8240555911",
-      "ko": "32fe4c8240555911",
-      "zh": "32fe4c8240555911"
+      "ja": "287ed1c9bed0892a",
+      "ko": "287ed1c9bed0892a",
+      "zh": "287ed1c9bed0892a"
     },
     "docs/explanation/evidence.md": {
-      "ja": "d6fef51be6655b0a",
-      "ko": "d6fef51be6655b0a",
-      "zh": "d6fef51be6655b0a"
+      "ja": "8fa6e571ab0116b3",
+      "ko": "8fa6e571ab0116b3",
+      "zh": "8fa6e571ab0116b3"
     },
     "docs/explanation/meta.ts": {
-      "ja": "aa6e0c35d35d08e1",
-      "ko": "aa6e0c35d35d08e1",
-      "zh": "aa6e0c35d35d08e1"
+      "ja": "6a0335a875b45629",
+      "ko": "6a0335a875b45629",
+      "zh": "6a0335a875b45629"
     },
     "docs/explanation/tables.md": {
-      "ja": "6454ec7b7af4a40a",
-      "ko": "6454ec7b7af4a40a",
-      "zh": "6454ec7b7af4a40a"
+      "ja": "c7367c037cd99b65",
+      "ko": "c7367c037cd99b65",
+      "zh": "c7367c037cd99b65"
     },
     "docs/how-to/agent-auth.md": {
       "ja": "1b1b42721b930a0b",
       "ko": "1b1b42721b930a0b",
       "zh": "1b1b42721b930a0b"
     },
+    "docs/how-to/agent-session-sql.md": {
+      "ja": "9e03294e0f0eca38",
+      "ko": "9e03294e0f0eca38",
+      "zh": "9e03294e0f0eca38"
+    },
     "docs/how-to/agent-telemetry.md": {
-      "ja": "f9affc5dfb94e621",
-      "ko": "f9affc5dfb94e621",
-      "zh": "f9affc5dfb94e621"
+      "ja": "5ca1b170c4827ff4",
+      "ko": "5ca1b170c4827ff4",
+      "zh": "5ca1b170c4827ff4"
+    },
+    "docs/how-to/debug-agent-performance.md": {
+      "ja": "58f6b244b0459e16",
+      "ko": "58f6b244b0459e16",
+      "zh": "58f6b244b0459e16"
+    },
+    "docs/how-to/executor.md": {
+      "ja": "108a1eea6bb5b8b4",
+      "ko": "108a1eea6bb5b8b4",
+      "zh": "108a1eea6bb5b8b4"
     },
     "docs/how-to/hosted-onboarding.md": {
-      "ja": "e926108b13995409",
-      "ko": "e926108b13995409",
-      "zh": "e926108b13995409"
+      "ja": "160db68db72fac25",
+      "ko": "160db68db72fac25",
+      "zh": "160db68db72fac25"
     },
     "docs/how-to/install-with-ai.md": {
-      "ja": "1a169180021342c2",
-      "ko": "1a169180021342c2",
-      "zh": "1a169180021342c2"
+      "ja": "b6da6e4cabc058fa",
+      "ko": "b6da6e4cabc058fa",
+      "zh": "b6da6e4cabc058fa"
+    },
+    "docs/how-to/jaeger-fanout.md": {
+      "ja": "334d419092606599",
+      "ko": "334d419092606599",
+      "zh": "334d419092606599"
     },
     "docs/how-to/meta.ts": {
-      "ja": "750030a15f3b4c0c",
-      "ko": "750030a15f3b4c0c",
-      "zh": "750030a15f3b4c0c"
+      "ja": "b9a3ff7a247dd4e7",
+      "ko": "b9a3ff7a247dd4e7",
+      "zh": "b9a3ff7a247dd4e7"
+    },
+    "docs/how-to/send-profiles.md": {
+      "ja": "d603467b3d067f1d",
+      "ko": "d603467b3d067f1d",
+      "zh": "d603467b3d067f1d"
     },
     "docs/index.md": {
-      "ja": "64aa5a76d28c1426",
-      "ko": "64aa5a76d28c1426",
-      "zh": "64aa5a76d28c1426"
+      "ja": "5cb8cb92cfbbcd47",
+      "ko": "5cb8cb92cfbbcd47",
+      "zh": "5cb8cb92cfbbcd47"
     },
     "docs/reference/cli.md": {
-      "ja": "e829593d7f977232",
-      "ko": "e829593d7f977232",
-      "zh": "e829593d7f977232"
+      "ja": "fc27f71b554f693f",
+      "ko": "fc27f71b554f693f",
+      "zh": "fc27f71b554f693f"
+    },
+    "docs/reference/meta.ts": {
+      "ja": "0c85084ee7bc5fc5",
+      "ko": "0c85084ee7bc5fc5",
+      "zh": "0c85084ee7bc5fc5"
+    },
+    "docs/reference/telemetry-tables.md": {
+      "ja": "43a942a3ac785c8f",
+      "ko": "43a942a3ac785c8f",
+      "zh": "43a942a3ac785c8f"
     },
     "docs/tutorials/meta.ts": {
-      "ja": "6f0afc1f1c2596d4",
-      "ko": "6f0afc1f1c2596d4",
-      "zh": "6f0afc1f1c2596d4"
+      "ja": "05fe65c664b2352b",
+      "ko": "05fe65c664b2352b",
+      "zh": "05fe65c664b2352b"
     },
     "docs/tutorials/quickstart.mdx": {
-      "ja": "e822202bf56a9bcd",
-      "ko": "e822202bf56a9bcd",
-      "zh": "e822202bf56a9bcd"
+      "ja": "9fc4f50d866ecb77",
+      "ko": "9fc4f50d866ecb77",
+      "zh": "9fc4f50d866ecb77"
     }
   },
   "version": 1

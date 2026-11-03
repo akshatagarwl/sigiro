@@ -88,7 +88,7 @@ An agent does more than you want here. State these limits before the agent start
 - Do not install an OTel Collector. sigiro is the collector.
 - Do not add manual spans for each endpoint. Auto-instrumentation covers them.
 - Do not change database connection strings or business logic.
-- Do not set up dashboards or alert configuration. sigiro has neither.
+- Do not set up dashboards or alert configuration. That is not part of this task.
 
 The full task is this: detect the framework, install auto-instrumentation, and point
 it at sigiro.
@@ -204,8 +204,8 @@ without a 401 response.
 
 ## Next
 
-- [Quickstart](/docs/tutorials/quickstart#3-ask-what-changed) — ask what changed
-  and why
+- [Quickstart](/docs/tutorials/quickstart#3-query-recent-errors) — query recent
+  errors with SQL
 - [Send your agent's own telemetry to sigiro](/docs/how-to/agent-telemetry) —
   point Claude Code or Codex at sigiro too
 - [Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding) — use this if

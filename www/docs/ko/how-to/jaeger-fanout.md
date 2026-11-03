@@ -1,15 +1,15 @@
 ---
 title: Jaeger와 함께 sigiro 시험 실행
-description: 애플리케이션의 전송 대상을 바꾸지 않고 Jaeger v2 트레이스를 sigiro에도 보내는 방법.
+description: 애플리케이션의 대상을 바꾸지 않고 기존 Jaeger v2 Collector에서 루프백 전용 sigiro 인스턴스로 OTLP 트레이스를 미러링합니다.
 sidebar:
   order: 8
 ---
 
-이 절차는 마이그레이션이 아닌 **트레이스 전용** 평가입니다. 애플리케이션은 기존 Jaeger v2 OTLP 수신기(`4317`/`4318`)에 계속 전송합니다. 기존 Jaeger 저장소 exporter와 다른 파이프라인은 유지하고, 트레이스 파이프라인에 두 번째 exporter를 추가합니다. Jaeger는 로그나 메트릭을 받지 않습니다. 별도의 OpenTelemetry Collector가 Jaeger 앞에 있다면 해당 Collector의 트레이스 파이프라인에 적용하고 기존 Jaeger 출력은 그대로 유지하십시오.
+이것은 마이그레이션이 아니라 **트레이스만의 평가**입니다. 애플리케이션은 계속 `4317`/`4318`의 기존 Jaeger v2 OTLP 수신기로 보내게 두십시오. 그 수신기의 **traces** 파이프라인에 sigiro를 두 번째 익스포터로 추가하고, Jaeger의 스토리지 익스포터와 다른 모든 파이프라인은 유지하십시오. Jaeger는 트레이스 데이터를 받으며 OTLP 로그나 메트릭은 받지 않습니다. Jaeger 앞에 별도의 OpenTelemetry Collector가 있다면 기존 Jaeger 목적지를 유지한 채 같은 traces 파이프라인 변경을 그곳에서 하십시오.
 
-## 1. 다른 호스트 포트로 sigiro 시작
+## 1. 다른 호스트 포트로 sigiro 시작하기
 
-Jaeger와 **같은 호스트**에서 `14317`, `14318`, `9999`가 비어 있는지 확인하십시오.
+Jaeger와 **같은 호스트**에서 `14317`, `14318`, `9999`가 비어 있는 상태로 실행합니다.
 
 ```bash
 docker run -d --name sigiro-trial --restart unless-stopped \
@@ -21,16 +21,18 @@ docker run -d --name sigiro-trial --restart unless-stopped \
 curl --fail http://127.0.0.1:9999/health
 ```
 
-`14317`은 gRPC용이고 이 예제는 HTTP `14318`만 사용합니다. `9999`가 점유되었으면 호스트 측을 `19999` 등으로 변경하고 아래 확인 요청에도 변경한 포트를 사용하십시오. 준비되지 않으면 `docker logs sigiro-trial`을 확인하십시오. 애플리케이션의 exporter 주소는 바꾸지 않습니다.
+`14317`은 다시 매핑한 gRPC 포트이며, 이 가이드는 `14318`의 OTLP HTTP만 사용합니다. `9999`가 사용 중이면 그 **호스트** 쪽도 다시 매핑하고(예: `-p 127.0.0.1:19999:9999`) 아래 확인에서 그 포트를 사용하십시오. 상태 확인이 성공할 때까지 기다리거나 `docker logs sigiro-trial`을 살펴보십시오. 애플리케이션 익스포터의 엔드포인트는 바꾸지 마십시오.
 
-**보안 경계:** 이 `127.0.0.1`은 Collector에서 호스트의 루프백에 접근할 수 있는 경우에만 작동합니다. 별도 컨테이너/호스트는 이 주소로 접근할 수 없으므로 접근 가능한 사설 경로와 TLS/인증을 준비하십시오. 편의를 위해 Docker 바인딩을 `0.0.0.0`으로 바꾸지 마십시오. 셀프 호스팅 sigiro의 OTLP/쿼리 엔드포인트는 인증하지 않습니다. 신뢰할 수 없는 네트워크에 직접 노출하지 마십시오. 로컬 프로세스도 자동으로 신뢰하지 마십시오.
+**네트워크 경계:** 이 예시는 Jaeger/Collector가 자신의 네트워크 네임스페이스에서 호스트의 `127.0.0.1:14318`에 도달할 수 있다고 가정합니다. 다른 컨테이너나 다른 호스트의 Collector는 그 루프백 주소를 쓸 수 없습니다. TLS/인증 프록시(또는 동등한 네트워크 통제)를 거치는 사설 경로를 마련하고 도달 가능한 그 주소를 사용하십시오. sigiro 자체는 인증을 제공하지 않습니다. 이것을 동작시키려고 Docker 바인딩을 `0.0.0.0`으로 바꾸지 마십시오.
+셀프 호스팅 sigiro는 OTLP나 쿼리 요청을 인증하지 않으므로 이 포트들을 신뢰할 수 없는 네트워크에 직접 공개하지 마십시오. 루프백 바인딩만으로 로컬 프로세스가 신뢰할 수 있게 되지는 않습니다.
 
-## 2. 기존 트레이스 설정에 미러 추가
+## 2. 기존 traces 파이프라인에 상한이 있는 미러 추가하기
 
-먼저 원본 YAML을 백업하십시오. 다음은 **병합할 조각**이지 전체 설정이 아닙니다. 기존 수신기, 프로세서, exporter, Jaeger 저장소, 다른 파이프라인과 순서를 보존하십시오. 이 예제는 Jaeger 2.0.0의 컴포넌트 이름 `otlphttp`를 사용합니다. 최신 Collector는 `otlp_http`를 쓰며 예전 이름은 더 이상 권장되지 않는 별칭입니다. 실행 중인 바이너리로 검증하고 정의와 목록에 동일한 이름을 사용하십시오.
+Jaeger v2/Collector YAML을 백업하십시오. 다음 항목을 그 안에 **병합**하십시오. 이것은 조각이며 대체 설정이 아닙니다. 기존 수신기, 프로세서, 익스포터, 확장, Jaeger 스토리지, 트레이스가 아닌 파이프라인은 그대로 두십시오. traces 파이프라인에 익스포터나 프로세서가 더 있다면 기존 순서대로 유지하십시오. 이 예시는 Jaeger **2.0.0** 컴포넌트 ID를 사용합니다. 그 릴리스는 OTLP HTTP 익스포터를 `otlphttp`라고 부릅니다. 더 새로운 Collector 배포판은 `otlp_http`라고 부릅니다(예전 철자는 사용 중단된 별칭입니다). 설치된 바이너리로 `validate`를 실행해 확인하고, 받아들여지는 이름을 두 곳 모두에 일관되게 사용하십시오.
 
 ```yaml
 exporters:
+  # Add alongside the existing jaeger_storage_exporter; do not replace it.
   otlphttp/sigiro:
     endpoint: http://127.0.0.1:14318
     sending_queue:
@@ -41,45 +43,60 @@ exporters:
       initial_interval: 5s
       max_interval: 30s
       max_elapsed_time: 300s
+
 service:
   pipelines:
     traces:
-      # 실제 설정의 receiver 및 processor 목록을 유지하십시오.
+      # Preserve the actual receiver and processor lists from your config.
       receivers: [otlp]
       processors: [batch]
       exporters: [jaeger_storage_exporter, otlphttp/sigiro]
 ```
 
-`endpoint`는 기본 URL이고 exporter가 `/v1/traces`를 덧붙입니다. 경로를 중복해서 추가하지 마십시오. 평문 HTTP는 같은 호스트의 루프백에서만 사용하고 원격 경로에는 TLS/인증을 적용하십시오. 메모리 큐의 상한은 **1000개 요청**이며 1000개 스팬이 아닙니다. 재시도는 5분 후 끝납니다. 큐 포화, 재시도 만료, Collector 재시작 시 미러의 스팬이 유실될 수 있습니다. **무손실 전송을 보장하지 않습니다.** 큐 크기/용량과 송신·큐 삽입 실패 메트릭, Jaeger 수집 오류를 감시하십시오. 오류가 증가하면 롤백하십시오. Jaeger의 로그/메트릭 파이프라인에는 exporter를 추가하지 마십시오.
+`endpoint`는 OTLP/HTTP **기본** URL이며 익스포터가 `/v1/traces`를 덧붙입니다. 여기에 `/v1/traces`를 추가하거나, 전체 경로 없이 신호별 `traces_endpoint`를 사용하지 마십시오. 여기서 평문 HTTP는 같은 호스트의 루프백에서만 적절합니다. `http://` 엔드포인트에는 `tls: { insecure: true }`가 필요하지 않습니다. 원격 사설 목적지라면 대신 양쪽에 TLS와 인증을 설정하십시오.
 
-## 3. 기존 인스턴스를 재시작하기 전에 검증
+큐는 **메모리에** 있으며 최대 1,000개의 스팬이 아니라 최대 1,000개의 요청을 담습니다. 재시도는 배치마다 5분 뒤 끝납니다. 큐가 가득 차거나, 재시도가 만료되거나, Collector가 재시작하면 미러링된 스팬이 사라질 수 있습니다. 손실이 없음을 보장하는 팬아웃이 **아닙니다**. Collector의 익스포터 큐 용량/크기와 전송 실패 및 인큐 실패 메트릭을 모니터링하고, 부하와 메모리에 맞게 큐 크기를 정하십시오. 그런 실패나 Jaeger 수집 오류가 늘어나면 시험을 멈추고 원래 설정을 복원하십시오. Jaeger의 메트릭이나 로그 파이프라인에는 sigiro 익스포터를 추가하지 마십시오.
 
-편집된 파일을 **동일 버전** Jaeger v2/Collector 실행 파일의 `validate --config=<편집된-파일>`로 검사하십시오. 이 검사는 설정만 확인하며 연결이나 전송 성공은 검증하지 않습니다. 이어서 수정된 파일의 복사본으로 별도 시험 인스턴스를 실행하십시오. 복사본의 **모든** 리스너를 빈 포트로 변경해야 합니다: OTLP `4317`/`4318`, 쿼리 UI `16686`, Prometheus `8888`(사용한다면 `8889`), 헬스 `13133` 및 나머지 extension/receiver/query 포트. 시험 저장소를 운영 환경과 격리하고 운영 저장소에 쓰지 않도록 하십시오. 시험 추적이 두 시험 대상에 도착하는 것을 확인한 후 기존 인스턴스를 정상적인 변경 절차에 따라 재시작하십시오. Docker `-p` 변경만으로 공유 네트워크 이름 공간의 리스너나 저장소 충돌을 해결할 수 없습니다. 격리가 불가능하면 운영 재시작을 첫 구성 검사로 사용하지 마십시오.
+## 3. 운영 중인 인스턴스를 바꾸기 전에 검증하기
 
-## 4. 양쪽 확인
+먼저 **같은 Jaeger v2 또는 Collector 바이너리/이미지 버전**으로 편집한 파일에 `validate --config=<edited-file>` 명령을 실행하십시오. 검증은 설정을 확인할 뿐 네트워크 접근, 전달, 스토리지는 확인하지 **않습니다**. 그런 다음 편집한 설정의 복사본으로 그 버전의 별도 스크래치 인스턴스를 시작하십시오. 스크래치 복사본에서는 OTLP `4317`/`4318`, Jaeger 쿼리/UI `16686`, 내부 Prometheus 메트릭 `8888`(그리고 있다면 `8889`), 상태 `13133`, 그 밖의 활성 확장, 수신기, 쿼리 리스너를 포함해 **모든** 리스너를 사용하지 않는 포트로 다시 매핑하십시오. 스토리지는 운영 환경과 분리하거나 읽기 전용 테스트 백엔드를 사용하십시오. 스크래치 익스포터가 운영 스토리지에 쓰지 않게 하십시오. 운영 인스턴스를 재시작하기 전에 스크래치 프로세스가 시작되고 테스트 트레이스를 두 스크래치 목적지 모두로 보내는지 확인하십시오. Docker `-p` 재매핑만으로는 공유 네트워크 네임스페이스 안의 리스너가 바뀌지 않으며 스토리지 충돌도 막지 **못합니다**. 스크래치 격리를 마련할 수 없다면 운영 재시작을 첫 구문 테스트로 삼지 마십시오.
 
-**기존** 앱/OTLP 주소를 통해 새로운 고유 스팬을 보내고 trace ID, 서비스, 시간을 기록합니다. Jaeger UI(보통 `16686`)에서 동일 ID의 스팬을 찾으십시오. sigiro에서 `curl --fail http://127.0.0.1:9999/v1/services`로 서비스를 확인한 뒤 ID를 질의하십시오. 테스트 시간을 포함하는 UTC 시작/끝 시각을 실제 값으로 바꾸십시오. `now()`는 DuckLake 파일 가지치기를 방해하고 시간 경계 질의 정책에 맞지 않습니다.
+스크래치 확인이 통과하면 평소의 통제된 Jaeger/Collector 재시작이나 롤아웃으로 편집한 설정을 적용하십시오. 즉시 시작 로그와 기존 Jaeger 쿼리 UI를 확인하십시오. 롤백을 위해 원래 YAML을 보관하십시오.
 
-```bash
-curl --fail -X POST http://127.0.0.1:9999/v1/query \
-  --data "SELECT trace_id, span_name, timestamp FROM sigiro_spans
-          WHERE trace_id = '<your-trace-id>'
-            AND timestamp >= TIMESTAMP '<start-utc:YYYY-MM-DD HH:MM:SS>'
-            AND timestamp < TIMESTAMP '<end-utc:YYYY-MM-DD HH:MM:SS>'"
-```
+## 4. 두 백엔드 모두 확인하기
 
-한쪽이라도 스팬이 없으면 Jaeger/Collector 로그, 큐/실패 메트릭, sigiro 로그, 네트워크 이름 공간, 주소를 확인하십시오. 총계가 아닌 동일 trace ID를 비교하고 상위 수집 단계의 샘플링/필터링을 고려하십시오.
+**기존** 앱이나 그 원래 OTLP 엔드포인트를 통해(sigiro로 직접이 아니라) 고유한 이름의 **새** 테스트 스팬을 생성하십시오. 트레이스 ID, 서비스 이름, 시각을 기록하십시오. 배치/내보내기 지연 후:
+
+1. 기존 Jaeger UI(보통 포트 `16686`)에서 그 트레이스 ID를 찾아 스팬이 있는지 확인하십시오. 이것으로 기존 스토리지 경로가 여전히 동작함이 입증됩니다. Collector가 성공적으로 시작했다는 것만으로는 입증되지 않습니다.
+2. sigiro에서는 `curl --fail http://127.0.0.1:9999/v1/services`로 서비스를 확인하십시오. `POST /v1/query`로 테스트 구간 안에서 정확한 트레이스 ID를 쿼리하거나, 해당 스팬을 찾으십시오. 예를 들어 트레이스 ID와 테스트 스팬을 감싸는 UTC 구간을 바꿔 넣은 뒤 실행합니다. 리터럴 범위를 사용하십시오. `now()`는 DuckLake 파일 가지치기를 막을 수 있으며, 범위 쿼리 정책은 반열린 리터럴 구간을 요구합니다.
+
+   ```bash
+   curl --fail -X POST http://127.0.0.1:9999/v1/query \
+     --data "SELECT trace_id, span_name, timestamp FROM sigiro_spans
+             WHERE trace_id = '<your-trace-id>'
+               AND timestamp >= TIMESTAMP '<start-utc:YYYY-MM-DD HH:MM:SS>'
+               AND timestamp < TIMESTAMP '<end-utc:YYYY-MM-DD HH:MM:SS>'"
+   ```
+
+어느 한 백엔드에 스팬이 없다면 결론을 내리기 전에 Jaeger/Collector 로그, 익스포터 실패/큐 메트릭, sigiro 로그, 네트워크 네임스페이스, 엔드포인트를 살펴보십시오. 전체 개수만이 아니라 실제 트레이스 ID를 비교하십시오. 상위의 샘플링이나 필터링이 두 목적지 모두에 영향을 줄 수 있습니다.
 
 ## 롤백
 
-백업한 YAML로 되돌립니다(`traces.exporters` 목록과 `exporters` 맵 **양쪽**에서 `otlphttp/sigiro` 제거). 검증한 후 기존 절차로 재시작하고 새로운 트레이스가 Jaeger에 들어오는지 확인하십시오. 시험 컨테이너를 제거하십시오.
+백업한 YAML을 복원하고(`otlphttp/sigiro`를 **traces 익스포터 목록과 익스포터 맵 양쪽에서** 제거), 검증한 뒤, 같은 통제된 재시작/롤아웃을 사용하십시오. Jaeger의 원래 수신기, 스토리지 익스포터, 애플리케이션 설정, 다른 파이프라인은 그대로 남습니다. Jaeger에서 새 트레이스를 확인하십시오. 그런 다음 시험 인스턴스를 멈추고 제거하십시오.
 
 ```bash
 docker rm -f sigiro-trial
-# 시험 데이터를 폐기하기로 결정했을 때만 실행 (복구 불가):
+# Only after deciding to discard the trial's stored telemetry:
 docker volume rm sigiro-trial-data
 ```
 
-데이터를 보존하려면 마지막 명령을 생략하십시오. Jaeger를 중지하거나 애플리케이션 전송 대상을 바꿀 필요가 없습니다.
+볼륨 제거는 되돌릴 수 없습니다. 시험 데이터를 유지하려면 마지막 명령을 생략하십시오. 롤백 과정에서 Jaeger를 멈추거나 애플리케이션의 대상을 바꾸지 마십시오.
 
-설정 원문: [Collector 설정 및 검증](https://opentelemetry.io/docs/collector/configuration/), [OTLP HTTP exporter](https://github.com/open-telemetry/opentelemetry-collector/blob/v0.112.0/exporter/otlphttpexporter/README.md), [큐 및 재시도](https://github.com/open-telemetry/opentelemetry-collector/blob/v0.112.0/exporter/exporterhelper/README.md), [문제 해결](https://opentelemetry.io/docs/collector/troubleshooting/), [Jaeger v2 API](https://www.jaegertracing.io/docs/2.0/architecture/apis/).
+## 설정 참조
+
+- [Collector configuration and validation](https://opentelemetry.io/docs/collector/configuration/)
+- [Jaeger 2.0.0 exporter factory](https://github.com/jaegertracing/jaeger/blob/v2.0.0/cmd/jaeger/internal/components.go) 및 [Collector 0.112.0 component ID](https://github.com/open-telemetry/opentelemetry-collector/blob/v0.112.0/exporter/otlphttpexporter/internal/metadata/generated_status.go)
+- [OTLP HTTP exporter settings (Collector 0.112.0)](https://github.com/open-telemetry/opentelemetry-collector/blob/v0.112.0/exporter/otlphttpexporter/README.md)
+- [Exporter queue/retry behavior (Collector 0.112.0)](https://github.com/open-telemetry/opentelemetry-collector/blob/v0.112.0/exporter/exporterhelper/README.md)
+- [Collector troubleshooting and exporter metrics](https://opentelemetry.io/docs/collector/troubleshooting/)
+- [Jaeger v2 API/port reference](https://www.jaegertracing.io/docs/2.0/architecture/apis/)

@@ -83,7 +83,7 @@ endpoint and transport used by your deployment.
 ## Verify the import
 
 Check the integration in Executor before asking an agent to use it. The sigiro API import
-should expose operations for services, traces, anomalies, investigations and queries.
+should expose operations for services, traces, alerts and queries.
 The docs import should expose documentation search and page retrieval.
 
 Then test one read-only call first. For a hosted API connection, confirm that the
