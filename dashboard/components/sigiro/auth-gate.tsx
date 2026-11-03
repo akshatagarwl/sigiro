@@ -48,6 +48,46 @@ const nameOf = async (id: string): Promise<string | undefined> => {
   }
 };
 
+/**
+ * Whether this browser already has a sigiro.com session (from signing up or
+ * signing in on the site). better-auth answers the JSON literal `null` when
+ * signed out, not a 401.
+ */
+const hasSession = async (): Promise<boolean> => {
+  try {
+    const response = await fetch("/api/auth/get-session", {
+      credentials: "include",
+    });
+    if (!response.ok) return false;
+    const body = (await response.json()) as { session?: unknown } | null;
+    return Boolean(body?.session);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * With a session, the token is fetched without asking: authorize sees the
+ * session and comes straight back with a code, so a reader who just signed up
+ * signs in once. The tab remembers the attempt for a minute, so a flow that
+ * comes back without a token shows the card instead of looping.
+ */
+const AUTO_KEY = "sigiro.dashboard.auto-sign-in";
+const autoSignIn = async (): Promise<boolean> => {
+  const last = Number(sessionStorage.getItem(AUTO_KEY));
+  if (last > 0 && Date.now() - last < 60_000) return false;
+  if (!(await hasSession())) return false;
+  sessionStorage.setItem(AUTO_KEY, String(Date.now()));
+  try {
+    await auth.beginAuthorization();
+  } catch (error) {
+    // beginAuthorization always throws once it has navigated away; anything
+    // else (the client document failed to load) falls back to the card.
+    if (String(error).includes("sign-in flow has started")) return true;
+  }
+  return false;
+};
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [phase, setPhase] = React.useState<Phase>({ kind: "starting" });
 
@@ -64,6 +104,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       }
       const token = auth.currentToken();
       if (!token) {
+        if (await autoSignIn().catch(() => false)) return;
         setPhase({ kind: "signed-out" });
         return;
       }
@@ -82,7 +123,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (phase.kind === "starting")
     return (
       <div className="text-muted-foreground p-6 text-sm" data-state="starting">
-        Checking sign-in…
+        Signing in…
       </div>
     );
 

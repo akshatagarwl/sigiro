@@ -4,6 +4,7 @@ import { EChartsLatencyAreaChart } from "@/components/evilcharts/blocks/latency-
 import { EvilBarChart } from "@/components/evilcharts/charts/recharts-bar-chart";
 import type { ChartConfig } from "@/components/evilcharts/ui/recharts-chart";
 import { SectionCards } from "@/components/section-cards";
+import { SetupEmpty } from "@/components/sigiro/setup-empty";
 import {
   Card,
   CardContent,
@@ -11,7 +12,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { useControls, useSql, type Window } from "@/lib/sigiro/controls";
+import {
+  RANGES,
+  useControls,
+  useSql,
+  type Window,
+} from "@/lib/sigiro/controls";
 import { LEVEL_CHART, STATUS_CHART } from "@/lib/sigiro/palette";
 import {
   bucketFor,
@@ -235,10 +241,9 @@ export default function OverviewPage() {
         ]}
       />
       {empty && (
-        <p className="text-muted-foreground px-4 text-sm lg:px-6">
-          No spans or logs in this window. Pick a longer range, or check that
-          your services export to this workspace.
-        </p>
+        <div className="px-4 lg:px-6">
+          <SetupEmpty range={RANGES[controls.range].label.toLowerCase()} />
+        </div>
       )}
       <div className="grid gap-4 px-4 lg:grid-cols-2 lg:px-6">
         <ChartCard

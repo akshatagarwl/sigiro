@@ -136,8 +136,28 @@ const traceSpans = () => {
   ];
 };
 
+let emptyWorkspace = false;
+
 /** The query API, answered from fixtures by the shape of each panel's SQL. */
 const answer = (sql) => {
+  if (emptyWorkspace)
+    return {
+      body: sql.includes("AS spans_before")
+        ? [
+            {
+              spans: 0,
+              spans_before: 0,
+              errors: 0,
+              errors_before: 0,
+              error_rate: null,
+              p95_ms: null,
+              logs: 0,
+              error_logs: 0,
+              error_logs_before: 0,
+            },
+          ]
+        : [],
+    };
   const now = Date.now() * 1000;
   if (/\bnope\b/.test(sql))
     return {
@@ -550,6 +570,137 @@ try {
     await page.locator('[data-action="run-sql"]').click();
     await page.getByRole("alert").filter({ hasText: "syntax error" }).waitFor();
   });
+
+  await step("empty workspace shows how to send data", async () => {
+    emptyWorkspace = true;
+    await page.goto(`${origin}/dashboard/`);
+    const setup = page.locator('[data-state="setup"]');
+    await setup.waitFor();
+    const text = await setup.innerText();
+    for (const needle of [
+      "https://sigiro.com",
+      "http/protobuf",
+      "sigiro auth token",
+      "Open the setup guide",
+    ])
+      assert.ok(text.includes(needle), `empty state must mention ${needle}`);
+    assert.equal(
+      await setup
+        .getByRole("link", { name: "Open the setup guide" })
+        .getAttribute("href"),
+      "/docs/how-to/hosted-onboarding/"
+    );
+    await screenshot("6-empty");
+    emptyWorkspace = false;
+  });
+
+  await step("390px wide: nothing cut off", async () => {
+    const overflow = [];
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const [name, path, ready] of [
+      ["overview", "/dashboard/", '[data-state="ready"]'],
+      [
+        "services",
+        "/dashboard/services/",
+        '[data-table="services"][data-rows="3"]',
+      ],
+      ["traces", "/dashboard/traces/", '[data-chart-name="timeline"]'],
+      ["logs", "/dashboard/logs/", '[data-chart-name="timeline"]'],
+      ["sql", "/dashboard/sql/", '[data-action="run-sql"]'],
+    ]) {
+      await page.goto(`${origin}${path}`);
+      await page.waitForSelector(ready);
+      await page.waitForTimeout(800);
+      await screenshot(`7-mobile-${name}`);
+      const scrollWidth = await page.evaluate(
+        () => document.documentElement.scrollWidth
+      );
+      if (scrollWidth > 390)
+        overflow.push(`${name}: page is ${scrollWidth}px wide`);
+      const wide = await page.evaluate(() =>
+        [...document.querySelectorAll("body *")]
+          .filter((el) => {
+            if (
+              el.getBoundingClientRect().right <= 391 ||
+              el.getClientRects().length === 0
+            )
+              return false;
+            // Wide content inside its own sideways-scrolling box (a table) is reachable, not cut off.
+            for (let up = el.parentElement; up; up = up.parentElement) {
+              const { overflowX } = getComputedStyle(up);
+              if (
+                (overflowX === "auto" || overflowX === "scroll") &&
+                up.getBoundingClientRect().right <= 391
+              )
+                return false;
+            }
+            return true;
+          })
+          .slice(-3)
+          .map(
+            (el) =>
+              `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 60)} → ${Math.round(el.getBoundingClientRect().right)}px`
+          )
+      );
+      if (wide.length > 0) overflow.push(`${name}: ${wide.join(" | ")}`);
+    }
+    await page.goto(`${origin}/dashboard/services/`);
+    await page.waitForSelector('[data-table="services"][data-rows="3"]');
+    const reached = await page.evaluate(() => {
+      const box = document.querySelector(
+        '[data-table="services"] table'
+      ).parentElement;
+      box.scrollLeft = box.scrollWidth;
+      const last = [...box.querySelectorAll("th")]
+        .at(-1)
+        .getBoundingClientRect();
+      return last.right <= 391 && last.left >= 0;
+    });
+    if (!reached)
+      overflow.push("services: the last column cannot be scrolled into view");
+    await screenshot("7-mobile-services-scrolled");
+    assert.deepEqual(
+      overflow,
+      [],
+      "nothing may extend past 390px outside a scroll container"
+    );
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  await step(
+    "an existing sigiro.com session signs in without a click",
+    async () => {
+      const tab = await context.newPage();
+      const authorized = [];
+      await tab.route(`${origin}/api/auth/get-session`, (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            session: { id: "s" },
+            user: { email: "a@b.c" },
+          }),
+        })
+      );
+      await tab.route(`${origin}/api/auth/oauth2/authorize**`, (route) => {
+        authorized.push(route.request().url());
+        return route.abort("aborted");
+      });
+      await tab.goto(`${origin}/dashboard/logs/`);
+      await tab.waitForTimeout(1500);
+      assert.equal(
+        authorized.length,
+        1,
+        "a session must go straight to authorize"
+      );
+      assert.equal(
+        await tab.locator('[data-state="signed-out"]').count(),
+        0,
+        "no sign-in card for a session"
+      );
+      await tab.close();
+    }
+  );
 
   assert.deepEqual(foreign, [], "no request may leave the origin");
   assert.deepEqual(errors, [], "no page errors");

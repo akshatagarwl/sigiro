@@ -38,7 +38,12 @@ function ServiceSelect() {
       value={service || ALL}
       onValueChange={(value) => setService(value === ALL ? "" : value)}
     >
-      <SelectTrigger className="w-44" size="sm" aria-label="Service" data-action="service">
+      <SelectTrigger
+        className="w-36 sm:w-44"
+        size="sm"
+        aria-label="Service"
+        data-action="service"
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="rounded-xl">
@@ -75,15 +80,16 @@ export function SiteHeader() {
   }
 
   return (
-    <header className="flex h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-(--header-height)">
-      <div className="flex w-full items-center gap-1 px-4 lg:gap-2 lg:px-6">
+    <header className="flex min-h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear">
+      {/* Wraps on a phone: the filters drop under the title instead of pushing the page sideways. */}
+      <div className="flex w-full flex-wrap items-center gap-1 px-4 py-2 lg:gap-2 lg:px-6">
         <SidebarTrigger className="-ml-1" />
         <Separator
           orientation="vertical"
           className="mx-2 data-[orientation=vertical]:h-4"
         />
         <h1 className="text-base font-medium">{TITLES[pathname] ?? "Sigiro"}</h1>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {(pathname === "/" || pathname === "/services/") && <ServiceSelect />}
           <ToggleGroup
             type="single"
