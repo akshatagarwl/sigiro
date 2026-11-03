@@ -168,7 +168,15 @@ const main = async () => {
     step("code requested", INBOX);
 
     const otpForm = page.locator("#otp-form");
-    await otpForm.waitFor({ state: "visible", timeout: 20000 });
+    await otpForm
+      .waitFor({ state: "visible", timeout: 20000 })
+      .catch(async (error: unknown) => {
+        const shown = await page.locator("#error, #status").allTextContents();
+        throw new Error(
+          `no OTP form; the page says: ${shown.join(" / ") || "nothing"}`,
+          { cause: error }
+        );
+      });
     step("OTP form revealed");
 
     const receipt = await waitForOTP(requestedAt);
@@ -256,6 +264,28 @@ const main = async () => {
     );
     assert.equal(await guide.count(), 1);
     step("success screen hands the existing workspace to the CLI");
+
+    // The success screen's dashboard link must not ask for a second sign-in:
+    // the dashboard sees the session and fetches its token without a click.
+    const dashboard = success.locator('a[href="/dashboard/"]');
+    assert.equal(await dashboard.count(), 1);
+    await dashboard.click();
+    await page.waitForURL(/\/dashboard\/(\?.*)?$/, { timeout: 30000 });
+    const overview = page.locator('[data-state="ready"], [data-state="empty"]');
+    await overview.first().waitFor({ state: "visible", timeout: 45000 });
+    assert.equal(
+      await page.locator('[data-state="signed-out"]').count(),
+      0,
+      "the dashboard asked for a second sign-in"
+    );
+    const workspace =
+      (await page.locator("[data-workspace]").getAttribute("data-workspace")) ??
+      "";
+    assert.equal(workspace, organization.organization.name ?? "");
+    step(
+      "dashboard opens signed in to the same workspace",
+      `${workspace}, ${await overview.first().getAttribute("data-state")}`
+    );
 
     if (failures.length > 0)
       throw new Error(`browser reported failures:\n  ${failures.join("\n  ")}`);
