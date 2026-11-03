@@ -50,8 +50,14 @@ export OTEL_SERVICE_NAME="checkout"`}
             The token comes from <code>sigiro auth token</code> once the CLI is
             signed in (<code>curl -fsSL https://sigiro.com/install | sh</code>,
             then <code>sigiro auth login</code>). It lasts 15 minutes, which is
-            enough to try sigiro; long-running services will use a per-project
-            ingest key.
+            enough to try sigiro.
+          </li>
+          <li>
+            A long-running service sends with an ingest key instead: run{" "}
+            <code>sigiro ingest-keys create --name checkout</code> and put the
+            printed <code>sigiro_…</code> key where the token is, as{" "}
+            <code>Authorization=Bearer sigiro_…</code>. It does not expire, can
+            only send telemetry, and is shown once.
           </li>
         </ul>
         <Button asChild>
