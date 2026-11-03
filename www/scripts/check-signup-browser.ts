@@ -170,11 +170,11 @@ const main = async () => {
     const otpForm = page.locator("#otp-form");
     await otpForm
       .waitFor({ state: "visible", timeout: 20000 })
-      .catch(async (error: unknown) => {
+      .catch(async (cause: Error) => {
         const shown = await page.locator("#error, #status").allTextContents();
         throw new Error(
           `no OTP form; the page says: ${shown.join(" / ") || "nothing"}`,
-          { cause: error }
+          { cause }
         );
       });
     step("OTP form revealed");
