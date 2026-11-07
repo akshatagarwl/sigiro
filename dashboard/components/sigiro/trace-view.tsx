@@ -6,8 +6,10 @@ import {
   TraceWaterfall,
   type TraceSpan,
 } from "@/components/assistant-ui/elements/trace-waterfall";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { num, query, sqlString } from "@/lib/sigiro/query";
+import { formatValue } from "@/lib/sigiro/profiles";
+import { num, query, sqlString, type Row } from "@/lib/sigiro/query";
 
 /**
  * One trace as assistant-ui's TraceWaterfall: the spans come from the server
@@ -85,13 +87,66 @@ export function TraceView({ traceId }: { traceId: string }) {
   }));
 
   return (
-    <div data-waterfall={spans.length}>
-      <TraceWaterfall
-        spans={spans}
-        totalMs={Math.round((end - start) / 1000)}
-        visibleCount={spans.length}
-        className="max-w-none"
-      />
+    <div className="grid gap-4">
+      <div data-waterfall={spans.length}>
+        <TraceWaterfall
+          spans={spans}
+          totalMs={Math.round((end - start) / 1000)}
+          visibleCount={spans.length}
+          className="max-w-none"
+        />
+      </div>
+      <TraceProfiles traceId={traceId.toLowerCase()} spans={data} />
+    </div>
+  );
+}
+
+/**
+ * CPU samples linked to this trace's spans (OTLP Sample.link), one row per
+ * span, each opening that span's flame graph on the Profiles page.
+ */
+function TraceProfiles({ traceId, spans }: { traceId: string; spans: Row[] }) {
+  const { data } = useQuery({
+    queryKey: ["trace-profiles", traceId],
+    queryFn: ({ signal }) =>
+      query(
+        `SELECT span_id, any_value(service_name) AS service, sum(value) AS v, min(epoch_ms(timestamp)) AS t0, max(epoch_ms(timestamp)) AS t1 FROM sigiro_profiles WHERE trace_id = ${sqlString(traceId)} AND profile_type = 'cpu' GROUP BY span_id ORDER BY v DESC`,
+        signal
+      ),
+  });
+  if (!data || data.length === 0) return null;
+  const names = new Map(spans.map((row) => [String(row.span_id), String(row.span_name)]));
+  const t0 = Math.min(...data.map((row) => num(row.t0))) - 60_000;
+  const t1 = Math.max(...data.map((row) => num(row.t1))) + 60_000;
+  const link = (service: string, span?: string) =>
+    `/dashboard/profiles/?service=${encodeURIComponent(service)}&ptype=cpu&trace=${traceId}${span ? `&span=${span}` : ""}&from=${t0}&to=${t1}`;
+  const service = String(data[0].service);
+  return (
+    <div className="grid gap-2" data-trace-profiles={data.length}>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-medium">CPU profile</h3>
+        <Button asChild variant="outline" size="sm">
+          <a href={link(service)} data-action="open-trace-profile">
+            Whole trace
+          </a>
+        </Button>
+      </div>
+      <ul className="divide-y rounded-md border text-sm">
+        {data.map((row) => (
+          <li key={String(row.span_id)} className="flex items-center gap-3 px-3 py-2">
+            <span className="min-w-0 flex-1 truncate">
+              {names.get(String(row.span_id)) ?? "span"}{" "}
+              <span className="text-muted-foreground font-mono text-xs">{String(row.span_id)}</span>
+            </span>
+            <span className="text-muted-foreground tabular-nums">{formatValue(num(row.v), "nanoseconds")}</span>
+            <Button asChild variant="ghost" size="sm">
+              <a href={link(String(row.service), String(row.span_id))} data-action="open-span-profile" data-span={String(row.span_id)}>
+                Open profile
+              </a>
+            </Button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

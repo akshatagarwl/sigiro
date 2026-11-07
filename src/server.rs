@@ -560,12 +560,72 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         None => public,
     };
 
+    // The dashboard authenticates with OAuth on sigiro.com; a self-hosted
+    // open-mode server has no sign-in, so it only serves the static build
+    // there.
+    let public = match crate::config::DASHBOARD_DIR.value() {
+        Ok(dir) if !app_state.auth_mode.requires_auth() => {
+            tracing::info!(dir, "serving the dashboard at /dashboard/");
+            let root = Arc::new(std::path::PathBuf::from(dir));
+            let index_root = root.clone();
+            public
+                .route(
+                    "/dashboard/",
+                    axum::routing::get(move || {
+                        dashboard_file(index_root.clone(), axum::extract::Path(String::new()))
+                    }),
+                )
+                .route(
+                    "/dashboard/{*path}",
+                    axum::routing::get(move |path| dashboard_file(root.clone(), path)),
+                )
+        }
+        _ => public,
+    };
+
     public
         .nest("/v1", v1)
         .nest("/admin", admin)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(tower_http::compression::CompressionLayer::new())
         .with_state(app_state)
+}
+
+/// Serve one file of the static dashboard build. Paths ending in `/` serve
+/// that directory's `index.html` (the export uses trailing slashes); any `..`
+/// or absolute component is refused.
+async fn dashboard_file(
+    root: Arc<std::path::PathBuf>,
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+    let relative = std::path::Path::new(&path);
+    if relative.components().any(|c| {
+        !matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)
+    }) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let mut file = root.join("dashboard").join(relative);
+    if path.is_empty() || path.ends_with('/') || file.is_dir() {
+        file = file.join("index.html");
+    }
+    let content_type = match file.extension().and_then(|e| e.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        _ => "application/octet-stream",
+    };
+    match tokio::fs::read(&file).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, content_type)], bytes).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Server port configuration — all configurable via environment variables.

@@ -320,6 +320,12 @@ pub(crate) fn disk_sample_seconds() -> Result<NonZeroU64> {
         .context("SIGIRO_DISK_SAMPLE_SECONDS must be greater than zero")
 }
 
+/// A static build of the dashboard (`dashboard/dist`, the directory holding
+/// `dashboard/`). When set on a self-hosted server in open mode, the HTTP API
+/// also serves it at `/dashboard/`, so a local sigiro has a UI.
+pub(crate) static DASHBOARD_DIR: Envar<String> =
+    Envar::on_startup("SIGIRO_DASHBOARD_DIR", || EnvarDef::Unset);
+
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
 /// Defaults to the platform data dir (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).
 pub(crate) static DATA_DIR: Envar<String> =

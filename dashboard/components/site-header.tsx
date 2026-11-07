@@ -65,6 +65,7 @@ const TITLES: Record<string, string> = {
   "/services/": "Services",
   "/traces/": "Traces",
   "/logs/": "Logs",
+  "/profiles/": "Profiles",
   "/sql/": "SQL",
 }
 

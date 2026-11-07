@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { auth } from "@/lib/sigiro/query";
+import { auth, detectOpenMode, localToken } from "@/lib/sigiro/query";
 
 type Phase =
   | { kind: "starting" }
@@ -102,7 +102,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         });
         return;
       }
-      const token = auth.currentToken();
+      const token =
+        auth.currentToken() ??
+        ((await detectOpenMode()) ? localToken() : undefined);
       if (!token) {
         if (await autoSignIn().catch(() => false)) return;
         setPhase({ kind: "signed-out" });

@@ -60,8 +60,35 @@ const detailOf = (text: string) => {
   }
 };
 
+/**
+ * A dashboard served by a self-hosted sigiro on this machine talks to an
+ * open-mode server, which has no sign-in and ignores the bearer. On a
+ * loopback origin whose `/v1/query` answers without a token, a placeholder
+ * stands in for the OAuth token.
+ */
+let openMode = false;
+export const localToken = (): string | undefined =>
+  openMode ? "local-open-mode" : undefined;
+
+export async function detectOpenMode(): Promise<boolean> {
+  const host = globalThis.location?.hostname;
+  if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]") return false;
+  try {
+    const response = await fetch("/v1/query", {
+      method: "POST",
+      credentials: "omit",
+      headers: { "content-type": "text/plain", accept: "application/json" },
+      body: "SELECT 1 AS ok",
+    });
+    openMode = response.ok;
+  } catch {
+    openMode = false;
+  }
+  return openMode;
+}
+
 export async function query(sql: string, signal?: AbortSignal): Promise<Row[]> {
-  const token = auth.currentToken();
+  const token = auth.currentToken() ?? localToken();
   if (!token) throw new QueryError(401, "Not signed in.");
   await acquire();
   try {

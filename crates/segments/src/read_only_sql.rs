@@ -160,6 +160,9 @@ const SCALAR_FUNCTIONS: &[&str] = &[
     // JSON
     "JSON_EXTRACT",
     "JSON_EXTRACT_STRING",
+    // Label discovery over JSON columns such as sigiro_profiles.labels.
+    "JSON_KEYS",
+    "JSON_TYPE",
     // Date/time
     "NOW",
     "CURRENT_TIMESTAMP",
