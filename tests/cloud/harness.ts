@@ -456,10 +456,12 @@ export function otlpProfileBody(service: string): Uint8Array {
       messageField(7, entry)
     ),
   ]);
+  // OTLP profiles v1.10+: Sample.values is field 4 (field 2 is now
+  // attribute_indices).
   const sample = (stackIndex: number, value: number) =>
     message([
       varintField(1, BigInt(stackIndex)),
-      varintField(2, BigInt(value)),
+      varintField(4, BigInt(value)),
     ]);
   const profile = message([
     messageField(1, message([varintField(1, 1n), varintField(2, 2n)])),
