@@ -1,13 +1,26 @@
+use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
 
-use arrow::array::{Int64Array, ListArray, ListBuilder, StringBuilder, TimestampMicrosecondArray};
+use arrow::array::{Int64Array, ListBuilder, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use prost::Message;
+use serde::Deserialize;
+use serde_json::{Map, Value as JsonValue};
 
 use crate::otel_proto::tonic::collector::profiles::v1development::ExportProfilesServiceRequest;
+use crate::otel_proto::tonic::profiles::v1development::ProfilesDictionary;
 use crate::{DecodeError, SpanId, TraceId};
+
+/// Frames kept per stack (leaf side). Deeper stacks lose their outermost
+/// callers; both ingest paths apply the same cap so their stacks agree.
+const MAX_FRAMES: usize = 512;
+
+/// The Profile attribute that names the Go runtime profile (cpu, heap,
+/// goroutine, mutex, block). pprof has no such field and mutex and block
+/// share sample types, so this is how an OTLP producer tells them apart.
+const PROFILE_NAME_ATTR: &str = "go.pprof.name";
 
 pub fn transform_otlp_profiles(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
     transform_profiles_request(ExportProfilesServiceRequest::decode(bytes)?)
@@ -16,7 +29,7 @@ pub fn transform_otlp_profiles(bytes: &[u8]) -> Result<RecordBatch, DecodeError>
 /// Resolve pprofile dictionary encoding into flat profile rows as a RecordBatch.
 /// Resolution chain:
 ///   Sample.stack_index → Dictionary.stack_table[].location_indices[]
-///   → Dictionary.location_table[].line[].function_index
+///   → Dictionary.location_table[].lines[].function_index
 ///   → Dictionary.function_table[].name_strindex
 ///   → Dictionary.string_table[]
 pub(crate) fn profile_schema() -> Arc<Schema> {
@@ -39,72 +52,145 @@ pub(crate) fn profile_schema() -> Arc<Schema> {
         Field::new("value", DataType::Int64, true),
         Field::new("unit", DataType::Utf8, true),
         Field::new("resource_attributes", DataType::Utf8, true),
+        // Per-sample labels as a JSON object: OTLP Sample attributes, or pprof
+        // sample labels on the Pyroscope path. Appended last so existing
+        // tables gain it with `ALTER TABLE … ADD COLUMN`.
+        Field::new("labels", DataType::Utf8, true),
     ]))
 }
 
-fn stack_trace_builder() -> ListBuilder<StringBuilder> {
-    ListBuilder::new(StringBuilder::new()).with_field(Arc::new(Field::new(
-        "item",
-        DataType::Utf8,
-        true,
-    )))
-}
-
-fn append_stack_trace<S: AsRef<str>>(builder: &mut ListBuilder<StringBuilder>, stack: &[S]) {
-    for frame in stack {
-        builder.values().append_value(frame.as_ref());
+/// The display name of a sample type. Mutex and block profiles share the
+/// pprof sample types `contentions` and `delay`, so with a known profile kind
+/// they are stored under Pyroscope's names (`mutex_count`, `block_duration`,
+/// …). The goroutine profile's `goroutine` type is stored as `goroutines`.
+/// Everything else keeps its pprof name.
+pub(crate) fn display_profile_type(kind: Option<&str>, sample_type: &str) -> String {
+    match (kind, sample_type) {
+        (Some(kind @ ("mutex" | "block")), "contentions") => format!("{kind}_count"),
+        (Some(kind @ ("mutex" | "block")), "delay") => format!("{kind}_duration"),
+        (_, "goroutine") => "goroutines".to_string(),
+        _ => sample_type.to_string(),
     }
-    builder.append(true);
 }
 
-fn empty_stack_trace_array() -> ListArray {
-    stack_trace_builder().finish()
+/// Column builders shared by both ingest paths.
+struct Rows {
+    profile_ids: StringBuilder,
+    trace_ids: StringBuilder,
+    span_ids: StringBuilder,
+    service_names: StringBuilder,
+    timestamps: Vec<i64>,
+    profile_types: StringBuilder,
+    stack_traces: ListBuilder<StringBuilder>,
+    values: Vec<i64>,
+    units: StringBuilder,
+    resource_attrs: StringBuilder,
+    labels: StringBuilder,
+}
+
+struct Row<'a, S: AsRef<str>> {
+    profile_id: &'a str,
+    link: Option<&'a (TraceId, SpanId)>,
+    service_name: &'a str,
+    timestamp_us: i64,
+    profile_type: &'a str,
+    stack: &'a [S],
+    value: i64,
+    unit: &'a str,
+    resource_attributes: Option<&'a str>,
+    labels: Option<&'a str>,
+}
+
+impl Rows {
+    fn new() -> Self {
+        Self {
+            profile_ids: StringBuilder::new(),
+            trace_ids: StringBuilder::new(),
+            span_ids: StringBuilder::new(),
+            service_names: StringBuilder::new(),
+            timestamps: Vec::new(),
+            profile_types: StringBuilder::new(),
+            stack_traces: ListBuilder::new(StringBuilder::new()).with_field(Arc::new(Field::new(
+                "item",
+                DataType::Utf8,
+                true,
+            ))),
+            values: Vec::new(),
+            units: StringBuilder::new(),
+            resource_attrs: StringBuilder::new(),
+            labels: StringBuilder::new(),
+        }
+    }
+
+    fn push<S: AsRef<str>>(&mut self, row: Row<'_, S>) {
+        self.profile_ids.append_value(row.profile_id);
+        match row.link {
+            Some((trace_id, span_id)) => {
+                self.trace_ids.append_value(trace_id.as_ref());
+                self.span_ids.append_value(span_id.as_ref());
+            }
+            None => {
+                self.trace_ids.append_null();
+                self.span_ids.append_null();
+            }
+        }
+        self.service_names.append_value(row.service_name);
+        self.timestamps.push(row.timestamp_us);
+        self.profile_types.append_value(row.profile_type);
+        for frame in row.stack {
+            self.stack_traces.values().append_value(frame.as_ref());
+        }
+        self.stack_traces.append(true);
+        self.values.push(row.value);
+        self.units.append_value(row.unit);
+        self.resource_attrs.append_option(row.resource_attributes);
+        self.labels.append_option(row.labels);
+    }
+
+    fn finish(mut self) -> Result<RecordBatch, DecodeError> {
+        RecordBatch::try_new(
+            profile_schema(),
+            vec![
+                Arc::new(self.profile_ids.finish()),
+                Arc::new(self.trace_ids.finish()),
+                Arc::new(self.span_ids.finish()),
+                Arc::new(self.service_names.finish()),
+                Arc::new(TimestampMicrosecondArray::from(self.timestamps)),
+                Arc::new(self.profile_types.finish()),
+                Arc::new(self.stack_traces.finish()),
+                Arc::new(Int64Array::from(self.values)),
+                Arc::new(self.units.finish()),
+                Arc::new(self.resource_attrs.finish()),
+                Arc::new(self.labels.finish()),
+            ],
+        )
+        .map_err(DecodeError::from)
+    }
+}
+
+fn labels_json(map: Map<String, JsonValue>) -> Option<String> {
+    if map.is_empty() {
+        None
+    } else {
+        Some(JsonValue::Object(map).to_string())
+    }
 }
 
 fn transform_profiles_request(
     request: ExportProfilesServiceRequest,
 ) -> Result<RecordBatch, DecodeError> {
-    let dict = match request.dictionary {
-        Some(d) => d,
-        None => {
-            // No dictionary = no samples can be resolved. Return empty batch.
-            tracing::debug!("profiles request has no dictionary, returning empty batch");
-            return RecordBatch::try_new(
-                profile_schema(),
-                vec![
-                    Arc::new(StringBuilder::new().finish()),
-                    Arc::new(StringBuilder::new().finish()),
-                    Arc::new(StringBuilder::new().finish()),
-                    Arc::new(StringBuilder::new().finish()),
-                    Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
-                    Arc::new(StringBuilder::new().finish()),
-                    Arc::new(empty_stack_trace_array()),
-                    Arc::new(Int64Array::from(Vec::<i64>::new())),
-                    Arc::new(StringBuilder::new().finish()),
-                    Arc::new(StringBuilder::new().finish()),
-                ],
-            )
-            .map_err(DecodeError::from);
-        }
+    let mut rows = Rows::new();
+    let Some(dict) = request.dictionary else {
+        // No dictionary = no samples can be resolved. Return empty batch.
+        tracing::debug!("profiles request has no dictionary, returning empty batch");
+        return rows.finish();
     };
     let string_table = &dict.string_table;
 
-    let schema = profile_schema();
-
-    let mut profile_ids = StringBuilder::new();
-    let mut trace_ids = StringBuilder::new();
-    let mut span_ids = StringBuilder::new();
-    let mut service_names = StringBuilder::new();
-    let mut timestamps = Vec::new();
-    let mut profile_types = StringBuilder::new();
-    let mut stack_traces = stack_trace_builder();
-    let mut values = Vec::new();
-    let mut units = StringBuilder::new();
-    let mut resource_attrs = StringBuilder::new();
-
     let resolve_str = |idx: i32| -> Result<&str, DecodeError> {
-        string_table
-            .get(idx as usize)
+        usize::try_from(idx)
+            .ok()
+            .and_then(|i| string_table.get(i))
             .map(String::as_str)
             .ok_or_else(|| {
                 DecodeError::Parse(format!(
@@ -115,45 +201,71 @@ fn transform_profiles_request(
     };
 
     /// Resolve a stack from sample.stack_index through the dictionary tables.
-    /// Returns function names from root to leaf, capped at 128 frames.
-    /// Returns Err on any index out of bounds — malformed profiles are rejected entirely.
+    /// Returns function names from root to leaf, expanding inlined frames,
+    /// capped at MAX_FRAMES frames. Returns Err on any index out of bounds —
+    /// malformed profiles are rejected entirely.
     fn resolve_stack<'a>(
         stack_index: i32,
-        dict: &'a crate::otel_proto::tonic::profiles::v1development::ProfilesDictionary,
+        dict: &'a ProfilesDictionary,
         string_table: &'a [String],
-    ) -> Result<Vec<&'a str>, DecodeError> {
-        let stack = dict.stack_table.get(stack_index as usize).ok_or_else(|| {
-            DecodeError::Parse(format!(
-                "stack_table index {stack_index} out of bounds (table has {} entries)",
-                dict.stack_table.len()
-            ))
-        })?;
-        let mut frames = Vec::with_capacity(stack.location_indices.len().min(128));
-        for (frame_pos, &loc_idx) in stack.location_indices.iter().take(128).enumerate() {
-            let loc = dict.location_table.get(loc_idx as usize).ok_or_else(|| {
+    ) -> Result<Vec<std::borrow::Cow<'a, str>>, DecodeError> {
+        let stack = usize::try_from(stack_index)
+            .ok()
+            .and_then(|i| dict.stack_table.get(i))
+            .ok_or_else(|| {
                 DecodeError::Parse(format!(
-                    "location_table index {loc_idx} out of bounds at stack {stack_index} frame {frame_pos} (table has {} entries)",
-                    dict.location_table.len()
+                    "stack_table index {stack_index} out of bounds (table has {} entries)",
+                    dict.stack_table.len()
                 ))
             })?;
-            let line = loc.line.first().ok_or_else(|| {
-                DecodeError::Parse(format!(
-                    "location index {loc_idx} has no line entries at stack {stack_index} frame {frame_pos}"
-                ))
-            })?;
-            let func = dict.function_table.get(line.function_index as usize).ok_or_else(|| {
-                DecodeError::Parse(format!(
-                    "function_table index {} out of bounds at stack {stack_index} frame {frame_pos} (table has {} entries)",
-                    line.function_index, dict.function_table.len()
-                ))
-            })?;
-            let name = string_table.get(func.name_strindex as usize).ok_or_else(|| {
-                DecodeError::Parse(format!(
-                    "string_table index {} out of bounds for function name at stack {stack_index} frame {frame_pos} (table has {} entries)",
-                    func.name_strindex, string_table.len()
-                ))
-            })?;
-            frames.push(name.as_str());
+        let mut frames = Vec::with_capacity(stack.location_indices.len().min(MAX_FRAMES));
+        'locations: for (frame_pos, &loc_idx) in stack.location_indices.iter().enumerate() {
+            let loc = usize::try_from(loc_idx)
+                .ok()
+                .and_then(|i| dict.location_table.get(i))
+                .ok_or_else(|| {
+                    DecodeError::Parse(format!(
+                        "location_table index {loc_idx} out of bounds at stack {stack_index} frame {frame_pos} (table has {} entries)",
+                        dict.location_table.len()
+                    ))
+                })?;
+            if loc.lines.is_empty() {
+                if loc.address == 0 {
+                    return Err(DecodeError::Parse(format!(
+                        "location index {loc_idx} has neither lines nor an address at stack {stack_index} frame {frame_pos}"
+                    )));
+                }
+                frames.push(std::borrow::Cow::Owned(format!("0x{:x}", loc.address)));
+            }
+            // lines[0] is the innermost inlined function; the last line is
+            // the caller it was inlined into. Leaf-first, like the stack.
+            for line in &loc.lines {
+                if frames.len() == MAX_FRAMES {
+                    break 'locations;
+                }
+                let func = usize::try_from(line.function_index)
+                    .ok()
+                    .and_then(|i| dict.function_table.get(i))
+                    .ok_or_else(|| {
+                        DecodeError::Parse(format!(
+                            "function_table index {} out of bounds at stack {stack_index} frame {frame_pos} (table has {} entries)",
+                            line.function_index, dict.function_table.len()
+                        ))
+                    })?;
+                let name = usize::try_from(func.name_strindex)
+                    .ok()
+                    .and_then(|i| string_table.get(i))
+                    .ok_or_else(|| {
+                        DecodeError::Parse(format!(
+                            "string_table index {} out of bounds for function name at stack {stack_index} frame {frame_pos} (table has {} entries)",
+                            func.name_strindex, string_table.len()
+                        ))
+                    })?;
+                frames.push(std::borrow::Cow::Borrowed(name.as_str()));
+            }
+            if frames.len() >= MAX_FRAMES {
+                break;
+            }
         }
         frames.reverse();
         Ok(frames)
@@ -161,7 +273,7 @@ fn transform_profiles_request(
 
     fn resolve_link(
         link_index: i32,
-        dict: &crate::otel_proto::tonic::profiles::v1development::ProfilesDictionary,
+        dict: &ProfilesDictionary,
     ) -> Result<Option<(TraceId, SpanId)>, DecodeError> {
         if link_index == 0 {
             return Ok(None);
@@ -192,33 +304,35 @@ fn transform_profiles_request(
         Ok(Some((trace_id, span_id)))
     }
 
+    let resolve_attrs = |indices: &[i32]| -> Result<Map<String, JsonValue>, DecodeError> {
+        let mut map = Map::new();
+        for &idx in indices {
+            let attr = usize::try_from(idx)
+                .ok()
+                .and_then(|i| dict.attribute_table.get(i))
+                .ok_or_else(|| {
+                    DecodeError::Parse(format!(
+                        "attribute_table index {idx} out of bounds (table has {} entries)",
+                        dict.attribute_table.len()
+                    ))
+                })?;
+            let key = resolve_str(attr.key_strindex)?;
+            if let Some(value) = attr.value.as_ref().and_then(crate::otlp::any_value_to_json) {
+                map.insert(key.to_string(), value);
+            }
+        }
+        Ok(map)
+    };
+
     for rp in &request.resource_profiles {
         let service_name = extract_service_name(rp.resource.as_ref())
             .ok_or_else(|| DecodeError::Parse("resource_profiles entry missing service.name attribute — every profile must identify its service".into()))?;
 
-        let res_attrs_json = if let Some(r) = &rp.resource {
-            if r.attributes.is_empty() {
-                None
-            } else {
-                Some(format!(
-                    "{{{}}}",
-                    r.attributes
-                        .iter()
-                        .map(|a| format!(
-                            "\"{}\":\"{}\"",
-                            a.key,
-                            a.value
-                                .as_ref()
-                                .map(|v| format!("{v:?}"))
-                                .unwrap_or_else(|| format!("<MISSING VALUE for key '{}'>", a.key))
-                        ))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                ))
-            }
-        } else {
-            None
-        };
+        let res_attrs_json = rp
+            .resource
+            .as_ref()
+            .filter(|r| !r.attributes.is_empty())
+            .map(|r| crate::otlp::attrs_to_json(&r.attributes));
 
         for sp in &rp.scope_profiles {
             for profile in &sp.profiles {
@@ -231,87 +345,62 @@ fn transform_profiles_request(
                     pid_hex.as_str()
                 };
 
+                let profile_attrs = resolve_attrs(&profile.attribute_indices)?;
+                let kind = profile_attrs
+                    .get(PROFILE_NAME_ATTR)
+                    .and_then(JsonValue::as_str);
+
                 // Resolve profile_type and unit from sample_type
                 let (ptype, punit) = match profile.sample_type.as_ref() {
                     Some(st) => (
-                        resolve_str(st.type_strindex)?,
+                        display_profile_type(kind, resolve_str(st.type_strindex)?),
                         resolve_str(st.unit_strindex)?,
                     ),
-                    None => ("", ""),
+                    None => (String::new(), ""),
                 };
 
-                for sample in &profile.sample {
+                for sample in &profile.samples {
                     let stack = resolve_stack(sample.stack_index, &dict, string_table)?;
                     let link = resolve_link(sample.link_index, &dict)?;
-                    let sample_values = std::iter::once(0i64)
+                    let labels = labels_json(resolve_attrs(&sample.attribute_indices)?);
+                    // A sample with only timestamps counts one event per timestamp.
+                    let timestamp_count =
+                        i64::try_from(sample.timestamps_unix_nano.len()).unwrap_or(i64::MAX);
+                    let sample_values = std::iter::once(timestamp_count)
                         .take(usize::from(sample.values.is_empty()))
                         .chain(sample.values.iter().copied());
 
                     // For multi-value profiles, write one row per value
                     for val in sample_values {
-                        profile_ids.append_value(pid);
-                        match &link {
-                            Some((trace_id, span_id)) => {
-                                trace_ids.append_value(trace_id.as_ref());
-                                span_ids.append_value(span_id.as_ref());
-                            }
-                            None => {
-                                trace_ids.append_null();
-                                span_ids.append_null();
-                            }
-                        }
-                        service_names.append_value(service_name);
-                        timestamps.push(ts_us);
-                        profile_types.append_value(ptype);
-                        append_stack_trace(&mut stack_traces, &stack);
-
-                        values.push(val);
-                        units.append_value(punit);
-                        match &res_attrs_json {
-                            Some(j) => resource_attrs.append_value(j),
-                            None => resource_attrs.append_null(),
-                        }
+                        rows.push(Row {
+                            profile_id: pid,
+                            link: link.as_ref(),
+                            service_name,
+                            timestamp_us: ts_us,
+                            profile_type: &ptype,
+                            stack: &stack,
+                            value: val,
+                            unit: punit,
+                            resource_attributes: res_attrs_json.as_deref(),
+                            labels: labels.as_deref(),
+                        });
                     }
                 }
             }
         }
     }
 
-    if timestamps.is_empty() {
-        return RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(profile_ids.finish()),
-                Arc::new(trace_ids.finish()),
-                Arc::new(span_ids.finish()),
-                Arc::new(service_names.finish()),
-                Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
-                Arc::new(profile_types.finish()),
-                Arc::new(stack_traces.finish()),
-                Arc::new(Int64Array::from(Vec::<i64>::new())),
-                Arc::new(units.finish()),
-                Arc::new(resource_attrs.finish()),
-            ],
-        )
-        .map_err(DecodeError::from);
-    }
+    rows.finish()
+}
 
-    RecordBatch::try_new(
-        schema,
-        vec![
-            Arc::new(profile_ids.finish()),
-            Arc::new(trace_ids.finish()),
-            Arc::new(span_ids.finish()),
-            Arc::new(service_names.finish()),
-            Arc::new(TimestampMicrosecondArray::from(timestamps)),
-            Arc::new(profile_types.finish()),
-            Arc::new(stack_traces.finish()),
-            Arc::new(Int64Array::from(values)),
-            Arc::new(units.finish()),
-            Arc::new(resource_attrs.finish()),
-        ],
-    )
-    .map_err(DecodeError::from)
+/// One entry of the `sample_type_config` multipart field that Pyroscope SDKs
+/// send next to a raw pprof profile.
+#[derive(Debug, Default, Deserialize)]
+pub struct PyroscopeSampleType {
+    #[serde(default, rename = "display-name", alias = "display_name")]
+    pub display_name: String,
+    #[serde(default)]
+    pub units: String,
 }
 
 /// Decode either a Pyroscope PushRequest or an SDK raw pprof profile into an
@@ -321,24 +410,66 @@ pub fn transform_pyroscope_profiles(
     sdk_name: Option<&str>,
     max_profile_bytes: usize,
 ) -> Result<RecordBatch, DecodeError> {
+    transform_pyroscope_profiles_with_config(body, sdk_name, None, max_profile_bytes)
+}
+
+/// Split a Pyroscope application name `app{k=v,k2=v2}` into the application
+/// and its labels.
+fn parse_pyroscope_name(name: &str) -> (&str, Vec<(String, String)>) {
+    let Some((base, rest)) = name.split_once('{') else {
+        return (name.trim(), Vec::new());
+    };
+    let inner = rest.strip_suffix('}').unwrap_or(rest);
+    let labels = inner
+        .split(',')
+        .filter_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            let (k, v) = (k.trim(), v.trim());
+            (!k.is_empty()).then(|| (k.to_string(), v.to_string()))
+        })
+        .collect();
+    (base.trim(), labels)
+}
+
+/// As transform_pyroscope_profiles, with the SDK's `sample_type_config` JSON
+/// (from the multipart body) used to name sample types.
+pub fn transform_pyroscope_profiles_with_config(
+    body: Vec<u8>,
+    sdk_name: Option<&str>,
+    sample_type_config: Option<&[u8]>,
+    max_profile_bytes: usize,
+) -> Result<RecordBatch, DecodeError> {
     let decompressed = decompress_profile(body, max_profile_bytes, "Pyroscope request")?;
     tracing::debug!("pyroscope: payload {} bytes", decompressed.len());
+
+    let type_config: HashMap<String, PyroscopeSampleType> = match sample_type_config {
+        Some(bytes) if !bytes.is_empty() => serde_json::from_slice(bytes).map_err(|e| {
+            DecodeError::Parse(format!("Pyroscope sample_type_config is invalid JSON: {e}"))
+        })?,
+        _ => HashMap::new(),
+    };
 
     // Stage 2: Node sends raw pprof with the application name in the query;
     // pyroscope-rs sends a PushRequest whose series already carries service_name.
     let push_request = if let Some(name) = sdk_name {
-        let service_name = name.split_once('{').map_or(name, |(base, _)| base).trim();
+        let (service_name, name_labels) = parse_pyroscope_name(name);
         if service_name.is_empty() {
             return Err(DecodeError::Parse(
                 "Pyroscope SDK name must contain a non-empty application name".into(),
             ));
         }
+        let mut labels = vec![crate::pyroscope_proto::types::LabelPair {
+            name: "service_name".to_string(),
+            value: service_name.to_string(),
+        }];
+        labels.extend(
+            name_labels
+                .into_iter()
+                .map(|(name, value)| crate::pyroscope_proto::types::LabelPair { name, value }),
+        );
         crate::pyroscope_proto::push::PushRequest {
             series: vec![crate::pyroscope_proto::push::RawProfileSeries {
-                labels: vec![crate::pyroscope_proto::types::LabelPair {
-                    name: "service_name".to_string(),
-                    value: service_name.to_string(),
-                }],
+                labels,
                 samples: vec![crate::pyroscope_proto::push::RawSample {
                     raw_profile: decompressed,
                     id: String::new(),
@@ -353,19 +484,7 @@ pub fn transform_pyroscope_profiles(
     };
     tracing::debug!("pyroscope: series count={}", push_request.series.len());
 
-    let schema = profile_schema();
-
-    let mut profile_ids = StringBuilder::new();
-    let mut trace_ids = StringBuilder::new();
-    let mut span_ids = StringBuilder::new();
-    let mut service_names = StringBuilder::new();
-    let mut timestamps = Vec::<i64>::new();
-    let mut profile_types = StringBuilder::new();
-    let mut stack_traces = stack_trace_builder();
-    let mut values = Vec::<i64>::new();
-    let mut units = StringBuilder::new();
-    let mut resource_attrs = StringBuilder::new();
-    let mut num_rows = 0usize;
+    let mut rows = Rows::new();
 
     for series in &push_request.series {
         // Extract service.name from labels
@@ -375,6 +494,25 @@ pub fn transform_pyroscope_profiles(
             .find(|l| l.name == "service_name")
             .map(|l| l.value.as_str())
             .unwrap_or("");
+        if service_name.is_empty() {
+            return Err(DecodeError::Parse(
+                "Pyroscope series is missing the service_name label".into(),
+            ));
+        }
+        // Series labels describe the process, like an OTLP resource. Pyroscope's
+        // reserved `__name__`-style labels are internal and dropped.
+        let mut resource = Map::new();
+        resource.insert(
+            "service.name".to_string(),
+            JsonValue::String(service_name.to_string()),
+        );
+        for label in &series.labels {
+            if label.name == "service_name" || label.name.starts_with("__") {
+                continue;
+            }
+            resource.insert(label.name.clone(), JsonValue::String(label.value.clone()));
+        }
+        let resource_json = JsonValue::Object(resource).to_string();
 
         for sample in &series.samples {
             // Decode each embedded pprof synchronously; the whole transform runs
@@ -389,12 +527,6 @@ pub fn transform_pyroscope_profiles(
 
             // Time and duration in nanoseconds → microseconds
             let ts_us = pprof_profile.time_nanos / 1000;
-
-            if service_name.is_empty() {
-                return Err(DecodeError::Parse(
-                    "Pyroscope series is missing the service_name label".into(),
-                ));
-            }
 
             let resolve_string = |index: i64, field: &str| -> Result<&str, DecodeError> {
                 let index = usize::try_from(index).map_err(|_| {
@@ -428,12 +560,26 @@ pub fn transform_pyroscope_profiles(
                             "pprof sample_type[{index}] must have non-empty type and unit"
                         )));
                     }
-                    Ok((profile_type, unit))
+                    let display = type_config
+                        .get(profile_type)
+                        .map(|c| c.display_name.as_str())
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| display_profile_type(None, profile_type));
+                    Ok((display, unit))
                 })
                 .collect::<Result<Vec<_>, DecodeError>>()?;
 
-            let locations = &pprof_profile.location;
-            let functions = &pprof_profile.function;
+            let locations: HashMap<u64, &crate::pyroscope_proto::google::Location> = pprof_profile
+                .location
+                .iter()
+                .map(|location| (location.id, location))
+                .collect();
+            let functions: HashMap<u64, &crate::pyroscope_proto::google::Function> = pprof_profile
+                .function
+                .iter()
+                .map(|function| (function.id, function))
+                .collect();
             let string_table = &pprof_profile.string_table;
 
             for (sample_index, pprof_sample) in pprof_profile.sample.iter().enumerate() {
@@ -444,109 +590,110 @@ pub fn transform_pyroscope_profiles(
                         sample_types.len()
                     )));
                 }
+                if pprof_sample.value.iter().all(|&v| v == 0) {
+                    continue;
+                }
 
-                let mut stack = Vec::with_capacity(pprof_sample.location_id.len().min(128));
-                for (frame_index, &location_id) in
-                    pprof_sample.location_id.iter().take(128).enumerate()
+                let mut stack: Vec<&str> =
+                    Vec::with_capacity(pprof_sample.location_id.len().min(MAX_FRAMES));
+                let mut addresses: Vec<String> = Vec::new();
+                let mut address_slots: Vec<usize> = Vec::new();
+                'locations: for (frame_index, &location_id) in
+                    pprof_sample.location_id.iter().enumerate()
                 {
-                    let location = locations
-                        .iter()
-                        .find(|location| location.id == location_id)
-                        .ok_or_else(|| {
-                            DecodeError::Parse(format!(
-                                "pprof sample[{sample_index}] frame[{frame_index}] references missing location id {location_id}"
-                            ))
-                        })?;
-                    let Some(line) = location.line.first() else {
-                        stack.push(format!("0x{:x}", location.address));
-                        continue;
-                    };
-                    let function = functions
-                        .iter()
-                        .find(|function| function.id == line.function_id)
-                        .ok_or_else(|| {
+                    let location = locations.get(&location_id).ok_or_else(|| {
+                        DecodeError::Parse(format!(
+                            "pprof sample[{sample_index}] frame[{frame_index}] references missing location id {location_id}"
+                        ))
+                    })?;
+                    if location.line.is_empty() {
+                        address_slots.push(stack.len());
+                        addresses.push(format!("0x{:x}", location.address));
+                        stack.push("");
+                    }
+                    // line[0] is the innermost inlined function.
+                    for line in &location.line {
+                        if stack.len() == MAX_FRAMES {
+                            break 'locations;
+                        }
+                        let function = functions.get(&line.function_id).ok_or_else(|| {
                             DecodeError::Parse(format!(
                                 "pprof location id {location_id} references missing function id {}",
                                 line.function_id
                             ))
                         })?;
-                    let function_name_index = usize::try_from(function.name).map_err(|_| {
-                        DecodeError::Parse(format!(
-                            "pprof function id {} has negative name index {}",
-                            function.id, function.name
-                        ))
-                    })?;
-                    let function_name = string_table.get(function_name_index).ok_or_else(|| {
-                        DecodeError::Parse(format!(
-                            "pprof function id {} name index {function_name_index} out of bounds (table has {} entries)",
-                            function.id,
-                            string_table.len()
-                        ))
-                    })?;
-                    if function_name.is_empty() {
-                        return Err(DecodeError::Parse(format!(
-                            "pprof function id {} has an empty name",
-                            function.id
-                        )));
+                        let function_name_index = usize::try_from(function.name).map_err(|_| {
+                            DecodeError::Parse(format!(
+                                "pprof function id {} has negative name index {}",
+                                function.id, function.name
+                            ))
+                        })?;
+                        let function_name =
+                            string_table.get(function_name_index).ok_or_else(|| {
+                                DecodeError::Parse(format!(
+                                    "pprof function id {} name index {function_name_index} out of bounds (table has {} entries)",
+                                    function.id,
+                                    string_table.len()
+                                ))
+                            })?;
+                        if function_name.is_empty() {
+                            return Err(DecodeError::Parse(format!(
+                                "pprof function id {} has an empty name",
+                                function.id
+                            )));
+                        }
+                        stack.push(function_name);
                     }
-                    stack.push(function_name.clone());
+                    if stack.len() >= MAX_FRAMES {
+                        break;
+                    }
+                }
+                for (slot, address) in address_slots.iter().zip(&addresses) {
+                    stack[*slot] = address;
                 }
                 // pprof stores leaf-first; Sigiro stores caller-first for folded stacks.
                 stack.reverse();
 
-                for ((profile_type, unit), &value) in sample_types.iter().zip(&pprof_sample.value) {
-                    profile_ids.append_value(&sample.id);
-                    trace_ids.append_null();
-                    span_ids.append_null();
-                    service_names.append_value(service_name);
-                    timestamps.push(ts_us);
-                    profile_types.append_value(profile_type);
-                    append_stack_trace(&mut stack_traces, &stack);
+                let mut labels = Map::new();
+                for label in &pprof_sample.label {
+                    let key = resolve_string(label.key, "label key")?;
+                    if label.str != 0 {
+                        labels.insert(
+                            key.to_string(),
+                            JsonValue::String(
+                                resolve_string(label.str, "label value")?.to_string(),
+                            ),
+                        );
+                    } else {
+                        labels.insert(key.to_string(), JsonValue::from(label.num));
+                    }
+                }
+                // Pyroscope's span profiles put the span ID in a label; it
+                // carries no trace ID, so it stays a label rather than a link.
+                let labels = labels_json(labels);
 
-                    values.push(value);
-                    units.append_value(unit);
-                    resource_attrs.append_null();
-                    num_rows += 1;
+                for ((profile_type, unit), &value) in sample_types.iter().zip(&pprof_sample.value) {
+                    if value == 0 {
+                        continue;
+                    }
+                    rows.push(Row {
+                        profile_id: &sample.id,
+                        link: None,
+                        service_name,
+                        timestamp_us: ts_us,
+                        profile_type,
+                        stack: &stack,
+                        value,
+                        unit,
+                        resource_attributes: Some(&resource_json),
+                        labels: labels.as_deref(),
+                    });
                 }
             }
         }
     }
 
-    if num_rows == 0 {
-        return RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(StringBuilder::new().finish()),
-                Arc::new(StringBuilder::new().finish()),
-                Arc::new(StringBuilder::new().finish()),
-                Arc::new(StringBuilder::new().finish()),
-                Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
-                Arc::new(StringBuilder::new().finish()),
-                Arc::new(empty_stack_trace_array()),
-                Arc::new(Int64Array::from(Vec::<i64>::new())),
-                Arc::new(StringBuilder::new().finish()),
-                Arc::new(StringBuilder::new().finish()),
-            ],
-        )
-        .map_err(DecodeError::from);
-    }
-
-    RecordBatch::try_new(
-        schema,
-        vec![
-            Arc::new(profile_ids.finish()),
-            Arc::new(trace_ids.finish()),
-            Arc::new(span_ids.finish()),
-            Arc::new(service_names.finish()),
-            Arc::new(TimestampMicrosecondArray::from(timestamps)),
-            Arc::new(profile_types.finish()),
-            Arc::new(stack_traces.finish()),
-            Arc::new(Int64Array::from(values)),
-            Arc::new(units.finish()),
-            Arc::new(resource_attrs.finish()),
-        ],
-    )
-    .map_err(DecodeError::from)
+    rows.finish()
 }
 
 fn decompress_profile(
@@ -596,4 +743,43 @@ fn extract_service_name(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pyroscope_names_split_into_app_and_labels() {
+        let (app, labels) =
+            parse_pyroscope_name("checkout{__session_id__=abc,env=prod, region = eu}");
+        assert_eq!(app, "checkout");
+        assert_eq!(
+            labels,
+            vec![
+                ("__session_id__".to_string(), "abc".to_string()),
+                ("env".to_string(), "prod".to_string()),
+                ("region".to_string(), "eu".to_string()),
+            ]
+        );
+        assert_eq!(parse_pyroscope_name("plain").0, "plain");
+    }
+
+    #[test]
+    fn mutex_and_block_types_are_disambiguated() {
+        assert_eq!(
+            display_profile_type(Some("mutex"), "contentions"),
+            "mutex_count"
+        );
+        assert_eq!(
+            display_profile_type(Some("block"), "delay"),
+            "block_duration"
+        );
+        assert_eq!(display_profile_type(None, "contentions"), "contentions");
+        assert_eq!(
+            display_profile_type(Some("goroutine"), "goroutine"),
+            "goroutines"
+        );
+        assert_eq!(display_profile_type(Some("cpu"), "cpu"), "cpu");
+    }
 }

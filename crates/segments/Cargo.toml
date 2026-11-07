@@ -28,7 +28,9 @@ tracing = "0.1"
 flate2 = "1"
 
 [dev-dependencies]
-otlp031 = { package = "opentelemetry-proto", version = "=0.31.0", default-features = false, features = ["gen-tonic-messages", "profiles"] }
+# The profiles tests encode with the same proto revision the ingest path decodes
+# (opentelemetry-proto v1.10 layout, also used by the gRPC server).
+otlp033 = { package = "opentelemetry-proto", version = "=0.33.1", default-features = false, features = ["gen-tonic-messages", "profiles"] }
 pyroscope = { version = "=2.0.4", default-features = false }
 flate2 = "1"
 bytes = "1"

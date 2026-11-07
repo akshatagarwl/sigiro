@@ -55,7 +55,8 @@ fn an_empty_profiles_segment_has_the_profiles_columns() {
             "stack_trace",
             "value",
             "unit",
-            "resource_attributes"
+            "resource_attributes",
+            "labels"
         ]
     );
 }

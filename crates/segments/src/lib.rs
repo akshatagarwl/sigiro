@@ -15,7 +15,10 @@ mod otel_proto;
 pub mod otlp;
 mod profiles;
 mod pyroscope_proto;
-pub use profiles::{transform_otlp_profiles, transform_pyroscope_profiles};
+pub use profiles::{
+    PyroscopeSampleType, transform_otlp_profiles, transform_pyroscope_profiles,
+    transform_pyroscope_profiles_with_config,
+};
 pub mod read_only_sql;
 pub use read_only_sql::{ALLOWED_TABLES, validate_read_only, validate_read_only_with};
 mod proto;

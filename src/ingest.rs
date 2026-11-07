@@ -960,9 +960,10 @@ async fn ingest_pyroscope(
         state.router.workloads(),
         "transform pyroscope profiles",
         move || {
-            sigiro_segments::transform_pyroscope_profiles(
-                body_bytes,
+            sigiro_segments::transform_pyroscope_profiles_with_config(
+                body_bytes.profile,
                 sdk_name.as_deref(),
+                body_bytes.sample_type_config.as_deref(),
                 max_profile_bytes,
             )
             .map_err(decode_status)
@@ -983,11 +984,11 @@ async fn ingest_pyroscope(
     );
 
     if batch.num_rows() == 0 {
-        tracing::warn!(
-            project_id,
-            "otlp_http_profiles: batch empty after transform — profile data lost"
-        );
-        return StatusCode::BAD_REQUEST;
+        // A decoded profile with no non-zero sample (an idle mutex or block
+        // window, say) carries nothing to store. The SDK uploaded a valid
+        // profile, so accept it rather than make it log an error.
+        tracing::debug!(project_id, "pyroscope ingest: profile has no non-zero samples");
+        return StatusCode::OK;
     }
     let pid = project_id.clone();
     if let Err(e) = state
@@ -1015,10 +1016,18 @@ async fn ingest_pyroscope(
 /// profile may be raw pprof (Node SDK, identified by the `name` query parameter)
 /// or a PushRequest protobuf. This function extracts the profile bytes; decoding
 /// is handled by `transform_pyroscope_profiles`.
+/// The payload of a Pyroscope ingest request: the profile bytes and, for
+/// multipart bodies, the optional `sample_type_config` JSON that names the
+/// sample types (for example `mutex_count` versus `block_count`).
+struct PyroscopeBody {
+    profile: Vec<u8>,
+    sample_type_config: Option<Vec<u8>>,
+}
+
 async fn parse_pyroscope_multipart(
     headers: &axum::http::HeaderMap,
     body: &[u8],
-) -> Result<Vec<u8>, String> {
+) -> Result<PyroscopeBody, String> {
     let content_type = headers
         .typed_get::<headers::ContentType>()
         .map(|c| c.to_string())
@@ -1040,25 +1049,43 @@ async fn parse_pyroscope_multipart(
         )));
         let mut multipart = Multipart::new(stream, boundary);
 
+        let mut profile = None;
+        let mut sample_type_config = None;
         while let Some(field) = multipart
             .next_field()
             .await
             .map_err(|e| format!("multipart parse error: {e}"))?
         {
-            if field.name() == Some("profile") {
-                let profile_bytes = field
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("multipart field read error: {e}"))?;
-                tracing::debug!(
-                    "pyroscope multipart: extracted {} profile bytes",
-                    profile_bytes.len()
-                );
-                return Ok(profile_bytes.to_vec());
+            let name = field.name().map(str::to_string);
+            match name.as_deref() {
+                Some("profile") => {
+                    let profile_bytes = field
+                        .bytes()
+                        .await
+                        .map_err(|e| format!("multipart field read error: {e}"))?;
+                    tracing::debug!(
+                        "pyroscope multipart: extracted {} profile bytes",
+                        profile_bytes.len()
+                    );
+                    profile = Some(profile_bytes.to_vec());
+                }
+                Some("sample_type_config") => {
+                    let config = field
+                        .bytes()
+                        .await
+                        .map_err(|e| format!("multipart field read error: {e}"))?;
+                    sample_type_config = Some(config.to_vec());
+                }
+                _ => {}
             }
         }
 
-        Err("profile form field not found in multipart body".to_string())
+        profile
+            .map(|profile| PyroscopeBody {
+                profile,
+                sample_type_config,
+            })
+            .ok_or_else(|| "profile form field not found in multipart body".to_string())
     } else if content_type.is_empty()
         || content_type.contains("application/proto")
         || content_type.contains("application/octet-stream")
@@ -1067,7 +1094,10 @@ async fn parse_pyroscope_multipart(
         if body.is_empty() {
             return Err("empty body".to_string());
         }
-        Ok(body.to_vec())
+        Ok(PyroscopeBody {
+            profile: body.to_vec(),
+            sample_type_config: None,
+        })
     } else {
         Err(format!(
             "unimplemented: Content-Type '{}' is not supported for Pyroscope ingest; \

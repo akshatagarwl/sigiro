@@ -717,7 +717,7 @@ fn extract_string_attr(
     })
 }
 
-fn attrs_to_json(attrs: &[crate::otel_proto::tonic::common::v1::KeyValue]) -> String {
+pub(crate) fn attrs_to_json(attrs: &[crate::otel_proto::tonic::common::v1::KeyValue]) -> String {
     if attrs.is_empty() {
         return "{}".to_string();
     }
@@ -732,7 +732,9 @@ fn attrs_to_json(attrs: &[crate::otel_proto::tonic::common::v1::KeyValue]) -> St
     serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn any_value_to_json(av: &crate::otel_proto::tonic::common::v1::AnyValue) -> Option<JsonValue> {
+pub(crate) fn any_value_to_json(
+    av: &crate::otel_proto::tonic::common::v1::AnyValue,
+) -> Option<JsonValue> {
     use crate::otel_proto::tonic::common::v1::any_value::Value;
     match &av.value {
         Some(Value::StringValue(s)) => Some(JsonValue::String(s.clone())),

@@ -188,10 +188,17 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             stack_trace           VARCHAR[],
             value                 BIGINT,
             unit                  VARCHAR,
-            resource_attributes   VARCHAR
+            resource_attributes   VARCHAR,
+            labels                VARCHAR
         )"
     ))
     .context("failed to create sigiro_profiles")?;
+    // Tables created before per-sample labels existed gain the column at the
+    // end, where the positional appender writes it.
+    conn.execute_batch(&format!(
+        "ALTER TABLE {prefix}sigiro_profiles ADD COLUMN IF NOT EXISTS labels VARCHAR"
+    ))
+    .context("failed to add sigiro_profiles.labels")?;
 
     // NOTE: DuckLake (Parquet-backed catalog) does not support CREATE INDEX.
     // Query performance relies on Parquet row group pruning and column statistics.
