@@ -92,7 +92,6 @@ fn otlp_request() -> Vec<u8> {
         sample_type: Some(ValueType {
             type_strindex: 1,
             unit_strindex: 2,
-            ..Default::default()
         }),
         samples: vec![
             Sample {
