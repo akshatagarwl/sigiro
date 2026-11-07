@@ -508,7 +508,10 @@ function FunctionsTable({
           </TableHeader>
           <TableBody>
             {rows.map((row) => {
-              const change = row.self - row.baseSelf;
+              // Values are scaled to a common total, so equal frames can differ
+              // by a fraction of a unit; show those as no change.
+              const raw = row.self - row.baseSelf;
+              const change = Math.abs(raw) < 1 ? 0 : raw;
               return (
                 <TableRow key={row.name} className="cursor-pointer" onClick={() => onPick(row.name)} data-function={row.name}>
                   <TableCell className="truncate pl-4 font-mono text-xs" title={row.name}>
