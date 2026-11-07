@@ -11,7 +11,7 @@ type Chart = ReturnType<typeof flamegraph>;
 /**
  * d3-flame-graph (Apache-2.0) in a resizable box. Click a frame to zoom,
  * `search` highlights matching frames, and with `diff` frames are coloured by
- * `delta` (red grew, green shrank).
+ * `delta` (red grew, blue shrank).
  */
 export function Flamegraph({
   tree,

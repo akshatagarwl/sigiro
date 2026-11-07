@@ -111,7 +111,7 @@ export function buildTree(stacks: Stack[], scale = 1, rootName = "total"): Flame
 /**
  * A diff tree: each node is as wide as the larger of the comparison value and
  * the baseline scaled to the comparison's total (so removed paths still show),
- * and `delta` is comparison − scaled baseline (red grew, green shrank).
+ * and `delta` is comparison − scaled baseline (red grew, blue shrank).
  */
 export function buildDiffTree(baseline: Stack[], comparison: Stack[], scale = 1): FlameNode {
   const totalA = baseline.reduce((s, x) => s + x.value, 0);

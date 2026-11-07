@@ -393,7 +393,7 @@ export function ProfilesExplorer() {
                       </CardTitle>
                       <CardDescription>
                         {diff
-                          ? "Width is the larger of the two windows; red grew, green shrank. Click to zoom."
+                          ? "Width is the larger of the two windows; red grew, blue shrank (compared with the baseline scaled to the same total). Click to zoom."
                           : "Click a frame to zoom; hover for its share."}
                       </CardDescription>
                     </CardHeader>
@@ -521,7 +521,7 @@ function FunctionsTable({
                   <TableCell className={`text-right text-xs tabular-nums ${diff ? "" : "pr-4"}`}>{formatValue(row.total, unit)}</TableCell>
                   {diff && (
                     <TableCell
-                      className={`pr-4 text-right text-xs tabular-nums ${change > 0 ? "text-destructive" : change < 0 ? "text-success" : ""}`}
+                      className={`pr-4 text-right text-xs tabular-nums ${change > 0 ? "text-destructive" : change < 0 ? "text-sky-600 dark:text-sky-400" : ""}`}
                     >
                       {change > 0 ? "+" : ""}
                       {formatValue(change, unit)}
