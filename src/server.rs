@@ -602,7 +602,10 @@ async fn dashboard_file(
     use axum::response::IntoResponse;
     let relative = std::path::Path::new(&path);
     if relative.components().any(|c| {
-        !matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)
+        !matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
     }) {
         return StatusCode::NOT_FOUND.into_response();
     }

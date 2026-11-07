@@ -987,7 +987,10 @@ async fn ingest_pyroscope(
         // A decoded profile with no non-zero sample (an idle mutex or block
         // window, say) carries nothing to store. The SDK uploaded a valid
         // profile, so accept it rather than make it log an error.
-        tracing::debug!(project_id, "pyroscope ingest: profile has no non-zero samples");
+        tracing::debug!(
+            project_id,
+            "pyroscope ingest: profile has no non-zero samples"
+        );
         return StatusCode::OK;
     }
     let pid = project_id.clone();
