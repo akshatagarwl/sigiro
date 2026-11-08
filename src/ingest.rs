@@ -129,22 +129,26 @@ pub async fn extract_project_id_grpc(
 ) -> Result<String, Status> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::Jwt { .. } => {
+        crate::auth::AuthMode::Jwt { .. } | crate::auth::AuthMode::StaticBearer { .. } => {
             let authorization = metadata
                 .get("authorization")
                 .ok_or_else(|| Status::unauthenticated("Missing Authorization metadata"))?
                 .to_str()
                 .map_err(|_| Status::unauthenticated("Invalid Authorization encoding"))?;
-            let credential =
-                crate::auth::parse_api_credential(authorization).map_err(|error| match error {
-                    crate::auth::CredentialParseError::MissingScheme
-                    | crate::auth::CredentialParseError::UnsupportedScheme => {
-                        Status::unauthenticated("Expected Bearer or AgentAuth credential")
-                    }
-                    crate::auth::CredentialParseError::InvalidToken => {
-                        Status::unauthenticated("Invalid Authorization metadata")
-                    }
-                })?;
+            let credential = if matches!(auth_mode, crate::auth::AuthMode::StaticBearer { .. }) {
+                crate::auth::parse_static_credential(authorization)
+            } else {
+                crate::auth::parse_api_credential(authorization)
+            }
+            .map_err(|error| match error {
+                crate::auth::CredentialParseError::MissingScheme
+                | crate::auth::CredentialParseError::UnsupportedScheme => {
+                    Status::unauthenticated("Expected Bearer or AgentAuth credential")
+                }
+                crate::auth::CredentialParseError::InvalidToken => {
+                    Status::unauthenticated("Invalid Authorization metadata")
+                }
+            })?;
 
             auth_mode
                 .authenticate(
@@ -750,8 +754,18 @@ pub async fn extract_project_id_http(
 ) -> Result<String, StatusCode> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
-        crate::auth::AuthMode::Jwt { .. } => {
-            let credential = crate::auth::extract_api_credential(headers).map_err(|_| {
+        crate::auth::AuthMode::Jwt { .. } | crate::auth::AuthMode::StaticBearer { .. } => {
+            let credential = if matches!(auth_mode, crate::auth::AuthMode::StaticBearer { .. }) {
+                headers
+                    .get(axum::http::header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or(crate::auth::CredentialParseError::MissingScheme)
+                    .and_then(crate::auth::parse_static_credential)
+                    .map_err(|_| ())
+            } else {
+                crate::auth::extract_api_credential(headers).map_err(|_| ())
+            }
+            .map_err(|_| {
                 tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
                 StatusCode::UNAUTHORIZED
             })?;

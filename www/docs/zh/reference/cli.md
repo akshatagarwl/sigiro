@@ -14,7 +14,7 @@ sidebar:
 `sigiro auth login`；`sigiro auth status`、`sigiro auth token` 和 `sigiro auth logout` 管理登录状态。
 
 全局标志 `--token <TOKEN>` 为自动化显式设置 bearer token。它会覆盖
-`SIGIRO_ACCESS_TOKEN`。两者仅用于客户端。Open 模式不需要令牌；JWT 模式需要有效的 OAuth/JWT 访问令牌。服务端不支持简单的静态 bearer 令牌模式。
+`SIGIRO_ACCESS_TOKEN`。两者仅用于客户端。Open 模式不需要令牌；本地静态 bearer 模式需要服务端配置的 `SIGIRO_STATIC_BEARER_TOKEN`；JWT 模式需要有效的 OAuth/JWT 访问令牌。参阅[静态 bearer 指南](/docs/zh/how-to/self-hosted-static-bearer)。
 
 所有客户端子命令都会访问 `SIGIRO_ENDPOINT` 指定的服务器，默认值为
 `http://localhost:9999`。

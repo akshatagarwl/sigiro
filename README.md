@@ -16,11 +16,11 @@ sigiro auth status
 
 For an existing account, use browser-based `sigiro auth login` instead. Use
 `sigiro auth logout` to revoke the refresh token and remove credentials.
-Self-hosting requires no account. Open mode requires no token; the only other
-server authentication mode validates JWTs using an issuer, audience, and JWKS URL.
-There is no simple static bearer-token mode. See the
+Self-hosting requires no account. Open mode requires no token. Set
+`SIGIRO_STATIC_BEARER_TOKEN` to require one shared token on the local query API
+and OTLP listeners, or configure issuer, audience, and JWKS URL for JWT mode. See the
 [self-hosted configuration reference](www/docs/reference/self-hosted-configuration.md)
-for retention, disk limits, JWT settings, and OTLP TLS.
+for retention, disk limits, authentication, and OTLP TLS.
 
 ## Quick Start
 
@@ -40,15 +40,18 @@ No configuration required. Data is stored in the platform data directory (`~/.lo
 
 ## Authentication
 
-Sigiro has two server authentication modes:
+Sigiro has three server authentication modes:
 
 * **Open** (default): self-hosted servers and edge/query-surface nodes run with
   no per-request authentication. Secure the network perimeter with a tailnet,
   private network, or reverse proxy.
+* **Static bearer** (local self-hosting only): set `SIGIRO_STATIC_BEARER_TOKEN`
+  to require one secret for the query API and all OTLP signals. Protect the
+  connection with TLS; the main HTTP listener requires a TLS-terminating proxy.
 * **Better Auth OAuth/JWT** (hosted): configure the issuer, audience, and JWKS
   settings. Requests carry OAuth access-token JWTs; organizations are tenants.
 
-For automation, `SIGIRO_ACCESS_TOKEN` is **client-only** configuration for calling a hosted endpoint:
+For automation, `SIGIRO_ACCESS_TOKEN` is **client-only** configuration for calling an authenticated endpoint:
 
 ```bash
 SIGIRO_ACCESS_TOKEN=<oauth-access-token> sigiro status
