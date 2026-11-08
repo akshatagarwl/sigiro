@@ -14,7 +14,8 @@ import assert from "node:assert/strict";
  *
  *   aube run check:signup
  *
- * Requires the `agentmail` CLI to be authenticated for INBOX.
+ * Requires SIGIRO_SIGNUP_INBOX (the inbox address) and the `agentmail` CLI
+ * authenticated for that inbox.
  */
 import { spawn } from "node:child_process";
 
@@ -22,8 +23,18 @@ import { chromium, type Page } from "playwright";
 
 import { INSTALL_COMMAND } from "../src/lib/site.shared";
 
+/** The AgentMail inbox address to read, from the environment; never hardcoded. */
+function requiredInbox(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    console.error(`${name} must name the AgentMail inbox to read (for example you@agentmail.to)`);
+    process.exit(2);
+  }
+  return value;
+}
+
 const BASE = process.env.SIGIRO_SIGNUP_BASE ?? "https://sigiro.com";
-const INBOX = process.env.SIGIRO_SIGNUP_INBOX ?? "akshat@agentmail.to";
+const INBOX = requiredInbox("SIGIRO_SIGNUP_INBOX");
 const HEADLESS = process.env.SIGIRO_SIGNUP_HEADED !== "1";
 
 const run = (command: string, args: readonly string[]): Promise<string> =>

@@ -11,8 +11,8 @@ import * as Layer from "effect/Layer";
  * bucket the S3-backed storage mode writes to.
  *
  * This replaced the hand-rolled `docker-compose.dev.yml`, now deleted. Production is already
- * Alchemy (`alchemy.run.ts`, `alchemy.hetzner.run.ts`,
- * `alchemy.workload.run.ts`); local dev was the last hand-written surface, and
+ * Alchemy (`alchemy.run.ts` here, plus the host stacks in the private
+ * infrastructure repository); local dev was the last hand-written surface, and
  * because it was written in a different language it drifted from production
  * silently. A config-level mistake that only production could catch costs a
  * cross-compile, a 287MB upload, a systemd restart, a journald read, and a

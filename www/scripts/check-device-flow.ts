@@ -12,8 +12,18 @@ import { execFileSync } from "node:child_process";
 
 import { chromium } from "playwright";
 
+/** The AgentMail inbox address to read, from the environment; never hardcoded. */
+function requiredInbox(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    console.error(`${name} must name the AgentMail inbox to read (for example you@agentmail.to)`);
+    process.exit(2);
+  }
+  return value;
+}
+
 const BASE = process.env.SIGIRO_E2E_BASE ?? "https://sigiro.com";
-const INBOX = process.env.SIGIRO_E2E_INBOX ?? "akshat@agentmail.to";
+const INBOX = requiredInbox("SIGIRO_E2E_INBOX");
 const CLIENT_ID = `${BASE}/.well-known/oauth-client.json`;
 
 interface DeviceCodeResponse {

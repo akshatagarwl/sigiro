@@ -18,7 +18,7 @@ edition = "2024"
 # (`cargo metadata` reports it); raise it deliberately when a dependency
 # forces it, and never leave it below what the tree already demands.
 rust-version = "1.89"
-license = "Apache-2.0"
+license = "FSL-1.1-ALv2"
 
 [workspace.lints.clippy]
 # Disallowed patterns (configured in clippy.toml)

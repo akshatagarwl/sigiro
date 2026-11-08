@@ -56,7 +56,6 @@ rust-gate = [
 # without running them.
 deployment-contract = [
     "tests/deployment/**",
-    "ops/prod/**",
 ]
 
 [env]
@@ -121,51 +120,19 @@ run = "aube -C www run alchemy:plan"
 description = "Deploy the production Cloudflare stack through Alchemy."
 run = "aube -C www run alchemy:deploy"
 
-[tasks.alchemy-hetzner-plan]
-description = "Plan the adopted production Hetzner stack without applying changes."
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
-  export HCLOUD_TOKEN="$(hcloud config get token --allow-sensitive)"
-fi
-if [[ -z "$HCLOUD_TOKEN" ]]; then
-  echo "alchemy-hetzner-plan: HCLOUD_TOKEN is unavailable and the active hcloud context has no token" >&2
-  exit 1
-fi
-aube -C www run alchemy:hetzner:plan
-"""
-
-[tasks.alchemy-workload-plan]
-description = "Plan the native systemd workload through Alchemy."
-run = "aube -C www run alchemy:workload:plan"
-
-[tasks.alchemy-workload-deploy]
-description = "Deploy the native systemd workload through Alchemy."
-run = "aube -C www run alchemy:workload:deploy"
-
-[tasks.native-host-check]
-description = "Validate the adopted-host systemd contract without connecting to production."
-run = "ops/prod/deploy-native-host.sh --check"
-
 [tasks.native-artifact]
 description = "Package a deterministic x86_64 native artifact."
 run = "scripts/package-native-artifact.py --input ${NATIVE_ARTIFACT_INPUT:?set NATIVE_ARTIFACT_INPUT} --service ${NATIVE_ARTIFACT_SERVICE:?set NATIVE_ARTIFACT_SERVICE} --version ${NATIVE_ARTIFACT_VERSION:-0.1.0} --output ${NATIVE_ARTIFACT_DIR:-dist-bin/native}"
 
 [tasks.native-contract-test]
-description = "Run black-box native deployment invariant tests."
-# Both suites, not just the contract one. The sync-postgres boundary test was
-# not wired into any gate, so the drop bug that aborted production on every
-# boot could not have been caught by CI.
-run = "python3 -m unittest tests.deployment.test_native_contract tests.deployment.test_sync_postgres_boundary"
+description = "Run the sync-postgres boundary test (the native host contract tests live in sigiro-infra)."
+# The sync-postgres boundary test was not wired into any gate, so the drop bug
+# that aborted production on every boot could not have been caught by CI.
+run = "python3 -m unittest tests.deployment.test_sync_postgres_boundary"
 
 [tasks.admin-postgres-test]
 description = "Reconcile the hosted admin schema against a TLS PostgreSQL 17 container (needs Docker)."
 run = "scripts/test-admin-postgres.sh"
-
-[tasks.native-verify]
-description = "Verify all native services and assert that no container engine is installed."
-run = "SIGIRO_NATIVE_ACTION=verify aube -C www run alchemy:workload:deploy"
 
 [tasks.build]
 description = "Release build of the sigiro binary. Set TARGET to cross-compile."
@@ -235,30 +202,6 @@ run = [
 sources = ["@group:rust-gate", "@group:deployment-contract"]
 outputs = []
 cache = { enabled = true, audit = true, env = ["CI", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC_WRAPPER", "CC", "CXX", "DUCKDB_LIB_DIR", "DUCKDB_INCLUDE_DIR", "DUCKDB_STATIC"], command_inputs = ["mbx --version", "rustc --version --verbose"] }
-
-[tasks.nightly-release]
-description = "Publish and deploy origin/main to production (-- --cli-only publishes only the CLI downloads; -- --dry-run plans)."
-env = { SIGIRO_RELEASE_ALLOW_WRITES = "1", DUCKDB_STATIC_CACHE = "{{env.HOME}}/Library/Caches/sigiro/duckdb-static" }
-run = "python3 deploy/nightly_release.py"
-
-[tasks.nightly-release-schedule]
-description = "Install the launchd job that runs `nightly-release -- --cli-only` every night at 03:30."
-run = """
-set -eu
-agent="$HOME/Library/LaunchAgents/com.sigiro.nightly-release.plist"
-# The job runs from the driver's own release worktree, which every run resets
-# to origin/main, so the schedule never depends on what a primary checkout has
-# checked out. A first `mise run nightly-release` creates it.
-worktree="${XDG_STATE_HOME:-$HOME/.local/state}/sigiro/nightly-release/worktree"
-test -f "$worktree/mise.toml" || { echo "run 'mise run nightly-release -- --cli-only' once first: $worktree is missing" >&2; exit 1; }
-mise trust "$worktree/mise.toml"
-mkdir -p "$HOME/Library/LaunchAgents"
-sed -e "s|@HOME@|$HOME|g" -e "s|@REPO@|$worktree|g" deploy/com.sigiro.nightly-release.plist > "$agent"
-plutil -lint "$agent"
-launchctl bootout "gui/$(id -u)/com.sigiro.nightly-release" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$agent"
-launchctl print "gui/$(id -u)/com.sigiro.nightly-release" | grep -E 'state|path'
-"""
 
 [tasks.install-hooks]
 description = "Install hk's Git 2.54+ repository-local config hooks."

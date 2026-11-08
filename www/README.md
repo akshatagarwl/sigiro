@@ -36,20 +36,13 @@ inner Worker and bypasses the apex auth and API proxies.
 
 ## Alchemy migration
 
-Two infrastructure composition roots share Alchemy's remote Cloudflare state backend:
-
-- `alchemy.run.ts` declares the production zone, downloads bucket, website Worker, binding, routes, and Email Sending domain.
-- `alchemy.hetzner.run.ts` adopts and retains the production Hetzner server, primary IPs, firewall, and SSH key.
-
-Review both plans with:
+`alchemy.run.ts` declares the production zone, downloads bucket, website Worker, binding, routes, and Email Sending domain, with state in Alchemy's remote Cloudflare state backend. Review its plan with:
 
 ```bash
 mise run alchemy-plan
-mise run alchemy-hetzner-plan
 ```
 
-The Hetzner task uses `HCLOUD_TOKEN` when it is set and otherwise reads the token
-from the active `hcloud` context without printing it.
+The production host stacks (server adoption and the native workload) live in a separate private infrastructure repository.
 
 Both scripts fix Alchemy's stage to production. Planning does not apply, deploy, or destroy resources. The Hetzner plan must be fully no-op after adoption.
 

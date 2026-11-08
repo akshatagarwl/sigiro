@@ -207,4 +207,6 @@ Format Rust with `mbx fmt` and run the full Rust gate with `mise run full`.
 
 ## License
 
-Not yet chosen. Until a `LICENSE` file is added, no license is granted.
+Sigiro is licensed under the [Functional Source License, Version 1.1, ALv2 Future License](LICENSE.md) (FSL-1.1-ALv2), © 2026 Akshat Agarwal.
+
+You may use, copy, modify and redistribute it for any purpose except a competing use: offering it, or a product built on it, as a commercial product or service that substitutes for Sigiro. Internal use, non-commercial education and research, and professional services for a licensee are all permitted. Each version becomes available under the Apache License, Version 2.0 on the second anniversary of its release. The license text is authoritative.
