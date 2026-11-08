@@ -1,3 +1,4 @@
+# Manual (workflow_dispatch) Rust gate and image build; release.yml runs on tags.
 name: CI
 on:
   workflow_dispatch:
