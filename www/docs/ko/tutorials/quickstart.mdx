@@ -117,6 +117,9 @@ curl http://localhost:9999/v1/services
 배열에 사용자 서비스가 나타납니다. 배열이 비어 있다면, HTTP를 통한 OTLP의
 경우 포트가 `4318`인지, gRPC를 통한 OTLP의 경우 `4317`인지 확인하십시오.
 
+같은 텔레메트리를 브라우저에서 보려면
+[localhost:9999/dashboard/](http://localhost:9999/dashboard/)를 여십시오.
+
 ## 3. 최근 오류 조회
 
 첫 쿼리는 지정한 기간의 작업 수와 실패 수를 보여 줍니다. 원인을 단정하지 않습니다.

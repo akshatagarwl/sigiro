@@ -93,6 +93,9 @@ curl http://localhost:9999/v1/services
 
 响应是一个包含 `services` 数组的 JSON 对象。首次请求后的几秒内，你的服务就会出现在该数组中。如果数组为空，请检查端口：基于 HTTP 的 OTLP 是 `4318`，基于 gRPC 的 OTLP 是 `4317`。
 
+要在浏览器中查看同样的遥测数据，请打开
+[localhost:9999/dashboard/](http://localhost:9999/dashboard/)。
+
 ## 3. 查询最近的错误
 
 第一个查询显示所选时间窗口内各操作的调用量和失败数，并不推断原因。

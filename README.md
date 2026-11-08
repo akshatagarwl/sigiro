@@ -127,12 +127,15 @@ git clone https://github.com/akshatagarwl/sigiro.git
 cd sigiro
 mise trust && mise install
 mise run build-dev          # debug binary at target/debug/sigiro
-mise run build              # release binary
+mise run build              # release binary, with the web dashboard built in
 ./target/debug/sigiro serve # OTLP on :4317/:4318, API on :9999
 ```
 
 DuckDB is linked statically from a pinned, checksum-verified prebuilt archive
 (`scripts/prepare-duckdb-static.sh`), so no C++ build of DuckDB is needed.
+`mise run build` also builds the dashboard (Node.js 24 and Aube) and embeds it,
+so the binary serves it at `/dashboard/` with no other files. A plain
+`cargo build` embeds whatever `dashboard/dist` holds, possibly nothing.
 No secrets or cloud accounts are needed to build, test, or run the self-hosted binary.
 
 Checks, from the repository root:
