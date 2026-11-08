@@ -1,0 +1,16 @@
+# Secret scanning config for gitleaks (https://github.com/gitleaks/gitleaks).
+# Extends the default rules. Every allowlist entry below is a value that is
+# public by design or a documented fake; add new entries only with a reason.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public-by-design values and documented test credentials"
+regexes = [
+  # IndexNow key: served publicly at https://www.sigiro.com/<key>.txt by protocol design.
+  '''1fcd9653aa5a4e26d24e76ecb4e1d3c1''',
+  # Cloudflare Web Analytics beacon token: embedded in every page by design.
+  '''6b38e16037e64f8eb96640075f51c32f''',
+  # Local/dev/e2e bearer tokens used by tests and docs; never valid on any deployment.
+  '''sigiro_dev_[A-Za-z0-9_-]*''',
+]

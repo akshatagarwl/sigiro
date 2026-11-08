@@ -1,6 +1,20 @@
 # Sigiro
 
-Observability platform with OTLP ingestion, ranked diagnosis, and SQL queries for agents.
+Sigiro is an observability backend built for coding agents. It accepts
+OpenTelemetry traces, logs, metrics, and profiles over OTLP, stores them as
+Parquet, and answers SQL, ranked-diagnosis, and MCP queries so an agent can
+investigate a production problem and propose a fix as a draft pull request.
+
+It runs two ways:
+
+* **Self-hosted**: one `sigiro` binary (Rust + DuckDB) that serves OTLP ingest,
+  the HTTP query API, the CLI, and MCP on your machine. No account needed.
+* **Hosted**: a multi-tenant Cloudflare Workers application at
+  [sigiro.com](https://sigiro.com).
+
+See [Architecture](#architecture) and [Build from source](#build-from-source)
+below. Contributions are welcome; read [CONTRIBUTING.md](CONTRIBUTING.md) and
+report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
 ## Hosted or self-hosted
 
@@ -102,7 +116,78 @@ sigiro query "SELECT count(*) FROM sigiro_spans" > report.json
 
 ## Documentation
 
-Full documentation is available at [docs.sigiro.com](https://docs.sigiro.com) (or in `docs-site/docs/`).
+Full documentation is available at [docs.sigiro.com](https://docs.sigiro.com). Its source lives in `www/`.
+
+## Build from source
+
+Toolchains are pinned in `mise.toml`. With [mise](https://mise.jdx.dev) installed:
+
+```bash
+git clone https://github.com/akshatagarwl/sigiro.git
+cd sigiro
+mise trust && mise install
+mise run build-dev          # debug binary at target/debug/sigiro
+mise run build              # release binary
+./target/debug/sigiro serve # OTLP on :4317/:4318, API on :9999
+```
+
+DuckDB is linked statically from a pinned, checksum-verified prebuilt archive
+(`scripts/prepare-duckdb-static.sh`), so no C++ build of DuckDB is needed.
+No secrets or cloud accounts are needed to build, test, or run the self-hosted binary.
+
+Checks, from the repository root:
+
+```bash
+mise run full               # rustfmt, cargo check, clippy -D warnings, deployment contract tests
+scripts/run-with-duckdb-static.sh cargo test --workspace --locked
+aube install --frozen-lockfile && aube run fmt:check && aube run lint
+```
+
+Install package dependencies from each package directory (`auth/`, `cloud/`,
+`dashboard/`, `www/`) with its frozen Aube lockfile, for example
+`aube -C dashboard install --frozen-lockfile`.
+
+## Architecture
+
+```text
+ OTLP (gRPC/HTTP)                       SQL / diagnose / MCP
+        │                                        ▲
+        ▼                                        │
+ ┌──────────────┐   Parquet segments   ┌──────────────────┐
+ │ ingest       │ ───────────────────▶ │ query (DuckDB)   │
+ │ (per tenant, │   + manifest          │ ranked diagnosis │
+ │  per signal) │                       │ anomalies, SQL   │
+ └──────────────┘                       └──────────────────┘
+                                                 │
+                                                 ▼
+                                   agent sessions → draft pull requests
+```
+
+* Each signal (spans, logs, metrics, profiles) has a fixed table layout.
+  Ingest groups rows and commits them as immutable Parquet **segments**; the
+  **manifest** is the authoritative list of live segments. Compaction and
+  retention are manifest changes.
+* The self-hosted binary keeps segments and the manifest on local disk. The
+  hosted service runs the same model in Cloudflare Durable Object "cells", with
+  segments in R2.
+* Agents run as durable sessions. They publish repository changes only as draft
+  pull requests that a human reviews.
+
+Terms are defined in [CONTEXT.md](CONTEXT.md). Design decisions are recorded in
+[docs/adr/](docs/adr/).
+
+## Repository layout
+
+| Path | What it is |
+|---|---|
+| `src/`, `crates/` | Rust: the `sigiro` binary (ingest, query, CLI, MCP), `sigiro-core`, segment format (+ WASM build) |
+| `cloud/` | Hosted service: Cloudflare Worker and Durable Object cells |
+| `auth/` | Hosted auth: Better Auth on Workers + D1 (OAuth, device flow, organizations) |
+| `dashboard/` | Web dashboard (Next.js static export) |
+| `www/` | Website and documentation (docs.sigiro.com) |
+| `tests/` | Rust integration tests, end-to-end and deployment contract tests |
+| `ops/`, `deploy/` | Deployment of the hosted service (maintainers only) |
+| `docs/adr/`, `docs/notes/` | Architecture decisions and design notes |
 
 ## Development
 
@@ -116,6 +201,8 @@ aube run fmt:check
 aube run lint
 ```
 
-Install package dependencies from each package directory with its frozen Aube
-lockfile. Build Sigiro with `mise run build`; format Rust with `mbx fmt` and run
-the full Rust gate with `mise run full`.
+Format Rust with `mbx fmt` and run the full Rust gate with `mise run full`.
+
+## License
+
+Not yet chosen. Until a `LICENSE` file is added, no license is granted.

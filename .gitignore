@@ -53,3 +53,9 @@ www/.source/
 
 # Local design-review screenshots (www/scripts/shoot-auth.ts)
 .shots/
+
+# Wrangler's local cache holds the account it last used; never commit it.
+.wrangler/
+# Local agent worktrees and per-user editor state.
+.worktrees/
+docs/notes/.obsidian/workspace*.json
