@@ -115,7 +115,9 @@ function TraceProfiles({ traceId, spans }: { traceId: string; spans: Row[] }) {
       ),
   });
   if (!data || data.length === 0) return null;
-  const names = new Map(spans.map((row) => [String(row.span_id), String(row.span_name)]));
+  const names = new Map(
+    spans.map((row) => [String(row.span_id), String(row.span_name)])
+  );
   const t0 = Math.min(...data.map((row) => num(row.t0))) - 60_000;
   const t1 = Math.max(...data.map((row) => num(row.t1))) + 60_000;
   const link = (service: string, span?: string) =>
@@ -133,14 +135,25 @@ function TraceProfiles({ traceId, spans }: { traceId: string; spans: Row[] }) {
       </div>
       <ul className="divide-y rounded-md border text-sm">
         {data.map((row) => (
-          <li key={String(row.span_id)} className="flex items-center gap-3 px-3 py-2">
+          <li
+            key={String(row.span_id)}
+            className="flex items-center gap-3 px-3 py-2"
+          >
             <span className="min-w-0 flex-1 truncate">
               {names.get(String(row.span_id)) ?? "span"}{" "}
-              <span className="text-muted-foreground font-mono text-xs">{String(row.span_id)}</span>
+              <span className="text-muted-foreground font-mono text-xs">
+                {String(row.span_id)}
+              </span>
             </span>
-            <span className="text-muted-foreground tabular-nums">{formatValue(num(row.v), "nanoseconds")}</span>
+            <span className="text-muted-foreground tabular-nums">
+              {formatValue(num(row.v), "nanoseconds")}
+            </span>
             <Button asChild variant="ghost" size="sm">
-              <a href={link(String(row.service), String(row.span_id))} data-action="open-span-profile" data-span={String(row.span_id)}>
+              <a
+                href={link(String(row.service), String(row.span_id))}
+                data-action="open-span-profile"
+                data-span={String(row.span_id)}
+              >
                 Open profile
               </a>
             </Button>

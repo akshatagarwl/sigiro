@@ -7,7 +7,12 @@ import { num, sqlString, ts, type Row } from "./query";
  */
 
 /** Sample types that are snapshots (a gauge), not counts over the window. */
-const SNAPSHOT_TYPES = new Set(["inuse_objects", "inuse_space", "goroutines", "goroutine"]);
+const SNAPSHOT_TYPES = new Set([
+  "inuse_objects",
+  "inuse_space",
+  "goroutines",
+  "goroutine",
+]);
 export const isSnapshot = (type: string) => SNAPSHOT_TYPES.has(type);
 
 export type LabelFilter = { key: string; value: string };
@@ -22,7 +27,8 @@ export type ProfileQuery = {
   spanId?: string;
 };
 
-const jsonPath = (key: string) => sqlString(`$."${key.replaceAll('"', '\\"')}"`);
+const jsonPath = (key: string) =>
+  sqlString(`$."${key.replaceAll('"', '\\"')}"`);
 
 export function whereSql(q: ProfileQuery): string {
   const parts = [
@@ -32,7 +38,9 @@ export function whereSql(q: ProfileQuery): string {
     `timestamp < ${ts(q.to)}`,
   ];
   for (const label of q.labels)
-    parts.push(`json_extract_string(labels, ${jsonPath(label.key)}) = ${sqlString(label.value)}`);
+    parts.push(
+      `json_extract_string(labels, ${jsonPath(label.key)}) = ${sqlString(label.value)}`
+    );
   if (q.traceId && /^[0-9a-f]{32}$/i.test(q.traceId))
     parts.push(`trace_id = ${sqlString(q.traceId.toLowerCase())}`);
   if (q.spanId && /^[0-9a-f]{16}$/i.test(q.spanId))
@@ -67,7 +75,9 @@ export type Stack = { frames: string[]; value: number };
 
 export const toStacks = (rows: Row[] | undefined): Stack[] =>
   (rows ?? []).map((row) => ({
-    frames: Array.isArray(row.stack) ? (row.stack as unknown[]).map(String) : [],
+    frames: Array.isArray(row.stack)
+      ? (row.stack as unknown[]).map(String)
+      : [],
     value: num(row.v),
   }));
 
@@ -78,21 +88,37 @@ export type FlameNode = {
   children: FlameNode[];
 };
 
-type MutableNode = { name: string; value: number; delta: number; children: Map<string, MutableNode> };
+type MutableNode = {
+  name: string;
+  value: number;
+  delta: number;
+  children: Map<string, MutableNode>;
+};
 
-const newNode = (name: string): MutableNode => ({ name, value: 0, delta: 0, children: new Map() });
+const newNode = (name: string): MutableNode => ({
+  name,
+  value: 0,
+  delta: 0,
+  children: new Map(),
+});
 
 function freeze(node: MutableNode, withDelta: boolean): FlameNode {
   return {
     name: node.name,
     value: node.value,
     ...(withDelta ? { delta: node.delta } : {}),
-    children: [...node.children.values()].map((child) => freeze(child, withDelta)),
+    children: [...node.children.values()].map((child) =>
+      freeze(child, withDelta)
+    ),
   };
 }
 
 /** A d3-flame-graph tree (values include children), root first. */
-export function buildTree(stacks: Stack[], scale = 1, rootName = "total"): FlameNode {
+export function buildTree(
+  stacks: Stack[],
+  scale = 1,
+  rootName = "total"
+): FlameNode {
   const root = newNode(rootName);
   for (const stack of stacks) {
     const v = stack.value * scale;
@@ -113,7 +139,11 @@ export function buildTree(stacks: Stack[], scale = 1, rootName = "total"): Flame
  * the baseline scaled to the comparison's total (so removed paths still show),
  * and `delta` is comparison − scaled baseline (red grew, blue shrank).
  */
-export function buildDiffTree(baseline: Stack[], comparison: Stack[], scale = 1): FlameNode {
+export function buildDiffTree(
+  baseline: Stack[],
+  comparison: Stack[],
+  scale = 1
+): FlameNode {
   const totalA = baseline.reduce((s, x) => s + x.value, 0);
   const totalB = comparison.reduce((s, x) => s + x.value, 0);
   const norm = totalA > 0 ? totalB / totalA : 1;
@@ -179,10 +209,19 @@ function freezeDiff(node: MutableNode): FlameNode {
   };
 }
 
-export type FunctionRow = { name: string; self: number; total: number; selfB?: number; totalB?: number };
+export type FunctionRow = {
+  name: string;
+  self: number;
+  total: number;
+  selfB?: number;
+  totalB?: number;
+};
 
 /** Self (leaf) and total (anywhere on the stack, once per stack) per function. */
-export function topFunctions(stacks: Stack[], scale = 1): Map<string, { self: number; total: number }> {
+export function topFunctions(
+  stacks: Stack[],
+  scale = 1
+): Map<string, { self: number; total: number }> {
   const out = new Map<string, { self: number; total: number }>();
   for (const stack of stacks) {
     const v = stack.value * scale;

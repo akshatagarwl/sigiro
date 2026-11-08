@@ -72,7 +72,8 @@ export const localToken = (): string | undefined =>
 
 export async function detectOpenMode(): Promise<boolean> {
   const host = globalThis.location?.hostname;
-  if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]") return false;
+  if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]")
+    return false;
   try {
     const response = await fetch("/v1/query", {
       method: "POST",

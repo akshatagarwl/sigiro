@@ -1,7 +1,7 @@
 "use client";
 
-import { select } from "d3-selection";
 import flamegraph, { colorMapper, tooltip } from "d3-flame-graph";
+import { select } from "d3-selection";
 import * as React from "react";
 
 import { formatValue, percent, type FlameNode } from "@/lib/sigiro/profiles";
@@ -66,14 +66,20 @@ export function Flamegraph({
       .inverted(true)
       .selfValue(false)
       .tooltip(tip)
-      .label((d: { data: FlameNode; value: number }) => `${d.data.name} (${formatValue(d.value, unit)}, ${percent(d.value, total)})`);
-    if (diff) c.computeDelta(true).setColorMapper(colorMapper.differentialColorMapper);
+      .label(
+        (d: { data: FlameNode; value: number }) =>
+          `${d.data.name} (${formatValue(d.value, unit)}, ${percent(d.value, total)})`
+      );
+    if (diff)
+      c.computeDelta(true).setColorMapper(colorMapper.differentialColorMapper);
     el.replaceChildren();
     select(el).datum(tree).call(c);
     chart.current = c;
     return () => {
       c.destroy?.();
-      document.querySelectorAll(".d3-flame-graph-tip").forEach((node) => node.remove());
+      document
+        .querySelectorAll(".d3-flame-graph-tip")
+        .forEach((node) => node.remove());
       chart.current = null;
     };
   }, [tree, unit, diff, width, resetKey]);
