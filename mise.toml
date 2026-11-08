@@ -89,6 +89,7 @@ run = "aube -C dashboard install --frozen-lockfile"
 
 [tasks.dashboard-build]
 description = "Build the dashboard's static export into dashboard/dist/dashboard."
+depends = ["dashboard-install"]
 run = "aube -C dashboard run build"
 
 [tasks.auth-install]
@@ -135,7 +136,11 @@ description = "Reconcile the hosted admin schema against a TLS PostgreSQL 17 con
 run = "scripts/test-admin-postgres.sh"
 
 [tasks.build]
-description = "Release build of the sigiro binary. Set TARGET to cross-compile."
+description = "Release build of the sigiro binary, with the dashboard built in. Set TARGET to cross-compile."
+# The binary embeds dashboard/dist/dashboard (src/dashboard.rs). Requiring it
+# makes build.rs fail instead of shipping a binary with no UI.
+depends = ["dashboard-build"]
+env = { SIGIRO_REQUIRE_DASHBOARD = "1" }
 run = 'scripts/run-with-duckdb-static.sh mbx build --release --locked --bin sigiro ${TARGET:+--target "$TARGET"}'
 
 [tasks.bench]

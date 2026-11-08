@@ -27,6 +27,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     eval "$(DUCKDB_STATIC_CACHE=/opt/duckdb-cache /usr/local/bin/prepare-duckdb-static "$T")" && \
     mkdir -p /opt/duckdb && cp "$DUCKDB_LIB_DIR/libduckdb_static.a" "$DUCKDB_INCLUDE_DIR/duckdb.h" /opt/duckdb/
 
+# The dashboard's static export, which the binary embeds (src/dashboard.rs).
+# Platform-independent output, so it builds once on $BUILDPLATFORM. Aube is
+# the version and checksum pinned in mise.lock.
+FROM --platform=$BUILDPLATFORM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS dashboard
+ARG BUILDARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* && \
+    set -eux; \
+    case "$BUILDARCH" in \
+      amd64) A=x86_64; SUM=7cdc99ea7a4ceced9ee174c2f2406abf6ed252b192b222a8a5ecb386b2dc2fe1 ;; \
+      arm64) A=aarch64; SUM=7cf94b73080d6604bf93e3e8d129c35264a851572a09a2b1236af75f592d87b5 ;; \
+      *) echo "unsupported BUILDARCH=$BUILDARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/aube.tgz "https://github.com/aubepkg/aube/releases/download/v2.8.4/aube-v2.8.4-${A}-unknown-linux-gnu.tar.gz"; \
+    echo "${SUM}  /tmp/aube.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/aube.tgz -C /usr/local/bin aube; \
+    rm /tmp/aube.tgz
+WORKDIR /build/dashboard
+COPY dashboard/package.json dashboard/aube-lock.yaml ./
+RUN aube install --frozen-lockfile
+COPY dashboard/ ./
+RUN aube run build && test -f dist/dashboard/index.html
+
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
@@ -71,6 +93,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 COPY benches/ benches/
+COPY --from=dashboard /build/dashboard/dist/dashboard dashboard/dist/dashboard
+ENV SIGIRO_REQUIRE_DASHBOARD=1
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGETARCH \
     set -eux; \
     case "$TARGETARCH" in \

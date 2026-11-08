@@ -8,3 +8,9 @@
 !src/**
 !benches/
 !benches/**
+!dashboard/
+!dashboard/**
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+dashboard/dist/
