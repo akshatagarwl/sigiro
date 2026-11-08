@@ -320,9 +320,10 @@ pub(crate) fn disk_sample_seconds() -> Result<NonZeroU64> {
         .context("SIGIRO_DISK_SAMPLE_SECONDS must be greater than zero")
 }
 
-/// A static build of the dashboard (`dashboard/dist`, the directory holding
-/// `dashboard/`). When set on a self-hosted server in open mode, the HTTP API
-/// also serves it at `/dashboard/`, so a local sigiro has a UI.
+/// A static build of the dashboard on disk (`dashboard/dist`, the directory
+/// holding `dashboard/`). An open-mode server serves the dashboard built into
+/// the binary at `/dashboard/`; set this to serve a different build instead,
+/// for example while developing the dashboard.
 pub(crate) static DASHBOARD_DIR: Envar<String> =
     Envar::on_startup("SIGIRO_DASHBOARD_DIR", || EnvarDef::Unset);
 

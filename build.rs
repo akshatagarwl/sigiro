@@ -18,6 +18,8 @@ fn main() {
     };
     println!("cargo:rustc-env=SIGIRO_VERSION={long}");
 
+    dashboard();
+
     match env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("linux") => {
             println!("cargo:rustc-link-lib=dylib=dl");
@@ -26,5 +28,29 @@ fn main() {
         }
         Ok("macos") => println!("cargo:rustc-link-arg=-lc++"),
         _ => {}
+    }
+}
+
+/// `src/dashboard.rs` embeds `dashboard/dist/dashboard`, the dashboard's static
+/// export. Release builds set `SIGIRO_REQUIRE_DASHBOARD=1` so a binary cannot
+/// ship without its UI; other builds embed whatever is there, or nothing.
+#[allow(clippy::disallowed_methods)]
+fn dashboard() {
+    let export = std::path::Path::new("dashboard/dist/dashboard");
+    println!("cargo:rerun-if-env-changed=SIGIRO_REQUIRE_DASHBOARD");
+    // Rebuild when the export changes. `dashboard-build` deletes and recreates
+    // `dashboard/dist`, so watching it catches a first build too. A watched
+    // path that does not exist would make every build dirty, so make sure the
+    // (gitignored) directory is there; a read-only tree just goes unwatched.
+    if std::fs::create_dir_all("dashboard/dist").is_ok() {
+        println!("cargo:rerun-if-changed=dashboard/dist");
+    }
+    let required = env::var("SIGIRO_REQUIRE_DASHBOARD").is_ok_and(|v| v == "1");
+    if required && !export.join("index.html").is_file() {
+        panic!(
+            "SIGIRO_REQUIRE_DASHBOARD=1 but dashboard/dist/dashboard/index.html is missing. \
+             Build the dashboard first: `mise run dashboard-install dashboard-build` \
+             (or use `mise run build`, which does both)."
+        );
     }
 }
