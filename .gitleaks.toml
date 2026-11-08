@@ -13,4 +13,11 @@ regexes = [
   '''6b38e16037e64f8eb96640075f51c32f''',
   # Local/dev/e2e bearer tokens used by tests and docs; never valid on any deployment.
   '''sigiro_dev_[A-Za-z0-9_-]*''',
+  # Key-format examples in old docs and code comments (history only); never issued.
+  '''sigiro_BRTRKFsL_51Fwqft''',
+  '''sigiro_ABC123_''',
+  '''sk_example_7KqX''',
+  '''sk_fake_bad_key''',
+  # Container image tags (valkey:9.0.1-alpine3.23) mistaken for keys.
+  '''\b\d+\.\d+\.\d+-alpine\d+\.\d+\b''',
 ]
