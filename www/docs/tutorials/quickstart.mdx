@@ -121,6 +121,9 @@ The response is a JSON object with a `services` array. Your service appears in
 that array within a few seconds of the first request. If the array is empty,
 check that the port is `4318` for OTLP over HTTP and `4317` for OTLP over gRPC.
 
+To look at the same telemetry in a browser, open
+[localhost:9999/dashboard/](http://localhost:9999/dashboard/).
+
 ## 3. Query recent errors
 
 The first query compares operation volumes and failures in your chosen window. It does not claim a cause.

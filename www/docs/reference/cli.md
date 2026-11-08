@@ -67,6 +67,11 @@ Starts the OTLP gRPC server, the OTLP HTTP server, and the query API.
 The first start downloads the query extensions into the data directory. That
 download takes 30–90 seconds and blocks the start.
 
+A server without auth (the default for a self-hosted server) also serves the
+web dashboard at `http://localhost:9999/dashboard/`. The dashboard is built into
+the binary. Set `SIGIRO_DASHBOARD_DIR` to the directory that holds a different
+static build (`dashboard/dist`) to serve that one instead.
+
 ## query
 
 `sigiro query "<SQL>"` is a **federated coordinator**, not a local client. It
