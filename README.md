@@ -145,7 +145,9 @@ aube install --frozen-lockfile && aube run fmt:check && aube run lint
 
 Install package dependencies from each package directory (`auth/`, `cloud/`,
 `dashboard/`, `www/`) with its frozen Aube lockfile, for example
-`aube -C dashboard install --frozen-lockfile`.
+`aube -C dashboard install --frozen-lockfile`. `cloud/` imports a generated
+WASM module, so run `aube -C cloud run build:wasm` once before
+`aube -C cloud run check`.
 
 ## Architecture
 
