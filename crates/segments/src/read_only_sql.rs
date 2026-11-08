@@ -124,7 +124,7 @@ const SAFE_FUNCTIONS: &[&str] = &["PRAGMA_DATABASE_SIZE", "RANGE"];
 /// - Real `/v1/query` traffic sigiro's own CLI sends today (via
 ///   `SigiroClient::query`, e.g. `sigiro status`'s recent-ingest block):
 ///   `count`, `coalesce`, `nullif`, `now`, `quantile_cont`.
-/// - The documented `/v1/query` examples (`www/content/docs/hosted-onboarding.md`,
+/// - The documented `/v1/query` examples (the hosted onboarding,
 ///   `getting-started.md`, `guides/self-host-edge-federation.md`): `count`,
 ///   `approx_quantile`, `now`, `avg`, `sum`, `min`, `max`, `json_extract`.
 /// - Sigiro's own internal analytics SQL (`src/diagnose/mod.rs`,

@@ -32,7 +32,7 @@ jobs:
           [ -n "$SECRET" ]  || missing="$missing R2_SECRET_ACCESS_KEY"
           [ -n "$ACCOUNT" ] || missing="$missing R2_ACCOUNT_ID"
           if [ -n "$missing" ]; then
-            echo "::error::missing repo secrets:$missing — set them, or publish by hand (see docs/notes/roadmap.md item 30)"
+            echo "::error::missing repo secrets:$missing — set them, or publish by hand"
             exit 1
           fi
 

@@ -35,7 +35,7 @@
 # is ~480 lines of SQL text with 11 control-flow keywords, and which
 # `cognitive_complexity` correctly does not flag at all. Splitting it would
 # fragment one CTE query across several functions. `schema.rs:6` (210) is a table
-# definition; the eight test findings are E2E scenario bodies, which AGENTS.md
+# definition; the eight test findings are E2E scenario bodies, which the project rules
 # explicitly asks for. And the low end is noise: `otlp.rs:135` is 101/100.
 # Seventeen of twenty-one findings would need a permanent exception — a gate
 # exempting 80% of what it finds is a list of `#[allow]`s wearing a threshold.
@@ -68,7 +68,7 @@
 #   `span_drill_sql` (anomaly.rs) — EXEMPTED, with the reason at the call site.
 #   Its `shift` argument is the caller's loop variable while `prefix`/`service`
 #   are loop-invariant, so the obvious context struct would be rebuilt every
-#   iteration. That is an abstraction with no reader, which AGENTS.md rules out.
+#   iteration. That is an abstraction with no reader, which the project rules rule out.
 #
 # The ceiling is live for all new code. Every current exception carries its
 # reason at the definition:
@@ -91,7 +91,7 @@ too-many-arguments-threshold = 5
 # All env var access must go through typed-env (src/config.rs): define the
 # variable there as a typed static, then read it via `.value()`. That keeps the
 # set of environment inputs enumerable in one place instead of discoverable only
-# by grep, which is the DI rule in AGENTS.md.
+# by grep, which is the dependency-injection rule.
 #
 # The bootstrap path in main.rs is the one legitimate exception and carries a
 # scoped `#[allow]` with its reason, because it must write the process

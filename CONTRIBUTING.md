@@ -5,8 +5,7 @@ For a larger change, open an issue first so we can agree on the approach.
 
 ## Before you start
 
-* Read [CONTEXT.md](CONTEXT.md) for the project's vocabulary and
-  [docs/adr/](docs/adr/) for decisions that are already made.
+* Read [CONTEXT.md](CONTEXT.md) for the project's vocabulary.
 * Never commit secrets, tokens, customer data, or personal paths. CI runs
   [gitleaks](https://github.com/gitleaks/gitleaks) on every pull request.
 

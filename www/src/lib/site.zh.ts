@@ -252,7 +252,7 @@ export const ZH: LandingCopy = {
    * reader who opens two gets two facets rather than the same paragraph twice.
    *
    * The situations are not invented here. They are the use cases and personas in
-   * `.agents/product-marketing.md`. Adding a line means finding the persona it
+   * the positioning brief. Adding a line means finding the persona it
    * serves, not thinking of a new question.
    *
    * Do not write 软件工厂. That frame was considered and **rejected** on

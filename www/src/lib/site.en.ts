@@ -1,7 +1,7 @@
 /**
  * English landing-page copy — the source every translation is made from.
  *
- * Positioning, voice and the five claims live in .agents/product-marketing.md —
+ * Positioning, voice and the five claims live in the positioning brief —
  * read that before editing copy here. Three rules from it that bite hardest:
  *
  * 1. Say "you". Prose with nobody in it reads as machine-generated no matter how
@@ -282,7 +282,7 @@ export const EN = {
    * twice.
    *
    * The situations are not invented here. They are the use cases and personas in
-   * `.agents/product-marketing.md`. Adding a line means finding the persona it
+   * the positioning brief. Adding a line means finding the persona it
    * serves, not thinking of a new question.
    *
    * Do not write "software factory". That frame was considered and **rejected**

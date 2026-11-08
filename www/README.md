@@ -59,8 +59,7 @@ Both scripts fix Alchemy's stage to production. Planning does not apply, deploy,
 | `public/install`                       | the script `curl -fsSL sigiro.com/install \| sh` fetches                                                                                                                                                                   |
 | `public/_headers`, `public/_redirects` | caching, and the published short links                                                                                                                                                                                     |
 
-Copy and positioning are governed by `.agents/product-marketing.md` at the repo
-root, and all user-facing text follows ASD-STE100 Simplified Technical English.
+All user-facing text follows ASD-STE100 Simplified Technical English.
 
 ## Four islands
 

@@ -13,7 +13,7 @@ import type { LandingCopy } from "./site.en";
  * natural equivalent. あなた appears only in the `loop` owner labels, where the
  * whole point of the label is whose stage it is.
  *
- * Three constraints from `.agents/product-marketing.md` survive translation and
+ * Three constraints from the positioning brief survive translation and
  * are the ones a reviewer here cannot check:
  *
  * 1. **疑わしいデプロイ, never 原因.** sigiro correlates a deploy in time with a
@@ -247,7 +247,7 @@ export const JA: LandingCopy = {
    * twice.
    *
    * The situations are not invented here. They are the use cases and personas in
-   * `.agents/product-marketing.md`. Adding a line means finding the persona it
+   * the positioning brief. Adding a line means finding the persona it
    * serves, not thinking of a new question.
    *
    * Do not write ソフトウェア工場 ("software factory"). That frame was considered

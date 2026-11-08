@@ -115,7 +115,7 @@ export default Alchemy.Stack(
         proxied: true,
         ttl: 1,
         comment:
-          "BenchApp API origin; the benchapp Worker forwards /api/* here",
+          "Secondary API origin; a separate Worker forwards /api/* here",
       })
     );
 

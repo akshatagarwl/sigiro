@@ -48,7 +48,7 @@ The server starts on:
 - OTLP gRPC: `localhost:4317`
 - OTLP HTTP: `localhost:4318`
 
-No configuration required. Data is stored in the platform data directory (`~/.local/share/sigiro` on Unix, `%LOCALAPPDATA%\sigiro` on Windows). Override with `SIGIRO_DATA_DIR`. The [local data layout](docs/notes/architecture/ducklake-integration.md#local-mode) identifies the DuckLake catalog, Parquet files, and separate administrative database.
+No configuration required. Data is stored in the platform data directory (`~/.local/share/sigiro` on Unix, `%LOCALAPPDATA%\sigiro` on Windows). Override with `SIGIRO_DATA_DIR`.
 
 ## Authentication
 
@@ -175,8 +175,7 @@ WASM module, so run `aube -C cloud run build:wasm` once before
 * Agents run as durable sessions. They publish repository changes only as draft
   pull requests that a human reviews.
 
-Terms are defined in [CONTEXT.md](CONTEXT.md). Design decisions are recorded in
-[docs/adr/](docs/adr/).
+Terms are defined in [CONTEXT.md](CONTEXT.md).
 
 ## Repository layout
 
@@ -188,8 +187,6 @@ Terms are defined in [CONTEXT.md](CONTEXT.md). Design decisions are recorded in
 | `dashboard/` | Web dashboard (Next.js static export) |
 | `www/` | Website and documentation (docs.sigiro.com) |
 | `tests/` | Rust integration tests, end-to-end and deployment contract tests |
-| `ops/`, `deploy/` | Deployment of the hosted service (maintainers only) |
-| `docs/adr/`, `docs/notes/` | Architecture decisions and design notes |
 
 ## Development
 

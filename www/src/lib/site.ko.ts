@@ -8,7 +8,7 @@ import type { LandingCopy } from "./site.en";
  * checked against it by the compiler. Read `site.en.ts` first — its comments
  * explain why each English string is worded the way it is, and those reasons
  * bind the Korean just as hard. Positioning and the five claims live in
- * .agents/product-marketing.md.
+ * the positioning brief.
  *
  * Register: formal 합니다체, technical documentation voice. Imperatives are
  * 하십시오체. The reader stays in the sentence — Korean drops the subject far
@@ -272,7 +272,7 @@ export const KO: LandingCopy = {
    * paragraph twice.
    *
    * The situations are not invented here. They are the use cases and personas in
-   * `.agents/product-marketing.md`. Adding a line means finding the persona it
+   * the positioning brief. Adding a line means finding the persona it
    * serves, not thinking of a new question.
    *
    * Do not write 소프트웨어 공장 ("software factory"). That frame was considered

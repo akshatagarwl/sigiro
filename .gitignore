@@ -58,4 +58,3 @@ www/.source/
 .wrangler/
 # Local agent worktrees and per-user editor state.
 .worktrees/
-docs/notes/.obsidian/workspace*.json
