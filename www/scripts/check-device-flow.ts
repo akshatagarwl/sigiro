@@ -16,7 +16,9 @@ import { chromium } from "playwright";
 function requiredInbox(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
-    console.error(`${name} must name the AgentMail inbox to read (for example you@agentmail.to)`);
+    console.error(
+      `${name} must name the AgentMail inbox to read (for example you@agentmail.to)`
+    );
     process.exit(2);
   }
   return value;
