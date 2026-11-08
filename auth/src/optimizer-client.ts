@@ -3,12 +3,20 @@
 // in-memory copy to CIMD so same-zone Worker self-fetches never hit CF 1014.
 export const OPTIMIZER_CLIENT_ID =
   "https://sigiro.com/api/auth/optimizer-client.json";
-// Until tenant-specific client registration is available, bind the live-test
-// operator client to exactly this previously provisioned Sigiro tenant.
-export const OPTIMIZER_CLIENT_TENANT_ID = "benchapp";
+// Until tenant-specific client registration is available, the operator client
+// is bound to exactly one previously provisioned Sigiro tenant, named by the
+// Worker's OPTIMIZER_CLIENT_TENANT_ID variable. Unset, the client gets no tenant.
+let optimizerClientTenantId: string | undefined;
+export const configureOptimizerClientTenant = (
+  tenantId: string | undefined
+): void => {
+  optimizerClientTenantId = tenantId === "" ? undefined : tenantId;
+};
+export const optimizerClientTenant = (): string | undefined =>
+  optimizerClientTenantId;
 export const OPTIMIZER_CLIENT_METADATA = {
   client_id: OPTIMIZER_CLIENT_ID,
-  client_name: "Sigiro Optimizer operator (Benchapp)",
+  client_name: "Sigiro Optimizer operator",
   client_uri: "https://sigiro.com/",
   application_type: "native",
   redirect_uris: ["com.sigiro.cli:/oauth/callback"],

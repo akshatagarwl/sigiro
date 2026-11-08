@@ -27,6 +27,19 @@ export default Alchemy.Stack(
     // indistinguishable from a key re-mint and would invalidate every token.
     const authSecret = yield* Config.Redacted("BETTER_AUTH_SECRET");
     const emailToken = yield* Config.Redacted("CLOUDFLARE_EMAIL_API_TOKEN");
+    // Deployment-specific names come from the deploying environment, not the
+    // repository: the adopted origin tunnel's name, extra hostnames it serves
+    // (comma-separated, may be empty), and the optimizer operator's tenant.
+    const originTunnelName = yield* Config.String("SIGIRO_ORIGIN_TUNNEL_NAME");
+    const extraOriginHostnames = (yield* Config.String(
+      "SIGIRO_EXTRA_ORIGIN_HOSTNAMES"
+    ))
+      .split(",")
+      .map((hostname) => hostname.trim())
+      .filter((hostname) => hostname.length > 0);
+    const optimizerTenantId = yield* Config.String(
+      "SIGIRO_OPTIMIZER_TENANT_ID"
+    );
 
     const zone = yield* productionResource(
       Cloudflare.Zone.Zone("ProductionZone", {
@@ -76,6 +89,7 @@ export default Alchemy.Stack(
           CLOUDFLARE_ACCOUNT_ID: "73035685fa8536f5c07b55b168868c71",
           BETTER_AUTH_SECRET: authSecret,
           CLOUDFLARE_EMAIL_API_TOKEN: emailToken,
+          OPTIMIZER_CLIENT_TENANT_ID: optimizerTenantId,
         },
       })
     );
@@ -83,13 +97,13 @@ export default Alchemy.Stack(
     // dials out, and kamal-proxy serves plain HTTP on 127.0.0.1:80 behind it.
     const originTunnel = yield* productionResource(
       Cloudflare.Tunnel.Tunnel("OriginTunnel", {
-        name: "sigiro-benchapp",
+        name: originTunnelName,
         ingress: [
           { hostname: "api-origin.sigiro.com", service: "http://127.0.0.1:80" },
-          {
-            hostname: "benchapp-origin.akshat.dev",
+          ...extraOriginHostnames.map((hostname) => ({
+            hostname,
             service: "http://127.0.0.1:80",
-          },
+          })),
           { service: "http_status:404" },
         ],
       })
@@ -106,18 +120,8 @@ export default Alchemy.Stack(
         ttl: 1,
       })
     );
-    const benchappOriginRecord = yield* productionResource(
-      Cloudflare.DNS.Record("BenchappOriginTunnelRecord", {
-        zoneId: "2803be07e3d170506d8546bed58eb437",
-        name: "benchapp-origin.akshat.dev",
-        type: "CNAME",
-        content: tunnelTarget,
-        proxied: true,
-        ttl: 1,
-        comment:
-          "Secondary API origin; a separate Worker forwards /api/* here",
-      })
-    );
+    // DNS records for the extra origin hostnames live in their own zones and
+    // are managed outside this stack.
 
     const website = yield* productionResource(
       Cloudflare.Worker("Website", {
@@ -222,7 +226,6 @@ export default Alchemy.Stack(
       downloads,
       emailSending,
       apiOriginRecord,
-      benchappOriginRecord,
       originTunnel,
       authDatabase,
       authWorker,
