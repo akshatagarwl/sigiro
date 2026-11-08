@@ -3,6 +3,7 @@ pub mod alerts;
 pub mod auth;
 pub mod client;
 pub mod config;
+pub(crate) mod dashboard;
 mod declared_schema;
 pub mod federate;
 

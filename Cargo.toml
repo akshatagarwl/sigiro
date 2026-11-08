@@ -97,6 +97,7 @@ url = "2"
 tempfile = "3"
 headers = "0.4"
 mime = "0.3"
+rust-embed = { version = "8.13", features = ["debug-embed"] }
 axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
 multer = "3"
 futures-util = "0.3"
