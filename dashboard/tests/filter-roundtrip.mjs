@@ -61,12 +61,34 @@ try {
   assert.equal((await (await reloaded).json()).length, 2);
   await page.locator("[data-event-row]").first().waitFor();
   await page.getByRole("button", { name: "Close event inspector" }).click();
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
   const removed = resultRequest();
   await page.getByRole("checkbox", { name: /dashboard-e2e/ }).click();
   assert.equal((await (await removed).json()).length, 2);
   await page.waitForURL(
     (current) => current.searchParams.get("service") === null
   );
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
+  await page.reload();
+  await page.locator("[data-event-row]").first().click();
+  await page
+    .getByRole("button", { name: "Filter service", exact: true })
+    .click();
+  const includedAgain = resultRequest("dashboard-e2e");
+  await page
+    .getByRole("menuitem", { name: "Include dashboard-e2e", exact: true })
+    .click();
+  assert.equal((await (await includedAgain).json()).length, 2);
+  await page
+    .getByRole("button", { name: "Remove Service: dashboard-e2e", exact: true })
+    .click();
+  await page.waitForURL(
+    (current) => current.searchParams.get("service") === null
+  );
+  assert.equal(await page.locator("[data-event-row]").count(), 2);
+  const chipRemoved = resultRequest();
+  await page.reload();
+  assert.equal((await (await chipRemoved).json()).length, 2);
   const special = "quote' and \\backslash";
   const specialUrl = new URL(url);
   specialUrl.searchParams.set("service", special);
@@ -101,7 +123,8 @@ try {
     checks: [
       "include UI → URL → parsed filter → actual SQL → actual rows",
       "reload persists",
-      "checkbox removal clears URL and SQL predicate",
+      "opt-in facets checkbox removal clears URL and SQL predicate",
+      "visible active service chip removes filter with facets closed; reload verifies actual SQL and rows (cached key may avoid a fresh request on click)",
       "quotes/backslashes preserved and SQL-quoted correctly, actual 200 empty response",
       "back/forward restores parsed URL state and displayed results",
     ],

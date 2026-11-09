@@ -75,10 +75,14 @@ export const DataTableContext = createContext<DataTableContextType<
 
 export function DataTableProvider<TData extends RowData, TValue>({
   children,
+  controlsDefaultOpen,
+  controlsStorageKey,
   ...props
 }: Partial<DataTableStateContextType> &
   DataTableBaseContextType<TData, TValue> & {
     children: React.ReactNode;
+    controlsDefaultOpen?: boolean;
+    controlsStorageKey?: string;
   }) {
   const value = useMemo(
     // eslint-disable-next-line react-hooks/preserve-manual-memoization
@@ -117,7 +121,10 @@ export function DataTableProvider<TData extends RowData, TValue>({
     // with — even though `any` is involved. React contexts cannot be generic,
     // so the erasure happens here and `useDataTable` casts it back.
     <DataTableContext.Provider value={value as DataTableContextType<any, any>}>
-      <ControlsProvider>
+      <ControlsProvider
+        defaultOpen={controlsDefaultOpen}
+        storageKey={controlsStorageKey}
+      >
         <DataTableStoreSync />
         {children}
       </ControlsProvider>

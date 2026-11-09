@@ -26,7 +26,7 @@ const server = createServer((req, res) => {
   } else {
     res.setHeader("content-type", "text/html");
     res.end(
-      '<!doctype html><html lang="en"><title>Synthetic reusable-component test</title><style>:root{--background:white;--foreground:#171717;--muted:#f5f5f5;--muted-foreground:#737373;--border:#ddd;--accent:#eee;--accent-foreground:#111;--primary:#222;--ring:#444;--popover:white;--popover-foreground:#111}body{font:14px system-ui}</style><link rel="stylesheet" href="/graph.css"><div id="root"></div><script type="module" src="/graph.js"></script></html>'
+      '<!doctype html><html lang="en"><title>Synthetic reusable-component test</title><style>:root{--background:white;--foreground:#171717;--muted:#f5f5f5;--muted-foreground:#737373;--border:#ddd;--accent:#eee;--accent-foreground:#111;--primary:#222;--ring:#444;--popover:white;--popover-foreground:#111}body{font:14px system-ui}#root{height:calc(100svh - 16px);display:flex;flex-direction:column}</style><link rel="stylesheet" href="/graph.css"><div id="root"></div><script type="module" src="/graph.js"></script></html>'
     );
   }
 });
@@ -45,7 +45,7 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(origin);
   await page.locator("[data-event-row]").click();
-  await page.getByRole("complementary", { name: "Event inspector" }).waitFor();
+  await page.getByRole("region", { name: "Event inspector" }).waitFor();
   assert(
     (await page
       .locator('section[aria-label="Structured log explorer"] *')
@@ -115,7 +115,7 @@ try {
     .waitFor();
   await page.goto(`${origin}/?deep=1`);
   await page.locator("[data-event-row]").click();
-  await page.getByRole("complementary", { name: "Event inspector" }).waitFor();
+  await page.getByRole("region", { name: "Event inspector" }).waitFor();
   await page
     .getByRole("button", { name: "Actions for attributes", exact: true })
     .click();

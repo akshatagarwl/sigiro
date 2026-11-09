@@ -1,14 +1,15 @@
 {
   "name": "dashboard",
   "version": "0.1.0",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build && rm -rf dist && mkdir dist && mv out dist/dashboard",
     "typecheck": "tsc --noEmit",
     "test:values": "node --test tests/value.test.mjs",
     "test:graph": "node tests/graph-browser.mjs",
+    "test:flow": "node tests/flow-browser.mjs",
     "test:browser": "node tests/real-browser.mjs && node tests/filter-roundtrip.mjs && node tests/pagination-browser.mjs && node tests/fixture-browser.mjs"
   },
   "dependencies": {

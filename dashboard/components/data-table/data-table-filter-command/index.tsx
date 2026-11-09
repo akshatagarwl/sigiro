@@ -37,6 +37,7 @@ interface DataTableFilterCommandProps {
   schema: SchemaDefinition;
   // Unique ID for this table (used to namespace localStorage)
   tableId?: string;
+  placeholder?: string;
 }
 
 /**
@@ -55,6 +56,7 @@ const boxClassName = cn(
 export function DataTableFilterCommand({
   schema,
   tableId = "default",
+  placeholder = "Search data table...",
 }: DataTableFilterCommandProps) {
   const {
     table,
@@ -176,7 +178,7 @@ export function DataTableFilterCommand({
           {inputValue.trim() ? (
             <span className="text-foreground">{inputValue}</span>
           ) : (
-            <span>Search data table...</span>
+            <span>{placeholder}</span>
           )}
         </span>
         <Kbd className="text-muted-foreground ml-auto">
@@ -239,7 +241,8 @@ export function DataTableFilterCommand({
               const word = getWordByCaretPosition({ value, caretPosition });
               setCurrentWord(word);
             }}
-            placeholder="Search data table..."
+            placeholder={placeholder}
+            aria-label={placeholder}
             className="text-foreground placeholder:text-muted-foreground flex h-full w-full bg-transparent text-sm outline-hidden disabled:cursor-not-allowed disabled:opacity-50"
           />
         </div>

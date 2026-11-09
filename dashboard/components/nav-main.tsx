@@ -36,12 +36,12 @@ export function NavMain({
         <SidebarMenu>
           {items.map((item) => (
             <SidebarMenuItem key={item.title}>
-              <SidebarMenuButton
-                asChild
-                tooltip={item.title}
-                isActive={pathname === item.url}
-              >
-                <Link href={`${item.url}${query}`}>
+              <SidebarMenuButton asChild tooltip={item.title} isActive={pathname === item.url}>
+                <Link
+                  href={`${item.url}${query}`}
+                  aria-label={item.title}
+                  aria-current={pathname === item.url ? "page" : undefined}
+                >
                   {item.icon && <item.icon />}
                   <span>{item.title}</span>
                 </Link>

@@ -49,8 +49,17 @@ assert.equal(
   ),
   id
 );
+const listWidth = await page
+  .locator('[aria-label^="Log events."]')
+  .evaluate((el) => el.getBoundingClientRect().width);
 await page.keyboard.press("Enter");
-await page.getByRole("complementary", { name: "Event inspector" }).waitFor();
+await page.getByRole("region", { name: "Event inspector" }).waitFor();
+assert.equal(
+  await page
+    .locator('[aria-label^="Log events."]')
+    .evaluate((el) => el.getBoundingClientRect().width),
+  listWidth
+);
 await page.waitForURL(/uuid=/);
 assert.equal(new URL(page.url()).searchParams.get("uuid"), id);
 results.checks.push("Arrow/Home/Enter row keyboard + URL selection");
@@ -66,26 +75,26 @@ assert.match(
 );
 await page.getByRole("tab", { name: "Attributes", exact: true }).click();
 await page.screenshot({ path: `${out}/02-real-inspector.png`, fullPage: true });
-const beforeResize = await page
-  .getByRole("complementary", { name: "Event inspector" })
-  .evaluate((el) => el.getBoundingClientRect().width);
-await page
-  .getByRole("separator", {
-    name: "Resize event list and inspector",
-    exact: true,
-  })
-  .focus();
-await page.keyboard.press("ArrowLeft");
-await page.waitForFunction(
-  (width) =>
-    Math.abs(
-      (document
-        .querySelector('aside[aria-label="Event inspector"]')
-        ?.getBoundingClientRect().width ?? width) - width
-    ) > 1,
-  beforeResize
+await page.getByRole("tab", { name: "Attributes", exact: true }).focus();
+await page.keyboard.press("End");
+assert.equal(
+  await page.evaluate(() => document.activeElement?.textContent),
+  "Event JSON"
 );
-results.checks.push("inspector separator resizes with keyboard");
+await page.keyboard.press("Home");
+assert.equal(
+  await page.evaluate(() => document.activeElement?.textContent),
+  "Attributes"
+);
+await page.getByRole("textbox", { name: "Find in loaded events" }).focus();
+await page.keyboard.press("Home");
+assert.equal(
+  await page.evaluate(() => document.activeElement?.getAttribute("aria-label")),
+  "Find in loaded events"
+);
+results.checks.push(
+  "inline inspector preserves list width; nested tab/input Home/End not captured by row keyboard"
+);
 await page.getByRole("button", { name: "Filter service" }).click();
 await page.getByRole("menuitem").first().waitFor();
 assert.equal(await page.getByRole("menuitem").count(), 1);
@@ -94,7 +103,7 @@ await page.keyboard.press("Escape");
 await page.getByRole("button", { name: "Close event inspector" }).focus();
 await page.keyboard.press("Escape");
 await page
-  .getByRole("complementary", { name: "Event inspector" })
+  .getByRole("region", { name: "Event inspector" })
   .waitFor({ state: "hidden" });
 await page.waitForFunction(
   (id) => document.activeElement?.getAttribute("data-event-row") === id,
@@ -109,14 +118,16 @@ assert.equal(
 results.checks.push(
   "copy real message; tabs; no unsupported exclude; Escape focus restored"
 );
-await page.getByRole("button", { name: "Wrap", exact: true }).click();
+await page.getByRole("button", { name: "View", exact: true }).click();
+await page
+  .getByRole("menuitemcheckbox", { name: "Wrap messages", exact: true })
+  .click();
 assert.equal(
   await page
-    .getByRole("button", { name: "Wrap", exact: true })
-    .getAttribute("aria-pressed"),
+    .getByRole("menuitemcheckbox", { name: "Wrap messages", exact: true })
+    .getAttribute("aria-checked"),
   "true"
 );
-await page.getByRole("button", { name: "Columns", exact: true }).click();
 await page.getByRole("menuitemcheckbox", { name: "Service" }).click();
 await page.keyboard.press("Escape");
 assert.equal(
@@ -130,7 +141,7 @@ await page
 await page.getByText("No loaded events match", { exact: true }).waitFor();
 await page.getByRole("textbox", { name: "Find in loaded events" }).fill("");
 await first.waitFor();
-await page.getByRole("button", { name: "Columns", exact: true }).click();
+await page.getByRole("button", { name: "View", exact: true }).click();
 await page.getByRole("menuitemcheckbox", { name: "Service" }).click();
 await page.keyboard.press("Escape");
 await page.addScriptTag({ path: require.resolve("axe-core/axe.min.js") });
@@ -172,6 +183,16 @@ assert.equal(
   await page.evaluate(() => document.documentElement.scrollWidth),
   390
 );
+await page.getByRole("button", { name: "Find", exact: true }).click();
+await page
+  .getByRole("textbox", { name: "Find in loaded events" })
+  .fill("does-not-exist");
+await page.getByText("No loaded events match", { exact: true }).waitFor();
+await page.getByRole("button", { name: "Find", exact: true }).click();
+await first.waitFor();
+results.checks.push(
+  "mobile loaded-find opt-in and close clears find; View menu exposes display and columns"
+);
 await page.screenshot({ path: `${out}/03-real-mobile.png`, fullPage: true });
 await first.click();
 await page.getByRole("dialog", { name: "Event details" }).waitFor();
@@ -195,6 +216,39 @@ await page.screenshot({
   path: `${out}/04-real-mobile-inspector.png`,
   fullPage: false,
 });
+await page.evaluate(() =>
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: async () => {
+        throw new Error("synthetic mobile clipboard denial");
+      },
+    },
+  })
+);
+await page.getByRole("button", { name: "Copy message", exact: true }).click();
+await page
+  .getByRole("dialog", { name: "Event details" })
+  .getByText(
+    "Copy failed. Full value was not copied; check clipboard permission.",
+    { exact: true }
+  )
+  .waitFor();
+assert(
+  await page
+    .getByRole("dialog", { name: "Event details" })
+    .getByText(
+      "Copy failed. Full value was not copied; check clipboard permission.",
+      { exact: true }
+    )
+    .evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      return box.top >= 0 && box.bottom <= innerHeight;
+    })
+);
+results.checks.push(
+  "mobile clipboard denial is visibly reported inside modal viewport, not behind it"
+);
 axe = await page.evaluate(
   async () => await axe.run(document.querySelector('[role="dialog"]'))
 );

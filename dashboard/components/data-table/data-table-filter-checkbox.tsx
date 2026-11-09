@@ -16,7 +16,7 @@ import {
 } from "@/lib/style";
 import { cn } from "@/lib/utils";
 import { Search } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { DataTableCheckboxFilterField } from "./types";
 
 export function DataTableFilterCheckbox<TData>({
@@ -25,6 +25,7 @@ export function DataTableFilterCheckbox<TData>({
   component,
 }: DataTableCheckboxFilterField<TData>) {
   const value = _value as string;
+  const instanceId = useId();
   const [inputValue, setInputValue] = useState("");
   const { table, columnFilters, isLoading, getFacetedUniqueValues } =
     useDataTable();
@@ -102,7 +103,7 @@ export function DataTableFilterCheckbox<TData>({
                 )}
               >
                 <Checkbox
-                  id={`${value}-${option.value}`}
+                  id={`${instanceId}-${value}-${option.value}`}
                   checked={checked}
                   onCheckedChange={(checked) => {
                     const newValue = checked
@@ -114,7 +115,7 @@ export function DataTableFilterCheckbox<TData>({
                   }}
                 />
                 <Label
-                  htmlFor={`${value}-${option.value}`}
+                  htmlFor={`${instanceId}-${value}-${option.value}`}
                   className="text-foreground/70 group-hover:text-accent-foreground flex w-full items-center justify-center gap-1 truncate"
                 >
                   {Component ? (

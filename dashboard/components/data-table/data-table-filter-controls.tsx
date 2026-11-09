@@ -55,20 +55,17 @@ export function DataTableFilterControls() {
         return (
           // REMINDER: -mx-2 lets the border-b span the full sidebar width despite the parent p-2; px-2 keeps the content aligned
           <AccordionItem key={value} value={value} className="-mx-2 px-2">
-            <AccordionTrigger className="data-[state=closed]:text-muted-foreground data-[state=open]:text-foreground focus-within:data-[state=closed]:text-foreground hover:data-[state=closed]:text-foreground w-full items-center gap-2 px-2 py-0 hover:no-underline">
-              <div className="flex w-full items-center justify-between gap-2 truncate py-3 pr-2">
-                <div className="flex items-center gap-2 truncate">
-                  <p className="text-sm font-medium">{field.label}</p>
-                  {value !== field.label.toLowerCase() &&
-                  !field.commandDisabled ? (
-                    <p className="text-muted-foreground mt-px truncate font-mono text-[10px]">
-                      {value}
-                    </p>
+            <div className="relative">
+              <AccordionTrigger className="data-[state=closed]:text-muted-foreground data-[state=open]:text-foreground focus-within:data-[state=closed]:text-foreground hover:data-[state=closed]:text-foreground w-full items-center gap-2 px-2 py-0 hover:no-underline">
+                <span className="flex w-full items-center gap-2 truncate py-3 pr-12">
+                  <span className="text-sm font-medium">{field.label}</span>
+                  {value !== field.label.toLowerCase() && !field.commandDisabled ? (
+                    <span className="text-muted-foreground mt-px truncate font-mono text-[10px]">{value}</span>
                   ) : null}
-                </div>
-                <DataTableFilterResetButton {...field} />
-              </div>
-            </AccordionTrigger>
+                </span>
+              </AccordionTrigger>
+              <div className="absolute right-7 top-1/2 -translate-y-1/2"><DataTableFilterResetButton {...field} /></div>
+            </div>
             <AccordionContent>
               {/* REMINDER: avoid the focus state to be cut due to overflow-hidden */}
               {/* REMINDER: need to move within here because of accordion height animation */}

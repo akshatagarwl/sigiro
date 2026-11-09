@@ -6,7 +6,6 @@ import { Menu } from "@base-ui/react/menu";
 import { Tabs } from "@base-ui/react/tabs";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import * as React from "react";
-import { Group, Panel, Separator } from "react-resizable-panels";
 
 import { AttributeTree } from "./attribute-tree";
 import { ActionMenu, Button, Input } from "./primitives";
@@ -45,6 +44,9 @@ export function EventExplorer({
 }) {
   const inspectorId = React.useId();
   const [find, setFind] = React.useState("");
+  const [findOpen, setFindOpen] = React.useState(false);
+  const findRef = React.useRef<HTMLInputElement>(null);
+  const findId = React.useId();
   const [wrap, setWrap] = React.useState(false);
   const [comfortable, setComfortable] = React.useState(false);
   const [columns, setColumns] = React.useState(DEFAULT_COLUMNS);
@@ -82,6 +84,24 @@ export function EventExplorer({
   React.useEffect(() => {
     virtualizer.measure();
   }, [wrap, comfortable, columns, mobile, selectedId, virtualizer]);
+  const revealedId = React.useRef<string | undefined>(undefined);
+  React.useEffect(() => {
+    if (mobile || !selectedId) {
+      revealedId.current = undefined;
+      return;
+    }
+    const index = rows.findIndex((row) => row.id === selectedId);
+    if (index < 0) {
+      revealedId.current = undefined;
+      return;
+    }
+    if (revealedId.current === selectedId) return;
+    const frame = requestAnimationFrame(() => {
+      revealedId.current = selectedId;
+      virtualizer.scrollToIndex(index, { align: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedId, mobile, rows, virtualizer]);
   const copy = (value: string) => {
     if (!navigator.clipboard) {
       setNotice("Clipboard unavailable. Full value was not copied.");
@@ -174,47 +194,91 @@ export function EventExplorer({
             loaded
           </span>
         </div>
-        <div className={styles.tableActions}>
+        <div
+          className={styles.tableActions}
+          data-find-open={findOpen || Boolean(find)}
+        >
           <Input
+            ref={findRef}
+            id={findId}
+            className={styles.findInput}
+            data-open={findOpen || Boolean(find)}
             aria-label="Find in loaded events"
             placeholder="Find in loaded events…"
             value={find}
             onChange={(event) => setFind(event.target.value)}
           />
-          <Button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>
-            Wrap
-          </Button>
           <Button
-            aria-pressed={comfortable}
-            onClick={() => setComfortable(!comfortable)}
+            className={styles.findToggle}
+            aria-expanded={findOpen || Boolean(find)}
+            aria-controls={findId}
+            onClick={() => {
+              if (findOpen || find) {
+                setFind("");
+                setFindOpen(false);
+              } else {
+                setFindOpen(true);
+                requestAnimationFrame(() => findRef.current?.focus());
+              }
+            }}
           >
-            Comfortable
+            Find
           </Button>
           <Menu.Root>
-            <Menu.Trigger render={<Button />}>Columns</Menu.Trigger>
+            <Menu.Trigger render={<Button />}>View</Menu.Trigger>
             <Menu.Portal>
               <Menu.Positioner sideOffset={6} className={styles.positioner}>
                 <Menu.Popup className={styles.menu}>
-                  {DEFAULT_COLUMNS.map((column) => (
+                  <Menu.Group>
+                    <Menu.GroupLabel className={styles.menuLabel}>
+                      Display
+                    </Menu.GroupLabel>
                     <Menu.CheckboxItem
-                      key={column}
                       className={styles.menuItem}
-                      checked={columns.includes(column)}
-                      disabled={columns.length === 1 && columns[0] === column}
-                      onCheckedChange={(checked) =>
-                        setColumns(
-                          DEFAULT_COLUMNS.filter((key) =>
-                            key === column ? checked : columns.includes(key)
-                          )
-                        )
-                      }
+                      checked={wrap}
+                      onCheckedChange={setWrap}
                     >
                       <Menu.CheckboxItemIndicator>
                         ✓{" "}
                       </Menu.CheckboxItemIndicator>
-                      {COLUMN_LABELS[column]}
+                      Wrap messages
                     </Menu.CheckboxItem>
-                  ))}
+                    <Menu.CheckboxItem
+                      className={styles.menuItem}
+                      checked={comfortable}
+                      onCheckedChange={setComfortable}
+                    >
+                      <Menu.CheckboxItemIndicator>
+                        ✓{" "}
+                      </Menu.CheckboxItemIndicator>
+                      Comfortable rows
+                    </Menu.CheckboxItem>
+                  </Menu.Group>
+                  <Menu.Group>
+                    <Menu.GroupLabel className={styles.menuLabel}>
+                      Columns
+                    </Menu.GroupLabel>
+                    {DEFAULT_COLUMNS.map((column) => (
+                      <Menu.CheckboxItem
+                        key={column}
+                        className={styles.menuItem}
+                        checked={columns.includes(column)}
+                        disabled={columns.length === 1 && columns[0] === column}
+                        onCheckedChange={(checked) =>
+                          setColumns(
+                            DEFAULT_COLUMNS.filter((key) =>
+                              key === column ? checked : columns.includes(key)
+                            )
+                          )
+                        }
+                      >
+                        <Menu.CheckboxItemIndicator>
+                          ✓{" "}
+                        </Menu.CheckboxItemIndicator>
+                        {COLUMN_LABELS[column]}
+                      </Menu.CheckboxItem>
+                    ))}
+                  </Menu.Group>
                 </Menu.Popup>
               </Menu.Positioner>
             </Menu.Portal>
@@ -242,7 +306,11 @@ export function EventExplorer({
         aria-label="Log events. Arrow keys move focus; Enter opens event."
         tabIndex={0}
         onKeyDown={(event) => {
-          if ((event.target as HTMLElement).closest('[role="menu"]')) return;
+          if (
+            event.target !== scrollRef.current &&
+            !(event.target as HTMLElement).closest("[data-event-row]")
+          )
+            return;
           const index = rows.findIndex((row) => row.id === activeId);
           if (
             event.key === "ArrowDown" ||
@@ -288,6 +356,11 @@ export function EventExplorer({
                     aria-controls={
                       row.id === selectedId ? inspectorId : undefined
                     }
+                    title={
+                      row.id === selectedId
+                        ? "Close event details"
+                        : "Open event details"
+                    }
                     data-selected={row.id === selectedId || undefined}
                     data-comfortable={comfortable || undefined}
                     data-wrap={wrap || undefined}
@@ -297,6 +370,9 @@ export function EventExplorer({
                     onFocus={() => setActiveId(row.id)}
                     onClick={(event) => open(row, event.currentTarget)}
                   >
+                    <span aria-hidden="true" className={styles.expandIcon}>
+                      {row.id === selectedId ? "⌄" : "›"}
+                    </span>
                     {columns.map((column) => (
                       <span
                         key={column}
@@ -328,6 +404,16 @@ export function EventExplorer({
                       </span>
                     ))}
                   </RowButton>
+                  {!mobile && row.id === selectedId && (
+                    <div
+                      id={inspectorId}
+                      role="region"
+                      aria-label="Event inspector"
+                      className={styles.inlineInspector}
+                    >
+                      {inspector}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -378,33 +464,14 @@ export function EventExplorer({
       }}
     >
       <div role="status" className={styles.notice}>
-        {notice}
+        {!mobile || !selected ? notice : ""}
       </div>
-      {!mobile ? (
-        <Group orientation="horizontal" className={styles.panelGroup}>
-          <Panel id="event-list" minSize="35%" defaultSize="65%">
-            {content}
-          </Panel>
-          {selected && (
-            <Separator
-              aria-label="Resize event list and inspector"
-              className={styles.resizeHandle}
-            />
-          )}
-          {selected && (
-            <Panel id="event-inspector" minSize="260px" defaultSize="35%">
-              <aside
-                id={inspectorId}
-                aria-label="Event inspector"
-                className={styles.inspector}
-              >
-                {inspector}
-              </aside>
-            </Panel>
-          )}
-        </Group>
-      ) : (
-        content
+      {content}
+      {selected && !rows.some((row) => row.id === selected.id) && (
+        <p role="status" className={styles.tableFooter}>
+          Selected event is hidden by find.{" "}
+          <Button onClick={() => setFind("")}>Clear find</Button>
+        </p>
       )}
       {selectedId && !selected && (
         <p role="status" className={styles.tableFooter}>
@@ -433,6 +500,9 @@ export function EventExplorer({
                 Full log message, structured attributes and correlation links.
               </Dialog.Description>
               {inspector}
+              <div role="status" className={styles.notice}>
+                {notice}
+              </div>
             </Dialog.Popup>
           </Dialog.Portal>
         </Dialog.Root>

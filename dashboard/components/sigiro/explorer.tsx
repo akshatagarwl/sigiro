@@ -220,7 +220,9 @@ export function createExplorer<TRow extends { timestamp: Date }>(
           getFacetedMinMaxValues={getFacetedMinMaxValues(facets)}
           chartSlot={
             <div
-              className={explorer.renderResults ? "h-24 w-full" : "h-36 w-full"}
+              className={
+                explorer.renderResults ? "h-16 w-full sm:h-20" : "h-36 w-full"
+              }
               data-chart-name="timeline"
             >
               <EvilBarChart
@@ -246,6 +248,11 @@ export function createExplorer<TRow extends { timestamp: Date }>(
             <DataTableFilterCommand
               schema={filterSchema.definition}
               tableId={explorer.id}
+              placeholder={
+                explorer.id === "logs"
+                  ? "Filter logs… e.g. service:api"
+                  : undefined
+              }
             />
           }
           sheetSlot={

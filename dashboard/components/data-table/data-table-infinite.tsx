@@ -330,6 +330,8 @@ export function DataTableInfinite<TData extends RowData>({
 
   return (
     <DataTableProvider
+      controlsDefaultOpen={resultsSlot == null}
+      controlsStorageKey={resultsSlot == null ? undefined : `data-table-${tableId}-facets`}
       table={table}
       columns={columns}
       filterFields={filterFields}
@@ -357,7 +359,7 @@ export function DataTableInfinite<TData extends RowData>({
       */}
       <div
         className={cn(
-          "flex h-screen w-full flex-col sm:flex-row",
+          resultsSlot == null ? "flex h-screen w-full flex-col sm:flex-row" : "flex h-full min-h-0 w-full flex-col sm:flex-row",
           // Single source of truth for the panel width: the panel, its inner
           // wrapper and the main pane's `max-width` all read this variable so
           // they animate in lockstep.
@@ -403,7 +405,7 @@ export function DataTableInfinite<TData extends RowData>({
           <DataTableFilterRail />
           <div
             className={cn(
-              "bg-background flex shrink-0 flex-col gap-4 p-2 pb-4",
+              resultsSlot == null ? "bg-background flex shrink-0 flex-col gap-4 p-2 pb-4" : "bg-background flex shrink-0 flex-col gap-2 p-3 pb-2",
               // Above the table so the command palette's popover overlays it.
               "relative z-10",
             )}
@@ -412,6 +414,7 @@ export function DataTableInfinite<TData extends RowData>({
             {/* TBD: better flexibility with compound components? */}
             <DataTableToolbar
               showViewOptions={resultsSlot == null}
+              compact={resultsSlot != null}
               renderActions={toolbarActions ? () => toolbarActions : undefined}
             />
             {chartSlot}
@@ -566,6 +569,7 @@ function FilterPanel({ children }: { children: React.ReactNode }) {
       // `hidden sm:flex` is the breakpoint only; the collapsed state is `w-0`,
       // which leaves the filters focusable — hence `inert`.
       inert={!open}
+      aria-hidden={!open}
       className={cn(
         "h-full w-full flex-col sm:w-(--controls-width) sm:shrink-0",
         "sm:group-data-[expanded=false]/controls:w-0",

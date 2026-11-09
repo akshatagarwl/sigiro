@@ -9,15 +9,23 @@ interface ControlsContextType {
 
 export const ControlsContext = createContext<ControlsContextType | null>(null);
 
-export function ControlsProvider({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useLocalStorage(CONTROLS_KEY, true);
+export function ControlsProvider({
+  children,
+  defaultOpen = true,
+  storageKey = CONTROLS_KEY,
+}: {
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  storageKey?: string;
+}) {
+  const [open, setOpen] = useLocalStorage(storageKey, defaultOpen);
 
   return (
     <ControlsContext.Provider value={{ open, setOpen }}>
       <div
         // REMINDER: access the data-expanded state with tailwind via `group-data-[expanded=true]/controls:block`
         // In tailwindcss v4, we could even use `group-data-expanded/controls:block`
-        className="group/controls"
+        className="group/controls min-h-0 flex-1"
         data-expanded={open}
       >
         {children}

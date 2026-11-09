@@ -1,0 +1,23 @@
+{
+  "kind": "SYNTHETIC fixture responses intercepted in browser; not production telemetry",
+  "rows": 5000,
+  "messageBytes": 1113190,
+  "readyMs": 616.8681659999999,
+  "inspectorMs": 148.130625,
+  "initialDom": 25,
+  "endDom": 25,
+  "security": {
+    "executedPayload": 0,
+    "unexpectedRequests": [],
+    "sqlQuoteEscaping": true,
+    "prototypePollution": false,
+    "fullClipboardPreserved": true
+  },
+  "performance": {
+    "heap": 88679183,
+    "longTasks": [80, 130, 149, 67, 59, 151]
+  },
+  "lightAxe": [],
+  "darkAxe": [],
+  "errors": []
+}

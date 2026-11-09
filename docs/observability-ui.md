@@ -2,14 +2,16 @@
 
 This is the **first vertical slice**, not a completed dashboard-wide Radix migration. Base UI means [base-ui.com](https://base-ui.com/), not Uber Base Web. Base: `516a2563d5e905746293ef9263d7de4100e92134`.
 
+The follow-up [results-first logs iteration](logs-results-first.md), based on `660b4e28b0367cab2c95de7aad834e98203b32a6`, replaces the initial desktop split inspector with inline expansion and removes default expanded navigation/facets. Its latest measurements and evidence are separate from the historical first-slice results below.
+
 ## Inventory and extraction plan
 
 | Layer | Existing implementation | This slice / next boundary |
 | --- | --- | --- |
 | Primitive wrappers | shadcn-owned `components/ui`, primarily Radix, plus cmdk, Sonner and Vaul | New reusable surfaces use pinned `@base-ui/react` **1.9.0**. Button, Input, Menu/CheckboxItem, Tabs, Collapsible and mobile Dialog. Retain shadcn semantic token styling. |
-| App shell, filters, calendar, notifications | Existing wrappers and day-picker/date-fns | **Unchanged**. Migrate incrementally after equivalent focus/keyboard/portal behavior is verified; do not stack competing primitive wrappers. |
+| App shell, filters, calendar, notifications | Existing wrappers and day-picker/date-fns | Logs now default to a compact navigation rail and closed, separately persisted facets, with active filter chips visible. Targeted navigation/facet accessibility fixes; underlying legacy shell/filter/calendar/command/notification primitives remain a partial migration. |
 | Dense log rows / pagination | TanStack Table, existing query adapter | Reusable `EventExplorer` uses TanStack Virtual for rows. Existing Table/store/facets/histogram/query pipeline remains the app adapter. Explicit Base UI load-more control calls the unchanged cursor adapter. |
-| Event inspection | Generic data-table sheet | Reusable body-first inspector, controlled selection, event JSON, bounded attribute tree, service inclusion, copy actions. Resizable desktop split uses react-resizable-panels; mobile uses a full-screen Base UI Dialog. |
+| Event inspection | Generic data-table sheet | Reusable body-first inspector, controlled selection, event JSON, bounded attribute tree, service inclusion, copy actions. Desktop details now expand inline without reducing results width; mobile uses a full-screen Base UI Dialog. |
 | Charts, virtualization and panel resizing | Recharts/ECharts, TanStack, resizable panels | Keep specialized engines. They are **not Base UI components**. Base UI supplies appropriate interactive controls, not their rendering engines. |
 | Traces / profiles | Laminar-style trace workspace, profile engine | Source unchanged and browser regression tested. Later extract trace tree/timeline/span inspector against the same presentation contracts. |
 | Tokens | Current application shadcn variables; separate polish PR #168 | Consume existing tokens, no global stylesheet changes. Preserve #168; resolve token/trace overlap explicitly before any later integration. |
@@ -20,7 +22,7 @@ Dependency direction is `Sigiro adapter → observability presentation → Base 
 
 `dashboard/components/observability/` contains `EventExplorer`, `AttributeTree`, typed event/filter contracts, Button/Input/ActionMenu, serializer, and scoped CSS. Controlled props cover selection, optional pagination, filter intentions and correlation links. Column visibility, find, wrap and density are local view preferences. Find is explicitly **loaded-events only**. Authoritative matching counts/facets stay in the existing application toolbar, rather than pretending a sample is the whole query.
 
-Presentational HTML such as messages and metadata does not require an artificial primitive abstraction. Appropriate new interactive controls use Base UI; the interactive resize separator comes from its specialized panel engine.
+Presentational HTML such as messages and metadata does not require an artificial primitive abstraction. Appropriate new interactive controls use Base UI. Existing trace resizing retains its specialized panel engine; logs no longer have a split inspector separator.
 
 This directory has an explicit **MIT** license and is excluded from the root FSL-1.1-ALv2 grant. The application remains FSL. This is a source extraction boundary, **not a new public repository or published package**. Before a future package publication: review naming, exported contracts, theme/token assets, full dependency notices and examples separately.
 
@@ -52,7 +54,7 @@ See [recorded queries/results](assets/observability-ui/filter-roundtrip.json). S
 
 Tests do not establish a universal security, accessibility or performance guarantee.
 
-## Exact build self-verification
+## Historical first-slice self-verification (`660b4e28`)
 
 No independent review was performed: the user requested a single-agent workflow. No other agents were spawned for this work. These are local self-verification results, not CI results.
 
@@ -68,6 +70,8 @@ Against an unmodified build of the same base on the same local read-only backend
 
 The deliberately overfilled 5,000-row synthetic page reached rows in **718ms**, inspector in **238ms**, with ~39.0MB observed JS heap. It recorded main-thread tasks up to **162ms**. Virtual DOM stays bounded, but this is **not zero-jank** and not a proof of production-scale latency. The existing row hashing/adapter also processes this artificial oversized page; normal requests retain their existing page size. [Raw observations](assets/observability-ui/fixture-results.json) and [bundle comparison](assets/observability-ui/bundle-comparison.json).
 
+These first-slice screenshots/measurements are retained unchanged; see [the follow-up](logs-results-first.md) for current layout, tests, performance observations and remaining boundaries.
+
 ## Reproduction
 
 From `dashboard/`, with the static build served at `UI_ORIGIN` against the existing backend:
@@ -79,6 +83,7 @@ aube run test:values
 # Install Playwright Chromium, or set CHROMIUM_PATH to an existing Chrome binary.
 aube run test:graph
 UI_ORIGIN=http://127.0.0.1:19990 aube run test:browser
+UI_ORIGIN=http://127.0.0.1:19990 aube run test:flow
 BASELINE_ORIGIN=http://127.0.0.1:19989 node tests/bundle-comparison.mjs
 ```
 

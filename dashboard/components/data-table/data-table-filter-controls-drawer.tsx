@@ -24,12 +24,12 @@ import React from "react";
 import { DataTableFilterControls } from "./data-table-filter-controls";
 import { TOOLTIP_DELAY } from "./ui-compat";
 
-export function DataTableFilterControlsDrawer() {
+export function DataTableFilterControlsDrawer({ showLabel = false, shortcut = true }: { showLabel?: boolean; shortcut?: boolean } = {}) {
   const triggerButtonRef = React.useRef<HTMLButtonElement>(null);
   const isMobile = useMediaQuery("(max-width: 640px)");
 
   useHotKey(() => {
-    triggerButtonRef.current?.click();
+    if (shortcut) triggerButtonRef.current?.click();
   }, "b");
 
   return (
@@ -41,20 +41,22 @@ export function DataTableFilterControlsDrawer() {
               <Button
                 ref={isMobile ? triggerButtonRef : null}
                 variant="ghost"
-                size="icon"
-                className="h-9 w-9"
+                size={showLabel ? "default" : "icon"}
+                aria-label="Filters"
+                className={showLabel ? "h-8 gap-2 px-3" : "h-9 w-9"}
               >
-                <FilterIcon className="h-4 w-4" />
+                <FilterIcon className="h-4 w-4" aria-hidden="true" />
+                {showLabel && "Filters"}
               </Button>
             </DrawerTrigger>
           </TooltipTrigger>
           <TooltipContent side="right">
             <p className="text-nowrap">
-              Toggle controls with{" "}
-              <Kbd className="text-muted-foreground group-hover:text-accent-foreground ml-1">
+              {shortcut ? "Toggle controls with " : "Open filters"}{" "}
+              {shortcut && <Kbd className="text-muted-foreground group-hover:text-accent-foreground ml-1">
                 <span className="mr-1">⌘</span>
                 <span>B</span>
-              </Kbd>
+              </Kbd>}
             </p>
           </TooltipContent>
         </Tooltip>

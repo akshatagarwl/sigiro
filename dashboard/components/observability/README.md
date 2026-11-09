@@ -3,11 +3,12 @@
 Reusable React presentation components, MIT licensed under `LICENSE` in this directory. The Sigiro application outside this directory retains its existing license.
 
 - Base UI 1.9.0 supplies interaction primitives. CSS Modules use the host’s shadcn semantic color tokens.
-- TanStack Virtual measures event rows; react-resizable-panels supplies the desktop inspector separator. These engines are not Base UI components.
+- TanStack Virtual measures rows including opt-in inline desktop details. Mobile details use a dismissible Base UI Dialog. No permanent inspector column or desktop resize separator remains. The host must provide a bounded height (e.g. a flex child with `min-height: 0` in a viewport-height shell) so results can scroll and virtualize.
 - `EventExplorer` accepts typed events and controlled selection, optional pagination callbacks, filter callbacks and correlation-link renderers. `AttributeTree` accepts values and a copy callback.
 - No Next router, OAuth, SQL generation, telemetry transport, tenant context or API calls. Hosts own pagination, filtering semantics, matching counts and URLs.
 - `onFilter` currently exposes service inclusion only. No exclude control is shown because Sigiro’s current transport does not implement exclusions.
-- Find searches loaded rows. Row previews are limited to 500 characters; inspector message/event-JSON previews to 50,000. Attribute trees display up to 200 keys per object and descend eight levels; leaf previews are limited to 10,000 characters. Copy actions retain complete values, independently of displayed preview budgets.
+- The View menu contains wrap/density and column controls. Find searches loaded rows; on mobile it is opt-in, and closing it clears its local query. Opening inline details preserves list/column width and reveals that row once; appending pages does not jump back to an older selected event.
+- Row previews are limited to 500 characters; inspector message/event-JSON previews to 50,000. Attribute trees display up to 200 keys per object and descend eight levels; leaf previews are limited to 10,000 characters. Copy actions retain complete values, independently of displayed preview budgets.
 - JSON copies represent BigInt as decimal strings and true circular references as `[Circular]`; repeated non-cyclic references are serialized normally. This is a JSON-safe representation, **not a lossless JavaScript graph encoding**. Clipboard rejection/unavailability is announced explicitly; it never reports an unsuccessful copy as success.
 - New production dependency notices are served from `dashboard/public/licenses/base-ui-MIT.txt`, `base-ui-utils-MIT.txt` and `babel-runtime-MIT.txt`. Existing Laminar Apache license/NOTICE files remain unchanged.
 

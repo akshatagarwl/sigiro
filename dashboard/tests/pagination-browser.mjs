@@ -41,10 +41,29 @@ try {
     `${origin}/dashboard/logs/?timestamp=1794243300000-1794243450000`
   );
   await page.getByText("50 / 50 loaded", { exact: true }).waitFor();
+  await page.locator("[data-event-row]").first().click();
+  await page
+    .getByRole("region", { name: "Event inspector", exact: true })
+    .waitFor();
+  await page.waitForURL((current) => current.searchParams.has("uuid"));
+  const selectedId = new URL(page.url()).searchParams.get("uuid");
+  await page.keyboard.press("End");
+  await page.waitForFunction(() =>
+    document.activeElement?.textContent?.includes(
+      "Synthetic pagination event 49"
+    )
+  );
   await page
     .getByRole("button", { name: "Load more events", exact: true })
     .click();
   await page.getByText("60 / 60 loaded", { exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("uuid"), selectedId);
+  assert(
+    await page
+      .locator('[aria-label^="Log events."]')
+      .evaluate((el) => el.scrollTop > 200),
+    "appending does not jump back to the selected first event"
+  );
   assert(
     cursors[1].includes(`timestamp < make_timestamp(${data[49].timestamp})`)
   );
@@ -67,6 +86,7 @@ try {
           "50 + 10 real-adapter cursor pages append",
           "last row timestamp used unchanged",
           "load more stops at authoritative 60",
+          "selection persists and appending at bottom does not scroll back to selected first event",
           "virtualized End reaches appended final row",
         ],
       },

@@ -1,0 +1,31 @@
+{
+  "kind": "real-existing-backend; no API interception",
+  "checks": [
+    "desktop: real events; initial compact navigation and closed facets; active time chip; opt-in filters/navigation; focus returns; full-width details; real View trace/back; Traces/Logs navigation closes mobile sheet and resets logs rail",
+    "laptop: real events; initial compact navigation and closed facets; active time chip; opt-in filters/navigation; focus returns; full-width details; real View trace/back; Traces/Logs navigation closes mobile sheet and resets logs rail",
+    "mobile: real events; initial compact navigation and closed facets; active time chip; opt-in filters/navigation; focus returns; full-width details; real View trace/back; Traces/Logs navigation closes mobile sheet and resets logs rail"
+  ],
+  "accessibility": [
+    {
+      "name": "desktop",
+      "state": "whole-page default",
+      "violations": []
+    },
+    {
+      "name": "laptop",
+      "state": "whole-page default",
+      "violations": []
+    },
+    {
+      "name": "mobile",
+      "state": "whole-page default",
+      "violations": []
+    },
+    {
+      "name": "mobile",
+      "state": "opt-in existing mobile facets",
+      "violations": []
+    }
+  ],
+  "errors": []
+}

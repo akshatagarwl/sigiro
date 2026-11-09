@@ -86,7 +86,7 @@ const initialDom = await p.locator("[data-event-row]").count();
 assert(initialDom < 60);
 const open = performance.now();
 await p.locator("[data-event-row]").first().click();
-await p.getByRole("complementary", { name: "Event inspector" }).waitFor();
+await p.getByRole("region", { name: "Event inspector" }).waitFor();
 const inspectorMs = performance.now() - open;
 assert((await p.locator("pre").first().innerText()).length <= 50_000);
 await p.getByRole("button", { name: "Copy message", exact: true }).click();

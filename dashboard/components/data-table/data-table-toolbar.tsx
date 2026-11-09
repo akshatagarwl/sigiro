@@ -2,6 +2,7 @@
 
 import { useDataTable } from "@/components/data-table/data-table-provider";
 import { Button } from "@/components/ui/button";
+import { Button as ExplorerButton } from "@/components/observability/primitives";
 import { Kbd } from "@/components/ui/kbd";
 import {
   Tooltip,
@@ -21,17 +22,64 @@ import { TOOLTIP_DELAY } from "./ui-compat";
 interface DataTableToolbarProps {
   renderActions?: () => React.ReactNode;
   showViewOptions?: boolean;
+  compact?: boolean;
 }
 
-export function DataTableToolbar({ renderActions, showViewOptions = true }: DataTableToolbarProps) {
-  const { table, isLoading, columnFilters, totalRows, filterRows } =
+export function DataTableToolbar({
+  renderActions,
+  showViewOptions = true,
+  compact = false,
+}: DataTableToolbarProps) {
+  const { table, filterFields, isLoading, columnFilters, totalRows, filterRows } =
     useDataTable();
   const { open, setOpen } = useControls();
-  useHotKey(() => setOpen((prev) => !prev), "b");
+  // The compact logs shell reserves Mod+B for navigation, not both panels.
+  useHotKey(() => {
+    if (!compact) setOpen((prev) => !prev);
+  }, "b");
   const rows = {
     total: totalRows ?? table.getCoreRowModel().rows.length,
     filtered: filterRows ?? table.getFilteredRowModel().rows.length,
   };
+
+  if (compact) return (
+    <div className="flex flex-wrap items-center gap-2" data-log-query-context>
+      <div className="hidden sm:block">
+        <ExplorerButton aria-expanded={open} onClick={() => setOpen(!open)}>Filters</ExplorerButton>
+      </div>
+      <div className="sm:hidden">
+        <DataTableFilterControlsDrawer showLabel shortcut={false} />
+      </div>
+      <p className="text-muted-foreground text-xs" aria-live="polite">
+        {isLoading ? "Updating…" : `${formatCompactNumber(rows.filtered)} matching · ${formatCompactNumber(rows.total)} in window`}
+      </p>
+      {columnFilters.length > 0 && (
+        <div className="flex flex-wrap gap-1.5" aria-label="Active log filters">
+          {columnFilters.map((filter) => {
+            const label = filterFields.find((field) => String(field.value) === filter.id)?.label ?? filter.id;
+            const values = Array.isArray(filter.value) ? filter.value : [filter.value];
+            const delimiter = values.every((value) => value instanceof Date) ? " → " : ", ";
+            const display = values.map((value) => value instanceof Date
+              ? value.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+              : String(value)).join(delimiter);
+            const fullValue = values.map((value) => value instanceof Date ? value.toISOString() : String(value)).join(delimiter);
+            return (
+              <ExplorerButton
+                key={filter.id}
+                aria-label={`Remove ${label}: ${display}`}
+                title={fullValue}
+                onClick={() => table.getColumn(filter.id)?.setFilterValue(undefined)}
+              >
+                <span className="max-w-64 truncate">{label}: {display}</span>
+                <span aria-hidden="true">×</span>
+              </ExplorerButton>
+            );
+          })}
+        </div>
+      )}
+      <div className="ml-auto flex items-center gap-2">{renderActions?.()}</div>
+    </div>
+  );
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-4">
