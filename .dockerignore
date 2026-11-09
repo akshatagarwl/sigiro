@@ -6,8 +6,8 @@
 !scripts/prepare-duckdb-static.sh
 !src/
 !src/**
-!benches/
-!benches/**
+!crates/
+!crates/**
 !dashboard/
 !dashboard/**
 dashboard/node_modules/

@@ -52,7 +52,7 @@ RUN aube run build && test -f dist/dashboard/index.html
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
-COPY benches/ benches/
+COPY crates/ crates/
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
@@ -92,7 +92,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
     mold -run cargo chef cook --release --target "$T" --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
-COPY benches/ benches/
+COPY crates/ crates/
 COPY --from=dashboard /build/dashboard/dist/dashboard dashboard/dist/dashboard
 ENV SIGIRO_REQUIRE_DASHBOARD=1
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGETARCH \
