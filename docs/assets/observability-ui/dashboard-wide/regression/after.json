@@ -1,0 +1,224 @@
+[
+  {
+    "name": "desktop",
+    "state": "default",
+    "viewport": 1600,
+    "documentWidth": 1600,
+    "documentHeight": 1000,
+    "results": {
+      "x": 73,
+      "y": 257,
+      "width": 1519,
+      "height": 735,
+      "top": 257,
+      "right": 1592,
+      "bottom": 992,
+      "left": 73
+    },
+    "message": {
+      "x": 498,
+      "y": 347.5,
+      "width": 1080,
+      "height": 18,
+      "top": 347.5,
+      "right": 1578,
+      "bottom": 365.5,
+      "left": 498
+    },
+    "scroll": {
+      "x": 73,
+      "y": 339.5,
+      "width": 1519,
+      "height": 577.5,
+      "top": 339.5,
+      "right": 1592,
+      "bottom": 917,
+      "left": 73
+    }
+  },
+  {
+    "name": "desktop",
+    "state": "selected",
+    "viewport": 1600,
+    "documentWidth": 1600,
+    "documentHeight": 1000,
+    "results": {
+      "x": 73,
+      "y": 257,
+      "width": 1519,
+      "height": 735,
+      "top": 257,
+      "right": 1592,
+      "bottom": 992,
+      "left": 73
+    },
+    "message": {
+      "x": 498,
+      "y": 347.5,
+      "width": 1080,
+      "height": 18,
+      "top": 347.5,
+      "right": 1578,
+      "bottom": 365.5,
+      "left": 498
+    },
+    "scroll": {
+      "x": 73,
+      "y": 339.5,
+      "width": 1519,
+      "height": 577.5,
+      "top": 339.5,
+      "right": 1592,
+      "bottom": 917,
+      "left": 73
+    }
+  },
+  {
+    "name": "laptop",
+    "state": "default",
+    "viewport": 1366,
+    "documentWidth": 1366,
+    "documentHeight": 900,
+    "results": {
+      "x": 73,
+      "y": 257,
+      "width": 1285,
+      "height": 635,
+      "top": 257,
+      "right": 1358,
+      "bottom": 892,
+      "left": 73
+    },
+    "message": {
+      "x": 498,
+      "y": 347.5,
+      "width": 846,
+      "height": 18,
+      "top": 347.5,
+      "right": 1344,
+      "bottom": 365.5,
+      "left": 498
+    },
+    "scroll": {
+      "x": 73,
+      "y": 339.5,
+      "width": 1285,
+      "height": 477.5,
+      "top": 339.5,
+      "right": 1358,
+      "bottom": 817,
+      "left": 73
+    }
+  },
+  {
+    "name": "laptop",
+    "state": "selected",
+    "viewport": 1366,
+    "documentWidth": 1366,
+    "documentHeight": 900,
+    "results": {
+      "x": 73,
+      "y": 257,
+      "width": 1285,
+      "height": 635,
+      "top": 257,
+      "right": 1358,
+      "bottom": 892,
+      "left": 73
+    },
+    "message": {
+      "x": 498,
+      "y": 347.5,
+      "width": 846,
+      "height": 18,
+      "top": 347.5,
+      "right": 1344,
+      "bottom": 365.5,
+      "left": 498
+    },
+    "scroll": {
+      "x": 73,
+      "y": 339.5,
+      "width": 1285,
+      "height": 477.5,
+      "top": 339.5,
+      "right": 1358,
+      "bottom": 817,
+      "left": 73
+    }
+  },
+  {
+    "name": "mobile",
+    "state": "default",
+    "viewport": 390,
+    "documentWidth": 390,
+    "documentHeight": 844,
+    "results": {
+      "x": 0,
+      "y": 303,
+      "width": 390,
+      "height": 541,
+      "top": 303,
+      "right": 390,
+      "bottom": 844,
+      "left": 0
+    },
+    "message": {
+      "x": 12,
+      "y": 411,
+      "width": 366,
+      "height": 18,
+      "top": 411,
+      "right": 378,
+      "bottom": 429,
+      "left": 12
+    },
+    "scroll": {
+      "x": 0,
+      "y": 357,
+      "width": 390,
+      "height": 395.5,
+      "top": 357,
+      "right": 390,
+      "bottom": 752.5,
+      "left": 0
+    }
+  },
+  {
+    "name": "mobile",
+    "state": "selected",
+    "viewport": 390,
+    "documentWidth": 390,
+    "documentHeight": 844,
+    "results": {
+      "x": 0,
+      "y": 303,
+      "width": 390,
+      "height": 541,
+      "top": 303,
+      "right": 390,
+      "bottom": 844,
+      "left": 0
+    },
+    "message": {
+      "x": 12,
+      "y": 411,
+      "width": 366,
+      "height": 18,
+      "top": 411,
+      "right": 378,
+      "bottom": 429,
+      "left": 12
+    },
+    "scroll": {
+      "x": 0,
+      "y": 357,
+      "width": 390,
+      "height": 395.5,
+      "top": 357,
+      "right": 390,
+      "bottom": 752.5,
+      "left": 0
+    }
+  }
+]

@@ -4,6 +4,8 @@ This is the **first vertical slice**, not a completed dashboard-wide Radix migra
 
 The follow-up [results-first logs iteration](logs-results-first.md), based on `660b4e28b0367cab2c95de7aad834e98203b32a6`, replaces the initial desktop split inspector with inline expansion and removes default expanded navigation/facets. Its latest measurements and evidence are separate from the historical first-slice results below.
 
+The later [six-route dashboard checkpoint](dashboard-wide-checkpoint.md) extends compact navigation, shared Base UI request states, time/scope correctness and bounded tables across the existing dashboard. It has separate current build fingerprints and real-versus-fixture evidence. The inventory and first-slice numbers below are historical; the dashboard remains a partial primitive migration.
+
 ## Inventory and extraction plan
 
 | Layer | Existing implementation | This slice / next boundary |
@@ -32,7 +34,7 @@ No ClickStack source/assets were copied. Its structured logs workflow at pinned 
 
 The logs schema used `col.enum([])` for dynamic facets. Its generated `parseAsStringLiteral([])` rejected every actual service string: the URL could change while parsed query state discarded the filter.
 
-The fix is **logs-only**: an explicit `service: field.array(field.string())` filter override. The empty-enum visual facet schema, generic generators/parsers, SQL/transport and auth code are unchanged. The explorer accepts an optional filter override to support this app-level declaration.
+The first-slice fix was **logs-only**: an explicit `service: field.array(field.string())` filter override. The later dashboard checkpoint applies the same bounded override to Traces and verifies its actual SQL. The empty-enum visual facet schema, generic generators/parsers, SQL/transport and auth code are unchanged. The explorer accepts an optional filter override to support this app-level declaration.
 
 Real read-only backend checks verify:
 

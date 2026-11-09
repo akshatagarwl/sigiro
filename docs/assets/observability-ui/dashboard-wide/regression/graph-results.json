@@ -1,0 +1,14 @@
+{
+  "kind": "standalone same-source SYNTHETIC component test, not dashboard API",
+  "fullMessageCharacters": 1400000,
+  "fullAttributeCharacters": 1200000,
+  "cycles": "[Circular]",
+  "bigInt": "decimal string",
+  "repeatedReferencesPreserved": true,
+  "boundedPreview": true,
+  "highFanoutInitiallyCollapsed": true,
+  "deepSerializationFailureVisible": true,
+  "clipboardRejectionVisible": true,
+  "clipboardUnavailableVisible": true,
+  "errors": []
+}

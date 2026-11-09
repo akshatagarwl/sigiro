@@ -1,0 +1,16 @@
+{
+  "source": "Actual backend browser observations at c92d64ee69ade67e99a7d9bc7a4c7c299b6441fc, recorded before dashboard-wide source edits",
+  "logsRefresh": {
+    "windowBeforeMicros": [1794170190460000, 1794256590460000],
+    "windowAfterMicros": [1794170190460000, 1794256590460000],
+    "cursorBeforeMicros": 1794256590475000,
+    "cursorAfterMicros": 1794256592715000,
+    "interpretation": "The window was frozen while the pagination cursor advanced. The original console probe's sameWindow=false compared entire SQL strings, not effective window bounds."
+  },
+  "tracesMissingService": {
+    "query": "service=missing-ui-inventory-service&timestamp=1794243300000-1794243450000",
+    "returnedRootCount": 2,
+    "servicePredicatePresent": false
+  },
+  "evidenceBoundary": "Initial baseline geometry/probe observations are preserved; the temporary capture directory was reused and is not a durable before-screenshot set. Current screenshots are separately labeled."
+}

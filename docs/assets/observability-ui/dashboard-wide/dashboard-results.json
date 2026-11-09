@@ -1,0 +1,454 @@
+{
+  "checks": [
+    {
+      "name": "overview desktop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "services desktop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "traces desktop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "logs desktop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "profiles desktop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "sql desktop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "overview laptop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "services laptop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "traces laptop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "logs laptop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "profiles laptop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "sql laptop real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "overview mobile real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "services mobile real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "traces mobile real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "logs mobile real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "profiles mobile real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "sql mobile real route, bounded shell, screenshot and scoped axe",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "Logs/Traces refresh moves relative bounds, preserves explicit bounds; relative header choice clears override",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "Traces known/missing/quoted service actually reaches SQL, reload and row keyboard/close focus",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "Compatible service/date navigation, active-route retention, back/forward/reload; real empty Overview/Services",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "SQL real SELECT/empty/error, draft identity, executed disclosure, keyboard",
+      "source": "real backend",
+      "status": "passed"
+    },
+    {
+      "name": "Logs request failure is not a successful empty/end state; retry restores real events",
+      "source": "synthetic failure over real logs",
+      "status": "passed"
+    },
+    {
+      "name": "Traces list/detail/related-profile failure, loading, retry and preserved workspace",
+      "source": "synthetic failures over real trace data",
+      "status": "passed"
+    },
+    {
+      "name": "overview deterministic request failure/retry without intercepting auth health",
+      "source": "synthetic failure over real page",
+      "status": "passed"
+    },
+    {
+      "name": "services deterministic request failure/retry without intercepting auth health",
+      "source": "synthetic failure over real page",
+      "status": "passed"
+    },
+    {
+      "name": "profiles deterministic request failure/retry without intercepting auth health",
+      "source": "synthetic failure over real page",
+      "status": "passed"
+    },
+    {
+      "name": "SQL single-flight repeated shortcuts, cancel/rerun, navigation abort",
+      "source": "synthetic delayed read-only SELECT",
+      "status": "passed"
+    },
+    {
+      "name": "Services client filter/sort, live selected-payload refresh, detail focus and SQL column namespace",
+      "source": "synthetic service aggregates; real SQL SELECT",
+      "status": "passed"
+    },
+    {
+      "name": "Profiles desktop populated/explicit scope/delay/type/compare/labels/view/keyboard/invalid time",
+      "source": "synthetic profiles SQL responses; other endpoints real",
+      "status": "passed"
+    },
+    {
+      "name": "Profiles mobile populated/explicit scope/delay/type/compare/labels/view/keyboard/invalid time",
+      "source": "synthetic profiles SQL responses; other endpoints real",
+      "status": "passed"
+    }
+  ],
+  "measurements": [
+    {
+      "view": "overview",
+      "size": "desktop",
+      "width": 1600,
+      "height": 1000,
+      "documentWidth": 1600,
+      "documentHeight": 1000
+    },
+    {
+      "view": "services",
+      "size": "desktop",
+      "width": 1600,
+      "height": 1000,
+      "documentWidth": 1600,
+      "documentHeight": 1000
+    },
+    {
+      "view": "traces",
+      "size": "desktop",
+      "width": 1600,
+      "height": 1000,
+      "documentWidth": 1600,
+      "documentHeight": 1000
+    },
+    {
+      "view": "logs",
+      "size": "desktop",
+      "width": 1600,
+      "height": 1000,
+      "documentWidth": 1600,
+      "documentHeight": 1000
+    },
+    {
+      "view": "profiles",
+      "size": "desktop",
+      "width": 1600,
+      "height": 1000,
+      "documentWidth": 1600,
+      "documentHeight": 1000
+    },
+    {
+      "view": "sql",
+      "size": "desktop",
+      "width": 1600,
+      "height": 1000,
+      "documentWidth": 1600,
+      "documentHeight": 1000
+    },
+    {
+      "view": "overview",
+      "size": "laptop",
+      "width": 1366,
+      "height": 900,
+      "documentWidth": 1366,
+      "documentHeight": 900
+    },
+    {
+      "view": "services",
+      "size": "laptop",
+      "width": 1366,
+      "height": 900,
+      "documentWidth": 1366,
+      "documentHeight": 900
+    },
+    {
+      "view": "traces",
+      "size": "laptop",
+      "width": 1366,
+      "height": 900,
+      "documentWidth": 1366,
+      "documentHeight": 900
+    },
+    {
+      "view": "logs",
+      "size": "laptop",
+      "width": 1366,
+      "height": 900,
+      "documentWidth": 1366,
+      "documentHeight": 900
+    },
+    {
+      "view": "profiles",
+      "size": "laptop",
+      "width": 1366,
+      "height": 900,
+      "documentWidth": 1366,
+      "documentHeight": 900
+    },
+    {
+      "view": "sql",
+      "size": "laptop",
+      "width": 1366,
+      "height": 900,
+      "documentWidth": 1366,
+      "documentHeight": 900
+    },
+    {
+      "view": "overview",
+      "size": "mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844
+    },
+    {
+      "view": "services",
+      "size": "mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844
+    },
+    {
+      "view": "traces",
+      "size": "mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844
+    },
+    {
+      "view": "logs",
+      "size": "mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844
+    },
+    {
+      "view": "profiles",
+      "size": "mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844
+    },
+    {
+      "view": "sql",
+      "size": "mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844
+    },
+    {
+      "view": "logs",
+      "probe": "relative-refresh-bounds",
+      "before": [
+        1794174664442000,
+        1794261064442000
+      ],
+      "after": [
+        1794174666062000,
+        1794261066062000
+      ]
+    },
+    {
+      "view": "traces",
+      "probe": "relative-refresh-bounds",
+      "before": [
+        1794174667259000,
+        1794261067259000
+      ],
+      "after": [
+        1794174668860000,
+        1794261068860000
+      ]
+    }
+  ],
+  "accessibility": [
+    {
+      "view": "overview",
+      "size": "desktop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "services",
+      "size": "desktop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "traces",
+      "size": "desktop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "logs",
+      "size": "desktop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "profiles",
+      "size": "desktop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "sql",
+      "size": "desktop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "overview",
+      "size": "laptop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "services",
+      "size": "laptop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "traces",
+      "size": "laptop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "logs",
+      "size": "laptop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "profiles",
+      "size": "laptop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "sql",
+      "size": "laptop",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "overview",
+      "size": "mobile",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "services",
+      "size": "mobile",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "traces",
+      "size": "mobile",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "logs",
+      "size": "mobile",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "profiles",
+      "size": "mobile",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "sql",
+      "size": "mobile",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "profiles",
+      "size": "desktop",
+      "source": "synthetic populated comparison",
+      "scope": "main",
+      "violations": []
+    },
+    {
+      "view": "profiles",
+      "size": "mobile",
+      "source": "synthetic populated comparison",
+      "scope": "main",
+      "violations": []
+    }
+  ],
+  "runtimeErrors": []
+}

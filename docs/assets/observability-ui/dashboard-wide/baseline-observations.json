@@ -1,0 +1,161 @@
+[
+  {
+    "name": "overview",
+    "view": "desktop",
+    "viewport": 1600,
+    "documentWidth": 1600,
+    "documentHeight": 1169,
+    "states": [],
+    "errors": []
+  },
+  {
+    "name": "services",
+    "view": "desktop",
+    "viewport": 1600,
+    "documentWidth": 1600,
+    "documentHeight": 1069,
+    "states": [
+      {
+        "tag": "DIV",
+        "table": "services",
+        "rows": "1"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "name": "traces",
+    "view": "desktop",
+    "viewport": 1600,
+    "documentWidth": 1600,
+    "documentHeight": 1137,
+    "states": [
+      {
+        "tag": "DIV",
+        "table": "traces"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "name": "logs",
+    "view": "desktop",
+    "viewport": 1600,
+    "documentWidth": 1600,
+    "documentHeight": 1000,
+    "states": [
+      {
+        "tag": "DIV",
+        "table": "logs"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "name": "profiles",
+    "view": "desktop",
+    "viewport": 1600,
+    "documentWidth": 1600,
+    "documentHeight": 1000,
+    "states": [],
+    "errors": []
+  },
+  {
+    "name": "sql",
+    "view": "desktop",
+    "viewport": 1600,
+    "documentWidth": 1600,
+    "documentHeight": 1344,
+    "states": [
+      {
+        "tag": "DIV",
+        "table": "sql",
+        "rows": "1"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "name": "overview",
+    "view": "mobile",
+    "viewport": 390,
+    "documentWidth": 390,
+    "documentHeight": 2423,
+    "states": [],
+    "errors": []
+  },
+  {
+    "name": "services",
+    "view": "mobile",
+    "viewport": 390,
+    "documentWidth": 390,
+    "documentHeight": 965,
+    "states": [
+      {
+        "tag": "DIV",
+        "table": "services",
+        "rows": "1"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "name": "traces",
+    "view": "mobile",
+    "viewport": 390,
+    "documentWidth": 390,
+    "documentHeight": 1013,
+    "states": [
+      {
+        "tag": "DIV",
+        "table": "traces"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "name": "logs",
+    "view": "mobile",
+    "viewport": 390,
+    "documentWidth": 390,
+    "documentHeight": 844,
+    "states": [
+      {
+        "tag": "DIV",
+        "table": "logs"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "name": "profiles",
+    "view": "mobile",
+    "viewport": 390,
+    "documentWidth": 390,
+    "documentHeight": 844,
+    "states": [],
+    "errors": []
+  },
+  {
+    "name": "sql",
+    "view": "mobile",
+    "viewport": 390,
+    "documentWidth": 390,
+    "documentHeight": 1198,
+    "states": [
+      {
+        "tag": "DIV",
+        "table": "sql",
+        "rows": "1"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "probe": "real-header-refresh-moving-window",
+    "sameWindow": false
+  },
+  {
+    "probe": "real-traces-missing-service"
+  }
+]
