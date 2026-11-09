@@ -21,10 +21,10 @@ OpenTelemetry 的 profiles 信号在上游仍处于开发阶段，其传输格�
 
 ## Go：otelprofile
 
-[otelprofile](https://github.com/akshatagarwl/otelprofile) 使用 Go 自带的运行时剖析器从内部剖析 Go 程序，并导出 OTLP 剖析数据。把它加入你的模块：
+[otelprofile](https://github.com/akshatagarwl/otelprofile-go) 使用 Go 自带的运行时剖析器从内部剖析 Go 程序，并导出 OTLP 剖析数据。把它加入你的模块：
 
 ```bash
-go get github.com/akshatagarwl/otelprofile@v0.2.0
+go get github.com/akshatagarwl/otelprofile-go@v0.3.0
 ```
 
 在程序启动时启动一次，在退出时停止：

@@ -21,10 +21,10 @@ OpenTelemetry のプロファイルシグナルは、上流でまだ開発中で
 
 ## Go: otelprofile
 
-[otelprofile](https://github.com/akshatagarwl/otelprofile) は、Go 自身のランタイムプロファイラーで Go プログラムを内側からプロファイルし、OTLP プロファイルとしてエクスポートします。モジュールに追加します。
+[otelprofile](https://github.com/akshatagarwl/otelprofile-go) は、Go 自身のランタイムプロファイラーで Go プログラムを内側からプロファイルし、OTLP プロファイルとしてエクスポートします。モジュールに追加します。
 
 ```bash
-go get github.com/akshatagarwl/otelprofile@v0.2.0
+go get github.com/akshatagarwl/otelprofile-go@v0.3.0
 ```
 
 プログラムの起動時に一度だけ開始し、終了時に停止します。

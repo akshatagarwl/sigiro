@@ -21,10 +21,10 @@ OpenTelemetry 프로파일 신호는 업스트림에서 아직 개발 중이며,
 
 ## Go: otelprofile
 
-[otelprofile](https://github.com/akshatagarwl/otelprofile)은 Go 자체의 런타임 프로파일러로 Go 프로그램을 안에서 프로파일링하고, OTLP 프로파일로 내보냅니다. 모듈에 추가합니다.
+[otelprofile](https://github.com/akshatagarwl/otelprofile-go)은 Go 자체의 런타임 프로파일러로 Go 프로그램을 안에서 프로파일링하고, OTLP 프로파일로 내보냅니다. 모듈에 추가합니다.
 
 ```bash
-go get github.com/akshatagarwl/otelprofile@v0.2.0
+go get github.com/akshatagarwl/otelprofile-go@v0.3.0
 ```
 
 프로그램이 시작될 때 한 번 시작하고, 종료할 때 멈춥니다.
