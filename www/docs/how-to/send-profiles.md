@@ -33,12 +33,12 @@ profiles that sigiro rejects with `400`.
 
 ## Go: otelprofile
 
-[otelprofile](https://github.com/akshatagarwl/otelprofile) profiles a Go program
+[otelprofile](https://github.com/akshatagarwl/otelprofile-go) profiles a Go program
 from the inside, with Go's own runtime profiler, and exports OTLP profiles. Add it
 to your module:
 
 ```bash
-go get github.com/akshatagarwl/otelprofile@v0.2.0
+go get github.com/akshatagarwl/otelprofile-go@v0.3.0
 ```
 
 Start it once, at program startup, and stop it on shutdown:
