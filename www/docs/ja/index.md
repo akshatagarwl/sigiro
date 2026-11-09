@@ -44,15 +44,15 @@ SQL に答えます。エージェントを第一に設計しており、すべ�
   根拠に基づいて比較します。
 - **[sigiro を Executor に接続する](/docs/how-to/executor)** — OpenAPI の API または
   ドキュメント MCP サーバーをエージェントゲートウェイに取り込みます。
-- **[Pyroscope プロファイルを sigiro に送信する](/docs/how-to/send-profiles)** — 検証済みの
-  プロファイリング SDK を設定し、プロファイルの行を SQL で読み返します。
+- **[プロファイルを sigiro に送信する](/docs/how-to/send-profiles)** — Go、OpenTelemetry eBPF
+  プロファイラー、または Collector から OTLP プロファイルを送り、プロファイルの行を SQL で読み返します。
 
 ## リファレンス
 
 このマシンに関する事実です。名前、型、上限を確認するために、作業中にこのパートを読んでください。
 
 - **[API リファレンス](/docs/reference)** — サーバーの `/openapi.json` が現在記述している
-  HTTP 操作です。このドキュメントに含まれないインジェストプロトコル（Pyroscope 互換ルートを含む）は
+  HTTP 操作です。このドキュメントに含まれない OTLP インジェストパスは
   ハウツーガイドで説明しています。
 - **[CLI リファレンス](/docs/reference/cli)** — 7 つのサブコマンド、すべてのフラグ、
   そしてそれらが読み取るすべての環境変数です。

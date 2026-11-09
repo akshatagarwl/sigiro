@@ -112,7 +112,7 @@ opentelemetry-instrument python app.py
 
 SDK는 각 신호를 표준 OTLP 경로(`/v1/traces`, `/v1/logs`, `/v1/metrics`, `/v1development/profiles`)로 보내며, 이 경로를 위 엔드포인트 뒤에 붙입니다. 익스포터가 신호별 엔드포인트를 받는다면 전체 경로를 주십시오. HTTP는 gzip을 지원하고 엔드포인트는 TLS를 사용합니다. 요청 하나는 압축 해제 후 **8 MB 이하**여야 합니다. 기본 SDK 배치 크기는 이 제한보다 훨씬 작습니다.
 
-Pyroscope SDK는 OTLP 프로파일 경로를 사용하지 않습니다. 대상, 요청 형식, 서비스 이름 규칙은 [Pyroscope 프로파일을 sigiro로 전송하기](/docs/how-to/send-profiles)를 따르십시오.
+프로파일도 같은 엔드포인트를 사용합니다. Go 프로그램, OpenTelemetry eBPF 프로파일러, Collector에서 보내는 방법은 [프로파일을 sigiro로 전송하기](/docs/how-to/send-profiles)를 참조하십시오.
 
 ## 3. 데이터 수신 확인하기
 

@@ -36,15 +36,15 @@ sigiro 存储 OpenTelemetry 链路、日志、指标和性能剖析数据，并�
 - **[调试并优化智能体](/docs/how-to/debug-agent-performance)** — 找出一次会话把时间和 token 花在了哪里，
   去掉无用的工作，并用证据比较下一次运行。
 - **[将 sigiro 接入 Executor](/docs/how-to/executor)** — 把 OpenAPI API 或文档 MCP 服务器导入智能体网关。
-- **[向 sigiro 发送 Pyroscope 性能剖析数据](/docs/how-to/send-profiles)** — 配置一个经过验证的性能剖析 SDK，
-  然后用 SQL 读回剖析数据行。
+- **[向 sigiro 发送性能剖析数据](/docs/how-to/send-profiles)** — 从 Go、OpenTelemetry eBPF 剖析器或 Collector
+  发送 OTLP 性能剖析数据，然后用 SQL 读回剖析数据行。
 
 ## 参考
 
 关于这台机器的事实。在工作中需要确认名称、类型或限制时，请读这一部分。
 
-- **[API 参考](/docs/reference)** — 服务器的 `/openapi.json` 当前描述的 HTTP 操作。不在该文档中的接收协议
-  （包括兼容 Pyroscope 的路由）在操作指南中说明。
+- **[API 参考](/docs/reference)** — 服务器的 `/openapi.json` 当前描述的 HTTP 操作。不在该文档中的 OTLP
+  接收路径在操作指南中说明。
 - **[CLI 参考](/docs/reference/cli)** — 七个子命令、每个参数，以及它们读取的每个环境变量。
 
 读取 `/openapi.json` 的智能体不需要我们提供任何其他信息。

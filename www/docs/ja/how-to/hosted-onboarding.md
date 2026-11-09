@@ -112,7 +112,7 @@ opentelemetry-instrument python app.py
 
 SDK は各シグナルを標準の OTLP パス（`/v1/traces`、`/v1/logs`、`/v1/metrics`、`/v1development/profiles`）に送信し、そのパスは上記のエンドポイントに付加されます。エクスポーターがシグナルごとのエンドポイントを受け取る形式の場合は、フルパスを指定してください。HTTP は gzip をサポートし、エンドポイントは TLS を使用します。1 リクエストは展開後のサイズで **8 MB 以下**である必要があります。SDK のデフォルトのバッチサイズは、この上限を十分に下回ります。
 
-Pyroscope SDK は OTLP のプロファイルパスを使いません。送信先、リクエスト形式、サービス名の規則については [Pyroscope プロファイルを sigiro に送信する](/docs/how-to/send-profiles) に従ってください。
+プロファイルも同じエンドポイントを使います。Go プログラム、OpenTelemetry eBPF プロファイラー、Collector からの送り方は [プロファイルを sigiro に送信する](/docs/how-to/send-profiles) を参照してください。
 
 ## 3. データが届いていることを確認する
 

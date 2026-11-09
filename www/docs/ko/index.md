@@ -42,15 +42,15 @@ sigiro는 OpenTelemetry 트레이스, 로그, 메트릭, 프로파일을 저장�
   토큰을 어디에 썼는지 찾고, 낭비되는 작업을 없애고, 다음 실행을 근거와 함께 비교합니다.
 - **[sigiro를 Executor에 연결하기](/docs/how-to/executor)** — OpenAPI API나 문서 MCP 서버를
   에이전트 게이트웨이로 가져옵니다.
-- **[Pyroscope 프로파일을 sigiro로 전송하기](/docs/how-to/send-profiles)** — 검증된
-  프로파일링 SDK를 설정한 다음, 프로파일 행을 SQL로 다시 읽습니다.
+- **[프로파일을 sigiro로 전송하기](/docs/how-to/send-profiles)** — Go, OpenTelemetry eBPF
+  프로파일러 또는 Collector에서 OTLP 프로파일을 보낸 다음, 프로파일 행을 SQL로 다시 읽습니다.
 
 ## 참조
 
 머신에 관한 사실입니다. 작업하면서 이름, 타입, 제한을 확인할 때 이 부분을 읽으십시오.
 
 - **[API 참조](/docs/reference)** — 서버의 `/openapi.json`이 현재 설명하는 HTTP 작업입니다.
-  그 문서에 없는 수집 프로토콜(Pyroscope 호환 경로 포함)은 사용 가이드에서 설명합니다.
+  그 문서에 없는 OTLP 수집 경로는 사용 가이드에서 설명합니다.
 - **[CLI 참조](/docs/reference/cli)** — 일곱 개의 하위 명령, 모든 플래그, 그리고 이들이 읽는
   모든 환경 변수입니다.
 

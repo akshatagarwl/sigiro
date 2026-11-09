@@ -47,8 +47,9 @@ need the steps to get it.
   run with evidence.
 - **[Connect sigiro to Executor](/docs/how-to/executor)** — import the OpenAPI API
   or the documentation MCP server into an agent gateway.
-- **[Send Pyroscope profiles to sigiro](/docs/how-to/send-profiles)** — configure
-  a verified profiling SDK, then read the profile rows back with SQL.
+- **[Send profiles to sigiro](/docs/how-to/send-profiles)** — send OTLP profiles
+  from Go, the OpenTelemetry eBPF profiler, or a Collector, then read the profile
+  rows back with SQL.
 
 ## Reference
 
@@ -56,9 +57,8 @@ Facts about the machine. Read this part while you work, to confirm a name, a
 type or a limit.
 
 - **[API reference](/docs/reference)** — the HTTP operations currently described
-  by the server's `/openapi.json`. Ingest protocols that are not in that
-  document, including the Pyroscope-compatible routes, are documented in the
-  how-to guides.
+  by the server's `/openapi.json`. The OTLP ingest paths, which are not in that
+  document, are documented in the how-to guides.
 - **[CLI reference](/docs/reference/cli)** — seven subcommands, every flag, and
   every environment variable they read.
 
