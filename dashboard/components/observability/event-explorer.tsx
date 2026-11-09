@@ -20,12 +20,7 @@ const COLUMN_LABELS: Record<EventColumn, string> = {
   service: "Service",
   message: "Message",
 };
-const DEFAULT_COLUMNS: EventColumn[] = [
-  "timestamp",
-  "severity",
-  "service",
-  "message",
-];
+const DEFAULT_COLUMNS: EventColumn[] = ["timestamp", "severity", "service", "message"];
 
 export function EventExplorer({
   events,
@@ -35,7 +30,7 @@ export function EventExplorer({
   traceLink,
   pagination,
 }: {
-  pagination?: { loading: boolean; hasMore: boolean; onLoadMore: () => void };
+  pagination?: { loading: boolean; failed?: boolean; hasMore: boolean; onLoadMore: () => void };
   events: EventRecord[];
   selectedId?: string;
   onSelect: (id: string | undefined) => void;
@@ -68,9 +63,7 @@ export function EventExplorer({
     return events.filter(
       (event) =>
         !needle ||
-        `${event.service} ${event.severity} ${event.message}`
-          .toLowerCase()
-          .includes(needle)
+        `${event.service} ${event.severity} ${event.message}`.toLowerCase().includes(needle),
     );
   }, [events, find]);
   const selected = events.find((event) => event.id === selectedId);
@@ -109,21 +102,15 @@ export function EventExplorer({
     }
     void navigator.clipboard.writeText(value).then(
       () => setNotice("Copied"),
-      () =>
-        setNotice(
-          "Copy failed. Full value was not copied; check clipboard permission."
-        )
+      () => setNotice("Copy failed. Full value was not copied; check clipboard permission."),
     );
   };
   const returnFocusTarget = React.useCallback(() => {
     if (returnFocus.current?.isConnected) return returnFocus.current;
-    const index = rows.findIndex(
-      (row) => row.id === returnFocus.current?.dataset.eventRow
-    );
+    const index = rows.findIndex((row) => row.id === returnFocus.current?.dataset.eventRow);
     return (
-      scrollRef.current?.querySelector<HTMLElement>(
-        `[data-event-focus="${index}"]`
-      ) ?? scrollRef.current
+      scrollRef.current?.querySelector<HTMLElement>(`[data-event-focus="${index}"]`) ??
+      scrollRef.current
     );
   }, [rows]);
   const previouslySelected = React.useRef(Boolean(selectedId));
@@ -131,9 +118,7 @@ export function EventExplorer({
     const wasSelected = previouslySelected.current;
     previouslySelected.current = Boolean(selectedId);
     if (selectedId || !wasSelected) return;
-    const frame = requestAnimationFrame(() =>
-      returnFocusTarget()?.focus({ preventScroll: true })
-    );
+    const frame = requestAnimationFrame(() => returnFocusTarget()?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
   }, [selectedId, returnFocusTarget]);
   const close = () => {
@@ -151,10 +136,8 @@ export function EventExplorer({
     virtualizer.scrollToIndex(rows.indexOf(row), { align: "auto" });
     requestAnimationFrame(() =>
       scrollRef.current
-        ?.querySelector<HTMLElement>(
-          `[data-event-focus="${rows.indexOf(row)}"]`
-        )
-        ?.focus()
+        ?.querySelector<HTMLElement>(`[data-event-focus="${rows.indexOf(row)}"]`)
+        ?.focus(),
     );
   };
   const grid = columns
@@ -165,7 +148,7 @@ export function EventExplorer({
           severity: "80px",
           service: "140px",
           message: "minmax(200px, 1fr)",
-        })[column]
+        })[column],
     )
     .join(" ");
   const inspector = selected ? (
@@ -177,9 +160,7 @@ export function EventExplorer({
       traceLink={traceLink}
       closeControl={
         mobile ? (
-          <Dialog.Close render={<Button aria-label="Close event inspector" />}>
-            ×
-          </Dialog.Close>
+          <Dialog.Close render={<Button aria-label="Close event inspector" />}>×</Dialog.Close>
         ) : undefined
       }
     />
@@ -190,14 +171,10 @@ export function EventExplorer({
         <div className={styles.resultsHeading}>
           <strong>Events</strong>
           <span className={styles.muted}>
-            {rows.length.toLocaleString()} / {events.length.toLocaleString()}{" "}
-            loaded
+            {rows.length.toLocaleString()} / {events.length.toLocaleString()} loaded
           </span>
         </div>
-        <div
-          className={styles.tableActions}
-          data-find-open={findOpen || Boolean(find)}
-        >
+        <div className={styles.tableActions} data-find-open={findOpen || Boolean(find)}>
           <Input
             ref={findRef}
             id={findId}
@@ -230,17 +207,13 @@ export function EventExplorer({
               <Menu.Positioner sideOffset={6} className={styles.positioner}>
                 <Menu.Popup className={styles.menu}>
                   <Menu.Group>
-                    <Menu.GroupLabel className={styles.menuLabel}>
-                      Display
-                    </Menu.GroupLabel>
+                    <Menu.GroupLabel className={styles.menuLabel}>Display</Menu.GroupLabel>
                     <Menu.CheckboxItem
                       className={styles.menuItem}
                       checked={wrap}
                       onCheckedChange={setWrap}
                     >
-                      <Menu.CheckboxItemIndicator>
-                        ✓{" "}
-                      </Menu.CheckboxItemIndicator>
+                      <Menu.CheckboxItemIndicator>✓ </Menu.CheckboxItemIndicator>
                       Wrap messages
                     </Menu.CheckboxItem>
                     <Menu.CheckboxItem
@@ -248,16 +221,12 @@ export function EventExplorer({
                       checked={comfortable}
                       onCheckedChange={setComfortable}
                     >
-                      <Menu.CheckboxItemIndicator>
-                        ✓{" "}
-                      </Menu.CheckboxItemIndicator>
+                      <Menu.CheckboxItemIndicator>✓ </Menu.CheckboxItemIndicator>
                       Comfortable rows
                     </Menu.CheckboxItem>
                   </Menu.Group>
                   <Menu.Group>
-                    <Menu.GroupLabel className={styles.menuLabel}>
-                      Columns
-                    </Menu.GroupLabel>
+                    <Menu.GroupLabel className={styles.menuLabel}>Columns</Menu.GroupLabel>
                     {DEFAULT_COLUMNS.map((column) => (
                       <Menu.CheckboxItem
                         key={column}
@@ -267,14 +236,12 @@ export function EventExplorer({
                         onCheckedChange={(checked) =>
                           setColumns(
                             DEFAULT_COLUMNS.filter((key) =>
-                              key === column ? checked : columns.includes(key)
-                            )
+                              key === column ? checked : columns.includes(key),
+                            ),
                           )
                         }
                       >
-                        <Menu.CheckboxItemIndicator>
-                          ✓{" "}
-                        </Menu.CheckboxItemIndicator>
+                        <Menu.CheckboxItemIndicator>✓ </Menu.CheckboxItemIndicator>
                         {COLUMN_LABELS[column]}
                       </Menu.CheckboxItem>
                     ))}
@@ -298,8 +265,7 @@ export function EventExplorer({
       <div
         ref={scrollRef}
         onScroll={(event) => {
-          if (headerRef.current)
-            headerRef.current.scrollLeft = event.currentTarget.scrollLeft;
+          if (headerRef.current) headerRef.current.scrollLeft = event.currentTarget.scrollLeft;
         }}
         className={styles.resultsScroll}
         role="region"
@@ -324,7 +290,7 @@ export function EventExplorer({
                 ? 0
                 : event.key === "End"
                   ? rows.length - 1
-                  : index + (event.key === "ArrowDown" ? 1 : -1)
+                  : index + (event.key === "ArrowDown" ? 1 : -1),
             );
           }
         }}
@@ -353,14 +319,8 @@ export function EventExplorer({
                     data-event-focus={item.index}
                     data-event-row={row.id}
                     aria-expanded={row.id === selectedId}
-                    aria-controls={
-                      row.id === selectedId ? inspectorId : undefined
-                    }
-                    title={
-                      row.id === selectedId
-                        ? "Close event details"
-                        : "Open event details"
-                    }
+                    aria-controls={row.id === selectedId ? inspectorId : undefined}
+                    title={row.id === selectedId ? "Close event details" : "Open event details"}
                     data-selected={row.id === selectedId || undefined}
                     data-comfortable={comfortable || undefined}
                     data-wrap={wrap || undefined}
@@ -377,12 +337,8 @@ export function EventExplorer({
                       <span
                         key={column}
                         data-column={column}
-                        className={
-                          column === "severity" ? styles.severity : undefined
-                        }
-                        data-level={
-                          column === "severity" ? row.category : undefined
-                        }
+                        className={column === "severity" ? styles.severity : undefined}
+                        data-level={column === "severity" ? row.category : undefined}
                       >
                         {column === "timestamp" ? (
                           <time dateTime={row.timestamp.toISOString()}>
@@ -420,20 +376,29 @@ export function EventExplorer({
           </div>
         ) : (
           <div className={styles.empty}>
-            <strong>No loaded events match</strong>
+            <strong>
+              {pagination?.failed
+                ? "Results unavailable"
+                : pagination?.loading
+                  ? "Loading events…"
+                  : "No loaded events match"}
+            </strong>
             <p>
-              Clear find, adjust the server filters or load more events below.
+              {pagination?.failed
+                ? "Retry the request to load results."
+                : pagination?.loading
+                  ? "Waiting for query results."
+                  : "Clear find, adjust the server filters or load more events below."}
             </p>
           </div>
         )}
       </div>
       {pagination && (
         <div className={styles.pagination}>
-          {pagination.hasMore || pagination.loading ? (
-            <Button
-              disabled={pagination.loading}
-              onClick={pagination.onLoadMore}
-            >
+          {pagination.failed ? (
+            <span className={styles.muted}>Results could not be updated.</span>
+          ) : pagination.hasMore || pagination.loading ? (
+            <Button disabled={pagination.loading} onClick={pagination.onLoadMore}>
               {pagination.loading ? "Loading events…" : "Load more events"}
             </Button>
           ) : (
@@ -442,8 +407,8 @@ export function EventExplorer({
         </div>
       )}
       <div className={styles.tableFooter}>
-        Find searches loaded events only. Rows preview the first 500 characters;
-        open an event for its full message.
+        Find searches loaded events only. Rows preview the first 500 characters; open an event for
+        its full message.
       </div>
     </div>
   );
@@ -469,8 +434,7 @@ export function EventExplorer({
       {content}
       {selected && !rows.some((row) => row.id === selected.id) && (
         <p role="status" className={styles.tableFooter}>
-          Selected event is hidden by find.{" "}
-          <Button onClick={() => setFind("")}>Clear find</Button>
+          Selected event is hidden by find. <Button onClick={() => setFind("")}>Clear find</Button>
         </p>
       )}
       {selectedId && !selected && (
@@ -493,9 +457,7 @@ export function EventExplorer({
               id={inspectorId}
               finalFocus={returnFocusTarget}
             >
-              <Dialog.Title className={styles.srOnly}>
-                Event details
-              </Dialog.Title>
+              <Dialog.Title className={styles.srOnly}>Event details</Dialog.Title>
               <Dialog.Description className={styles.srOnly}>
                 Full log message, structured attributes and correlation links.
               </Dialog.Description>
@@ -545,9 +507,7 @@ function Inspector({
         <span className={styles.severity} data-level={event.category}>
           {event.severity || event.category}
         </span>
-        <time dateTime={event.timestamp.toISOString()}>
-          {event.timestamp.toLocaleString()}
-        </time>
+        <time dateTime={event.timestamp.toISOString()}>{event.timestamp.toLocaleString()}</time>
       </div>
       <div className={styles.inspectorActions}>
         <Button onClick={() => onCopy(event.message)}>Copy message</Button>
@@ -573,16 +533,12 @@ function Inspector({
         </pre>
         {event.message.length > 50_000 && (
           <p className={styles.muted}>
-            Showing 50,000 of {event.message.length.toLocaleString()}{" "}
-            characters. Copy message preserves the full value.
+            Showing 50,000 of {event.message.length.toLocaleString()} characters. Copy message
+            preserves the full value.
           </p>
         )}
       </div>
-      <Tabs.Root
-        defaultValue="attributes"
-        className={styles.tabs}
-        key={event.id}
-      >
+      <Tabs.Root defaultValue="attributes" className={styles.tabs} key={event.id}>
         <Tabs.List className={styles.tabList} aria-label="Event fields">
           <Tabs.Tab className={styles.tab} value="attributes">
             Attributes
@@ -596,10 +552,7 @@ function Inspector({
         </Tabs.Panel>
         <Tabs.Panel value="json">
           <div className={styles.jsonActions}>
-            <Button
-              disabled={Boolean(serialized.error)}
-              onClick={() => onCopy(eventJson)}
-            >
+            <Button disabled={Boolean(serialized.error)} onClick={() => onCopy(eventJson)}>
               Copy event JSON
             </Button>
           </div>
@@ -609,8 +562,7 @@ function Inspector({
           </pre>
           {eventJson.length > 50_000 && (
             <p className={styles.muted}>
-              JSON preview limited to 50,000 characters. Copy event JSON
-              preserves the full value.
+              JSON preview limited to 50,000 characters. Copy event JSON preserves the full value.
             </p>
           )}
         </Tabs.Panel>

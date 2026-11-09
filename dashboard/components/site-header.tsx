@@ -29,21 +29,14 @@ function ServiceSelect() {
     (w) =>
       `SELECT DISTINCT service_name AS s FROM sigiro_spans WHERE timestamp >= ${ts(w.from)} AND timestamp < ${ts(w.to)} UNION SELECT DISTINCT service_name FROM sigiro_logs WHERE timestamp >= ${ts(w.from)} AND timestamp < ${ts(w.to)} ORDER BY 1`
   )
-  const names = (services.data ?? [])
-    .map((row) => String(row.s ?? ""))
-    .filter(Boolean)
+  const names = (services.data ?? []).map((row) => String(row.s ?? "")).filter(Boolean)
   if (service && !names.includes(service)) names.unshift(service)
   return (
     <Select
       value={service || ALL}
       onValueChange={(value) => setService(value === ALL ? "" : value)}
     >
-      <SelectTrigger
-        className="w-36 sm:w-44"
-        size="sm"
-        aria-label="Service"
-        data-action="service"
-      >
+      <SelectTrigger className="w-36 sm:w-44" size="sm" aria-label="Service" data-action="service">
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="rounded-xl">
@@ -73,7 +66,8 @@ const KEYS = Object.keys(RANGES) as RangeKey[]
 
 export function SiteHeader() {
   const pathname = usePathname()
-  const { range, setRange, live, setLive, refresh } = useControls()
+  const { range, setRange, hasCustomWindow, live, setLive, refresh } = useControls()
+  const isSql = pathname.replace(/\/$/, "") === "/sql"
   const { resolvedTheme, setTheme } = useTheme()
   const pick = (value: string) => {
     const key = KEYS.find((known) => known === value)
@@ -85,66 +79,81 @@ export function SiteHeader() {
       {/* Wraps on a phone: the filters drop under the title instead of pushing the page sideways. */}
       <div className="flex w-full flex-wrap items-center gap-1 px-4 py-2 lg:gap-2 lg:px-6">
         <SidebarTrigger className="-ml-1" />
-        <Separator
-          orientation="vertical"
-          className="mx-2 data-[orientation=vertical]:h-4"
-        />
+        <Separator orientation="vertical" className="mx-2 data-[orientation=vertical]:h-4" />
         <h1 className="text-base font-medium">{TITLES[pathname] ?? "Sigiro"}</h1>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {(pathname === "/" || pathname === "/services/") && <ServiceSelect />}
-          <ToggleGroup
-            type="single"
-            value={range}
-            onValueChange={pick}
-            variant="outline"
-            aria-label="Time range"
-            className="hidden *:data-[slot=toggle-group-item]:px-3! @container/main:flex lg:flex"
-          >
-            {KEYS.map((key) => (
-              <ToggleGroupItem key={key} value={key} title={RANGES[key].label}>
-                {key}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <Select value={range} onValueChange={pick}>
-            <SelectTrigger
-              className="flex w-36 lg:hidden"
-              size="sm"
-              aria-label="Time range"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="rounded-xl">
-              {KEYS.map((key) => (
-                <SelectItem key={key} value={key} className="rounded-lg">
-                  {RANGES[key].label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Toggle
-            variant="outline"
-            size="sm"
-            pressed={live}
-            onPressedChange={setLive}
-            aria-label="Live refresh every 10 seconds"
-            data-action="live"
-          >
-            <span
-              className={`size-2 rounded-full ${live ? "bg-success animate-pulse" : "bg-muted-foreground/40"}`}
-            />
-            Live
-          </Toggle>
-          <Button
-            variant="outline"
-            size="icon"
-            className="size-8"
-            onClick={refresh}
-            aria-label="Refresh"
-            data-action="refresh"
-          >
-            <IconRefresh />
-          </Button>
+          {isSql ? (
+            <span className="text-muted-foreground text-xs">Time is controlled by SQL</span>
+          ) : (
+            <>
+              {(pathname === "/" || pathname === "/services/") && <ServiceSelect />}
+              <ToggleGroup
+                type="single"
+                value={hasCustomWindow ? "" : range}
+                onValueChange={pick}
+                variant="outline"
+                aria-label="Time range"
+                className="hidden *:data-[slot=toggle-group-item]:px-3! @container/main:flex lg:flex"
+              >
+                {KEYS.map((key) => (
+                  <ToggleGroupItem key={key} value={key} title={RANGES[key].label}>
+                    {key}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              {hasCustomWindow && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="hidden lg:inline-flex"
+                  onClick={() => pick(range)}
+                  aria-label={`Custom time · reset to ${RANGES[range].label.toLowerCase()}`}
+                >
+                  Custom time · reset
+                </Button>
+              )}
+              <Select value={hasCustomWindow ? "custom" : range} onValueChange={pick}>
+                <SelectTrigger className="flex w-36 lg:hidden" size="sm" aria-label="Time range">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl">
+                  {hasCustomWindow && (
+                    <SelectItem value="custom" disabled>
+                      Custom time
+                    </SelectItem>
+                  )}
+                  {KEYS.map((key) => (
+                    <SelectItem key={key} value={key} className="rounded-lg">
+                      {RANGES[key].label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Toggle
+                variant="outline"
+                size="sm"
+                pressed={live}
+                onPressedChange={setLive}
+                aria-label="Live refresh every 10 seconds"
+                data-action="live"
+              >
+                <span
+                  className={`size-2 rounded-full ${live ? "bg-success animate-pulse" : "bg-muted-foreground/40"}`}
+                />
+                Live
+              </Toggle>
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-8"
+                onClick={refresh}
+                aria-label="Refresh"
+                data-action="refresh"
+              >
+                <IconRefresh />
+              </Button>
+            </>
+          )}
           <Button
             variant="ghost"
             size="icon"

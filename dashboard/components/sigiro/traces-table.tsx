@@ -3,11 +3,8 @@
 import { createExplorer } from "@/components/sigiro/explorer";
 import { STATUS_CHART } from "@/lib/sigiro/palette";
 import { fromMicros, num } from "@/lib/sigiro/query";
-import {
-  col,
-  createTableSchema,
-  type InferTableType,
-} from "@/lib/table-schema";
+import { field } from "@/lib/store/schema";
+import { col, createTableSchema, type InferTableType } from "@/lib/table-schema";
 
 const STATUSES = ["error", "ok"] as const;
 const STATUS_SQL = "CASE status_code WHEN 2 THEN 'error' ELSE 'ok' END";
@@ -31,25 +28,10 @@ const schema = createTableSchema({
     })
     .defaultOpen()
     .size(100),
-  duration: col.presets
-    .latency("ms")
-    .label("Duration")
-    .sortable(false)
-    .size(120),
-  timestamp: col.presets
-    .timestamp()
-    .label("Started")
-    .sortable(false)
-    .commandDisabled()
-    .size(200),
+  duration: col.presets.latency("ms").label("Duration").sortable(false).size(120),
+  timestamp: col.presets.timestamp().label("Started").sortable(false).commandDisabled().size(200),
   message: col.string().label("Status message").notFilterable().hidden(),
-  trace_id: col
-    .string()
-    .label("Trace ID")
-    .display("code")
-    .filterable("input")
-    .hidden()
-    .size(270),
+  trace_id: col.string().label("Trace ID").display("code").filterable("input").hidden().size(270),
 });
 
 type TraceRow = InferTableType<typeof schema.definition>;
@@ -58,6 +40,7 @@ export const TracesTable = createExplorer<TraceRow>({
   id: "traces",
   detail: false,
   definition: schema.definition,
+  filterOverrides: { service: field.array(field.string()) },
   chart: STATUS_CHART,
   source: {
     from: "sigiro_spans",

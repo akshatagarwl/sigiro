@@ -4,7 +4,8 @@ Reusable React presentation components, MIT licensed under `LICENSE` in this dir
 
 - Base UI 1.9.0 supplies interaction primitives. CSS Modules use the host’s shadcn semantic color tokens.
 - TanStack Virtual measures rows including opt-in inline desktop details. Mobile details use a dismissible Base UI Dialog. No permanent inspector column or desktop resize separator remains. The host must provide a bounded height (e.g. a flex child with `min-height: 0` in a viewport-height shell) so results can scroll and virtualize.
-- `EventExplorer` accepts typed events and controlled selection, optional pagination callbacks, filter callbacks and correlation-link renderers. `AttributeTree` accepts values and a copy callback.
+- `EventExplorer` accepts typed events and controlled selection, optional pagination callbacks (including a host-owned failure flag), filter callbacks and correlation-link renderers. `AttributeTree` accepts values and a copy callback.
+- `RequestState` presents idle/loading/updating/empty/error states and an optional Base UI retry button. The host supplies wording, stale-snapshot context, request state and retry behavior; this component does not infer query outcomes.
 - No Next router, OAuth, SQL generation, telemetry transport, tenant context or API calls. Hosts own pagination, filtering semantics, matching counts and URLs.
 - `onFilter` currently exposes service inclusion only. No exclude control is shown because Sigiro’s current transport does not implement exclusions.
 - The View menu contains wrap/density and column controls. Find searches loaded rows; on mobile it is opt-in, and closing it clears its local query. Opening inline details preserves list/column width and reveals that row once; appending pages does not jump back to an older selected event.

@@ -3,21 +3,11 @@
 import { EChartsLatencyAreaChart } from "@/components/evilcharts/blocks/latency-echarts-area-chart";
 import { EvilBarChart } from "@/components/evilcharts/charts/recharts-bar-chart";
 import type { ChartConfig } from "@/components/evilcharts/ui/recharts-chart";
+import { RequestState } from "@/components/observability/request-state";
 import { SectionCards } from "@/components/section-cards";
 import { SetupEmpty } from "@/components/sigiro/setup-empty";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  RANGES,
-  useControls,
-  useSql,
-  type Window,
-} from "@/lib/sigiro/controls";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { RANGES, useControls, useSql, type Window } from "@/lib/sigiro/controls";
 import { LEVEL_CHART, STATUS_CHART } from "@/lib/sigiro/palette";
 import {
   bucketFor,
@@ -57,16 +47,12 @@ function axis<K extends string>(
   rows: Row[] | undefined,
   w: { from: Date; to: Date },
   keys: readonly K[],
-  empty: number | null = 0
+  empty: number | null = 0,
 ) {
   const { ms } = bucketFor(w.from, w.to);
   const byTime = new Map((rows ?? []).map((row) => [num(row.t), row]));
   const points: ({ time: string } & Record<K, number | null>)[] = [];
-  for (
-    let t = Math.floor(w.from.getTime() / ms) * ms;
-    t < w.to.getTime();
-    t += ms
-  ) {
+  for (let t = Math.floor(w.from.getTime() / ms) * ms; t < w.to.getTime(); t += ms) {
     const row = byTime.get(t);
     const point = {
       time: new Date(t).toLocaleString(undefined, {
@@ -88,10 +74,12 @@ function ChartCard({
   title,
   description,
   children,
+  error,
 }: {
   title: string;
   description: string;
   children: React.ReactNode;
+  error?: Error | null;
 }) {
   return (
     <Card className="@container/card">
@@ -99,7 +87,15 @@ function ChartCard({
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
-      <CardContent className="h-72 px-2 sm:px-6">{children}</CardContent>
+      <CardContent className="h-72 px-2 sm:px-6">
+        {error ? (
+          <p className="text-muted-foreground text-sm" data-panel-error>
+            {title} unavailable. Retry from the error notice above.
+          </p>
+        ) : (
+          children
+        )}
+      </CardContent>
     </Card>
   );
 }
@@ -156,57 +152,81 @@ export default function OverviewPage() {
   const requests = useSql(
     "requests",
     (w) =>
-      `SELECT ${bucketed(w)} AS t, count(*) FILTER (WHERE NOT ${FAILED_SQL}) AS ok, count(*) FILTER (WHERE ${FAILED_SQL}) AS error FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`
+      `SELECT ${bucketed(w)} AS t, count(*) FILTER (WHERE NOT ${FAILED_SQL}) AS ok, count(*) FILTER (WHERE ${FAILED_SQL}) AS error FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`,
   );
   const latency = useSql(
     "latency",
     (w) =>
-      `SELECT ${bucketed(w)} AS t, round(quantile_cont(duration, 0.5) / 1000, 1) AS p50, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99 FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`
+      `SELECT ${bucketed(w)} AS t, round(quantile_cont(duration, 0.5) / 1000, 1) AS p50, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99 FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`,
   );
   const logs = useSql(
     "log-volume",
     (w) =>
-      `SELECT ${bucketed(w)} AS t, ${["error", "warning", "info", "debug"].map((level) => `count(*) FILTER (WHERE ${LEVEL_SQL} = '${level}') AS ${level}`).join(", ")} FROM sigiro_logs WHERE ${range(w)} GROUP BY 1`
+      `SELECT ${bucketed(w)} AS t, ${["error", "warning", "info", "debug"].map((level) => `count(*) FILTER (WHERE ${LEVEL_SQL} = '${level}') AS ${level}`).join(", ")} FROM sigiro_logs WHERE ${range(w)} GROUP BY 1`,
   );
   const overall = useSql(
     "latency-overall",
     (w) =>
-      `SELECT round(quantile_cont(duration, 0.5) / 1000, 1) AS p50, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99 FROM sigiro_spans WHERE ${range(w)}`
+      `SELECT round(quantile_cont(duration, 0.5) / 1000, 1) AS p50, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99 FROM sigiro_spans WHERE ${range(w)}`,
   );
 
   const k = kpis.data?.[0];
   const spans = num(k?.spans);
   const errors = num(k?.errors);
   const errorLogs = num(k?.error_logs);
-  const error = [kpis, requests, latency, logs, overall].find(
-    (q) => q.error
-  )?.error;
-  const ready = kpis.isSuccess;
-  const empty = ready && spans === 0 && num(k?.logs) === 0;
+  const panels = [kpis, requests, latency, logs, overall];
+  const error = panels.find((q) => q.error)?.error;
+  const loading = panels.some((q) => q.isLoading);
+  const updating = !loading && panels.some((q) => q.isFetching);
+  const ready = kpis.data !== undefined;
+  const missingValue = kpis.isLoading ? "…" : "—";
+  const empty =
+    !loading && !updating && panels.every((q) => q.isSuccess) && spans === 0 && num(k?.logs) === 0;
   const o = overall.data?.[0];
 
   return (
     <div
       className="flex flex-col gap-4 py-4 md:gap-6 md:py-6"
-      data-state={empty ? "empty" : ready ? "ready" : "loading"}
+      data-page="overview"
+      data-state={
+        error ? "error" : loading ? "loading" : updating ? "updating" : empty ? "empty" : "ready"
+      }
     >
       {error && (
-        <p className="text-destructive px-4 text-sm lg:px-6" role="alert">
-          {error.message}
-        </p>
+        <div className="px-4 lg:px-6">
+          <RequestState
+            kind="error"
+            title="Some overview panels are unavailable"
+            onRetry={controls.refresh}
+            retrying={panels.some((q) => q.isFetching)}
+          >
+            {error.message} Available values are the last loaded snapshots, not zero values for
+            failed panels.
+          </RequestState>
+        </div>
+      )}
+      {!error && (loading || updating) && (
+        <div className="px-4 lg:px-6">
+          <RequestState
+            kind={loading ? "loading" : "updating"}
+            title={loading ? "Loading overview" : "Updating overview"}
+          >
+            {updating && "Showing the last loaded snapshots until refresh completes."}
+          </RequestState>
+        </div>
       )}
       <SectionCards
         items={[
           {
             label: "Spans",
-            value: ready ? formatCount(spans) : "…",
+            value: ready ? formatCount(spans) : missingValue,
             change: change(spans, num(k?.spans_before)),
             headline: "Requests and internal spans",
             note: "vs the previous window",
           },
           {
             label: "Failed spans",
-            value: ready ? formatCount(errors) : "…",
+            value: ready ? formatCount(errors) : missingValue,
             change: change(errors, num(k?.errors_before)),
             riseIsBad: true,
             headline: "Spans that ended in an error",
@@ -218,21 +238,19 @@ export default function OverviewPage() {
               ? k?.error_rate === null || k?.error_rate === undefined
                 ? "–"
                 : `${num(k.error_rate).toFixed(2)}%`
-              : "…",
+              : missingValue,
             headline: "Failed ÷ all spans",
             note: "same definition as the Services table",
           },
           {
             label: "p95 latency",
-            value: ready
-              ? formatMs(k?.p95_ms === null ? null : num(k?.p95_ms))
-              : "…",
+            value: ready ? formatMs(k?.p95_ms === null ? null : num(k?.p95_ms)) : missingValue,
             headline: "Across all spans",
             note: "95% of spans finished faster",
           },
           {
             label: "Error logs",
-            value: ready ? formatCount(errorLogs) : "…",
+            value: ready ? formatCount(errorLogs) : missingValue,
             change: change(errorLogs, num(k?.error_logs_before)),
             riseIsBad: true,
             headline: `of ${formatCount(num(k?.logs))} log lines`,
@@ -242,12 +260,19 @@ export default function OverviewPage() {
       />
       {empty && (
         <div className="px-4 lg:px-6">
-          <SetupEmpty range={RANGES[controls.range].label.toLowerCase()} />
+          {controls.service ? (
+            <RequestState kind="empty" title="No telemetry matches the selected service and window">
+              Choose another service or time range above. Other services may have data.
+            </RequestState>
+          ) : (
+            <SetupEmpty range={RANGES[controls.range].label.toLowerCase()} />
+          )}
         </div>
       )}
       <div className="grid gap-4 px-4 lg:grid-cols-2 lg:px-6">
         <ChartCard
           title="Requests"
+          error={requests.error}
           description="Spans over time, succeeded and failed"
         >
           <StackedBars
@@ -259,23 +284,16 @@ export default function OverviewPage() {
         </ChartCard>
         <ChartCard
           title="Latency"
+          error={latency.error}
           description="How long spans took: median, 95th and 99th percentile"
         >
           <div className="h-full w-full" data-chart-name="latency">
             <EChartsLatencyAreaChart
-              data={axis(
-                latency.data,
-                win,
-                ["p50", "p95", "p99"] as const,
-                null
-              )}
+              data={axis(latency.data, win, ["p50", "p95", "p99"] as const, null)}
               latest={{
-                p50:
-                  o?.p50 === null || o?.p50 === undefined ? null : num(o.p50),
-                p95:
-                  o?.p95 === null || o?.p95 === undefined ? null : num(o.p95),
-                p99:
-                  o?.p99 === null || o?.p99 === undefined ? null : num(o.p99),
+                p50: o?.p50 === null || o?.p50 === undefined ? null : num(o.p50),
+                p95: o?.p95 === null || o?.p95 === undefined ? null : num(o.p95),
+                p99: o?.p99 === null || o?.p99 === undefined ? null : num(o.p99),
               }}
               isLoading={latency.isLoading}
             />
@@ -284,16 +302,12 @@ export default function OverviewPage() {
         <div className="lg:col-span-2">
           <ChartCard
             title="Log volume"
+            error={logs.error}
             description="Log lines over time, by level"
           >
             <StackedBars
               name="logs"
-              data={axis(logs.data, win, [
-                "error",
-                "warning",
-                "info",
-                "debug",
-              ] as const)}
+              data={axis(logs.data, win, ["error", "warning", "info", "debug"] as const)}
               config={LEVEL_CHART}
               isLoading={logs.isLoading}
             />

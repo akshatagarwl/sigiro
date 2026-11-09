@@ -8,21 +8,17 @@ import {
   parseAsString,
   parseAsStringLiteral,
   useQueryState,
+  useQueryStates,
 } from "nuqs";
 import * as React from "react";
 
 import { EvilBarChart } from "@/components/evilcharts/charts/recharts-bar-chart";
 import type { ChartConfig } from "@/components/evilcharts/ui/recharts-chart";
+import { RequestState } from "@/components/observability/request-state";
 import { Flamegraph } from "@/components/sigiro/flamegraph";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Command,
   CommandEmpty,
@@ -40,11 +36,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -103,7 +95,6 @@ function useSqlQuery(name: string, sql: string | undefined) {
     queryKey: [name, sql],
     enabled: Boolean(sql),
     queryFn: ({ signal }) => query(sql!, signal),
-    placeholderData: (previous) => previous,
     retry: false,
   });
 }
@@ -116,66 +107,66 @@ function useSqlQuery(name: string, sql: string | undefined) {
  */
 export function ProfilesExplorer() {
   const controls = useControls();
-  const [service, setService] = useQueryState(
-    "service",
-    parseAsString.withDefault("")
-  );
-  const [type, setType] = useQueryState("ptype", parseAsString.withDefault(""));
+  const [{ service, ptype: type }, setSelection] = useQueryStates({
+    service: parseAsString.withDefault(""),
+    ptype: parseAsString.withDefault(""),
+  });
+  const setService = (value: string | null) => setSelection({ service: value, ptype: null });
+  const setType = (value: string | null) => setSelection({ ptype: value });
   const [labelParams, setLabelParams] = useQueryState(
     "label",
-    parseAsArrayOf(parseAsString, ",").withDefault([])
+    parseAsArrayOf(parseAsString, ",").withDefault([]),
   );
-  const [traceId, setTraceId] = useQueryState(
-    "trace",
-    parseAsString.withDefault("")
-  );
-  const [spanId, setSpanId] = useQueryState(
-    "span",
-    parseAsString.withDefault("")
-  );
+  const [traceId, setTraceId] = useQueryState("trace", parseAsString.withDefault(""));
+  const [spanId, setSpanId] = useQueryState("span", parseAsString.withDefault(""));
   const [fromMs, setFromMs] = useQueryState("from", parseAsInteger);
   const [toMs, setToMs] = useQueryState("to", parseAsInteger);
   const [compare, setCompare] = useQueryState(
     "compare",
-    parseAsStringLiteral(COMPARE).withDefault("off")
+    parseAsStringLiteral(COMPARE).withDefault("off"),
   );
-  const [view, setView] = useQueryState(
-    "view",
-    parseAsStringLiteral(VIEWS).withDefault("both")
-  );
+  const [view, setView] = useQueryState("view", parseAsStringLiteral(VIEWS).withDefault("both"));
   const [search, setSearch] = React.useState("");
+  const [zoomReset, setZoomReset] = React.useState(0);
 
-  const custom = fromMs !== null && toMs !== null && toMs > fromMs;
+  const hasCustom = fromMs !== null || toMs !== null;
+  const custom =
+    fromMs !== null &&
+    toMs !== null &&
+    toMs > fromMs &&
+    Number.isFinite(new Date(fromMs).getTime()) &&
+    Number.isFinite(new Date(toMs).getTime());
+  const invalidRange = hasCustom && !custom;
+  const invalidCorrelation = Boolean(
+    (traceId && !/^[0-9a-f]{32}$/i.test(traceId)) || (spanId && !/^[0-9a-f]{16}$/i.test(spanId)),
+  );
   const from = custom ? new Date(fromMs) : controls.from;
   const to = custom ? new Date(toMs) : controls.to;
-  const labels = labelParams
-    .map(parseLabel)
-    .filter((x): x is LabelFilter => Boolean(x));
+  const labels = labelParams.map(parseLabel).filter((x): x is LabelFilter => Boolean(x));
 
-  const services = useSqlQuery("profile-services", servicesSql(from, to));
+  const services = useSqlQuery(
+    "profile-services",
+    invalidRange ? undefined : servicesSql(from, to),
+  );
   const serviceNames = (services.data ?? []).map((row) => String(row.s));
-  const activeService =
-    service && serviceNames.includes(service)
-      ? service
-      : (serviceNames[0] ?? service);
+  const activeService = service || serviceNames[0] || "";
+  const serviceAvailable = services.isSuccess && serviceNames.includes(activeService);
 
   const types = useSqlQuery(
     "profile-types",
-    activeService ? typesSql(activeService, from, to) : undefined
+    serviceAvailable ? typesSql(activeService, from, to) : undefined,
   );
   const typeRows = (types.data ?? []).map((row) => ({
     type: String(row.type),
     unit: String(row.unit ?? ""),
   }));
   const activeType =
-    typeRows.find((row) => row.type === type)?.type ??
-    typeRows.find((row) => row.type === "cpu")?.type ??
-    typeRows[0]?.type ??
-    "";
+    type || typeRows.find((row) => row.type === "cpu")?.type || typeRows[0]?.type || "";
+  const typeAvailable = types.isSuccess && typeRows.some((row) => row.type === activeType);
   const unit = typeRows.find((row) => row.type === activeType)?.unit ?? "";
 
   const q: ProfileQuery | undefined =
-    activeService && activeType
+    !invalidRange && !invalidCorrelation && serviceAvailable && typeAvailable
       ? {
           service: activeService,
           type: activeType,
@@ -206,19 +197,10 @@ export function ProfilesExplorer() {
 
   const stacks = useSqlQuery("profile-stacks", q && stacksSql(q));
   const summary = useSqlQuery("profile-summary", q && summarySql(q));
-  const baseStacks = useSqlQuery(
-    "profile-stacks-base",
-    qBase && stacksSql(qBase)
-  );
-  const baseSummary = useSqlQuery(
-    "profile-summary-base",
-    qBase && summarySql(qBase)
-  );
+  const baseStacks = useSqlQuery("profile-stacks-base", qBase && stacksSql(qBase));
+  const baseSummary = useSqlQuery("profile-summary-base", qBase && summarySql(qBase));
   const bucket = bucketFor(from, to);
-  const timeline = useSqlQuery(
-    "profile-timeline",
-    q && timelineSql(q, bucket.sql)
-  );
+  const timeline = useSqlQuery("profile-timeline", q && timelineSql(q, bucket.sql));
   const labelOptions = useSqlQuery("profile-labels", q && labelsSql(q));
 
   const snapshot = isSnapshot(activeType);
@@ -230,20 +212,17 @@ export function ProfilesExplorer() {
   const baseScale = snapshot ? 1 / baseSnaps : 1;
 
   const current = React.useMemo(() => toStacks(stacks.data), [stacks.data]);
-  const baseline = React.useMemo(
-    () => toStacks(baseStacks.data),
-    [baseStacks.data]
-  );
+  const baseline = React.useMemo(() => toStacks(baseStacks.data), [baseStacks.data]);
   const diff = compare !== "off";
   const tree = React.useMemo(
     () =>
       diff
         ? buildDiffTree(
             baseline.map((s) => ({ ...s, value: s.value * baseScale })),
-            current.map((s) => ({ ...s, value: s.value * scale }))
+            current.map((s) => ({ ...s, value: s.value * scale })),
           )
         : buildTree(current, scale),
-    [diff, baseline, current, scale, baseScale]
+    [diff, baseline, current, scale, baseScale],
   );
   const total = current.reduce((sum, s) => sum + s.value, 0) * scale;
   const baseTotal = baseline.reduce((sum, s) => sum + s.value, 0) * baseScale;
@@ -283,22 +262,58 @@ export function ProfilesExplorer() {
   };
   const removeLabel = (key: string) =>
     void setLabelParams(
-      labelParams.filter((x) => x !== key).length
-        ? labelParams.filter((x) => x !== key)
-        : null
+      labelParams.filter((x) => x !== key).length ? labelParams.filter((x) => x !== key) : null,
     );
 
-  if (services.isSuccess && serviceNames.length === 0 && !custom)
-    return <ProfilesEmpty />;
-
-  const resetKey = `${activeService}|${activeType}|${labelParams.join(",")}|${traceId}|${spanId}|${compare}`;
-  const loading = stacks.isLoading || types.isLoading || services.isLoading;
+  const requests = [
+    services,
+    ...(serviceAvailable ? [types] : []),
+    ...(q
+      ? [stacks, summary, timeline, labelOptions, ...(qBase ? [baseStacks, baseSummary] : [])]
+      : []),
+  ];
+  const error = requests.find((request) => request.error)?.error;
+  const loading = requests.some((request) => request.isLoading);
+  const updating = !loading && requests.some((request) => request.isFetching);
+  const resultsReady = Boolean(q) && !invalidRange && !invalidCorrelation && !error && !loading;
+  const showSetup =
+    services.isSuccess &&
+    serviceNames.length === 0 &&
+    !service &&
+    !type &&
+    !hasCustom &&
+    !labelParams.length &&
+    !traceId &&
+    !spanId;
+  const resetKey = `${activeService}|${activeType}|${from.getTime()}|${to.getTime()}|${labelParams.join(",")}|${traceId}|${spanId}|${compare}|${zoomReset}`;
+  React.useEffect(() => setSearch(""), [activeService, activeType]);
 
   return (
     <div
       className="flex min-h-0 flex-1 flex-col gap-4 p-4 lg:p-6"
       data-page="profiles"
+      data-state={
+        invalidRange || invalidCorrelation
+          ? "invalid"
+          : error
+            ? "error"
+            : loading
+              ? "loading"
+              : updating
+                ? "updating"
+                : !q
+                  ? "empty"
+                  : current.length === 0 && baseline.length === 0
+                    ? "no-samples"
+                    : "ready"
+      }
     >
+      <div className="shrink-0 space-y-1">
+        <h2 className="text-lg font-semibold">Profile explorer</h2>
+        <p className="text-muted-foreground text-sm">
+          Choose a service and profile type, then inspect stacks or compare windows.
+        </p>
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <Select value={activeService} onValueChange={(v) => void setService(v)}>
           <SelectTrigger
@@ -306,10 +321,16 @@ export function ProfilesExplorer() {
             size="sm"
             aria-label="Service"
             data-action="profile-service"
+            disabled={!services.isSuccess || serviceNames.length === 0}
           >
             <SelectValue placeholder="Service" />
           </SelectTrigger>
           <SelectContent className="rounded-xl">
+            {service && !serviceNames.includes(service) && (
+              <SelectItem value={service} disabled>
+                {service} (not in window)
+              </SelectItem>
+            )}
             {serviceNames.map((name) => (
               <SelectItem key={name} value={name} className="rounded-lg">
                 {name}
@@ -323,20 +344,20 @@ export function ProfilesExplorer() {
             size="sm"
             aria-label="Profile type"
             data-action="profile-type"
+            disabled={!types.isSuccess || typeRows.length === 0}
           >
             <SelectValue placeholder="Profile type" />
           </SelectTrigger>
           <SelectContent className="rounded-xl">
+            {type && !typeRows.some((row) => row.type === type) && (
+              <SelectItem value={type} disabled>
+                {type} (not in window)
+              </SelectItem>
+            )}
             {typeRows.map((row) => (
-              <SelectItem
-                key={row.type}
-                value={row.type}
-                className="rounded-lg"
-              >
+              <SelectItem key={row.type} value={row.type} className="rounded-lg">
                 {TYPE_LABELS[row.type] ?? row.type}
-                <span className="text-muted-foreground ml-1 text-xs">
-                  {row.type}
-                </span>
+                <span className="text-muted-foreground ml-1 text-xs">{row.type}</span>
               </SelectItem>
             ))}
           </SelectContent>
@@ -352,9 +373,7 @@ export function ProfilesExplorer() {
         />
         <Select
           value={compare}
-          onValueChange={(v) =>
-            void setCompare(v === "off" ? null : (v as Compare))
-          }
+          onValueChange={(v) => void setCompare(v === "off" ? null : (v as Compare))}
         >
           <SelectTrigger
             className="w-48"
@@ -381,7 +400,7 @@ export function ProfilesExplorer() {
           data-action="profile-search"
         />
       </div>
-      {(labels.length > 0 || traceId || custom) && (
+      {(labelParams.length > 0 || traceId || spanId || hasCustom) && (
         <div className="flex flex-wrap items-center gap-2" data-filters>
           {labelParams.map((key) => (
             <Badge
@@ -391,26 +410,16 @@ export function ProfilesExplorer() {
               data-label-filter={key}
             >
               {key}
-              <button
-                type="button"
-                aria-label={`Remove ${key}`}
-                onClick={() => removeLabel(key)}
-              >
+              {!parseLabel(key) && " (invalid label)"}
+              <button type="button" aria-label={`Remove ${key}`} onClick={() => removeLabel(key)}>
                 <IconX className="size-3" />
               </button>
             </Badge>
           ))}
           {traceId && (
-            <Badge
-              variant="outline"
-              className="gap-1 font-mono"
-              data-trace-filter={traceId}
-            >
+            <Badge variant="outline" className="gap-1 font-mono" data-trace-filter={traceId}>
               trace {traceId.slice(0, 12)}…{spanId ? ` · span ${spanId}` : ""}
-              <a
-                className="underline"
-                href={`/dashboard/traces/?trace=${traceId}`}
-              >
+              <a className="underline" href={`/dashboard/traces/?trace=${traceId}`}>
                 open trace
               </a>
               <button
@@ -425,9 +434,23 @@ export function ProfilesExplorer() {
               </button>
             </Badge>
           )}
-          {custom && (
+          {spanId && !traceId && (
+            <Badge variant="outline" className="gap-1 font-mono">
+              span {spanId}
+              <button
+                type="button"
+                aria-label="Clear span filter"
+                onClick={() => void setSpanId(null)}
+              >
+                <IconX className="size-3" />
+              </button>
+            </Badge>
+          )}
+          {hasCustom && (
             <Badge variant="outline" className="gap-1" data-custom-range>
-              {from.toLocaleString()} – {to.toLocaleTimeString()}
+              {custom
+                ? `${from.toLocaleString()} – ${to.toLocaleTimeString()}`
+                : "Invalid custom time range"}
               <button
                 type="button"
                 aria-label="Use the header's time range"
@@ -443,124 +466,181 @@ export function ProfilesExplorer() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat
-          title={snapshot ? "Average per collection" : "Total"}
-          value={formatValue(total, unit)}
-          note={
-            diff
-              ? `baseline ${formatValue(baseTotal, unit)} (${baseTotal > 0 ? `${total >= baseTotal ? "+" : ""}${(((total - baseTotal) / baseTotal) * 100).toFixed(1)}%` : "–"})`
-              : (TYPE_LABELS[activeType] ?? activeType)
+      {invalidCorrelation && (
+        <RequestState kind="error" title="Invalid trace or span filter">
+          Trace IDs must contain 32 hexadecimal characters and span IDs 16. Clear the marked
+          correlation filter above; it is not silently ignored.
+        </RequestState>
+      )}
+      {invalidRange && (
+        <RequestState kind="error" title="Invalid custom time range">
+          Provide both valid timestamps with the end after the start, or clear custom time above. No
+          profile query runs for this invalid range.
+        </RequestState>
+      )}
+      {error && (
+        <RequestState
+          kind="error"
+          title="Unable to load profiles"
+          onRetry={() =>
+            Promise.all(
+              requests.filter((request) => request.error).map((request) => request.refetch()),
+            )
           }
-          name="total"
-        />
-        <Stat
-          title="Distinct stacks"
-          value={String(current.length)}
-          name="stacks"
-        />
-        <Stat
-          title="Collections"
-          value={String(num(summary.data?.[0]?.snapshots))}
-          name="collections"
-        />
-        <Stat
-          title="Samples linked to spans"
-          value={percent(
-            num(summary.data?.[0]?.linked),
-            num(summary.data?.[0]?.rows)
-          )}
-          name="linked"
-        />
-      </div>
-
-      <Card className="py-4">
-        <CardContent
-          className="h-36 px-2 sm:px-6"
-          data-chart-name="profile-timeline"
+          retrying={requests.some((request) => request.isFetching)}
         >
-          <EvilBarChart
-            data={timelineData}
-            config={timelineConfig}
-            className="h-full w-full"
-            isLoading={timeline.isLoading}
+          {error.message}
+        </RequestState>
+      )}
+      {!error && !invalidRange && (loading || updating) && (
+        <RequestState
+          kind={loading ? "loading" : "updating"}
+          title={loading ? "Loading profiles" : "Updating profiles"}
+        >
+          {updating && "Showing the last loaded data for this scope."}
+        </RequestState>
+      )}
+      {!loading &&
+        !error &&
+        !invalidRange &&
+        !invalidCorrelation &&
+        !q &&
+        (showSetup ? (
+          <ProfilesEmpty />
+        ) : (
+          <RequestState
+            kind="empty"
+            title={
+              !serviceAvailable
+                ? "No profiles for the selected service in this window"
+                : "No matching profile type in this window"
+            }
           >
-            <EvilBarChart.Grid />
-            <EvilBarChart.XAxis dataKey="time" />
-            <EvilBarChart.Tooltip />
-            <EvilBarChart.Bar dataKey="value" />
-          </EvilBarChart>
-        </CardContent>
-      </Card>
+            {service && !serviceAvailable && (
+              <Button onClick={() => void setService(null)}>Use an available service</Button>
+            )}
+            {type && serviceAvailable && !typeAvailable && (
+              <Button onClick={() => void setType(null)}>Use an available profile type</Button>
+            )}
+            <p>
+              Change the service, type or time range. Explicit selections are not silently replaced.
+            </p>
+          </RequestState>
+        ))}
+      {resultsReady && (
+        <>
+          <div className="grid shrink-0 grid-cols-2 gap-4 lg:grid-cols-4">
+            <Stat
+              title={snapshot ? "Average per collection" : "Total"}
+              value={formatValue(total, unit)}
+              note={
+                diff
+                  ? `baseline ${formatValue(baseTotal, unit)} (${baseTotal > 0 ? `${total >= baseTotal ? "+" : ""}${(((total - baseTotal) / baseTotal) * 100).toFixed(1)}%` : "–"})`
+                  : (TYPE_LABELS[activeType] ?? activeType)
+              }
+              name="total"
+            />
+            <Stat title="Distinct stacks" value={String(current.length)} name="stacks" />
+            <Stat
+              title="Collections"
+              value={String(num(summary.data?.[0]?.snapshots))}
+              name="collections"
+            />
+            <Stat
+              title="Samples linked to spans"
+              value={percent(num(summary.data?.[0]?.linked), num(summary.data?.[0]?.rows))}
+              name="linked"
+            />
+          </div>
 
-      <Tabs
-        value={view}
-        onValueChange={(v) =>
-          void setView(v === "both" ? null : (v as (typeof VIEWS)[number]))
-        }
-      >
-        <TabsList>
-          <TabsTrigger value="both">Table + flame graph</TabsTrigger>
-          <TabsTrigger value="flamegraph">Flame graph</TabsTrigger>
-          <TabsTrigger value="table">Top functions</TabsTrigger>
-        </TabsList>
-        {VIEWS.map((v) => (
-          <TabsContent key={v} value={v}>
-            {loading ? (
-              <Skeleton className="h-96 w-full" />
-            ) : current.length === 0 && baseline.length === 0 ? (
-              <p
-                className="text-muted-foreground p-6 text-sm"
-                data-state="no-samples"
+          <Card className="py-4">
+            <CardContent className="h-36 px-2 sm:px-6" data-chart-name="profile-timeline">
+              <EvilBarChart
+                data={timelineData}
+                config={timelineConfig}
+                className="h-full w-full"
+                isLoading={timeline.isLoading}
               >
-                No samples match these filters in this window.
-              </p>
-            ) : (
-              <div
-                className={
-                  v === "both"
-                    ? "grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
-                    : "grid gap-4"
-                }
-              >
-                {v !== "flamegraph" && (
-                  <FunctionsTable
-                    rows={functions}
-                    total={total}
-                    unit={unit}
-                    diff={diff}
-                    onPick={(name) => setSearch(name)}
-                    compact={v === "both"}
-                  />
-                )}
-                {v !== "table" && (
-                  <Card className="min-w-0 py-3">
-                    <CardHeader className="px-4">
-                      <CardTitle className="text-sm">
-                        {diff ? "Diff flame graph" : "Flame graph"}
-                      </CardTitle>
-                      <CardDescription>
-                        {diff
-                          ? "Width is the larger of the two windows; red grew, blue shrank (compared with the baseline scaled to the same total). Click to zoom."
-                          : "Click a frame to zoom; hover for its share."}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="px-2">
-                      <Flamegraph
-                        tree={tree}
+                <EvilBarChart.Grid />
+                <EvilBarChart.XAxis dataKey="time" />
+                <EvilBarChart.Tooltip />
+                <EvilBarChart.Bar dataKey="value" />
+              </EvilBarChart>
+            </CardContent>
+          </Card>
+
+          <Tabs
+            value={view}
+            onValueChange={(v) => void setView(v === "both" ? null : (v as (typeof VIEWS)[number]))}
+          >
+            <TabsList>
+              <TabsTrigger value="both">Table + flame graph</TabsTrigger>
+              <TabsTrigger value="flamegraph">Flame graph</TabsTrigger>
+              <TabsTrigger value="table">Top functions</TabsTrigger>
+            </TabsList>
+            {VIEWS.map((v) => (
+              <TabsContent key={v} value={v}>
+                {loading ? (
+                  <Skeleton className="h-96 w-full" />
+                ) : current.length === 0 && baseline.length === 0 ? (
+                  <p className="text-muted-foreground p-6 text-sm" data-state="no-samples">
+                    No samples match these filters in this window.
+                  </p>
+                ) : (
+                  <div
+                    className={
+                      v === "both"
+                        ? "grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
+                        : "grid gap-4"
+                    }
+                  >
+                    {v !== "flamegraph" && (
+                      <FunctionsTable
+                        rows={functions}
+                        total={total}
                         unit={unit}
                         diff={diff}
-                        search={search}
-                        resetKey={resetKey}
+                        onPick={(name) => setSearch(name)}
+                        compact={v === "both"}
                       />
-                    </CardContent>
-                  </Card>
+                    )}
+                    {v !== "table" && (
+                      <Card className="min-w-0 py-3">
+                        <CardHeader className="px-4">
+                          <CardTitle className="text-sm">
+                            {diff ? "Diff flame graph" : "Flame graph"}
+                          </CardTitle>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setZoomReset((value) => value + 1)}
+                          >
+                            Reset zoom
+                          </Button>
+                          <CardDescription>
+                            {diff
+                              ? "Width is the larger of the two windows; red grew, blue shrank (compared with the baseline scaled to the same total). Click to zoom."
+                              : "Click a frame to zoom; hover for its share."}
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="px-2">
+                          <Flamegraph
+                            tree={tree}
+                            unit={unit}
+                            diff={diff}
+                            search={search}
+                            resetKey={resetKey}
+                          />
+                        </CardContent>
+                      </Card>
+                    )}
+                  </div>
                 )}
-              </div>
-            )}
-          </TabsContent>
-        ))}
-      </Tabs>
+              </TabsContent>
+            ))}
+          </Tabs>
+        </>
+      )}
     </div>
   );
 }
@@ -598,8 +678,7 @@ function LabelPicker({
 }) {
   const [open, setOpen] = React.useState(false);
   const byKey = new Map<string, typeof options>();
-  for (const option of options)
-    byKey.set(option.key, [...(byKey.get(option.key) ?? []), option]);
+  for (const option of options) byKey.set(option.key, [...(byKey.get(option.key) ?? []), option]);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -624,9 +703,7 @@ function LabelPicker({
                       setOpen(false);
                     }}
                   >
-                    <span className="truncate font-mono text-xs">
-                      {option.value}
-                    </span>
+                    <span className="truncate font-mono text-xs">{option.value}</span>
                     <span className="text-muted-foreground ml-auto text-xs tabular-nums">
                       {formatValue(option.total, unit)}
                     </span>
@@ -661,33 +738,23 @@ function FunctionsTable({
       <CardHeader className="px-4">
         <CardTitle className="text-sm">Top functions</CardTitle>
         <CardDescription>
-          Self is time or bytes in the function itself; total includes its
-          callees. Click to highlight.
+          Self is time or bytes in the function itself; total includes its callees. Click to
+          highlight.
         </CardDescription>
       </CardHeader>
-      <CardContent
-        className={`px-0 ${compact ? "max-h-[640px] overflow-y-auto" : ""}`}
-      >
+      <CardContent className={`px-0 ${compact ? "max-h-[640px] overflow-y-auto" : ""}`}>
         <Table
           data-table="top-functions"
           data-rows={rows.length}
-          className="table-fixed"
+          className={compact ? "min-w-[440px] table-fixed" : "min-w-[640px] table-fixed"}
         >
           <TableHeader>
             <TableRow>
               <TableHead className="pl-4">Function</TableHead>
               <TableHead className="w-24 text-right">Self</TableHead>
-              {!compact && (
-                <TableHead className="w-20 text-right">Self %</TableHead>
-              )}
-              <TableHead className={`w-24 text-right ${diff ? "" : "pr-4"}`}>
-                Total
-              </TableHead>
-              {diff && (
-                <TableHead className="w-28 pr-4 text-right">
-                  Self change
-                </TableHead>
-              )}
+              {!compact && <TableHead className="w-20 text-right">Self %</TableHead>}
+              <TableHead className={`w-24 text-right ${diff ? "" : "pr-4"}`}>Total</TableHead>
+              {diff && <TableHead className="w-28 pr-4 text-right">Self change</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -697,17 +764,16 @@ function FunctionsTable({
               const raw = row.self - row.baseSelf;
               const change = Math.abs(raw) < 1 ? 0 : raw;
               return (
-                <TableRow
-                  key={row.name}
-                  className="cursor-pointer"
-                  onClick={() => onPick(row.name)}
-                  data-function={row.name}
-                >
-                  <TableCell
-                    className="truncate pl-4 font-mono text-xs"
-                    title={row.name}
-                  >
-                    {row.name}
+                <TableRow key={row.name} data-function={row.name}>
+                  <TableCell className="truncate pl-4 font-mono text-xs" title={row.name}>
+                    <button
+                      type="button"
+                      className="w-full truncate text-left hover:underline focus-visible:underline"
+                      aria-label={`Highlight ${row.name}`}
+                      onClick={() => onPick(row.name)}
+                    >
+                      {row.name}
+                    </button>
                   </TableCell>
                   <TableCell className="text-right text-xs tabular-nums">
                     {formatValue(row.self, unit)}
@@ -717,9 +783,7 @@ function FunctionsTable({
                       {percent(row.self, total)}
                     </TableCell>
                   )}
-                  <TableCell
-                    className={`text-right text-xs tabular-nums ${diff ? "" : "pr-4"}`}
-                  >
+                  <TableCell className={`text-right text-xs tabular-nums ${diff ? "" : "pr-4"}`}>
                     {formatValue(row.total, unit)}
                   </TableCell>
                   {diff && (
@@ -750,13 +814,17 @@ function ProfilesEmpty() {
           </EmptyMedia>
           <EmptyTitle>No profiles in this window</EmptyTitle>
           <EmptyDescription>
-            Send OTLP profiles to <code>/v1development/profiles</code>, from the
-            OpenTelemetry eBPF profiler, a Collector, or an SDK. For Go, one
-            call starts continuous CPU and heap profiling:
+            Send OTLP profiles to <code>/v1development/profiles</code>, from the OpenTelemetry eBPF
+            profiler, a Collector, or an SDK. For Go, one call starts continuous CPU and heap
+            profiling:
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent className="max-w-2xl text-left">
-          <pre className="bg-muted w-full overflow-x-auto rounded-md p-3 text-xs">
+          <pre
+            tabIndex={0}
+            aria-label="Go profiling setup example"
+            className="bg-muted w-full overflow-x-auto rounded-md p-3 text-xs"
+          >
             {`p, err := otelprofile.Start(otelprofile.Config{
     ServiceName: "checkout",
     Endpoint:    "http://localhost:4318",

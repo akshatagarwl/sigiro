@@ -16,9 +16,9 @@ import { ControlsProvider } from "@/lib/sigiro/controls";
 /** dashboard-01's sidebar + inset layout, behind sign-in, with the providers the blocks need. */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [queryClient] = React.useState(() => new QueryClient());
-  const isLogs = usePathname().replace(/\/$/, "") === "/logs";
-  const [navigationOpen, setNavigationOpen] = React.useState(!isLogs);
-  React.useEffect(() => setNavigationOpen(!isLogs), [isLogs]);
+  const pathname = usePathname();
+  const [navigationOpen, setNavigationOpen] = React.useState(false);
+  React.useEffect(() => setNavigationOpen(false), [pathname]);
   return (
     <QueryClientProvider client={queryClient}>
       <NuqsAdapter>
@@ -36,19 +36,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     } as React.CSSProperties
                   }
                 >
-                  <AppSidebar
-                    variant="inset"
-                    collapsible={isLogs ? "icon" : "offcanvas"}
-                  />
-                  <SidebarInset
-                    className={
-                      isLogs
-                        ? "h-svh min-w-0 overflow-hidden md:h-[calc(100svh-1rem)]"
-                        : "min-w-0"
-                    }
-                  >
+                  <AppSidebar variant="inset" collapsible="icon" />
+                  <SidebarInset className="h-svh min-w-0 overflow-hidden md:h-[calc(100svh-1rem)]">
                     <SiteHeader />
-                    <div className="@container/main flex min-h-0 flex-1 flex-col">
+                    <div className="@container/main flex min-h-0 flex-1 flex-col overflow-y-auto">
                       {children}
                     </div>
                   </SidebarInset>

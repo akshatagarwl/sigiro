@@ -14,12 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useFilterActions } from "@/lib/store/hooks/useFilterActions";
 import { useFilterState } from "@/lib/store/hooks/useFilterState";
 import { cn } from "@/lib/utils";
@@ -37,7 +32,9 @@ export function DataTableSheetDetails({
   titleClassName,
   children,
 }: DataTableSheetDetailsProps) {
-  const { table, rowSelection, isLoading } = useDataTable();
+  const { table, rowSelection, isLoading, columnFilters, sorting } = useDataTable();
+  const returnRow = React.useRef<HTMLElement | null>(null);
+  const returnTable = React.useRef<HTMLElement | null>(null);
   const { setFilters } = useFilterActions();
 
   const isMultiSelect = !!table.options.enableMultiRowSelection;
@@ -45,29 +42,23 @@ export function DataTableSheetDetails({
   // Read the detail row ID from BYOS uuid when multi-select is enabled,
   // otherwise fall back to rowSelection (existing single-select behavior)
   const uuid = useFilterState((s) => s.uuid) as string | null | undefined;
-  const selectedRowKey = isMultiSelect
-    ? (uuid ?? undefined)
-    : Object.keys(rowSelection)?.[0];
+  const selectedRowKey = isMultiSelect ? (uuid ?? undefined) : Object.keys(rowSelection)?.[0];
 
   const selectedRow = React.useMemo(() => {
     if (isLoading && !selectedRowKey) return;
-    return table
-      .getRowModel()
-      .flatRows.find((row) => row.id === selectedRowKey);
-  }, [selectedRowKey, isLoading, table]);
+    return table.getRowModel().flatRows.find((row) => row.id === selectedRowKey);
+  }, [selectedRowKey, isLoading, table, columnFilters, sorting]);
 
-  const index = table
-    .getRowModel()
-    .flatRows.findIndex((row) => row.id === selectedRow?.id);
+  const index = table.getRowModel().flatRows.findIndex((row) => row.id === selectedRow?.id);
 
   const nextId = React.useMemo(
     () => table.getRowModel().flatRows[index + 1]?.id,
-    [index, isLoading, table],
+    [index, isLoading, table, columnFilters, sorting],
   );
 
   const prevId = React.useMemo(
     () => table.getRowModel().flatRows[index - 1]?.id,
-    [index, isLoading, table],
+    [index, isLoading, table, columnFilters, sorting],
   );
 
   const onPrev = React.useCallback(() => {
@@ -94,9 +85,11 @@ export function DataTableSheetDetails({
 
       // REMINDER: prevent dropdown navigation inside of sheet to change row selection
       const activeElement = document.activeElement;
-      const isMenuActive = activeElement?.closest('[role="menu"]');
+      const ownsArrows = activeElement?.closest(
+        'input, textarea, select, [contenteditable="true"], [role="menu"], [role="combobox"], [role="listbox"], [role="tablist"], [role="slider"], [role="spinbutton"]',
+      );
 
-      if (isMenuActive) return;
+      if (ownsArrows) return;
 
       if (e.key === "ArrowUp") {
         e.preventDefault();
@@ -118,9 +111,9 @@ export function DataTableSheetDetails({
       onOpenChange={() => {
         // REMINDER: focus back to the row that was selected
         // We need to manually focus back due to missing Trigger component
-        const el = selectedRowKey
+        returnRow.current = selectedRowKey
           ? document.getElementById(selectedRowKey)
-          : null;
+          : returnRow.current;
 
         if (isMultiSelect) {
           setFilters({ uuid: null });
@@ -128,24 +121,26 @@ export function DataTableSheetDetails({
           table.resetRowSelection();
         }
 
-        // REMINDER: when navigating between tabs in the sheet and exit the sheet, the tab gets lost
-        // We need a minimal delay to allow the sheet to close before focusing back to the row
-        setTimeout(() => el?.focus(), 0);
+        // Restore in onCloseAutoFocus, after the focus trap is dismantled.
       }}
     >
       <SheetContent
-        // onCloseAutoFocus={(e) => e.preventDefault()}
+        onOpenAutoFocus={() => {
+          returnRow.current = selectedRowKey ? document.getElementById(selectedRowKey) : null;
+          returnTable.current = document.getElementById("content");
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          const target = returnRow.current?.isConnected ? returnRow.current : returnTable.current;
+          if (target?.isConnected) target.focus({ preventScroll: true });
+        }}
         className="overflow-y-auto p-0 sm:max-w-md"
         hideClose
       >
         <SheetHeader className="bg-background sticky top-0 z-10 border-b p-4">
           <div className="flex items-center justify-between gap-2">
             <SheetTitle className={cn(titleClassName, "truncate text-left")}>
-              {isLoading && !selectedRowKey ? (
-                <Skeleton className="h-7 w-36" />
-              ) : (
-                title
-              )}
+              {isLoading && !selectedRowKey ? <Skeleton className="h-7 w-36" /> : title}
             </SheetTitle>
             <div className="flex h-7 items-center gap-1">
               <TooltipProvider {...TOOLTIP_DELAY}>
@@ -200,9 +195,7 @@ export function DataTableSheetDetails({
             </div>
           </div>
         </SheetHeader>
-        <SheetDescription className="sr-only">
-          Selected row details
-        </SheetDescription>
+        <SheetDescription className="sr-only">Selected row details</SheetDescription>
         <div className="p-4">{children}</div>
       </SheetContent>
     </Sheet>

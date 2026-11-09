@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
+import { RequestState } from "@/components/observability/request-state";
 import { TraceWorkspace } from "@/components/sigiro/trace-workspace";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,12 +18,11 @@ export function TraceView({ traceId }: { traceId: string }) {
     queryFn: ({ signal }) =>
       query(
         `SELECT epoch_us(timestamp) AS start_us, duration, service_name, span_name, span_id, parent_span_id, status_code, status_message, span_attributes, resource_attributes, events_json, links_json FROM sigiro_spans WHERE trace_id = ${sqlString(traceId.toLowerCase())} ORDER BY timestamp, span_id LIMIT 2001`,
-        signal
+        signal,
       ),
   });
 
-  if (!valid)
-    return <p className="text-destructive text-sm">Not a trace id.</p>;
+  if (!valid) return <p className="text-destructive text-sm">Not a trace id.</p>;
   if (error)
     return (
       <div className="grid gap-3 rounded-lg border p-4">
@@ -39,13 +39,15 @@ export function TraceView({ traceId }: { traceId: string }) {
         </Button>
       </div>
     );
-  if (isLoading || !data) return <Skeleton className="h-40 w-full" />;
-  if (data.length === 0)
+  if (isLoading || !data)
     return (
-      <p className="text-muted-foreground text-sm">
-        No spans stored for this trace.
-      </p>
+      <div className="grid gap-3">
+        <RequestState kind="loading" title="Loading trace spans" />
+        <Skeleton className="h-40 w-full" />
+      </div>
     );
+  if (data.length === 0)
+    return <p className="text-muted-foreground text-sm">No spans stored for this trace.</p>;
 
   const spans = data.slice(0, 2000);
   return (
@@ -66,18 +68,28 @@ export function TraceView({ traceId }: { traceId: string }) {
  * span, each opening that span's flame graph on the Profiles page.
  */
 function TraceProfiles({ traceId, spans }: { traceId: string; spans: Row[] }) {
-  const { data } = useQuery({
+  const { data, error, isFetching, refetch } = useQuery({
     queryKey: ["trace-profiles", traceId],
+    retry: false,
     queryFn: ({ signal }) =>
       query(
         `SELECT span_id, any_value(service_name) AS service, sum(value) AS v, min(epoch_ms(timestamp)) AS t0, max(epoch_ms(timestamp)) AS t1 FROM sigiro_profiles WHERE trace_id = ${sqlString(traceId)} AND profile_type = 'cpu' GROUP BY span_id ORDER BY v DESC`,
-        signal
+        signal,
       ),
   });
+  if (error)
+    return (
+      <RequestState
+        kind="error"
+        title="Related profiles are unavailable"
+        onRetry={() => refetch()}
+        retrying={isFetching}
+      >
+        {error.message} The trace workspace remains available.
+      </RequestState>
+    );
   if (!data || data.length === 0) return null;
-  const names = new Map(
-    spans.map((row) => [String(row.span_id), String(row.span_name)])
-  );
+  const names = new Map(spans.map((row) => [String(row.span_id), String(row.span_name)]));
   const t0 = Math.min(...data.map((row) => num(row.t0))) - 60_000;
   const t1 = Math.max(...data.map((row) => num(row.t1))) + 60_000;
   const link = (service: string, span?: string) =>
@@ -95,15 +107,10 @@ function TraceProfiles({ traceId, spans }: { traceId: string; spans: Row[] }) {
       </div>
       <ul className="divide-y rounded-md border text-sm">
         {data.map((row) => (
-          <li
-            key={String(row.span_id)}
-            className="flex items-center gap-3 px-3 py-2"
-          >
+          <li key={String(row.span_id)} className="flex items-center gap-3 px-3 py-2">
             <span className="min-w-0 flex-1 truncate">
               {names.get(String(row.span_id)) ?? "span"}{" "}
-              <span className="text-muted-foreground font-mono text-xs">
-                {String(row.span_id)}
-              </span>
+              <span className="text-muted-foreground font-mono text-xs">{String(row.span_id)}</span>
             </span>
             <span className="text-muted-foreground tabular-nums">
               {formatValue(num(row.v), "nanoseconds")}

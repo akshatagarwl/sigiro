@@ -3,9 +3,11 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   parseAsBoolean,
+  parseAsInteger,
   parseAsString,
   parseAsStringLiteral,
   useQueryState,
+  useQueryStates,
 } from "nuqs";
 import * as React from "react";
 
@@ -31,6 +33,7 @@ const LIVE_EVERY_MS = 10_000;
 type Controls = {
   range: RangeKey;
   setRange: (range: RangeKey) => void;
+  hasCustomWindow: boolean;
   /** One service, or "" for all. */
   service: string;
   setService: (service: string) => void;
@@ -46,18 +49,15 @@ type Controls = {
 const ControlsContext = React.createContext<Controls | null>(null);
 
 export function ControlsProvider({ children }: { children: React.ReactNode }) {
-  const [range, setRange] = useQueryState(
-    "range",
-    parseAsStringLiteral(RANGE_KEYS).withDefault("24h")
-  );
-  const [live, setLive] = useQueryState(
-    "live",
-    parseAsBoolean.withDefault(false)
-  );
-  const [service, setService] = useQueryState(
-    "service",
-    parseAsString.withDefault("")
-  );
+  const [{ range, timestamp, from: customFrom, to: customTo }, setTime] = useQueryStates({
+    range: parseAsStringLiteral(RANGE_KEYS).withDefault("24h"),
+    timestamp: parseAsString,
+    from: parseAsInteger,
+    to: parseAsInteger,
+  });
+  const hasCustomWindow = timestamp !== null || customFrom !== null || customTo !== null;
+  const [live, setLive] = useQueryState("live", parseAsBoolean.withDefault(false));
+  const [service, setService] = useQueryState("service", parseAsString.withDefault(""));
   const [tick, setTick] = React.useState(0);
   const [now, setNow] = React.useState(() => Date.now());
   const refresh = React.useCallback(() => {
@@ -76,7 +76,10 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
   const value = React.useMemo<Controls>(
     () => ({
       range,
-      setRange: (next) => void setRange(next),
+      // A deliberate relative-range choice replaces view-local time overrides
+      // in one URL transaction; changing range must change the actual SQL window.
+      setRange: (next) => void setTime({ range: next, timestamp: null, from: null, to: null }),
+      hasCustomWindow,
       service,
       setService: (next) => void setService(next || null),
       live,
@@ -86,14 +89,10 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
       from: new Date(now - RANGES[range].ms),
       to: new Date(now),
     }),
-    [range, setRange, service, setService, live, setLive, tick, refresh, now]
+    [range, setTime, hasCustomWindow, service, setService, live, setLive, tick, refresh, now],
   );
 
-  return (
-    <ControlsContext.Provider value={value}>
-      {children}
-    </ControlsContext.Provider>
-  );
+  return <ControlsContext.Provider value={value}>{children}</ControlsContext.Provider>;
 }
 
 export function useControls(): Controls {
@@ -109,12 +108,16 @@ export type Window = { from: Date; to: Date; service: string };
  * live ticks (each moves the window, so the SQL text is the cache key).
  */
 export function useSql(name: string, sql: (window: Window) => string) {
-  const { from, to, service } = useControls();
+  const { from, to, service, range } = useControls();
   const text = sql({ from, to, service });
+  const scope = JSON.stringify([range, service]);
   return useQuery<Row[]>({
-    queryKey: [name, text],
+    queryKey: [name, text, scope],
     queryFn: ({ signal }) => query(text, signal),
-    placeholderData: (previous) => previous,
+    // Refresh can retain the last snapshot with an Updating state. A different
+    // service or range must not inherit data labeled with the new scope.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[2] === scope ? previous : undefined,
     retry: false,
   });
 }

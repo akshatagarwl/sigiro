@@ -10,6 +10,7 @@
     "test:values": "node --test tests/value.test.mjs",
     "test:graph": "node tests/graph-browser.mjs",
     "test:flow": "node tests/flow-browser.mjs",
+    "test:dashboard": "node tests/dashboard-browser.mjs",
     "test:browser": "node tests/real-browser.mjs && node tests/filter-roundtrip.mjs && node tests/pagination-browser.mjs && node tests/fixture-browser.mjs"
   },
   "dependencies": {

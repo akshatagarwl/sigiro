@@ -17,23 +17,14 @@ import type { DataTableFilterField } from "@/components/data-table/types";
 import { Button } from "@/components/ui/button";
 import { useHotKey } from "@/hooks/use-hot-key";
 import { useLocalStorage } from "@/hooks/use-local-storage";
-import {
-  getColumnOrderKey,
-  getColumnVisibilityKey,
-} from "@/lib/constants/local-storage";
+import { getColumnOrderKey, getColumnVisibilityKey } from "@/lib/constants/local-storage";
 import { formatCompactNumber } from "@/lib/format";
 import { useFilterActions } from "@/lib/store/hooks/useFilterActions";
 import { useFilterState } from "@/lib/store/hooks/useFilterState";
-import {
-  dataTableFeatures,
-  type DataTableFeatures,
-} from "@/lib/table/features";
+import { dataTableFeatures, type DataTableFeatures } from "@/lib/table/features";
 import { cn } from "@/lib/utils";
 import { useControls } from "@/components/controls";
-import {
-  type FetchNextPageOptions,
-  type FetchPreviousPageOptions,
-} from "@tanstack/react-query";
+import { type FetchNextPageOptions, type FetchPreviousPageOptions } from "@tanstack/react-query";
 import type {
   ColumnDef,
   ColumnFiltersState,
@@ -104,15 +95,9 @@ export interface DataTableInfiniteProps<TData extends RowData> {
   isFetching?: boolean;
   isLoading?: boolean;
   hasNextPage?: boolean;
-  fetchNextPage: (
-    options?: FetchNextPageOptions | undefined,
-  ) => Promise<unknown>;
-  fetchPreviousPage?: (
-    options?: FetchPreviousPageOptions | undefined,
-  ) => Promise<unknown>;
-  renderLiveRow?: (props?: {
-    row: Row<DataTableFeatures, TData>;
-  }) => React.ReactNode;
+  fetchNextPage: (options?: FetchNextPageOptions | undefined) => Promise<unknown>;
+  fetchPreviousPage?: (options?: FetchPreviousPageOptions | undefined) => Promise<unknown>;
+  renderLiveRow?: (props?: { row: Row<DataTableFeatures, TData> }) => React.ReactNode;
   // Used to store column order and visibility in local storage for specific data-table namespace
   tableId?: string;
   // Optional slots for extensibility
@@ -122,6 +107,10 @@ export interface DataTableInfiniteProps<TData extends RowData> {
   chartSlot?: React.ReactNode;
   footerSlot?: React.ReactNode;
   resultsSlot?: React.ReactNode;
+  emptySlot?: React.ReactNode;
+  /** Fit the host's bounded results region; facets default opt-in per table. */
+  compact?: boolean;
+  countLabel?: "in window" | "loaded";
   floatingBarSlot?: React.ReactNode;
   className?: string;
 }
@@ -154,24 +143,21 @@ export function DataTableInfinite<TData extends RowData>({
   chartSlot,
   footerSlot,
   resultsSlot,
+  emptySlot,
+  compact = resultsSlot != null,
+  countLabel,
   floatingBarSlot,
   className,
 }: DataTableInfiniteProps<TData>) {
   const [columnFilters, setColumnFilters] =
     React.useState<ColumnFiltersState>(defaultColumnFilters);
-  const [sorting, setSorting] =
-    React.useState<SortingState>(defaultColumnSorting);
-  const [rowSelection, setRowSelection] =
-    React.useState<RowSelectionState>(defaultRowSelection);
-  const [columnOrder, setColumnOrder] = useLocalStorage<string[]>(
-    getColumnOrderKey(tableId),
-    [],
+  const [sorting, setSorting] = React.useState<SortingState>(defaultColumnSorting);
+  const [rowSelection, setRowSelection] = React.useState<RowSelectionState>(defaultRowSelection);
+  const [columnOrder, setColumnOrder] = useLocalStorage<string[]>(getColumnOrderKey(tableId), []);
+  const [columnVisibility, setColumnVisibility] = useLocalStorage<ColumnVisibilityState>(
+    getColumnVisibilityKey(tableId),
+    defaultColumnVisibility,
   );
-  const [columnVisibility, setColumnVisibility] =
-    useLocalStorage<ColumnVisibilityState>(
-      getColumnVisibilityKey(tableId),
-      defaultColumnVisibility,
-    );
   const tableRef = React.useRef<HTMLTableElement>(null);
 
   // Detect if a select column exists to enable multi-row selection
@@ -290,17 +276,12 @@ export function DataTableInfinite<TData extends RowData>({
     for (let i = 0; i < headers.length; i++) {
       const header = headers[i]!;
       // REMINDER: replace "." with "-" to avoid invalid CSS variable name (e.g. "timing.dns" -> "timing-dns")
-      colSizes[`--header-${header.id.replaceAll(".", "-")}-size`] =
-        `${header.getSize()}px`;
+      colSizes[`--header-${header.id.replaceAll(".", "-")}-size`] = `${header.getSize()}px`;
       colSizes[`--col-${header.column.id.replaceAll(".", "-")}-size`] =
         `${header.column.getSize()}px`;
     }
     return colSizes;
-  }, [
-    table.state.columnResizing,
-    table.state.columnSizing,
-    table.state.columnVisibility,
-  ]);
+  }, [table.state.columnResizing, table.state.columnSizing, table.state.columnVisibility]);
 
   useHotKey(() => {
     setColumnOrder([]);
@@ -330,8 +311,8 @@ export function DataTableInfinite<TData extends RowData>({
 
   return (
     <DataTableProvider
-      controlsDefaultOpen={resultsSlot == null}
-      controlsStorageKey={resultsSlot == null ? undefined : `data-table-${tableId}-facets`}
+      controlsDefaultOpen={!compact}
+      controlsStorageKey={compact ? `data-table-${tableId}-facets` : undefined}
       table={table}
       columns={columns}
       filterFields={filterFields}
@@ -359,7 +340,9 @@ export function DataTableInfinite<TData extends RowData>({
       */}
       <div
         className={cn(
-          resultsSlot == null ? "flex h-screen w-full flex-col sm:flex-row" : "flex h-full min-h-0 w-full flex-col sm:flex-row",
+          compact
+            ? "flex h-full min-h-0 w-full flex-col sm:flex-row"
+            : "flex h-screen w-full flex-col sm:flex-row",
           // Single source of truth for the panel width: the panel, its inner
           // wrapper and the main pane's `max-width` all read this variable so
           // they animate in lockstep.
@@ -371,11 +354,7 @@ export function DataTableInfinite<TData extends RowData>({
           <div className="border-border bg-background shrink-0 border-b p-2">
             <div className="flex h-[46px] items-center justify-between gap-3">
               <p className="text-foreground px-2 font-medium">Filters</p>
-              <div>
-                {table.state.columnFilters.length ? (
-                  <DataTableResetButton />
-                ) : null}
-              </div>
+              <div>{table.state.columnFilters.length ? <DataTableResetButton /> : null}</div>
             </div>
           </div>
           {/* REMINDER: no top padding - it would offset the first filter row */}
@@ -383,14 +362,12 @@ export function DataTableInfinite<TData extends RowData>({
             <DataTableFilterControls />
           </div>
           {footerSlot ? (
-            <div className="border-border bg-background shrink-0 border-t p-4">
-              {footerSlot}
-            </div>
+            <div className="border-border bg-background shrink-0 border-t p-4">{footerSlot}</div>
           ) : null}
         </FilterPanel>
         <div
           className={cn(
-            "border-border relative flex h-full max-w-full flex-1 flex-col",
+            "border-border relative flex h-full min-h-0 max-w-full flex-1 flex-col",
             // Collapsed, the panel is w-0 and the border would sit on the
             // viewport edge. Keep the 1px so nothing shifts, drop the colour.
             "sm:border-l sm:border-l-transparent",
@@ -405,7 +382,9 @@ export function DataTableInfinite<TData extends RowData>({
           <DataTableFilterRail />
           <div
             className={cn(
-              resultsSlot == null ? "bg-background flex shrink-0 flex-col gap-4 p-2 pb-4" : "bg-background flex shrink-0 flex-col gap-2 p-3 pb-2",
+              compact
+                ? "bg-background flex shrink-0 flex-col gap-2 p-3 pb-2"
+                : "bg-background flex shrink-0 flex-col gap-4 p-2 pb-4",
               // Above the table so the command palette's popover overlays it.
               "relative z-10",
             )}
@@ -414,138 +393,138 @@ export function DataTableInfinite<TData extends RowData>({
             {/* TBD: better flexibility with compound components? */}
             <DataTableToolbar
               showViewOptions={resultsSlot == null}
-              compact={resultsSlot != null}
+              showResetButton={resultsSlot == null}
+              compact={compact}
+              countLabel={countLabel}
               renderActions={toolbarActions ? () => toolbarActions : undefined}
             />
             {chartSlot}
           </div>
           {/* `min-h-0` lets the flex item shrink so the table container scrolls instead of the page. */}
           <div className="z-0 min-h-0 flex-1">
-            {resultsSlot ?? <Table
-              ref={tableRef}
-              onScroll={onScroll}
-              // REMINDER: https://stackoverflow.com/questions/50361698/border-style-do-not-work-with-sticky-position-element
-              className="border-separate border-spacing-0"
-              containerClassName="max-h-full"
-            >
-              <TableHeader className={cn("bg-background sticky top-0 z-20")}>
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <TableRow
-                    key={headerGroup.id}
-                    className={cn(
-                      "bg-muted/50 hover:bg-muted/50",
-                      "*:border-t [&>:not(:last-child)]:border-r",
-                    )}
-                  >
-                    {headerGroup.headers.map((header) => {
-                      return (
-                        <TableHead
-                          key={header.id}
-                          style={columnSizeStyle(
-                            header.column,
-                            `--header-${header.id.replaceAll(".", "-")}-size`,
-                            "min",
-                          )}
-                          className={cn(
-                            "border-border relative truncate border-b select-none last:[&>.cursor-col-resize]:opacity-0",
-                            header.column.columnDef.meta?.headerClassName,
-                          )}
-                          aria-sort={
-                            header.column.getIsSorted() === "asc"
-                              ? "ascending"
-                              : header.column.getIsSorted() === "desc"
-                                ? "descending"
-                                : "none"
-                          }
-                        >
-                          {header.isPlaceholder
-                            ? null
-                            : flexRender(
-                                header.column.columnDef.header,
-                                header.getContext(),
-                              )}
-                          {header.column.getCanResize() && (
-                            <div
-                              onDoubleClick={() => header.column.resetSize()}
-                              onMouseDown={header.getResizeHandler()}
-                              onTouchStart={header.getResizeHandler()}
-                              className={cn(
-                                "user-select-none absolute top-0 -right-2 z-10 flex h-full w-4 cursor-col-resize touch-none justify-center",
-                                "before:bg-border before:absolute before:inset-y-0 before:w-px before:translate-x-px",
-                              )}
-                            />
-                          )}
-                        </TableHead>
-                      );
-                    })}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody
-                id="content"
-                tabIndex={-1}
-                className="outline-primary outline-1 -outline-offset-1 transition-colors outline-none focus-visible:outline-solid"
-                // REMINDER: keeps the first rows out from under the sticky
-                // header when "skip to content" focuses the body
-                style={{ scrollMarginTop: "40px" }}
+            {resultsSlot ?? (
+              <Table
+                ref={tableRef}
+                onScroll={onScroll}
+                // REMINDER: https://stackoverflow.com/questions/50361698/border-style-do-not-work-with-sticky-position-element
+                className="border-separate border-spacing-0"
+                containerClassName="max-h-full"
               >
-                {table.getRowModel().rows?.length ? (
-                  table.getRowModel().rows.map((row) => (
-                    // REMINDER: if we want to add arrow navigation https://github.com/TanStack/table/discussions/2752#discussioncomment-192558
-                    <React.Fragment key={row.id}>
-                      {renderLiveRow?.({ row })}
-                      <MemoizedRow
-                        row={row}
-                        selected={row.getIsSelected()}
-                        isMultiSelect={hasSelectColumn}
-                        onRowClick={onRowClick}
-                        getRowClassName={getRowClassName}
-                      />
-                    </React.Fragment>
-                  ))
-                ) : (
-                  <React.Fragment>
-                    {renderLiveRow?.()}
-                    <TableRow>
-                      <TableCell
-                        colSpan={columns.length}
-                        className="h-24 text-center"
-                      >
-                        No results.
-                      </TableCell>
+                <TableHeader className={cn("bg-background sticky top-0 z-20")}>
+                  {table.getHeaderGroups().map((headerGroup) => (
+                    <TableRow
+                      key={headerGroup.id}
+                      className={cn(
+                        "bg-muted/50 hover:bg-muted/50",
+                        "*:border-t [&>:not(:last-child)]:border-r",
+                      )}
+                    >
+                      {headerGroup.headers.map((header) => {
+                        return (
+                          <TableHead
+                            key={header.id}
+                            style={columnSizeStyle(
+                              header.column,
+                              `--header-${header.id.replaceAll(".", "-")}-size`,
+                              "min",
+                            )}
+                            className={cn(
+                              "border-border relative truncate border-b select-none last:[&>.cursor-col-resize]:opacity-0",
+                              header.column.columnDef.meta?.headerClassName,
+                            )}
+                            aria-sort={
+                              header.column.getIsSorted() === "asc"
+                                ? "ascending"
+                                : header.column.getIsSorted() === "desc"
+                                  ? "descending"
+                                  : "none"
+                            }
+                          >
+                            {header.isPlaceholder
+                              ? null
+                              : flexRender(header.column.columnDef.header, header.getContext())}
+                            {header.column.getCanResize() && (
+                              <div
+                                onDoubleClick={() => header.column.resetSize()}
+                                onMouseDown={header.getResizeHandler()}
+                                onTouchStart={header.getResizeHandler()}
+                                className={cn(
+                                  "user-select-none absolute top-0 -right-2 z-10 flex h-full w-4 cursor-col-resize touch-none justify-center",
+                                  "before:bg-border before:absolute before:inset-y-0 before:w-px before:translate-x-px",
+                                )}
+                              />
+                            )}
+                          </TableHead>
+                        );
+                      })}
                     </TableRow>
-                  </React.Fragment>
-                )}
-                <TableRow className="hover:bg-transparent data-[state=selected]:bg-transparent">
-                  <TableCell colSpan={columns.length} className="text-center">
-                    {hasMoreToLoad || isFetching || isLoading ? (
-                      <Button
-                        disabled={isFetching || isLoading}
-                        onClick={() => fetchNextPage()}
-                        variant="outline"
-                      >
-                        {isFetching ? (
-                          <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-                        ) : null}
-                        Load More
-                      </Button>
-                    ) : (
-                      <p className="text-muted-foreground text-sm">
-                        No more data to load (
-                        <span className="font-mono font-medium">
-                          {formatCompactNumber(filterRows ?? 0)}
-                        </span>{" "}
-                        of{" "}
-                        <span className="font-mono font-medium">
-                          {formatCompactNumber(totalRows ?? 0)}
-                        </span>{" "}
-                        rows)
-                      </p>
-                    )}
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>}
+                  ))}
+                </TableHeader>
+                <TableBody
+                  id="content"
+                  tabIndex={-1}
+                  className="outline-primary outline-1 -outline-offset-1 transition-colors outline-none focus-visible:outline-solid"
+                  // REMINDER: keeps the first rows out from under the sticky
+                  // header when "skip to content" focuses the body
+                  style={{ scrollMarginTop: "40px" }}
+                >
+                  {table.getRowModel().rows?.length ? (
+                    table.getRowModel().rows.map((row) => (
+                      // REMINDER: if we want to add arrow navigation https://github.com/TanStack/table/discussions/2752#discussioncomment-192558
+                      <React.Fragment key={row.id}>
+                        {renderLiveRow?.({ row })}
+                        <MemoizedRow
+                          row={row}
+                          selected={row.getIsSelected()}
+                          isMultiSelect={hasSelectColumn}
+                          onRowClick={onRowClick}
+                          getRowClassName={getRowClassName}
+                        />
+                      </React.Fragment>
+                    ))
+                  ) : (
+                    <React.Fragment>
+                      {renderLiveRow?.()}
+                      <TableRow>
+                        <TableCell colSpan={columns.length} className="h-24 text-center">
+                          {emptySlot ?? "No results."}
+                        </TableCell>
+                      </TableRow>
+                    </React.Fragment>
+                  )}
+                  <TableRow className="hover:bg-transparent data-[state=selected]:bg-transparent">
+                    <TableCell colSpan={columns.length} className="text-center">
+                      {hasMoreToLoad || isFetching || isLoading ? (
+                        <Button
+                          disabled={isFetching || isLoading}
+                          onClick={() => fetchNextPage()}
+                          variant="outline"
+                        >
+                          {isFetching ? (
+                            <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                          ) : null}
+                          Load More
+                        </Button>
+                      ) : (
+                        <p className="text-muted-foreground text-sm">
+                          No more data to load (
+                          <span className="font-mono font-medium">
+                            {formatCompactNumber(
+                              filterRows ?? table.getFilteredRowModel().rows.length,
+                            )}
+                          </span>{" "}
+                          of{" "}
+                          <span className="font-mono font-medium">
+                            {formatCompactNumber(totalRows ?? 0)}
+                          </span>{" "}
+                          rows)
+                        </p>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            )}
           </div>
         </div>
       </div>
@@ -577,9 +556,7 @@ function FilterPanel({ children }: { children: React.ReactNode }) {
         "motion-reduce:transition-none",
       )}
     >
-      <div className="flex h-full w-full flex-col sm:w-(--controls-width)">
-        {children}
-      </div>
+      <div className="flex h-full w-full flex-col sm:w-(--controls-width)">{children}</div>
     </div>
   );
 }

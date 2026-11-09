@@ -16,8 +16,7 @@ export function DataTableCellHeatmap({
   color?: string;
 }) {
   const range = max - min;
-  const ratio =
-    range === 0 ? 0 : Math.max(0, Math.min(1, (value - min) / range));
+  const ratio = range === 0 ? 0 : Math.max(0, Math.min(1, (value - min) / range));
   const opacity = ratio * OPACITY;
 
   const formatted = new Intl.NumberFormat("en-US", {
@@ -37,7 +36,7 @@ export function DataTableCellHeatmap({
       />
       <span className="relative font-mono">
         {formatted}
-        {unit && <span className="text-muted-foreground">{unit}</span>}
+        {unit && <span>{unit}</span>}
       </span>
     </div>
   );

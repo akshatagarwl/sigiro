@@ -25,30 +25,28 @@ type AutoRow = Record<string, unknown>;
 
 export interface DataTableAutoProps {
   data: AutoRow[];
+  tableId?: string;
+  compact?: boolean;
+  isUpdating?: boolean;
+  getRowId?: (row: AutoRow, index: number) => string;
 }
 
-export function DataTableAuto({ data }: DataTableAutoProps) {
+export function DataTableAuto({
+  data,
+  tableId = "auto",
+  compact = false,
+  isUpdating = false,
+  getRowId,
+}: DataTableAutoProps) {
   const schemaJson = React.useMemo(() => inferSchemaFromJSON(data), [data]);
 
-  const { definition } = React.useMemo(
-    () => createTableSchema.fromJSON(schemaJson),
-    [schemaJson],
-  );
+  const { definition } = React.useMemo(() => createTableSchema.fromJSON(schemaJson), [schemaJson]);
 
-  const columns = React.useMemo(
-    () => generateColumns<AutoRow>(definition),
-    [definition],
-  );
+  const columns = React.useMemo(() => generateColumns<AutoRow>(definition), [definition]);
 
-  const filterFields = React.useMemo(
-    () => generateFilterFields<AutoRow>(definition),
-    [definition],
-  );
+  const filterFields = React.useMemo(() => generateFilterFields<AutoRow>(definition), [definition]);
 
-  const sheetFields = React.useMemo(
-    () => generateSheetFields<AutoRow>(definition),
-    [definition],
-  );
+  const sheetFields = React.useMemo(() => generateSheetFields<AutoRow>(definition), [definition]);
 
   const defaultColumnVisibility = React.useMemo(
     () => getDefaultColumnVisibility(definition),
@@ -63,11 +61,15 @@ export function DataTableAuto({ data }: DataTableAutoProps) {
     [definition],
   );
 
-  const adapter = useMemoryAdapter(filterSchema.definition, { id: "auto" });
+  const adapter = useMemoryAdapter(filterSchema.definition, { id: tableId });
 
   return (
     <DataTableStoreProvider adapter={adapter}>
       <DataTableAutoInner
+        tableId={tableId}
+        compact={compact}
+        isUpdating={isUpdating}
+        getRowId={getRowId}
         data={data}
         columns={columns}
         filterFields={filterFields}
@@ -88,32 +90,42 @@ function DataTableAutoInner({
   sheetFields,
   defaultColumnVisibility,
   schema,
-}: {
-  data: AutoRow[];
+  tableId,
+  compact,
+  isUpdating,
+  getRowId,
+}: DataTableAutoProps & {
+  tableId: string;
   columns: React.ComponentProps<typeof DataTableInfinite<AutoRow>>["columns"];
-  filterFields: React.ComponentProps<
-    typeof DataTableInfinite<AutoRow>
-  >["filterFields"];
+  filterFields: React.ComponentProps<typeof DataTableInfinite<AutoRow>>["filterFields"];
   sheetFields: SheetField<AutoRow>[];
   defaultColumnVisibility: Record<string, boolean>;
   schema: SchemaDefinition;
 }) {
   return (
     <DataTableInfinite
+      compact={compact}
+      countLabel="loaded"
+      getRowId={getRowId}
       columns={columns}
       data={data}
       filterFields={filterFields}
       defaultColumnVisibility={defaultColumnVisibility}
+      totalRows={data.length}
       totalRowsFetched={data.length}
       hasNextPage={false}
       fetchNextPage={noop}
-      isFetching={false}
+      isFetching={isUpdating}
       isLoading={false}
-      tableId="auto"
-      commandSlot={<DataTableFilterCommand schema={schema} tableId="auto" />}
-      sheetSlot={
-        <AutoSheetSlot sheetFields={sheetFields} totalRows={data.length} />
+      tableId={tableId}
+      commandSlot={
+        <DataTableFilterCommand
+          schema={schema}
+          tableId={tableId}
+          placeholder="Filter loaded rows…"
+        />
       }
+      sheetSlot={<AutoSheetSlot sheetFields={sheetFields} data={data} getRowId={getRowId} />}
       footerSlot={
         <div className="text-muted-foreground text-sm">
           powered by{" "}
@@ -133,41 +145,41 @@ function DataTableAutoInner({
 
 function AutoSheetSlot({
   sheetFields: fields,
-  totalRows,
-}: {
+  data,
+  getRowId,
+}: Pick<DataTableAutoProps, "data" | "getRowId"> & {
   sheetFields: SheetField<AutoRow>[];
-  totalRows: number;
 }) {
-  const { table, rowSelection, isLoading, filterFields } = useDataTable<
-    AutoRow,
-    unknown
-  >();
+  const { table, rowSelection, filterFields } = useDataTable<AutoRow, unknown>();
   const selectedRowKey = Object.keys(rowSelection)?.[0];
-  const selectedRow = React.useMemo(() => {
-    if (isLoading && !selectedRowKey) return undefined;
-    return table
-      .getCoreRowModel()
-      .flatRows.find((row) => row.id === selectedRowKey);
-  }, [selectedRowKey, isLoading, table]);
+  // The dataset, not the stable table instance, owns the selected payload.
+  const selectedRow = React.useMemo(
+    () => data.find((row, index) => (getRowId?.(row, index) ?? String(index)) === selectedRowKey),
+    [data, getRowId, selectedRowKey],
+  );
 
   return (
     <DataTableSheetDetails
-      title={
-        selectedRow ? String(Object.values(selectedRow.original)[0] ?? "") : ""
-      }
+      title={selectedRow ? String(Object.values(selectedRow)[0] ?? "") : "Selected row unavailable"}
       titleClassName="font-mono"
     >
-      <MemoizedDataTableSheetContent
-        table={table}
-        data={selectedRow?.original}
-        filterFields={filterFields}
-        fields={fields}
-        metadata={{
-          totalRows,
-          filterRows: totalRows,
-          totalRowsFetched: totalRows,
-        }}
-      />
+      {!selectedRow && selectedRowKey ? (
+        <p role="status" className="p-4 text-sm">
+          This row is no longer in the current results. Close this panel to continue.
+        </p>
+      ) : (
+        <MemoizedDataTableSheetContent
+          table={table}
+          data={selectedRow}
+          filterFields={filterFields}
+          fields={fields}
+          metadata={{
+            totalRows: data.length,
+            filterRows: table.getFilteredRowModel().rows.length,
+            totalRowsFetched: data.length,
+          }}
+        />
+      )}
     </DataTableSheetDetails>
   );
 }
