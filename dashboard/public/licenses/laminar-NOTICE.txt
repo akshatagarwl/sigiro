@@ -1,0 +1,20 @@
+Laminar trace UI adaptation
+
+This product includes code adapted from Laminar by the Laminar contributors:
+https://github.com/lmnr-ai/lmnr
+Revision inspected: 99d1eae1faa7d779ab11c4deaafca7659c143442
+
+Original file:
+frontend/components/traces/trace-view/condensed-timeline/use-wheel-zoom.ts
+
+Adapted file:
+dashboard/components/laminar/use-wheel-zoom.ts
+
+Modifications: local zoom constants, clamped bounds, immediate zoom ref updates,
+zero-width guard, Sigiro callback wiring and formatting. The tree/timeline layout
+and inspector are Sigiro components informed by Laminar's condensed timeline UI;
+Laminar's store, backend, session replay and cost calculations are not included.
+
+Licensed under the Apache License, Version 2.0.
+A copy accompanies this notice in laminar-Apache-2.0.txt.
+No upstream NOTICE file was present in the inspected repository tree.

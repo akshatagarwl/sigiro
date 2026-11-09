@@ -48,6 +48,7 @@ export function DataTableViewOptions() {
           variant="outline"
           size="icon"
           role="combobox"
+          aria-label="Configure columns"
           aria-expanded={open}
           className="shadow-none"
         >
