@@ -1,7 +1,14 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { CircleAlert, ChevronDown, ChevronRight, Minus, Plus, Search } from "lucide-react";
+import {
+  CircleAlert,
+  ChevronDown,
+  ChevronRight,
+  Minus,
+  Plus,
+  Search,
+} from "lucide-react";
 import { useQueryState, parseAsString } from "nuqs";
 import { useMemo, useRef, useState } from "react";
 
@@ -74,15 +81,21 @@ function SpanInspector({
           </Badge>
         </div>
         <h3 className="text-base font-semibold break-words">{span.name}</h3>
-        <div className="text-muted-foreground font-mono text-xs break-all">{span.id}</div>
+        <div className="text-muted-foreground font-mono text-xs break-all">
+          {span.id}
+        </div>
         <dl className="bg-muted/30 grid grid-cols-2 gap-4 rounded-md border p-3">
           <div>
             <dt className="text-muted-foreground text-xs">Duration</dt>
-            <dd className="mt-1 text-sm font-medium tabular-nums">{durationLabel(span.duration)}</dd>
+            <dd className="mt-1 text-sm font-medium tabular-nums">
+              {durationLabel(span.duration)}
+            </dd>
           </div>
           <div>
             <dt className="text-muted-foreground text-xs">Service</dt>
-            <dd className="mt-1 text-sm font-medium break-words">{span.service}</dd>
+            <dd className="mt-1 text-sm font-medium break-words">
+              {span.service}
+            </dd>
           </div>
         </dl>
         {span.row.status_message ? (
@@ -265,36 +278,40 @@ export function TraceWorkspace({
         >
           Errors only
         </Button>
-        <div className="flex shrink-0 items-center gap-1" role="group" aria-label="Timeline zoom">
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="Zoom out"
-          disabled={zoom <= 1}
-          onClick={() => setZoom(Math.max(1, zoom - 0.5))}
+        <div
+          className="flex shrink-0 items-center gap-1"
+          role="group"
+          aria-label="Timeline zoom"
         >
-          <Minus className="size-4" />
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            setZoom(1);
-            if (scrollRef.current) scrollRef.current.scrollLeft = 0;
-          }}
-          aria-label="Reset zoom"
-        >
-          {zoom.toFixed(1)}×
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="Zoom in"
-          disabled={zoom >= MAX_ZOOM}
-          onClick={() => setZoom(Math.min(MAX_ZOOM, zoom + 0.5))}
-        >
-          <Plus className="size-4" />
-        </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Zoom out"
+            disabled={zoom <= 1}
+            onClick={() => setZoom(Math.max(1, zoom - 0.5))}
+          >
+            <Minus className="size-4" />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setZoom(1);
+              if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+            }}
+            aria-label="Reset zoom"
+          >
+            {zoom.toFixed(1)}×
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Zoom in"
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => setZoom(Math.min(MAX_ZOOM, zoom + 0.5))}
+          >
+            <Plus className="size-4" />
+          </Button>
         </div>
       </div>
       <ResizablePanelGroup
@@ -395,8 +412,17 @@ export function TraceWorkspace({
                         aria-pressed={selected.id === span.id}
                         onClick={() => select(span)}
                       >
-                        {span.error && <CircleAlert className="text-destructive mr-1 inline size-3.5" aria-label="Error" />}
-                        <span className={span.error ? "text-destructive font-medium" : ""}>
+                        {span.error && (
+                          <CircleAlert
+                            className="text-destructive mr-1 inline size-3.5"
+                            aria-label="Error"
+                          />
+                        )}
+                        <span
+                          className={
+                            span.error ? "text-destructive font-medium" : ""
+                          }
+                        >
                           {span.name}
                         </span>
                         <span className="text-muted-foreground ml-2">
@@ -437,10 +463,12 @@ export function TraceWorkspace({
               )}
             </div>
           </div>
-          <div className="text-muted-foreground border-t px-3 py-2 text-xs"
+          <div
+            className="text-muted-foreground border-t px-3 py-2 text-xs"
             role="status"
             aria-live="polite"
-            aria-atomic="true">
+            aria-atomic="true"
+          >
             {filtered.length} matching spans · Ctrl/⌘ + scroll to zoom
           </div>
         </ResizablePanel>
