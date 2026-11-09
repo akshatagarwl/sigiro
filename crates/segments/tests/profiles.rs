@@ -13,6 +13,9 @@ use prost::Message;
 use pyroscope::encode::r#gen::google;
 use pyroscope::encode::r#gen::push::{PushRequest, RawProfileSeries, RawSample};
 use pyroscope::encode::r#gen::types::LabelPair;
+use sigiro_segments::profile_export::{
+    ExportFrame, ExportProfile, ExportRequest, ExportSample, encode_profiles_request,
+};
 use sigiro_segments::{
     DecodeError, Table, transform_otlp_profiles, transform_pyroscope_profiles, write_segment,
 };
@@ -455,4 +458,107 @@ fn pyroscope_sample_type_config_names_labels_and_tags_are_kept() {
         serde_json::from_str(&strings(&batch, "resource_attributes")[0]).unwrap();
     assert_eq!(resource["env"], "prod");
     assert!(resource.get("__session_id__").is_none());
+}
+
+fn frame(function: &str, line: i64) -> ExportFrame {
+    ExportFrame {
+        function: function.into(),
+        file: "src/main.rs".into(),
+        line,
+    }
+}
+
+#[test]
+fn an_exported_profile_round_trips_through_the_otlp_transform() {
+    let thread = |name: &str| vec![("thread.name".to_string(), name.to_string())];
+    let request = ExportRequest {
+        resource: vec![
+            ("service.name".into(), "sigiro".into()),
+            ("process.pid".into(), "42".into()),
+        ],
+        scope_name: "sigiro".into(),
+        scope_version: "0.1.0".into(),
+        profiles: vec![
+            ExportProfile {
+                sample_type: ("cpu".into(), "nanoseconds".into()),
+                period_type: ("cpu".into(), "nanoseconds".into()),
+                period: 10_000_000,
+                time_unix_nano: 1_700_000_000_000_000_000,
+                duration_nano: 10_000_000_000,
+                samples: vec![
+                    // Leaf first, with `inlined` inlined into `work`.
+                    ExportSample {
+                        frames: vec![frame("inlined", 7), frame("work", 3), frame("main", 1)],
+                        value: 30_000_000,
+                        attributes: thread("worker-1"),
+                    },
+                    ExportSample {
+                        frames: vec![frame("work", 4), frame("main", 1)],
+                        value: 20_000_000,
+                        attributes: thread("worker-2"),
+                    },
+                    // Zero samples carry nothing and are not sent.
+                    ExportSample {
+                        frames: vec![frame("main", 1)],
+                        value: 0,
+                        attributes: Vec::new(),
+                    },
+                ],
+            },
+            ExportProfile {
+                sample_type: ("inuse_space".into(), "bytes".into()),
+                period_type: ("space".into(), "bytes".into()),
+                period: 524_288,
+                time_unix_nano: 1_700_000_000_000_000_000,
+                duration_nano: 0,
+                samples: vec![ExportSample {
+                    frames: vec![frame("alloc", 9), frame("main", 1)],
+                    value: 4096,
+                    attributes: Vec::new(),
+                }],
+            },
+        ],
+    };
+    let bytes = encode_profiles_request(&request);
+    let decoded = ExportProfilesServiceRequest::decode(bytes.as_slice()).unwrap();
+    let dictionary = decoded.dictionary.as_ref().unwrap();
+    // The two `main` frames at line 1 share one location.
+    assert_eq!(dictionary.location_table.len(), 1 + 5);
+
+    let batch = transform_otlp_profiles(&bytes).unwrap();
+    assert_eq!(
+        strings(&batch, "profile_type"),
+        ["cpu", "cpu", "inuse_space"]
+    );
+    assert_eq!(
+        strings(&batch, "unit"),
+        ["nanoseconds", "nanoseconds", "bytes"]
+    );
+    assert_eq!(
+        stacks(&batch),
+        [
+            vec!["main", "work", "inlined"],
+            vec!["main", "work"],
+            vec!["main", "alloc"]
+        ]
+    );
+    assert_eq!(values(&batch), [30_000_000, 20_000_000, 4096]);
+    assert_eq!(strings(&batch, "service_name"), ["sigiro"; 3]);
+    assert_eq!(
+        strings(&batch, "labels")[..2],
+        [
+            r#"{"thread.name":"worker-1"}"#,
+            r#"{"thread.name":"worker-2"}"#
+        ]
+    );
+    let resource: serde_json::Value =
+        serde_json::from_str(&strings(&batch, "resource_attributes")[0]).unwrap();
+    assert_eq!(resource["process.pid"], "42");
+    let timestamps = batch
+        .column_by_name("timestamp")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+    assert_eq!(timestamps.value(0), 1_700_000_000_000_000);
 }
