@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-labelledby="title desc">
+<title id="title">Follow a run from trace explorer to related signals</title>
+<desc id="desc">Filter root spans, open a trace, select a span in the tree and timeline, inspect recorded payloads, and follow links to logs or a CPU profile. All panels query Sigiro.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#333" stroke-width="2"/></marker></defs>
+<rect width="1200" height="470" fill="#faf9f6"/>
+<g font-family="ui-rounded, system-ui, sans-serif" fill="#252525">
+<text x="34" y="40" font-size="23" font-weight="600">Investigate a trace, without switching tools</text>
+<g fill="none" stroke="#333" stroke-width="2.2" stroke-linejoin="round">
+<path d="M34 80 L336 77 L339 274 L32 277 Z" fill="#e8f1ff"/>
+<path d="M437 77 L741 81 L738 274 L434 278 Z" fill="#eee8ff"/>
+<path d="M840 81 L1164 78 L1168 277 L838 274 Z" fill="#fff0d9"/>
+<path d="M348 167 Q391 158 424 167" marker-end="url(#arrow)"/>
+<path d="M752 167 Q793 159 829 166" marker-end="url(#arrow)"/>
+<path d="M1001 288 Q1009 328 900 352" marker-end="url(#arrow)"/>
+<path d="M1014 288 Q1025 329 1093 352" marker-end="url(#arrow)"/>
+<path d="M763 363 L960 360 L963 416 L760 420 Z" fill="#e9f5e9"/>
+<path d="M1000 361 L1173 364 L1170 419 L998 416 Z" fill="#e9f5e9"/>
+</g>
+<g font-size="19" font-weight="600"><text x="54" y="111">1. Trace explorer</text><text x="456" y="111">2. Tree + timeline</text><text x="858" y="111">3. Span inspector</text></g>
+<g font-size="15"><text x="54" y="149">Filter root name, service, status</text><text x="54" y="179">Choose columns · share the URL</text><text x="54" y="209">Open the run you want to inspect</text>
+<text x="456" y="149">Search · errors only · collapse</text><text x="456" y="179">Zoom · keyboard selection</text><text x="456" y="209">Virtual rows, not 2,000 DOM nodes</text>
+<text x="858" y="149">Recorded input / output</text><text x="858" y="179">Events · attributes · status</text><text x="858" y="209">Resize panels · deep-link a span</text>
+<text x="787" y="394" font-weight="600">Related trace logs</text><text x="1020" y="394" font-weight="600">Span CPU profile</text>
+<text x="34" y="324" fill="#555">One query API. No Laminar backend.</text><text x="34" y="354" fill="#555">No invented sessions, payloads or profiles.</text><text x="34" y="414" fill="#555">More than 2,000 spans? The loaded subset is explicitly labelled.</text></g>
+</g></svg>

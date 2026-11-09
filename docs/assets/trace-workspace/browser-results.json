@@ -1,0 +1,40 @@
+{
+  "results": [
+    "explorer real root rows and working column picker",
+    "root-name filter restored from URL after reload",
+    "row opens trace workspace with shareable uuid",
+    "span tree collapse and expand",
+    "span search, selected URL and recorded input/output",
+    "events and resource/span attributes",
+    "errors-only filter and real HTTP 404 status message",
+    "timeline zoom controls",
+    "Laminar-adapted Ctrl+wheel zoom",
+    "keyboard span navigation",
+    "accessible panel resizing",
+    "deep link survives reload",
+    "close clears selected trace/span and restores explorer",
+    "2102-span trace visibly capped at 2000; DOM virtualized at start/end",
+    "invalid trace ID",
+    "empty trace",
+    "related logs link returns the real correlated log",
+    "profile link carries exact trace/span/service/window",
+    "profile destination shows honest empty state when no samples exist",
+    "390px mobile sheet has no horizontal page overflow",
+    "no browser runtime errors"
+  ],
+  "errors": [],
+  "workload": {
+    "normal": {
+      "trace": "ff37c8bb3cf08a27a9e2f3e7f81148e3",
+      "root": "fb5f14c08c6ba9ad",
+      "spans": 82,
+      "operations": 80
+    },
+    "large": {
+      "trace": "484e95086fe612f4d402773fddb64ac2",
+      "root": "b2e9fccf2b6df9dc",
+      "spans": 2102,
+      "operations": 2100
+    }
+  }
+}
