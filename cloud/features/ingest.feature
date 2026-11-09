@@ -52,17 +52,6 @@ Feature: Hosted telemetry ingest
     When the SDK exports an OTLP profile whose leaf frame is "work" under "main"
     Then a profiles segment holds the stack "main;work" with its sample value
 
-  Scenario Outline: Pyroscope SDK pushes are stored as profiles
-    When a Pyroscope SDK sends <payload> to <path>
-    Then a profiles segment holds rows for that SDK's service
-
-    Examples:
-      | path                        | payload                                  |
-      | /push.v1.PusherService/Push | a PushRequest                            |
-      | /ingest                     | a gzipped raw pprof named by ?name=      |
-      | /ingest/pyroscope           | a multipart form with a profile field    |
-      | /                           | a PushRequest with no content type       |
-
-  Scenario: A Pyroscope push with an unsupported content type is rejected
-    When a Pyroscope SDK sends a profile as text/plain
-    Then the export fails with status 400
+  Scenario: Profiles in a format other than OTLP are not accepted
+    When a client posts a profile to /ingest
+    Then the export fails with status 404

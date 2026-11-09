@@ -6,7 +6,7 @@
 //! (the tenant: sigiro has no smaller "project" inside a workspace), it is sent
 //! as an ordinary `Authorization: Bearer <key>` header so zero-code
 //! instrumentation works with nothing but `OTEL_EXPORTER_OTLP_HEADERS`, and it
-//! authorizes OTLP and Pyroscope ingest only: every read API rejects it.
+//! authorizes OTLP ingest only: every read API rejects it.
 //!
 //! The key is `sigiro_<id>_<secret>` ([`prefixed_api_key`], the format GitHub
 //! and Seam use). The id is public and is what `list` and `revoke` name. Only a

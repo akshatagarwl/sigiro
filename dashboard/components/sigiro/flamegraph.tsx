@@ -62,7 +62,7 @@ export function Flamegraph({
       .minFrameSize(1)
       .transitionDuration(250)
       .sort(true)
-      // Root on top, callees below (an icicle), as Pyroscope draws it.
+      // Root on top, callees below (an icicle).
       .inverted(true)
       .selfValue(false)
       .tooltip(tip)

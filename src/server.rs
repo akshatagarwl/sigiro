@@ -47,10 +47,6 @@ use tracing_attributes::instrument;
         services_handler,
         alerts_handler,
         trace_detail_handler,
-        crate::ingest::pyroscope_root,
-        crate::ingest::pyroscope_push,
-        crate::ingest::pyroscope_ingest,
-        crate::ingest::pyroscope_ingest_pyroscope,
         list_ingest_keys,
         create_ingest_key,
         revoke_ingest_key,
@@ -76,16 +72,15 @@ use tracing_attributes::instrument;
     /* Every operation carries an explicit `tag`.
      *
      * An operation without one is not untagged: utoipa falls back to the Rust
-     * module path, so the Pyroscope routes (defined in `crate::ingest`) showed up
-     * in the public reference under a section literally named `crate::ingest`.
+     * module path, so routes defined in `crate::ingest` once showed up in the
+     * public reference under a section literally named `crate::ingest`.
      *
      * The tags name what an operation is for, not how it is reached (an earlier
      * `query` tag described the transport and grouped everything into one
-     * heading). With ingest keys the API has three genuine areas. */
+     * heading). The API has two genuine areas. */
     tags(
         (name = "Telemetry", description = "Read the telemetry of your workspace."),
         (name = "Ingest keys", description = "Fixed, revocable keys that let a long-running service send telemetry."),
-        (name = "Pyroscope ingest", description = "Send profiles in Pyroscope's own wire format."),
     ),
 )]
 pub(crate) struct ApiDoc;
@@ -825,8 +820,8 @@ pub async fn run_servers(
         None
     };
 
-    // OTLP HTTP ingest sub-router (POST /v1/traces|logs|metrics|profiles + the
-    // pyroscope paths) — a composable Router with its own auth/DefaultBodyLimit/
+    // OTLP HTTP ingest sub-router (POST /v1/traces|logs|metrics and
+    // /v1development/profiles) — a composable Router with its own auth/DefaultBodyLimit/
     // state. RequestDecompressionLayer is applied to THIS sub-router only, not
     // the whole :9999 app, matching what the dedicated :4318 listener already
     // does. Merged into the :9999 app below so there is one public port; the

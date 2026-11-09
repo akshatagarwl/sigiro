@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-use std::io::Read;
 use std::sync::Arc;
 
 use arrow::array::{Int64Array, ListBuilder, StringBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use prost::Message;
-use serde::Deserialize;
 use serde_json::{Map, Value as JsonValue};
 
 use crate::otel_proto::tonic::collector::profiles::v1development::ExportProfilesServiceRequest;
@@ -14,7 +11,7 @@ use crate::otel_proto::tonic::profiles::v1development::ProfilesDictionary;
 use crate::{DecodeError, SpanId, TraceId};
 
 /// Frames kept per stack (leaf side). Deeper stacks lose their outermost
-/// callers; both ingest paths apply the same cap so their stacks agree.
+/// callers.
 const MAX_FRAMES: usize = 512;
 
 /// The Profile attribute that names the Go runtime profile (cpu, heap,
@@ -52,17 +49,17 @@ pub(crate) fn profile_schema() -> Arc<Schema> {
         Field::new("value", DataType::Int64, true),
         Field::new("unit", DataType::Utf8, true),
         Field::new("resource_attributes", DataType::Utf8, true),
-        // Per-sample labels as a JSON object: OTLP Sample attributes, or pprof
-        // sample labels on the Pyroscope path. Appended last so existing
-        // tables gain it with `ALTER TABLE … ADD COLUMN`.
+        // Per-sample labels as a JSON object (OTLP Sample attributes).
+        // Appended last so existing tables gain it with
+        // `ALTER TABLE … ADD COLUMN`.
         Field::new("labels", DataType::Utf8, true),
     ]))
 }
 
 /// The display name of a sample type. Mutex and block profiles share the
 /// pprof sample types `contentions` and `delay`, so with a known profile kind
-/// they are stored under Pyroscope's names (`mutex_count`, `block_duration`,
-/// …). The goroutine profile's `goroutine` type is stored as `goroutines`.
+/// they are stored as `mutex_count`, `mutex_duration`, `block_count` and
+/// `block_duration`. The goroutine profile's `goroutine` type is stored as `goroutines`.
 /// Everything else keeps its pprof name.
 pub(crate) fn display_profile_type(kind: Option<&str>, sample_type: &str) -> String {
     match (kind, sample_type) {
@@ -73,7 +70,7 @@ pub(crate) fn display_profile_type(kind: Option<&str>, sample_type: &str) -> Str
     }
 }
 
-/// Column builders shared by both ingest paths.
+/// Column builders for profile rows.
 struct Rows {
     profile_ids: StringBuilder,
     trace_ids: StringBuilder,
@@ -393,342 +390,6 @@ fn transform_profiles_request(
     rows.finish()
 }
 
-/// One entry of the `sample_type_config` multipart field that Pyroscope SDKs
-/// send next to a raw pprof profile.
-#[derive(Debug, Default, Deserialize)]
-pub struct PyroscopeSampleType {
-    #[serde(default, rename = "display-name", alias = "display_name")]
-    pub display_name: String,
-    #[serde(default)]
-    pub units: String,
-}
-
-/// Decode either a Pyroscope PushRequest or an SDK raw pprof profile into an
-/// Arrow RecordBatch using the same schema as transform_profiles.
-pub fn transform_pyroscope_profiles(
-    body: Vec<u8>,
-    sdk_name: Option<&str>,
-    max_profile_bytes: usize,
-) -> Result<RecordBatch, DecodeError> {
-    transform_pyroscope_profiles_with_config(body, sdk_name, None, max_profile_bytes)
-}
-
-/// Split a Pyroscope application name `app{k=v,k2=v2}` into the application
-/// and its labels.
-fn parse_pyroscope_name(name: &str) -> (&str, Vec<(String, String)>) {
-    let Some((base, rest)) = name.split_once('{') else {
-        return (name.trim(), Vec::new());
-    };
-    let inner = rest.strip_suffix('}').unwrap_or(rest);
-    let labels = inner
-        .split(',')
-        .filter_map(|pair| {
-            let (k, v) = pair.split_once('=')?;
-            let (k, v) = (k.trim(), v.trim());
-            (!k.is_empty()).then(|| (k.to_string(), v.to_string()))
-        })
-        .collect();
-    (base.trim(), labels)
-}
-
-/// As transform_pyroscope_profiles, with the SDK's `sample_type_config` JSON
-/// (from the multipart body) used to name sample types.
-pub fn transform_pyroscope_profiles_with_config(
-    body: Vec<u8>,
-    sdk_name: Option<&str>,
-    sample_type_config: Option<&[u8]>,
-    max_profile_bytes: usize,
-) -> Result<RecordBatch, DecodeError> {
-    let decompressed = decompress_profile(body, max_profile_bytes, "Pyroscope request")?;
-    tracing::debug!("pyroscope: payload {} bytes", decompressed.len());
-
-    let type_config: HashMap<String, PyroscopeSampleType> = match sample_type_config {
-        Some(bytes) if !bytes.is_empty() => serde_json::from_slice(bytes).map_err(|e| {
-            DecodeError::Parse(format!("Pyroscope sample_type_config is invalid JSON: {e}"))
-        })?,
-        _ => HashMap::new(),
-    };
-
-    // Stage 2: Node sends raw pprof with the application name in the query;
-    // pyroscope-rs sends a PushRequest whose series already carries service_name.
-    let push_request = if let Some(name) = sdk_name {
-        let (service_name, name_labels) = parse_pyroscope_name(name);
-        if service_name.is_empty() {
-            return Err(DecodeError::Parse(
-                "Pyroscope SDK name must contain a non-empty application name".into(),
-            ));
-        }
-        let mut labels = vec![crate::pyroscope_proto::types::LabelPair {
-            name: "service_name".to_string(),
-            value: service_name.to_string(),
-        }];
-        labels.extend(
-            name_labels
-                .into_iter()
-                .map(|(name, value)| crate::pyroscope_proto::types::LabelPair { name, value }),
-        );
-        crate::pyroscope_proto::push::PushRequest {
-            series: vec![crate::pyroscope_proto::push::RawProfileSeries {
-                labels,
-                samples: vec![crate::pyroscope_proto::push::RawSample {
-                    raw_profile: decompressed,
-                    id: String::new(),
-                }],
-            }],
-        }
-    } else {
-        crate::pyroscope_proto::push::PushRequest::decode(&decompressed[..]).map_err(|e| {
-            tracing::debug!("pyroscope PushRequest decode failed: {:?}", e);
-            DecodeError::Parse(format!("push request decode failed: {e}"))
-        })?
-    };
-    tracing::debug!("pyroscope: series count={}", push_request.series.len());
-
-    let mut rows = Rows::new();
-
-    for series in &push_request.series {
-        // Extract service.name from labels
-        let service_name = series
-            .labels
-            .iter()
-            .find(|l| l.name == "service_name")
-            .map(|l| l.value.as_str())
-            .unwrap_or("");
-        if service_name.is_empty() {
-            return Err(DecodeError::Parse(
-                "Pyroscope series is missing the service_name label".into(),
-            ));
-        }
-        // Series labels describe the process, like an OTLP resource. Pyroscope's
-        // reserved `__name__`-style labels are internal and dropped.
-        let mut resource = Map::new();
-        resource.insert(
-            "service.name".to_string(),
-            JsonValue::String(service_name.to_string()),
-        );
-        for label in &series.labels {
-            if label.name == "service_name" || label.name.starts_with("__") {
-                continue;
-            }
-            resource.insert(label.name.clone(), JsonValue::String(label.value.clone()));
-        }
-        let resource_json = JsonValue::Object(resource).to_string();
-
-        for sample in &series.samples {
-            // Decode each embedded pprof synchronously; the whole transform runs
-            // in one blocking-pool task from the HTTP handler.
-            let decompressed = decompress_profile(
-                sample.raw_profile.clone(),
-                max_profile_bytes,
-                "embedded pprof profile",
-            )?;
-            let pprof_profile = crate::pyroscope_proto::google::Profile::decode(&decompressed[..])
-                .map_err(|e| DecodeError::Parse(format!("pprof profile decode failed: {e}")))?;
-
-            // Time and duration in nanoseconds → microseconds
-            let ts_us = pprof_profile.time_nanos / 1000;
-
-            let resolve_string = |index: i64, field: &str| -> Result<&str, DecodeError> {
-                let index = usize::try_from(index).map_err(|_| {
-                    DecodeError::Parse(format!(
-                        "pprof {field} string index {index} must not be negative"
-                    ))
-                })?;
-                pprof_profile
-                    .string_table
-                    .get(index)
-                    .map(String::as_str)
-                    .ok_or_else(|| {
-                        DecodeError::Parse(format!(
-                            "pprof {field} string index {index} out of bounds (table has {} entries)",
-                            pprof_profile.string_table.len()
-                        ))
-                    })
-            };
-
-            let sample_types = pprof_profile
-                .sample_type
-                .iter()
-                .enumerate()
-                .map(|(index, sample_type)| {
-                    let profile_type =
-                        resolve_string(sample_type.r#type, &format!("sample_type[{index}].type"))?;
-                    let unit =
-                        resolve_string(sample_type.unit, &format!("sample_type[{index}].unit"))?;
-                    if profile_type.is_empty() || unit.is_empty() {
-                        return Err(DecodeError::Parse(format!(
-                            "pprof sample_type[{index}] must have non-empty type and unit"
-                        )));
-                    }
-                    let display = type_config
-                        .get(profile_type)
-                        .map(|c| c.display_name.as_str())
-                        .filter(|name| !name.is_empty())
-                        .map(str::to_string)
-                        .unwrap_or_else(|| display_profile_type(None, profile_type));
-                    Ok((display, unit))
-                })
-                .collect::<Result<Vec<_>, DecodeError>>()?;
-
-            let locations: HashMap<u64, &crate::pyroscope_proto::google::Location> = pprof_profile
-                .location
-                .iter()
-                .map(|location| (location.id, location))
-                .collect();
-            let functions: HashMap<u64, &crate::pyroscope_proto::google::Function> = pprof_profile
-                .function
-                .iter()
-                .map(|function| (function.id, function))
-                .collect();
-            let string_table = &pprof_profile.string_table;
-
-            for (sample_index, pprof_sample) in pprof_profile.sample.iter().enumerate() {
-                if pprof_sample.value.len() != sample_types.len() {
-                    return Err(DecodeError::Parse(format!(
-                        "pprof sample[{sample_index}] has {} values but the profile declares {} sample types",
-                        pprof_sample.value.len(),
-                        sample_types.len()
-                    )));
-                }
-                if pprof_sample.value.iter().all(|&v| v == 0) {
-                    continue;
-                }
-
-                let mut stack: Vec<&str> =
-                    Vec::with_capacity(pprof_sample.location_id.len().min(MAX_FRAMES));
-                let mut addresses: Vec<String> = Vec::new();
-                let mut address_slots: Vec<usize> = Vec::new();
-                'locations: for (frame_index, &location_id) in
-                    pprof_sample.location_id.iter().enumerate()
-                {
-                    let location = locations.get(&location_id).ok_or_else(|| {
-                        DecodeError::Parse(format!(
-                            "pprof sample[{sample_index}] frame[{frame_index}] references missing location id {location_id}"
-                        ))
-                    })?;
-                    if location.line.is_empty() {
-                        address_slots.push(stack.len());
-                        addresses.push(format!("0x{:x}", location.address));
-                        stack.push("");
-                    }
-                    // line[0] is the innermost inlined function.
-                    for line in &location.line {
-                        if stack.len() == MAX_FRAMES {
-                            break 'locations;
-                        }
-                        let function = functions.get(&line.function_id).ok_or_else(|| {
-                            DecodeError::Parse(format!(
-                                "pprof location id {location_id} references missing function id {}",
-                                line.function_id
-                            ))
-                        })?;
-                        let function_name_index = usize::try_from(function.name).map_err(|_| {
-                            DecodeError::Parse(format!(
-                                "pprof function id {} has negative name index {}",
-                                function.id, function.name
-                            ))
-                        })?;
-                        let function_name =
-                            string_table.get(function_name_index).ok_or_else(|| {
-                                DecodeError::Parse(format!(
-                                    "pprof function id {} name index {function_name_index} out of bounds (table has {} entries)",
-                                    function.id,
-                                    string_table.len()
-                                ))
-                            })?;
-                        if function_name.is_empty() {
-                            return Err(DecodeError::Parse(format!(
-                                "pprof function id {} has an empty name",
-                                function.id
-                            )));
-                        }
-                        stack.push(function_name);
-                    }
-                    if stack.len() >= MAX_FRAMES {
-                        break;
-                    }
-                }
-                for (slot, address) in address_slots.iter().zip(&addresses) {
-                    stack[*slot] = address;
-                }
-                // pprof stores leaf-first; Sigiro stores caller-first for folded stacks.
-                stack.reverse();
-
-                let mut labels = Map::new();
-                for label in &pprof_sample.label {
-                    let key = resolve_string(label.key, "label key")?;
-                    if label.str != 0 {
-                        labels.insert(
-                            key.to_string(),
-                            JsonValue::String(
-                                resolve_string(label.str, "label value")?.to_string(),
-                            ),
-                        );
-                    } else {
-                        labels.insert(key.to_string(), JsonValue::from(label.num));
-                    }
-                }
-                // Pyroscope's span profiles put the span ID in a label; it
-                // carries no trace ID, so it stays a label rather than a link.
-                let labels = labels_json(labels);
-
-                for ((profile_type, unit), &value) in sample_types.iter().zip(&pprof_sample.value) {
-                    if value == 0 {
-                        continue;
-                    }
-                    rows.push(Row {
-                        profile_id: &sample.id,
-                        link: None,
-                        service_name,
-                        timestamp_us: ts_us,
-                        profile_type,
-                        stack: &stack,
-                        value,
-                        unit,
-                        resource_attributes: Some(&resource_json),
-                        labels: labels.as_deref(),
-                    });
-                }
-            }
-        }
-    }
-
-    rows.finish()
-}
-
-fn decompress_profile(
-    bytes: Vec<u8>,
-    max_profile_bytes: usize,
-    description: &str,
-) -> Result<Vec<u8>, DecodeError> {
-    if bytes.len() > max_profile_bytes {
-        return Err(DecodeError::TooLarge(format!(
-            "{description} exceeds the {max_profile_bytes}-byte ingest limit"
-        )));
-    }
-    if !bytes.starts_with(&[0x1f, 0x8b]) {
-        return Ok(bytes);
-    }
-
-    let read_limit = u64::try_from(max_profile_bytes)
-        .ok()
-        .and_then(|limit| limit.checked_add(1))
-        .ok_or_else(|| {
-            DecodeError::Parse("ingest body limit cannot be represented as u64".into())
-        })?;
-    let mut decompressed = Vec::new();
-    flate2::read::GzDecoder::new(&bytes[..])
-        .take(read_limit)
-        .read_to_end(&mut decompressed)
-        .map_err(|e| DecodeError::Parse(format!("{description} gzip is invalid: {e}")))?;
-    if decompressed.len() > max_profile_bytes {
-        return Err(DecodeError::TooLarge(format!(
-            "{description} exceeds the {max_profile_bytes}-byte ingest limit after decompression"
-        )));
-    }
-    Ok(decompressed)
-}
-
 fn extract_service_name(
     resource: Option<&crate::otel_proto::tonic::resource::v1::Resource>,
 ) -> Option<&str> {
@@ -748,22 +409,6 @@ fn extract_service_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pyroscope_names_split_into_app_and_labels() {
-        let (app, labels) =
-            parse_pyroscope_name("checkout{__session_id__=abc,env=prod, region = eu}");
-        assert_eq!(app, "checkout");
-        assert_eq!(
-            labels,
-            vec![
-                ("__session_id__".to_string(), "abc".to_string()),
-                ("env".to_string(), "prod".to_string()),
-                ("region".to_string(), "eu".to_string()),
-            ]
-        );
-        assert_eq!(parse_pyroscope_name("plain").0, "plain");
-    }
 
     #[test]
     fn mutex_and_block_types_are_disambiguated() {
