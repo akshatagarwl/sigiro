@@ -112,7 +112,7 @@ opentelemetry-instrument python app.py
 
 SDK 会把每种信号发送到它的标准 OTLP 路径（`/v1/traces`、`/v1/logs`、`/v1/metrics`、`/v1development/profiles`），并把该路径追加到上面的端点之后。如果你的导出器接受的是按信号区分的端点，请给出完整路径。HTTP 支持 gzip，端点使用 TLS。单个请求解压后必须**不超过 8 MB**。SDK 默认的批大小远低于这个限制。
 
-Pyroscope SDK 不使用 OTLP 的 profiles 路径。其目标地址、请求格式和服务名规则，请参阅[向 sigiro 发送 Pyroscope 性能剖析数据](/docs/how-to/send-profiles)。
+性能剖析数据使用同一个端点。如何从 Go 程序、OpenTelemetry eBPF 剖析器或 Collector 发送，请参阅[向 sigiro 发送性能剖析数据](/docs/how-to/send-profiles)。
 
 ## 3. 确认数据已到达
 

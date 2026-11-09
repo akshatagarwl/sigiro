@@ -1,130 +1,176 @@
 ---
-title: Send Pyroscope profiles to sigiro
-description: Send pprof profiles from the verified Pyroscope Rust SDK to sigiro over Pyroscope-compatible HTTP, then confirm the profile rows with SQL.
+title: Send profiles to sigiro
+description: Send continuous profiles to sigiro over OTLP, from otelprofile for Go, the OpenTelemetry eBPF profiler, or an OpenTelemetry Collector, then confirm the profile rows with SQL.
 sidebar:
   order: 7
 ---
 
-This guide shows you how to send application CPU profiles to sigiro. It uses the
-verified first-party Pyroscope Rust SDK and its pprof backend.
+This guide shows you how to send continuous profiles (CPU, heap and the other
+pprof profile types) to sigiro. sigiro accepts profiles in one format: OTLP
+profiles over HTTP or gRPC, the OpenTelemetry profiles signal.
 
 This is different from [sending your agent's own
 telemetry](/docs/how-to/agent-telemetry), which records agent sessions with
-OpenTelemetry. Use this guide when the process that you want to inspect produces
-pprof profiles.
+OpenTelemetry. Use this guide when you want to see where a process spends its
+CPU time and memory.
 
 ## Before you start
 
 You need a sigiro server. Start one with `sigiro serve`, or use the Docker command
 in the [quickstart](/docs/tutorials/quickstart#1-run-it).
 
-Pyroscope-compatible HTTP is available on the main sigiro port, `9999`, and on
-the OTLP HTTP port, `4318`. Use the main port unless you deliberately separate
-ingest traffic. Sigiro does not listen for profiles on port `4040`.
+A self-hosted server receives OTLP/HTTP on port `4318` and on the main port
+`9999`, and OTLP/gRPC on port `4317`. Hosted sigiro receives OTLP/HTTP only, at
+`https://sigiro.com` with no port.
 
 A self-hosted server in Open auth mode needs no key. A server in Better Auth OAuth/JWT mode,
 including hosted sigiro, requires `Authorization: Bearer YOUR_TENANT_KEY`.
 
-## Configure pyroscope-rs
+The OpenTelemetry profiles signal is still in development upstream, and its wire
+format has changed between releases. sigiro reads the layout of
+`opentelemetry-proto` v1.10. A producer built on a different revision can send
+profiles that sigiro rejects with `400`.
 
-Sigiro verifies the first-party `pyroscope` crate with its pprof backend. This
-repository currently pins version `2.0.4`:
+## Go: otelprofile
 
-```toml
-[dependencies]
-pyroscope = { version = "=2.0.4", features = ["backend-pprof-rs"] }
+[otelprofile](https://github.com/akshatagarwl/otelprofile) profiles a Go program
+from the inside, with Go's own runtime profiler, and exports OTLP profiles. Add it
+to your module:
+
+```bash
+go get github.com/akshatagarwl/otelprofile@v0.2.0
 ```
 
-For self-hosted sigiro, use this target and no headers:
+Start it once, at program startup, and stop it on shutdown:
 
-```rust
-let endpoint = "http://localhost:9999";
-let http_headers = None;
-```
-
-For hosted sigiro, use the HTTPS origin with no port and add the OAuth access token:
-
-```rust
-use std::collections::HashMap;
-
-let endpoint = "https://sigiro.com";
-let mut headers = HashMap::new();
-headers.insert(
-    "Authorization".to_string(),
-    format!("Bearer {}", std::env::var("SIGIRO_ACCESS_TOKEN")?),
-);
-let http_headers = Some(headers);
-```
-
-Pass that target and optional header map to the SDK at application startup:
-
-```rust
-use pyroscope::backend::pprof::PprofConfig;
-use pyroscope::backend::{BackendConfig, pprof_backend};
-use pyroscope::pyroscope::PyroscopeAgentBuilder;
-
-let backend = pprof_backend(PprofConfig::default(), BackendConfig::default());
-let mut builder = PyroscopeAgentBuilder::new(
-    endpoint,
-    "checkout",
-    100,
-    "pyroscope-rs",
-    env!("CARGO_PKG_VERSION"),
-    backend,
-);
-if let Some(headers) = http_headers {
-    builder = builder.http_headers(headers);
+```go
+p, err := otelprofile.Start(otelprofile.Config{
+    ServiceName: "checkout",
+    Endpoint:    "http://localhost:4318",
+})
+if err != nil {
+    log.Fatal(err)
 }
-let _profile_agent = builder.build()?.start()?;
+defer p.Stop()
 ```
 
-Keep `_profile_agent` in scope for the life of the process. The SDK sends a batch
-every 10 seconds. If the handle is dropped early, no later batch reaches sigiro.
+By default it sends a heap profile every 15 seconds and a CPU profile every 30
+seconds. Set `ProfileTypes`
+(or `OTEL_GO_X_PROFILES_TYPES=all`) to add goroutine, mutex and block profiles.
 
-Do not put the OAuth access token in source control. Set `SIGIRO_ACCESS_TOKEN` in the
-environment that starts the process.
+For hosted sigiro, set the endpoint to `https://sigiro.com` and add the key:
+
+```go
+p, err := otelprofile.Start(otelprofile.Config{
+    ServiceName: "checkout",
+    Endpoint:    "https://sigiro.com",
+    Headers: map[string]string{
+        "Authorization": "Bearer " + os.Getenv("SIGIRO_ACCESS_TOKEN"),
+    },
+})
+```
+
+The standard `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` and
+`OTEL_SERVICE_NAME` environment variables work too, when the matching field is
+left empty. Do not put the access token in source control.
+
+If the program also sends traces through the OpenTelemetry Go SDK, otelprofile
+labels CPU samples with the span they ran in, and the dashboard opens a span's
+profile from the trace view. See the otelprofile README for the setup.
+
+## Any Linux process: the OpenTelemetry eBPF profiler
+
+The [OpenTelemetry eBPF profiler](https://github.com/open-telemetry/opentelemetry-ebpf-profiler)
+samples the CPU of every process on a Linux host, with no change to the programs.
+It runs inside a Collector distribution, `otelcol-ebpf-profiler`, as the
+`profiling` receiver, and it needs root (or `CAP_SYS_ADMIN`, `CAP_PERFMON` and
+`CAP_BPF`) and access to `/proc`.
+
+The profiler names each process with `process.executable.name` but sets no
+`service.name`, and sigiro rejects a profile without a service name. The
+`resource` processor below fills it in from the executable name:
+
+```yaml
+receivers:
+  profiling: {}
+
+processors:
+  resource:
+    attributes:
+      - key: service.name
+        from_attribute: process.executable.name
+        action: insert
+
+exporters:
+  otlp_http:
+    endpoint: http://localhost:4318
+    # For hosted sigiro:
+    # endpoint: https://sigiro.com
+    # headers:
+    #   Authorization: "Bearer ${env:SIGIRO_ACCESS_TOKEN}"
+
+service:
+  pipelines:
+    profiles:
+      receivers: [profiling]
+      processors: [resource]
+      exporters: [otlp_http]
+```
+
+Start the Collector with the profiles feature gate:
+
+```bash
+sudo otelcol-ebpf-profiler --feature-gates=+service.profilesSupport --config config.yaml
+```
+
+Collector releases before the `otlp_http` name use `otlphttp` for the same
+exporter.
+
+## Through an OpenTelemetry Collector
+
+A Collector that already receives your OTLP can forward profiles to sigiro. Add a
+`profiles` pipeline from the `otlp` receiver to an `otlp_http` exporter, and start
+the Collector with `--feature-gates=+service.profilesSupport`:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+      grpc:
+
+exporters:
+  otlp_http/sigiro:
+    endpoint: http://localhost:4318
+
+service:
+  pipelines:
+    profiles:
+      receivers: [otlp]
+      exporters: [otlp_http/sigiro]
+```
+
+The exporter appends `/v1development/profiles` to the endpoint. Set
+`profiles_endpoint` instead if you need to give the full URL.
 
 ## HTTP contract
 
-The SDK can post to any of these equivalent paths:
-
-- `/`
-- `/push.v1.PusherService/Push`
-- `/ingest`
-- `/ingest/pyroscope`
-
-The Rust SDK appends `/push.v1.PusherService/Push` to the target above. A target
-that already includes that path can therefore send to the wrong URL without an
-obvious error in sigiro. Give this SDK the origin only.
-
-Sigiro accepts these request forms:
-
-- `application/proto`, `binary/octet-stream`, or no content type for a gzipped
-  Pyroscope `PushRequest`
-- `multipart/form-data` with a file field named exactly `profile` for either raw
-  pprof bytes or a `PushRequest`
-
-The `name` query parameter changes how sigiro decodes the body. If `name` is
-present, sigiro treats the `profile` bytes as raw pprof and uses the text before
-the first `{` as the service name. If `name` is absent, the body must decode as a
-`PushRequest`, and each series must contain a non-empty `service_name` label.
-Sending raw pprof without `name`, or a `PushRequest` without `service_name`,
-returns `400` and stores nothing.
-
-Sigiro accepts gzip and limits each request to 8 MiB after decompression by
-default. A request over the HTTP body limit returns `413`. A malformed or
-unsupported profile returns `400`, a missing or invalid Better Auth OAuth/JWT bearer token
-returns `401`, and a capacity gate returns `507`. A `200` response means sigiro
-accepted the batch.
-
-Send pprof data only. Sigiro does not decode Java Flight Recorder data, so this
-guide does not claim Java or JFR compatibility. Other language SDK setups are
-omitted until they have a runnable end-to-end verification.
+- **Path:** `POST /v1development/profiles`.
+- **Body:** a protobuf `ExportProfilesServiceRequest`, with content type
+  `application/x-protobuf`. JSON is not accepted for profiles.
+- **Service:** every resource must carry a `service.name` attribute. A request
+  without one returns `400` and stores nothing.
+- **Size:** gzip is accepted. A request is limited to 8 MiB after decompression
+  by default, and a larger one returns `413`.
+- **Errors:** a malformed profile, or one with no non-zero samples, returns
+  `400`. A missing or invalid Better Auth OAuth/JWT bearer token returns `401`,
+  and a capacity gate returns `507`. A `2xx` response means sigiro accepted the
+  batch.
 
 ## Confirm that it works
 
-Start the application and let it do some work for at least 10 seconds. Then read
-the profile rows back from the main HTTP API:
+Let the profiler run for at least one upload interval. Then read the profile rows
+back from the main HTTP API:
 
 ```bash
 curl -s -X POST http://localhost:9999/v1/query \
@@ -137,10 +183,12 @@ curl -s -X POST http://localhost:9999/v1/query \
 ```
 
 For hosted sigiro, change the origin and add
-`-H "Authorization: Bearer YOUR_TENANT_KEY"`. A non-empty result confirms the SDK
-push, profile decoding, and HTTP readback. An empty result after one full SDK
-interval usually means the profile handle was dropped, the target includes an
-extra path, or the service name in the query does not match the SDK configuration.
+`-H "Authorization: Bearer YOUR_TENANT_KEY"`. A non-empty result confirms the
+export, profile decoding, and HTTP readback. Open the dashboard's **Profiles**
+page to see the same data as a flame graph. An empty result after a full interval
+usually means the endpoint is wrong, the service name in the query does not match
+the producer, or the producer's log shows a `400` for a format sigiro does not
+read.
 
 ## Next
 

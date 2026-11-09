@@ -1,103 +1,139 @@
 ---
-title: 向 sigiro 发送 Pyroscope 性能剖析数据
-description: 通过兼容 Pyroscope 的 HTTP，把经过验证的 Pyroscope Rust SDK 产生的 pprof 剖析数据发送到 sigiro，再用 SQL 确认剖析数据行。
+title: 向 sigiro 发送性能剖析数据
+description: 通过 OTLP 从 Go 的 otelprofile、OpenTelemetry eBPF 剖析器或 OpenTelemetry Collector 向 sigiro 发送持续性能剖析数据，然后用 SQL 确认剖析数据行。
 sidebar:
   order: 7
 ---
 
-本指南介绍如何把应用的 CPU 性能剖析数据发送到 sigiro。它使用经过验证的官方 Pyroscope Rust SDK 及其 pprof 后端。
+本指南介绍如何把持续性能剖析数据（CPU、堆以及其他 pprof 剖析类型）发送到 sigiro。sigiro 只接受一种剖析格式：通过 HTTP 或 gRPC 传输的 OTLP 剖析数据，即 OpenTelemetry 的 profiles 信号。
 
-这与[发送智能体自身的遥测数据](/docs/how-to/agent-telemetry)不同，后者用 OpenTelemetry 记录智能体会话。当你要查看的进程会产生 pprof 剖析数据时，请使用本指南。
+这与[发送智能体自身的遥测数据](/docs/how-to/agent-telemetry)不同，后者用 OpenTelemetry 记录智能体会话。当你想查看一个进程把 CPU 时间和内存花在哪里时，请使用本指南。
 
 ## 开始之前
 
 你需要一台 sigiro 服务器。用 `sigiro serve` 启动一台，或者使用[快速开始](/docs/tutorials/quickstart#1-运行它)中的 Docker 命令。
 
-兼容 Pyroscope 的 HTTP 在 sigiro 的主端口 `9999` 和 OTLP HTTP 端口 `4318` 上都可用。除非你有意把接收流量分开，否则请使用主端口。sigiro 不在端口 `4040` 上接收剖析数据。
+自托管服务器在端口 `4318` 和主端口 `9999` 上接收 OTLP/HTTP，在端口 `4317` 上接收 OTLP/gRPC。托管版 sigiro 只接收 OTLP/HTTP，地址为不带端口的 `https://sigiro.com`。
 
-Open 认证模式的自托管服务器不需要密钥。Better Auth OAuth/JWT 模式的服务器（包括托管版 sigiro）需要 `Authorization: Bearer YOUR_TENANT_KEY`。
+处于 Open 认证模式的自托管服务器不需要密钥。处于 Better Auth OAuth/JWT 模式的服务器（包括托管版 sigiro）需要 `Authorization: Bearer YOUR_TENANT_KEY`。
 
-## 配置 pyroscope-rs
+OpenTelemetry 的 profiles 信号在上游仍处于开发阶段，其传输格式在不同版本之间发生过变化。sigiro 读取 `opentelemetry-proto` v1.10 的布局。基于其他版本构建的生产者发送的剖析数据，可能会被 sigiro 以 `400` 拒绝。
 
-sigiro 验证的是官方 `pyroscope` crate 及其 pprof 后端。本仓库目前锁定版本 `2.0.4`：
+## Go：otelprofile
 
-```toml
-[dependencies]
-pyroscope = { version = "=2.0.4", features = ["backend-pprof-rs"] }
+[otelprofile](https://github.com/akshatagarwl/otelprofile) 使用 Go 自带的运行时剖析器从内部剖析 Go 程序，并导出 OTLP 剖析数据。把它加入你的模块：
+
+```bash
+go get github.com/akshatagarwl/otelprofile@v0.2.0
 ```
 
-对于自托管 sigiro，使用以下目标，不加任何请求头：
+在程序启动时启动一次，在退出时停止：
 
-```rust
-let endpoint = "http://localhost:9999";
-let http_headers = None;
-```
-
-对于托管版 sigiro，使用不带端口的 HTTPS 源，并加上 OAuth 访问令牌：
-
-```rust
-use std::collections::HashMap;
-
-let endpoint = "https://sigiro.com";
-let mut headers = HashMap::new();
-headers.insert(
-    "Authorization".to_string(),
-    format!("Bearer {}", std::env::var("SIGIRO_ACCESS_TOKEN")?),
-);
-let http_headers = Some(headers);
-```
-
-在应用启动时，把该目标和可选的请求头映射传给 SDK：
-
-```rust
-use pyroscope::backend::pprof::PprofConfig;
-use pyroscope::backend::{BackendConfig, pprof_backend};
-use pyroscope::pyroscope::PyroscopeAgentBuilder;
-
-let backend = pprof_backend(PprofConfig::default(), BackendConfig::default());
-let mut builder = PyroscopeAgentBuilder::new(
-    endpoint,
-    "checkout",
-    100,
-    "pyroscope-rs",
-    env!("CARGO_PKG_VERSION"),
-    backend,
-);
-if let Some(headers) = http_headers {
-    builder = builder.http_headers(headers);
+```go
+p, err := otelprofile.Start(otelprofile.Config{
+    ServiceName: "checkout",
+    Endpoint:    "http://localhost:4318",
+})
+if err != nil {
+    log.Fatal(err)
 }
-let _profile_agent = builder.build()?.start()?;
+defer p.Stop()
 ```
 
-在进程的整个生命周期内都要让 `_profile_agent` 保持在作用域中。SDK 每 10 秒发送一批数据。如果句柄被提前释放，之后的批次都不会到达 sigiro。
+默认情况下，它每 15 秒发送一次堆剖析数据，每 30 秒发送一次 CPU 剖析数据。设置 `ProfileTypes`（或 `OTEL_GO_X_PROFILES_TYPES=all`）即可加入 goroutine、mutex 和 block 剖析数据。
 
-不要把 OAuth 访问令牌放进版本控制。请在启动进程的环境中设置 `SIGIRO_ACCESS_TOKEN`。
+对于托管版 sigiro，把端点设为 `https://sigiro.com` 并加上密钥：
+
+```go
+p, err := otelprofile.Start(otelprofile.Config{
+    ServiceName: "checkout",
+    Endpoint:    "https://sigiro.com",
+    Headers: map[string]string{
+        "Authorization": "Bearer " + os.Getenv("SIGIRO_ACCESS_TOKEN"),
+    },
+})
+```
+
+当对应字段留空时，标准的 `OTEL_EXPORTER_OTLP_ENDPOINT`、`OTEL_EXPORTER_OTLP_HEADERS` 和 `OTEL_SERVICE_NAME` 环境变量同样有效。不要把访问令牌放进源代码管理。
+
+如果程序还通过 OpenTelemetry Go SDK 发送链路追踪，otelprofile 会给 CPU 样本标上它所运行的 span，仪表盘可以从链路视图打开某个 span 的剖析数据。设置方法见 otelprofile 的 README。
+
+## 任意 Linux 进程：OpenTelemetry eBPF 剖析器
+
+[OpenTelemetry eBPF 剖析器](https://github.com/open-telemetry/opentelemetry-ebpf-profiler)无需修改程序，就能对 Linux 主机上所有进程的 CPU 进行采样。它作为 `profiling` 接收器运行在 Collector 发行版 `otelcol-ebpf-profiler` 中，需要 root 权限（或 `CAP_SYS_ADMIN`、`CAP_PERFMON` 和 `CAP_BPF`）以及对 `/proc` 的访问。
+
+该剖析器会给每个进程加上 `process.executable.name`，但不会设置 `service.name`，而 sigiro 会拒绝没有服务名的剖析数据。下面的 `resource` 处理器用可执行文件名补上服务名：
+
+```yaml
+receivers:
+  profiling: {}
+
+processors:
+  resource:
+    attributes:
+      - key: service.name
+        from_attribute: process.executable.name
+        action: insert
+
+exporters:
+  otlp_http:
+    endpoint: http://localhost:4318
+    # For hosted sigiro:
+    # endpoint: https://sigiro.com
+    # headers:
+    #   Authorization: "Bearer ${env:SIGIRO_ACCESS_TOKEN}"
+
+service:
+  pipelines:
+    profiles:
+      receivers: [profiling]
+      processors: [resource]
+      exporters: [otlp_http]
+```
+
+启用 profiles 特性开关来启动 Collector：
+
+```bash
+sudo otelcol-ebpf-profiler --feature-gates=+service.profilesSupport --config config.yaml
+```
+
+在出现 `otlp_http` 这个名称之前的 Collector 版本中，同一个导出器叫做 `otlphttp`。
+
+## 通过 OpenTelemetry Collector
+
+已经在接收 OTLP 的 Collector 可以把剖析数据转发给 sigiro。添加一条从 `otlp` 接收器到 `otlp_http` 导出器的 `profiles` 流水线，并用 `--feature-gates=+service.profilesSupport` 启动 Collector：
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+      grpc:
+
+exporters:
+  otlp_http/sigiro:
+    endpoint: http://localhost:4318
+
+service:
+  pipelines:
+    profiles:
+      receivers: [otlp]
+      exporters: [otlp_http/sigiro]
+```
+
+导出器会把 `/v1development/profiles` 追加到端点之后。如果需要给出完整 URL，请改为设置 `profiles_endpoint`。
 
 ## HTTP 约定
 
-SDK 可以向以下任一等价路径发送：
-
-- `/`
-- `/push.v1.PusherService/Push`
-- `/ingest`
-- `/ingest/pyroscope`
-
-Rust SDK 会在上面的目标后追加 `/push.v1.PusherService/Push`。因此，如果目标本身已包含该路径，数据可能会发到错误的 URL，而 sigiro 中不会出现明显的错误。只把源地址交给这个 SDK。
-
-sigiro 接受以下请求形式：
-
-- gzip 压缩的 Pyroscope `PushRequest`：`application/proto`、`binary/octet-stream` 或不带内容类型
-- `multipart/form-data`，其中文件字段名必须恰好是 `profile`，内容为原始 pprof 字节或 `PushRequest`
-
-查询参数 `name` 会改变 sigiro 解码请求体的方式。存在 `name` 时，sigiro 把 `profile` 字节当作原始 pprof，并把第一个 `{` 之前的文本作为服务名。没有 `name` 时，请求体必须能解码为 `PushRequest`，并且每个序列都必须带有非空的 `service_name` 标签。不带 `name` 发送原始 pprof，或发送没有 `service_name` 的 `PushRequest`，都会返回 `400` 且不存储任何数据。
-
-sigiro 接受 gzip，默认把每个请求限制为解压后 8 MiB。超过 HTTP 请求体上限的请求返回 `413`。格式错误或不受支持的剖析数据返回 `400`，缺少或无效的 Better Auth OAuth/JWT Bearer 令牌返回 `401`，触发容量限制返回 `507`。`200` 表示 sigiro 已接受该批数据。
-
-只发送 pprof 数据。sigiro 不解码 Java Flight Recorder 数据，因此本指南不声称兼容 Java 或 JFR。其他语言 SDK 的配置在有可运行的端到端验证之前暂不列出。
+- **路径：** `POST /v1development/profiles`。
+- **请求体：** protobuf 格式的 `ExportProfilesServiceRequest`，内容类型为 `application/x-protobuf`。剖析数据不接受 JSON。
+- **服务：** 每个资源都必须带有 `service.name` 属性。缺少时返回 `400`，且不存储任何数据。
+- **大小：** 接受 gzip。默认情况下，单个请求解压后不得超过 8 MiB，超出时返回 `413`。
+- **错误：** 格式错误的剖析数据，或没有任何非零样本的剖析数据，返回 `400`。缺少或无效的 Better Auth OAuth/JWT bearer 令牌返回 `401`，容量闸门返回 `507`。`2xx` 响应表示 sigiro 已接受该批数据。
 
 ## 确认它能工作
 
-启动应用，让它至少运行 10 秒。然后通过主 HTTP API 读回剖析数据行：
+让剖析器至少运行一个上传间隔。然后从主 HTTP API 读回剖析数据行：
 
 ```bash
 curl -s -X POST http://localhost:9999/v1/query \
@@ -109,7 +145,7 @@ curl -s -X POST http://localhost:9999/v1/query \
           ORDER BY samples DESC"
 ```
 
-对于托管版 sigiro，请更换源地址并加上 `-H "Authorization: Bearer YOUR_TENANT_KEY"`。结果非空，即确认了 SDK 推送、剖析数据解码和 HTTP 读回都正常。如果过了一个完整的 SDK 周期结果仍为空，通常是剖析句柄被释放了、目标包含多余的路径，或者查询中的服务名与 SDK 配置不一致。
+对于托管版 sigiro，请更换源地址并加上 `-H "Authorization: Bearer YOUR_TENANT_KEY"`。结果非空即可确认导出、剖析数据解码和 HTTP 读回都已生效。在仪表盘的 **Profiles** 页面可以把同样的数据看作火焰图。如果过了一个完整间隔结果仍为空，通常是端点有误、查询中的服务名与生产者不一致，或者生产者日志里出现了 sigiro 不读取的格式所返回的 `400`。
 
 ## 下一步
 

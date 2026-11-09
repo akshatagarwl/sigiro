@@ -172,9 +172,9 @@ HTTP supports gzip and the endpoint uses TLS. One request must be **8 MB or
 smaller** after decompression. Default SDK batch sizes stay well below this
 limit.
 
-A Pyroscope SDK does not use the OTLP profiles path. Follow [Send Pyroscope
-profiles to sigiro](/docs/how-to/send-profiles) for its target, request format
-and service-name rules.
+Profiles use the same endpoint. [Send profiles to
+sigiro](/docs/how-to/send-profiles) covers Go programs, the OpenTelemetry eBPF
+profiler and a Collector.
 
 ## 3. Confirm that the data arrives
 

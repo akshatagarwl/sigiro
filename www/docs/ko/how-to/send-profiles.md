@@ -1,103 +1,139 @@
 ---
-title: Pyroscope 프로파일을 sigiro로 전송하기
-description: 검증된 Pyroscope Rust SDK에서 pprof 프로파일을 Pyroscope 호환 HTTP로 sigiro에 보내고, 프로파일 행을 SQL로 확인합니다.
+title: 프로파일을 sigiro로 전송하기
+description: Go용 otelprofile, OpenTelemetry eBPF 프로파일러 또는 OpenTelemetry Collector에서 OTLP로 연속 프로파일을 sigiro에 보낸 다음, 프로파일 행을 SQL로 확인합니다.
 sidebar:
   order: 7
 ---
 
-이 가이드는 애플리케이션 CPU 프로파일을 sigiro로 보내는 방법을 보여 줍니다. 검증된 퍼스트 파티 Pyroscope Rust SDK와 그 pprof 백엔드를 사용합니다.
+이 가이드는 연속 프로파일(CPU, 힙 및 기타 pprof 프로파일 유형)을 sigiro로 보내는 방법을 보여 줍니다. sigiro가 받는 프로파일 형식은 하나뿐입니다. OpenTelemetry 프로파일 신호인, HTTP 또는 gRPC를 통한 OTLP 프로파일입니다.
 
-이는 에이전트 세션을 OpenTelemetry로 기록하는 [에이전트 자체 텔레메트리 전송](/docs/how-to/agent-telemetry)과는 다릅니다. 살펴보려는 프로세스가 pprof 프로파일을 생성할 때 이 가이드를 사용하십시오.
+이는 에이전트 세션을 OpenTelemetry로 기록하는 [에이전트 자체 텔레메트리 전송](/docs/how-to/agent-telemetry)과는 다릅니다. 프로세스가 CPU 시간과 메모리를 어디에 쓰는지 보고 싶을 때 이 가이드를 사용하십시오.
 
 ## 시작하기 전에
 
 sigiro 서버가 필요합니다. `sigiro serve`로 시작하거나 [빠른 시작](/docs/tutorials/quickstart#1-실행하기)의 Docker 명령을 사용하십시오.
 
-Pyroscope 호환 HTTP는 sigiro의 메인 포트 `9999`와 OTLP HTTP 포트 `4318`에서 사용할 수 있습니다. 수집 트래픽을 의도적으로 분리하는 경우가 아니라면 메인 포트를 사용하십시오. sigiro는 포트 `4040`에서 프로파일을 받지 않습니다.
+셀프 호스팅 서버는 OTLP/HTTP를 포트 `4318`과 메인 포트 `9999`에서, OTLP/gRPC를 포트 `4317`에서 받습니다. 호스티드 sigiro는 OTLP/HTTP만, 포트 없이 `https://sigiro.com`에서 받습니다.
 
-Open 인증 모드의 셀프 호스팅 서버에는 키가 필요하지 않습니다. 호스팅 sigiro를 포함한 Better Auth OAuth/JWT 모드의 서버에는 `Authorization: Bearer YOUR_TENANT_KEY`가 필요합니다.
+Open 인증 모드의 셀프 호스팅 서버에는 키가 필요하지 않습니다. 호스티드 sigiro를 포함해 Better Auth OAuth/JWT 모드의 서버에는 `Authorization: Bearer YOUR_TENANT_KEY`가 필요합니다.
 
-## pyroscope-rs 설정하기
+OpenTelemetry 프로파일 신호는 업스트림에서 아직 개발 중이며, 와이어 형식이 릴리스마다 바뀌어 왔습니다. sigiro는 `opentelemetry-proto` v1.10의 레이아웃을 읽습니다. 다른 리비전으로 만든 생산자가 보낸 프로파일은 sigiro가 `400`으로 거부할 수 있습니다.
 
-sigiro는 퍼스트 파티 `pyroscope` 크레이트를 pprof 백엔드와 함께 검증합니다. 이 저장소는 현재 버전 `2.0.4`를 고정합니다.
+## Go: otelprofile
 
-```toml
-[dependencies]
-pyroscope = { version = "=2.0.4", features = ["backend-pprof-rs"] }
+[otelprofile](https://github.com/akshatagarwl/otelprofile)은 Go 자체의 런타임 프로파일러로 Go 프로그램을 안에서 프로파일링하고, OTLP 프로파일로 내보냅니다. 모듈에 추가합니다.
+
+```bash
+go get github.com/akshatagarwl/otelprofile@v0.2.0
 ```
 
-셀프 호스팅 sigiro에는 다음 대상을 사용하고 헤더는 넣지 않습니다.
+프로그램이 시작될 때 한 번 시작하고, 종료할 때 멈춥니다.
 
-```rust
-let endpoint = "http://localhost:9999";
-let http_headers = None;
-```
-
-호스팅 sigiro에는 포트 없는 HTTPS 오리진을 사용하고 OAuth 액세스 토큰을 추가합니다.
-
-```rust
-use std::collections::HashMap;
-
-let endpoint = "https://sigiro.com";
-let mut headers = HashMap::new();
-headers.insert(
-    "Authorization".to_string(),
-    format!("Bearer {}", std::env::var("SIGIRO_ACCESS_TOKEN")?),
-);
-let http_headers = Some(headers);
-```
-
-애플리케이션 시작 시 그 대상과 선택적 헤더 맵을 SDK에 전달합니다.
-
-```rust
-use pyroscope::backend::pprof::PprofConfig;
-use pyroscope::backend::{BackendConfig, pprof_backend};
-use pyroscope::pyroscope::PyroscopeAgentBuilder;
-
-let backend = pprof_backend(PprofConfig::default(), BackendConfig::default());
-let mut builder = PyroscopeAgentBuilder::new(
-    endpoint,
-    "checkout",
-    100,
-    "pyroscope-rs",
-    env!("CARGO_PKG_VERSION"),
-    backend,
-);
-if let Some(headers) = http_headers {
-    builder = builder.http_headers(headers);
+```go
+p, err := otelprofile.Start(otelprofile.Config{
+    ServiceName: "checkout",
+    Endpoint:    "http://localhost:4318",
+})
+if err != nil {
+    log.Fatal(err)
 }
-let _profile_agent = builder.build()?.start()?;
+defer p.Stop()
 ```
 
-`_profile_agent`는 프로세스가 실행되는 동안 계속 스코프 안에 두십시오. SDK는 10초마다 배치를 보냅니다. 핸들이 일찍 해제되면 이후의 배치는 sigiro에 도달하지 않습니다.
+기본적으로 힙 프로파일은 15초마다, CPU 프로파일은 30초마다 보냅니다. goroutine, mutex, block 프로파일도 보내려면 `ProfileTypes`(또는 `OTEL_GO_X_PROFILES_TYPES=all`)를 설정하십시오.
 
-OAuth 액세스 토큰을 소스 관리에 넣지 마십시오. 프로세스를 시작하는 환경에서 `SIGIRO_ACCESS_TOKEN`을 설정하십시오.
+호스티드 sigiro에서는 엔드포인트를 `https://sigiro.com`으로 하고 키를 추가합니다.
+
+```go
+p, err := otelprofile.Start(otelprofile.Config{
+    ServiceName: "checkout",
+    Endpoint:    "https://sigiro.com",
+    Headers: map[string]string{
+        "Authorization": "Bearer " + os.Getenv("SIGIRO_ACCESS_TOKEN"),
+    },
+})
+```
+
+해당 필드를 비워 두면 표준 `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` 환경 변수도 쓸 수 있습니다. 액세스 토큰을 소스 관리에 넣지 마십시오.
+
+프로그램이 OpenTelemetry Go SDK로 트레이스도 보낸다면, otelprofile은 CPU 샘플에 그것이 실행된 스팬의 레이블을 붙이고, 대시보드는 트레이스 보기에서 스팬의 프로파일을 엽니다. 설정 방법은 otelprofile README를 참조하십시오.
+
+## 모든 Linux 프로세스: OpenTelemetry eBPF 프로파일러
+
+[OpenTelemetry eBPF 프로파일러](https://github.com/open-telemetry/opentelemetry-ebpf-profiler)는 프로그램을 바꾸지 않고 Linux 호스트의 모든 프로세스의 CPU를 샘플링합니다. Collector 배포판 `otelcol-ebpf-profiler` 안에서 `profiling` 리시버로 동작하며, root 권한(또는 `CAP_SYS_ADMIN`, `CAP_PERFMON`, `CAP_BPF`)과 `/proc` 접근이 필요합니다.
+
+이 프로파일러는 각 프로세스에 `process.executable.name`을 붙이지만 `service.name`은 설정하지 않으며, sigiro는 서비스 이름이 없는 프로파일을 거부합니다. 아래의 `resource` 프로세서가 실행 파일 이름으로 서비스 이름을 채웁니다.
+
+```yaml
+receivers:
+  profiling: {}
+
+processors:
+  resource:
+    attributes:
+      - key: service.name
+        from_attribute: process.executable.name
+        action: insert
+
+exporters:
+  otlp_http:
+    endpoint: http://localhost:4318
+    # For hosted sigiro:
+    # endpoint: https://sigiro.com
+    # headers:
+    #   Authorization: "Bearer ${env:SIGIRO_ACCESS_TOKEN}"
+
+service:
+  pipelines:
+    profiles:
+      receivers: [profiling]
+      processors: [resource]
+      exporters: [otlp_http]
+```
+
+프로파일 기능 게이트를 켜고 Collector를 시작합니다.
+
+```bash
+sudo otelcol-ebpf-profiler --feature-gates=+service.profilesSupport --config config.yaml
+```
+
+`otlp_http`라는 이름 이전의 Collector 릴리스에서는 같은 익스포터를 `otlphttp`라고 부릅니다.
+
+## OpenTelemetry Collector를 통해
+
+이미 OTLP를 받고 있는 Collector가 프로파일을 sigiro로 전달할 수 있습니다. `otlp` 리시버에서 `otlp_http` 익스포터로 가는 `profiles` 파이프라인을 추가하고, `--feature-gates=+service.profilesSupport`로 Collector를 시작하십시오.
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+      grpc:
+
+exporters:
+  otlp_http/sigiro:
+    endpoint: http://localhost:4318
+
+service:
+  pipelines:
+    profiles:
+      receivers: [otlp]
+      exporters: [otlp_http/sigiro]
+```
+
+익스포터는 엔드포인트 뒤에 `/v1development/profiles`를 붙입니다. 전체 URL을 지정해야 한다면 대신 `profiles_endpoint`를 설정하십시오.
 
 ## HTTP 계약
 
-SDK는 다음의 동등한 경로 중 어디로든 보낼 수 있습니다.
-
-- `/`
-- `/push.v1.PusherService/Push`
-- `/ingest`
-- `/ingest/pyroscope`
-
-Rust SDK는 위 대상에 `/push.v1.PusherService/Push`를 덧붙입니다. 따라서 이미 그 경로가 포함된 대상은 sigiro에서 뚜렷한 오류 없이 잘못된 URL로 보낼 수 있습니다. 이 SDK에는 오리진만 주십시오.
-
-sigiro는 다음 요청 형식을 받습니다.
-
-- gzip으로 압축한 Pyroscope `PushRequest`에는 `application/proto`, `binary/octet-stream` 또는 콘텐츠 타입 없음
-- 원시 pprof 바이트나 `PushRequest`에는 이름이 정확히 `profile`인 파일 필드를 가진 `multipart/form-data`
-
-`name` 쿼리 매개변수는 sigiro가 본문을 디코딩하는 방식을 바꿉니다. `name`이 있으면 sigiro는 `profile` 바이트를 원시 pprof로 취급하고, 첫 `{` 앞의 텍스트를 서비스 이름으로 사용합니다. `name`이 없으면 본문은 `PushRequest`로 디코딩되어야 하며, 각 시리즈에는 비어 있지 않은 `service_name` 레이블이 있어야 합니다. `name` 없이 원시 pprof를 보내거나 `service_name` 없는 `PushRequest`를 보내면 `400`이 반환되고 아무것도 저장되지 않습니다.
-
-sigiro는 gzip을 받으며, 기본적으로 각 요청을 압축 해제 후 8 MiB로 제한합니다. HTTP 본문 제한을 넘는 요청은 `413`을 반환합니다. 잘못되었거나 지원되지 않는 프로파일은 `400`, Better Auth OAuth/JWT 베어러 토큰이 없거나 유효하지 않으면 `401`, 용량 게이트에 걸리면 `507`을 반환합니다. `200` 응답은 sigiro가 배치를 받았다는 뜻입니다.
-
-pprof 데이터만 보내십시오. sigiro는 Java Flight Recorder 데이터를 디코딩하지 않으므로, 이 가이드는 Java나 JFR 호환성을 주장하지 않습니다. 다른 언어 SDK 설정은 실행 가능한 엔드 투 엔드 검증이 생길 때까지 생략합니다.
+- **경로:** `POST /v1development/profiles`.
+- **본문:** protobuf `ExportProfilesServiceRequest`, 콘텐츠 유형은 `application/x-protobuf`입니다. 프로파일에는 JSON을 받지 않습니다.
+- **서비스:** 모든 리소스에 `service.name` 속성이 있어야 합니다. 없으면 `400`을 반환하고 아무것도 저장하지 않습니다.
+- **크기:** gzip을 받습니다. 요청 하나는 기본적으로 압축 해제 후 8 MiB로 제한되며, 이를 넘으면 `413`을 반환합니다.
+- **오류:** 형식이 잘못된 프로파일이나 0이 아닌 샘플이 없는 프로파일은 `400`을 반환합니다. Better Auth OAuth/JWT 베어러 토큰이 없거나 잘못되면 `401`을, 용량 게이트는 `507`을 반환합니다. `2xx` 응답은 sigiro가 배치를 받아들였다는 뜻입니다.
 
 ## 동작 확인하기
 
-애플리케이션을 시작하고 최소 10초 동안 작업을 하게 하십시오. 그런 다음 메인 HTTP API에서 프로파일 행을 다시 읽습니다.
+프로파일러를 적어도 한 번의 업로드 간격 동안 실행하십시오. 그런 다음 메인 HTTP API에서 프로파일 행을 다시 읽습니다.
 
 ```bash
 curl -s -X POST http://localhost:9999/v1/query \
@@ -109,7 +145,7 @@ curl -s -X POST http://localhost:9999/v1/query \
           ORDER BY samples DESC"
 ```
 
-호스팅 sigiro에서는 오리진을 바꾸고 `-H "Authorization: Bearer YOUR_TENANT_KEY"`를 추가하십시오. 결과가 비어 있지 않으면 SDK 전송, 프로파일 디코딩, HTTP 재조회가 확인된 것입니다. SDK 주기가 한 번 지난 뒤에도 결과가 비어 있다면, 대개 프로파일 핸들이 해제되었거나, 대상에 불필요한 경로가 포함되었거나, 쿼리의 서비스 이름이 SDK 설정과 일치하지 않는 경우입니다.
+호스티드 sigiro에서는 오리진을 바꾸고 `-H "Authorization: Bearer YOUR_TENANT_KEY"`를 추가하십시오. 결과가 비어 있지 않으면 내보내기, 프로파일 디코딩, HTTP 읽기가 확인된 것입니다. 대시보드의 **Profiles** 페이지에서 같은 데이터를 플레임 그래프로 볼 수 있습니다. 한 간격이 지나도 결과가 비어 있다면 대개 엔드포인트가 틀렸거나, 쿼리의 서비스 이름이 생산자와 맞지 않거나, 생산자 로그에 sigiro가 읽지 않는 형식에 대한 `400`이 있는 경우입니다.
 
 ## 다음 단계
 
