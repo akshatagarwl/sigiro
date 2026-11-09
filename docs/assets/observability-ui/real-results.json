@@ -1,0 +1,17 @@
+{
+  "kind": "real-existing-backend",
+  "url": "http://127.0.0.1:19990",
+  "checks": [
+    "two real logs, original time/metadata/facets",
+    "Arrow/Home/Enter row keyboard + URL selection",
+    "inspector separator resizes with keyboard",
+    "copy real message; tabs; no unsupported exclude; Escape focus restored",
+    "wrap and Base UI column checkbox menu",
+    "390px no body overflow; full-width modal; trap and Escape focus return"
+  ],
+  "desktopAxe": [],
+  "darkAxe": [],
+  "mobileAxe": [],
+  "reducedMotion": true,
+  "errors": []
+}

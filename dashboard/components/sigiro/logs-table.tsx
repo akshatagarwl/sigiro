@@ -3,10 +3,18 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import Link from "next/link";
+import { useMemo } from "react";
 
-import { createExplorer } from "@/components/sigiro/explorer";
+import { useDataTable } from "@/components/data-table/data-table-provider";
+import { EventExplorer } from "@/components/observability/event-explorer";
+import type { EventRecord } from "@/components/observability/types";
+import {
+  createExplorer,
+  type ExplorerPagination,
+} from "@/components/sigiro/explorer";
 import { LEVEL_CHART } from "@/lib/sigiro/palette";
 import { fromMicros, type Level, LEVEL_SQL, LEVELS } from "@/lib/sigiro/query";
+import { field } from "@/lib/store/schema";
 import {
   col,
   createTableSchema,
@@ -81,6 +89,11 @@ type LogRow = InferTableType<typeof schema.definition>;
 
 export const LogsTable = createExplorer<LogRow>({
   id: "logs",
+  detail: false,
+  filterOverrides: { service: field.array(field.string()) },
+  renderResults: (rows, pagination) => (
+    <LogResults rows={rows} pagination={pagination} />
+  ),
   definition: schema.definition,
   chart: LEVEL_CHART,
   source: {
@@ -115,3 +128,52 @@ export const LogsTable = createExplorer<LogRow>({
   title: (row) => `${row.service} · ${row.severity || row.level}`,
   rowClassName: (row) => levelRowClassName(row.level),
 });
+
+function LogResults({
+  rows,
+  pagination,
+}: {
+  rows: LogRow[];
+  pagination: ExplorerPagination;
+}) {
+  const { table, rowSelection } = useDataTable<LogRow, unknown>();
+  const events: EventRecord[] = useMemo(
+    () =>
+      rows.map((row) => {
+        let attributes: unknown = row.attributes;
+        try {
+          attributes = JSON.parse(row.attributes);
+        } catch {}
+        return {
+          id: row.uuid,
+          timestamp: row.timestamp,
+          service: row.service,
+          severity: row.severity,
+          category: row.level,
+          message: row.body,
+          attributes,
+          traceId: row.trace_id,
+        };
+      }),
+    [rows]
+  );
+  return (
+    <EventExplorer
+      events={events}
+      pagination={pagination}
+      selectedId={Object.keys(rowSelection)[0]}
+      onSelect={(id) => table.setRowSelection(id ? { [id]: true } : {})}
+      onFilter={(field, value, action) => {
+        if (field === "service" && action === "include")
+          table.getColumn("service")?.setFilterValue([value]);
+      }}
+      traceLink={(event) =>
+        event.traceId ? (
+          <Link href={`/traces/?trace=${encodeURIComponent(event.traceId)}`}>
+            View trace
+          </Link>
+        ) : null
+      }
+    />
+  );
+}

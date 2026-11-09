@@ -20,9 +20,10 @@ import { TOOLTIP_DELAY } from "./ui-compat";
 
 interface DataTableToolbarProps {
   renderActions?: () => React.ReactNode;
+  showViewOptions?: boolean;
 }
 
-export function DataTableToolbar({ renderActions }: DataTableToolbarProps) {
+export function DataTableToolbar({ renderActions, showViewOptions = true }: DataTableToolbarProps) {
   const { table, isLoading, columnFilters, totalRows, filterRows } =
     useDataTable();
   const { open, setOpen } = useControls();
@@ -92,7 +93,7 @@ export function DataTableToolbar({ renderActions }: DataTableToolbarProps) {
       <div className="ml-auto flex items-center gap-2">
         {columnFilters.length ? <DataTableResetButton /> : null}
         {renderActions?.()}
-        <DataTableViewOptions />
+        {showViewOptions && <DataTableViewOptions />}
       </div>
     </div>
   );

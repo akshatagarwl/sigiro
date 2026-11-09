@@ -1,5 +1,7 @@
 # Functional Source License, Version 1.1, ALv2 Future License
 
+The reusable UI source in `dashboard/components/observability/` is separately licensed under the MIT license included in that directory. This exception does not change the license of the Sigiro application or third-party materials.
+
 ## Abbreviation
 
 FSL-1.1-ALv2

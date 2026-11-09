@@ -9,6 +9,7 @@ import { useDataTable } from "@/components/data-table/data-table-provider";
 import { DataTableRefreshButton } from "@/components/data-table/data-table-refresh-button";
 import { MemoizedDataTableSheetContent } from "@/components/data-table/data-table-sheet/data-table-sheet-content";
 import { DataTableSheetDetails } from "@/components/data-table/data-table-sheet/data-table-sheet-details";
+import { canLoadMore } from "@/components/data-table/utils";
 import { EvilBarChart } from "@/components/evilcharts/charts/recharts-bar-chart";
 import type { ChartConfig } from "@/components/evilcharts/ui/recharts-chart";
 import {
@@ -46,6 +47,12 @@ import {
 const STATE_KEYS = new Set(["sort", "uuid", "size", "direction", "cursor"]);
 const DIRECTIONS = ["prev", "next"] as const;
 
+export type ExplorerPagination = {
+  loading: boolean;
+  hasMore: boolean;
+  onLoadMore: () => void;
+};
+
 type Explorer<TRow> = {
   id: string;
   // The table-schema definition; typed loosely because each table infers its own.
@@ -56,6 +63,11 @@ type Explorer<TRow> = {
   title: (row: TRow) => string;
   rowClassName?: (row: TRow) => string;
   detail?: boolean;
+  renderResults?: (
+    rows: TRow[],
+    pagination: ExplorerPagination
+  ) => React.ReactNode;
+  filterOverrides?: SchemaDefinition;
 };
 
 export function createExplorer<TRow extends { timestamp: Date }>(
@@ -71,6 +83,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(
     sort: field.sort(),
     uuid: field.string(),
     size: field.number().default(50),
+    ...explorer.filterOverrides,
     direction: field.stringLiteral(DIRECTIONS).default("next"),
     cursor: field.timestamp(),
   });
@@ -170,6 +183,17 @@ export function createExplorer<TRow extends { timestamp: Date }>(
           </div>
         )}
         <DataTableInfinite
+          resultsSlot={explorer.renderResults?.(flatData, {
+            loading: isFetching || isLoading,
+            hasMore: canLoadMore({
+              hasNextPage,
+              filterRows: meta?.filterRowCount,
+              totalRowsFetched: flatData.length,
+            }),
+            onLoadMore: () => {
+              void fetchNextPage();
+            },
+          })}
           columns={columns}
           data={flatData}
           totalRows={meta?.totalRowCount}
@@ -195,7 +219,10 @@ export function createExplorer<TRow extends { timestamp: Date }>(
           getFacetedUniqueValues={getFacetedUniqueValues(facets)}
           getFacetedMinMaxValues={getFacetedMinMaxValues(facets)}
           chartSlot={
-            <div className="h-36 w-full" data-chart-name="timeline">
+            <div
+              className={explorer.renderResults ? "h-24 w-full" : "h-36 w-full"}
+              data-chart-name="timeline"
+            >
               <EvilBarChart
                 data={chartData}
                 config={explorer.chart as never}

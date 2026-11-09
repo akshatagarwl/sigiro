@@ -1,0 +1,56 @@
+{
+  "kind": "real read-only backend round-trip, no fixture interception",
+  "service": "dashboard-e2e",
+  "matchedRows": 2,
+  "specialService": "quote' and \\backslash",
+  "specialMatchedRows": 0,
+  "checks": [
+    "include UI → URL → parsed filter → actual SQL → actual rows",
+    "reload persists",
+    "checkbox removal clears URL and SQL predicate",
+    "quotes/backslashes preserved and SQL-quoted correctly, actual 200 empty response",
+    "back/forward restores parsed URL state and displayed results"
+  ],
+  "queries": [
+    {
+      "sql": "SELECT timestamp, CASE WHEN severity_number >= 17 THEN 'error' WHEN severity_number >= 13 THEN 'warning' WHEN severity_number >= 9 THEN 'info' ELSE 'debug' END AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id FROM sigiro_logs WHERE timestamp >= make_timestamp(1794243300000000) AND timestamp < make_timestamp(1794243450000000) AND timestamp < make_timestamp(1794252761258000) ORDER BY timestamp DESC LIMIT 50",
+      "status": 200,
+      "rows": 2
+    },
+    {
+      "sql": "SELECT timestamp, CASE WHEN severity_number >= 17 THEN 'error' WHEN severity_number >= 13 THEN 'warning' WHEN severity_number >= 9 THEN 'info' ELSE 'debug' END AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id FROM sigiro_logs WHERE timestamp >= make_timestamp(1794243300000000) AND timestamp < make_timestamp(1794243450000000) AND service_name IN ('dashboard-e2e') AND timestamp < make_timestamp(1794252761808000) ORDER BY timestamp DESC LIMIT 50",
+      "status": 200,
+      "rows": 2
+    },
+    {
+      "sql": "SELECT timestamp, CASE WHEN severity_number >= 17 THEN 'error' WHEN severity_number >= 13 THEN 'warning' WHEN severity_number >= 9 THEN 'info' ELSE 'debug' END AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id FROM sigiro_logs WHERE timestamp >= make_timestamp(1794243300000000) AND timestamp < make_timestamp(1794243450000000) AND service_name IN ('dashboard-e2e') AND timestamp < make_timestamp(1794252761928000) ORDER BY timestamp DESC LIMIT 50",
+      "status": 200,
+      "rows": 2
+    },
+    {
+      "sql": "SELECT timestamp, CASE WHEN severity_number >= 17 THEN 'error' WHEN severity_number >= 13 THEN 'warning' WHEN severity_number >= 9 THEN 'info' ELSE 'debug' END AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id FROM sigiro_logs WHERE timestamp >= make_timestamp(1794243300000000) AND timestamp < make_timestamp(1794243450000000) AND timestamp < make_timestamp(1794252762286000) ORDER BY timestamp DESC LIMIT 50",
+      "status": 200,
+      "rows": 2
+    },
+    {
+      "sql": "SELECT timestamp, CASE WHEN severity_number >= 17 THEN 'error' WHEN severity_number >= 13 THEN 'warning' WHEN severity_number >= 9 THEN 'info' ELSE 'debug' END AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id FROM sigiro_logs WHERE timestamp >= make_timestamp(1794243300000000) AND timestamp < make_timestamp(1794243450000000) AND service_name IN ('quote'' and \\backslash') AND timestamp < make_timestamp(1794252762387000) ORDER BY timestamp DESC LIMIT 50",
+      "status": 200,
+      "rows": 0
+    },
+    {
+      "sql": "SELECT timestamp, CASE WHEN severity_number >= 17 THEN 'error' WHEN severity_number >= 13 THEN 'warning' WHEN severity_number >= 9 THEN 'info' ELSE 'debug' END AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id FROM sigiro_logs WHERE timestamp >= make_timestamp(1794243300000000) AND timestamp < make_timestamp(1794243450000000) AND service_name IN ('quote'' and \\backslash') AND timestamp < make_timestamp(1794252762601000) ORDER BY timestamp DESC LIMIT 50",
+      "status": 200,
+      "rows": 0
+    },
+    {
+      "sql": "SELECT timestamp, CASE WHEN severity_number >= 17 THEN 'error' WHEN severity_number >= 13 THEN 'warning' WHEN severity_number >= 9 THEN 'info' ELSE 'debug' END AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id FROM sigiro_logs WHERE timestamp >= make_timestamp(1794243300000000) AND timestamp < make_timestamp(1794243450000000) AND timestamp < make_timestamp(1794252762797000) ORDER BY timestamp DESC LIMIT 50",
+      "status": 200,
+      "rows": 2
+    },
+    {
+      "sql": "SELECT timestamp, CASE WHEN severity_number >= 17 THEN 'error' WHEN severity_number >= 13 THEN 'warning' WHEN severity_number >= 9 THEN 'info' ELSE 'debug' END AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id FROM sigiro_logs WHERE timestamp >= make_timestamp(1794243300000000) AND timestamp < make_timestamp(1794243450000000) AND service_name IN ('quote'' and \\backslash') AND timestamp < make_timestamp(1794252762987000) ORDER BY timestamp DESC LIMIT 50",
+      "status": 200,
+      "rows": 0
+    }
+  ]
+}
