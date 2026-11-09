@@ -482,49 +482,6 @@ export function otlpProfileBody(service: string): Uint8Array {
   ]);
 }
 
-export function pprofBody(): Uint8Array {
-  const strings = ["", "cpu", "nanoseconds", "main", "work"];
-  const location = (id: number, fnId: number) =>
-    message([
-      varintField(1, BigInt(id)),
-      messageField(4, message([varintField(1, BigInt(fnId))])),
-    ]);
-  const fn = (id: number, name: number) =>
-    message([varintField(1, BigInt(id)), varintField(2, BigInt(name))]);
-  const sample = (ids: number[], value: number) =>
-    message([
-      ...ids.map((id) => varintField(1, BigInt(id))),
-      varintField(2, BigInt(value)),
-    ]);
-  return message([
-    messageField(1, message([varintField(1, 1n), varintField(2, 2n)])),
-    messageField(2, sample([2, 1], 10)),
-    messageField(2, sample([1], 5)),
-    messageField(4, location(1, 1)),
-    messageField(4, location(2, 2)),
-    messageField(5, fn(1, 3)),
-    messageField(5, fn(2, 4)),
-    ...strings.map((value) => stringField(6, value)),
-    varintField(9, 1_700_000_000_000_000_000n),
-  ]);
-}
-
-export function pushRequestBody(service: string): Uint8Array {
-  const label = message([
-    stringField(1, "service_name"),
-    stringField(2, service),
-  ]);
-  return message([
-    messageField(
-      1,
-      message([
-        messageField(1, label),
-        messageField(2, message([bytesField(1, pprofBody())])),
-      ])
-    ),
-  ]);
-}
-
 export function gzip(body: Uint8Array | string): Uint8Array {
   return new Uint8Array(gzipSync(body));
 }

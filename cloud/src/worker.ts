@@ -5,7 +5,6 @@ import { DurableObject } from "cloudflare:workers";
 import type { Query, QueryOutcome, ViewSource } from "../query/src/query.ts";
 import initWasm, {
   decode_otlp,
-  decode_pyroscope,
   empty_segment,
   manifest_commit,
   manifest_empty,
@@ -34,7 +33,7 @@ import wasmModule from "../vendor/segments-wasm/sigiro_segments_wasm_bg.wasm";
 await initWasm(wasmModule);
 
 type Signal = "traces" | "logs" | "metrics" | "profiles";
-type Format = "protobuf" | "json" | "pyroscope";
+type Format = "protobuf" | "json";
 type Table =
   | "spans"
   | "logs"
@@ -75,8 +74,7 @@ type WalRow = {
   id: number;
   tenant: TenantId;
   signal: Signal;
-  format: Format;
-  sdk_name: string | null;
+  format: string;
   body: ArrayBuffer;
   bytes: number;
 };
@@ -108,18 +106,6 @@ const views: Record<string, { table: Table; signal: Signal }> = {
   },
   sigiro_profiles: { table: "profiles", signal: "profiles" },
 };
-const pyroscopePaths = new Set([
-  "/",
-  "/push.v1.PusherService/Push",
-  "/ingest",
-  "/ingest/pyroscope",
-]);
-const pyroscopeContentTypes = [
-  "",
-  "application/proto",
-  "application/octet-stream",
-  "binary/octet-stream",
-];
 const servicesSql = `SELECT service_name, min(first_seen)::VARCHAR AS first_seen, max(last_seen)::VARCHAR AS last_seen,
   sum(span_count)::BIGINT AS span_count, sum(log_count)::BIGINT AS log_count, sum(metric_count)::BIGINT AS metric_count,
   sum(profile_count)::BIGINT AS profile_count, sum(span_count + log_count + metric_count + profile_count)::BIGINT AS total_count
@@ -152,44 +138,26 @@ export class IngestCell extends DurableObject<Env> {
     const signal = parseSignal(params.get("signal"));
     const tenant = parseTenantId(params.get("tenant"));
     const format = parseCellFormat(params.get("format"));
-    const sdkName = params.get("name");
     if (signal === undefined || format === undefined || tenant === undefined) {
       return new Response("bad ingest cell request", { status: 400 });
     }
     const body = await request.arrayBuffer();
     try {
-      this.decode(signal, format, sdkName, body);
+      decode_otlp(signal, format, new Uint8Array(body));
     } catch (error) {
       return new Response(String(error), { status: 400 });
     }
     this.ctx.storage.sql.exec(
-      "INSERT INTO wal (tenant, signal, format, sdk_name, body, bytes) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO wal (tenant, signal, format, body, bytes) VALUES (?, ?, ?, ?, ?)",
       tenant,
       signal,
       format,
-      sdkName,
       body,
       body.byteLength
     );
     await this.ctx.storage.sync?.();
     await this.scheduleIfNeeded();
     return new Response(null, { status: 202 });
-  }
-
-  private decode(
-    signal: Signal,
-    format: Format,
-    sdkName: string | null,
-    body: ArrayBuffer
-  ): Array<{ metadata: string; parquet: Uint8Array }> {
-    if (format === "pyroscope") {
-      return decode_pyroscope(
-        new Uint8Array(body),
-        sdkName,
-        numberVar(this.env.SIGIRO_MAX_INGEST_BODY_BYTES, defaultBodyLimit)
-      );
-    }
-    return decode_otlp(signal, format, new Uint8Array(body));
   }
 
   liveKeys(table: Table): string[] {
@@ -226,7 +194,7 @@ export class IngestCell extends DurableObject<Env> {
   private async flush(): Promise<void> {
     const rows = this.ctx.storage.sql
       .exec<WalRow>(
-        "SELECT id, tenant, signal, format, sdk_name, body, bytes FROM wal ORDER BY id"
+        "SELECT id, tenant, signal, format, body, bytes FROM wal ORDER BY id"
       )
       .toArray();
     if (rows.length === 0) {
@@ -234,12 +202,16 @@ export class IngestCell extends DurableObject<Env> {
     }
     let manifest = readManifest(this.ctx.storage.sql);
     for (const row of rows) {
-      const outputs = this.decode(
-        row.signal,
-        row.format,
-        row.sdk_name,
-        row.body
-      );
+      const format = parseCellFormat(row.format);
+      if (format === undefined) {
+        console.warn(
+          `dropping wal row ${row.id} in removed format ${row.format}`
+        );
+        this.ctx.storage.sql.exec("DELETE FROM wal WHERE id = ?", row.id);
+        await this.ctx.storage.sync?.();
+        continue;
+      }
+      const outputs = decode_otlp(row.signal, format, new Uint8Array(row.body));
       for (const [index, output] of outputs.entries()) {
         const metadata = JSON.parse(output.metadata) as SegmentMetadata;
         const key = objectKey(row.tenant, row.id, index, metadata.table);
@@ -267,8 +239,7 @@ export default {
     if (request.method === "GET" && url.pathname === "/v1/services") {
       return servicesRoute(request, env);
     }
-    const pyroscope = pyroscopePaths.has(url.pathname);
-    const route = pyroscope ? "profiles" : routeSignal(url.pathname);
+    const route = routeSignal(url.pathname);
     if (request.method !== "POST" || route === undefined) {
       return new Response("not found", { status: 404 });
     }
@@ -278,18 +249,9 @@ export default {
       return new Response("request body exceeds ingest limit", { status: 413 });
     }
     const contentType = mediaType(request.headers.get("content-type"));
-    const format = pyroscope ? "pyroscope" : parseFormat(contentType);
+    const format = parseFormat(contentType);
     if (format === undefined) {
       return new Response("unsupported content type", { status: 415 });
-    }
-    if (
-      pyroscope &&
-      contentType !== "multipart/form-data" &&
-      !pyroscopeContentTypes.includes(contentType)
-    ) {
-      return new Response("unsupported Pyroscope content type", {
-        status: 400,
-      });
     }
     const auth = await authenticate(request, env, ingestScope);
     if (auth.status !== 200) {
@@ -299,18 +261,6 @@ export default {
     if (decoded.status !== 200) {
       return new Response(decoded.detail, { status: decoded.status });
     }
-    const body =
-      pyroscope && contentType === "multipart/form-data"
-        ? await profileField(
-            decoded.body,
-            request.headers.get("content-type") ?? ""
-          )
-        : decoded.body;
-    if (body === undefined) {
-      return new Response("profile form field not found in multipart body", {
-        status: 400,
-      });
-    }
     const id = env.INGEST_CELL.idFromName(cellName(auth.tenant, route));
     const stub = env.INGEST_CELL.get(id);
     const params = new URLSearchParams({
@@ -318,14 +268,10 @@ export default {
       tenant: auth.tenant,
       format,
     });
-    const name = url.searchParams.get("name");
-    if (pyroscope && name !== null) {
-      params.set("name", name);
-    }
     try {
       return await stub.fetch(`https://cell.invalid/ingest?${params}`, {
         method: "POST",
-        body,
+        body: decoded.body,
       });
     } catch (error) {
       return new Response(`ingest cell unavailable: ${String(error)}`, {
@@ -442,9 +388,7 @@ function mediaType(contentType: string | null): string {
 }
 
 function parseCellFormat(value: string | null): Format | undefined {
-  return value === "protobuf" || value === "json" || value === "pyroscope"
-    ? value
-    : undefined;
+  return value === "protobuf" || value === "json" ? value : undefined;
 }
 
 async function decodedBody(
@@ -481,22 +425,6 @@ async function decodedBody(
     offset += chunk.byteLength;
   }
   return { status: 200, body: body.buffer };
-}
-
-async function profileField(
-  body: ArrayBuffer,
-  contentType: string
-): Promise<ArrayBuffer | undefined> {
-  const form = await new Response(body, {
-    headers: { "content-type": contentType },
-  }).formData();
-  const field = form.get("profile");
-  if (field === null) {
-    return undefined;
-  }
-  return typeof field === "string"
-    ? new TextEncoder().encode(field).buffer
-    : await field.arrayBuffer();
 }
 
 function routeSignal(pathname: string): Signal | undefined {

@@ -109,7 +109,7 @@ function useSqlQuery(name: string, sql: string | undefined) {
 }
 
 /**
- * Pyroscope-style profile explorer over `sigiro_profiles`: pick a service and
+ * Continuous-profiling explorer over `sigiro_profiles`: pick a service and
  * profile type, narrow by sample labels or a trace/span, and read the result
  * as a flame graph and a top-functions table, optionally diffed against an
  * earlier window.
@@ -750,9 +750,9 @@ function ProfilesEmpty() {
           </EmptyMedia>
           <EmptyTitle>No profiles in this window</EmptyTitle>
           <EmptyDescription>
-            Send OTLP profiles to <code>/v1development/profiles</code>, or point
-            a Pyroscope SDK at sigiro. For Go, one call starts continuous CPU
-            and heap profiling:
+            Send OTLP profiles to <code>/v1development/profiles</code>, from the
+            OpenTelemetry eBPF profiler, a Collector, or an SDK. For Go, one
+            call starts continuous CPU and heap profiling:
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent className="max-w-2xl text-left">

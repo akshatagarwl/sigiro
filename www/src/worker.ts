@@ -27,10 +27,7 @@ const API_PATHS = new Set([
   "/.well-known/oauth-protected-resource",
   "/health",
   "/healthz",
-  "/ingest",
-  "/ingest/pyroscope",
   "/openapi.json",
-  "/push.v1.PusherService/Push",
   "/v1development/profiles",
 ]);
 

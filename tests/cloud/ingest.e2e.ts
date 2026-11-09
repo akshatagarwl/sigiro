@@ -10,8 +10,6 @@ import {
   otlpProfileBody,
   post,
   postUntilAccepted,
-  pprofBody,
-  pushRequestBody,
   token,
   traceBody,
 } from "./harness.ts";
@@ -94,46 +92,10 @@ try {
   } finally {
     rmSync(profiles, { recursive: true, force: true });
   }
+  // Only OTLP carries profiles; the old non-OTLP profile paths are gone.
   await expectStatus(
-    await post(
-      "/push.v1.PusherService/Push",
-      pushRequestBody("push-profiled"),
-      ingest,
-      "application/proto"
-    ),
-    202
-  );
-  await expectStatus(
-    await post(
-      "/ingest?name=pprof-profiled%7Benv%3Dprod%7D",
-      gzip(pprofBody()),
-      ingest,
-      "application/octet-stream"
-    ),
-    202
-  );
-  const form = new FormData();
-  form.append(
-    "profile",
-    new Blob([pushRequestBody("multipart-profiled")]),
-    "profile.pb"
-  );
-  await expectStatus(await post("/ingest/pyroscope", form, ingest), 202);
-  await expectStatus(
-    await post("/", pushRequestBody("root-profiled"), ingest),
-    202
-  );
-  for (const service of [
-    "push-profiled",
-    "pprof-profiled",
-    "multipart-profiled",
-    "root-profiled",
-  ]) {
-    await fleet.waitForRow("tenants/acme/profiles/", "service_name", service);
-  }
-  await expectStatus(
-    await post("/ingest", pushRequestBody("text"), ingest, "text/plain"),
-    400
+    await post("/ingest", otlpProfileBody("gone"), ingest, protobuf),
+    404
   );
 
   await expectStatus(

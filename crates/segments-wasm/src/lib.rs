@@ -2,7 +2,7 @@ use arrow::record_batch::RecordBatch;
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use sigiro_segments::{
     InputFormat, Manifest, Segment, Table, transform_logs, transform_metrics,
-    transform_otlp_profiles, transform_pyroscope_profiles, transform_traces, write_segment,
+    transform_otlp_profiles, transform_traces, write_segment,
 };
 use wasm_bindgen::prelude::*;
 
@@ -171,19 +171,4 @@ pub fn validate_read_only(sql: &str) -> Result<(), JsValue> {
 pub fn empty_segment(table: &str) -> Result<Vec<u8>, JsValue> {
     sigiro_segments::empty_segment(parse_table(table)?)
         .ok_or_else(|| JsValue::from_str(&format!("table {table} has no hosted schema")))
-}
-
-#[wasm_bindgen]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "wasm-bindgen cannot accept Option<&str>"
-)]
-pub fn decode_pyroscope(
-    body: Vec<u8>,
-    sdk_name: Option<String>,
-    max_bytes: usize,
-) -> Result<Array, JsValue> {
-    let batch = transform_pyroscope_profiles(body, sdk_name.as_deref(), max_bytes)
-        .map_err(|error| to_js_error(&error))?;
-    write_batch(Table::Profiles, &batch)
 }
