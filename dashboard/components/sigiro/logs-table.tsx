@@ -1,5 +1,7 @@
 "use client";
 
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import Link from "next/link";
 
 import { createExplorer } from "@/components/sigiro/explorer";
@@ -83,7 +85,7 @@ export const LogsTable = createExplorer<LogRow>({
   chart: LEVEL_CHART,
   source: {
     from: "sigiro_logs",
-    select: `timestamp, ${LEVEL_SQL} AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, CAST(hash(timestamp, service_name, body, span_id) AS VARCHAR) AS uuid`,
+    select: `timestamp, ${LEVEL_SQL} AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id`,
     series: { key: "level", sql: LEVEL_SQL, values: LEVELS },
     facets: { service: "service_name" },
     inputs: { body: "body", trace_id: "trace_id" },
@@ -95,7 +97,18 @@ export const LogsTable = createExplorer<LogRow>({
       severity: String(row.severity_text ?? ""),
       attributes: String(row.attributes ?? ""),
       trace_id: String(row.trace_id ?? ""),
-      uuid: String(row.uuid),
+      uuid: bytesToHex(
+        sha256(
+          new TextEncoder().encode(
+            JSON.stringify([
+              row.timestamp,
+              row.service_name,
+              row.body,
+              row.span_id,
+            ])
+          )
+        )
+      ),
     }),
   },
   rowId: (row) => row.uuid,

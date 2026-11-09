@@ -55,6 +55,7 @@ type Explorer<TRow> = {
   rowId: (row: TRow) => string;
   title: (row: TRow) => string;
   rowClassName?: (row: TRow) => string;
+  detail?: boolean;
 };
 
 export function createExplorer<TRow extends { timestamp: Date }>(
@@ -110,7 +111,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(
     const options = useOptions();
     const queryClient = useQueryClient();
     const { tick } = useControls();
-    const { data, isFetching, isLoading, fetchNextPage, hasNextPage } =
+    const { data, error, isFetching, isLoading, fetchNextPage, hasNextPage } =
       useInfiniteQuery(options(search));
 
     const refresh = React.useCallback(
@@ -156,67 +157,82 @@ export function createExplorer<TRow extends { timestamp: Date }>(
     );
 
     return (
-      <DataTableInfinite
-        columns={columns}
-        data={flatData}
-        totalRows={meta?.totalRowCount}
-        filterRows={meta?.filterRowCount}
-        totalRowsFetched={flatData.length}
-        defaultColumnFilters={defaultColumnFilters}
-        defaultColumnSorting={
-          search.sort
-            ? [search.sort as { id: string; desc: boolean }]
-            : undefined
-        }
-        defaultRowSelection={
-          search.uuid ? { [String(search.uuid)]: true } : undefined
-        }
-        defaultColumnVisibility={defaultColumnVisibility}
-        filterFields={dynamicFilterFields}
-        isFetching={isFetching}
-        isLoading={isLoading}
-        fetchNextPage={fetchNextPage}
-        hasNextPage={hasNextPage}
-        getRowId={explorer.rowId}
-        getRowClassName={getRowClassName}
-        getFacetedUniqueValues={getFacetedUniqueValues(facets)}
-        getFacetedMinMaxValues={getFacetedMinMaxValues(facets)}
-        chartSlot={
-          <div className="h-36 w-full" data-chart-name="timeline">
-            <EvilBarChart
-              data={chartData}
-              config={explorer.chart as never}
-              stackType="stacked"
-              className="h-full w-full"
-              isLoading={isLoading}
-            >
-              <EvilBarChart.Grid />
-              <EvilBarChart.XAxis dataKey="time" />
-              <EvilBarChart.Tooltip />
-              {seriesKeys.map((key) => (
-                <EvilBarChart.Bar key={key} dataKey={key} />
-              ))}
-            </EvilBarChart>
+      <>
+        {error && (
+          <div
+            role="alert"
+            className="border-destructive/30 text-destructive mx-4 mt-4 rounded-md border p-3 text-sm"
+          >
+            Unable to load {explorer.id}. {error.message}{" "}
+            <button className="ml-2 underline" onClick={() => void refresh()}>
+              Retry
+            </button>
           </div>
-        }
-        toolbarActions={
-          <DataTableRefreshButton onClick={() => void refresh()} />
-        }
-        commandSlot={
-          <DataTableFilterCommand
-            schema={filterSchema.definition}
-            tableId={explorer.id}
-          />
-        }
-        sheetSlot={
-          <SheetSlot
-            totalRows={meta?.totalRowCount ?? 0}
-            filterRows={meta?.filterRowCount ?? 0}
-            totalRowsFetched={flatData.length}
-          />
-        }
-        tableId={explorer.id}
-      />
+        )}
+        <DataTableInfinite
+          columns={columns}
+          data={flatData}
+          totalRows={meta?.totalRowCount}
+          filterRows={meta?.filterRowCount}
+          totalRowsFetched={flatData.length}
+          defaultColumnFilters={defaultColumnFilters}
+          defaultColumnSorting={
+            search.sort
+              ? [search.sort as { id: string; desc: boolean }]
+              : undefined
+          }
+          defaultRowSelection={
+            search.uuid ? { [String(search.uuid)]: true } : undefined
+          }
+          defaultColumnVisibility={defaultColumnVisibility}
+          filterFields={dynamicFilterFields}
+          isFetching={isFetching}
+          isLoading={isLoading}
+          fetchNextPage={fetchNextPage}
+          hasNextPage={hasNextPage}
+          getRowId={explorer.rowId}
+          getRowClassName={getRowClassName}
+          getFacetedUniqueValues={getFacetedUniqueValues(facets)}
+          getFacetedMinMaxValues={getFacetedMinMaxValues(facets)}
+          chartSlot={
+            <div className="h-36 w-full" data-chart-name="timeline">
+              <EvilBarChart
+                data={chartData}
+                config={explorer.chart as never}
+                stackType="stacked"
+                className="h-full w-full"
+                isLoading={isLoading}
+              >
+                <EvilBarChart.Grid />
+                <EvilBarChart.XAxis dataKey="time" />
+                <EvilBarChart.Tooltip />
+                {seriesKeys.map((key) => (
+                  <EvilBarChart.Bar key={key} dataKey={key} />
+                ))}
+              </EvilBarChart>
+            </div>
+          }
+          toolbarActions={
+            <DataTableRefreshButton onClick={() => void refresh()} />
+          }
+          commandSlot={
+            <DataTableFilterCommand
+              schema={filterSchema.definition}
+              tableId={explorer.id}
+            />
+          }
+          sheetSlot={
+            explorer.detail === false ? null : (
+              <SheetSlot
+                totalRows={meta?.totalRowCount ?? 0}
+                filterRows={meta?.filterRowCount ?? 0}
+                totalRowsFetched={flatData.length}
+              />
+            )
+          }
+          tableId={explorer.id}
+        />
+      </>
     );
   }
 
