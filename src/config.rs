@@ -54,6 +54,13 @@ pub(crate) static OTEL_EXPORTER_OTLP_ENDPOINT: Envar<String> =
         EnvarDef::Default(String::new())
     });
 
+/// OTLP profiles endpoint for self-profiling, used as-is. Unset means
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` + `/v1development/profiles`, or this server.
+pub(crate) static OTEL_EXPORTER_OTLP_PROFILES_ENDPOINT: Envar<String> =
+    Envar::on_startup("OTEL_EXPORTER_OTLP_PROFILES_ENDPOINT", || {
+        EnvarDef::Default(String::new())
+    });
+
 /// OTel auth key for self-ingestion (optional). Empty means no auth.
 pub(crate) static OTEL_AUTH_KEY: Envar<String> =
     Envar::on_startup("SIGIRO_OTEL_AUTH_KEY", || EnvarDef::Default(String::new()));
@@ -112,11 +119,10 @@ pub(crate) static QUERY_TIMEOUT_SECONDS: Envar<u64> =
 pub(crate) static MAX_RESULT_ROWS: Envar<usize> =
     Envar::on_startup("SIGIRO_MAX_RESULT_ROWS", || EnvarDef::Default(100_000));
 
-/// Pyroscope profiling endpoint (optional — no profiling if unset).
-pub(crate) static PYROSCOPE_ENDPOINT: Envar<String> =
-    Envar::on_startup("SIGIRO_PYROSCOPE_ENDPOINT", || {
-        EnvarDef::Default(String::new())
-    });
+/// Self-profiling: `true` sends sigiro's own CPU and heap profiles over OTLP
+/// (see `src/profiling.rs`). Off by default.
+pub(crate) static SELF_PROFILING: Envar<String> =
+    Envar::on_startup("SIGIRO_SELF_PROFILING", || EnvarDef::Default(String::new()));
 
 /// Flush interval for per-project flusher tasks (seconds). Default: 60s.
 /// Controls how often buffered rows are flushed to DuckDB, even if the row

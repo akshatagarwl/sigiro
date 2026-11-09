@@ -544,7 +544,7 @@ async fn run_serve() -> Result<()> {
 
     // backtrace snapshots the loaded shared-library list once. Start profiling
     // only after DuckDB has loaded its extensions so their native frames resolve.
-    let (_profiling, pyroscope_status) = match start_profiling()? {
+    let (_profiling, self_profiling_status) = match start_profiling()? {
         Some(handle) => (Some(handle), "active"),
         None => (None, "disabled"),
     };
@@ -557,7 +557,7 @@ async fn run_serve() -> Result<()> {
         sigiro::admin::write_instance_status_batch(
             conn,
             &[
-                ("pyroscope_status", pyroscope_status),
+                ("self_profiling_status", self_profiling_status),
                 ("version", version),
                 ("mode", "otlp"),
                 ("platform_os", std::env::consts::OS),

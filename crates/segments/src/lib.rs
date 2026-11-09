@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 mod otel_proto;
 pub mod otlp;
+pub mod profile_export;
 mod profiles;
 mod pyroscope_proto;
 pub use profiles::{
