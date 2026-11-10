@@ -69,12 +69,20 @@ fn docs() {
     if std::fs::create_dir_all(export).is_ok() {
         println!("cargo:rerun-if-changed=www/dist-binary");
     }
+    // The docs MCP snapshot (src/docs_mcp.rs), written by the same script.
+    let snapshot = std::path::Path::new("www/dist-mcp");
+    if std::fs::create_dir_all(snapshot).is_ok() {
+        println!("cargo:rerun-if-changed=www/dist-mcp");
+    }
     let required = env::var("SIGIRO_REQUIRE_DOCS").is_ok_and(|v| v == "1");
-    if required && !export.join("index.html").is_file() {
-        panic!(
-            "SIGIRO_REQUIRE_DOCS=1 but www/dist-binary/index.html is missing. \
-             Build the docs first: `mise run docs-build` \
-             (or use `mise run build`, which does both)."
-        );
+    for file in [export.join("index.html"), snapshot.join("mcp-data.json.gz")] {
+        if required && !file.is_file() {
+            panic!(
+                "SIGIRO_REQUIRE_DOCS=1 but {} is missing. \
+                 Build the docs first: `mise run docs-build` \
+                 (or use `mise run build`, which does both).",
+                file.display()
+            );
+        }
     }
 }

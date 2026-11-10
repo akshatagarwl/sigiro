@@ -128,6 +128,12 @@ codex mcp add sigiro -- sigiro mcp      # Codex
 결과 행은 타임스탬프와 `duration`을 Unix epoch 이후의 마이크로초로 표시하지만, `timestamp`를
 정수와 비교하면 실패합니다.
 
+문서 도구는 `https://sigiro.com/mcp/docs`의 호스팅 문서 MCP를 사용하며, `SIGIRO_DOCS_MCP_URL`을
+설정하면 그 주소를 사용합니다. 오프라인이거나, 엔드포인트가 몇 초 안에 응답하지 않거나, 오류를
+반환하면 바이너리에 내장된 이 문서의 사본으로 답합니다. 도구 이름, 인수, 응답 형식은 같지만 내장
+사본은 실행 중인 릴리스 시점의 문서입니다. 네트워크를 쓰지 않고 항상 내장 사본을 사용하려면
+`SIGIRO_DOCS_MCP_URL`을 빈 값으로 설정하십시오.
+
 호스팅 sigiro는 CLI 세션 대신 브라우저에서 OAuth로 로그인하는 에이전트를 위해 같은 도구를
 streamable HTTP로 `https://sigiro.com/mcp`에서도 제공합니다. 로그인 없이 쓸 수 있는 문서 도구만은
 `https://sigiro.com/mcp/docs`에 있습니다.

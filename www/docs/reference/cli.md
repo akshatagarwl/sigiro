@@ -141,6 +141,15 @@ than your shell. In `run_query`, bound `timestamp` with timestamp values such as
 `duration` as microseconds since the Unix epoch, but comparing `timestamp` with
 an integer fails.
 
+The documentation tools come from the hosted docs MCP at
+`https://sigiro.com/mcp/docs`, or from `SIGIRO_DOCS_MCP_URL` if you set it.
+When that endpoint cannot be reached, because the machine is offline, the
+endpoint does not answer within a few seconds, or it returns an error, the tools
+answer from a copy of these docs that is built into the binary. The tool names,
+arguments and answers stay the same, but the built-in copy is the docs as of the
+release you run. Set `SIGIRO_DOCS_MCP_URL` to an empty value to skip the network
+and always use the built-in copy.
+
 Hosted sigiro also serves the same tools over streamable HTTP at
 `https://sigiro.com/mcp`, for agents that sign in with OAuth in a browser instead
 of using the CLI's session. The documentation tools alone, without sign-in, are

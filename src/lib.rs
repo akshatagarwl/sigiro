@@ -7,6 +7,7 @@ pub(crate) mod dashboard;
 mod declared_schema;
 pub mod disk_gate;
 pub(crate) mod docs;
+pub mod docs_mcp;
 pub mod federate;
 
 pub mod ingest;

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Build the docs export the sigiro binary embeds and serves at /docs/
-# (src/docs.rs) into www/dist-binary.
+# (src/docs.rs) into www/dist-binary, and the docs MCP snapshot it answers
+# `search_docs`, `get_page`, `list_pages` and `get_navigation` from when the
+# hosted docs MCP is unreachable (src/docs_mcp.rs) into www/dist-mcp.
 #
 # The same Blume project as sigiro.com/docs, built with SIGIRO_DOCS_TARGET=binary
 # (see `BINARY` in www/blume.config.ts): static, everything under /docs, no
@@ -26,7 +28,12 @@ restore() {
 }
 trap restore EXIT
 
-rm -rf dist dist-binary
+rm -rf dist dist-binary dist-mcp
+# The MCP snapshot comes from the sigiro.com config, not the binary one, so its
+# routes and URLs are the hosted docs MCP's.
+mkdir dist-mcp
+env -u SIGIRO_DOCS_TARGET aube exec tsx scripts/export-mcp-data.ts dist-mcp/mcp-data.json
+gzip -9n dist-mcp/mcp-data.json
 SIGIRO_DOCS_TARGET=binary aube run build
 mv dist dist-binary
 
@@ -46,3 +53,4 @@ if grep -rlq cloudflareinsights .; then
   exit 1
 fi
 echo "build-docs-export: $(find . -type f | wc -l | tr -d ' ') files, $(du -sh . | cut -f1) in www/dist-binary"
+echo "build-docs-export: $(du -h ../dist-mcp/mcp-data.json.gz | cut -f1) docs MCP snapshot in www/dist-mcp"

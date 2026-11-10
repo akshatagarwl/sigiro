@@ -5074,6 +5074,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "typed-env",
+ "unicode-normalization",
  "url",
  "utoipa",
  "walkdir",

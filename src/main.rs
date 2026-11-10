@@ -439,14 +439,24 @@ async fn main() -> Result<()> {
             let client = sigiro::client::try_build_client().await?;
             tracing::info!(endpoint = client.base_url(), "starting sigiro MCP server");
             let mut service = sigiro::mcp::SigiroMcp::new(client);
-            match sigiro::mcp::connect_docs().await {
-                Ok((docs, tools)) => {
+            // The hosted docs MCP when it answers; the docs built into this
+            // binary when it does not (offline, timeout, error).
+            let offline = sigiro::docs_mcp::OfflineDocs::embedded();
+            match (sigiro::mcp::connect_docs().await, offline) {
+                (Ok((docs, tools)), offline) => {
                     tracing::info!(count = tools.len(), "connected to documentation MCP");
-                    service = service.with_docs(&docs, tools)?;
+                    service = service.with_hosted_docs(&docs, tools, offline.as_ref())?;
                 }
-                Err(error) => {
+                (Err(error), Some(offline)) => {
                     tracing::warn!(
-                        "documentation MCP unavailable; operational tools remain available: {error:#}"
+                        "documentation MCP unavailable; answering from the built-in docs: {error:#}"
+                    );
+                    service = service.with_offline_docs(&offline)?;
+                }
+                (Err(error), None) => {
+                    tracing::warn!(
+                        "documentation MCP unavailable and this binary has no built-in docs; \
+                         operational tools remain available: {error:#}"
                     );
                 }
             }

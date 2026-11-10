@@ -35,8 +35,10 @@ yarn-error.log*
 # Blume's pre-bundled Vite deps and reports lint warnings from mermaid's internals.
 /.blume/
 /dist/
-# The docs export the sigiro binary embeds (scripts/build-docs-export.sh).
+# The docs export and docs MCP snapshot the sigiro binary embeds
+# (scripts/build-docs-export.sh).
 /dist-binary/
+/dist-mcp/
 
 # cloudflare — local state for `wrangler dev`
 .wrangler/

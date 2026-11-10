@@ -24,4 +24,5 @@ www/.wrangler/
 www/.alchemy/
 www/dist/
 www/dist-binary/
+www/dist-mcp/
 www/.env*

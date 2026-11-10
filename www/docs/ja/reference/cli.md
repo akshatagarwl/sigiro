@@ -133,6 +133,13 @@ codex mcp add sigiro -- sigiro mcp      # Codex
 `timestamp` を絞り込んでください。結果の行ではタイムスタンプと `duration` が Unix エポックからの
 マイクロ秒で表示されますが、`timestamp` を整数と比較すると失敗します。
 
+ドキュメントツールは `https://sigiro.com/mcp/docs` のホスト型ドキュメント MCP を使います。
+`SIGIRO_DOCS_MCP_URL` を設定した場合はそちらを使います。オフラインのとき、エンドポイントが数秒以内に
+応答しないとき、またはエラーを返したときは、バイナリに組み込まれたこのドキュメントのコピーから
+答えます。ツール名、引数、回答の形は変わりませんが、組み込みのコピーは実行中のリリース時点の
+ドキュメントです。ネットワークを使わず常に組み込みのコピーを使うには、`SIGIRO_DOCS_MCP_URL` を
+空の値に設定してください。
+
 ホスト型 sigiro は、CLI のセッションを使わずにブラウザーで OAuth サインインするエージェント向けに、
 同じツールを streamable HTTP で `https://sigiro.com/mcp` からも提供しています。サインインなしで
 使えるドキュメントツールだけなら `https://sigiro.com/mcp/docs` にあります。

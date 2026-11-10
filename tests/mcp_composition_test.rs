@@ -239,3 +239,148 @@ async fn docs_collision_and_discovery_failure_are_deterministic() -> anyhow::Res
     fixture.await?;
     Ok(())
 }
+
+fn offline_docs() -> Arc<sigiro::docs_mcp::OfflineDocs> {
+    Arc::new(
+        sigiro::docs_mcp::OfflineDocs::from_json(include_bytes!("fixtures/docs-mcp/mcp-data.json"))
+            .expect("fixture snapshot"),
+    )
+}
+
+fn search(query: &str) -> rmcp::model::CallToolRequestParams {
+    rmcp::model::CallToolRequestParams::new("search_docs").with_arguments(
+        serde_json::json!({ "query": query, "limit": 2 })
+            .as_object()
+            .cloned()
+            .unwrap(),
+    )
+}
+
+/// The routes of a `search_docs` answer.
+fn routes(result: &rmcp::model::CallToolResult) -> Vec<String> {
+    let text = &result.content[0].as_text().expect("text").text;
+    let hits: Vec<serde_json::Value> = serde_json::from_str(text).expect("search json");
+    hits.iter()
+        .map(|hit| hit["route"].as_str().expect("route").to_string())
+        .collect()
+}
+
+/// Serve `service` over an in-process stdio pipe and run `calls` against it.
+async fn call_over_stdio(
+    service: SigiroMcp,
+    calls: Vec<rmcp::model::CallToolRequestParams>,
+) -> (Vec<rmcp::model::Tool>, Vec<rmcp::model::CallToolResult>) {
+    let (server_transport, client_transport) = tokio::io::duplex(256 * 1024);
+    let server = tokio::spawn(async move {
+        service.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = ().serve(client_transport).await.expect("stdio client");
+    let tools = client.list_all_tools().await.expect("tools/list");
+    let mut results = Vec::new();
+    for call in calls {
+        results.push(client.call_tool(call).await.expect("tools/call"));
+    }
+    client.cancel().await.expect("cancel stdio client");
+    server
+        .await
+        .expect("stdio server join")
+        .expect("stdio server");
+    (tools, results)
+}
+
+/// No network: the hosted endpoint is a TEST-NET-1 address (RFC 5737), which
+/// is never routed, so the connect either fails at once (no route) or hangs
+/// until the connect timeout. Discovery gives up within seconds, and the
+/// built-in docs answer the same four tools.
+#[tokio::test]
+async fn unreachable_docs_fall_back_to_the_built_in_docs() -> anyhow::Result<()> {
+    let started = std::time::Instant::now();
+    let failure = sigiro::mcp::connect_docs_at("http://192.0.2.1/mcp/docs").await;
+    assert!(failure.is_err(), "an unroutable endpoint cannot connect");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(8),
+        "discovery must give up quickly, took {:?}",
+        started.elapsed()
+    );
+
+    let offline = offline_docs();
+    let local = SigiroClient::new("http://127.0.0.1:1", ClientAuth::Open);
+    let service = SigiroMcp::new(local).with_offline_docs(&offline)?;
+    let (tools, results) = call_over_stdio(service, vec![search("executor")]).await;
+
+    // The hosted tool definitions, verbatim, next to the operational tools.
+    let advertised: Vec<_> = tools
+        .iter()
+        .filter(|tool| offline.has_tool(&tool.name))
+        .cloned()
+        .collect();
+    let mut expected = offline.tools();
+    expected.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut advertised = advertised;
+    advertised.sort_by(|a, b| a.name.cmp(&b.name));
+    assert_eq!(advertised, expected);
+    assert_eq!(tools.len(), 6);
+    assert_eq!(results[0].is_error, None);
+    assert_eq!(routes(&results[0])[0], "/docs/how-to/executor");
+    Ok(())
+}
+
+/// An endpoint that accepts the connection but never answers is given up on
+/// after the discovery timeout, not the OS's.
+#[tokio::test]
+async fn silent_docs_endpoint_times_out() -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    // Accept and hold connections without reading or answering.
+    let holder = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            held.push(stream);
+        }
+    });
+    let started = std::time::Instant::now();
+    let failure = sigiro::mcp::connect_docs_at(format!("http://{address}/mcp/docs")).await;
+    let Err(error) = failure else {
+        anyhow::bail!("a silent endpoint must fail");
+    };
+    let error = error.to_string();
+    assert!(error.contains("no answer"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(8));
+    holder.abort();
+    Ok(())
+}
+
+/// The hosted endpoint answers while it is up; once it goes away mid-session,
+/// the same tools answer from the built-in docs instead of failing.
+#[tokio::test]
+async fn hosted_docs_failing_mid_session_fall_back() -> anyhow::Result<()> {
+    let (url, cancellation, fixture, _) = spawn_docs_fixture().await;
+    let (docs, docs_tools) = sigiro::mcp::connect_docs_at(url).await?;
+    let local = SigiroClient::new("http://127.0.0.1:1", ClientAuth::Open);
+    let service =
+        SigiroMcp::new(local).with_hosted_docs(&docs, docs_tools, Some(&offline_docs()))?;
+
+    let (server_transport, client_transport) = tokio::io::duplex(256 * 1024);
+    let server = tokio::spawn(async move {
+        service.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = ().serve(client_transport).await?;
+
+    let hosted = client.call_tool(search("executor")).await?;
+    assert_eq!(
+        hosted.content[0].as_text().expect("text").text,
+        "search result for executor"
+    );
+
+    cancellation.cancel();
+    fixture.await?;
+    let fallback = client.call_tool(search("executor")).await?;
+    assert_eq!(fallback.is_error, None);
+    assert_eq!(routes(&fallback)[0], "/docs/how-to/executor");
+
+    client.cancel().await?;
+    server.await??;
+    Ok(())
+}

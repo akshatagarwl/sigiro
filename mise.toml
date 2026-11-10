@@ -93,7 +93,7 @@ depends = ["dashboard-install"]
 run = "aube -C dashboard run build"
 
 [tasks.docs-build]
-description = "Build the docs' static export (sigiro.com/docs, offline) into www/dist-binary."
+description = "Build the docs' static export (sigiro.com/docs, offline) into www/dist-binary, and the docs MCP snapshot into www/dist-mcp."
 depends = ["www-install"]
 run = "scripts/build-docs-export.sh"
 
@@ -143,7 +143,8 @@ run = "scripts/test-admin-postgres.sh"
 [tasks.build]
 description = "Release build of the sigiro binary, with the dashboard and docs built in. Set TARGET to cross-compile."
 # The binary embeds dashboard/dist/dashboard (src/dashboard.rs) and the docs
-# export www/dist-binary (src/docs.rs). Requiring them makes build.rs fail
+# export www/dist-binary (src/docs.rs), with the docs MCP snapshot
+# www/dist-mcp (src/docs_mcp.rs). Requiring them makes build.rs fail
 # instead of shipping a binary with no UI or no manual.
 depends = ["dashboard-build", "docs-build"]
 env = { SIGIRO_REQUIRE_DASHBOARD = "1", SIGIRO_REQUIRE_DOCS = "1" }

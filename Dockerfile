@@ -61,7 +61,8 @@ COPY www/patches/ www/patches/
 RUN aube -C www install --frozen-lockfile
 COPY www/ www/
 COPY scripts/build-docs-export.sh scripts/
-RUN scripts/build-docs-export.sh && test -f www/dist-binary/index.html
+RUN scripts/build-docs-export.sh && test -f www/dist-binary/index.html \
+    && test -f www/dist-mcp/mcp-data.json.gz
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock build.rs ./
@@ -109,6 +110,7 @@ COPY src/ src/
 COPY crates/ crates/
 COPY --from=dashboard /build/dashboard/dist/dashboard dashboard/dist/dashboard
 COPY --from=docs /build/www/dist-binary www/dist-binary
+COPY --from=docs /build/www/dist-mcp www/dist-mcp
 ENV SIGIRO_REQUIRE_DASHBOARD=1 SIGIRO_REQUIRE_DOCS=1
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGETARCH \
     set -eux; \

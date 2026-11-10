@@ -1,0 +1,963 @@
+[
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/zh/how-to/executor",
+   "/docs/ja/how-to/executor",
+   "/docs",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/how-to/executor",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/zh/how-to/executor",
+   "/docs/ja/how-to/executor",
+   "/docs/how-to/agent-auth",
+   "/docs",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/how-to/executor",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs/how-to/agent-auth",
+   "/docs"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/explanation/tables",
+   "/docs/reference/cli",
+   "/docs/how-to/executor",
+   "/docs/how-to/agent-auth",
+   "/docs",
+   "/docs/zh/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/ja",
+   "/docs/ja/how-to/executor",
+   "/docs/ja/explanation/tables"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja",
+   "/docs/ja/how-to/executor",
+   "/docs/ja/explanation/tables"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/explanation/tables",
+   "/docs/reference/cli",
+   "/docs/how-to/executor",
+   "/docs/how-to/agent-auth",
+   "/docs"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/agent-auth",
+   "/docs/how-to/executor",
+   "/docs/reference/cli",
+   "/docs",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/agent-auth",
+   "/docs/how-to/executor",
+   "/docs/reference/cli",
+   "/docs"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/agent-auth",
+   "/docs",
+   "/docs/how-to/executor",
+   "/docs/reference/cli",
+   "/docs/ja",
+   "/docs/ko/how-to/executor",
+   "/docs/zh/how-to/executor",
+   "/docs/ja/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja",
+   "/docs/ja/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/agent-auth",
+   "/docs",
+   "/docs/how-to/executor",
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/agent-auth",
+   "/docs",
+   "/docs/how-to/executor",
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/agent-auth",
+   "/docs",
+   "/docs/how-to/executor",
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs",
+   "/docs/ja/explanation/tables",
+   "/docs/how-to/agent-auth"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/explanation/tables"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs",
+   "/docs/how-to/agent-auth"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs",
+   "/docs/explanation/tables",
+   "/docs/how-to/agent-auth",
+   "/docs/ja/explanation/tables",
+   "/docs/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/explanation/tables"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs",
+   "/docs/explanation/tables",
+   "/docs/how-to/agent-auth",
+   "/docs/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/how-to/executor",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/how-to/executor",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja",
+   "/docs/ja/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja",
+   "/docs/ja/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/how-to/executor",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/how-to/executor",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/how-to/executor",
+   "/docs/explanation/tables",
+   "/docs/reference/cli",
+   "/docs/how-to/executor",
+   "/docs/zh/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs",
+   "/docs/how-to/agent-auth"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/explanation/tables",
+   "/docs/reference/cli",
+   "/docs/how-to/executor",
+   "/docs",
+   "/docs/how-to/agent-auth"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor",
+   "/docs/ja",
+   "/docs/ja/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/how-to/agent-auth",
+   "/docs/ja/explanation/tables",
+   "/docs/reference/cli",
+   "/docs",
+   "/docs/how-to/executor",
+   "/docs/explanation/tables"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja",
+   "/docs/ja/how-to/executor",
+   "/docs/ja/explanation/tables"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/agent-auth",
+   "/docs/reference/cli",
+   "/docs",
+   "/docs/how-to/executor",
+   "/docs/explanation/tables"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs/explanation/tables",
+   "/docs",
+   "/docs/how-to/agent-auth",
+   "/docs/reference/cli",
+   "/docs/ja/explanation/tables"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja/explanation/tables"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs/explanation/tables",
+   "/docs",
+   "/docs/how-to/agent-auth",
+   "/docs/reference/cli"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/explanation/tables",
+   "/docs",
+   "/docs/ja",
+   "/docs/reference/cli",
+   "/docs/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/zh/how-to/executor",
+   "/docs/ja/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ja",
+   "/docs/ja/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/explanation/tables",
+   "/docs",
+   "/docs/reference/cli",
+   "/docs/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/ko/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/reference/cli",
+   "/docs/how-to/agent-auth"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/reference/cli",
+   "/docs/how-to/agent-auth"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/zh/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/zh/how-to/executor",
+   "/docs/ja/how-to/executor",
+   "/docs"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/zh/how-to/executor",
+   "/docs/ja/how-to/executor",
+   "/docs",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": []
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/zh/how-to/executor",
+   "/docs/ja",
+   "/docs/ja/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/how-to/agent-auth",
+   "/docs/ja/explanation/tables",
+   "/docs/reference/cli",
+   "/docs"
+  ]
+ },
+ {
+  "isError": false,
+  "routes": [
+   "/docs/how-to/executor",
+   "/docs/ko/how-to/executor",
+   "/docs/zh/how-to/executor",
+   "/docs/ja/how-to/executor",
+   "/docs",
+   "/docs/ja"
+  ]
+ },
+ {
+  "isError": false,
+  "text": "[\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro stores OpenTelemetry traces, logs, metrics and profiles and answers SQL over them. Built for agents first, with a dashboard for people on hosted workspaces.\",\n    \"lastModified\": null,\n    \"route\": \"/docs\",\n    \"title\": \"sigiro docs\",\n    \"url\": \"https://sigiro.com/docs\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"What each sigiro_* table stores and how to query the machine that emitted the telemetry.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/explanation/tables\",\n    \"title\": \"About the telemetry tables\",\n    \"url\": \"https://sigiro.com/docs/explanation/tables\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Register an agent host, grant the minimum capability, and rotate or revoke its credentials through Sigiro's Agent Auth API.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/how-to/agent-auth\",\n    \"title\": \"Onboard an agent with Agent Auth\",\n    \"url\": \"https://sigiro.com/docs/how-to/agent-auth\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Add sigiro's OpenAPI API or documentation MCP server to Executor, then expose the resulting tools to your agent.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/how-to/executor\",\n    \"title\": \"Connect sigiro to Executor\",\n    \"url\": \"https://sigiro.com/docs/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro は OpenTelemetry のトレース、ログ、メトリクス、プロファイルを保存し、それらに対する SQL に答えます。エージェントを第一に設計し、ホスト型ワークスペースには人のためのダッシュボードもあります。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja\",\n    \"title\": \"sigiro ドキュメント\",\n    \"url\": \"https://sigiro.com/docs/ja\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"各 sigiro_* テーブルの内容と、テレメトリを送信したマシンの調べ方。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/explanation/tables\",\n    \"title\": \"テレメトリテーブルについて\",\n    \"url\": \"https://sigiro.com/docs/ja/explanation/tables\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro の OpenAPI API またはドキュメント MCP サーバーを Executor に追加し、得られたツールをエージェントに公開します。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/how-to/executor\",\n    \"title\": \"sigiro を Executor に接続する\",\n    \"url\": \"https://sigiro.com/docs/ja/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro의 OpenAPI API나 문서 MCP 서버를 Executor에 추가한 다음, 그 결과로 생긴 도구를 에이전트에 제공합니다.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ko/how-to/executor\",\n    \"title\": \"sigiro를 Executor에 연결하기\",\n    \"url\": \"https://sigiro.com/docs/ko/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Every sigiro subcommand, its arguments, and the environment variables it reads, including hosted signup and login.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/reference/cli\",\n    \"title\": \"CLI\",\n    \"url\": \"https://sigiro.com/docs/reference/cli\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"把 sigiro 的 OpenAPI API 或文档 MCP 服务器添加到 Executor，再把生成的工具提供给你的智能体。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/zh/how-to/executor\",\n    \"title\": \"将 sigiro 接入 Executor\",\n    \"url\": \"https://sigiro.com/docs/zh/how-to/executor\"\n  }\n]"
+ },
+ {
+  "isError": false,
+  "text": "[\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro は OpenTelemetry のトレース、ログ、メトリクス、プロファイルを保存し、それらに対する SQL に答えます。エージェントを第一に設計し、ホスト型ワークスペースには人のためのダッシュボードもあります。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja\",\n    \"title\": \"sigiro ドキュメント\",\n    \"url\": \"https://sigiro.com/docs/ja\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"各 sigiro_* テーブルの内容と、テレメトリを送信したマシンの調べ方。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/explanation/tables\",\n    \"title\": \"テレメトリテーブルについて\",\n    \"url\": \"https://sigiro.com/docs/ja/explanation/tables\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro の OpenAPI API またはドキュメント MCP サーバーを Executor に追加し、得られたツールをエージェントに公開します。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/how-to/executor\",\n    \"title\": \"sigiro を Executor に接続する\",\n    \"url\": \"https://sigiro.com/docs/ja/how-to/executor\"\n  }\n]"
+ },
+ {
+  "isError": false,
+  "text": "[\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro의 OpenAPI API나 문서 MCP 서버를 Executor에 추가한 다음, 그 결과로 생긴 도구를 에이전트에 제공합니다.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ko/how-to/executor\",\n    \"title\": \"sigiro를 Executor에 연결하기\",\n    \"url\": \"https://sigiro.com/docs/ko/how-to/executor\"\n  }\n]"
+ },
+ {
+  "isError": false,
+  "text": "[\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro stores OpenTelemetry traces, logs, metrics and profiles and answers SQL over them. Built for agents first, with a dashboard for people on hosted workspaces.\",\n    \"lastModified\": null,\n    \"route\": \"/docs\",\n    \"title\": \"sigiro docs\",\n    \"url\": \"https://sigiro.com/docs\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"What each sigiro_* table stores and how to query the machine that emitted the telemetry.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/explanation/tables\",\n    \"title\": \"About the telemetry tables\",\n    \"url\": \"https://sigiro.com/docs/explanation/tables\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Register an agent host, grant the minimum capability, and rotate or revoke its credentials through Sigiro's Agent Auth API.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/how-to/agent-auth\",\n    \"title\": \"Onboard an agent with Agent Auth\",\n    \"url\": \"https://sigiro.com/docs/how-to/agent-auth\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Add sigiro's OpenAPI API or documentation MCP server to Executor, then expose the resulting tools to your agent.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/how-to/executor\",\n    \"title\": \"Connect sigiro to Executor\",\n    \"url\": \"https://sigiro.com/docs/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro は OpenTelemetry のトレース、ログ、メトリクス、プロファイルを保存し、それらに対する SQL に答えます。エージェントを第一に設計し、ホスト型ワークスペースには人のためのダッシュボードもあります。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja\",\n    \"title\": \"sigiro ドキュメント\",\n    \"url\": \"https://sigiro.com/docs/ja\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"各 sigiro_* テーブルの内容と、テレメトリを送信したマシンの調べ方。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/explanation/tables\",\n    \"title\": \"テレメトリテーブルについて\",\n    \"url\": \"https://sigiro.com/docs/ja/explanation/tables\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro の OpenAPI API またはドキュメント MCP サーバーを Executor に追加し、得られたツールをエージェントに公開します。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/how-to/executor\",\n    \"title\": \"sigiro を Executor に接続する\",\n    \"url\": \"https://sigiro.com/docs/ja/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro의 OpenAPI API나 문서 MCP 서버를 Executor에 추가한 다음, 그 결과로 생긴 도구를 에이전트에 제공합니다.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ko/how-to/executor\",\n    \"title\": \"sigiro를 Executor에 연결하기\",\n    \"url\": \"https://sigiro.com/docs/ko/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Every sigiro subcommand, its arguments, and the environment variables it reads, including hosted signup and login.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/reference/cli\",\n    \"title\": \"CLI\",\n    \"url\": \"https://sigiro.com/docs/reference/cli\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"把 sigiro 的 OpenAPI API 或文档 MCP 服务器添加到 Executor，再把生成的工具提供给你的智能体。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/zh/how-to/executor\",\n    \"title\": \"将 sigiro 接入 Executor\",\n    \"url\": \"https://sigiro.com/docs/zh/how-to/executor\"\n  }\n]"
+ },
+ {
+  "isError": false,
+  "text": "[\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro stores OpenTelemetry traces, logs, metrics and profiles and answers SQL over them. Built for agents first, with a dashboard for people on hosted workspaces.\",\n    \"lastModified\": null,\n    \"route\": \"/docs\",\n    \"title\": \"sigiro docs\",\n    \"url\": \"https://sigiro.com/docs\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"What each sigiro_* table stores and how to query the machine that emitted the telemetry.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/explanation/tables\",\n    \"title\": \"About the telemetry tables\",\n    \"url\": \"https://sigiro.com/docs/explanation/tables\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Register an agent host, grant the minimum capability, and rotate or revoke its credentials through Sigiro's Agent Auth API.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/how-to/agent-auth\",\n    \"title\": \"Onboard an agent with Agent Auth\",\n    \"url\": \"https://sigiro.com/docs/how-to/agent-auth\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Add sigiro's OpenAPI API or documentation MCP server to Executor, then expose the resulting tools to your agent.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/how-to/executor\",\n    \"title\": \"Connect sigiro to Executor\",\n    \"url\": \"https://sigiro.com/docs/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro は OpenTelemetry のトレース、ログ、メトリクス、プロファイルを保存し、それらに対する SQL に答えます。エージェントを第一に設計し、ホスト型ワークスペースには人のためのダッシュボードもあります。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja\",\n    \"title\": \"sigiro ドキュメント\",\n    \"url\": \"https://sigiro.com/docs/ja\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"各 sigiro_* テーブルの内容と、テレメトリを送信したマシンの調べ方。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/explanation/tables\",\n    \"title\": \"テレメトリテーブルについて\",\n    \"url\": \"https://sigiro.com/docs/ja/explanation/tables\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro の OpenAPI API またはドキュメント MCP サーバーを Executor に追加し、得られたツールをエージェントに公開します。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/how-to/executor\",\n    \"title\": \"sigiro を Executor に接続する\",\n    \"url\": \"https://sigiro.com/docs/ja/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro의 OpenAPI API나 문서 MCP 서버를 Executor에 추가한 다음, 그 결과로 생긴 도구를 에이전트에 제공합니다.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ko/how-to/executor\",\n    \"title\": \"sigiro를 Executor에 연결하기\",\n    \"url\": \"https://sigiro.com/docs/ko/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Every sigiro subcommand, its arguments, and the environment variables it reads, including hosted signup and login.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/reference/cli\",\n    \"title\": \"CLI\",\n    \"url\": \"https://sigiro.com/docs/reference/cli\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"把 sigiro 的 OpenAPI API 或文档 MCP 服务器添加到 Executor，再把生成的工具提供给你的智能体。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/zh/how-to/executor\",\n    \"title\": \"将 sigiro 接入 Executor\",\n    \"url\": \"https://sigiro.com/docs/zh/how-to/executor\"\n  }\n]"
+ },
+ {
+  "isError": false,
+  "text": "[]"
+ },
+ {
+  "isError": false,
+  "text": "[\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro stores OpenTelemetry traces, logs, metrics and profiles and answers SQL over them. Built for agents first, with a dashboard for people on hosted workspaces.\",\n    \"lastModified\": null,\n    \"route\": \"/docs\",\n    \"title\": \"sigiro docs\",\n    \"url\": \"https://sigiro.com/docs\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"What each sigiro_* table stores and how to query the machine that emitted the telemetry.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/explanation/tables\",\n    \"title\": \"About the telemetry tables\",\n    \"url\": \"https://sigiro.com/docs/explanation/tables\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Register an agent host, grant the minimum capability, and rotate or revoke its credentials through Sigiro's Agent Auth API.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/how-to/agent-auth\",\n    \"title\": \"Onboard an agent with Agent Auth\",\n    \"url\": \"https://sigiro.com/docs/how-to/agent-auth\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Add sigiro's OpenAPI API or documentation MCP server to Executor, then expose the resulting tools to your agent.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/how-to/executor\",\n    \"title\": \"Connect sigiro to Executor\",\n    \"url\": \"https://sigiro.com/docs/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro は OpenTelemetry のトレース、ログ、メトリクス、プロファイルを保存し、それらに対する SQL に答えます。エージェントを第一に設計し、ホスト型ワークスペースには人のためのダッシュボードもあります。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja\",\n    \"title\": \"sigiro ドキュメント\",\n    \"url\": \"https://sigiro.com/docs/ja\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"各 sigiro_* テーブルの内容と、テレメトリを送信したマシンの調べ方。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/explanation/tables\",\n    \"title\": \"テレメトリテーブルについて\",\n    \"url\": \"https://sigiro.com/docs/ja/explanation/tables\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro の OpenAPI API またはドキュメント MCP サーバーを Executor に追加し、得られたツールをエージェントに公開します。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ja/how-to/executor\",\n    \"title\": \"sigiro を Executor に接続する\",\n    \"url\": \"https://sigiro.com/docs/ja/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"sigiro의 OpenAPI API나 문서 MCP 서버를 Executor에 추가한 다음, 그 결과로 생긴 도구를 에이전트에 제공합니다.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/ko/how-to/executor\",\n    \"title\": \"sigiro를 Executor에 연결하기\",\n    \"url\": \"https://sigiro.com/docs/ko/how-to/executor\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"Every sigiro subcommand, its arguments, and the environment variables it reads, including hosted signup and login.\",\n    \"lastModified\": null,\n    \"route\": \"/docs/reference/cli\",\n    \"title\": \"CLI\",\n    \"url\": \"https://sigiro.com/docs/reference/cli\"\n  },\n  {\n    \"contentType\": \"doc\",\n    \"description\": \"把 sigiro 的 OpenAPI API 或文档 MCP 服务器添加到 Executor，再把生成的工具提供给你的智能体。\",\n    \"lastModified\": null,\n    \"route\": \"/docs/zh/how-to/executor\",\n    \"title\": \"将 sigiro 接入 Executor\",\n    \"url\": \"https://sigiro.com/docs/zh/how-to/executor\"\n  }\n]"
+ },
+ {
+  "isError": false,
+  "text": "---\ntitle: Connect sigiro to Executor\ndescription: Add sigiro's OpenAPI API or documentation MCP server to Executor, then expose the resulting tools to your agent.\nsidebar:\n  order: 6\n---\n\n[Executor](https://executor.sh/) is an integration layer for agents. It imports OpenAPI\nspecifications, MCP servers and GraphQL endpoints into one tool catalog. You can add\nsigiro without writing an Executor plugin.\n\nExecutor also reads the [integrations.sh](https://integrations.sh/) registry to\npopulate its catalog, and sigiro publishes its surfaces there, so a search inside\nExecutor may find sigiro before you paste anything. The steps below are the explicit\nimport, which works either way.\n\n## Add the sigiro API\n\nThe public OpenAPI document is:\n\n```\nhttps://sigiro.com/openapi.json\n```\n\nIn the Executor web UI:\n\n1. Open **Add Integration**.\n2. Paste the OpenAPI URL.\n3. Let Executor detect and index the operations.\n4. Create a connection for the integration.\n5. Add the hosted sigiro OAuth access token to that connection if the API asks for it.\n6. Set a policy for each tool. Use approval for tools that run SQL or inspect telemetry.\n\nThe specification is public and does not require a key to read. The hosted API itself\nstill requires the OAuth access token. Self-hosted sigiro can use the same import pattern with\nthe OpenAPI URL served by your own instance — and needs no key at all, because a\nself-hosted server runs in open mode and authenticates no request.\n\nExecutor also exposes a CLI. The equivalent import has this shape:\n\n```bash\nexecutor call executor openapi addIntegration '{\n  \"spec\": \"https://sigiro.com/openapi.json\",\n  \"namespace\": \"sigiro\",\n  \"baseUrl\": \"https://sigiro.com\"\n}'\n```\n\nUse the `baseUrl` field when you import a specification whose server URL is not the\nURL you want Executor to call. Configure authentication on the resulting connection,\nnot in the public specification URL.\n\nConfirm it is live:\n\n```bash\nexecutor tools integrations\n```\n\n## Add the sigiro docs MCP server\n\nThe docs site also exposes a public, read-only MCP server:\n\n```\nhttps://sigiro.com/mcp/docs\n```\n\nAdd it as an MCP integration in Executor and select the streamable HTTP transport. This\ngives an agent documentation tools such as search and page retrieval. It does\nnot provide access to a workspace's telemetry. The same URL without `/docs`,\n`https://sigiro.com/mcp`, adds the telemetry tools and requires an OAuth sign-in.\n\nUse the OpenAPI integration for live telemetry operations. Use the MCP one when an agent\nneeds to find or read sigiro documentation. You can add both to the same\nExecutor workspace.\n\n## Connect your agent\n\nAfter Executor indexes the integrations, connect your agent to Executor over MCP. Executor's\nMCP endpoint is the one your agent uses; the agent does not need a separate sigiro\nplugin. Follow [Executor's MCP connection guide](https://executor.sh/docs) for the\nendpoint and transport used by your deployment.\n\n## Verify the import\n\nCheck the integration in Executor before asking an agent to use it. The sigiro API import\nshould expose operations for services, traces, alerts and queries.\nThe docs import should expose documentation search and page retrieval.\n\nThen test one read-only call first. For a hosted API connection, confirm that the\nrequest includes the OAuth access token and that the returned data belongs to the intended\nsigiro tenant. Do not put an OAuth access token in this page, an OpenAPI URL, or an agent\nprompt checked into a repository.\n\n## Next\n\n- [API reference](/docs/reference) — inspect the generated operation details\n- [Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding) — create the\n  hosted endpoint and tenant connection\n- [Quickstart](/docs/tutorials/quickstart) — run sigiro locally and send test data\n"
+ },
+ {
+  "isError": false,
+  "text": "---\ntitle: sigiro を Executor に接続する\ndescription: sigiro の OpenAPI API またはドキュメント MCP サーバーを Executor に追加し、得られたツールをエージェントに公開します。\nsidebar:\n  order: 6\n---\n\n[Executor](https://executor.sh/) はエージェントのための統合レイヤーです。OpenAPI 仕様、MCP サーバー、GraphQL エンドポイントを 1 つのツールカタログに取り込みます。Executor のプラグインを書かずに sigiro を追加できます。\n\nExecutor はカタログを埋めるために [integrations.sh](https://integrations.sh/) レジストリも読み取り、sigiro はそこに自身のインターフェースを公開しているため、何かを貼り付ける前に Executor 内の検索で sigiro が見つかることがあります。以下の手順は明示的な取り込みで、どちらの場合でも機能します。\n\n## sigiro API を追加する\n\n公開されている OpenAPI ドキュメントは次のとおりです。\n\n```\nhttps://sigiro.com/openapi.json\n```\n\nExecutor の Web UI で次の操作を行います。\n\n1. **Add Integration** を開きます。\n2. OpenAPI の URL を貼り付けます。\n3. Executor に操作を検出させ、インデックスを作成させます。\n4. そのインテグレーションの接続を作成します。\n5. API が求める場合は、その接続にホスト型 sigiro の OAuth アクセストークンを追加します。\n6. ツールごとにポリシーを設定します。SQL を実行するツールやテレメトリを調べるツールには承認を使ってください。\n\n仕様は公開されており、読むのに鍵は不要です。ホスト型 API 自体には引き続き OAuth アクセストークンが必要です。セルフホストの sigiro でも、ご自身のインスタンスが提供する OpenAPI の URL を使って同じ方法で取り込めます。セルフホストのサーバーはオープンモードで動作し、どのリクエストも認証しないため、鍵はまったく不要です。\n\nExecutor には CLI もあります。同等の取り込みは次の形になります。\n\n```bash\nexecutor call executor openapi addIntegration '{\n  \"spec\": \"https://sigiro.com/openapi.json\",\n  \"namespace\": \"sigiro\",\n  \"baseUrl\": \"https://sigiro.com\"\n}'\n```\n\n仕様に記載されたサーバー URL が、Executor に呼び出させたい URL と異なる場合は、`baseUrl` フィールドを使ってください。認証は、公開仕様の URL ではなく、作成された接続に設定してください。\n\n有効になったことを確認します。\n\n```bash\nexecutor tools integrations\n```\n\n## sigiro ドキュメントの MCP サーバーを追加する\n\nドキュメントサイトは、公開の読み取り専用 MCP サーバーも提供しています。\n\n```\nhttps://sigiro.com/mcp/docs\n```\n\nExecutor で MCP インテグレーションとして追加し、streamable HTTP トランスポートを選択します。これにより、エージェントは検索やページ取得などのドキュメントツールを使えるようになります。ワークスペースのテレメトリにはアクセスできません。`/docs` を除いた同じ URL `https://sigiro.com/mcp` はテレメトリツールを追加し、OAuth サインインが必要です。\n\nライブのテレメトリ操作には OpenAPI のインテグレーションを使います。エージェントが sigiro のドキュメントを探したり読んだりする必要があるときは MCP のインテグレーションを使います。両方を同じ Executor ワークスペースに追加できます。\n\n## エージェントを接続する\n\nExecutor がインテグレーションのインデックスを作成したら、エージェントを MCP 経由で Executor に接続します。エージェントが使うのは Executor の MCP エンドポイントであり、sigiro 専用のプラグインは不要です。デプロイで使うエンドポイントとトランスポートについては、[Executor の MCP 接続ガイド](https://executor.sh/docs) に従ってください。\n\n## 取り込みを確認する\n\nエージェントに使わせる前に、Executor でインテグレーションを確認してください。sigiro API の取り込みでは、サービス、トレース、アラート、クエリの操作が公開されているはずです。ドキュメントの取り込みでは、ドキュメント検索とページ取得が公開されているはずです。\n\n次に、まず読み取り専用の呼び出しを 1 つ試します。ホスト型 API の接続では、リクエストに OAuth アクセストークンが含まれていること、そして返ってきたデータが意図した sigiro テナントのものであることを確認してください。OAuth アクセストークンをこのページ、OpenAPI の URL、リポジトリにコミットされるエージェントのプロンプトに含めないでください。\n\n## 次のステップ\n\n- [API リファレンス](/docs/ja/reference) — 生成された操作の詳細を確認します\n- [ホスト型 sigiro へのテレメトリ送信](/docs/ja/how-to/hosted-onboarding) — ホスト型のエンドポイントとテナント接続を作成します\n- [クイックスタート](/docs/ja/tutorials/quickstart) — sigiro をローカルで実行し、テストデータを送信します\n"
+ },
+ {
+  "isError": true,
+  "text": "No page found at \"/\". Use list_pages or search_docs to find valid routes."
+ },
+ {
+  "isError": true,
+  "text": "No page found at \"/nope\". Use list_pages or search_docs to find valid routes."
+ },
+ {
+  "isError": true,
+  "text": "No page found at \"/docs/日\". Use list_pages or search_docs to find valid routes."
+ },
+ {
+  "isError": true,
+  "text": "No page found at \"/%zz\". Use list_pages or search_docs to find valid routes."
+ },
+ {
+  "isError": true,
+  "text": "No page found at \"/\". Use list_pages or search_docs to find valid routes."
+ },
+ {
+  "isError": true,
+  "text": "No page found at \"/\". Use list_pages or search_docs to find valid routes."
+ },
+ {
+  "isError": false,
+  "text": "{\n  \"actions\": [],\n  \"cta\": null,\n  \"featured\": [\n    {\n      \"href\": \"https://sigiro.com/openapi.json\",\n      \"label\": \"openapi.json\"\n    }\n  ],\n  \"root\": \"/docs/ja\",\n  \"selectors\": [],\n  \"sidebar\": [\n    {\n      \"description\": \"sigiro は OpenTelemetry のトレース、ログ、メトリクス、プロファイルを保存し、それらに対する SQL に答えます。エージェントを第一に設計し、ホスト型ワークスペースには人のためのダッシュボードもあります。\",\n      \"kind\": \"page\",\n      \"label\": \"sigiro ドキュメント\",\n      \"pageId\": \"filesystem:ja/index.md\",\n      \"route\": \"/docs/ja\"\n    },\n    {\n      \"children\": [\n        {\n          \"description\": \"1 つのコマンドで sigiro を起動し、OpenTelemetry を向けて、最近の失敗を SQL で照会します。所要時間は 5 分で、コレクターも設定ファイルも不要です。\",\n          \"kind\": \"page\",\n          \"label\": \"クイックスタート\",\n          \"pageId\": \"filesystem:ja/tutorials/quickstart.mdx\",\n          \"route\": \"/docs/ja/tutorials/quickstart\"\n        }\n      ],\n      \"display\": \"flat\",\n      \"kind\": \"group\",\n      \"label\": \"チュートリアル\",\n      \"path\": \"/docs/ja/tutorials\"\n    },\n    {\n      \"children\": [\n        {\n          \"description\": \"エージェントにプロンプトを 1 つ渡すと、サービスに OpenTelemetry の自動計装を追加して sigiro に向けます。Claude Code、OpenCode、Codex で使えます。\",\n          \"kind\": \"page\",\n          \"label\": \"エージェントでコードを計装する\",\n          \"pageId\": \"filesystem:ja/how-to/install-with-ai.md\",\n          \"route\": \"/docs/ja/how-to/install-with-ai\"\n        },\n        {\n          \"description\": \"Sigiro の Agent Auth API でエージェントホストを登録し、最小限の capability を付与して、資格情報をローテーションまたは失効させます。\",\n          \"kind\": \"page\",\n          \"label\": \"Agent Auth でエージェントをオンボーディングする\",\n          \"pageId\": \"filesystem:ja/how-to/agent-auth.md\",\n          \"route\": \"/docs/ja/how-to/agent-auth\"\n        },\n        {\n          \"description\": \"ターミナルからホスト型 sigiro のアカウントを作成し、OpenTelemetry を送信して、SQL でデータを照会します。\",\n          \"kind\": \"page\",\n          \"label\": \"ホスト型 sigiro へのテレメトリ送信\",\n          \"pageId\": \"filesystem:ja/how-to/hosted-onboarding.md\",\n          \"route\": \"/docs/ja/how-to/hosted-onboarding\"\n        },\n        {\n          \"description\": \"Claude Code、Codex、Hermes Agent、Pi を sigiro に向けて、セッション、モデルのレイテンシー、トークン、ツール、エラー、リトライを調べます。\",\n          \"kind\": \"page\",\n          \"label\": \"エージェント自身のテレメトリを sigiro に送信する\",\n          \"pageId\": \"filesystem:ja/how-to/agent-telemetry.md\",\n          \"route\": \"/docs/ja/how-to/agent-telemetry\"\n        },\n        {\n          \"description\": \"コーディングエージェントのセッションを記録し、時間とトークンをどこで使ったかを見つけ、その根拠をより小さく速いワークフローに変えます。\",\n          \"kind\": \"page\",\n          \"label\": \"sigiro でエージェントをデバッグして最適化する\",\n          \"pageId\": \"filesystem:ja/how-to/debug-agent-performance.md\",\n          \"route\": \"/docs/ja/how-to/debug-agent-performance\"\n        },\n        {\n          \"description\": \"sigiro の OpenAPI API またはドキュメント MCP サーバーを Executor に追加し、得られたツールをエージェントに公開します。\",\n          \"kind\": \"page\",\n          \"label\": \"sigiro を Executor に接続する\",\n          \"pageId\": \"filesystem:ja/how-to/executor.md\",\n          \"route\": \"/docs/ja/how-to/executor\"\n        },\n        {\n          \"description\": \"Go 向けの otelprofile、OpenTelemetry eBPF プロファイラー、または OpenTelemetry Collector から OTLP で継続的プロファイルを sigiro に送り、プロファイルの行を SQL で確認します。\",\n          \"kind\": \"page\",\n          \"label\": \"プロファイルを sigiro に送信する\",\n          \"pageId\": \"filesystem:ja/how-to/send-profiles.md\",\n          \"route\": \"/docs/ja/how-to/send-profiles\"\n        },\n        {\n          \"description\": \"アプリケーションの送信先を変えずに、既存の Jaeger v2 Collector からループバック専用の sigiro インスタンスへ OTLP トレースをミラーします。\",\n          \"kind\": \"page\",\n          \"label\": \"Jaeger と並行して sigiro を試す\",\n          \"pageId\": \"filesystem:ja/how-to/jaeger-fanout.md\",\n          \"route\": \"/docs/ja/how-to/jaeger-fanout\"\n        },\n        {\n          \"description\": \"2 つの Claude Code セッション ID を比較し、提供元が報告した USD コストを順位付けする、範囲を限定した DuckDB のレシピです。\",\n          \"kind\": \"page\",\n          \"label\": \"Claude Code セッションの比較と報告コストの順位付け\",\n          \"pageId\": \"filesystem:ja/how-to/agent-session-sql.md\",\n          \"route\": \"/docs/ja/how-to/agent-session-sql\"\n        }\n      ],\n      \"display\": \"flat\",\n      \"kind\": \"group\",\n      \"label\": \"ハウツーガイド\",\n      \"path\": \"/docs/ja/how-to\"\n    },\n    {\n      \"children\": [\n        {\n          \"kind\": \"page\",\n          \"label\": \"Overview\",\n          \"pageId\": \"openapi:reference/index.mdx\",\n          \"route\": \"/docs/ja/reference\"\n        },\n        {\n          \"description\": \"sigiro のすべてのサブコマンド、その引数、読み取る環境変数（ホスト型のサインアップとログインを含む）。\",\n          \"kind\": \"page\",\n          \"label\": \"CLI\",\n          \"pageId\": \"filesystem:ja/reference/cli.md\",\n          \"route\": \"/docs/ja/reference/cli\"\n        },\n        {\n          \"description\": \"現在の DuckDB 列名、型、単位、1.0 前の互換性。\",\n          \"kind\": \"page\",\n          \"label\": \"テレメトリテーブルの列\",\n          \"pageId\": \"filesystem:ja/reference/telemetry-tables.md\",\n          \"route\": \"/docs/ja/reference/telemetry-tables\"\n        },\n        {\n          \"children\": [\n            {\n              \"badge\": \"GET\",\n              \"kind\": \"page\",\n              \"label\": \"List alerts\",\n              \"pageId\": \"openapi:reference/telemetry/list-alerts.mdx\",\n              \"route\": \"/docs/ja/reference/telemetry/list-alerts\"\n            },\n            {\n              \"badge\": \"POST\",\n              \"kind\": \"page\",\n              \"label\": \"Run a SQL query\",\n              \"pageId\": \"openapi:reference/telemetry/run-query.mdx\",\n              \"route\": \"/docs/ja/reference/telemetry/run-query\"\n            },\n            {\n              \"badge\": \"GET\",\n              \"kind\": \"page\",\n              \"label\": \"List services\",\n              \"pageId\": \"openapi:reference/telemetry/list-services.mdx\",\n              \"route\": \"/docs/ja/reference/telemetry/list-services\"\n            },\n            {\n              \"badge\": \"GET\",\n              \"kind\": \"page\",\n              \"label\": \"Fetch one whole trace\",\n              \"pageId\": \"openapi:reference/telemetry/get-trace.mdx\",\n              \"route\": \"/docs/ja/reference/telemetry/get-trace\"\n            }\n          ],\n          \"display\": \"flat\",\n          \"kind\": \"group\",\n          \"label\": \"Telemetry\",\n          \"path\": \"/docs/ja/reference/telemetry\"\n        },\n        {\n          \"children\": [\n            {\n              \"badge\": \"GET\",\n              \"kind\": \"page\",\n              \"label\": \"List ingest keys\",\n              \"pageId\": \"openapi:reference/ingest-keys/list-ingest-keys.mdx\",\n              \"route\": \"/docs/ja/reference/ingest-keys/list-ingest-keys\"\n            },\n            {\n              \"badge\": \"POST\",\n              \"kind\": \"page\",\n              \"label\": \"Create an ingest key\",\n              \"pageId\": \"openapi:reference/ingest-keys/create-ingest-key.mdx\",\n              \"route\": \"/docs/ja/reference/ingest-keys/create-ingest-key\"\n            },\n            {\n              \"badge\": \"DELETE\",\n              \"kind\": \"page\",\n              \"label\": \"Revoke an ingest key\",\n              \"pageId\": \"openapi:reference/ingest-keys/revoke-ingest-key.mdx\",\n              \"route\": \"/docs/ja/reference/ingest-keys/revoke-ingest-key\"\n            }\n          ],\n          \"display\": \"flat\",\n          \"kind\": \"group\",\n          \"label\": \"Ingest keys\",\n          \"path\": \"/docs/ja/reference/ingest-keys\"\n        },\n        {\n          \"children\": [\n            {\n              \"badge\": \"POST\",\n              \"kind\": \"page\",\n              \"label\": \"Ingest Pyroscope profiles at the server root\",\n              \"pageId\": \"openapi:reference/pyroscope-ingest/ingest-pyroscope-root.mdx\",\n              \"route\": \"/docs/ja/reference/pyroscope-ingest/ingest-pyroscope-root\"\n            },\n            {\n              \"badge\": \"POST\",\n              \"kind\": \"page\",\n              \"label\": \"Ingest Pyroscope profiles\",\n              \"pageId\": \"openapi:reference/pyroscope-ingest/ingest-pyroscope.mdx\",\n              \"route\": \"/docs/ja/reference/pyroscope-ingest/ingest-pyroscope\"\n            },\n            {\n              \"badge\": \"POST\",\n              \"kind\": \"page\",\n              \"label\": \"Ingest Pyroscope profiles at the /ingest/pyroscope alias\",\n              \"pageId\": \"openapi:reference/pyroscope-ingest/ingest-pyroscope-alias.mdx\",\n              \"route\": \"/docs/ja/reference/pyroscope-ingest/ingest-pyroscope-alias\"\n            },\n            {\n              \"badge\": \"POST\",\n              \"kind\": \"page\",\n              \"label\": \"Ingest Pyroscope profiles over the Push API\",\n              \"pageId\": \"openapi:reference/pyroscope-ingest/ingest-pyroscope-push.mdx\",\n              \"route\": \"/docs/ja/reference/pyroscope-ingest/ingest-pyroscope-push\"\n            }\n          ],\n          \"display\": \"flat\",\n          \"kind\": \"group\",\n          \"label\": \"Pyroscope ingest\",\n          \"path\": \"/docs/ja/reference/pyroscope-ingest\"\n        }\n      ],\n      \"display\": \"flat\",\n      \"kind\": \"group\",\n      \"label\": \"リファレンス\",\n      \"path\": \"/docs/ja/reference\",\n      \"route\": \"/docs/ja/reference\"\n    },\n    {\n      \"children\": [\n        {\n          \"description\": \"各 sigiro_* テーブルの内容と、テレメトリを送信したマシンの調べ方。\",\n          \"kind\": \"page\",\n          \"label\": \"テレメトリテーブルについて\",\n          \"pageId\": \"filesystem:ja/explanation/tables.md\",\n          \"route\": \"/docs/ja/explanation/tables\"\n        },\n        {\n          \"description\": \"過去の設計に関する資料です。現在の分析には、範囲を限定した生のテレメトリのクエリを使ってください。\",\n          \"kind\": \"page\",\n          \"label\": \"廃止された異常検出と診断の設計\",\n          \"pageId\": \"filesystem:ja/explanation/evidence.md\",\n          \"route\": \"/docs/ja/explanation/evidence\"\n        },\n        {\n          \"description\": \"sigiro がデプロイのために読み取る属性は service.version だけです。バージョンがデプロイイベントになる仕組みと、送信されない場合に何が得られるのかを説明します。\",\n          \"kind\": \"page\",\n          \"label\": \"廃止された診断内のデプロイ検出\",\n          \"pageId\": \"filesystem:ja/explanation/deploys.md\",\n          \"route\": \"/docs/ja/explanation/deploys\"\n        }\n      ],\n      \"display\": \"flat\",\n      \"kind\": \"group\",\n      \"label\": \"解説\",\n      \"path\": \"/docs/ja/explanation\"\n    }\n  ],\n  \"tabs\": [],\n  \"brandHref\": \"/docs/ja\"\n}"
+ }
+]

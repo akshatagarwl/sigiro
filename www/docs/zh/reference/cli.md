@@ -117,5 +117,10 @@ codex mcp add sigiro -- sigiro mcp      # Codex
 `timestamp`，例如 `timestamp > now() - INTERVAL '1 hour'`；结果行把时间戳和 `duration` 显示为自 Unix
 纪元以来的微秒数，但把 `timestamp` 和整数比较会失败。
 
+文档工具使用 `https://sigiro.com/mcp/docs` 上的托管文档 MCP；如果设置了 `SIGIRO_DOCS_MCP_URL`，
+则使用该地址。当无法访问该端点时（机器离线、端点几秒内没有响应或返回错误），这些工具会改用内置在
+二进制文件中的这份文档副本来回答。工具名称、参数和回答格式保持不变，但内置副本是你所运行版本发布时的
+文档。要跳过网络、始终使用内置副本，请把 `SIGIRO_DOCS_MCP_URL` 设为空值。
+
 托管版 sigiro 还在 `https://sigiro.com/mcp` 通过 streamable HTTP 提供同样的工具，供那些在浏览器中用 OAuth
 登录、而不是使用 CLI 会话的智能体使用。无需登录、只含文档工具的版本位于 `https://sigiro.com/mcp/docs`。
