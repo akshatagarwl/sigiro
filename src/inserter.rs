@@ -6,7 +6,7 @@ use duckdb::Connection;
 use sigiro_segments::MetricBatches;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle as TokioJoinHandle;
@@ -77,6 +77,9 @@ pub struct MaintenanceHealth {
     /// entries are removed on success rather than zeroed, so the map stays the
     /// size of the unhealthy set.
     failures: DashMap<String, u32>,
+    /// Rows the writers gave up on after their append retry, all projects.
+    rows_dropped: AtomicU64,
+    rows_dropped_metric: opentelemetry::metrics::Counter<u64>,
 }
 
 impl MaintenanceHealth {
@@ -84,7 +87,28 @@ impl MaintenanceHealth {
         Arc::new(Self {
             threshold,
             failures: DashMap::new(),
+            rows_dropped: AtomicU64::new(0),
+            // Exported to Prometheus as `sigiro_rows_dropped_total`.
+            rows_dropped_metric: opentelemetry::global::meter("sigiro.ingest")
+                .u64_counter("sigiro.rows.dropped")
+                .with_unit("{row}")
+                .with_description("Buffered rows dropped after a failed append and its retry")
+                .build(),
         })
+    }
+
+    /// Count rows a writer dropped, by table.
+    pub(crate) fn record_rows_dropped(&self, table: &str, rows: u64) {
+        self.rows_dropped.fetch_add(rows, Ordering::Relaxed);
+        self.rows_dropped_metric.add(
+            rows,
+            &[opentelemetry::KeyValue::new("table", table.to_string())],
+        );
+    }
+
+    /// Total rows dropped since start (`sigiro_rows_dropped_total`).
+    pub fn rows_dropped(&self) -> u64 {
+        self.rows_dropped.load(Ordering::Relaxed)
     }
 
     /// A gate that never sheds — the default for callers that have not opted
@@ -645,7 +669,93 @@ struct ProjectFlusher {
     byte_threshold: usize,
     flush_interval: Duration,
     drain: DrainTree,
-    first_flush: bool,
+    phase: FlusherPhase,
+    /// Failed append attempts for the batches still buffered per table.
+    failed_appends: BTreeMap<SignalTable, u8>,
+}
+
+/// Where a project's writer is between flushes. The append itself
+/// (Flushing) happens inside one [`ProjectFlusher::flush`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlusherPhase {
+    /// Nothing flushed yet: the first batch is written at once, so a new
+    /// project's data is queryable without waiting a whole interval.
+    Cold,
+    /// Nothing buffered.
+    Empty,
+    /// Rows buffered; flushed on row, byte, or age threshold.
+    Buffering,
+    /// A table's append failed; its rows are kept for one retry.
+    Failed,
+}
+
+/// Appends per batch: the first try plus one retry.
+const APPEND_ATTEMPTS: u8 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableOutcome {
+    Written,
+    /// Keep the unwritten batches for the next flush.
+    Retry,
+    /// Give up: count the rows in `sigiro_rows_dropped_total`.
+    Dropped,
+}
+
+/// One table's result in a flush. `failed_before` counts earlier failed
+/// appends of the same batches; on the final flush there is no next time.
+fn table_outcome(failed_before: u8, ok: bool, last_chance: bool) -> TableOutcome {
+    if ok {
+        TableOutcome::Written
+    } else if last_chance || failed_before.saturating_add(1) >= APPEND_ATTEMPTS {
+        TableOutcome::Dropped
+    } else {
+        TableOutcome::Retry
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FlushThresholds {
+    rows: usize,
+    bytes: usize,
+    interval: Duration,
+}
+
+fn flush_due(
+    phase: FlusherPhase,
+    rows: usize,
+    bytes: usize,
+    since_last_flush: Duration,
+    limits: FlushThresholds,
+) -> bool {
+    match phase {
+        FlusherPhase::Empty => false,
+        FlusherPhase::Cold => rows > 0,
+        FlusherPhase::Buffering | FlusherPhase::Failed => {
+            rows >= limits.rows || bytes >= limits.bytes || since_last_flush >= limits.interval
+        }
+    }
+}
+
+fn phase_after_buffer(phase: FlusherPhase) -> FlusherPhase {
+    match phase {
+        FlusherPhase::Empty => FlusherPhase::Buffering,
+        phase @ (FlusherPhase::Cold | FlusherPhase::Buffering | FlusherPhase::Failed) => phase,
+    }
+}
+
+fn phase_after_flush(retained_rows: usize) -> FlusherPhase {
+    if retained_rows > 0 {
+        FlusherPhase::Failed
+    } else {
+        FlusherPhase::Empty
+    }
+}
+
+/// What one flush did, for the caller to log and count.
+#[derive(Debug, Default)]
+struct FlushReport {
+    failures: Vec<String>,
+    dropped: Vec<(String, usize)>,
 }
 
 impl ProjectFlusher {
@@ -669,7 +779,8 @@ impl ProjectFlusher {
             byte_threshold: cfg.byte_threshold,
             flush_interval: cfg.interval,
             drain: DrainTree::new(),
-            first_flush: true,
+            phase: FlusherPhase::Cold,
+            failed_appends: BTreeMap::new(),
         }
     }
     #[instrument(skip_all, fields(signal = ?signal, rows = batch.num_rows()))]
@@ -692,6 +803,7 @@ impl ProjectFlusher {
         self.total_rows += batch.num_rows();
         self.total_bytes += batch_bytes;
         self.buffers.entry(signal).or_default().push(batch);
+        self.phase = phase_after_buffer(self.phase);
     }
     /// Run DRAIN on each log body and append its classification to the same row.
     #[instrument(skip_all, fields(rows = batch.num_rows()))]
@@ -770,9 +882,17 @@ impl ProjectFlusher {
     }
 
     fn should_flush(&self) -> bool {
-        self.first_flush
-            || self.reached_flush_threshold()
-            || self.last_flush.elapsed() >= self.flush_interval
+        flush_due(
+            self.phase,
+            self.total_rows,
+            self.total_bytes,
+            self.last_flush.elapsed(),
+            FlushThresholds {
+                rows: self.row_threshold,
+                bytes: self.byte_threshold,
+                interval: self.flush_interval,
+            },
+        )
     }
 
     fn reached_flush_threshold(&self) -> bool {
@@ -781,57 +901,80 @@ impl ProjectFlusher {
 
     /// Flush all buffered batches to DuckDB using appenders per table.
     /// Uses appender_to_catalog_and_db for DuckLake catalog-qualified table access.
+    ///
+    /// A table whose append fails keeps its unwritten batches for one retry
+    /// on the next flush; a second failure, or any failure on the final
+    /// (`last_chance`) flush, drops them and reports the rows.
     #[tracing::instrument(skip_all, fields(project_id = %project_id, rows = self.total_rows))]
-    fn flush(&mut self, project_id: &str) -> Result<()> {
+    fn flush(&mut self, project_id: &str, last_chance: bool) -> FlushReport {
+        let mut report = FlushReport::default();
         if self.total_rows == 0 {
             // F-25: demoted from debug! to trace! — fires every flush interval
             // per project (default 60s) and was polluting `RUST_LOG=debug` runs
             // with per-project "nothing happened" noise.
             tracing::trace!(project_id, "flush skipped: no rows");
-            return Ok(());
+            return report;
         }
 
-        tracing::info!(project_id, rows = self.total_rows, tables = ?self.buffers.keys().collect::<Vec<_>>(), "flushing batches");
+        tracing::info!(project_id, rows = self.total_rows, phase = ?self.phase, tables = ?self.buffers.keys().collect::<Vec<_>>(), "flushing batches");
         let conn = &self.conn;
-
-        let mut failures: Vec<String> = Vec::new();
+        let (mut retained_rows, mut retained_bytes) = (0, 0);
         for (signal, buf) in &mut self.buffers {
             if buf.is_empty() {
                 continue;
             }
             let table = &self.table_names[signal];
             let batches = std::mem::take(buf);
-            let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
-            if let Err(e) = append_batches(conn, table, batches) {
-                tracing::error!(
-                    project_id,
-                    table = %table,
-                    rows_lost = rows,
-                    "flush failed — dropping buffered batches: {e:#}"
-                );
-                failures.push(format!("{table}: {e:#}"));
+            let failed_before = self.failed_appends.remove(signal).unwrap_or(0);
+            let (written, error) = match append_batches(conn, table, &batches) {
+                Ok(()) => (batches.len(), None),
+                Err((written, error)) => (written, Some(error)),
+            };
+            match table_outcome(failed_before, error.is_none(), last_chance) {
+                TableOutcome::Written => {}
+                TableOutcome::Retry => {
+                    let kept = batches[written..].to_vec();
+                    let rows: usize = kept.iter().map(RecordBatch::num_rows).sum();
+                    tracing::warn!(
+                        project_id,
+                        table = %table,
+                        rows_kept = rows,
+                        "flush failed — keeping buffered batches for one retry: {:#}",
+                        error.as_ref().expect("a retry follows a failure")
+                    );
+                    retained_rows += rows;
+                    retained_bytes += kept.iter().map(batch_byte_size).sum::<usize>();
+                    *buf = kept;
+                    self.failed_appends.insert(*signal, failed_before + 1);
+                }
+                TableOutcome::Dropped => {
+                    let error = error.expect("a drop follows a failure");
+                    let rows: usize = batches[written..].iter().map(RecordBatch::num_rows).sum();
+                    tracing::error!(
+                        project_id,
+                        table = %table,
+                        rows_lost = rows,
+                        attempts = failed_before + 1,
+                        "flush failed — dropping buffered batches: {error:#}"
+                    );
+                    report.dropped.push((table.clone(), rows));
+                    report.failures.push(format!("{table}: {error:#}"));
+                }
             }
         }
 
         tracing::info!(
             project_id,
-            rows = self.total_rows,
-            bytes = self.total_bytes,
+            rows = self.total_rows - retained_rows,
+            retained_rows,
             "flushed batches"
         );
 
-        self.total_rows = 0;
-        self.total_bytes = 0;
+        self.total_rows = retained_rows;
+        self.total_bytes = retained_bytes;
         self.last_flush = Instant::now();
-        self.first_flush = false;
-
-        anyhow::ensure!(
-            failures.is_empty(),
-            "flush failed for {} table(s): {}",
-            failures.len(),
-            failures.join("; ")
-        );
-        Ok(())
+        self.phase = phase_after_flush(retained_rows);
+        report
     }
 
     #[tracing::instrument(skip_all, fields(project_id = %project_id))]
@@ -883,23 +1026,34 @@ impl ProjectFlusher {
 /// Append a table's buffered batches via a DuckLake catalog-qualified appender.
 /// Isolated as a free function (not a `&mut self` method) so `ProjectFlusher::flush`
 /// can call it per-table inside a loop that also borrows `self.buffers` mutably.
-fn append_batches(conn: &Connection, table: &str, batches: Vec<RecordBatch>) -> Result<()> {
+///
+/// On failure returns how many leading batches were handed to the appender
+/// before the error, so a retry does not append them twice. A failed
+/// appender creation or final flush reports 0: nothing was committed.
+fn append_batches(
+    conn: &Connection,
+    table: &str,
+    batches: &[RecordBatch],
+) -> std::result::Result<(), (usize, anyhow::Error)> {
     // Extract bare table name (strip "lake." prefix for catalog-qualified appender).
     // conn.appender("lake.table") fails — must use appender_to_catalog_and_db.
     let bare_table = table.strip_prefix("lake.").unwrap_or(table);
     let mut appender = conn
         .appender_to_catalog_and_db(bare_table, "lake", "main")
-        .with_context(|| format!("failed to create {table} appender"))?;
-    for batch in batches {
+        .with_context(|| format!("failed to create {table} appender"))
+        .map_err(|error| (0, error))?;
+    for (index, batch) in batches.iter().enumerate() {
         if batch.num_rows() > 0 {
             appender
-                .append_record_batch(batch)
-                .with_context(|| format!("failed to append {table} batch"))?;
+                .append_record_batch(batch.clone())
+                .with_context(|| format!("failed to append {table} batch"))
+                .map_err(|error| (index, error))?;
         }
     }
     appender
         .flush()
-        .with_context(|| format!("failed to flush {table} appender"))?;
+        .with_context(|| format!("failed to flush {table} appender"))
+        .map_err(|error| (0, error))?;
     // Appender::drop cleans up
     Ok(())
 }
@@ -1074,17 +1228,23 @@ fn run_writer_thread(
                         Err(mpsc::error::TryRecvError::Disconnected) => break,
                     }
                 }
-                if flusher.should_flush()
-                    && let Err(e) = flusher.flush(project_id)
-                {
-                    tracing::error!(project_id, "flush failed: {e:#}");
+                if flusher.should_flush() {
+                    record_flush(
+                        project_id,
+                        "flush",
+                        &flusher.flush(project_id, false),
+                        maintenance,
+                    );
                 }
             }
             WriterCommand::FlushIfNeeded => {
-                if flusher.should_flush()
-                    && let Err(e) = flusher.flush(project_id)
-                {
-                    tracing::error!(project_id, "timer flush failed: {e:#}");
+                if flusher.should_flush() {
+                    record_flush(
+                        project_id,
+                        "timer flush",
+                        &flusher.flush(project_id, false),
+                        maintenance,
+                    );
                 }
             }
             WriterCommand::Checkpoint => {
@@ -1133,13 +1293,36 @@ fn run_writer_thread(
         }
     }
 
-    if let Err(e) = flusher.flush(project_id) {
-        tracing::error!(project_id, "final flush failed: {e:#}");
-    }
+    record_flush(
+        project_id,
+        "final flush",
+        &flusher.flush(project_id, true),
+        maintenance,
+    );
     // A successful flush commits the final DuckLake transaction. CHECKPOINT is
     // compaction/retention maintenance, not the durability boundary, and remains
     // owned by ProjectPool after the writer has been returned without lock overlap.
     flusher.into_connection()
+}
+
+/// Count a flush's dropped rows and log its failures once.
+fn record_flush(
+    project_id: &str,
+    what: &str,
+    report: &FlushReport,
+    maintenance: &MaintenanceHealth,
+) {
+    for (table, rows) in &report.dropped {
+        maintenance.record_rows_dropped(table, *rows as u64);
+    }
+    if !report.failures.is_empty() {
+        tracing::error!(
+            project_id,
+            "{what} failed for {} table(s): {}",
+            report.failures.len(),
+            report.failures.join("; ")
+        );
+    }
 }
 
 /// Route an IngestMsg into the flusher's signal-keyed buffers.
@@ -1149,5 +1332,175 @@ fn buffer_msg(flusher: &mut ProjectFlusher, msg: IngestMsg) {
         IngestMsg::Logs { batch, .. } => flusher.buffer(SignalTable::Logs, batch),
         IngestMsg::Metrics { batches, .. } => flusher.buffer_metrics(batches),
         IngestMsg::Profiles { batch, .. } => flusher.buffer(SignalTable::Profiles, batch),
+    }
+}
+
+#[cfg(test)]
+mod flusher_tests {
+    use super::*;
+    use FlusherPhase::{Buffering, Cold, Empty, Failed};
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    const LIMITS: FlushThresholds = FlushThresholds {
+        rows: 100,
+        bytes: 1_000,
+        interval: Duration::from_secs(60),
+    };
+
+    #[test]
+    fn flush_is_due_by_phase_and_threshold() {
+        let young = Duration::from_secs(1);
+        let old = Duration::from_secs(60);
+        let cases = [
+            (Cold, 0, 0, old, false),
+            (Cold, 1, 1, young, true),
+            (Empty, 0, 0, old, false),
+            (Buffering, 1, 1, young, false),
+            (Buffering, 100, 1, young, true),
+            (Buffering, 1, 1_000, young, true),
+            (Buffering, 1, 1, old, true),
+            (Failed, 1, 1, young, false),
+            (Failed, 1, 1, old, true),
+            (Failed, 100, 1, young, true),
+        ];
+        for (phase, rows, bytes, age, due) in cases {
+            assert_eq!(
+                flush_due(phase, rows, bytes, age, LIMITS),
+                due,
+                "{phase:?} {rows} rows {bytes} B {age:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_flusher_phase_edge_follows_the_table() {
+        assert_eq!(phase_after_buffer(Cold), Cold, "Cold stays until a flush");
+        assert_eq!(phase_after_buffer(Empty), Buffering);
+        assert_eq!(phase_after_buffer(Buffering), Buffering);
+        assert_eq!(phase_after_buffer(Failed), Failed);
+        assert_eq!(phase_after_flush(0), Empty);
+        assert_eq!(phase_after_flush(5), Failed);
+
+        assert_eq!(table_outcome(0, true, false), TableOutcome::Written);
+        assert_eq!(table_outcome(1, true, false), TableOutcome::Written);
+        assert_eq!(table_outcome(0, false, false), TableOutcome::Retry);
+        assert_eq!(table_outcome(1, false, false), TableOutcome::Dropped);
+        assert_eq!(
+            table_outcome(0, false, true),
+            TableOutcome::Dropped,
+            "no retry after shutdown"
+        );
+        assert_eq!(table_outcome(1, true, true), TableOutcome::Written);
+    }
+
+    fn batch(rows: i64) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from_iter_values(0..rows))],
+        )
+        .unwrap()
+    }
+
+    fn flusher() -> ProjectFlusher {
+        let conn = crate::pool::open_duckdb().unwrap();
+        conn.execute_batch("ATTACH ':memory:' AS lake").unwrap();
+        let cfg = FlushConfig {
+            row_threshold: 100,
+            byte_threshold: usize::MAX,
+            interval: Duration::from_secs(3_600),
+            backpressure: BackpressurePolicy::Block,
+        };
+        ProjectFlusher::new(conn, &cfg)
+    }
+
+    fn create_spans_table(flusher: &ProjectFlusher) {
+        flusher
+            .conn
+            .execute_batch(&format!(
+                "CREATE TABLE lake.main.{} (v BIGINT)",
+                SignalTable::Spans.table_suffix()
+            ))
+            .unwrap();
+    }
+
+    fn stored_rows(flusher: &ProjectFlusher) -> i64 {
+        flusher
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT count(*) FROM lake.main.{}",
+                    SignalTable::Spans.table_suffix()
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn cold_writes_the_first_batch_then_buffers() {
+        let mut flusher = flusher();
+        create_spans_table(&flusher);
+        assert_eq!(flusher.phase, Cold);
+        assert!(!flusher.should_flush(), "nothing to write yet");
+        flusher.buffer(SignalTable::Spans, batch(3));
+        assert!(
+            flusher.should_flush(),
+            "Cold flushes the first batch at once"
+        );
+        let report = flusher.flush("p", false);
+        assert!(report.failures.is_empty() && report.dropped.is_empty());
+        assert_eq!((flusher.phase, stored_rows(&flusher)), (Empty, 3));
+        flusher.buffer(SignalTable::Spans, batch(2));
+        assert_eq!(flusher.phase, Buffering);
+        assert!(!flusher.should_flush(), "under every threshold");
+    }
+
+    #[test]
+    fn a_failed_append_keeps_rows_for_one_retry_that_can_succeed() {
+        let mut flusher = flusher();
+        flusher.buffer(SignalTable::Spans, batch(4));
+        let report = flusher.flush("p", false);
+        assert!(report.dropped.is_empty(), "first failure keeps the rows");
+        assert_eq!((flusher.phase, flusher.total_rows), (Failed, 4));
+        create_spans_table(&flusher);
+        let report = flusher.flush("p", false);
+        assert!(report.dropped.is_empty());
+        assert_eq!(
+            (flusher.phase, flusher.total_rows, stored_rows(&flusher)),
+            (Empty, 0, 4)
+        );
+    }
+
+    #[test]
+    fn a_second_failure_drops_and_reports_the_rows() {
+        let mut flusher = flusher();
+        flusher.buffer(SignalTable::Spans, batch(4));
+        assert!(flusher.flush("p", false).dropped.is_empty());
+        flusher.buffer(SignalTable::Spans, batch(1));
+        assert_eq!(flusher.phase, Failed, "new rows join the pending retry");
+        let report = flusher.flush("p", false);
+        assert_eq!(
+            report.dropped,
+            vec![(SignalTable::Spans.table_name(ProjectPool::prefix()), 5)]
+        );
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!((flusher.phase, flusher.total_rows), (Empty, 0));
+
+        let health = MaintenanceHealth::new(0);
+        record_flush("p", "flush", &report, &health);
+        assert_eq!(health.rows_dropped(), 5);
+    }
+
+    #[test]
+    fn the_final_flush_does_not_wait_for_a_retry() {
+        let mut flusher = flusher();
+        flusher.buffer(SignalTable::Spans, batch(2));
+        let report = flusher.flush("p", true);
+        assert_eq!(report.dropped.len(), 1);
+        assert_eq!(report.dropped[0].1, 2);
+        assert_eq!(flusher.phase, Empty);
     }
 }

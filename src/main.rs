@@ -290,8 +290,14 @@ async fn main() -> Result<()> {
                 Ok(HealthResponse::Ready {
                     alert_webhooks,
                     disk_gate,
+                    rows_dropped_total,
                 }) => {
                     let mut notes = Vec::new();
+                    if let Some(rows) = rows_dropped_total {
+                        notes.push(format!(
+                            "{rows} buffered row(s) dropped after a failed append"
+                        ));
+                    }
                     if let Some(gate) = disk_gate {
                         notes.push(format!(
                             "disk gate {:?}: ingest rejected at {} of {} bytes",

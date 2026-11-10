@@ -1214,6 +1214,8 @@ async fn health(
         axum::Json(HealthResponse::Ready {
             alert_webhooks: state.alerts.delivery_health(),
             disk_gate: state.router.disk_state().health(),
+            rows_dropped_total: Some(state.router.maintenance_health().rows_dropped())
+                .filter(|rows| *rows > 0),
         }),
     )
 }
@@ -2097,6 +2099,10 @@ async fn admin_status(
     map.insert(
         "ingest_dropped_messages_total".to_string(),
         state.router.dropped_messages().to_string(),
+    );
+    map.insert(
+        "sigiro_rows_dropped_total".to_string(),
+        state.router.maintenance_health().rows_dropped().to_string(),
     );
     Ok(Json(AdminStatusResponse { status: map }))
 }

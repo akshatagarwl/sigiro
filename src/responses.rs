@@ -73,6 +73,10 @@ pub enum HealthResponse {
         /// (`tripped`, `healing`, or `stuck` with a `reason`) and the numbers.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         disk_gate: Option<crate::disk_gate::DiskGateHealth>,
+        /// Buffered rows dropped after a failed append and its retry, since
+        /// start (`sigiro_rows_dropped_total`); absent while zero.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows_dropped_total: Option<u64>,
     },
     /// HTTP listener is up but init is still in progress (cold start). Probe
     /// should retry; no operator action required.
@@ -146,6 +150,7 @@ mod health_response_tests {
         let bare = HealthResponse::Ready {
             alert_webhooks: None,
             disk_gate: None,
+            rows_dropped_total: None,
         };
         assert_eq!(
             serde_json::to_string(&bare).unwrap(),
@@ -163,6 +168,7 @@ mod health_response_tests {
                 last_dead_error: Some("http_401".into()),
             }),
             disk_gate: None,
+            rows_dropped_total: None,
         };
         let json = serde_json::to_string(&dead).unwrap();
         assert_eq!(
