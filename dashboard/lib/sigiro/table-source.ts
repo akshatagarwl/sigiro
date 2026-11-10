@@ -5,8 +5,9 @@ import type {
   FacetMetadataSchema,
   InfiniteQueryResponse,
 } from "@/lib/data-table";
-import type { Transport } from "@/lib/data-table/transport";
+import type { PaginationStrategy, Transport } from "@/lib/data-table/transport";
 
+import { decodeKeyset, encodeKeyset } from "./explorer-state";
 import { bucketFor, num, query, type Row, sqlString, ts } from "./query";
 
 /**
@@ -22,6 +23,11 @@ export type SqlSource<TRow> = {
   base?: string;
   /** Column list for a page of rows; must include `timestamp`. */
   select: string;
+  /**
+   * Tiebreak for rows that share a timestamp, as a VARCHAR SQL expression.
+   * Pages are ordered by `(timestamp, key)` and resume after the last pair.
+   */
+  key: string;
   /** Series for the timeline chart and the `level` facet. */
   series: { key: string; sql: string; values: readonly string[] };
   /** Checkbox filters: URL key → SQL expression. */
@@ -88,10 +94,14 @@ export function sqlTransport<TRow extends { timestamp: Date }>(
 
     const size = Number(search.size) > 0 ? Number(search.size) : 50;
     const cursor = (search.cursor as Date | null | undefined) ?? to;
-    const page =
-      search.direction === "prev"
-        ? `SELECT ${source.select} ${where([...filters, `timestamp > ${ts(cursor)}`])} ORDER BY timestamp DESC LIMIT 500`
-        : `SELECT ${source.select} ${where([...filters, `timestamp < ${ts(cursor)}`])} ORDER BY timestamp DESC LIMIT ${size}`;
+    const after = decodeKeyset(search.after);
+    const newer = search.direction === "prev";
+    // The first page starts strictly before the anchor time; later pages
+    // resume after the last (timestamp, key) pair they returned.
+    const bound = after
+      ? `(timestamp ${newer ? ">" : "<"} make_timestamp(${after.micros}) OR (timestamp = make_timestamp(${after.micros}) AND ${source.key} ${newer ? ">" : "<"} ${sqlString(after.key)}))`
+      : `timestamp ${newer ? ">" : "<"} ${ts(cursor)}`;
+    const page = `SELECT ${source.select}, epoch_us(timestamp) AS sigiro_cursor_us, ${source.key} AS sigiro_cursor_key ${where([...filters, bound])} ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT ${newer ? 500 : size}`;
 
     const facetKeys = [source.series.key, ...Object.keys(source.facets)];
     const facetSql = [source.series.sql, ...Object.values(source.facets)];
@@ -174,6 +184,11 @@ export function sqlTransport<TRow extends { timestamp: Date }>(
     }));
 
     const data = rows.map(source.toRow);
+    const keyset = (row: Row) =>
+      encodeKeyset({
+        micros: num(row.sigiro_cursor_us ?? row.timestamp),
+        key: String(row.sigiro_cursor_key ?? ""),
+      });
     const response: InfiniteQueryResponse<TRow[]> = {
       data,
       meta: {
@@ -182,9 +197,8 @@ export function sqlTransport<TRow extends { timestamp: Date }>(
         chartData,
         facets,
       },
-      prevCursor: data.length > 0 ? data[0].timestamp.getTime() : null,
-      nextCursor:
-        data.length >= size ? data[data.length - 1].timestamp.getTime() : null,
+      prevCursor: rows.length > 0 ? keyset(rows[0]) : null,
+      nextCursor: rows.length >= size ? keyset(rows[rows.length - 1]) : null,
     };
     return Response.json(SuperJSON.stringify(response));
   };
@@ -193,5 +207,47 @@ export function sqlTransport<TRow extends { timestamp: Date }>(
     baseUrl: "",
     fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
       handle(String(input), init?.signal ?? undefined)) as typeof fetch,
+  };
+}
+
+export type KeysetPageParam = {
+  /** Anchor for the first page: rows strictly older than this (epoch ms). */
+  cursor: number;
+  /** Encoded `(timestamp, key)` of the row to resume after; null on page one. */
+  after: string | null;
+  direction: "next" | "prev";
+};
+
+/** Pages addressed by `(timestamp, key)`; see `SqlSource.key`. */
+export function keysetPagination(): PaginationStrategy<KeysetPageParam> {
+  return {
+    pageParamKeys: ["cursor", "after", "direction"],
+    getInitialPageParam: (search) => ({
+      cursor: (search.cursor as Date | undefined)?.getTime?.() ?? Date.now(),
+      after: null,
+      direction: "next",
+    }),
+    getNextPageParam: (lastPage, lastPageParam) =>
+      lastPage.nextCursor
+        ? {
+            cursor: lastPageParam.cursor,
+            after: String(lastPage.nextCursor),
+            direction: "next",
+          }
+        : null,
+    getPreviousPageParam: (firstPage, firstPageParam) =>
+      firstPage.prevCursor
+        ? {
+            cursor: firstPageParam.cursor,
+            after: String(firstPage.prevCursor),
+            direction: "prev",
+          }
+        : null,
+    applyPageParam: (search, pageParam) => ({
+      ...search,
+      cursor: new Date(pageParam.cursor),
+      after: pageParam.after,
+      direction: pageParam.direction,
+    }),
   };
 }

@@ -65,7 +65,8 @@ await p.route("**/v1/query", async (route) => {
   const q = route.request().postData() ?? "";
   sql.push(q);
   let result = [];
-  if (q.includes("ORDER BY timestamp DESC LIMIT")) result = rows;
+  if (q.includes("ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT"))
+    result = rows;
   else if (q.includes("AS f0"))
     result = [{ f0: "info", f1: "fixture-service", n: 5000 }];
   else if (q.includes("time_bucket"))

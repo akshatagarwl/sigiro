@@ -18,7 +18,8 @@ try {
   page.on("response", async (response) => {
     if (!response.url().endsWith("/v1/query")) return;
     const sql = response.request().postData() ?? "";
-    if (!sql.includes("ORDER BY timestamp DESC LIMIT")) return;
+    if (!sql.includes("ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT"))
+      return;
     queries.push({
       sql,
       status: response.status(),
@@ -30,7 +31,7 @@ try {
       (response) =>
         response.url().endsWith("/v1/query") &&
         (response.request().postData() ?? "").includes(
-          "ORDER BY timestamp DESC LIMIT"
+          "ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT"
         ) &&
         (service
           ? (response.request().postData() ?? "").includes(

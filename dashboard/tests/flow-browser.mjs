@@ -119,7 +119,7 @@ try {
         (response) =>
           response.url().endsWith("/v1/query") &&
           (response.request().postData() ?? "").includes(
-            "ORDER BY timestamp DESC LIMIT"
+            "ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT"
           ) &&
           (response.request().postData() ?? "").includes(
             "service_name IN ('dashboard-e2e')"

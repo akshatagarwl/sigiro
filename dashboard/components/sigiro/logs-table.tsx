@@ -99,6 +99,7 @@ export const LogsTable = createExplorer<LogRow>({
   source: {
     from: "sigiro_logs",
     select: `timestamp, ${LEVEL_SQL} AS level, service_name, severity_text, body, CAST(log_attributes AS VARCHAR) AS attributes, trace_id, span_id`,
+    key: "concat_ws('|', coalesce(span_id, ''), coalesce(service_name, ''), substring(coalesce(body, ''), 1, 256))",
     series: { key: "level", sql: LEVEL_SQL, values: LEVELS },
     facets: { service: "service_name" },
     inputs: { body: "body", trace_id: "trace_id" },
@@ -160,7 +161,21 @@ function LogResults({
   return (
     <EventExplorer
       events={events}
-      pagination={pagination}
+      pagination={{
+        list:
+          pagination.view.kind === "loading" ||
+          (pagination.view.kind === "failed" && pagination.view.retrying)
+            ? "loading"
+            : pagination.view.kind === "failed"
+              ? "failed"
+              : "ready",
+        more: pagination.more,
+        moreError:
+          pagination.view.kind === "rows"
+            ? pagination.view.moreError?.message
+            : undefined,
+        onLoadMore: pagination.onLoadMore,
+      }}
       selectedId={Object.keys(rowSelection)[0]}
       onSelect={(id) => table.setRowSelection(id ? { [id]: true } : {})}
       onFilter={(field, value, action) => {

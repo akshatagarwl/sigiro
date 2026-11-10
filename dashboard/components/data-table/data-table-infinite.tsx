@@ -108,6 +108,8 @@ export interface DataTableInfiniteProps<TData extends RowData> {
   footerSlot?: React.ReactNode;
   resultsSlot?: React.ReactNode;
   emptySlot?: React.ReactNode;
+  /** Replaces the built-in load-more cell, e.g. with an inline page error. */
+  loadMoreSlot?: React.ReactNode;
   /** Fit the host's bounded results region; facets default opt-in per table. */
   compact?: boolean;
   countLabel?: "in window" | "loaded";
@@ -144,6 +146,7 @@ export function DataTableInfinite<TData extends RowData>({
   footerSlot,
   resultsSlot,
   emptySlot,
+  loadMoreSlot,
   compact = resultsSlot != null,
   countLabel,
   floatingBarSlot,
@@ -494,7 +497,9 @@ export function DataTableInfinite<TData extends RowData>({
                   )}
                   <TableRow className="hover:bg-transparent data-[state=selected]:bg-transparent">
                     <TableCell colSpan={columns.length} className="text-center">
-                      {hasMoreToLoad || isFetching || isLoading ? (
+                      {loadMoreSlot ? (
+                        loadMoreSlot
+                      ) : hasMoreToLoad || isFetching || isLoading ? (
                         <Button
                           disabled={isFetching || isLoading}
                           onClick={() => fetchNextPage()}

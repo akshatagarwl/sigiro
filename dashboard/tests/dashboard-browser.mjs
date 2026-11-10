@@ -22,7 +22,8 @@ const bounds = (sql) =>
   [...sql.matchAll(/timestamp (?:>=|<) make_timestamp\((\d+)\)/g)]
     .slice(0, 2)
     .map((x) => Number(x[1]));
-const rowSql = (sql) => /ORDER BY timestamp DESC LIMIT/.test(sql ?? "");
+const rowSql = (sql) =>
+  /ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT/.test(sql ?? "");
 async function page(viewport = { width: 1600, height: 1000 }) {
   const p = await browser.newPage({ viewport });
   p.on("pageerror", (e) => errors.push(e.message));

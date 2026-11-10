@@ -65,6 +65,7 @@ export const TracesTable = createExplorer<TraceRow>({
     from: "sigiro_spans",
     base: "coalesce(parent_span_id, '') IN ('', '0000000000000000')",
     select: `timestamp, ${STATUS_SQL} AS status, service_name, span_name, round(duration / 1000, 1) AS duration_ms, status_message, trace_id`,
+    key: "coalesce(span_id, '')",
     series: { key: "status", sql: STATUS_SQL, values: STATUSES },
     facets: { service: "service_name" },
     sliders: { duration: "duration / 1000" },

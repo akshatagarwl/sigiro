@@ -13,6 +13,7 @@ import { canLoadMore } from "@/components/data-table/utils";
 import { EvilBarChart } from "@/components/evilcharts/charts/recharts-bar-chart";
 import type { ChartConfig } from "@/components/evilcharts/ui/recharts-chart";
 import { RequestState } from "@/components/observability/request-state";
+import { Button } from "@/components/ui/button";
 import {
   applyFacets,
   createDataTableQueryOptions,
@@ -23,7 +24,16 @@ import {
 } from "@/lib/data-table";
 import { isActive } from "@/lib/filters";
 import { useControls } from "@/lib/sigiro/controls";
-import { type SqlSource, sqlTransport } from "@/lib/sigiro/table-source";
+import {
+  type ExplorerView,
+  explorerView,
+  type MoreState,
+} from "@/lib/sigiro/explorer-state";
+import {
+  keysetPagination,
+  type SqlSource,
+  sqlTransport,
+} from "@/lib/sigiro/table-source";
 import { useNuqsAdapter } from "@/lib/store/adapters/nuqs";
 import { createNuqsSearchParams } from "@/lib/store/adapters/nuqs/server";
 import { useFilterState } from "@/lib/store/hooks/useFilterState";
@@ -45,13 +55,21 @@ import {
  * EvilCharts stacked bar chart instead of the block's own recharts chart.
  */
 
-const STATE_KEYS = new Set(["sort", "uuid", "size", "direction", "cursor"]);
+const STATE_KEYS = new Set([
+  "sort",
+  "uuid",
+  "size",
+  "direction",
+  "cursor",
+  "after",
+]);
 const DIRECTIONS = ["prev", "next"] as const;
 
+/** The load-more control's slice of {@link ExplorerView}. */
 export type ExplorerPagination = {
-  loading: boolean;
-  failed?: boolean;
-  hasMore: boolean;
+  /** The whole results view, for empty/failed slots. */
+  view: ExplorerView;
+  more: MoreState | null;
   onLoadMore: () => void;
 };
 
@@ -88,6 +106,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(
     ...explorer.filterOverrides,
     direction: field.stringLiteral(DIRECTIONS).default("next"),
     cursor: field.timestamp(),
+    after: field.string(),
   });
   const { searchParamsParser, searchParamsSerializer } = createNuqsSearchParams(
     filterSchema.definition as SchemaDefinition
@@ -108,6 +127,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(
             search: Record<string, unknown>
           ) => string,
           skipMetaOnPagination: true,
+          pagination: keysetPagination(),
           transport: sqlTransport<TRow>(
             { ...explorer.source, window: () => ({ from, to }) },
             searchParamsParser as never
@@ -125,11 +145,19 @@ export function createExplorer<TRow extends { timestamp: Date }>(
     const options = useOptions();
     const queryClient = useQueryClient();
     const { tick } = useControls();
-    const { data, error, isFetching, isLoading, fetchNextPage, hasNextPage } =
-      useInfiniteQuery({
-        ...options(search),
-        placeholderData: undefined,
-      });
+    const {
+      data,
+      error,
+      status,
+      isFetching,
+      isFetchingNextPage,
+      isFetchNextPageError,
+      fetchNextPage,
+      hasNextPage,
+    } = useInfiniteQuery({
+      ...options(search),
+      placeholderData: undefined,
+    });
 
     const refresh = React.useCallback(
       () => refreshDataTableQuery(queryClient, options(search)),
@@ -159,6 +187,22 @@ export function createExplorer<TRow extends { timestamp: Date }>(
       () => applyFacets(filterFields, facets),
       [facets]
     );
+    const view = explorerView({
+      rows: flatData.length,
+      status,
+      error,
+      isFetching,
+      isFetchingNextPage,
+      isFetchNextPageError,
+      hasMore: canLoadMore({
+        hasNextPage,
+        filterRows: meta?.filterRowCount,
+        totalRowsFetched: flatData.length,
+      }),
+    });
+    const loadMore = React.useCallback(() => {
+      void fetchNextPage();
+    }, [fetchNextPage]);
     const chartData = React.useMemo(
       () =>
         (meta?.chartData ?? []).map((point) => ({
@@ -175,39 +219,50 @@ export function createExplorer<TRow extends { timestamp: Date }>(
 
     return (
       <>
-        {error && (
+        {view.kind === "failed" && (
           <RequestState
             kind="error"
             title={`Unable to load ${explorer.id}`}
             onRetry={refresh}
-            retrying={isFetching}
+            retrying={view.retrying}
           >
-            {error.message}
-            {flatData.length > 0 &&
-              " Showing previously loaded results until retry succeeds."}
+            {view.error.message}
+          </RequestState>
+        )}
+        {view.kind === "rows" && view.refreshError && (
+          <RequestState
+            kind="error"
+            title={`Unable to refresh ${explorer.id}`}
+            onRetry={refresh}
+            retrying={view.refreshing}
+          >
+            {view.refreshError.message} Showing previously loaded results until
+            retry succeeds.
           </RequestState>
         )}
         <DataTableInfinite
           compact
           emptySlot={
-            isLoading || isFetching
+            view.kind === "loading" || (view.kind === "failed" && view.retrying)
               ? "Loading results…"
-              : error
+              : view.kind === "failed"
                 ? "Results are unavailable until the request succeeds."
                 : `No matching ${explorer.id}. Adjust the time range or filters.`
           }
           resultsSlot={explorer.renderResults?.(flatData, {
-            loading: isFetching || isLoading,
-            failed: Boolean(error),
-            hasMore: canLoadMore({
-              hasNextPage,
-              filterRows: meta?.filterRowCount,
-              totalRowsFetched: flatData.length,
-            }),
-            onLoadMore: () => {
-              void fetchNextPage();
-            },
+            view,
+            more: view.kind === "rows" ? view.more : null,
+            onLoadMore: loadMore,
           })}
+          loadMoreSlot={
+            view.kind === "rows" && view.more === "failed" ? (
+              <LoadMoreFailed
+                error={view.moreError}
+                onRetry={loadMore}
+                label={explorer.id}
+              />
+            ) : undefined
+          }
           columns={columns}
           data={flatData}
           totalRows={meta?.totalRowCount}
@@ -224,8 +279,8 @@ export function createExplorer<TRow extends { timestamp: Date }>(
           }
           defaultColumnVisibility={defaultColumnVisibility}
           filterFields={dynamicFilterFields}
-          isFetching={isFetching}
-          isLoading={isLoading}
+          isFetching={view.kind === "rows" ? view.more === "loading" : false}
+          isLoading={view.kind === "loading"}
           fetchNextPage={fetchNextPage}
           hasNextPage={hasNextPage}
           getRowId={explorer.rowId}
@@ -244,7 +299,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(
                 config={explorer.chart as never}
                 stackType="stacked"
                 className="h-full w-full"
-                isLoading={isLoading}
+                isLoading={view.kind === "loading"}
               >
                 <EvilBarChart.Grid />
                 <EvilBarChart.XAxis dataKey="time" />
@@ -281,6 +336,31 @@ export function createExplorer<TRow extends { timestamp: Date }>(
           tableId={explorer.id}
         />
       </>
+    );
+  }
+
+  function LoadMoreFailed({
+    error,
+    onRetry,
+    label,
+  }: {
+    error: Error | null;
+    onRetry: () => void;
+    label: string;
+  }) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-wrap items-center justify-center gap-2 text-sm"
+      >
+        <span className="text-muted-foreground">
+          Could not load more {label}
+          {error ? `: ${error.message}` : "."}
+        </span>
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      </div>
     );
   }
 

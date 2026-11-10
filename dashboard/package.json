@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build && rm -rf dist && mkdir dist && mv out dist/dashboard",
     "typecheck": "tsc --noEmit",
-    "test:values": "node --test tests/value.test.mjs",
+    "test:values": "node --test tests/value.test.mjs tests/explorer-state.test.mjs",
     "test:graph": "node tests/graph-browser.mjs",
     "test:flow": "node tests/flow-browser.mjs",
     "test:dashboard": "node tests/dashboard-browser.mjs",

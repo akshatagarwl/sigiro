@@ -49,9 +49,27 @@ Status at initial inventory: source findings below are **not yet fixed** except 
 ### Boundaries to flag rather than silently redesign
 
 - Overview/Services use a single service string while Logs/Traces can select multiple services. Existing navigation retains only range/live and drops service, even between Overview and Services. Preserve compatible single-service context first; do not pretend a multi-service selection is representable by the existing single-service panels. A deliberate cross-view scope policy is still needed.
-- Explorer pagination uses a strict timestamp cursor; rows tied at a page boundary may need a composite cursor contract. Do not silently rewrite the cursor/backend contract in this UI pass. No arbitrary server-sort capability will be invented.
+- Explorer pagination uses a `(timestamp, key)` keyset cursor (`keysetPagination` in `lib/sigiro/table-source.ts`; each `SqlSource` names its tiebreak `key`), so rows tied at a page boundary are not skipped. No arbitrary server-sort capability will be invented.
 - No real populated profile data exists in the inspected local window. Flamegraph/diff interactions can be verified only with labeled fixtures, not claimed as real backend profile evidence.
 - Complete payload/resource/security/accessibility audits, every browser, every viewport and every possible transition are not covered by a route inventory. Keep individual tested/untested cases explicit.
+
+## Explorer results machine
+
+`lib/sigiro/explorer-state.ts` names the explorer's results states as one union derived from the TanStack infinite query (`explorerView`). React Query is the request machine; the union is the only thing the slots read.
+
+| State | Shown | Load-more control |
+| --- | --- | --- |
+| `loading` | "Loading results…" | none |
+| `failed` (`retrying`) | table-level error with Retry | none |
+| `empty` (`refreshing`) | "No matching …" | none |
+| `rows`, `more: idle` | rows | Load more |
+| `rows`, `more: loading` | rows | Loading… (disabled) |
+| `rows`, `more: failed` | rows | inline error + Retry at the bottom |
+| `rows`, `more: end` | rows | "No more events in this query." |
+| `rows`, `refreshing` | rows, unchanged control | unchanged |
+| `rows`, `refreshError` | rows + "Unable to refresh" banner | unchanged |
+
+A header refresh or live tick only sets `refreshing`; it never changes `more`. A failed next page only sets `more: failed`; it never raises the table banner. `tests/explorer-state.test.mjs` covers every row of this table.
 
 ## Per-view bounded transition gates
 

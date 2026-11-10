@@ -30,8 +30,9 @@ export type InfiniteQueryMeta<TMeta = Record<string, unknown>> = {
 export type InfiniteQueryResponse<TData, TMeta = unknown> = {
   data: TData;
   meta: InfiniteQueryMeta<TMeta>;
-  prevCursor: number | null;
-  nextCursor: number | null;
+  /** Epoch ms for the default strategy; strategies may use opaque strings. */
+  prevCursor: number | string | null;
+  nextCursor: number | string | null;
 };
 
 /**

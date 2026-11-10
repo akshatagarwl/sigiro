@@ -27,6 +27,18 @@ const DEFAULT_COLUMNS: EventColumn[] = [
   "message",
 ];
 
+/**
+ * The host's results state, already reduced to one value per slot: `list`
+ * for the empty area, `more` for the control under the rows. A refresh never
+ * changes `more`, and a failed page never changes `list`.
+ */
+export type EventPagination = {
+  list: "loading" | "failed" | "ready";
+  more: "idle" | "loading" | "failed" | "end" | null;
+  moreError?: string;
+  onLoadMore: () => void;
+};
+
 export function EventExplorer({
   events,
   selectedId,
@@ -35,12 +47,7 @@ export function EventExplorer({
   traceLink,
   pagination,
 }: {
-  pagination?: {
-    loading: boolean;
-    failed?: boolean;
-    hasMore: boolean;
-    onLoadMore: () => void;
-  };
+  pagination?: EventPagination;
   events: EventRecord[];
   selectedId?: string;
   onSelect: (id: string | undefined) => void;
@@ -426,16 +433,16 @@ export function EventExplorer({
         ) : (
           <div className={styles.empty}>
             <strong>
-              {pagination?.failed
+              {pagination?.list === "failed"
                 ? "Results unavailable"
-                : pagination?.loading
+                : pagination?.list === "loading"
                   ? "Loading events…"
                   : "No loaded events match"}
             </strong>
             <p>
-              {pagination?.failed
+              {pagination?.list === "failed"
                 ? "Retry the request to load results."
-                : pagination?.loading
+                : pagination?.list === "loading"
                   ? "Waiting for query results."
                   : "Clear find, adjust the server filters or load more events below."}
             </p>
@@ -444,15 +451,25 @@ export function EventExplorer({
       </div>
       {pagination && (
         <div className={styles.pagination}>
-          {pagination.failed ? (
-            <span className={styles.muted}>Results could not be updated.</span>
-          ) : pagination.hasMore || pagination.loading ? (
+          {pagination.more === "failed" ? (
+            <span role="alert" className={styles.muted}>
+              Could not load more events
+              {pagination.moreError ? `: ${pagination.moreError}` : "."}{" "}
+              <Button onClick={pagination.onLoadMore}>Retry</Button>
+            </span>
+          ) : pagination.more === "idle" || pagination.more === "loading" ? (
             <Button
-              disabled={pagination.loading}
+              disabled={pagination.more === "loading"}
               onClick={pagination.onLoadMore}
             >
-              {pagination.loading ? "Loading events…" : "Load more events"}
+              {pagination.more === "loading"
+                ? "Loading events…"
+                : "Load more events"}
             </Button>
+          ) : pagination.list === "failed" ? (
+            <span className={styles.muted}>Results could not be updated.</span>
+          ) : pagination.list === "loading" ? (
+            <Button disabled>Loading events…</Button>
           ) : (
             <span className={styles.muted}>No more events in this query.</span>
           )}
@@ -468,7 +485,9 @@ export function EventExplorer({
     <section
       className={styles.explorer}
       aria-label="Structured log explorer"
-      aria-busy={pagination?.loading}
+      aria-busy={
+        pagination?.list === "loading" || pagination?.more === "loading"
+      }
       onKeyDown={(event) => {
         if (
           event.key === "Escape" &&
