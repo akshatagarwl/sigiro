@@ -46,6 +46,7 @@ const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 
 export type FleetVars = {
   FLUSH_SECONDS?: string;
+  FLUSH_BYTES?: string;
   SIGIRO_MAX_INGEST_BODY_BYTES?: string;
   SIGIRO_MAX_RESULT_ROWS?: string;
   QUERY_MAX_SCAN_BYTES?: string;
@@ -106,10 +107,19 @@ export class Fleet {
     const project = join(cloud, `.e2e-${revision}`);
     rmSync(project, { recursive: true, force: true });
     mkdirSync(join(project, "src"), { recursive: true });
-    writeFileSync(
-      join(project, "src/worker.ts"),
-      run("git", ["-C", root, "show", `${revision}:cloud/src/worker.ts`], true)
-    );
+    const sources = run(
+      "git",
+      ["-C", root, "ls-tree", "--name-only", revision, "cloud/src/"],
+      true
+    )
+      .split("\n")
+      .filter((path) => path.endsWith(".ts"));
+    for (const path of sources) {
+      writeFileSync(
+        join(project, "src", path.slice("cloud/src/".length)),
+        run("git", ["-C", root, "show", `${revision}:${path}`], true)
+      );
+    }
     for (const shared of ["vendor", "query", "types", "node_modules"]) {
       symlinkSync(join(cloud, shared), join(project, shared));
     }
@@ -296,6 +306,30 @@ export async function post(
     headers["content-type"] = contentType;
   }
   return fetch(`${origin}${path}`, { method: "POST", headers, body });
+}
+
+export async function get(path: string, jwt?: string): Promise<Response> {
+  return fetch(`${origin}${path}`, {
+    headers: jwt === undefined ? {} : { authorization: `Bearer ${jwt}` },
+  });
+}
+
+export type CellStatus = {
+  phase: string;
+  pendingRows: number;
+  pendingBytes: number;
+  lagMs: number;
+  retrying: number;
+  parked: number;
+};
+
+export async function ingestHealth(
+  jwt: string
+): Promise<{ status: string; ingest: Record<string, CellStatus> }> {
+  const response = await get("/health", jwt);
+  const text = await response.text();
+  assert.equal(response.status, 200, text);
+  return JSON.parse(text);
 }
 
 export async function expectStatus(

@@ -12,10 +12,11 @@ import initWasm, {
   manifest_register,
   validate_read_only,
 } from "../vendor/segments-wasm/sigiro_segments_wasm.js";
+import { type CellState, cellStep, flushPass } from "./cell";
 import { reconcile, type Schema, type SchemaStore } from "./schema";
 
 const ingestCellSchema: Schema = {
-  wal: "CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, sdk_name TEXT, body BLOB NOT NULL, bytes INTEGER NOT NULL)",
+  wal: "CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, sdk_name TEXT, body BLOB NOT NULL, bytes INTEGER NOT NULL, accepted_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER, last_error TEXT, parked_at INTEGER, parked_reason TEXT)",
   manifest:
     "CREATE TABLE {table} (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL)",
 };
@@ -77,6 +78,16 @@ type WalRow = {
   format: string;
   body: ArrayBuffer;
   bytes: number;
+  attempts: number;
+};
+
+export type CellStatus = {
+  phase: CellState["phase"];
+  pendingRows: number;
+  pendingBytes: number;
+  lagMs: number;
+  retrying: number;
+  parked: number;
 };
 type SegmentMetadata = {
   table: Table;
@@ -125,9 +136,16 @@ const defaultFlushBytes = 4_194_304;
 let jwksCache: { url: string; keys: Jwk[]; expiresAt: number } | undefined;
 
 export class IngestCell extends DurableObject<Env> {
+  private cell: CellState = { phase: "idle" };
+  private flushing: Promise<void> | undefined;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     reconcile(sqlStore(ctx.storage), ingestCellSchema);
+    void ctx.blockConcurrencyWhile(async () => {
+      const at = await ctx.storage.getAlarm();
+      this.cell = at === null ? { phase: "idle" } : { phase: "scheduled", at };
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -148,16 +166,61 @@ export class IngestCell extends DurableObject<Env> {
       return new Response(String(error), { status: 400 });
     }
     this.ctx.storage.sql.exec(
-      "INSERT INTO wal (tenant, signal, format, body, bytes) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO wal (tenant, signal, format, body, bytes, accepted_at) VALUES (?, ?, ?, ?, ?, ?)",
       tenant,
       signal,
       format,
       body,
-      body.byteLength
+      body.byteLength,
+      Date.now()
     );
     await this.ctx.storage.sync?.();
-    await this.scheduleIfNeeded();
+    try {
+      await this.apply(
+        cellStep(
+          this.cell,
+          {
+            type: "write",
+            now: Date.now(),
+            due:
+              pendingWalBytes(this.ctx.storage.sql) >=
+              numberVar(this.env.FLUSH_BYTES, defaultFlushBytes),
+          },
+          this.flushDelayMs()
+        )
+      );
+    } catch (error) {
+      console.error(`ingest cell could not schedule a flush: ${error}`);
+    }
     return new Response(null, { status: 202 });
+  }
+
+  status(): CellStatus {
+    const row = this.ctx.storage.sql
+      .exec<{
+        pending_rows: number;
+        pending_bytes: number;
+        oldest: number | null;
+        retrying: number;
+        parked: number;
+      }>(
+        `SELECT
+          COALESCE(SUM(parked_at IS NULL), 0) AS pending_rows,
+          COALESCE(SUM(CASE WHEN parked_at IS NULL THEN bytes END), 0) AS pending_bytes,
+          MIN(CASE WHEN parked_at IS NULL THEN COALESCE(accepted_at, 0) END) AS oldest,
+          COALESCE(SUM(parked_at IS NULL AND attempts > 0), 0) AS retrying,
+          COALESCE(SUM(parked_at IS NOT NULL), 0) AS parked
+        FROM wal`
+      )
+      .one();
+    return {
+      phase: this.cell.phase,
+      pendingRows: row.pending_rows,
+      pendingBytes: row.pending_bytes,
+      lagMs: row.oldest === null ? 0 : Math.max(0, Date.now() - row.oldest),
+      retrying: row.retrying,
+      parked: row.parked,
+    };
   }
 
   liveKeys(table: Table): string[] {
@@ -173,60 +236,118 @@ export class IngestCell extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
-    await this.flush();
-  }
-
-  private async scheduleIfNeeded(): Promise<void> {
-    const total = sumWalBytes(this.ctx.storage.sql);
-    if (total >= numberVar(this.env.FLUSH_BYTES, defaultFlushBytes)) {
-      await this.flush();
-      return;
-    }
-    const existing = await this.ctx.storage.getAlarm();
-    if (existing === null) {
-      await this.ctx.storage.setAlarm(
-        Date.now() +
-          numberVar(this.env.FLUSH_SECONDS, defaultFlushSeconds) * 1000
-      );
-    }
-  }
-
-  private async flush(): Promise<void> {
-    const rows = this.ctx.storage.sql
-      .exec<WalRow>(
-        "SELECT id, tenant, signal, format, body, bytes FROM wal ORDER BY id"
+    await this.apply(
+      cellStep(
+        this.cell,
+        { type: "alarm", now: Date.now() },
+        this.flushDelayMs()
       )
-      .toArray();
-    if (rows.length === 0) {
-      return;
+    );
+    await this.flushing;
+  }
+
+  private flushDelayMs(): number {
+    return numberVar(this.env.FLUSH_SECONDS, defaultFlushSeconds) * 1000;
+  }
+
+  private async apply(decision: ReturnType<typeof cellStep>): Promise<void> {
+    this.cell = decision.state;
+    if (decision.alarmAt !== null) {
+      await this.ctx.storage.setAlarm(decision.alarmAt);
     }
-    let manifest = readManifest(this.ctx.storage.sql);
-    for (const row of rows) {
-      const format = parseCellFormat(row.format);
-      if (format === undefined) {
-        console.warn(
-          `dropping wal row ${row.id} in removed format ${row.format}`
+    if (decision.flush && this.flushing === undefined) {
+      this.flushing = this.flushLoop().finally(() => {
+        this.flushing = undefined;
+      });
+    }
+  }
+
+  private async flushLoop(): Promise<void> {
+    for (;;) {
+      let next: number | null;
+      try {
+        next = (await flushPass(this.flushPort())).next;
+      } catch (error) {
+        console.error(`ingest cell flush failed: ${error}`);
+        next = Date.now() + this.flushDelayMs();
+      }
+      const decision = cellStep(
+        this.cell,
+        { type: "flushed", next },
+        this.flushDelayMs()
+      );
+      this.cell = decision.state;
+      if (decision.alarmAt !== null) {
+        await this.ctx.storage.setAlarm(decision.alarmAt);
+      }
+      if (!decision.flush) {
+        return;
+      }
+    }
+  }
+
+  private flushPort() {
+    const sql = this.ctx.storage.sql;
+    return {
+      now: () => Date.now(),
+      dueRows: (now: number) =>
+        sql
+          .exec<WalRow>(
+            "SELECT id, tenant, signal, format, body, bytes, attempts FROM wal WHERE parked_at IS NULL AND COALESCE(next_attempt_at, 0) <= ? ORDER BY id",
+            now
+          )
+          .toArray(),
+      decode: (row: WalRow) => {
+        const format = parseCellFormat(row.format);
+        if (format === undefined) {
+          throw new Error(`removed format ${row.format}`);
+        }
+        return decode_otlp(row.signal, format, new Uint8Array(row.body)).map(
+          (output, index) => {
+            const metadata = JSON.parse(output.metadata) as SegmentMetadata;
+            return {
+              key: objectKey(row.tenant, row.id, index, metadata.table),
+              table: metadata.table,
+              metadata,
+              parquet: output.parquet,
+            };
+          }
         );
-        this.ctx.storage.sql.exec("DELETE FROM wal WHERE id = ?", row.id);
+      },
+      readManifest: () => readManifest(sql),
+      writeManifest: (manifest: string) => writeManifest(sql, manifest),
+      registerPending,
+      commitLive,
+      put: async (key: string, parquet: Uint8Array) => {
+        await this.env.SEGMENTS.put(key, parquet);
+      },
+      sync: async () => {
         await this.ctx.storage.sync?.();
-        continue;
-      }
-      const outputs = decode_otlp(row.signal, format, new Uint8Array(row.body));
-      for (const [index, output] of outputs.entries()) {
-        const metadata = JSON.parse(output.metadata) as SegmentMetadata;
-        const key = objectKey(row.tenant, row.id, index, metadata.table);
-        manifest = registerPending(manifest, key, metadata.table);
-        writeManifest(this.ctx.storage.sql, manifest);
-        await this.ctx.storage.sync?.();
-        await this.env.SEGMENTS.put(key, output.parquet);
-        manifest = commitLive(manifest, key, metadata);
-        writeManifest(this.ctx.storage.sql, manifest);
-        await this.ctx.storage.sync?.();
-      }
-      this.ctx.storage.sql.exec("DELETE FROM wal WHERE id = ?", row.id);
-      writeManifest(this.ctx.storage.sql, manifest);
-      await this.ctx.storage.sync?.();
-    }
+      },
+      retire: (id: number) => void sql.exec("DELETE FROM wal WHERE id = ?", id),
+      backoff: (id: number, attempts: number, nextAt: number, reason: string) =>
+        void sql.exec(
+          "UPDATE wal SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?",
+          attempts,
+          nextAt,
+          reason,
+          id
+        ),
+      park: (id: number, reason: string, now: number) =>
+        void sql.exec(
+          "UPDATE wal SET parked_at = ?, parked_reason = ?, last_error = ? WHERE id = ?",
+          now,
+          reason,
+          reason,
+          id
+        ),
+      nextDue: () =>
+        sql
+          .exec<{ next: number | null }>(
+            "SELECT MIN(COALESCE(next_attempt_at, 0)) AS next FROM wal WHERE parked_at IS NULL"
+          )
+          .one().next,
+    };
   }
 }
 
@@ -238,6 +359,9 @@ export default {
     }
     if (request.method === "GET" && url.pathname === "/v1/services") {
       return servicesRoute(request, env);
+    }
+    if (request.method === "GET" && url.pathname === "/health") {
+      return healthRoute(request, env);
     }
     const route = routeSignal(url.pathname);
     if (request.method !== "POST" || route === undefined) {
@@ -344,6 +468,33 @@ async function servicesRoute(request: Request, env: Env): Promise<Response> {
     totalCount: row.total_count,
   }));
   return Response.json({ services });
+}
+
+async function healthRoute(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env, [queryScope, ingestScope]);
+  if (auth.status !== 200) {
+    return problem(
+      auth.status,
+      auth.status === 401 ? "unauthorized" : "forbidden",
+      auth.body
+    );
+  }
+  const signals: Signal[] = ["traces", "logs", "metrics", "profiles"];
+  const cells = Object.fromEntries(
+    await Promise.all(
+      signals.map(async (signal) => {
+        const cell = env.INGEST_CELL.get(
+          env.INGEST_CELL.idFromName(cellName(auth.tenant, signal))
+        );
+        return [signal, await cell.status()] as const;
+      })
+    )
+  );
+  const parked = Object.values(cells).some((cell) => cell.parked > 0);
+  return Response.json(
+    { status: parked ? "degraded" : "ready", ingest: cells },
+    { headers: { "cache-control": "no-store" } }
+  );
 }
 
 async function runQuery(
@@ -469,7 +620,7 @@ function parseFormat(mediaType: string): "protobuf" | "json" | undefined {
 async function authenticate(
   request: Request,
   env: Env,
-  scope: string
+  scope: string | string[]
 ): Promise<
   { status: 200; tenant: TenantId } | { status: 401 | 403; body: string }
 > {
@@ -516,8 +667,10 @@ async function authenticate(
   if (tenant === undefined) {
     return { status: 401, body: "invalid bearer token" };
   }
-  if (!claims.scope.split(/\s+/u).includes(scope)) {
-    return { status: 403, body: `missing ${scope} scope` };
+  const granted = claims.scope.split(/\s+/u);
+  const accepted = Array.isArray(scope) ? scope : [scope];
+  if (!accepted.some((needed) => granted.includes(needed))) {
+    return { status: 403, body: `missing ${accepted.join(" or ")} scope` };
   }
   return { status: 200, tenant };
 }
@@ -637,9 +790,11 @@ function writeManifest(sql: SqlStorage, manifest: string): void {
   );
 }
 
-function sumWalBytes(sql: SqlStorage): number {
+function pendingWalBytes(sql: SqlStorage): number {
   const row = sql
-    .exec<{ total: number }>("SELECT COALESCE(SUM(bytes), 0) AS total FROM wal")
+    .exec<{ total: number }>(
+      "SELECT COALESCE(SUM(bytes), 0) AS total FROM wal WHERE parked_at IS NULL"
+    )
     .one();
   return row.total;
 }

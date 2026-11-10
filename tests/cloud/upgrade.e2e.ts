@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
 
-import { Fleet, postUntilAccepted, token, traceBody } from "./harness.ts";
+import {
+  Fleet,
+  ingestHealth,
+  postUntilAccepted,
+  token,
+  traceBody,
+  waitFor,
+} from "./harness.ts";
 
-const previous = "1b39e0d";
+// The last API revision before the ingest cell became an explicit state
+// machine: its WAL rows must survive the reshape that adds the row state.
+const previous = "c583c035a";
 const fleet = new Fleet();
 const ingest = token("acme", "telemetry:ingest");
+const read = token("acme", "query:read");
 
 try {
   await fleet.start({ FLUSH_SECONDS: "1" });
@@ -37,6 +47,10 @@ try {
     1,
     "the acknowledged span survives the storage reshape once"
   );
+  await waitFor(async () => {
+    const cell = (await ingestHealth(read)).ingest.traces;
+    return cell.pendingRows === 0 && cell.parked === 0;
+  }, "the upgraded cell drains with nothing parked");
 
   console.log("cloud upgrade e2e passed");
 } finally {
