@@ -853,6 +853,9 @@ fn required_http_scope(method: &axum::http::Method, path: &str) -> Result<&'stat
         (&Method::GET, "/v1/services" | "/services") => Ok(SERVICES_READ_SCOPE),
         (&Method::GET, "/v1/auth/validate" | "/auth/validate") => Ok(AUTHENTICATED_SCOPE),
         (&Method::GET, "/v1/alerts" | "/alerts") => Ok(ALERTS_READ_SCOPE),
+        // Replay re-sends webhooks the project already produced, so it needs
+        // the project's write scope rather than a read scope.
+        (&Method::POST, "/v1/alerts/replay" | "/alerts/replay") => Ok(TELEMETRY_INGEST_SCOPE),
         // Managing ingest keys needs the power the keys grant. The handlers
         // further require a user's own OAuth token: an agent or an ingest key
         // must not mint credentials that outlive it.
@@ -891,6 +894,11 @@ mod legacy_removal_tests {
             required_http_scope(&Method::POST, "/v1/query").unwrap(),
             QUERY_READ_SCOPE
         );
+        assert_eq!(
+            required_http_scope(&Method::POST, "/v1/alerts/replay").unwrap(),
+            TELEMETRY_INGEST_SCOPE
+        );
+        assert!(required_http_scope(&Method::GET, "/v1/alerts/replay").is_err());
     }
 }
 

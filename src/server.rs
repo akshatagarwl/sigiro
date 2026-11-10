@@ -46,6 +46,7 @@ use tracing_attributes::instrument;
         query_handler,
         services_handler,
         alerts_handler,
+        alerts_replay_handler,
         trace_detail_handler,
         list_ingest_keys,
         create_ingest_key,
@@ -57,7 +58,9 @@ use tracing_attributes::instrument;
             ServicesResponse,
             ServiceEntry,
             AlertsResponse,
+            AlertsReplayResponse,
             crate::alerts::AlertInstance,
+            crate::alerts::DeliverySummary,
             TraceDetailResponse,
             SpanDetail,
             ServiceBreakdownEntry,
@@ -505,6 +508,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .typed_post(query_handler)
         .typed_get(services_handler)
         .typed_get(alerts_handler)
+        .typed_post(alerts_replay_handler)
         .typed_get(trace_detail_handler)
         .layer(axum_mw::map_response(retry_after_on_busy));
 
@@ -1243,7 +1247,9 @@ async fn health(
     tracing::info!("health check called");
     (
         axum::http::StatusCode::OK,
-        axum::Json(HealthResponse::Ready),
+        axum::Json(HealthResponse::Ready {
+            alert_webhooks: state.alerts.delivery_health(),
+        }),
     )
 }
 
@@ -1679,9 +1685,12 @@ async fn alerts_handler(
         .workloads()
         .try_acquire(crate::workload::WorkloadClass::Maintenance)
         .map_err(|error| too_many_requests("alerts busy", &error.to_string()))?;
-    let alerts = tokio::task::spawn_blocking(move || {
+    let (alerts, delivery) = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        alert_store.list(&project_id, status.as_deref())
+        anyhow::Ok((
+            alert_store.list(&project_id, status.as_deref())?,
+            alert_store.delivery_summary(Some(&project_id))?,
+        ))
     })
     .await
     .map_err(|error| {
@@ -1692,7 +1701,57 @@ async fn alerts_handler(
         tracing::error!(project_id = auth.as_ref(), "alerts query failed: {error:#}");
         internal_error("alerts query failed", "unable to read alert state")
     })?;
-    Ok(Json(AlertsResponse { alerts }))
+    Ok(Json(AlertsResponse { alerts, delivery }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/alerts/replay",
+    tag = "Telemetry",
+    operation_id = "replay-alert-webhooks",
+    summary = "Replay dead alert webhooks",
+    description = "Put this project's dead alert notifications (rejected with a 4xx, or out of attempts) back in the delivery queue, due now.",
+    responses(
+        (status = 200, description = "Notifications requeued", body = AlertsReplayResponse),
+        (status = 401, description = "Missing or invalid bearer token")
+    ),
+    security(("bearer" = [])),
+)]
+#[instrument(skip_all)]
+async fn alerts_replay_handler(
+    _path: AlertsReplayPath,
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<TenantId>,
+) -> ApiResult<Json<AlertsReplayResponse>> {
+    let alert_store = state.alerts.clone();
+    let project_id = auth.as_ref().to_string();
+    let permit = state
+        .router
+        .workloads()
+        .try_acquire(crate::workload::WorkloadClass::Maintenance)
+        .map_err(|error| too_many_requests("alerts busy", &error.to_string()))?;
+    let replayed = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        alert_store.replay_dead(&project_id, crate::alerts::now_us())
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(
+            project_id = auth.as_ref(),
+            "alert replay task failed: {error}"
+        );
+        internal_error("alert replay failed", "unable to replay alert webhooks")
+    })?
+    .map_err(|error| {
+        tracing::error!(project_id = auth.as_ref(), "alert replay failed: {error:#}");
+        internal_error("alert replay failed", "unable to replay alert webhooks")
+    })?;
+    tracing::info!(
+        project_id = auth.as_ref(),
+        replayed,
+        "dead alert webhooks replayed"
+    );
+    Ok(Json(AlertsReplayResponse { replayed }))
 }
 
 /// GET /v1/traces/{trace_id} -- return a single trace with full detail including critical path and service breakdown.

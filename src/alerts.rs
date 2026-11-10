@@ -27,6 +27,8 @@ pub struct AlertWebhookToken(String);
 #[derive(Clone)]
 pub struct AlertStore {
     conn: Arc<Mutex<AdminConnection>>,
+    /// Refreshed by [`run_delivery`]; `None` while delivery is not running.
+    delivery_health: Arc<Mutex<Option<DeliverySummary>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -455,7 +457,7 @@ impl AlertPersistence for rusqlite::Transaction<'_> {
         payload: &str,
     ) -> Result<()> {
         self.execute(
-            "INSERT INTO alert_outbox (project_id, fingerprint, transition, payload_json, next_attempt_at_us) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO alert_outbox (project_id, fingerprint, transition, payload_json, next_attempt_at_us, enqueued_at_us) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
             params![event.project_id, fingerprint, transition, payload, now_us()],
         )?;
         Ok(())
@@ -517,7 +519,7 @@ impl AlertPersistence for postgres::Transaction<'_> {
         payload: &str,
     ) -> Result<()> {
         self.execute(
-            "INSERT INTO sigiro_admin.alert_outbox (project_id, fingerprint, transition, payload_json, next_attempt_at_us) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO sigiro_admin.alert_outbox (project_id, fingerprint, transition, payload_json, next_attempt_at_us, enqueued_at_us) VALUES ($1, $2, $3, $4, $5, $5)",
             &[&event.project_id, &fingerprint, &transition, &payload, &now_us()],
         )?;
         Ok(())
@@ -526,7 +528,10 @@ impl AlertPersistence for postgres::Transaction<'_> {
 
 impl AlertStore {
     pub fn new(conn: Arc<Mutex<AdminConnection>>) -> Result<Self> {
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            delivery_health: Arc::default(),
+        })
     }
 
     pub(crate) fn admin_connection(&self) -> Arc<Mutex<AdminConnection>> {
@@ -562,12 +567,12 @@ impl AlertStore {
     pub(crate) fn next_due(&self, now_us: i64) -> Result<Option<PendingNotification>> {
         match &mut *self.conn.lock() {
             AdminConnection::Local(conn) => conn.query_row(
-                "SELECT id, payload_json FROM alert_outbox WHERE sent_at_us IS NULL AND next_attempt_at_us <= ?1 ORDER BY id LIMIT 1",
+                "SELECT id, payload_json FROM alert_outbox WHERE sent_at_us IS NULL AND dead_at_us IS NULL AND next_attempt_at_us <= ?1 ORDER BY id LIMIT 1",
                 [now_us],
                 |row| Ok(PendingNotification { id: row.get(0)?, payload: row.get(1)? }),
             ).optional().context("failed to read alert outbox"),
             AdminConnection::Hosted(client) => Ok(client.query_opt(
-                "SELECT id, payload_json FROM sigiro_admin.alert_outbox WHERE sent_at_us IS NULL AND next_attempt_at_us <= $1 ORDER BY id LIMIT 1",
+                "SELECT id, payload_json FROM sigiro_admin.alert_outbox WHERE sent_at_us IS NULL AND dead_at_us IS NULL AND next_attempt_at_us <= $1 ORDER BY id LIMIT 1",
                 &[&now_us],
             ).context("failed to read alert outbox")?.map(|row| PendingNotification {
                 id: row.get(0), payload: row.get(1),
@@ -576,28 +581,28 @@ impl AlertStore {
     }
 
     pub(crate) fn mark_sent(&self, id: i64, sent_at_us: i64) -> Result<()> {
-        let changed = match &mut *self.conn.lock() {
+        let mut conn = self.conn.lock();
+        let changed = match &mut *conn {
             AdminConnection::Local(conn) => conn.execute(
-                "UPDATE alert_outbox SET sent_at_us = ?2, last_error = NULL WHERE id = ?1",
+                "UPDATE alert_outbox SET sent_at_us = ?2, last_error = NULL WHERE id = ?1 AND sent_at_us IS NULL AND dead_at_us IS NULL",
                 params![id, sent_at_us],
             )? as u64,
             AdminConnection::Hosted(client) => client.execute(
-                "UPDATE sigiro_admin.alert_outbox SET sent_at_us = $2, last_error = NULL WHERE id = $1",
+                "UPDATE sigiro_admin.alert_outbox SET sent_at_us = $2, last_error = NULL WHERE id = $1 AND sent_at_us IS NULL AND dead_at_us IS NULL",
                 &[&id, &sent_at_us],
             )?,
         };
-        anyhow::ensure!(changed == 1, "alert outbox row {id} does not exist");
-        Ok(())
+        ensure_was_queued(&mut conn, id, changed)
     }
 
-    pub(crate) fn mark_retry(&self, id: i64, now_us: i64, error_class: &str) -> Result<()> {
-        anyhow::ensure!(
-            error_class.len() <= 64
-                && error_class
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')),
-            "alert error class must be a short identifier"
-        );
+    /// Record a failed attempt and move the row to `Queued` (retry later) or
+    /// `Dead`, as [`delivery_step`] decides. Returns the decision.
+    pub(crate) fn mark_failed(
+        &self,
+        id: i64,
+        now_us: i64,
+        outcome: DeliveryOutcome,
+    ) -> Result<DeliveryStep> {
         let mut conn = self.conn.lock();
         let attempts: i32 = match &mut *conn {
             AdminConnection::Local(conn) => conn.query_row(
@@ -612,20 +617,200 @@ impl AlertStore {
                 )?
                 .get(0),
         };
-        let exponent = attempts.clamp(0, 10) as u32;
-        let next_attempt = now_us + 5_i64.saturating_mul(1_i64 << exponent).min(3_600) * 1_000_000;
+        let step = delivery_step(attempts, outcome, now_us);
+        let (next_attempt_at_us, dead_at_us) = match step {
+            DeliveryStep::Retry { next_attempt_at_us } => (next_attempt_at_us, None),
+            DeliveryStep::Dead => (now_us, Some(now_us)),
+        };
+        let error = outcome.error_class();
         let changed = match &mut *conn {
             AdminConnection::Local(conn) => conn.execute(
-                "UPDATE alert_outbox SET attempts = attempts + 1, next_attempt_at_us = ?2, last_error = ?3 WHERE id = ?1 AND sent_at_us IS NULL",
-                params![id, next_attempt, error_class],
+                "UPDATE alert_outbox SET attempts = attempts + 1, next_attempt_at_us = ?2, dead_at_us = ?3, last_error = ?4 WHERE id = ?1 AND sent_at_us IS NULL AND dead_at_us IS NULL",
+                params![id, next_attempt_at_us, dead_at_us, error],
             )? as u64,
             AdminConnection::Hosted(client) => client.execute(
-                "UPDATE sigiro_admin.alert_outbox SET attempts = attempts + 1, next_attempt_at_us = $2, last_error = $3 WHERE id = $1 AND sent_at_us IS NULL",
-                &[&id, &next_attempt, &error_class],
+                "UPDATE sigiro_admin.alert_outbox SET attempts = attempts + 1, next_attempt_at_us = $2, dead_at_us = $3, last_error = $4 WHERE id = $1 AND sent_at_us IS NULL AND dead_at_us IS NULL",
+                &[&id, &next_attempt_at_us, &dead_at_us, &error],
             )?,
         };
-        anyhow::ensure!(changed == 1, "pending alert outbox row {id} does not exist");
-        Ok(())
+        ensure_was_queued(&mut conn, id, changed)?;
+        Ok(step)
+    }
+
+    /// Put every `Dead` row of a project back in the queue, due now, with a
+    /// fresh attempt budget. Returns how many rows were replayed.
+    pub(crate) fn replay_dead(&self, project_id: &str, now_us: i64) -> Result<u64> {
+        Ok(match &mut *self.conn.lock() {
+            AdminConnection::Local(conn) => conn.execute(
+                "UPDATE alert_outbox SET dead_at_us = NULL, attempts = 0, next_attempt_at_us = ?2 WHERE project_id = ?1 AND dead_at_us IS NOT NULL AND sent_at_us IS NULL",
+                params![project_id, now_us],
+            )? as u64,
+            AdminConnection::Hosted(client) => client.execute(
+                "UPDATE sigiro_admin.alert_outbox SET dead_at_us = NULL, attempts = 0, next_attempt_at_us = $2 WHERE project_id = $1 AND dead_at_us IS NOT NULL AND sent_at_us IS NULL",
+                &[&project_id, &now_us],
+            )?,
+        })
+    }
+
+    /// Queue depth and dead count, for one project or (None) every project.
+    pub(crate) fn delivery_summary(&self, project_id: Option<&str>) -> Result<DeliverySummary> {
+        let (queued, dead, oldest, last_error): (i64, i64, Option<i64>, Option<String>) =
+            match &mut *self.conn.lock() {
+                AdminConnection::Local(conn) => conn.query_row(
+                    "SELECT
+                       count(*) FILTER (WHERE sent_at_us IS NULL AND dead_at_us IS NULL),
+                       count(*) FILTER (WHERE sent_at_us IS NULL AND dead_at_us IS NOT NULL),
+                       min(enqueued_at_us) FILTER (WHERE sent_at_us IS NULL AND dead_at_us IS NULL),
+                       (SELECT last_error FROM alert_outbox d WHERE d.dead_at_us IS NOT NULL AND d.sent_at_us IS NULL
+                          AND (?1 IS NULL OR d.project_id = ?1) ORDER BY d.dead_at_us DESC LIMIT 1)
+                     FROM alert_outbox WHERE ?1 IS NULL OR project_id = ?1",
+                    [project_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?,
+                AdminConnection::Hosted(client) => {
+                    let row = client.query_one(
+                        "SELECT
+                           count(*) FILTER (WHERE sent_at_us IS NULL AND dead_at_us IS NULL),
+                           count(*) FILTER (WHERE sent_at_us IS NULL AND dead_at_us IS NOT NULL),
+                           min(enqueued_at_us) FILTER (WHERE sent_at_us IS NULL AND dead_at_us IS NULL),
+                           (SELECT last_error FROM sigiro_admin.alert_outbox d WHERE d.dead_at_us IS NOT NULL AND d.sent_at_us IS NULL
+                              AND ($1::TEXT IS NULL OR d.project_id = $1) ORDER BY d.dead_at_us DESC LIMIT 1)
+                         FROM sigiro_admin.alert_outbox WHERE $1::TEXT IS NULL OR project_id = $1",
+                        &[&project_id],
+                    )?;
+                    (row.get(0), row.get(1), row.get(2), row.get(3))
+                }
+            };
+        Ok(DeliverySummary {
+            queued: u64::try_from(queued).unwrap_or(0),
+            dead: u64::try_from(dead).unwrap_or(0),
+            oldest_queued_at: oldest.map(format_timestamp).transpose()?,
+            last_dead_error: last_error,
+        })
+    }
+
+    /// The last summary the delivery loop computed across every project;
+    /// `None` when webhook delivery is not configured.
+    pub fn delivery_health(&self) -> Option<DeliverySummary> {
+        self.delivery_health.lock().clone()
+    }
+}
+
+/// Lifecycle of one webhook outbox row. It is derived from `sent_at_us` and
+/// `dead_at_us` in one place ([`OutboxState::of`]); a separate state column
+/// could not be backfilled for rows sent before it existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutboxState {
+    /// Waiting for `next_attempt_at_us`; retried with backoff.
+    Queued,
+    /// The receiver answered 2xx. Terminal.
+    Sent,
+    /// Rejected permanently or out of attempts. Terminal until replayed.
+    Dead,
+}
+
+impl OutboxState {
+    pub(crate) fn of(sent_at_us: Option<i64>, dead_at_us: Option<i64>) -> Self {
+        match (sent_at_us, dead_at_us) {
+            (Some(_), _) => Self::Sent,
+            (None, Some(_)) => Self::Dead,
+            (None, None) => Self::Queued,
+        }
+    }
+}
+
+/// Attempts after which a still-failing notification is `Dead`. With the
+/// 5s·2ⁿ backoff capped at an hour this is about eleven hours of retrying.
+pub(crate) const MAX_DELIVERY_ATTEMPTS: i32 = 20;
+
+/// What one delivery attempt produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeliveryOutcome {
+    /// Non-2xx HTTP status.
+    Http(u16),
+    Timeout,
+    Connect,
+    Request,
+}
+
+impl DeliveryOutcome {
+    fn error_class(self) -> String {
+        match self {
+            Self::Http(status) => format!("http_{status}"),
+            Self::Timeout => "timeout".into(),
+            Self::Connect => "connect".into(),
+            Self::Request => "request".into(),
+        }
+    }
+
+    /// A 4xx other than 408/429 will not change on retry: bad URL, token, or
+    /// payload. Everything else (5xx, 429, 408, timeouts, connect errors) may.
+    fn is_permanent(self) -> bool {
+        matches!(self, Self::Http(status) if (400..500).contains(&status) && status != 408 && status != 429)
+    }
+}
+
+/// Where a failed attempt sends the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeliveryStep {
+    Retry { next_attempt_at_us: i64 },
+    Dead,
+}
+
+/// The failure edge of the outbox machine. `attempts` counts earlier failures.
+pub(crate) fn delivery_step(attempts: i32, outcome: DeliveryOutcome, now_us: i64) -> DeliveryStep {
+    if outcome.is_permanent() || attempts.saturating_add(1) >= MAX_DELIVERY_ATTEMPTS {
+        return DeliveryStep::Dead;
+    }
+    let exponent = attempts.clamp(0, 10) as u32;
+    let delay_secs = 5_i64.saturating_mul(1_i64 << exponent).min(3_600);
+    DeliveryStep::Retry {
+        next_attempt_at_us: now_us + delay_secs * 1_000_000,
+    }
+}
+
+/// Outbox counts shown on `/health` and `GET /v1/alerts`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DeliverySummary {
+    /// Notifications waiting to be (re)sent.
+    pub queued: u64,
+    /// Notifications that failed permanently; replay with `POST /v1/alerts/replay`.
+    pub dead: u64,
+    /// When the oldest queued notification was enqueued (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_queued_at: Option<String>,
+    /// Error class of the most recent dead notification, e.g. `http_401`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_dead_error: Option<String>,
+}
+
+fn outbox_state(conn: &mut AdminConnection, id: i64) -> Result<Option<OutboxState>> {
+    let columns: Option<(Option<i64>, Option<i64>)> = match conn {
+        AdminConnection::Local(conn) => conn
+            .query_row(
+                "SELECT sent_at_us, dead_at_us FROM alert_outbox WHERE id = ?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?,
+        AdminConnection::Hosted(client) => client
+            .query_opt(
+                "SELECT sent_at_us, dead_at_us FROM sigiro_admin.alert_outbox WHERE id = $1",
+                &[&id],
+            )?
+            .map(|row| (row.get(0), row.get(1))),
+    };
+    Ok(columns.map(|(sent, dead)| OutboxState::of(sent, dead)))
+}
+
+/// Sent and Dead are terminal: a transition out of them is a caller bug.
+fn ensure_was_queued(conn: &mut AdminConnection, id: i64, changed: u64) -> Result<()> {
+    if changed == 1 {
+        return Ok(());
+    }
+    match outbox_state(conn, id)? {
+        Some(state) => anyhow::bail!("alert outbox row {id} is {state:?}, not Queued"),
+        None => anyhow::bail!("alert outbox row {id} does not exist"),
     }
 }
 
@@ -766,23 +951,15 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
         }
     };
     let mut interval = tokio::time::interval(Duration::from_secs(1));
+    let mut ticks: u64 = 0;
     loop {
         interval.tick().await;
+        let mut attempted = 0;
         loop {
             // Every AlertStore call below reaches the sync postgres client,
             // whose internal block_on ABORTS the process from a runtime thread.
             // This loop is async, so each call moves to a blocking thread.
-            let due = {
-                let store = store.clone();
-                tokio::task::spawn_blocking(move || store.next_due(now_us())).await
-            };
-            let due = match due {
-                Ok(result) => result,
-                Err(error) => {
-                    tracing::warn!("alert outbox task panicked: {error}");
-                    break;
-                }
-            };
+            let due = blocking(&store, |store| store.next_due(now_us())).await;
             let notification = match due {
                 Ok(Some(notification)) => notification,
                 Ok(None) => break,
@@ -791,6 +968,8 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
                     break;
                 }
             };
+            attempted += 1;
+            let id = notification.id;
             let mut request = client
                 .post(config.url.clone())
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -798,66 +977,65 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
             if let Some(token) = &config.token {
                 request = request.bearer_auth(token.as_ref());
             }
-            match request.send().await {
+            let outcome = match request.send().await {
                 Ok(response) if response.status().is_success() => {
-                    let store = store.clone();
-                    let id = notification.id;
-                    let marked = tokio::task::spawn_blocking(move || store.mark_sent(id, now_us()))
-                        .await
-                        .map_err(|error| anyhow::anyhow!("mark_sent task panicked: {error}"))
-                        .and_then(|result| result);
-                    if let Err(error) = marked {
+                    if let Err(error) =
+                        blocking(&store, move |store| store.mark_sent(id, now_us())).await
+                    {
                         tracing::warn!(
-                            notification_id = notification.id,
+                            notification_id = id,
                             "webhook accepted alert but sent state was not persisted: {error:#}"
                         );
                         break;
                     }
+                    continue;
                 }
-                Ok(response) => {
-                    let class = format!("http_{}", response.status().as_u16());
-                    let store = store.clone();
-                    let id = notification.id;
-                    let marked =
-                        tokio::task::spawn_blocking(move || store.mark_retry(id, now_us(), &class))
-                            .await
-                            .map_err(|error| anyhow::anyhow!("mark_retry task panicked: {error}"))
-                            .and_then(|result| result);
-                    if let Err(error) = marked {
-                        tracing::warn!(
-                            notification_id = notification.id,
-                            "failed to schedule alert retry: {error:#}"
-                        );
-                        break;
-                    }
-                }
+                Ok(response) => DeliveryOutcome::Http(response.status().as_u16()),
+                Err(error) if error.is_timeout() => DeliveryOutcome::Timeout,
+                Err(error) if error.is_connect() => DeliveryOutcome::Connect,
+                Err(_) => DeliveryOutcome::Request,
+            };
+            match blocking(&store, move |store| {
+                store.mark_failed(id, now_us(), outcome)
+            })
+            .await
+            {
+                Ok(DeliveryStep::Dead) => tracing::warn!(
+                    notification_id = id,
+                    error = %outcome.error_class(),
+                    "alert webhook is dead: permanent rejection or out of attempts; replay with POST /v1/alerts/replay"
+                ),
+                Ok(DeliveryStep::Retry { .. }) => {}
                 Err(error) => {
-                    let class = if error.is_timeout() {
-                        "timeout"
-                    } else if error.is_connect() {
-                        "connect"
-                    } else {
-                        "request"
-                    };
-                    let store = store.clone();
-                    let id = notification.id;
-                    let class = class.to_string();
-                    let marked =
-                        tokio::task::spawn_blocking(move || store.mark_retry(id, now_us(), &class))
-                            .await
-                            .map_err(|error| anyhow::anyhow!("mark_retry task panicked: {error}"))
-                            .and_then(|result| result);
-                    if let Err(error) = marked {
-                        tracing::warn!(
-                            notification_id = notification.id,
-                            "failed to schedule alert retry: {error:#}"
-                        );
-                        break;
-                    }
+                    tracing::warn!(
+                        notification_id = id,
+                        "failed to record alert delivery failure: {error:#}"
+                    );
+                    break;
                 }
             }
         }
+        // Refresh the /health summary when the queue moved, and every 30s so
+        // newly enqueued or replayed rows show up without an attempt.
+        if attempted > 0 || ticks.is_multiple_of(30) {
+            match blocking(&store, |store| store.delivery_summary(None)).await {
+                Ok(summary) => *store.delivery_health.lock() = Some(summary),
+                Err(error) => tracing::warn!("failed to summarise alert outbox: {error:#}"),
+            }
+        }
+        ticks = ticks.wrapping_add(1);
     }
+}
+
+/// Run a sync [`AlertStore`] call on a blocking thread.
+async fn blocking<T: Send + 'static>(
+    store: &AlertStore,
+    call: impl FnOnce(&AlertStore) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let store = store.clone();
+    tokio::task::spawn_blocking(move || call(&store))
+        .await
+        .map_err(|error| anyhow::anyhow!("alert outbox task panicked: {error}"))?
 }
 
 pub(crate) const SQLITE_TABLES: &[DeclaredTable] = &[
@@ -901,8 +1079,12 @@ pub(crate) const SQLITE_TABLES: &[DeclaredTable] = &[
             attempts INTEGER NOT NULL DEFAULT 0,
             next_attempt_at_us INTEGER NOT NULL,
             sent_at_us INTEGER,
-            last_error TEXT)",
-        indexes: &["CREATE INDEX alert_outbox_due ON {table} (sent_at_us, next_attempt_at_us, id)"],
+            last_error TEXT,
+            dead_at_us INTEGER,
+            enqueued_at_us INTEGER)",
+        indexes: &[
+            "CREATE INDEX alert_outbox_due ON {table} (sent_at_us, dead_at_us, next_attempt_at_us, id)",
+        ],
     },
 ];
 
@@ -928,8 +1110,9 @@ pub(crate) const POSTGRES_TABLES: &[DeclaredTable] = &[
         create: "CREATE TABLE {table} (
             id BIGSERIAL PRIMARY KEY, project_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
             transition TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-            next_attempt_at_us BIGINT NOT NULL, sent_at_us BIGINT, last_error TEXT)",
-        indexes: &["CREATE INDEX alert_outbox_due ON {table} (sent_at_us, next_attempt_at_us, id)"],
+            next_attempt_at_us BIGINT NOT NULL, sent_at_us BIGINT, last_error TEXT,
+            dead_at_us BIGINT, enqueued_at_us BIGINT)",
+        indexes: &["CREATE INDEX alert_outbox_due ON {table} (sent_at_us, dead_at_us, next_attempt_at_us, id)"],
     },
 ];
 
@@ -1067,7 +1250,7 @@ fn format_timestamp(timestamp_us: i64) -> Result<String> {
         .context("failed to format alert timestamp")
 }
 
-fn now_us() -> i64 {
+pub(crate) fn now_us() -> i64 {
     (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000) as i64
 }
 
@@ -1457,12 +1640,133 @@ mod tests {
         assert_eq!(alerts[0].occurrence_count, 3);
     }
 
+    #[test]
+    fn every_delivery_failure_follows_the_table() {
+        use DeliveryOutcome::{Connect, Http, Request, Timeout};
+        let retry = |secs: i64| DeliveryStep::Retry {
+            next_attempt_at_us: 1_000_000 + secs * 1_000_000,
+        };
+        let cases: &[(i32, DeliveryOutcome, DeliveryStep)] = &[
+            (0, Http(500), retry(5)),
+            (1, Http(503), retry(10)),
+            (0, Http(429), retry(5)),
+            (0, Http(408), retry(5)),
+            (0, Http(302), retry(5)),
+            (3, Timeout, retry(40)),
+            (0, Connect, retry(5)),
+            (0, Request, retry(5)),
+            (10, Http(502), retry(3_600)),
+            (18, Http(502), retry(3_600)),
+            (19, Http(502), DeliveryStep::Dead),
+            (40, Timeout, DeliveryStep::Dead),
+            (0, Http(400), DeliveryStep::Dead),
+            (0, Http(401), DeliveryStep::Dead),
+            (0, Http(403), DeliveryStep::Dead),
+            (0, Http(404), DeliveryStep::Dead),
+            (0, Http(410), DeliveryStep::Dead),
+        ];
+        for (attempts, outcome, expected) in cases {
+            assert_eq!(
+                delivery_step(*attempts, *outcome, 1_000_000),
+                *expected,
+                "{attempts} earlier failures, then {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn outbox_state_is_read_from_its_columns() {
+        assert_eq!(OutboxState::of(None, None), OutboxState::Queued);
+        assert_eq!(OutboxState::of(Some(1), None), OutboxState::Sent);
+        assert_eq!(OutboxState::of(None, Some(1)), OutboxState::Dead);
+        assert_eq!(OutboxState::of(Some(1), Some(2)), OutboxState::Sent);
+    }
+
+    fn outbox_lifecycle(store: &AlertStore, project: &str) {
+        store
+            .process_events(&[oom(project, OOM_FIRING_EVENT, 1_000_000)])
+            .unwrap();
+        let summary = store.delivery_summary(Some(project)).unwrap();
+        assert_eq!((summary.queued, summary.dead), (1, 0));
+        assert!(summary.oldest_queued_at.is_some());
+
+        // Queued -> Dead at once on a permanent rejection.
+        let due = store.next_due(i64::MAX).unwrap().unwrap();
+        let step = store
+            .mark_failed(due.id, 1, DeliveryOutcome::Http(401))
+            .unwrap();
+        assert_eq!(step, DeliveryStep::Dead);
+        let summary = store.delivery_summary(Some(project)).unwrap();
+        assert_eq!((summary.queued, summary.dead), (0, 1));
+        assert_eq!(summary.last_dead_error.as_deref(), Some("http_401"));
+        assert!(
+            store.next_due(i64::MAX).unwrap().is_none(),
+            "dead rows are not retried"
+        );
+        let late = store.mark_sent(due.id, 2).unwrap_err().to_string();
+        assert!(late.contains("Dead"), "{late}");
+        assert!(
+            store
+                .mark_failed(due.id, 2, DeliveryOutcome::Timeout)
+                .is_err()
+        );
+
+        // Dead -> Queued on replay, with a fresh attempt budget.
+        assert_eq!(store.replay_dead(project, 3).unwrap(), 1);
+        assert_eq!(
+            store.replay_dead(project, 3).unwrap(),
+            0,
+            "replay is idempotent"
+        );
+        assert_eq!(store.next_due(3).unwrap().map(|due| due.id), Some(due.id));
+
+        // Queued -> Queued (backoff) until the attempt budget runs out.
+        for attempt in 0..MAX_DELIVERY_ATTEMPTS - 1 {
+            let step = store
+                .mark_failed(due.id, 10, DeliveryOutcome::Http(503))
+                .unwrap();
+            assert!(
+                matches!(step, DeliveryStep::Retry { .. }),
+                "attempt {attempt}: {step:?}"
+            );
+            assert!(
+                store.next_due(10).unwrap().is_none(),
+                "backoff defers the retry"
+            );
+        }
+        let last = store
+            .mark_failed(due.id, 10, DeliveryOutcome::Http(503))
+            .unwrap();
+        assert_eq!(last, DeliveryStep::Dead);
+
+        // Dead -> Queued -> Sent; Sent is terminal.
+        assert_eq!(store.replay_dead(project, 20).unwrap(), 1);
+        assert_eq!(store.next_due(20).unwrap().map(|due| due.id), Some(due.id));
+        store.mark_sent(due.id, 21).unwrap();
+        assert!(store.next_due(i64::MAX).unwrap().is_none());
+        assert!(
+            store
+                .mark_sent(due.id, 21)
+                .unwrap_err()
+                .to_string()
+                .contains("Sent")
+        );
+        assert_eq!(
+            store.replay_dead(project, 22).unwrap(),
+            0,
+            "sent rows are never replayed"
+        );
+        let summary = store.delivery_summary(Some(project)).unwrap();
+        assert_eq!((summary.queued, summary.dead), (0, 0));
+    }
+
     type Scenario = fn(&AlertStore, &str);
 
     pub(super) const SCENARIOS: &[(&str, Scenario)] = &[
         ("recover_before_fire", recover_before_fire),
         ("recover_ahead_of_reopen", recover_ahead_of_reopen),
         ("in_order_pages_and_reopens", in_order_pages_and_reopens),
+        ("outbox_lifecycle", outbox_lifecycle),
     ];
 
     #[test]
@@ -1475,11 +1779,11 @@ mod tests {
 
     #[test]
     fn postgres_backend_runs_every_scenario() {
-        let Some(store) = postgres_store() else {
-            eprintln!("skipped: set SIGIRO_TEST_POSTGRES_URL (scripts/test-admin-postgres.sh)");
-            return;
-        };
         for (name, scenario) in SCENARIOS {
+            let Some(store) = postgres_store() else {
+                eprintln!("skipped: set SIGIRO_TEST_POSTGRES_URL (scripts/test-admin-postgres.sh)");
+                return;
+            };
             scenario(&store, name);
         }
     }

@@ -176,6 +176,11 @@ pub struct ServicesPath;
 #[typed_path("/alerts")]
 pub struct AlertsPath;
 
+/// Route: POST /alerts/replay
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/alerts/replay")]
+pub struct AlertsReplayPath;
+
 /// Route: GET /status
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/status")]

@@ -20,6 +20,15 @@ pub struct ServicesResponse {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AlertsResponse {
     pub(crate) alerts: Vec<crate::alerts::AlertInstance>,
+    /// Webhook outbox for this project: queued and dead notifications.
+    pub(crate) delivery: crate::alerts::DeliverySummary,
+}
+
+/// POST /v1/alerts/replay
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct AlertsReplayResponse {
+    /// Dead notifications put back in the queue.
+    pub(crate) replayed: u64,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -54,8 +63,13 @@ pub struct AdminStatusResponse {
 #[derive(Serialize, Deserialize, ToSchema, PartialEq, Eq, Debug)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum HealthResponse {
-    /// Init complete, no dead flushers.
-    Ready,
+    /// Init complete, no dead flushers. Background state that needs an
+    /// operator but does not make the server unready is reported alongside.
+    Ready {
+        /// Alert webhook outbox across every project; absent when delivery is off.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alert_webhooks: Option<crate::alerts::DeliverySummary>,
+    },
     /// HTTP listener is up but init is still in progress (cold start). Probe
     /// should retry; no operator action required.
     Starting,
@@ -117,4 +131,38 @@ pub struct ServiceBreakdownEntry {
     pub(crate) duration_us: i64,
     /// Percentage of cumulative inclusive span duration across all services.
     pub(crate) percentage: f64,
+}
+
+#[cfg(test)]
+mod health_response_tests {
+    use super::HealthResponse;
+
+    #[test]
+    fn ready_stays_a_bare_status_until_there_is_something_to_report() {
+        let bare = HealthResponse::Ready {
+            alert_webhooks: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&bare).unwrap(),
+            r#"{"status":"ready"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<HealthResponse>(r#"{"status":"ready"}"#).unwrap(),
+            bare
+        );
+        let dead = HealthResponse::Ready {
+            alert_webhooks: Some(crate::alerts::DeliverySummary {
+                queued: 0,
+                dead: 2,
+                oldest_queued_at: None,
+                last_dead_error: Some("http_401".into()),
+            }),
+        };
+        let json = serde_json::to_string(&dead).unwrap();
+        assert_eq!(
+            json,
+            r#"{"status":"ready","alert_webhooks":{"queued":0,"dead":2,"last_dead_error":"http_401"}}"#
+        );
+        assert_eq!(serde_json::from_str::<HealthResponse>(&json).unwrap(), dead);
+    }
 }

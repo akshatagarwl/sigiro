@@ -287,7 +287,17 @@ async fn main() -> Result<()> {
             let health_client =
                 sigiro::client::SigiroClient::new(&base_url, sigiro::client::ClientAuth::Open);
             let (state, detail) = match health_client.health().await {
-                Ok(HealthResponse::Ready) => ("ready".to_string(), "ok".to_string()),
+                Ok(HealthResponse::Ready { alert_webhooks }) => (
+                    "ready".to_string(),
+                    match alert_webhooks {
+                        Some(webhooks) if webhooks.dead > 0 => format!(
+                            "ok; {} alert webhook(s) dead (last error {}), replay with POST /v1/alerts/replay",
+                            webhooks.dead,
+                            webhooks.last_dead_error.as_deref().unwrap_or("unknown")
+                        ),
+                        _ => "ok".to_string(),
+                    },
+                ),
                 Ok(HealthResponse::Starting) => (
                     "starting".to_string(),
                     "http up, init not complete".to_string(),
@@ -349,7 +359,7 @@ async fn main() -> Result<()> {
             let client =
                 sigiro::client::SigiroClient::new(base_url, sigiro::client::ClientAuth::Open);
             match client.health().await {
-                Ok(HealthResponse::Ready) => {}
+                Ok(HealthResponse::Ready { .. }) => {}
                 other => {
                     eprintln!("healthcheck: not ready: {other:?}");
                     std::process::exit(1);
