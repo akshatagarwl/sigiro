@@ -95,7 +95,11 @@ export default function SqlPage() {
           }}
         />
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" data-action="run-sql" disabled={running || !sql.trim()}>
+          <Button
+            type="submit"
+            data-action="run-sql"
+            disabled={running || !sql.trim()}
+          >
             {running ? "Running…" : "Run"}
           </Button>
           {running && (
@@ -104,23 +108,29 @@ export default function SqlPage() {
             </Button>
           )}
           <span id="sql-help" className="text-muted-foreground text-xs">
-            ⌘/Ctrl + Enter · tables: sigiro_spans, sigiro_logs, sigiro_metrics_histogram,
-            sigiro_profiles
+            ⌘/Ctrl + Enter · tables: sigiro_spans, sigiro_logs,
+            sigiro_metrics_histogram, sigiro_profiles
           </span>
         </div>
       </form>
       {state.kind === "idle" && (
         <RequestState kind="idle" title="Run a query to inspect results">
-          The query defines its own time and service scope within the current workspace.
+          The query defines its own time and service scope within the current
+          workspace.
         </RequestState>
       )}
       {state.kind === "running" && (
         <RequestState kind="loading" title="Running query">
-          Additional Run shortcuts are ignored until this request completes or is canceled.
+          Additional Run shortcuts are ignored until this request completes or
+          is canceled.
         </RequestState>
       )}
       {state.kind === "error" && (
-        <RequestState kind="error" title="SQL query failed" onRetry={() => run(state.sql)}>
+        <RequestState
+          kind="error"
+          title="SQL query failed"
+          onRetry={() => run(state.sql)}
+        >
           {state.message}
           <p>Retry executes the failed SQL. Run executes the current draft.</p>
         </RequestState>
@@ -128,7 +138,9 @@ export default function SqlPage() {
       {(state.kind === "ready" || state.kind === "error") && (
         <Collapsible.Root className="shrink-0 space-y-2 px-4 lg:px-6">
           <div className="flex flex-wrap items-center gap-3">
-            <Collapsible.Trigger render={<Button />}>Executed SQL</Collapsible.Trigger>
+            <Collapsible.Trigger render={<Button />}>
+              Executed SQL
+            </Collapsible.Trigger>
             {state.sql !== sql && (
               <span role="status" className="text-muted-foreground text-xs">
                 Draft changed · this outcome belongs to the last executed query.
@@ -153,11 +165,19 @@ export default function SqlPage() {
           data-rows={state.rows.length}
         >
           {state.rows.length === 0 ? (
-            <RequestState kind="empty" title="No rows matched the executed query">
+            <RequestState
+              kind="empty"
+              title="No rows matched the executed query"
+            >
               Edit the SQL and run again.
             </RequestState>
           ) : (
-            <DataTableAuto key={state.id} compact tableId="sql" data={state.rows} />
+            <DataTableAuto
+              key={state.id}
+              compact
+              tableId="sql"
+              data={state.rows}
+            />
           )}
         </div>
       )}

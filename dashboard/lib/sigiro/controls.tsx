@@ -49,15 +49,23 @@ type Controls = {
 const ControlsContext = React.createContext<Controls | null>(null);
 
 export function ControlsProvider({ children }: { children: React.ReactNode }) {
-  const [{ range, timestamp, from: customFrom, to: customTo }, setTime] = useQueryStates({
-    range: parseAsStringLiteral(RANGE_KEYS).withDefault("24h"),
-    timestamp: parseAsString,
-    from: parseAsInteger,
-    to: parseAsInteger,
-  });
-  const hasCustomWindow = timestamp !== null || customFrom !== null || customTo !== null;
-  const [live, setLive] = useQueryState("live", parseAsBoolean.withDefault(false));
-  const [service, setService] = useQueryState("service", parseAsString.withDefault(""));
+  const [{ range, timestamp, from: customFrom, to: customTo }, setTime] =
+    useQueryStates({
+      range: parseAsStringLiteral(RANGE_KEYS).withDefault("24h"),
+      timestamp: parseAsString,
+      from: parseAsInteger,
+      to: parseAsInteger,
+    });
+  const hasCustomWindow =
+    timestamp !== null || customFrom !== null || customTo !== null;
+  const [live, setLive] = useQueryState(
+    "live",
+    parseAsBoolean.withDefault(false)
+  );
+  const [service, setService] = useQueryState(
+    "service",
+    parseAsString.withDefault("")
+  );
   const [tick, setTick] = React.useState(0);
   const [now, setNow] = React.useState(() => Date.now());
   const refresh = React.useCallback(() => {
@@ -78,7 +86,8 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
       range,
       // A deliberate relative-range choice replaces view-local time overrides
       // in one URL transaction; changing range must change the actual SQL window.
-      setRange: (next) => void setTime({ range: next, timestamp: null, from: null, to: null }),
+      setRange: (next) =>
+        void setTime({ range: next, timestamp: null, from: null, to: null }),
       hasCustomWindow,
       service,
       setService: (next) => void setService(next || null),
@@ -89,10 +98,25 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
       from: new Date(now - RANGES[range].ms),
       to: new Date(now),
     }),
-    [range, setTime, hasCustomWindow, service, setService, live, setLive, tick, refresh, now],
+    [
+      range,
+      setTime,
+      hasCustomWindow,
+      service,
+      setService,
+      live,
+      setLive,
+      tick,
+      refresh,
+      now,
+    ]
   );
 
-  return <ControlsContext.Provider value={value}>{children}</ControlsContext.Provider>;
+  return (
+    <ControlsContext.Provider value={value}>
+      {children}
+    </ControlsContext.Provider>
+  );
 }
 
 export function useControls(): Controls {

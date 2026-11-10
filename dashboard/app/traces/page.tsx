@@ -34,7 +34,11 @@ export default function TracesPage() {
     router.replace(`/traces/${next.size > 0 ? `?${next}` : ""}`);
   };
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-page="traces" data-table="traces">
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      data-page="traces"
+      data-table="traces"
+    >
       <div className="shrink-0 px-4 pt-4 lg:px-6">
         <h2 ref={heading} tabIndex={-1} className="text-lg font-semibold">
           Trace explorer
@@ -49,7 +53,9 @@ export default function TracesPage() {
           className="w-full overflow-y-auto sm:max-w-[96vw]"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            const row = returnId.current ? document.getElementById(returnId.current) : null;
+            const row = returnId.current
+              ? document.getElementById(returnId.current)
+              : null;
             (row ?? heading.current)?.focus({ preventScroll: true });
           }}
         >
@@ -57,7 +63,9 @@ export default function TracesPage() {
             <SheetTitle>Trace detail</SheetTitle>
             <SheetDescription className="font-mono">{trace}</SheetDescription>
           </SheetHeader>
-          <div className="min-h-0 px-4 pb-4">{trace && <TraceView traceId={trace} />}</div>
+          <div className="min-h-0 px-4 pb-4">
+            {trace && <TraceView traceId={trace} />}
+          </div>
         </SheetContent>
       </Sheet>
     </div>

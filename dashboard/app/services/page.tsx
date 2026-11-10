@@ -3,7 +3,13 @@
 import { DataTableAuto } from "@/components/data-table/data-table-auto";
 import { RequestState } from "@/components/observability/request-state";
 import { useControls, useSql, type Window } from "@/lib/sigiro/controls";
-import { ERROR_RATE_SQL, FAILED_SQL, num, sqlString, ts } from "@/lib/sigiro/query";
+import {
+  ERROR_RATE_SQL,
+  FAILED_SQL,
+  num,
+  sqlString,
+  ts,
+} from "@/lib/sigiro/query";
 
 const range = (w: Window) =>
   `timestamp >= ${ts(w.from)} AND timestamp < ${ts(w.to)}${w.service ? ` AND service_name = ${sqlString(w.service)}` : ""}`;
@@ -16,12 +22,12 @@ export default function ServicesPage() {
   const spans = useSql(
     "services",
     (w) =>
-      `SELECT service_name AS service, count(*) AS spans, count(*) FILTER (WHERE ${FAILED_SQL}) AS failed_spans, ${ERROR_RATE_SQL} AS error_rate, round(quantile_cont(duration, 0.5) / 1000, 1) AS p50_ms, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95_ms, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99_ms, count(DISTINCT span_name) AS operations FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`,
+      `SELECT service_name AS service, count(*) AS spans, count(*) FILTER (WHERE ${FAILED_SQL}) AS failed_spans, ${ERROR_RATE_SQL} AS error_rate, round(quantile_cont(duration, 0.5) / 1000, 1) AS p50_ms, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95_ms, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99_ms, count(DISTINCT span_name) AS operations FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`
   );
   const logs = useSql(
     "service-logs",
     (w) =>
-      `SELECT service_name AS service, count(*) AS logs, count(*) FILTER (WHERE severity_number >= 17) AS error_logs FROM sigiro_logs WHERE ${range(w)} GROUP BY 1`,
+      `SELECT service_name AS service, count(*) AS logs, count(*) FILTER (WHERE severity_number >= 17) AS error_logs FROM sigiro_logs WHERE ${range(w)} GROUP BY 1`
   );
   const error = spans.error ?? logs.error;
   const canRender = spans.data !== undefined && logs.data !== undefined;
@@ -58,7 +64,9 @@ export default function ServicesPage() {
     entry.error_logs = num(row.error_logs);
     byService.set(service, entry);
   }
-  const data = [...byService.values()].sort((a, b) => Number(b.spans) - Number(a.spans));
+  const data = [...byService.values()].sort(
+    (a, b) => Number(b.spans) - Number(a.spans)
+  );
 
   return (
     <div
@@ -92,7 +100,8 @@ export default function ServicesPage() {
           retrying={pending}
         >
           {error.message}
-          {canRender && " Showing the last loaded snapshots until retry succeeds."}
+          {canRender &&
+            " Showing the last loaded snapshots until retry succeeds."}
         </RequestState>
       )}
       {!error && pending && (

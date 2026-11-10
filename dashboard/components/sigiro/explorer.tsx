@@ -65,15 +65,22 @@ type Explorer<TRow> = {
   title: (row: TRow) => string;
   rowClassName?: (row: TRow) => string;
   detail?: boolean;
-  renderResults?: (rows: TRow[], pagination: ExplorerPagination) => React.ReactNode;
+  renderResults?: (
+    rows: TRow[],
+    pagination: ExplorerPagination
+  ) => React.ReactNode;
   filterOverrides?: SchemaDefinition;
 };
 
-export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explorer<TRow>) {
+export function createExplorer<TRow extends { timestamp: Date }>(
+  explorer: Explorer<TRow>
+) {
   const columns = generateColumns<TRow>(explorer.definition);
   const filterFields = generateFilterFields<TRow>(explorer.definition);
   const sheetFields = generateSheetFields<TRow>(explorer.definition);
-  const defaultColumnVisibility = getDefaultColumnVisibility(explorer.definition);
+  const defaultColumnVisibility = getDefaultColumnVisibility(
+    explorer.definition
+  );
   const filterSchema = generateFilterSchema(explorer.definition, {
     sort: field.sort(),
     uuid: field.string(),
@@ -83,7 +90,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
     cursor: field.timestamp(),
   });
   const { searchParamsParser, searchParamsSerializer } = createNuqsSearchParams(
-    filterSchema.definition as SchemaDefinition,
+    filterSchema.definition as SchemaDefinition
   );
   const getRowClassName = explorer.rowClassName
     ? (row: { original: TRow }) => explorer.rowClassName!(row.original)
@@ -98,18 +105,18 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
           queryKeyPrefix: `${explorer.id}-${range}`,
           apiEndpoint: `/${explorer.id}`,
           searchParamsSerializer: searchParamsSerializer as (
-            search: Record<string, unknown>,
+            search: Record<string, unknown>
           ) => string,
           skipMetaOnPagination: true,
           transport: sqlTransport<TRow>(
             { ...explorer.source, window: () => ({ from, to }) },
-            searchParamsParser as never,
+            searchParamsParser as never
           ),
           queryOptions: { retry: false },
         }),
       // Keep the query identity stable within a range, but rebuild its fetch
       // closure when Refresh/live advances the fallback window.
-      [range, from, to],
+      [range, from, to]
     );
   }
 
@@ -118,14 +125,15 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
     const options = useOptions();
     const queryClient = useQueryClient();
     const { tick } = useControls();
-    const { data, error, isFetching, isLoading, fetchNextPage, hasNextPage } = useInfiniteQuery({
-      ...options(search),
-      placeholderData: undefined,
-    });
+    const { data, error, isFetching, isLoading, fetchNextPage, hasNextPage } =
+      useInfiniteQuery({
+        ...options(search),
+        placeholderData: undefined,
+      });
 
     const refresh = React.useCallback(
       () => refreshDataTableQuery(queryClient, options(search)),
-      [queryClient, options, search],
+      [queryClient, options, search]
     );
     const first = React.useRef(true);
     React.useEffect(() => {
@@ -140,14 +148,17 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
 
     const flatData = React.useMemo(
       () => data?.pages?.flatMap((page) => page.data ?? []) ?? [],
-      [data?.pages],
+      [data?.pages]
     );
     const meta = getMetaPage(data)?.meta;
     const facets = meta?.facets;
     const defaultColumnFilters = Object.entries(search)
       .filter(([key, value]) => !STATE_KEYS.has(key) && isActive(value))
       .map(([id, value]) => ({ id, value }));
-    const dynamicFilterFields = React.useMemo(() => applyFacets(filterFields, facets), [facets]);
+    const dynamicFilterFields = React.useMemo(
+      () => applyFacets(filterFields, facets),
+      [facets]
+    );
     const chartData = React.useMemo(
       () =>
         (meta?.chartData ?? []).map((point) => ({
@@ -159,7 +170,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
             minute: "2-digit",
           }),
         })),
-      [meta?.chartData],
+      [meta?.chartData]
     );
 
     return (
@@ -172,7 +183,8 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
             retrying={isFetching}
           >
             {error.message}
-            {flatData.length > 0 && " Showing previously loaded results until retry succeeds."}
+            {flatData.length > 0 &&
+              " Showing previously loaded results until retry succeeds."}
           </RequestState>
         )}
         <DataTableInfinite
@@ -203,9 +215,13 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
           totalRowsFetched={flatData.length}
           defaultColumnFilters={defaultColumnFilters}
           defaultColumnSorting={
-            search.sort ? [search.sort as { id: string; desc: boolean }] : undefined
+            search.sort
+              ? [search.sort as { id: string; desc: boolean }]
+              : undefined
           }
-          defaultRowSelection={search.uuid ? { [String(search.uuid)]: true } : undefined}
+          defaultRowSelection={
+            search.uuid ? { [String(search.uuid)]: true } : undefined
+          }
           defaultColumnVisibility={defaultColumnVisibility}
           filterFields={dynamicFilterFields}
           isFetching={isFetching}
@@ -218,7 +234,9 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
           getFacetedMinMaxValues={getFacetedMinMaxValues(facets)}
           chartSlot={
             <div
-              className={explorer.renderResults ? "h-16 w-full sm:h-20" : "h-36 w-full"}
+              className={
+                explorer.renderResults ? "h-16 w-full sm:h-20" : "h-36 w-full"
+              }
               data-chart-name="timeline"
             >
               <EvilBarChart
@@ -237,12 +255,18 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
               </EvilBarChart>
             </div>
           }
-          toolbarActions={<DataTableRefreshButton onClick={() => void refresh()} />}
+          toolbarActions={
+            <DataTableRefreshButton onClick={() => void refresh()} />
+          }
           commandSlot={
             <DataTableFilterCommand
               schema={filterSchema.definition}
               tableId={explorer.id}
-              placeholder={explorer.id === "logs" ? "Filter logs… e.g. service:api" : undefined}
+              placeholder={
+                explorer.id === "logs"
+                  ? "Filter logs… e.g. service:api"
+                  : undefined
+              }
             />
           }
           sheetSlot={
@@ -265,11 +289,16 @@ export function createExplorer<TRow extends { timestamp: Date }>(explorer: Explo
     filterRows: number;
     totalRowsFetched: number;
   }) {
-    const { table, rowSelection, isLoading, filterFields } = useDataTable<TRow, unknown>();
+    const { table, rowSelection, isLoading, filterFields } = useDataTable<
+      TRow,
+      unknown
+    >();
     const selectedRowKey = Object.keys(rowSelection)?.[0];
     const selectedRow = React.useMemo(() => {
       if (isLoading && !selectedRowKey) return undefined;
-      return table.getCoreRowModel().flatRows.find((row) => row.id === selectedRowKey);
+      return table
+        .getCoreRowModel()
+        .flatRows.find((row) => row.id === selectedRowKey);
     }, [selectedRowKey, isLoading, table]);
 
     return (

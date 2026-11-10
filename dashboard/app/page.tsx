@@ -6,8 +6,19 @@ import type { ChartConfig } from "@/components/evilcharts/ui/recharts-chart";
 import { RequestState } from "@/components/observability/request-state";
 import { SectionCards } from "@/components/section-cards";
 import { SetupEmpty } from "@/components/sigiro/setup-empty";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { RANGES, useControls, useSql, type Window } from "@/lib/sigiro/controls";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  RANGES,
+  useControls,
+  useSql,
+  type Window,
+} from "@/lib/sigiro/controls";
 import { LEVEL_CHART, STATUS_CHART } from "@/lib/sigiro/palette";
 import {
   bucketFor,
@@ -47,12 +58,16 @@ function axis<K extends string>(
   rows: Row[] | undefined,
   w: { from: Date; to: Date },
   keys: readonly K[],
-  empty: number | null = 0,
+  empty: number | null = 0
 ) {
   const { ms } = bucketFor(w.from, w.to);
   const byTime = new Map((rows ?? []).map((row) => [num(row.t), row]));
   const points: ({ time: string } & Record<K, number | null>)[] = [];
-  for (let t = Math.floor(w.from.getTime() / ms) * ms; t < w.to.getTime(); t += ms) {
+  for (
+    let t = Math.floor(w.from.getTime() / ms) * ms;
+    t < w.to.getTime();
+    t += ms
+  ) {
     const row = byTime.get(t);
     const point = {
       time: new Date(t).toLocaleString(undefined, {
@@ -152,22 +167,22 @@ export default function OverviewPage() {
   const requests = useSql(
     "requests",
     (w) =>
-      `SELECT ${bucketed(w)} AS t, count(*) FILTER (WHERE NOT ${FAILED_SQL}) AS ok, count(*) FILTER (WHERE ${FAILED_SQL}) AS error FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`,
+      `SELECT ${bucketed(w)} AS t, count(*) FILTER (WHERE NOT ${FAILED_SQL}) AS ok, count(*) FILTER (WHERE ${FAILED_SQL}) AS error FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`
   );
   const latency = useSql(
     "latency",
     (w) =>
-      `SELECT ${bucketed(w)} AS t, round(quantile_cont(duration, 0.5) / 1000, 1) AS p50, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99 FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`,
+      `SELECT ${bucketed(w)} AS t, round(quantile_cont(duration, 0.5) / 1000, 1) AS p50, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99 FROM sigiro_spans WHERE ${range(w)} GROUP BY 1`
   );
   const logs = useSql(
     "log-volume",
     (w) =>
-      `SELECT ${bucketed(w)} AS t, ${["error", "warning", "info", "debug"].map((level) => `count(*) FILTER (WHERE ${LEVEL_SQL} = '${level}') AS ${level}`).join(", ")} FROM sigiro_logs WHERE ${range(w)} GROUP BY 1`,
+      `SELECT ${bucketed(w)} AS t, ${["error", "warning", "info", "debug"].map((level) => `count(*) FILTER (WHERE ${LEVEL_SQL} = '${level}') AS ${level}`).join(", ")} FROM sigiro_logs WHERE ${range(w)} GROUP BY 1`
   );
   const overall = useSql(
     "latency-overall",
     (w) =>
-      `SELECT round(quantile_cont(duration, 0.5) / 1000, 1) AS p50, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99 FROM sigiro_spans WHERE ${range(w)}`,
+      `SELECT round(quantile_cont(duration, 0.5) / 1000, 1) AS p50, round(quantile_cont(duration, 0.95) / 1000, 1) AS p95, round(quantile_cont(duration, 0.99) / 1000, 1) AS p99 FROM sigiro_spans WHERE ${range(w)}`
   );
 
   const k = kpis.data?.[0];
@@ -181,7 +196,11 @@ export default function OverviewPage() {
   const ready = kpis.data !== undefined;
   const missingValue = kpis.isLoading ? "…" : "—";
   const empty =
-    !loading && !updating && panels.every((q) => q.isSuccess) && spans === 0 && num(k?.logs) === 0;
+    !loading &&
+    !updating &&
+    panels.every((q) => q.isSuccess) &&
+    spans === 0 &&
+    num(k?.logs) === 0;
   const o = overall.data?.[0];
 
   return (
@@ -189,7 +208,15 @@ export default function OverviewPage() {
       className="flex flex-col gap-4 py-4 md:gap-6 md:py-6"
       data-page="overview"
       data-state={
-        error ? "error" : loading ? "loading" : updating ? "updating" : empty ? "empty" : "ready"
+        error
+          ? "error"
+          : loading
+            ? "loading"
+            : updating
+              ? "updating"
+              : empty
+                ? "empty"
+                : "ready"
       }
     >
       {error && (
@@ -200,8 +227,8 @@ export default function OverviewPage() {
             onRetry={controls.refresh}
             retrying={panels.some((q) => q.isFetching)}
           >
-            {error.message} Available values are the last loaded snapshots, not zero values for
-            failed panels.
+            {error.message} Available values are the last loaded snapshots, not
+            zero values for failed panels.
           </RequestState>
         </div>
       )}
@@ -211,7 +238,8 @@ export default function OverviewPage() {
             kind={loading ? "loading" : "updating"}
             title={loading ? "Loading overview" : "Updating overview"}
           >
-            {updating && "Showing the last loaded snapshots until refresh completes."}
+            {updating &&
+              "Showing the last loaded snapshots until refresh completes."}
           </RequestState>
         </div>
       )}
@@ -244,7 +272,9 @@ export default function OverviewPage() {
           },
           {
             label: "p95 latency",
-            value: ready ? formatMs(k?.p95_ms === null ? null : num(k?.p95_ms)) : missingValue,
+            value: ready
+              ? formatMs(k?.p95_ms === null ? null : num(k?.p95_ms))
+              : missingValue,
             headline: "Across all spans",
             note: "95% of spans finished faster",
           },
@@ -261,8 +291,12 @@ export default function OverviewPage() {
       {empty && (
         <div className="px-4 lg:px-6">
           {controls.service ? (
-            <RequestState kind="empty" title="No telemetry matches the selected service and window">
-              Choose another service or time range above. Other services may have data.
+            <RequestState
+              kind="empty"
+              title="No telemetry matches the selected service and window"
+            >
+              Choose another service or time range above. Other services may
+              have data.
             </RequestState>
           ) : (
             <SetupEmpty range={RANGES[controls.range].label.toLowerCase()} />
@@ -289,11 +323,19 @@ export default function OverviewPage() {
         >
           <div className="h-full w-full" data-chart-name="latency">
             <EChartsLatencyAreaChart
-              data={axis(latency.data, win, ["p50", "p95", "p99"] as const, null)}
+              data={axis(
+                latency.data,
+                win,
+                ["p50", "p95", "p99"] as const,
+                null
+              )}
               latest={{
-                p50: o?.p50 === null || o?.p50 === undefined ? null : num(o.p50),
-                p95: o?.p95 === null || o?.p95 === undefined ? null : num(o.p95),
-                p99: o?.p99 === null || o?.p99 === undefined ? null : num(o.p99),
+                p50:
+                  o?.p50 === null || o?.p50 === undefined ? null : num(o.p50),
+                p95:
+                  o?.p95 === null || o?.p95 === undefined ? null : num(o.p95),
+                p99:
+                  o?.p99 === null || o?.p99 === undefined ? null : num(o.p99),
               }}
               isLoading={latency.isLoading}
             />
@@ -307,7 +349,12 @@ export default function OverviewPage() {
           >
             <StackedBars
               name="logs"
-              data={axis(logs.data, win, ["error", "warning", "info", "debug"] as const)}
+              data={axis(logs.data, win, [
+                "error",
+                "warning",
+                "info",
+                "debug",
+              ] as const)}
               config={LEVEL_CHART}
               isLoading={logs.isLoading}
             />

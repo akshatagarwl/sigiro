@@ -29,7 +29,9 @@ export function RequestState({
     >
       <div>
         <h2>{title}</h2>
-        {children && <div className={styles.requestDescription}>{children}</div>}
+        {children && (
+          <div className={styles.requestDescription}>{children}</div>
+        )}
       </div>
       {onRetry && (
         <Button disabled={retrying} onClick={() => void onRetry()}>

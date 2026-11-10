@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const dist = path.join(root, "dashboard/dist");
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
-const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+const git = (...args) =>
+  execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 const sourcePaths = [
   ...new Set(
     git(
@@ -18,10 +19,10 @@ const sourcePaths = [
       "--",
       "dashboard",
       "package.json",
-      "aube-lock.yaml",
+      "aube-lock.yaml"
     )
       .split("\0")
-      .filter(Boolean),
+      .filter(Boolean)
   ),
 ].sort();
 const treeHash = (entries) =>
@@ -54,7 +55,8 @@ const manifest = {
   fileCount: files.length,
   files,
 };
-const destination = process.argv[2] ?? "/tmp/sigiro-dashboard-evidence/artifact-manifest.json";
+const destination =
+  process.argv[2] ?? "/tmp/sigiro-dashboard-evidence/artifact-manifest.json";
 fs.mkdirSync(path.dirname(destination), { recursive: true });
 fs.writeFileSync(destination, JSON.stringify(manifest, null, 2) + "\n");
 console.log(
@@ -66,6 +68,6 @@ console.log(
       destination,
     },
     null,
-    2,
-  ),
+    2
+  )
 );
