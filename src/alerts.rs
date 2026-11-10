@@ -100,16 +100,6 @@ pub struct ProcessResult {
     pub(crate) notifications_enqueued: usize,
 }
 
-#[derive(Debug)]
-struct StoredAlert {
-    status: String,
-    service_name: String,
-    container_name: String,
-    starts_at_us: i64,
-    ends_at_us: Option<i64>,
-    occurrence_count: u64,
-}
-
 struct AlertRow {
     fingerprint: String,
     rule_id: String,
@@ -121,13 +111,417 @@ struct AlertRow {
     occurrence_count: i64,
 }
 
-struct AlertTransition<'a> {
-    event: &'a AlertEvent,
-    fingerprint: &'a str,
-    status: &'static str,
-    starts_at_us: i64,
-    ends_at_us: Option<i64>,
-    occurrence_count: u64,
+/// Lifecycle of one alert fingerprint. "No row yet" is `Option::None`.
+///
+/// Every transition lives in [`step`]; SQLite and PostgreSQL only load and
+/// save this value, so the two backends cannot disagree about the rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AlertState {
+    /// A recover arrived before any fire it could close. OTLP batches from
+    /// different requests race, so the fire may still be on its way; keeping
+    /// the recover lets that late fire resolve instead of firing forever.
+    RecoveredFirst {
+        recovered_at_us: i64,
+        occurrence_count: u64,
+    },
+    Firing {
+        starts_at_us: i64,
+        occurrence_count: u64,
+    },
+    Resolved {
+        starts_at_us: i64,
+        ends_at_us: i64,
+        occurrence_count: u64,
+        /// A recover newer than this episode, seen before its fire. The late
+        /// fire then closes silently instead of reopening forever.
+        recovered_ahead_us: Option<i64>,
+    },
+}
+
+/// One accepted (deduplicated) OOM event, reduced to what the machine needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AlertInput {
+    Fire { at_us: i64 },
+    Recover { at_us: i64 },
+}
+
+/// What [`step`] decided for one event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AlertStep {
+    /// Stale or out-of-episode event: nothing is written.
+    Ignore,
+    /// Persist `next`; `notify` enqueues one webhook for the new state.
+    Move { next: AlertState, notify: bool },
+}
+
+const STATUS_RECOVERED_FIRST: &str = "recovered_first";
+const STATUS_FIRING: &str = "firing";
+const STATUS_RESOLVED: &str = "resolved";
+
+impl AlertState {
+    fn status(self) -> &'static str {
+        match self {
+            Self::RecoveredFirst { .. } => STATUS_RECOVERED_FIRST,
+            Self::Firing { .. } => STATUS_FIRING,
+            Self::Resolved { .. } => STATUS_RESOLVED,
+        }
+    }
+
+    fn occurrence_count(self) -> u64 {
+        match self {
+            Self::RecoveredFirst {
+                occurrence_count, ..
+            }
+            | Self::Firing {
+                occurrence_count, ..
+            }
+            | Self::Resolved {
+                occurrence_count, ..
+            } => occurrence_count,
+        }
+    }
+
+    /// `(starts_at_us, ends_at_us)` as stored. A recovered-first row has no
+    /// fire yet, so both columns hold the recover time.
+    fn bounds(self) -> (i64, Option<i64>) {
+        match self {
+            Self::RecoveredFirst {
+                recovered_at_us, ..
+            } => (recovered_at_us, Some(recovered_at_us)),
+            Self::Firing { starts_at_us, .. } => (starts_at_us, None),
+            Self::Resolved {
+                starts_at_us,
+                ends_at_us,
+                ..
+            } => (starts_at_us, Some(ends_at_us)),
+        }
+    }
+
+    fn recovered_ahead_us(self) -> Option<i64> {
+        match self {
+            Self::Resolved {
+                recovered_ahead_us, ..
+            } => recovered_ahead_us,
+            Self::RecoveredFirst { .. } | Self::Firing { .. } => None,
+        }
+    }
+
+    fn decode(
+        status: &str,
+        starts_at_us: i64,
+        ends_at_us: Option<i64>,
+        count: i64,
+        recovered_ahead_us: Option<i64>,
+    ) -> Result<Self> {
+        let occurrence_count = u64::try_from(count).context("negative alert occurrence count")?;
+        match (status, ends_at_us) {
+            (STATUS_RECOVERED_FIRST, _) => Ok(Self::RecoveredFirst {
+                recovered_at_us: ends_at_us.unwrap_or(starts_at_us),
+                occurrence_count,
+            }),
+            (STATUS_FIRING, None) => Ok(Self::Firing {
+                starts_at_us,
+                occurrence_count,
+            }),
+            (STATUS_RESOLVED, Some(ends_at_us)) => Ok(Self::Resolved {
+                starts_at_us,
+                ends_at_us,
+                occurrence_count,
+                recovered_ahead_us,
+            }),
+            (status, ends_at_us) => anyhow::bail!(
+                "alert row has inconsistent state: status {status:?}, ends_at_us {ends_at_us:?}"
+            ),
+        }
+    }
+}
+
+/// The whole alert lifecycle as one pure function.
+///
+/// | from            | event                | to              | webhook |
+/// |-----------------|----------------------|-----------------|---------|
+/// | none            | fire t               | Firing(t, 1)    | firing  |
+/// | none            | recover t            | RecoveredFirst  | —       |
+/// | RecoveredFirst r| fire t ≤ r           | Resolved(t, r)  | —       |
+/// | RecoveredFirst r| fire t > r           | Firing(t)       | firing  |
+/// | RecoveredFirst r| recover t            | RecoveredFirst(max) | —   |
+/// | Firing s        | fire                 | Firing, count+1 | —       |
+/// | Firing s        | recover t ≥ s        | Resolved(s, t)  | resolved|
+/// | Firing s        | recover t < s        | ignore          | —       |
+/// | Resolved s..e   | fire t ≤ e           | ignore          | —       |
+/// | Resolved, ahead r | fire e < t ≤ r     | Resolved(t, r)  | —       |
+/// | Resolved s..e   | fire t > e (and > r) | Firing(t)       | firing  |
+/// | Resolved s..e   | recover t ≤ e        | ignore          | —       |
+/// | Resolved s..e   | recover t > e        | Resolved, ahead max(r, t) | — |
+pub(crate) fn step(state: Option<AlertState>, input: AlertInput) -> AlertStep {
+    use AlertInput::{Fire, Recover};
+    use AlertState::{Firing, RecoveredFirst, Resolved};
+    let count = state.map_or(0, AlertState::occurrence_count);
+    let fire = |at_us| AlertStep::Move {
+        next: Firing {
+            starts_at_us: at_us,
+            occurrence_count: count + 1,
+        },
+        notify: true,
+    };
+    let closed_silently = |starts_at_us, ends_at_us| AlertStep::Move {
+        next: Resolved {
+            starts_at_us,
+            ends_at_us,
+            occurrence_count: count + 1,
+            recovered_ahead_us: None,
+        },
+        notify: false,
+    };
+    let recovered_first = |at_us| AlertStep::Move {
+        next: RecoveredFirst {
+            recovered_at_us: at_us,
+            occurrence_count: count,
+        },
+        notify: false,
+    };
+    match (state, input) {
+        (None, Fire { at_us }) => fire(at_us),
+        (None, Recover { at_us }) => recovered_first(at_us),
+        (
+            Some(RecoveredFirst {
+                recovered_at_us, ..
+            }),
+            Fire { at_us },
+        ) if at_us <= recovered_at_us => closed_silently(at_us, recovered_at_us),
+        (Some(RecoveredFirst { .. }), Fire { at_us }) => fire(at_us),
+        (
+            Some(RecoveredFirst {
+                recovered_at_us, ..
+            }),
+            Recover { at_us },
+        ) => recovered_first(recovered_at_us.max(at_us)),
+        (Some(Firing { starts_at_us, .. }), Fire { .. }) => AlertStep::Move {
+            next: Firing {
+                starts_at_us,
+                occurrence_count: count + 1,
+            },
+            notify: false,
+        },
+        (Some(Firing { starts_at_us, .. }), Recover { at_us }) if at_us >= starts_at_us => {
+            AlertStep::Move {
+                next: Resolved {
+                    starts_at_us,
+                    ends_at_us: at_us,
+                    occurrence_count: count,
+                    recovered_ahead_us: None,
+                },
+                notify: true,
+            }
+        }
+        (Some(Firing { .. }), Recover { .. }) => AlertStep::Ignore,
+        (
+            Some(Resolved {
+                ends_at_us,
+                recovered_ahead_us: Some(ahead),
+                ..
+            }),
+            Fire { at_us },
+        ) if at_us > ends_at_us && at_us <= ahead => closed_silently(at_us, ahead),
+        (Some(Resolved { ends_at_us, .. }), Fire { at_us }) if at_us > ends_at_us => fire(at_us),
+        (
+            Some(Resolved {
+                starts_at_us,
+                ends_at_us,
+                occurrence_count,
+                recovered_ahead_us,
+            }),
+            Recover { at_us },
+        ) if at_us > ends_at_us => AlertStep::Move {
+            next: Resolved {
+                starts_at_us,
+                ends_at_us,
+                occurrence_count,
+                recovered_ahead_us: Some(
+                    recovered_ahead_us.map_or(at_us, |ahead| ahead.max(at_us)),
+                ),
+            },
+            notify: false,
+        },
+        (Some(Resolved { .. }), Fire { .. } | Recover { .. }) => AlertStep::Ignore,
+    }
+}
+
+/// The storage a backend must offer the alert machine. Implemented by a
+/// SQLite and a PostgreSQL transaction; neither holds any transition logic.
+trait AlertPersistence {
+    /// Record the occurrence; `false` means it was already seen (dedupe).
+    fn record_occurrence(&mut self, event: &AlertEvent, fingerprint: &str) -> Result<bool>;
+    fn load(&mut self, project_id: &str, fingerprint: &str) -> Result<Option<AlertState>>;
+    fn save(&mut self, event: &AlertEvent, fingerprint: &str, state: AlertState) -> Result<()>;
+    fn enqueue(
+        &mut self,
+        event: &AlertEvent,
+        fingerprint: &str,
+        transition: &str,
+        payload: &str,
+    ) -> Result<()>;
+}
+
+fn apply_events(store: &mut impl AlertPersistence, events: &[AlertEvent]) -> Result<ProcessResult> {
+    let mut accepted_events = 0;
+    let mut notifications_enqueued = 0;
+    for event in events {
+        let input = match event.event_name.as_str() {
+            OOM_FIRING_EVENT => AlertInput::Fire {
+                at_us: event.timestamp_us,
+            },
+            OOM_RECOVERED_EVENT => AlertInput::Recover {
+                at_us: event.timestamp_us,
+            },
+            _ => continue,
+        };
+        let fingerprint = alert_fingerprint(event);
+        if !store.record_occurrence(event, &fingerprint)? {
+            continue;
+        }
+        accepted_events += 1;
+        let state = store.load(&event.project_id, &fingerprint)?;
+        let AlertStep::Move { next, notify } = step(state, input) else {
+            continue;
+        };
+        store.save(event, &fingerprint, next)?;
+        if notify {
+            let payload = webhook_payload(event, &fingerprint, next)?;
+            store.enqueue(event, &fingerprint, next.status(), &payload)?;
+            notifications_enqueued += 1;
+        }
+    }
+    Ok(ProcessResult {
+        accepted_events,
+        notifications_enqueued,
+    })
+}
+
+impl AlertPersistence for rusqlite::Transaction<'_> {
+    fn record_occurrence(&mut self, event: &AlertEvent, fingerprint: &str) -> Result<bool> {
+        let inserted = self.execute(
+            "INSERT OR IGNORE INTO alert_occurrences (project_id, occurrence_key, fingerprint, observed_at_us) VALUES (?1, ?2, ?3, ?4)",
+            params![event.project_id, occurrence_key(event), fingerprint, event.timestamp_us],
+        )?;
+        Ok(inserted == 1)
+    }
+
+    fn load(&mut self, project_id: &str, fingerprint: &str) -> Result<Option<AlertState>> {
+        self.query_row(
+            "SELECT status, starts_at_us, ends_at_us, occurrence_count, recovered_ahead_us FROM alert_instances WHERE project_id = ?1 AND fingerprint = ?2",
+            params![project_id, fingerprint],
+            |row| Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .optional()
+        .context("failed to read alert state")?
+        .map(|(status, starts, ends, count, ahead)| AlertState::decode(&status, starts, ends, count, ahead))
+        .transpose()
+    }
+
+    fn save(&mut self, event: &AlertEvent, fingerprint: &str, state: AlertState) -> Result<()> {
+        let (starts_at_us, ends_at_us) = state.bounds();
+        let count =
+            i64::try_from(state.occurrence_count()).context("alert occurrence count overflow")?;
+        self.execute(
+            "INSERT INTO alert_instances (project_id, fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count, updated_at_us, recovered_ahead_us)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT (project_id, fingerprint) DO UPDATE SET status = excluded.status, service_name = excluded.service_name,
+               container_name = excluded.container_name, starts_at_us = excluded.starts_at_us, ends_at_us = excluded.ends_at_us,
+               occurrence_count = excluded.occurrence_count, updated_at_us = excluded.updated_at_us,
+               recovered_ahead_us = excluded.recovered_ahead_us",
+            params![
+                event.project_id,
+                fingerprint,
+                OOM_RULE_ID,
+                state.status(),
+                event.service_name,
+                event.container_name,
+                starts_at_us,
+                ends_at_us,
+                count,
+                event.timestamp_us,
+                state.recovered_ahead_us()
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn enqueue(
+        &mut self,
+        event: &AlertEvent,
+        fingerprint: &str,
+        transition: &str,
+        payload: &str,
+    ) -> Result<()> {
+        self.execute(
+            "INSERT INTO alert_outbox (project_id, fingerprint, transition, payload_json, next_attempt_at_us) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![event.project_id, fingerprint, transition, payload, now_us()],
+        )?;
+        Ok(())
+    }
+}
+
+impl AlertPersistence for postgres::Transaction<'_> {
+    fn record_occurrence(&mut self, event: &AlertEvent, fingerprint: &str) -> Result<bool> {
+        let inserted = self.execute(
+            "INSERT INTO sigiro_admin.alert_occurrences (project_id, occurrence_key, fingerprint, observed_at_us) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, occurrence_key) DO NOTHING",
+            &[&event.project_id, &occurrence_key(event), &fingerprint, &event.timestamp_us],
+        )?;
+        Ok(inserted == 1)
+    }
+
+    fn load(&mut self, project_id: &str, fingerprint: &str) -> Result<Option<AlertState>> {
+        self.query_opt(
+            "SELECT status, starts_at_us, ends_at_us, occurrence_count, recovered_ahead_us FROM sigiro_admin.alert_instances WHERE project_id = $1 AND fingerprint = $2",
+            &[&project_id, &fingerprint],
+        )
+        .context("failed to read alert state")?
+        .map(|row| AlertState::decode(row.get::<_, &str>(0), row.get(1), row.get(2), row.get(3), row.get(4)))
+        .transpose()
+    }
+
+    fn save(&mut self, event: &AlertEvent, fingerprint: &str, state: AlertState) -> Result<()> {
+        let (starts_at_us, ends_at_us) = state.bounds();
+        let count =
+            i64::try_from(state.occurrence_count()).context("alert occurrence count overflow")?;
+        self.execute(
+            "INSERT INTO sigiro_admin.alert_instances (project_id, fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count, updated_at_us, recovered_ahead_us)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT (project_id, fingerprint) DO UPDATE SET status = excluded.status, service_name = excluded.service_name,
+               container_name = excluded.container_name, starts_at_us = excluded.starts_at_us, ends_at_us = excluded.ends_at_us,
+               occurrence_count = excluded.occurrence_count, updated_at_us = excluded.updated_at_us,
+               recovered_ahead_us = excluded.recovered_ahead_us",
+            &[
+                &event.project_id,
+                &fingerprint,
+                &OOM_RULE_ID,
+                &state.status(),
+                &event.service_name,
+                &event.container_name,
+                &starts_at_us,
+                &ends_at_us,
+                &count,
+                &event.timestamp_us,
+                &state.recovered_ahead_us(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn enqueue(
+        &mut self,
+        event: &AlertEvent,
+        fingerprint: &str,
+        transition: &str,
+        payload: &str,
+    ) -> Result<()> {
+        self.execute(
+            "INSERT INTO sigiro_admin.alert_outbox (project_id, fingerprint, transition, payload_json, next_attempt_at_us) VALUES ($1, $2, $3, $4, $5)",
+            &[&event.project_id, &fingerprint, &transition, &payload, &now_us()],
+        )?;
+        Ok(())
+    }
 }
 
 impl AlertStore {
@@ -239,40 +633,12 @@ fn process_events_sqlite(
     conn: &mut rusqlite::Connection,
     events: &[AlertEvent],
 ) -> Result<ProcessResult> {
-    let tx = conn
+    let mut tx = conn
         .transaction()
         .context("failed to start alert transaction")?;
-    let mut accepted_events = 0;
-    let mut notifications_enqueued = 0;
-    for event in events {
-        if event.event_name != OOM_FIRING_EVENT && event.event_name != OOM_RECOVERED_EVENT {
-            continue;
-        }
-        let fingerprint = alert_fingerprint(event);
-        let inserted = tx.execute(
-            "INSERT OR IGNORE INTO alert_occurrences (project_id, occurrence_key, fingerprint, observed_at_us) VALUES (?1, ?2, ?3, ?4)",
-            params![event.project_id, occurrence_key(event), fingerprint, event.timestamp_us],
-        )?;
-        if inserted == 0 {
-            continue;
-        }
-        accepted_events += 1;
-        let stored = read_stored_alert(&tx, &event.project_id, &fingerprint)?;
-        if event.event_name == OOM_FIRING_EVENT {
-            notifications_enqueued += process_firing(&tx, event, &fingerprint, stored.as_ref())?;
-        } else if let Some(stored) = stored.as_ref()
-            && stored.status == "firing"
-            && event.timestamp_us >= stored.starts_at_us
-        {
-            process_resolution(&tx, event, &fingerprint, stored)?;
-            notifications_enqueued += 1;
-        }
-    }
+    let result = apply_events(&mut tx, events)?;
     tx.commit().context("failed to commit alert transaction")?;
-    Ok(ProcessResult {
-        accepted_events,
-        notifications_enqueued,
-    })
+    Ok(result)
 }
 
 fn process_events_postgres(
@@ -282,38 +648,9 @@ fn process_events_postgres(
     let mut tx = client
         .transaction()
         .context("failed to start alert transaction")?;
-    let mut accepted_events = 0;
-    let mut notifications_enqueued = 0;
-    for event in events {
-        if event.event_name != OOM_FIRING_EVENT && event.event_name != OOM_RECOVERED_EVENT {
-            continue;
-        }
-        let fingerprint = alert_fingerprint(event);
-        let inserted = tx.execute(
-            "INSERT INTO sigiro_admin.alert_occurrences (project_id, occurrence_key, fingerprint, observed_at_us) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, occurrence_key) DO NOTHING",
-            &[&event.project_id, &occurrence_key(event), &fingerprint, &event.timestamp_us],
-        )?;
-        if inserted == 0 {
-            continue;
-        }
-        accepted_events += 1;
-        let stored = read_stored_alert_postgres(&mut tx, &event.project_id, &fingerprint)?;
-        if event.event_name == OOM_FIRING_EVENT {
-            notifications_enqueued +=
-                process_firing_postgres(&mut tx, event, &fingerprint, stored.as_ref())?;
-        } else if let Some(stored) = stored.as_ref()
-            && stored.status == "firing"
-            && event.timestamp_us >= stored.starts_at_us
-        {
-            process_resolution_postgres(&mut tx, event, &fingerprint, stored)?;
-            notifications_enqueued += 1;
-        }
-    }
+    let result = apply_events(&mut tx, events)?;
     tx.commit().context("failed to commit alert transaction")?;
-    Ok(ProcessResult {
-        accepted_events,
-        notifications_enqueued,
-    })
+    Ok(result)
 }
 
 fn alert_instance(row: AlertRow) -> Result<AlertInstance> {
@@ -338,7 +675,7 @@ fn list_sqlite(
     status: Option<&str>,
 ) -> Result<Vec<AlertInstance>> {
     let mut sql = String::from(
-        "SELECT fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count FROM alert_instances WHERE project_id = ?1",
+        "SELECT fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count FROM alert_instances WHERE project_id = ?1 AND status IN ('firing', 'resolved')",
     );
     if status.is_some() {
         sql.push_str(" AND status = ?2");
@@ -396,7 +733,7 @@ fn list_postgres(
 ) -> Result<Vec<AlertInstance>> {
     let rows = match status {
         Some(status) => client.query("SELECT fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count FROM sigiro_admin.alert_instances WHERE project_id = $1 AND status = $2 ORDER BY updated_at_us DESC", &[&project_id, &status])?,
-        None => client.query("SELECT fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count FROM sigiro_admin.alert_instances WHERE project_id = $1 ORDER BY updated_at_us DESC", &[&project_id])?,
+        None => client.query("SELECT fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count FROM sigiro_admin.alert_instances WHERE project_id = $1 AND status IN ('firing', 'resolved') ORDER BY updated_at_us DESC", &[&project_id])?,
     };
     rows.into_iter()
         .map(|row| {
@@ -537,6 +874,7 @@ pub(crate) const SQLITE_TABLES: &[DeclaredTable] = &[
             ends_at_us INTEGER,
             occurrence_count INTEGER NOT NULL,
             updated_at_us INTEGER NOT NULL,
+            recovered_ahead_us INTEGER,
             PRIMARY KEY (project_id, fingerprint))",
         indexes: &[
             "CREATE INDEX alert_instances_project_status ON {table} (project_id, status, updated_at_us)",
@@ -575,7 +913,7 @@ pub(crate) const POSTGRES_TABLES: &[DeclaredTable] = &[
             project_id TEXT NOT NULL, fingerprint TEXT NOT NULL, rule_id TEXT NOT NULL,
             status TEXT NOT NULL, service_name TEXT NOT NULL, container_name TEXT NOT NULL,
             starts_at_us BIGINT NOT NULL, ends_at_us BIGINT, occurrence_count BIGINT NOT NULL,
-            updated_at_us BIGINT NOT NULL, PRIMARY KEY (project_id, fingerprint))",
+            updated_at_us BIGINT NOT NULL, recovered_ahead_us BIGINT, PRIMARY KEY (project_id, fingerprint))",
         indexes: &["CREATE INDEX alert_instances_project_status ON {table} (project_id, status, updated_at_us)"],
     },
     DeclaredTable {
@@ -646,272 +984,19 @@ pub(crate) fn events_from_log_batch(
     Ok(events)
 }
 
-fn read_stored_alert_postgres(
-    tx: &mut postgres::Transaction<'_>,
-    project_id: &str,
-    fingerprint: &str,
-) -> Result<Option<StoredAlert>> {
-    Ok(tx.query_opt(
-        "SELECT status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count
-         FROM sigiro_admin.alert_instances WHERE project_id = $1 AND fingerprint = $2",
-        &[&project_id, &fingerprint],
-    )?.map(|row| StoredAlert {
-        status: row.get(0), service_name: row.get(1), container_name: row.get(2),
-        starts_at_us: row.get(3), ends_at_us: row.get(4),
-        occurrence_count: u64::try_from(row.get::<_, i64>(5)).unwrap_or(0),
-    }))
-}
-
-fn enqueue_postgres(
-    tx: &mut postgres::Transaction<'_>,
-    transition: &AlertTransition<'_>,
-) -> Result<()> {
-    let payload = webhook_payload(transition)?;
-    tx.execute(
-        "INSERT INTO sigiro_admin.alert_outbox
-         (project_id, fingerprint, transition, payload_json, next_attempt_at_us) VALUES ($1, $2, $3, $4, $5)",
-        &[&transition.event.project_id, &transition.fingerprint, &transition.status, &payload, &now_us()],
-    )?;
-    Ok(())
-}
-
-fn process_firing_postgres(
-    tx: &mut postgres::Transaction<'_>,
-    event: &AlertEvent,
-    fingerprint: &str,
-    stored: Option<&StoredAlert>,
-) -> Result<usize> {
-    match stored {
-        Some(stored)
-            if stored.status == "resolved"
-                && stored
-                    .ends_at_us
-                    .is_some_and(|ends_at| event.timestamp_us <= ends_at) =>
-        {
-            Ok(0)
-        }
-        Some(stored) if stored.status == "firing" => {
-            tx.execute("UPDATE sigiro_admin.alert_instances SET occurrence_count = occurrence_count + 1, updated_at_us = $3 WHERE project_id = $1 AND fingerprint = $2", &[&event.project_id, &fingerprint, &event.timestamp_us])?;
-            Ok(0)
-        }
-        Some(stored) => {
-            let count = stored.occurrence_count + 1;
-            let count_i64 = i64::try_from(count).context("alert occurrence count overflow")?;
-            tx.execute(
-                "UPDATE sigiro_admin.alert_instances SET status = 'firing', service_name = $3, container_name = $4, starts_at_us = $5, ends_at_us = NULL, occurrence_count = $6, updated_at_us = $5 WHERE project_id = $1 AND fingerprint = $2",
-                &[&event.project_id, &fingerprint, &event.service_name, &event.container_name, &event.timestamp_us, &count_i64],
-            )?;
-            enqueue_postgres(
-                tx,
-                &AlertTransition {
-                    event,
-                    fingerprint,
-                    status: "firing",
-                    starts_at_us: event.timestamp_us,
-                    ends_at_us: None,
-                    occurrence_count: count,
-                },
-            )?;
-            Ok(1)
-        }
-        None => {
-            tx.execute(
-                "INSERT INTO sigiro_admin.alert_instances (project_id, fingerprint, rule_id, status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count, updated_at_us) VALUES ($1, $2, $3, 'firing', $4, $5, $6, NULL, 1, $6)",
-                &[&event.project_id, &fingerprint, &OOM_RULE_ID, &event.service_name, &event.container_name, &event.timestamp_us],
-            )?;
-            enqueue_postgres(
-                tx,
-                &AlertTransition {
-                    event,
-                    fingerprint,
-                    status: "firing",
-                    starts_at_us: event.timestamp_us,
-                    ends_at_us: None,
-                    occurrence_count: 1,
-                },
-            )?;
-            Ok(1)
-        }
-    }
-}
-
-fn process_resolution_postgres(
-    tx: &mut postgres::Transaction<'_>,
-    event: &AlertEvent,
-    fingerprint: &str,
-    stored: &StoredAlert,
-) -> Result<()> {
-    tx.execute(
-        "UPDATE sigiro_admin.alert_instances SET status = 'resolved', ends_at_us = $3, updated_at_us = $3 WHERE project_id = $1 AND fingerprint = $2",
-        &[&event.project_id, &fingerprint, &event.timestamp_us],
-    )?;
-    let original = AlertEvent {
-        project_id: event.project_id.clone(),
-        event_name: event.event_name.clone(),
-        timestamp_us: event.timestamp_us,
-        service_name: stored.service_name.clone(),
-        container_name: stored.container_name.clone(),
-        container_id: event.container_id.clone(),
-    };
-    enqueue_postgres(
-        tx,
-        &AlertTransition {
-            event: &original,
-            fingerprint,
-            status: "resolved",
-            starts_at_us: stored.starts_at_us,
-            ends_at_us: Some(event.timestamp_us),
-            occurrence_count: stored.occurrence_count,
-        },
-    )
-}
-
-fn process_firing(
-    tx: &rusqlite::Transaction<'_>,
-    event: &AlertEvent,
-    fingerprint: &str,
-    stored: Option<&StoredAlert>,
-) -> Result<usize> {
-    match stored {
-        Some(stored)
-            if stored.status == "resolved"
-                && stored
-                    .ends_at_us
-                    .is_some_and(|ends_at| event.timestamp_us <= ends_at) =>
-        {
-            Ok(0)
-        }
-        Some(stored) if stored.status == "firing" => {
-            tx.execute(
-                "UPDATE alert_instances
-                 SET occurrence_count = occurrence_count + 1, updated_at_us = ?3
-                 WHERE project_id = ?1 AND fingerprint = ?2",
-                params![event.project_id, fingerprint, event.timestamp_us],
-            )?;
-            Ok(0)
-        }
-        Some(stored) => {
-            let count = stored.occurrence_count + 1;
-            tx.execute(
-                "UPDATE alert_instances SET status = 'firing', service_name = ?3,
-                    container_name = ?4, starts_at_us = ?5, ends_at_us = NULL,
-                    occurrence_count = ?6, updated_at_us = ?5
-                 WHERE project_id = ?1 AND fingerprint = ?2",
-                params![
-                    event.project_id,
-                    fingerprint,
-                    event.service_name,
-                    event.container_name,
-                    event.timestamp_us,
-                    count
-                ],
-            )?;
-            enqueue(
-                tx,
-                &AlertTransition {
-                    event,
-                    fingerprint,
-                    status: "firing",
-                    starts_at_us: event.timestamp_us,
-                    ends_at_us: None,
-                    occurrence_count: count,
-                },
-            )?;
-            Ok(1)
-        }
-        None => {
-            tx.execute(
-                "INSERT INTO alert_instances
-                 (project_id, fingerprint, rule_id, status, service_name, container_name,
-                  starts_at_us, ends_at_us, occurrence_count, updated_at_us)
-                 VALUES (?1, ?2, ?3, 'firing', ?4, ?5, ?6, NULL, 1, ?6)",
-                params![
-                    event.project_id,
-                    fingerprint,
-                    OOM_RULE_ID,
-                    event.service_name,
-                    event.container_name,
-                    event.timestamp_us
-                ],
-            )?;
-            enqueue(
-                tx,
-                &AlertTransition {
-                    event,
-                    fingerprint,
-                    status: "firing",
-                    starts_at_us: event.timestamp_us,
-                    ends_at_us: None,
-                    occurrence_count: 1,
-                },
-            )?;
-            Ok(1)
-        }
-    }
-}
-
-fn process_resolution(
-    tx: &rusqlite::Transaction<'_>,
-    event: &AlertEvent,
-    fingerprint: &str,
-    stored: &StoredAlert,
-) -> Result<()> {
-    tx.execute(
-        "UPDATE alert_instances SET status = 'resolved', ends_at_us = ?3, updated_at_us = ?3
-         WHERE project_id = ?1 AND fingerprint = ?2",
-        params![event.project_id, fingerprint, event.timestamp_us],
-    )?;
-    let original = AlertEvent {
-        project_id: event.project_id.clone(),
-        event_name: event.event_name.clone(),
-        timestamp_us: event.timestamp_us,
-        service_name: stored.service_name.clone(),
-        container_name: stored.container_name.clone(),
-        container_id: event.container_id.clone(),
-    };
-    enqueue(
-        tx,
-        &AlertTransition {
-            event: &original,
-            fingerprint,
-            status: "resolved",
-            starts_at_us: stored.starts_at_us,
-            ends_at_us: Some(event.timestamp_us),
-            occurrence_count: stored.occurrence_count,
-        },
-    )
-}
-
-fn enqueue(tx: &rusqlite::Transaction<'_>, transition: &AlertTransition<'_>) -> Result<()> {
-    let payload = webhook_payload(transition)?;
-    tx.execute(
-        "INSERT INTO alert_outbox
-         (project_id, fingerprint, transition, payload_json, next_attempt_at_us)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![
-            transition.event.project_id,
-            transition.fingerprint,
-            transition.status,
-            payload,
-            now_us()
-        ],
-    )?;
-    Ok(())
-}
-
-fn webhook_payload(transition: &AlertTransition<'_>) -> Result<String> {
-    let event = transition.event;
-    let starts_at = format_timestamp(transition.starts_at_us)?;
-    let ends_at = transition
-        .ends_at_us
+fn webhook_payload(event: &AlertEvent, fingerprint: &str, state: AlertState) -> Result<String> {
+    let status = state.status();
+    let (starts_at_us, ends_at_us) = state.bounds();
+    let starts_at = format_timestamp(starts_at_us)?;
+    let ends_at = ends_at_us
         .map(format_timestamp)
         .transpose()?
         .unwrap_or_else(|| "0001-01-01T00:00:00Z".to_string());
     serde_json::to_string(&serde_json::json!({
         "receiver": "sigiro",
-        "status": transition.status,
+        "status": status,
         "alerts": [{
-            "status": transition.status,
+            "status": status,
             "labels": {
                 "alertname": "ContainerOOMKilled",
                 "project": event.project_id,
@@ -921,12 +1006,12 @@ fn webhook_payload(transition: &AlertTransition<'_>) -> Result<String> {
             },
             "annotations": {
                 "summary": format!("{} was killed because it ran out of memory", event.container_name),
-                "occurrence_count": transition.occurrence_count.to_string(),
+                "occurrence_count": state.occurrence_count().to_string(),
             },
             "startsAt": starts_at,
             "endsAt": ends_at,
             "generatorURL": "",
-            "fingerprint": transition.fingerprint,
+            "fingerprint": fingerprint,
         }],
         "groupLabels": {"alertname": "ContainerOOMKilled"},
         "commonLabels": {
@@ -939,34 +1024,10 @@ fn webhook_payload(transition: &AlertTransition<'_>) -> Result<String> {
         "commonAnnotations": {},
         "externalURL": "",
         "version": "4",
-        "groupKey": format!("{{}}:{{alertname=\"ContainerOOMKilled\",fingerprint=\"{}\"}}", transition.fingerprint),
+        "groupKey": format!("{{}}:{{alertname=\"ContainerOOMKilled\",fingerprint=\"{}\"}}", fingerprint),
         "truncatedAlerts": 0,
     }))
     .context("failed to serialize Alertmanager webhook")
-}
-
-fn read_stored_alert(
-    tx: &rusqlite::Transaction<'_>,
-    project_id: &str,
-    fingerprint: &str,
-) -> Result<Option<StoredAlert>> {
-    tx.query_row(
-        "SELECT status, service_name, container_name, starts_at_us, ends_at_us, occurrence_count
-         FROM alert_instances WHERE project_id = ?1 AND fingerprint = ?2",
-        params![project_id, fingerprint],
-        |row| {
-            Ok(StoredAlert {
-                status: row.get(0)?,
-                service_name: row.get(1)?,
-                container_name: row.get(2)?,
-                starts_at_us: row.get(3)?,
-                ends_at_us: row.get(4)?,
-                occurrence_count: row.get(5)?,
-            })
-        },
-    )
-    .optional()
-    .context("failed to read alert state")
 }
 
 fn alert_fingerprint(event: &AlertEvent) -> String {
@@ -1043,4 +1104,383 @@ fn required_string<'a>(
         "{key} exceeds the alert label limit"
     );
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use AlertInput::{Fire, Recover};
+    use AlertState::{Firing, RecoveredFirst, Resolved};
+
+    const fn firing(starts_at_us: i64, occurrence_count: u64) -> AlertState {
+        Firing {
+            starts_at_us,
+            occurrence_count,
+        }
+    }
+    const fn resolved(starts_at_us: i64, ends_at_us: i64, occurrence_count: u64) -> AlertState {
+        Resolved {
+            starts_at_us,
+            ends_at_us,
+            occurrence_count,
+            recovered_ahead_us: None,
+        }
+    }
+    const fn ahead(state: AlertState, at_us: i64) -> AlertState {
+        match state {
+            Resolved {
+                starts_at_us,
+                ends_at_us,
+                occurrence_count,
+                ..
+            } => Resolved {
+                starts_at_us,
+                ends_at_us,
+                occurrence_count,
+                recovered_ahead_us: Some(at_us),
+            },
+            other => other,
+        }
+    }
+    const fn recovered_first(recovered_at_us: i64, occurrence_count: u64) -> AlertState {
+        RecoveredFirst {
+            recovered_at_us,
+            occurrence_count,
+        }
+    }
+    const fn to(next: AlertState, notify: bool) -> AlertStep {
+        AlertStep::Move { next, notify }
+    }
+
+    #[test]
+    fn every_alert_transition_follows_the_table() {
+        let cases: &[(Option<AlertState>, AlertInput, AlertStep)] = &[
+            (None, Fire { at_us: 10 }, to(firing(10, 1), true)),
+            (
+                None,
+                Recover { at_us: 20 },
+                to(recovered_first(20, 0), false),
+            ),
+            (
+                Some(recovered_first(20, 0)),
+                Fire { at_us: 10 },
+                to(resolved(10, 20, 1), false),
+            ),
+            (
+                Some(recovered_first(20, 0)),
+                Fire { at_us: 20 },
+                to(resolved(20, 20, 1), false),
+            ),
+            (
+                Some(recovered_first(20, 3)),
+                Fire { at_us: 30 },
+                to(firing(30, 4), true),
+            ),
+            (
+                Some(recovered_first(20, 0)),
+                Recover { at_us: 40 },
+                to(recovered_first(40, 0), false),
+            ),
+            (
+                Some(recovered_first(40, 0)),
+                Recover { at_us: 20 },
+                to(recovered_first(40, 0), false),
+            ),
+            (
+                Some(firing(10, 1)),
+                Fire { at_us: 15 },
+                to(firing(10, 2), false),
+            ),
+            (
+                Some(firing(10, 1)),
+                Fire { at_us: 5 },
+                to(firing(10, 2), false),
+            ),
+            (
+                Some(firing(10, 2)),
+                Recover { at_us: 20 },
+                to(resolved(10, 20, 2), true),
+            ),
+            (
+                Some(firing(10, 2)),
+                Recover { at_us: 10 },
+                to(resolved(10, 10, 2), true),
+            ),
+            (Some(firing(10, 1)), Recover { at_us: 5 }, AlertStep::Ignore),
+            (
+                Some(resolved(10, 20, 1)),
+                Fire { at_us: 30 },
+                to(firing(30, 2), true),
+            ),
+            (
+                Some(resolved(10, 20, 1)),
+                Fire { at_us: 20 },
+                AlertStep::Ignore,
+            ),
+            (
+                Some(resolved(10, 20, 1)),
+                Fire { at_us: 15 },
+                AlertStep::Ignore,
+            ),
+            (
+                Some(resolved(10, 20, 1)),
+                Recover { at_us: 20 },
+                AlertStep::Ignore,
+            ),
+            (
+                Some(resolved(10, 20, 1)),
+                Recover { at_us: 5 },
+                AlertStep::Ignore,
+            ),
+            (
+                Some(resolved(10, 20, 1)),
+                Recover { at_us: 40 },
+                to(ahead(resolved(10, 20, 1), 40), false),
+            ),
+            (
+                Some(ahead(resolved(10, 20, 1), 40)),
+                Recover { at_us: 30 },
+                to(ahead(resolved(10, 20, 1), 40), false),
+            ),
+            (
+                Some(ahead(resolved(10, 20, 1), 40)),
+                Recover { at_us: 50 },
+                to(ahead(resolved(10, 20, 1), 50), false),
+            ),
+            (
+                Some(ahead(resolved(10, 20, 1), 40)),
+                Fire { at_us: 30 },
+                to(resolved(30, 40, 2), false),
+            ),
+            (
+                Some(ahead(resolved(10, 20, 1), 40)),
+                Fire { at_us: 40 },
+                to(resolved(40, 40, 2), false),
+            ),
+            (
+                Some(ahead(resolved(10, 20, 1), 40)),
+                Fire { at_us: 50 },
+                to(firing(50, 2), true),
+            ),
+            (
+                Some(ahead(resolved(10, 20, 1), 40)),
+                Fire { at_us: 15 },
+                AlertStep::Ignore,
+            ),
+        ];
+        for (from, input, expected) in cases {
+            assert_eq!(step(*from, *input), *expected, "{from:?} + {input:?}");
+        }
+    }
+
+    fn run(inputs: &[AlertInput]) -> Option<AlertState> {
+        inputs
+            .iter()
+            .fold(None, |state, input| match step(state, *input) {
+                AlertStep::Ignore => state,
+                AlertStep::Move { next, .. } => Some(next),
+            })
+    }
+
+    fn permutations(items: &[AlertInput]) -> Vec<Vec<AlertInput>> {
+        if items.len() <= 1 {
+            return vec![items.to_vec()];
+        }
+        let mut all = Vec::new();
+        for i in 0..items.len() {
+            let mut rest = items.to_vec();
+            let head = rest.remove(i);
+            for mut tail in permutations(&rest) {
+                tail.insert(0, head);
+                all.push(tail);
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn no_arrival_order_leaves_a_recovered_alert_firing() {
+        let one = [Fire { at_us: 10 }, Recover { at_us: 20 }];
+        let two = [
+            Fire { at_us: 10 },
+            Recover { at_us: 20 },
+            Fire { at_us: 30 },
+            Recover { at_us: 40 },
+        ];
+        for order in permutations(&one) {
+            assert_eq!(run(&order), Some(resolved(10, 20, 1)), "{order:?}");
+        }
+        for order in permutations(&two) {
+            match run(&order) {
+                Some(
+                    Resolved { ends_at_us: 40, .. }
+                    | Resolved {
+                        recovered_ahead_us: Some(40),
+                        ..
+                    },
+                ) => {}
+                other => panic!("{order:?} ended in {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn stored_rows_decode_strictly() {
+        for state in [
+            firing(10, 1),
+            resolved(10, 20, 2),
+            ahead(resolved(10, 20, 2), 40),
+            recovered_first(30, 2),
+        ] {
+            let (starts, ends) = state.bounds();
+            let count = i64::try_from(state.occurrence_count()).unwrap();
+            let decoded = AlertState::decode(
+                state.status(),
+                starts,
+                ends,
+                count,
+                state.recovered_ahead_us(),
+            );
+            assert_eq!(decoded.unwrap(), state);
+        }
+        assert!(AlertState::decode("pending", 10, None, 1, None).is_err());
+        assert!(AlertState::decode("firing", 10, Some(20), 1, None).is_err());
+        assert!(AlertState::decode("resolved", 10, None, 1, None).is_err());
+        assert!(AlertState::decode("firing", 10, None, -1, None).is_err());
+    }
+
+    pub(super) fn local_store() -> (tempfile::TempDir, AlertStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let conn = crate::admin::open_local_admin_db(&path).unwrap();
+        (dir, AlertStore::new(Arc::new(Mutex::new(conn))).unwrap())
+    }
+
+    /// A store on the PostgreSQL named by `SIGIRO_TEST_POSTGRES_URL`
+    /// (`scripts/test-admin-postgres.sh` starts one), with a fresh admin schema.
+    pub(super) fn postgres_store() -> Option<AlertStore> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "selects an external test database, not application configuration"
+        )]
+        let url = std::env::var("SIGIRO_TEST_POSTGRES_URL").ok()?;
+        crate::admin::connect_postgres(&url)
+            .unwrap()
+            .batch_execute("DROP SCHEMA IF EXISTS sigiro_admin CASCADE")
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let conn = runtime
+            .block_on(crate::admin::open_hosted_admin_db(&url))
+            .unwrap();
+        drop(runtime);
+        Some(AlertStore::new(Arc::new(Mutex::new(conn))).unwrap())
+    }
+
+    pub(super) fn oom(project: &str, name: &str, at_us: i64) -> AlertEvent {
+        AlertEvent {
+            project_id: project.into(),
+            event_name: name.into(),
+            timestamp_us: at_us,
+            service_name: "api".into(),
+            container_name: "api-1".into(),
+            container_id: "c1".into(),
+        }
+    }
+
+    fn recover_before_fire(store: &AlertStore, project: &str) {
+        let first = store
+            .process_events(&[oom(project, OOM_RECOVERED_EVENT, 2_000_000)])
+            .unwrap();
+        assert_eq!(
+            (first.accepted_events, first.notifications_enqueued),
+            (1, 0)
+        );
+        assert!(
+            store.list(project, None).unwrap().is_empty(),
+            "a recover with no fire is not an alert"
+        );
+        let second = store
+            .process_events(&[oom(project, OOM_FIRING_EVENT, 1_000_000)])
+            .unwrap();
+        assert_eq!(
+            (second.accepted_events, second.notifications_enqueued),
+            (1, 0)
+        );
+        let alerts = store.list(project, None).unwrap();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].status, "resolved");
+        assert_eq!(alerts[0].occurrence_count, 1);
+        assert!(store.list(project, Some("firing")).unwrap().is_empty());
+        let replay = store
+            .process_events(&[oom(project, OOM_FIRING_EVENT, 1_000_000)])
+            .unwrap();
+        assert_eq!(replay.accepted_events, 0, "duplicates stay deduplicated");
+    }
+
+    fn recover_ahead_of_reopen(store: &AlertStore, project: &str) {
+        store
+            .process_events(&[
+                oom(project, OOM_FIRING_EVENT, 1_000_000),
+                oom(project, OOM_RECOVERED_EVENT, 2_000_000),
+            ])
+            .unwrap();
+        store
+            .process_events(&[oom(project, OOM_RECOVERED_EVENT, 4_000_000)])
+            .unwrap();
+        let resolved = store.list(project, Some("resolved")).unwrap();
+        assert_eq!(resolved.len(), 1, "the earlier episode stays listed");
+        let late = store
+            .process_events(&[oom(project, OOM_FIRING_EVENT, 3_000_000)])
+            .unwrap();
+        assert_eq!(late.notifications_enqueued, 0);
+        assert!(store.list(project, Some("firing")).unwrap().is_empty());
+        assert_eq!(store.list(project, None).unwrap()[0].occurrence_count, 2);
+    }
+
+    fn in_order_pages_and_reopens(store: &AlertStore, project: &str) {
+        let result = store
+            .process_events(&[
+                oom(project, OOM_FIRING_EVENT, 1_000_000),
+                oom(project, OOM_FIRING_EVENT, 1_500_000),
+                oom(project, OOM_RECOVERED_EVENT, 2_000_000),
+                oom(project, OOM_FIRING_EVENT, 3_000_000),
+            ])
+            .unwrap();
+        assert_eq!(
+            (result.accepted_events, result.notifications_enqueued),
+            (4, 3)
+        );
+        let alerts = store.list(project, Some("firing")).unwrap();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].occurrence_count, 3);
+    }
+
+    type Scenario = fn(&AlertStore, &str);
+
+    pub(super) const SCENARIOS: &[(&str, Scenario)] = &[
+        ("recover_before_fire", recover_before_fire),
+        ("recover_ahead_of_reopen", recover_ahead_of_reopen),
+        ("in_order_pages_and_reopens", in_order_pages_and_reopens),
+    ];
+
+    #[test]
+    fn sqlite_backend_runs_every_scenario() {
+        for (name, scenario) in SCENARIOS {
+            let (_dir, store) = local_store();
+            scenario(&store, name);
+        }
+    }
+
+    #[test]
+    fn postgres_backend_runs_every_scenario() {
+        let Some(store) = postgres_store() else {
+            eprintln!("skipped: set SIGIRO_TEST_POSTGRES_URL (scripts/test-admin-postgres.sh)");
+            return;
+        };
+        for (name, scenario) in SCENARIOS {
+            scenario(&store, name);
+        }
+    }
 }

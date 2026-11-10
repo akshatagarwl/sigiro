@@ -26,3 +26,4 @@ sleep 2
 export SIGIRO_TEST_POSTGRES_URL="postgresql://postgres:$password@localhost:$port/postgres?sslmode=verify-full&sslrootcert=$work/ca.crt"
 cd "$repo"
 scripts/run-with-duckdb-static.sh mbx test --test admin_schema_test -- --nocapture
+scripts/run-with-duckdb-static.sh mbx test --lib -- alerts::tests::postgres --nocapture --test-threads=1
