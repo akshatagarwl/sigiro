@@ -959,7 +959,7 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
             // Every AlertStore call below reaches the sync postgres client,
             // whose internal block_on ABORTS the process from a runtime thread.
             // This loop is async, so each call moves to a blocking thread.
-            let due = blocking(&store, |store| store.next_due(now_us())).await;
+            let due = spawn_blocking_store(&store, |store| store.next_due(now_us())).await;
             let notification = match due {
                 Ok(Some(notification)) => notification,
                 Ok(None) => break,
@@ -980,7 +980,8 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
             let outcome = match request.send().await {
                 Ok(response) if response.status().is_success() => {
                     if let Err(error) =
-                        blocking(&store, move |store| store.mark_sent(id, now_us())).await
+                        spawn_blocking_store(&store, move |store| store.mark_sent(id, now_us()))
+                            .await
                     {
                         tracing::warn!(
                             notification_id = id,
@@ -995,7 +996,7 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
                 Err(error) if error.is_connect() => DeliveryOutcome::Connect,
                 Err(_) => DeliveryOutcome::Request,
             };
-            match blocking(&store, move |store| {
+            match spawn_blocking_store(&store, move |store| {
                 store.mark_failed(id, now_us(), outcome)
             })
             .await
@@ -1018,7 +1019,7 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
         // Refresh the /health summary when the queue moved, and every 30s so
         // newly enqueued or replayed rows show up without an attempt.
         if attempted > 0 || ticks.is_multiple_of(30) {
-            match blocking(&store, |store| store.delivery_summary(None)).await {
+            match spawn_blocking_store(&store, |store| store.delivery_summary(None)).await {
                 Ok(summary) => *store.delivery_health.lock() = Some(summary),
                 Err(error) => tracing::warn!("failed to summarise alert outbox: {error:#}"),
             }
@@ -1028,7 +1029,7 @@ pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
 }
 
 /// Run a sync [`AlertStore`] call on a blocking thread.
-async fn blocking<T: Send + 'static>(
+async fn spawn_blocking_store<T: Send + 'static>(
     store: &AlertStore,
     call: impl FnOnce(&AlertStore) -> Result<T> + Send + 'static,
 ) -> Result<T> {
