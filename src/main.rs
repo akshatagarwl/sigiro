@@ -287,17 +287,31 @@ async fn main() -> Result<()> {
             let health_client =
                 sigiro::client::SigiroClient::new(&base_url, sigiro::client::ClientAuth::Open);
             let (state, detail) = match health_client.health().await {
-                Ok(HealthResponse::Ready { alert_webhooks }) => (
-                    "ready".to_string(),
-                    match alert_webhooks {
-                        Some(webhooks) if webhooks.dead > 0 => format!(
-                            "ok; {} alert webhook(s) dead (last error {}), replay with POST /v1/alerts/replay",
+                Ok(HealthResponse::Ready {
+                    alert_webhooks,
+                    disk_gate,
+                }) => {
+                    let mut notes = Vec::new();
+                    if let Some(gate) = disk_gate {
+                        notes.push(format!(
+                            "disk gate {:?}: ingest rejected at {} of {} bytes",
+                            gate.state, gate.sampled_bytes, gate.cap_bytes
+                        ));
+                    }
+                    if let Some(webhooks) = alert_webhooks.filter(|webhooks| webhooks.dead > 0) {
+                        notes.push(format!(
+                            "{} alert webhook(s) dead (last error {}), replay with POST /v1/alerts/replay",
                             webhooks.dead,
                             webhooks.last_dead_error.as_deref().unwrap_or("unknown")
-                        ),
-                        _ => "ok".to_string(),
-                    },
-                ),
+                        ));
+                    }
+                    let detail = if notes.is_empty() {
+                        "ok".to_string()
+                    } else {
+                        format!("ok; {}", notes.join("; "))
+                    };
+                    ("ready".to_string(), detail)
+                }
                 Ok(HealthResponse::Starting) => (
                     "starting".to_string(),
                     "http up, init not complete".to_string(),

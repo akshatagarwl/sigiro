@@ -1075,26 +1075,12 @@ fn dir_size_bytes(path: &std::path::Path) -> (u64, bool) {
     (total, reliable)
 }
 
-/// Resets `DiskCapacityState::cleanup_in_flight` to `false` on drop so the
-/// single-flight self-heal flag is released on every exit of the spawned
-/// cleanup task — normal completion, error, OR panic-unwind — instead of only
-/// on the success path. Without this a panic in `run_retention_cleanup` would
-/// leave the flag stuck `true` and disable immediate self-heal forever.
-struct CleanupInFlightGuard(Arc<DiskCapacityState>);
-
-impl Drop for CleanupInFlightGuard {
-    fn drop(&mut self) {
-        self.0.cleanup_in_flight.store(false, Ordering::Release);
-    }
-}
-
 /// Spawn the storage-maintenance background task. Runs when retention is on
 /// (`SIGIRO_RETENTION_DAYS > 0`) OR the disk cap is armed (`cap > 0`); returns
 /// `None` when neither is configured. Drives two independent timers:
-/// - every `SIGIRO_DISK_SAMPLE_SECONDS`: sample `DATA_DIR` bytes and, if the
-///   cap is armed, trip/clear the gate with hysteresis. On the OFF→ON trip,
-///   single-flight an immediate retention cleanup (self-heal); the next sample
-///   tick re-measures and clears the gate — clearing stays on this one sampler.
+/// - every `SIGIRO_DISK_SAMPLE_SECONDS`: sample `DATA_DIR` bytes and feed the
+///   gate (`crate::disk_gate`), which trips/clears with hysteresis and asks for
+///   a self-heal retention run while runs keep freeing space.
 /// - hourly: run the routine retention cleanup (as before).
 fn spawn_storage_maintenance_task(
     router: Arc<MsgRouter>,
@@ -1135,46 +1121,24 @@ fn spawn_storage_maintenance_task(
                             continue;
                         }
                     };
-                    // `apply_sample` is only ever called here (one serialized
-                    // sampler) — no concurrent caller can race the load/store,
-                    // and `over_cap` is re-evaluated on the NEXT tick after any
-                    // self-heal cleanup frees space, so we never resample off-loop.
-                    match disk.apply_sample(bytes, reliable) {
-                        Some(true) => {
-                            tracing::warn!(
-                                sampled_bytes = bytes,
-                                cap,
-                                "disk cap tripped — REJECTING ingest until usage falls below 90% of cap"
-                            );
-                            // Self-heal: kick one retention cleanup, single-flighted.
-                            // The next sample tick re-measures and clears the gate.
-                            if retention_days > 0
-                                && disk
-                                    .cleanup_in_flight
-                                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                                    .is_ok()
-                            {
-                                let r = Arc::clone(&router);
-                                let ds = Arc::clone(&disk);
-                                tokio::spawn(async move {
-                                    // RAII: reset the single-flight flag on EVERY exit —
-                                    // normal, error, or panic — so a panicking cleanup
-                                    // can't wedge self-heal off forever.
-                                    let _reset = CleanupInFlightGuard(ds);
-                                    if let Err(e) = r.run_retention_cleanup(retention_days).await {
-                                        tracing::error!("disk-cap self-heal retention cleanup failed: {e:#}");
-                                    }
-                                });
+                    // Every transition (and its log line) happens inside the
+                    // gate; this loop only runs the effect it asks for.
+                    if let Some(crate::disk_gate::DiskGateEffect::SpawnHeal { .. }) =
+                        disk.on_sample(bytes, reliable, retention_days > 0)
+                    {
+                        let r = Arc::clone(&router);
+                        let heal = disk.start_heal();
+                        tokio::spawn(async move {
+                            // The guard reports a failed run if this task
+                            // errors or panics, so Healing cannot outlive it.
+                            match r.run_retention_cleanup(retention_days).await {
+                                Ok(()) => heal.finish(true),
+                                Err(e) => {
+                                    tracing::error!("disk-cap self-heal retention cleanup failed: {e:#}");
+                                    heal.finish(false);
+                                }
                             }
-                        }
-                        Some(false) => {
-                            tracing::info!(
-                                sampled_bytes = bytes,
-                                cap,
-                                "disk usage back under 90% of cap — ingest re-enabled"
-                            );
-                        }
-                        None => {}
+                        });
                     }
                 }
 
@@ -1249,6 +1213,7 @@ async fn health(
         axum::http::StatusCode::OK,
         axum::Json(HealthResponse::Ready {
             alert_webhooks: state.alerts.delivery_health(),
+            disk_gate: state.router.disk_state().health(),
         }),
     )
 }

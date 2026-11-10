@@ -5,6 +5,7 @@ pub mod client;
 pub mod config;
 pub(crate) mod dashboard;
 mod declared_schema;
+pub mod disk_gate;
 pub mod federate;
 
 pub mod ingest;

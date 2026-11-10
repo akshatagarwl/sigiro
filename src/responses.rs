@@ -69,6 +69,10 @@ pub enum HealthResponse {
         /// Alert webhook outbox across every project; absent when delivery is off.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         alert_webhooks: Option<crate::alerts::DeliverySummary>,
+        /// Present while the disk-capacity gate rejects ingest: its state
+        /// (`tripped`, `healing`, or `stuck` with a `reason`) and the numbers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        disk_gate: Option<crate::disk_gate::DiskGateHealth>,
     },
     /// HTTP listener is up but init is still in progress (cold start). Probe
     /// should retry; no operator action required.
@@ -141,6 +145,7 @@ mod health_response_tests {
     fn ready_stays_a_bare_status_until_there_is_something_to_report() {
         let bare = HealthResponse::Ready {
             alert_webhooks: None,
+            disk_gate: None,
         };
         assert_eq!(
             serde_json::to_string(&bare).unwrap(),
@@ -157,6 +162,7 @@ mod health_response_tests {
                 oldest_queued_at: None,
                 last_dead_error: Some("http_401".into()),
             }),
+            disk_gate: None,
         };
         let json = serde_json::to_string(&dead).unwrap();
         assert_eq!(

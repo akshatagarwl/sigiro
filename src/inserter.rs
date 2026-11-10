@@ -6,7 +6,7 @@ use duckdb::Connection;
 use sigiro_segments::MetricBatches;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle as TokioJoinHandle;
@@ -142,79 +142,7 @@ impl MaintenanceHealth {
     }
 }
 
-/// Box-level disk-capacity gate, shared (`Arc`) between the ingest router —
-/// which reads `over_cap` at the top of `send` to reject when tripped — and
-/// the storage-maintenance task, which samples `SIGIRO_DATA_DIR` and trips/
-/// clears `over_cap` with hysteresis. `cap == 0` disables the gate entirely.
-#[derive(Debug)]
-pub struct DiskCapacityState {
-    /// `SIGIRO_MAX_DISK_BYTES`. 0 disables the gate.
-    pub(crate) cap: u64,
-    /// Most recent sampled on-disk byte size of `SIGIRO_DATA_DIR`.
-    pub(crate) sampled_bytes: AtomicU64,
-    /// Whether ingest is currently rejected (cap breached, not yet recovered).
-    pub(crate) over_cap: AtomicBool,
-    /// Single-flight guard for the self-heal retention cleanup kicked on the
-    /// OFF→ON transition.
-    pub(crate) cleanup_in_flight: AtomicBool,
-}
-
-impl DiskCapacityState {
-    pub fn new(cap: u64) -> Arc<Self> {
-        Arc::new(Self {
-            cap,
-            sampled_bytes: AtomicU64::new(0),
-            over_cap: AtomicBool::new(false),
-            cleanup_in_flight: AtomicBool::new(false),
-        })
-    }
-
-    /// A disabled (`cap == 0`) gate — the no-op default for constructors.
-    pub(crate) fn disabled() -> Arc<Self> {
-        Self::new(0)
-    }
-
-    /// True when the gate is armed AND currently tripped. Cheap enough to call
-    /// on the ingest hot path.
-    pub fn is_over_cap(&self) -> bool {
-        self.cap > 0 && self.over_cap.load(Ordering::Relaxed)
-    }
-
-    /// Fold a fresh byte sample into the gate with hysteresis: trip when
-    /// `bytes >= cap`, and clear only once `bytes <= cap * 9 / 10`. Returns
-    /// `Some(true)` on an OFF→ON transition, `Some(false)` on ON→OFF, and
-    /// `None` when the state is unchanged.
-    ///
-    /// `reliable` is `false` when the disk walk hit an unreadable entry, so the
-    /// byte total is an UNDER-count. Tripping is still allowed on an unreliable
-    /// sample (an under-count already over the cap is definitely over —
-    /// rejecting is fail-safe), but CLEARING is not: an under-count must never
-    /// re-open ingest while real usage may still be over.
-    ///
-    /// MUST be called from a single serialized context (the one maintenance
-    /// loop). The load-then-store is not atomic across concurrent callers, so
-    /// two overlapping samplers could let a stale under-cap sample clobber a
-    /// newer over-cap one — the maintenance task keeps exactly one sampler.
-    pub fn apply_sample(&self, bytes: u64, reliable: bool) -> Option<bool> {
-        if self.cap == 0 {
-            return None;
-        }
-        self.sampled_bytes.store(bytes, Ordering::Relaxed);
-        let was_over = self.over_cap.load(Ordering::Relaxed);
-        if !was_over && bytes >= self.cap {
-            self.over_cap.store(true, Ordering::Relaxed);
-            return Some(true);
-        }
-        // u128 keeps 90% exact (no `cap/10*9` truncation that breaks small caps,
-        // e.g. cap=9 would clear only at 0 bytes) while never overflowing u64.
-        let clear_threshold = ((self.cap as u128 * 9) / 10) as u64;
-        if was_over && reliable && bytes <= clear_threshold {
-            self.over_cap.store(false, Ordering::Relaxed);
-            return Some(false);
-        }
-        None
-    }
-}
+pub use crate::disk_gate::DiskCapacityState;
 
 /// Per-project channel capacity. When full, messages are dropped
 /// (the OTLP SDK retries). Better to drop one project's data than block all.
