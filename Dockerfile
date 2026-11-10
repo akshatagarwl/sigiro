@@ -27,10 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     eval "$(DUCKDB_STATIC_CACHE=/opt/duckdb-cache /usr/local/bin/prepare-duckdb-static "$T")" && \
     mkdir -p /opt/duckdb && cp "$DUCKDB_LIB_DIR/libduckdb_static.a" "$DUCKDB_INCLUDE_DIR/duckdb.h" /opt/duckdb/
 
-# The dashboard's static export, which the binary embeds (src/dashboard.rs).
-# Platform-independent output, so it builds once on $BUILDPLATFORM. Aube is
-# the version and checksum pinned in mise.lock.
-FROM --platform=$BUILDPLATFORM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS dashboard
+# Node and aube for the two static exports the binary embeds, the dashboard
+# (src/dashboard.rs) and the docs (src/docs.rs). Platform-independent output,
+# so both build once on $BUILDPLATFORM. Aube is the version and checksum pinned
+# in mise.lock.
+FROM --platform=$BUILDPLATFORM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS node-aube
 ARG BUILDARCH
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* && \
     set -eux; \
@@ -43,11 +44,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     echo "${SUM}  /tmp/aube.tgz" | sha256sum -c -; \
     tar -xzf /tmp/aube.tgz -C /usr/local/bin aube; \
     rm /tmp/aube.tgz
+
+FROM node-aube AS dashboard
 WORKDIR /build/dashboard
 COPY dashboard/package.json dashboard/aube-lock.yaml ./
 RUN aube install --frozen-lockfile
 COPY dashboard/ ./
 RUN aube run build && test -f dist/dashboard/index.html
+
+# The docs (sigiro.com/docs) as a static export. The build reads the API
+# reference from https://sigiro.com/openapi.json, as the sigiro.com build does.
+FROM node-aube AS docs
+WORKDIR /build
+COPY www/package.json www/aube-lock.yaml www/
+COPY www/patches/ www/patches/
+RUN aube -C www install --frozen-lockfile
+COPY www/ www/
+COPY scripts/build-docs-export.sh scripts/
+RUN scripts/build-docs-export.sh && test -f www/dist-binary/index.html
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock build.rs ./
@@ -94,7 +108,8 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 COPY crates/ crates/
 COPY --from=dashboard /build/dashboard/dist/dashboard dashboard/dist/dashboard
-ENV SIGIRO_REQUIRE_DASHBOARD=1
+COPY --from=docs /build/www/dist-binary www/dist-binary
+ENV SIGIRO_REQUIRE_DASHBOARD=1 SIGIRO_REQUIRE_DOCS=1
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGETARCH \
     set -eux; \
     case "$TARGETARCH" in \

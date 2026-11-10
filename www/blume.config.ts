@@ -31,7 +31,7 @@ import { CF_ANALYTICS_TOKEN, SITE } from "./src/lib/site";
  * wrangler config and in no built code at all. `injectRoute` is the supported way
  * in, and the way Blume mounts its own `.well-known/mcp.json` endpoint.
  */
-const sigiro = (): AstroIntegration => ({
+const sigiro = ({ binary }: { binary: boolean }): AstroIntegration => ({
   name: "sigiro",
   hooks: {
     "astro:config:setup": ({ injectRoute, injectScript, updateConfig }) => {
@@ -81,6 +81,9 @@ const sigiro = (): AstroIntegration => ({
           },
         },
       });
+      // The binary's copy is static and offline: no R2 download route and no
+      // WebMCP client, which signs in against sigiro.com.
+      if (binary) return;
       injectRoute({
         pattern: "/dl/[...key]",
         entrypoint: fileURLToPath(new URL("./src/dl.ts", import.meta.url)),
@@ -89,6 +92,27 @@ const sigiro = (): AstroIntegration => ({
     },
   },
 });
+
+/**
+ * `SIGIRO_DOCS_TARGET=binary` builds the copy of these docs the sigiro binary
+ * embeds and serves at `/docs/` (`src/docs.rs`; `mise run docs-build`).
+ *
+ * Same content, same URLs, different shell around them:
+ *
+ * - Static output under `deployment.base` `/docs` instead of a Cloudflare
+ *   server build under `basePath` `/docs`. The base moves *everything* under
+ *   `/docs` — `_astro/`, `blume-search.json`, `llms.txt` — so the binary owns
+ *   one prefix and nothing at its root. A page URL is identical either way.
+ * - No landing page or sign-in pages (`content.pages` names a directory that
+ *   does not exist), no `/dl` route, no WebMCP script, no MCP endpoint (static),
+ *   no `@astrojs/sitemap` and no Cloudflare analytics beacon: a self-hosted
+ *   server must not phone home when someone reads its manual.
+ *
+ * Unset, every branch below takes the sigiro.com value, so the Worker build is
+ * unchanged. Read once here; Blume evaluates this module twice per run and the
+ * environment is the same both times.
+ */
+const BINARY = process.env.SIGIRO_DOCS_TARGET === "binary";
 
 /**
  * sigiro.com — the landing page at `/` and the docs at `/docs/*`.
@@ -126,6 +150,9 @@ export default defineConfig({
 
   logo: { text: "sigiro", href: "/" },
 
+  /** The binary embeds the docs only, not `pages/`; see `BINARY`. */
+  content: BINARY ? { pages: "pages-binary-none" } : undefined,
+
   /**
    * The docs sit under `/docs`, the landing page owns `/`.
    *
@@ -139,7 +166,7 @@ export default defineConfig({
    * days at docs.sigiro.com; that Worker, its routes and its custom domain are
    * deleted, so the hostname no longer resolves at all.
    */
-  basePath: "/docs",
+  basePath: BINARY ? undefined : "/docs",
 
   /**
    * `sigiro()` is the alias + `/dl` route, above.
@@ -173,7 +200,9 @@ export default defineConfig({
    * after `astro build` returns, so no integration hook fires late enough to
    * catch them. `scripts/serve-agent-files.mjs` moves those four and says so.
    */
-  integrations: [sigiro(), sitemap()],
+  integrations: BINARY
+    ? [sigiro({ binary: true })]
+    : [sigiro({ binary: false }), sitemap()],
 
   /**
    * Retired URLs. Two groups, two different provenances — see the comment above
@@ -407,33 +436,37 @@ export default defineConfig({
    * plan the RUM beacon excludes visitors served from EU/EEA data centres by
    * default, so EU locales are the ones this will under-report.
    */
-  analytics: [
-    script({
-      src: "https://static.cloudflareinsights.com/beacon.min.js",
-      strategy: "defer",
-      attributes: {
-        "data-cf-beacon": `{"token": "${CF_ANALYTICS_TOKEN}"}`,
-      },
-    }),
-  ],
+  analytics: BINARY
+    ? []
+    : [
+        script({
+          src: "https://static.cloudflareinsights.com/beacon.min.js",
+          strategy: "defer",
+          attributes: {
+            "data-cf-beacon": `{"token": "${CF_ANALYTICS_TOKEN}"}`,
+          },
+        }),
+      ],
 
-  deployment: cloudflare({
-    site: "https://sigiro.com",
-    // Named rather than left to auto-detection, which keys off CI environment
-    // variables and would pick nothing on a laptop — the dev server warned that
-    // there was no adapter and a build would fail.
-    //
-    // `server` and not `static` because the MCP route below is request-time.
-    output: "server",
+  deployment: BINARY
+    ? { base: "/docs", site: "https://sigiro.com" }
+    : cloudflare({
+        site: "https://sigiro.com",
+        // Named rather than left to auto-detection, which keys off CI environment
+        // variables and would pick nothing on a laptop — the dev server warned that
+        // there was no adapter and a build would fail.
+        //
+        // `server` and not `static` because the MCP route below is request-time.
+        output: "server",
 
-    /**
-     * `server` because the injected `/dl/[...key]` route and the MCP endpoint are
-     * both request-time. Every HTML route still prerenders.
-     *
-     * On the artifact-location defect this combination has, and what is and is not
-     * done about it, see the `integrations` note above.
-     */
-  }),
+        /**
+         * `server` because the injected `/dl/[...key]` route and the MCP endpoint are
+         * both request-time. Every HTML route still prerenders.
+         *
+         * On the artifact-location defect this combination has, and what is and is not
+         * done about it, see the `integrations` note above.
+         */
+      }),
 
   /**
    * shadcn/ui's neutral palette, so the docs match the rest of the site
@@ -549,7 +582,7 @@ export default defineConfig({
      * already or did not want.
      */
     mcp: {
-      enabled: true,
+      enabled: !BINARY,
       route: "/mcp/docs",
       name: "sigiro-docs",
       instructions:

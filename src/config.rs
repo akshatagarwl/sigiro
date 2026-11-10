@@ -333,6 +333,13 @@ pub(crate) fn disk_sample_seconds() -> Result<NonZeroU64> {
 pub(crate) static DASHBOARD_DIR: Envar<String> =
     Envar::on_startup("SIGIRO_DASHBOARD_DIR", || EnvarDef::Unset);
 
+/// A static export of the docs on disk (`www/dist-binary`, the directory
+/// holding the docs' `index.html`). Every server serves the docs built into the
+/// binary at `/docs/`; set this to serve a different export instead, for
+/// example while editing the docs.
+pub(crate) static DOCS_DIR: Envar<String> =
+    Envar::on_startup("SIGIRO_DOCS_DIR", || EnvarDef::Unset);
+
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
 /// Defaults to the platform data dir (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).
 pub(crate) static DATA_DIR: Envar<String> =

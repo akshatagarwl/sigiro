@@ -6,16 +6,12 @@
 //! dashboard development); when it is set, the disk copy wins. A plain
 //! `cargo build` without the export embeds nothing and serves no UI.
 
-use std::borrow::Cow;
-use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use axum::Router;
-use axum::extract::{Path as AxumPath, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::get;
-use rust_embed::{EmbeddedFile, RustEmbed};
+use rust_embed::RustEmbed;
+
+use crate::static_site::{Site, Source};
 
 #[derive(RustEmbed)]
 #[folder = "dashboard/dist/dashboard/"]
@@ -25,43 +21,27 @@ struct Embedded;
 /// Next.js puts content-hashed build output here; those files never change.
 const IMMUTABLE_PREFIX: &str = "_next/static/";
 
-/// Where the dashboard's files come from.
-#[derive(Clone)]
-pub(crate) enum Source {
-    /// A static export on disk: the directory that holds `dashboard/`.
-    Disk(PathBuf),
-    /// Files compiled into the binary.
-    Embedded(fn(&str) -> Option<EmbeddedFile>),
+/// The dashboard to serve, if any. A server that requires auth serves none:
+/// the hosted dashboard signs in on sigiro.com, and a self-hosted server with
+/// auth has no sign-in page. `dir` is the directory that holds `dashboard/`.
+pub(crate) fn select(requires_auth: bool, dir: Option<String>, embedded: bool) -> Option<Source> {
+    if requires_auth {
+        return None;
+    }
+    match dir {
+        Some(dir) if !dir.trim().is_empty() => {
+            Some(Source::Disk(PathBuf::from(dir).join("dashboard")))
+        }
+        _ if embedded => Some(Source::Embedded(Embedded::get)),
+        _ => None,
+    }
 }
 
-impl Source {
-    /// The dashboard to serve, if any. A server that requires auth serves none:
-    /// the hosted dashboard signs in on sigiro.com, and a self-hosted server
-    /// with auth has no sign-in page.
-    pub(crate) fn select(requires_auth: bool, dir: Option<String>, embedded: bool) -> Option<Self> {
-        if requires_auth {
-            return None;
-        }
-        match dir {
-            Some(dir) if !dir.trim().is_empty() => Some(Self::Disk(PathBuf::from(dir))),
-            _ if embedded => Some(Self::Embedded(Embedded::get)),
-            _ => None,
-        }
-    }
-
-    /// As [`Source::select`], reading `SIGIRO_DASHBOARD_DIR` and checking
-    /// whether this binary embeds a build.
-    pub(crate) fn from_env(requires_auth: bool) -> Option<Self> {
-        let dir = crate::config::DASHBOARD_DIR.value().ok();
-        Self::select(requires_auth, dir, is_embedded())
-    }
-
-    fn describe(&self) -> String {
-        match self {
-            Self::Disk(dir) => dir.display().to_string(),
-            Self::Embedded(_) => "embedded".to_string(),
-        }
-    }
+/// As [`select`], reading `SIGIRO_DASHBOARD_DIR` and checking whether this
+/// binary embeds a build.
+pub(crate) fn from_env(requires_auth: bool) -> Option<Source> {
+    let dir = crate::config::DASHBOARD_DIR.value().ok();
+    select(requires_auth, dir, is_embedded())
 }
 
 /// Whether this binary was built with the dashboard export.
@@ -69,157 +49,43 @@ pub fn is_embedded() -> bool {
     Embedded::get("index.html").is_some()
 }
 
+fn site(source: Source) -> Site {
+    Site {
+        source,
+        immutable_prefix: IMMUTABLE_PREFIX,
+        not_found_page: None,
+    }
+}
+
 /// Add `/dashboard/` routes serving `source`.
 pub(crate) fn routes<S>(router: Router<S>, source: Source) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    tracing::info!(source = %source.describe(), "serving the dashboard at /dashboard/");
-    let source = Arc::new(source);
-    router
-        .route(
-            "/dashboard",
-            get(|| async { Redirect::permanent("/dashboard/") }),
-        )
-        .route("/dashboard/", get(index).with_state(source.clone()))
-        .route("/dashboard/{*path}", get(file).with_state(source))
-}
-
-async fn index(State(source): State<Arc<Source>>, headers: HeaderMap) -> Response {
-    serve(source, String::new(), headers).await
-}
-
-async fn file(
-    State(source): State<Arc<Source>>,
-    AxumPath(path): AxumPath<String>,
-    headers: HeaderMap,
-) -> Response {
-    serve(source, path, headers).await
-}
-
-/// The file a request path names, relative to the export root. Paths that are
-/// empty or end in `/` name that directory's `index.html` (the export uses
-/// trailing slashes). `None` for `..`, absolute, or other non-plain components.
-fn relative_file(path: &str) -> Option<String> {
-    let mut parts = Vec::new();
-    for component in Path::new(path).components() {
-        match component {
-            Component::Normal(part) => parts.push(part.to_str()?),
-            Component::CurDir => {}
-            _ => return None,
-        }
-    }
-    if path.is_empty() || path.ends_with('/') {
-        parts.push("index.html");
-    }
-    Some(parts.join("/"))
-}
-
-struct Found {
-    name: String,
-    bytes: Cow<'static, [u8]>,
-    etag: Option<String>,
-}
-
-async fn load(source: &Source, relative: &str) -> Option<Found> {
-    let index = format!("{relative}/index.html");
-    match source {
-        Source::Disk(root) => {
-            let root = root.join("dashboard");
-            for name in [relative, index.as_str()] {
-                let file = root.join(name);
-                if file.is_file()
-                    && let Ok(bytes) = tokio::fs::read(&file).await
-                {
-                    return Some(Found {
-                        name: name.to_string(),
-                        bytes: Cow::Owned(bytes),
-                        etag: None,
-                    });
-                }
-            }
-            None
-        }
-        Source::Embedded(get_file) => [relative, index.as_str()].into_iter().find_map(|name| {
-            get_file(name).map(|file| Found {
-                name: name.to_string(),
-                etag: Some(format!("\"{}\"", hex::encode(file.metadata.sha256_hash()))),
-                bytes: file.data,
-            })
-        }),
-    }
-}
-
-fn content_type(name: &str) -> &'static str {
-    match Path::new(name).extension().and_then(|e| e.to_str()) {
-        Some("html") => "text/html; charset=utf-8",
-        Some("js" | "mjs") => "text/javascript; charset=utf-8",
-        Some("css") => "text/css; charset=utf-8",
-        Some("json" | "map") => "application/json",
-        Some("webmanifest") => "application/manifest+json",
-        Some("txt") => "text/plain; charset=utf-8",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("ico") => "image/x-icon",
-        Some("woff2") => "font/woff2",
-        Some("woff") => "font/woff",
-        _ => "application/octet-stream",
-    }
-}
-
-/// Serve one file of the dashboard export.
-async fn serve(source: Arc<Source>, path: String, headers: HeaderMap) -> Response {
-    let Some(relative) = relative_file(&path) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let Some(found) = load(&source, &relative).await else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let cache = if found.name.starts_with(IMMUTABLE_PREFIX) {
-        "public, max-age=31536000, immutable"
-    } else {
-        "no-cache"
-    };
-    let mut response = match &found.etag {
-        Some(etag)
-            if headers
-                .get(header::IF_NONE_MATCH)
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| v.split(',').any(|t| t.trim() == etag || t.trim() == "*")) =>
-        {
-            StatusCode::NOT_MODIFIED.into_response()
-        }
-        _ => (
-            [(header::CONTENT_TYPE, content_type(&found.name))],
-            axum::body::Body::from(found.bytes),
-        )
-            .into_response(),
-    };
-    let response_headers = response.headers_mut();
-    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
-    if let Some(etag) = found.etag.and_then(|e| HeaderValue::from_str(&e).ok()) {
-        response_headers.insert(header::ETAG, etag);
-    }
-    response
+    crate::static_site::routes(router, "/dashboard", site(source))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use axum::http::{HeaderMap, StatusCode, header};
+
     use super::*;
+    use crate::static_site::serve;
 
     /// A tiny export with the same layout as the real one.
     #[derive(RustEmbed)]
     #[folder = "tests/fixtures/dashboard/"]
     struct Fixture;
 
-    fn fixture() -> Arc<Source> {
-        Arc::new(Source::Embedded(Fixture::get))
+    fn fixture() -> Arc<Site> {
+        Arc::new(site(Source::Embedded(Fixture::get)))
     }
 
     async fn get_path(
-        source: Arc<Source>,
+        source: Arc<Site>,
         path: &str,
         headers: HeaderMap,
     ) -> (StatusCode, HeaderMap, Vec<u8>) {
@@ -235,38 +101,25 @@ mod tests {
 
     #[test]
     fn auth_servers_never_serve_the_dashboard() {
-        assert!(Source::select(true, Some("/tmp/x".into()), true).is_none());
-        assert!(Source::select(true, None, true).is_none());
+        assert!(select(true, Some("/tmp/x".into()), true).is_none());
+        assert!(select(true, None, true).is_none());
     }
 
     #[test]
     fn a_dashboard_dir_wins_over_the_embedded_build() {
         assert!(matches!(
-            Source::select(false, Some("/tmp/x".into()), true),
-            Some(Source::Disk(dir)) if dir == Path::new("/tmp/x")
+            select(false, Some("/tmp/x".into()), true),
+            Some(Source::Disk(dir)) if dir == Path::new("/tmp/x/dashboard")
         ));
         assert!(matches!(
-            Source::select(false, None, true),
+            select(false, None, true),
             Some(Source::Embedded(_))
         ));
         assert!(matches!(
-            Source::select(false, Some(" ".into()), true),
+            select(false, Some(" ".into()), true),
             Some(Source::Embedded(_))
         ));
-        assert!(Source::select(false, None, false).is_none());
-    }
-
-    #[test]
-    fn request_paths_map_to_files() {
-        assert_eq!(relative_file("").as_deref(), Some("index.html"));
-        assert_eq!(
-            relative_file("profiles/").as_deref(),
-            Some("profiles/index.html")
-        );
-        assert_eq!(relative_file("./a/b.js").as_deref(), Some("a/b.js"));
-        assert_eq!(relative_file("../secret"), None);
-        assert_eq!(relative_file("a/../../secret"), None);
-        assert_eq!(relative_file("/etc/passwd"), None);
+        assert!(select(false, None, false).is_none());
     }
 
     #[tokio::test]
@@ -338,7 +191,7 @@ mod tests {
         std::fs::create_dir_all(&pages).expect("create fixture dir");
         std::fs::write(dir.join("dashboard/index.html"), "<p>disk index</p>").expect("write index");
         std::fs::write(pages.join("index.html"), "<p>disk profiles</p>").expect("write page");
-        let source = Arc::new(Source::Disk(dir.clone()));
+        let source = Arc::new(site(Source::Disk(dir.join("dashboard"))));
         let (status, headers, body) = get_path(source.clone(), "profiles", HeaderMap::new()).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");

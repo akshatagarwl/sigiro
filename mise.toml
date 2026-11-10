@@ -92,6 +92,11 @@ description = "Build the dashboard's static export into dashboard/dist/dashboard
 depends = ["dashboard-install"]
 run = "aube -C dashboard run build"
 
+[tasks.docs-build]
+description = "Build the docs' static export (sigiro.com/docs, offline) into www/dist-binary."
+depends = ["www-install"]
+run = "scripts/build-docs-export.sh"
+
 [tasks.auth-install]
 description = "Install auth dependencies from the frozen aube lockfile."
 run = "aube -C auth install --frozen-lockfile"
@@ -136,11 +141,12 @@ description = "Reconcile the hosted admin schema against a TLS PostgreSQL 17 con
 run = "scripts/test-admin-postgres.sh"
 
 [tasks.build]
-description = "Release build of the sigiro binary, with the dashboard built in. Set TARGET to cross-compile."
-# The binary embeds dashboard/dist/dashboard (src/dashboard.rs). Requiring it
-# makes build.rs fail instead of shipping a binary with no UI.
-depends = ["dashboard-build"]
-env = { SIGIRO_REQUIRE_DASHBOARD = "1" }
+description = "Release build of the sigiro binary, with the dashboard and docs built in. Set TARGET to cross-compile."
+# The binary embeds dashboard/dist/dashboard (src/dashboard.rs) and the docs
+# export www/dist-binary (src/docs.rs). Requiring them makes build.rs fail
+# instead of shipping a binary with no UI or no manual.
+depends = ["dashboard-build", "docs-build"]
+env = { SIGIRO_REQUIRE_DASHBOARD = "1", SIGIRO_REQUIRE_DOCS = "1" }
 run = 'scripts/run-with-duckdb-static.sh mbx build --release --locked --bin sigiro ${TARGET:+--target "$TARGET"}'
 
 [tasks.bench]

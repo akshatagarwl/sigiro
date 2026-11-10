@@ -23,6 +23,7 @@ export default defineConfig({
   ignorePatterns: [
     "**/node_modules/**",
     "**/dist/**",
+    "www/dist-binary/**",
     "**/.astro/**",
     "**/.blume/**",
     "**/.cache/**",

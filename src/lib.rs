@@ -6,6 +6,7 @@ pub mod config;
 pub(crate) mod dashboard;
 mod declared_schema;
 pub mod disk_gate;
+pub(crate) mod docs;
 pub mod federate;
 
 pub mod ingest;
@@ -23,6 +24,7 @@ pub mod responses;
 pub mod runtime_metrics;
 pub mod schema;
 pub mod server;
+pub(crate) mod static_site;
 pub mod storage;
 pub mod types;
 pub mod workload;

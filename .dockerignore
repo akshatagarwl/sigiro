@@ -4,6 +4,7 @@
 !build.rs
 !scripts/
 !scripts/prepare-duckdb-static.sh
+!scripts/build-docs-export.sh
 !src/
 !src/**
 !crates/
@@ -14,3 +15,13 @@ dashboard/node_modules/
 dashboard/.next/
 dashboard/out/
 dashboard/dist/
+!www/
+!www/**
+www/node_modules/
+www/.blume/
+www/.blume-verify/
+www/.wrangler/
+www/.alchemy/
+www/dist/
+www/dist-binary/
+www/.env*

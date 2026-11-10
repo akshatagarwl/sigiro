@@ -562,8 +562,15 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     // The hosted dashboard signs in on sigiro.com; a self-hosted open-mode
     // server has no sign-in, so it serves the dashboard itself (embedded in
     // the binary, or SIGIRO_DASHBOARD_DIR when set). See src/dashboard.rs.
-    let public = match crate::dashboard::Source::from_env(app_state.auth_mode.requires_auth()) {
+    let public = match crate::dashboard::from_env(app_state.auth_mode.requires_auth()) {
         Some(source) => crate::dashboard::routes(public, source),
+        None => public,
+    };
+
+    // The docs are public, so every server serves them, auth or not (embedded
+    // in the binary, or SIGIRO_DOCS_DIR when set). See src/docs.rs.
+    let public = match crate::docs::from_env() {
+        Some(source) => crate::docs::routes(public, source),
         None => public,
     };
 

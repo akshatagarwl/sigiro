@@ -19,6 +19,7 @@ fn main() {
     println!("cargo:rustc-env=SIGIRO_VERSION={long}");
 
     dashboard();
+    docs();
 
     match env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("linux") => {
@@ -50,6 +51,29 @@ fn dashboard() {
         panic!(
             "SIGIRO_REQUIRE_DASHBOARD=1 but dashboard/dist/dashboard/index.html is missing. \
              Build the dashboard first: `mise run dashboard-install dashboard-build` \
+             (or use `mise run build`, which does both)."
+        );
+    }
+}
+
+/// `src/docs.rs` embeds `www/dist-binary`, the docs' static export
+/// (`scripts/build-docs-export.sh`). Release builds set `SIGIRO_REQUIRE_DOCS=1`
+/// so a binary cannot ship without its manual; other builds embed whatever is
+/// there, or nothing.
+#[allow(clippy::disallowed_methods)]
+fn docs() {
+    let export = std::path::Path::new("www/dist-binary");
+    println!("cargo:rerun-if-env-changed=SIGIRO_REQUIRE_DOCS");
+    // As for the dashboard: the export script replaces the directory, so watch
+    // it, and make sure it exists so a missing export does not dirty every build.
+    if std::fs::create_dir_all(export).is_ok() {
+        println!("cargo:rerun-if-changed=www/dist-binary");
+    }
+    let required = env::var("SIGIRO_REQUIRE_DOCS").is_ok_and(|v| v == "1");
+    if required && !export.join("index.html").is_file() {
+        panic!(
+            "SIGIRO_REQUIRE_DOCS=1 but www/dist-binary/index.html is missing. \
+             Build the docs first: `mise run docs-build` \
              (or use `mise run build`, which does both)."
         );
     }

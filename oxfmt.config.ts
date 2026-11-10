@@ -9,6 +9,7 @@ export default defineConfig({
     "www/.astro/**",
     "www/.blume/**",
     "www/dist/**",
+    "www/dist-binary/**",
     "www/docs/tutorials/quickstart.mdx",
     "www/docs/*/tutorials/quickstart.mdx",
     "www/openapi.json",
