@@ -67,7 +67,7 @@ arrow = "60"
 duckdb = { version = "=1.20000.1", default-features = false, features = ["appender-arrow", "vscalar"] }
 opentelemetry-proto = { version = "0.33", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
 axum = "0.8"
-axum-server = { version = "0.8", features = ["tls-rustls"] }
+axum-server = { version = "0.9", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 tower-http = { version = "0.7", features = ["compression-full", "decompression-full", "cors", "trace"] }
 axum-anyhow = "0.11"
@@ -85,10 +85,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
 # demangles DuckDB's native C++ frames. jemalloc_pprof dumps the sampled heap,
 # pprof_util parses the dump, and backtrace symbolizes its addresses.
 pprof = { version = "0.15", default-features = false, features = ["cpp"] }
-jemalloc_pprof = "0.8.2"
+jemalloc_pprof = "0.9"
 pprof_util = "0.8.2"
 backtrace = "0.3"
-tikv-jemallocator = { version = "0.6.1", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 regex = "1"
 hex = "0.4.3"

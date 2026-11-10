@@ -27,24 +27,24 @@
     "indexnow": "tsx scripts/indexnow.ts"
   },
   "dependencies": {
-    "@astrojs/cloudflare": "14.4.2",
+    "@astrojs/cloudflare": "14.4.6",
     "@astrojs/sitemap": "3.7.4",
     "@modelcontextprotocol/sdk": "1.32.2",
-    "@nekuda/webmcp-sdk": "0.8.0",
-    "astro": "7.4.4",
-    "blume": "2.2.6",
+    "@nekuda/webmcp-sdk": "0.9.0",
+    "astro": "7.4.7",
+    "blume": "2.2.7",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "effect": "4.0.7",
+    "effect": "4.1.2",
     "input-otp": "1.5.0",
-    "lucide-react": "1.66.0",
-    "motion": "14.7.1",
+    "lucide-react": "1.70.0",
+    "motion": "14.10.1",
     "oauth4webapi": "3.8.8",
     "radix-ui": "1.8.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "shiki": "4.5.0",
-    "sigiro-icons": "npm:simple-icons@16.36.0",
+    "shiki": "4.6.0",
+    "sigiro-icons": "npm:simple-icons@16.37.0",
     "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
@@ -52,18 +52,18 @@
     "@alchemy.run/docker": "2.0.0-beta.84",
     "@alchemy.run/frontend-frameworks": "2.0.0-beta.84",
     "@alchemy.run/hetzner": "2.0.0-beta.84",
-    "@effect/platform-node": "4.0.7",
+    "@effect/platform-node": "4.1.2",
     "@mcp-b/webmcp-polyfill": "6.0.3",
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vercel/og": "1.0.3",
     "alchemy": "2.0.0-beta.84",
-    "geist": "1.8.2",
-    "playwright": "1.64.1",
+    "geist": "1.9.2",
+    "playwright": "1.65.0",
     "tsx": "4.23.15",
     "typescript": "7.1.0-dev.20260803.1",
-    "wrangler": "4.154.0"
+    "wrangler": "4.158.0"
   },
   "packageManager": "aube@2.8.4",
   "ignoreScripts": [
@@ -76,7 +76,7 @@
   ],
   "aube": {
     "patchedDependencies": {
-      "astro@7.4.4": "patches/astro@7.4.4.patch"
+      "astro@7.4.7": "patches/astro@7.4.7.patch"
     }
   }
 }

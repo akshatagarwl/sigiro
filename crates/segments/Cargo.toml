@@ -19,7 +19,7 @@ nutype = { version = "0.8", features = ["serde"] }
 parquet = { version = "60", default-features = false, features = ["arrow", "snap"] }
 prost = "0.14"
 regex = "1"
-sqlparser = { version = "0.63", features = ["visitor"] }
+sqlparser = { version = "0.64", features = ["visitor"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
