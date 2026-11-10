@@ -6,10 +6,10 @@ use std::env;
 // is unreadable from the built binary.
 #[allow(clippy::disallowed_methods)]
 fn main() {
-    // `sigiro --version`: the release driver sets SIGIRO_BUILD_COMMIT to the
-    // short source SHA so a downloaded binary names the commit it came from.
-    // Every release is published as the mutable 0.1.0, so the package version
-    // alone cannot tell two downloads apart.
+    // `sigiro --version`: release.yml and the nightly driver set
+    // SIGIRO_BUILD_COMMIT to the short source SHA so a downloaded binary names
+    // the commit it came from. Nightlies all carry the version of the next
+    // release, so the package version alone cannot tell two of them apart.
     println!("cargo:rerun-if-env-changed=SIGIRO_BUILD_COMMIT");
     let version = env::var("CARGO_PKG_VERSION").unwrap_or_default();
     let long = match env::var("SIGIRO_BUILD_COMMIT") {

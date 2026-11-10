@@ -11,7 +11,9 @@ import { env } from "cloudflare:workers";
  *
  * Keys are `LATEST`, `<version>/SHA256SUMS` and
  * `<version>/sigiro-<version>-<target>.tar.gz`. The installer at /install builds
- * all three.
+ * all three. `nightly/` has the same shape with `nightly` as the version, so
+ * `SIGIRO_VERSION=nightly` installs the last build of main. sigiro-infra is the
+ * only writer.
  */
 
 /**
@@ -51,13 +53,14 @@ export const GET: APIRoute = async ({ params }) => {
   headers.set("content-length", String(object.size));
 
   /**
-   * `LATEST` is the one mutable key — it names the current version, so a cached
-   * copy is a reader pinned to an old release. Everything else is addressed by
+   * Two things are mutable: `LATEST`, which names the current version, and
+   * `nightly/`, which the nightly build overwrites. A cached copy of either is
+   * a reader pinned to an old build. Everything else is addressed by a released
    * version and can never change, so it gets a year and `immutable`.
    */
   headers.set(
     "cache-control",
-    key === "LATEST"
+    key === "LATEST" || key.startsWith("nightly/")
       ? "public, max-age=0, s-maxage=60, stale-while-revalidate=300"
       : "public, max-age=31536000, immutable"
   );

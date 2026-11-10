@@ -1,6 +1,7 @@
 name: Release
 
-# Tags and manual releases build and publish release artifacts.
+# A v* tag builds the four CLI archives and publishes them, with SHA256SUMS, as
+# a GitHub Release. A manual run builds and uploads workflow artifacts only.
 on:
   push:
     tags: ['v*']
@@ -14,25 +15,23 @@ env:
   RUSTC_WRAPPER: sccache
 
 jobs:
-  # Fails in seconds if the R2 credentials are missing, before the matrix spends
-  # an hour of macOS minutes compiling DuckDB from source for a release that
-  # cannot be uploaded. v0.1.0 was cut by hand precisely because these secrets
-  # were not set; tagging without them should cost nothing, not an hour.
+  # Fails in seconds if the tag does not name the version in Cargo.toml, before
+  # the matrix spends an hour of macOS minutes on a release whose archives would
+  # carry the wrong version. No secrets: this workflow only publishes a GitHub
+  # Release. sigiro.com/dl is written by sigiro-infra alone, which copies each
+  # published release into R2 after checking these same checksums.
   preflight:
     runs-on: ubuntu-latest
     steps:
-      - name: R2 credentials present
-        env:
-          KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
-          SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          ACCOUNT: ${{ secrets.R2_ACCOUNT_ID }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          missing=''
-          [ -n "$KEY" ]     || missing="$missing R2_ACCESS_KEY_ID"
-          [ -n "$SECRET" ]  || missing="$missing R2_SECRET_ACCESS_KEY"
-          [ -n "$ACCOUNT" ] || missing="$missing R2_ACCOUNT_ID"
-          if [ -n "$missing" ]; then
-            echo "::error::missing repo secrets:$missing — set them, or publish by hand"
+          set -euo pipefail
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$cargo_version" != "$tag_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $cargo_version"
             exit 1
           fi
 
@@ -74,7 +73,13 @@ jobs:
         uses: jdx/mr-boxington-action@867fc530102eec5b756075d70d850dc8330d2272 # v1.4.0
         with:
           cache-generation: v1-${{ matrix.target }}
-      - name: Install pinned build tools
+      # mise.toml's rust pin already lists every release target; this only
+      # asserts it. MISE_DISABLE_TOOLS keeps `mise exec` from installing the
+      # DuckDB CLI, which the build does not use and which has no asset for
+      # these runners at the pinned version.
+      - name: Rust target installed
+        env:
+          MISE_DISABLE_TOOLS: duckdb
         run: mise exec -- rustup target add "${{ matrix.target }}"
 
       - name: Cross-compilation toolchain
@@ -97,10 +102,20 @@ jobs:
             echo "DUCKDB_STATIC_CACHE=$DUCKDB_STATIC_CACHE"
           } >> "$GITHUB_ENV"
 
+      # ci.yml's reason applies here too: libduckdb-sys puts the C++ runtime
+      # before the static archive, so repeat it at the end of the link line.
+      - name: Linux link flags
+        if: contains(matrix.target, 'linux')
+        run: echo 'RUSTFLAGS=-C link-arg=-lstdc++' >> "$GITHUB_ENV"
+
       - name: Build
         env:
           TARGET: ${{ matrix.target }}
-        run: mise run --skip-tools build
+        run: |
+          set -euo pipefail
+          # `sigiro --version` names the commit as well as the version.
+          export SIGIRO_BUILD_COMMIT="${GITHUB_SHA::9}"
+          mise run --skip-tools build
 
       # No UPX here, unlike the image. Compression buys nothing on a download
       # the reader does once, costs a decompression stub on every start, and is
@@ -112,11 +127,19 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            # A manual run off a branch builds and uploads workflow artifacts
+            # only; it never publishes, so the name just has to be unique.
+            version="0.0.0-${GITHUB_SHA::9}"
+          fi
           name="sigiro-${version}-${TARGET}.tar.gz"
           # -C so the archive holds a bare `sigiro`, not a path. The installer
-          # looks for exactly that.
-          tar -czf "$name" -C "target/${TARGET}/release" sigiro
+          # looks for exactly that. COPYFILE_DISABLE keeps macOS tar from
+          # adding AppleDouble entries.
+          COPYFILE_DISABLE=1 tar -czf "$name" -C "target/${TARGET}/release" sigiro
+          [ "$(tar -tzf "$name")" = sigiro ] || { echo "::error::$name must hold exactly one file, sigiro"; exit 1; }
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -126,9 +149,15 @@ jobs:
           path: ${{ steps.package.outputs.name }}
           if-no-files-found: error
 
+  # Tags only: a manual run stops after the build. GitHub Releases are the
+  # source of truth for a version; sigiro-infra's nightly driver promotes each
+  # new one to sigiro.com/dl/<version>/ and then moves LATEST.
   publish:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -141,28 +170,16 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
+          count="$(find . -maxdepth 1 -name "*.tar.gz" | wc -l)"
+          [ "$count" -eq 4 ] || { echo "::error::expected 4 archives, found $count"; exit 1; }
           sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Configure R2 credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          aws-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          aws-region: auto
-
-      # Upload versioned artifacts BEFORE LATEST. LATEST is what the installer
-      # reads first, so if it names a version whose archives are not up yet,
-      # every install in that window fails. Write the pointer last and this
-      # cannot happen.
-      - name: Upload to R2
+      - name: GitHub Release
         env:
-          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          aws s3 cp dist "s3://sigiro-dl/${version}/" \
-            --endpoint-url "$ENDPOINT" --recursive --no-progress
-          printf '%s' "$version" > LATEST
-          aws s3 cp LATEST s3://sigiro-dl/LATEST \
-            --endpoint-url "$ENDPOINT" --content-type text/plain --no-progress
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "sigiro ${GITHUB_REF_NAME#v}" --generate-notes
