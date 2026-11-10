@@ -13,7 +13,6 @@ try {
   const tsOf = (i) => 1794243364481000 - (i > 49 ? i - 1 : i) * 1000;
   const data = Array.from({ length: 60 }, (_, i) => ({
     timestamp: tsOf(i),
-    sigiro_cursor_us: tsOf(i),
     sigiro_cursor_key: `${String(i).padStart(2, "0")}|synthetic-pagination|key`,
     level: "info",
     service_name: "synthetic-pagination",

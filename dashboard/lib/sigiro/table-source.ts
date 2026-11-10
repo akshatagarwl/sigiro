@@ -101,7 +101,7 @@ export function sqlTransport<TRow extends { timestamp: Date }>(
     const bound = after
       ? `(timestamp ${newer ? ">" : "<"} make_timestamp(${after.micros}) OR (timestamp = make_timestamp(${after.micros}) AND ${source.key} ${newer ? ">" : "<"} ${sqlString(after.key)}))`
       : `timestamp ${newer ? ">" : "<"} ${ts(cursor)}`;
-    const page = `SELECT ${source.select}, epoch_us(timestamp) AS sigiro_cursor_us, ${source.key} AS sigiro_cursor_key ${where([...filters, bound])} ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT ${newer ? 500 : size}`;
+    const page = `SELECT ${source.select}, ${source.key} AS sigiro_cursor_key ${where([...filters, bound])} ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT ${newer ? 500 : size}`;
 
     const facetKeys = [source.series.key, ...Object.keys(source.facets)];
     const facetSql = [source.series.sql, ...Object.values(source.facets)];
@@ -186,7 +186,8 @@ export function sqlTransport<TRow extends { timestamp: Date }>(
     const data = rows.map(source.toRow);
     const keyset = (row: Row) =>
       encodeKeyset({
-        micros: num(row.sigiro_cursor_us ?? row.timestamp),
+        // `/v1/query` sends TIMESTAMP columns as epoch microseconds.
+        micros: num(row.timestamp),
         key: String(row.sigiro_cursor_key ?? ""),
       });
     const response: InfiniteQueryResponse<TRow[]> = {
