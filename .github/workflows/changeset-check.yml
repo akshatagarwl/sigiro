@@ -1,0 +1,33 @@
+name: Changeset check
+
+# Warns, never fails, when a pull request changes what ships in the sigiro
+# binary without adding a .changeset/*.md file. Changes that need no changelog
+# line (refactors, tests) can ignore the warning or add an empty changeset with
+# `aube run changeset --empty`. No secrets, so it runs on forks too.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  changeset:
+    if: ${{ !startsWith(github.head_ref, 'release/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Look for a changeset
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          shipped="$(printf '%s\n' "$changed" | grep -E '^(src/|crates/|dashboard/|build\.rs$|Cargo\.toml$)' || true)"
+          added="$(git diff --name-only --diff-filter=A "$BASE_SHA"...HEAD -- '.changeset/*.md' | grep -v '^\.changeset/README\.md$' || true)"
+          if [ -n "$shipped" ] && [ -z "$added" ]; then
+            echo "::warning::This PR changes the sigiro binary but adds no changeset. Run \`aube run changeset\` (or \`aube run changeset --empty\` if it needs no changelog line)."
+          else
+            echo "ok"
+          fi

@@ -2,10 +2,21 @@ name: Release
 
 # A v* tag builds the four CLI archives and publishes them, with SHA256SUMS, as
 # a GitHub Release. A manual run builds and uploads workflow artifacts only.
+#
+# tag-on-main.yml also calls this workflow (workflow_call) right after it pushes
+# the tag, because a tag pushed with GITHUB_TOKEN starts no workflow run. In a
+# called run github.ref is main, so every step reads the tag from
+# preflight.outputs.tag instead.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      tag:
+        description: The v<version> tag to build and publish. It must already exist.
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -22,16 +33,45 @@ jobs:
   # published release into R2 after checking these same checksums.
   preflight:
     runs-on: ubuntu-latest
+    outputs:
+      # Empty for a manual run off a branch: build only, never publish.
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
+      - name: Release tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$INPUT_TAG"
+          if [ -z "$tag" ] && [ "$GITHUB_REF_TYPE" = tag ]; then tag="$GITHUB_REF_NAME"; fi
+          case "$tag" in ""|v*) ;; *) echo "::error::release tag '$tag' must start with v"; exit 1 ;; esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.tag.outputs.tag || github.sha }}
       - name: Tag matches Cargo.toml
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.tag.outputs.tag != ''
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
-          tag_version="${GITHUB_REF_NAME#v}"
-          if [ "$cargo_version" != "$tag_version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $cargo_version"
+          if [ "$cargo_version" != "${TAG#v}" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml version $cargo_version"
+            exit 1
+          fi
+      # A published version is never rebuilt or replaced: archives already on
+      # sigiro.com/dl and in users' SHA256SUMS would stop matching.
+      - name: Not released yet
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::$TAG is already released; a version is never re-released"
             exit 1
           fi
 
@@ -60,6 +100,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.tag || github.sha }}
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
@@ -114,7 +156,8 @@ jobs:
         run: |
           set -euo pipefail
           # `sigiro --version` names the commit as well as the version.
-          export SIGIRO_BUILD_COMMIT="${GITHUB_SHA::9}"
+          SIGIRO_BUILD_COMMIT="$(git rev-parse --short=9 HEAD)"
+          export SIGIRO_BUILD_COMMIT
           mise run --skip-tools build
 
       # No UPX here, unlike the image. Compression buys nothing on a download
@@ -125,10 +168,11 @@ jobs:
         id: package
         env:
           TARGET: ${{ matrix.target }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" = tag ]; then
-            version="${GITHUB_REF_NAME#v}"
+          if [ -n "$TAG" ]; then
+            version="${TAG#v}"
           else
             # A manual run off a branch builds and uploads workflow artifacts
             # only; it never publishes, so the name just has to be unique.
@@ -153,8 +197,8 @@ jobs:
   # source of truth for a version; sigiro-infra's nightly driver promotes each
   # new one to sigiro.com/dl/<version>/ and then moves LATEST.
   publish:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [preflight, build]
+    if: needs.preflight.outputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -178,8 +222,9 @@ jobs:
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS \
+          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "sigiro ${GITHUB_REF_NAME#v}" --generate-notes
+            --title "sigiro ${TAG#v}" --generate-notes

@@ -1,5 +1,6 @@
 {
-  "name": "@sigiro/tooling",
+  "name": "sigiro",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "packageManager": "aube@2.8.4",
@@ -10,9 +11,13 @@
     "prepare": "effect-tsgo patch --no-typescript --oxlint",
     "fmt": "oxfmt --config oxfmt.config.ts --disable-nested-config \"**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}\"",
     "fmt:check": "oxfmt --config oxfmt.config.ts --disable-nested-config --check \"**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}\"",
-    "lint": "oxlint --config oxlint.config.ts --disable-nested-config --type-aware auth && oxlint --config oxlint.config.ts --disable-nested-config --ignore-pattern 'auth/**' ."
+    "lint": "oxlint --config oxlint.config.ts --disable-nested-config --type-aware auth && oxlint --config oxlint.config.ts --disable-nested-config --ignore-pattern 'auth/**' .",
+    "changeset": "changeset",
+    "release:version": "changeset version && node scripts/sync-release-version.mjs",
+    "release:pr": "node scripts/release-pr.mjs"
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.3",
     "@effect/tsgo": "0.62.0",
     "@oxlint/plugins": "1.90.0",
     "oxfmt": "0.75.0",

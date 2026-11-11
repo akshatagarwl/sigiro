@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+<!-- Changesets inserts each release above the newest version heading. -->
+
+## 0.2.0
 
 ### Breaking changes
 
