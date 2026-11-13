@@ -9,7 +9,6 @@ import {
   IconFlame,
   IconHierarchy2,
   IconListDetails,
-  IconServer,
 } from "@tabler/icons-react"
 
 import { NavMain } from "@/components/nav-main"
@@ -29,7 +28,6 @@ import {
 const data = {
   navMain: [
     { title: "Overview", url: "/", icon: IconDashboard },
-    { title: "Services", url: "/services/", icon: IconServer },
     { title: "Traces", url: "/traces/", icon: IconHierarchy2 },
     { title: "Logs", url: "/logs/", icon: IconListDetails },
     { title: "Profiles", url: "/profiles/", icon: IconFlame },

@@ -28,7 +28,7 @@ export function NavMain({
   // selection fits a single-service summary/profile control.
   const params = useSearchParams()
   const keep = new URLSearchParams()
-  for (const key of ["range", "live"]) {
+  for (const key of ["range", "live", "timeStart", "timeEnd"]) {
     const value = params.get(key)
     if (value) keep.set(key, value)
   }
@@ -36,7 +36,7 @@ export function NavMain({
     if (destination === pathname) return `${destination}${params.size ? `?${params}` : ""}`
     const next = new URLSearchParams(keep)
     const explorer = (path: string) => ["/logs/", "/traces/"].includes(path)
-    const singleService = (path: string) => ["/", "/services/", "/profiles/"].includes(path)
+    const singleService = (path: string) => ["/", "/profiles/"].includes(path)
     const compatibleExplorers = explorer(pathname) && explorer(destination)
     if (compatibleExplorers || (singleService(pathname) && singleService(destination))) {
       const service = params.get("service")

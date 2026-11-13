@@ -147,9 +147,8 @@ export const bucketFor = (from: Date, to: Date) => {
 export const FAILED_SQL = "status_code = 2";
 
 /**
- * Failed ÷ all spans as a percentage, rounded on the server. The Overview
- * card and the Services table both use exactly this over the header's
- * window, so with one service picked the two agree to the digit.
+ * Failed ÷ all spans as a percentage, rounded on the server over the
+ * header's time window and selected service.
  */
 export const ERROR_RATE_SQL = `round(100.0 * count(*) FILTER (WHERE ${FAILED_SQL}) / nullif(count(*), 0), 2)`;
 

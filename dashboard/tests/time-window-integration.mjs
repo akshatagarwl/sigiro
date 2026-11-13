@@ -15,7 +15,7 @@ await page.route("**/v1/query", async (route) => {
 const start = 1700000000123;
 const end = 1700003600456;
 try {
-  for (const path of ["", "services/", "logs/", "traces/", "profiles/"]) {
+  for (const path of ["", "logs/", "traces/", "profiles/"]) {
     queries.length = 0;
     await page.goto(
       `${base}/dashboard/${path}?timeStart=${start}&timeEnd=${end}`

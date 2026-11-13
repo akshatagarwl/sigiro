@@ -60,22 +60,14 @@ try {
       ["laptop", 1366, 900],
       ["mobile", 390, 844],
     ])
-      for (const view of [
-        "overview",
-        "services",
-        "traces",
-        "logs",
-        "profiles",
-        "sql",
-      ]) {
+      for (const view of ["overview", "traces", "logs", "profiles", "sql"]) {
         await check(
           `${view} ${size} real route, bounded shell, screenshot and scoped axe`,
           "real backend",
           async () => {
             const p = await page({ width, height });
             await p.goto(url(view === "overview" ? "" : view + "/"));
-            if (["overview", "services"].includes(view))
-              await state(p, view, "ready");
+            if (view === "overview") await state(p, view, "ready");
             if (view === "profiles") await state(p, view, "empty");
             if (view === "logs")
               await p.locator("[data-event-row]").first().waitFor();
@@ -246,14 +238,14 @@ try {
     }
   );
   await check(
-    "Compatible service/date navigation, active-route retention, back/forward/reload; real empty Overview/Services",
+    "Compatible service/date navigation, active-route retention, back/forward/reload; real empty Overview",
     "real backend",
     async () => {
       const p = await page();
       await p.goto(url("", "service=dashboard-e2e&range=7d"));
       await state(p, "overview", "ready");
-      await p.getByRole("link", { name: "Services", exact: true }).click();
-      await state(p, "services", "ready");
+      await p.getByRole("link", { name: "Profiles", exact: true }).click();
+      await state(p, "profiles", "empty");
       assert.equal(
         new URL(p.url()).searchParams.get("service"),
         "dashboard-e2e"
@@ -262,9 +254,9 @@ try {
       await state(p, "overview", "ready");
       assert.equal(new URL(p.url()).searchParams.get("range"), "7d");
       await p.goForward();
-      await state(p, "services", "ready");
+      await state(p, "profiles", "empty");
       await p.reload();
-      await state(p, "services", "ready");
+      await state(p, "profiles", "empty");
       await p.goto(
         url("logs/", `timestamp=${fixed}&service=dashboard-e2e&level=info`)
       );
@@ -280,7 +272,7 @@ try {
         "dashboard-e2e"
       );
       assert(!new URL(p.url()).searchParams.has("level"));
-      for (const view of ["overview", "services"]) {
+      for (const view of ["overview"]) {
         await p.goto(
           url(
             view === "overview" ? "" : view + "/",
@@ -427,7 +419,7 @@ try {
       await p.close();
     }
   );
-  for (const view of ["overview", "services", "profiles"])
+  for (const view of ["overview", "profiles"])
     await check(
       `${view} deterministic request failure/retry without intercepting auth health`,
       "synthetic failure over real page",
@@ -439,11 +431,7 @@ try {
           if (
             fail &&
             sql.includes(
-              view === "profiles"
-                ? "FROM sigiro_profiles"
-                : view === "services"
-                  ? "AS failed_spans"
-                  : "AS spans_before"
+              view === "profiles" ? "FROM sigiro_profiles" : "AS spans_before"
             )
           )
             return route.fulfill({
@@ -498,112 +486,10 @@ try {
       assert.equal(calls, 2);
       await input.press("Control+Enter");
       await state(p, "sql", "running");
-      await p.getByRole("link", { name: "Services", exact: true }).click();
-      await state(p, "services", "ready");
+      await p.getByRole("link", { name: "Overview", exact: true }).click();
+      await state(p, "overview", "ready");
       await pause(750);
       assert(aborted >= 1);
-      await p.close();
-    }
-  );
-  await check(
-    "Services client filter/sort, live selected-payload refresh, detail focus and SQL column namespace",
-    "synthetic service aggregates; real SQL SELECT",
-    async () => {
-      const p = await page();
-      let round = 0;
-      await p.route("**/v1/query", async (route) => {
-        const sql = route.request().postData() ?? "";
-        if (!sql.startsWith("SELECT service_name AS service"))
-          return route.continue();
-        return route.fulfill({
-          json: sql.includes("AS failed_spans")
-            ? [
-                {
-                  service: "api",
-                  spans: 20 + round,
-                  failed_spans: 1,
-                  error_rate: 5,
-                  p50_ms: 1,
-                  p95_ms: 2,
-                  p99_ms: 3,
-                  operations: 2,
-                },
-                {
-                  service: "worker",
-                  spans: 5,
-                  failed_spans: 0,
-                  error_rate: 0,
-                  p50_ms: 2,
-                  p95_ms: 3,
-                  p99_ms: 4,
-                  operations: 1,
-                },
-              ]
-            : [
-                { service: "api", logs: 4, error_logs: 1 },
-                { service: "worker", logs: 9, error_logs: 0 },
-              ],
-        });
-      });
-      await p.goto(url("services/"));
-      await state(p, "services", "ready");
-      await p.getByRole("button", { name: "Spans", exact: true }).click();
-      assert.equal(
-        await p
-          .getByRole("columnheader", { name: "Spans", exact: true })
-          .getAttribute("aria-sort"),
-        "descending"
-      );
-      await p.getByRole("button", { name: "Spans", exact: true }).click();
-      await p
-        .locator("tbody tr[id]")
-        .first()
-        .filter({ hasText: "worker" })
-        .waitFor();
-      assert.equal(
-        await p.locator("tbody tr[id]").first().getAttribute("id"),
-        "worker"
-      );
-      await p.getByRole("button", { name: /Filter loaded rows/ }).click();
-      await p.getByPlaceholder("Filter loaded rows…").fill("service:api");
-      await p.getByPlaceholder("Filter loaded rows…").press("Enter");
-      await p.getByPlaceholder("Filter loaded rows…").press("Escape");
-      await p.getByRole("button", { name: "Reset", exact: true }).waitFor();
-      assert.equal(await p.locator("tbody tr[id]").count(), 1);
-      await p.getByRole("button", { name: "Reset", exact: true }).click();
-      await p.clock.install();
-      await p
-        .getByRole("button", { name: "Live refresh every 10 seconds" })
-        .click();
-      const row = p.locator("tr[id=api]");
-      await row.focus();
-      await row.press("Enter");
-      await p.getByRole("dialog").waitFor();
-      round = 5;
-      await p.clock.fastForward(10500);
-      await p.getByRole("dialog").getByText("25", { exact: true }).waitFor();
-      await p.keyboard.press("Escape");
-      await p.getByRole("dialog").waitFor({ state: "hidden" });
-      assert.equal(await p.evaluate(() => document.activeElement?.id), "api");
-      await p.getByRole("combobox", { name: "Configure columns" }).click();
-      await p.getByRole("option", { name: "Spans", exact: true }).click();
-      await p.keyboard.press("Escape");
-      assert.equal(
-        await p.getByRole("button", { name: "Spans", exact: true }).count(),
-        0
-      );
-      await p.getByRole("link", { name: "SQL", exact: true }).click();
-      await p.getByLabel("SQL query").fill("SELECT 1 AS spans");
-      await p.getByRole("button", { name: "Run", exact: true }).click();
-      await state(p, "sql", "ready");
-      await p.getByRole("button", { name: "Spans", exact: true }).waitFor();
-      await p.getByRole("link", { name: "Services", exact: true }).click();
-      await state(p, "services", "ready");
-      assert.equal(
-        await p.getByRole("button", { name: "Spans", exact: true }).count(),
-        0
-      );
-      await p.screenshot({ path: `${out}/fixture-services-preferences.png` });
       await p.close();
     }
   );

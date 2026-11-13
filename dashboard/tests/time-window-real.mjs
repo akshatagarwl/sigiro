@@ -246,12 +246,20 @@ try {
     if (r.url().endsWith("/v1/query"))
       responses.push({ status: r.status(), sql: r.request().postData() });
   });
-  for (const route of ["", "services/", "logs/", "traces/", "profiles/"]) {
+  const removed = await page.request.get(`${origin}/dashboard/services/`);
+  assert.equal(removed.status(), 404, "Service inventory route is removed");
+  report.checks.push("Removed service inventory route returns 404");
+  for (const route of ["", "logs/", "traces/", "profiles/"]) {
     responses.length = 0;
     await page.goto(
       `${origin}/dashboard/${route}?timeStart=${start}&timeEnd=${end}&service=${service}`
     );
     await page.getByRole("button", { name: /^Time range:/ }).waitFor();
+    assert.equal(
+      await page.getByRole("link", { name: "Services", exact: true }).count(),
+      0,
+      "Service inventory must not appear in navigation"
+    );
     if (route === "logs/") {
       for (const label of ["start", "inside", "last"])
         await page
@@ -292,6 +300,36 @@ try {
     );
     console.log("PASS", report.checks.at(-1));
   }
+  // Removing inventory must not remove service scope or lose absolute windows.
+  await page.goto(
+    `${origin}/dashboard/?timeStart=${start}&timeEnd=${end}&service=${service}`
+  );
+  await page.locator("[data-page=overview][data-state=ready]").waitFor();
+  await page.locator("[data-action=service]").waitFor();
+  await page.getByRole("link", { name: "Profiles", exact: true }).click();
+  await page.locator("[data-page=profiles][data-state=ready]").waitFor();
+  for (const [key, value] of Object.entries({
+    timeStart: String(start),
+    timeEnd: String(end),
+    service,
+  }))
+    assert.equal(new URL(page.url()).searchParams.get(key), value);
+  await page.goBack();
+  await page.locator("[data-page=overview][data-state=ready]").waitFor();
+  await page.goForward();
+  await page.locator("[data-page=profiles][data-state=ready]").waitFor();
+  await page.reload();
+  await page.locator("[data-page=profiles][data-state=ready]").waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("service"), service);
+  assert.equal(
+    new URL(page.url()).searchParams.get("timeStart"),
+    String(start)
+  );
+  assert.equal(new URL(page.url()).searchParams.get("timeEnd"), String(end));
+  report.checks.push(
+    "Overview service filter and Profiles navigation retain service/window across back, forward, reload"
+  );
+  console.log("PASS", report.checks.at(-1));
   // Apply a genuinely different absolute range in the browser, not just a URL.
   await page.goto(
     `${origin}/dashboard/logs/?timeStart=${start}&timeEnd=${end}`

@@ -55,7 +55,6 @@ function ServiceSelect() {
 
 const TITLES: Record<string, string> = {
   "/": "Overview",
-  "/services/": "Services",
   "/traces/": "Traces",
   "/logs/": "Logs",
   "/profiles/": "Profiles",
@@ -80,7 +79,7 @@ export function SiteHeader() {
             <span className="text-muted-foreground text-xs">Time is controlled by SQL</span>
           ) : (
             <>
-              {(pathname === "/" || pathname === "/services/") && <ServiceSelect />}
+              {pathname === "/" && <ServiceSelect />}
               <TimeRangePicker start={start} end={end} onChange={setWindow} />
               <Toggle
                 variant="outline"

@@ -510,13 +510,6 @@ try {
     await page.locator('[data-action="live"]').click();
   });
 
-  await step("services table", async () => {
-    await page.getByRole("link", { name: "Services" }).click();
-    await page.waitForSelector('[data-table="services"][data-rows="3"]');
-    await page.getByRole("cell", { name: "shopfront-api" }).first().waitFor();
-    await screenshot("2-services");
-  });
-
   await step("traces list → waterfall", async () => {
     await page.getByRole("link", { name: "Traces" }).click();
     await page.getByText("POST /route-1", { exact: true }).first().waitFor();
@@ -599,11 +592,6 @@ try {
     await page.setViewportSize({ width: 390, height: 844 });
     for (const [name, path, ready] of [
       ["overview", "/dashboard/", '[data-state="ready"]'],
-      [
-        "services",
-        "/dashboard/services/",
-        '[data-table="services"][data-rows="3"]',
-      ],
       ["traces", "/dashboard/traces/", '[data-chart-name="timeline"]'],
       ["logs", "/dashboard/logs/", '[data-chart-name="timeline"]'],
       ["sql", "/dashboard/sql/", '[data-action="run-sql"]'],
@@ -644,21 +632,6 @@ try {
       );
       if (wide.length > 0) overflow.push(`${name}: ${wide.join(" | ")}`);
     }
-    await page.goto(`${origin}/dashboard/services/`);
-    await page.waitForSelector('[data-table="services"][data-rows="3"]');
-    const reached = await page.evaluate(() => {
-      const box = document.querySelector(
-        '[data-table="services"] table'
-      ).parentElement;
-      box.scrollLeft = box.scrollWidth;
-      const last = [...box.querySelectorAll("th")]
-        .at(-1)
-        .getBoundingClientRect();
-      return last.right <= 391 && last.left >= 0;
-    });
-    if (!reached)
-      overflow.push("services: the last column cannot be scrolled into view");
-    await screenshot("7-mobile-services-scrolled");
     assert.deepEqual(
       overflow,
       [],

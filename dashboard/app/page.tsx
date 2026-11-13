@@ -268,7 +268,7 @@ export default function OverviewPage() {
                 : `${num(k.error_rate).toFixed(2)}%`
               : missingValue,
             headline: "Failed ÷ all spans",
-            note: "same definition as the Services table",
+            note: "percentage of spans with ERROR status",
           },
           {
             label: "p95 latency",
