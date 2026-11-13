@@ -675,9 +675,11 @@ pub async fn run_servers(
     let auth_mode =
         crate::auth::AuthMode::from_runtime_config(query_surface, pool.storage_mode(), ingest_keys)
             .await?;
-    let micro = micro_config
-        .map(|path| crate::micro::Service::open(&path, data_dir.as_std_path(), &auth_mode))
-        .transpose()?;
+    let micro = if let Some(path) = micro_config {
+        Some(crate::micro::Service::open(&path, data_dir.as_std_path(), &auth_mode).await?)
+    } else {
+        None
+    };
 
     // The bind address enforced for EVERY listener (HTTP, OTLP-HTTP, gRPC, and
     // quack itself) when this node is a quack edge — resolved once here so

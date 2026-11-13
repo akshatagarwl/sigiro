@@ -174,6 +174,23 @@ headroom and monitor disk usage. Inbox I/O failure terminates `serve`; supervise
 it and alert on failures. Broker outage does not stop raw projection or existing
 HTTP queries; `/health` by itself is not proof of MQTT connectivity.
 
+## Library ownership
+
+- `sequential-storage` owns the NOR queue/journal; Micropb owns embedded protobuf encoding.
+- rumqttc and rustls own MQTT and verified TLS; `backon` owns reconnect backoff/jitter.
+- `async-rusqlite` owns a dedicated, bounded SQLite connection worker. It matches
+  the host's existing rusqlite version without downgrading other database users.
+- `embassy-futures` supplies the simulator-only polling executor (not a board RTOS).
+- Testcontainers owns both suites' container lifecycle, readiness and Docker SDK
+  integration; `trustme` issues the native TLS fixtures. Listeners remain bound to
+  loopback. Scoped contexts clean up fixtures; Ryuk is disabled to avoid mounting
+  the developer's Docker socket into another container.
+
+Sigiro still owns the atomic raw/dedup/quota transaction, persisted projection
+retry/quarantine policy, receipt semantics and adversarial fault scenarios. Those
+are domain guarantees, not generic job-queue behavior. Wire bytes and the inbox
+schema are unchanged by these plumbing substitutions.
+
 ## Reproducible checks
 
 ```sh
@@ -185,7 +202,7 @@ uv run --locked tests/micro/simulate.py --no-network
 uv run --locked tests/micro/native.py --binary target/debug/sigiro
 ```
 
-Install QEMU, Docker and OpenSSL first. `SIGIRO_EXTENSION_DIR` may explicitly point
+Install QEMU and Docker first; `uv` supplies the locked Python libraries. `SIGIRO_EXTENSION_DIR` may explicitly point
 the native harness at a preinstalled cache for this binary's DuckDB version.
 Otherwise the ordinary server extension installation runs on first start.
 Results live in ignored `artifacts/` directories. The native suite uses a private

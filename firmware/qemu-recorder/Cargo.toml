@@ -17,6 +17,7 @@ lto = true
 codegen-units = 1
 
 [dependencies]
+embassy-futures = "0.1.2"
 otlp-outbox = { path = "../../crates/otlp-outbox" }
 embedded-storage-async = "0.4.2"
 sequential-storage = { version = "=8.0.2", default-features = false }

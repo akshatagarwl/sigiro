@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["paho-mqtt==2.1.0", "opentelemetry-proto==1.38.0"]
+# dependencies = ["paho-mqtt==2.1.0", "opentelemetry-proto==1.38.0", "testcontainers==4.15.0", "trustme==1.2.1"]
 # ///
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """QEMU storage -> host TLS/MQTT adapter -> actual Sigiro -> durable raw + SQL.
@@ -27,6 +27,7 @@ import urllib.request
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
+import trustme
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
     ExportMetricsServiceRequest,
 )
@@ -35,7 +36,17 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
 )
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.properties import Properties
-from simulate import ELF, MOSQUITTO, ROOT, Lab, command, parse_record
+from simulate import (
+    ELF,
+    MOSQUITTO,
+    ROOT,
+    Lab,
+    command,
+    loopback_container,
+    parse_record,
+)
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 NAMESPACE = "sigiro/micro/v1"
 DEVICE = "qemu-lab"
@@ -67,86 +78,20 @@ def broker(root):
     password_file.write_text(
         "".join(f"{user}:{password}\n" for user, password in credentials.items())
     )
-    command(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--user",
-            f"{os.getuid()}:{os.getgid()}",
-            "--mount",
-            f"type=bind,source={config},target=/cfg",
-            "--entrypoint",
-            "mosquitto_passwd",
-            MOSQUITTO,
-            "-U",
-            "/cfg/passwords",
-        ]
-    )
+    with (
+        DockerContainer(MOSQUITTO)
+        .with_volume_mapping(str(config), "/cfg", mode="rw")
+        .with_kwargs(entrypoint="mosquitto_passwd", user=f"{os.getuid()}:{os.getgid()}")
+        .with_command(["-U", "/cfg/passwords"])
+    ) as helper:
+        result = helper.get_wrapped_container().wait(timeout=30)
+        assert result["StatusCode"] == 0, helper.get_logs()
     password_file.chmod(0o644)
-    command(
-        [
-            "openssl",
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-days",
-            "1",
-            "-keyout",
-            str(config / "ca-key.pem"),
-            "-out",
-            str(config / "ca.pem"),
-            "-subj",
-            "/CN=Sigiro Test CA",
-            "-addext",
-            "basicConstraints=critical,CA:TRUE",
-            "-addext",
-            "subjectKeyIdentifier=hash",
-            "-addext",
-            "keyUsage=critical,keyCertSign,cRLSign",
-        ]
-    )
-    command(
-        [
-            "openssl",
-            "req",
-            "-new",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-keyout",
-            str(config / "key.pem"),
-            "-out",
-            str(config / "server.csr"),
-            "-subj",
-            "/CN=localhost",
-        ]
-    )
-    (config / "extensions").write_text(
-        "basicConstraints=critical,CA:FALSE\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n"
-    )
-    command(
-        [
-            "openssl",
-            "x509",
-            "-req",
-            "-in",
-            str(config / "server.csr"),
-            "-CA",
-            str(config / "ca.pem"),
-            "-CAkey",
-            str(config / "ca-key.pem"),
-            "-CAcreateserial",
-            "-out",
-            str(config / "server.pem"),
-            "-days",
-            "1",
-            "-extfile",
-            str(config / "extensions"),
-        ]
-    )
+    ca = trustme.CA()
+    server = ca.issue_cert("localhost", "127.0.0.1")
+    ca.cert_pem.write_to_path(config / "ca.pem")
+    server.cert_chain_pems[0].write_to_path(config / "server.pem")
+    server.private_key_pem.write_to_path(config / "key.pem")
     # Throwaway fixture key, accessible to container UID 1883. Never production credentials.
     (config / "key.pem").chmod(0o644)
     (config / "acl").write_text(
@@ -155,59 +100,27 @@ def broker(root):
     (config / "mosquitto.conf").write_text(
         "listener 8883\nallow_anonymous false\npersistence false\npassword_file /cfg/passwords\nacl_file /cfg/acl\ncertfile /cfg/server.pem\nkeyfile /cfg/key.pem\nlog_type all\n"
     )
-    name = f"sigiro-native-micro-{os.getpid()}-{time.time_ns()}"
-    mqtt_port = port()  # Fixed binding survives stop/start; Docker's :: port does not.
-    command(
-        [
-            "docker",
-            "run",
-            "-d",
-            "--name",
-            name,
-            "--user",
-            "1883",
-            "--cap-drop",
-            "ALL",
-            "--read-only",
-            "--memory",
-            "64m",
-            "-p",
-            f"127.0.0.1:{mqtt_port}:8883",
-            "--mount",
-            f"type=bind,source={config},target=/cfg,readonly",
-            MOSQUITTO,
-            "mosquitto",
-            "-c",
-            "/cfg/mosquitto.conf",
-        ]
-    )
-    try:
-        endpoint = command(["docker", "port", name, "8883"]).splitlines()[0]
-        mqtt_port = int(endpoint.rsplit(":", 1)[1])
-        context = ssl.create_default_context(cafile=str(config / "ca.pem"))
-
-        def ready():
-            try:
-                with (
-                    socket.create_connection(
-                        ("127.0.0.1", mqtt_port), timeout=1
-                    ) as raw,
-                    context.wrap_socket(raw, server_hostname="127.0.0.1"),
-                ):
-                    return True
-            except ssl.SSLCertVerificationError:
-                raise
-            except OSError:
-                return False  # Docker mapping can be visible before its listener.
-
-        wait_for(ready, 15)
-        yield mqtt_port, credentials, config / "ca.pem", name
-    finally:
-        logs = subprocess.run(
-            ["docker", "logs", name], capture_output=True, text=True, check=False
+    # An explicit binding survives the real stop/start outage below.
+    with (
+        loopback_container(MOSQUITTO, 8883, port())
+        .with_volume_mapping(str(config), "/cfg", mode="ro")
+        .with_kwargs(user="1883", cap_drop=["ALL"], read_only=True, mem_limit="64m")
+        .with_command(["mosquitto", "-c", "/cfg/mosquitto.conf"])
+        .waiting_for(
+            LogMessageWaitStrategy(
+                r"mosquitto version .* running"
+            ).with_startup_timeout(15)
         )
-        (root / "broker.log").write_text(logs.stdout + logs.stderr)
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
+    ) as container:
+        try:
+            yield (
+                int(container.get_exposed_port(8883)),
+                credentials,
+                config / "ca.pem",
+                container.get_wrapped_container(),
+            )
+        finally:
+            (root / "broker.log").write_bytes(b"".join(container.get_logs()))
 
 
 class Device:
@@ -446,11 +359,11 @@ def run(binary, root):
             offline = lab.case("broker-offline", pending_image)
             device.drain()
             device.ready.clear()
-            command(["docker", "stop", "--time", "1", container])
+            container.stop(timeout=1)
             device.send(ident, "logs", payload)
             time.sleep(0.5)
             assert device.receipts.empty() and lab.peek(offline) == wire
-            command(["docker", "start", container])
+            container.start()
             assert device.ready.wait(20)
             recovered = wait_for(deliver, 35)
             (offline / "ack.bin").write_bytes(recovered)

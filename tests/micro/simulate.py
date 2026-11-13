@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["paho-mqtt==2.1.0", "opentelemetry-proto==1.38.0"]
+# dependencies = ["paho-mqtt==2.1.0", "opentelemetry-proto==1.38.0", "testcontainers==4.15.0"]
 # ///
 """Execute actual Cortex-M instructions in QEMU; no host substitute for firmware.
 Semihost files are a simulator transport/NOR model, not MCU TCP or physical flash.
@@ -32,6 +32,9 @@ from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
 )
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.properties import Properties
+from testcontainers.core.config import testcontainers_config
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 ROOT = Path(__file__).resolve().parents[2]
 ELF = (
@@ -42,6 +45,18 @@ COLLECTOR = "otel/opentelemetry-collector:0.140.0@sha256:6852803128c97a37fd2bafb
 TOPIC = "sigiro/experimental/v1/qemu-lab/logs"
 RESPONSE = "sigiro/experimental/v1/qemu-lab/ack"
 BASE_TIME = 1_794_495_600_123_456_789
+
+# Context managers own these disposable fixtures. Do not grant a separate
+# reaper container access to the developer's Docker socket.
+testcontainers_config.ryuk_disabled = True
+
+
+def loopback_container(image, internal_port, host_port=None):
+    container = DockerContainer(image).with_exposed_ports(internal_port)
+    # Testcontainers forwards this Docker SDK port map. Its with_bind_ports
+    # shorthand binds all interfaces; fixtures must stay loopback-only.
+    container.ports[str(internal_port)] = ("127.0.0.1", host_port)
+    return container
 
 
 def command(args, **kwargs):
@@ -298,105 +313,47 @@ def simulator_tests(lab, exhaustive):
 
 @contextlib.contextmanager
 def services(lab):
-    suffix = f"{os.getpid()}-{time.time_ns()}"
-    names = []
-    try:
-        broker = f"sigiro-qemu-mqtt-{suffix}"
-        command(
+    config = lab.root / "collector.yaml"
+    config.write_text(
+        "receivers:\n  otlp:\n    protocols:\n      http:\n        endpoint: 0.0.0.0:4318\nexporters:\n  debug:\n    verbosity: detailed\nservice:\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [debug]\n"
+    )
+    broker = (
+        loopback_container(MOSQUITTO, 1883)
+        .with_tmpfs_mount("/tmp")
+        .with_kwargs(
+            user="1883",
+            cap_drop=["ALL"],
+            read_only=True,
+            mem_limit="64m",
+            entrypoint="sh",
+        )
+        .with_command(
             [
-                "docker",
-                "run",
-                "--rm",
-                "-d",
-                "--name",
-                broker,
-                "--user",
-                "1883",
-                "--cap-drop",
-                "ALL",
-                "--read-only",
-                "--tmpfs",
-                "/tmp",
-                "--memory",
-                "64m",
-                "-p",
-                "127.0.0.1::1883",
-                "--entrypoint",
-                "sh",
-                MOSQUITTO,
                 "-c",
                 'printf "listener 1883\\nallow_anonymous true\\npersistence false\\n" > /tmp/lab.conf; exec /usr/sbin/mosquitto -c /tmp/lab.conf',
             ]
         )
-        names.append(broker)
-        config = lab.root / "collector.yaml"
-        config.write_text(
-            "receivers:\n  otlp:\n    protocols:\n      http:\n        endpoint: 0.0.0.0:4318\nexporters:\n  debug:\n    verbosity: detailed\nservice:\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [debug]\n"
+        .waiting_for(
+            LogMessageWaitStrategy(
+                r"mosquitto version .* running"
+            ).with_startup_timeout(30)
         )
-        collector = f"sigiro-qemu-collector-{suffix}"
-        command(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-d",
-                "--name",
-                collector,
-                "--cap-drop",
-                "ALL",
-                "--read-only",
-                "--memory",
-                "256m",
-                "-p",
-                "127.0.0.1::4318",
-                "--mount",
-                f"type=bind,source={config},target=/etc/otelcol/config.yaml,readonly",
-                COLLECTOR,
-            ]
+    )
+    collector = (
+        loopback_container(COLLECTOR, 4318)
+        .with_volume_mapping(str(config), "/etc/otelcol/config.yaml", mode="ro")
+        .with_kwargs(cap_drop=["ALL"], read_only=True, mem_limit="256m")
+        .waiting_for(
+            LogMessageWaitStrategy("Everything is ready").with_startup_timeout(30)
         )
-        names.append(collector)
-
-        def port(name, internal):
-            value = json.loads(command(["docker", "inspect", name]))[0]
-            return int(
-                value["NetworkSettings"]["Ports"][f"{internal}/tcp"][0]["HostPort"]
-            )
-
-        endpoint = f"http://127.0.0.1:{port(collector, 4318)}/v1/logs"
-        for _ in range(100):
-            try:
-                request = urllib.request.Request(
-                    endpoint,
-                    data=b"",
-                    headers={"Content-Type": "application/x-protobuf"},
-                )
-                with urllib.request.urlopen(request, timeout=1) as response:
-                    assert response.status == 200
-                break
-            except (OSError, urllib.error.URLError):
-                time.sleep(0.1)
-        else:
-            raise AssertionError("Collector never became ready")
-        yield port(broker, 1883), endpoint, collector
-    finally:
-        for name in reversed(names):
-            logs = subprocess.run(
-                ["docker", "logs", name],
-                check=False,
-                text=True,
-                capture_output=True,
-                timeout=15,
-            )
-            (
-                lab.root / ("collector.log" if "collector" in name else "mosquitto.log")
-            ).write_text(logs.stdout + logs.stderr)
-            subprocess.run(
-                ["docker", "stop", "-t", "2", name],
-                check=False,
-                text=True,
-                capture_output=True,
-                timeout=15,
-            )
+    )
+    with broker, collector:
+        try:
+            endpoint = f"http://127.0.0.1:{collector.get_exposed_port(4318)}/v1/logs"
+            yield int(broker.get_exposed_port(1883)), endpoint, collector
+        finally:
+            (lab.root / "collector.log").write_bytes(b"".join(collector.get_logs()))
+            (lab.root / "mosquitto.log").write_bytes(b"".join(broker.get_logs()))
 
 
 class Peer:
@@ -595,16 +552,7 @@ def export_tests(lab):
             lab.passed(
                 "real Collector HTTP 400 yields permanent rejection, not successful deletion"
             )
-            logs = command(["docker", "logs", collector])
-            # Collector debug output may be written to stderr instead of stdout.
-            logs_process = subprocess.run(
-                ["docker", "logs", collector],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            logs += logs_process.stderr
+            logs = b"".join(collector.get_logs()).decode()
             assert "sigiro-micro-qemu" in logs and "QEMU:" in logs
             lab.passed(
                 "QEMU-produced original OTLP crosses real MQTT 5 and reaches official Collector",

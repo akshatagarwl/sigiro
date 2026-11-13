@@ -1,12 +1,8 @@
 #![no_std]
 #![no_main]
 mod flash;
-use core::{
-    future::Future,
-    pin::pin,
-    task::{Context, Poll, Waker},
-};
 use cortex_m_rt::entry;
+use embassy_futures::block_on;
 use flash::HostNor;
 use micropb::{MessageEncode, PbEncoder};
 use opentelemetry_micropb::heapless::{
@@ -21,14 +17,6 @@ use semihosting::{
     io::{Read, Write},
 };
 
-fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = pin!(future);
-    let mut context = Context::from_waker(Waker::noop());
-    match future.as_mut().poll(&mut context) {
-        Poll::Ready(value) => value,
-        Poll::Pending => panic!("simulator storage unexpectedly suspended"),
-    }
-}
 fn id(ordinal: u32) -> BatchId {
     let mut id = *b"qemu-lab-id-0000";
     id[12..].copy_from_slice(&ordinal.to_be_bytes());

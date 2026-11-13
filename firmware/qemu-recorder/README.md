@@ -4,7 +4,9 @@ MIT OR Apache-2.0. Imported from `akshatagarwl/sigiro-micro` commit `d631614`.
 
 This independent target workspace builds actual Cortex-M3 firmware without a
 global allocator. It uses the shared `../../crates/otlp-outbox` path dependency,
-not the host's DuckDB/Arrow/Tokio dependency graph.
+not the host's DuckDB/Arrow/Tokio dependency graph. `embassy-futures::block_on`
+supplies the simulator's polling executor; no bespoke executor is maintained.
+A hardware adapter still needs a board-appropriate executor and drivers.
 
 ```sh
 rustup target add --toolchain stable thumbv7m-none-eabi

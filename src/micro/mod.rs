@@ -8,6 +8,7 @@ mod tests;
 
 use crate::inserter::MsgRouter;
 use anyhow::{Context, Result, ensure};
+use backon::{BackoffBuilder, ExponentialBuilder};
 use config::Config;
 use inbox::{Acceptance, Inbox};
 use otlp_outbox::{Ack, BatchId, Outcome, Signal};
@@ -19,13 +20,10 @@ use rumqttc::v5::{
         v5::{Filter, Packet, Publish, PublishProperties, RetainForwardRule, SubscribeReasonCode},
     },
 };
-use std::{
-    path::Path,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{path::Path, sync::Arc, time::Duration};
 use tokio::sync::watch;
 
+#[derive(Clone)]
 pub(crate) struct Frame {
     device: String,
     project: String,
@@ -39,7 +37,7 @@ pub(crate) struct Service {
     options: MqttOptions,
 }
 impl Service {
-    pub(crate) fn open(
+    pub(crate) async fn open(
         path: &Path,
         data_dir: &Path,
         auth: &crate::auth::AuthMode,
@@ -50,7 +48,7 @@ impl Service {
         );
         let config = Config::load(path)?;
         let options = config.options()?;
-        let inbox = Inbox::open(data_dir, config.max_inbox_bytes, config.max_batches)?;
+        let inbox = Inbox::open(data_dir, config.max_inbox_bytes, config.max_batches).await?;
         Ok(Arc::new(Self {
             config,
             inbox,
@@ -119,12 +117,12 @@ impl Service {
         mut stop: watch::Receiver<bool>,
     ) -> Result<()> {
         let (client, mut events) = AsyncClient::new(self.options.clone(), 64);
-        let mut backoff = 1u64;
+        let mut backoff = reconnect_backoff();
         loop {
             let event = tokio::select! { _ = stop.changed() => return Ok(()), event = events.poll() => event };
             match event {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
-                    backoff = 1;
+                    backoff = reconnect_backoff();
                     let topics = self.config.devices.iter().flat_map(|device| {
                         ["logs", "traces", "metrics"].map(|signal| {
                             let mut filter = Filter::new(
@@ -165,23 +163,17 @@ impl Service {
                     let id = frame.id;
                     let signal = frame.signal;
                     let response_topic = format!("{}/{}/ack", self.config.namespace, frame.device);
-                    let inbox = self.inbox.clone();
-                    let disk_full = router.disk_state().is_over_cap();
-                    let outcome = tokio::task::spawn_blocking(move || -> Result<Outcome> {
-                        if !valid_protobuf(frame.signal, &frame.payload) {
-                            return Ok(Outcome::Permanent);
-                        }
-                        if disk_full {
-                            return Ok(Outcome::RetryLater);
-                        }
-                        Ok(match inbox.accept(&frame)? {
+                    let outcome = if !valid_protobuf(frame.signal, &frame.payload) {
+                        Outcome::Permanent
+                    } else if router.disk_state().is_over_cap() {
+                        Outcome::RetryLater
+                    } else {
+                        match self.inbox.accept(frame).await? {
                             Acceptance::Stored => Outcome::FullAcceptance,
                             Acceptance::Quota => Outcome::RetryLater,
                             Acceptance::Conflict => Outcome::Permanent,
-                        })
-                    })
-                    .await
-                    .context("micro inbox worker panicked")??;
+                        }
+                    };
                     let receipt = Ack {
                         id,
                         signal,
@@ -212,13 +204,10 @@ impl Service {
                         return Err(error.into());
                     }
                     tracing::warn!(%error, "micro broker disconnected; reconnecting with backoff");
-                    let jitter = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .subsec_millis()
-                        % 251;
-                    tokio::select! { _ = stop.changed() => return Ok(()), _ = tokio::time::sleep(Duration::from_secs(backoff) + Duration::from_millis(u64::from(jitter))) => {} }
-                    backoff = (backoff * 2).min(30);
+                    let delay = backoff
+                        .next()
+                        .context("micro reconnect retries exhausted")?;
+                    tokio::select! { _ = stop.changed() => return Ok(()), _ = tokio::time::sleep(delay) => {} }
                 }
             }
         }
@@ -232,8 +221,7 @@ impl Service {
             if *stop.borrow() {
                 return Ok(());
             }
-            let inbox = self.inbox.clone();
-            let pending = tokio::task::spawn_blocking(move || inbox.next()).await??;
+            let pending = self.inbox.next().await?;
             if let Some(pending) = pending {
                 let result = crate::ingest::project_micro(
                     &router,
@@ -242,25 +230,33 @@ impl Service {
                     pending.frame.payload,
                 )
                 .await;
-                let inbox = self.inbox.clone();
-                tokio::task::spawn_blocking(move || match result {
-                    Ok(()) => inbox.finish(pending.row, None),
+                match result {
+                    Ok(()) => self.inbox.finish(pending.row, None).await?,
                     Err(error) => {
                         let diagnostic: String = error.message().chars().take(512).collect();
                         if error.code() == tonic::Code::InvalidArgument {
-                            inbox.finish(pending.row, Some(&diagnostic))
+                            self.inbox.finish(pending.row, Some(diagnostic)).await?
                         } else {
-                            inbox.retry(pending.row, &diagnostic)
+                            self.inbox.retry(pending.row, diagnostic).await?
                         }
                     }
-                })
-                .await??;
+                }
             } else {
                 tokio::select! { _ = stop.changed() => return Ok(()), _ = tokio::time::sleep(Duration::from_millis(100)) => {} }
             }
         }
     }
 }
+fn reconnect_backoff() -> backon::ExponentialBackoff {
+    ExponentialBuilder::default()
+        .with_min_delay(Duration::from_secs(1))
+        // backon adds up to one base delay of jitter: total stays <=30s.
+        .with_max_delay(Duration::from_secs(15))
+        .with_jitter()
+        .without_max_times()
+        .build()
+}
+
 fn fatal_transport_error(error: &ConnectionError) -> bool {
     use rumqttc::v5::{TlsError, mqttbytes::v5::ConnectReturnCode};
     match error {

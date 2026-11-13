@@ -533,6 +533,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-rusqlite"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5037e6d08cef6626f4f29c76c9c5ba23eefde7a840391c1009245c42fff564c"
+dependencies = [
+ "asyncified",
+ "rusqlite",
+]
+
+[[package]]
 name = "async-signal"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -566,6 +576,12 @@ dependencies = [
  "quote",
  "syn 3.0.10",
 ]
+
+[[package]]
+name = "asyncified"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4ad9271e7e1d2d664a80ea5b819782df4bd0eb41065dc393aa553b59bbdf58e"
 
 [[package]]
 name = "atoi"
@@ -738,6 +754,15 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+]
+
+[[package]]
+name = "backon"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
+dependencies = [
+ "fastrand",
 ]
 
 [[package]]
@@ -5113,10 +5138,12 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "async-rusqlite",
  "axum",
  "axum-anyhow",
  "axum-extra",
  "axum-server",
+ "backon",
  "backtrace",
  "camino",
  "clap",
