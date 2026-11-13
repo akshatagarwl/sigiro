@@ -21,6 +21,7 @@
     "check:dashboard": "node scripts/check-dashboard.mjs",
     "check:web": "aube run check:mcp && aube run check:mcp:hosted && aube run check:webmcp:browser",
     "deploy": "aube run alchemy:deploy",
+    "deploy:dashboard": "aube -C ../dashboard run build && wrangler deploy --config ../dashboard/wrangler.jsonc --keep-vars",
     "check": "aube -C .. run fmt:check && aube -C .. run lint",
     "doctor": "blume doctor",
     "og": "tsx scripts/generate-og.tsx",
@@ -35,7 +36,7 @@
     "blume": "2.2.7",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "effect": "4.1.2",
+    "effect": "4.1.4",
     "input-otp": "1.5.0",
     "lucide-react": "1.70.0",
     "motion": "14.10.1",
@@ -48,17 +49,17 @@
     "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
-    "@alchemy.run/cloudflare": "2.0.0-beta.84",
-    "@alchemy.run/docker": "2.0.0-beta.84",
-    "@alchemy.run/frontend-frameworks": "2.0.0-beta.84",
-    "@alchemy.run/hetzner": "2.0.0-beta.84",
-    "@effect/platform-node": "4.1.2",
+    "@alchemy.run/cloudflare": "2.0.0-beta.87",
+    "@alchemy.run/docker": "2.0.0-beta.87",
+    "@alchemy.run/frontend-frameworks": "2.0.0-beta.87",
+    "@alchemy.run/hetzner": "2.0.0-beta.87",
+    "@effect/platform-node": "4.1.4",
     "@mcp-b/webmcp-polyfill": "6.0.3",
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vercel/og": "1.0.3",
-    "alchemy": "2.0.0-beta.84",
+    "alchemy": "2.0.0-beta.87",
     "geist": "1.9.2",
     "playwright": "1.65.0",
     "tsx": "4.23.15",
@@ -66,6 +67,11 @@
     "wrangler": "4.158.0"
   },
   "packageManager": "aube@2.8.4",
+  "aube": {
+    "patchedDependencies": {
+      "astro@7.4.7": "patches/astro@7.4.7.patch"
+    }
+  },
   "ignoreScripts": [
     "sharp",
     "unrs-resolver"
@@ -73,10 +79,5 @@
   "trustedDependencies": [
     "sharp",
     "unrs-resolver"
-  ],
-  "aube": {
-    "patchedDependencies": {
-      "astro@7.4.7": "patches/astro@7.4.7.patch"
-    }
-  }
+  ]
 }
