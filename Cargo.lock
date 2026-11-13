@@ -1683,6 +1683,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-storage"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c815b3ed4213d85d6cfd274b871f430c0681084e28dfd4a537877f47f844ec83"
+
+[[package]]
+name = "embedded-storage-async"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69aa7787b8ba0cf4e626c95839f811d853b75e24a0f7312a1eef324fedc13b21"
+dependencies = [
+ "embedded-storage",
+]
+
+[[package]]
+name = "embedded-storage-file"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15d96f7733a8ebedee66f40cd3a66f01903c15ae869d163ad99a97661c56902c"
+dependencies = [
+ "embedded-storage",
+ "embedded-storage-async",
+ "memmap2",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1848,6 +1874,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fixedbitset"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5905ec755cc8386d7928353e4d356d2be3e89e81e5ca01fe630a1ca4d08dc175"
+
+[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1866,6 +1898,17 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
  "zlib-rs",
+]
+
+[[package]]
+name = "flume"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin 0.9.9",
 ]
 
 [[package]]
@@ -3532,6 +3575,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "otlp-outbox"
+version = "0.1.0"
+dependencies = [
+ "embedded-storage-async",
+ "embedded-storage-file",
+ "futures",
+ "sequential-storage",
+]
+
+[[package]]
 name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4556,6 +4609,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rumqttc"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0feff8d882bff0b2fddaf99355a10336d43dd3ed44204f85ece28cf9626ab519"
+dependencies = [
+ "bytes",
+ "fixedbitset",
+ "flume",
+ "futures-util",
+ "log",
+ "rustls-native-certs",
+ "rustls-pemfile",
+ "rustls-webpki 0.102.8",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tokio-util",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4650,7 +4724,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki",
+ "rustls-webpki 0.103.16",
  "subtle",
  "zeroize",
 ]
@@ -4665,6 +4739,15 @@ dependencies = [
  "rustls-pki-types",
  "schannel",
  "security-framework",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
@@ -4691,7 +4774,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
- "rustls-webpki",
+ "rustls-webpki 0.103.16",
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
@@ -4703,6 +4786,17 @@ name = "rustls-platform-verifier-android"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
+
+[[package]]
+name = "rustls-webpki"
+version = "0.102.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
+dependencies = [
+ "ring",
+ "rustls-pki-types",
+ "untrusted",
+]
 
 [[package]]
 name = "rustls-webpki"
@@ -4854,6 +4948,15 @@ name = "seq-macro"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bc711410fbe7399f390ca1c3b60ad0f53f80e95c5eb935e52268a0e2cd49acc"
+
+[[package]]
+name = "sequential-storage"
+version = "8.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1550e4d0c7a6a54e2d7884309dc6bfe206d2d8884cb5498177fd936cb233616d"
+dependencies = [
+ "embedded-storage-async",
+]
 
 [[package]]
 name = "serde"
@@ -5037,6 +5140,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-proto 0.33.1",
  "opentelemetry_sdk",
+ "otlp-outbox",
  "parking_lot 0.13.0",
  "postgres",
  "postgres-native-tls",
@@ -5048,9 +5152,11 @@ dependencies = [
  "reqwest 0.13.5",
  "rmcp",
  "rpassword",
+ "rumqttc",
  "rusqlite",
  "rust-embed",
  "rustls",
+ "rustls-native-certs",
  "schemars",
  "secrecy",
  "serde",
@@ -5229,6 +5335,9 @@ name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+dependencies = [
+ "lock_api 0.4.14",
+]
 
 [[package]]
 name = "spin"

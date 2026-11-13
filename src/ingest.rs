@@ -37,6 +37,48 @@ use tracing_attributes::instrument;
 use crate::inserter::{MsgRouter, RouterError};
 use crate::types::IngestMsg;
 
+/// Project an already-durable micro inbox record through the normal transforms
+/// and writer, waiting for commit instead of merely enqueueing in RAM.
+/// Invalid/partially transformable input remains in the raw inbox for diagnosis.
+pub(crate) async fn project_micro(
+    router: &Arc<MsgRouter>,
+    project_id: String,
+    signal: otlp_outbox::Signal,
+    payload: Vec<u8>,
+) -> Result<(), Status> {
+    let workloads = router.workloads();
+    let body = Bytes::from(payload);
+    let message = match signal {
+        otlp_outbox::Signal::Logs => {
+            let (batch, rejected) = transform_logs(workloads, body, InputFormat::Protobuf).await?;
+            if rejected != 0 {
+                return Err(Status::invalid_argument(format!(
+                    "{rejected} rejected log records; raw batch quarantined"
+                )));
+            }
+            if batch.num_rows() == 0 {
+                return Ok(());
+            }
+            IngestMsg::Logs { project_id, batch }
+        }
+        otlp_outbox::Signal::Traces => {
+            let batch = transform_traces(workloads, body, InputFormat::Protobuf).await?;
+            if batch.num_rows() == 0 {
+                return Ok(());
+            }
+            IngestMsg::Traces { project_id, batch }
+        }
+        otlp_outbox::Signal::Metrics => {
+            let batches = transform_metrics(workloads, body, InputFormat::Protobuf).await?;
+            IngestMsg::Metrics {
+                project_id,
+                batches,
+            }
+        }
+    };
+    router.send_durable(message).await.map_err(status_internal)
+}
+
 /// Convenience helper for `Status::internal` to avoid repeating `format!` at call sites.
 fn status_internal(msg: impl std::fmt::Display) -> Status {
     Status::internal(msg.to_string())

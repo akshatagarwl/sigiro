@@ -1,0 +1,93 @@
+name: Micro recorder
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/micro.yml'
+      - 'Cargo.*'
+      - 'src/**'
+      - 'crates/**'
+      - 'firmware/**'
+      - 'tests/micro/**'
+      - 'scripts/prepare-duckdb-static.sh'
+  push:
+    branches: [main, feat/micro-mqtt]
+    paths:
+      - '.github/workflows/micro.yml'
+      - 'Cargo.*'
+      - 'src/**'
+      - 'crates/**'
+      - 'firmware/**'
+      - 'tests/micro/**'
+      - 'scripts/prepare-duckdb-static.sh'
+permissions:
+  contents: read
+concurrency:
+  group: micro-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target thumbv7m-none-eabi
+          rustup default stable
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-arm sccache
+          python3 -m venv "$RUNNER_TEMP/micro-tools"
+          "$RUNNER_TEMP/micro-tools/bin/pip" install 'uv==0.13.8'
+          echo "$RUNNER_TEMP/micro-tools/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            firmware/qemu-recorder/target
+          key: micro-native-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'firmware/qemu-recorder/Cargo.lock') }}
+      - name: Host formatting, lint, unit tests and binary
+        env:
+          RUSTFLAGS: '-C link-arg=-lstdc++'
+        run: |
+          cargo fmt --all --check
+          scripts/run-with-duckdb-static.sh cargo clippy --locked --all-targets -- -D warnings
+          scripts/run-with-duckdb-static.sh cargo test --locked --lib
+          scripts/run-with-duckdb-static.sh cargo build --locked --bin sigiro
+      - name: Portable crate and Cortex-M storage fault suite
+        run: |
+          uvx 'ruff==0.17.5' check tests/micro/native.py tests/micro/simulate.py
+          uvx 'ruff==0.17.5' format --check tests/micro/native.py tests/micro/simulate.py
+          (cd firmware/qemu-recorder && cargo fmt --check && cargo clippy --locked --release --target thumbv7m-none-eabi -- -D warnings)
+          uv run --locked tests/micro/simulate.py --no-network
+      - name: QEMU to real Sigiro through verified TLS and broker ACLs
+        env:
+          SIGIRO_EXTENSION_DIR: ${{ runner.temp }}/micro-extensions
+        run: |
+          # Seed the pinned server version's signed extension over HTTPS. This
+          # avoids depending on the engine's default HTTP installer in CI.
+          mkdir -p "$SIGIRO_EXTENSION_DIR/v2.0.0/linux_amd64"
+          curl --fail --location --retry 3 --max-time 120 \
+            https://extensions.duckdb.org/v2.0.0/linux_amd64/ducklake.duckdb_extension.gz \
+            | gzip -d > "$SIGIRO_EXTENSION_DIR/v2.0.0/linux_amd64/ducklake.duckdb_extension"
+          uv run --locked tests/micro/native.py --binary target/debug/sigiro
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: micro-native-evidence
+          # No throwaway password files or private fixture keys in uploads.
+          path: |
+            artifacts/**/results.json
+            artifacts/**/sigiro.log
+            artifacts/**/broker.log
+            artifacts/**/qemu.log
+  portable-msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          rustup toolchain install 1.89.0 --profile minimal --target thumbv7m-none-eabi
+          rustup run 1.89.0 cargo check --locked -p otlp-outbox --lib --target thumbv7m-none-eabi

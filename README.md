@@ -37,6 +37,23 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 
 Data is kept for 7 days. Set `SIGIRO_RETENTION_DAYS=0` to keep it all.
 
+## Microcontroller ingress (experimental)
+
+The same host binary can receive MCU batches through an authenticated MQTT 5
+broker, retain their original OTLP bytes, and acknowledge durable raw recording
+before asynchronous query projection:
+
+```sh
+sigiro serve --micro-config /etc/sigiro/micro.json
+sigiro micro status --data-dir /var/lib/sigiro
+```
+
+See [configuration, receipt semantics and QEMU tests](docs/micro.md). The portable
+outbox and target-specific firmware are MIT/Apache-2.0; host code remains FSL.
+This self-hosted milestone is not physical-board certification or exactly-once
+indexing. Raw MCU recording retention has its own quotas and is independent of
+the ordinary 7-day query retention.
+
 ## Look at it
 
 Open <http://localhost:9999/dashboard/>.

@@ -1,0 +1,17 @@
+[package]
+name = "otlp-outbox"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.89"
+repository = "https://github.com/akshatagarwl/sigiro"
+description = "Bounded no_std OTLP outbox policy over sequential-storage NOR flash queues"
+publish = false
+
+[dependencies]
+embedded-storage-async = "0.4.2"
+sequential-storage = { version = "=8.0.2", default-features = false }
+
+[dev-dependencies]
+embedded-storage-file = "0.3.0"
+futures = { version = "0.3", features = ["executor"] }

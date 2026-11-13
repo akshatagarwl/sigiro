@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [workspace]
-members = ["crates/sigiro-core", "crates/segments", "crates/segments-wasm"]
+members = ["crates/sigiro-core", "crates/segments", "crates/segments-wasm", "crates/otlp-outbox"]
+exclude = ["firmware/qemu-recorder"]
 
 [workspace.package]
 edition = "2024"
@@ -41,6 +42,9 @@ dead_code = "warn"
 unused_imports = "warn"
 
 [dependencies]
+otlp-outbox = { path = "crates/otlp-outbox" }
+rumqttc = { version = "0.25.1", default-features = false, features = ["use-rustls-no-provider"] }
+rustls-native-certs = "0.8.5"
 sigiro-core = { path = "crates/sigiro-core" }
 sigiro-segments = { path = "crates/segments" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
