@@ -137,7 +137,8 @@ This is a Sigiro mapping, not a standardized OTLP transport:
 - MQTT 5 QoS 1/2, non-retained, `ContentType=application/x-protobuf`.
 - `CorrelationData`: stable 16-byte batch ID, never regenerated on retry.
 - `ResponseTopic`: exactly `<namespace>/<same-device>/ack`; arbitrary reflection
-  targets and retained ingress are rejected without application success.
+  targets and retained ingress are rejected without application success. MQTT 5
+  subscriptions preserve the live RETAIN flag and never request retained history.
 - Receipt: non-retained QoS 1, content type
   `application/vnd.sigiro.micro-receipt.v1`, matching correlation data.
 - Receipt bytes: `SAK1`, 16-byte ID, signal byte (logs=1/traces=2/metrics=3),

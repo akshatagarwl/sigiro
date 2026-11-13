@@ -16,7 +16,7 @@ use rumqttc::v5::{
     AsyncClient, ConnectionError, Event, MqttOptions,
     mqttbytes::{
         QoS,
-        v5::{Filter, Packet, Publish, PublishProperties, SubscribeReasonCode},
+        v5::{Filter, Packet, Publish, PublishProperties, RetainForwardRule, SubscribeReasonCode},
     },
 };
 use std::{
@@ -127,10 +127,15 @@ impl Service {
                     backoff = 1;
                     let topics = self.config.devices.iter().flat_map(|device| {
                         ["logs", "traces", "metrics"].map(|signal| {
-                            Filter::new(
+                            let mut filter = Filter::new(
                                 format!("{}/{}/{signal}", self.config.namespace, device.id),
                                 QoS::AtLeastOnce,
-                            )
+                            );
+                            // MQTT 5 otherwise clears RETAIN on live delivery,
+                            // making a retained publisher appear non-retained.
+                            filter.preserve_retain = true;
+                            filter.retain_forward_rule = RetainForwardRule::Never;
+                            filter
                         })
                     });
                     client

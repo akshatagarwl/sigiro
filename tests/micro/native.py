@@ -328,6 +328,7 @@ class Host:
             SIGIRO_OTLP_HTTP_PORT=str(self.otlp),
             SIGIRO_GRPC_PORT=str(self.grpc),
             SIGIRO_FLUSH_INTERVAL_SECS="1",
+            SIGIRO_RETENTION_DAYS="0",  # Fixed firmware timestamp must not age out.
             RUST_LOG="sigiro=info,warn",
         )
         # Explicit opt-in preinstalled extensions keep offline experiments
@@ -335,6 +336,7 @@ class Host:
         if extension_dir := os.environ.get("SIGIRO_EXTENSION_DIR"):
             env["SIGIRO_EXTENSION_DIR"] = extension_dir
         self.log = (self.root / "sigiro.log").open("a")
+        generation = self.log.tell()
         self.process = subprocess.Popen(
             [self.binary, "serve", "--micro-config", str(self.config_path)],
             env=env,
@@ -355,6 +357,18 @@ class Host:
                 return False
 
         wait_for(healthy, 120)
+
+        # HTTP readiness is deliberately not broker readiness. Observe this
+        # process generation's SUBACK before sending non-retried test requests.
+        def subscribed():
+            assert self.process.poll() is None, (
+                f"Sigiro exited: {self.root / 'sigiro.log'}"
+            )
+            with (self.root / "sigiro.log").open("rb") as log:
+                log.seek(generation)
+                return b"micro MQTT subscribed" in log.read()
+
+        wait_for(subscribed, 30)
 
     def stop(self, crash=False):
         if self.process is not None:
@@ -457,12 +471,6 @@ def run(binary, root):
             lab.passed(
                 "real host SIGKILL/restart preserves acknowledged raw data and deduplication"
             )
-            device.exchange(ident, "logs", payload + b"\xa8\x06\x01", expected=5)
-            device.exchange(ident, "traces", payload, expected=5)
-            assert host.rows()[0][2] == payload and len(host.rows()) == 1
-            lab.passed(
-                "reused device/batch ID with different bytes or signal cannot receive success"
-            )
             malformed = bytes([90]) * 16
             device.exchange(malformed, "logs", b"\x0a\xff\xff", expected=5)
             assert len(host.rows()) == 1
@@ -473,6 +481,17 @@ def run(binary, root):
             time.sleep(0.5)
             assert len(host.rows()) == 1 and device.receipts.empty()
             lab.passed("unprovisioned response topic is rejected without reflection")
+            device.drain()
+            retained_id = bytes([97]) * 16
+            published = device.send(retained_id, "logs", payload, retain=True)
+            published.wait_for_publish(timeout=10)
+            time.sleep(0.5)
+            assert len(host.rows()) == 1 and device.receipts.empty(), (
+                "retained ingress must never receive recording acceptance"
+            )
+            lab.passed(
+                "retained live publication is rejected and retained history cannot replay after resubscription"
+            )
             attacker = Device(mqtt_port, credentials["other"], ca, user="other")
             try:
                 forged = attacker.client.publish(
@@ -530,6 +549,20 @@ def run(binary, root):
                 and host.query_count("sigiro_metrics_gauge") == 1
             )
             lab.passed("native logs/traces/metrics use real Sigiro query projections")
+            # Use a freshly accepted identity, not the original log identity
+            # whose intentionally duplicated receipts can still be in flight.
+            original_metrics = metrics.SerializeToString()
+            device.exchange(
+                bytes([93]) * 16,
+                "metrics",
+                original_metrics + b"\xa8\x06\x01",
+                expected=5,
+            )
+            device.exchange(bytes([93]) * 16, "logs", original_metrics, expected=5)
+            assert host.rows()[2][2] == original_metrics and len(host.rows()) == 3
+            lab.passed(
+                "reused device/batch ID with different bytes or signal cannot receive success"
+            )
             # Quota is lifetime raw retention; neither indexing nor quarantine erases it.
             for value in [94, 95]:
                 device.exchange(bytes([value]) * 16, "logs", payload)
