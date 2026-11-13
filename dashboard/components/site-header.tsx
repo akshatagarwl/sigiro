@@ -15,8 +15,8 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Toggle } from "@/components/ui/toggle"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { RANGES, type RangeKey, useControls, useSql } from "@/lib/sigiro/controls"
+import { TimeRangePicker } from "@/components/sigiro/time-range-picker"
+import { useControls, useSql } from "@/lib/sigiro/controls"
 import { ts } from "@/lib/sigiro/query"
 
 const ALL = "__all__"
@@ -62,17 +62,11 @@ const TITLES: Record<string, string> = {
   "/sql/": "SQL",
 }
 
-const KEYS = Object.keys(RANGES) as RangeKey[]
-
 export function SiteHeader() {
   const pathname = usePathname()
-  const { range, setRange, hasCustomWindow, live, setLive, refresh } = useControls()
+  const { start, end, setWindow, live, setLive, refresh } = useControls()
   const isSql = pathname.replace(/\/$/, "") === "/sql"
   const { resolvedTheme, setTheme } = useTheme()
-  const pick = (value: string) => {
-    const key = KEYS.find((known) => known === value)
-    if (key) setRange(key)
-  }
 
   return (
     <header className="flex min-h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear">
@@ -87,48 +81,7 @@ export function SiteHeader() {
           ) : (
             <>
               {(pathname === "/" || pathname === "/services/") && <ServiceSelect />}
-              <ToggleGroup
-                type="single"
-                value={hasCustomWindow ? "" : range}
-                onValueChange={pick}
-                variant="outline"
-                aria-label="Time range"
-                className="hidden *:data-[slot=toggle-group-item]:px-3! @container/main:flex lg:flex"
-              >
-                {KEYS.map((key) => (
-                  <ToggleGroupItem key={key} value={key} title={RANGES[key].label}>
-                    {key}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-              {hasCustomWindow && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="hidden lg:inline-flex"
-                  onClick={() => pick(range)}
-                  aria-label={`Custom time · reset to ${RANGES[range].label.toLowerCase()}`}
-                >
-                  Custom time · reset
-                </Button>
-              )}
-              <Select value={hasCustomWindow ? "custom" : range} onValueChange={pick}>
-                <SelectTrigger className="flex w-36 lg:hidden" size="sm" aria-label="Time range">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl">
-                  {hasCustomWindow && (
-                    <SelectItem value="custom" disabled>
-                      Custom time
-                    </SelectItem>
-                  )}
-                  {KEYS.map((key) => (
-                    <SelectItem key={key} value={key} className="rounded-lg">
-                      {RANGES[key].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <TimeRangePicker start={start} end={end} onChange={setWindow} />
               <Toggle
                 variant="outline"
                 size="sm"

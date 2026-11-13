@@ -12,7 +12,20 @@ import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ControlsProvider } from "@/lib/sigiro/controls";
+import { ControlsProvider, useControls } from "@/lib/sigiro/controls";
+
+function WindowGuard({ children }: { children: React.ReactNode }) {
+  const { windowError } = useControls();
+  const pathname = usePathname();
+  if (windowError && pathname.replace(/\/$/, "") !== "/sql")
+    return (
+      <div role="alert" className="space-y-2 p-6 text-sm">
+        <h2 className="font-semibold">Invalid time range</h2>
+        <p>{windowError}. Choose a valid range in the header to continue.</p>
+      </div>
+    );
+  return children;
+}
 
 /** dashboard-01's sidebar + inset layout, behind sign-in, with the providers the blocks need. */
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -42,7 +55,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     <SiteHeader />
                     <AlertDeliveryNotice />
                     <div className="@container/main flex min-h-0 flex-1 flex-col overflow-y-auto">
-                      {children}
+                      <WindowGuard>{children}</WindowGuard>
                     </div>
                   </SidebarInset>
                 </SidebarProvider>

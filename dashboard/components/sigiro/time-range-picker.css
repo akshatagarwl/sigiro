@@ -1,0 +1,129 @@
+.sigiro-time-range-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2rem;
+  max-width: min(100%, calc(100vw - 3rem));
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.sigiro-time-range-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sigiro-time-range-trigger svg {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+.sigiro-time-range-trigger:hover {
+  background: var(--accent);
+}
+.sigiro-time-range-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.sigiro-time-range-positioner {
+  z-index: 60;
+}
+.sigiro-time-range-popup {
+  width: min(48rem, calc(100vw - 1rem));
+  max-height: min(44rem, var(--available-height, calc(100dvh - 1rem)));
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 0.14);
+  outline: none;
+}
+.sigiro-time-range-popup .datetime-range-range-popup {
+  min-width: 0;
+}
+.sigiro-time-range-popup .datetime-range-range-quick {
+  width: 9rem;
+  flex-shrink: 0;
+}
+.sigiro-time-range-popup .datetime-range-range-quick-inner {
+  height: auto;
+}
+.sigiro-time-range-popup .datetime-range-range-pickers {
+  min-width: 0;
+  flex: 1;
+}
+.sigiro-time-range-popup .datetime-range-range-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.sigiro-time-range-popup .datetime-range-range-panel-slot {
+  min-width: 0;
+  padding: 12px;
+}
+.sigiro-time-range-popup .datetime-range-side-panel {
+  width: 100%;
+  min-width: 0;
+}
+.sigiro-time-range-popup .datetime-range-range-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--popover);
+  border-top: 1px solid var(--border);
+  min-height: 3.5rem;
+}
+.sigiro-time-range-popup .datetime-range-range-error-text {
+  flex: 1;
+}
+.sigiro-time-range-popup .datetime-range-range-actions {
+  flex-shrink: 0;
+}
+@media (max-width: 700px) {
+  .sigiro-time-range-popup .datetime-range-range-popup {
+    flex-direction: column;
+  }
+  .sigiro-time-range-popup .datetime-range-range-quick {
+    width: 100%;
+    border-bottom: 1px solid var(--border);
+  }
+  .sigiro-time-range-popup .datetime-range-range-quick-inner {
+    position: static;
+    padding: 12px;
+  }
+  .sigiro-time-range-popup .datetime-range-range-quick-list {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .sigiro-time-range-popup .datetime-range-range-quick-item {
+    width: auto;
+    flex-shrink: 0;
+    min-height: 40px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+  }
+  .sigiro-time-range-popup .datetime-range-range-divider {
+    display: none;
+  }
+  .sigiro-time-range-popup .datetime-range-range-panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sigiro-time-range-popup
+    .datetime-range-range-panel-slot
+    + .datetime-range-range-panel-slot {
+    border-top: 1px solid var(--border);
+  }
+  .sigiro-time-range-popup .datetime-range-range-panel-slot {
+    padding: 16px;
+  }
+  .sigiro-time-range-popup .datetime-range-range-actions button {
+    min-height: 44px;
+  }
+}

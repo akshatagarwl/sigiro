@@ -117,11 +117,11 @@ export function createExplorer<TRow extends { timestamp: Date }>(
   const seriesKeys = Object.keys(explorer.chart);
 
   function useOptions() {
-    const { from, to, range } = useControls();
+    const { from, to, windowKey } = useControls();
     return React.useMemo(
       () =>
         createDataTableQueryOptions<TRow[], unknown>({
-          queryKeyPrefix: `${explorer.id}-${range}`,
+          queryKeyPrefix: `${explorer.id}-${windowKey}`,
           apiEndpoint: `/${explorer.id}`,
           searchParamsSerializer: searchParamsSerializer as (
             search: Record<string, unknown>
@@ -136,7 +136,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(
         }),
       // Keep the query identity stable within a range, but rebuild its fetch
       // closure when Refresh/live advances the fallback window.
-      [range, from, to]
+      [windowKey, from, to]
     );
   }
 

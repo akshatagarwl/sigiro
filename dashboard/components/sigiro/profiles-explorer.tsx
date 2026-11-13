@@ -101,8 +101,9 @@ const parseLabel = (s: string): LabelFilter | undefined => {
 };
 
 function useSqlQuery(name: string, sql: string | undefined) {
+  const { tick } = useControls();
   return useQuery({
-    queryKey: [name, sql],
+    queryKey: [name, sql, tick],
     enabled: Boolean(sql),
     queryFn: ({ signal }) => query(sql!, signal),
     retry: false,

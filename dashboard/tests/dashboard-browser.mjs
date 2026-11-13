@@ -165,7 +165,11 @@ try {
               bounds(r.request().postData())[0] ===
               3600000000
         );
-        await p.getByRole("radio", { name: "1h", exact: true }).click();
+        await p.getByRole("button", { name: /^Time range:/ }).click();
+        await p
+          .getByRole("dialog", { name: "Choose time range" })
+          .getByRole("button", { name: "Last hour", exact: true })
+          .click();
         await changed;
         assert(!new URL(p.url()).searchParams.has("timestamp"));
         await p.reload();
@@ -787,16 +791,11 @@ try {
         failStacks = false;
         await p.getByRole("button", { name: "Retry", exact: true }).click();
         await state(p, "profiles", "ready");
-        if (width >= 1024)
-          await p.getByRole("radio", { name: "1h", exact: true }).click();
-        else {
-          await p
-            .getByRole("combobox", { name: "Time range", exact: true })
-            .click();
-          await p
-            .getByRole("option", { name: "Last hour", exact: true })
-            .click();
-        }
+        await p.getByRole("button", { name: /^Time range:/ }).click();
+        await p
+          .getByRole("dialog", { name: "Choose time range" })
+          .getByRole("button", { name: "Last hour", exact: true })
+          .click();
         await p.waitForURL(
           (current) =>
             current.searchParams.get("range") === "1h" &&
@@ -806,12 +805,13 @@ try {
         await state(p, "profiles", "ready");
         assert.equal(bounds(qs.at(-1))[1] - bounds(qs.at(-1))[0], 3600000000);
         await p.goto(url("profiles/", "service=api&from=100&to=50"));
-        await state(p, "profiles", "invalid");
         await p
-          .getByRole("heading", { name: "Invalid custom time range" })
+          .getByRole("heading", { name: "Invalid time range", exact: true })
           .waitFor();
+        await p.getByRole("button", { name: /^Time range:/ }).click();
         await p
-          .getByRole("button", { name: "Use the header's time range" })
+          .getByRole("dialog", { name: "Choose time range" })
+          .getByRole("button", { name: "Last 24 hours", exact: true })
           .click();
         await state(p, "profiles", "ready");
         assert(!new URL(p.url()).searchParams.has("from"));

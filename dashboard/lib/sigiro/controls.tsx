@@ -1,5 +1,6 @@
 "use client";
 
+import { toUrlString, type DateTimeRangeValue } from "@loykin/datetime-range";
 import { useQuery } from "@tanstack/react-query";
 import {
   parseAsBoolean,
@@ -12,6 +13,7 @@ import {
 import * as React from "react";
 
 import { query, type Row } from "./query";
+import { resolveTimeWindow } from "./time-window";
 
 /**
  * The header's time range, service and live switch, shared by every page
@@ -34,6 +36,11 @@ type Controls = {
   range: RangeKey;
   setRange: (range: RangeKey) => void;
   hasCustomWindow: boolean;
+  start: DateTimeRangeValue;
+  end: DateTimeRangeValue;
+  setWindow: (start: DateTimeRangeValue, end: DateTimeRangeValue) => void;
+  windowKey: string;
+  windowError: string | null;
   /** One service, or "" for all. */
   service: string;
   setService: (service: string) => void;
@@ -49,19 +56,35 @@ type Controls = {
 const ControlsContext = React.createContext<Controls | null>(null);
 
 export function ControlsProvider({ children }: { children: React.ReactNode }) {
-  const [{ range, timestamp, from: customFrom, to: customTo }, setTime] =
-    useQueryStates({
-      range: parseAsStringLiteral(RANGE_KEYS).withDefault("24h"),
-      timestamp: parseAsString,
-      from: parseAsInteger,
-      to: parseAsInteger,
-    });
+  const [
+    {
+      range,
+      timestamp,
+      from: customFrom,
+      to: customTo,
+      timeStart,
+      timeEnd,
+      live,
+    },
+    setTime,
+  ] = useQueryStates({
+    range: parseAsStringLiteral(RANGE_KEYS).withDefault("24h"),
+    timestamp: parseAsString,
+    from: parseAsInteger,
+    to: parseAsInteger,
+    timeStart: parseAsString,
+    timeEnd: parseAsString,
+    live: parseAsBoolean.withDefault(false),
+    cursor: parseAsString,
+    after: parseAsString,
+    direction: parseAsString,
+  });
   const hasCustomWindow =
-    timestamp !== null || customFrom !== null || customTo !== null;
-  const [live, setLive] = useQueryState(
-    "live",
-    parseAsBoolean.withDefault(false)
-  );
+    timestamp !== null ||
+    customFrom !== null ||
+    customTo !== null ||
+    timeStart !== null ||
+    timeEnd !== null;
   const [service, setService] = useQueryState(
     "service",
     parseAsString.withDefault("")
@@ -79,7 +102,56 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(timer);
   }, [live, refresh]);
 
-  React.useEffect(refresh, [range, refresh]);
+  React.useEffect(refresh, [range, timeStart, timeEnd, refresh]);
+
+  // Honor existing profile links and table chart selections as well as the
+  // header's new relative/absolute endpoints; every page sees the same window.
+  const legacyDates = timestamp?.match(/^(\d+)(?:-(\d+))?$/);
+  const invalidLegacyTimestamp = timestamp !== null && !legacyDates;
+  const legacyStart =
+    customFrom ?? (legacyDates ? Number(legacyDates[1]) : null);
+  const legacyEnd =
+    customTo ??
+    (legacyDates
+      ? Number(legacyDates[2] ?? Number(legacyDates[1]) + 86_400_000)
+      : null);
+  const startText =
+    timeStart ?? (legacyStart !== null ? String(legacyStart) : `now-${range}`);
+  const endText = timeEnd ?? (legacyEnd !== null ? String(legacyEnd) : "now");
+  const windowKey = JSON.stringify([
+    startText,
+    endText,
+    customFrom,
+    customTo,
+    timestamp,
+  ]);
+  const resolved = React.useMemo(() => {
+    try {
+      if ((timeStart === null) !== (timeEnd === null))
+        throw new Error("Provide both time endpoints");
+      if (timeStart === null && (customFrom === null) !== (customTo === null))
+        throw new Error("Provide both time endpoints");
+      if (timeStart === null && invalidLegacyTimestamp)
+        throw new Error("Invalid timestamp selection");
+      return { ...resolveTimeWindow(startText, endText, now), error: null };
+    } catch (error) {
+      return {
+        ...resolveTimeWindow(`now-${range}`, "now", now),
+        error: error instanceof Error ? error.message : "Invalid time range",
+      };
+    }
+  }, [
+    startText,
+    endText,
+    timeStart,
+    timeEnd,
+    customFrom,
+    customTo,
+    timestamp,
+    invalidLegacyTimestamp,
+    range,
+    now,
+  ]);
 
   const value = React.useMemo<Controls>(
     () => ({
@@ -87,16 +159,51 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
       // A deliberate relative-range choice replaces view-local time overrides
       // in one URL transaction; changing range must change the actual SQL window.
       setRange: (next) =>
-        void setTime({ range: next, timestamp: null, from: null, to: null }),
+        void setTime({
+          range: next,
+          timestamp: null,
+          from: null,
+          to: null,
+          timeStart: null,
+          timeEnd: null,
+          cursor: null,
+          after: null,
+          direction: null,
+        }),
       hasCustomWindow,
+      start: resolved.start,
+      end: resolved.end,
+      windowKey,
+      windowError: resolved.error,
+      setWindow: (start, end) => {
+        const nextStart = toUrlString(start);
+        const nextEnd = toUrlString(end);
+        resolveTimeWindow(nextStart, nextEnd, Date.now());
+        const preset = RANGE_KEYS.find(
+          (key) => nextStart === `now-${key}` && nextEnd === "now"
+        );
+        void setTime({
+          range: preset ?? range,
+          timeStart: preset ? null : nextStart,
+          timeEnd: preset ? null : nextEnd,
+          timestamp: null,
+          from: null,
+          to: null,
+          cursor: null,
+          after: null,
+          direction: null,
+          live: nextEnd === "now" ? live : null,
+        });
+        refresh();
+      },
       service,
       setService: (next) => void setService(next || null),
       live,
-      setLive: (next) => void setLive(next || null),
+      setLive: (next) => void setTime({ live: next || null }),
       tick,
       refresh,
-      from: new Date(now - RANGES[range].ms),
-      to: new Date(now),
+      from: resolved.from,
+      to: resolved.to,
     }),
     [
       range,
@@ -105,7 +212,8 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
       service,
       setService,
       live,
-      setLive,
+      resolved,
+      windowKey,
       tick,
       refresh,
       now,
@@ -132,12 +240,13 @@ export type Window = { from: Date; to: Date; service: string };
  * live ticks (each moves the window, so the SQL text is the cache key).
  */
 export function useSql(name: string, sql: (window: Window) => string) {
-  const { from, to, service, range } = useControls();
+  const { from, to, service, windowKey, windowError, tick } = useControls();
   const text = sql({ from, to, service });
-  const scope = JSON.stringify([range, service]);
+  const scope = JSON.stringify([windowKey, service]);
   return useQuery<Row[]>({
-    queryKey: [name, text, scope],
+    queryKey: [name, text, scope, tick],
     queryFn: ({ signal }) => query(text, signal),
+    enabled: windowError === null,
     // Refresh can retain the last snapshot with an Updating state. A different
     // service or range must not inherit data labeled with the new scope.
     placeholderData: (previous, previousQuery) =>
