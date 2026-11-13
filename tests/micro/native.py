@@ -62,10 +62,10 @@ def port():
 def broker(root):
     config = root / "broker"
     config.mkdir()
-    password = secrets.token_hex(24)
+    credentials = {user: secrets.token_hex(24) for user in ("server", DEVICE, "other")}
     password_file = config / "passwords"
     password_file.write_text(
-        f"server:{password}\n{DEVICE}:{password}\nother:{password}\n"
+        "".join(f"{user}:{password}\n" for user, password in credentials.items())
     )
     command(
         [
@@ -201,7 +201,7 @@ def broker(root):
                 return False  # Docker mapping can be visible before its listener.
 
         wait_for(ready, 15)
-        yield mqtt_port, password, config / "ca.pem", name
+        yield mqtt_port, credentials, config / "ca.pem", name
     finally:
         logs = subprocess.run(
             ["docker", "logs", name], capture_output=True, text=True, check=False
@@ -390,9 +390,9 @@ class Host:
 def run(binary, root):
     lab = Lab(root)
     complete = False
-    with broker(root) as (mqtt_port, password, ca, container):
-        host = Host(binary, root, mqtt_port, password, ca)
-        device = Device(mqtt_port, password, ca)
+    with broker(root) as (mqtt_port, credentials, ca, container):
+        host = Host(binary, root, mqtt_port, credentials["server"], ca)
+        device = Device(mqtt_port, credentials[DEVICE], ca)
         try:
             host.start()
             case = lab.case("qemu-raw")
@@ -473,7 +473,7 @@ def run(binary, root):
             time.sleep(0.5)
             assert len(host.rows()) == 1 and device.receipts.empty()
             lab.passed("unprovisioned response topic is rejected without reflection")
-            attacker = Device(mqtt_port, password, ca, user="other")
+            attacker = Device(mqtt_port, credentials["other"], ca, user="other")
             try:
                 forged = attacker.client.publish(
                     ACK_TOPIC, b"SAK1" + spoof + bytes([1, 1, 0, 0]), qos=1
@@ -486,8 +486,24 @@ def run(binary, root):
                 assert device.receipts.empty() and len(host.rows()) == 1
             finally:
                 attacker.close()
+            probe = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION2,
+                client_id="wrong-server-credential",
+                protocol=mqtt.MQTTv5,
+            )
+            probe.username_pw_set("server", credentials["other"])
+            probe.tls_set_context(ssl.create_default_context(cafile=str(ca)))
+            refused = queue.Queue()
+            probe.on_connect = lambda _c, _u, _f, reason, _p: refused.put(reason)
+            probe.connect("127.0.0.1", mqtt_port)
+            probe.loop_start()
+            try:
+                assert refused.get(timeout=10).is_failure
+            finally:
+                probe.disconnect()
+                probe.loop_stop()
             lab.passed(
-                "broker ACLs deny cross-device ingress and forged success receipts"
+                "distinct credentials and broker ACLs deny server impersonation, cross-device ingress and forged receipts"
             )
             traces = ExportTraceServiceRequest()
             resource = traces.resource_spans.add()

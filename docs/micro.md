@@ -44,7 +44,7 @@ Example `micro.json`:
 Paths are relative to the config file. Omit `ca_file` to use platform trust
 anchors. TLS validates both chain and broker hostname, with an explicit aws-lc
 provider; verification is never disabled. Password files must be private
-(`chmod 600` on Unix); remove a trailing newline if desired. Credentials are
+(`chmod 600` on Unix); trailing CR/LF characters are stripped. Credentials are
 required outside explicitly enabled loopback tests. Choose a unique server
 client ID, so another server does not disconnect this subscription.
 
@@ -64,7 +64,9 @@ topic write sigiro/micro/v1/sensor-001/metrics
 topic read sigiro/micro/v1/sensor-001/ack
 ```
 
-Never allow devices to publish receipts or another device's ingress. The broker
+Use distinct, high-entropy credentials per device and for the server; never
+share the server credential with devices. Never allow devices to publish receipts
+or another device's ingress. The broker
 is a trusted security boundary, not an untrusted relay: the current receipt has
 no independent signature. An authenticated broker plus verified TLS and correct
 ACLs are required on **both device and host**. Compromising the broker can forge
