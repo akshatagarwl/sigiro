@@ -1,0 +1,27 @@
+[package]
+name = "sigiro-micro-qemu"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.89"
+publish = false
+
+# Separate target workspace: host-wide lint/test commands must not try to run
+# a bare-metal binary. The portable outbox is a member of the host workspace.
+[workspace]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[dependencies]
+embassy-futures = "0.1.2"
+otlp-outbox = { path = "../../crates/otlp-outbox" }
+embedded-storage-async = "0.4.2"
+sequential-storage = { version = "=8.0.2", default-features = false }
+semihosting = { version = "0.1.25", features = ["fs", "stdio"] }
+cortex-m-rt = "0.7.7"
+micropb = "0.6.0"
+opentelemetry-micropb = { git = "https://github.com/akshatagarwl/opentelemetry-micropb", rev = "4742be65cda96cea0b1cf12e732684ff9742299c", default-features = false, features = ["use_heapless"] }

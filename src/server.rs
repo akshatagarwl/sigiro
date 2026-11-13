@@ -650,13 +650,23 @@ pub fn resolve_listener_bind_ips(
     }
 }
 
+pub struct ServerOptions {
+    pub data_dir: camino::Utf8PathBuf,
+    pub init_complete: Arc<AtomicBool>,
+    pub micro_config: Option<std::path::PathBuf>,
+}
+
 pub async fn run_servers(
     pool: Arc<ProjectPool>,
     alerts: crate::alerts::AlertStore,
     router: Arc<MsgRouter>,
-    data_dir: camino::Utf8PathBuf,
-    init_complete: Arc<AtomicBool>,
+    options: ServerOptions,
 ) -> Result<()> {
+    let ServerOptions {
+        data_dir,
+        init_complete,
+        micro_config,
+    } = options;
     let ports = ServerPorts::load()?;
     let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?.get();
 
@@ -665,6 +675,11 @@ pub async fn run_servers(
     let auth_mode =
         crate::auth::AuthMode::from_runtime_config(query_surface, pool.storage_mode(), ingest_keys)
             .await?;
+    let micro = if let Some(path) = micro_config {
+        Some(crate::micro::Service::open(&path, data_dir.as_std_path(), &auth_mode).await?)
+    } else {
+        None
+    };
 
     // The bind address enforced for EVERY listener (HTTP, OTLP-HTTP, gRPC, and
     // quack itself) when this node is a quack edge — resolved once here so
@@ -735,6 +750,20 @@ pub async fn run_servers(
     let grpc_auth_mode = auth_mode.clone();
     let grpc_port = ports.grpc;
     let mut servers = JoinSet::new();
+    let (micro_stop, micro_rx) = tokio::sync::watch::channel(false);
+    if let Some(service) = micro {
+        let mqtt = Arc::clone(&service);
+        let mqtt_router = Arc::clone(&router);
+        let mqtt_stop = micro_rx.clone();
+        servers.spawn(async move { ("micro MQTT", mqtt.mqtt(mqtt_router, mqtt_stop).await) });
+        let project_router = Arc::clone(&router);
+        servers.spawn(async move {
+            (
+                "micro projection",
+                service.project(project_router, micro_rx).await,
+            )
+        });
+    }
     let (grpc_shutdown_tx, grpc_shutdown_rx) = oneshot::channel();
     servers.spawn(async move {
         let addr = SocketAddr::new(grpc_bind_ip, grpc_port);
@@ -935,6 +964,8 @@ pub async fn run_servers(
         },
     };
 
+    // No receivers is normal when micro ingress is disabled/already stopped.
+    micro_stop.send_replace(true);
     http_handle.graceful_shutdown(None);
     otlp_http_handle.graceful_shutdown(None);
     let shutdown_send = grpc_shutdown_tx

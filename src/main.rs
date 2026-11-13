@@ -43,6 +43,9 @@ enum Command {
         /// OTLP gRPC port (overrides SIGIRO_GRPC_PORT)
         #[arg(long)]
         otlp_grpc_port: Option<u16>,
+        /// Enable native MQTT micro ingress using a device/broker JSON configuration.
+        #[arg(long, value_name = "FILE")]
+        micro_config: Option<std::path::PathBuf>,
     },
 
     /// Run a federated SQL query across one or more self-hosted sigiro edges.
@@ -78,6 +81,11 @@ enum Command {
     /// otherwise. This is the container HEALTHCHECK for the distroless image,
     /// which has no shell or curl for the usual `curl -f /health` probe.
     Healthcheck,
+    /// Inspect local microcontroller raw recording/projection state.
+    Micro {
+        #[command(subcommand)]
+        command: MicroCommand,
+    },
     /// Authenticate this CLI with Sigiro Cloud.
     Auth {
         #[command(subcommand)]
@@ -111,6 +119,15 @@ enum Command {
     /// Register it with an agent as a stdio server, for example
     /// `claude mcp add sigiro -- sigiro mcp`.
     Mcp,
+}
+
+#[derive(Subcommand)]
+enum MicroCommand {
+    /// Read durable raw inbox counts; does not connect to the broker.
+    Status {
+        #[arg(long, value_name = "DIR")]
+        data_dir: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -219,6 +236,7 @@ async fn main() -> Result<()> {
             http_port,
             otlp_http_port,
             otlp_grpc_port,
+            micro_config,
         }) => {
             // Apply CLI flags to env before any config::*.value() is called.
             // The on_startup Envar machinery reads env::var at first .value(),
@@ -239,10 +257,10 @@ async fn main() -> Result<()> {
                     std::env::set_var("SIGIRO_GRPC_PORT", v.to_string());
                 }
             }
-            run_serve().await?;
+            run_serve(micro_config).await?;
         }
         None => {
-            run_serve().await?;
+            run_serve(None).await?;
         }
 
         Some(Command::Query {
@@ -263,6 +281,14 @@ async fn main() -> Result<()> {
             let result = sigiro::federate::run_federated_query(&sql, &edge, full_scan).await?;
             let value = serde_json::to_value(&result)?;
             println!("{}", format_output(&value)?);
+        }
+        Some(Command::Micro {
+            command: MicroCommand::Status { data_dir },
+        }) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&sigiro::micro::status(&data_dir)?)?
+            );
         }
         Some(Command::Status) => {
             // Health is public, but it must come from the server the other
@@ -487,7 +513,7 @@ fn probe_kernel_release() -> String {
     }
 }
 
-async fn run_serve() -> Result<()> {
+async fn run_serve(micro_config: Option<std::path::PathBuf>) -> Result<()> {
     // Hosted mode has an explicit persistent filesystem contract. Do not let
     // an inherited SIGIRO_DATA_DIR silently put hosted telemetry/admin state in
     // a developer's home directory.
@@ -669,8 +695,17 @@ async fn run_serve() -> Result<()> {
     // those drops replaces the error with the panic — which is exactly how the
     // real cause of a production boot failure went unrecorded. The error is
     // still returned; this only guarantees it is written down first.
-    if let Err(error) =
-        sigiro::server::run_servers(pool, alert_store, router, dir.clone(), init_complete).await
+    if let Err(error) = sigiro::server::run_servers(
+        pool,
+        alert_store,
+        router,
+        sigiro::server::ServerOptions {
+            data_dir: dir.clone(),
+            init_complete,
+            micro_config,
+        },
+    )
+    .await
     {
         tracing::error!("sigiro serve failed: {error:#}");
         return Err(error);

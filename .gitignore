@@ -58,3 +58,8 @@ www/.source/
 .wrangler/
 # Local agent worktrees and per-user editor state.
 .worktrees/
+
+# Microcontroller simulator build/output
+/firmware/qemu-recorder/target/
+/artifacts/
+/tests/micro/__pycache__/
