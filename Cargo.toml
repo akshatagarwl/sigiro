@@ -84,11 +84,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
 # Self-profiling (src/profiling.rs): pprof-rs samples CPU; its `cpp` feature
 # demangles DuckDB's native C++ frames. jemalloc_pprof dumps the sampled heap,
 # pprof_util parses the dump, and backtrace symbolizes its addresses.
-pprof = { version = "0.15", default-features = false, features = ["cpp"] }
-jemalloc_pprof = "0.9"
-pprof_util = "0.8.2"
-backtrace = "0.3"
-tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 regex = "1"
 hex = "0.4.3"
@@ -128,6 +123,15 @@ tokio-util = "0.7"
 
 [lints]
 workspace = true
+
+# Android (bionic) can't build jemalloc and doesn't need self-profiling;
+# it uses the system allocator and reports self-profiling as disabled.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+pprof = { version = "0.15", default-features = false, features = ["cpp"] }
+jemalloc_pprof = "0.9"
+pprof_util = "0.8.2"
+backtrace = "0.3"
+tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
 
 [profile.dev]
 split-debuginfo = "unpacked"

@@ -181,6 +181,9 @@ unsafe extern "C" {
     fn duckdb_extension_parquet_describe(descriptor: *mut ExtensionDescriptor) -> i32;
     fn duckdb_extension_json_describe(descriptor: *mut ExtensionDescriptor) -> i32;
     fn duckdb_extension_icu_describe(descriptor: *mut ExtensionDescriptor) -> i32;
+    // DuckDB serves no android_arm64 extensions; the Android bundle links ducklake.
+    #[cfg(target_os = "android")]
+    fn duckdb_extension_ducklake_describe(descriptor: *mut ExtensionDescriptor) -> i32;
 }
 
 /// Open an in-memory DuckDB. The only way to open one: clippy bans
@@ -195,7 +198,8 @@ pub fn open_duckdb() -> Result<Connection> {
     static REGISTERED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
     REGISTERED
         .get_or_init(|| {
-            let extensions: [(&str, DescribeExtension); 6] = [
+            #[allow(unused_mut)]
+            let mut extensions: Vec<(&str, DescribeExtension)> = vec![
                 (
                     "loadable_extensions",
                     duckdb_extension_loadable_extensions_describe,
@@ -206,6 +210,8 @@ pub fn open_duckdb() -> Result<Connection> {
                 ("json", duckdb_extension_json_describe),
                 ("icu", duckdb_extension_icu_describe),
             ];
+            #[cfg(target_os = "android")]
+            extensions.push(("ducklake", duckdb_extension_ducklake_describe));
             for (name, describe) in extensions {
                 // SAFETY: each describe function is DuckDB's own, linked from
                 // the static bundle, with the signature duckdb_static_extension.h

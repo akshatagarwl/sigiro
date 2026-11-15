@@ -781,7 +781,14 @@ pub(crate) fn install_extensions_from(conn: &Connection, names: &[&str]) -> Resu
             i + 1,
             total,
         );
-        conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
+        // Android links its extensions statically: DuckDB serves no
+        // android_arm64 downloads, so INSTALL would 404.
+        let sql = if cfg!(target_os = "android") {
+            format!("LOAD {name};")
+        } else {
+            format!("INSTALL {name}; LOAD {name};")
+        };
+        conn.execute_batch(&sql)
             .with_context(|| format!("failed to install/load extension {name}"))?;
         tracing::info!("loaded DuckDB extension: {name}");
     }
