@@ -7,10 +7,11 @@
 #
 # Needs: Android NDK (ANDROID_NDK_HOME), cmake, ninja, cargo-ndk,
 #        rustup target aarch64-linux-android.
-# After replacing libduckdb_static.a, run `cargo clean -p libduckdb-sys
-# --target aarch64-linux-android --release`: the archive is bundled into that rlib.
-# Output: target/aarch64-linux-android/release/sigiro (plus a stripped copy
-#         at target/sigiro-android-arm64).
+# After replacing libduckdb_static.a, run `cargo clean -p libduckdb-sys --target
+# aarch64-linux-android --release --target-dir "$work/target"`: the archive is bundled
+# into that rlib.
+# Output: stripped binary at $work/sigiro-android-arm64
+#         ($work defaults to ~/Library/Caches/sigiro/android-build).
 set -euo pipefail
 
 : "${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME to an NDK (tested with r30)}"
@@ -72,6 +73,8 @@ fi
 export DUCKDB_LIB_DIR="$out" DUCKDB_INCLUDE_DIR="$out" DUCKDB_STATIC=1
 # DuckDB is C++: link the NDK's static libc++ so the binary needs only bionic.
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-lc++_static -C link-arg=-lc++abi"
+# Own target dir: managed/shared target caches may not keep cross-built binaries around.
+export CARGO_TARGET_DIR="$work/target"
 cargo ndk -t arm64-v8a -P "$api" build --release --bin sigiro
-"$bin/llvm-strip" -o target/sigiro-android-arm64 target/aarch64-linux-android/release/sigiro
-ls -la target/sigiro-android-arm64
+"$bin/llvm-strip" -o "$work/sigiro-android-arm64" "$CARGO_TARGET_DIR/aarch64-linux-android/release/sigiro"
+ls -la "$work/sigiro-android-arm64"

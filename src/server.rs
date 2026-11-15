@@ -684,7 +684,17 @@ pub async fn run_servers(
     } else {
         None
     };
-    let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(edge_bind);
+    // Outside quack, SIGIRO_BIND (loopback by default on Android) narrows the listeners.
+    let listener_bind = match (edge_bind, crate::config::BIND.value()) {
+        (Some(bind), _) => Some(bind),
+        (None, Ok(raw_bind)) => Some(
+            raw_bind
+                .parse()
+                .with_context(|| format!("SIGIRO_BIND {raw_bind:?} is not a valid IP address"))?,
+        ),
+        (None, Err(_)) => None,
+    };
+    let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(listener_bind);
 
     // TLS configuration
     let (otlp_http_tls_config, grpc_tls_config) = match (

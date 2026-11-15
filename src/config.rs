@@ -469,6 +469,18 @@ pub(crate) static QUACK_BIND: Envar<String> = Envar::on_startup("SIGIRO_QUACK_BI
     EnvarDef::Default("127.0.0.1".to_string())
 });
 
+/// Bind address for the HTTP, OTLP-HTTP and gRPC listeners outside quack mode.
+/// Unset binds every interface, as hosted mode needs (the ingress sits on the
+/// Docker network). Android defaults to loopback: a phone joins untrusted
+/// networks and a self-hosted Sigiro there has no auth or TLS by default.
+pub(crate) static BIND: Envar<String> = Envar::on_startup("SIGIRO_BIND", || {
+    if cfg!(target_os = "android") {
+        EnvarDef::Default("127.0.0.1".to_string())
+    } else {
+        EnvarDef::Unset
+    }
+});
+
 /// Port for the quack query-serving surface.
 pub(crate) static QUACK_PORT: Envar<u16> =
     Envar::on_startup("SIGIRO_QUACK_PORT", || EnvarDef::Default(7777));
