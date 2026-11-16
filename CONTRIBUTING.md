@@ -80,6 +80,13 @@ never a failure. For changes that need no changelog line, ignore it or run
    `SHA256SUMS` on a GitHub Release. sigiro-infra then copies the release to
    sigiro.com/dl.
 
+Release notes should lead with user-visible changes, then list supported
+OS/architecture combinations from the actual uploaded archives, install/update
+instructions, checksum verification, and known limitations or breaking changes.
+Keep the generated contributor/PR changelog below that summary. Do not imply that
+unreleased `main` features are included in an existing version, and do not replace
+published archives or checksums just to improve the presentation.
+
 Every other push to `main` finds the tag already there and does nothing.
 `release.yml` refuses a tag that does not match `Cargo.toml` and a version that
 already has a GitHub Release. If a release fails after the tag is pushed,
@@ -93,6 +100,19 @@ involved.
 Pull requests from forks run only jobs that need no repository secrets
 (JavaScript format/lint/typecheck and secret scanning). Release and deployment
 jobs run only for maintainers.
+
+## Repository presentation
+
+Keep the GitHub About description, website (`https://sigiro.com`), and topics
+aligned with the README. Topics describe the product; version tags identify
+releases. Name the FSL license explicitly rather than calling the application
+OSI-approved open source.
+
+The repository social card is [`.github/social-preview.png`](.github/social-preview.png)
+(1280×640). Upload it under the repository's **Settings → General → Social preview**;
+committing the image alone does not configure GitHub's preview. The dashboard
+crop shows example telemetry, not a production benchmark. The website's Open
+Graph card is a separate asset with its own generation process.
 
 ## Reporting security issues
 

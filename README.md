@@ -1,10 +1,16 @@
-# Sigiro
+# Sigiro — a single-binary OpenTelemetry backend
 
-An OpenTelemetry backend you can hand to a coding agent.
-One binary takes in traces, logs, metrics and profiles over OTLP.
-You read them back with SQL, a dashboard, a CLI, or MCP.
+One binary stores traces, logs, metrics, and profiles over OTLP.
+Query them with SQL, explore them in the dashboard, or give your coding agent
+the CLI and MCP server.
 
-![Your apps send OTLP to the sigiro binary, which stores Parquet files and answers through the dashboard, HTTP API, CLI and MCP](docs/assets/flow.svg)
+[Website](https://sigiro.com) · [Quickstart](https://sigiro.com/docs/tutorials/quickstart) · [Documentation](https://sigiro.com/docs) · [Releases](https://github.com/akshatagarwl/sigiro/releases) · [Contributing](CONTRIBUTING.md)
+
+[![Latest release](https://img.shields.io/github/v/release/akshatagarwl/sigiro)](https://github.com/akshatagarwl/sigiro/releases/latest)
+[![CI (manually triggered)](https://github.com/akshatagarwl/sigiro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/akshatagarwl/sigiro/actions/workflows/ci.yml)
+[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE.md)
+
+![Dashboard overview: requests, errors, latency and log volume for two small demo services](docs/assets/dashboard-overview.png)
 
 ## Run it
 
@@ -21,6 +27,8 @@ server on loopback. It listens on:
 | `4317` | OTLP gRPC |
 | `4318` | OTLP HTTP |
 | `9999` | dashboard (`/dashboard/`), HTTP API, `/health` |
+
+![Your apps send OTLP to the sigiro binary, which stores Parquet files and answers through the dashboard, HTTP API, CLI and MCP](docs/assets/flow.svg)
 
 Data goes to `~/.local/share/sigiro` on Linux and `~/Library/Application Support/sigiro` on macOS.
 Change it with `--data-dir` or `SIGIRO_DATA_DIR`.
@@ -60,17 +68,11 @@ window. If it is empty, check the exporter destination, selected service, and ti
 range; data outside that scope will not appear. Enable Live for refreshes every
 10 seconds, or refresh manually. SQL defines its own query window.
 
-**Current local-dashboard caveats:** the empty-state instructions still describe
-hosted ingestion and must not be used to configure your local exporter. Follow
-[the local quickstart](https://sigiro.com/docs/tutorials/quickstart) instead. A
-standalone frontend preview also needs a working same-origin backend; a Sign in
-card there can reflect failed local-server detection rather than a requirement
-to create a hosted account. See the existing [entry and first-run inventory](docs/dashboard-state-machines.md#current-entry-and-first-run-behavior)
-for current behavior and pending fixes. Documentation is available at
-<http://localhost:9999/docs/> when served by the binary, or at
-<https://sigiro.com/docs>.
-
-![Dashboard overview: requests, errors, latency and log volume for two small demo services](docs/assets/dashboard-overview.png)
+**Local setup:** the current empty-state instructions describe hosted ingestion;
+use the [local quickstart](https://sigiro.com/docs/tutorials/quickstart) instead.
+[Known entry and first-run limitations](docs/dashboard-state-machines.md#current-entry-and-first-run-behavior)
+include misleading sign-in fallback in frontend-only previews. The binary also
+serves documentation at <http://localhost:9999/docs/>.
 
 Click a trace to see its waterfall:
 
@@ -143,3 +145,4 @@ Report security issues as described in [SECURITY.md](SECURITY.md).
 [FSL-1.1-ALv2](LICENSE.md), © 2026 Akshat Agarwal.
 Use it for anything except a competing commercial product.
 Each version becomes Apache 2.0 two years after its release.
+FSL is source-available, not an OSI-approved open-source license.
