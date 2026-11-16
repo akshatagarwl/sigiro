@@ -14,6 +14,7 @@ pub mod ingest;
 pub mod ingest_keys;
 pub mod inserter;
 pub mod mcp;
+pub mod micro;
 
 pub mod duckdb_json;
 pub mod oauth;

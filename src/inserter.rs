@@ -226,6 +226,10 @@ pub struct MsgRouter {
 
 enum FlusherCommand {
     Ingest(Box<IngestMsg>),
+    IngestDurable {
+        msg: Box<IngestMsg>,
+        ack: oneshot::Sender<Result<(), String>>,
+    },
     RetentionCleanup {
         days: u32,
         ack: oneshot::Sender<Result<(), String>>,
@@ -234,6 +238,10 @@ enum FlusherCommand {
 
 enum WriterCommand {
     Ingest(Box<IngestMsg>),
+    IngestDurable {
+        msg: Box<IngestMsg>,
+        ack: oneshot::Sender<Result<(), String>>,
+    },
     FlushIfNeeded,
     Checkpoint,
     RetentionCleanup {
@@ -556,6 +564,51 @@ impl MsgRouter {
                 }
             }
         }
+    }
+
+    /// Micro inbox projection barrier. Unlike `send`, never uses DropNewest
+    /// and does not report success until the writer commits a forced flush.
+    /// The raw inbox remains the source of truth if projection fails.
+    pub(crate) async fn send_durable(&self, msg: IngestMsg) -> Result<()> {
+        anyhow::ensure!(!self.disk.is_over_cap(), "disk capacity exceeded");
+        let project_id = msg.project_id().to_string();
+        anyhow::ensure!(
+            !self.maintenance.is_stalled(&project_id),
+            "project maintenance stalled"
+        );
+        let alert_batch = match &msg {
+            IngestMsg::Logs { batch, .. } if self.alerts.is_some() => Some(batch.clone()),
+            _ => None,
+        };
+        let alert_permit = if alert_batch.is_some() {
+            Some(
+                self.workloads
+                    .try_acquire(crate::workload::WorkloadClass::Maintenance)?,
+            )
+        } else {
+            None
+        };
+        self.ensure_flusher(&project_id).await?;
+        let sender = self
+            .project_senders
+            .get(&project_id)
+            .map(|entry| entry.value().0.clone())
+            .context("micro projection writer unavailable")?;
+        let (ack, result) = oneshot::channel();
+        sender
+            .send(FlusherCommand::IngestDurable {
+                msg: Box::new(msg),
+                ack,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("micro projection writer closed"))?;
+        result
+            .await
+            .context("micro projection writer dropped its commit receipt")?
+            .map_err(anyhow::Error::msg)?;
+        self.process_alerts(&project_id, alert_batch, alert_permit)
+            .await;
+        Ok(())
     }
 
     async fn process_alerts(
@@ -1171,6 +1224,13 @@ async fn run_flusher(
                             break;
                         }
                     }
+                    Some(FlusherCommand::IngestDurable { msg, ack }) => {
+                        pool.touch_project(&project_id);
+                        if writer_tx.send(WriterCommand::IngestDurable { msg, ack }).await.is_err() {
+                            tracing::error!(project_id, "writer thread stopped before durable ingest");
+                            break;
+                        }
+                    }
                     Some(FlusherCommand::RetentionCleanup { days, ack }) => {
                         pool.touch_project(&project_id);
                         if writer_tx.send(WriterCommand::RetentionCleanup { days, ack }).await.is_err() {
@@ -1235,6 +1295,32 @@ fn run_writer_thread(
                         &flusher.flush(project_id, false),
                         maintenance,
                     );
+                }
+            }
+            WriterCommand::IngestDurable { msg, ack } => {
+                // Keep the existing HTTP/gRPC retry policy: never turn their
+                // buffered first failure into a last-chance drop for micro.
+                let prior = flusher.flush(project_id, false);
+                record_flush(project_id, "pre-micro flush", &prior, maintenance);
+                if flusher.total_rows != 0 {
+                    drop(ack.send(Err("prior writer buffers await retry".into())));
+                    continue;
+                }
+                // Only this replayable raw-inbox batch is now buffered. A
+                // failed forced flush can safely drop it and retry from raw.
+                buffer_msg(&mut flusher, *msg);
+                let report = flusher.flush(project_id, true);
+                record_flush(project_id, "micro durable flush", &report, maintenance);
+                let result = if report.failures.is_empty() && report.dropped.is_empty() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "projection flush failed: {}",
+                        report.failures.join("; ")
+                    ))
+                };
+                if ack.send(result).is_err() {
+                    tracing::debug!(project_id, "micro projection commit receiver dropped");
                 }
             }
             WriterCommand::FlushIfNeeded => {
