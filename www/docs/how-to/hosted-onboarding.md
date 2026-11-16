@@ -8,6 +8,13 @@ sidebar:
 This guide shows you how to send OpenTelemetry to a sigiro host that we operate,
 and how to query the data back. You run no infrastructure.
 
+**This guide is for the hosted service, not a local open-mode server.** If you
+started `sigiro serve` on your own machine, follow the
+[local quickstart](/docs/tutorials/quickstart) instead: use its local ingestion
+address without hosted login or an Authorization token. The local dashboard's
+current empty-state link can lead here, but that does not make hosted signup a
+requirement for self-hosting.
+
 The whole path, start to finish:
 
 1. Sign up at [sigiro.com/sign-in](https://sigiro.com/sign-in), or with

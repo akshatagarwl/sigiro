@@ -1,4 +1,10 @@
-# Six-route dashboard checkpoint
+# Dashboard verification checkpoints
+
+The six-route results below describe a historical build, not the current route
+count or a promise that its preview is still running. `main` now has five routes
+after Services was removed. Later entry/first-run observations and pending fixes
+are recorded in the [follow-up](#entry-and-first-run-follow-up), without replacing
+or relabeling the original artifact hashes and results.
 
 ## Exact local checkpoint
 
@@ -63,3 +69,68 @@ No implementation blocker remains for the bounded checkpoint. These are real rem
 5. **Backend/auth/tenancy/security/performance audits**: no changed contracts or new guarantees. No production verification, load test, independent review, CI run or full accessibility/security audit was performed. Public ClickStack demo deployed SHA remains unknown.
 
 The rejected log-viewer worktree/preview, unmerged PR #168, existing license boundaries, and unrelated work remain preserved. Completion here means the six-route bounded UI checkpoint and recorded gates—not every dashboard issue or implicit state machine.
+
+## Entry and first-run follow-up
+
+### Scope and provenance
+
+The follow-up describes local dashboard entry and the empty Overview, not all
+telemetry workflows. Source was read at `239cf44c3`; supplementary browser checks
+used `feat/dashboard-ui-sdk` at that base **plus uncommitted UI/auth changes**.
+Those changes are not included in this documentation update to `main`. In
+particular, the worktree's Local Sigiro menu, explicit authentication bootstrap,
+credential-free queries, and connection-retry behavior must not be presented as
+already available on `main`.
+
+The [current state inventory](dashboard-state-machines.md#current-entry-and-first-run-behavior)
+describes actual `main` behavior, including its older local-detection fallback.
+The correct local exporter workflow is in the existing
+[quickstart](../www/docs/tutorials/quickstart.mdx); the
+[hosted guide](../www/docs/how-to/hosted-onboarding.md) is explicitly a different
+distribution/access path, not a local prerequisite.
+
+On 2026-11-16, the worktree's existing synthetic auth regression passed four
+configuration-failure/retry cases and two OAuth compatibility/error boundaries.
+Its real-backend regression visited all five routes, with 18 queries, no identity
+requests, no API HTTP failures, and no page errors. A supplementary probe passed
+21 assertions/observations: real local menu keyboard input, destination 404s,
+mobile geometry, and one targeted axe rule; isolated mocked scenarios covered
+query failure, invalid-time recovery availability, and custom-window title copy.
+These are **local scripted observations of the worktree**, not tests of this
+new `main` commit, a production deployment, or a complete manual pass. Their local
+logs/screenshots are not added to or represented by the historical artifact set
+above. The bounded findings below retain source causes and reproduction checks;
+repeat them against the intended artifact before calling them release-verified.
+
+### Consolidated first-run triage
+
+IDs are stable within this follow-up; the older D1–D8 inventory remains unchanged.
+Reproduce copy problems by reading the commands, never by running them against
+Cloud or using customer telemetry.
+
+| ID | Current mismatch | Source cause | Severity / decision | Reproduction and evidence boundary |
+| --- | --- | --- | --- | --- |
+| ENTRY-01 | Local setup directs exports to Cloud and asks for hosted login/token; says gRPC is unavailable. Expected: accurate local destination/transports without an account. | `components/sigiro/setup-empty.tsx:15,23–64` fixes the endpoint/guide to hosted values; `app/page.tsx` passes only a range label. | High / fix: deployment-aware ingestion addresses and transport guidance, not ports guessed from a frontend URL. | Empty local Overview → read snippet/prose. Reproduced on worktree with real backend; same fixed copy is present on `main`. No exporter was run. |
+| ENTRY-02 | Both documentation escape routes return 404 in the frontend-only preview. Expected: usable local help. | Preview has no docs route; links target `/docs` and `/docs/how-to/hosted-onboarding/`. The binary separately embeds documentation. | Medium / fix: verify destination strategy in preview and packaged serving; do not claim binary docs are absent. | Follow both links in the actual preview; worktree recorded HTTP 404 for both. Packaged link behavior remains untested. |
+| ENTRY-03 | Empty mobile Overview hides its useful next action below five summary cards. | `app/page.tsx` renders `SectionCards` before Setup; `components/section-cards.tsx` stacks cards on narrow screens. | Medium / product call: prioritize Setup, collapse empty summaries, or choose another first-run hierarchy. | At 390×844, inspect before scrolling. Worktree setup top y=976 and snippet y=1185.25, with a 214px header. Run-specific geometry, not `main` layout constants. |
+| ENTRY-04 | Overflowing setup commands lack a keyboard-focusable scroll region. | `components/sigiro/setup-empty.tsx:37–42` has horizontal overflow without a tab stop/focusable child or Copy action. | Medium / fix: keyboard-readable, named command region; consider copying as an additional affordance. | At mobile width run axe `scrollable-region-focusable`, then manually read/scroll/copy by keyboard. Worktree: serious axe finding, 308px visible versus 580px scrollable; manual access still pending. |
+| ENTRY-05 | Narrow horizontal navigation hides SQL without an explicit overflow cue. | Worktree `components/sigiro/app-shell.tsx` uses a horizontally overflowing five-link strip. | Low / product call: visible overflow cue or another accessible navigation layout. | Worktree only: at 320px, 288px visible versus 346px scrollable. Current `main` uses a sidebar; do not attribute this strip defect to that implementation. |
+| ENTRY-06 | Empty-state title can say last 24 hours for a custom one-hour interval. | `app/page.tsx` labels Setup with `RANGES[controls.range]` while custom endpoints can determine the actual query window. | Medium / fix: describe the resolved window, not the leftover preset. | Open `/dashboard/?timeStart=now-1h&timeEnd=now` with empty results. Reproduced using worktree mock-empty responses; `main` shares the labeling expression but needs a fresh browser check. |
+
+### Remaining verification gates
+
+| Gate | Action and expected result | Status |
+| --- | --- | --- |
+| FIRST-01 | With the actual `main` artifact and local server, distinguish failed backend detection from a true hosted requirement. Verify no account is needed for the backend. | Source described; updated explicit entry/retry behavior exists only in the uncommitted worktree. |
+| FIRST-02 | Confirm loading/updating/error never become successful empty; selected-service emptiness offers scope recovery. Retry must repeat the appropriate connection or data read. | Query-failure separation observed with worktree mocks; full current-artifact interaction pass pending. |
+| FIRST-03 | After an approved deployment-aware fix, export non-sensitive test data only to the local ingestion endpoint, then refresh until it appears in scope. | Not run; no exporter/persistent telemetry mutation in this follow-up. |
+| FIRST-04 | Click both help paths in the real preview and a packaged binary; inspect mobile/keyboard command access and screen-reader speech. | Preview 404 and worktree targeted axe reproduced; packaged, physical touch, and screen-reader checks pending. |
+| FIRST-05 | Exercise Escape, Back/Forward, reload, close, navigation away, network failure, session boundaries, another tab, data arrival, and blur before/during interaction. Record exact URL/focus/scroll behavior. | Inventory recorded; not an exhaustive manual pass. |
+| FIRST-06 | Verify custom-window title against query bounds, not just a preset control label; recheck narrow navigation against the implementation actually shipping. | Mock title mismatch and worktree navigation geometry reproduced; current-artifact checks pending. |
+
+Metrics/profiles-only data and empty historical windows raise product questions:
+should Setup be suppressed or should scope recovery take priority? They are not
+asserted data-loss defects. No upstream issues, deployments, Publik integration,
+license changes, or authentication-policy changes are part of this documentation
+update. The older all-green axe results above apply only to their named build and
+states; they do not override a later finding on a different worktree.

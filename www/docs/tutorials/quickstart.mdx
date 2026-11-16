@@ -33,8 +33,12 @@ session for telemetry and queries.
 
 ```bash
 curl -fsSL https://sigiro.com/install | sh
-sigiro serve
+SIGIRO_BIND=127.0.0.1 sigiro serve
 ```
+
+`SIGIRO_BIND` keeps this unauthenticated local instance on loopback. On Linux
+and macOS, an unset bind address currently listens on every interface; do not
+rely on the default to provide a network perimeter.
 
 The script reads your operating system and processor. Then it checks the SHA-256
 of the download against the published checksum. It writes the binary to
@@ -78,7 +82,7 @@ Each of the three ports has one function:
 | --- | --- |
 | `4317` | OTLP over gRPC |
 | `4318` | OTLP over HTTP |
-| `9999` | the telemetry query API |
+| `9999` | dashboard (`/dashboard/`), documentation (`/docs/`), query API and health |
 
 Wait for the server to be ready before sending telemetry:
 
@@ -102,9 +106,16 @@ the standard environment variables at sigiro:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
 OTEL_SERVICE_NAME=checkout \
   <your-app-start-command>
 ```
+
+Use a shell without any hosted exporter Authorization headers. This local
+server needs no account, `sigiro auth login`, or `sigiro auth token`. If your
+application runs in a container or on another machine, `localhost` names that
+application's environment, not necessarily the Sigiro host; configure a reachable
+address and protect the server's network perimeter.
 
 If your code has no instrumentation yet, do not add it by hand. Follow
 [Instrument your code with an agent](/docs/how-to/install-with-ai) first, then
@@ -123,6 +134,23 @@ check that the port is `4318` for OTLP over HTTP and `4317` for OTLP over gRPC.
 
 To look at the same telemetry in a browser, open
 [localhost:9999/dashboard/](http://localhost:9999/dashboard/).
+
+The dashboard has Overview, Traces, Logs, Profiles, and SQL. Overview starts with
+all services, the last 24 hours, and Live off. An empty view is about that scope,
+not proof that the server has never received data. Check the selected service
+and time window, then refresh; Live refreshes every 10 seconds when enabled.
+Query errors are not empty results. SQL uses the window written in your query.
+
+The overview's current empty-state setup text describes hosted ingestion even
+when the server is local. Use the local endpoint and transport above instead;
+do not switch to `https://sigiro.com` or sign in to fill a local dashboard. A
+standalone frontend preview is not a complete server: failed backend detection
+can currently show a misleading Sign in card. Prefer the dashboard served by
+the running binary for this tutorial.
+
+Open [the bundled docs](http://localhost:9999/docs/) for help. If a frontend-only
+preview's documentation links return 404, use [sigiro.com/docs](https://sigiro.com/docs)
+rather than treating that preview as an offline documentation server.
 
 ## 3. Query recent errors
 

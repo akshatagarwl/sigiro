@@ -1,5 +1,116 @@
 # Dashboard state / transition inventory
 
+## Current entry and first-run behavior
+
+This section describes the user-facing behavior on `main` at `239cf44c3`, not a
+new implementation. The six-route inventory below is historical: the Services
+page was subsequently removed. The current dashboard has **five routes** under
+`/dashboard/`: Overview, Traces, Logs, Profiles, and SQL. There is still no Metrics
+explorer. The separate `feat/dashboard-ui-sdk` worktree contains uncommitted
+entry/auth and primitive-migration changes; its successful tests do not establish
+that those changes are present on `main`.
+
+### Vocabulary and state ownership
+
+- **Local open mode:** the self-hosted backend admits requests without a hosted
+  account. It still needs a protected network perimeter.
+- **Scope:** the service and time window used for a view. Default Overview scope
+  is all services and the last 24 hours, with live refresh off.
+- **Empty:** all five Overview panel queries have succeeded and stopped
+  fetching, with zero spans and logs in scope. Empty is not failed, loading, or
+  a server-wide assertion about every signal.
+- **Snapshot:** a previously returned value retained during a same-scope refresh,
+  not proof that the new request succeeded.
+- **Setup:** first-export guidance in a settled empty Overview without a service
+  restriction. It is not an editable configuration form or a persisted wizard.
+
+| User-facing area | Owner | Behavior on current `main` |
+| --- | --- | --- |
+| Entry | `components/sigiro/auth-gate.tsx`, `lib/sigiro/query.ts` | Starts with Signing in; loopback open-server detection can admit without an account. Failed detection can fall through to hosted sign-in. |
+| Navigation | `components/app-sidebar.tsx`, `components/nav-main.tsx` | Five destinations; selected route is marked. Current scope is carried only where supported; same-route links retain current parameters. |
+| Shared scope | `lib/sigiro/controls.tsx`, `components/site-header.tsx` | Service/time/live/refresh; Live opts into a 10-second refresh interval. SQL defines its own time. |
+| Invalid time | `components/sigiro/app-shell.tsx` | Non-SQL content is replaced by Invalid time range; header remains for recovery. SQL is not blocked by this guard. |
+| Overview readiness | `app/page.tsx` | Loading, updating, error, ready, and settled empty are distinct. Selected-service empty results offer scope recovery rather than generic setup. |
+| First export | `components/sigiro/setup-empty.tsx` | Static instructions and guide link; no editable draft, Submit, Copy command, or completion flag. Current copy is hosted-specific even in local mode. |
+| Workspace actions | `components/nav-user.tsx` | Switch workspace and Sign out are not currently hidden for open mode; do not mistake them for required local setup. |
+
+> Technical note: current `main` detects local access by a loopback-only
+> unauthenticated query probe and uses a placeholder bearer for subsequent
+> queries. It does not yet have the explicit `/v1/auth/config` bootstrap,
+> credential-free local query headers, Local Sigiro label, or connection-retry
+> card exercised in the uncommitted worktree. These are pending implementation,
+> not documentation claims about a shipped release. The current standalone Next
+> configuration also does not proxy backend requests automatically.
+
+### The first-run lifecycle
+
+1. **Arrive:** open the dashboard served by the binary at
+   `http://localhost:9999/dashboard/`. A frontend-only preview must separately
+   provide the same-origin API; otherwise detection can fail even though local
+   usage does not require an account.
+2. **Leave untouched:** initial reads may already run, but no account, exporter,
+   product configuration, or onboarding-completed record is created merely by
+   opening or reading the page.
+3. **Begin interacting:** wait for Overview to settle, then inspect Setup if the
+   current scope has no spans/logs. A selected service with no matches instead
+   offers another service/time choice. Loading or a query error is not setup.
+4. **While interacting:** inspect the snippet or choose a scope/refresh action.
+   Reading the snippet does not execute it. On mobile, the summary cards precede
+   setup and long commands can require horizontal scrolling. The current hosted
+   endpoint and token commands are wrong for local ingestion; follow the
+   [local quickstart](../www/docs/tutorials/quickstart.mdx) instead.
+5. **Finish:** a later successful read with spans/logs replaces Setup with data.
+   With Live off, no immediate push update is promised. Following the guide is
+   browser navigation, not an installation, login, or completion action.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Entry : open dashboard (start reads)
+    Entry --> Loading : local detection admits (load Overview)
+    Entry --> SignIn : detection fails without a token (current misleading fallback)
+    Loading --> QueryError : panel fails (show error, not setup)
+    Loading --> Setup : settled empty, no service (show instructions)
+    Loading --> NoMatches : settled empty, selected service (offer scope recovery)
+    Loading --> Ready : scoped spans or logs exist (show data)
+    Setup --> Loading : refresh (repeat reads)
+    QueryError --> Loading : retry (repeat reads)
+    Setup --> Guide : open guide (navigate, no setup saved)
+```
+
+### Variants and interrupts to verify
+
+The same lifecycle must be checked at arrival and after an action starts. Known
+behavior and unverified cases must not be conflated.
+
+| Variant/event | Established behavior or verification boundary |
+| --- | --- |
+| Backend unavailable or request failure | Entry detection can currently show Sign in; a later Overview failure has its own query error. Do not infer an account requirement or successful emptiness from either failure. |
+| Stored hosted token | Current entry checks it before local detection. Credential clearing/exclusion is a pending follow-up, not a verified guarantee on `main`. |
+| Selected service/time | Empty is scoped; new scope must not inherit old data labeled as new. Custom-window setup titles need the follow-up check below. |
+| Viewport/input | Check desktop, 390px mobile, keyboard, and a named screen reader separately. An emulated viewport is not physical touch evidence. |
+| Escape | No setup or entry Cancel action. Menu/picker dismissal belongs to the relevant control; verify focus return independently. |
+| Browser Back/Forward | Browser history is not product undo. Exact scope, disclosure, focus, and scroll restoration need direct checks. |
+| Reload | Re-enters the gate and reloads current view; reading Setup is not remembered as completed onboarding. Relative now is evaluated again. |
+| Close tab/window | No entry/setup editable draft or corresponding Save/Discard prompt; no exporter is started. |
+| In-app navigation | Leaves the view without a setup-save step. Preserve only the scope supported by the current navigation implementation. |
+| Network loss or timeout | Record initial-load and refresh failures separately. A loading indicator, stale snapshot, and empty response are different outcomes. |
+| Session expiry | Local backend access has no hosted session requirement. Do not generalize hosted expiry behavior to the account-free local workflow. |
+| Another tab | No shared onboarding-completed flag. Check preference synchronization and tab-scoped credentials separately. |
+| Telemetry changes elsewhere | Subsequent reads can observe it; no guaranteed immediate push. Metrics/profiles alone do not enter Overview's span/log empty predicate. |
+| Autofill | Entry/setup have no editable fields; explorer/editor inputs are separate features. |
+| Window loses focus | Not an intentional logout/setup-completion action. Refetch timing, live background timers, and focus restoration remain unverified. |
+
+### Open questions and verification
+
+The [existing checkpoint report](dashboard-wide-checkpoint.md#entry-and-first-run-follow-up)
+collects follow-up defects, source causes, verification IDs, and decision needs.
+No full manual pass, screen-reader pass, real populated-profile check, or packaged
+release verification is implied by these descriptions. The worktree's scripted
+results must stay labeled separately from current `main` behavior. Do not execute
+hosted setup commands to reproduce a local copy defect.
+
+## Historical six-route inventory
+
 Starting checkpoint: `c92d64ee69ade67e99a7d9bc7a4c7c299b6441fc` (completed results-first Logs iteration, still local). Expanded user scope: the **whole existing dashboard**, not only logs. Solo execution; environment verified `PI_MODEL=gpt-6.1-sol`, `PI_REASONING_LEVEL=medium`. No delegation, push, PR, merge, deployment, publication or backend/auth/tenant rewrite.
 
 This is a working inventory and bounded fix plan, **not an assertion that every implicit state machine has been found or fixed**. Initial source inspection and actual-browser inventory happened before broad changes. The initial six-route desktop/mobile inventory used real backend responses. Its retained [baseline observations](assets/observability-ui/dashboard-wide/baseline-observations.json) and [window/filter probes](assets/observability-ui/dashboard-wide/baseline-window-probes.json) are distinct from the current screenshots. The temporary capture directory was reused; it is not a durable before-screenshot set.

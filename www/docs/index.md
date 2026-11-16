@@ -1,14 +1,21 @@
 ---
 title: sigiro docs
-description: sigiro stores OpenTelemetry traces, logs, metrics and profiles and answers SQL over them. Built for agents first, with a dashboard for people on hosted workspaces.
+description: sigiro stores OpenTelemetry traces, logs, metrics and profiles and answers SQL over them. Built for agents first, with a dashboard for local servers and hosted workspaces.
 sidebar:
   order: 0
 ---
 
 sigiro stores OpenTelemetry traces, logs, metrics and profiles, and answers SQL
 over them. It is built for agents first: every answer is a query that an agent or
-a person can run again. Hosted workspaces also have a read-only
-[dashboard](https://sigiro.com/dashboard/) for people.
+a person can run again. People can inspect the same data in the dashboard:
+`http://localhost:9999/dashboard/` on a local server, or the hosted
+[dashboard](https://sigiro.com/dashboard/) for a signed-in workspace.
+
+The dashboard has Overview, Traces, Logs, Profiles, and SQL. Overview summarizes
+spans and logs in the selected service and time window; trace and profile views
+support deeper inspection, while SQL queries the stored tables directly. A local
+open-mode server needs no hosted account or token. Hosted login and ingestion
+instructions apply only when you choose the hosted service.
 
 New here and want your own app's data in sigiro.com? Start with [Send telemetry
 to hosted sigiro](/docs/how-to/hosted-onboarding). Want to run it on your own
