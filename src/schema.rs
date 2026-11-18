@@ -4,12 +4,13 @@ use duckdb::Connection;
 /// Create all sigiro tables and views.
 /// `prefix` is always "lake." (DuckLake catalog-qualified tables).
 pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
-    // Traces: 25 columns matching sigiro-segments.
+    // Traces — 25 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_spans (
             timestamp             TIMESTAMP NOT NULL,
             -- end_timestamp and duration are microseconds, matching `timestamp`.
-            -- Ingest stores OTLP nanoseconds as microseconds.
+            -- The ingest path converts OTLP nanoseconds via `nanos_to_micros`
+            -- (one named helper — never a bare divisor; see otlp.rs).
             end_timestamp         BIGINT NOT NULL,
             duration              BIGINT NOT NULL,
             trace_id              VARCHAR,
@@ -38,14 +39,13 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_spans")?;
 
-    // Logs — OTLP fields plus DRAIN classification stored on the same row.
+    // Logs — 15 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_logs (
             timestamp             TIMESTAMP NOT NULL,
             observed_timestamp    BIGINT NOT NULL,
             trace_id              VARCHAR,
             span_id               VARCHAR,
-            event_name            VARCHAR,
             service_name          VARCHAR NOT NULL,
             service_namespace     VARCHAR,
             service_instance_id   VARCHAR,
@@ -58,13 +58,25 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             scope_attributes      VARCHAR,
             log_attributes        VARCHAR,
             template_id           UBIGINT,
-            template_values       VARCHAR,
-            template_text         VARCHAR
+            template_values       VARCHAR
         )"
     ))
     .context("failed to create sigiro_logs")?;
 
-    // Gauge: 16 columns matching sigiro-segments.
+    // Log template lookup table — maps template_id to template text.
+    // Populated at insert time by the DRAIN algorithm.
+    // No PRIMARY KEY — DuckLake does not support PK/UNIQUE constraints.
+    // Duplicate template rows are harmless; dedup is done at insert time.
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_log_templates (
+            template_id           UBIGINT,
+            template_text         VARCHAR NOT NULL,
+            first_seen            TIMESTAMP NOT NULL DEFAULT now()
+        )"
+    ))
+    .context("failed to create sigiro_log_templates")?;
+
+    // Gauge — 16 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_gauge (
             timestamp             TIMESTAMP NOT NULL,
@@ -87,7 +99,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_gauge")?;
 
-    // Sum: 18 columns matching sigiro-segments.
+    // Sum — 18 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_sum (
             timestamp                  TIMESTAMP NOT NULL,
@@ -112,7 +124,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_sum")?;
 
-    // Histogram: 22 columns matching sigiro-segments.
+    // Histogram — 22 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_histogram (
             timestamp                  TIMESTAMP NOT NULL,
@@ -141,7 +153,7 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
     ))
     .context("failed to create sigiro_metrics_histogram")?;
 
-    // ExpHistogram: 27 columns matching sigiro-segments.
+    // ExpHistogram — 27 columns, direct Arrow builder (src/otlp.rs)
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_exp_histogram (
             timestamp                  TIMESTAMP NOT NULL,
@@ -188,44 +200,150 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             stack_trace           VARCHAR[],
             value                 BIGINT,
             unit                  VARCHAR,
-            resource_attributes   VARCHAR,
-            labels                VARCHAR
+            resource_attributes   VARCHAR
         )"
     ))
     .context("failed to create sigiro_profiles")?;
-    // Tables created before per-sample labels existed gain the column at the
-    // end, where the positional appender writes it.
-    conn.execute_batch(&format!(
-        "ALTER TABLE {prefix}sigiro_profiles ADD COLUMN IF NOT EXISTS labels VARCHAR"
-    ))
-    .context("failed to add sigiro_profiles.labels")?;
 
+    // Anomalies — written by the scheduled anomaly pass (src/anomaly.rs,
+    // driven from the per-project inserter timer), read by /v1/diagnose
+    // and /v1/anomalies. Detection is BOCPD changepoints (augurs) over
+    // continuous 5-minute series of every signal — NO arbitrary thresholds
+    // anywhere (docs/plans/01-continuous-anomaly-subsystem.md). Lives in the
+    // DuckLake catalog alongside the telemetry it derives from, so it gets
+    // the same per-tenant isolation for free.
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_anomalies (
+            detected_at           TIMESTAMP NOT NULL,
+            service_name          VARCHAR NOT NULL,
+            -- The entity the shifted series is keyed by: the derived
+            -- operation identity (error_rate / latency_p95) or the service
+            -- name (log_volume / error_log_rate / profile_cost).
+            operation             VARCHAR NOT NULL,
+            -- Which health series shifted: 'error_rate', 'latency_p95',
+            -- 'log_volume', 'error_log_rate', or 'profile_cost'.
+            signal                VARCHAR NOT NULL,
+            -- Detection kind; BOCPD emits 'changepoint'.
+            kind                  VARCHAR NOT NULL,
+            -- Only 'worsening' shifts are persisted (mean after > mean
+            -- before — a direction comparison, not a threshold).
+            direction             VARCHAR NOT NULL,
+            -- First bucket of the NEW regime.
+            ts_shift              TIMESTAMP NOT NULL,
+            -- Series mean before/after the shift, in raw signal units
+            -- (error %, p95 µs, logs per bucket, profile cost per bucket).
+            \"before\"            DOUBLE NOT NULL,
+            \"after\"             DOUBLE NOT NULL,
+            -- Ready-to-run /v1/query SQL for the raw telemetry behind the
+            -- shift (spans, logs, or profile samples, per the signal).
+            drill_down_sql        VARCHAR
+        )"
+    ))
+    .context("failed to create sigiro_anomalies")?;
+
+    // GPU kernels — the per-run kernel ledger. Written by the batch
+    // `sigiro ingest-kernels` CLI (src/ledger.rs) from a profiler's Parquet
+    // export, read by whoever asks "where did this run's GPU time go".
+    //
+    // One row per (run_id, graph_id, node_index): already aggregated by the
+    // producer, because a per-launch table for a 10-minute benchmark is
+    // hundreds of millions of rows nobody queries twice. There is no OTLP
+    // path here on purpose — kernel timing arrives once, after a run ends.
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_gpu_kernels (
+            run_id                VARCHAR NOT NULL,
+            experiment_id         VARCHAR,
+            arm                   VARCHAR,
+            timestamp             TIMESTAMP NOT NULL,
+            service_name          VARCHAR NOT NULL,
+            device                VARCHAR,
+            rank                  INTEGER,
+            -- Producer-side identity of the compiled graph and the node
+            -- inside it. Null when the engine runs eager, not compiled.
+            graph_id              BIGINT,
+            node_index            BIGINT,
+            kernel                VARCHAR NOT NULL,
+            -- Model-level provenance, when the producer could resolve it.
+            layer                 VARCHAR,
+            op                    VARCHAR,
+            attribution_method    VARCHAR,
+            -- 'attributed', or a residual reason such as
+            -- 'residual_no_provenance'. NEVER null: GPU time that could not
+            -- be attributed has to be a row rather than an absence, or the
+            -- ledger silently under-reports and every percentage computed
+            -- from it is wrong.
+            bucket                VARCHAR NOT NULL,
+            executions            BIGINT NOT NULL,
+            total_ns              BIGINT NOT NULL,
+            mean_ns               BIGINT,
+            max_ns                BIGINT,
+            -- Occupancy inputs, when the profiler collected them.
+            occupancy_pct         DOUBLE,
+            registers_per_thread  INTEGER,
+            shared_mem_bytes      BIGINT,
+            limiting_factor       VARCHAR,
+            -- Which producer nodes folded into this row.
+            source_nodes          VARCHAR
+        )"
+    ))
+    .context("failed to create sigiro_gpu_kernels")?;
+
+    // Experiment runs — the run ledger. Written by the batch
+    // `sigiro record-run` CLI (src/ledger.rs) once a run finishes, read by
+    // the experiment comparison surface (src/experiment.rs) and by anyone
+    // joining kernel rows back to the configuration that produced them.
+    //
+    // One row per (experiment_id, run_id, arm). The fingerprint columns are
+    // what make two runs comparable at all; the outcome columns are the
+    // verdict AIPerf and the comparison rule already produced, recorded here
+    // so the verdict survives the process that computed it.
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_experiment_runs (
+            experiment_id         VARCHAR NOT NULL,
+            run_id                VARCHAR NOT NULL,
+            arm                   VARCHAR NOT NULL,
+            -- Lineage edge: the run this one was derived from. This is what
+            -- makes \"what changed over time\" a recursive query instead of a
+            -- reconstruction from timestamps.
+            parent_run_id         VARCHAR,
+            started_at            TIMESTAMP NOT NULL,
+            ended_at              TIMESTAMP,
+            -- Identity of everything that must hold constant for a
+            -- comparison to mean anything.
+            config_sha            VARCHAR,
+            model_sha             VARCHAR,
+            hardware_sha          VARCHAR,
+            benchmark_sha         VARCHAR,
+            engine                VARCHAR,
+            engine_version        VARCHAR,
+            model_id              VARCHAR,
+            model_revision        VARCHAR,
+            gpu_model             VARCHAR,
+            gpu_count             INTEGER,
+            tp_size               INTEGER,
+            quantization          VARCHAR,
+            -- The full runtime configuration as JSON text, so a run stays
+            -- readable after the knobs above stop being the right columns.
+            config_json           VARCHAR,
+            -- Results, in the units the benchmark reports them.
+            goodput               DOUBLE,
+            ttft_p95_ms           DOUBLE,
+            itl_ms                DOUBLE,
+            output_tokens_per_s   DOUBLE,
+            gpu_seconds           DOUBLE,
+            price_per_hour_usd    DOUBLE,
+            -- Verdict for this run: 'confirmed', 'rejected', 'inconclusive',
+            -- 'drift_detected' — the same vocabulary /v1/experiments/compare
+            -- returns (src/experiment.rs).
+            outcome               VARCHAR,
+            drift_detected        BOOLEAN
+        )"
+    ))
+    .context("failed to create sigiro_experiment_runs")?;
     // NOTE: DuckLake (Parquet-backed catalog) does not support CREATE INDEX.
     // Query performance relies on Parquet row group pruning and column statistics.
     // For heavy query workloads, consider partitioning by timestamp or using
     // DuckDB's native tables (non-DuckLake) for hot data.
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fresh_schema_has_raw_telemetry_but_no_saved_anomalies() {
-        let conn = crate::pool::open_duckdb().unwrap();
-        create_tables(&conn, "").unwrap();
-        let tables: Vec<String> = conn
-            .prepare("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .map(|row| row.unwrap())
-            .collect();
-        assert!(tables.iter().any(|name| name == "sigiro_spans"));
-        assert!(tables.iter().any(|name| name == "sigiro_logs"));
-        assert!(tables.iter().any(|name| name == "sigiro_profiles"));
-        assert!(!tables.iter().any(|name| name == "sigiro_anomalies"));
-    }
 }

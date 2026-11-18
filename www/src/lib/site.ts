@@ -26,23 +26,22 @@
  * new entry point, used by `pages/[locale]/index.astro`.
  */
 
-import { EN, type LandingCopy } from "./site.en";
-import { JA } from "./site.ja";
-import { KO } from "./site.ko";
+import { EN, type LandingCopy } from './site.en';
+import { JA } from './site.ja';
+import { KO } from './site.ko';
 import {
   CALL_HREF,
   DISCOVER_ARTIFACT,
   HOW_SESSIONS,
   INTEGRATION_ITEMS,
+  type LandingLocale,
   type Locale,
   LOOP_SESSIONS,
   NAV_HREFS,
-  SIGN_IN_HREF,
-  INSTALL_HREF,
   READ_ALL_THREE,
   SITE_SHARED,
-} from "./site.shared";
-import { ZH } from "./site.zh";
+} from './site.shared';
+import { ZH } from './site.zh';
 
 export {
   CF_ANALYTICS_TOKEN,
@@ -51,12 +50,9 @@ export {
   type Locale,
   LOCALE_LABELS,
   SOCIAL,
-} from "./site.shared";
+} from './site.shared';
 
-const COPY = { en: EN, ja: JA, ko: KO, zh: ZH } satisfies Record<
-  Locale,
-  LandingCopy
->;
+const COPY: Record<Locale, LandingCopy> = { en: EN, ja: JA, ko: KO, zh: ZH };
 
 /**
  * Everything the landing page renders, for one locale.
@@ -77,17 +73,9 @@ export const getCopy = (locale: Locale) => {
       description: c.description,
     },
     how: [
-      {
-        title: c.how.connect.title,
-        say: c.how.connect.say,
-        ...HOW_SESSIONS.connect,
-      },
+      { title: c.how.connect.title, say: c.how.connect.say, ...HOW_SESSIONS.connect },
       { title: c.how.ask.title, say: c.how.ask.say, ...HOW_SESSIONS.ask },
-      {
-        title: c.how.correlate.title,
-        say: c.how.correlate.say,
-        ...HOW_SESSIONS.correlate,
-      },
+      { title: c.how.correlate.title, say: c.how.correlate.say, ...HOW_SESSIONS.correlate },
       { title: c.how.prove.title, say: c.how.prove.say, ...HOW_SESSIONS.prove },
     ],
     sections: [
@@ -131,12 +119,8 @@ export const getCopy = (locale: Locale) => {
     nav: [
       { href: NAV_HREFS.docs, label: c.nav.docs },
       { href: NAV_HREFS.reference, label: c.nav.reference },
-      { href: NAV_HREFS.dashboard, label: c.nav.dashboard },
     ],
     call: { href: CALL_HREF, label: c.callLabel },
-    signup: { href: SIGN_IN_HREF, label: c.ui.signUp },
-    signin: { href: SIGN_IN_HREF, label: c.ui.signIn },
-    install: { href: INSTALL_HREF, label: c.ui.installCli },
     /* The three URLs are prepended from the shared constant rather than written
        into any locale file, so a translation cannot corrupt a path. The
        assistant reads the URLs regardless of the language around them. */
@@ -151,7 +135,7 @@ export const getCopy = (locale: Locale) => {
  * page's render path is exactly what it was — which is the property that makes
  * this refactor reviewable: if `/` changes at all, the split is wrong.
  */
-const en = getCopy("en");
+const en = getCopy('en');
 
 export const SITE = en.site;
 export const HOW = en.how;

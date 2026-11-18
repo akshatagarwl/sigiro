@@ -1,0 +1,81 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "hermes-agent",
+  "elements": [
+    {"type": "text", "id": "title", "x": 140, "y": 20, "text": "Sigiro Federated Debugging: Query Flow", "fontSize": 28, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "Sigiro Federated Debugging: Query Flow", "autoResize": true},
+
+    {"type": "rectangle", "id": "phase1_bg", "x": 30, "y": 70, "width": 1100, "height": 200, "backgroundColor": "#fff3bf", "fillStyle": "solid", "strokeColor": "#f59f00", "roundness": {"type": 3}, "boundElements": [{"id": "t_phase1", "type": "text"}]},
+    {"type": "text", "id": "t_phase1", "x": 40, "y": 75, "width": 200, "height": 25, "text": "Phase 1: Broad Discovery", "fontSize": 20, "fontFamily": 1, "strokeColor": "#e67700", "containerId": "phase1_bg", "originalText": "Phase 1: Broad Discovery", "autoResize": true},
+
+    {"type": "rectangle", "id": "p1_agent", "x": 60, "y": 115, "width": 200, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "boundElements": [{"id": "t_p1_agent", "type": "text"}]},
+    {"type": "text", "id": "t_p1_agent", "x": 70, "y": 125, "width": 180, "height": 50, "text": "AI Agent\n\"which machines have\nhigh error rates?\"", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "p1_agent", "originalText": "AI Agent\n\"which machines have\nhigh error rates?\"", "autoResize": true},
+
+    {"type": "arrow", "id": "a_p1_1", "x": 260, "y": 150, "width": 50, "height": 0, "points": [[0,0],[50,0]], "endArrowhead": "arrow"},
+    {"type": "text", "id": "t_a_p1_1", "x": 265, "y": 135, "text": "SQL", "fontSize": 14, "fontFamily": 1, "strokeColor": "#868e96", "originalText": "SQL", "autoResize": true},
+
+    {"type": "rectangle", "id": "p1_central", "x": 310, "y": 115, "width": 200, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "boundElements": [{"id": "t_p1_central", "type": "text"}]},
+    {"type": "text", "id": "t_p1_central", "x": 320, "y": 125, "width": 180, "height": 50, "text": "Central Sigiro\nfans out to all nodes", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "p1_central", "originalText": "Central Sigiro\nfans out to all nodes", "autoResize": true},
+
+    {"type": "arrow", "id": "a_p1_2", "x": 510, "y": 130, "width": 40, "height": -20, "points": [[0,0],[40,-20]], "endArrowhead": "arrow"},
+    {"type": "arrow", "id": "a_p1_3", "x": 510, "y": 150, "width": 40, "height": 0, "points": [[0,0],[40,0]], "endArrowhead": "arrow"},
+    {"type": "arrow", "id": "a_p1_4", "x": 510, "y": 170, "width": 40, "height": 20, "points": [[0,0],[40,20]], "endArrowhead": "arrow"},
+
+    {"type": "rectangle", "id": "p1_e1", "x": 560, "y": 100, "width": 150, "height": 55, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "boundElements": [{"id": "t_p1_e1", "type": "text"}]},
+    {"type": "text", "id": "t_p1_e1", "x": 570, "y": 105, "width": 130, "height": 45, "text": "Sigiro #1\n3 errors/s", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "p1_e1", "originalText": "Sigiro #1\n3 errors/s", "autoResize": true},
+
+    {"type": "rectangle", "id": "p1_e2", "x": 560, "y": 160, "width": 150, "height": 55, "roundness": {"type": 3}, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "boundElements": [{"id": "t_p1_e2", "type": "text"}]},
+    {"type": "text", "id": "t_p1_e2", "x": 570, "y": 165, "width": 130, "height": 45, "text": "Sigiro #2\n147 errors/s", "fontSize": 16, "fontFamily": 1, "strokeColor": "#c92a2a", "textAlign": "center", "verticalAlign": "middle", "containerId": "p1_e2", "originalText": "Sigiro #2\n147 errors/s", "autoResize": true},
+
+    {"type": "rectangle", "id": "p1_e3", "x": 560, "y": 220, "width": 150, "height": 55, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "boundElements": [{"id": "t_p1_e3", "type": "text"}]},
+    {"type": "text", "id": "t_p1_e3", "x": 570, "y": 225, "width": 130, "height": 45, "text": "Sigiro #3\n1 errors/s", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "p1_e3", "originalText": "Sigiro #3\n1 errors/s", "autoResize": true},
+
+    {"type": "arrow", "id": "a_p1_result", "x": 710, "y": 140, "width": 80, "height": 0, "points": [[0,0],[80,0]], "endArrowhead": "arrow", "strokeColor": "#c92a2a"},
+    {"type": "text", "id": "t_a_p1_result", "x": 715, "y": 125, "text": "aggregated", "fontSize": 14, "fontFamily": 1, "strokeColor": "#868e96", "originalText": "aggregated", "autoResize": true},
+
+    {"type": "rectangle", "id": "p1_insight", "x": 800, "y": 115, "width": 280, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "boundElements": [{"id": "t_p1_insight", "type": "text"}]},
+    {"type": "text", "id": "t_p1_insight", "x": 810, "y": 125, "width": 260, "height": 50, "text": "Agent identifies: Machine #2\nhas anomalous error rate\n-> narrows investigation target", "fontSize": 16, "fontFamily": 1, "strokeColor": "#c92a2a", "textAlign": "center", "verticalAlign": "middle", "containerId": "p1_insight", "originalText": "Agent identifies: Machine #2\nhas anomalous error rate\n-> narrows investigation target", "autoResize": true},
+
+    {"type": "arrow", "id": "a_phase1_2", "x": 570, "y": 280, "width": 0, "height": 30, "points": [[0,0],[0,30]], "endArrowhead": "arrow", "strokeColor": "#e67700", "strokeWidth": 3},
+
+    {"type": "rectangle", "id": "phase2_bg", "x": 30, "y": 310, "width": 1100, "height": 200, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "strokeColor": "#e03131", "roundness": {"type": 3}, "boundElements": [{"id": "t_phase2", "type": "text"}]},
+    {"type": "text", "id": "t_phase2", "x": 40, "y": 315, "width": 300, "height": 25, "text": "Phase 2: Targeted Deep-Dive", "fontSize": 20, "fontFamily": 1, "strokeColor": "#c92a2a", "containerId": "phase2_bg", "originalText": "Phase 2: Targeted Deep-Dive", "autoResize": true},
+
+    {"type": "rectangle", "id": "p2_agent", "x": 60, "y": 355, "width": 220, "height": 80, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "boundElements": [{"id": "t_p2_agent", "type": "text"}]},
+    {"type": "text", "id": "t_p2_agent", "x": 70, "y": 365, "width": 200, "height": 60, "text": "AI Agent\n\"drill into Machine #2:\nservice X connections\nfailing? TCP errors?\"", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "p2_agent", "originalText": "AI Agent\n\"drill into Machine #2:\nservice X connections\nfailing? TCP errors?\"", "autoResize": true},
+
+    {"type": "arrow", "id": "a_p2_1", "x": 280, "y": 395, "width": 50, "height": 0, "points": [[0,0],[50,0]], "endArrowhead": "arrow"},
+    {"type": "text", "id": "t_a_p2_1", "x": 285, "y": 380, "text": "targeted SQL", "fontSize": 14, "fontFamily": 1, "strokeColor": "#868e96", "originalText": "targeted SQL", "autoResize": true},
+
+    {"type": "rectangle", "id": "p2_central", "x": 330, "y": 355, "width": 220, "height": 80, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "boundElements": [{"id": "t_p2_central", "type": "text"}]},
+    {"type": "text", "id": "t_p2_central", "x": 340, "y": 365, "width": 200, "height": 60, "text": "Central Sigiro\nroutes query to\nMachine #2 only", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "p2_central", "originalText": "Central Sigiro\nroutes query to\nMachine #2 only", "autoResize": true},
+
+    {"type": "arrow", "id": "a_p2_2", "x": 550, "y": 395, "width": 60, "height": 0, "points": [[0,0],[60,0]], "endArrowhead": "arrow", "strokeColor": "#c92a2a"},
+    {"type": "text", "id": "t_a_p2_2", "x": 555, "y": 380, "text": "single node", "fontSize": 14, "fontFamily": 1, "strokeColor": "#868e96", "originalText": "single node", "autoResize": true},
+
+    {"type": "rectangle", "id": "p2_target", "x": 610, "y": 340, "width": 230, "height": 110, "roundness": {"type": 3}, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "strokeWidth": 3, "boundElements": [{"id": "t_p2_target", "type": "text"}]},
+    {"type": "text", "id": "t_p2_target", "x": 620, "y": 350, "width": 210, "height": 90, "text": "Sigiro #2 (targeted)\n[ DuckDB ]\n\nSELECT service, count()\nFROM connections\nWHERE error != 0\nGROUP BY service", "fontSize": 14, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "p2_target", "originalText": "Sigiro #2 (targeted)\n[ DuckDB ]\n\nSELECT service, count()\nFROM connections\nWHERE error != 0\nGROUP BY service", "autoResize": true},
+
+    {"type": "arrow", "id": "a_p2_result", "x": 840, "y": 395, "width": 60, "height": 0, "points": [[0,0],[60,0]], "endArrowhead": "arrow"},
+    {"type": "text", "id": "t_a_p2_result", "x": 845, "y": 380, "text": "results", "fontSize": 14, "fontFamily": 1, "strokeColor": "#868e96", "originalText": "results", "autoResize": true},
+
+    {"type": "rectangle", "id": "p2_diagnosis", "x": 900, "y": 355, "width": 210, "height": 80, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "boundElements": [{"id": "t_p2_diag", "type": "text"}]},
+    {"type": "text", "id": "t_p2_diag", "x": 910, "y": 365, "width": 190, "height": 60, "text": "Root cause found:\nservice-db on :5432\nconnection refused\n-> restart PostgreSQL", "fontSize": 16, "fontFamily": 1, "strokeColor": "#2b8a3e", "textAlign": "center", "verticalAlign": "middle", "containerId": "p2_diagnosis", "originalText": "Root cause found:\nservice-db on :5432\nconnection refused\n-> restart PostgreSQL", "autoResize": true},
+
+    {"type": "text", "id": "t_comparison", "x": 30, "y": 550, "text": "Without Federated Debugging (the alternatives):", "fontSize": 22, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "Without Federated Debugging (the alternatives):", "autoResize": true},
+
+    {"type": "rectangle", "id": "alt1_box", "x": 30, "y": 590, "width": 520, "height": 130, "roundness": {"type": 3}, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "strokeColor": "#e03131", "boundElements": [{"id": "t_alt1", "type": "text"}]},
+    {"type": "text", "id": "t_alt1", "x": 40, "y": 600, "width": 500, "height": 110, "text": "Option 1: Centralized Collection\n- Collectors ingest machine data periodically\n- Data lands in central store with latency\n- SRE queries stale/sampled data\n- Cost: network bandwidth + storage for ALL data\n- Debugging: limited to what was pre-collected", "fontSize": 16, "fontFamily": 1, "strokeColor": "#c92a2a", "textAlign": "left", "verticalAlign": "middle", "containerId": "alt1_box", "originalText": "Option 1: Centralized Collection\n- Collectors ingest machine data periodically\n- Data lands in central store with latency\n- SRE queries stale/sampled data\n- Cost: network bandwidth + storage for ALL data\n- Debugging: limited to what was pre-collected", "autoResize": true},
+
+    {"type": "rectangle", "id": "alt2_box", "x": 580, "y": 590, "width": 520, "height": 130, "roundness": {"type": 3}, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "strokeColor": "#e03131", "boundElements": [{"id": "t_alt2", "type": "text"}]},
+    {"type": "text", "id": "t_alt2", "x": 590, "y": 600, "width": 500, "height": 110, "text": "Option 2: SSH Into Each Machine\n- SRE manually SSHs into each of N machines\n- Run ad-hoc queries per machine\n- No cross-machine correlation\n- Slow, error-prone, doesn't scale\n- Debugging: requires deep infra knowledge", "fontSize": 16, "fontFamily": 1, "strokeColor": "#c92a2a", "textAlign": "left", "verticalAlign": "middle", "containerId": "alt2_box", "originalText": "Option 2: SSH Into Each Machine\n- SRE manually SSHs into each of N machines\n- Run ad-hoc queries per machine\n- No cross-machine correlation\n- Slow, error-prone, doesn't scale\n- Debugging: requires deep infra knowledge", "autoResize": true},
+
+    {"type": "rectangle", "id": "sigiro_box", "x": 305, "y": 740, "width": 520, "height": 100, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "strokeColor": "#2b8a3e", "strokeWidth": 3, "boundElements": [{"id": "t_sigiro", "type": "text"}]},
+    {"type": "text", "id": "t_sigiro", "x": 315, "y": 750, "width": 500, "height": 80, "text": "Sigiro Federated: best of both worlds\n- Arbitrary SQL on LIVE data (not pre-collected)\n- Cross-machine correlation via fan-out\n- Narrow to single machine when identified\n- Works for 1 machine (solo dev) or N machines", "fontSize": 16, "fontFamily": 1, "strokeColor": "#2b8a3e", "textAlign": "left", "verticalAlign": "middle", "containerId": "sigiro_box", "originalText": "Sigiro Federated: best of both worlds\n- Arbitrary SQL on LIVE data (not pre-collected)\n- Cross-machine correlation via fan-out\n- Narrow to single machine when identified\n- Works for 1 machine (solo dev) or N machines", "autoResize": true},
+
+    {"type": "text", "id": "t_scale_note", "x": 30, "y": 870, "text": "Scales: solo dev (1 Sigiro) -> startup (5 machines) -> enterprise (N machines)", "fontSize": 18, "fontFamily": 1, "strokeColor": "#868e96", "originalText": "Scales: solo dev (1 Sigiro) -> startup (5 machines) -> enterprise (N machines)", "autoResize": true}
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff"
+  }
+}
