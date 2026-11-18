@@ -1,7 +1,7 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
 
+use crate::otlp::MetricBatches;
 use arrow::record_batch::RecordBatch;
-use sigiro_segments::{MetricBatches, TraceId};
 
 // --------------------------------------------------------------------------
 // IngestMsg — carried across modules for routing
@@ -105,58 +105,43 @@ pub enum StatusCode {
     Error = 2,
 }
 
-// ---------------------------------------------------------------------------
-// TenantId — prevents invalid identifiers reaching storage and SQL boundaries
-// ---------------------------------------------------------------------------
-
-/// Canonical tenant identifier used for filesystem, schema, and control-plane keys.
-///
-/// The character and length rules are part of the type so deserialized API input
-/// cannot bypass the storage identifier invariant.
-#[nutype::nutype(
-    validate(predicate = |id: &str| {
-        !id.is_empty()
-            && id.len() <= 56
-            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-            && !matches!(id, "extensions" | "tenants")
-    }),
-    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
-)]
-pub struct TenantId(String);
+impl StatusCode {
+    /// Convert back to i32 for SQL queries.
+    pub(crate) fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
 
 // ---------------------------------------------------------------------------
 // TimestampMicros — prevents sec/µs confusion at API boundaries
 // ---------------------------------------------------------------------------
 
-/// Plausible contemporary Unix timestamp in microseconds.
-///
-/// The 16-digit range deliberately rejects values expressed in seconds,
-/// milliseconds, or nanoseconds. It is the same API invariant used by
-/// diagnosis input validation: approximately 2001 through 2286.
-#[nutype::nutype(
-    validate(
-        greater_or_equal = 1_000_000_000_000_000,
-        less = 10_000_000_000_000_000
-    ),
-    derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
-        Into,
-        Serialize,
-        Deserialize
-    )
-)]
-pub struct TimestampMicros(i64);
+/// Microsecond-precision timestamp. All internal timestamps are in microseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TimestampMicros(pub i64);
+
+impl TimestampMicros {
+    /// From epoch microseconds (internal storage).
+    pub(crate) fn from_micros(us: i64) -> Self {
+        Self(us)
+    }
+
+    /// Raw microseconds value (for SQL parameters).
+    pub(crate) fn as_micros(self) -> i64 {
+        self.0
+    }
+}
+
+impl From<i64> for TimestampMicros {
+    fn from(us: i64) -> Self {
+        Self(us)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Typed path structs — compile-time route checking for axum router
 // ---------------------------------------------------------------------------
+// Used with axum_extra::routing::TypedPath for compile-time route verification.
 
 use axum_extra::routing::TypedPath;
 use serde::{Deserialize, Serialize};
@@ -166,20 +151,37 @@ use serde::{Deserialize, Serialize};
 #[typed_path("/query")]
 pub struct QueryPath;
 
+/// Route: GET /diagnose
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/diagnose")]
+pub struct DiagnosePath;
+
 /// Route: GET /services
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/services")]
 pub struct ServicesPath;
 
-/// Route: GET /alerts
+/// Route: GET /anomalies
 #[derive(Debug, Clone, TypedPath)]
-#[typed_path("/alerts")]
-pub struct AlertsPath;
+#[typed_path("/anomalies")]
+pub struct AnomaliesPath;
 
-/// Route: POST /alerts/replay
+/// Route: GET /keys
 #[derive(Debug, Clone, TypedPath)]
-#[typed_path("/alerts/replay")]
-pub struct AlertsReplayPath;
+#[typed_path("/keys")]
+pub struct AdminKeysPath;
+
+/// Route: GET /tenants
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/tenants")]
+pub struct AdminTenantsPath;
+
+/// Route: GET /keys/{short_token}
+#[derive(Debug, Clone, Deserialize, TypedPath)]
+#[typed_path("/keys/{short_token}")]
+pub struct AdminKeyPath {
+    pub(crate) short_token: String,
+}
 
 /// Route: GET /status
 #[derive(Debug, Clone, TypedPath)]
@@ -191,6 +193,13 @@ pub struct AdminStatusPath;
 #[typed_path("/health")]
 pub struct HealthPath;
 
+/// Route: GET /v1/health
+/// Alias of /health, kept for compatibility with the
+/// "all OTLP HTTP endpoints live under /v1/..." convention.
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/v1/health")]
+pub struct V1HealthPath;
+
 /// Route: GET /healthz
 /// Alias of /health, for Kubernetes liveness/readiness probes.
 #[derive(Debug, Clone, TypedPath)]
@@ -201,5 +210,5 @@ pub struct HealthzPath;
 #[derive(Debug, Clone, Deserialize, TypedPath)]
 #[typed_path("/traces/{trace_id}")]
 pub struct TraceDetailPath {
-    pub(crate) trace_id: TraceId,
+    pub(crate) trace_id: String,
 }
