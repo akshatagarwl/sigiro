@@ -1,7 +1,14 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, ChevronRight, Minus, Plus, Search } from "lucide-react";
+import {
+  CircleAlert,
+  ChevronDown,
+  ChevronRight,
+  Minus,
+  Plus,
+  Search,
+} from "lucide-react";
 import { useQueryState, parseAsString } from "nuqs";
 import { useMemo, useRef, useState } from "react";
 
@@ -60,7 +67,7 @@ function SpanInspector({
   const to = Math.ceil((span.start + span.duration) / 1000) + 60_000;
   return (
     <aside
-      className="bg-background h-full min-w-0 overflow-auto p-4"
+      className="bg-background h-full min-w-0 overflow-auto p-4 sm:p-5"
       aria-label="Span inspector"
     >
       <div className="mb-4 space-y-2">
@@ -72,13 +79,25 @@ function SpanInspector({
                 ? "OK"
                 : "Unset"}
           </Badge>
-          <span className="text-muted-foreground text-xs">{span.service}</span>
         </div>
         <h3 className="text-base font-semibold break-words">{span.name}</h3>
-        <div className="text-muted-foreground font-mono text-xs">{span.id}</div>
-        <div className="text-sm tabular-nums">
-          {durationLabel(span.duration)}
+        <div className="text-muted-foreground font-mono text-xs break-all">
+          {span.id}
         </div>
+        <dl className="bg-muted/30 grid grid-cols-2 gap-4 rounded-md border p-3">
+          <div>
+            <dt className="text-muted-foreground text-xs">Duration</dt>
+            <dd className="mt-1 text-sm font-medium tabular-nums">
+              {durationLabel(span.duration)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground text-xs">Service</dt>
+            <dd className="mt-1 text-sm font-medium break-words">
+              {span.service}
+            </dd>
+          </div>
+        </dl>
         {span.row.status_message ? (
           <p
             role={span.error ? "alert" : undefined}
@@ -206,7 +225,7 @@ export function TraceWorkspace({
     });
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border"
+      className="trace-workspace flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border"
       data-trace-workspace={rows.length}
     >
       <div className="bg-muted/20 flex flex-wrap items-center gap-3 border-b px-4 py-3">
@@ -220,10 +239,11 @@ export function TraceWorkspace({
         <span className="text-muted-foreground text-xs">
           {new Set(model.spans.map((span) => span.service)).size} services
         </span>
-        <span className="text-destructive text-xs">
+        <span className="text-destructive inline-flex items-center gap-1.5 text-xs font-medium">
+          <CircleAlert className="size-3.5" aria-hidden="true" />
           {model.spans.filter((span) => span.error).length} errors
         </span>
-        <span className="text-muted-foreground ml-auto text-xs">
+        <span className="text-muted-foreground ml-auto hidden text-xs sm:inline">
           Drag the divider to resize
         </span>
       </div>
@@ -258,35 +278,41 @@ export function TraceWorkspace({
         >
           Errors only
         </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="Zoom out"
-          disabled={zoom <= 1}
-          onClick={() => setZoom(Math.max(1, zoom - 0.5))}
+        <div
+          className="flex shrink-0 items-center gap-1"
+          role="group"
+          aria-label="Timeline zoom"
         >
-          <Minus className="size-4" />
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            setZoom(1);
-            if (scrollRef.current) scrollRef.current.scrollLeft = 0;
-          }}
-          aria-label="Reset zoom"
-        >
-          {zoom.toFixed(1)}×
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="Zoom in"
-          disabled={zoom >= MAX_ZOOM}
-          onClick={() => setZoom(Math.min(MAX_ZOOM, zoom + 0.5))}
-        >
-          <Plus className="size-4" />
-        </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Zoom out"
+            disabled={zoom <= 1}
+            onClick={() => setZoom(Math.max(1, zoom - 0.5))}
+          >
+            <Minus className="size-4" />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setZoom(1);
+              if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+            }}
+            aria-label="Reset zoom"
+          >
+            {zoom.toFixed(1)}×
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Zoom in"
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => setZoom(Math.min(MAX_ZOOM, zoom + 0.5))}
+          >
+            <Plus className="size-4" />
+          </Button>
+        </div>
       </div>
       <ResizablePanelGroup
         orientation={isMobile ? "vertical" : "horizontal"}
@@ -338,7 +364,7 @@ export function TraceWorkspace({
               }}
               className="relative"
             >
-              <div className="bg-background text-muted-foreground sticky top-0 z-20 flex h-7 border-b text-[10px]">
+              <div className="bg-muted text-muted-foreground sticky top-0 z-20 flex h-7 border-b text-[11px] font-medium tabular-nums">
                 <div className="bg-background sticky left-0 z-20 w-64 shrink-0 border-r px-3 py-1">
                   Span · service
                 </div>
@@ -356,6 +382,7 @@ export function TraceWorkspace({
                   <div
                     key={span.id}
                     className={`absolute flex h-9 w-full border-b text-xs ${selected.id === span.id ? "bg-accent" : "hover:bg-muted/50"}`}
+                    data-selected={selected.id === span.id}
                     style={{ top: item.start }}
                     data-span-row={span.id}
                   >
@@ -365,7 +392,7 @@ export function TraceWorkspace({
                     >
                       {children ? (
                         <button
-                          className="hover:bg-muted shrink-0 rounded p-1"
+                          className="hover:bg-muted flex size-6 shrink-0 items-center justify-center rounded"
                           aria-label={`${collapsed.has(span.id) ? "Expand" : "Collapse"} ${span.name}`}
                           aria-expanded={!collapsed.has(span.id)}
                           onClick={() => toggle(span.id)}
@@ -380,12 +407,22 @@ export function TraceWorkspace({
                         <span className="w-5 shrink-0" />
                       )}
                       <button
-                        className="min-w-0 flex-1 truncate py-2 text-left"
+                        className="min-w-0 flex-1 truncate py-2 pr-2 text-left"
                         title={`${span.name} · ${span.service}`}
                         aria-pressed={selected.id === span.id}
                         onClick={() => select(span)}
                       >
-                        <span className={span.error ? "text-destructive" : ""}>
+                        {span.error && (
+                          <CircleAlert
+                            className="text-destructive mr-1 inline size-3.5"
+                            aria-label="Error"
+                          />
+                        )}
+                        <span
+                          className={
+                            span.error ? "text-destructive font-medium" : ""
+                          }
+                        >
                           {span.name}
                         </span>
                         <span className="text-muted-foreground ml-2">
@@ -426,7 +463,12 @@ export function TraceWorkspace({
               )}
             </div>
           </div>
-          <div className="text-muted-foreground border-t px-3 py-2 text-xs">
+          <div
+            className="text-muted-foreground border-t px-3 py-2 text-xs"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             {filtered.length} matching spans · Ctrl/⌘ + scroll to zoom
           </div>
         </ResizablePanel>
