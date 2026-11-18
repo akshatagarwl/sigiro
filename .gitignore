@@ -1,5 +1,4 @@
 /target
-node_modules/
 __pycache__/
 .buildx-cache*
 .env
@@ -11,6 +10,11 @@ fuzz/corpus/otlp_traces_fuzz/*
 mutants.out/
 mutants.out.old/
 vendor/
+# Temporary Alchemy package set from alchemy-run/alchemy@c83b4542.
+!www/vendor/
+!www/vendor/alchemy-c83b4542/
+!www/vendor/alchemy-c83b4542/*.tgz
+!www/vendor/alchemy-c83b4542/manifest.json
 .cargo-home/
 TASKS.md
 .DS_Store
@@ -35,26 +39,3 @@ www/.source/
 
 # Letta worktree admin state
 .letta/
-
-# Locally issued dev-stack TLS material (scripts/dev-certs.sh). Machine-local
-# by construction — mkcert's root only exists in this machine's trust store.
-.dev/
-
-# Local Worker secrets and env overrides (wrangler/celld convention). These
-# carry BETTER_AUTH_SECRET and must never be committed.
-.dev.vars
-.dev.vars.*
-
-# celld's local runtime state (D1 sqlite, replication working dir).
-.celld/
-
-# Alchemy's local state and bundled worker output.
-**/.alchemy/
-
-# Local design-review screenshots (www/scripts/shoot-auth.ts)
-.shots/
-
-# Wrangler's local cache holds the account it last used; never commit it.
-.wrangler/
-# Local agent worktrees and per-user editor state.
-.worktrees/

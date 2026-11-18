@@ -1,0 +1,209 @@
+# Accessories-only Kamal configuration. Explicit service names preserve the
+# existing containers, Docker network, proxy routes, and named volumes while
+# ownership moves from Worldpol into this repository.
+service: sigiro
+image: ghcr.io/sigiroai/sigiro
+servers:
+  web:
+    - 91.98.118.235
+
+builder:
+  arch: amd64
+
+registry:
+  server: 127.0.0.1:5555
+  username: linguabench
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+ssh:
+  user: root
+  keys:
+    - ~/.ssh/linguabench
+
+accessories:
+  sigiro-catalog-db:
+    service: linguabench-sigiro-catalog-db
+    network: kamal
+    image: 127.0.0.1:5555/linguabench/postgres:17
+    host: 91.98.118.235
+    cmd: >-
+      /bin/sh -ec 'export POSTGRES_PASSWORD="$SIGIRO_CATALOG_PASSWORD";
+      install -m 0600 -o postgres -g postgres /dev/null /var/lib/postgresql/data/server.crt;
+      install -m 0600 -o postgres -g postgres /dev/null /var/lib/postgresql/data/server.key;
+      printf "%s" "$SIGIRO_AUTH_DB_TLS_CERT_B64" | base64 -d > /var/lib/postgresql/data/server.crt;
+      printf "%s" "$SIGIRO_AUTH_DB_TLS_KEY_B64" | base64 -d > /var/lib/postgresql/data/server.key;
+      exec /usr/local/bin/docker-entrypoint.sh postgres -c max_connections=30
+      -c shared_buffers=64MB -c work_mem=2MB -c ssl=on
+      -c ssl_cert_file=/var/lib/postgresql/data/server.crt
+      -c ssl_key_file=/var/lib/postgresql/data/server.key'
+    env:
+      clear:
+        POSTGRES_USER: sigiro
+        POSTGRES_DB: sigiro
+      secret:
+        - SIGIRO_CATALOG_PASSWORD
+        - SIGIRO_AUTH_DB_TLS_CERT_B64
+        - SIGIRO_AUTH_DB_TLS_KEY_B64
+    volumes:
+      - linguabench_sigiro_catalog_data:/var/lib/postgresql/data
+    options:
+      cpus: 0.25
+      memory: 256m
+      memory-swap: 256m
+      pids-limit: 128
+      network-alias: auth-db.sigiro.com
+
+  sigiro-auth-tunnel:
+    service: linguabench-sigiro-auth-tunnel
+    network: kamal
+    image: cloudflare/cloudflared@sha256:b269e8abd07a5bf6f3f4be65d5050b2174eca89c56a0241a8ff32a16aec454e4
+    host: 91.98.118.235
+    cmd: tunnel --no-autoupdate run
+    env:
+      secret:
+        - TUNNEL_TOKEN:SIGIRO_AUTH_TUNNEL_TOKEN
+    options:
+      read-only: true
+      tmpfs:
+        - /tmp:rw,noexec,nosuid,nodev,size=8m
+      cap-drop: ALL
+      security-opt: no-new-privileges:true
+      cpus: 0.10
+      memory: 128m
+      memory-swap: 128m
+      pids-limit: 64
+
+  sigiro-edge:
+    service: linguabench-sigiro-edge
+    network: kamal
+    image: nginxinc/nginx-unprivileged:1.30.3-alpine@sha256:b3f2436575bd5be7386518084d842dac414ab4962712afa31e99e0942a56e3b2
+    host: 91.98.118.235
+    files:
+      - ops/prod/sigiro-edge.nginx.conf:/etc/nginx/nginx.conf
+    proxy:
+      host: api-origin.sigiro.com
+      app_port: 8080
+      ssl: true
+      response_timeout: 5
+      buffering:
+        requests: true
+        responses: true
+        memory: 65536
+        max_request_body: 65536
+        max_response_body: 1048576
+      healthcheck:
+        path: /health
+        interval: 3
+        timeout: 3
+    options:
+      user: 10001:10001
+      read-only: true
+      tmpfs:
+        - /tmp:rw,noexec,nosuid,nodev,size=4m
+      cap-drop: ALL
+      security-opt: no-new-privileges:true
+      cpus: 0.05
+      memory: 64m
+      memory-swap: 64m
+      pids-limit: 32
+
+  sigiro-auth:
+    service: linguabench-sigiro-auth
+    network: kamal
+    image: ghcr.io/akshatagarwl/sigiro-auth@sha256:9a94bc181fed7eb20623ed9861567cb32d67fdbb24d79cb66090af2f1f004318
+    host: 91.98.118.235
+    proxy:
+      host: auth-origin.sigiro.com
+      app_port: 3100
+      ssl: true
+      response_timeout: 15
+      healthcheck:
+        path: /health
+        interval: 3
+        timeout: 5
+    env:
+      clear:
+        ENVIRONMENT: production
+        PORT: 3100
+        BETTER_AUTH_URL: https://sigiro.com
+        SIGIRO_RESOURCE: https://sigiro.com
+        EMAIL_FROM: noreply@sigiro.com
+        CLOUDFLARE_ACCOUNT_ID: 73035685fa8536f5c07b55b168868c71
+      secret:
+        - DATABASE_URL:SIGIRO_AUTH_DATABASE_URL
+        - DATABASE_CA_CERT_B64:SIGIRO_AUTH_DB_TLS_CERT_B64
+        - BETTER_AUTH_SECRET
+        - CLOUDFLARE_EMAIL_API_TOKEN
+    options:
+      read-only: true
+      tmpfs:
+        - /tmp:rw,noexec,nosuid,nodev,size=16m
+      cap-drop: ALL
+      security-opt: no-new-privileges:true
+      cpus: 0.25
+      memory: 256m
+      memory-swap: 256m
+      pids-limit: 128
+
+  sigiro-hosted:
+    service: linguabench-sigiro-hosted
+    network: kamal
+    image: ghcr.io/sigiroai/sigiro@sha256:168ee861383c994345fa8e1caa9e1d328a140cd51872c2af29559a7a40e8d3e3
+    host: 91.98.118.235
+    proxy:
+      host: api-origin.sigiro.com
+      app_port: 9999
+      forward_headers: false
+      path_prefixes:
+        - /v1
+        - /v1development/profiles
+        - /health
+        - /healthz
+        - /ingest
+        - /push.v1.PusherService/Push
+        - /openapi.json
+        - /.well-known/oauth-protected-resource
+      strip_path_prefix: false
+      response_timeout: 90
+      buffering:
+        requests: true
+        responses: true
+        memory: 1048576
+        max_request_body: 8388608
+        max_response_body: 16777216
+      healthcheck:
+        path: /health
+        interval: 3
+        timeout: 5
+    env:
+      clear:
+        SIGIRO_DATA_DIR: /var/lib/sigiro-hosted
+        RUST_LOG: info
+        SIGIRO_RETENTION_DAYS: 7
+        SIGIRO_FLUSH_INTERVAL_SECS: 1
+        SIGIRO_MAX_DISK_BYTES: 4294967296
+        SIGIRO_DUCKDB_THREADS: 1
+        SIGIRO_DUCKDB_MEMORY_LIMIT: 512MB
+        SIGIRO_QUERY_TIMEOUT_SECONDS: 10
+        SIGIRO_MAX_RESULT_ROWS: 10000
+        SIGIRO_MAX_INGEST_BODY_BYTES: 8388608
+        SIGIRO_AUTH_ISSUER: https://sigiro.com/api/auth
+        SIGIRO_AUTH_AUDIENCE: https://sigiro.com
+        SIGIRO_AUTH_JWKS_URL: https://sigiro.com/api/auth/jwks
+      secret:
+        - SIGIRO_ADMIN_TOKEN
+    volumes:
+      - linguabench_sigiro_hosted_data:/var/lib/sigiro-hosted
+    options:
+      read-only: true
+      tmpfs:
+        - /tmp:rw,noexec,nosuid,nodev,size=64m
+      cap-drop: ALL
+      security-opt: no-new-privileges:true
+      cpus: 1.0
+      memory: 1792m
+      memory-swap: 2560m
+      pids-limit: 256
+      publish:
+        - 127.0.0.1:9998:9999

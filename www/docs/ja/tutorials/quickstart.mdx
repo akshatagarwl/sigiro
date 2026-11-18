@@ -1,6 +1,8 @@
 ---
 title: クイックスタート
-description: 1 つのコマンドで sigiro を起動し、OpenTelemetry を向けて、最近の失敗を SQL で照会します。所要時間は 5 分で、コレクターも設定ファイルも不要です。
+description: >-
+  1 つの docker コマンドで sigiro を起動し、OpenTelemetry
+  を向けて、何がなぜ変わったのかを尋ねます。所要時間は 5 分で、コレクターも設定ファイルも不要です。
 sidebar:
   order: 1
 ---
@@ -42,28 +44,16 @@ sigiro serve
 ビルドは arm64 向けの Linux および macOS と、x86-64 向けの Linux に存在します。
 それ以外のプラットフォームでは、コンテナをご利用ください。
 
-新しいデータディレクトリでバイナリを初めて起動すると、準備が整う前にクエリ拡張機能を
-ダウンロードする場合があります。固定の待ち時間ではなく、起動ログを確認してください。
-
 </Tab>
 
 <Tab title="docker">
 
 ```bash
-docker run -d --name sigiro --restart unless-stopped \
-  -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 \
-  -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro
+docker run -p 4317:4317 -p 4318:4318 -p 9999:9999 ghcr.io/sigiroai/sigiro
 ```
 
-名前付きボリュームにより、コンテナを再起動してもデータが残ります。再起動ポリシーに
-より、ホストの再起動後もサーバーが起動します。Docker が公開するポートにはこのホスト
-からのみアクセスできます。Jaeger などが `4317` と `4318` を使用中の場合は、実行前に
-最初の 2 つの `-p` フラグを `-p 127.0.0.1:14317:4317 -p 127.0.0.1:14318:4318`
-に置き換えてください。OTLP HTTP の送信先は `http://localhost:14318`（gRPC は
-`localhost:14317`）に変更します。ホスト側の `9999` も空いている必要があります。
-変更した場合は、以降の API リクエストでも変更後のホスト側ポートを使用してください。
-
-Jaeger v2 の既存の受信先を維持してトレースを複製する場合は、[Jaeger と並行して sigiro を試す](/docs/how-to/jaeger-fanout)を参照してください。アプリの送信先は変更しません。
+コンテナの再起動をまたいでデータを保持するには、`-v sigiro-data:/var/lib/sigiro`
+を追加してください。
 
 </Tab>
 
@@ -77,20 +67,14 @@ Jaeger v2 の既存の受信先を維持してトレースを複製する場合�
 | `4318` | HTTP 経由の OTLP |
 | `9999` | クエリおよび診断 API |
 
-テレメトリを送信する前に、サーバーが準備できていることを確認してください。
-
-```bash
-curl --fail http://localhost:9999/health
-```
-
-Docker では `docker inspect --format '{{.State.Health.Status}}' sigiro` が準備完了時に
-`healthy` を返します。そうならない場合は `docker logs sigiro` を確認してください。
-データディレクトリはバイナリの場合は `~/.local/share/sigiro`、イメージの場合は
-`/var/lib/sigiro` です。
+初回起動時、sigiro はクエリ拡張機能をダウンロードします。これには 30〜90 秒かかる
+ことがあるため、サーバーがリクエストを受け付けるまでに待ち時間が生じます。以降の
+起動は即時です。sigiro はデータを `SIGIRO_DATA_DIR` に書き込みます。このディレクトリ
+はバイナリの場合は `~/.local/share/sigiro`、イメージの場合は `/var/lib/sigiro` です。
 
 サーバーがキーを要求しないことに注意してください。セルフホストのサーバーはリクエスト
-を認証しません。上記の Docker コマンドはアクセスをこのホストに制限します。信頼
-できないネットワークにポートを公開しないでください。ネットワークがセキュリティ境界です。
+を認証しないため、プライベートネットワーク内で運用してください。ネットワークが
+セキュリティ境界です。
 
 ## 2. テレメトリを送信する
 
@@ -117,39 +101,90 @@ curl http://localhost:9999/v1/services
 以内に、お使いのサービスがその配列に現れます。配列が空の場合は、HTTP 経由の OTLP
 ではポートが `4318`、gRPC 経由の OTLP では `4317` になっていることを確認してください。
 
-同じテレメトリーをブラウザーで見るには、
-[localhost:9999/dashboard/](http://localhost:9999/dashboard/) を開きます。
+## 3. 何が変わったかを尋ねる
 
-## 3. 最近のエラーを問い合わせる
-
-最初のクエリは指定した期間の操作数と失敗数を示します。原因を断定するものではありません。
+`anomalies` はこのループの入口です。各サービスの直近のベースラインから逸脱した変化
+を、変化の大きい順に返します。
 
 ```bash
-curl -sS -X POST http://localhost:9999/v1/query \
-  --data-binary "SELECT span_name, count(*) AS calls,
-                   sum(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) AS errors
-                 FROM sigiro_spans
-                 WHERE service_name = 'checkout'
-                   AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'
-                 GROUP BY span_name ORDER BY errors DESC LIMIT 10"
+sigiro anomalies
+sigiro anomalies --service checkout
 ```
 
-## 4. 元のスパンを調べる
+ここでは何も設定しません。選ぶべきしきい値はなく、常に遅いが*安定している*サービス
+は異常ではありません。sigiro がどのように判断しているかを読むには、
+[ダッシュボードではなくエビデンスについて](/docs/explanation/evidence#しきい値ではなくベースライン)
+をご覧ください。
 
-次のクエリは生のスパンを返します。修正を決める前に関連するトレースやデプロイを確認してください。保存済み異常テーブルや診断エンドポイントは使いません。
+起動して間もないサーバーではリストが空になることがあります。sigiro が比較を行うには
+5 分間バケットの履歴がいくつか必要なので、サービスをしばらく動かしてから改めて
+尋ねてください。
+
+## 4. 理由を尋ねる
+
+`diagnose` は、あるサービスと時間ウィンドウについて、構造化されたエビデンスブロック
+を 1 つ返します。このブロックは、注目に値するものをランク付けしたリストから始まり
+ます。その下には、エラー数、各オペレーションのエラー内訳、各モデルの LLM 統計、
+サンプリングされたスパン、重複排除されたログパターンが含まれます。各行には、すぐに
+実行できる SQL クエリも付いています。
 
 ```bash
-curl -sS -X POST http://localhost:9999/v1/query \
-  --data-binary "SELECT trace_id, duration, status_message
-                 FROM sigiro_spans
-                 WHERE service_name = 'checkout' AND status_code = 2
-                   AND timestamp > CURRENT_TIMESTAMP - INTERVAL '30 minutes'
-                 ORDER BY timestamp DESC LIMIT 20"
+sigiro diagnose checkout
+sigiro diagnose checkout --from $(date -v-1H +%s)
 ```
+
+このコマンドはインデント付きの JSON を出力します。まず `findings` 配列を読んで
+ください。深刻度の高い順にソートされており、各項目には読める `summary` があります。
+単独の finding には `drill_down_sql` があり、incident では各 member shift にあります。
+
+エージェントは同じ質問を HTTP 経由で尋ねます。HTTP リクエストには明示的なウィンドウ
+が必要で、両方のタイムスタンプは Unix エポックからの**マイクロ秒**です。
+
+```bash
+curl -X POST http://localhost:9999/v1/diagnose \
+  -H 'content-type: application/json' \
+  -d "{\"services\":[\"checkout\"],
+       \"from_ts\":$(( $(date +%s) - 900 ))000000,
+       \"to_ts\":$(date +%s)000000}"
+```
+
+CLI の `--from`/`--to` フラグはエポック**秒**を受け取り、CLI はウィンドウを既定で
+直近 15 分にします。HTTP のボディはマイクロ秒を受け取り、既定値は何もありません。
+sigiro は HTTP パスで秒の値を単位名を示すメッセージとともに拒否するため、単位を
+誤った場合は空のウィンドウが返るのではなく、はっきりと失敗します。
+
+## 5. 行の裏側にあるクエリを実行する
+
+エビデンスブロックが疑問に答えていない場合は、行から得られた SQL を実行してください。
+テレメトリはテーブルの集合であり、クエリリクエストのボディは JSON ではなく生の SQL
+です。
+
+```bash
+curl -X POST http://localhost:9999/v1/query \
+  --data "SELECT service_name, count(*) AS errors
+          FROM sigiro_spans
+          WHERE status_code = 2 AND timestamp > now() - INTERVAL '1 hour'
+          GROUP BY 1 ORDER BY errors DESC"
+```
+
+レスポンスは行オブジェクトの JSON 配列です。`status_code` は OTLP の列挙値であり、
+`2` はエラーを意味します。
+
+このクエリが `timestamp` に範囲を設けていることに注意してください。すべてのクエリで
+`timestamp` に範囲を設けてください。sigiro はセカンダリインデックスを保持しないため、
+範囲を設けたクエリは少数のファイルだけを読み、範囲を設けないクエリはすべてのファイル
+を読みます。
+
+`sigiro_spans` は 9 つのテーブルのうちの 1 つです。
+[ホスト版ガイド](/docs/how-to/hosted-onboarding#4-データを照会するsql-api)では 9 つ
+すべてと、それらに適用される規則を一覧しており、[テーブルについて](/docs/explanation/tables)
+では各ファミリーが何を計測するのかを説明しています。
 
 ## ここまでにやったこと
 
-サーバーを起動し、OpenTelemetry を送信し、期間を限定して生のテレメトリを問い合わせました。結果は証拠であり、自動的な原因判定ではありません。
+サーバーを起動し、OpenTelemetry を送信し、何が変わったかを尋ね、なぜ変わったかを
+尋ね、その回答の 1 つを裏付けるクエリを実行しました。これが、エージェントが自律的に
+回すループのすべてです。
 
 ## 次のステップ
 

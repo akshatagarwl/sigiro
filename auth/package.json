@@ -3,40 +3,48 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "aube@2.8.4",
+  "packageManager": "aube@2.2.16",
   "engines": {
     "node": ">=24.20.0"
   },
   "scripts": {
+    "prepare": "effect-tsgo patch --no-typescript --oxlint",
     "build": "tsc -p tsconfig.build.json",
-    "check": "tsc --noEmit",
-    "schema:sql": "tsx scripts/generate-d1-sql.ts",
-    "worker:dev": "wrangler dev",
-    "worker:deploy": "wrangler deploy",
-    "dev": "wrangler dev",
-    "test:agent-e2e": "scripts/agent-e2e.sh"
+    "check": "tsc --noEmit && tsx --test test/ui.ts",
+    "lint": "oxlint --type-aware .",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down --volumes",
+    "migrate": "node --env-file-if-exists=.env --import tsx src/migrate.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx --watch src/server.ts",
+    "start": "node dist/server.js",
+    "test:email": "node --import tsx test/cloudflare-email-e2e.ts",
+    "test:e2e": "node --env-file-if-exists=.env --import tsx test/e2e.ts",
+    "test": "aube run check && aube run test:email && node --env-file-if-exists=.env --import tsx test/run.ts"
   },
   "dependencies": {
     "@better-auth/agent-auth": "0.6.2",
-    "@better-auth/cimd": "1.7.14",
-    "@better-auth/core": "1.7.14",
-    "@better-auth/drizzle-adapter": "1.7.14",
-    "@better-auth/mcp": "1.7.14",
-    "@better-auth/oauth-provider": "1.7.14",
-    "@better-auth/passkey": "1.7.14",
-    "better-auth": "1.7.14",
-    "cloudflare": "7.3.0",
-    "drizzle-orm": "0.45.4",
-    "effect": "4.0.7",
-    "zod": "4.6.7"
+    "@better-auth/cimd": "1.7.5",
+    "@better-auth/mcp": "1.7.5",
+    "@better-auth/oauth-provider": "1.7.5",
+    "@better-auth/passkey": "1.7.5",
+    "@effect/platform-node": "4.0.0-rc.115",
+    "@effect/sql-pg": "4.0.0-rc.115",
+    "better-auth": "1.7.5",
+    "cloudflare": "7.1.0",
+    "effect": "4.0.0-rc.115",
+    "pg": "8.16.3"
   },
   "devDependencies": {
     "@auth/agent": "0.6.2",
-    "@cloudflare/workers-types": "^5.20261028.1",
-    "@types/node": "24.19.2",
-    "tsx": "4.23.15",
-    "typescript": "7.0.2",
-    "wrangler": "^4.154.0"
+    "@effect/tsgo": "0.45.0",
+    "@effect/vitest": "4.0.0-rc.115",
+    "@types/node": "24.10.1",
+    "@types/pg": "8.15.6",
+    "jose": "6.2.3",
+    "oxlint": "1.82.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
   },
   "patchedDependencies": {
     "@auth/agent@0.6.2": "patches/@auth%2Fagent@0.6.2.patch"

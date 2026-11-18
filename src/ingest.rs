@@ -1,14 +1,18 @@
+use crate::otlp::{InputFormat, MetricBatches};
+use crate::types::{SpanId, TraceId};
 use anyhow::Result;
+use arrow::array::{Int64Array, ListArray, ListBuilder, StringBuilder, TimestampMicrosecondArray};
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use axum::{
     Router,
     body::Bytes,
-    extract::State,
-    http::{StatusCode, header::CONTENT_TYPE},
-    response::{IntoResponse, Response as AxumResponse},
+    extract::{Query, State},
+    http::StatusCode,
     routing::post,
 };
 use headers::HeaderMapExt;
+use multer::Multipart;
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
         ExportLogsPartialSuccess, ExportLogsServiceRequest, ExportLogsServiceResponse,
@@ -28,7 +32,8 @@ use opentelemetry_proto::tonic::collector::{
     },
 };
 use prost::Message;
-use sigiro_segments::{InputFormat, MetricBatches};
+use serde::Deserialize;
+use std::io::Read;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
@@ -36,6 +41,11 @@ use tracing_attributes::instrument;
 
 use crate::inserter::{MsgRouter, RouterError};
 use crate::types::IngestMsg;
+
+/// Wrap an Arrow/record-batch construction error into a tonic Status.
+fn arrow_status<E: std::fmt::Display>(e: E) -> Status {
+    status_internal(format!("arrow error: {e}"))
+}
 
 /// Convenience helper for `Status::internal` to avoid repeating `format!` at call sites.
 fn status_internal(msg: impl std::fmt::Display) -> Status {
@@ -143,9 +153,14 @@ pub async fn extract_project_id_grpc(
                 )
                 .await
                 .map(|context| context.tenant_id.as_ref().to_owned())
-                .map_err(|error| {
-                    let failure = IngestAuthFailure::from(error);
-                    Status::new(failure.code, failure.message)
+                .map_err(|error| match error {
+                    crate::auth::AuthError::InsufficientScope(_) => {
+                        Status::permission_denied("Access token lacks telemetry:ingest scope")
+                    }
+                    crate::auth::AuthError::InvalidToken
+                    | crate::auth::AuthError::JwksUnavailable => {
+                        Status::unauthenticated("Invalid access token")
+                    }
                 })
         }
     }
@@ -157,8 +172,7 @@ fn detect_format(headers: &axum::http::HeaderMap) -> InputFormat {
     headers
         .typed_get::<headers::ContentType>()
         .map(|ct| {
-            let mime: mime::Mime = ct.into();
-            if mime.type_() == mime::APPLICATION && mime.subtype() == mime::JSON {
+            if ct == headers::ContentType::json() {
                 InputFormat::Json
             } else {
                 InputFormat::Protobuf
@@ -200,7 +214,7 @@ async fn transform_traces(
     fmt: InputFormat,
 ) -> Result<RecordBatch, Status> {
     spawn_transform(workloads, "transform traces", move || {
-        sigiro_segments::transform_traces(&bytes, fmt)
+        crate::otlp::transform_traces(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
@@ -213,7 +227,7 @@ async fn transform_logs(
     fmt: InputFormat,
 ) -> Result<(RecordBatch, u64), Status> {
     spawn_transform(workloads, "transform logs", move || {
-        sigiro_segments::transform_logs(&bytes, fmt)
+        crate::otlp::transform_logs(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
@@ -226,7 +240,7 @@ async fn transform_metrics(
     fmt: InputFormat,
 ) -> Result<MetricBatches, Status> {
     spawn_transform(workloads, "transform metrics", move || {
-        sigiro_segments::transform_metrics(&bytes, fmt)
+        crate::otlp::transform_metrics(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
@@ -241,6 +255,7 @@ impl TraceService for OtlpGrpcService {
     ) -> Result<Response<ExportTraceServiceResponse>, Status> {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         // Transform on tokio blocking pool — no double decode.
+        // Encode once (prost), decode once (direct Arrow builder, src/otlp.rs).
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
         let batch = transform_traces(self.router.workloads(), bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
@@ -340,6 +355,306 @@ impl MetricsService for OtlpGrpcService {
     }
 }
 
+/// Resolve pprofile dictionary encoding into flat profile rows as a RecordBatch.
+/// Resolution chain:
+///   Sample.stack_index → Dictionary.stack_table[].location_indices[]
+///   → Dictionary.location_table[].line[].function_index
+///   → Dictionary.function_table[].name_strindex
+///   → Dictionary.string_table[]
+fn profile_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("profile_id", DataType::Utf8, true),
+        Field::new("trace_id", DataType::Utf8, true),
+        Field::new("span_id", DataType::Utf8, true),
+        Field::new("service_name", DataType::Utf8, false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
+        Field::new("profile_type", DataType::Utf8, true),
+        Field::new(
+            "stack_trace",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+        Field::new("value", DataType::Int64, true),
+        Field::new("unit", DataType::Utf8, true),
+        Field::new("resource_attributes", DataType::Utf8, true),
+    ]))
+}
+
+fn stack_trace_builder() -> ListBuilder<StringBuilder> {
+    ListBuilder::new(StringBuilder::new()).with_field(Arc::new(Field::new(
+        "item",
+        DataType::Utf8,
+        true,
+    )))
+}
+
+fn append_stack_trace<S: AsRef<str>>(builder: &mut ListBuilder<StringBuilder>, stack: &[S]) {
+    for frame in stack {
+        builder.values().append_value(frame.as_ref());
+    }
+    builder.append(true);
+}
+
+fn empty_stack_trace_array() -> ListArray {
+    stack_trace_builder().finish()
+}
+
+fn transform_profiles(request: ExportProfilesServiceRequest) -> Result<RecordBatch, Status> {
+    let dict = match request.dictionary {
+        Some(d) => d,
+        None => {
+            // No dictionary = no samples can be resolved. Return empty batch.
+            tracing::debug!("profiles request has no dictionary, returning empty batch");
+            return RecordBatch::try_new(
+                profile_schema(),
+                vec![
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(empty_stack_trace_array()),
+                    Arc::new(Int64Array::from(Vec::<i64>::new())),
+                    Arc::new(StringBuilder::new().finish()),
+                    Arc::new(StringBuilder::new().finish()),
+                ],
+            )
+            .map_err(arrow_status);
+        }
+    };
+    let string_table = &dict.string_table;
+
+    let schema = profile_schema();
+
+    let mut profile_ids = StringBuilder::new();
+    let mut trace_ids = StringBuilder::new();
+    let mut span_ids = StringBuilder::new();
+    let mut service_names = StringBuilder::new();
+    let mut timestamps = Vec::new();
+    let mut profile_types = StringBuilder::new();
+    let mut stack_traces = stack_trace_builder();
+    let mut values = Vec::new();
+    let mut units = StringBuilder::new();
+    let mut resource_attrs = StringBuilder::new();
+
+    let resolve_str = |idx: i32| -> Result<&str, Status> {
+        string_table
+            .get(idx as usize)
+            .map(String::as_str)
+            .ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "string_table index {idx} out of bounds (table has {} entries)",
+                    string_table.len()
+                ))
+            })
+    };
+
+    /// Resolve a stack from sample.stack_index through the dictionary tables.
+    /// Returns function names from root to leaf, capped at 128 frames.
+    /// Returns Err on any index out of bounds — malformed profiles are rejected entirely.
+    fn resolve_stack<'a>(
+        stack_index: i32,
+        dict: &'a opentelemetry_proto::tonic::profiles::v1development::ProfilesDictionary,
+        string_table: &'a [String],
+    ) -> Result<Vec<&'a str>, Status> {
+        let stack = dict.stack_table.get(stack_index as usize).ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "stack_table index {stack_index} out of bounds (table has {} entries)",
+                dict.stack_table.len()
+            ))
+        })?;
+        let mut frames = Vec::with_capacity(stack.location_indices.len().min(128));
+        for (frame_pos, &loc_idx) in stack.location_indices.iter().take(128).enumerate() {
+            let loc = dict.location_table.get(loc_idx as usize).ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "location_table index {loc_idx} out of bounds at stack {stack_index} frame {frame_pos} (table has {} entries)",
+                    dict.location_table.len()
+                ))
+            })?;
+            let line = loc.line.first().ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "location index {loc_idx} has no line entries at stack {stack_index} frame {frame_pos}"
+                ))
+            })?;
+            let func = dict.function_table.get(line.function_index as usize).ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "function_table index {} out of bounds at stack {stack_index} frame {frame_pos} (table has {} entries)",
+                    line.function_index, dict.function_table.len()
+                ))
+            })?;
+            let name = string_table.get(func.name_strindex as usize).ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "string_table index {} out of bounds for function name at stack {stack_index} frame {frame_pos} (table has {} entries)",
+                    func.name_strindex, string_table.len()
+                ))
+            })?;
+            frames.push(name.as_str());
+        }
+        Ok(frames)
+    }
+
+    fn resolve_link(
+        link_index: i32,
+        dict: &opentelemetry_proto::tonic::profiles::v1development::ProfilesDictionary,
+    ) -> Result<Option<(TraceId, SpanId)>, Status> {
+        if link_index == 0 {
+            return Ok(None);
+        }
+
+        let link_index = usize::try_from(link_index).map_err(|_| {
+            Status::invalid_argument(format!(
+                "link_table index {link_index} must not be negative"
+            ))
+        })?;
+        let link = dict.link_table.get(link_index).ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "link_table index {link_index} out of bounds (table has {} entries)",
+                dict.link_table.len()
+            ))
+        })?;
+        let trace_id = TraceId::try_new(hex::encode(&link.trace_id)).map_err(|error| {
+            Status::invalid_argument(format!(
+                "invalid profile link trace_id at index {link_index}: {error}"
+            ))
+        })?;
+        let span_id = SpanId::try_new(hex::encode(&link.span_id)).map_err(|error| {
+            Status::invalid_argument(format!(
+                "invalid profile link span_id at index {link_index}: {error}"
+            ))
+        })?;
+
+        Ok(Some((trace_id, span_id)))
+    }
+
+    for rp in &request.resource_profiles {
+        let service_name = extract_service_name(rp.resource.as_ref())
+            .ok_or_else(|| Status::invalid_argument(
+                "resource_profiles entry missing service.name attribute — every profile must identify its service",
+            ))?;
+
+        let res_attrs_json = if let Some(r) = &rp.resource {
+            if r.attributes.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{{{}}}",
+                    r.attributes
+                        .iter()
+                        .map(|a| format!(
+                            "\"{}\":\"{}\"",
+                            a.key,
+                            a.value
+                                .as_ref()
+                                .map(|v| format!("{v:?}"))
+                                .unwrap_or_else(|| format!("<MISSING VALUE for key '{}'>", a.key))
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ))
+            }
+        } else {
+            None
+        };
+
+        for sp in &rp.scope_profiles {
+            for profile in &sp.profiles {
+                let ts_us = (profile.time_unix_nano / 1000) as i64;
+                let pid_hex;
+                let pid = if profile.profile_id.is_empty() {
+                    ""
+                } else {
+                    pid_hex = hex::encode(&profile.profile_id);
+                    pid_hex.as_str()
+                };
+
+                // Resolve profile_type and unit from sample_type
+                let (ptype, punit) = match profile.sample_type.as_ref() {
+                    Some(st) => (
+                        resolve_str(st.type_strindex)?,
+                        resolve_str(st.unit_strindex)?,
+                    ),
+                    None => ("", ""),
+                };
+
+                for sample in &profile.sample {
+                    let stack = resolve_stack(sample.stack_index, &dict, string_table)?;
+                    let link = resolve_link(sample.link_index, &dict)?;
+                    let sample_values = std::iter::once(0i64)
+                        .take(usize::from(sample.values.is_empty()))
+                        .chain(sample.values.iter().copied());
+
+                    // For multi-value profiles, write one row per value
+                    for val in sample_values {
+                        profile_ids.append_value(pid);
+                        match &link {
+                            Some((trace_id, span_id)) => {
+                                trace_ids.append_value(trace_id.as_ref());
+                                span_ids.append_value(span_id.as_ref());
+                            }
+                            None => {
+                                trace_ids.append_null();
+                                span_ids.append_null();
+                            }
+                        }
+                        service_names.append_value(service_name);
+                        timestamps.push(ts_us);
+                        profile_types.append_value(ptype);
+                        append_stack_trace(&mut stack_traces, &stack);
+
+                        values.push(val);
+                        units.append_value(punit);
+                        match &res_attrs_json {
+                            Some(j) => resource_attrs.append_value(j),
+                            None => resource_attrs.append_null(),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if timestamps.is_empty() {
+        return RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(profile_ids.finish()),
+                Arc::new(trace_ids.finish()),
+                Arc::new(span_ids.finish()),
+                Arc::new(service_names.finish()),
+                Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
+                Arc::new(profile_types.finish()),
+                Arc::new(stack_traces.finish()),
+                Arc::new(Int64Array::from(Vec::<i64>::new())),
+                Arc::new(units.finish()),
+                Arc::new(resource_attrs.finish()),
+            ],
+        )
+        .map_err(arrow_status);
+    }
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(profile_ids.finish()),
+            Arc::new(trace_ids.finish()),
+            Arc::new(span_ids.finish()),
+            Arc::new(service_names.finish()),
+            Arc::new(TimestampMicrosecondArray::from(timestamps)),
+            Arc::new(profile_types.finish()),
+            Arc::new(stack_traces.finish()),
+            Arc::new(Int64Array::from(values)),
+            Arc::new(units.finish()),
+            Arc::new(resource_attrs.finish()),
+        ],
+    )
+    .map_err(arrow_status)
+}
+
 #[tonic::async_trait]
 impl ProfilesService for OtlpGrpcService {
     #[instrument(skip_all, fields(project_id))]
@@ -350,7 +665,7 @@ impl ProfilesService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         let req = request.into_inner();
         let batch = spawn_transform(self.router.workloads(), "transform profiles", move || {
-            sigiro_segments::transform_otlp_profiles(&req.encode_to_vec()).map_err(decode_status)
+            transform_profiles(req)
         })
         .await?;
         if batch.num_rows() == 0 {
@@ -375,6 +690,7 @@ impl ProfilesService for OtlpGrpcService {
 pub(crate) struct OtlpHttpState {
     router: Arc<MsgRouter>,
     auth_mode: crate::auth::AuthMode,
+    max_body_bytes: usize,
 }
 
 /// `max_body_bytes` is `SIGIRO_MAX_INGEST_BODY_BYTES` (see
@@ -392,12 +708,20 @@ pub fn otlp_http_router(
     max_body_bytes: usize,
 ) -> Router {
     let rate_limit = auth_mode.requires_auth();
-    let state = Arc::new(OtlpHttpState { router, auth_mode });
+    let state = Arc::new(OtlpHttpState {
+        router,
+        auth_mode,
+        max_body_bytes,
+    });
     let app = Router::new()
+        .route("/", post(pyroscope_root)) // Pyroscope RS SDK posts here
+        .route("/push.v1.PusherService/Push", post(pyroscope_push)) // pyroscope-rs SDK push path
         .route("/v1/traces", post(otlp_http_traces))
         .route("/v1/logs", post(otlp_http_logs))
         .route("/v1/metrics", post(otlp_http_metrics))
         .route("/v1development/profiles", post(otlp_http_profiles))
+        .route("/ingest", post(pyroscope_ingest))
+        .route("/ingest/pyroscope", post(pyroscope_ingest_pyroscope))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         .with_state(state);
 
@@ -418,24 +742,16 @@ pub fn otlp_http_router(
 
 /// Extract project_id from HTTP Authorization header.
 /// Uses the explicit AuthMode — Open mode skips auth, JWT mode validates Bearer or AgentAuth.
-pub(crate) async fn extract_project_id_http(
+pub async fn extract_project_id_http(
     auth_mode: &crate::auth::AuthMode,
     headers: &axum::http::HeaderMap,
-) -> Result<String, IngestAuthFailure> {
+) -> Result<String, StatusCode> {
     match auth_mode {
         crate::auth::AuthMode::Open => Ok("default".to_string()),
         crate::auth::AuthMode::Jwt { .. } => {
-            let value = headers
-                .get(axum::http::header::AUTHORIZATION)
-                .ok_or_else(|| {
-                    tracing::warn!("OTLP HTTP: missing Authorization header");
-                    IngestAuthFailure::unauthenticated(MISSING_AUTHORIZATION)
-                })?
-                .to_str()
-                .map_err(|_| IngestAuthFailure::unauthenticated(MALFORMED_AUTHORIZATION))?;
-            let credential = crate::auth::parse_api_credential(value).map_err(|_| {
-                tracing::warn!("OTLP HTTP: malformed Authorization header");
-                IngestAuthFailure::unauthenticated(MALFORMED_AUTHORIZATION)
+            let credential = crate::auth::extract_api_credential(headers).map_err(|_| {
+                tracing::warn!("OTLP HTTP: missing or malformed Authorization header");
+                StatusCode::UNAUTHORIZED
             })?;
 
             auth_mode
@@ -446,58 +762,11 @@ pub(crate) async fn extract_project_id_http(
                 )
                 .await
                 .map(|context| context.tenant_id.as_ref().to_owned())
-                .map_err(|error| {
-                    tracing::warn!("OTLP HTTP: authentication failed: {error}");
-                    IngestAuthFailure::from(error)
+                .map_err(|error| match error {
+                    crate::auth::AuthError::InsufficientScope(_) => StatusCode::FORBIDDEN,
+                    crate::auth::AuthError::InvalidToken
+                    | crate::auth::AuthError::JwksUnavailable => StatusCode::UNAUTHORIZED,
                 })
-        }
-    }
-}
-
-const MISSING_AUTHORIZATION: &str = "Missing Authorization header. Send `Authorization: Bearer <ingest key>`; create a key with `sigiro ingest-keys create`.";
-const MALFORMED_AUTHORIZATION: &str = "Malformed Authorization header. Expected `Authorization: Bearer <ingest key or access token>`.";
-
-/// Why an ingest request was not authenticated, in a form the sender can log.
-///
-/// A bare 401 left a service's exporter logging "401" with nothing to act on,
-/// and the most common cause, a 15-minute token that has expired, looked the
-/// same as a typo.
-#[derive(Debug)]
-pub(crate) struct IngestAuthFailure {
-    pub(crate) status: StatusCode,
-    pub(crate) code: tonic::Code,
-    pub(crate) message: String,
-}
-
-impl IngestAuthFailure {
-    fn unauthenticated(message: &str) -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            code: tonic::Code::Unauthenticated,
-            message: message.to_owned(),
-        }
-    }
-
-    /// OTLP/HTTP failure response: a `google.rpc.Status` in the request's own
-    /// encoding, which SDKs decode and log, so a JSON request reads
-    /// `{"code":16,"message":"…"}`.
-    pub(crate) fn otlp_response(&self, format: InputFormat) -> AxumResponse {
-        metrics_http_error_response(format, self.status, self.code, &self.message)
-    }
-}
-
-impl From<crate::auth::AuthError> for IngestAuthFailure {
-    fn from(error: crate::auth::AuthError) -> Self {
-        let status = error.status();
-        let code = match status {
-            StatusCode::FORBIDDEN => tonic::Code::PermissionDenied,
-            StatusCode::SERVICE_UNAVAILABLE => tonic::Code::Unavailable,
-            _ => tonic::Code::Unauthenticated,
-        };
-        Self {
-            status,
-            code,
-            message: error.reason(),
         }
     }
 }
@@ -519,16 +788,6 @@ async fn route_ingest_msg(state: &OtlpHttpState, msg: IngestMsg) -> StatusCode {
     StatusCode::OK
 }
 
-fn decode_status(error: sigiro_segments::DecodeError) -> Status {
-    match error {
-        sigiro_segments::DecodeError::TooLarge(detail) => Status::resource_exhausted(detail),
-        sigiro_segments::DecodeError::Arrow(error) => {
-            Status::internal(format!("arrow error: {error}"))
-        }
-        other => Status::invalid_argument(other.to_string()),
-    }
-}
-
 fn transform_http_status(status: &Status) -> StatusCode {
     match status.code() {
         tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
@@ -537,82 +796,17 @@ fn transform_http_status(status: &Status) -> StatusCode {
     }
 }
 
-fn metrics_http_response(
-    format: InputFormat,
-    status: StatusCode,
-    partial_success: Option<ExportMetricsPartialSuccess>,
-) -> AxumResponse {
-    let response = ExportMetricsServiceResponse { partial_success };
-    let (content_type, body) = match format {
-        InputFormat::Json => {
-            let body = match &response.partial_success {
-                Some(partial) => serde_json::to_vec(&serde_json::json!({
-                    "partialSuccess": {
-                        "rejectedDataPoints": partial.rejected_data_points.to_string(),
-                        "errorMessage": partial.error_message,
-                    }
-                }))
-                .expect("OTLP metrics response must serialize"),
-                None => b"{}".to_vec(),
-            };
-            ("application/json", body)
-        }
-        InputFormat::Protobuf => ("application/x-protobuf", response.encode_to_vec()),
-    };
-    (status, [(CONTENT_TYPE, content_type)], body).into_response()
-}
-
-fn metrics_http_error_response(
-    format: InputFormat,
-    status: StatusCode,
-    code: tonic::Code,
-    message: &str,
-) -> AxumResponse {
-    let code = code as i32;
-    let (content_type, body) = match format {
-        InputFormat::Json => (
-            "application/json",
-            serde_json::to_vec(&serde_json::json!({
-                "code": code,
-                "message": message,
-            }))
-            .expect("OTLP error response must serialize"),
-        ),
-        InputFormat::Protobuf => (
-            "application/x-protobuf",
-            tonic_types::pb::Status {
-                code,
-                message: message.to_string(),
-                details: Vec::new(),
-            }
-            .encode_to_vec(),
-        ),
-    };
-    (status, [(CONTENT_TYPE, content_type)], body).into_response()
-}
-
 #[instrument(skip_all, fields(endpoint = "/v1/traces"))]
 async fn otlp_http_traces(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> AxumResponse {
+) -> StatusCode {
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(failure) => return failure.otlp_response(detect_format(&headers)),
+        Err(status) => return status,
     };
-    ingest_traces(&state, project_id, &headers, body)
-        .await
-        .into_response()
-}
-
-async fn ingest_traces(
-    state: &OtlpHttpState,
-    project_id: String,
-    headers: &axum::http::HeaderMap,
-    body: Bytes,
-) -> StatusCode {
-    let fmt = detect_format(headers);
+    let fmt = detect_format(&headers);
     let batch = match transform_traces(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
@@ -626,7 +820,7 @@ async fn ingest_traces(
     if batch.num_rows() == 0 {
         return StatusCode::OK;
     }
-    route_ingest_msg(state, IngestMsg::Traces { project_id, batch }).await
+    route_ingest_msg(&state, IngestMsg::Traces { project_id, batch }).await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]
@@ -634,23 +828,12 @@ async fn otlp_http_logs(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> AxumResponse {
+) -> StatusCode {
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(failure) => return failure.otlp_response(detect_format(&headers)),
+        Err(status) => return status,
     };
-    ingest_logs(&state, project_id, &headers, body)
-        .await
-        .into_response()
-}
-
-async fn ingest_logs(
-    state: &OtlpHttpState,
-    project_id: String,
-    headers: &axum::http::HeaderMap,
-    body: Bytes,
-) -> StatusCode {
-    let fmt = detect_format(headers);
+    let fmt = detect_format(&headers);
     let (batch, rejected) = match transform_logs(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
@@ -667,7 +850,7 @@ async fn ingest_logs(
     if batch.num_rows() == 0 {
         return StatusCode::OK;
     }
-    route_ingest_msg(state, IngestMsg::Logs { project_id, batch }).await
+    route_ingest_msg(&state, IngestMsg::Logs { project_id, batch }).await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/metrics"))]
@@ -675,22 +858,17 @@ async fn otlp_http_metrics(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> AxumResponse {
-    let fmt = detect_format(&headers);
+) -> StatusCode {
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(failure) => return failure.otlp_response(fmt),
+        Err(status) => return status,
     };
+    let fmt = detect_format(&headers);
     let batches = match transform_metrics(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform metrics: {e}");
-            return metrics_http_error_response(
-                fmt,
-                transform_http_status(&e),
-                e.code(),
-                e.message(),
-            );
+            return transform_http_status(&e);
         }
     };
     let has_data = batches.gauge.as_ref().is_some_and(|b| b.num_rows() > 0)
@@ -700,45 +878,18 @@ async fn otlp_http_metrics(
             .exp_histogram
             .as_ref()
             .is_some_and(|b| b.num_rows() > 0);
-    let rejected = batches.skipped.total();
-    if fmt == InputFormat::Json && rejected > 0 {
-        return metrics_http_error_response(
-            fmt,
-            StatusCode::BAD_REQUEST,
-            tonic::Code::InvalidArgument,
-            &format!(
-                "rejected {rejected} metric data points: {}",
-                batches.skipped.message()
-            ),
-        );
-    }
-    let partial_success = (rejected > 0).then(|| ExportMetricsPartialSuccess {
-        rejected_data_points: rejected as i64,
-        error_message: batches.skipped.message(),
-    });
     if !has_data {
         // F-05: empty batch is a valid no-op (see otlp_http_traces).
-        return metrics_http_response(fmt, StatusCode::OK, partial_success);
+        return StatusCode::OK;
     }
-    let status = route_ingest_msg(
+    route_ingest_msg(
         &state,
         IngestMsg::Metrics {
             project_id,
             batches,
         },
     )
-    .await;
-    if status != StatusCode::OK {
-        let code = if status == StatusCode::TOO_MANY_REQUESTS
-            || status == StatusCode::INSUFFICIENT_STORAGE
-        {
-            tonic::Code::ResourceExhausted
-        } else {
-            tonic::Code::Internal
-        };
-        return metrics_http_error_response(fmt, status, code, "failed to ingest metrics");
-    }
-    metrics_http_response(fmt, status, partial_success)
+    .await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1development/profiles"))]
@@ -746,19 +897,15 @@ async fn otlp_http_profiles(
     State(state): State<Arc<OtlpHttpState>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> AxumResponse {
+) -> StatusCode {
     let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
         Ok(id) => id,
-        Err(failure) => return failure.otlp_response(detect_format(&headers)),
+        Err(status) => return status,
     };
-    ingest_profiles(&state, project_id, body)
-        .await
-        .into_response()
-}
-
-async fn ingest_profiles(state: &OtlpHttpState, project_id: String, body: Bytes) -> StatusCode {
     let batch = match spawn_transform(state.router.workloads(), "transform profiles", move || {
-        sigiro_segments::transform_otlp_profiles(&body).map_err(decode_status)
+        let request = ExportProfilesServiceRequest::decode(body)
+            .map_err(|error| Status::invalid_argument(format!("decode profiles: {error}")))?;
+        transform_profiles(request)
     })
     .await
     {
@@ -775,80 +922,556 @@ async fn ingest_profiles(state: &OtlpHttpState, project_id: String, body: Bytes)
         );
         return StatusCode::BAD_REQUEST;
     }
-    route_ingest_msg(state, IngestMsg::Profiles { project_id, batch }).await
+    route_ingest_msg(&state, IngestMsg::Profiles { project_id, batch }).await
+}
+
+// ─── Pyroscope native format ingest ──────────────────────────────────────────
+//
+// The pyroscope Rust crate pushes profiles in Pyroscope's own wire format:
+//   PushRequest (prost protobuf) → gzip → HTTP POST
+// Sigiro's OTLP /v1development/profiles accepts only OTLP protobuf. This endpoint bridges
+// the two by decoding Pyroscope's native format and converting to the same
+// Arrow RecordBatch that transform_profiles produces.
+//
+// Note: "gen" is a reserved keyword in Rust 2021+, so we re-export the module
+// under a safe name via the `pyroscope::encode::gen` module alias below.
+
+/// HTTP handler for Pyroscope's native push format.
+///
+/// Accepts these formats (and binary payloads without a Content-Type):
+/// - `application/proto`, `application/octet-stream`, or `binary/octet-stream` —
+///   PushRequest, or raw pprof with `name`
+/// - `multipart/form-data` — `profile` contains PushRequest, or raw pprof with `name`
+#[derive(Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct PyroscopeIngestQuery {
+    /// When present, the body is a raw pprof profile and the service name is the
+    /// part before the first `{`. When absent, the body is a Pyroscope
+    /// PushRequest and each series must contain a `service_name` label.
+    name: Option<String>,
+}
+
+struct PyroscopeProfileBody;
+
+impl utoipa::PartialSchema for PyroscopeProfileBody {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::String)
+            .format(Some(utoipa::openapi::SchemaFormat::KnownFormat(
+                utoipa::openapi::KnownFormat::Binary,
+            )))
+            .into()
+    }
+}
+
+impl utoipa::ToSchema for PyroscopeProfileBody {}
+
+const PYROSCOPE_INGEST_DESCRIPTION: &str = "Accept a Pyroscope PushRequest or raw pprof profile. With `name`, the payload is raw pprof and the service name is the part before the first `{`; without `name`, the payload is a PushRequest whose series require a `service_name` label. Binary bodies may be gzip-compressed. Multipart bodies must carry the payload in the `profile` field. A missing Content-Type is also accepted as a binary body. See the [profile ingest guide](https://sigiro.com/docs/how-to/send-profiles).";
+
+macro_rules! pyroscope_ingest_handler {
+    ($handler:ident, $path:literal, $operation_id:literal) => {
+        #[utoipa::path(
+            post,
+            path = $path,
+            operation_id = $operation_id,
+            summary = "Ingest Pyroscope profiles",
+            description = PYROSCOPE_INGEST_DESCRIPTION,
+            params(PyroscopeIngestQuery),
+            request_body(
+                description = "Pyroscope PushRequest or raw pprof bytes. For multipart/form-data, put the binary payload in the `profile` field.",
+                content(
+                    (PyroscopeProfileBody = "application/proto"),
+                    (PyroscopeProfileBody = "application/octet-stream"),
+                    (PyroscopeProfileBody = "binary/octet-stream"),
+                    (PyroscopeProfileBody = "multipart/form-data")
+                )
+            ),
+            responses(
+                (status = 200, description = "Profile accepted"),
+                (status = 400, description = "Unsupported media type, malformed payload, missing service name, or empty profile"),
+                (status = 401, description = "Missing or invalid bearer token"),
+                (status = 413, description = "Request body exceeds the configured ingest limit"),
+                (status = 429, description = "Ingest rate limit exceeded"),
+                (status = 500, description = "Ingest failed"),
+                (status = 507, description = "Storage cannot currently accept ingest")
+            ),
+            security(("bearer" = [])),
+        )]
+        pub(crate) async fn $handler(
+            state: State<Arc<OtlpHttpState>>,
+            query: Query<PyroscopeIngestQuery>,
+            headers: axum::http::HeaderMap,
+            body: Bytes,
+        ) -> StatusCode {
+            otlp_http_pyroscope(state, query, headers, body).await
+        }
+    };
+}
+
+pyroscope_ingest_handler!(pyroscope_root, "/", "ingestPyroscopeRoot");
+pyroscope_ingest_handler!(
+    pyroscope_push,
+    "/push.v1.PusherService/Push",
+    "ingestPyroscopePush"
+);
+pyroscope_ingest_handler!(pyroscope_ingest, "/ingest", "ingestPyroscope");
+pyroscope_ingest_handler!(
+    pyroscope_ingest_pyroscope,
+    "/ingest/pyroscope",
+    "ingestPyroscopeAlias"
+);
+
+async fn otlp_http_pyroscope(
+    State(state): State<Arc<OtlpHttpState>>,
+    Query(query): Query<PyroscopeIngestQuery>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let project_id = match extract_project_id_http(&state.auth_mode, &headers).await {
+        Ok(id) => id,
+        Err(status) => {
+            tracing::warn!("pyroscope: auth failed: {status}");
+            return status;
+        }
+    };
+
+    let ct = headers
+        .typed_get::<headers::ContentType>()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "(none)".to_string());
+    tracing::debug!(
+        "otlp_http_pyroscope: project_id={project_id} body_len={} ct={ct}",
+        body.len()
+    );
+
+    // Detect format: multipart/form-data (SDK) vs raw protobuf
+    let body_bytes = match parse_pyroscope_multipart(&headers, &body).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::error!("pyroscope parse failed: {e}");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let sdk_name = query.name;
+    let max_profile_bytes = state.max_body_bytes;
+    let batch = match spawn_transform(
+        state.router.workloads(),
+        "transform pyroscope profiles",
+        move || transform_pyroscope_profiles(body_bytes, sdk_name.as_deref(), max_profile_bytes),
+    )
+    .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("transform pyroscope profiles failed: {e}");
+            return transform_http_status(&e);
+        }
+    };
+
+    tracing::info!(
+        "pyroscope ingest: project_id={project_id} rows={}",
+        batch.num_rows()
+    );
+
+    if batch.num_rows() == 0 {
+        tracing::warn!(
+            project_id,
+            "otlp_http_profiles: batch empty after transform — profile data lost"
+        );
+        return StatusCode::BAD_REQUEST;
+    }
+    let pid = project_id.clone();
+    if let Err(e) = state
+        .router
+        .send(IngestMsg::Profiles { project_id, batch })
+        .await
+    {
+        tracing::error!(pid, "ingest router error: {e:?}");
+        return match e {
+            RouterError::DiskCapacityExceeded | RouterError::MaintenanceStalled { .. } => {
+                StatusCode::INSUFFICIENT_STORAGE
+            }
+            RouterError::Admission(_) => StatusCode::TOO_MANY_REQUESTS,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+    }
+    StatusCode::OK
+}
+
+/// Extract service.name from an optional Resource's attributes.
+/// Returns None if the resource is absent or lacks the attribute.
+fn extract_service_name(
+    resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,
+) -> Option<&str> {
+    let resource = resource?;
+    for attr in &resource.attributes {
+        if attr.key == "service.name" {
+            let val = attr.value.as_ref()?;
+            let inner = val.value.as_ref()?;
+            if let opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s) = inner
+            {
+                return Some(s.as_str());
+            }
+        }
+    }
+    None
+}
+
+/// Parse the request body, handling both raw protobuf and Pyroscope SDK multipart/form-data.
+///
+/// Pyroscope SDKs send `multipart/form-data` with a `profile` form file. The
+/// profile may be raw pprof (Node SDK, identified by the `name` query parameter)
+/// or a PushRequest protobuf. This function extracts the profile bytes; decoding
+/// is handled by `transform_pyroscope_profiles`.
+async fn parse_pyroscope_multipart(
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+) -> Result<Vec<u8>, String> {
+    let content_type = headers
+        .typed_get::<headers::ContentType>()
+        .map(|c| c.to_string())
+        .unwrap_or_default();
+
+    if content_type.contains("multipart/form-data") {
+        // Extract boundary from Content-Type header via typed mime parsing
+        let mime: mime::Mime = headers
+            .typed_get::<headers::ContentType>()
+            .ok_or("missing Content-Type header")?
+            .into();
+        let boundary = mime
+            .get_param("boundary")
+            .map(|b| b.to_string())
+            .ok_or("missing boundary in multipart Content-Type")?;
+
+        let stream = futures_util::stream::once(std::future::ready(Ok::<_, std::io::Error>(
+            Bytes::copy_from_slice(body),
+        )));
+        let mut multipart = Multipart::new(stream, boundary);
+
+        while let Some(field) = multipart
+            .next_field()
+            .await
+            .map_err(|e| format!("multipart parse error: {e}"))?
+        {
+            if field.name() == Some("profile") {
+                let profile_bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| format!("multipart field read error: {e}"))?;
+                tracing::debug!(
+                    "pyroscope multipart: extracted {} profile bytes",
+                    profile_bytes.len()
+                );
+                return Ok(profile_bytes.to_vec());
+            }
+        }
+
+        Err("profile form field not found in multipart body".to_string())
+    } else if content_type.is_empty()
+        || content_type.contains("application/proto")
+        || content_type.contains("application/octet-stream")
+        || content_type.contains("binary/octet-stream")
+    {
+        if body.is_empty() {
+            return Err("empty body".to_string());
+        }
+        Ok(body.to_vec())
+    } else {
+        Err(format!(
+            "unimplemented: Content-Type '{}' is not supported for Pyroscope ingest; \
+             supported: 'multipart/form-data' (SDK pprof), 'application/proto' or \
+             'application/octet-stream' (binary profile payload)",
+            content_type
+        ))
+    }
+}
+
+/// Decode either a Pyroscope PushRequest or an SDK raw pprof profile into an
+/// Arrow RecordBatch using the same schema as transform_profiles.
+pub fn transform_pyroscope_profiles(
+    body: Vec<u8>,
+    sdk_name: Option<&str>,
+    max_profile_bytes: usize,
+) -> Result<RecordBatch, Status> {
+    let decompressed = decompress_profile(body, max_profile_bytes, "Pyroscope request")?;
+    tracing::debug!("pyroscope: payload {} bytes", decompressed.len());
+
+    // Stage 2: Node sends raw pprof with the application name in the query;
+    // pyroscope-rs sends a PushRequest whose series already carries service_name.
+    let push_request = if let Some(name) = sdk_name {
+        let service_name = name.split_once('{').map_or(name, |(base, _)| base).trim();
+        if service_name.is_empty() {
+            return Err(Status::invalid_argument(
+                "Pyroscope SDK name must contain a non-empty application name",
+            ));
+        }
+        pyroscope::encode::r#gen::push::PushRequest {
+            series: vec![pyroscope::encode::r#gen::push::RawProfileSeries {
+                labels: vec![pyroscope::encode::r#gen::types::LabelPair {
+                    name: "service_name".to_string(),
+                    value: service_name.to_string(),
+                }],
+                samples: vec![pyroscope::encode::r#gen::push::RawSample {
+                    raw_profile: decompressed,
+                    id: String::new(),
+                }],
+            }],
+        }
+    } else {
+        pyroscope::encode::r#gen::push::PushRequest::decode(&decompressed[..]).map_err(|e| {
+            tracing::debug!("pyroscope PushRequest decode failed: {:?}", e);
+            Status::invalid_argument(format!("push request decode failed: {e}"))
+        })?
+    };
+    tracing::debug!("pyroscope: series count={}", push_request.series.len());
+
+    let schema = profile_schema();
+
+    let mut profile_ids = StringBuilder::new();
+    let mut trace_ids = StringBuilder::new();
+    let mut span_ids = StringBuilder::new();
+    let mut service_names = StringBuilder::new();
+    let mut timestamps = Vec::<i64>::new();
+    let mut profile_types = StringBuilder::new();
+    let mut stack_traces = stack_trace_builder();
+    let mut values = Vec::<i64>::new();
+    let mut units = StringBuilder::new();
+    let mut resource_attrs = StringBuilder::new();
+    let mut num_rows = 0usize;
+
+    for series in &push_request.series {
+        // Extract service.name from labels
+        let service_name = series
+            .labels
+            .iter()
+            .find(|l| l.name == "service_name")
+            .map(|l| l.value.as_str())
+            .unwrap_or("");
+
+        for sample in &series.samples {
+            // Decode each embedded pprof synchronously; the whole transform runs
+            // in one blocking-pool task from the HTTP handler.
+            let decompressed = decompress_profile(
+                sample.raw_profile.clone(),
+                max_profile_bytes,
+                "embedded pprof profile",
+            )?;
+            let pprof_profile = pyroscope::encode::r#gen::google::Profile::decode(
+                &decompressed[..],
+            )
+            .map_err(|e| Status::invalid_argument(format!("pprof profile decode failed: {e}")))?;
+
+            // Time and duration in nanoseconds → microseconds
+            let ts_us = (pprof_profile.time_nanos / 1000) as i64;
+
+            if service_name.is_empty() {
+                return Err(Status::invalid_argument(
+                    "Pyroscope series is missing the service_name label",
+                ));
+            }
+
+            let resolve_string = |index: i64, field: &str| -> Result<&str, Status> {
+                let index = usize::try_from(index).map_err(|_| {
+                    Status::invalid_argument(format!(
+                        "pprof {field} string index {index} must not be negative"
+                    ))
+                })?;
+                pprof_profile
+                    .string_table
+                    .get(index)
+                    .map(String::as_str)
+                    .ok_or_else(|| {
+                        Status::invalid_argument(format!(
+                            "pprof {field} string index {index} out of bounds (table has {} entries)",
+                            pprof_profile.string_table.len()
+                        ))
+                    })
+            };
+
+            let sample_types = pprof_profile
+                .sample_type
+                .iter()
+                .enumerate()
+                .map(|(index, sample_type)| {
+                    let profile_type =
+                        resolve_string(sample_type.r#type, &format!("sample_type[{index}].type"))?;
+                    let unit =
+                        resolve_string(sample_type.unit, &format!("sample_type[{index}].unit"))?;
+                    if profile_type.is_empty() || unit.is_empty() {
+                        return Err(Status::invalid_argument(format!(
+                            "pprof sample_type[{index}] must have non-empty type and unit"
+                        )));
+                    }
+                    Ok((profile_type, unit))
+                })
+                .collect::<Result<Vec<_>, Status>>()?;
+
+            let locations = &pprof_profile.location;
+            let functions = &pprof_profile.function;
+            let string_table = &pprof_profile.string_table;
+
+            for (sample_index, pprof_sample) in pprof_profile.sample.iter().enumerate() {
+                if pprof_sample.value.len() != sample_types.len() {
+                    return Err(Status::invalid_argument(format!(
+                        "pprof sample[{sample_index}] has {} values but the profile declares {} sample types",
+                        pprof_sample.value.len(),
+                        sample_types.len()
+                    )));
+                }
+
+                let mut stack = Vec::with_capacity(pprof_sample.location_id.len().min(128));
+                for (frame_index, &location_id) in
+                    pprof_sample.location_id.iter().take(128).enumerate()
+                {
+                    let location = locations
+                        .iter()
+                        .find(|location| location.id == location_id)
+                        .ok_or_else(|| {
+                            Status::invalid_argument(format!(
+                                "pprof sample[{sample_index}] frame[{frame_index}] references missing location id {location_id}"
+                            ))
+                        })?;
+                    let Some(line) = location.line.first() else {
+                        stack.push(format!("0x{:x}", location.address));
+                        continue;
+                    };
+                    let function = functions
+                        .iter()
+                        .find(|function| function.id == line.function_id)
+                        .ok_or_else(|| {
+                            Status::invalid_argument(format!(
+                                "pprof location id {location_id} references missing function id {}",
+                                line.function_id
+                            ))
+                        })?;
+                    let function_name_index = usize::try_from(function.name).map_err(|_| {
+                        Status::invalid_argument(format!(
+                            "pprof function id {} has negative name index {}",
+                            function.id, function.name
+                        ))
+                    })?;
+                    let function_name = string_table.get(function_name_index).ok_or_else(|| {
+                        Status::invalid_argument(format!(
+                            "pprof function id {} name index {function_name_index} out of bounds (table has {} entries)",
+                            function.id,
+                            string_table.len()
+                        ))
+                    })?;
+                    if function_name.is_empty() {
+                        return Err(Status::invalid_argument(format!(
+                            "pprof function id {} has an empty name",
+                            function.id
+                        )));
+                    }
+                    stack.push(function_name.clone());
+                }
+                // pprof stores leaf-first; Sigiro stores caller-first for folded stacks.
+                stack.reverse();
+
+                for ((profile_type, unit), &value) in sample_types.iter().zip(&pprof_sample.value) {
+                    profile_ids.append_value(&sample.id);
+                    trace_ids.append_null();
+                    span_ids.append_null();
+                    service_names.append_value(service_name);
+                    timestamps.push(ts_us);
+                    profile_types.append_value(profile_type);
+                    append_stack_trace(&mut stack_traces, &stack);
+
+                    values.push(value);
+                    units.append_value(unit);
+                    resource_attrs.append_null();
+                    num_rows += 1;
+                }
+            }
+        }
+    }
+
+    if num_rows == 0 {
+        return RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(TimestampMicrosecondArray::from(Vec::<i64>::new())),
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(empty_stack_trace_array()),
+                Arc::new(Int64Array::from(Vec::<i64>::new())),
+                Arc::new(StringBuilder::new().finish()),
+                Arc::new(StringBuilder::new().finish()),
+            ],
+        )
+        .map_err(arrow_status);
+    }
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(profile_ids.finish()),
+            Arc::new(trace_ids.finish()),
+            Arc::new(span_ids.finish()),
+            Arc::new(service_names.finish()),
+            Arc::new(TimestampMicrosecondArray::from(timestamps)),
+            Arc::new(profile_types.finish()),
+            Arc::new(stack_traces.finish()),
+            Arc::new(Int64Array::from(values)),
+            Arc::new(units.finish()),
+            Arc::new(resource_attrs.finish()),
+        ],
+    )
+    .map_err(arrow_status)
+}
+
+fn decompress_profile(
+    bytes: Vec<u8>,
+    max_profile_bytes: usize,
+    description: &str,
+) -> Result<Vec<u8>, Status> {
+    if bytes.len() > max_profile_bytes {
+        return Err(Status::resource_exhausted(format!(
+            "{description} exceeds the {max_profile_bytes}-byte ingest limit"
+        )));
+    }
+    if !bytes.starts_with(&[0x1f, 0x8b]) {
+        return Ok(bytes);
+    }
+
+    let read_limit = u64::try_from(max_profile_bytes)
+        .ok()
+        .and_then(|limit| limit.checked_add(1))
+        .ok_or_else(|| status_internal("ingest body limit cannot be represented as u64"))?;
+    let mut decompressed = Vec::new();
+    flate2::read::GzDecoder::new(&bytes[..])
+        .take(read_limit)
+        .read_to_end(&mut decompressed)
+        .map_err(|e| Status::invalid_argument(format!("{description} gzip is invalid: {e}")))?;
+    if decompressed.len() > max_profile_bytes {
+        return Err(Status::resource_exhausted(format!(
+            "{description} exceeds the {max_profile_bytes}-byte ingest limit after decompression"
+        )));
+    }
+    Ok(decompressed)
 }
 
 #[cfg(test)]
-mod ingest_auth_reason_tests {
+mod http_status_tests {
     use super::*;
-    use crate::auth::test_support::{jwt_mode, user_token};
-    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 
-    fn bearer(token: &str) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-        );
-        headers
-    }
-
-    async fn json_body(response: AxumResponse) -> (StatusCode, serde_json::Value) {
-        let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
-            .await
-            .unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap())
-    }
-
-    #[tokio::test]
-    async fn every_401_says_why() {
-        let (mode, keys) = jwt_mode();
-        let acme = crate::types::TenantId::try_new("acme".to_owned()).unwrap();
-        let created = keys.create(&acme, "svc", "user-1").await.unwrap();
-
+    #[test]
+    fn transform_failures_have_distinct_http_statuses() {
         assert_eq!(
-            extract_project_id_http(&mode, &bearer(&created.key))
-                .await
-                .unwrap(),
-            "acme"
+            transform_http_status(&Status::invalid_argument("invalid payload")),
+            StatusCode::BAD_REQUEST
         );
-
-        let cases = [
-            (HeaderMap::new(), "Missing Authorization header"),
-            (
-                bearer(&user_token("acme", "telemetry:ingest", -300)),
-                "expired",
-            ),
-            (bearer("sigiro_abc_def"), "not valid"),
-            (bearer("garbage"), "could not be verified"),
-        ];
-        for (headers, expected) in cases {
-            let failure = extract_project_id_http(&mode, &headers).await.unwrap_err();
-            let (status, body) = json_body(failure.otlp_response(InputFormat::Json)).await;
-            assert_eq!(status, StatusCode::UNAUTHORIZED, "{expected}");
-            assert_eq!(body["code"], 16, "{expected}");
-            assert!(
-                body["message"].as_str().unwrap().contains(expected),
-                "{body} lacks {expected}"
-            );
-        }
-
-        keys.revoke(&acme, &created.info.id).await.unwrap();
-        let failure = extract_project_id_http(&mode, &bearer(&created.key))
-            .await
-            .unwrap_err();
-        let (status, body) = json_body(failure.otlp_response(InputFormat::Json)).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-        assert!(body["message"].as_str().unwrap().contains("revoked"));
-
-        // Protobuf senders get a google.rpc.Status their SDK decodes.
-        let response = failure.otlp_response(InputFormat::Protobuf);
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
-            .await
-            .unwrap();
-        let status = tonic_types::pb::Status::decode(bytes).unwrap();
-        assert_eq!(status.code, tonic::Code::Unauthenticated as i32);
-        assert!(status.message.contains("revoked"));
+        assert_eq!(
+            transform_http_status(&Status::resource_exhausted("busy")),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            transform_http_status(&Status::internal("worker panic")),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

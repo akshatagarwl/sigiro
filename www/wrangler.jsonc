@@ -89,7 +89,10 @@
       "/device",
       "/health",
       "/healthz",
+      "/ingest",
+      "/ingest/*",
       "/openapi.json",
+      "/push.v1.PusherService/Push",
       "/sign-in",
       "/sign-up",
       "/v1/*",
@@ -97,11 +100,9 @@
       "/v1development/profiles",
     ],
   },
-  // No AUTH_ORIGIN_URL. `src/worker.ts` reaches auth through the `AUTH` service
-  // binding that `alchemy.run.ts` wires to the auth Worker on D1; the
-  // auth-origin.sigiro.com hostname and its tunnel are retired.
   "vars": {
     "API_ORIGIN_URL": "https://api-origin.sigiro.com",
+    "AUTH_ORIGIN_URL": "https://auth-origin.sigiro.com",
   },
   "workers_dev": false,
   "routes": [

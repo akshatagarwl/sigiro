@@ -1,21 +1,21 @@
+use crate::otlp::MetricBatches;
 use anyhow::{Context, Result};
 use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use dashmap::DashMap;
 use duckdb::Connection;
-use sigiro_segments::MetricBatches;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle as TokioJoinHandle;
 use tracing_attributes::instrument;
 
 use crate::config::BackpressurePolicy;
+use crate::drain::DrainTree;
 use crate::pool::ProjectPool;
 use crate::types::{IngestMsg, SignalTable};
-use sigiro_core::drain::DrainTree;
 
 /// Errors from the ingest router.
 #[derive(Debug, thiserror::Error)]
@@ -77,9 +77,6 @@ pub struct MaintenanceHealth {
     /// entries are removed on success rather than zeroed, so the map stays the
     /// size of the unhealthy set.
     failures: DashMap<String, u32>,
-    /// Rows the writers gave up on after their append retry, all projects.
-    rows_dropped: AtomicU64,
-    rows_dropped_metric: opentelemetry::metrics::Counter<u64>,
 }
 
 impl MaintenanceHealth {
@@ -87,32 +84,11 @@ impl MaintenanceHealth {
         Arc::new(Self {
             threshold,
             failures: DashMap::new(),
-            rows_dropped: AtomicU64::new(0),
-            // Exported to Prometheus as `sigiro_rows_dropped_total`.
-            rows_dropped_metric: opentelemetry::global::meter("sigiro.ingest")
-                .u64_counter("sigiro.rows.dropped")
-                .with_unit("{row}")
-                .with_description("Buffered rows dropped after a failed append and its retry")
-                .build(),
         })
     }
 
-    /// Count rows a writer dropped, by table.
-    pub(crate) fn record_rows_dropped(&self, table: &str, rows: u64) {
-        self.rows_dropped.fetch_add(rows, Ordering::Relaxed);
-        self.rows_dropped_metric.add(
-            rows,
-            &[opentelemetry::KeyValue::new("table", table.to_string())],
-        );
-    }
-
-    /// Total rows dropped since start (`sigiro_rows_dropped_total`).
-    pub fn rows_dropped(&self) -> u64 {
-        self.rows_dropped.load(Ordering::Relaxed)
-    }
-
-    /// A gate that never sheds — the default for callers that have not opted
-    /// into shedding.
+    /// A gate that never sheds — the default for tests and any caller that has
+    /// not opted into shedding.
     pub(crate) fn disabled() -> Arc<Self> {
         Self::new(0)
     }
@@ -166,7 +142,79 @@ impl MaintenanceHealth {
     }
 }
 
-pub use crate::disk_gate::DiskCapacityState;
+/// Box-level disk-capacity gate, shared (`Arc`) between the ingest router —
+/// which reads `over_cap` at the top of `send` to reject when tripped — and
+/// the storage-maintenance task, which samples `SIGIRO_DATA_DIR` and trips/
+/// clears `over_cap` with hysteresis. `cap == 0` disables the gate entirely.
+#[derive(Debug)]
+pub struct DiskCapacityState {
+    /// `SIGIRO_MAX_DISK_BYTES`. 0 disables the gate.
+    pub(crate) cap: u64,
+    /// Most recent sampled on-disk byte size of `SIGIRO_DATA_DIR`.
+    pub(crate) sampled_bytes: AtomicU64,
+    /// Whether ingest is currently rejected (cap breached, not yet recovered).
+    pub(crate) over_cap: AtomicBool,
+    /// Single-flight guard for the self-heal retention cleanup kicked on the
+    /// OFF→ON transition.
+    pub(crate) cleanup_in_flight: AtomicBool,
+}
+
+impl DiskCapacityState {
+    pub fn new(cap: u64) -> Arc<Self> {
+        Arc::new(Self {
+            cap,
+            sampled_bytes: AtomicU64::new(0),
+            over_cap: AtomicBool::new(false),
+            cleanup_in_flight: AtomicBool::new(false),
+        })
+    }
+
+    /// A disabled (`cap == 0`) gate — the no-op default for constructors/tests.
+    pub(crate) fn disabled() -> Arc<Self> {
+        Self::new(0)
+    }
+
+    /// True when the gate is armed AND currently tripped. Cheap enough to call
+    /// on the ingest hot path.
+    pub fn is_over_cap(&self) -> bool {
+        self.cap > 0 && self.over_cap.load(Ordering::Relaxed)
+    }
+
+    /// Fold a fresh byte sample into the gate with hysteresis: trip when
+    /// `bytes >= cap`, and clear only once `bytes <= cap * 9 / 10`. Returns
+    /// `Some(true)` on an OFF→ON transition, `Some(false)` on ON→OFF, and
+    /// `None` when the state is unchanged. Pure state logic — unit-tested.
+    ///
+    /// `reliable` is `false` when the disk walk hit an unreadable entry, so the
+    /// byte total is an UNDER-count. Tripping is still allowed on an unreliable
+    /// sample (an under-count already over the cap is definitely over —
+    /// rejecting is fail-safe), but CLEARING is not: an under-count must never
+    /// re-open ingest while real usage may still be over.
+    ///
+    /// MUST be called from a single serialized context (the one maintenance
+    /// loop). The load-then-store is not atomic across concurrent callers, so
+    /// two overlapping samplers could let a stale under-cap sample clobber a
+    /// newer over-cap one — the maintenance task keeps exactly one sampler.
+    pub fn apply_sample(&self, bytes: u64, reliable: bool) -> Option<bool> {
+        if self.cap == 0 {
+            return None;
+        }
+        self.sampled_bytes.store(bytes, Ordering::Relaxed);
+        let was_over = self.over_cap.load(Ordering::Relaxed);
+        if !was_over && bytes >= self.cap {
+            self.over_cap.store(true, Ordering::Relaxed);
+            return Some(true);
+        }
+        // u128 keeps 90% exact (no `cap/10*9` truncation that breaks small caps,
+        // e.g. cap=9 would clear only at 0 bytes) while never overflowing u64.
+        let clear_threshold = ((self.cap as u128 * 9) / 10) as u64;
+        if was_over && reliable && bytes <= clear_threshold {
+            self.over_cap.store(false, Ordering::Relaxed);
+            return Some(false);
+        }
+        None
+    }
+}
 
 /// Per-project channel capacity. When full, messages are dropped
 /// (the OTLP SDK retries). Better to drop one project's data than block all.
@@ -176,6 +224,13 @@ const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
 // Large remote catalogs take tens of seconds, so this is hourly maintenance,
 // not a flush mechanism.
 const DUCKLAKE_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/// Cadence of the continuous anomaly pass (`crate::anomaly`) — how often
+/// each project's persisted error-rate series are re-scanned for regime
+/// shifts. An operational scheduling knob (like DuckLake maintenance and the
+/// hourly retention timers), NOT a detection threshold: detection itself is
+/// BOCPD with no tunables.
+const ANOMALY_PASS_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Flusher configuration derived from env vars at startup.
 #[derive(Debug, Clone)]
@@ -240,6 +295,12 @@ enum WriterCommand {
         days: u32,
         ack: oneshot::Sender<Result<(), String>>,
     },
+    /// Persist one anomaly detection run's results (`crate::anomaly::persist`)
+    /// — a brief DELETE+INSERT. The expensive detection already ran on a
+    /// READER connection (see `spawn_anomaly_detection`); the writer never
+    /// runs the scan. Fire-and-forget: failures are logged in the writer
+    /// thread and NEVER affect ingest.
+    PersistAnomalies(Vec<crate::anomaly::AnomalyInsert>),
     Shutdown,
 }
 
@@ -253,10 +314,21 @@ impl MsgRouter {
     }
 
     /// Build a router with the disk-capacity gate enabled from config. Used by
-    /// the production server (`main::run_serve`); other callers get a disabled
-    /// gate via `new`/`with_config`.
+    /// the production server (`main::run_serve`); tests/other callers get a
+    /// disabled gate via `new`/`with_config`.
     pub fn new_with_disk(pool: Arc<ProjectPool>, disk: Arc<DiskCapacityState>) -> Self {
         Self::with_config_and_disk(pool, FlushConfig::from_env(), disk)
+    }
+
+    /// Build a router with BOTH the disk gate and the DuckLake maintenance gate
+    /// explicitly supplied. Used by the E2E tests that drive checkpoint failure
+    /// directly; production goes through `new_with_disk_and_alerts`.
+    pub fn new_with_disk_and_maintenance(
+        pool: Arc<ProjectPool>,
+        disk: Arc<DiskCapacityState>,
+        maintenance: Arc<MaintenanceHealth>,
+    ) -> Self {
+        Self::with_config_disk_and_maintenance(pool, FlushConfig::from_env(), disk, maintenance)
     }
 
     pub fn new_with_disk_and_alerts(
@@ -422,11 +494,12 @@ impl MsgRouter {
         let pool = Arc::clone(&self.pool);
         let cfg = self.flush_config.clone();
         let maintenance = Arc::clone(&self.maintenance);
+        let workloads = self.workloads.clone();
         let (tx, rx) = mpsc::channel::<FlusherCommand>(PROJECT_CHANNEL_CAPACITY);
         let pid_spawn = pid.clone();
         tracing::info!(project_id = %pid, "ensure_flusher: spawning new flusher task");
         let handle = tokio::spawn(async move {
-            run_flusher(pid_spawn, writer, rx, pool, cfg, maintenance).await;
+            run_flusher(pid_spawn, writer, rx, pool, cfg, maintenance, workloads).await;
         });
         self.project_senders.insert(pid.clone(), (tx, handle));
         self.project_initializers.remove(&pid);
@@ -657,7 +730,7 @@ impl MsgRouter {
 /// returns, the data is durable. The only data-loss window is the buffer
 /// here (up to 1s / 10k rows between 200 OK and DuckDB append). This is
 /// acceptable for a debugging tool where the data source is still running
-/// and will re-emit.
+/// and will re-emit. See www/content/docs/decisions/001-wal-not-needed.md for the full analysis.
 struct ProjectFlusher {
     conn: Connection,
     table_names: BTreeMap<SignalTable, String>,
@@ -669,93 +742,7 @@ struct ProjectFlusher {
     byte_threshold: usize,
     flush_interval: Duration,
     drain: DrainTree,
-    phase: FlusherPhase,
-    /// Failed append attempts for the batches still buffered per table.
-    failed_appends: BTreeMap<SignalTable, u8>,
-}
-
-/// Where a project's writer is between flushes. The append itself
-/// (Flushing) happens inside one [`ProjectFlusher::flush`] call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FlusherPhase {
-    /// Nothing flushed yet: the first batch is written at once, so a new
-    /// project's data is queryable without waiting a whole interval.
-    Cold,
-    /// Nothing buffered.
-    Empty,
-    /// Rows buffered; flushed on row, byte, or age threshold.
-    Buffering,
-    /// A table's append failed; its rows are kept for one retry.
-    Failed,
-}
-
-/// Appends per batch: the first try plus one retry.
-const APPEND_ATTEMPTS: u8 = 2;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TableOutcome {
-    Written,
-    /// Keep the unwritten batches for the next flush.
-    Retry,
-    /// Give up: count the rows in `sigiro_rows_dropped_total`.
-    Dropped,
-}
-
-/// One table's result in a flush. `failed_before` counts earlier failed
-/// appends of the same batches; on the final flush there is no next time.
-fn table_outcome(failed_before: u8, ok: bool, last_chance: bool) -> TableOutcome {
-    if ok {
-        TableOutcome::Written
-    } else if last_chance || failed_before.saturating_add(1) >= APPEND_ATTEMPTS {
-        TableOutcome::Dropped
-    } else {
-        TableOutcome::Retry
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FlushThresholds {
-    rows: usize,
-    bytes: usize,
-    interval: Duration,
-}
-
-fn flush_due(
-    phase: FlusherPhase,
-    rows: usize,
-    bytes: usize,
-    since_last_flush: Duration,
-    limits: FlushThresholds,
-) -> bool {
-    match phase {
-        FlusherPhase::Empty => false,
-        FlusherPhase::Cold => rows > 0,
-        FlusherPhase::Buffering | FlusherPhase::Failed => {
-            rows >= limits.rows || bytes >= limits.bytes || since_last_flush >= limits.interval
-        }
-    }
-}
-
-fn phase_after_buffer(phase: FlusherPhase) -> FlusherPhase {
-    match phase {
-        FlusherPhase::Empty => FlusherPhase::Buffering,
-        phase @ (FlusherPhase::Cold | FlusherPhase::Buffering | FlusherPhase::Failed) => phase,
-    }
-}
-
-fn phase_after_flush(retained_rows: usize) -> FlusherPhase {
-    if retained_rows > 0 {
-        FlusherPhase::Failed
-    } else {
-        FlusherPhase::Empty
-    }
-}
-
-/// What one flush did, for the caller to log and count.
-#[derive(Debug, Default)]
-struct FlushReport {
-    failures: Vec<String>,
-    dropped: Vec<(String, usize)>,
+    first_flush: bool,
 }
 
 impl ProjectFlusher {
@@ -779,8 +766,7 @@ impl ProjectFlusher {
             byte_threshold: cfg.byte_threshold,
             flush_interval: cfg.interval,
             drain: DrainTree::new(),
-            phase: FlusherPhase::Cold,
-            failed_appends: BTreeMap::new(),
+            first_flush: true,
         }
     }
     #[instrument(skip_all, fields(signal = ?signal, rows = batch.num_rows()))]
@@ -803,7 +789,6 @@ impl ProjectFlusher {
         self.total_rows += batch.num_rows();
         self.total_bytes += batch_bytes;
         self.buffers.entry(signal).or_default().push(batch);
-        self.phase = phase_after_buffer(self.phase);
     }
     /// Run DRAIN on each log body and append its classification to the same row.
     #[instrument(skip_all, fields(rows = batch.num_rows()))]
@@ -882,17 +867,9 @@ impl ProjectFlusher {
     }
 
     fn should_flush(&self) -> bool {
-        flush_due(
-            self.phase,
-            self.total_rows,
-            self.total_bytes,
-            self.last_flush.elapsed(),
-            FlushThresholds {
-                rows: self.row_threshold,
-                bytes: self.byte_threshold,
-                interval: self.flush_interval,
-            },
-        )
+        self.first_flush
+            || self.reached_flush_threshold()
+            || self.last_flush.elapsed() >= self.flush_interval
     }
 
     fn reached_flush_threshold(&self) -> bool {
@@ -901,80 +878,57 @@ impl ProjectFlusher {
 
     /// Flush all buffered batches to DuckDB using appenders per table.
     /// Uses appender_to_catalog_and_db for DuckLake catalog-qualified table access.
-    ///
-    /// A table whose append fails keeps its unwritten batches for one retry
-    /// on the next flush; a second failure, or any failure on the final
-    /// (`last_chance`) flush, drops them and reports the rows.
     #[tracing::instrument(skip_all, fields(project_id = %project_id, rows = self.total_rows))]
-    fn flush(&mut self, project_id: &str, last_chance: bool) -> FlushReport {
-        let mut report = FlushReport::default();
+    fn flush(&mut self, project_id: &str) -> Result<()> {
         if self.total_rows == 0 {
             // F-25: demoted from debug! to trace! — fires every flush interval
             // per project (default 60s) and was polluting `RUST_LOG=debug` runs
             // with per-project "nothing happened" noise.
             tracing::trace!(project_id, "flush skipped: no rows");
-            return report;
+            return Ok(());
         }
 
-        tracing::info!(project_id, rows = self.total_rows, phase = ?self.phase, tables = ?self.buffers.keys().collect::<Vec<_>>(), "flushing batches");
+        tracing::info!(project_id, rows = self.total_rows, tables = ?self.buffers.keys().collect::<Vec<_>>(), "flushing batches");
         let conn = &self.conn;
-        let (mut retained_rows, mut retained_bytes) = (0, 0);
+
+        let mut failures: Vec<String> = Vec::new();
         for (signal, buf) in &mut self.buffers {
             if buf.is_empty() {
                 continue;
             }
             let table = &self.table_names[signal];
             let batches = std::mem::take(buf);
-            let failed_before = self.failed_appends.remove(signal).unwrap_or(0);
-            let (written, error) = match append_batches(conn, table, &batches) {
-                Ok(()) => (batches.len(), None),
-                Err((written, error)) => (written, Some(error)),
-            };
-            match table_outcome(failed_before, error.is_none(), last_chance) {
-                TableOutcome::Written => {}
-                TableOutcome::Retry => {
-                    let kept = batches[written..].to_vec();
-                    let rows: usize = kept.iter().map(RecordBatch::num_rows).sum();
-                    tracing::warn!(
-                        project_id,
-                        table = %table,
-                        rows_kept = rows,
-                        "flush failed — keeping buffered batches for one retry: {:#}",
-                        error.as_ref().expect("a retry follows a failure")
-                    );
-                    retained_rows += rows;
-                    retained_bytes += kept.iter().map(batch_byte_size).sum::<usize>();
-                    *buf = kept;
-                    self.failed_appends.insert(*signal, failed_before + 1);
-                }
-                TableOutcome::Dropped => {
-                    let error = error.expect("a drop follows a failure");
-                    let rows: usize = batches[written..].iter().map(RecordBatch::num_rows).sum();
-                    tracing::error!(
-                        project_id,
-                        table = %table,
-                        rows_lost = rows,
-                        attempts = failed_before + 1,
-                        "flush failed — dropping buffered batches: {error:#}"
-                    );
-                    report.dropped.push((table.clone(), rows));
-                    report.failures.push(format!("{table}: {error:#}"));
-                }
+            let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+            if let Err(e) = append_batches(conn, table, batches) {
+                tracing::error!(
+                    project_id,
+                    table = %table,
+                    rows_lost = rows,
+                    "flush failed — dropping buffered batches: {e:#}"
+                );
+                failures.push(format!("{table}: {e:#}"));
             }
         }
 
         tracing::info!(
             project_id,
-            rows = self.total_rows - retained_rows,
-            retained_rows,
+            rows = self.total_rows,
+            bytes = self.total_bytes,
             "flushed batches"
         );
 
-        self.total_rows = retained_rows;
-        self.total_bytes = retained_bytes;
+        self.total_rows = 0;
+        self.total_bytes = 0;
         self.last_flush = Instant::now();
-        self.phase = phase_after_flush(retained_rows);
-        report
+        self.first_flush = false;
+
+        anyhow::ensure!(
+            failures.is_empty(),
+            "flush failed for {} table(s): {}",
+            failures.len(),
+            failures.join("; ")
+        );
+        Ok(())
     }
 
     #[tracing::instrument(skip_all, fields(project_id = %project_id))]
@@ -1018,6 +972,28 @@ impl ProjectFlusher {
         Ok(())
     }
 
+    /// Persist one anomaly detection run's results (see
+    /// `crate::anomaly::persist`) — the writer's ONLY involvement in the
+    /// anomaly pass: one brief DELETE+INSERT transaction. The scan + BOCPD
+    /// already ran on a reader (`spawn_anomaly_detection`). ISOLATION
+    /// CONTRACT: this shares the writer thread with flush/retention, so
+    /// every failure mode is contained here — errors surface as `Err` and
+    /// are logged (warn); nothing can propagate out and take ingest down.
+    #[tracing::instrument(skip_all, fields(project_id = %project_id))]
+    fn persist_anomalies(&self, project_id: &str, inserts: &[crate::anomaly::AnomalyInsert]) {
+        match crate::anomaly::persist(&self.conn, ProjectPool::prefix(), inserts) {
+            Ok(anomalies) => {
+                tracing::debug!(project_id, anomalies, "anomaly pass persisted");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    project_id,
+                    "anomaly persist failed — ingest/flush/retention unaffected: {e:#}"
+                );
+            }
+        }
+    }
+
     fn into_connection(self) -> Connection {
         self.conn
     }
@@ -1026,34 +1002,23 @@ impl ProjectFlusher {
 /// Append a table's buffered batches via a DuckLake catalog-qualified appender.
 /// Isolated as a free function (not a `&mut self` method) so `ProjectFlusher::flush`
 /// can call it per-table inside a loop that also borrows `self.buffers` mutably.
-///
-/// On failure returns how many leading batches were handed to the appender
-/// before the error, so a retry does not append them twice. A failed
-/// appender creation or final flush reports 0: nothing was committed.
-fn append_batches(
-    conn: &Connection,
-    table: &str,
-    batches: &[RecordBatch],
-) -> std::result::Result<(), (usize, anyhow::Error)> {
+fn append_batches(conn: &Connection, table: &str, batches: Vec<RecordBatch>) -> Result<()> {
     // Extract bare table name (strip "lake." prefix for catalog-qualified appender).
     // conn.appender("lake.table") fails — must use appender_to_catalog_and_db.
     let bare_table = table.strip_prefix("lake.").unwrap_or(table);
     let mut appender = conn
         .appender_to_catalog_and_db(bare_table, "lake", "main")
-        .with_context(|| format!("failed to create {table} appender"))
-        .map_err(|error| (0, error))?;
-    for (index, batch) in batches.iter().enumerate() {
+        .with_context(|| format!("failed to create {table} appender"))?;
+    for batch in batches {
         if batch.num_rows() > 0 {
             appender
-                .append_record_batch(batch.clone())
-                .with_context(|| format!("failed to append {table} batch"))
-                .map_err(|error| (index, error))?;
+                .append_record_batch(batch)
+                .with_context(|| format!("failed to append {table} batch"))?;
         }
     }
     appender
         .flush()
-        .with_context(|| format!("failed to flush {table} appender"))
-        .map_err(|error| (0, error))?;
+        .with_context(|| format!("failed to flush {table} appender"))?;
     // Appender::drop cleans up
     Ok(())
 }
@@ -1094,6 +1059,7 @@ async fn run_flusher(
     pool: Arc<ProjectPool>,
     cfg: FlushConfig,
     maintenance: Arc<MaintenanceHealth>,
+    workloads: crate::workload::WorkloadBudget,
 ) {
     let flush_interval = cfg.interval;
     let (writer_tx, writer_rx) = mpsc::channel::<WriterCommand>(PROJECT_CHANNEL_CAPACITY);
@@ -1133,6 +1099,18 @@ async fn run_flusher(
     );
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     checkpoint_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // First anomaly pass one full period AFTER startup (interval_at skips the
+    // immediate tick a plain `interval` fires) — a pass at t=0 would scan
+    // before the first flush ever lands and find nothing.
+    let mut anomaly_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + ANOMALY_PASS_INTERVAL,
+        ANOMALY_PASS_INTERVAL,
+    );
+    // Single-flight guard for the detached anomaly detection task: a tick
+    // that fires while the previous detection is still scanning is skipped
+    // (never queued), so slow detections can't pile up.
+    let mut anomaly_detection: Option<TokioJoinHandle<()>> = None;
+
     loop {
         tokio::select! {
             biased;
@@ -1158,6 +1136,19 @@ async fn run_flusher(
                         tracing::error!(project_id, "writer thread stopped before checkpoint");
                         break;
                     }
+                }
+            }
+
+            _ = anomaly_interval.tick() => {
+                pool.touch_project(&project_id);
+                if anomaly_detection.as_ref().is_some_and(|h| !h.is_finished()) {
+                    tracing::warn!(
+                        project_id,
+                        "previous anomaly detection still running — skipping this tick"
+                    );
+                } else {
+                    anomaly_detection =
+                        spawn_anomaly_detection(&project_id, &pool, &writer_tx, &workloads);
                 }
             }
 
@@ -1204,6 +1195,69 @@ async fn run_flusher(
     }
 }
 
+/// One scheduled anomaly pass, structured so the single DuckLake writer is
+/// never held during the expensive part: BOCPD detection (a multi-day span
+/// scan, seconds of work) runs here on a READER connection from the
+/// project's `ReaderPool`, and only the resulting rows are handed to the
+/// writer thread for the brief DELETE+INSERT
+/// (`WriterCommand::PersistAnomalies`). Detached (`tokio::spawn`) so the
+/// flusher loop keeps forwarding ingest while the scan runs.
+///
+/// ISOLATION CONTRACT: every failure mode is contained here and logged —
+/// detection errors (`Err`), detection panics (augurs runs under
+/// `catch_unwind` inside the pass, and `spawn_blocking` catches the rest as
+/// a `JoinError`), and a writer that stopped during shutdown. Nothing can
+/// propagate out and affect ingest/flush/retention.
+fn spawn_anomaly_detection(
+    project_id: &str,
+    pool: &Arc<ProjectPool>,
+    writer_tx: &mpsc::Sender<WriterCommand>,
+    workloads: &crate::workload::WorkloadBudget,
+) -> Option<TokioJoinHandle<()>> {
+    let permit = match workloads.try_acquire(crate::workload::WorkloadClass::Anomaly) {
+        Ok(permit) => permit,
+        Err(error) => {
+            tracing::warn!(project_id, "{error}; skipping anomaly pass");
+            return None;
+        }
+    };
+    let project_id = project_id.to_string();
+    let pool = Arc::clone(pool);
+    let writer_tx = writer_tx.clone();
+    Some(tokio::spawn(async move {
+        let reader_project_id = project_id.clone();
+        let detected = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            // `readers.get()` blocks until a reader is free — fine on the
+            // blocking pool, and it competes with queries, never with the
+            // writer.
+            let readers = pool.get_project(&reader_project_id)?;
+            let reader = readers.get();
+            crate::anomaly::detect(&reader, ProjectPool::prefix())
+        })
+        .await;
+        match detected {
+            Ok(Ok(inserts)) => {
+                if writer_tx
+                    .send(WriterCommand::PersistAnomalies(inserts))
+                    .await
+                    .is_err()
+                {
+                    tracing::debug!(project_id, "writer thread stopped before anomaly persist");
+                }
+            }
+            Ok(Err(e)) => tracing::warn!(
+                project_id,
+                "anomaly detection failed — ingest/flush/retention unaffected: {e:#}"
+            ),
+            Err(e) => tracing::warn!(
+                project_id,
+                "anomaly detection panicked — ingest/flush/retention unaffected: {e}"
+            ),
+        }
+    }))
+}
+
 fn run_writer_thread(
     project_id: &str,
     writer: Connection,
@@ -1228,23 +1282,17 @@ fn run_writer_thread(
                         Err(mpsc::error::TryRecvError::Disconnected) => break,
                     }
                 }
-                if flusher.should_flush() {
-                    record_flush(
-                        project_id,
-                        "flush",
-                        &flusher.flush(project_id, false),
-                        maintenance,
-                    );
+                if flusher.should_flush()
+                    && let Err(e) = flusher.flush(project_id)
+                {
+                    tracing::error!(project_id, "flush failed: {e:#}");
                 }
             }
             WriterCommand::FlushIfNeeded => {
-                if flusher.should_flush() {
-                    record_flush(
-                        project_id,
-                        "timer flush",
-                        &flusher.flush(project_id, false),
-                        maintenance,
-                    );
+                if flusher.should_flush()
+                    && let Err(e) = flusher.flush(project_id)
+                {
+                    tracing::error!(project_id, "timer flush failed: {e:#}");
                 }
             }
             WriterCommand::Checkpoint => {
@@ -1281,6 +1329,12 @@ fn run_writer_thread(
                     }
                 }
             }
+            WriterCommand::PersistAnomalies(inserts) => {
+                // Isolated by construction: persist_anomalies never returns
+                // an error and never panics (see its doc comment) — the
+                // loop, and therefore ingest, always continues.
+                flusher.persist_anomalies(project_id, &inserts);
+            }
             WriterCommand::RetentionCleanup { days, ack } => {
                 let result = flusher
                     .retention_cleanup(project_id, days)
@@ -1293,36 +1347,13 @@ fn run_writer_thread(
         }
     }
 
-    record_flush(
-        project_id,
-        "final flush",
-        &flusher.flush(project_id, true),
-        maintenance,
-    );
+    if let Err(e) = flusher.flush(project_id) {
+        tracing::error!(project_id, "final flush failed: {e:#}");
+    }
     // A successful flush commits the final DuckLake transaction. CHECKPOINT is
     // compaction/retention maintenance, not the durability boundary, and remains
     // owned by ProjectPool after the writer has been returned without lock overlap.
     flusher.into_connection()
-}
-
-/// Count a flush's dropped rows and log its failures once.
-fn record_flush(
-    project_id: &str,
-    what: &str,
-    report: &FlushReport,
-    maintenance: &MaintenanceHealth,
-) {
-    for (table, rows) in &report.dropped {
-        maintenance.record_rows_dropped(table, *rows as u64);
-    }
-    if !report.failures.is_empty() {
-        tracing::error!(
-            project_id,
-            "{what} failed for {} table(s): {}",
-            report.failures.len(),
-            report.failures.join("; ")
-        );
-    }
 }
 
 /// Route an IngestMsg into the flusher's signal-keyed buffers.
@@ -1336,171 +1367,464 @@ fn buffer_msg(flusher: &mut ProjectFlusher, msg: IngestMsg) {
 }
 
 #[cfg(test)]
-mod flusher_tests {
+mod tests {
     use super::*;
-    use FlusherPhase::{Buffering, Cold, Empty, Failed};
-    use arrow::array::Int64Array;
+    use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
 
-    const LIMITS: FlushThresholds = FlushThresholds {
-        rows: 100,
-        bytes: 1_000,
-        interval: Duration::from_secs(60),
-    };
+    // Copied from tests/ducklake_appender_test.rs — no attach helper is exposed
+    // via crate::storage, and this test needs private ProjectFlusher access
+    // so it must live in-module rather than in tests/.
+    //
+    // Reads the environment directly, like every other test harness here: the
+    // integration tests in tests/ carry the same file-level allow. Routing a
+    // test-only DuckDB extension path through typed-env would add a production
+    // config entry that production never reads.
+    #[allow(clippy::disallowed_methods)]
+    fn extension_dir() -> String {
+        std::env::var("SIGIRO_EXTENSION_DIR").unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|home| format!("{home}/.duckdb/extensions"))
+                .unwrap_or_else(|_| "/tmp/sigiro-test-extensions".to_string())
+        })
+    }
 
-    #[test]
-    fn flush_is_due_by_phase_and_threshold() {
-        let young = Duration::from_secs(1);
-        let old = Duration::from_secs(60);
-        let cases = [
-            (Cold, 0, 0, old, false),
-            (Cold, 1, 1, young, true),
-            (Empty, 0, 0, old, false),
-            (Buffering, 1, 1, young, false),
-            (Buffering, 100, 1, young, true),
-            (Buffering, 1, 1_000, young, true),
-            (Buffering, 1, 1, old, true),
-            (Failed, 1, 1, young, false),
-            (Failed, 1, 1, old, true),
-            (Failed, 100, 1, young, true),
-        ];
-        for (phase, rows, bytes, age, due) in cases {
-            assert_eq!(
-                flush_due(phase, rows, bytes, age, LIMITS),
-                due,
-                "{phase:?} {rows} rows {bytes} B {age:?}"
-            );
+    fn attach_ducklake(conn: &Connection, dir: &std::path::Path) {
+        let data_path = dir.to_string_lossy();
+        conn.execute_batch(&format!("SET home_directory='{data_path}';"))
+            .expect("set home_directory");
+        conn.execute_batch(&format!("SET extension_directory='{}';", extension_dir()))
+            .expect("set extension_directory");
+        conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
+            .expect("install/load ducklake");
+        conn.execute_batch(&format!(
+            "ATTACH 'ducklake:{data_path}/catalog.ducklake' AS lake"
+        ))
+        .expect("attach DuckDB file catalog");
+    }
+
+    /// A batch matching the test-only `lake.sigiro_metrics_gauge (id INTEGER)` table.
+    fn int_batch(n: usize) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(
+                (0..n as i32).collect::<Vec<_>>(),
+            ))],
+        )
+        .expect("valid int batch")
+    }
+
+    fn test_flush_config() -> FlushConfig {
+        FlushConfig {
+            row_threshold: 1_000_000,
+            byte_threshold: 1_000_000_000,
+            interval: Duration::from_secs(3600),
+            backpressure: BackpressurePolicy::Block,
         }
     }
 
     #[test]
-    fn every_flusher_phase_edge_follows_the_table() {
-        assert_eq!(phase_after_buffer(Cold), Cold, "Cold stays until a flush");
-        assert_eq!(phase_after_buffer(Empty), Buffering);
-        assert_eq!(phase_after_buffer(Buffering), Buffering);
-        assert_eq!(phase_after_buffer(Failed), Failed);
-        assert_eq!(phase_after_flush(0), Empty);
-        assert_eq!(phase_after_flush(5), Failed);
+    fn disk_cap_hysteresis_trips_at_cap_clears_at_90_percent() {
+        let disk = DiskCapacityState::new(1000);
+        assert!(!disk.is_over_cap(), "starts under cap");
 
-        assert_eq!(table_outcome(0, true, false), TableOutcome::Written);
-        assert_eq!(table_outcome(1, true, false), TableOutcome::Written);
-        assert_eq!(table_outcome(0, false, false), TableOutcome::Retry);
-        assert_eq!(table_outcome(1, false, false), TableOutcome::Dropped);
-        assert_eq!(
-            table_outcome(0, false, true),
-            TableOutcome::Dropped,
-            "no retry after shutdown"
-        );
-        assert_eq!(table_outcome(1, true, true), TableOutcome::Written);
+        // Below cap: no transition, stays off.
+        assert_eq!(disk.apply_sample(500, true), None);
+        assert!(!disk.is_over_cap());
+
+        // Reaching the cap trips it (OFF->ON).
+        assert_eq!(disk.apply_sample(1000, true), Some(true));
+        assert!(disk.is_over_cap());
+
+        // Still over 90% (900): stays tripped, no transition.
+        assert_eq!(disk.apply_sample(950, true), None);
+        assert_eq!(disk.apply_sample(901, true), None);
+        assert!(disk.is_over_cap());
+
+        // An UNRELIABLE (under-counted) sample must NOT clear, even below 90%.
+        assert_eq!(disk.apply_sample(500, false), None);
+        assert!(disk.is_over_cap(), "unreliable walk never re-opens ingest");
+
+        // Dropping to <=90% on a reliable sample clears it (ON->OFF).
+        assert_eq!(disk.apply_sample(900, true), Some(false));
+        assert!(!disk.is_over_cap());
+
+        // A brief spike below the cap does not re-trip.
+        assert_eq!(disk.apply_sample(999, true), None);
+        assert!(!disk.is_over_cap());
     }
 
-    fn batch(rows: i64) -> RecordBatch {
-        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+    #[test]
+    fn disk_cap_small_cap_clear_threshold_is_exact() {
+        // Regression: `cap/10*9` truncated to 0 for cap=9 (could only clear at
+        // 0 bytes → permanent deadlock). u128 math gives the exact 90% floor.
+        let disk = DiskCapacityState::new(9);
+        assert_eq!(disk.apply_sample(9, true), Some(true));
+        // 90% of 9 = 8.1 → floor 8; usage 8 must clear, not require 0.
+        assert_eq!(disk.apply_sample(8, true), Some(false));
+        assert!(!disk.is_over_cap());
+    }
+
+    #[test]
+    fn disk_cap_zero_is_disabled() {
+        let disk = DiskCapacityState::disabled();
+        assert_eq!(disk.apply_sample(u64::MAX, true), None);
+        assert!(!disk.is_over_cap());
+    }
+
+    /// An `n`-row `(id, ts)` batch with every `ts` set `days_ago` days before
+    /// now. Batches must be large enough to exceed DuckLake's inline-row limit
+    /// so the appender writes Parquet rather than inlining into the catalog.
+    fn day_batch(days_ago: i64, n: usize) -> RecordBatch {
+        use arrow::array::TimestampMicrosecondArray;
+        use arrow::datatypes::TimeUnit;
+        let now_us = {
+            let odt = time::OffsetDateTime::now_utc();
+            odt.unix_timestamp() * 1_000_000 + i64::from(odt.microsecond())
+        };
+        let ts = now_us - days_ago * 86_400 * 1_000_000;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            ),
+        ]));
         RecordBatch::try_new(
             schema,
-            vec![Arc::new(Int64Array::from_iter_values(0..rows))],
+            vec![
+                Arc::new(Int32Array::from((0..n as i32).collect::<Vec<_>>())),
+                Arc::new(TimestampMicrosecondArray::from(vec![ts; n])),
+            ],
         )
-        .unwrap()
+        .expect("valid day batch")
     }
 
-    fn flusher() -> ProjectFlusher {
-        let conn = crate::pool::open_duckdb().unwrap();
-        conn.execute_batch("ATTACH ':memory:' AS lake").unwrap();
-        let cfg = FlushConfig {
-            row_threshold: 100,
-            byte_threshold: usize::MAX,
-            interval: Duration::from_secs(3_600),
-            backpressure: BackpressurePolicy::Block,
-        };
-        ProjectFlusher::new(conn, &cfg)
+    /// Retention must reach a tenant that has been evicted from the connection
+    /// pool, which is the normal state for anything with sporadic traffic.
+    ///
+    /// This exercises `run_retention_cleanup` itself rather than the
+    /// enumeration helper it calls, because the defect was the CALL SITE
+    /// choosing the wrong source. A test against `known_project_ids` alone
+    /// would keep passing if this line were reverted to `project_ids`.
+    ///
+    /// The observable is the pool: `run_retention_cleanup` calls
+    /// `ensure_flusher` for every project it enumerates, so a project it
+    /// covered is back in the connection map afterwards. With the old
+    /// `project_ids` source it enumerated an empty list and the map stayed
+    /// empty.
+    #[tokio::test]
+    async fn retention_covers_projects_evicted_from_the_pool() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = std::sync::Arc::new(ProjectPool::new(
+            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap(),
+            10,
+            crate::storage::StorageMode::LocalFile,
+        ));
+        pool.create_project("busy_tenant").unwrap();
+        pool.create_project("quiet_tenant").unwrap();
+
+        // Exactly what `run_evictor` does after MAX_IDLE_SECS with no traffic.
+        pool.evict_idle(std::time::Duration::ZERO);
+        assert_eq!(
+            pool.project_ids().len(),
+            0,
+            "precondition: the idle evictor emptied the pool"
+        );
+
+        let router = MsgRouter::new(std::sync::Arc::clone(&pool));
+        router
+            .run_retention_cleanup(7)
+            .await
+            .expect("retention must not fail for an unpooled project");
+
+        let covered = pool.project_ids();
+        assert!(
+            covered.iter().any(|id| id == "busy_tenant")
+                && covered.iter().any(|id| id == "quiet_tenant"),
+            "retention must sweep every tenant with data on disk, not only those \
+             holding a pooled connection when it happens to run; covered {covered:?}"
+        );
+        router
+            .shutdown_and_wait()
+            .await
+            .expect("retention test flushers must shut down cleanly");
     }
 
-    fn create_spans_table(flusher: &ProjectFlusher) {
-        flusher
-            .conn
-            .execute_batch(&format!(
-                "CREATE TABLE lake.main.{} (v BIGINT)",
-                SignalTable::Spans.table_suffix()
+    /// #91: a REAL failing `CHECKPOINT` must be counted and must trip the shed
+    /// gate — not merely logged.
+    ///
+    /// The failure is genuine, not injected: after seeding a compaction backlog
+    /// across the real sigiro tables, `chmod 000` on the DuckLake `DATA_PATH`
+    /// makes DuckDB fail the checkpoint with
+    /// `IO Error: ... Failed to create directory ".../sigiro_metrics_histogram":
+    /// Permission denied`. Restoring the mode lets the very next checkpoint
+    /// succeed, which proves the recovery path too.
+    #[test]
+    #[cfg(unix)]
+    fn real_checkpoint_failure_trips_and_recovers_the_shed_gate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        let hp = home.to_string_lossy().to_string();
+        let dp = data.to_string_lossy().to_string();
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!("SET home_directory='{hp}';"))
+            .expect("set home_directory");
+        conn.execute_batch(&format!("SET extension_directory='{}';", extension_dir()))
+            .expect("set extension_directory");
+        conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
+            .expect("install/load ducklake");
+        conn.execute_batch(&format!(
+            "ATTACH 'ducklake:{hp}/catalog.ducklake' AS lake (DATA_PATH '{dp}/')"
+        ))
+        .expect("attach ducklake");
+        crate::schema::create_tables(&conn, "lake.").expect("create sigiro tables");
+
+        // A real compaction backlog: 10 separate commits, so CHECKPOINT has
+        // actual Parquet to write rather than being a no-op.
+        for i in 0..10 {
+            conn.execute_batch(&format!(
+                "INSERT INTO lake.sigiro_metrics_gauge (timestamp, service_name, metric_name, value)
+                 SELECT make_timestamp(1700000000000000 + range), 'svc', 'm', (range + {})::DOUBLE
+                 FROM range(3000)",
+                i * 3000
             ))
-            .unwrap();
+            .expect("seed insert");
+        }
+        crate::pool::set_ducklake_catalog_policy(&conn, 7).expect("catalog policy");
+
+        let cfg = test_flush_config();
+        let flusher = ProjectFlusher::new(conn, &cfg);
+        let maintenance = MaintenanceHealth::new(3);
+
+        // Break the storage the checkpoint must write to.
+        let mut p = std::fs::metadata(&data).unwrap().permissions();
+        p.set_mode(0o000);
+        std::fs::set_permissions(&data, p).unwrap();
+
+        // Drive the SAME arm production drives, three times.
+        for expected in 1..=3 {
+            let err = flusher
+                .checkpoint("p91")
+                .expect_err("CHECKPOINT must fail while DATA_PATH is unwritable");
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("CHECKPOINT") || msg.contains("Permission denied"),
+                "expected a real DuckLake checkpoint IO failure, got: {msg}"
+            );
+            let (failures, tripped) = maintenance.record_checkpoint_failure("p91");
+            assert_eq!(failures, expected);
+            assert_eq!(
+                tripped,
+                expected == 3,
+                "the trip transition must be reported exactly once, at the threshold"
+            );
+        }
+        assert!(
+            maintenance.is_stalled("p91"),
+            "three consecutive real failures must shed ingest"
+        );
+        assert_eq!(maintenance.stalled_projects(), vec!["p91".to_string()]);
+
+        // Restore storage: the next checkpoint must succeed and re-open ingest.
+        let mut p = std::fs::metadata(&data).unwrap().permissions();
+        p.set_mode(0o700);
+        std::fs::set_permissions(&data, p).unwrap();
+
+        flusher
+            .checkpoint("p91")
+            .expect("CHECKPOINT must succeed once DATA_PATH is writable again");
+        assert!(
+            maintenance.record_checkpoint_success("p91"),
+            "recovery from a shedding state must be reported"
+        );
+        assert!(!maintenance.is_stalled("p91"), "ingest must re-open");
+        assert_eq!(maintenance.consecutive_failures("p91"), 0);
     }
 
-    fn stored_rows(flusher: &ProjectFlusher) -> i64 {
-        flusher
+    #[test]
+    fn checkpoint_runs_ducklake_native_maintenance() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        attach_ducklake(&conn, dir.path());
+        crate::schema::create_tables(&conn, "lake.").expect("create sigiro tables");
+        conn.execute_batch("CREATE TABLE lake.t (id INTEGER, ts TIMESTAMP)")
+            .expect("create table");
+
+        // 30 separate appender flushes = 30 committed data files, 3000 rows
+        // each, one day per batch going back 0..29 days. Batches are large so
+        // the appender writes Parquet rather than inlining into the catalog.
+        for i in 0..30 {
+            let mut appender = conn
+                .appender_to_catalog_and_db("t", "lake", "main")
+                .expect("appender");
+            appender
+                .append_record_batch(day_batch(i64::from(i), 3000))
+                .expect("append");
+            appender.flush().expect("flush");
+        }
+        // These batches exceed DuckLake's inline-row limit, so each appender
+        // commit is already a current data file. Measure before CHECKPOINT:
+        // DuckLake defaults auto_compact to true, and a checkpoint with its
+        // default 512 MiB target would compact this fixture even without the
+        // sigiro policy, erasing the control arm.
+        let files_before: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ducklake_list_files('lake', 't')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let rows_before: i64 = conn
+            .query_row("SELECT count(*) FROM lake.t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows_before, 30 * 3000, "all rows present before retention");
+        assert!(
+            files_before >= 30,
+            "expected >=30 data files from 30 commits, got {files_before}"
+        );
+
+        // Retention: drop everything older than 7 days (rows for days 8..=29).
+        conn.execute_batch("DELETE FROM lake.t WHERE ts < now()::TIMESTAMP - INTERVAL '7 days'")
+            .expect("delete old rows");
+
+        // DELETE removes wholly-aged files from the current snapshot, but the
+        // retained days remain one file each. Compaction belongs to DuckLake's
+        // native CHECKPOINT sequence.
+        let files_after_delete: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ducklake_list_files('lake', 't')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            (7..=8).contains(&files_after_delete),
+            "DELETE should leave one current file per retained day, not compact them (before={files_before}, after_delete={files_after_delete})"
+        );
+
+        // Activate the same persisted policy the pool sets on every attach.
+        // Delaying it until here gives the test an unconfigured control arm;
+        // with policy active before appender commits, DuckLake compacts the
+        // files as they are written and leaves no backlog to distinguish.
+        crate::pool::set_ducklake_catalog_policy(&conn, 7).expect("set catalog policy");
+
+        // This is the same call the production writer makes every 30 seconds.
+        // DuckLake consumes the persisted policy and runs its own flush,
+        // expiry, compaction, rewrite, cleanup, and orphan-removal sequence.
+        conn.execute_batch("CHECKPOINT lake")
+            .expect("native maintenance checkpoint");
+
+        let files_after: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ducklake_list_files('lake', 't')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Touch columns so DuckLake must scan the compacted Parquet instead of
+        // answering count(*) from catalog metadata.
+        let (rows_after, max_id): (i64, i32) = conn
+            .query_row(
+                "SELECT count(*), max(id) FROM lake.t WHERE id >= 0",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+
+        // Days 8..=29 are unambiguously older than 7 days and gone; day 7 sits
+        // exactly on the cutoff, so 7 or 8 days' worth of rows may remain.
+        assert!(
+            (7 * 3000..=8 * 3000).contains(&rows_after),
+            "retention should leave ~7 days of rows, got {rows_after}"
+        );
+        assert_eq!(max_id, 2999, "real scan of compacted Parquet must succeed");
+        assert!(
+            files_after <= 2,
+            "native CHECKPOINT must compact the current 30-file table to at most two files (before={files_after_delete}, after={files_after})"
+        );
+    }
+
+    #[test]
+    fn flush_isolates_per_table_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        attach_ducklake(&conn, dir.path());
+
+        // Deliberately create ONLY the gauge table — sigiro_spans is missing,
+        // so its appender creation fails.
+        conn.execute_batch("CREATE TABLE lake.sigiro_metrics_gauge (id INTEGER)")
+            .expect("create gauge table");
+
+        let cfg = test_flush_config();
+        let mut flusher = ProjectFlusher::new(conn, &cfg);
+
+        // Spans sorts before MetricsGauge in the BTreeMap (SignalTable::Spans
+        // is the first variant), so the old code's early-return on the Spans
+        // error would have starved MetricsGauge entirely.
+        flusher.buffer(SignalTable::Spans, int_batch(5));
+        flusher.buffer(SignalTable::MetricsGauge, int_batch(7));
+
+        let err = flusher
+            .flush("test_project")
+            .expect_err("flush should fail: sigiro_spans table does not exist");
+        assert!(
+            format!("{err:#}").contains("sigiro_spans"),
+            "error should mention the failing table sigiro_spans: {err:#}"
+        );
+
+        // The healthy MetricsGauge table must still have been written despite
+        // the Spans failure — this assertion fails on the old drain-based code.
+        let count: i64 = flusher
             .conn
             .query_row(
-                &format!(
-                    "SELECT count(*) FROM lake.main.{}",
-                    SignalTable::Spans.table_suffix()
-                ),
+                "SELECT count(*) FROM lake.sigiro_metrics_gauge",
                 [],
                 |row| row.get(0),
             )
-            .unwrap()
-    }
+            .unwrap();
+        assert_eq!(
+            count, 7,
+            "gauge batch should have been flushed despite the spans failure"
+        );
 
-    #[test]
-    fn cold_writes_the_first_batch_then_buffers() {
-        let mut flusher = flusher();
-        create_spans_table(&flusher);
-        assert_eq!(flusher.phase, Cold);
-        assert!(!flusher.should_flush(), "nothing to write yet");
-        flusher.buffer(SignalTable::Spans, batch(3));
+        // Buffers drain and counters reset even though one table failed.
         assert!(
-            flusher.should_flush(),
-            "Cold flushes the first batch at once"
+            flusher.buffers.values().all(Vec::is_empty),
+            "all buffers should be empty after flush"
         );
-        let report = flusher.flush("p", false);
-        assert!(report.failures.is_empty() && report.dropped.is_empty());
-        assert_eq!((flusher.phase, stored_rows(&flusher)), (Empty, 3));
-        flusher.buffer(SignalTable::Spans, batch(2));
-        assert_eq!(flusher.phase, Buffering);
-        assert!(!flusher.should_flush(), "under every threshold");
-    }
-
-    #[test]
-    fn a_failed_append_keeps_rows_for_one_retry_that_can_succeed() {
-        let mut flusher = flusher();
-        flusher.buffer(SignalTable::Spans, batch(4));
-        let report = flusher.flush("p", false);
-        assert!(report.dropped.is_empty(), "first failure keeps the rows");
-        assert_eq!((flusher.phase, flusher.total_rows), (Failed, 4));
-        create_spans_table(&flusher);
-        let report = flusher.flush("p", false);
-        assert!(report.dropped.is_empty());
+        assert_eq!(flusher.total_rows, 0, "total_rows should reset after flush");
         assert_eq!(
-            (flusher.phase, flusher.total_rows, stored_rows(&flusher)),
-            (Empty, 0, 4)
+            flusher.total_bytes, 0,
+            "total_bytes should reset after flush"
         );
-    }
 
-    #[test]
-    fn a_second_failure_drops_and_reports_the_rows() {
-        let mut flusher = flusher();
-        flusher.buffer(SignalTable::Spans, batch(4));
-        assert!(flusher.flush("p", false).dropped.is_empty());
-        flusher.buffer(SignalTable::Spans, batch(1));
-        assert_eq!(flusher.phase, Failed, "new rows join the pending retry");
-        let report = flusher.flush("p", false);
+        // Recovery: the spans buffer is now empty so it's skipped (not
+        // reattempted), and a further gauge flush succeeds cleanly.
+        flusher.buffer(SignalTable::MetricsGauge, int_batch(3));
+        flusher
+            .flush("test_project")
+            .expect("second flush should succeed once the failing table is idle");
+
+        let count: i64 = flusher
+            .conn
+            .query_row(
+                "SELECT count(*) FROM lake.sigiro_metrics_gauge",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(
-            report.dropped,
-            vec![(SignalTable::Spans.table_name(ProjectPool::prefix()), 5)]
+            count, 10,
+            "gauge count should increment after recovery flush"
         );
-        assert_eq!(report.failures.len(), 1);
-        assert_eq!((flusher.phase, flusher.total_rows), (Empty, 0));
-
-        let health = MaintenanceHealth::new(0);
-        record_flush("p", "flush", &report, &health);
-        assert_eq!(health.rows_dropped(), 5);
-    }
-
-    #[test]
-    fn the_final_flush_does_not_wait_for_a_retry() {
-        let mut flusher = flusher();
-        flusher.buffer(SignalTable::Spans, batch(2));
-        let report = flusher.flush("p", true);
-        assert_eq!(report.dropped.len(), 1);
-        assert_eq!(report.dropped[0].1, 2);
-        assert_eq!(flusher.phase, Empty);
     }
 }

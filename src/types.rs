@@ -1,7 +1,7 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
 
+use crate::otlp::MetricBatches;
 use arrow::record_batch::RecordBatch;
-use sigiro_segments::{MetricBatches, TraceId};
 
 // --------------------------------------------------------------------------
 // IngestMsg — carried across modules for routing
@@ -105,6 +105,13 @@ pub enum StatusCode {
     Error = 2,
 }
 
+impl StatusCode {
+    /// Convert back to i32 for SQL queries.
+    pub(crate) fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TenantId — prevents invalid identifiers reaching storage and SQL boundaries
 // ---------------------------------------------------------------------------
@@ -158,6 +165,28 @@ pub struct TimestampMicros(i64);
 // Typed path structs — compile-time route checking for axum router
 // ---------------------------------------------------------------------------
 
+#[nutype::nutype(
+    validate(predicate = |id: &str| {
+        id.len() == 32
+            && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            && id.bytes().any(|b| b != b'0')
+    }),
+    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
+)]
+pub struct TraceId(String);
+
+#[nutype::nutype(
+    validate(predicate = |id: &str| {
+        id.len() == 16
+            && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            && id.bytes().any(|b| b != b'0')
+    }),
+    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
+)]
+pub struct SpanId(String);
+
+// Used with axum_extra::routing::TypedPath for compile-time route verification.
+
 use axum_extra::routing::TypedPath;
 use serde::{Deserialize, Serialize};
 
@@ -166,20 +195,25 @@ use serde::{Deserialize, Serialize};
 #[typed_path("/query")]
 pub struct QueryPath;
 
+/// Route: GET /diagnose
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/diagnose")]
+pub struct DiagnosePath;
+
 /// Route: GET /services
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/services")]
 pub struct ServicesPath;
 
+/// Route: GET /anomalies
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/anomalies")]
+pub struct AnomaliesPath;
+
 /// Route: GET /alerts
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/alerts")]
 pub struct AlertsPath;
-
-/// Route: POST /alerts/replay
-#[derive(Debug, Clone, TypedPath)]
-#[typed_path("/alerts/replay")]
-pub struct AlertsReplayPath;
 
 /// Route: GET /status
 #[derive(Debug, Clone, TypedPath)]
